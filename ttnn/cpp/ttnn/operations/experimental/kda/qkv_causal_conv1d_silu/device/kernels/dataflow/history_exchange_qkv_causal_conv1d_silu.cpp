@@ -56,7 +56,12 @@ template <
     uint32_t has_actual_end,
     uint32_t token_paged,
     uint32_t page_channels,
-    uint32_t unicast_peers>
+    uint32_t unicast_peers,
+    uint32_t slab,
+    uint32_t slab_index_limit,
+    uint32_t slab_scale,
+    uint32_t slab_offset,
+    uint32_t entry_pages>
 TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore, uint32_t carry_semaphore) {
     constexpr uint32_t row_bytes = channel_tiles * tile_row_bytes;
     static_assert(max_payload % read_alignment == 0, "row chunks must stay aligned in DRAM");
@@ -72,6 +77,7 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
     const auto final_history = TensorAccessor(tensor::final_history);
     Semaphore staged(sem::staged);
     Semaphore predecessor_ready(sem::predecessor_ready);
+    Semaphore history_consumed(sem::history_consumed);
 
     // Scratch, from an aligned base: a slot for the chronology scalars, then three outgoing rows and three carry rows.
     // Raw: base/offset arithmetic below feeds raw reads/writes into scratch; no handle form yet.
@@ -81,6 +87,8 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
     const uint32_t carry = outgoing + history_rows * row_bytes;
     const auto offset_of = [&](uint32_t address) { return address - scratch_base; };
     const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, scalar_slot);
+    const auto layer_carry =
+        read_slab_carry<slab, slab_index_limit, slab_scale, slab_offset, entry_pages>(noc, scalar_slot);
     const auto read_rows = [&](uint32_t first_page, uint32_t destination) {
         for (uint32_t row = 0; row < history_rows; ++row) {
             noc.async_read(
@@ -100,9 +108,12 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
             const uint32_t position = carried + row;
             const bool from_layer_history = position < history_rows && interval.carry_continues_layer_history();
             const uint32_t destination = offset_of(carry) + row * row_bytes;
-            if (from_layer_history) {
+            if (from_layer_history && layer_carry.zeros) {
+                noc.async_write_zeros(scratch, row_bytes, {.offset_bytes = destination});
+                noc.write_zeros_l1_barrier();
+            } else if (from_layer_history) {
                 read_tail_row<token_paged, page_channels>(
-                    noc, history, scratch, position, 0, channel_tiles, destination);
+                    noc, history, scratch, position, 0, channel_tiles, destination, layer_carry.page_base);
             } else {
                 const uint32_t page =
                     position >= history_rows ? end_page + position - history_rows : predecessor_page + position;
@@ -285,7 +296,12 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
     }
     // The replacement carry, three full rows in scratch, goes out in history's layout; the outgoing rows have been
     // sent, so their scratch gathers its pages.
-    write_tail<token_paged, page_channels>(
-        noc, scratch, final_history, channel_tiles, offset_of(carry), offset_of(outgoing));
+    if constexpr (slab) {
+        history_consumed.wait_min(num_convolution_cores);
+    }
+    if (layer_carry.writes) {
+        write_tail<token_paged, page_channels>(
+            noc, scratch, final_history, channel_tiles, offset_of(carry), offset_of(outgoing), layer_carry.page_base);
+    }
     noc.async_write_barrier();
 }

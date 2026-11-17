@@ -34,6 +34,10 @@ Tensor select_final_carry(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const std::vector<tt::tt_metal::CoreCoord>& cores,
-    const std::array<uint32_t, 2>& semaphore_addresses);
+    const std::array<uint32_t, 2>& semaphore_addresses,
+    const std::optional<Tensor>& slab = std::nullopt,
+    const std::optional<Tensor>& slab_index = std::nullopt,
+    uint32_t slab_index_scale = 1,
+    uint32_t slab_index_offset = 0);
 
 }  // namespace ttnn::experimental::prim

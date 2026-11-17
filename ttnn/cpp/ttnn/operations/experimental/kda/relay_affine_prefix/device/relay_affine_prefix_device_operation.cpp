@@ -28,7 +28,8 @@ void RelayAffinePrefixOperation::validate_on_program_cache_hit(const operation_a
         {&in.packed, "packed"},
         {&in.initial_state, "initial_state"},
         {&in.actual_start, "actual_start"},
-        {&in.landing, "landing"}};
+        {&in.landing, "landing"},
+        {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}};
     kda_factory_detail::check_allocated_on_device(in.packed, tensors, operation_name);
     kda_factory_detail::check_distinct_buffers(tensors, operation_name);
 }
@@ -49,16 +50,26 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_allocated_device_tensor(in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_layout(in.initial_state, tt::tt_metal::Layout::TILE, operation_name, "initial_state");
     kda_factory_detail::check_dtype(in.initial_state, tt::tt_metal::DataType::FLOAT32, operation_name, "initial_state");
-    kda_factory_detail::check_interleaved(in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_same_device(in.packed, in.initial_state, operation_name, "initial_state");
     const auto& state = in.initial_state.logical_shape();
-    TT_FATAL(state.rank() == 3 && state[1] == state[2], "{}: initial_state must be [B*H, K, K]", operation_name);
+    if (in.slab_index) {
+        TT_FATAL(state.rank() == 4 && state[2] == state[3], "{}: slab must be [entries, H, K, K]", operation_name);
+        kda_factory_detail::check_slab_index(
+            in.packed,
+            in.initial_state,
+            *in.slab_index,
+            attrs.slab_index_scale,
+            attrs.slab_index_offset,
+            operation_name);
+    } else {
+        kda_factory_detail::check_interleaved(in.initial_state, operation_name, "initial_state");
+        TT_FATAL(state.rank() == 3 && state[1] == state[2], "{}: initial_state must be [B*H, K, K]", operation_name);
+    }
+    const auto [heads, key_dim] = relay_state_geometry(in);
     TT_FATAL(
-        state[0] > 0 && state[1] > 0 && state[1] % tt::constants::TILE_WIDTH == 0,
+        heads > 0 && key_dim > 0 && key_dim % tt::constants::TILE_WIDTH == 0,
         "{}: B*H must be positive and K positive and tile aligned",
         operation_name);
-    const uint32_t heads = state[0];
-    const uint32_t key_dim = state[1];
     const uint32_t key_tiles = key_dim / tt::constants::TILE_WIDTH;
     // The reader indexes packed as B*H x K tile rows of the complement form [E | B], E = A - I.
     TT_FATAL(
@@ -137,7 +148,8 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         {{&in.packed, "packed"},
          {&in.initial_state, "initial_state"},
          {&in.actual_start, "actual_start"},
-         {&in.landing, "landing"}},
+         {&in.landing, "landing"},
+         {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}},
         operation_name);
     kda_factory_detail::check_output_interleaved(attrs.entry_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
@@ -160,8 +172,9 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
 RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     const auto spec = [&](const tt::tt_metal::MemoryConfig& memory) {
+        const auto [heads, key_dim] = relay_state_geometry(in);
         return tt::tt_metal::TensorSpec(
-            in.initial_state.logical_shape(),
+            tt::tt_metal::Shape({heads, key_dim, key_dim}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::FLOAT32, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
     };
@@ -181,9 +194,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<RelayAffinePrefixOperation::t
 RelayAffinePrefixOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
     using namespace kda_performance_model;
-    const auto& state = in.initial_state.logical_shape();
-    const double heads = state[0];
-    const double key_dim = state[1];
+    const auto geometry = relay_state_geometry(in);
+    const double heads = geometry.heads;
+    const double key_dim = geometry.key_dim;
     // One hop per rank: S_out = S_in + E S_in + B per head (E = A - I).
     const KdaFpuWork work{
         .fpu_matrix_flops = heads * 2.0 * key_dim * key_dim * key_dim,
@@ -204,7 +217,10 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
-    const std::vector<tt::tt_metal::CoreCoord>& cores) {
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::optional<Tensor>& slab_index,
+    uint32_t slab_index_scale,
+    uint32_t slab_index_offset) {
     auto outputs = ttnn::device_operation::launch<RelayAffinePrefixOperation>(
         RelayAffinePrefixParams{
             .sequence_parallel_axis = sequence_parallel_axis,
@@ -213,9 +229,15 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
             .cores = cores,
             .entry_mem_config = entry_memory_config,
             .compute_kernel_config = compute_kernel_config,
-            .semaphore_addresses = semaphore_addresses},
+            .semaphore_addresses = semaphore_addresses,
+            .slab_index_scale = slab_index_scale,
+            .slab_index_offset = slab_index_offset},
         RelayAffinePrefixInputs{
-            .packed = packed, .initial_state = initial_state, .actual_start = actual_start, .landing = landing});
+            .packed = packed,
+            .initial_state = initial_state,
+            .actual_start = actual_start,
+            .landing = landing,
+            .slab_index = slab_index});
     return {outputs[0], outputs[1]};
 }
 

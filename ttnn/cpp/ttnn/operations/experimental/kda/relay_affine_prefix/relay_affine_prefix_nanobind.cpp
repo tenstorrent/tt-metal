@@ -31,7 +31,7 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             packed (ttnn.Tensor): BFLOAT16 TILE-layout interleaved ``[1, B*H, K, 2K]`` rows of this rank's
                 packed transition in complement form ``[E | B]``, ``E = A - I``.
             initial_state (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` state the
-                chronologically first rank enters at.
+                chronologically first rank enters at, or with ``slab_index`` a ``[entries, H, K, K]`` DRAM slab.
             actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar with the absolute position of the
                 chunk's first token. Keep its address stable and update its contents before replay of a
                 captured trace.
@@ -51,6 +51,10 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The hop's matmul fidelity;
                 its products accumulate in DST. Requires ``fp32_dest_acc_en`` and HiFi2 or above. Defaults to
                 HiFi2 with FP32 destination accumulation.
+            slab_index (ttnn.Tensor, optional): Replicated UINT32 scalar, read on device: the first rank enters at
+                slab entry ``slab_index * slab_index_scale + slab_index_offset``, or zeros when ``actual_start`` is 0.
+            slab_index_scale (int, optional): Defaults to 1.
+            slab_index_offset (int, optional): Defaults to 0.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: FLOAT32 TILE-layout ``[B*H, K, K]`` entry states and the final state in
@@ -72,7 +76,10 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         nb::arg("cores"),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("entry_memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("slab_index") = nb::none(),
+        nb::arg("slab_index_scale") = 1,
+        nb::arg("slab_index_offset") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::relay_affine_prefix::detail

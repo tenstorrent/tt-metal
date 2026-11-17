@@ -25,7 +25,9 @@ void SelectFinalCarryOperation::validate_on_program_cache_hit(const operation_at
         {&in.rank_final, "rank_final"},
         {&in.prefix_final, "prefix_final"},
         {&in.actual_start, "actual_start"},
-        {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}};
+        {in.actual_end ? &*in.actual_end : nullptr, "actual_end"},
+        {in.slab ? &*in.slab : nullptr, "slab"},
+        {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}};
     kda_factory_detail::check_allocated_on_device(in.rank_final, tensors, operation_name);
     kda_factory_detail::check_distinct_buffers(tensors, operation_name);
 }
@@ -53,7 +55,9 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
         {{&in.rank_final, "rank_final"},
          {&in.prefix_final, "prefix_final"},
          {&in.actual_start, "actual_start"},
-         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"},
+         {in.slab ? &*in.slab : nullptr, "slab"},
+         {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}},
         operation_name);
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     const auto& tail = in.rank_final.logical_shape();
@@ -63,6 +67,21 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
         tail == prefix || (tail.rank() == 4 && tail[0] == prefix[0] && tail[2] == prefix[1] && tail[3] == prefix[2]),
         "{}: rank_final must be [B*H, K, V], or [B*H, groups, K, V] whose last group is the final state",
         operation_name);
+    TT_FATAL(
+        in.slab.has_value() == in.slab_index.has_value(),
+        "{}: pass both slab and slab_index, or neither",
+        operation_name);
+    if (in.slab) {
+        kda_factory_detail::check_slab_index(
+            in.rank_final, *in.slab, *in.slab_index, attrs.slab_index_scale, attrs.slab_index_offset, operation_name);
+        const auto& shape = in.slab->logical_shape();
+        TT_FATAL(
+            in.slab->dtype() == tt::tt_metal::DataType::FLOAT32 && in.slab->layout() == tt::tt_metal::Layout::TILE &&
+                shape.rank() == 4 && shape[1] == prefix[0] && shape[2] == prefix[1] && shape[3] == prefix[2],
+            "{}: slab must be FP32 TILE [entries, B*H, K, V], got {}",
+            operation_name,
+            shape);
+    }
     const auto* mesh = in.rank_final.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(attrs.num_links > 0, "{}: num_links must be positive", operation_name);
@@ -82,6 +101,9 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
 
 SelectFinalCarryOperation::spec_return_value_t SelectFinalCarryOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
+    if (in.slab) {
+        return {in.slab->tensor_spec()};
+    }
     return {tt::tt_metal::TensorSpec(
         in.prefix_final.logical_shape(),
         tt::tt_metal::TensorLayout(
@@ -92,6 +114,9 @@ SelectFinalCarryOperation::spec_return_value_t SelectFinalCarryOperation::comput
 
 SelectFinalCarryOperation::tensor_return_value_t SelectFinalCarryOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
+    if (in.slab) {
+        return {*in.slab};
+    }
     return {create_device_tensor(compute_output_specs(attrs, in)[0], in.prefix_final.device())};
 }
 
@@ -106,7 +131,11 @@ Tensor select_final_carry(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const std::vector<tt::tt_metal::CoreCoord>& cores,
-    const std::array<uint32_t, 2>& semaphore_addresses) {
+    const std::array<uint32_t, 2>& semaphore_addresses,
+    const std::optional<Tensor>& slab,
+    const std::optional<Tensor>& slab_index,
+    uint32_t slab_index_scale,
+    uint32_t slab_index_offset) {
     return ttnn::device_operation::launch<SelectFinalCarryOperation>(
         SelectFinalCarryParams{
             .sequence_parallel_axis = sequence_parallel_axis,
@@ -115,12 +144,16 @@ Tensor select_final_carry(
             .topology = topology,
             .output_mem_config = memory_config,
             .cores = cores,
-            .semaphore_addresses = semaphore_addresses},
+            .semaphore_addresses = semaphore_addresses,
+            .slab_index_scale = slab_index_scale,
+            .slab_index_offset = slab_index_offset},
         SelectFinalCarryInputs{
             .rank_final = rank_final,
             .prefix_final = prefix_final,
             .actual_start = actual_start,
-            .actual_end = actual_end})[0];
+            .actual_end = actual_end,
+            .slab = slab,
+            .slab_index = slab_index})[0];
 }
 
 }  // namespace ttnn::experimental::prim

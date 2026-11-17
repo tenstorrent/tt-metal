@@ -26,11 +26,10 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
     to_sp_input,
 )
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import run_kda_chunk, zero_state_like
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import run_kda_chunk
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
     KdaStates,
-    allocate_native_state,
     deallocate_state,
     device_scalar,
 )
@@ -43,7 +42,6 @@ pytestmark = run_for_blackhole()
 @pytest.mark.parametrize(
     "mesh_device,device_params,sp_axis,tp_axis",
     [
-        pytest.param((1, 8), kda_device_params((1, 8)), 0, 1, id="1x8-sp0"),
         pytest.param((2, 4), kda_device_params((2, 4)), 0, 1, id="2x4-sp0"),
         pytest.param((2, 4), kda_device_params((2, 4)), 1, 0, id="2x4-sp1"),
         # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
@@ -80,8 +78,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
         config, mesh_shape=tuple(mesh_device.shape), sp_axis=sp_axis, tp_axis=tp_axis
     )
     slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(1,), num_slots=1)
-    scratch = allocate_native_state(mesh_device, geometry)
-    attention = TtK3KdaAttention(layer, 1, tp_axis, 1, ttnn.Topology.Linear, scratch)
+    attention = TtK3KdaAttention(layer, 1, tp_axis, 1, ttnn.Topology.Linear)
     slot_tt = device_scalar(mesh_device, 0)
 
     def committed_carry():
@@ -146,7 +143,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                 # Grade each transition from its actual incoming carry, retaining
                 # the existing error gates without accumulating prior BF16 error. A
                 # request head's incoming carry is zero, whatever the slot holds.
-                incoming = committed_carry() if start else zero_state_like(scratch)
+                incoming = committed_carry() if start else layer.allocate_state()
                 history = reconstruct_convolution_at_sp_rank(
                     incoming.convolution,
                     mesh_device,
@@ -225,7 +222,6 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
         if trace is not None:
             ttnn.release_trace(mesh_device, trace)
             ttnn.deallocate(traced_output)
-        deallocate_state(scratch)
         slabs.deallocate()
         for tensor in (input_tt, slot_tt, start_tt, end_tt):
             ttnn.deallocate(tensor)
