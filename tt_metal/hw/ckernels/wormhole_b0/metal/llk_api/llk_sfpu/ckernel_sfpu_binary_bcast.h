@@ -143,8 +143,10 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects col
 // BCAST_COL normalize path:
 //   LREG0/LREG2 and LREG7/LREG1 carry the two interleaved broadcast chains
 //   (mean and inverse standard deviation); LREG1 is LREG_DATA0 and is only
-//   loaded once the chains have finished. Replay slots [0, 16) are
-//   re-recorded on every call; see the normalize section below.
+//   loaded once the chains have finished. It replays the block that
+//   sfpu_bcast_col_init() records into slots [0, 16), so like add/sub/mul it
+//   needs that init re-run after any op that rewrites the SFPU replay slots;
+//   see the normalize section below.
 //
 // BCAST_SCALAR normalize path:
 //   LREG6/LREG7 retain the negated scalar mean and inverse standard deviation for the
@@ -185,7 +187,7 @@ constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM = 1;
 // a ROW op needs sfpu_bcast_col_init() again (it needs it anyway, since ROW
 // also clobbers the LREG6 lane mask).
 constexpr std::uint32_t REPLAY_SLOT_BROADCAST = 0;  // col-0 -> all-cols broadcast
-constexpr std::uint32_t REPLAY_LEN_BROADCAST = 11;  // see _record_broadcast_replay_
+constexpr std::uint32_t REPLAY_LEN_BROADCAST = 11;  // see _record_norm_dual_broadcast_replay_
 // Whether the ROW band body advances RWC.Dst from its last SFPSTORE through
 // ADDR_MOD_6 (programmed per call) instead of a trailing INCRWC. A throttled
 // matmul (MM_THROTTLE > 0) programs ADDR_MOD_6 for its own MOP only at init,
@@ -248,48 +250,14 @@ inline void _build_lane_mask_col0_() {
     TTI_SFPENCC(0, 0, 0, 0);
 }
 
-// Record the mask + stage1 (ROR by 1) + stage2 (ROR by 2) portion of the
-// broadcast sequence into the replay buffer. Stage 3 (ROR by 4) is emitted
-// inline by _broadcast_stage3_with_data_prefetch_() because keeping replay
-// slots short leaves room for other kernels' replay entries if/when
-// combined, and because stage 3 interleaves per-slot SFPLOADs into its
-// SFPSHFT2 latency slots (data addresses are per-call so can't be recorded).
-//
-// Sequence recorded (11 SFPU ops):
-//    1  SFPAND    LREG_BCAST &= LREG_MASK   (zero SFPU cols 1..7 bitwise)
-//    2  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
-//    3  SFPNOP
-//    4  SFPADD    LREG_BCAST += LREG_TMP
-//    5  SFPNOP
-//    6  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
-//    7  SFPNOP
-//    8  SFPSHFT2  LREG_TMP = ROR1(LREG_TMP)
-//    9  SFPNOP
-//   10  SFPADD    LREG_BCAST += LREG_TMP
-//   11  SFPNOP
-// No SFPNOP after step 1: SFPAND is a single-cycle op whose result the next
-// instruction reads directly (only the SFPMAD-class ops need the slot).
-inline void _record_broadcast_replay_() {
-    lltt::record(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
-
-    // (1) Mask: zero out SFPU cols 1..7 bitwise, so an Inf or NaN in a
-    //     discarded column cannot reach col 0.
-    TTI_SFPAND(0, LREG_MASK, LREG_BCAST, 0);
-
-    // Stage 1: ROR by 1, add.
-    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
-    TTI_SFPNOP;
-
-    // Stage 2: ROR by 2 (ROR1 twice), add.
-    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
-    TTI_SFPNOP;
-}
+// The BCAST_COL add/sub/mul broadcast program is the first
+// REPLAY_LEN_BROADCAST slots of the normalize block that the COL init records
+// (_record_norm_dual_broadcast_replay_): the mask (SFPAND LREG_BCAST &=
+// LREG_MASK, zeroing SFPU cols 1..7 bitwise) + stage 1 (ROR by 1, add) +
+// stage 2 (ROR by 2, add) on LREG_BCAST / LREG_TMP. Stage 3 (ROR by 4) is
+// emitted inline by _broadcast_stage3_with_data_prefetch_() because it
+// interleaves per-slot SFPLOADs into its SFPSHFT2 latency slots (data
+// addresses are per-call so can't be recorded).
 
 // Emit the "rotate by 4, add" tail stage inline (not in the replay buffer),
 // because inserting it pushes the recorded length past what we want to
@@ -474,15 +442,15 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
 // address adder is 10 bits wide, so a negative offset wraps correctly).
 //
 // The mean mask + stage 1 + stage 2 + first half of stage 3 of the interleaved
-// chains (16 ops, no addresses) are recorded into replay slots [0, 16) once
-// per call. This stays inside the SFPU half of the replay buffer (FPU kernels
-// own [replay_buf_offset, 32)). The first REPLAY_LEN_BROADCAST slots are the
-// COL init's broadcast program with its SFPNOP slots filled by the inv_std
-// chain (which writes only LREG7 and LREG1 = LREG_DATA0, both dead at that
-// point of the add/sub/mul path), so a subsequent BCAST_COL add/sub/mul still
-// works without re-running its init. That is why the inv_std mask is applied
-// before the replay: an SFPAND may not follow an SFPSHFT2 ROR1 directly, so it
-// cannot take the first NOP slot.
+// chains (16 ops, no addresses) are recorded into replay slots [0, 16) by the
+// COL init. This stays inside the SFPU half of the replay buffer (FPU kernels
+// own [replay_buf_offset, 32)). The first REPLAY_LEN_BROADCAST slots double as
+// the add/sub/mul broadcast program: the mean chain on LREG_BCAST / LREG_TMP,
+// with the inv_std chain in what would otherwise be SFPNOP slots (it writes
+// only LREG7 and LREG1 = LREG_DATA0, both dead at that point of the
+// add/sub/mul path). That is why the inv_std mask is applied before the
+// replay: an SFPAND may not follow an SFPSHFT2 ROR1 directly, so it cannot
+// take the slot after the first shift.
 
 constexpr std::uint32_t LREG_NORM_MEAN = LREG_BCAST;
 constexpr std::uint32_t LREG_NORM_MEAN_TMP = LREG_TMP;
@@ -511,8 +479,9 @@ inline std::uint32_t _norm_rel_tile_offset_(std::uint32_t dst_index, std::uint32
 
 // Record the interleaved broadcast block (16 ops). Precondition at replay:
 // LREG_NORM_MEAN holds the freshly loaded col-0 slot, LREG_NORM_INV_STD the
-// masked one. Slots 1..11 hold the mean chain exactly where
-// _record_broadcast_replay_ puts it (1, 2, 4, 6, 8, 10).
+// masked one. Replaying slots 1..11 alone is the add/sub/mul broadcast
+// program; every SFPADD / SFPSHFT2 result is first read two slots later, and
+// no SFPAND follows a shift.
 //
 //    1  SFPAND    MEAN    &= MASK
 //    2  SFPSHFT2  MEAN_TMP    = ROR1(MEAN)           stage 1
@@ -623,11 +592,10 @@ sfpi_inline void _norm_load_data_band_() {
     TTI_SFPLOAD(LREG_DATA3, IM, ADDR_MOD_3, COL_GROUP_OFFSETS[3]);
 }
 
-// Point the math dest offset at the data tile and record the broadcast block.
+// Point the math dest offset at the data tile.
 // RWC.Dst is 0 on entry (the SFPU wrappers clear it) and ends at 48.
 inline void _norm_col_tile_begin_(std::uint32_t dst_index_data) {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index_data);
-    _record_norm_dual_broadcast_replay_();
 }
 
 // Restore the dest offset programmed by _llk_math_eltwise_sfpu_start_ once
@@ -1084,8 +1052,9 @@ inline void _sfpu_binary_bcast_init_() {
         // Build persistent col-0 lane mask in LREG_MASK.
         _build_lane_mask_col0_();
 
-        // Record the broadcast helper (mask + ROR1 + ROR2) into replay slot 0.
-        _record_broadcast_replay_();
+        // Record the normalize broadcast block into replay slot 0; its first
+        // REPLAY_LEN_BROADCAST slots are the add/sub/mul broadcast program.
+        _record_norm_dual_broadcast_replay_();
     }
     // BCAST_ROW: nothing persists from the init. Each full-tile call records
     // its band body into SFPU replay slots 0..15, clobbers LREG4..7 and

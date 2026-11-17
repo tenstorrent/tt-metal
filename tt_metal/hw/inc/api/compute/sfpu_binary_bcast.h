@@ -121,7 +121,8 @@ ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
  * Apply `(data - mean) * inv_std` in one SFPU traversal, broadcasting column 0
  * of each statistics tile across all columns. All operands and the in-place
  * output are FP32. DST must be acquired, and `sfpu_bcast_col_init()` must have
- * been called since any scalar-broadcast normalisation.
+ * been called since any other SFPU op that rewrites the SFPU replay slots or
+ * LREG6 (ROW or scalar broadcasts, reduce, ...), as for the BCAST_COL add.
  *
  * Not supported on Quasar: a kernel that calls it fails to build.
  *
@@ -153,7 +154,9 @@ ALWI void sfpu_normalize_bcast_col(uint32_t dst_data_idx, uint32_t dst_mean_col_
 /**
  * Apply `(data - mean) * inv_std` to two in-place data tiles while reusing
  * each column-vector statistics broadcast. All operands and outputs are FP32.
- * DST must be acquired, and `sfpu_bcast_col_init()` must have been called.
+ * DST must be acquired, and `sfpu_bcast_col_init()` must have been called
+ * since any other SFPU op that rewrites the SFPU replay slots or LREG6 (ROW or
+ * scalar broadcasts, reduce, ...), as for the BCAST_COL add.
  *
  * Not supported on Quasar: a kernel that calls it fails to build.
  *
@@ -191,7 +194,8 @@ ALWI void sfpu_normalize_bcast_col_two_tiles(
  * Apply `(data + residual - mean) * inv_std` in one SFPU traversal,
  * broadcasting column 0 of each statistics tile. All operands and the in-place
  * output are FP32. DST must be acquired, and `sfpu_bcast_col_init()` must have
- * been called since any scalar-broadcast normalisation.
+ * been called since any other SFPU op that rewrites the SFPU replay slots or
+ * LREG6 (ROW or scalar broadcasts, reduce, ...), as for the BCAST_COL add.
  *
  * Not supported on Quasar: a kernel that calls it fails to build.
  *
