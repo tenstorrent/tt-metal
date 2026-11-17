@@ -127,6 +127,11 @@ jobs:
         LOGURU_LEVEL: INFO
         HF_HUB_CACHE: ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '' || '/mnt/MLPerf/huggingface/hub' }}
         TT_MM_THROTTLE_PERF: ${{ contains(matrix.test-group.sku, 'bh_') && '0' || '5' }}
+        # CI experiment only (not for merge): every pytest in these jobs loads the precompile plugin, which decides
+        # per pytest after collection; stream mode: the real run starts right away, the child (at SCHED_IDLE) builds
+        # ahead of it.
+        PYTEST_ADDOPTS: -p tests.plugins.precompile
+        PRECOMPILE_WAIT: "0"
       volumes:
         # The image owns /work, so no bind mount: one would mask the payload. A
         # single-path entry is an anonymous volume on an unused path.
