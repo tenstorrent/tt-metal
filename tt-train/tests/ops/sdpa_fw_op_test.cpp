@@ -3669,9 +3669,15 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_BatchGQAGateNoLse) 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitEdge_DefaultPickFewHeads) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // The production pick (all knobs 0) on the tensor-parallel shapes that cut, against the pick with cutting
-    // off; whatever the pick chooses must match the uncut run.
+    // off; whatever the pick chooses must match the uncut run. The D=256 row is the Qwen3.8 TP4 training
+    // shape, which the pick cuts on a 110-core grid and which is the only split coverage of vWt = 8
+    // partials (a partial row of 10 tiles); every other split test here runs vWt = 4 or less.
     for (const auto [heads, kv, S, D] : std::vector<std::array<uint32_t, 4>>{
-             {4U, 1U, 4096U, 128U}, {8U, 2U, 2048U, 128U}, {2U, 2U, 2048U, 64U}, {1U, 1U, 4096U, 64U}}) {
+             {4U, 1U, 4096U, 128U},
+             {8U, 2U, 2048U, 128U},
+             {2U, 2U, 2048U, 64U},
+             {1U, 1U, 4096U, 64U},
+             {6U, 1U, 1024U, 256U}}) {
         SDPATestConfig base{
             .batch_size = 1U,
             .sequence_length = S,
