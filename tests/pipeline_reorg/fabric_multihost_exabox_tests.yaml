@@ -502,6 +502,9 @@
       echo "::error::could not resolve the hosts from ${HOSTFILE}"; exit 1
     fi
     echo "hosts: $RESOLVED_HOSTS"
+    # the setup action provisions passwordless ssh for the 'user' account and syncs the workspace with `ssh -l user`;
+    # reach the peers as the same account for staging, census and cleanup
+    export TEARDOWN_REMOTE_USER=user
     ./tests/scripts/multihost/run_teardown_multihost_tests.sh --hosts "$RESOLVED_HOSTS" 2>&1 \
       | tee "${PIPELINE_DIR}/teardown_multihost.log"
   skus:

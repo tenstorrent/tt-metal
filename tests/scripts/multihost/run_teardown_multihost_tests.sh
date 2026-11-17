@@ -32,6 +32,13 @@ num_hosts=$(host_names | wc -w)
 last_host=$(host_names | awk '{print $NF}')  # the remote host we inject faults on
 victim_rank=$((num_hosts - 1))               # one rank per host, so the last rank runs on last_host
 
+# ssh/scp reach the peers as REMOTE_USER when it is set. The multihost CI (setup-multihost-job) provisions
+# passwordless ssh for the 'user' account and syncs the workspace with `ssh -l user`, so that lane sets
+# TEARDOWN_REMOTE_USER=user to reach the same account. Empty (the default) keeps a bare host, so a manual run
+# uses your own account and keys.
+REMOTE_USER="${TEARDOWN_REMOTE_USER:-}"
+rtarget() { if [ -n "$REMOTE_USER" ]; then printf '%s@%s' "$REMOTE_USER" "$1"; else printf '%s' "$1"; fi; }
+
 # --------------------------------------------------------------------------------------------------------------
 # build the probe and stage it on every host. The compile dir is a local mktemp under /tmp, which SC4 does NOT
 # share across hosts (only the workspace is synced), so the copy is required, not a fallback. scp will not create
@@ -42,10 +49,10 @@ probe="$(mktemp -d)/teardown_mpi_probe"
 probe_src="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/distributed/multiprocess/teardown_sanity/sanity_mpi_probe.cpp"
 mpicxx -O1 -o "$probe" "$probe_src" || { echo "::error::the probe did not compile ($probe_src)"; exit 1; }
 for host in $(host_names); do
-  ssh -o BatchMode=yes "$host" "mkdir -p '$(dirname "$probe")'" \
+  ssh -o BatchMode=yes "$(rtarget "$host")" "mkdir -p '$(dirname "$probe")'" \
     || { echo "::error::could not create the probe directory on $host"; exit 1; }
-  scp -q "$probe" "$host:$probe" 2>/dev/null || true  # a no-op on the compile host (same file); verified next
-  ssh -o BatchMode=yes "$host" "test -x '$probe'" \
+  scp -q "$probe" "$(rtarget "$host"):$probe" 2>/dev/null || true  # a no-op on the compile host (same file); verified next
+  ssh -o BatchMode=yes "$(rtarget "$host")" "test -x '$probe'" \
     || { echo "::error::the probe is not staged/executable on $host ($probe)"; exit 1; }
 done
 
@@ -86,7 +93,7 @@ launch=(--host "$hosts" -np "$num_hosts" --map-by node --oversubscribe --bind-to
 ranks_still_alive() {
   local total=0 host n
   for host in $(host_names); do
-    n=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "pgrep -cf '$probe_pat' || true" 2>/dev/null)
+    n=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$(rtarget "$host")" "pgrep -cf '$probe_pat' || true" 2>/dev/null)
     if [ $? -ne 0 ] || ! [[ "$n" =~ ^[0-9]+$ ]]; then echo "ERROR"; return 1; fi
     total=$((total + n))
   done
@@ -95,7 +102,7 @@ ranks_still_alive() {
 
 kill_stragglers() {
   local host
-  for host in $(host_names); do ssh -o BatchMode=yes "$host" "pkill -9 -f '$probe_pat'" 2>/dev/null || true; done
+  for host in $(host_names); do ssh -o BatchMode=yes "$(rtarget "$host")" "pkill -9 -f '$probe_pat'" 2>/dev/null || true; done
 }
 
 # Kill ONLY this job's prted on $1. The rank on that host runs under this job's prted, so we find this run's rank
@@ -106,7 +113,7 @@ kill_stragglers() {
 # PROBE_PAT, which keeps the remote script free of nested quoting.
 kill_this_jobs_prted() {
   local host="$1"
-  ssh -o BatchMode=yes "$host" "PROBE_PAT='$probe_pat' bash -s" <<'REMOTE'
+  ssh -o BatchMode=yes "$(rtarget "$host")" "PROBE_PAT='$probe_pat' bash -s" <<'REMOTE'
     rank=$(pgrep -f "$PROBE_PAT" | head -1)
     [ -n "$rank" ] || { echo "no rank matching the probe on this host"; exit 2; }
     pid=$rank
@@ -183,7 +190,7 @@ echo "       remote host, kill ONLY this job's prted there, and require PRRTE's 
 echo "       is no --timeout backstop on purpose: if PRRTE does not abort, the rank hangs, the outer 'timeout 120'"
 echo "       ends it with 124, and expect rejects that as the failure — so the case tests the abort, not the clock."
 ( for _ in $(seq 1 30); do
-    ssh -o BatchMode=yes "$last_host" "pgrep -f '$probe_pat' >/dev/null 2>&1" && break; sleep 1
+    ssh -o BatchMode=yes "$(rtarget "$last_host")" "pgrep -f '$probe_pat' >/dev/null 2>&1" && break; sleep 1
   done
   kill_this_jobs_prted "$last_host" || echo "::error::daemon-death fault was not injected on $last_host" ) &
 inject_pid=$!
