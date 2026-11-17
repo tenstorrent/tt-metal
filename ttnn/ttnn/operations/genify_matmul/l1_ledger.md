@@ -68,6 +68,12 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
   - Gate: the split is taken only if it keeps the R1a multicast decision (a smaller K-block can fall under `MCAST_MIN_KBLOCK_BYTES`).
 - **`cb_output_tiles` capacity** is `depth_out · write_batch · sb_h · out_block_n` (`OUT_WRITE_BATCH_ROW_GROUPS`, parked at 1 = the Refinement 7 size; a larger batch is granted only if it fits the budget). The writer waits / flushes / pops `write_batch` row groups at a time; the ring is a whole number of batches, so a batch never wraps.
 
+**Refinement 9 (R1b `interleaved_stream_mcast_a`) as built.** R1's CB inventory on a 1-D N split (`grid_m' = 1`); no new CB.
+- **`cb_act_tiles`: producer = the writer** (BRISC), not the reader. The writer's A stream produces it (the injector reads each A K-block into its own slot and multicasts it to the same slot on every core; the others reserve, ack, wait, push). The reader no longer touches it, so single producer / single consumer holds. Every core walks the same nominal block sequence (grid-uniform `nb_n`), so the write pointers stay in lockstep and the slot is the multicast landing zone.
+- **Operand depths**: `cb_act_tiles` / `cb_weight_tiles` hold `ACT_STREAM_DEPTH = 4` K-blocks each on an R1b K-walk (S2 / S3), carried in `Blocking.depth_act` / `depth_weight`, which both the solve (`_footprint`, `_block_k_max`) and the CB sizes read. The solve shrinks `block_k` to pay for it (PERF FOCUS 4: `block_k` 20 → 10, 10 → 20 K-blocks; same bytes per CB). What depth buys: every core waits for each K-block's A round, so the slowest core's B read gates the next broadcast; four slots give the coupling three K-blocks of slack and let B run ahead of compute (683 → 633 µs). The one-K-block S1 walk keeps depth 2. Shares with / why not: unchanged (in0 / in1 of the same matmul, both live).
+- **Injector stall-shadow** (`ACT_STREAM_AHEAD = 2`): the injector reserves K-block kb+1's slot (`(j − kb + 1)` blocks ahead, address `ring base + (slot % depth_act) · slot bytes`, the CB is exactly `depth_act` slots) and issues its reads (trid `(j % ahead) + 1`) before multicasting kb. No extra L1: the slot is one of the ring's own.
+- One `ttnn.Mcast` channel (`act`, NoC1, a fixed in-group sender, one group = the whole split; a flat split's partial last row is a second rectangle) adds 2 L1 semaphores per core; the R1a line channels are absent.
+
 ## Symbol table (non-block parameters and their bounds)
 
 | Symbol | Bound | Predicate establishing it |
@@ -188,3 +194,13 @@ PDL res3 reduce (8192×512 @ 512×128 bf8b, 86 cores): DRAM = B × 86 ≈ 6.0 MB
 | output | 1 | unchanged | none |
 
 PERF FOCUS 3 (32 × 512×128 @ 128×1024 bf8b, B in L1): split 32×1×3 → **32×3×1** (96 cores, `act_resident`, 8-column B blocks). DRAM: A ×3 (6.6 MB) → **A ×1 (2.2 MB)** + out 17.8 MB = 20.0 MB (the roofline's traffic). L1 → NoC: B re-read ×3 (13.2 MB, NoC0, overlapped with the write stream). 70.3 → 65.2 µs; the DRAM write stream binds (write-only 59–61 µs at any core count from 32 to 96, ≈ 300 GB/s for 1088 B interleaved tile writes).
+
+**R1b `interleaved_stream_mcast_a` as built (Refinement 9)** — DRAM / NoC crossings per tensor when `operand_mode() == 2` (1-D N split over `grid_n'` cores, weight-streaming shape):
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | `nb_n` (1 when the whole region is one block) | one injector (the writer RISC of `ACT_STREAM_INJECTOR`) reads each A K-block once and broadcasts it | multicast of every A K-block to the other `grid_n' − 1` cores (NoC1) |
+| B | 1 (× `nb_m`) | each core streams its own column slice (NoC0) | none |
+| output, bias / gate, residual | as R1 | unchanged (per-core) | none |
+
+PERF FOCUS 4 (256×6144 @ 6144×18432 bf16, swiglu; 96 cores, block 8×6): DRAM = A 3.1 MB + B 226 MB + out 4.7 MB ≈ 234 MB (the roofline's traffic), NoC = 3.1 MB A multicast to 95 cores. Before (R1a 8×9, 72 cores): the same DRAM bytes, but B streamed by only the 9 column injectors (25 MB each), 1125 µs; now 633–646 µs, B-stream-bound (B alone 550 µs ≈ 411 GB/s for interleaved 2 KB tile reads; with the A lockstep 578 µs). The single injector caps R1b at ~23 GB/s of A, so the split ranking counts R1b at `max(A + B, ACT_STREAM_INJECTOR_COST · A)` (= 18): text-encoder down 512×16384×5120 (A = 19% of B) keeps R1a.

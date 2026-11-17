@@ -288,7 +288,7 @@ No SUPPORTED change.
 
 **Outcome**: PERF FOCUS 3 measured **70.3 → 65.2 µs** device time (median of 5 fresh runs each; stock 123.0 µs, roofline 43.5 µs); precision PCC 0.9989, rel-RMS 0.017 (gate 0.997 / 0.15). The ablation at the start showed the output **DRAM write stream binds**: write-only 59.9 µs, while the reads (A re-read 3× from DRAM by the 32×1×3 split, 6.6 MB) sat before compute as a ~10 µs prologue and competed with the writes for DRAM. Levers: (1) **operand residency** (`RESIDENT_SPLIT_BLOCKS = 4`): a one-K-block S1 walk is split along one axis with the smaller per-core operand held fronted (matmul_block `WaitAndRetainOnLastBlock`; `act_resident` = A held across N-blocks, `weight_resident` = B held across M-blocks), so compute and the first writes start after the resident operand + one block; (2) **`L1_READ_COST = 0.25`** in the split ranking (L1-sourced operand bytes do not load DRAM): PERF FOCUS 3 moves to 32×3×1 with A resident, so A crosses DRAM once (2.2 MB) and B is re-read from L1 instead; (3) **write batching** (`OUT_WRITE_BATCH_ROW_GROUPS`): correct but flat to +1.6% at 4 / 8, parked at 1 as a live knob. Also measured: the 16-bit-DEST 8-tile subblock already holds (1×8 on the new block); `block_batches = 2` (16×{3,2,1}×{1,3} splits) 71.6–81.6 µs, so one batch per core stays; writer on NoC0 107 µs, so NoC1 stays; write bank-stagger, N-block rotation and posted writes are all within noise. Same levers elsewhere: the PDL upsample W pass 15.6 → 12.7 µs; 2048×256×512 bf16 −11% / −14% (HiFi4 / HiFi2); 2048×128×3072 −6% / −4%. The rest of the guard set is within ±2% (plans unchanged). A residency split that would lose the R1a multicast is refused: 2048×256×512 bf8b had measured +11% before that gate. **Bottleneck now**: the interleaved DRAM write stream. Write-only time is 59–61 µs at 32, 64 or 96 cores (≈ 300 GB/s for 1088 B tile writes). Full 65 µs = that floor plus ~5 µs of read prologue, because every core reads its resident A and first B block before its first write. **Next**: shorten that prologue. Options: B multicast within each batch's 3-core group (it re-reads the same L1 B 3×, 13 MB on NoC0), or a staggered core start. Not done: the multicast needs a batch-line topology, a scheme change, and the whole remaining gap is ~8% above a measured write floor that no read-side lever moves.
 
-### [ ] Refinement 9 — Speed up PERF FOCUS 4 (FLUX.2 prompt-stream FF1 + SwiGLU, 256 tokens)
+### [x] Refinement 9 — Speed up PERF FOCUS 4 (FLUX.2 prompt-stream FF1 + SwiGLU, 256 tokens)
 
 **Type**: perf
 
@@ -305,3 +305,20 @@ No SUPPORTED change.
 **Verifier notes**: Reuse the multicast infrastructure Refinement 3 builds. This is a different topology (one-to-all A broadcast instead of row/column), so it gets its own phase.
 
 **Done when**: measured device ns on the flagged shape improves toward 865.9 µs, its soft precision gate holds, and the golden suite is green. There must be no regression across the guard set (one representative per kernel path × placement × dtype, including the PERF FOCUS 1–3 shapes).
+
+**Outcome**: PERF FOCUS 4 measured **1125 → 645 µs** device time (median of 3 fresh runs, range 630–646). The `achievable_ns` target of 865.9 µs is beaten, and the result is 1.27× the 508.6 µs roofline. Precision: PCC 0.99999, rel-RMS 0.0084.
+- **What landed.** R1b `interleaved_stream_mcast_a` on a 1-D N split of 96 cores: every core streams its own B columns, and one injector broadcasts each A K-block from the writer RISC (BRISC / NoC1). Co-tuned levers:
+  - the row-aware N quantum (`Q_N_ROW_AWARE`: 72 → 96 cores, 2×2 subblock);
+  - `ACT_STREAM_DEPTH = 4` (683 → 633 µs);
+  - the injector stall-shadow `ACT_STREAM_AHEAD = 2`: −3 to −4% on A-heavy shapes, noise on FF1.
+- **Gates.** The split ranking caps R1b by the single injector's throughput (`ACT_STREAM_INJECTOR_COST = 18`), and R1b runs only on weight-streaming shapes. Together these keep text-encoder down and x_embedder on their old plans.
+- **Same regime, other shapes:**
+  - the twin, 559 → 321 µs;
+  - guidance / timestep linear_2, 308 / 407 → 206 / 209 µs;
+  - context_embedder, 2226 → 351 µs;
+  - attn-out txt, 888 → 144 µs;
+  - FF2 txt, 570 → 323 µs;
+  - text-encoder qkv, 1314 → 232 µs.
+- **Guard set.** PERF FOCUS 1–3, block_sharded, height_sharded, 4096³, the W pass and the L1 shapes are all within ±1% (PERF FOCUS 3: median of 5).
+- **Bottleneck now (ablation).** The B DRAM stream: B alone takes 550 µs, ≈ 411 GB/s for interleaved 2 KB tile reads from every bank. The A broadcast adds 28 µs, but its lockstep keeps the cores on the same DRAM rows: with A stubbed and compute on, the run is slower (744 µs vs 688 µs). Compute alone is 274 µs, and ~55 µs of compute stays outside the stream.
+- **Next.** A split B reader (half of each B slot filled by BRISC on NoC1 under a local slot handshake), or a rotating injector for A-heavy shapes (a rectangular landing zone as in R4). Neither was done: each is a structural change, and the gain depends on NoC0 link saturation, which was not measured. Same-bank coalesced reads measured slower (627 vs 578 µs).

@@ -511,3 +511,72 @@
     - residency off;
     - the write-batch knob at 4 (with none and swiglu epilogues).
   - Perf guard `test_perf_upsample_w_pass`.
+
+## Refinement 9 — Speed up PERF FOCUS 4 (FLUX.2 prompt-stream FF1 + SwiGLU, 256 tokens)
+- Date: 2026-11-17
+- What was done: built regime **R1b `interleaved_stream_mcast_a`** and co-tuned it.
+  - **Starting point.** PERF FOCUS 4 (A 1×256×6144 bf16 × B 6144×18432 bf16, HiFi2, fp32 DEST, swiglu) ran R1a on an 8×9 split (72 cores): B crossed DRAM once, but only the 9 column injectors read it, ~25 MB each, so those injectors bound the run at 1125 µs.
+  - **R1b topology.** A 1-D N split (`grid_m' = 1`, 96 cores, block 8×6, 2×2 subblock). Every core streams its own B columns from DRAM on the reader (NCRISC / NoC0). ONE injector reads each A K-block and multicasts it to every core's `cb_act_tiles` slot. The broadcast runs on the **writer RISC** (BRISC / NoC1), which becomes `cb_act_tiles`' producer on every core (reserve → ack or send → push), so the A handshake never stalls the B stream. The compute kernel is unchanged. Wiring: reader CT 22 is now `operand_mode` (0 R1 / 1 R1a / 2 R1b); writer CT 8 is `act_mode` (0 / 1 R4 rounds / 2 R1b stream), plus CT 17–20 (last K-block, A page size, A residency, injector ahead) and A's accessor after the output's. One `ttnn.Mcast` channel: a fixed in-group sender; a flat split's partial last row makes the receiver set a second rectangle. 1125 → 683 µs.
+  - **`Q_N_ROW_AWARE`.** On a 1-D split a core owns all `core_m` rows, so a subblock of height h (largest power of two ≤ 4 dividing `core_m`) needs only `4/h` columns. FF1: `core_n` 8 → 6, 72 → 96 cores, subblock 1×4 → 2×2.
+  - **`ACT_STREAM_DEPTH = 4`** (operand rings in K-blocks on an R1b K-walk). Carried in `Blocking.depth_act` / `depth_weight`; the L1 solve and the CB sizes both read it there, and the solve shrinks `block_k` (20 → 10) to pay for it. Every core waits for each K-block's A round, so the slowest core's B read gates the next broadcast; depth gives that coupling slack. Measured FF1 683 / 666 / 633 / 634 µs at depth 2 / 3 / 4 / 5; depth 6 drops the K-block under the R1b gate.
+  - **`ACT_STREAM_AHEAD = 2`** (injector stall-shadow). The injector reserves K-block kb+1's slot and issues its reads (read-trid ring) before multicasting kb. Effect: −3 to −4% on the injector-heavy shapes (context_embedder 362.6 → 349.8 µs, text-encoder down 761 → 732 µs); within noise on FF1 (median of 3: 638 at ahead=1, 645 at ahead=2).
+  - **Ranking and gates** (`read_traffic`, `uses_act_stream`):
+    - R1b counts A once and B per core, capped by the single injector's throughput: `max(A + B, ACT_STREAM_INJECTOR_COST · A)`, cost 18. The B stream runs at ~411 GB/s; one injector's A read + multicast at ~23 GB/s. Without the cap, text-encoder down 512×16384×5120 (A = 19% of B) went R1b at 760 µs against 552 µs under R1a.
+    - R1b requires a weight-streaming shape (B bytes ≥ output bytes): the A rounds share the writer RISC with the output drains. Without the gate, x_embedder 2048×128×3072 went R1b at 62.8 µs against 48.5 µs.
+    - The existing gates still apply: an A K-block of at least `ACT_STREAM_MIN_KBLOCK_BYTES` = 32 KB, single batch.
+  - **Reused:** R1's split, blocking, CBs, compute kernel and block walk; the reader's R1 B path; the writer's block walk; `ttnn.Mcast` + `McastArgs`; the trid helpers. **Added:** `operand_mode()`, `uses_act_stream()`, `_attach_act_stream()`, `_row_subblock_h()`, `_stream_depths()`, the `Blocking` depth fields, the writer's A-stream role, 7 knobs.
+- Perf (device ns; one fresh run each unless noted; old = `ACT_STREAM_MCAST = Q_N_ROW_AWARE = False`):
+
+  | case | before | after | stock |
+  |---|---|---|---|
+  | **PERF FOCUS 4** FF1 256×6144×18432 swiglu | 1125.4 µs | **645 µs** (median of 3; 630–646) | 865.9 µs (roofline 508.6) |
+  | its epilogue-none twin 256×6144×9216 | 558.9 µs | **321 µs** | 452.9 µs |
+  | guidance linear_2 1×6144×6144 bf16 | 308.3 µs | 206 µs | 192.1 µs |
+  | timestep linear_2 1×6144×6144 fp32 | 406.9 µs | 209 µs | 195.4 µs |
+  | context_embedder 256×15360×3072 | 2225.8 µs | 351 µs | 405.1 µs |
+  | attn out txt 256×6144×3072 addcmul | 887.7 µs | 144 µs | 193.2 µs |
+  | attn out 128×6144×3072 addcmul | 526.4 µs | 119 µs | — |
+  | FF2 txt 256×9216×6144 | 569.5 µs | 323 µs | 456.2 µs |
+  | text-encoder qkv 512×5120×3072 bf8b | 1314.2 µs | 232 µs | 139.2 µs |
+  | time_mod 1×6144×52224 fp32 + bias | 1819.9 µs | 1601 µs | 2310.7 µs |
+  | timestep linear_1 1×256×6144 fp32 | 19.6 µs | 10.0 µs | 13.1 µs |
+  | Qwen prefill-128 gate_up (A / out in L1, bf4b) | 392.9 µs | 114 µs | — |
+  | cartesian 32×1024×2048 / 1×2048×1536 | 23.8 / 36.9 µs | 12.9 / 19.7 µs | — |
+  | x_embedder 2048×128×3072, text-encoder down 512×16384×5120 | 48.5 / 552 µs | 47.5 / 552 µs (plans unchanged) | 62.9 / 508.6 µs |
+
+  Guard set, plans unchanged (writer / reader CT layout only): PERF FOCUS 1 465.3 µs (465.5), PERF FOCUS 2 29.6 (29.7), PERF FOCUS 3 65.5 (median of 5; 65.2), BS res5 expand 46.1 (45.8), HS res3 expand 18.6 (18.7), 4096³ 1292.5 (1293), W pass 12.8 (12.7), L1 384×1536×1024 31.2 (31.1).
+- Bottleneck now (FF1, ablation with hooks in `agent_logs/refinement9_ablation_hooks.patch`):
+  - Measured times (depth 4):
+    - full: 633 µs
+    - compute stubbed (B stream + A broadcast): 578 µs
+    - B stream alone, A and compute stubbed: 550 µs (226 MB at ≈ 411 GB/s, interleaved 2 KB tile reads)
+    - compute alone: 274 µs
+    - everything stubbed: 16 µs
+  - So the run is **B-DRAM-stream-bound**; compute overlaps it within ~55 µs.
+  - The A lockstep costs ~28 µs on the bare B stream, but helps once compute runs: with compute on and A stubbed, the run takes 744 µs against 688 µs, because the cores drift apart and lose DRAM-row locality.
+  - Same-bank coalesced B reads (perf-only ablation) were slower: 627 µs against 578 µs.
+- Accuracy achieved (PCC / rel-RMS, HiFi2, fp32 DEST):
+  - FF1 swiglu: 0.999990 / 0.0084
+  - twin: 0.999983 / 0.0046
+  - guidance: 0.999995 / 0.0047
+  - timestep fp32: 0.999994 / 0.0067
+  - context_embedder: 0.999986 / 0.0046
+- Golden test progress: `test_golden.py -k "(loose and interleaved) or (not loose and interleaved and (A1x2048_ or A1x1x32x1024))"`: 204 passed, 30 xfailed (the expected EXCLUSIONs), 0 failed. Unit net (whole `tests/.../genify_matmul/`): 687 passed, 0 failed.
+- Issues encountered:
+  - The R1b plan change touched every 1-D-split interleaved shape. The plan diff and the per-shape A/B found two regressions, fixed by the injector cost and the weight-streaming gate.
+  - `run_safe_pytest.sh --profile` cannot pass a multi-word `-k` through tracy, so the perf file takes a `GENIFY_MATMUL_ONLY` id filter.
+  - A perf-only ablation issuing reads on NoC1 from NCRISC hung, as expected: NoC command buffers belong to one RISC. A real split reader needs BRISC to fill half of each B slot under a local handshake.
+- Tests added:
+  - `test_genify_matmul_stream_mcast.py` (13 cases):
+    - R1b selection + correctness on PERF FOCUS 4, M = 1, ragged M / N, a one-row rectangle and every epilogue family
+    - fp32 A
+    - A in L1
+    - a multi-N-block walk (none / swiglu)
+    - A residency
+    - each knob off
+  - `perf/test_genify_matmul_perf_flux.py`: the 4 FLUX cases plus 12 R1b guard cases, with `GENIFY_MATMUL_KNOBS` / `GENIFY_MATMUL_ONLY`.
+  - `test_genify_matmul_residency.py` act-resident R1a cases: unchanged and passing again (x_embedder keeps R1a under the weight-streaming gate).
+- Next (not done):
+  - The B stream itself: 550 µs vs the 508.6 µs roofline. Interleaved 2 KB tile reads from all banks on NoC0 reach ~411 GB/s. A split reader would put half of B on BRISC / NoC1 under a local slot handshake, since the CB still has one producer. It is a structural change, and the gain depends on NoC0 link saturation, which was not measured.
+  - The ~55 µs of compute / stream non-overlap at the ends of the walk.
+  - A rotating injector for A-heavy shapes, so A reads spread over cores. The helper's rotating mode needs a rectangular receiver set, so it would mean a bounding-rectangle landing zone as in R4.
