@@ -546,18 +546,46 @@ class TtCodecDecoder:
         """codes [1, 16, T] -> latents [1, T, 512] on host."""
         return quantizer_decode(codes, self.p["state"], self.config)
 
+    def conv_reach_frames(self):
+        """How many frames before a frame the convolutions after the transformer read.
+
+        Decoding a chunk's frames behind this many of the transformer's outputs gives the
+        same samples as decoding the whole clip. Walks the stack backwards from the output:
+        a causal convolution reaches `(kernel - 1) * dilation` samples back, and a
+        transposed one of stride `s` turns a reach of `L` samples into `ceil((L + kernel -
+        1) / s)` of its input.
+        """
+        reach = self.p["final_conv"]["kernel"] - 1
+        for block in reversed(self.p["blocks"]):
+            for unit, dilation in reversed(list(zip(block["units"], (1, 3, 9)))):
+                reach += unit["conv2"]["kernel"] - 1 + (unit["conv1"]["kernel"] - 1) * dilation
+            reach = -(-(reach + block["trans_conv"]["kernel"] - 1) // block["rate"])
+        reach += self.p["head_conv"]["kernel"] - 1
+        for stage in reversed(self.p["upsample"]):
+            reach += stage["convnext"]["dwconv"]["kernel"] - 1
+            trans = stage["trans_conv"]
+            reach = -(-(reach + trans["kernel"] - 1) // trans["kernel"])
+        return reach
+
+    def front(self, latents, cos, sin, mask, intermediates=None):
+        """latents [1, T, 512] -> the transformer's output [1, T, 1024]."""
+        x = self._causal_conv(latents, self.p["pre_conv"], "pre_conv")
+        if intermediates is not None:
+            intermediates["pre_conv"] = x
+        x = self._transformer(x, cos, sin, mask)
+        if intermediates is not None:
+            intermediates["pre_transformer"] = x
+        return x
+
     def __call__(self, latents, cos, sin, mask, return_intermediates=False):
         """latents [1, T, 512] -> waveform [1, 1920 * T, 1]."""
-        intermediates = {}
+        intermediates = {} if return_intermediates else None
+        x = self.back(self.front(latents, cos, sin, mask, intermediates), intermediates)
+        return (x, intermediates) if return_intermediates else x
 
-        x = self._causal_conv(latents, self.p["pre_conv"], "pre_conv")
-        if return_intermediates:
-            intermediates["pre_conv"] = x
-
-        x = self._transformer(x, cos, sin, mask)
-        if return_intermediates:
-            intermediates["pre_transformer"] = x
-
+    def back(self, x, intermediates=None):
+        """The transformer's output [1, T, 1024] -> waveform [1, 1920 * T, 1]."""
+        return_intermediates = intermediates is not None
         for index, stage in enumerate(self.p["upsample"]):
             x = self._trans_conv(x, stage["trans_conv"], f"upsample.{index}", stride=stage["trans_conv"]["kernel"])
             x = self._convnext(x, stage["convnext"], f"upsample.{index}")
@@ -584,7 +612,6 @@ class TtCodecDecoder:
         x = ttnn.clamp(ttnn.to_layout(x, ttnn.TILE_LAYOUT), min=-1.0, max=1.0)
         if return_intermediates:
             intermediates[f"decoder.{len(self.p['blocks']) + 2}"] = x
-            return x, intermediates
         return x
 
     def decode(self, codes, bucket=LENGTH_BUCKET):
@@ -628,16 +655,21 @@ class TtCodecDecoder:
 # the fp32 reference, two LibriTTS clips in vLLM-Omni's chunk schedule: 44-47 dB SNR at 100
 # frames of context, 65-71 dB at 144, against ~28 dB between this bf16 decoder and fp32.
 STREAM_WINDOW = 4 * LENGTH_BUCKET
+# Frames the convolutions after the transformer decode for a chunk: the chunk and the frames
+# the convolutions reach back to, rounded up to one of these, or the whole window for a longer
+# chunk. They cost ~1.5 ms a frame and the transformer ~12 ms at any length, so a steady
+# 25-frame chunk decodes 40 frames rather than 128.
+CONV_LENGTHS = (16, 24, 32, 40)
 
 
 class StreamingCodecDecoder:
     """Decodes one request's codes chunk by chunk, returning only each chunk's new samples.
 
-    A request's `state` dict keeps the last `window` frames it was given, and each chunk is
-    decoded behind them, so every decode runs at one of `window / LENGTH_BUCKET` bucketed
-    lengths. `warmup` captures one trace per length; a chunk is one latents write and one
-    replay. Eager, a decode costs at least ~0.19 s whatever its length, longer than a
-    two-frame chunk plays for.
+    A request's `state` dict keeps the last `window` frames it was given. Each chunk runs the
+    transformer over all of them, padded to `window`, then the convolutions over only the
+    chunk and the `conv_reach_frames()` frames before it, which gives the samples a decode of
+    the whole window would. `warmup` captures one trace per convolution length; a chunk is a
+    latents write, a row-selection write and one replay.
     """
 
     def __init__(self, device, parameters=None, window=STREAM_WINDOW):
@@ -645,10 +677,13 @@ class StreamingCodecDecoder:
         self.codec = TtCodecDecoder(device, parameters or preprocess_codec_parameters(device))
         self.window = window
         self.upsample = self.codec.upsample
-        self._traces = {}  # padded frames -> (trace id, latents input, waveform output)
+        self.context = self.codec.conv_reach_frames()
+        self.conv_lengths = sorted({length for length in CONV_LENGTHS if length < window} | {window})
+        self._traces = {}  # convolution frames -> (trace id, row-selection input, waveform output)
+        self._latents = None  # the window's latents, read by every trace
 
     def warmup(self):
-        """Compile every bucketed length, then capture a trace of each.
+        """Compile every convolution length, then capture a trace of each.
 
         All are compiled before the first capture and captured before the first replay:
         nothing eager may run beside a live trace, and capturing one after another had run
@@ -657,17 +692,27 @@ class StreamingCodecDecoder:
         to_device = lambda tensor: ttnn.from_torch(
             tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
         )
-        inputs = {}
-        for frames in range(LENGTH_BUCKET, self.window + 1, LENGTH_BUCKET):
-            codes = torch.zeros(1, self.codec.config["num_quantizers"], frames, dtype=torch.long)
-            inputs[frames] = [to_device(self.codec.latents(codes)), *map(to_device, self.codec.host_inputs(frames))]
-            self.codec(*inputs[frames])
+        codes = torch.zeros(1, self.codec.config["num_quantizers"], self.window, dtype=torch.long)
+        self._latents = to_device(self.codec.latents(codes))
+        tables = [to_device(table) for table in self.codec.host_inputs(self.window)]
+        selections = {length: to_device(torch.zeros(1, length, self.window)) for length in self.conv_lengths}
+        for selection in selections.values():
+            self._forward(selection, tables)
         ttnn.synchronize_device(self.device)
-        for frames, tensors in inputs.items():
+        for length, selection in selections.items():
             trace = ttnn.begin_trace_capture(self.device, cq_id=0)
-            waveform = self.codec(*tensors)
+            waveform = self._forward(selection, tables)
             ttnn.end_trace_capture(self.device, trace, cq_id=0)
-            self._traces[frames] = (trace, tensors[0], waveform)
+            self._traces[length] = (trace, selection, waveform)
+
+    def _forward(self, selection, tables):
+        """The window's transformer output, the rows `selection` picks, then the convolutions.
+
+        A one-hot matmul picks the rows, so which rows can change between replays of a trace.
+        """
+        hidden = self.codec.front(self._latents, *tables)
+        picked = ttnn.matmul(selection, hidden, compute_kernel_config=self.codec.compute_config)
+        return self.codec.back(picked)
 
     def decode(self, codes, state, skip=0):
         """One chunk's codes [1, 16, F] -> its samples [1920 * (F - skip)] on host.
@@ -685,13 +730,19 @@ class StreamingCodecDecoder:
             codes = torch.cat([history, codes], dim=-1)[..., -self.window :]
         state["codes"] = codes
         decoded = codes.shape[-1]
-        codes = self.codec.pad_codes(codes)
-        trace, latents, waveform = self._traces[codes.shape[-1]]
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(self.codec.latents(codes), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), latents
-        )
+        kept = min(decoded, frames + self.context)
+        length = next(length for length in self.conv_lengths if length >= kept)
+        trace, selection, waveform = self._traces[length]
+        # Rows past `kept` stay zero: the convolutions are causal, so they cannot change the
+        # samples in front of them, which are the only ones returned.
+        rows = torch.zeros(1, length, self.window)
+        rows[0, torch.arange(kept), torch.arange(decoded - kept, decoded)] = 1.0
+        padded = self.codec.pad_codes(codes, bucket=self.window)
+        to_host = lambda tensor: ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_host_to_device_tensor(to_host(self.codec.latents(padded)), self._latents)
+        ttnn.copy_host_to_device_tensor(to_host(rows), selection)
         ttnn.execute_trace(self.device, trace, cq_id=0, blocking=False)
-        samples = ttnn.to_torch(waveform).float().reshape(-1)[: decoded * self.upsample]
+        samples = ttnn.to_torch(waveform).float().reshape(-1)[: kept * self.upsample]
         return samples[samples.numel() - (frames - skip) * self.upsample :]
 
     def release(self):

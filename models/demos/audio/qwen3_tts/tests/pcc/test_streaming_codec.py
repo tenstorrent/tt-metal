@@ -34,6 +34,9 @@ FRAMES = 200
 # Measured 0.99873 on Wormhole with random codes. This decoder against the fp32 reference
 # scores 0.995 on random codes (`test_codec_pcc.py`), so the window's error is the smaller.
 STREAM_PCC = 0.998
+# The same samples up to bf16 rounding: the convolutions see identical inputs at a
+# different length, which can change how ttnn splits their work.
+REACH_PCC = 0.9999
 
 
 def _schedule(total):
@@ -71,6 +74,30 @@ def test_streamed_chunks_track_one_decode_of_the_clip(device, codes):
     print(f"\n  {len(pieces)} chunks, window {STREAM_WINDOW}: PCC {pcc}")
     assert passed, f"streamed PCC {pcc} < {STREAM_PCC}"
     assert state["codes"].shape[-1] == STREAM_WINDOW
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_convolutions_over_their_reach_match_convolutions_over_the_window(device, codes):
+    """Each chunk's convolutions run over the chunk and `conv_reach_frames()` before it.
+    Running them over the whole window instead must give the same samples."""
+    stream = StreamingCodecDecoder(device, preprocess_codec_parameters(device))
+    stream.warmup()
+
+    def streamed(context):
+        stream.context = context
+        state, pieces, start = {}, [], 0
+        for size in _schedule(FRAMES):
+            pieces.append(stream.decode(codes[..., start : start + size], state))
+            start += size
+        return torch.cat(pieces)
+
+    reach = streamed(stream.codec.conv_reach_frames())
+    window = streamed(STREAM_WINDOW)
+    stream.release()
+
+    passed, pcc = comp_pcc(window, reach, REACH_PCC)
+    print(f"\n  reach {stream.codec.conv_reach_frames()} frames vs the window: PCC {pcc}")
+    assert passed, f"PCC {pcc} < {REACH_PCC}"
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
