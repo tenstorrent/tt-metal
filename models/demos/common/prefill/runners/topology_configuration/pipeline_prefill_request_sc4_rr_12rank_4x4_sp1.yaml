@@ -1,0 +1,39 @@
+# [RING,RING] 4x4 prefill on SC4: 8 stages on 4 Galaxies, 12 ranks. Even stages are in-Galaxy tori (one rank, one
+# host); odd stages are seam tori split over two hosts (mesh_host_rank 0 on host k, 1 on host k+1), so a seam
+# stage's MeshDevice is shared by two ranks. Ranks are ordered mesh-major, host-rank-minor, as the control plane
+# assigns them. The descriptor is ci/sc4_4x4_rr_mgd.textproto (ci/sc4_4x4_rr_1link_mgd.textproto for a pod with a
+# short hop).
+#
+# TEMPLATE for rr_pipeline_binding.py, which fills TT_VISIBLE_DEVICES (a 2x4-slice map per rank) and prints
+# the rankfile, with the hosts in cabling ring order h0 -> h1 -> h2 -> h3:
+#   on a pod host:   python models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py generate --host h0 ... --out <yaml>
+#   from cabling:    python models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py predict --out <yaml>
+# TT_VISIBLE_DEVICES is per Galaxy and a wrong map does not error.
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 2, mesh_id: 1, mesh_host_rank: 1, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 3, mesh_id: 2, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 4, mesh_id: 3, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 5, mesh_id: 3, mesh_host_rank: 1, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 6, mesh_id: 4, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 7, mesh_id: 5, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 8, mesh_id: 5, mesh_host_rank: 1, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 9, mesh_id: 6, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 10, mesh_id: 7, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 11, mesh_id: 7, mesh_host_rank: 1, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/ci/sc4_4x4_rr_mgd.textproto
+
+global_env:
+  # Both mesh axes are rings (dim_types [RING, RING]).
+  PREFILL_FABRIC_MODE: "2d_torus_xy"
+  PREFILL_SP: "4"
+  PREFILL_TP: "4"
+  PREFILL_SP_AXIS: "1"
+  PREFILL_TP_SHARD_KV: "1"
+  PREFILL_CHUNK_SIZE: "2560"
+  PREFILL_MAX_SEQ_LEN: "61440"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  LOGURU_LEVEL: "INFO"

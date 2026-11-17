@@ -316,51 +316,103 @@ def resolve_fabric_test_visible_devices_slices(
     return visible
 
 
-def build_quad_split_rank_table(hosts):
-    """Canonical 12-rank table for the quad split 4x4 layout (8x4x4z).
+# ASIC locations and UBB tray ids of each 2x4 slice, as in the Generate2x4SliceToPCIeDeviceMapping gtest.
+# Rev C swaps UBB trays 2 and 3 relative to Rev A/B.
+SLICE_ASIC_LOCATIONS = {0: (1, 2, 5, 6), 1: (3, 4, 7, 8), 2: (3, 4, 7, 8), 3: (1, 2, 5, 6)}
+SLICE_TRAYS_REV_AB = {0: (1, 3), 1: (1, 3), 2: (2, 4), 3: (2, 4)}
+SLICE_TRAYS_REV_C = {0: (1, 2), 1: (1, 2), 2: (3, 4), 3: (3, 4)}
 
-    8 meshes across 4 ring-ordered hosts:
-      even mesh 2i  -> single-host 4x4 on hosts[i], slices {1,2}, host_rank 0
-      odd  mesh 2i+1 -> split 4x4: host_rank 0 = hosts[i]   slice {3}
-                                    host_rank 1 = hosts[i+1] slice {0}  (ring wrap)
+
+def slice_positions(slice_id, rev_c):
+    """(tray_id, asic_location) of the 8 chips of a 2x4 slice."""
+    trays = (SLICE_TRAYS_REV_C if rev_c else SLICE_TRAYS_REV_AB)[slice_id]
+    return [(tray, asic) for tray in trays for asic in SLICE_ASIC_LOCATIONS[slice_id]]
+
+
+def build_split_ring_rank_table(hosts, num_stages):
+    """Rank table for a pipeline of 4x4 stages alternating single-host and split-host meshes.
+
+    Stages follow the cabling ring of `hosts`:
+      even stage 2i  -> single-host 4x4 on hosts[i], slices {1,2}, host_rank 0
+      odd  stage 2i+1 -> split 4x4: host_rank 0 = hosts[i]   slice {3}
+                                    host_rank 1 = hosts[i+1] slice {0}  (hosts[0] after the last host)
 
     Entries are ordered mesh-major then host-rank-minor, matching control_plane's
     (mesh_id, host_rank) -> mpi_rank assignment, so the launcher must emit MPMD
     segments / rankfile slots in exactly this order. Each entry is a tuple
     (mesh_id, host_rank, host, slice_ids).
     """
-    if len(hosts) != 4:
-        logger.error(f"8x4x4z requires exactly 4 hosts in ring order, got {len(hosts)}: {hosts}")
+    if num_stages < 1 or num_stages > 2 * len(hosts):
+        logger.error(f"{num_stages} stages do not fit on {len(hosts)} hosts ({hosts}); at most {2 * len(hosts)}")
+        sys.exit(1)
+    if num_stages >= 2 and len(hosts) < 2:
+        logger.error("a split stage needs a second host")
         sys.exit(1)
 
     table = []
-    for mesh_id in range(8):
+    for mesh_id in range(num_stages):
         host_idx = mesh_id // 2
         if mesh_id % 2 == 0:
             table.append((mesh_id, 0, hosts[host_idx], [1, 2]))
         else:
             table.append((mesh_id, 0, hosts[host_idx], [3]))
-            table.append((mesh_id, 1, hosts[(host_idx + 1) % 4], [0]))
+            table.append((mesh_id, 1, hosts[(host_idx + 1) % len(hosts)], [0]))
     return table
 
 
-def resolve_quad_split_rank_table(hosts, mpi_if=None, run_discovery=True, work_dir=None):
-    """Resolve the 8x4x4z 12-rank table from a single local 2x4 slice discovery.
+def build_quad_split_rank_table(hosts):
+    """Canonical 12-rank table for the quad split 4x4 layout (8x4x4z): 8 stages on 4 ring hosts."""
+    if len(hosts) != 4:
+        logger.error(f"8x4x4z requires exactly 4 hosts in ring order, got {len(hosts)}: {hosts}")
+        sys.exit(1)
+    return build_split_ring_rank_table(hosts, 8)
 
-    Discovery runs --np 1 on the local host and the resulting slice -> device map
-    is replicated across all four ring hosts (identical galaxies), so no
-    cross-host discovery is needed and the whole thing runs inside one docker
-    container.
 
-    Returns a list (in canonical rank order) of dicts:
+def resolve_rank_table_devices(table, reference_slices, source="slice mapping"):
+    """Attach TT_VISIBLE_DEVICES strings to a rank table, using one slice -> logical device map for all hosts.
+
+    Returns a list (in table order) of dicts:
       {"mesh_id": int, "host_rank": int, "host": str, "devices": "d0,d1,..."}.
     """
-    table = build_quad_split_rank_table(hosts)
+    rank_table = []
+    for mesh_id, host_rank, host, slice_ids in table:
+        devices = []
+        for slice_id in slice_ids:
+            if slice_id not in reference_slices:
+                logger.error(f"Slice {slice_id} not found in {source}")
+                sys.exit(1)
+            slice_devices = sorted(reference_slices[slice_id])
+            if len(slice_devices) != DEVICES_PER_SLICE:
+                logger.error(
+                    f"Slice {slice_id} resolved to {len(slice_devices)} devices, " f"expected {DEVICES_PER_SLICE}"
+                )
+                sys.exit(1)
+            devices.extend(slice_devices)
+        rank_table.append(
+            {
+                "mesh_id": mesh_id,
+                "host_rank": host_rank,
+                "host": host,
+                "devices": ",".join(map(str, devices)),
+            }
+        )
+    return rank_table
+
+
+def resolve_split_ring_rank_table(hosts, num_stages, mpi_if=None, run_discovery=True, work_dir=None):
+    """Resolve the rank table of a split-ring pipeline from a single local 2x4 slice discovery.
+
+    Discovery runs --np 1 on the local host and the resulting slice -> device map
+    is replicated across all ring hosts (identical galaxies), so no
+    cross-host discovery is needed and the whole thing runs inside one docker
+    container. See build_split_ring_rank_table for the table layout.
+    """
+    table = build_split_ring_rank_table(hosts, num_stages)
     cwd = Path(work_dir) if work_dir else Path.cwd()
     mapping_path = cwd / SLICE_MAPPING_FILE
 
     # Discover the 2x4 slice -> device numbering with a single LOCAL rank
-    # (mpirun --np 1, no --host => no ssh) rather than across all four ring hosts.
+    # (mpirun --np 1, no --host => no ssh) rather than across all ring hosts.
     # Every Blackhole Galaxy in the pod is wired identically, so the local host's
     # slice -> device map applies to every host. This keeps discovery entirely
     # inside one docker container, so the script works when the local env only has
@@ -381,30 +433,13 @@ def resolve_quad_split_rank_table(hosts, mpi_if=None, run_discovery=True, work_d
     # Single-host discovery yields exactly one host entry; reuse its slice -> device
     # map for every ring host (homogeneous galaxies).
     reference_slices = next(iter(device_mapping.values()))
+    return resolve_rank_table_devices(table, reference_slices, str(mapping_path))
 
-    rank_table = []
-    for mesh_id, host_rank, host, slice_ids in table:
-        devices = []
-        for slice_id in slice_ids:
-            if slice_id not in reference_slices:
-                logger.error(f"Slice {slice_id} not found in {mapping_path}")
-                sys.exit(1)
-            slice_devices = sorted(reference_slices[slice_id])
-            if len(slice_devices) != DEVICES_PER_SLICE:
-                logger.error(
-                    f"Slice {slice_id} resolved to {len(slice_devices)} devices, " f"expected {DEVICES_PER_SLICE}"
-                )
-                sys.exit(1)
-            devices.extend(slice_devices)
-        rank_table.append(
-            {
-                "mesh_id": mesh_id,
-                "host_rank": host_rank,
-                "host": host,
-                "devices": ",".join(map(str, devices)),
-            }
-        )
-    return rank_table
+
+def resolve_quad_split_rank_table(hosts, mpi_if=None, run_discovery=True, work_dir=None):
+    """Resolve the 8x4x4z 12-rank table (8 stages on 4 ring hosts)."""
+    build_quad_split_rank_table(hosts)
+    return resolve_split_ring_rank_table(hosts, 8, mpi_if=mpi_if, run_discovery=run_discovery, work_dir=work_dir)
 
 
 def parse_args():

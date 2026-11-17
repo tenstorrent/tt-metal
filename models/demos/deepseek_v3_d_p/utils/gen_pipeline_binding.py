@@ -84,17 +84,19 @@ def mirror_rows(ids, shape):
     return [d for r in reversed(range(rows)) for d in ids[r * cols : (r + 1) * cols]]
 
 
-def fill_rank_bindings(text, subs, tpl, profile_root=None):
+def fill_rank_bindings(text, subs, tpl, profile_root=None, mesh_ranks=None):
     """Write subs[r] into rank r's TT_VISIBLE_DEVICES in a rank-binding template's text.
 
-    Each rank must have exactly one `{rank: r, mesh_id: r, ...}` line; assemble_pipeline_binding.py
-    fills the multi-host template through this too."""
+    Each rank must have exactly one `{rank: r, mesh_id: m, mesh_host_rank: h, ...}` line, with (m, h) =
+    mesh_ranks[r], or (r, 0) without mesh_ranks. assemble_pipeline_binding.py and rr_pipeline_binding.py
+    fill their multi-host templates through this too."""
     for r, sub in enumerate(subs):
+        mesh_id, host_rank = mesh_ranks[r] if mesh_ranks else (r, 0)
         ids = ",".join(map(str, sub))
         extra = f'TT_METAL_PROFILER_DIR: "{profile_root}/rank{r}", ' if profile_root else ""
         pat = re.compile(
-            r"(\{rank: %d, mesh_id: %d, mesh_host_rank: 0, env_overrides: \{)(?:TT_METAL_PROFILER_DIR: \"[^\"]*\", )?TT_VISIBLE_DEVICES: \"[^\"]*\"\}\}"
-            % (r, r)
+            r"(\{rank: %d, mesh_id: %d, mesh_host_rank: %d, env_overrides: \{)(?:TT_METAL_PROFILER_DIR: \"[^\"]*\", )?TT_VISIBLE_DEVICES: \"[^\"]*\"\}\}"
+            % (r, mesh_id, host_rank)
         )
         text, n = pat.subn(lambda m: f'{m.group(1)}{extra}TT_VISIBLE_DEVICES: "{ids}"}}}}', text)
         if n != 1:
