@@ -14,11 +14,10 @@ from .module_base import AbstractModuleBase
 from .parameter import Parameter
 
 
-# A tensor-parallel region runs from a column-parallel matmul to a row-parallel one. How a tensor is laid out is read
-# from its label, but a label cannot say that a tensor is a partial sum still to be added up across ranks: a placement
-# is only Replicate or Shard (https://github.com/tenstorrent/tt-metal/issues/62347). The row-parallel matmul's output is
-# such a sum, and so is the gradient a column-parallel matmul sends back to its input. So entering and leaving the
-# region choose the collectives that add them up.
+# How a tensor is laid out is read from its label, but a label cannot say that a tensor is a partial sum still to be
+# added up across ranks: a placement is only Replicate or Shard (https://github.com/tenstorrent/tt-metal/issues/62347).
+# A row-parallel matmul's output is such a sum, and so is the gradient a column-parallel matmul sends back to its input.
+# sum_tp_partials and the backward of replicate_for_tp add them up.
 
 
 def _input_layout_error(layer: str, x, expected: str, cluster_axis: int) -> ValueError:
@@ -28,7 +27,12 @@ def _input_layout_error(layer: str, x, expected: str, cluster_axis: int) -> Valu
     )
 
 
-def enter_tp_region(x, cluster_axis: int, sequence_parallel: bool):
+def replicate_for_tp(x, cluster_axis: int, sequence_parallel: bool):
+    """Make ``x`` whole on every rank of ``cluster_axis``, for work that each rank does only its share of, such as a
+    column-parallel matmul. The gradients the ranks send back are partial, so the backward sums them.
+
+    ``x`` must be replicated across the axis or, under ``sequence_parallel``, sharded along the sequence. A sharded
+    ``x`` is gathered."""
     expected = SEQUENCE_DIM if sequence_parallel else None
     if ttml.mesh().shape[cluster_axis] > 1 and ttml.sharding.shard_dim(x, cluster_axis) != expected:
         layout = "sharded along the sequence" if sequence_parallel else "replicated"
@@ -52,8 +56,10 @@ def shard_features(x, cluster_axis: int):
     return x
 
 
-def exit_tp_region(x, cluster_axis: int, sequence_parallel: bool):
-    """Sum a tensor-parallel region's partial products across TP ranks."""
+def sum_tp_partials(x, cluster_axis: int, sequence_parallel: bool):
+    """Add up the partial sums ``x`` holds on the ranks of ``cluster_axis``, such as a row-parallel matmul's outputs.
+
+    The result is replicated across the axis or, under ``sequence_parallel``, sharded along the sequence."""
     if sequence_parallel:
         return ttml.ops.distributed.reduce_scatter(x, SEQUENCE_DIM, cluster_axis)
     return ttml.ops.distributed.all_reduce(x, noop_backward=True, cluster_axis=cluster_axis)
@@ -176,7 +182,7 @@ class ColumnParallelLinear(AbstractModuleBase):
             self.bias = None
 
     def forward(self, x):
-        x = enter_tp_region(x, self.cluster_axis, self.sequence_parallel)
+        x = replicate_for_tp(x, self.cluster_axis, self.sequence_parallel)
         bias_t = self.bias.tensor if self.bias is not None else None
         x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
@@ -245,7 +251,7 @@ class RowParallelLinear(AbstractModuleBase):
     def forward(self, x):
         x = shard_features(x, self.cluster_axis)
         x = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        x = exit_tp_region(x, self.cluster_axis, self.sequence_parallel)
+        x = sum_tp_partials(x, self.cluster_axis, self.sequence_parallel)
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)
         return x

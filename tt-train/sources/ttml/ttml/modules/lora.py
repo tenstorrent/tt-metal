@@ -18,9 +18,9 @@ from .linear import (
     ColumnParallelLinear,
     LinearLayer,
     RowParallelLinear,
-    enter_tp_region,
-    exit_tp_region,
+    replicate_for_tp,
     shard_features,
+    sum_tp_partials,
 )
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Parameter
@@ -152,7 +152,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
 
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
-        x = enter_tp_region(x, self.cluster_axis, self.sequence_parallel)
+        x = replicate_for_tp(x, self.cluster_axis, self.sequence_parallel)
         base = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
             base = ttml.ops.distributed.all_gather(
@@ -210,7 +210,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
     def forward(self, x):
         x = shard_features(x, self.cluster_axis)
         base = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        base = exit_tp_region(base, self.cluster_axis, self.sequence_parallel)
+        base = sum_tp_partials(base, self.cluster_axis, self.sequence_parallel)
         if self.bias is not None:
             base = ttml.ops.binary.add(base, self.bias.tensor)
         # lora_A is row-sharded (each device sees a slice of in_features), so its partial
@@ -219,7 +219,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
         h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
-        h = exit_tp_region(h, self.cluster_axis, self.sequence_parallel)
+        h = sum_tp_partials(h, self.cluster_axis, self.sequence_parallel)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         return base + lora_update * self.scaling
 

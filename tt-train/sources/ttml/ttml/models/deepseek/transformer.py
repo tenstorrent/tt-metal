@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ttml
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, Parameter, RowParallelLinear
-from ttml.modules.linear import enter_tp_region, exit_tp_region
+from ttml.modules.linear import replicate_for_tp, sum_tp_partials
 
 
 class RMSNormLayer(AbstractModuleBase):
@@ -70,10 +70,10 @@ class DeepSeekMLP(AbstractModuleBase):
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         if self._tp_axis is not None:
-            x = enter_tp_region(x, self._tp_axis, sequence_parallel=False)
+            x = replicate_for_tp(x, self._tp_axis, sequence_parallel=False)
         out = self.partial_forward(x)
         if self._tp_axis is not None:
-            out = exit_tp_region(out, self._tp_axis, sequence_parallel=False)
+            out = sum_tp_partials(out, self._tp_axis, sequence_parallel=False)
         return out
 
 

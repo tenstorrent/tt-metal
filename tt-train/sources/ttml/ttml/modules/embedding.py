@@ -13,7 +13,7 @@ import numpy as np
 import ttnn
 import ttml
 
-from .linear import exit_tp_region
+from .linear import sum_tp_partials
 from .module_base import AbstractModuleBase
 from .parameter import Parameter
 
@@ -194,7 +194,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         mask = ttnn.transpose(ttnn.to_layout(ttnn.typecast(in_range, ttnn.DataType.FLOAT32), ttnn.Layout.TILE), 2, 3)
         emb = ttml.ops.binary.mul(emb, ttml.autograd.create_tensor(mask, requires_grad=False))
 
-        return exit_tp_region(emb, self.cluster_axis, self.sequence_parallel)
+        return sum_tp_partials(emb, self.cluster_axis, self.sequence_parallel)
 
 
 class FeatureParallelEmbedding(AbstractModuleBase):
