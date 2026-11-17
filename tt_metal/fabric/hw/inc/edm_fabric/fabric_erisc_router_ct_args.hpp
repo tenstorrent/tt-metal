@@ -22,6 +22,18 @@
 // Convenience macro for named compile-time arg lookup
 #define NAMED_CT_ARG(name) get_named_compile_time_arg_val(name)
 
+// Whether the host passed a named arg: inter-domain args are passed only where they apply, so every other router's
+// arg map is unchanged.
+constexpr bool has_named_ct_arg(std::string_view name) {
+    for (const auto& [arg_name, arg_value] : named_args_map) {
+        if (name == arg_name) {
+            return true;
+        }
+    }
+    return false;
+}
+#define NAMED_CT_ARG_OR(name, fallback) (has_named_ct_arg(name) ? NAMED_CT_ARG(name) : (fallback))
+
 // CHANNEL CONSTANTS
 // ETH TXQ SELECTION
 
@@ -65,6 +77,15 @@ constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID");
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_4_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID");
+// VC2's downstreams: inter-domain fabrics only (VC2 forwards there).
+constexpr uint32_t vc_2_free_slots_from_downstream_edge_1_stream_id =
+    NAMED_CT_ARG_OR("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID", tt::tt_fabric::k_unused_stream_id);
+constexpr uint32_t vc_2_free_slots_from_downstream_edge_2_stream_id =
+    NAMED_CT_ARG_OR("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID", tt::tt_fabric::k_unused_stream_id);
+constexpr uint32_t vc_2_free_slots_from_downstream_edge_3_stream_id =
+    NAMED_CT_ARG_OR("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID", tt::tt_fabric::k_unused_stream_id);
+constexpr uint32_t vc_2_free_slots_from_downstream_edge_4_stream_id =
+    NAMED_CT_ARG_OR("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID", tt::tt_fabric::k_unused_stream_id);
 constexpr uint32_t vc2_receiver_free_slots_stream_id = NAMED_CT_ARG("VC2_RECEIVER_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_0_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_1_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID");
@@ -144,7 +165,7 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_free_slots_stream
 
 // This router's local copy of each downstream router's free slots, by VC that forwards to routers (VC0, VC1) and by
 // downstream entry (the host's compact order: VC<n>_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_<entry + 1>_STREAM_ID).
-constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 2> local_downstream_credit_streams = {{
+constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 3> local_downstream_credit_streams = {{
     {vc_0_free_slots_from_downstream_edge_1_stream_id,
      vc_0_free_slots_from_downstream_edge_2_stream_id,
      vc_0_free_slots_from_downstream_edge_3_stream_id,
@@ -153,6 +174,10 @@ constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 2> lo
      vc_1_free_slots_from_downstream_edge_2_stream_id,
      vc_1_free_slots_from_downstream_edge_3_stream_id,
      vc_1_free_slots_from_downstream_edge_4_stream_id},
+    {vc_2_free_slots_from_downstream_edge_1_stream_id,
+     vc_2_free_slots_from_downstream_edge_2_stream_id,
+     vc_2_free_slots_from_downstream_edge_3_stream_id,
+     vc_2_free_slots_from_downstream_edge_4_stream_id},
 }};
 
 // Does this router service a channel at this fabric position?
@@ -179,6 +204,9 @@ constexpr size_t NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("NUM_RECEIVER_CHANNELS");
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NAMED_CT_ARG("NUM_DOWNSTREAM_CHANNELS");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC0");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC1");
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC2 = NAMED_CT_ARG_OR("NUM_DOWNSTREAM_SENDERS_VC2", 0);
+// VC2 forwards (inter-domain fabrics): its receiver decodes and forwards, its runtime args list its downstreams.
+constexpr bool vc2_forwards = has_named_ct_arg("VC2_DOWNSTREAM_EDM_SIZE");
 constexpr bool wait_for_host_signal = NAMED_CT_ARG("WAIT_FOR_HOST_SIGNAL");
 
 static_assert(
@@ -267,6 +295,7 @@ constexpr std::array<bool, MAX_NUM_VCS> is_vc_crossover_to_vc1 = {
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = NAMED_CT_ARG("ENABLE_RISC_CPU_DATA_CACHE");
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE");
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
+constexpr size_t VC2_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG_OR("VC2_DOWNSTREAM_EDM_SIZE", 0);
 // Remote channel info (always available; 0 when inactive)
 constexpr size_t remote_worker_sender_channel = NAMED_CT_ARG("REMOTE_WORKER_SENDER_CHANNEL");
 
@@ -424,6 +453,8 @@ constexpr bool any_receiver_channel_serviced = []() {
 // routers — receiver 1 is legitimately trimmed on crossover routers even when VC1 traffic flows.
 constexpr bool open_downstream_vc0_connections = static_cast<bool>(NAMED_CT_ARG("OPEN_DOWNSTREAM_VC0_CONNECTIONS"));
 constexpr bool open_downstream_vc1_connections = static_cast<bool>(NAMED_CT_ARG("OPEN_DOWNSTREAM_VC1_CONNECTIONS"));
+constexpr bool open_downstream_vc2_connections =
+    static_cast<bool>(NAMED_CT_ARG_OR("OPEN_DOWNSTREAM_VC2_CONNECTIONS", 0));
 
 // Structural per-RISC role flags (2-erisc split), deliberately independent of trimming.
 constexpr bool risc_services_sender_channels = static_cast<bool>(NAMED_CT_ARG("RISC_SERVICES_SENDER_CHANNELS"));
@@ -991,3 +1022,10 @@ static_assert(
 static_assert(
     !super_speedy_mode || RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0,
     "super_speedy_mode requires receiver credit amortization to be enabled");
+
+//-------------------------------- Inter-domain --------------------------------//
+// Only perimeter routers get these args, so every other router's arg map is unchanged.
+constexpr bool is_inter_domain_router =
+    has_named_ct_arg("INTER_DOMAIN_ROUTER") && NAMED_CT_ARG("INTER_DOMAIN_ROUTER") != 0;
+constexpr uint32_t inter_domain_ctrl_addr = is_inter_domain_router ? NAMED_CT_ARG("INTER_DOMAIN_CTRL_ADDR") : 0;
+static_assert(!is_inter_domain_router || NUM_ACTIVE_ERISCS == 1, "inter-domain routers run on one ERISC");

@@ -1118,6 +1118,47 @@ struct RouterStateManager {
     }
 };
 
+// Inter-domain router control block, in the router's L1. The host writes the command and the
+// connect fields; the router writes the state and counters; the peer router writes peer_marker.
+enum class InterDomainCommand : std::uint32_t {
+    NONE = 0,
+    CONNECT = 1,
+    DISCONNECT = 2,        // healthy: exchange markers with the peer
+    FORCE_DISCONNECT = 3,  // peer gone: reset without it
+    ABORT = 4,             // give up a connect still waiting on the peer
+};
+
+enum class InterDomainState : std::uint32_t {
+    RESET = 0,
+    LOCAL_HANDSHAKE = 1,
+    DRAIN = 2,
+    CONNECT = 3,
+    HANDLE_CONNECT_FAIL = 4,
+    SERVICE_TRAFFIC = 5,
+    DISCONNECT = 6,
+    WAIT_PEER_MARKER = 7,
+};
+
+struct InterDomainRouterControl {
+    InterDomainCommand command;  // host
+    InterDomainState state;      // router
+    uint32_t local_domain_id;    // host, with CONNECT
+    uint32_t peer_domain_id;
+    uint32_t peer_vc2_receiver_addr;
+    uint32_t peer_vc2_receiver_slots;
+    uint32_t peer_max_packet_size_bytes;
+    uint32_t connect_failures;  // router
+    uint32_t drained_packets;   // router: packets dropped while not connected
+    uint32_t connects;          // router: completed connects
+    uint32_t padding0[2];
+    uint32_t peer_marker;  // the peer's disconnect marker, written over eth
+    uint32_t padding1[3];
+    uint32_t marker[4];  // what this router sends as its marker
+};
+static_assert(sizeof(InterDomainRouterControl) == 80);
+static_assert(offsetof(InterDomainRouterControl, peer_marker) % 16 == 0);
+static_assert(offsetof(InterDomainRouterControl, marker) % 16 == 0);
+
 // Destination-major 2D routing state. Shares its L1 offset with the 1D routing-path table because a
 // fabric build uses exactly one routing mode. Regions are fixed-size; rows within action_vectors use
 // the live mesh shape [Y,X]:

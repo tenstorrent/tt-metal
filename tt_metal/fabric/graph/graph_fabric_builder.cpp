@@ -23,8 +23,12 @@ GraphFabricBuilder::GraphFabricBuilder(
     const PhysicalGraph& graph) :
     FabricBuilder(device, program, fabric_context, dispatch_core_type), graph_(graph) {
     for (RouterIndex r = 0; r < graph_.logical.routers.size(); ++r) {
-        if (graph_.logical.routers[r].port.node == local_node_) {
+        const auto& port = graph_.logical.routers[r].port;
+        if (port.node == local_node_) {
             on_chip_.emplace(graph_.eth_chans[r], r);
+            if (port.capability == EdgeCapability::INTERDOMAIN) {
+                chip_facts_.per_direction_capabilities.at(*port.direction) = EdgeCapability::INTERDOMAIN;
+            }
         }
     }
 }
@@ -57,6 +61,11 @@ RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
         .layout = graph_.layouts[router],
         .injection = std::vector<bool>(num_senders, false),
         .serviced = std::vector<bool>(num_senders, false)};
+    // a perimeter router's peer is bound at connect
+    in.inter_domain = !g.routers[router].peer.has_value();
+    in.on_domain_edge = std::any_of(g.routers.begin(), g.routers.end(), [&](const LogicalRouter& r) {
+        return r.port.node == g.routers[router].port.node && r.port.capability == EdgeCapability::INTERDOMAIN;
+    });
     for (ChannelIndex c : g.channels_of(router, ChannelKind::Sender)) {
         const uint32_t i = base[g.channels[c].vc] + graph_.index_in_vc[c];
         in.injection[i] = graph_.enters_ring[c];
@@ -96,9 +105,10 @@ std::unique_ptr<FabricRouterBuilder> GraphFabricBuilder::make_router(const Route
         router.id,
         location.eth_chan,
         enchantum::to_string(location.direction));
-    TT_FATAL(router.peer.has_value(), "fabric graph: router {} has no link peer", router.id);
+    const bool perimeter = router.port.capability == EdgeCapability::INTERDOMAIN;
+    TT_FATAL(router.peer.has_value() || perimeter, "fabric graph: router {} has no link peer", router.id);
     TT_FATAL(
-        router.port.peer == location.remote_node,
+        perimeter || router.port.peer == location.remote_node,
         "fabric graph: router {} links to {}, but the live link goes to {}",
         router.id,
         router.port.peer,
@@ -121,6 +131,19 @@ std::unique_ptr<FabricRouterBuilder> GraphFabricBuilder::make_router(const Route
         nullptr,
         RouterArchetype{.shape = shape_of(r), .turns = {}},
         inputs_of(r));
+}
+
+// perimeter routers have no peer yet: they stand in for it with their own node
+std::vector<RouterLocation> GraphFabricBuilder::perimeter_router_locations() const {
+    std::vector<RouterLocation> locations;
+    for (const auto& [chan, r] : on_chip_) {
+        const auto& port = graph_.logical.routers[r].port;
+        if (port.capability == EdgeCapability::INTERDOMAIN) {
+            locations.push_back(RouterLocation{
+                .eth_chan = chan, .remote_node = local_node_, .direction = *port.direction, .is_dispatch_link = false});
+        }
+    }
+    return locations;
 }
 
 KernelCreationContext GraphFabricBuilder::kernel_creation_context() const {

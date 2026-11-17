@@ -29,6 +29,7 @@ public:
 
 protected:
     std::unique_ptr<FabricRouterBuilder> make_router(const RouterLocation& location) override;
+    std::vector<RouterLocation> perimeter_router_locations() const override;
     KernelCreationContext kernel_creation_context() const override;
 
 private:

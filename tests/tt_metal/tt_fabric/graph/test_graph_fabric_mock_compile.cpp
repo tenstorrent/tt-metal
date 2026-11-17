@@ -22,6 +22,8 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
+#include <tt-metalium/experimental/fabric/inter_domain.hpp>
+
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/graph/fabric_graph_inputs.hpp"
@@ -165,6 +167,18 @@ TEST_F(GraphFabricInterDomain, PerimeterLeavesTheDomain) {
     }
     if (const char* expect = std::getenv("TT_FABRIC_EXPECT_UNTRAINED")) {
         EXPECT_EQ(untrained, std::stol(expect));
+    }
+
+    // a router on every trained port, with a VC2 receiver for the peer to send into
+    const auto api_ports = experimental::get_inter_domain_ports();
+    EXPECT_EQ(api_ports.size(), ports.size());
+    for (const auto& port : api_ports) {
+        if (!port.has_router) {
+            continue;
+        }
+        const auto md = experimental::get_inter_domain_metadata(port, 1);
+        EXPECT_NE(md.vc2_receiver_channel_addr, 0u) << port.node << " chan " << int(port.eth_chan);
+        EXPECT_GT(md.vc2_receiver_channel_slots, 0u);
     }
     mesh->close();
 }

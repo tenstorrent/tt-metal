@@ -341,8 +341,8 @@ RouterVcShape router_vc_shape(
             }
         }
 
-        // VC2: one sender by VC2's own definition.
-        vc2_senders = requires_vc2 ? 1 : 0;
+        // VC2: one sender by VC2's own definition; as wide as VC0 where it forwards (inter-domain).
+        vc2_senders = requires_vc2 ? (vc_config->vc2_forwards ? vc0_senders : 1) : 0;
 
         // Receivers: one per active carrier VC. The boundary services no VC2 receiver.
         vc1_receivers = requires_vc1 ? 1 : 0;

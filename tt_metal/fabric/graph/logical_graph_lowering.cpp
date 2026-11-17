@@ -66,6 +66,10 @@ private:
     void link_peers() {
         for (auto& router : g_.routers) {
             const auto& p = router.port;
+            if (p.capability == EdgeCapability::INTERDOMAIN) {
+                router.capabilities = Capabilities{.rt_lookup = true, .dynamic_connect = true};
+                continue;  // its peer is bound at connect
+            }
             std::optional<RouterIndex> match;
             if (p.capability != EdgeCapability::INTERMESH) {
                 const auto it = by_key_.find(RouterKey{p.peer, facing_back(p.direction), p.plane});
@@ -132,16 +136,20 @@ private:
         }
     }
 
+    // A perimeter router's senders get dynamic edges, to its own receiver: the stand-in for the peer's until connect
+    // (both ends are built alike).
     void add_eth_edges(uint32_t vc) {
-        for (const auto& router : g_.routers) {
-            const auto rx = g_.receiver(*router.peer, vc);
+        for (RouterIndex r = 0; r < g_.routers.size(); ++r) {
+            const auto peer = g_.routers[r].peer;
+            const auto rx = g_.receiver(peer.value_or(r), vc);
             if (!rx) {
                 continue;
             }
-            for (ChannelIndex c : router.channels) {
+            for (ChannelIndex c : g_.routers[r].channels) {
                 const auto& ch = g_.channels[c];
                 if (ch.kind == ChannelKind::Sender && ch.vc == vc) {
-                    g_.edges.push_back(LogicalEdge{.from = c, .to = *rx, .transport = Transport::Eth});
+                    g_.edges.push_back(
+                        LogicalEdge{.from = c, .to = *rx, .transport = peer ? Transport::Eth : Transport::Dynamic});
                 }
             }
         }
@@ -162,7 +170,7 @@ private:
             while (members.size() <= g_.routers.size()) {
                 const auto& far = g_.routers[*g_.routers[at].peer].port;
                 const auto next = by_key_.find(RouterKey{far.node, s.direction, s.plane});
-                if (next == by_key_.end()) {
+                if (next == by_key_.end() || !g_.routers[next->second].peer) {
                     break;
                 }
                 if (next->second == start) {

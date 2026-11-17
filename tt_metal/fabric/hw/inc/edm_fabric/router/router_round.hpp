@@ -53,6 +53,23 @@ FORCE_INLINE bool terminating() {
     return got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal());
 }
 
+// Inter-domain routers: the host's control block (router_inter_domain.hpp), and whether the host asked this router to
+// leave its peer. Always false elsewhere.
+FORCE_INLINE volatile tt_l1_ptr InterDomainRouterControl* inter_domain_control() {
+    return reinterpret_cast<volatile tt_l1_ptr InterDomainRouterControl*>(inter_domain_ctrl_addr);
+}
+FORCE_INLINE bool disconnect_requested() {
+    if constexpr (is_inter_domain_router) {
+        const auto command = inter_domain_control()->command;
+        return command == InterDomainCommand::DISCONNECT || command == InterDomainCommand::FORCE_DISCONNECT;
+    } else {
+        return false;
+    }
+}
+
+// Whether a loop keeps running: no termination, no disconnect.
+FORCE_INLINE bool keep_running() { return !terminating() && !disconnect_requested(); }
+
 // Wait until the context-switch register reads `s`, or termination.
 FORCE_INLINE void wait_for_context_switch_state(ContextSwitchState s) {
     while (context_switch_state() != static_cast<uint32_t>(s)) {
@@ -100,7 +117,7 @@ FORCE_INLINE void follow_context_switch() {
 // Whether to run another round: no termination, and (master) no router command pending.
 __attribute__((noinline)) bool next_round() {
     if constexpr (is_context_switch_master || NUM_ACTIVE_ERISCS == 1) {
-        return !terminating() && !router_state()->is_non_run_command_pending();
+        return keep_running() && !router_state()->is_non_run_command_pending();
     } else {
         return !terminating();
     }

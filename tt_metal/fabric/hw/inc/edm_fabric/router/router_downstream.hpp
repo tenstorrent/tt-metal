@@ -31,9 +31,10 @@ namespace fabric_router {
 // Downstreams of a VC
 // ---------------------------------------------------------------------------------------------------------------------
 
-// The host's downstream args exist per VC for the VCs that forward to other routers: VC0 and VC1
-// (VC<n>_DOWNSTREAM_EDM_SIZE, DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY, the runtime args' per-VC blocks).
-constexpr std::array<size_t, 2> DOWNSTREAM_EDM_COUNT_BY_VC = {VC0_DOWNSTREAM_EDM_SIZE, VC1_DOWNSTREAM_EDM_SIZE};
+// The host's downstream args exist per VC for the VCs that forward to other routers: VC0, VC1, and VC2 on inter-domain
+// fabrics (VC<n>_DOWNSTREAM_EDM_SIZE, DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY, the runtime args' per-VC blocks).
+constexpr std::array<size_t, 3> DOWNSTREAM_EDM_COUNT_BY_VC = {
+    VC0_DOWNSTREAM_EDM_SIZE, VC1_DOWNSTREAM_EDM_SIZE, VC2_DOWNSTREAM_EDM_SIZE};
 
 // The downstreams a router can forward to on VC, one bit per name. In 2D, the directions with an entry, but an
 // E/W-facing router inside a mesh never turns a packet onto N/S (Y first); intermesh routers (a landing decodes Y
@@ -80,7 +81,7 @@ constexpr bool pair_has_one_destination(std::index_sequence<VCs...>) {
 // The downstream routers of VC, as the host sets them.
 template <size_t VC>
 struct DownstreamTraits {
-    static_assert(VC < DOWNSTREAM_EDM_COUNT_BY_VC.size(), "the host lists downstream routers for VC0 and VC1");
+    static_assert(VC < DOWNSTREAM_EDM_COUNT_BY_VC.size(), "the host lists downstream routers for VC0, VC1 and VC2");
     static constexpr size_t count = DOWNSTREAM_EDM_COUNT_BY_VC[VC];
     static constexpr uint32_t num_slots = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[VC];
     // The last slot's offset from the ring's base (the ring wraps after it).
@@ -93,11 +94,11 @@ struct DownstreamTraits {
     template <size_t ENTRY>
     static constexpr uint32_t local_credit_stream = local_downstream_credit_streams[VC][ENTRY];
     // Entry ENTRY's sender channel for traffic arriving from this router's direction, by its fabric position: VC's
-    // first forwarding position (VC0's channel 0 is its worker channel), plus this router's direction's compact index
-    // on the downstream. A 1D downstream has one forwarding channel.
+    // first forwarding position (VC0's and VC2's channel 0 is their worker channel), plus this router's direction's
+    // compact index on the downstream. A 1D downstream has one forwarding channel.
     template <size_t ENTRY>
     static constexpr size_t forwarding_position() {
-        constexpr size_t first = VC == 0 ? 1 : VC1_FABRIC_POSITION_START;
+        constexpr size_t first = VC == 0 ? 1 : VC == 1 ? VC1_FABRIC_POSITION_START : VC2_FABRIC_POSITION_START + 1;
         if constexpr (is_2d) {
             constexpr size_t facing = static_cast<size_t>(downstream_direction(ENTRY));
             return first + compact_index_on(facing, static_cast<size_t>(my_direction));
@@ -475,11 +476,12 @@ private:
 };
 
 // The receiver's downstream connections: the downstream routers of each VC a receiver channel here forwards on
-// (any_forwards_on_vc: VC0's, VC1's), and UDM's relay, each where this router has it. In memory (the receiver loop
-// takes them by reference): only forwards touch them, so they stay out of the registers every packet needs.
+// (any_forwards_on_vc: VC0's, VC1's, VC2's), and UDM's relay, each where this router has it. In memory (the receiver
+// loop takes them by reference): only forwards touch them, so they stay out of the registers every packet needs.
 struct DownstreamConnections {
     [[no_unique_address]] Present<any_forwards_on_vc(0), Downstreams<0>, 0> vc0;
     [[no_unique_address]] Present<any_forwards_on_vc(1), Downstreams<1>, 1> vc1;
+    [[no_unique_address]] Present<any_forwards_on_vc(2), Downstreams<2>, 3> vc2;
     [[no_unique_address]] Present<udm_mode, Relay, 2> relay;
 
     // VC's downstream routers.
@@ -488,8 +490,10 @@ struct DownstreamConnections {
         static_assert(any_forwards_on_vc(VC));
         if constexpr (VC == 0) {
             return vc0;
-        } else {
+        } else if constexpr (VC == 1) {
             return vc1;
+        } else {
+            return vc2;
         }
     }
 };
