@@ -429,8 +429,8 @@ constexpr bool matmul_fe_tile_mop() {
         return false;
     } else if constexpr (
         !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf &&
-        matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<13, K>(0)) {
-        // LoFi half sync: the row form in a kernel with a constant block and no constant one-tile block, whose call it slows (bmm's
+        matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<13, K>(0) && !matmul_fe_mark::is_used_d<15, K>(0)) {
+        // LoFi half sync: the row form in a kernel with a constant block and no constant one-tile or kt-1 block, whose call it slows (bmm's
         // reload init passes its constant block through a helper's parameters, so tag 7 does not tell a run-time-block kernel)
         return false;
     } else {
@@ -1189,20 +1189,20 @@ ALWI void matmul_block_fe(
     matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, false)>( \
         __builtin_LINE(), a, b, tr, ct, rt)
 #define MATMUL_FE_INIT_6(a, b, tr, ct, rt, kt)                                                          \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>(MATMUL_FE_CK(kt))))>( \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_KT1(kt), MATMUL_FE_KDEC(a, (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>(MATMUL_FE_CK(kt))))>( \
         __builtin_LINE(), a, b, tr, ct, rt, kt)
 #define MATMUL_FE_INIT_7(a, b, tr, ct, rt, kt, line)                                                    \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>(MATMUL_FE_CK(kt))))>( \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_KT1(kt), MATMUL_FE_KDEC(a, (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>(MATMUL_FE_CK(kt))))>( \
         line, a, b, tr, ct, rt, kt)
 #define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_BLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
 // the experimental 2_0 call (no transpose argument)
 #define MATMUL_FE_BLOCK_8(a, ...) \
     matmul_block_fe<0xFFu, 0xFFu, 0xFFu, 0xFFu, 0, ::ckernel::matmul_fe_unkeyed<MATMUL_FE_KDEC(a, false)>()>(__builtin_LINE(), a, __VA_ARGS__)
 #define MATMUL_FE_BLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt)                                                               \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, false)>( \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_KT1(kt), MATMUL_FE_KDEC(a, false)>( \
         __builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
 #define MATMUL_FE_BLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line)                                                        \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, false)>( \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_KT1(kt), MATMUL_FE_KDEC(a, false)>( \
         line, a, b, i0, i1, d, tr, ct, rt, kt)
 #else
 // the unpack and pack macros: the class rule's mark and the shape mark, and on a call that names ct, rt and kt the cell mark; every

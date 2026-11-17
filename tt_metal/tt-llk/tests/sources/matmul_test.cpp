@@ -462,7 +462,7 @@ constexpr bool matmul_tile_mop =
            !(matmul_hifi2_half_wide(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, is_fp32_dest_acc_en, matmul_prod_may_pack_32bit) &&
              !matmul_prod_dims_unseen) &&
            !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf && !matmul_prod_dims_unseen &&
-             !(MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1))) ||
+             !(MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1) && MATMUL_PK_KT != 1)) ||
               MATMUL_PROD_RUNTIME_DIR
         : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
 #else

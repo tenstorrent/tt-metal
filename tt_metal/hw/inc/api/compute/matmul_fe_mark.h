@@ -12,7 +12,8 @@
 // is_used<N>(0) reads true from that point on. tag 0: a plain matmul call runs the ttsync unpack, read by the TRISC
 // wrapper after the kernel's include; tag 3: the kernel names a fast tilize init; tag 4: a plain matmul call polls; tag 5: a plain
 // call of constant block keys runs the ttsync unpack on its cell in a kernel the class rule keeps polling; tags 7 and 8: a plain
-// matmul call whose ct and rt are (8) or are not (7) constant expressions; tag 13: a call or init of a constant one-tile block (14 unread).
+// matmul call whose ct and rt are (8) or are not (7) constant expressions; tag 13: a call or init of a constant one-tile block (14 unread); tag 15: a math init or call of
+// constant kt 1 (16 unread).
 namespace ckernel::matmul_fe_mark {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnon-template-friend"
@@ -85,6 +86,8 @@ constexpr bool is_used_dl(...) {
 // a block key: the constant itself, 0xFF where the argument is not a constant expression; taken by value, since a reference to a
 // run-time dim moved its register allocation (minimal_matmul)
 #define MATMUL_FE_CK(x) (__builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_mark::dim(x))) ? ::ckernel::matmul_fe_mark::dim(x) : 0xFFu)
+// 0, completing tag 15 for a math init or call whose kt is the constant 1 (16 unread)
+#define MATMUL_FE_KT1(kt) (0 * sizeof(::ckernel::matmul_fe_mark::set<(MATMUL_FE_CK(kt) == 1u) ? 15 : 16>))
 #define FAST_TILIZE_MARK() sizeof(::ckernel::matmul_fe_mark::set<3>)
 // 0, completing tag 8 for a plain call whose ct and rt are constant expressions and tag 7 otherwise; the dims pass by value, so
 // the test takes no address of them (a reference moved the register allocation of run-time-dim kernels), and through matmul_fe_cb,
