@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage-0 image-embedding injection: overwrite the token embeddings at a chunk's image positions."""
+"""Stage-0 image-embedding splice on the device: the image rows build_media_partials (media.py) lays out per SP row,
+and the lookup and where that put them over the token embeddings at a chunk's image positions."""
 
 import itertools
 
@@ -9,16 +10,15 @@ import numpy as np
 import torch
 
 import ttnn
-from models.demos.minimax_m3.utils.profiler_utils import COARSE, zone
 
 
 class MediaPartials:
-    """Per-SP-row image rows, on device, for the hook in TtParallelEmbedding (_splice).
+    """Per-SP-row image rows, on device, for an embedding's splice_media.
 
-    table [h, hidden/tp] per chip (row 0 zeros) and lookup per chip (0 = not this SP row's). The 2D
-    embedding looks up all s_total gathered positions before its reduce-scatter, so lookup is [1,1,s_total]
-    and is_img [1,1,s_total,1] replicated. The 1D one (by_position) looks up only the chip's own s_local
-    positions, so both are SP-sharded. lookup and is_img are chunk-shaped and allocated once; only the
+    table [h, hidden/tp] per chip (row 0 zeros) and lookup per chip (0 = not this SP row's). An embedding that
+    looks up all s_total gathered positions before a reduce-scatter (vocab sharded over SP) has lookup [1,1,s_total]
+    and is_img [1,1,s_total,1] replicated. One that looks up only the chip's own s_local positions (by_position:
+    full vocab per SP row, no collective) has both SP-sharded. lookup and is_img are chunk-shaped and allocated once; only the
     table tracks the image count, and build_media_partials snaps its height to a few buckets, so a
     deployment keeps a handful. All are refilled with copy_host_to_device_tensor, so a forward pays no
     host tilize.
@@ -109,5 +109,14 @@ class MediaPartials:
             self._is_img_rows,
         )
         ttnn.deallocate(self.is_img)
-        with zone("media_tilize", COARSE):
-            self.is_img = ttnn.to_layout(self._is_img_rows, ttnn.TILE_LAYOUT)
+        self.is_img = ttnn.to_layout(self._is_img_rows, ttnn.TILE_LAYOUT)
+
+
+def splice_media(emb: ttnn.Tensor, media: MediaPartials, dtype) -> ttnn.Tensor:
+    """emb [1, 1, s, hidden/tp] with media's image rows at its image positions. ttnn.embedding returns zeros where
+    lookup is 0 (row 0 of the table), so one where() both supplies this SP row's image rows and, before a
+    reduce-scatter, suppresses the token embedding where another row supplies them."""
+    gathered = ttnn.embedding(media.lookup, media.table, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    if len(gathered.shape) == 3:
+        gathered = ttnn.unsqueeze_to_4D(gathered)
+    return ttnn.where(media.is_img, gathered, emb)

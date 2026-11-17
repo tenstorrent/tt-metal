@@ -42,8 +42,8 @@ from models.common.multimedia_store.reader import FetchRequest
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
 from models.demos.common.prefill.media import build_media_partials, warm_media_refs
+from models.demos.common.prefill.media_partials import MediaPartials
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
-from models.demos.minimax_m3.tt.media_injection import MediaPartials
 from models.demos.minimax_m3.tt.residual import activation_mapper
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 from models.demos.minimax_m3.vision import format as media_format

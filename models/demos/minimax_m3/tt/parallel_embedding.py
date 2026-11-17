@@ -48,6 +48,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.media_partials import splice_media
 from models.demos.minimax_m3.tt.residual import use_sharded_residual
 from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.profiler_utils import COARSE, zone
@@ -229,16 +230,10 @@ class TtParallelEmbedding(LightweightModule):
         return emb
 
     def _splice(self, emb: ttnn.Tensor, media_fn) -> ttnn.Tensor:
-        """emb with the image rows of media_fn's MediaPartials at its image positions. ttnn.embedding returns
-        zeros where lookup is 0 (row 0 of the table), so one where() both supplies this SP row's image rows and, on
-        the 2D path, suppresses the token embedding where another row supplies them. Called after the token lookup
-        is enqueued, so the host's fetch and upload overlap it."""
+        """emb with media_fn's image rows (splice_media). Called after the token lookup is enqueued, so the host's
+        fetch and upload overlap it."""
         media = media_fn() if media_fn is not None else None
         if media is None:
             return emb
-        with zone("media_gather", COARSE):
-            gathered = ttnn.embedding(media.lookup, media.table, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
-            if len(gathered.shape) == 3:
-                gathered = ttnn.unsqueeze_to_4D(gathered)
-        with zone("media_where", COARSE):
-            return ttnn.where(media.is_img, gathered, emb)
+        with zone("media_splice", COARSE):
+            return splice_media(emb, media, self.dtype)
