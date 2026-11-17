@@ -7,8 +7,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -95,7 +95,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -270,7 +269,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     const float pad_value = operation_attributes.pad_value;
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -338,24 +336,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     if (output_H % tile_shape[1] != 0) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
-        switch (input_tensor.dtype()) {
-            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            case DataType::UINT32: padding_val_packed = pad_value; break;
-            case DataType::BFLOAT16:
-                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-                break;
-            case DataType::UINT16:
-                padding_val_packed =
-                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-                break;
-            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            default:
-                padding_val_packed = 0;
-                TT_ASSERT(
-                    false,
-                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
-                    "FLOAT32");
-        }
+        // INT32 pad values arrive as the int32 bit pattern carried in the float (the INT32 max/min
+        // reductions pad with INT32_MIN + 1 and INT32_MAX this way), so keep those bits.
+        padding_val_packed = input_tensor.dtype() == DataType::INT32
+                                 ? std::bit_cast<uint32_t>(pad_value)
+                                 : pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
     }
 
     uint32_t h_in_dest = 0;
@@ -607,7 +592,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
 
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     const float pad_value = operation_attributes.pad_value;
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -681,24 +665,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
 
-        switch (input_tensor.dtype()) {
-            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            case DataType::UINT32: padding_val_packed = pad_value; break;
-            case DataType::BFLOAT16:
-                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-                break;
-            case DataType::UINT16:
-                padding_val_packed =
-                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-                break;
-            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            default:
-                padding_val_packed = 0;
-                TT_ASSERT(
-                    false,
-                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
-                    "FLOAT32");
-        }
+        // INT32 pad values arrive as the int32 bit pattern carried in the float (the INT32 max/min
+        // reductions pad with INT32_MIN + 1 and INT32_MAX this way), so keep those bits.
+        padding_val_packed = input_tensor.dtype() == DataType::INT32
+                                 ? std::bit_cast<uint32_t>(pad_value)
+                                 : pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
     }
 
     // Faces with real data in the final tile along the width dimension, divided up

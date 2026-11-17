@@ -22,8 +22,8 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
@@ -39,8 +39,6 @@
 #include <tt-umd/driver_atomics.hpp>
 
 namespace tt::tt_metal {
-
-namespace m2 = experimental;
 
 TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     using DataT = std::uint32_t;
@@ -80,53 +78,53 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
             expected_scalar_reads.end(), expected_per_thread.begin(), expected_per_thread.end());
     }
 
-    const m2::NodeCoord node{0, 0};
-    const m2::DFBSpecName DFB{"dfb"};
-    const m2::KernelSpecName PRODUCER{"producer"};
-    const m2::KernelSpecName CONSUMER{"consumer"};
-    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const NodeCoord node{0, 0};
+    const DFBSpecName DFB{"dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
 
     const uint32_t words_per_entry = entry_size / sizeof(DataT);
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries);
     auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
 
-    m2::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = DataFormat::Float16_b,
     };
 
-    m2::DataMovementHardwareConfig producer_hw;
-    m2::ComputeHardwareConfig consumer_hw;
+    DataMovementHardwareConfig producer_hw;
+    ComputeHardwareConfig consumer_hw;
     if (this->device().arch() == ARCH::QUASAR) {
-        producer_hw = m2::DataMovementHardwareConfig{
+        producer_hw = DataMovementHardwareConfig{
             .config_2xx =
-                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for = {DFB},
                 },
         };
-        consumer_hw = m2::ComputeHardwareConfig{};
+        consumer_hw = ComputeHardwareConfig{};
     } else {
-        producer_hw = m2::DataMovementHardwareConfig{
+        producer_hw = DataMovementHardwareConfig{
             .config_1xx =
-                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = DataMovementProcessor::RISCV_0,
                 },
         };
-        consumer_hw = m2::ComputeHardwareConfig{};
+        consumer_hw = ComputeHardwareConfig{};
     }
 
-    m2::KernelSpec producer{
+    KernelSpec producer{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = num_producers,
         .dfb_bindings =
             {{.dfb_spec_name = DFB,
               .accessor_name = "out",
-              .endpoint_type = m2::DFBEndpointType::PRODUCER,
-              .access_pattern = m2::DFBAccessPattern::STRIDED}},
+              .endpoint_type = DFBEndpointType::PRODUCER,
+              .access_pattern = DFBAccessPattern::STRIDED}},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args =
             {
@@ -138,23 +136,23 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
         .hw_config = producer_hw,
     };
 
-    m2::KernelSpec consumer{
+    KernelSpec consumer{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_read_tile_value_compute.cpp",
         .num_threads = num_consumers,
         .dfb_bindings =
             {{.dfb_spec_name = DFB,
               .accessor_name = "in",
-              .endpoint_type = m2::DFBEndpointType::CONSUMER,
-              .access_pattern = m2::DFBAccessPattern::STRIDED}},
+              .endpoint_type = DFBEndpointType::CONSUMER,
+              .access_pattern = DFBAccessPattern::STRIDED}},
         .compile_time_args = {{"num_entries_per_consumer", num_entries}},
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
         .hw_config = consumer_hw,
     };
 
-    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
+    WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
-    m2::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dfb_read_tile_value_2tiles",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb_spec},
@@ -162,25 +160,25 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     const uint32_t result_size_bytes = static_cast<uint32_t>(expected_scalar_reads.size() * sizeof(DataT));
     const uint32_t result_l1_addr = top_of_l1_scratch_addr(this->device(), result_size_bytes);
 
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        m2::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
             .runtime_arg_values =
-                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
+                MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
-        m2::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
-            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
         },
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     const uint32_t total_words = num_entries * words_per_entry;
     auto input = tt::test_utils::generate_uniform_random_vector<DataT>(0, 1000000, total_words);
@@ -305,8 +303,8 @@ inline ExtentRecord expected_extent(
     uint32_t num_producers,
     uint32_t num_consumers,
     bool is_producer,
-    m2::DFBAccessPattern consumer_access_pattern) {
-    if (consumer_access_pattern == m2::DFBAccessPattern::ALL) {
+    DFBAccessPattern consumer_access_pattern) {
+    if (consumer_access_pattern == DFBAccessPattern::ALL) {
         return expected_all_extent(entry_size, num_entries, num_producers, num_consumers, is_producer);
     }
     return expected_strided_extent(entry_size, num_entries, num_producers, num_consumers, is_producer);
@@ -361,7 +359,7 @@ struct ExtentProbeParams {
     uint32_t num_consumers = 1;
     uint32_t entry_size = 1024;
     uint32_t num_entries = 16;
-    m2::DFBAccessPattern consumer_access_pattern = m2::DFBAccessPattern::STRIDED;
+    DFBAccessPattern consumer_access_pattern = DFBAccessPattern::STRIDED;
     ProducerProbeConfig producer{};
     ConsumerProbeConfig consumer{};
 };
@@ -375,47 +373,47 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
         GTEST_SKIP() << "WH/BH supports 1Sx1S only";
     }
 
-    const m2::NodeCoord node{0, 0};
-    const m2::DFBSpecName DFB{"dfb"};
-    const m2::KernelSpecName PRODUCER{"producer"};
-    const m2::KernelSpecName CONSUMER{"consumer"};
+    const NodeCoord node{0, 0};
+    const DFBSpecName DFB{"dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
 
-    m2::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
         .entry_size = params.entry_size,
         .num_entries = params.num_entries,
         .data_format_metadata = DataFormat::Float16_b,
     };
 
-    m2::DataMovementHardwareConfig producer_hw;
-    m2::ComputeHardwareConfig consumer_hw;
+    DataMovementHardwareConfig producer_hw;
+    ComputeHardwareConfig consumer_hw;
     if (is_quasar) {
-        producer_hw = m2::DataMovementHardwareConfig{
+        producer_hw = DataMovementHardwareConfig{
             .config_2xx =
-                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for = {DFB},
                 },
         };
-        consumer_hw = m2::ComputeHardwareConfig{};
+        consumer_hw = ComputeHardwareConfig{};
     } else {
-        producer_hw = m2::DataMovementHardwareConfig{
+        producer_hw = DataMovementHardwareConfig{
             .config_1xx =
-                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = DataMovementProcessor::RISCV_0,
                 },
         };
-        consumer_hw = m2::ComputeHardwareConfig{};
+        consumer_hw = ComputeHardwareConfig{};
     }
 
-    m2::KernelSpec producer{
+    KernelSpec producer{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_extent_probe_dm.cpp",
         .num_threads = static_cast<uint8_t>(params.num_producers),
         .dfb_bindings =
             {{.dfb_spec_name = DFB,
               .accessor_name = "out",
-              .endpoint_type = m2::DFBEndpointType::PRODUCER,
-              .access_pattern = m2::DFBAccessPattern::STRIDED}},
+              .endpoint_type = DFBEndpointType::PRODUCER,
+              .access_pattern = DFBAccessPattern::STRIDED}},
         .compile_time_args =
             {
                 {"num_tc_snapshots", params.producer.num_tc_snapshots},
@@ -426,14 +424,14 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
         .hw_config = producer_hw,
     };
 
-    m2::KernelSpec consumer{
+    KernelSpec consumer{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_extent_probe_compute.cpp",
         .num_threads = static_cast<uint8_t>(params.num_consumers),
         .dfb_bindings =
             {{.dfb_spec_name = DFB,
               .accessor_name = "in",
-              .endpoint_type = m2::DFBEndpointType::CONSUMER,
+              .endpoint_type = DFBEndpointType::CONSUMER,
               .access_pattern = params.consumer_access_pattern}},
         .compile_time_args =
             {
@@ -447,16 +445,16 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
         .hw_config = consumer_hw,
     };
 
-    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
+    WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
-    m2::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dfb_extent_probe",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     const uint32_t producer_records = params.num_producers * params.producer.num_tc_snapshots;
     const uint32_t consumer_records = params.consumer.num_tc_snapshots;
@@ -464,18 +462,18 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
         top_of_l1_scratch_addr(mesh_device, (producer_records + consumer_records) * extent_record_bytes);
     const uint32_t consumer_result_l1 = producer_result_l1 + producer_records * extent_record_bytes;
 
-    m2::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        m2::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
-            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", producer_result_l1}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", producer_result_l1}}),
         },
-        m2::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
-            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", consumer_result_l1}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", consumer_result_l1}}),
         },
     };
-    m2::SetProgramRunArgs(program, run_args);
+    experimental::SetProgramRunArgs(program, run_args);
 
     LaunchProgram(mesh_device, std::move(program));
     tt_driver_atomics::mfence();
@@ -530,13 +528,13 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
             << "multi-TC consumer RISC: local ring < bounding span";
     }
     if (is_quasar && params.producer.num_tc_snapshots == 1 && params.num_consumers > params.num_producers &&
-        params.consumer_access_pattern == m2::DFBAccessPattern::STRIDED) {
+        params.consumer_access_pattern == DFBAccessPattern::STRIDED) {
         const ExtentRecord producer_rec = read_extent_record(mesh_device, core, producer_result_l1);
         EXPECT_LT(producer_rec[LocalSizeBytes], producer_rec[RingSpanBytes])
             << "multi-TC producer RISC: local ring < bounding span";
     }
-    if (is_quasar && params.producer.num_tc_snapshots == 1 &&
-        params.consumer_access_pattern == m2::DFBAccessPattern::ALL && params.num_producers > 1) {
+    if (is_quasar && params.producer.num_tc_snapshots == 1 && params.consumer_access_pattern == DFBAccessPattern::ALL &&
+        params.num_producers > 1) {
         const ExtentRecord consumer_rec = read_extent_record(mesh_device, core, consumer_result_l1);
         EXPECT_LT(consumer_rec[LocalSizeBytes], consumer_rec[RingSpanBytes])
             << "ALL consumer multi-TC RISC: local ring < bounding span";
@@ -583,7 +581,7 @@ TEST_F(UnitMeshFixture, DataflowBufferExtentApis_2Sx4A_ConsumerEachTC) {
         {
             .num_producers = 2,
             .num_consumers = 4,
-            .consumer_access_pattern = m2::DFBAccessPattern::ALL,
+            .consumer_access_pattern = DFBAccessPattern::ALL,
             .producer =
                 {
                     .credits_to_post = 1,

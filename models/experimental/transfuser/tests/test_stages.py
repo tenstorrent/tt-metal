@@ -14,7 +14,7 @@ from models.experimental.transfuser.tt.stages import Ttstages
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 
 def filter_checkpoint(ckpt_dict, stage_name="layer1", model_prefix="image_encoder.features"):
