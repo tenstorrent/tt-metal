@@ -19,8 +19,11 @@ inside the window (periodic bit 0 and the firmware not triggering).
 """
 
 import argparse
+import sys
+from pathlib import Path
 
-import _common as c
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _common as c  # noqa: E402
 
 TX_BITS = {
     "snapshot clears active": 5,

@@ -23,9 +23,12 @@ correction of the runtime.
 """
 
 import argparse
+import sys
 import time
+from pathlib import Path
 
-import _common as c
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _common as c  # noqa: E402
 
 
 def main():
