@@ -142,6 +142,16 @@ class Qwen36ModelArgs(ModelArgs):
         # prefill_agmm_bf8: prefill AGMM gathers its activation as bf8, half the fabric bytes (QWEN36_AGMM_BF8=1).
         self.prefill_fused_dist_norm = os.environ.get("QWEN36_FUSED_DIST_NORM", "0") == "1"
         self.prefill_agmm_bf8 = os.environ.get("QWEN36_AGMM_BF8", "0") == "1"
+        self.gdn_fused_prefill = os.environ.get("QWEN36_GDN_FUSED_PREFILL", "0") == "1"
+        # MLP gate/up weight dtype (QWEN36_MLP_GATEUP_DTYPE = bfp4 (default) | bfp8 | bf16); down stays bfp8. Non-default
+        # dtypes get a tag in the gate/up tensor-cache file names (tt/mlp.py), so default caches stay valid.
+        _gu = os.environ.get("QWEN36_MLP_GATEUP_DTYPE", "bfp4")
+        if _gu not in ("bfp4", "bfp8", "bf16"):
+            raise ValueError(f"QWEN36_MLP_GATEUP_DTYPE={_gu!r}: expected one of bfp4, bfp8, bf16")
+        if mesh_device is not None:  # ttnn is imported lazily (CPU-only testing); None -> mlp.py default bfloat4_b
+            self.mlp_gateup_dtype = {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}[_gu]
+        else:
+            self.mlp_gateup_dtype = None
         # Per-S prefill tuning hooks (None = the built-in configs). prefill_sdpa_config_fn(S) -> (q_chunk, k_chunk,
         # exp_approx) for the prefill SDPA; prefill_agmm_config_fn(S, shape_name) -> dict | None for the prefill AGMM
         # (shape_name: mlp_gateup | gdn_in | attn_qkv | gdn_out; keys: see tp_common._agmm_launch_config).
