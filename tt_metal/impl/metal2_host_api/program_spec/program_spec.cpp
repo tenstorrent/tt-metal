@@ -21,17 +21,15 @@
 
 namespace tt::tt_metal {
 
-Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
     MetalContext& metal_ctx = mesh_device.impl().metal_context();
 
     // Step 1a: Collect derived data (builds lookup tables, checks name uniqueness and references)
     CollectedSpecData collected = CollectSpecData(spec);
 
-    // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
-    if (!skip_validation) {
-        ValidateProgramSpec(spec, collected, metal_ctx, *mesh_device.allocator());
-    }
+    // Step 1b: Validate semantic rules
+    ValidateProgramSpec(spec, collected, metal_ctx, *mesh_device.allocator());
 
     // Step 2: Build the program
     return BuildProgram(mesh_device, spec, collected, metal_ctx);
@@ -41,17 +39,15 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 // Public Entry Points
 // ============================================================================
 
-Program experimental::MakeProgramFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
-    Program program = BuildProgramFromSpec(mesh_device, spec, skip_validation);
+Program experimental::MakeProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec) {
+    Program program = BuildProgramFromSpec(mesh_device, spec);
     program.impl().compile_and_allocate(&mesh_device, false);
     return program;
 }
 
 distributed::MeshWorkload experimental::MakeMeshWorkloadFromSpecs(
     distributed::MeshDevice& mesh_device,
-    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
-    bool skip_validation) {
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs) {
     const distributed::MeshCoordinateRange mesh_extent(mesh_device.shape());
     distributed::MeshWorkload workload;
     TT_FATAL(!program_specs.empty(), "At least one ProgramSpec is required to create a MeshWorkload.");
@@ -61,18 +57,17 @@ distributed::MeshWorkload experimental::MakeMeshWorkloadFromSpecs(
             "Device range {} is outside MeshDevice shape {}",
             device_range,
             mesh_device.shape());
-        workload.impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
+        workload.impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec));
     }
     workload.impl().compile(&mesh_device);
     return workload;
 }
 
 distributed::MeshWorkload experimental::MakeMeshWorkloadFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation) {
+    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec) {
     distributed::MeshWorkload workload;
     workload.impl().add_program(
-        distributed::MeshCoordinateRange(mesh_device.shape()),
-        BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
+        distributed::MeshCoordinateRange(mesh_device.shape()), BuildProgramFromSpec(mesh_device, program_spec));
     workload.impl().compile(&mesh_device);
     return workload;
 }
