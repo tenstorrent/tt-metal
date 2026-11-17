@@ -288,10 +288,10 @@ def test_two_galaxy_pair_chain(tmp_path):
     assert binding["mesh_graph_desc_path"].endswith("ci/sc2_4x4_rr_mgd.textproto")
     assert all(b["env_overrides"]["TT_VISIBLE_DEVICES"] for b in binding["rank_bindings"])
     assert rankfile.read_text().splitlines() == [
-        f"rank 0={names[1]} slot=0-31",
-        f"rank 1={names[1]} slot=0-31",
-        f"rank 2={names[2]} slot=0-31",
-        f"rank 3={names[2]} slot=0-31",
+        f"rank 0={names[1]} slot=0",
+        f"rank 1={names[1]} slot=1",
+        f"rank 2={names[2]} slot=0",
+        f"rank 3={names[2]} slot=1",
     ]
 
 

@@ -19,7 +19,7 @@ tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py (shared with the blitz 
               edge and how many links each stage boundary has. Picks the descriptor: the 2-link MGD when
               every torus has 2-link edges, else the 1-link variant.
 
-Both write a rankfile (`rank i=host slot=0-31`), the placement the binding needs: tt-run takes no host
+Both write a rankfile (`rank i=host slot=<n>`, n counting the ranks on that host), the placement the binding needs: tt-run takes no host
 field, so launch with `--mpi-args "--map-by rankfile:file=<rankfile>"`.
 """
 import argparse
@@ -250,7 +250,13 @@ def render(template, rank_table, source, hosts, mgd=None):
 
 
 def rankfile(rank_table):
-    return "".join(f"rank {i}={r['host']} slot=0-31\n" for i, r in enumerate(rank_table))
+    """One line per rank; ranks sharing a host take its slots 0, 1, ... in rank order."""
+    seen = collections.Counter()
+    lines = []
+    for i, r in enumerate(rank_table):
+        lines.append(f"rank {i}={r['host']} slot={seen[r['host']]}\n")
+        seen[r["host"]] += 1
+    return "".join(lines)
 
 
 def mock_mapping(rank_table, descriptors):
