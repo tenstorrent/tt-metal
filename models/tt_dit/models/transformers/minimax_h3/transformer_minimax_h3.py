@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import dataclass
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -544,6 +547,17 @@ class MiniMaxH3Transformer3DModel(Module):
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
+        # Diagnostics, off by default: H3_DIT_STAGE_TIMING=1 syncs the device at each stage boundary and logs the wall
+        # time per stage, so each stage's cost is its own (device or host-dispatch bound, whichever is longer).
+        stage_timing = os.environ.get("H3_DIT_STAGE_TIMING") == "1" and not traced
+        stage_marks: list[tuple[str, float]] = []
+
+        def mark(stage: str) -> None:
+            if stage_timing:
+                ttnn.synchronize_device(self.mesh_device)
+                stage_marks.append((stage, time.perf_counter()))
+
+        mark("start")
         block_tables = None
         if modulation_key is not None:
             if modulation_key not in self._modulation_cache:
@@ -607,6 +621,7 @@ class MiniMaxH3Transformer3DModel(Module):
             ttnn.deallocate(audio_rows)
         self._write_source_rows(video_rows, row)
         ttnn.deallocate(video_rows)
+        mark("proj_in + source rows")
 
         # `ttnn.embedding` takes the `[1, 1, rows, C]` table as is; indices never reach past
         # `total_rows`, so rows beyond it (a smaller table layout than an earlier request) are inert.
@@ -616,6 +631,7 @@ class MiniMaxH3Transformer3DModel(Module):
         hidden = ttnn.unsqueeze(hidden, 0)
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
+        mark("assemble (embedding gather)")
 
         temb = self.time_embedder(self.time_proj(timestep))
         if self.two_time is not None:
@@ -647,6 +663,7 @@ class MiniMaxH3Transformer3DModel(Module):
         else:
             eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
         eye = eye_state.value
+        mark("temb + indices + eye")
 
         hidden = self.run_blocks(
             hidden,
@@ -662,6 +679,7 @@ class MiniMaxH3Transformer3DModel(Module):
             traced=traced,
             tracer_trace_key=(pad_to, adaln_tile_map is not None),
         )
+        mark("blocks")
 
         hidden = self.norm_out(
             hidden,
@@ -673,8 +691,9 @@ class MiniMaxH3Transformer3DModel(Module):
             hidden = self.ccl_manager.all_gather(
                 hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False, **ag_kwargs
             )
+        mark("norm_out + TP gather")
 
-        video_head = self.proj_out_heads[output_head] if self.proj_out_heads is not None else self.proj_out
+        video_head =self.proj_out_heads[output_head] if self.proj_out_heads is not None else self.proj_out
         video_all = video_head(hidden, matmul_config=self._head_configs.get("video"))
         audio_all = (
             self.audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))
@@ -689,6 +708,7 @@ class MiniMaxH3Transformer3DModel(Module):
                 audio_all = self.ccl_manager.all_gather(
                     audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
                 )
+        mark("output head + SP gather")
 
         def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
@@ -699,7 +719,16 @@ class MiniMaxH3Transformer3DModel(Module):
             return ttnn.unsqueeze(gathered, 0)
 
         audio_out = select(audio_all, audio_out_indices) if audio_all is not None else None
-        return select(video_all, video_out_indices), audio_out
+        video_out = select(video_all, video_out_indices)
+        mark("select target rows")
+        if stage_timing:
+            parts = ", ".join(
+                f"{name} {1e3 * (t - prev):.1f}" for (_, prev), (name, t) in zip(stage_marks, stage_marks[1:])
+            )
+            logger.info(
+                f"DIT_STAGES rows {pad_to}: total {1e3 * (stage_marks[-1][1] - stage_marks[0][1]):.1f} ms = {parts}"
+            )
+        return video_out, audio_out
 
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def run_blocks(

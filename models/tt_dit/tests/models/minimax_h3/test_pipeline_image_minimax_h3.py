@@ -591,3 +591,91 @@ def test_step_profile_text_tokens(mesh_device, guide_examples):
     logger.info(f"RESULT text_tokens {len(tok(prompt, add_special_tokens=False)['input_ids'])}: packed "
                 f"{result.packed_length} -> rung {result.rung}, padding rows {pad}")
     _log_result(f"text_tokens_{n}", result)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_sustained_load_clock(mesh_device, guide_examples):
+    """Does the DiT slow down under sustained load (clock/power throttling)? Warm, idle, then 4 back-to-back 4K t2i
+    requests, a 30 s idle, and one more; logs denoise per step for each request (H3_DIT_STAGE_TIMING=1 adds the
+    per-stage split) and a tt-smi telemetry snapshot (aiclk, power, temperature) between phases when available."""
+    import json
+    import subprocess
+
+    t2i, _, _ = guide_examples
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    pipe(t2i["prompt"], width=4096, height=4096, seed=0)
+
+    def telemetry(tag):
+        try:
+            out = subprocess.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=60).stdout
+            data = json.loads(out[out.index("{"):])
+            rows = []
+            for dev in data.get("device_info", []):
+                t = dev.get("telemetry", {})
+                rows.append((t.get("aiclk"), t.get("power"), t.get("asic_temperature")))
+            clk = sorted(float(str(r[0]).split()[0]) for r in rows if r[0] is not None)
+            pw = sorted(float(str(r[1]).split()[0]) for r in rows if r[1] is not None)
+            tmp = sorted(float(str(r[2]).split()[0]) for r in rows if r[2] is not None)
+            logger.info(f"RESULT telemetry {tag}: aiclk min/med/max {clk[0]:.0f}/{clk[len(clk) // 2]:.0f}/{clk[-1]:.0f}, "
+                        f"power med {pw[len(pw) // 2]:.0f} max {pw[-1]:.0f}, temp med {tmp[len(tmp) // 2]:.0f} "
+                        f"max {tmp[-1]:.0f} ({len(rows)} chips)")
+        except Exception as err:
+            logger.info(f"RESULT telemetry {tag}: unavailable ({type(err).__name__}: {str(err)[:120]})")
+
+    def run(tag, seed):
+        result = pipe(t2i["prompt"], width=4096, height=4096, seed=seed)
+        steps = ", ".join(f"{s * 1e3:.0f}" for s in result.timings.denoise_steps)
+        logger.info(f"RESULT load {tag}: denoise {result.timings.denoise:.3f} s, steps [{steps}] ms")
+
+    time.sleep(20)
+    telemetry("after 20 s idle")
+    run("first after idle", 1)
+    for i in range(4):
+        run(f"back-to-back {i + 1}", 2 + i)
+    telemetry("right after 5 requests")
+    time.sleep(30)
+    telemetry("after 30 s idle")
+    run("after 30 s idle", 9)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_step_slowdown_cause(mesh_device, guide_examples):
+    """Steps 1-5 of a 4K request run ~7% slower than step 0 except on the warm-up request. Separate data dependence
+    (seed) from a load-triggered clock/power limit: repeat seed 0 vs other seeds while a thread samples tt-smi
+    telemetry (aiclk, power) continuously during the requests."""
+    import json
+    import subprocess
+    import threading
+
+    t2i, _, _ = guide_examples
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    samples, stop = [], threading.Event()
+
+    def sampler():
+        while not stop.is_set():
+            try:
+                out = subprocess.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=30).stdout
+                data = json.loads(out[out.index("{"):])
+                clk = [float(str(d["telemetry"]["aiclk"]).split()[0]) for d in data.get("device_info", [])]
+                pw = [float(str(d["telemetry"]["power"]).split()[0]) for d in data.get("device_info", [])]
+                samples.append((time.time(), min(clk), max(clk), sorted(pw)[len(pw) // 2], max(pw)))
+            except Exception as err:
+                samples.append((time.time(), None, None, None, f"{type(err).__name__}"))
+
+    thread = threading.Thread(target=sampler, daemon=True)
+    thread.start()
+    spans = []
+    for tag, seed in [("warm seed0", 0), ("seed0 again", 0), ("seed1", 1), ("seed0 third", 0), ("seed7", 7)]:
+        t0 = time.time()
+        result = pipe(t2i["prompt"], width=4096, height=4096, seed=seed)
+        spans.append((tag, t0, time.time()))
+        steps = ", ".join(f"{s * 1e3:.0f}" for s in result.timings.denoise_steps)
+        logger.info(f"RESULT slowdown {tag}: steps [{steps}] ms")
+    stop.set()
+    thread.join(timeout=60)
+    base = spans[0][1]
+    for ts, cmin, cmax, pmed, pmax in samples:
+        span = next((s[0] for s in spans if s[1] <= ts <= s[2]), "between")
+        logger.info(f"RESULT telem t={ts - base:6.1f}s [{span}]: aiclk {cmin}-{cmax}, power med {pmed} max {pmax}")
