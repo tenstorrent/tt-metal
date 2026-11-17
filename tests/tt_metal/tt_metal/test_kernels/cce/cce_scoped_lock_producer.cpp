@@ -96,7 +96,7 @@ void kernel_main() {
             status.code = abi::kCodePeerTimeout;
         }
     } else if (mode == abi::kModeFlushOnRelease) {
-        volatile uint32_t* cached_probe = reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(region_offset));
+        volatile uint32_t* cached_probe = cached_tl1_words(region_offset);
         const uintptr_t lock_address = region_offset + lock_first_line * abi::kLineBytes;
         const uint32_t lock_bytes = lock_num_lines * abi::kLineBytes;
         for (uint32_t line = 0; line < abi::kNumLines; ++line) {
@@ -147,8 +147,7 @@ void kernel_main() {
         } else {
             status.flags |= abi::kFlagPeerSignalled;
             asm volatile("fence r, rw" ::: "memory");
-            volatile uint32_t* cached_probe =
-                reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(region_offset));
+            volatile uint32_t* cached_probe = cached_tl1_words(region_offset);
             const uintptr_t lock_address = region_offset + lock_first_line * abi::kLineBytes;
             const uint32_t lock_bytes = lock_num_lines * abi::kLineBytes;
             scoped_lock_acquire_cache_ops(lock_address, lock_bytes);

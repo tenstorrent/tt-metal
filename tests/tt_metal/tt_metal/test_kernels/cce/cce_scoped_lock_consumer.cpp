@@ -113,8 +113,7 @@ void kernel_main() {
             status.rounds_done = round + 1;
         }
     } else {
-        const volatile uint32_t* cached_probe =
-            reinterpret_cast<const volatile uint32_t*>(static_cast<uintptr_t>(region_offset));
+        const volatile uint32_t* cached_probe = cached_tl1_words(region_offset);
         const volatile uint32_t* uncached_probe = own_tl1_words(region_offset);
         volatile uint32_t* result_words = own_tl1_words(result_offset);
         const bool invalidate_mode = mode != abi::kModeFlushOnRelease;
