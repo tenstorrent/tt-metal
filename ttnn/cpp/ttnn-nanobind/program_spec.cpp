@@ -1178,6 +1178,16 @@ void bind_mesh_programs(nb::module_& mod) {
 
 }  // namespace
 
+nb::object python_tensor_args(const m2::ProgramRunArgs& run_args) {
+    const nb::object self = nb::find(run_args);
+    return self.is_valid() ? nb::getattr(self, TENSOR_ARGS_ATTRIBUTE, nb::none()) : nb::none();
+}
+
+nb::object python_tensor_args(const ttnn::experimental::MeshProgramRunArgs& run_args) {
+    const nb::object self = nb::find(run_args);
+    return self.is_valid() ? nb::getattr(self, TENSOR_ARGS_ATTRIBUTE, nb::none()) : nb::none();
+}
+
 void py_module_types(nb::module_& mod) {
     bind_enums(mod);
     bind_tensor_parameter(mod);
