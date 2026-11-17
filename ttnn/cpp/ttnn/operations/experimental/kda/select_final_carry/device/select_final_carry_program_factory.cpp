@@ -101,30 +101,19 @@ tt::tt_metal::ProgramDescriptor build_program(
 
     const auto& end_tensor = in.actual_end.value_or(in.actual_start);
     std::vector<uint32_t> reader_args = {
-        tiles_cb,
-        mode_cb,
-        packet_pages,
-        sp_rank,
-        sp_size,
-        attrs.local_rows,
-        in.actual_end.has_value(),
-        tail_groups,
-        head_tiles};
+        tiles_cb, mode_cb, packet_pages, sp_size, attrs.local_rows, in.actual_end.has_value(), tail_groups, head_tiles};
     tt::tt_metal::TensorAccessorArgs(in.rank_final.buffer()).append_to(reader_args);
     tt::tt_metal::TensorAccessorArgs(in.prefix_final.buffer()).append_to(reader_args);
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(reader_args);
     tt::tt_metal::TensorAccessorArgs(end_tensor.buffer()).append_to(reader_args);
     std::vector<uint32_t> writer_args = {
-        tiles_cb,
-        mode_cb,
-        packet_pages,
-        page_size,
-        targets_forward + targets_backward,
+        tiles_cb, mode_cb, packet_pages, page_size, targets_forward + targets_backward, uint32_t(unicast_peers)};
+    // sp_rank and the multicast hops are runtime args, so a range's per-chip programs merge into one.
+    const std::vector<uint32_t> multicast_hops = {
         uint32_t(forward.has_value()),
         forward ? targets_forward : 0u,
         uint32_t(backward.has_value()),
-        backward ? targets_backward : 0u,
-        uint32_t(unicast_peers)};
+        backward ? targets_backward : 0u};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_args);
 
     tt::tt_metal::KernelDescriptor reader;
@@ -152,9 +141,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (uint32_t link = 0; link < fabric_cores.size(); ++link) {
         const auto& core = fabric_cores[link];
         const TileRange send = split_range(state_tiles, attrs.num_links, link);
-        desc.kernels[reader_id].emplace_runtime_args(core, {send.begin, send.end});
+        desc.kernels[reader_id].emplace_runtime_args(core, {send.begin, send.end, sp_rank});
 
         std::vector<uint32_t> writer_rt = {send.begin, send.end};
+        writer_rt.insert(writer_rt.end(), multicast_hops.begin(), multicast_hops.end());
         const auto worker = mesh->worker_core_from_logical_core(core);
         const auto source = mesh->get_fabric_node_id(coord);
         std::vector<tt::tt_fabric::FabricNodeId> destinations;

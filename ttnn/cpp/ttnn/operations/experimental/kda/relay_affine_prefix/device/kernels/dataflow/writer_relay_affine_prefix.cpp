@@ -9,12 +9,11 @@
 
 constexpr uint32_t cb_eout = get_compile_time_arg_val(0);
 constexpr uint32_t cb_chron = get_compile_time_arg_val(1);
-constexpr uint32_t sp_rank = get_compile_time_arg_val(2);
-constexpr uint32_t sp_size = get_compile_time_arg_val(3);
-constexpr uint32_t local_rows = get_compile_time_arg_val(4);
-constexpr uint32_t kt = get_compile_time_arg_val(5);
-constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(6);
-constexpr auto entry_args = TensorAccessorArgs<7>();
+constexpr uint32_t sp_size = get_compile_time_arg_val(2);
+constexpr uint32_t local_rows = get_compile_time_arg_val(3);
+constexpr uint32_t kt = get_compile_time_arg_val(4);
+constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(5);
+constexpr auto entry_args = TensorAccessorArgs<6>();
 constexpr auto final_args = TensorAccessorArgs<entry_args.next_compile_time_args_offset()>();
 constexpr uint32_t state_tiles = kt * kt;
 
@@ -32,6 +31,7 @@ void kernel_main() {
     const uint32_t notify_semaphore_id = get_arg_val<uint32_t>(arg++);  // this head's column count on its sender
     const uint32_t sender_x = get_arg_val<uint32_t>(arg++);
     const uint32_t sender_y = get_arg_val<uint32_t>(arg++);
+    const uint32_t sp_rank = get_arg_val<uint32_t>(arg++);
 
     cb_wait_front(cb_chron, 1);
     const uint32_t actual_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_chron))[0];
