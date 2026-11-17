@@ -29,7 +29,7 @@ void kernel_main() {
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_out.wait_front(onetile);
-        noc.async_write(cb_out, s, s.get_aligned_page_size(), {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write(cb_out, s, page_bytes, {.offset_bytes = 0}, {.page_id = i});
         noc.async_write_barrier();
         cb_out.pop_front(onetile);
     }

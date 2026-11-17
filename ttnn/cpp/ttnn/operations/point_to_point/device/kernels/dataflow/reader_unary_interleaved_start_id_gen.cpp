@@ -32,7 +32,7 @@ void kernel_main() {
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_in0.reserve_back(onetile);
-        noc.async_read(s, cb_in0, s.get_aligned_page_size(), {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read(s, cb_in0, page_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
         cb_in0.push_back(onetile);
     }
