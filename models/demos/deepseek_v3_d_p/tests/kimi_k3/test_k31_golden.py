@@ -3,7 +3,7 @@
 
 """The K3.1 golden is K3's golden format and K3's contract, and it is the trace it was converted from. Host only.
 
-The golden is Miguel's chunked vLLM trace rewritten into the per-stream layout `golden.GoldenTrace` reads, by a
+The golden is the chunked vLLM trace rewritten into the per-stream layout `golden.GoldenTrace` reads, by a
 one-shot converter kept outside the repo (the golden's `converted_from` metadata names its source and version).
 Pinned here, through both readers that consume a golden — K3's `GoldenTrace` (the *_matches_golden tests) and
 the runner producer's loaders (the PCC gate): the converted K3.1 golden is the source trace row for row where it
