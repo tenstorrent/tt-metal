@@ -312,7 +312,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
                 }
-                if constexpr (sync_with_math)
+                // Wormhole PACK_ISOLATE also releases every section to drain the packers.
+                if constexpr (sync_with_math || PERF_PACK_SECTION_RELEASE)
                 {
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
