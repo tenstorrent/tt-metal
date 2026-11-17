@@ -12,6 +12,7 @@ Persistent tensors are allocated in ``__init__`` / ``warm`` BEFORE any trace cap
 State mirror (host, per PHYSICAL mesh row): pending token, its position P, the K drafts, live flag. The device state of a round is authoritative; the mirror is refreshed from the read-back of every round and
 re-uploaded (``Hy4SpecRunner.load``) only on a transition (prefill, a row freed, an idle row present, a mismatch with the plugin's block).
 """
+import hashlib
 import os
 import time
 
@@ -296,7 +297,7 @@ class Hy4Engine:
         if self.spec:
             self._seed_rows(rows, first, res, prompts_by_row, sampling or {})
         logger.info(
-            f"HY4 prefill call: pfx_start={start} hits={hits} mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
+            f"HY4 prefill call: lg_md5={ {r: hashlib.md5(res.logits[r].numpy().tobytes()).hexdigest()[:12] for r in rows} } pfx_start={start} hits={hits} pfx_stats={self.pfx_stats} mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
             f"(chunk median {sorted(res.chunk_sec)[len(res.chunk_sec) // 2]:.2f}s) chunks_s={[round(x, 1) for x in res.chunk_sec[:6]]}..{[round(x, 1) for x in res.chunk_sec[-2:]]} seed={time.perf_counter() - t1:.2f}s"
         )
         return first
