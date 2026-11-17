@@ -487,4 +487,17 @@ RouterArchetype router_archetype(
         turn_set_for_router(topology, facing, chip_capabilities, express_axis, vc_config)};
 }
 
+void check_vc_shape(const RouterVcShape& shape) {
+    TT_FATAL(
+        shape.num_vcs <= builder_config::MAX_NUM_VCS,
+        "Router shape has {} VCs, over the {}-VC limit",
+        shape.num_vcs,
+        builder_config::MAX_NUM_VCS);
+    auto expected = shape;
+    finalize_vc_shape_bases(expected);  // checks the channel ceilings
+    TT_FATAL(
+        expected.sender_flat_base == shape.sender_flat_base && expected.receiver_flat_base == shape.receiver_flat_base,
+        "Router shape bases aren't prefix sums of its channel counts");
+}
+
 }  // namespace tt::tt_fabric

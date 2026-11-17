@@ -393,6 +393,18 @@ std::vector<std::optional<Tensor>> exp_bw(
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config, input_grad)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::EXPM1_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()),
+            input_grad)};
+    }
+
     std::vector<std::optional<Tensor>> grad_tensor;
 
     input_grad =
@@ -603,6 +615,17 @@ std::vector<Tensor> tan_bw(
 // grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
 std::vector<Tensor> sigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps main's single program below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config.value_or(input.memory_config()))) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::SIGMOID_BW_BF16,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
 
@@ -729,7 +752,7 @@ std::vector<Tensor> hardsigmoid_bw(
             std::nullopt,
             output_mem_config),
         0.f,
-        ttnn::multiply(grad, 1.0f / 6.0f),
+        ttnn::multiply(grad, 1.0f / 6.0f, std::nullopt, output_mem_config),
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
@@ -1877,6 +1900,17 @@ std::vector<Tensor> erfinv_bw(
 
 std::vector<Tensor> erf_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::ERF_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
