@@ -2481,6 +2481,14 @@ void check_schedule(
             next = end;
         }
         EXPECT_EQ(next, num_kv_steps(shape, chunks, item)) << "item " << item << ": pieces must cover every step";
+        // The merger owns the band the diagonal crosses, so every piece starts at or before the step that
+        // holds the item's first row's diagonal and no piece ever sees a row masked end to end.
+        const uint32_t first_row_tile =
+            sdpa_items::first_row_tile_of(item, shape.St / chunks.Sq_chunk_t, chunks.Sq_chunk_t);
+        const uint32_t below_band = first_row_tile / chunks.Sk_chunk_t;
+        ASSERT_TRUE(c.merger.has_value());
+        EXPECT_LE(c.merger->step_begin, below_band)
+            << "item " << item << ": the merger must own the whole diagonal band, from step " << below_band;
         std::sort(c.sender_slots.begin(), c.sender_slots.end());
         for (uint32_t k = 0; k < c.sender_slots.size(); ++k) {
             EXPECT_EQ(c.sender_slots[k], c.merger->slot + k) << "item " << item << ": slots must follow the merger's";
@@ -2584,11 +2592,14 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     EXPECT_LT(many.num_slots, kCores);
     check_schedule(one_head, sq4sk1, many, 16U);
 
-    // The most pieces an item can be cut into, 63: one 128-step item (a whole 1024-tile sequence, eight K
-    // tiles per step, so a step outweighs a merge) on 120 cores gets 62 senders and a merger with 62
-    // partials, the top of the six-bit num_partials field, which check_schedule encodes.
+    // The most pieces an item can be cut into, 63: two items over a 1024-tile sequence at one K tile per
+    // step, so the second item has 1024 steps and its first row tile is 512, leaving the senders 512 steps
+    // below the diagonal band. On 120 cores it gets 62 senders and a merger with 62 partials, the top of
+    // the six-bit num_partials field, which check_schedule encodes. (An item that is the whole sequence
+    // cannot be cut at all: its first row is row 0, so every step past the first lies past that row's
+    // diagonal and only the merger may own them.)
     const SDPAForwardShape one_item = causal_shape(1U, 1U, 1U, 1024U, 1U);
-    const SDPAForwardChunks whole_seq{.Sq_chunk_t = 1024U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
+    const SDPAForwardChunks whole_seq{.Sq_chunk_t = 512U, .Sk_chunk_t = 1U, .heads_per_item = 1U};
     const SDPAForwardSchedule most = make_schedule(one_item, whole_seq, kCores, kMaxPieces);
     EXPECT_EQ(most.num_slots, kMaxPieces - 1U);
     EXPECT_EQ(count_role(most, UnitRole::Sender), kMaxPieces - 1U);
@@ -3716,25 +3727,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_OddVWidth) {
     run_split_vs_unsplit(base, {64, 64, 1, 4, 0});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_MaskedRowsInPieces) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // Sq_chunk_t = 8 with Sk_chunk_t = 1: most rows of a cut item are fully masked in every piece but the
-    // first, including in the merger's own range, so the fold has to remove their garbage partials exactly.
-    const SDPATestConfig base{
-        .batch_size = 1U,
-        .sequence_length = 1024U,
-        .query_dim = 64U,
-        .key_value_dim = 64U,
-        .num_query_heads = 1U,
-        .num_key_heads = 1U,
-        .mask_type = ttml::metal::AttentionMaskType::Causal,
-        .test_name = "SplitEdge_MaskedRowsInPieces"};
-    // Four items: on 16 and 32 cores the model cuts them four and eight ways (on the full grid it rates the
-    // merges' DRAM share at 120 cores and keeps them whole).
-    run_split_vs_unsplit(base, {256, 32, 1, 4, 16});
-    run_split_vs_unsplit(base, {256, 32, 1, 8, 32});
-}
-
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_NonPow2) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // S = 1536 (48 tiles) with 96-row chunks and 96-row steps: 16 chunks of three rows, 3 K/V tiles a step.
@@ -3750,19 +3742,22 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_NonPow2) {
     run_split_vs_unsplit(base, {96, 96, 1, 4, 0});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_OneItemTwoCores) {
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_SmallestCut) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // One item (the whole sequence is one chunk) on two cores: one sender, one merger, nothing else.
+    // The smallest cut there is: two items of eight tile-rows at one K tile per step on three cores, the
+    // heavy one cut into a single sender and its merger, the light one whole, one unit per core. (An item
+    // that holds tile row 0 is never cut, because every step past the first lies past that row's diagonal
+    // and only the merger may own those; a one-item shape therefore runs whole.)
     const SDPATestConfig base{
         .batch_size = 1U,
-        .sequence_length = 256U,
+        .sequence_length = 512U,
         .query_dim = 64U,
         .key_value_dim = 64U,
         .num_query_heads = 1U,
         .num_key_heads = 1U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
-        .test_name = "SplitEdge_OneItemTwoCores"};
-    run_split_vs_unsplit(base, {256, 32, 1, 4, 2});
+        .test_name = "SplitEdge_SmallestCut"};
+    run_split_vs_unsplit(base, {256, 32, 1, 4, 3});
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitEdge_BatchGQAGateNoLse) {
@@ -3814,58 +3809,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitEdge_DefaultPick
             continue;
         }
         run_split_vs_unsplit(base, {0, 0, 0, 0, 0});
-    }
-}
-
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_LargeScoresStayFinite) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // A piece whose first step lies past a row's diagonal sees only masked scores on that row: its running max is
-    // the mask value, so its P is exp(scale * s) rather than exp(0). This checks that raw scores in the hundreds
-    // do not overflow that row's partial to inf, which alpha_p = 0 would turn into NaN in the fold (the uncut
-    // kernel has K tile 0 unmasked at step 0 for every row, so its max is always real). Q, K in [-40, 40] at
-    // D=64 put |QK^T| in the thousands; both runs stay finite and agree, so the fold holds there.
-    using namespace ttml;
-    auto* device = &autograd::ctx().get_device();
-    const std::array<std::size_t, 4> shape{1U, 1U, 1024U, 64U};
-    auto make = [&](uint32_t s, float lo, float hi) {
-        return core::from_xtensor(
-            round_to_bf16(test_utils::make_uniform_xarray<float>(shape, lo, hi, 90U + s)), device);
-    };
-    const ttnn::Tensor query = make(0U, -40.0F, 40.0F);
-    const ttnn::Tensor key = make(1U, -40.0F, 40.0F);
-    const ttnn::Tensor value = make(2U, 0.0F, 1.0F);
-    auto run = [&](const metal::SDPAForwardProgramConfig& cfg) {
-        auto out = metal::sdpa_fw(
-            query, key, value, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, true, std::nullopt, cfg);
-        return std::pair{core::to_xtensor(out[0].value()), core::to_xtensor(out[1].value())};
-    };
-    const metal::SDPAForwardProgramConfig split{.q_chunk_size = 256U, .k_chunk_size = 32U, .max_pieces = 4U};
-    const metal::SDPAForwardProgramConfig unsplit{.q_chunk_size = 256U, .k_chunk_size = 32U, .max_pieces = 1U};
-    SDPATestConfig probe{
-        .batch_size = 1U,
-        .sequence_length = 1024U,
-        .query_dim = 64U,
-        .key_value_dim = 64U,
-        .num_query_heads = 1U,
-        .num_key_heads = 1U,
-        .program_config = split};
-    ASSERT_GT(host_schedule(probe).num_slots, 0U) << "the split config must cut";
-    const auto [split_out, split_lse] = run(split);
-    const auto [unsplit_out, unsplit_lse] = run(unsplit);
-    const auto nonfinite = [](const xt::xarray<float>& a) { return xt::sum(!xt::isfinite(a))(); };
-    fmt::print(
-        "LargeScoresStayFinite: non-finite outputs split {} unsplit {}, non-finite lse split {} unsplit {}\n",
-        nonfinite(split_out),
-        nonfinite(unsplit_out),
-        nonfinite(split_lse),
-        nonfinite(unsplit_lse));
-    EXPECT_EQ(nonfinite(unsplit_out), 0U) << "the uncut run itself is not finite; the inputs are too large";
-    EXPECT_EQ(nonfinite(split_out), 0U) << "the split run produced NaN/Inf where the uncut run is finite";
-    EXPECT_EQ(nonfinite(split_lse), 0U);
-    if (nonfinite(split_out) == 0U && nonfinite(unsplit_out) == 0U) {
-        const float mean_rel = xt::mean(xt::abs(split_out - unsplit_out))() / xt::mean(xt::abs(unsplit_out))();
-        fmt::print("LargeScoresStayFinite: split vs unsplit mean relative gap {:.3e}\n", mean_rel);
-        EXPECT_LT(mean_rel, 2e-2F);
     }
 }
 

@@ -438,13 +438,13 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
 // through the CBs one row (Wt + 2 tiles) at a time. The partial's tiles and the sums are multiplied on the
 // FPU (19-bit inputs, once per partial); the merger's own fp32 output accumulator is scaled in DST so it is
 // never truncated.
-// A piece whose first step lies past a row's diagonal (Sq_chunk_t > 2 * Sk_chunk_t, or a piece of the
-// first chunks) sees only masked scores on that row. The stamp adds the bf16 mask value (-998244352) in
-// fp32, where a score of a few hundred survives as the low bits; the row max then rounds to the mask value
-// in the bf16 max CB, so the row's P is exp(scale * score), not exp(0): finite garbage of up to exp(scale *
-// |score|) per element. The fold removes it exactly, since alpha = exp(scale * (mask - real max))
-// underflows to 0. The whole path never does this, since every row has K tile 0 unmasked at step 0.
-// Measured finite on Blackhole with raw scores in the thousands (SplitEdge_LargeScoresStayFinite).
+// No piece ever sees a row masked end to end: the scheduler only cuts where every piece, the merger's own
+// range included, starts at or before the step holding the item's first row's diagonal, so every row of
+// every piece has an unmasked K tile (schedule_pieces in sdpa_fw_config.cpp; check_schedule pins it, and
+// ring_joint's K split keeps the same rule). That matters because reduce_tile and sub_tiles_bcast_cols
+// read the scores through the FPU's 19-bit srcA, whose step near the bf16 mask value (-998244352) is
+// 2^19: a fully masked row's max would round to the mask value, and its P to 1, 0 or inf rather than
+// exp(scale * s), so the fold could not remove it.
 // ttnn has this fold twice: ring_joint's K split (merge_into_prev in ring_joint_sdpa.cpp) and flash decode's
 // correction_block (compute_common.hpp). Neither fits here. ring_joint's runs on its bf16 streaming path
 // only (it rejects fp32_dest_acc_en, and this kernel keeps the fp32 accumulator in DST), its senders hold

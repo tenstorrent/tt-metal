@@ -342,28 +342,50 @@ SDPAForwardSchedule schedule_pieces(
         uint32_t n;
     };
     std::vector<Cut> cuts;
+    const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
     for (uint32_t item = 0; item < total_items; ++item) {
         const uint32_t steps = num_kv_steps(shape, chunks, item);
         const double cost = fixed + step * steps;
+        // The merger always owns the band the diagonal crosses, so a sender's steps are unmasked on every
+        // row of the item and a piece never sees a row that is masked end to end. ring_joint's K split
+        // keeps the same rule (ring_joint_ksplit.hpp: "the last split always owns the final chunk, which
+        // holds the diagonal"); here the band is wider than one step whenever Sq_chunk_t > Sk_chunk_t, so
+        // it is the item's first row tile, not its last, that bounds what the senders may take. Steps
+        // [0, below_band) are below every row's diagonal.
+        const uint32_t below_band =
+            sdpa_items::first_row_tile_of(item, q_num_chunks, chunks.Sq_chunk_t) / chunks.Sk_chunk_t;
         uint32_t n = 1U;
         if (max_pieces > 1U && cost > cut_above && steps >= 2U * kMinStepsPerPiece) {
-            n = std::min({static_cast<uint32_t>(std::ceil(cost / fair)), max_pieces, steps / kMinStepsPerPiece});
+            n = std::min(
+                {static_cast<uint32_t>(std::ceil(cost / fair)),
+                 max_pieces,
+                 steps / kMinStepsPerPiece,
+                 below_band / kMinStepsPerPiece + 1U});
         }
-        if (n <= 1U) {
+        // Equal pieces would put the merger's at steps - steps / n; it starts at the band instead when the
+        // band begins earlier. At every default pick the band is the last step or two of a long item, so
+        // the equal split already lies inside it and nothing moves; a pinned Sq_chunk_t above 2 * Sk_chunk_t
+        // is what gives the merger more than its share, or stops the cut. An item that holds tile row 0 is
+        // never cut: below_band is 0 there, so there is nothing a sender may own.
+        const uint32_t merger_begin = n > 1U ? std::min(steps - steps / n, below_band) : 0U;
+        const uint32_t senders = n > 1U ? std::min(n - 1U, merger_begin / kMinStepsPerPiece) : 0U;
+        if (senders == 0U) {
             pieces.push_back({WorkUnit{.item = item, .role = UnitRole::Whole, .num_items = 1U}, cost});
             continue;
         }
+        n = senders + 1U;
         cuts.push_back({static_cast<uint32_t>(pieces.size()), n});
-        const uint32_t base = steps / n;
-        const uint32_t extra = steps % n;  // the senders take the leftover steps, the merger pays the merges
+        const uint32_t base = merger_begin / senders;
+        const uint32_t extra = merger_begin % senders;  // the senders take the leftover steps
         uint32_t begin = 0;
         for (uint32_t k = 0; k < n; ++k) {
-            const uint32_t len = base + (k < extra ? 1U : 0U);
-            WorkUnit unit{.item = item, .step_begin = begin, .step_end = begin + len};
-            unit.role = (k + 1U == n) ? UnitRole::Merger : UnitRole::Sender;
-            unit.num_partials = (k + 1U == n) ? n - 1U : 0U;
+            const bool is_merger = k + 1U == n;
+            const uint32_t end = is_merger ? steps : begin + base + (k < extra ? 1U : 0U);
+            WorkUnit unit{.item = item, .step_begin = begin, .step_end = end};
+            unit.role = is_merger ? UnitRole::Merger : UnitRole::Sender;
+            unit.num_partials = is_merger ? n - 1U : 0U;
             pieces.push_back({unit, unit_us(shape, chunks, unit, step, fixed, num_cores)});
-            begin += len;
+            begin = end;
         }
     }
 
