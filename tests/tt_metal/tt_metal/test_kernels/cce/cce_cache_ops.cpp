@@ -397,8 +397,8 @@ static WipeResult clean_and_wipe(
     return {static_cast<uint32_t>(warm_old), static_cast<uint32_t>(stale_before), wiped != 0};
 }
 
-// FLUSH64 has no completion register. The helper reads once (chippy spins) and fences; in hardware the fence after
-// FLUSH64 should already wait for completion, so the read is kept only until a hardware check confirms that.
+// FLUSH64 has no completion register. By RTL the fence that ends the flush already waits for completion; this read
+// and fence are a second drain, kept on purpose, in chippy's form (chippy spins; this reads once).
 static void drain_flushed_range(uint32_t data_offset, uint32_t num_bytes) {
     (void)*own_tl1_words<uint32_t>(data_offset + num_bytes - sizeof(uint32_t));
     asm volatile("fence" ::: "memory");
