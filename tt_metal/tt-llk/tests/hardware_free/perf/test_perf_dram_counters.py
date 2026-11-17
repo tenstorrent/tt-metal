@@ -49,9 +49,36 @@ def test_niu_offsets_follow_the_status_register_indices():
 
 
 def test_layouts():
-    assert headers.dram_layout("blackhole") == (0xFFB20000, 0x10000, 64, 2)
-    assert headers.dram_layout("wormhole_b0") == (0xFFB20000, 0x10000, 32, 2)
-    assert headers.dram_layout("quasar") == (0, 0, 0, 0)
+    assert headers.dram_layout("blackhole") == (0xFFB20000, 0x10000, 0, 1, 0, 64, 2)
+    assert headers.dram_layout("wormhole_b0") == (
+        0x100080000,
+        0x8000,
+        0x10000,
+        3,
+        2,
+        32,
+        2,
+    )
+    assert headers.dram_layout("quasar").word_bytes == 0
+
+
+def test_blackhole_address_is_the_worker_one():
+    for y in (0, 1, 2, 11):
+        assert headers.dram_niu_address("blackhole", 0, y, 0x2CC) == 0xFFB202CC
+        assert headers.dram_niu_address("blackhole", 1, y, 0x2CC) == 0xFFB302CC
+
+
+def test_wormhole_dram_tile_addresses_follow_the_register_instances():
+    rd = dict(headers.dram_counter_table("wormhole"))["NIU_SLV_RD_DATA_WORD_SENT"]
+    assert rd == 0x2CC
+    # y % 3 == 1 -> instance 0, 2 -> 1, 0 -> 2
+    assert headers.dram_niu_address("wormhole", 0, 1, rd) == 0x1000802CC
+    assert headers.dram_niu_address("wormhole", 0, 2, rd) == 0x1000902CC
+    assert headers.dram_niu_address("wormhole", 0, 0, rd) == 0x1000A02CC
+    assert headers.dram_niu_address("wormhole", 0, 3, rd) == 0x1000A02CC
+    assert headers.dram_niu_address("wormhole", 1, 1, rd) == 0x1000882CC
+    assert headers.dram_niu_address("wormhole", 1, 0, rd) == 0x1000A82CC
+    assert headers.dram_niu_address("wormhole", 0, 4, rd) == 0x1000802CC
 
 
 def _rows(*items, device=0, program=7, seq=0, flags=0, elapsed=1_000_000):

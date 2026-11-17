@@ -70,13 +70,27 @@ TEST(DramCountersPlan, BlackholeCapturesThreeCountersPerNoc) {
 
 TEST(DramCountersPlan, QuasarHasNoMap) { EXPECT_FALSE(make_plan(dc::Arch::QUASAR, 8).has_value()); }
 
-TEST(DramCountersLayout, RegisterAddresses) {
+TEST(DramCountersLayout, BlackholeAddressIsTheWorkerOne) {
     const auto niu = dc::niu_table(dc::Arch::BLACKHOLE);
     ASSERT_EQ(niu.size, 6u);
     EXPECT_EQ(niu.data[1].first, dc::DramCounter::NIU_SLV_RD_DATA_WORD_SENT);
-    EXPECT_EQ(dc::niu_address(dc::Arch::BLACKHOLE, 0, niu.data[1].second), 0xFFB202CCu);
-    EXPECT_EQ(dc::niu_address(dc::Arch::BLACKHOLE, 1, niu.data[1].second), 0xFFB302CCu);
+    for (uint32_t y : {0u, 1u, 2u, 11u}) {
+        EXPECT_EQ(dc::niu_address(dc::Arch::BLACKHOLE, 0, y, niu.data[1].second), 0xFFB202CCull);
+        EXPECT_EQ(dc::niu_address(dc::Arch::BLACKHOLE, 1, y, niu.data[1].second), 0xFFB302CCull);
+    }
     EXPECT_EQ(dc::layout_for(dc::Arch::BLACKHOLE).word_bytes, 64u);
+}
+
+TEST(DramCountersLayout, WormholeDramTileInstances) {
+    const auto niu = dc::niu_table(dc::Arch::WORMHOLE);
+    ASSERT_EQ(niu.size, 6u);
+    const uint32_t rd = niu.data[1].second;
+    EXPECT_EQ(rd, 0x2CCu);
+    EXPECT_EQ(dc::niu_address(dc::Arch::WORMHOLE, 0, 1, rd), 0x1000802CCull);
+    EXPECT_EQ(dc::niu_address(dc::Arch::WORMHOLE, 0, 2, rd), 0x1000902CCull);
+    EXPECT_EQ(dc::niu_address(dc::Arch::WORMHOLE, 0, 0, rd), 0x1000A02CCull);
+    EXPECT_EQ(dc::niu_address(dc::Arch::WORMHOLE, 0, 3, rd), 0x1000A02CCull);
+    EXPECT_EQ(dc::niu_address(dc::Arch::WORMHOLE, 1, 1, rd), 0x1000882CCull);
     EXPECT_EQ(dc::layout_for(dc::Arch::WORMHOLE).word_bytes, 32u);
 }
 

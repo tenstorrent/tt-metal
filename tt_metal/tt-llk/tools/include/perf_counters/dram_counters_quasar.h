@@ -17,7 +17,7 @@
 namespace llk::perf::dram::quasar
 {
 
-inline constexpr Layout layout = {0u, 0u, 0u, 0u};
+inline constexpr Layout layout = {0u, 0u, 0u, 1u, 0u, 0u, 0u};
 
 inline constexpr std::array<Entry, 0> niu_counters = {};
 

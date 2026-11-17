@@ -45,11 +45,11 @@ def run(args):
     tiles = reader.tiles()
     samples = []
     for spacing in SPACINGS_S:
-        before = c.snapshot(reader, tiles)
+        before = c.snapshot(reader, tiles, args.arch)
         t0 = time.monotonic()
         if spacing:
             time.sleep(spacing)
-        after = c.snapshot(reader, tiles)
+        after = c.snapshot(reader, tiles, args.arch)
         elapsed = time.monotonic() - t0
         samples.append(
             {
@@ -64,7 +64,7 @@ def run(args):
             }
         )
     probe_tile = tiles[0]
-    addr = c.niu_addr(0, c.NIU_COUNTERS["RD_DATA_WORD_SENT"])
+    addr = c.niu_addr(probe_tile, 0, c.NIU_COUNTERS["RD_DATA_WORD_SENT"], args.arch)
     values = [reader.read32(probe_tile, addr) for _ in range(SELF_READS)]
     json.dump(
         {
@@ -125,6 +125,7 @@ def main():
         choices=("umd", "exalens", "exalens-reinit", "exalens-unsafe"),
     )
     r.add_argument("--out", required=True)
+    r.add_argument("--arch", default="blackhole", choices=("blackhole", "wormhole"))
     r.add_argument("--device", default=c.default_device_path())
     r.set_defaults(fn=run)
     cp = sub.add_parser("compare")

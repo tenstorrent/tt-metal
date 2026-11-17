@@ -61,7 +61,8 @@ struct DeviceState {
     bool initialized = false;
     Plan plan;
     Coupling coupling;
-    std::vector<std::pair<uint32_t, uint32_t>> tiles;
+    std::vector<std::pair<uint32_t, uint32_t>> tiles;  // translated x, y
+    std::vector<uint32_t> tile_noc0_y;                 // selects the NIU register instance of the tile
     std::vector<uint32_t> tile_reads;  // register reads issued to each tile so far
     std::vector<double> idle_per_pair;
     std::vector<double> idle_per_second;
@@ -74,7 +75,7 @@ std::unordered_map<ChipId, DeviceState> g_devices;
 bool g_traffic_started = false;
 bool g_idle_started = false;
 
-uint32_t read_one(MetalContext& ctx, ChipId chip, DeviceState& st, size_t tile, uint32_t addr, uint32_t& index) {
+uint32_t read_one(MetalContext& ctx, ChipId chip, DeviceState& st, size_t tile, uint64_t addr, uint32_t& index) {
     uint32_t value = 0;
     ctx.get_cluster().read_reg(&value, tt_cxy_pair(chip, st.tiles[tile].first, st.tiles[tile].second), addr);
     index = ++st.tile_reads[tile];
@@ -91,8 +92,8 @@ Reading read_all(MetalContext& ctx, ChipId chip, DeviceState& st) {
         for (uint32_t noc = 0; noc < plan.num_nocs; noc++) {
             for (size_t c = 0; c < plan.counters.size(); c++) {
                 uint32_t index = 0;
-                reading.values.push_back(
-                    read_one(ctx, chip, st, t, dc::niu_address(plan.arch, noc, plan.offsets[c]), index));
+                reading.values.push_back(read_one(
+                    ctx, chip, st, t, dc::niu_address(plan.arch, noc, st.tile_noc0_y[t], plan.offsets[c]), index));
                 reading.tile_reads.push_back(index);
             }
         }
@@ -109,8 +110,8 @@ std::vector<uint32_t> read_writes(MetalContext& ctx, ChipId chip, DeviceState& s
             for (size_t c = 0; c < plan.counters.size(); c++) {
                 if (is_write_counter(plan.counters[c])) {
                     uint32_t index = 0;
-                    values.push_back(
-                        read_one(ctx, chip, st, t, dc::niu_address(plan.arch, noc, plan.offsets[c]), index));
+                    values.push_back(read_one(
+                        ctx, chip, st, t, dc::niu_address(plan.arch, noc, st.tile_noc0_y[t], plan.offsets[c]), index));
                 }
             }
         }
@@ -134,7 +135,7 @@ Coupling measure_coupling(MetalContext& ctx, ChipId chip, DeviceState& st) {
     }
     Coupling coupling(plan.num_nocs, 0);
     for (uint32_t noc = 0; noc < plan.num_nocs; noc++) {
-        const uint32_t addr = dc::niu_address(plan.arch, noc, plan.offsets[read_slot]);
+        const uint64_t addr = dc::niu_address(plan.arch, noc, st.tile_noc0_y[0], plan.offsets[read_slot]);
         uint32_t first_index = 0, last_index = 0;
         const uint32_t first = read_one(ctx, chip, st, 0, addr, first_index);
         uint32_t last = first;
@@ -252,10 +253,13 @@ bool prepare(MetalContext& ctx, ChipId chip, DeviceState& st) {
     const auto& rt = ctx.rtoptions();
     const auto arch = arch_of(ctx.get_cluster().arch());
     std::vector<std::pair<uint32_t, uint32_t>> tiles;
+    std::vector<uint32_t> noc0_y;
     if (arch) {
-        for (const auto& core :
-             ctx.get_cluster().get_soc_desc(chip).get_cores(tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED)) {
-            tiles.emplace_back(core.x, core.y);
+        const auto& soc_desc = ctx.get_cluster().get_soc_desc(chip);
+        for (const auto& core : soc_desc.get_cores(tt::CoreType::DRAM, tt::CoordSystem::NOC0)) {
+            const auto translated = soc_desc.translate_coord_to(core, tt::CoordSystem::TRANSLATED);
+            tiles.emplace_back(translated.x, translated.y);
+            noc0_y.push_back(core.y);
         }
     }
     const auto plan = arch ? make_plan(*arch, static_cast<uint32_t>(tiles.size())) : std::nullopt;
@@ -269,6 +273,7 @@ bool prepare(MetalContext& ctx, ChipId chip, DeviceState& st) {
     }
     st.plan = *plan;
     st.tiles = std::move(tiles);
+    st.tile_noc0_y = std::move(noc0_y);
     st.tile_reads.assign(st.tiles.size(), 0);
     try {
         st.coupling = measure_coupling(ctx, chip, st);

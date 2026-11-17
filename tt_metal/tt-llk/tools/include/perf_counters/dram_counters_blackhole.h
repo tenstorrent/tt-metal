@@ -15,7 +15,7 @@
 namespace llk::perf::dram::blackhole
 {
 
-inline constexpr Layout layout = {0xFFB20000u, 0x10000u, 64u, 2u};
+inline constexpr Layout layout = {0xFFB20000ull, 0x10000u, 0u, 1u, 0u, 64u, 2u};
 
 inline constexpr std::array<Entry, 6> niu_counters = {{
     {DramCounter::NIU_SLV_RD_REQ_RECEIVED, 0x2D4},
