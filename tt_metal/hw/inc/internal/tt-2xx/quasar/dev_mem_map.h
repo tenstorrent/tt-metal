@@ -559,7 +559,7 @@
 #define MEM_MIMIR_CCE_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
 // Written by the host after drisc.cc has copied the bank tables out of the preceding scratch
 // range. It is persistent CCE-kernel configuration, not boot code or mailbox storage.
-#define MEM_MIMIR_CCE_SPA_ROUTES_SIZE 64
+#define MEM_MIMIR_CCE_SPA_ROUTES_SIZE 128
 #define MEM_MIMIR_CCE_SPA_ROUTES_BASE (MEM_MIMIR_CCE_BANK_TO_NOC_SCRATCH + MEM_MIMIR_CCE_BANK_TO_NOC_SIZE)
 #define MEM_MIMIR_CCE_KERNEL_CONFIG_BASE (MEM_MIMIR_CCE_SPA_ROUTES_BASE + MEM_MIMIR_CCE_SPA_ROUTES_SIZE)
 #define MEM_MIMIR_CCE_KERNEL_CONFIG_SIZE (2 * 1024)

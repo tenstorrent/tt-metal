@@ -221,7 +221,7 @@ So the 16-hart firmware (two images, interleaved processors, shared mailbox) boo
 
 UMD: baremetal 543/543, `api_tests` 17 pass + 9 skipped (`EmuTTDevice.*` need the emulator).
 
-**Mimir -> K address.** A Mimir CCE reaches HSIO SRAM with a plain 64-bit load or store to the same package address the Keraunos CCEs use. No SysEng document gives the Mimir-side map; found by trying it. Open: the Mimir CCE API (`gddr_cce.h`) has no `keraunos_hsio_sram_addr` yet, because `MimirCceSpaRoutes` has no K entries. The fabric tests pass the address in as a runtime arg.
+**Mimir -> K address.** A Mimir CCE reaches HSIO SRAM with a plain 64-bit load or store to the same package address the Keraunos CCEs use. No SysEng document gives the Mimir-side map; found by trying it. The Mimir CCE API now has `experimental::keraunos_hsio_sram_address(hsio, eth_cce, offset)` plus `keraunos_hsio_sram_{read,write}_uint32` in `gddr_cce.h`. `MimirCceSpaRoutes` grew three fields (`keraunos_sram_base`, `keraunos_tile_stride`, `keraunos_cce_sram_size`, all 0 without a Keraunos) and the Mimir routes region went from 64 to 128 bytes. The fabric worker uses the helper. Verified on mmk: `KeraunosFabric.*`, `KeraunosFromMimir*`, `MimirEmu.*`, `MimirCceSramRoundTrip*` and two GDDR copy cases pass (24/24).
 
 **Parked / not done.**
 - **Remote atomics.** Still `DISABLED_` (see the atomics probe above). Question for SysEng: which fmt/op is an int32 add?

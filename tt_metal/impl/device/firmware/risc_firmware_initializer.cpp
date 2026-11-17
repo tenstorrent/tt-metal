@@ -91,6 +91,10 @@ uint8_t gddr_cce_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint3
     return 0;
 }
 
+// Package SPA of HSIO 0's CCE0 SRAM: identity DMRISC windows over HSIO SPA 0x12_0400_0000 + n * tile_stride, with the
+// CCE SRAM 0x280_0000 into each tile (bringup_mmk.py programs them).
+constexpr uint64_t kKeraunosHsioSramSpaBase = 0x12'0680'0000ULL;
+
 MimirCceSpaRoutes mimir_cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t channel) {
     const auto& channels = soc.get_arch_descriptor().get_mimir_channels();
     uint32_t sender = channel;
@@ -108,12 +112,15 @@ MimirCceSpaRoutes mimir_cce_spa_routes_for_channel(const metal_SocDescriptor& so
     for (uint32_t dest = 0; dest < MIMIR_CCE_SPA_ROUTES_MAX_INSTANCES; ++dest) {
         routes.gddr_d2d[dest] = gddr_cce_port(soc, channel, sender, dest);
     }
+    // A Mimir CCE reaches Keraunos HSIO SRAM through the package address the Keraunos CCEs use for it.
+    const auto& arch = soc.get_arch_descriptor();
+    if (!arch.get_keraunos().cores.empty()) {
+        routes.keraunos_sram_base = kKeraunosHsioSramSpaBase;
+        routes.keraunos_tile_stride = arch.get_keraunos().tile_stride.value_or(0);
+        routes.keraunos_cce_sram_size = arch.get_eth_l1_size();
+    }
     return routes;
 }
-
-// Package SPA of HSIO 0's CCE0 SRAM: identity DMRISC windows over HSIO SPA 0x12_0400_0000 + n * tile_stride, with the
-// CCE SRAM 0x280_0000 into each tile (bringup_mmk.py programs them).
-constexpr uint64_t kKeraunosHsioSramSpaBase = 0x12'0680'0000ULL;
 
 // The routes a kernel on one Keraunos HSIO CCE uses, filled from the descriptor's keraunos and mimir_channels
 // blocks. Keraunos sits on the D2D1 lane of the package ATT, so its Mimir GDDR windows are the D2D1 ones.

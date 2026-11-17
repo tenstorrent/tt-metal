@@ -106,10 +106,10 @@ protected:
             std::string(kKernelDir) + "keraunos_fabric_worker.cpp",
             mimir_core,
             DramConfig{.noc = NOC::NOC_0});
-        std::vector<uint32_t> worker_args = split(global_addr(*router, kChannelOffset));
-        const auto counter = split(global_addr(*router, kCounterOffset));
-        worker_args.insert(worker_args.end(), counter.begin(), counter.end());
-        worker_args.insert(worker_args.end(), {kPayloadWords, tag, worker_credit, worker_status});
+        // The worker finds the router's SRAM through the Mimir CCE API (the host-written route table).
+        const std::vector<uint32_t> worker_args = {
+            router->hsio, router->eth_cce, unreserved_ + kChannelOffset, unreserved_ + kCounterOffset,
+            kPayloadWords, tag, worker_credit, worker_status};
         SetRuntimeArgs(program, worker_kernel, mimir_core, worker_args);
 
         try {

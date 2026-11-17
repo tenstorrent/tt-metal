@@ -50,6 +50,25 @@ inline __attribute__((always_inline)) uint64_t mimir_cce_sram_address(uint32_t m
     return routes->sram_spa_base + static_cast<uint64_t>(mimir_cce_index) * routes->sram_tile_stride + offset;
 }
 
+// Keraunos HSIO tile `hsio`, CCE `eth_cce` SRAM at `offset` (a CCE-relative offset, as the Keraunos host and HAL use).
+// Mimir 1 reaches it over its D2D link and Mimir 0 through Mimir 1. Valid only on a package with a Keraunos.
+inline __attribute__((always_inline)) uint64_t keraunos_hsio_sram_address(
+    uint32_t hsio, uint32_t eth_cce, uint64_t offset) {
+    volatile tt_l1_ptr MimirCceSpaRoutes* routes = mimir_cce_spa_routes();
+    return routes->keraunos_sram_base + static_cast<uint64_t>(hsio) * routes->keraunos_tile_stride +
+           static_cast<uint64_t>(eth_cce) * routes->keraunos_cce_sram_size + offset;
+}
+
+inline __attribute__((always_inline)) void keraunos_hsio_sram_write_uint32(
+    uint32_t hsio, uint32_t eth_cce, uint64_t offset, uint32_t value) {
+    *reinterpret_cast<volatile uint32_t*>(keraunos_hsio_sram_address(hsio, eth_cce, offset)) = value;
+}
+
+inline __attribute__((always_inline)) uint32_t keraunos_hsio_sram_read_uint32(
+    uint32_t hsio, uint32_t eth_cce, uint64_t offset) {
+    return *reinterpret_cast<volatile uint32_t*>(keraunos_hsio_sram_address(hsio, eth_cce, offset));
+}
+
 inline __attribute__((always_inline)) void mimir_cce_sram_write_uint32(uint32_t mimir_cce_index, uint64_t offset, uint32_t value) {
     *reinterpret_cast<volatile uint32_t*>(mimir_cce_sram_address(mimir_cce_index, offset)) = value;
 }

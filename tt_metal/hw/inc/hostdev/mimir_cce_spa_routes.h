@@ -15,6 +15,8 @@
 // strides above D2D0. gddr_d2d[instance] is the port this core uses to reach that SPA instance.
 // A local instance uses port 0, which is the window the CCE remapper claims. SRAM is one package
 // window, 4 MiB per CCE, indexed by CCE.
+// Keraunos HSIO SRAM (the worker -> router direction): keraunos_sram_base + hsio * keraunos_tile_stride +
+// eth_cce * keraunos_cce_sram_size. All three are 0 on a package with no Keraunos.
 inline constexpr uint32_t MIMIR_CCE_SPA_ROUTES_MAX_INSTANCES = 16;
 inline constexpr uint64_t MIMIR_CCE_GDDR_D2D_LANE_INSTANCES = 16;
 
@@ -24,7 +26,11 @@ struct MimirCceSpaRoutes {
     uint64_t sram_spa_base;
     uint64_t sram_tile_stride;
     uint8_t gddr_d2d[MIMIR_CCE_SPA_ROUTES_MAX_INSTANCES];
+    uint64_t keraunos_sram_base;
+    uint64_t keraunos_tile_stride;
+    uint64_t keraunos_cce_sram_size;
 };
 
-static_assert(sizeof(MimirCceSpaRoutes) == 56);
+static_assert(sizeof(MimirCceSpaRoutes) == 80);
 static_assert(offsetof(MimirCceSpaRoutes, gddr_d2d) == 40);
+static_assert(offsetof(MimirCceSpaRoutes, keraunos_sram_base) == 56);
