@@ -9,11 +9,14 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    BroadcastType,
     DestAccumulation,
     DestSync,
+    EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
     PerfRunType,
+    Transpose,
 )
 from helpers.param_config import (
     generate_dest_depth_input_dimensions,
@@ -32,6 +35,7 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
+    BROADCAST_TYPE,
     DEST_SYNC,
     ENABLE_DIRECT_INDEXING,
     INPUT_TILE_CNT,
@@ -44,8 +48,11 @@ from helpers.test_variant_parameters import (
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
+    REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
     generate_input_dim,
 )
 from helpers.tile_constants import is_mx_unsupported_tile_dims
@@ -313,6 +320,10 @@ def test_eltwise_binary(
             DEST_SYNC(dest_sync_mode),
             ACC_TO_DEST(acc_to_dest),
             ENABLE_DIRECT_INDEXING(enable_direct_indexing),
+            # This kernel is a plain binary op: no broadcast and no dest reuse. Stated here so
+            # the perf CSV carries the same columns as the other eltwise binary families.
+            BROADCAST_TYPE(BroadcastType.None_),
+            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
         ],
         "runtimes": [
             generate_input_dim(
@@ -331,6 +342,8 @@ def test_eltwise_binary(
                 output_num_tiles_in_block=output_tiles_in_block,
             ),
             LOOP_FACTOR(loop_factor),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,

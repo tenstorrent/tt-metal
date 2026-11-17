@@ -5,18 +5,17 @@
 #include "pad_rm_reader_writer_program_factory.hpp"
 
 #include <algorithm>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
-using ttnn::operations::data_movement::pack_pad_value;
+using ttnn::operations::data_movement::pack_scalar_into_uint32;
 
 namespace {
 
@@ -71,7 +70,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
     // every dispatch that hits this cached Program.
     std::vector<tt::tt_metal::MeshTensor> op_owned;
     op_owned.reserve(1);
-    const uint32_t packed_pad_value = pack_pad_value(a.dtype(), pad_value);
+    const uint32_t packed_pad_value = pack_scalar_into_uint32(a.dtype(), pad_value);
     Tensor pad_value_const_tensor = build_pad_value_const_tensor_sc(tensor_args, packed_pad_value);
     op_owned.push_back(pad_value_const_tensor.device_storage().release_mesh_tensor());
     const auto& pad_value_mesh_tensor = op_owned.back();

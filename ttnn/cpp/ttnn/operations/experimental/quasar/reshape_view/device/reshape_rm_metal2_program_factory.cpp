@@ -14,15 +14,14 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #define MASK_64 0xFFFFFFFFFFFFFFC0
 
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 const TensorParamName RS_SRC{"reshape_rm_src"};

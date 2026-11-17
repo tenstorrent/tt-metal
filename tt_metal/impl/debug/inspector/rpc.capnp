@@ -11,6 +11,28 @@ $Cxx.namespace("tt::tt_metal::inspector::rpc");
 
 # Inspector RPC interface for querying TT-Metal runtime state
 
+struct KernelArg {
+    name @0 :Text;  # empty if unnamed
+    value @1 :UInt32;
+}
+
+struct RuntimeArgCount {
+    core @0 :LogicalCoord;
+    count @1 :UInt32;  # without the watcher count word
+}
+
+# Values live in L1 at kernel_config_base + rta_offset.
+struct RuntimeArgs {
+    names @0 :List(Text);  # names[i] names word i, empty if unnamed; words past the end, like varargs, are unnamed
+    counts @1 :List(RuntimeArgCount);  # kernel cores not listed have no args
+}
+
+# Values live in L1 at kernel_config_base + crta_offset.
+struct CommonRuntimeArgs {
+    names @0 :List(Text);  # like RuntimeArgs.names
+    count @1 :UInt32;  # the same on every core of the kernel, without the watcher count word
+}
+
 struct KernelData {
     watcherKernelId @0 :Int32;
     name @1 :Text;
@@ -18,6 +40,9 @@ struct KernelData {
     source @3 :Text;
     programId @4 :UInt64;
     processorElfPaths @5 :List(Text);
+    compileTimeArgs @6 :List(KernelArg);  # positional, then named
+    runtimeArgs @7 :RuntimeArgs;
+    commonRuntimeArgs @8 :CommonRuntimeArgs;
 }
 
 enum BinaryStatus {

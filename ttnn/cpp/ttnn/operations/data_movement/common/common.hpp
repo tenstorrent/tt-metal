@@ -308,9 +308,9 @@ uint16_t float_to_uint16(float f);
 
 uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s);
 
-// Bit pattern of pad_value in dtype, filling one 32-bit word: 4-byte dtypes hold one element, 2-byte
-// dtypes hold the element in both halves. BFLOAT16 is the fallback for any other dtype.
-uint32_t pack_pad_value(DataType dtype, float pad_value);
+// Packs `value` as `dtype` into a 32-bit word; 16-bit types fill both halves, UINT8 fills all four bytes,
+// UINT8 and 32-bit integers truncate, integer types saturate.
+uint32_t pack_scalar_into_uint32(DataType dtype, float value);
 
 template <typename OpOutputType, typename... OpInputTypes>
 struct MassagedOperationParams {
