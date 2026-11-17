@@ -19,6 +19,7 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/profiler/perf_counters.hpp"
 #include "internal/profiler/riscv_pmc.hpp"
+#include "internal/profiler/noc_counters.hpp"
 #include "api/kernel_thread_globals.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
 // The TensorAccessor address-generator path (internal/tensor/generated_noc_addr.h) only exists with the ATT backend,
@@ -472,6 +473,7 @@ extern "C" uint32_t _start1() {
                 // The counter window runs from here to StopPerfCounters after wait_subordinates.
                 StartPerfCounters();
                 RiscvPmcBegin();
+                NocCountersBegin();
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -516,6 +518,7 @@ extern "C" uint32_t _start1() {
                 }
                 wait_subordinates_and_finish_dfbs(implicit_sync_txn_ids);
                 RiscvPmcEnd();
+                NocCountersEnd();
 
                 // Every TRISC is done: the window spans the whole kernel and the TRISC profiler buffers are final.
                 StopPerfCounters();

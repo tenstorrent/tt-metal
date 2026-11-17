@@ -12,6 +12,7 @@ set(UNIT_TESTS_JIT_BUILD_SRC
     test_kernel_signature_parser.cpp
     test_named_ct_arg_channels.cpp
     test_named_ct_arg_map.cpp
+    test_noc_counters_option.cpp
     test_pch_build.cpp
     test_riscv_pmc_option.cpp
     test_sfpu_replay_opt_out.cpp

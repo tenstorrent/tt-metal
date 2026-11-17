@@ -435,6 +435,13 @@ void JitBuildEnv::init(
             "-DPROFILE_RISCV_PMC_DM_EV6=" + std::to_string(rtoptions.get_profiler_riscv_pmc_dm_event6()) + "u ";
     }
 
+    if (rtoptions.get_profiler_noc_counters_enabled()) {
+        // The hooks live in the BRISC and DM0 firmware, so the define has to reach the firmware build.
+        TT_ASSERT(rtoptions.get_profiler_enabled());
+        this->defines_ +=
+            "-DPROFILE_NOC_COUNTERS=" + std::to_string(rtoptions.get_profiler_noc_counters_groups()) + " ";
+    }
+
     if (rtoptions.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
     }

@@ -153,6 +153,7 @@ enum class EnvVarID {
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_PROFILE_RISCV_PMC,                    // Enable RISC-V baby-core HPM counters
     TT_METAL_PROFILE_RISCV_PMC_DM,                 // Event selects of the Quasar data-movement cores
+    TT_METAL_PROFILE_NOC_COUNTERS,                 // Per-launch NoC interface event counters
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -1315,6 +1316,31 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->profiler_riscv_pmc_dm_event4 = static_cast<uint32_t>(ev[1]);
             this->profiler_riscv_pmc_dm_event5 = static_cast<uint32_t>(ev[2]);
             this->profiler_riscv_pmc_dm_event6 = static_cast<uint32_t>(ev[3]);
+            break;
+        }
+
+        // TT_METAL_PROFILE_NOC_COUNTERS
+        // Per-launch deltas of the NoC interface (NIU) event counters of each Tensix tile: requests and data words,
+        // both NoCs, captured by one core per tile. Value is a group mask, hex or decimal: 1 master (issued
+        // requests and data words), 2 slave (served ones), 4 atomics; "on" selects master and slave. See
+        // tt_metal/tt-llk/docs/performance_counters/noc_counters.md. Default: disabled
+        // Usage: export TT_METAL_PROFILE_NOC_COUNTERS=3
+        case EnvVarID::TT_METAL_PROFILE_NOC_COUNTERS: {
+            unsigned long mask = 3;
+            if (std::strcmp(value, "on") != 0) {
+                char* end = nullptr;
+                mask = std::strtoul(value, &end, 0);
+                if (end == value || *end != '\0' || mask > 7) {
+                    TT_THROW(
+                        "TT_METAL_PROFILE_NOC_COUNTERS=\"{}\" is not a group mask. Expected \"on\" or an integer "
+                        "of 1 (master), 2 (slave) and 4 (atomics) bits, e.g. 3.",
+                        value);
+                }
+            }
+            if (mask != 0) {
+                this->profiler_noc_counters_groups = static_cast<uint32_t>(mask);
+                this->profiler_enabled = true;
+            }
             break;
         }
 

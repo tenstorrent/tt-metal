@@ -260,6 +260,7 @@ class RunTimeOptions {
     uint32_t profiler_riscv_pmc_dm_event4 = 0;
     uint32_t profiler_riscv_pmc_dm_event5 = 0;
     uint32_t profiler_riscv_pmc_dm_event6 = 0;
+    uint32_t profiler_noc_counters_groups = 0;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
@@ -745,6 +746,10 @@ public:
                     fmt::format("_dmu{:x}_{:x}", profiler_riscv_pmc_dm_event5, profiler_riscv_pmc_dm_event6);
             }
         }
+        // The NoC counter group mask is a compile-time constant of the firmware; appended only when the feature is on.
+        if (profiler_noc_counters_groups != 0) {
+            compile_hash_str += fmt::format("_noc{:x}", profiler_noc_counters_groups);
+        }
         return compile_hash_str;
     }
 
@@ -783,6 +788,8 @@ public:
     uint32_t get_profiler_riscv_pmc_dm_event4() const { return profiler_riscv_pmc_dm_event4; }
     uint32_t get_profiler_riscv_pmc_dm_event5() const { return profiler_riscv_pmc_dm_event5; }
     uint32_t get_profiler_riscv_pmc_dm_event6() const { return profiler_riscv_pmc_dm_event6; }
+    uint32_t get_profiler_noc_counters_groups() const { return profiler_noc_counters_groups; }
+    bool get_profiler_noc_counters_enabled() const { return profiler_noc_counters_groups != 0; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
