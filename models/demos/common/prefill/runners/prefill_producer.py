@@ -53,6 +53,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     resolve_trace_dir,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -115,7 +116,7 @@ def _load_env_config(check_budget: bool = True) -> None:
     # The host payload is one row per SP chip, in SP order, whichever mesh axis SP runs on; the
     # runner's H2D mapper (PREFILL_SP_AXIS) places the rows, so the producer needs only the factor.
     SP_FACTOR = int(os.environ.get("PREFILL_SP", 8))
-    CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    CHUNK_SIZE = prefill_chunk_tokens()
     # Tokens per forward, a multiple of the chunk size; must match the runner's.
     forward_tokens_budget = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
     assert not check_budget or (
@@ -857,7 +858,7 @@ def _golden_pe_as_device(golden_pe, layout: str):
 
 
 def _kvpe_pcc_vs_golden(golden, device_kv, kv_lora: int, golden_pe_layout: str = "half_split"):
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     _, pcc_nope = comp_pcc(golden[:, :kv_lora], device_kv[:, :kv_lora])
     _, pcc_pe = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], golden_pe_layout), device_kv[:, kv_lora:])
@@ -961,7 +962,7 @@ def _check_mtp_kv_slots(
         return None
     logger.info(f"[producer] slot {slot_id} MTP: golden KV from {golden_dir} (pe columns: {pe_layout})")
 
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     rejected = "half_split" if pe_layout == "interleaved" else "interleaved"
     min_pcc = 1.0
@@ -991,7 +992,7 @@ def _read_slot_kv_and_check_pcc_gpt_oss(
 
     from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from models.demos.gpt_oss_d_p.tt.runners.acceptance import validate_kv_for_pcc
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
@@ -1078,7 +1079,7 @@ def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, rea
 
     from safetensors import safe_open
 
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
@@ -1160,7 +1161,7 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
 
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from models.demos.minimax_m3.tt.runners.prefill_kv_validation import _hf_to_meta_rotary_perm
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim, rotary_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM, mc.ROTARY_DIM
@@ -1293,7 +1294,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     )
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     # The pe half needs re-basing only if the model rotates it. The adapter's own declaration wins:
     # `cache_half_pccs` names a second case (a natively interleaved indexer RoPE) where the answer

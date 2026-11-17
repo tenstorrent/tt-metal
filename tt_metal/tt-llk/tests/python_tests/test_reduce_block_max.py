@@ -58,7 +58,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     USE_RUNTIME,
 )
-from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES_C_DIM
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 # Tiles are 32 columns wide: 32x32 (4 faces) or a 16x32 tiny tile (2 faces, one face-row).
@@ -94,18 +94,18 @@ _CLOBBER_FOR_REINIT = {
 }
 
 
-def block_max_num_faces(formats):
-    """Face counts for one block-max format.
+def block_max_tile_dimensions(formats):
+    """Tile shapes for one block-max format.
 
-    A 32-bit Dest does not support the 16x32 tiny tile, so fp32-dest stays at 4 faces.
-    16x32 (2 faces) is Blackhole-only: Wormhole unpack still hardcodes ``y_dim = 4``
+    A 32-bit Dest does not support the 16x32 tiny tile, so fp32-dest stays at 32x32.
+    16x32 (two faces) is Blackhole-only: Wormhole unpack still hardcodes ``y_dim = 4``
     and strides a full 32x32 tile between block tiles.
     """
     if dest_acc_for(formats.output_format) == DestAccumulation.Yes:
-        return [4]
+        return [[32, 32]]
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        return [4]
-    return [2, 4]
+        return [[32, 32]]
+    return [[32, 32], [16, 32]]
 
 
 def _run_reduce_block_max(
@@ -118,7 +118,7 @@ def _run_reduce_block_max(
     overlap_first_half=False,
     expect_mismatch=False,
     expected_nondeterministic=False,
-    num_faces=4,
+    tile_dimensions=None,
     *,
     is_perf=False,
     perf_report=None,
@@ -134,7 +134,8 @@ def _run_reduce_block_max(
     repeating the unpack/math body ``loop_factor`` times with either flag set
     deadlocks or skews the measurement.
 
-    ``num_faces`` is 4 (32x32) or 2 (16x32, Blackhole bf16 only). ``loop_factor``
+    ``tile_dimensions`` is [32, 32] (four faces, the default) or [16, 32] (two faces, Blackhole
+    bf16 only); ``num_faces`` follows from it. ``loop_factor``
     repeats the TILE_LOOP body (1 for functional, 32 for perf). ``run_types`` selects
     the perf pipeline modes; functional runs use ``L1_TO_L1``.
 
@@ -155,9 +156,11 @@ def _run_reduce_block_max(
         )
 
     dest_acc = dest_acc_for(formats.output_format)
-    num_faces_r_dim = num_faces // MAX_NUM_FACES_C_DIM
-    tile_rows = MAX_FACE_R_DIM * num_faces_r_dim
-    tile_dimensions = [tile_rows, TILE_DIM]
+    tile_dimensions = list(tile_dimensions or [2 * MAX_FACE_R_DIM, TILE_DIM])
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    assert face_r_dim == MAX_FACE_R_DIM and num_faces_c_dim == MAX_NUM_FACES_C_DIM
+    num_faces = num_faces_r_dim * num_faces_c_dim
+    tile_rows = tile_dimensions[0]
     elements_per_tile = tile_rows * TILE_DIM
 
     # One permutation of 0..width-1 per row. The row max is width-1 only when every
@@ -291,24 +294,26 @@ def _run_reduce_block_max(
 @parametrize(
     formats=FORMATS,
     block_ct_dim=[1, 2, 3, 4, 8],
-    num_faces=block_max_num_faces,
+    tile_dimensions=block_max_tile_dimensions,
 )
-def test_reduce_block_max(formats, block_ct_dim, num_faces):
+def test_reduce_block_max(formats, block_ct_dim, tile_dimensions):
     """Compile-time block_ct_dim sweep, bf16 and fp32-dest.
 
     32x32 on both arches. 16x32 bf16 is Blackhole-only.
     """
-    _run_reduce_block_max(formats, block_ct_dim, num_faces=num_faces)
+    _run_reduce_block_max(formats, block_ct_dim, tile_dimensions=tile_dimensions)
 
 
 @parametrize(
     formats=FORMATS,
     block_ct_dim=[1, 2, 4, 8],
-    num_faces=block_max_num_faces,
+    tile_dimensions=block_max_tile_dimensions,
 )
-def test_reduce_block_max_runtime(formats, block_ct_dim, num_faces):
+def test_reduce_block_max_runtime(formats, block_ct_dim, tile_dimensions):
     """Runtime (dynamic block_ct_dim) path, including the Blackhole 16x32 sweep."""
-    _run_reduce_block_max(formats, block_ct_dim, use_runtime=True, num_faces=num_faces)
+    _run_reduce_block_max(
+        formats, block_ct_dim, use_runtime=True, tile_dimensions=tile_dimensions
+    )
 
 
 # compile-time reduce_block_max_row reinit is a Blackhole-only lib path

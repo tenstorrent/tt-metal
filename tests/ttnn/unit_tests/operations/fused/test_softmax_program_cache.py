@@ -79,6 +79,7 @@ def run_softmax_4d(device, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.D
 # =============================================================================
 
 
+@pytest.mark.merge_gate
 def test_softmax_cache_reuse_same_config_5d(device, isolate_program_cache):
     """Same op, same 5D shape, same dtype run twice -> 1 cache entry, different outputs."""
     shape = [1, 1, 1, 32, 64]
@@ -113,6 +114,7 @@ def test_softmax_cache_reuse_same_config_5d(device, isolate_program_cache):
     assert not torch.equal(tt_out1, tt_out2)
 
 
+@pytest.mark.merge_gate
 def test_softmax_cache_reuse_same_config_4d(device, isolate_program_cache):
     """Same op, same 4D shape with last dim -> 1 cache entry (attention optimized factory)."""
     shape = [1, 1, 32, 64]
@@ -148,6 +150,7 @@ def test_softmax_cache_reuse_same_config_4d(device, isolate_program_cache):
 # =============================================================================
 
 
+@pytest.mark.merge_gate
 def test_softmax_cache_miss_different_dims_5d(device, isolate_program_cache):
     """Different dims on 5D tensor -> different factories -> different cache entries.
     dim=-1 -> WSmall/WLarge, dim=-2 -> HSmall/HLarge, dim=-3 -> CLarge."""
@@ -182,6 +185,7 @@ def test_softmax_cache_miss_different_dims_5d(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_softmax_cache_miss_different_factories(device, isolate_program_cache):
     """5D W-softmax vs 4D last-dim softmax -> different factories -> different cache entries."""
     torch.manual_seed(0)
@@ -217,6 +221,7 @@ def test_softmax_cache_miss_different_factories(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_softmax_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries."""
     torch.manual_seed(0)
@@ -247,6 +252,7 @@ def test_softmax_cache_miss_different_input_dtypes(device, isolate_program_cache
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_softmax_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
     torch.manual_seed(0)
@@ -279,6 +285,7 @@ def test_softmax_cache_miss_different_memory_configs(device, isolate_program_cac
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_softmax_cache_miss_different_shapes(device, isolate_program_cache):
     """Different logical shapes -> different cache entries.
     logical_shape is in compute_program_hash() determining Wt, Ht, work distribution."""
@@ -311,6 +318,7 @@ def test_softmax_cache_miss_different_shapes(device, isolate_program_cache):
 # =============================================================================
 
 
+@pytest.mark.merge_gate
 def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_program_cache):
     """scale_mask_softmax with masks of different dtypes -> different cache entries.
 
@@ -363,6 +371,7 @@ def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_pro
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, isolate_program_cache):
     """scale_mask_softmax with masks in different memory locations -> different cache entries.
 
@@ -414,6 +423,7 @@ def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, iso
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_scale_mask_softmax_cache_reuse_same_mask_config(device, isolate_program_cache):
     """scale_mask_softmax with same mask config twice -> 1 cache entry, different outputs."""
     batch = 1
