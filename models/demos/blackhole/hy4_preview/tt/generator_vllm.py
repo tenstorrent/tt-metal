@@ -245,6 +245,16 @@ class HYV4ForCausalLM:
         if len(set(slots)) != B:
             raise RuntimeError(f"duplicate prefill slots {slots}")
         phys = [self.slots.phys[s] for s in slots]
+        if self.eng.pfx:
+            # row-match admission (HY4_PFX): serve each new request on the free mesh row that retains the longest prefix of its prompt. Device state is per PHYSICAL row, so moving a logical slot to another free
+            # row is a swap of two entries of the logical -> physical map (both rows are idle).
+            want = self.eng.assign_rows([tokens[i, : lens[i]].numpy() for i in range(B)], phys)
+            for i, s in enumerate(slots):
+                q = want[i]
+                if self.slots.phys[s] != q:
+                    s2 = self.slots.phys.index(q)
+                    self.slots.phys[s], self.slots.phys[s2] = self.slots.phys[s2], self.slots.phys[s]
+            phys = [self.slots.phys[s] for s in slots]
         prompts = {p: [int(x) for x in tokens[i, : lens[i]].tolist()] for i, p in enumerate(phys)}
         sampling = {}
         if sampling_params is not None:

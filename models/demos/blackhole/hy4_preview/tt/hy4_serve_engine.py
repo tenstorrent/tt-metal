@@ -70,6 +70,16 @@ class Hy4Engine:
         # HY4_PF_HYBRID=<cap tokens> (default 0 = off): prompts of at most cap tokens (longest of the call) use the OLD chain prefill (replicated SCALED_FP8 cache, 512-row chunks) + masked hand-off into the pool
         # (clean on stray tokens / GPQA thinking, program product-race RESULT_RACE sec 8); longer prompts use the direct-to-pool prefill. The cap is bounded by the replicated cache (scratch DRAM).
         self.hybrid_cap = int(os.environ.get("HY4_PF_HYBRID", "0"))
+        # HY4_PFX=1 (default 0): ROW-LOCAL PREFIX CACHE. The pool pages of a finished request stay resident in its mesh row; a later prompt whose first tokens equal the retained prompt prefix prefills only the
+        # suffix (chunk-aligned start; the last chunk of the hit is recomputed, HY4_PFX_REDO=1, so the MTP pair of the boundary position is exact). Spec mode only (the parked rows of the spec round are moved
+        # past the retained blocks). HY4_PFX_FILE: live switch (a file holding 0 / 1, read per prefill call; 0 = never hit, retention bookkeeping continues).
+        self.pfx = os.environ.get("HY4_PFX", "0") == "1" and self.spec
+        self.pfx_redo = os.environ.get("HY4_PFX_REDO", "1") == "1"
+        self.ret = [
+            None
+        ] * ROWS  # per mesh row: np.int32 tokens whose pool pages (positions 0..len-1) are valid, len % 512 == 0; None = nothing retained
+        self.ret_t = [0.0] * ROWS
+        self.pfx_stats = dict(calls=0, hit_calls=0, hit_tokens=0, prompt_tokens=0, computed_tokens=0)
         ckpt = os.environ.get("HY4_CKPT", "/ckpt")
         nl = int(os.environ.get("HY4_SERVE_LAYERS", "78"))
         t0 = time.time()
@@ -132,7 +142,7 @@ class Hy4Engine:
         # host mirror of the per-row decode state (spec)
         K = max(self.K, 1)
         self.pend = [PAD] * ROWS
-        self.pos = [0] * ROWS
+        self.pos = [0] * ROWS  # idle rows: ``park_pos(r)`` (set at the first load)
         self.drafts = [[-1] * K for _ in range(ROWS)]
         self.live = [False] * ROWS
         self.dirty = True  # the device state differs from the mirror: ``load`` before the next round
@@ -156,6 +166,67 @@ class Hy4Engine:
         self.pipe_resync = int(os.environ.get("HY4_SPEC_PIPE_RESYNC", "256"))
         self._since_load = 0
         self.tl = [] if os.environ.get("HY4_ROUND_TL", "0") == "1" else None
+
+    # ------------------------------------------------------------------------------------------------ prefix cache (row local)
+    def park_pos(self, r):
+        """position an idle row keeps: just past its retained prefix (0 when nothing is retained or the cache is off)."""
+        return int(len(self.ret[r])) if (self.pfx and self.ret[r] is not None) else 0
+
+    def park_pos_all(self):
+        return [self.park_pos(r) for r in range(ROWS)]
+
+    def _pfx_on(self):
+        f = os.environ.get("HY4_PFX_FILE")
+        if f:
+            try:
+                with open(f) as fh:
+                    return fh.read().strip() == "1"
+            except (OSError, ValueError):
+                pass
+        return True
+
+    def match_len(self, r, toks):
+        """number of leading tokens of ``toks`` (np.int32) equal to the retained prefix of mesh row r."""
+        a = self.ret[r]
+        if a is None or len(a) == 0:
+            return 0
+        n = min(len(a), len(toks))
+        ne = (a[:n] != toks[:n]).nonzero()[0]
+        return int(ne[0]) if len(ne) else n
+
+    def hit_len(self, r, toks):
+        """reusable prefix length for a prompt on row r: matched, chunk aligned, at least one token left to prefill."""
+        if not (self.pfx and self._pfx_on()):
+            return 0
+        A = self.pf_rows
+        return (min(self.match_len(r, toks), len(toks) - 1) // A) * A
+
+    def assign_rows(self, prompts, cur_rows):
+        """row-match admission: prompts = list of token lists (one new request each), cur_rows = the mesh row the plugin's slot currently maps to. Returns the mesh row per request: a free (not live) row holding the
+        longest matching retained prefix; with no match the free row with nothing retained / least recently used (so retained prefixes of other sessions survive). Never a live row, never twice.
+        """
+        taken, out = set(), [None] * len(prompts)
+        arrs = [torch.as_tensor(p, dtype=torch.int32).numpy() for p in prompts]
+        cand = lambda: [r for r in range(ROWS) if not self.live[r] and r not in taken]
+        order = []
+        for i, a in enumerate(arrs):
+            best = max(((self.hit_len(r, a), r) for r in cand()), default=(0, None))
+            order.append((best[0], i))
+        for _, i in sorted(order, reverse=True):
+            c = cand()
+            if not c:
+                out[i] = cur_rows[i]
+                continue
+            scored = [(self.hit_len(r, arrs[i]), r) for r in c]
+            h, r = max(scored, key=lambda x: x[0])
+            if h <= 0:
+                # no usable prefix: prefer to keep the plugin's choice unless it would destroy a retained prefix while an empty / older row exists
+                r = min(
+                    c, key=lambda q: (self.ret[q] is not None and len(self.ret[q]) > 0, self.ret_t[q], q != cur_rows[i])
+                )
+            out[i] = r
+            taken.add(r)
+        return out
 
     def drain(self):
         """wait for an in-flight speculative round and drop it (state on device advanced past the mirror: reload before the next round). Called before anything else touches the device (prefill, seed)."""
@@ -185,7 +256,23 @@ class Hy4Engine:
                     cap = min(int(fh.read().strip()), self.hybrid_cap)
             except (OSError, ValueError):
                 pass
-        chain = cap > 0 and max(len(prompts_by_row[r]) for r in rows) <= cap
+        # prefix reuse: the common start of the prefilled rows (lock step); a row with a longer hit recomputes down to it (writes the same bytes)
+        start, hits = 0, {}
+        if self.pfx:
+            A = self.pf_rows
+            for r in rows:
+                hits[r] = self.hit_len(r, torch.as_tensor(prompts_by_row[r], dtype=torch.int32).numpy())
+            st = [(h - A if (self.pfx_redo and h > 0) else h) for h in hits.values()]
+            start = max(0, min(st)) if st else 0
+            for r in rows:
+                self.ret[r] = None  # the pages of this row change from position ``start`` on
+            self.pfx_stats["calls"] += 1
+            self.pfx_stats["prompt_tokens"] += sum(len(prompts_by_row[r]) for r in rows)
+            self.pfx_stats["computed_tokens"] += sum(len(prompts_by_row[r]) - start for r in rows)
+            if start > 0:
+                self.pfx_stats["hit_calls"] += 1
+                self.pfx_stats["hit_tokens"] += start * len(rows)
+        chain = cap > 0 and start == 0 and max(len(prompts_by_row[r]) for r in rows) <= cap
         res = self.pp.prefill(
             prompts,
             keep_hidden=self.spec,
@@ -193,7 +280,14 @@ class Hy4Engine:
             mtp=self.mtp if self.spec else None,
             keep_rows=rows,
             chain=chain,
+            start=start,
         )
+        if self.pfx:
+            now = time.time()
+            for r in rows:
+                n = (len(prompts_by_row[r]) // PAGE) * PAGE
+                self.ret[r] = torch.as_tensor(prompts_by_row[r][:n], dtype=torch.int32).numpy().copy() if n else None
+                self.ret_t[r] = now
         first = {}
         for r in rows:
             sp = (sampling or {}).get(r, (0.0, -1, 1.0, 0))
@@ -202,7 +296,7 @@ class Hy4Engine:
         if self.spec:
             self._seed_rows(rows, first, res, prompts_by_row, sampling or {})
         logger.info(
-            f"HY4 prefill call: mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
+            f"HY4 prefill call: pfx_start={start} hits={hits} mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
             f"(chunk median {sorted(res.chunk_sec)[len(res.chunk_sec) // 2]:.2f}s) chunks_s={[round(x, 1) for x in res.chunk_sec[:6]]}..{[round(x, 1) for x in res.chunk_sec[-2:]]} seed={time.perf_counter() - t1:.2f}s"
         )
         return first
@@ -224,9 +318,9 @@ class Hy4Engine:
             if r in rows:
                 pend[r], pos[r] = first[r], len(prompts_by_row[r]) - 1
             elif not self.live[r]:
-                pend[r], pos[r] = PAD, 0
+                pend[r], pos[r] = PAD, self.park_pos(r)
         rn.load(pend, pos, [[-1] * K for _ in range(ROWS)], cap=[0] * ROWS)
-        rn.set_park([0] * ROWS)  # the seed tail must not park the rows being seeded
+        rn.set_park([0] * ROWS, self.park_pos_all())  # the seed tail must not park the rows being seeded
         a_seed = ttnn.from_torch(
             torch.tensor([[pend[r]] * S for r in range(ROWS)], dtype=torch.int32).reshape(ROWS * S, 1),
             device=md,
@@ -262,7 +356,7 @@ class Hy4Engine:
     def release(self, row):
         """request on this mesh row finished: park the row (pos 0, pad token) at the next round."""
         self.live[row] = False
-        self.pend[row], self.pos[row] = PAD, 0
+        self.pend[row], self.pos[row] = PAD, self.park_pos(row)
         self.drafts[row] = [-1] * max(self.K, 1)
         self.dirty = True
 
@@ -303,6 +397,7 @@ class Hy4Engine:
         park = tuple(0.0 if lv else 1.0 for lv in self.live)
         key = (
             park,
+            tuple(self.park_pos_all()),
             tuple(caps),
             v,
             tuple(temps) if (v == "S" and temps is not None) else None,
@@ -322,10 +417,10 @@ class Hy4Engine:
                 if idle:
                     for r in range(ROWS):
                         if not self.live[r]:
-                            self.pend[r], self.pos[r] = PAD, 0
+                            self.pend[r], self.pos[r] = PAD, self.park_pos(r)
             else:
                 rn.set_cap(caps)
-            rn.set_park(park)
+            rn.set_park(park, self.park_pos_all())
             if v == "S":
                 if temps is not None:
                     new = (list(temps), list(seeds))
@@ -366,7 +461,7 @@ class Hy4Engine:
         if idle and not self.pipe:
             for r in range(ROWS):
                 if not self.live[r]:
-                    self.pend[r], self.pos[r] = PAD, 0
+                    self.pend[r], self.pos[r] = PAD, self.park_pos(r)
         return st
 
     # ------------------------------------------------------------------------------------------------ warm-up (before any request: all persistent tensors exist before the traces)
@@ -470,7 +565,7 @@ class Hy4Engine:
             ):  # old serve-long path captured its trace at the LAST pool position (a trace captured at a short position produced garbage above it, serve-long RESULT.md)
                 cpos = self.pages * PAGE - self.K - 4 if cp == "last" else int(cp)
                 self.runner.load([PAD] * ROWS, [cpos] * ROWS, [[-1] * self.K for _ in range(ROWS)], cap=[0] * ROWS)
-                self.runner.set_park([0] * ROWS)
+                self.runner.set_park([0] * ROWS, self.park_pos_all())
                 logger.info(f"HY4 warm-up: capture position {cpos}")
             self._l1_peak(lambda: self.runner.body("G"), "G")
             ttnn.synchronize_device(self.md)
@@ -490,6 +585,8 @@ class Hy4Engine:
         for r in range(ROWS):
             self.release(r)
         self.pp.set_keep(None)
+        self.ret = [None] * ROWS  # the warm-up prompts are synthetic: nothing retained
+        self.pfx_stats = dict(calls=0, hit_calls=0, hit_tokens=0, prompt_tokens=0, computed_tokens=0)
         probe = os.environ.get("HY4_PF_HYBRID_PROBE", "")
         if probe:
             self._probe_chain_cap([int(x) for x in probe.split(",")])

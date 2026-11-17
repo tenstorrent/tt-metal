@@ -191,21 +191,24 @@ class Hy4PoolPrefill:
         mtp=None,
         keep_rows=None,
         chain=False,
+        start=0,
     ):
         """prompts: list (<= rows) of token-id lists (a missing / empty user is a pad prompt). Returns PrefillResult.
         mtp: an Hy4MTP -> the MTP layer prompt KV is written per chunk (``mtp_prompt_chunk``). keep_rows: the mesh rows being prefilled (the pool writes of the others are suppressed: live decode users).
         """
         ch, md, PF = self.ch, self.md, self.pf_rows
+        assert start == 0 or not chain, "prefix reuse (start > 0) needs the direct-to-pool path"
+        assert start % PF == 0, (start, PF)
         if chain:
             PF = 512  # chain prefill: chunks of 512 rows, replicated cache, hand-off at the end (HY4_PF_HYBRID)
             self._chain_mode(True)
         try:
-            return self._prefill(prompts, keep_hidden, keep_logits, sync_every_chunk, mtp, keep_rows, chain, PF)
+            return self._prefill(prompts, keep_hidden, keep_logits, sync_every_chunk, mtp, keep_rows, chain, PF, start)
         finally:
             if chain:
                 self._chain_mode(False)
 
-    def _prefill(self, prompts, keep_hidden, keep_logits, sync_every_chunk, mtp, keep_rows, chain, PF):
+    def _prefill(self, prompts, keep_hidden, keep_logits, sync_every_chunk, mtp, keep_rows, chain, PF, start=0):
         ch, md = self.ch, self.md
         if keep_rows is not None:
             self.set_keep(keep_rows)
@@ -222,7 +225,7 @@ class Hy4PoolPrefill:
             res.logits = [None] * self.rows
         ids_by_layer = {}
         t0 = time.time()
-        for c in range(nch):
+        for c in range(start // PF, nch):
             ids = torch.full((self.rows, PF), PAD, dtype=torch.long)
             for r in range(self.rows):
                 seg = prompts[r][c * PF : (c + 1) * PF]

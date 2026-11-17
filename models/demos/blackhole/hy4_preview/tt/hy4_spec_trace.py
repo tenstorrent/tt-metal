@@ -187,6 +187,9 @@ class MTPRoundTail:
             torch.zeros(R, 1, 1, 1)
         )  # 1.0 = idle (parked) row: its next-round state is forced to (PAD token, position 0, no drafts) ON DEVICE, exactly what a host reload would upload
         self.padvec = rep(torch.tensor([120002.0] + [0.0] * (S - 1)).reshape(1, 1, 1, S))
+        # HY4_PFX=1 (prefix cache): a parked row keeps (PAD, parkvec[row]) instead of position 0. The engine sets parkvec = the length of the row's retained prefix, so the idle rounds write their junk KV rows just past
+        # the retained blocks (never over page 0 of the prefix) and only attend to initialised keys.
+        self.parkvec = rows(torch.zeros(R, 1, 1, 1)) if os.environ.get("HY4_PFX", "0") == "1" else None
         self.m_out = rows(torch.zeros(R, 1, 1, 1))
         self.a_out = rows(torch.zeros(R, 1, 1, W16))  # emitted tokens a_0..a_k of the round (host reads a_out + m_out)
         self.zeros_pad = rep(torch.zeros(1, 1, 1, W16 - S))
@@ -255,7 +258,10 @@ class MTPRoundTail:
         tok_f = ttnn.concat([nxt, dcat], dim=3)  # [1,1,1,S]: [x_{P'}, d_1..d_k]
         tok_eff = ttnn.add(ttnn.multiply(tok_f, keep), ttnn.multiply(self.padvec, self.park))
         ttnn.copy(self._u32_row(tok_eff), self.tok)
-        ttnn.copy(ttnn.multiply(p_new, keep), self.pos)
+        p_eff = ttnn.multiply(p_new, keep)
+        if self.parkvec is not None:
+            p_eff = ttnn.add(p_eff, ttnn.multiply(self.parkvec, self.park))
+        ttnn.copy(p_eff, self.pos)
 
 
 class Hy4SpecRunner:
@@ -373,11 +379,21 @@ class Hy4SpecRunner:
         tr = self.trace if variant is None else self.traces[variant]
         ttnn.execute_trace(self.dec.md, tr, cq_id=0, blocking=False)
 
-    def set_park(self, park):
-        """per user flag (1 = idle row): the device parks it every round (see MTPRoundTail.park)."""
+    def set_park(self, park, park_pos=None):
+        """per user flag (1 = idle row): the device parks it every round (see MTPRoundTail.park). park_pos (prefix cache): the position a parked row keeps per user."""
         md = self.dec.md
         R = int(md.shape[0])
         mp = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=tuple(md.shape))
+        if park_pos is not None and self.tail.parkvec is not None:
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor([float(x) for x in park_pos]).reshape(R, 1, 1, 1),
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=mp,
+                ),
+                self.tail.parkvec,
+            )
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
                 torch.tensor([float(x) for x in park]).reshape(R, 1, 1, 1),
