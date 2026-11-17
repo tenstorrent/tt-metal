@@ -18,6 +18,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 #include "params.h"
@@ -55,7 +56,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid<true /* src A */, is_fp32_dest_acc_en>(LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK * num_faces);
+                const std::uint32_t src_handshake_iters =
+                    LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, NUM_BLOCKS * NUM_TILES_IN_BLOCK, num_faces);
+                _perf_unpack_stream_set_valid<true /* set_a */, is_fp32_dest_acc_en /* set_b */, PERF_RUN_TYPE>(src_handshake_iters);
             }
         }
         else
@@ -84,8 +87,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_lib_math_wrappers.h"
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -104,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
     {
         START_PERF_MEASURE("INIT")
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
             tensor_shape, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -126,7 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                         {
-                            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                                 tile, formats.math, formats.math, tensor_shape);
                         }
                     }
@@ -134,7 +138,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                _perf_math_loop_clear_valid<true /* src A */, true /* src B */>(LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK * num_faces);
+                const std::uint32_t src_handshake_iters =
+                    LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, NUM_BLOCKS * NUM_TILES_IN_BLOCK, num_faces);
+                _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(src_handshake_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -147,7 +153,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                         {
-                            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                                 tile, formats.math, formats.math, tensor_shape);
                         }
                     }
@@ -163,7 +169,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_wait_for_dest_available_<dest_sync>();
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                             tile, formats.math, formats.math, tensor_shape);
                     }
                     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

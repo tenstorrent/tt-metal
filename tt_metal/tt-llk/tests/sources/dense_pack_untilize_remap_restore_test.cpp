@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Blackhole cross-op regression for dense pack-untilize Dest remap teardown.
-//
-// Run 0 enables the stride-of-16 Dest read remap, executes dense untilize into
-// scratch L1, and disables the remap after the pack has drained. Run 1 then
-// performs a normal datacopy and Default-mode pack in the same kernel launch.
-// If run 0 leaves remapping enabled, run 1 reads the Dest rows with untilize
-// addressing and no longer reproduces the input tile.
+// Blackhole regression: dense untilize must restore linear Dest addressing.
+// Run 1 writes under inherited state, then forces linear readback.
 
 #include <cstdint>
 
@@ -85,11 +80,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // the shared remap bits.
     _llk_math_reconfig_remap_(false);
 
-    // Run 1: normal linear-Dest datacopy and pack.
+    // Run 1 writes with the state left by the teardown under test.
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(tensor_shape, formats.math);
     _llk_math_wait_for_dest_available_<dest_sync>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         0, formats.math, formats.math, tensor_shape);
+    // Force only the readback linear so a leaked remap cannot round-trip.
+    _llk_math_reconfig_remap_(false);
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
@@ -126,9 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces, FACE_R_DIM, TILE_C_DIM, num_faces);
     _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */>(
         formats.pack_src, FACE_R_DIM, TILE_C_DIM, num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
-    // Keep the Dest half selected by run 0's section-done handshake; re-running
-    // pack-dest init here would reset only pack's half pointer and desynchronize it
-    // from math.
+    // Preserve the Dest half selected by run 0; reinit would desynchronize pack from math.
     _llk_packer_wait_for_math_done_();
     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
