@@ -68,6 +68,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint32_t src_addr,
     uint64_t noc_addr,
+    uint64_t local_noc_addr,
     int32_t size_bytes,
     [[maybe_unused]] uint32_t alignment) {
     using ttnn::operations::ccl::common::ReplicateGroup;
@@ -84,7 +85,8 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
 
     // Track the original total size for the local write at the end
     const uint32_t total_size = static_cast<uint32_t>(size_bytes);
-    const uint64_t original_noc_addr = noc_addr;
+    // noc_addr is resolved for the fabric router's NoC (packets); local_noc_addr for this kernel's NoC (local write)
+    const uint64_t original_noc_addr = local_noc_addr;
     const uint32_t original_src_addr = src_addr;
 
     // Send multicast packets, splitting payload if larger than max packet size
@@ -775,6 +777,7 @@ FORCE_INLINE void dispatch_token_bidirectional_multicast(
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint32_t input_token_read_addr,
     uint64_t output_token_write_addr,
+    uint64_t local_output_token_write_addr,
     uint32_t input_page_size,
     uint32_t alignment) {
     fabric_multicast_bidirectional_write_ring_1d_async<
@@ -790,6 +793,7 @@ FORCE_INLINE void dispatch_token_bidirectional_multicast(
         packet_header_neg,
         input_token_read_addr,
         output_token_write_addr,
+        local_output_token_write_addr,
         (int32_t)input_page_size,
         alignment);
 }
@@ -1119,6 +1123,9 @@ void kernel_main() {
         uint64_t payload_write_addr = output_token_write_addr + payload_offset;
 
         if constexpr (dispatch_algorithm == DispatchAlgorithm::BROADCAST) {
+            // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+            const uint64_t fabric_payload_write_addr =
+                tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addr_gen, global_token, payload_offset);
             // Broadcast token to all devices via bidirectional multicast
             detail::dispatch_token_bidirectional_multicast<
                 fabric_max_packet_size,
@@ -1132,6 +1139,7 @@ void kernel_main() {
                 unicast_packet_header_pos,
                 unicast_packet_header_neg,
                 payload_read_addr,
+                fabric_payload_write_addr,
                 payload_write_addr,
                 payload_size,
                 alignment);
