@@ -6,11 +6,13 @@
 cycles per tile product = (PACK end - UNPACK start) / (passes * tile products); LoFi peak = 16.
 """
 
+import os
+
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.demos.ws_expert.bench_util import (
     TILE_BYTES,
     aiclk_mhz,
@@ -28,7 +30,7 @@ DT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b, "fp
 
 
 def run_bench(device, rt, ct, kt, nbr, nbc, act, x_dt="bf16", w_dt="bfp4", out_dt="bf16", full_sync=False, target=2e6):
-    core = (0, 0)
+    core = tuple(int(v) for v in os.environ.get("WS_MMCORE", "0,0").split(","))
     grid = crs([core])
     ops_per_pass = nbr * nbc * rt * ct * kt
     passes = max(2, int(target / (ops_per_pass * 16)))
@@ -163,5 +165,23 @@ def test_mm_bench_fullsync(device, case):
     logger.info(
         f"MMBENCH FULLSYNC {rt}x{ct} K{kt} blocks {nbr}x{nbc} act {int(act)}: {r['cpt']:.2f} cyc/tile "
         f"({100 * r['util']:.1f}% LoFi) pcc {r['pcc']:.5f}"
+    )
+    assert r["pcc"] > 0.99
+
+
+# K-split gate/up (K over the group's rows, N over its columns): partial blocks packed out of fp32 DEST as bf16 or
+# bfp8. (rt, ct, kt, nbr, nbc): 10 x 2 -> K 12, 20 N tiles a core; 5 x 4 -> K 24, 10 N; 4 x 5 -> K 30, 8 N;
+# 1 x 20 (today) -> K 120, 2 N.
+KSPLIT = [(1, 4, 12, 4, 5), (1, 4, 24, 4, 3), (1, 4, 30, 4, 2), (1, 2, 12, 4, 10), (1, 4, 120, 2, 2)]
+
+
+@pytest.mark.parametrize("case", KSPLIT, ids=lambda c: f"{c[0]}x{c[1]}k{c[2]}n{c[1] * c[4]}")
+@pytest.mark.parametrize("out_dt", ["bf16", "bfp8"])
+def test_mm_bench_ksplit(device, case, out_dt):
+    rt, ct, kt, nbr, nbc = case
+    r = run_bench(device, rt, ct, kt, nbr, nbc, False, x_dt="bfp8", out_dt=out_dt)
+    logger.info(
+        f"MMKSPLIT {rt}x{ct} K{kt} N{ct * nbc} out {out_dt}: {r['cpt']:.2f} cyc/tile ({100 * r['util']:.1f}% LoFi) "
+        f"pcc {r['pcc']:.5f}"
     )
     assert r["pcc"] > 0.99

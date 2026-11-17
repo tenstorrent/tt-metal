@@ -16,11 +16,12 @@ group (make_tables, layout in kernels/wl_reader.cpp); a slot's next occupant is 
 the previous one: a credit from the receiving core to the sending one, one hop back, through the other direction's
 mux. Every wait is on an event earlier in the schedule's model time, so the lanes cannot deadlock (ws_lane_sched).
 
-Core layout: group g in logical columns LANE_PAIRS[g] (contiguous in NoC x), its two mux cores in the column just west
-of it (MUX_COL[g], rows MUX_ROWS): the cores reach their muxes on NOC1 (north, then west) without entering another
+Core layout (group_layout): group g in a pair of logical columns (contiguous in NoC x), its two mux cores in a column
+west of it (rows MUX_ROWS): the cores reach their muxes on NOC1 (north, then west) without entering another
 group's columns, whose linked multicasts run on both NoCs.
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -35,7 +36,7 @@ from models.demos.ws_expert.ws_sf import snake
 
 LANE_PAIRS = [(1, 2), (4, 5), (7, 8), (10, 11)]
 MUX_COL = [0, 3, 6, 9]
-MUX_ROWS = (4, 5)  # direction 0, direction 1
+MUX_ROWS = tuple(int(v) for v in os.environ.get("WS_MUXROWS", "4,5").split(","))  # direction 0, direction 1
 KIND_OWN, KIND_D0, KIND_D1 = 1, 2, 3
 fabric_mux = ttnn.experimental.fabric_mux
 
@@ -49,7 +50,7 @@ class LCfg:
     D: int = 4  # own-expert chunk reads in flight
     slots: str = "d0,d1,any"  # weight slots a core and the experts each takes (ws_lane_sched.slot_types)
     keep: int = 1  # schedule: slots an owner leaves free when it injects
-    out_all: bool = True  # every expert's down rows to DRAM (WL_OUT_ALL); False: only each group's last expert
+    out_all: bool = True  # every expert's down rows to DRAM (WL_OUT_ALL); False: only each group's last (old default)
     wpoll: int = 2  # the reader serves its weight queues every wpoll turns of its loop (WL_WPOLL)
     mcast_linked: bool = False  # group multicast payloads linked to their flags (WL_MCAST_LINKED)
     arr_write: bool = False  # arrival counts as plain writes after the payloads, no router atomics (WL_ARR_WRITE)
@@ -70,19 +71,98 @@ class LCfg:
     # mesh every chip runs the same one-chip program on its own inputs (the tables of the one-chip cycles on each)
     nofab: bool = False
     # row-major outputs (WL_Y_RM): each down row of each expert to its own row of a row-major [rows, H] output, the
-    # row given by the expert's destination list (build_lane's dest_t, the token lists' layout); needs noc_split
+    # row given by the expert's destination list (build_lane's dest_t, the token lists' layout); needs noc_split or ucast
     y_rm: bool = False
     y_nowrite: bool = False  # (a diagnostic, WL_Y_NOWRITE) y_rm without the row writes: destinations read, rows dropped
     y_posted: bool = True  # y_rm's row writes posted (no acks; WL_Y_POSTED)
+    # no NoC multicasts (WL_UCAST): every x block and h row goes to the group's 20 cores as unicast writes, payloads then
+    # flags (the group multicasts wedged the NoC under the lane design's other traffic); False: multicasts as before
+    ucast: bool = True
+    # with ucast: x blocks as a unicast chain (origin -> partner column, then row by row down on NOC0 / up on NOC1, each
+    # link once; WL_XCHAIN) instead of the 20-way fan-out; the h rows stay a fan-out
+    xchain: bool = True
+    # with xchain: slot credits hop by hop (each writer checks only its target core; WL_XHOP). Off: no gain on the
+    # tray (37.9% vs 38.1% at M 586) and it deadlocked within 50 soak launches (cores of a chain drift apart)
+    xhop: bool = False
+    xst: int = -1  # x tilize staging blocks a core beyond the look-ahead's share (CB 8); -1: 2 with ucast, else 4
+    jump: bool = False  # chains: the origin also sends to row (r + 5) % 10, at most 4 hops, not 9 (WL_JUMP)
+    hchain: bool = True  # with ucast: the h row parts as the same kind of chain (WL_HCHAIN)
+    # chains: pieces a hop (cut-through): an x block / h row part moves in xp / hp pieces, each with its own flag word
+    # (word p of the slot's 16 B), so a forwarder passes piece p on while piece p + 1 is still arriving (WL_XP / WL_HP).
+    # Tray, with fnb: xp 2 48.7% / 58.2% at M 586 / 2048 vs 46.1% / 54.2% for xp 1 without fnb; xp 4 and hp 2 lose
+    # (x waits fall, h waits rise more)
+    xp: int = 2
+    hp: int = 1
+    # chains: the forwarders polled between every other queue of their RISC's loop (WL_FPRIO). Off: 35-38% at M 586
+    # (h waits double)
+    fprio: bool = False
+    # chains: forwarders never block on a flush; what they walked is published once their RISC's writes have left (WL_FNB)
+    fnb: bool = True
+    # with ucast: an h tile's arrival at its row leader as a 4-byte write after it (a word a producer, same command
+    # buffer) instead of a write barrier and a semaphore increment (WL_HARRW)
+    harrw: bool = False  # (neutral on the tray)
+    # chains: forwarders issue only on a free write command buffer, never stall in it (WL_FASYNC). Off: 40.3% / 43.0% at
+    # M 586 / 2048 (a hop that yields waits a whole loop turn to go on)
+    fasync: bool = False
+    # h rows as a column all-to-all (WL_HA2A, kernels/wl_ha2a.hpp): each core's tile to its column and partner, the
+    # partner's on to its column - at most 2 hops, no leaders / chains (replaces hchain; needs hcred)
+    ha2a: bool = False
+    hcred: bool = True  # h ring slot credits (WL_HCRED; without them the ring depth had to cover the cores' skew)
+    # K-split gate/up (WL_KS; ws_ks.py's layout, single-chip prototype 75.5% at M 586 with the lane's L1): core (c, r)
+    # holds W_gu[K tiles KSL r .., pairs 10 c ..] and computes partials of its column's 10 pairs; x rows go partner to
+    # partner (whole rows alternately, one hop, no chain), partials are reduce-scattered down the column (bf16; rows below
+    # on NOC0, above on NOC1) to the pair's owner, which folds them and produces h tile j as before (the h chain, down,
+    # weights unchanged). Replaces the x chain (xchain does not apply).
+    ks: bool = False
+    ks_nxr: int = 8  # x ring rows
+    ks_d: int = 3  # landing slots (rows of 10 contributions)
+    ks_pd: int = 2  # partial ring rows
+    ks_fl: int = 1  # fold lag (rows)
+    ks_tl: int = 3  # tilize look-ahead (rows)
+    ydep: int = 2  # down output staging (CB 17), rows
+    # K split: an expert's last folds / downs overlap the next expert's first rows (drained only when the next one reuses
+    # its weight slot) instead of a full drain at every expert's end (KS_OVL)
+    ks_ovl: bool = False
+    # K split: compute tilizes its x rows straight into its ring slot (no CB 8 staging, no local copy; CB 8 becomes a
+    # 1-page-a-row signal), so the tilize look-ahead can reach ks_nxr - 1 rows (KS_XDIRECT / WL_KS_XDIRECT)
+    ks_xdirect: bool = False
+    idle: int = 0  # >0: the BRISC / NCRISC loops back off this many cycles after a turn that did nothing (WL_IDLE)
+    ks_fz: bool = False  # K split: a row's fold after its down (KS_FOLD_LAST)
+    ks_ff: bool = (
+        False  # K split: a row's fold before its gate/up (the SwiGLU on PACK overlaps the gate/up) (KS_FOLD_FIRST)
+    )
+    sched_c: int = 9  # the schedule model's compute time per expert (packet times) the static order is planned with
+    ks_bal: int = 0  # >0: partials by distance - the BRISC to itself + the next ks_bal - 1 rows down (wrapping), the NCRISC to the rest up (WL_KS_BAL)
+    ks_pall: bool = False  # the BRISC sends every partial contribution (rows above wrap round on NOC0) (WL_KS_PALL)
+    wtwice: bool = False  # the reader's weight queues twice a loop turn (WL_WTWICE)
+    ybarrier: bool = False  # output rows: a write barrier each (old) instead of a flush (WL_YBARRIER)
+    # weight packets' fused arrival increment without the router's write-ack wait (WL_ARR_NF; ordering rests on the
+    # router's write and increment reaching the same core in order; mux bench: 43.7 vs 26.2 GB/s a link)
+    arr_nf: bool = False
 
 
-def lane_cores(g):
-    a, b = LANE_PAIRS[g]
+# G <= 2 (the tray): columns (4, 5) and (9, 10), muxes in 3 and 8. Measured on the tray (K split, M 586): 62.5% against
+# 59.5% in (1, 2) / (4, 5); (1, 2) / (7, 8) 58.7-59.1%, (4, 5) / (7, 8) 58.7%, (3, 4) or (5, 6) with (9, 10) 61.2%. The
+# group cores' compute is position dependent (gate/up MATH time a row ~10% longer in columns 1-2 / 7-8 than in 4-5).
+LAYOUT_G2 = [(4, 5, 3), (9, 10, 8)]
+
+
+def group_layout(G):
+    """(column a, column b, mux column) of each group; WS_GLAYOUT "a,b,mux;..." overrides (experiments)."""
+    if os.environ.get("WS_GLAYOUT"):
+        return [tuple(int(v) for v in it.split(",")) for it in os.environ["WS_GLAYOUT"].split(";")]
+    if G <= 2:
+        return LAYOUT_G2
+    return [(a, b, m) for (a, b), m in zip(LANE_PAIRS, MUX_COL)]
+
+
+def lane_cores(g, G=4):
+    a, b, _ = group_layout(G)[g]
     return [(a, y) for y in range(10)] + [(b, y) for y in range(10)]  # core j = c * 10 + y
 
 
-def mux_core(g, d):
-    return (MUX_COL[g], MUX_ROWS[d])
+def mux_core(g, d, G=4):
+    return (group_layout(G)[g][2], MUX_ROWS[d])
 
 
 def lanes(shape, lc: LCfg):
@@ -106,7 +186,7 @@ def slot_packets(cfg: GCfg, lc: LCfg):
 
 def schedule(N, E, cfg: GCfg, lc: LCfg):
     GU, P = slot_packets(cfg, lc)
-    return lane_sched(N, E, P=P, GU=GU, keep=lc.keep, types=slot_types(lc.slots))
+    return lane_sched(N, E, P=P, GU=GU, C=lc.sched_c, keep=lc.keep, types=slot_types(lc.slots))
 
 
 def make_tables(shape, cfg: GCfg, lc: LCfg):
@@ -120,7 +200,7 @@ def make_tables(shape, cfg: GCfg, lc: LCfg):
     E = cfg.nexp // G
     sch = schedule(N, E, cfg, lc)
     K = len(slot_types(lc.slots))
-    assert K <= 4 and 1 + 2 * K <= 16, "2-bit slot fields, header below word 16"
+    assert K <= 7 and 1 + 2 * K <= 16, "3-bit slot fields, header below word 16"
     owners, kf = sch["owners"], sch["kf"]
     TLW = -(-(16 + 5 * E) // 16) * 16  # words a table (64 B multiple)
     tabs = torch.zeros(N, G, TLW, dtype=torch.int64)
@@ -177,7 +257,7 @@ def make_tables(shape, cfg: GCfg, lc: LCfg):
                         y = (pos + 1) % N if d == 0 else (pos - 1) % N
                         s2, k2 = where[(y, i)]
                         assert arrives(i, y)[0] == (KIND_D0 if d == 0 else KIND_D1)
-                        w[1 + d] = s2 | k2 << 2
+                        w[1 + d] = s2 | k2 << 3
                     t[off + 4 * k : off + 4 * k + 4] = torch.tensor(w)
                 off += 4 * len(lst)
             assert off <= TLW
@@ -212,9 +292,9 @@ def build_lane(
     N, G, GC = R * Cn, cfg.G, cfg.GC
     assert GC == 20 and cfg.PAIRS == GC and cfg.DCOLS * GC == cfg.HT
     ln = lanes((R, Cn), lc)
-    groups = [lane_cores(g) for g in range(G)]
+    groups = [lane_cores(g, G) for g in range(G)]
     C = [c for gr in groups for c in gr]
-    muxes = [] if lc.nofab else [mux_core(g, d) for g in range(G) for d in range(2)]
+    muxes = [] if lc.nofab else [mux_core(g, d, G) for g in range(G) for d in range(2)]
     assert not set(muxes) & set(C)
     gx, gy = mesh.compute_with_storage_grid_size().x, mesh.compute_with_storage_grid_size().y
     assert all(x < gx and y < gy for x, y in C + muxes), f"core layout outside the {gx} x {gy} grid"
@@ -233,8 +313,22 @@ def build_lane(
     warr, cred, freew, arr_stage = w16(K), w16(2 * K), w16(K), w16(2)
     hring = sharded_l1(mesh, C, [NS * KTD * 32, 32], cfg.h_dt, ttnn.TILE_LAYOUT)
     hflags = w16(NS * 2)
-    xring = sharded_l1(mesh, C, [NX * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT)
-    xflags = w16(NX)
+    harrw = w16(GC // 2)  # h arrivals at a row leader, a word a producer row of its column (WL_HARRW)
+    hcred = w16(GC // 2 + 1)  # h ring credits: consumed h rows of the column's cores, then the partner (WL_HCRED)
+    ha2a_w, ha2a_f = w16(2), w16(NS * KTD)  # (WL_HA2A: BRISC rows forwarded + flag scratch; a flag a tile of a slot)
+    if lc.ks:
+        assert lc.ucast and lc.hchain and not lc.bcast, "the K split runs with the unicast h chain"
+        KSL = KT // 10
+        BK, NX = KSL, lc.ks_nxr  # (the x ring: NXR rows of KSL tiles; xflags 2 words a row: the two partners)
+        xring = sharded_l1(mesh, C, [NX * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT)
+        xflags = w16(2 * NX)
+        ptile = TILE_BYTES[ttnn.bfloat16]
+        xcred, lflags, lcred, kscr = w16(2), w16(lc.ks_d * 10), w16(10), w16(8)
+        land = sharded_l1(mesh, C, [lc.ks_d * 20 * 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        pring = sharded_l1(mesh, C, [lc.ks_pd * 20 * 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    else:
+        xring = sharded_l1(mesh, C, [NX * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT)
+        xflags = w16(NX)
     xprog = w16(GC)
     assert not (lc.bcast and lc.mc_noc1), "bcast and mc_noc1 place the multicasts differently"
     assert not (lc.noc_split and lc.mc_noc1), "noc_split places every multicast on NOC0"
@@ -244,16 +338,20 @@ def build_lane(
     xinf = w16(lc.xf) if lc.bcast else None
     # DRAM -> L1 reads need the L1 address congruent to the DRAM one mod 64: 64-aligned landing spots inside these
     counts_l1 = sharded_l1(mesh, C, [1, 32 + max(4, cfg.nexp)], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
-    idx_l1 = sharded_l1(mesh, C, [4, 32], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    idx_l1 = sharded_l1(mesh, C, [12 if lc.ks else 4, 32], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     table_l1 = sharded_l1(mesh, C, [1, TLW + 16], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     a64 = lambda a: (a + 63) // 64 * 64
-    cnt_base, idx_addr, tab_base = a64(counts_l1.buffer_address()), a64(idx_l1.buffer_address()), a64(
-        table_l1.buffer_address()
+    cnt_base, idx_addr, tab_base = (
+        a64(counts_l1.buffer_address()),
+        a64(idx_l1.buffer_address()),
+        a64(table_l1.buffer_address()),
     )
     st = stamps_tensor(mesh, C)
-    assert not lc.y_rm or (lc.noc_split and dest_t is not None), "y_rm: destination lists, read on NOC1 by QY"
+    # (y_rm: QY on the NCRISC's NOC1 reads the destination lists and posts the rows; no group multicast may use NOC1
+    # meanwhile: the NoC split, or the unicast chains)
+    assert not lc.y_rm or ((lc.noc_split or lc.ucast) and dest_t is not None), "y_rm: noc_split or ucast, and dest_t"
     # (y_rm: the row writes need CB 17 64 B aligned)
-    ysh = sharded_l1(mesh, C, [2 * cfg.DCOLS * 32, 32], cfg.out_dt, ttnn.TILE_LAYOUT) if lc.y_rm else None
+    ysh = sharded_l1(mesh, C, [lc.ydep * cfg.DCOLS * 32, 32], cfg.out_dt, ttnn.TILE_LAYOUT) if lc.y_rm else None
     dest_t = dest_t if lc.y_rm else idx_t
     if lc.nofab:
         mcfg, ctype, client_ct, mesh_id = None, None, [0] * 5, 0  # (the reader's mux CT args are placeholders)
@@ -282,8 +380,9 @@ def build_lane(
         ("EXPERT_ACTIVATION_LIMIT", "7.0f"),
         ("EXPERT_ACTIVATION_ALPHA", "1.702f"),
     ]
-    xord = 1 if lc.mc_noc1 or lc.bcast or lc.noc_split else cfg.xorder
-    ydefs = [("WG_XORDER", str(xord)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
+    # (the x stream-order gate fixed starving concurrent multicasts; with the x chain it only costs: off)
+    xorder = 1 if lc.mc_noc1 or lc.bcast or lc.noc_split else (0 if lc.ucast and lc.xchain else cfg.xorder)
+    ydefs = [("WG_XORDER", str(xorder)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
     ydefs += [("WL_MC_NOC1", "1")] if lc.mc_noc1 else []
     ydefs += [("WL_NOC_SPLIT", "1")] if lc.noc_split else []
     if lc.bcast:
@@ -297,8 +396,52 @@ def build_lane(
     ydefs += [("WL_MCAST_LINKED", "1")] if lc.mcast_linked else []
     ydefs += [] if lc.own_read else [("WL_NO_OWN_READ", "1")]
     ydefs += [] if lc.gather else [("WG_NO_GATHER", "1")]
+    assert not (lc.ucast and lc.bcast), "WL_BCAST still multicasts its h rows: run it with ucast=0"
+    ydefs += [("WL_UCAST", "1")] if lc.ucast else []
+    # (the chains replace the unicast fan-out: without ucast, i.e. with multicasts, they do not apply)
+    assert not lc.ha2a or (lc.ucast and lc.hcred and not lc.bcast), "ha2a: unicast, with h credits"
+    xchain, hchain = lc.ucast and lc.xchain and not lc.ks, lc.ucast and lc.hchain and not lc.ha2a
+    ydefs += [("WL_XCHAIN", "1")] if xchain else []
+    ydefs += [("WL_XHOP", "1")] if xchain and lc.xhop else []
+    ydefs += [("WL_JUMP", "1")] if lc.jump and (xchain or hchain) else []
+    ydefs += [("WL_HCHAIN", "1")] if hchain else []
+    assert 1 <= lc.xp <= 4 and 1 <= lc.hp <= 4, "a piece's flag is a word of its slot's 16 B"
+    ydefs += [("WL_XP", str(lc.xp if xchain else 1)), ("WL_HP", str(lc.hp if hchain else 1))]
+    ydefs += [("WL_FPRIO", "1")] if lc.fprio and (xchain or hchain) else []
+    ydefs += [("WL_FNB", "1")] if lc.fnb and (xchain or hchain) else []
+    ydefs += [("WL_FASYNC", "1")] if lc.fasync and (xchain or hchain) else []
+    ydefs += [("WL_HARRW", str(harrw.buffer_address()))] if lc.ucast and lc.harrw else []
+    ydefs += [("WL_HCRED", str(hcred.buffer_address()))] if lc.hcred and (hchain or lc.ha2a) else []
+    if lc.ha2a:
+        ydefs += [("WL_HA2A", str(ha2a_w.buffer_address())), ("WL_HA2A_F", str(ha2a_f.buffer_address()))]
+    if lc.ks:
+        assert not lc.ks_xdirect or lc.ks_tl < lc.ks_nxr, "direct tilize: the look-ahead must stay inside the x ring"
+        # (the down of row q runs once row q + DN_LAG is folded; the h ring must hold the rows in between - NS 2 with
+        # DN_LAG 3 hung on the tray, NS 3 with DN_LAG 3 runs: folded h tiles can wait in CB 16 meanwhile)
+        assert NS >= cfg.dn_lag, f"h ring NS {NS} below DN_LAG {cfg.dn_lag} (deadlock)"
+        ydefs += [("WL_KS_XDIRECT", "1")] if lc.ks_xdirect else []
+        ydefs += [
+            ("WL_KS_XRM", str(cfg.XRM)),
+            ("WL_KS", str(KSL)),
+            ("WL_KS_XCRED", str(xcred.buffer_address())),
+            ("WL_KS_D", str(lc.ks_d)),
+        ]
+        ydefs += [("WL_KS_LAND", str(land.buffer_address())), ("WL_KS_LFLAGS", str(lflags.buffer_address()))]
+        ydefs += [("WL_KS_LCRED", str(lcred.buffer_address())), ("WL_KS_PTILE", str(ptile))]
+        ydefs += [("WL_KS_SCR", str(kscr.buffer_address())), ("WL_KS_PD", str(lc.ks_pd))]
+        ydefs += [("WL_KS_PRING", str(pring.buffer_address()))] + ([("WL_KS_PALL", "1")] if lc.ks_pall else [])
+        ydefs += [("WL_KS_BAL", str(lc.ks_bal))] if lc.ks_bal else []
+    ydefs += [("WL_WTWICE", "1")] if lc.wtwice else []
+    ydefs += [("WL_YBARRIER", "1")] if lc.ybarrier else []
+    ydefs += [("WL_IDLE", str(lc.idle))] if lc.idle else []
+    # extra data-movement defines for experiments, e.g. WL_DEFS="WG_NO_GATHER,WL_READ_NOC=1"
+    for d in filter(None, os.environ.get("WL_DEFS", "").split(",")):
+        k, _, v = d.partition("=")
+        ydefs += [(k, v or "1")]
     # x staging blocks a core; with the funnel (bcast), core 0's lc.xf funnel slots take two of them on every core
-    XST = -(-cfg.LOOK // GC) + (2 if lc.bcast else 4)
+    XST = -(-cfg.LOOK // GC) + (2 if lc.bcast else lc.xst if lc.xst >= 0 else 2 if lc.ucast else 4)
+    if lc.ks:
+        XST = lc.ks_tl + 2  # (rows of KSL tiles)
     mpd = ttnn.MeshProgramDescriptor()
     for r in range(R):
         for c in range(Cn):
@@ -387,24 +530,45 @@ def build_lane(
                         defines=ydefs
                         + ([("WL_NO_FABRIC", "1")] if lc.nofab else FAB_DEFS)
                         + [("WL_WPOLL", str(lc.wpoll))]
-                        + ([("WL_ARR_WRITE", str(arr_stage.buffer_address()))] if lc.arr_write else []),
+                        + ([("WL_ARR_WRITE", str(arr_stage.buffer_address()))] if lc.arr_write else [])
+                        + ([("WL_ARR_NF", "1")] if lc.arr_nf else []),
                         config=dm(1),
                     )
                 )
-                kernels.append(
-                    ttnn.KernelDescriptor(
-                        kernel_source=kpath("wl_compute.cpp"),
-                        core_ranges=crs(gr),
-                        compile_time_args=[KT, BK, KTD, DC, DB, NX, cfg.LOOK, cnt_base, G, GC, tab_base + 64],
-                        named_compile_time_args=[("expert_activation", 0)],
-                        defines=act_defs
-                        + [("DN_LAG", str(cfg.dn_lag)), ("WC_GLU", str(cfg.glu))]
-                        + ([("WL_Y_RM", "1")] if lc.y_rm else [])
-                        + ([("WX_X_FMT_DIFFERS", "1")] if cfg.x_dt != cfg.h_dt else []),
-                        runtime_args=cp_rt,
-                        config=ccfg,
+                if lc.ks:
+                    kernels.append(
+                        ttnn.KernelDescriptor(
+                            kernel_source=kpath("kl_compute.cpp"),
+                            core_ranges=crs(gr),
+                            compile_time_args=[KSL, KTD, DC, DB, cnt_base, G, GC, lc.ks_fl, lc.ks_tl, tab_base + 64],
+                            named_compile_time_args=[("expert_activation", 0)],
+                            defines=act_defs
+                            + [("DN_LAG", str(cfg.dn_lag)), ("KS_XALT", "1")]
+                            + ([("KS_OVL", "1")] if lc.ks_ovl else [])
+                            + ([("KS_XDIRECT", str(lc.ks_nxr))] if lc.ks_xdirect else [])
+                            + ([("KS_FOLD_FIRST", "1")] if lc.ks_ff else [])
+                            + ([("KS_FOLD_LAST", "1")] if lc.ks_fz else [])
+                            + ([("WL_Y_RM", "1")] if lc.y_rm else []),
+                            runtime_args=cp_rt,
+                            config=ccfg,
+                        )
                     )
-                )
+                else:
+                    kernels.append(
+                        ttnn.KernelDescriptor(
+                            kernel_source=kpath("wl_compute.cpp"),
+                            core_ranges=crs(gr),
+                            compile_time_args=[KT, BK, KTD, DC, DB, NX, cfg.LOOK, cnt_base, G, GC, tab_base + 64],
+                            named_compile_time_args=[("expert_activation", 0)],
+                            defines=act_defs
+                            + [("DN_LAG", str(cfg.dn_lag)), ("WC_GLU", str(cfg.glu))]
+                            + ([("WL_Y_RM", "1")] if lc.y_rm else [])
+                            + ([("WX_X_FMT_DIFFERS", "1")] if cfg.x_dt != cfg.h_dt else [])
+                            + ([("WX_H_PACK_DIFFERS", "1")] if cfg.h_dt != cfg.out_dt else []),
+                            runtime_args=cp_rt,
+                            config=ccfg,
+                        )
+                    )
             mux_idx = len(kernels)
             mrt = ttnn.RuntimeArgs()
             for m in muxes:
@@ -432,17 +596,25 @@ def build_lane(
                 ttnn.cb_descriptor_from_sharded_tensor(2, hring),
                 ttnn.cb_descriptor_from_sharded_tensor(3, wd_ring),
                 cb(7, ttnn.bfloat16, cfg.XRM * BK, cset),
-                cb(8, cfg.x_dt, XST * BK, cset),
+                cb(8, ttnn.uint32, lc.ks_nxr, cset, page=32)
+                if lc.ks and lc.ks_xdirect
+                else cb(8, cfg.x_dt, XST * BK, cset),
                 cb(16, cfg.h_dt, 2, cset),
-                ttnn.cb_descriptor_from_sharded_tensor(17, ysh) if lc.y_rm else cb(17, cfg.out_dt, 2 * DC, cset),
+                ttnn.cb_descriptor_from_sharded_tensor(17, ysh) if lc.y_rm else cb(17, cfg.out_dt, lc.ydep * DC, cset),
             ]
+            if lc.ks:
+                cbs += [
+                    ttnn.cb_descriptor_from_sharded_tensor(4, land),
+                    ttnn.cb_descriptor_from_sharded_tensor(18, pring),
+                ]
+            # (0: the chains' down-forwarder progress, BRISC -> NCRISC)
             sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(6)]
             p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
             if not lc.nofab:
                 for g, gr in enumerate(groups):
                     cyc, link = ln[g]
                     for d in range(2):
-                        m = mux_core(g, d)
+                        m = mux_core(g, d, G)
                         p.kernels[mux_idx].runtime_args[m[0]][m[1]].extend(
                             mcfg.kernel_runtime_args(
                                 source_node_id=node(mesh, me_rc),
@@ -453,7 +625,7 @@ def build_lane(
                             )
                         )
                     for d in range(2):
-                        m = mux_core(g, d)
+                        m = mux_core(g, d, G)
                         mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
                         master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
                         term_sem = None
@@ -475,7 +647,9 @@ def build_lane(
                             p.kernels[rd_idx[g]].runtime_args[x][y].extend(args)
             mc = ttnn.MeshCoordinate(r, c)
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
-    io = [x_t, idx_t, counts_t, ws_t, tab_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1]
+    io = [x_t, idx_t, counts_t, ws_t, tab_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1, harrw]
+    io += [hcred, ha2a_w, ha2a_f]
     io += [idx_l1, table_l1, warr, cred, freew, arr_stage] + ([hcnt, xin, xinf] if lc.bcast else [])
+    io += [xcred, lflags, lcred, kscr, land, pring] if lc.ks else []
     io += ([ysh, dest_t] if lc.y_rm else []) + [st, out_t]
     return mpd, io, st

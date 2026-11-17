@@ -22,6 +22,19 @@
 //     (own slices)
 #include "api/dataflow/dataflow_api.h"
 
+// WL_HCRED: h ring slot credits. Every core's NCRISC writes the count of h rows its compute has consumed (and so its
+// forwarders passed) into word Y of each core of its column and word HALF of its partner (16 B words at WL_HCRED); a
+// write of row q into core X's ring slot (an h tile to its leader, a chain start to the partner, a hop) waits for X's
+// count >= q - NS + 1. Without it the ring depth NS alone had to cover the cores' skew (PCC dips in the K split).
+#ifdef WL_HCRED
+#define HCRED_OK(word, q) \
+    ((q) < NS || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_HCRED + (word) * 16) >= (q) - NS + 1)
+#else
+#define HCRED_OK(word, q) true
+#endif
+#ifdef WL_HA2A
+#include "wl_ha2a.hpp"
+#endif
 constexpr uint32_t xrm_cb = tt::CBIndex::c_7;
 constexpr uint32_t h_cb = tt::CBIndex::c_16;
 constexpr uint32_t y_cb = tt::CBIndex::c_17;
@@ -64,13 +77,137 @@ constexpr uint32_t X_COLS = 1, H_COLS = 1;
 // one multicast in its NoC's queue.
 FORCE_INLINE void mcast_with_flag(
     uint32_t src, uint64_t dst, uint32_t bytes, uint32_t n, uint32_t flag_src, uint64_t flag_dst) {
+#if defined(WL_MC_FLUSHPKT)
+    // (diagnostic) one packet at a time, each flushed (sent) before the command buffer is programmed again: no
+    // multicast still waiting for its path reservation can be overwritten by the next packet or the flag
+    for (uint32_t o = 0; o < bytes; o += NOC_MAX_BURST_SIZE) {
+        const uint32_t m = bytes - o < NOC_MAX_BURST_SIZE ? bytes - o : NOC_MAX_BURST_SIZE;
+        noc_async_write_multicast_loopback_src(src + o, dst + o, m, n, false);
+        noc_async_writes_flushed();
+    }
+    noc_async_write_multicast_loopback_src(flag_src, flag_dst, 4, n, false);
+    noc_async_writes_flushed();
+#else
 #ifdef WL_MCAST_LINKED
     noc_async_write_multicast_loopback_src(src, dst, bytes, n, true);
 #else
     noc_async_write_multicast_loopback_src(src, dst, bytes, n, false);
 #endif
     noc_async_write_multicast_loopback_src(flag_src, flag_dst, 4, n, false);
+#endif
 }
+
+// WL_UCAST (the default, LCfg.ucast): no NoC multicasts at all. A group "multicast" is a unicast fan-out to the
+// group's 2 x HALF cores (columns cx[0], cx[1], rows ny0 .. ny0 + HALF - 1), this core included: the payload to every
+// core, then the 4-byte flag to every core, all from the write command buffer on this RISC's NoC, so each core's flag
+// lands after its own payload (one path, one virtual channel). A payload whose source is its own destination (the h
+// leader's row part) is not copied onto itself (core me = c * HALF + y), only flagged.
+template <uint32_t HALF>
+FORCE_INLINE void group_write_with_flag(
+    const uint32_t* cx,
+    uint32_t ny0,
+    uint32_t me,
+    uint32_t src,
+    uint32_t dst,
+    uint32_t bytes,
+    uint32_t flag_src,
+    uint32_t flag_dst) {
+    for (uint32_t c = 0; c < 2; ++c) {
+        for (uint32_t y = 0; y < HALF; ++y) {
+            if (src != dst || c * HALF + y != me) {
+                noc_async_write(src, get_noc_addr(cx[c], ny0 + y, dst), bytes);
+            }
+        }
+    }
+    for (uint32_t c = 0; c < 2; ++c) {
+        for (uint32_t y = 0; y < HALF; ++y) {
+            noc_async_write(flag_src, get_noc_addr(cx[c], ny0 + y, flag_dst), 4);
+        }
+    }
+}
+
+// WL_XCHAIN: x blocks travel the group as a unicast chain instead of a fan-out (each link carries a block once, as a
+// multicast would). Block s of origin core (c, r) (r = (l / 2) % HALF for the expert's block l): the origin copies it
+// into its own ring slot and sends it to its partner (1 - c, r) (column 0's BRISC on NOC0 east, column 1's NCRISC on
+// NOC1 west); then in both columns every core of a row >= r passes it one row down from its BRISC on NOC0, and every
+// core of a row <= r one row up from its NCRISC on NOC1, from the ring slot, flag word included (value s + 1, stable
+// until the slot's credit). A core credits block s to its producer only once both its forwarders are past s (the
+// BRISC's count in semaphore 0), so no slot is overwritten while it is read for a hop.
+FORCE_INLINE void x_hop(
+    uint32_t src, uint32_t x, uint32_t y, uint32_t dst, uint32_t bytes, uint32_t flag_src, uint32_t flag_dst) {
+    noc_async_write(src, get_noc_addr(x, y, dst), bytes);
+    noc_async_write(flag_src, get_noc_addr(x, y, flag_dst), 4);  // (same buffer, NoC and VC: after the payload)
+}
+
+// WL_XP / WL_HP (chains): an x block / h row part (T tiles of tb bytes) moves in P pieces, split on tile boundaries,
+// piece p followed by its own flag at word p of the slot's 16 B (same command buffer, NoC and VC: after its piece),
+// sent from word p of the 16 B flag source (a NoC write keeps the address's offset within 16 B: an origin's scratch
+// holds its value in all four words). A forwarder passes piece p on as soon as its flag has landed (cut-through), from
+// its own flag word p (value s + 1, stable until the slot's credit); a slot is complete once word P - 1 has landed
+// (every piece of a slot comes from one sender, in order).
+#ifndef WL_XP
+#define WL_XP 1
+#endif
+#ifndef WL_HP
+#define WL_HP 1
+#endif
+constexpr uint32_t XP = WL_XP, HP = WL_HP, XL = (XP - 1) * 4, HL = (HP - 1) * 4;
+template <uint32_t T, uint32_t P>
+FORCE_INLINE void piece_data(uint32_t p, uint32_t src, uint32_t x, uint32_t y, uint32_t dst, uint32_t tb) {
+    const uint32_t o = (p * T / P) * tb, n = ((p + 1) * T / P) * tb - o;
+    noc_async_write(src + o, get_noc_addr(x, y, dst + o), n);
+}
+FORCE_INLINE void piece_flag(uint32_t p, uint32_t x, uint32_t y, uint32_t flag_src, uint32_t flag_dst) {
+    noc_async_write(flag_src + 4 * p, get_noc_addr(x, y, flag_dst + 4 * p), 4);
+}
+template <uint32_t T, uint32_t P>
+FORCE_INLINE void piece_hop(
+    uint32_t p, uint32_t src, uint32_t x, uint32_t y, uint32_t dst, uint32_t tb, uint32_t flag_src, uint32_t flag_dst) {
+    piece_data<T, P>(p, src, x, y, dst, tb);
+    piece_flag(p, x, y, flag_src, flag_dst);
+}
+
+// WL_FASYNC: the forwarders issue a piece's payload and its flag only when this RISC's write command buffer is free
+// (it stays busy while a packet's data goes out, ~55 B a cycle): else back to the loop, resuming at the same step, so
+// the RISC does not stall in the issue for the NoC's injection time (busy forwarding was ~650K / 430K cycles of the
+// BRISC / NCRISC at M 586)
+FORCE_INLINE bool wr_ready() {
+#ifdef WL_FASYNC
+    return noc_cmd_buf_ready(noc_index, write_cmd_buf);
+#else
+    return true;
+#endif
+}
+
+// Chain routing in a column of HALF rows for a block / h part whose origin is row r: does row y pass it one row down
+// (BRISC, NOC0) / one row up (NCRISC, NOC1)? Plain chain: from r both ways. WL_JUMP: the origin also sends to row
+// r' = (r + HALF / 2) % HALF of both columns, so each column has two entries lo < hi = lo + HALF / 2: lo feeds the rows
+// above it and the next ND below it, hi the rows below it and the rest between (at most HALF / 2 - 1 hops, not HALF -
+// 1).
+template <uint32_t HALF>
+FORCE_INLINE bool chain_down(uint32_t y, uint32_t r) {
+#ifdef WL_JUMP
+    static_assert(HALF % 2 == 0);
+    constexpr uint32_t J2 = HALF / 2, ND = J2 / 2;
+    const uint32_t lo = r < J2 ? r : r - J2, hi = lo + J2;
+    return (y >= hi && y + 1 < HALF) || (y >= lo && y < lo + ND);
+#else
+    return r <= y && y + 1 < HALF;
+#endif
+}
+template <uint32_t HALF>
+FORCE_INLINE bool chain_up(uint32_t y, uint32_t r) {
+#ifdef WL_JUMP
+    constexpr uint32_t J2 = HALF / 2, ND = J2 / 2;
+    const uint32_t lo = r < J2 ? r : r - J2, hi = lo + J2;
+    return (y <= lo && y > 0) || (y >= lo + ND + 2 && y <= hi);
+#else
+    return r >= y && y > 0;
+#endif
+}
+
+// WL_NOEX (diagnostic, wrong results): no x / h exchange at all - every ring is handed to compute as if it had
+// arrived; the gather, tilize, h tiles and weight streaming still run
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
@@ -144,6 +281,78 @@ void kernel_main() {
         total_rows += rows_of(n);
     }
 
+#ifdef WL_KS
+    // ---- Q1 (K split): this core's x rows q of the stream with q % 2 == C (its partner gathers the others), whole:
+    // 32 token rows x KSL K-tiles from K tile KSL Y (768 B reads) into CB 7. Pipelined: the token ids of KS_IB rows of
+    // an expert come in one read (idx scratch, KS_IB x 128 B), and the data reads of as many own rows as CB 7 has room
+    // for are issued before one wait (state 0 idle, 1 ids requested, 2 rows requested)
+    constexpr uint32_t KSL = WL_KS, KS_IB = 8;
+    auto KW = [](uint32_t a) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a); };
+    [[maybe_unused]] const uint32_t L0 = 0;
+    const uint32_t koff = KSL * Y * 64;
+    uint32_t g_n = 0, g_r = 0, g_q = 0, g_state = 0, g_pend = 0, ib_n = 0xFFFFFFFF, ib_r0 = 0, ib_cnt = 0;
+    // (CB 7 is a ring of WL_KS_XRM rows: a batch's rows after the first wrap round it)
+    const uint32_t xrm_base = get_write_ptr(xrm_cb);
+    constexpr uint32_t XRM_ROW = KSL * 2048, XRM_SIZE = WL_KS_XRM * XRM_ROW;
+    auto own_row = [&]() {  // advance (g_n, g_r, g_q) to this core's next row (or past the last expert)
+        while (true) {
+            while (g_n < nexp_g && g_r >= rows_of(g_n)) {
+                ++g_n;
+                g_r = 0;
+            }
+            if (g_n >= nexp_g || g_q % 2 == C) {
+                return;
+            }
+            ++g_r;
+            ++g_q;
+        }
+    };
+    auto q1 = [&]() -> bool {
+        if (g_state != 0) {
+            if (!ncrisc_noc_reads_flushed(noc_index)) {
+                return false;
+            }
+            if (g_state == 2) {
+                cb_push_back(xrm_cb, KSL * g_pend);
+                g_pend = 0;
+            }
+            g_state = 0;
+            return true;
+        }
+        own_row();
+        if (g_n >= nexp_g) {
+            return false;
+        }
+        if (ib_n != g_n || g_r < ib_r0 ||
+            g_r >= ib_r0 + ib_cnt) {  // ids of this row not in the buffer: read KS_IB rows'
+            ib_n = g_n;
+            ib_r0 = g_r;
+            ib_cnt = rows_of(g_n) - g_r < KS_IB ? rows_of(g_n) - g_r : KS_IB;
+            noc_async_read(is.get_noc_addr(order[g_n] & 0xFFFF) + g_r * 32 * 4, idx_l1, ib_cnt * 32 * 4);
+            g_state = 1;
+            return true;
+        }
+        // data reads of own rows while their ids are buffered and CB 7 has room
+        while (g_n < nexp_g && ib_n == g_n && g_r >= ib_r0 && g_r < ib_r0 + ib_cnt &&
+               cb_pages_reservable_at_back(xrm_cb, KSL * (g_pend + 1))) {
+            cb_reserve_back(xrm_cb, KSL * (g_pend + 1));
+            volatile tt_l1_ptr uint32_t* idx = KW(idx_l1 + (g_r - ib_r0) * 32 * 4);
+            uint32_t l1 = xrm_base + (get_write_ptr(xrm_cb) - xrm_base + g_pend * XRM_ROW) % XRM_SIZE;
+            for (uint32_t i = 0; i < 32; ++i, l1 += KSL * 64) {
+                noc_async_read(xs.get_noc_addr(idx[i]) + koff, l1, KSL * 64);
+            }
+            ++g_pend;
+            ++g_r;
+            ++g_q;
+            own_row();
+        }
+        if (g_pend) {
+            g_state = 2;
+            return true;
+        }
+        return false;
+    };
+#else
     // ---- Q1: a state machine (0 idle, 1 ids requested, 2 rows requested): the barriers would stall the x
     // multicasts this RISC also sends (column 1) - they went out 11-27K cycles late
     const uint32_t L0 = 2 * (J % HALF) + J / HALF;
@@ -196,6 +405,7 @@ void kernel_main() {
         return true;
 #endif
     };
+#endif
     // ---- QO: own experts' weights from DRAM into their slots (chunk reads with transaction ids 1..D, in order)
     volatile tt_l1_ptr uint32_t* warr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(warr_addr);
     volatile tt_l1_ptr uint32_t* freew = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freew_addr);
@@ -285,6 +495,31 @@ void kernel_main() {
         if (sent >= total_rows || !cb_pages_available_at_front(h_cb, 1)) {
             return false;
         }
+#ifdef WL_HA2A
+        {  // (own tile -> own ring slot + its flag; the forwarders take it on: see wl_ha2a.hpp)
+            invalidate_l1_cache();
+            if (sent >= NS && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_HCRED + Y * 16) < sent - NS + 1) {
+                return false;
+            }
+            const uint32_t s = sent % NS, t = C * HALF + Y;
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_HA2A + 16) = sent + 1;
+            noc_async_write(get_read_ptr(h_cb), get_noc_addr(cxs[C], ny0 + Y, hring + (s * KTD + t) * htile), htile);
+            noc_async_write(WL_HA2A + 16, get_noc_addr(cxs[C], ny0 + Y, WL_HA2A_F + (s * KTD + t) * 16), 4);
+            noc_async_writes_flushed();
+            cb_pop_front(h_cb, 1);
+            ++sent;
+            return true;
+        }
+#endif
+#ifdef WL_NOEX
+        cb_pop_front(h_cb, 1);
+        ++sent;
+        return true;
+#endif
+        invalidate_l1_cache();
+        if (!HCRED_OK(sent % HALF, sent)) {  // (the row's leader has consumed row sent - NS)
+            return false;
+        }
 #ifdef WL_BCAST
         // core GC - 1's ring slot sent % NS holds row sent - NS until that row's multicast has been read out of it:
         // its last flag landing here shows the whole row has left that core
@@ -300,14 +535,28 @@ void kernel_main() {
 #endif
         noc_async_write(
             get_read_ptr(h_cb), get_noc_addr(lx, ly, hring + ((sent % NS) * KTD + C * HALF + Y) * htile), htile);
+#if defined(WL_HARRW) && !defined(WL_BCAST)
+        // (this core's (sent / HALF + 1)-th tile to that leader, counted in its word Y there: the word after the tile
+        // through the same command buffer, so it lands after it; flushed, no barrier: the source only must be free.
+        // The arrival semaphore, unused, holds the value.)
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(harr) = sent / HALF + 1;
+        noc_async_write(harr, get_noc_addr(lx, ly, WL_HARRW + Y * 16), 4);
+        noc_async_writes_flushed();
+        (void)arr;
+#else
         noc_async_write_barrier();
         noc_semaphore_inc(get_noc_addr(lx, ly, arr), 1);
+#endif
         cb_pop_front(h_cb, 1);
         ++sent;
         return true;
     };
     // ---- Q3: leader multicasts (rows q with q % 10 == Y)
+#if defined(WL_NOEX) || defined(WL_HA2A)
+    uint32_t led = 0, lq = total_rows;
+#else
     uint32_t led = 0, lq = Y;
+#endif
     const uint32_t scr_addr = get_semaphore(SEM_SCR);
     volatile tt_l1_ptr uint32_t* scr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr_addr);
     constexpr uint32_t ngroup = (gx1 - gx0 + 1) * (gy1 - gy0 + 1);
@@ -316,11 +565,42 @@ void kernel_main() {
             return false;
         }
         invalidate_l1_cache();
+#ifdef WL_HARRW
+        for (uint32_t y = 0; y < HALF; ++y) {
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_HARRW + y * 16) < led + 1) {
+                return false;
+            }
+        }
+#else
         if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(harr) < HALF * (led + 1)) {
             return false;
         }
+#endif
         const uint32_t part = hring + ((lq % NS) * KTD + C * HALF) * htile;
-        *scr = lq + 1;
+        for (uint32_t p = 0; p < 4; ++p) {  // (all four words: see piece_hop)
+            scr[p] = lq + 1;
+        }
+#if defined(WL_HCHAIN)
+        // (chain start: the part is in place here; flag it locally, send it to the partner column, and the forwarders
+        // take it on from both)
+        if (!HCRED_OK(HALF, lq)) {  // (the partner has consumed row lq - NS)
+            return false;
+        }
+        const uint32_t hf = hflags + ((lq % NS) * 2 + C) * 16;
+        for (uint32_t p = 0; p < HP; ++p) {
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hf)[p] = lq + 1;
+        }
+        for (uint32_t p = 0; p < HP; ++p) {
+            piece_hop<HALF, HP>(p, part, cxs[1 - C], ny0 + Y, part, htile, scr_addr, hf);
+#ifdef WL_JUMP
+            for (uint32_t c2 = 0; c2 < 2; ++c2) {
+                piece_hop<HALF, HP>(p, part, cxs[c2], ny0 + (Y + HALF / 2) % HALF, part, htile, scr_addr, hf);
+            }
+#endif
+        }
+#elif defined(WL_UCAST)
+        group_write_with_flag<HALF>(cxs, ny0, J, part, part, HALF * htile, scr_addr, hflags + ((lq % NS) * 2 + C) * 16);
+#else
         mcast_with_flag(
             part,
             get_noc_multicast_addr(gx0, gy0, gx1, gy1, part),
@@ -328,6 +608,7 @@ void kernel_main() {
             ngroup,
             scr_addr,
             get_noc_multicast_addr(gx0, gy0, gx1, gy1, hflags + ((lq % NS) * 2 + C) * 16));
+#endif
         noc_async_writes_flushed();
         ++led;
         lq += HALF;
@@ -446,6 +727,9 @@ void kernel_main() {
         }
         const uint32_t xs = s % NX;
         *xscr = s + 1;
+#ifdef WL_UCAST
+        group_write_with_flag<HALF>(cxs, ny0, J, src, xring + xs * BK * xtile, BK * xtile, xscr_addr, xflags + xs * 16);
+#else
         mcast_with_flag(
             src,
             get_noc_multicast_addr(gx0, gy0, gx1, gy1, xring + xs * BK * xtile),
@@ -453,6 +737,7 @@ void kernel_main() {
             ngroup,
             xscr_addr,
             get_noc_multicast_addr(gx0, gy0, gx1, gy1, xflags + xs * 16));
+#endif
         noc_async_writes_flushed();
         if (own) {
             cb_pop_front(xst_cb, BK);
@@ -461,6 +746,134 @@ void kernel_main() {
         return true;
     };
     auto x_done = [&]() { return J != 0 || xs_s >= total_x; };
+#elif defined(WL_KS)
+    // ---- QX (K split, column 0; column 1's on the NCRISC, NOC1 west): this core's tilized x row s (CB 8, KSL tiles)
+    // -> ring slot s % NX of itself and its partner (payload + flag word C of the slot's 2, from one command buffer),
+    // once both consumed row s - NX (XCRED words 0 / 1, kept by the NCRISCs)
+    uint32_t kx_q = C;
+    auto x_done = [&]() { return C != 0 || kx_q >= total_rows; };
+    auto qx = [&]() -> bool {
+#ifdef WL_KS_XDIRECT
+        // (compute tilized row kx_q straight into its ring slot here and signalled it with one CB 8 page: send it to
+        // the partner, then flag it here - after the send has left, so compute cannot reuse the slot under it)
+        if (C != 0 || kx_q >= total_rows || !cb_pages_available_at_front(xst_cb, 1)) {
+            return false;
+        }
+        if (kx_q >= NX) {
+            invalidate_l1_cache();
+            if (*KW(WL_KS_XCRED + 16) < kx_q - NX + 1) {
+                return false;
+            }
+        }
+        {
+            const uint32_t a = xring + (kx_q % NX) * KSL * xtile, fl = xflags + ((kx_q % NX) * 2 + C) * 16;
+            *KW(WL_KS_SCR) = kx_q + 1;
+            noc_async_write(a, get_noc_addr(cxs[1 - C], ny0 + Y, a), KSL * xtile);
+            noc_async_write(WL_KS_SCR, get_noc_addr(cxs[1 - C], ny0 + Y, fl), 4);
+            noc_async_writes_flushed();
+            *KW(fl) = kx_q + 1;
+            cb_pop_front(xst_cb, 1);
+            kx_q += 2;
+            return true;
+        }
+#endif
+        if (C != 0 || kx_q >= total_rows || !cb_pages_available_at_front(xst_cb, KSL)) {
+            return false;
+        }
+        if (kx_q >= NX) {
+            invalidate_l1_cache();
+            if (*KW(WL_KS_XCRED) < kx_q - NX + 1 || *KW(WL_KS_XCRED + 16) < kx_q - NX + 1) {
+                return false;
+            }
+        }
+        const uint32_t dst = xring + (kx_q % NX) * KSL * xtile, fl = xflags + ((kx_q % NX) * 2 + C) * 16;
+        *KW(WL_KS_SCR) = kx_q + 1;
+        const uint32_t src = get_read_ptr(xst_cb);
+        noc_async_write(src, get_noc_addr(cxs[C], ny0 + Y, dst), KSL * xtile);
+        noc_async_write(WL_KS_SCR, get_noc_addr(cxs[C], ny0 + Y, fl), 4);
+        noc_async_write(src, get_noc_addr(cxs[1 - C], ny0 + Y, dst), KSL * xtile);
+        noc_async_write(WL_KS_SCR, get_noc_addr(cxs[1 - C], ny0 + Y, fl), 4);
+        noc_async_writes_flushed();
+        cb_pop_front(xst_cb, KSL);
+        kx_q += 2;
+        return true;
+    };
+    // ---- QP (K split): row q's 20 partial tiles (CB 18; local pair p = partial tiles 2 p, 2 p + 1) to their owners
+    // (C, o) for o >= Y (rows below on NOC0, itself): landing slot q % WL_KS_D at contributor Y + flag q + 1, once o
+    // consumed row q - D (LCRED word o). PAVAIL (scratch word 4) = q + 1 tells the NCRISC (rows above); the row is
+    // popped once its PDONE (word 5) reaches q + 1. QC: this core's landing credits (LCRED word Y, kept by the
+    // NCRISC) to the rows below.
+    constexpr uint32_t p_cb = tt::CBIndex::c_18, KS_NW = 2 * HALF, KS_LT = 2 * HALF;
+#if defined(WL_KS_PALL)
+    // (WL_KS_PALL: this BRISC sends every contribution, the rows above too - NOC0 wraps round the column - so the
+    // NCRISC's loop stays with the weights; no PDONE handshake)
+    constexpr uint32_t KP_N = HALF;
+#elif defined(WL_KS_BAL)
+    // (WL_KS_BAL: by distance, not direction - this BRISC to itself and the next WL_KS_BAL - 1 rows down, wrapping
+    // round the column's NoC ring on NOC0; the NCRISC to the rest, up on NOC1: every core the same share)
+    constexpr uint32_t KP_N = WL_KS_BAL;
+#else
+    const uint32_t KP_N = HALF - Y;  // (itself and the rows below)
+#endif
+    uint32_t kp_q = 0, kp_d = 0, kc_sent = 0;
+    bool kp_av = false;
+    auto qp = [&]() -> bool {
+        if (kp_q >= total_rows) {
+            return false;
+        }
+        if (!kp_av) {
+            if (!cb_pages_available_at_front(p_cb, KS_NW)) {
+                return false;
+            }
+            kp_av = true;
+            *KW(WL_KS_SCR + 16) = kp_q + 1;      // this RISC's partial flag source
+            *KW(WL_KS_SCR + 4 * 16) = kp_q + 1;  // PAVAIL
+        }
+        bool did = false;
+        const uint32_t src = get_read_ptr(p_cb), sl = kp_q % WL_KS_D;
+        while (kp_d < KP_N) {
+            const uint32_t kp_o = (Y + kp_d) % HALF;
+            if (kp_q >= WL_KS_D) {
+                invalidate_l1_cache();
+                if (*KW(WL_KS_LCRED + kp_o * 16) < kp_q - WL_KS_D + 1) {
+                    return did;
+                }
+            }
+            const uint32_t oy = ny0 + kp_o;
+            noc_async_write(
+                src + 2 * kp_o * WL_KS_PTILE,
+                get_noc_addr(cxs[C], oy, WL_KS_LAND + (sl * KS_LT + 2 * Y) * WL_KS_PTILE),
+                2 * WL_KS_PTILE);
+            noc_async_write(WL_KS_SCR + 16, get_noc_addr(cxs[C], oy, WL_KS_LFLAGS + (sl * HALF + Y) * 16), 4);
+            ++kp_d;
+            did = true;
+        }
+        invalidate_l1_cache();
+#ifndef WL_KS_PALL
+        if (*KW(WL_KS_SCR + 5 * 16) < kp_q + 1) {  // PDONE
+            return did;
+        }
+#endif
+        noc_async_writes_flushed();
+        cb_pop_front(p_cb, KS_NW);
+        ++kp_q;
+        kp_d = 0;
+        kp_av = false;
+        return true;
+    };
+    auto qc = [&]() -> bool {
+        invalidate_l1_cache();
+        const uint32_t c = *KW(WL_KS_LCRED + Y * 16);
+        if (c <= kc_sent) {
+            return false;
+        }
+        for (uint32_t o = Y + 1; o < HALF; ++o) {
+            noc_inline_dw_write(get_noc_addr(cxs[C], ny0 + o, WL_KS_LCRED + Y * 16), c);
+        }
+        kc_sent = c;
+        return true;
+    };
+    auto ks_done = [&]() { return kp_q >= total_rows && kc_sent >= total_rows; };
 #else
     auto x_done = [&]() { return !((X_COLS >> C) & 1) || a_n >= nexp_g; };
     auto qx = [&]() -> bool {
@@ -476,13 +889,30 @@ void kernel_main() {
             return false;
         }
         const uint32_t s = a_base + a_l;
+#ifdef WL_NOEX
+        cb_pop_front(xst_cb, BK);
+        a_l += GC;
+        return true;
+#endif
 #ifdef WG_TRACE0
         volatile tt_l1_ptr uint32_t* tst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(10));
         if (s >= WG_TRACE0 && s < WG_TRACE0 + 40 && tst[320 + s - WG_TRACE0] == 0) {
             tst[320 + s - WG_TRACE0] = wall();
         }
 #endif
+#ifdef WL_XHOP
+        // (hop credits: only this core's own slot and its partner's, the two places this block is written from here)
         if (s >= NX) {
+            invalidate_l1_cache();
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xprog + 3 * 16) < s - NX + 1 ||
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xprog + 2 * 16) < s - NX + 1) {
+                return false;
+            }
+        }
+        if (false) {
+#else
+        if (s >= NX) {
+#endif
             invalidate_l1_cache();
             for (uint32_t c = 0; c < GC; ++c) {
                 if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xprog + c * 16) < s - NX + 1) {
@@ -499,21 +929,41 @@ void kernel_main() {
 #if WG_XORDER
         if (s >= WG_XORDER) {  // in stream order (see the NCRISC)
             invalidate_l1_cache();
-            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xflags + ((s - WG_XORDER) % NX) * 16) <
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xflags + ((s - WG_XORDER) % NX) * 16 + XL) <
                 s - WG_XORDER + 1) {
                 return false;
             }
         }
 #endif
         const uint32_t xs = s % NX;
-        *xscr = s + 1;
-        mcast_with_flag(
-            get_read_ptr(xst_cb),
-            get_noc_multicast_addr(gx0, gy0, gx1, gy1, xring + xs * BK * xtile),
-            BK * xtile,
-            ngroup,
-            xscr_addr,
-            get_noc_multicast_addr(gx0, gy0, gx1, gy1, xflags + xs * 16));
+        for (uint32_t p = 0; p < 4; ++p) {  // (all four words: see piece_hop)
+            xscr[p] = s + 1;
+        }
+#if defined(WL_XCHAIN)
+        {
+            const uint32_t src = get_read_ptr(xst_cb), dst = xring + xs * BK * xtile, xf = xflags + xs * 16;
+            for (uint32_t p = 0; p < XP; ++p) {  // (piece by piece to every entry, so they all start forwarding early)
+                piece_hop<BK, XP>(p, src, cxs[C], ny0 + Y, dst, xtile, xscr_addr, xf);
+                piece_hop<BK, XP>(p, src, cxs[1 - C], ny0 + Y, dst, xtile, xscr_addr, xf);
+#ifdef WL_JUMP
+                for (uint32_t c2 = 0; c2 < 2; ++c2) {
+                    piece_hop<BK, XP>(p, src, cxs[c2], ny0 + (Y + HALF / 2) % HALF, dst, xtile, xscr_addr, xf);
+                }
+#endif
+            }
+        }
+#elif defined(WL_UCAST)
+        group_write_with_flag<HALF>(
+            cxs, ny0, J, get_read_ptr(xst_cb), xring + xs * BK * xtile, BK * xtile, xscr_addr, xflags + xs * 16);
+#else
+    mcast_with_flag(
+        get_read_ptr(xst_cb),
+        get_noc_multicast_addr(gx0, gy0, gx1, gy1, xring + xs * BK * xtile),
+        BK * xtile,
+        ngroup,
+        xscr_addr,
+        get_noc_multicast_addr(gx0, gy0, gx1, gy1, xflags + xs * 16));
+#endif
         noc_async_writes_flushed();
         cb_pop_front(xst_cb, BK);
 #ifdef WG_TRACE0
@@ -525,34 +975,225 @@ void kernel_main() {
         return true;
     };
 #endif
-    uint32_t tq[5] = {0, 0, 0, 0, 0}, tmx[5] = {0, 0, 0, 0, 0};
+#if !defined(WL_KS) || defined(WL_BCAST)
+    auto qp = []() -> bool { return false; };
+    auto qc = []() -> bool { return false; };
+    auto ks_done = []() { return true; };
+#endif
+    // chain forwarders' progress for the NCRISC (slot credits / h rows to compute): semaphore 0, x blocks walked in
+    // the low 16 bits, h row parts in the high 16. Each forwarder call passes on every piece that has landed, up to the
+    // end of its block / part. WL_FNB: no blocking flush after a hop; what the forwarders walked is published once this
+    // RISC's writes have all left, checked without blocking (else: flushed after each block / part, then published).
+    volatile tt_l1_ptr uint32_t* fwd_word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+    ASSERT(total_rows * BPR < 65536);
+#ifdef WL_XCHAIN
+    const uint32_t total_xd = total_rows * BPR;
+    uint32_t fd_s = Y + 1 < HALF ? 0 : total_xd, fd_n = 0, fd_base = 0, fd_p = 0;
+    bool fd_f = false;  // (piece fd_p's payload issued, its flag not yet)
+#else
+    const uint32_t total_xd = 0, fd_s = 0;
+#endif
+#ifdef WL_HCHAIN
+    const uint32_t total_hd = 2 * total_rows;
+    uint32_t hd_i = Y + 1 < HALF ? 0 : total_hd, hd_p = 0;
+    bool hd_f = false;
+#else
+    const uint32_t total_hd = 0, hd_i = 0;
+#endif
+    uint32_t fd_pub = fd_s, hd_pub = hd_i;
+    auto pub = [&]() { *fwd_word = (hd_pub << 16) | fd_pub; };
+    pub();
+    [[maybe_unused]] auto fnb = [&]() -> bool {
+#ifdef WL_FNB
+        if ((fd_pub != fd_s || hd_pub != hd_i) && ncrisc_noc_nonposted_writes_sent(noc_index)) {
+            fd_pub = fd_s;
+            hd_pub = hd_i;
+            pub();
+            return true;
+        }
+#endif
+        return false;
+    };
+#ifdef WL_XCHAIN
+    // ---- QD: x chain, one row down (NOC0): blocks in stream order, those whose origin row is <= this row
+    auto qd = [&]() -> bool {
+        bool did = fnb();
+        if (fd_s >= total_xd) {
+            return did;
+        }
+        while (fd_s >= fd_base + rows_of(fd_n) * BPR) {
+            fd_base += rows_of(fd_n) * BPR;
+            ++fd_n;
+        }
+        if (chain_down<HALF>(Y, ((fd_s - fd_base) / 2) % HALF)) {
+            const uint32_t xs = fd_s % NX, xf = xflags + xs * 16;
+            do {
+                if (!fd_f) {
+                    invalidate_l1_cache();
+                    if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xf + 4 * fd_p) < fd_s + 1) {
+                        return did;
+                    }
+#ifdef WL_XHOP
+                    if (fd_p == 0 && fd_s >= NX &&
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xprog + 0 * 16) <
+                            fd_s - NX + 1) {  // (the row below has freed the slot)
+                        return did;
+                    }
+#endif
+                    if (!wr_ready()) {
+                        return did;
+                    }
+                    piece_data<BK, XP>(
+                        fd_p, xring + xs * BK * xtile, cxs[C], ny0 + Y + 1, xring + xs * BK * xtile, xtile);
+                    fd_f = did = true;
+                }
+                if (!wr_ready()) {
+                    return did;
+                }
+                piece_flag(fd_p, cxs[C], ny0 + Y + 1, xf, xf);
+                fd_f = false;
+            } while (++fd_p < XP);
+            fd_p = 0;
+#ifndef WL_FNB
+            noc_async_writes_flushed();
+#endif
+        }
+        ++fd_s;
+#ifndef WL_FNB
+        fd_pub = fd_s;
+        pub();
+#endif
+        return true;
+    };
+#else
+    auto qd = []() -> bool { return false; };
+#endif
+#ifdef WL_HCHAIN
+    // ---- QHD: h chain, one row down (NOC0): row parts i = 2 q + c in order, those whose leader row q % HALF is <=
+    // this row; the walked count in semaphore 0's high half (the NCRISC gives row q to compute only once both
+    // forwarders passed it)
+    auto qhd = [&]() -> bool {
+        bool did = fnb();
+        if (hd_i >= total_hd) {
+            return did;
+        }
+        const uint32_t q = hd_i / 2, c = hd_i % 2;
+        if (chain_down<HALF>(Y, q % HALF)) {
+            const uint32_t f = hflags + ((q % NS) * 2 + c) * 16;
+            const uint32_t part = hring + ((q % NS) * KTD + c * HALF) * htile;
+            do {
+                if (!hd_f) {
+                    invalidate_l1_cache();
+                    if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(f + 4 * hd_p) < q + 1 || !wr_ready() ||
+                        !HCRED_OK(Y + 1, q)) {
+                        return did;
+                    }
+                    piece_data<HALF, HP>(hd_p, part, cxs[C], ny0 + Y + 1, part, htile);
+                    hd_f = did = true;
+                }
+                if (!wr_ready()) {
+                    return did;
+                }
+                piece_flag(hd_p, cxs[C], ny0 + Y + 1, f, f);
+                hd_f = false;
+            } while (++hd_p < HP);
+            hd_p = 0;
+#ifndef WL_FNB
+            noc_async_writes_flushed();
+#endif
+        }
+        ++hd_i;
+#ifndef WL_FNB
+        hd_pub = hd_i;
+        pub();
+#endif
+        return true;
+    };
+#else
+    auto qhd = []() -> bool { return false; };
+#endif
+#ifdef WL_HA2A
+    HFwd hb;
+    hfwd_init<HALF>(hb, true, C, Y);
+    auto qhb = [&]() -> bool {
+        const bool d = hfwd_step<NS, KTD>(hb, total_rows, cxs, ny0, hring, htile);
+        if (d) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_HA2A) = hb.q;  // (rows forwarded: for the NCRISC's QH)
+        }
+        return d;
+    };
+#define HB_DONE (hb.q >= total_rows)
+#else
+    auto qhb = []() -> bool { return false; };
+#define HB_DONE true
+#endif
+    uint32_t tq[5] = {0, 0, 0, 0, 0}, tmx[5] = {0, 0, 0, 0, 0}, t_fwd = 0, t_own = 0;  // (forwarders, own weights)
+    uint32_t tbz[5] = {0, 0, 0, 0, 0};  // (busy time of qx / q1 / q2 / q3 / q4: calls that did something)
+    uint32_t t_ks = 0;                  // (busy time of the K split's partial sends and landing credits)
+    const uint32_t t_start = wall();
     while (true) {
+        // WL_FPRIO: the chain forwarders between every other queue (a hop waiting a whole turn of the loop costs every
+        // core further down the chain)
+#ifdef WL_FPRIO
+#define WL_FW() (fdw |= qd() | qhd())
+#else
+#define WL_FW()
+#endif
+        const uint32_t tf0 = wall();
+        bool fdw = qd() | qhd() | qhb();
+        const uint32_t tf1 = wall();
         const bool o = qo();
+        if (fdw) {  // (busy time only: a call that did something)
+            t_fwd += tf1 - tf0;
+        }
+        if (o) {
+            t_own += wall() - tf1;
+        }
+        WL_FW();
         uint32_t t0 = wall();
         const bool x = qx();
+        WL_FW();
         uint32_t t1 = wall();
         const bool a = q1();
+        WL_FW();
         uint32_t t2 = wall();
         const bool b = q2();
+        WL_FW();
         uint32_t t3 = wall();
         const bool c = q3();
+        WL_FW();
         uint32_t t4 = wall();
         const bool d = q4() | qm();
         uint32_t t5 = wall();
+        const bool kp = qp() | qc();
+        if (kp) {
+            t_ks += wall() - t5;
+        }
         tq[0] += t1 - t0;
         tq[1] += t2 - t1;
         tq[2] += t3 - t2;
         tq[3] += t4 - t3;
         tq[4] += t5 - t4;
         const uint32_t dd[5] = {t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4};
+        const bool bz[5] = {x, a, b, c, d};
         for (uint32_t i = 0; i < 5; ++i) {
             tmx[i] = dd[i] > tmx[i] ? dd[i] : tmx[i];
+            tbz[i] += bz[i] ? dd[i] : 0;
         }
         const bool mch = (H_COLS >> C) & 1;
-        if (!o && !x && !a && !b && !c && !d && g_n >= nexp_g && sent >= total_rows && (!mch || lq >= total_rows) &&
-            drained >= total_rows && x_done() && g_state == 0 && qo_done() && (!hm || hq >= total_rows)) {
+        if (!fdw && fd_s >= total_xd && fd_pub >= total_xd && hd_i >= total_hd && hd_pub >= total_hd && !o && !x &&
+            !a && !b && !c && !d && !kp && ks_done() && HB_DONE && g_n >= nexp_g && sent >= total_rows &&
+            (!mch || lq >= total_rows) && drained >= total_rows && x_done() && g_state == 0 && qo_done() &&
+            (!hm || hq >= total_rows)) {
             break;
         }
+#ifdef WL_IDLE
+        if (!fdw && !o && !x && !a && !b && !c && !d && !kp) {  // (an idle turn: back off on a register, not L1)
+            const uint32_t w0 = wall();
+            while (wall() - w0 < WL_IDLE) {
+            }
+        }
+#endif
     }
     noc_async_atomic_barrier();
     volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(10));
@@ -563,4 +1204,12 @@ void kernel_main() {
 #ifndef WL_NOC_SPLIT
     st[56] = n_own;
 #endif
+    st[60] = t_fwd;
+    st[61] = t_own;
+    for (uint32_t i = 0; i < 5; ++i) {
+        st[490 + i] = tbz[i];  // (not 62..: the compute's end stamp is 63)
+    }
+    st[495] = wall() - t_start;
+    st[496] = t_start;
+    st[497] = t_ks;
 }
