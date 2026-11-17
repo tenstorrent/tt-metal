@@ -183,30 +183,36 @@ def test_ttrun_abort_ends():
     assert r.wall_s < 30, f"tt-run stalled on the aborting rank: {r}"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "openpmix/prrte#2815: a killed peer + the survivors' MPI_Abort (what the DistributedContext does on "
-        "MPI_ERR_PROC_FAILED) INTERMITTENTLY leaves prterun up with every rank gone on the PRRTE this image ships "
-        "(3.0.8 in Open MPI 5.0.7rc2). Fixed in open-mpi/ompi#14590 (main) / #14713 (v6.0.x), not backported to "
-        "5.0.x. Drop this marker when the launcher carries the fix. https://github.com/openpmix/prrte/issues/2815"
-    ),
-    strict=False,
-)
 def test_ttrun_dead_peer_survivors_abort():
-    """The exact shape prrte#2815 hits: a rank is SIGKILLed, the survivors get MPI_ERR_PROC_FAILED from the
-    barrier and call MPI_Abort — the way tt-metal's DistributedContext reacts to a dead peer (see the comment at
-    the MPI_Abort in sanity_mpi_probe.cpp). tt-run should end the whole job non-zero with nothing left; because
-    PRRTE 3.0.8 cannot guarantee that (prterun can hang), the row is a non-strict xfail: a pass or a fail both
-    leave CI green until the launcher is fixed."""
+    """A rank is SIGKILLed, the survivors get MPI_ERR_PROC_FAILED from the barrier and call MPI_Abort — the way
+    tt-metal's DistributedContext reacts to a dead peer (see the comment at the MPI_Abort in sanity_mpi_probe.cpp).
+    tt-run must end the whole job non-zero with nothing left; its failsafe (LaunchedJob.wait) ends a launcher that
+    the prrte#2815 race leaves hung, so this should normally pass.
+
+    The race is intermittent and the failsafe is not guaranteed on PRRTE 3.0.8, so the row tolerates ONLY that
+    one shape — the job hanging past the harness deadline after the survivors reached MPI_Abort — and fails on
+    anything else, so a genuine teardown regression is never masked by a blanket xfail."""
     r = run_case(
         "ttrun_dead_peer_abort",
         {**NP, "PROBE_SCENARIO": "victim_sigkill", "PROBE_SURVIVOR_ACTION": "abort"},
         DEADLINE_END,
         cmd=ttrun_mpi_cmd(),
     )
-    ended(r)
-    nonzero(r)
-    clean(r)  # intermittent on PRRTE 3.0.8 (prrte#2815): prterun can stay up with the ranks gone
+    try:
+        ended(r)
+        nonzero(r)
+        clean(r)
+    except AssertionError:
+        # The fingerprint of openpmix/prrte#2815: the survivors reached MPI_Abort and the job then hung past the
+        # deadline (prterun stayed up with the ranks gone, and the failsafe could not reap it). Tolerate only
+        # that; re-raise anything else — a wrong exit code, a leftover with no hang — as a real failure.
+        if r.timed_out and "survivor MPI_Abort" in r.log:
+            pytest.xfail(
+                "openpmix/prrte#2815: prterun left up after a killed peer + the survivors' MPI_Abort "
+                "(PRRTE 3.0.8 / Open MPI 5.0.7rc2; fixed in open-mpi/ompi#14590 / #14713, not in 5.0.x). "
+                "https://github.com/openpmix/prrte/issues/2815"
+            )
+        raise
 
 
 def test_ttrun_shm_layer_still_ends():

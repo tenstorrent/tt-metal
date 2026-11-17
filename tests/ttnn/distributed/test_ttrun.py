@@ -1502,3 +1502,57 @@ class TestJobOwnership:
         finally:
             for p in (dead, live):
                 shutil.rmtree(p, ignore_errors=True)
+
+    def test_wait_ends_a_launcher_that_outlives_its_ranks(self, monkeypatch):
+        import subprocess
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # The prrte#2815 failsafe: wait() must end a launcher that is still up after its ranks are all gone,
+        # instead of blocking forever. Simulate it with a real process that never exits on its own (the hung
+        # launcher) and a _survivors that reports a rank once (so the watchdog arms) and then nothing.
+        monkeypatch.setattr(m, "LAUNCHER_HANG_GRACE_S", 1.0)
+        job = m.LaunchedJob(["sleep", "600"], Path("."))
+        job.proc = subprocess.Popen(["sleep", "600"], start_new_session=True)
+        try:
+            job.sid, job.pgid = os.getsid(job.proc.pid), os.getpgid(job.proc.pid)
+            calls = {"n": 0}
+
+            def fake_survivors():
+                calls["n"] += 1
+                return [10_000_000] if calls["n"] == 1 else []  # ranks seen once, then all gone
+
+            monkeypatch.setattr(job, "_survivors", fake_survivors)
+
+            t0 = time.time()
+            rc = job.wait()
+            elapsed = time.time() - t0
+
+            assert job.proc.poll() is not None, "the hung launcher was not ended"
+            assert rc != 0, "a job whose launcher had to be force-ended must not report success"
+            assert elapsed < 15, f"the watchdog did not fire promptly ({elapsed:.0f}s)"
+        finally:
+            if job.proc.poll() is None:
+                job.proc.kill()
+                job.proc.wait()
+
+    def test_wait_does_not_end_a_launcher_whose_ranks_are_still_running(self, monkeypatch):
+        import subprocess
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # The watchdog must NOT fire while ranks are alive: a launcher that exits normally shortly after its
+        # ranks keep showing up is returned, not killed.
+        monkeypatch.setattr(m, "LAUNCHER_HANG_GRACE_S", 1.0)
+        job = m.LaunchedJob(["true"], Path("."))
+        job.proc = subprocess.Popen(["sleep", "3"], start_new_session=True)  # exits on its own
+        try:
+            monkeypatch.setattr(job, "_survivors", lambda: [10_000_000])  # ranks always present
+            rc = job.wait()
+            assert rc == 0, "a launcher that exits cleanly must return its own code, not be force-ended"
+        finally:
+            if job.proc.poll() is None:
+                job.proc.kill()
+                job.proc.wait()
