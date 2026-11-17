@@ -9,7 +9,9 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <type_traits>
@@ -54,11 +56,26 @@ public:
     };
     static_assert(std::is_trivially_copyable_v<Record>);
 
+    // What each rank says about its launch, gathered before the records. num_records is filled in by exchange().
+    struct LaunchHeader {
+        uint32_t num_records = 0;
+        uint32_t status = 0;
+        uint32_t fabric_config = 0;
+        uint32_t launch_generation = 0;
+    };
+    static_assert(std::is_trivially_copyable_v<LaunchHeader>);
+    // Sees every rank's header, in rank order, before the records gather; throws to stop the launch.
+    using HeaderCheck = std::function<void(const std::vector<LaunchHeader>&)>;
+
     // Start of each fabric launch.
     void begin_launch();
     void publish(FabricNodeId node, chan_id_t eth_chan, RouterChannelLayout layout);
-    // Collective over `context`: every rank calls it once per launch, after its devices have published.
-    void exchange(const tt::tt_metal::distributed::multihost::DistributedContext& context);
+    // Collective over `context`: every rank calls it once per launch, after its devices have published. A rank with a
+    // nonzero status sends no records; `check` decides what that means.
+    void exchange(
+        const tt::tt_metal::distributed::multihost::DistributedContext& context,
+        LaunchHeader header,
+        const HeaderCheck& check);
     const RouterChannelLayout& get(FabricNodeId node, chan_id_t eth_chan) const;
     // nullptr when no layout was published for the router.
     const RouterChannelLayout* find(FabricNodeId node, chan_id_t eth_chan) const;
@@ -66,8 +83,9 @@ public:
     // The two halves of the exchange, without the collectives.
     static std::vector<Record> pack(const Map& layouts);
     // `gathered` is every rank's records, each padded to the same stride; num_records is each rank's real count.
-    // Routers already in `layouts` keep what they have.
-    static void merge(Map& layouts, const std::vector<Record>& gathered, const std::vector<uint32_t>& num_records);
+    // `layouts` holds this rank's own routers; a router built by two ranks is fatal.
+    static void merge(
+        Map& layouts, const std::vector<Record>& gathered, const std::vector<uint32_t>& num_records, size_t this_rank);
 
 private:
     mutable std::mutex mutex_;

@@ -44,12 +44,13 @@ private:
     void compile_and_configure_fabric();
 
     // Mock only: compile the fabric program on every device, without programming or syncing routers.
-    // No-op when debug tooling disables erisc IRAM.
+    // Builds but does not compile when debug tooling disables erisc IRAM.
     void compile_fabric_only();
 
     // Every fabric launch builds through here: start the launch's build session, then build each device's fabric
     // program into fabric_programs_. on_compiled(i) runs on the calling thread, in device order, once device i is done.
-    void build_fabric_programs(bool parallel, const std::function<void(size_t)>& on_compiled = {});
+    // With compile false it stops after the layout exchange.
+    void build_fabric_programs(bool parallel, const std::function<void(size_t)>& on_compiled = {}, bool compile = true);
 
     // task(i) for every device, on worker threads when parallel; on_done(i) as in build_fabric_programs().
     void for_each_device(

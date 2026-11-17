@@ -15,6 +15,10 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include "distributed_context.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <atomic>
+#include <string>
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -62,9 +66,43 @@ std::optional<FabricDeviceBuild> build_fabric_routers(
     return build;
 }
 
-void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl) {
+void check_fabric_launch_headers(const std::vector<RouterChannelLayouts::LaunchHeader>& headers) {
+    std::string failed, launches;
+    bool mismatch = false;
+    for (size_t rank = 0; rank < headers.size(); ++rank) {
+        const auto& header = headers[rank];
+        if (header.status != 0) {
+            failed += fmt::format("{}{}", failed.empty() ? "" : ", ", rank);
+        }
+        mismatch |= header.fabric_config != headers[0].fabric_config ||
+                    header.launch_generation != headers[0].launch_generation;
+        launches += fmt::format(" rank {}: config {} launch {};", rank, header.fabric_config, header.launch_generation);
+    }
+    TT_FATAL(failed.empty(), "fabric launch: rank {} failed the phase-1 build (see its log)", failed);
+    TT_FATAL(!mismatch, "fabric launch: ranks disagree on the fabric config or launch:{}", launches);
+}
+
+void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl, std::exception_ptr phase1_error) {
+    static std::atomic<uint32_t> launch_generation = 0;
+    const RouterChannelLayouts::LaunchHeader header{
+        .status = phase1_error ? 1u : 0u,
+        .fabric_config = static_cast<uint32_t>(env_impl.get_fabric_config()),
+        .launch_generation = ++launch_generation};
+    const auto& context = env_impl.full_world_distributed_context();
+    if (phase1_error) {
+        if (*context.size() == 1) {
+            std::rethrow_exception(phase1_error);
+        }
+        try {
+            std::rethrow_exception(phase1_error);
+        } catch (const std::exception& e) {
+            log_error(tt::LogFabric, "fabric launch: phase-1 build failed: {}", e.what());
+        } catch (...) {
+            log_error(tt::LogFabric, "fabric launch: phase-1 build failed with an unknown exception");
+        }
+    }
     env_impl.get_control_plane().get_fabric_context().get_builder_context().exchange_router_channel_layouts(
-        env_impl.full_world_distributed_context());
+        context, header, check_fabric_launch_headers);
 }
 
 std::unique_ptr<tt::tt_metal::Program> compile_fabric_program(

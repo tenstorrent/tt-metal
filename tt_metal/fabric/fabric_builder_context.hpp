@@ -177,8 +177,11 @@ public:
     void publish_router_channel_layout(FabricNodeId node, chan_id_t eth_chan, RouterChannelLayout layout) {
         router_channel_layouts_.publish(node, eth_chan, std::move(layout));
     }
-    void exchange_router_channel_layouts(const tt::tt_metal::distributed::multihost::DistributedContext& context) {
-        router_channel_layouts_.exchange(context);
+    void exchange_router_channel_layouts(
+        const tt::tt_metal::distributed::multihost::DistributedContext& context,
+        RouterChannelLayouts::LaunchHeader header,
+        const RouterChannelLayouts::HeaderCheck& check) {
+        router_channel_layouts_.exchange(context, header, check);
     }
     const RouterChannelLayout& get_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
         return router_channel_layouts_.get(node, eth_chan);

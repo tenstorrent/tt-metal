@@ -4,11 +4,14 @@
 
 #pragma once
 
+#include <exception>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "device.hpp"
 #include "tt_metal.hpp"
+#include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 
 namespace tt::tt_metal {
 class DispatchCoreConfig;
@@ -40,8 +43,14 @@ std::optional<FabricDeviceBuild> build_fabric_routers(
     const FabricBuildSession& session);
 
 // Between the phases, once per launch on every rank (a collective across hosts): gives each router the channel layout
-// of the router across its link.
-void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl);
+// of the router across its link. Also the launch's gate: pass phase 1's exception here rather than throwing it, and
+// every rank fails together. A single rank just rethrows it.
+// Follow-ups: gate where every rank runs (fabric-disabled or managed-mode ranks skip this), a phase-2 gate, error text.
+void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl, std::exception_ptr phase1_error);
+
+// The gate's rule, run on every rank's headers: any failed rank, or ranks on different fabric configs or launches, is
+// fatal on every rank.
+void check_fabric_launch_headers(const std::vector<RouterChannelLayouts::LaunchHeader>& headers);
 
 // Phase 2: create the router kernels and compile the device's fabric program.
 std::unique_ptr<tt::tt_metal::Program> compile_fabric_program(
