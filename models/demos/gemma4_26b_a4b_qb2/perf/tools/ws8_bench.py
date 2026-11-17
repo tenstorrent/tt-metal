@@ -16,7 +16,6 @@ import ttnn
 from models.demos.gemma4_26b_a4b_qb2.tt import generator as generator_module
 from models.demos.gemma4_26b_a4b_qb2.tt.generator import Gemma4Generator
 from models.demos.gemma4_26b_a4b_qb2.tt.generator_vllm import Gemma4ForCausalLM
-from models.demos.utils.trace_region_sizes import build_trace_device_params
 
 ap = argparse.ArgumentParser()
 ap.add_argument("out")
@@ -29,9 +28,9 @@ args = ap.parse_args()
 suffixes = [int(s) for s in args.suffixes.split(",")]
 
 ttnn.set_fabric_config(**Gemma4ForCausalLM.model_capabilities["fabric_config"])
-mesh = ttnn.open_mesh_device(
-    ttnn.MeshShape(1, 4), l1_small_size=16384, **build_trace_device_params("gemma4-26b-a4b-qb2-decoder")
-)
+# The serving mesh parameters (as decode_timing.py / vLLM): no L1_SMALL region. With l1_small_size the full model's
+# persistent L1 (WS5 boundary buffers) sits 16 KB lower and long prefills clash with it.
+mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=1_000_000_000)
 results = {"prefix": args.prefix}
 try:
     total = args.prefix + max(suffixes) + 64
