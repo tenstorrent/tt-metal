@@ -156,6 +156,7 @@ MatmulReduceScatterPrefillParams resolve_params(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<uint32_t>& l1_headroom,
+    bool use_column_major_ccl,
     bool output_preallocated) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
@@ -224,6 +225,7 @@ MatmulReduceScatterPrefillParams resolve_params(
         .tW = static_cast<uint32_t>(weight.mesh_buffer().aligned_page_size()),
         .scatter_dim = canonical_dim,
         .budget = l1_bank - headroom,
+        .column_major_ccl = use_column_major_ccl,
     };
     // L1 tensors fill from the top; the CBs (staging included) and an L1 output share the free L1 below them
     const uint64_t output = output_preallocated ? 0 : l1_output_bytes_per_bank(mesh, out_mem, Mt, Nt, G);
@@ -263,7 +265,8 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
-    const std::optional<uint32_t>& l1_headroom) {
+    const std::optional<uint32_t>& l1_headroom,
+    bool use_column_major_ccl) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
     const MatmulReduceScatterPrefillParams params = resolve_params(
         input_tensor,
@@ -275,6 +278,7 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         compute_kernel_config,
         memory_config,
         l1_headroom,
+        use_column_major_ccl,
         output_tensor.has_value());
     record_last_plan(params);
     return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, params);

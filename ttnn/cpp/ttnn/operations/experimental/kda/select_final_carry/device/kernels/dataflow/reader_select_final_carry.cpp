@@ -10,14 +10,13 @@
 constexpr uint32_t tiles_cb = get_compile_time_arg_val(0);
 constexpr uint32_t mode_cb = get_compile_time_arg_val(1);
 constexpr uint32_t packet_pages = get_compile_time_arg_val(2);
-constexpr uint32_t sp_rank = get_compile_time_arg_val(3);
-constexpr uint32_t sp_size = get_compile_time_arg_val(4);
-constexpr uint32_t local_rows = get_compile_time_arg_val(5);
-constexpr bool has_actual_end = get_compile_time_arg_val(6);
+constexpr uint32_t sp_size = get_compile_time_arg_val(3);
+constexpr uint32_t local_rows = get_compile_time_arg_val(4);
+constexpr bool has_actual_end = get_compile_time_arg_val(5);
 // The local final is the last of `tail_groups` group states stored per head, each `head_tiles` tiles.
-constexpr uint32_t tail_groups = get_compile_time_arg_val(7);
-constexpr uint32_t head_tiles = get_compile_time_arg_val(8);
-constexpr auto tail_args = TensorAccessorArgs<9>();
+constexpr uint32_t tail_groups = get_compile_time_arg_val(6);
+constexpr uint32_t head_tiles = get_compile_time_arg_val(7);
+constexpr auto tail_args = TensorAccessorArgs<8>();
 constexpr auto prefix_args = TensorAccessorArgs<tail_args.next_compile_time_args_offset()>();
 constexpr auto start_args = TensorAccessorArgs<prefix_args.next_compile_time_args_offset()>();
 constexpr auto end_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
@@ -56,6 +55,7 @@ void kernel_main() {
     size_t arg = 0;
     const uint32_t send_begin = get_arg_val<uint32_t>(arg++);
     const uint32_t send_end = get_arg_val<uint32_t>(arg++);
+    const uint32_t sp_rank = get_arg_val<uint32_t>(arg++);
 
     cb_reserve_back(mode_cb, 1);
     auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(mode_cb));
