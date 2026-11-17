@@ -52,8 +52,6 @@ We validate the top 8 rows x 16 cols = 128 defined lanes against the standard
 tiled MatmulGolden, using an M/K-invariant, N-varying stimulus so the check is
 robust to the K pairing/split the op performs internally while still exercising a
 real per-column dot product (distinct V columns), not just a constant fill.
-
-The functional assertion covers only this derivable region.
 """
 
 import torch

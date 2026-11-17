@@ -54,9 +54,6 @@
 // masking as every other FPU matmul in this suite. Only the DEFINED output rows
 // (the first face-row band the op writes for a [1,32] tile) are validated -- the
 // remaining DEST rows are left undefined by the op and must not be asserted on.
-//
-// The functional test validates only the derivable top eight rows of face 0;
-// the remaining DEST layout is outside its asserted region.
 
 #include <cstdint>
 
