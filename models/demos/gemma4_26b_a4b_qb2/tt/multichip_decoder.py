@@ -2385,8 +2385,12 @@ class MultichipDecoder(OptimizedDecoder):
         if self.moe_b1 is not None:
             # WS4: RouterTopk.op_packed row + the batch-1 moe_decode programs (routed experts only, every bank busy)
             packed = self.layer.moe.router.decode_packed(normalized)
-            expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
             moe = self.moe_b1
+            if moe.merged is not None:
+                # WS5 merged MoE: the expert pre-norm gamma is folded into the expert gate|up weights
+                expert_input = ttnn.typecast(normalized, ttnn.bfloat16)
+            else:
+                expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
             routed = moe.op(expert_input, packed, moe.w_gu, moe.w_down)
         else:
             routes = self.layer.moe.router(residual, normalized=normalized)
