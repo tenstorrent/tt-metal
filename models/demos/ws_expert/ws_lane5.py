@@ -47,6 +47,7 @@ class L5Cfg:
     # h by the group hub's multicast: 1 (l5h_reader.cpp / l5h_hub.cpp) NOC0 only for the hub's multicasts; 2
     # (l5h_writer.cpp / l5h_reader.cpp WL5_HMC2) NOC0 also for the transfers that stay inside the group's rectangle
     hmc: int = 0
+    mux_noc: int = -1  # the mux kernels' NoC: -1 NOC1 with hmc, else NOC0; 0 / 1 force it (diagnostics)
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -337,7 +338,11 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                     defines=FAB_DEFS,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0,
-                        noc=ttnn.NOC.RISCV_1_default if l5.hmc else ttnn.NOC.RISCV_0_default,
+                        noc=(
+                            ttnn.NOC.RISCV_1_default
+                            if (l5.mux_noc == 1 or (l5.mux_noc < 0 and l5.hmc))
+                            else ttnn.NOC.RISCV_0_default
+                        ),
                     ),
                     opt_level=fabric_mux.KernelBuildOptLevel.O3,
                 )
