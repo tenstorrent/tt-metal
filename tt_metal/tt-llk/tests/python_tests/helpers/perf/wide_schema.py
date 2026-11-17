@@ -159,6 +159,8 @@ DB_SCHEMA = [
     Column("r_dimm", "int64", True, "configuration"),
     Column("read_transposed", "bool", True, "configuration"),
     Column("reduce_block_ct_dim", "int64", True, "configuration"),
+    Column("reduce_pool", "string", True, "configuration"),
+    Column("reduce_pool_type", "string", True, "configuration"),
     Column("reinit_mode", "int64", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
     Column("relu_type", "string", True, "configuration"),
