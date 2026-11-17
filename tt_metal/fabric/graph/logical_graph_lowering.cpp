@@ -67,7 +67,6 @@ private:
         for (auto& router : g_.routers) {
             const auto& p = router.port;
             if (p.capability == EdgeCapability::INTERDOMAIN) {
-                router.capabilities = Capabilities{.rt_lookup = true, .dynamic_connect = true};
                 continue;  // its peer is bound at connect
             }
             std::optional<RouterIndex> match;

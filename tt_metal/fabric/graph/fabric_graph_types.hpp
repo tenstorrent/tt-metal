@@ -51,17 +51,10 @@ struct PerimeterPort {
 using RouterIndex = uint32_t;
 using ChannelIndex = uint32_t;
 
-// inter-domain router features
-struct Capabilities {
-    bool rt_lookup = false;        // looks the workload FNID up in a routing table
-    bool dynamic_connect = false;  // peer bound at runtime
-};
-
 // One router per port.
 struct LogicalRouter {
     std::string id;
     Port port;
-    Capabilities capabilities;
     std::optional<RouterIndex> peer;  // router at the other end of the link
     std::vector<ChannelIndex> channels;
 };
@@ -73,7 +66,6 @@ struct LogicalChannel {
     uint32_t vc = 0;
     ChannelKind kind = ChannelKind::Sender;
     bool injection = false;
-    bool host_rdma = false;             // injection sender fed by the host request service core
     std::optional<PortDirection> from;  // forwarding sender: where its traffic came in
 };
 

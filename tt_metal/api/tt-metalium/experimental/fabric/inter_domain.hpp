@@ -41,6 +41,7 @@ struct InterDomainMetadata {
     uint32_t vc2_receiver_channel_addr = 0;
     uint32_t vc2_receiver_channel_slots = 0;
     uint32_t max_packet_size_bytes = 0;
+    uint32_t layout_fingerprint = 0;  // the router L1 layout connect/disconnect write across the link; must match
     // completions are not wired up yet
     uint32_t completion_region_base = 0;
     uint32_t assigned_domain_credit_slot = 0;

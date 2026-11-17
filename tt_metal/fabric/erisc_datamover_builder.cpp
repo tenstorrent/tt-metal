@@ -153,7 +153,10 @@ bool is_fabric_two_erisc_enabled(const FabricContext& fabric_context) {
     bool force_disable_2_erisc = fabric_context.get_rtoptions().get_disable_fabric_2_erisc_mode() ||
                                  fabric_context.get_rtoptions().get_fabric_inter_domain();
     if (force_disable_2_erisc) {
-        log_debug(tt::LogFabric, "Disabling fabric 2-ERISC mode due to force disable");
+        log_debug(
+            tt::LogFabric,
+            "Disabling fabric 2-ERISC mode fabric-wide: {}",
+            fabric_context.get_rtoptions().get_fabric_inter_domain() ? "inter-domain fabric" : "force disable");
         return false;
     }
 
@@ -860,7 +863,12 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // disable a channel this router genuinely uses.
     const bool express_routing_enabled =
         fabric_context.get_control_plane().express_routing_enabled(local_fabric_node_id.mesh_id);
-    if (channel_trimming_overrides.has_value() && !express_routing_enabled) {
+    // Skipped too where VC2 forwards (inter-domain): the capture doesn't see VC2 forwarding, so it would turn it off.
+    const bool vc2_forwards = fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards;
+    if (channel_trimming_overrides.has_value() && vc2_forwards) {
+        log_warning(tt::LogFabric, "Channel trimming overrides ignored: VC2 forwards (inter-domain fabric)");
+    }
+    if (channel_trimming_overrides.has_value() && !express_routing_enabled && !vc2_forwards) {
         apply_channel_trimming_overrides(channel_trimming_overrides.value());
     }
 
@@ -1028,7 +1036,8 @@ MasterRouterCandidate FabricEriscDatamoverBuilder::describe_master_router_candid
 
 FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_compile_time_args(
     uint32_t risc_id) const {
-    TT_ASSERT(this->local_fabric_node_id != this->peer_fabric_node_id);
+    // a perimeter router stands in for its unbound peer with its own node
+    TT_ASSERT(inter_domain_ || this->local_fabric_node_id != this->peer_fabric_node_id);
 
     // Tie break policy for selecting the handshake master:
     // 1. If both nodes are on the same mesh, compare chip_ids

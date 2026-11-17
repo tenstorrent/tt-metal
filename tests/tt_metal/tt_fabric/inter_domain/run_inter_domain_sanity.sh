@@ -11,7 +11,7 @@ MGD=${3:-tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textp
 [[ $MGD = /* ]] || MGD=$TT_METAL_HOME/$MGD
 DIR=${OUT:-$(mktemp -d)}
 mkdir -p "$DIR"
-rm -f "$DIR"/d*.meta "$DIR"/d*.[0-9]*.*
+rm -f "$DIR"/d[12].meta "$DIR"/d[12].[0-9]*.*
 BIN=$TT_METAL_HOME/build/test/tt_metal/tt_fabric/test_inter_domain
 export TT_METAL_FABRIC_GRAPH_BUILDER=1 TT_METAL_FABRIC_INTER_DOMAIN=1 TT_INTER_DOMAIN_DIR=$DIR TT_MESH_GRAPH_DESC_PATH=$MGD
 

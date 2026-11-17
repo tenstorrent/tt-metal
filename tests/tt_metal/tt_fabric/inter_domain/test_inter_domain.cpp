@@ -96,7 +96,7 @@ std::string to_text(const Side& s) {
     for (const auto& p : s.ports) {
         o << "port " << p.asic << " " << p.chan << " " << p.peer_asic << " " << p.peer_chan << " " << p.md.domain_id
           << " " << p.md.vc2_receiver_channel_addr << " " << p.md.vc2_receiver_channel_slots << " "
-          << p.md.max_packet_size_bytes << "\n";
+          << p.md.max_packet_size_bytes << " " << p.md.layout_fingerprint << "\n";
     }
     for (const auto& [asic, r] : s.rx) {
         o << "rx " << asic << " " << r.x << " " << r.y << " " << r.addr << " " << r.mesh << " " << r.chip << "\n";
@@ -112,7 +112,7 @@ Side from_text(const fs::path& path) {
         if (kind == "port") {
             PortInfo p;
             in >> p.asic >> p.chan >> p.peer_asic >> p.peer_chan >> p.md.domain_id >> p.md.vc2_receiver_channel_addr >>
-                p.md.vc2_receiver_channel_slots >> p.md.max_packet_size_bytes;
+                p.md.vc2_receiver_channel_slots >> p.md.max_packet_size_bytes >> p.md.layout_fingerprint;
             s.ports.push_back(p);
         } else {
             uint64_t asic = 0;
@@ -135,6 +135,7 @@ TEST(InterDomain, Sanity) {
     if (!domain || !peer_domain || dir_env == nullptr) {
         GTEST_SKIP() << "needs a peer process: see run_inter_domain_sanity.sh";
     }
+    ASSERT_TRUE(*domain < 256 && *peer_domain < 256) << "pattern() keeps a domain id in one byte";
     const fs::path dir(dir_env);
     auto mine = [&](const std::string& what) { return dir / ("d" + std::to_string(*domain) + "." + what); };
     auto theirs = [&](const std::string& what) { return dir / ("d" + std::to_string(*peer_domain) + "." + what); };

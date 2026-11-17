@@ -10,7 +10,7 @@
 // the link-facing state back to its start, DRAIN again. The host drives it through InterDomainRouterControl in L1.
 // One ERISC only (fabric_erisc_router_ct_args.hpp).
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_eth_handshake.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_link_transport.hpp"
 
 #include "router_init.hpp"
@@ -91,25 +91,26 @@ __attribute__((noinline)) bool connect() {
     bool connected = peer_matches(c);
     if (connected) {
         const auto& routing_table = l1_routing_table();
-        auto* info = init_handshake_info(handshake_addr, routing_table.my_mesh_id, routing_table.my_device_id);
-        const uint32_t local_value = reinterpret_cast<uint32_t>(&info->local_value);
-        const uint32_t scratch = reinterpret_cast<uint32_t>(&info->scratch);
-        const bool sends = c->local_domain_id < c->peer_domain_id;
-        FirmwareTicks ticks;
-        while (info->local_value != MAGIC_HANDSHAKE_VALUE) {
-            if (terminating() || command() == InterDomainCommand::ABORT) {
-                connected = false;
-                break;
-            }
-            if (sends) {
-                SenderLinkTransport::send_with_context_switch(scratch, local_value, PACKET_WORD_SIZE_BYTES);
-            }
-            ticks.tick();
-            invalidate_l1_cache();
+        const auto aborted = [] { return terminating() || command() == InterDomainCommand::ABORT; };
+        if (c->local_domain_id < c->peer_domain_id) {
+            fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                handshake_addr,
+                routing_table.my_mesh_id,
+                routing_table.my_device_id,
+                termination_signal(),
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT,
+                aborted);
+        } else {
+            fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                handshake_addr,
+                routing_table.my_mesh_id,
+                routing_table.my_device_id,
+                termination_signal(),
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT,
+                aborted);
         }
-        if (connected && !sends) {
-            SenderLinkTransport::send_with_context_switch(scratch, local_value, PACKET_WORD_SIZE_BYTES);
-        }
+        auto* info = reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_addr);
+        connected = info->local_value == MAGIC_HANDSHAKE_VALUE;
         if (connected) {
             telemetry_block()->static_info.neighbor_mesh_id = info->neighbor_mesh_id;
             telemetry_block()->static_info.neighbor_device_id = info->neighbor_device_id;

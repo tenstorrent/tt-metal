@@ -16,16 +16,21 @@ namespace handshake {
  * Fabric-specific handshake functions with termination signal support.
  * These extend the base EDM handshake with the ability to exit early
  * when the host requests immediate termination, enabling graceful
- * recovery during fabric init/teardown.
+ * recovery during fabric init/teardown. `abort` ends the wait early too (an inter-domain connect's host ABORT).
  */
 
-template <bool RISC_CPU_DATA_CACHE_ENABLED>
+struct NeverAbort {
+    constexpr bool operator()() const { return false; }
+};
+
+template <bool RISC_CPU_DATA_CACHE_ENABLED, typename Abort = NeverAbort>
 FORCE_INLINE void fabric_sender_side_handshake(
     uint32_t handshake_register_address,
     uint16_t my_mesh_id,
     uint8_t my_device_id,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
-    size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH,
+    Abort abort = {}) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
     const uint32_t local_val_addr = reinterpret_cast<uint32_t>(&handshake_info->local_value);
@@ -35,7 +40,7 @@ FORCE_INLINE void fabric_sender_side_handshake(
 #ifndef ARCH_WORMHOLE
            && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
 #endif
-    ) {
+           && !abort()) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
 
@@ -51,13 +56,14 @@ FORCE_INLINE void fabric_sender_side_handshake(
     }
 }
 
-template <bool RISC_CPU_DATA_CACHE_ENABLED>
+template <bool RISC_CPU_DATA_CACHE_ENABLED, typename Abort = NeverAbort>
 FORCE_INLINE void fabric_receiver_side_handshake(
     uint32_t handshake_register_address,
     uint16_t my_mesh_id,
     uint8_t my_device_id,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
-    size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH,
+    Abort abort = {}) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
     const uint32_t local_val_addr = reinterpret_cast<uint32_t>(&handshake_info->local_value);
@@ -67,7 +73,7 @@ FORCE_INLINE void fabric_receiver_side_handshake(
 #ifndef ARCH_WORMHOLE
            && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
 #endif
-    ) {
+           && !abort()) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
 
@@ -80,12 +86,18 @@ FORCE_INLINE void fabric_receiver_side_handshake(
         invalidate_l1_cache();
     }
 #ifndef ARCH_WORMHOLE
-    if (!tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
+    // aborted before the sender's value arrived: no reply
+    const bool replies = !abort() || handshake_info->local_value == MAGIC_HANDSHAKE_VALUE;
+    if (replies &&
+        !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
         SenderLinkTransport::send_with_context_switch(
             scratch_addr, local_val_addr, tt::tt_fabric::PACKET_WORD_SIZE_BYTES);
     }
 #else
-    SenderLinkTransport::send_with_context_switch(scratch_addr, local_val_addr, tt::tt_fabric::PACKET_WORD_SIZE_BYTES);
+    if (!abort() || handshake_info->local_value == MAGIC_HANDSHAKE_VALUE) {
+        SenderLinkTransport::send_with_context_switch(
+            scratch_addr, local_val_addr, tt::tt_fabric::PACKET_WORD_SIZE_BYTES);
+    }
 #endif
 }
 
