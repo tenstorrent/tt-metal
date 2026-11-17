@@ -978,6 +978,18 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
     }
 }
 
+// Known issue: DPRINT expands to a bare { } block, and DPRINT_DATA0 and DPRINT_DATA1 to a bare if, so today this
+// kernel doesn't compile. Disabled until that is fixed.
+TEST_F(DevicePrintOutputFixture, DISABLED_PrintInUnbracedIfElse) {
+    std::vector<std::string> messages = {
+        "if",
+        "else after DPRINT_DATA0",
+        "else after DPRINT_DATA1",
+    };
+
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_unbraced_if_else.cpp", messages);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintCallstackPcFullRaFirmware) {
     // The PC inline chain reaches the kernel_main terminal, so the unwind stops there and the
     // firmware return address is never resolved -- no continuation sentinel is emitted.
