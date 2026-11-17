@@ -86,8 +86,9 @@ inline uint32_t noc_try_write_packet_with_trid(
 }
 
 // GDDR DMA: reads go on one TX stream and writes on the other, and a stream completes its requests in issue order.
-// Issue skips the engine's ready poll, so callers keep fewer than experimental::kMaxOutstandingWrites requests in
-// flight per stream. Lengths must be multiples of 16.
+// Reads poll the engine's ready flag: its read command queue holds 4 and silently drops an issue past that. Writes
+// skip the poll, so callers keep fewer than experimental::kMaxOutstandingWrites writes in flight. Lengths must be
+// multiples of 16.
 constexpr uint8_t dma_read_stream = 0;
 constexpr uint8_t dma_write_stream = 1;
 
