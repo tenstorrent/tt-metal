@@ -1532,8 +1532,8 @@ inline void calculate_reduce_max_min_uint16() {
         }
 
         // Transpose, reduce the 4 partials of each column, transpose back and combine the two vertically
-        // adjacent faces, all in place on LREG0-3 (one recorded window; see emit_manual_col_combine).
-        manual_col_combine<clear_high_bits>();
+        // adjacent faces, all in place on LREG0-3 (see emit_manual_col_combine).
+        emit_manual_col_combine();
 
         TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_3, top_face_addr);
         TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_3, top_face_addr + ODD_COLUMNS);
@@ -1852,7 +1852,7 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
             // garbage high bits can be masked before each swap. It records the manual 3-swap replay
             // buffer at [0, 3) and the face-pair combine at [3, 10); the calculate sets the swap direction on
             // entry. That format is column-only (calculate_reduce_max_min_uint16), so no row window is recorded.
-            init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type, true /*record_combine*/>();
+            init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type, false /*record_combine*/>();
         } else {
             init_reduce_max_min<INSTRUCTION_MODE, pool_type, false>(block_ct_dim);
             // Hoisted out of perform_reduce_row_max_min: the row butterfly-stage window is recorded once here.
