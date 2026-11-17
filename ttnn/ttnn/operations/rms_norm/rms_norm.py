@@ -81,7 +81,7 @@ PROPERTIES = {
 # ---------------------------------------------------------------------------
 # 4. validate()
 # ---------------------------------------------------------------------------
-def validate(input_tensor, *, gamma=None, compute_kernel_config=None):
+def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_config=None):
     shape = list(input_tensor.shape)
     if len(shape) < 2:
         raise ValueError(f"rms_norm: input must have rank >= 2, got shape {shape}")
@@ -103,6 +103,12 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None):
     }
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((shape,), axes)
+
+    # Requested output placement must also be a supported memory_layout.
+    if memory_config is not None and memory_config.memory_layout not in SUPPORTED["memory_layout"]:
+        raise UnsupportedAxisValue(
+            f"rms_norm: output memory_layout={memory_config.memory_layout!r} not in SUPPORTED {SUPPORTED['memory_layout']}"
+        )
 
     # fp32 input requires fp32 accumulation (no intermediate bf16 downcast).
     if axes["dtype"] == ttnn.float32 and not axes["fp32_dest_acc_en"]:
@@ -126,8 +132,9 @@ def rms_norm(
     gamma: Optional[ttnn.Tensor] = None,
     epsilon: float = 1e-6,
     compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
+    memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.Tensor:
-    validate(input_tensor, gamma=gamma, compute_kernel_config=compute_kernel_config)
+    validate(input_tensor, gamma=gamma, compute_kernel_config=compute_kernel_config, memory_config=memory_config)
     if compute_kernel_config is None:
         compute_kernel_config = default_compute_kernel_config()
 
@@ -136,7 +143,7 @@ def rms_norm(
         input_tensor.dtype,
         input_tensor.layout,
         input_tensor.device(),
-        ttnn.DRAM_MEMORY_CONFIG,
+        memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
     )
 
     program_descriptor = create_program_descriptor(
