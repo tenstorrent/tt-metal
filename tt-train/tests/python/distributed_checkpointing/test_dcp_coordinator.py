@@ -14,7 +14,7 @@ import ttnn
 from dcp_oracle import tp_split_of
 
 from ttml.distributed_checkpointing._boxes import Box
-from ttml.distributed_checkpointing import _coordinator
+from ttml.distributed_checkpointing import _coordinator, _state_dict
 from ttml.distributed_checkpointing._coordinator import (
     Election,
     Group,
@@ -32,6 +32,7 @@ from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
 from ttml.distributed_checkpointing._state_dict import check_param_groups, is_structural_scalar, restore_scalars
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
+from ttml.distributed_checkpointing._train_state import this_world_rank
 
 
 def _label(placements, shape):
@@ -59,6 +60,27 @@ def _big_mesh_parts():
         PlanPart(_record(0, [(0, 0), (0, 1)]), infos),
         PlanPart(_record(1, [(0, 2), (0, 3)]), infos),
     ]
+
+
+def test_local_coords_keeps_only_this_hosts_devices_when_they_do_not_form_a_box(monkeypatch):
+    """get_local_mesh_coord_range is the bounding box of this host's devices. An L-shaped set of them spans another
+    host's device too, which a save would otherwise be elected to write and a load would hand to
+    from_local_host_shards."""
+    mine = {(0, 0), (0, 1), (1, 0)}
+
+    class View:
+        def get_local_mesh_coord_range(self):
+            return [(r, c) for r in range(2) for c in range(2)]  # the box, with (1, 1) on another host
+
+        def is_local(self, coord):
+            return tuple(coord) in mine
+
+    class Device:
+        def get_view(self):
+            return View()
+
+    monkeypatch.setattr(_state_dict, "mesh_device", lambda: Device())
+    assert _state_dict.local_coords() == [(0, 0), (0, 1), (1, 0)]
 
 
 def test_the_election_gives_every_box_one_owner_that_holds_it():
@@ -138,6 +160,44 @@ def test_multi_mesh_ranks_with_their_own_keys_and_one_shared_key():
     assert {r for r, _ in election.owners["model/stage0/w"].values()} == {0}
     assert {r for r, _ in election.owners["model/stage1/w"].values()} == {1}
     assert len(election.owners["model/norm"]) == 1, "one box, held by four (rank, coordinate) pairs"
+
+
+def test_every_ranks_names_of_a_key_reach_the_index_even_from_a_rank_that_writes_none_of_it(expect_error):
+    """A layer both ranks hold, tied to another name on one rank only: the index maps that name too, though the other
+    rank writes the layer, so the rank holding it under the extra name loads it through that name."""
+    stage0 = _info("model/stage0/w", [R, S(3)], (1, 2), (1, 1, 32, 32))
+    stage1 = _info("model/stage1/w", [R, S(3)], (1, 2), (1, 1, 32, 32))
+    norm = _info("model/norm", [R, R], (1, 2), (1, 1, 1, 64))
+
+    def parts(norm_of):
+        return [
+            PlanPart(_record(r, [(0, 0), (0, 1)], mesh_id=r, shape=(1, 2)), [stage, norm_of(r)])
+            for r, stage in ((0, stage0), (1, stage1))
+        ]
+
+    writer = merge_plan_parts(parts(lambda r: norm)).owners["model/norm"][()][0]  # names do not move the owner
+    tied = dataclasses.replace(norm, live_keys=("model/head/norm", "model/norm"))
+    election = merge_plan_parts(parts(lambda r: tied if r != writer else norm))
+    assert election.owners["model/norm"][()][0] == writer
+    assert election.live_keys["model/norm"] == ("model/head/norm", "model/norm")
+    assert Election.from_bytes(election.to_bytes()) == election
+
+    def result(rank, own_key):
+        files = [FileRecord(f"data/w{rank:03d}_m{rank}_d0-{c}.safetensors", 5120, rank, rank, (0, c)) for c in (0, 1)]
+        entries = {own_key: _entry(own_key, [_chunk(0, 0), _chunk(1, 1)])}
+        if rank == writer:
+            bias = ChunkRecord(Box((0, 0, 0, 0), (1, 1, 1, 64)), 0, 8192, 128, 9)
+            entries["model/norm"] = _entry("model/norm", [bias], (1, 1, 1, 64))
+        return _result(rank, files, entries, f"gen{rank}")
+
+    index, _ = merge_results([result(0, "model/stage0/w"), result(1, "model/stage1/w")], election, "step_0000001")
+    assert index.entries["model/norm"].live_keys == ("model/head/norm", "model/norm")
+    assert index.live_key_map()["model/head/norm"] == "model/norm"
+
+    # A name one rank uses for a key another rank holds under that very name cannot map to both.
+    clash = dataclasses.replace(norm, live_keys=("model/norm", "model/stage0/w"))
+    with expect_error(CheckpointError, r"model/stage0/w names model/norm on rank 1 but model/stage0/w on rank 0"):
+        merge_plan_parts(parts(lambda r: clash if r == 1 else norm))
 
 
 def _result(rank, files, entries, rng_text):
@@ -519,6 +579,23 @@ def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset(exp
     check_param_groups(_Opt(["shared/w", "stage1/w"]), index.scalars, strict=True)  # each rank holds part of the union
     with expect_error(CheckpointError, "holds params the checkpoint's group 0 does not"):
         check_param_groups(_Opt(["shared/w", "stage2/w"]), index.scalars, strict=True)
+
+
+def test_a_one_rank_sub_context_is_the_group_of_one_under_its_world_rank(monkeypatch):
+    """A split launch can leave a process alone in its sub context: still the group of one, but under its MPI world
+    rank, as capture_rng and restore_rng key its generators."""
+    for name, value in (
+        ("distributed_context_is_initialized", True),
+        ("distributed_context_get_size", 1),
+        ("distributed_context_get_rank", 0),
+        ("distributed_context_world_rank", 3),
+    ):
+        monkeypatch.setattr(ttnn, name, lambda value=value: value, raising=False)
+    group = _coordinator.current_group()
+    assert isinstance(group.transport, LoopbackTransport)
+    assert (group.rank, group.size, group.world_rank) == (0, 1, 3) and this_world_rank() == 3
+    monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: False, raising=False)
+    assert _coordinator.current_group().world_rank == 0 == this_world_rank()
 
 
 def test_the_group_of_one_runs_phases_directly_and_keeps_error_types(expect_error):

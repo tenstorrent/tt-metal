@@ -491,10 +491,11 @@ def mesh_device():
 
 
 def local_coords() -> list[tuple[int, ...]]:
-    """The mesh coordinates this process holds: every coordinate on a single-host mesh, this host's block of a
-    multi-host mesh."""
+    """The mesh coordinates this process holds: every coordinate on a single-host mesh, this host's devices of a
+    multi-host mesh. get_local_mesh_coord_range is their bounding box, which also holds other hosts' devices when this
+    host's do not form a box, so each coordinate is checked."""
     view = mesh_device().get_view()
-    return [tuple(int(x) for x in c) for c in view.get_local_mesh_coord_range()]
+    return [tuple(int(x) for x in c) for c in view.get_local_mesh_coord_range() if view.is_local(c)]
 
 
 def mesh_id() -> int:
