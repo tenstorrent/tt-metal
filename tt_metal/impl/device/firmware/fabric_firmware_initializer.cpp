@@ -29,6 +29,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder.hpp"
 #include "fabric/fabric_builder_context.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include <llrt/llrt.hpp>
@@ -355,11 +356,7 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     } else if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
-        fabric_programs_.clear();
-        fabric_programs_.resize(devices_.size());
-        for (size_t i = 0; i < devices_.size(); ++i) {
-            fabric_programs_[i] = compile_fabric(devices_[i]);
-        }
+        build_fabric_programs(/*parallel=*/false);
     } else {
         log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
     }
@@ -384,8 +381,9 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
     if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric teardown for mock/emule devices");
-        // Free any compiled fabric programs, but leave devices_/initialized_ as they were.
+        // Free any compiled fabric programs and the session, but leave devices_/initialized_ as they were.
         fabric_programs_.clear();
+        build_session_.reset();
         init_done.erase(key);
         return;
     }
@@ -450,6 +448,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
 void FabricFirmwareInitializer::reset_state(std::unordered_set<InitializerKey>& init_done) {
     // Release fabric programs before the devices they were compiled for are closed.
     fabric_programs_.clear();
+    // End this launch's build session; the next launch starts a new one.
+    build_session_.reset();
     devices_.clear();
     initialized_.clear();
     init_done.erase(key);
@@ -462,11 +462,60 @@ void FabricFirmwareInitializer::post_teardown() {
 
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_.test(); }
 
+FabricFirmwareInitializer::~FabricFirmwareInitializer() = default;
+
+void FabricFirmwareInitializer::for_each_device(
+    bool parallel, const std::function<void(size_t)>& task, const std::function<void(size_t)>& on_done) const {
+    if (!parallel) {
+        for (size_t i = 0; i < devices_.size(); ++i) {
+            task(i);
+            if (on_done) {
+                on_done(i);
+            }
+        }
+        return;
+    }
+    std::vector<std::shared_future<void>> events;
+    // The tasks write into this object, and detail::async futures do not join on destruction, so every exit
+    // (including a throw from get() or on_done) must wait for all of them.
+    struct WaitForTasks {
+        std::vector<std::shared_future<void>>& events;
+        ~WaitForTasks() {
+            for (const auto& event : events) {
+                event.wait();
+            }
+        }
+    } wait_for_tasks{events};
+    events.reserve(devices_.size());
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        events.emplace_back(detail::async([&task, i]() { task(i); }));
+    }
+    for (size_t i = 0; i < events.size(); ++i) {
+        events[i].get();
+        if (on_done) {
+            on_done(i);
+        }
+    }
+}
+
+void FabricFirmwareInitializer::build_fabric_programs(bool parallel, const std::function<void(size_t)>& on_compiled) {
+    // Each task writes only its own slot, and the vector is not resized while tasks are running.
+    fabric_programs_.clear();
+    fabric_programs_.resize(devices_.size());
+    // One session per launch, created on this thread before the per-device builds that read it.
+    build_session_ = tt::tt_fabric::begin_fabric_build_session(descriptor_->env_impl());
+    for_each_device(parallel, [this](size_t i) { fabric_programs_[i] = compile_fabric(devices_[i]); }, on_compiled);
+}
+
 std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) const {
+    if (!build_session_) {
+        return nullptr;
+    }
     auto fabric_program = tt::tt_fabric::create_and_compile_fabric_program(
         descriptor_->env_impl(),
         descriptor_->metal_context().get_dispatch_core_manager().get_dispatch_core_config(),
-        dev);
+        dev,
+        *build_session_);
     if (!fabric_program) {
         // Compile failure mostly comes from Nebula (TG)
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
@@ -510,44 +559,19 @@ void FabricFirmwareInitializer::configure_fabric(Device* dev, Program& fabric_pr
 }
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
-    // Each task writes only its own slot, and the vector is not resized while tasks are running.
-    fabric_programs_.clear();
-    fabric_programs_.resize(devices_.size());
-
-    std::vector<std::shared_future<void>> events;
-    // The tasks write into this object, and detail::async futures do not join on destruction, so every exit
-    // (including a throw from get() or configure_fabric()) must wait for all of them.
-    struct WaitForCompiles {
-        std::vector<std::shared_future<void>>& events;
-        ~WaitForCompiles() {
-            for (const auto& event : events) {
-                event.wait();
-            }
-        }
-    } wait_for_compiles{events};
-
-    events.reserve(devices_.size());
-    for (size_t i = 0; i < devices_.size(); ++i) {
-        events.emplace_back(detail::async([this, i]() { fabric_programs_[i] = compile_fabric(devices_[i]); }));
-    }
-
-    if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
-        for (const auto& event : events) {
-            event.get();
-        }
-        return;
-    }
-
-    // Serial on purpose: configuring in parallel hangs Galaxy.
+    const bool configure = has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC);
     size_t configured_count = 0;
-    for (size_t i = 0; i < events.size(); ++i) {
-        events[i].get();
-        if (fabric_programs_[i]) {
+    // Compiles run in parallel; configuring runs on this thread as each device's compile lands. Serial on purpose:
+    // configuring in parallel hangs Galaxy.
+    build_fabric_programs(/*parallel=*/true, [&](size_t i) {
+        if (configure && fabric_programs_[i]) {
             configure_fabric(devices_[i], *fabric_programs_[i]);
             configured_count++;
         }
+    });
+    if (configure) {
+        log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
     }
-    log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
 }
 
 void FabricFirmwareInitializer::compile_fabric_only() {
@@ -561,11 +585,7 @@ void FabricFirmwareInitializer::compile_fabric_only() {
 
     // Serial on purpose: the shared tensix mux config mutates state from a const getter, which
     // races when devices compile in parallel.
-    fabric_programs_.clear();
-    fabric_programs_.resize(devices_.size());
-    for (size_t i = 0; i < devices_.size(); ++i) {
-        fabric_programs_[i] = compile_fabric(devices_[i]);
-    }
+    build_fabric_programs(/*parallel=*/false);
 }
 
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
