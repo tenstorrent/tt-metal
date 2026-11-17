@@ -178,10 +178,12 @@ void subtract(uint32_t first, uint32_t tiles) {
 }
 
 // Chunk outputs F0_c + (FI_c - F0_c) @ seed for this core's chunks [begin, end), accumulated in the FP32 DST on top of
-// the copied F0; in place the differences are already formed, streamed each is formed just before its product.
+// the copied F0. The seed is column-major by tile and lands a tile column at a time: output column j needs only seed
+// column j, so the columns are formed as they land, up to dst_tiles chunks per pass, and packed into their rows. In
+// place the differences are already formed; streamed, each chunk's is formed just before its products.
 void correct(uint32_t begin, uint32_t end, uint32_t seed) {
-    for (uint32_t c = begin; c < end; ++c) {
-        const uint32_t row = streamed ? 0 : c * kt;
+    const uint32_t block = streamed ? 1 : end - begin;
+    for (uint32_t first = begin; first < end; first += block) {
         if constexpr (streamed) {
             cb_wait_front(cb_terms, terms_tiles);
             cb_reserve_back(cb_diff, kt);
@@ -190,25 +192,32 @@ void correct(uint32_t begin, uint32_t end, uint32_t seed) {
             cb_wait_front(cb_diff, kt);
         }
         pack_reconfig_data_format(cb_out);
-        cb_reserve_back(cb_out, kt);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_terms);
-        copy_init(cb_terms);
+        cb_reserve_back(cb_out, block * kt);
         for (uint32_t j = 0; j < kt; ++j) {
-            copy_tile(cb_terms, row + j, j);
+            cb_wait_front(seed, (j + 1) * kt);
+            for (uint32_t c = 0; c < block; c += dst_tiles) {
+                const uint32_t rows = block - c < dst_tiles ? block - c : dst_tiles;
+                const uint32_t row = streamed ? 0 : (first + c) * kt;
+                tile_regs_acquire();
+                reconfig_data_format_srca(cb_terms);
+                copy_init(cb_terms);
+                for (uint32_t i = 0; i < rows; ++i) {
+                    copy_tile(cb_terms, row + i * kt + j, i);
+                }
+                reconfig_data_format<SrcOrder::Reverse>(cb_diff, seed);
+                matmul_block_init(cb_diff, seed, false, 1, rows, kt);
+                for (uint32_t k = 0; k < kt; ++k) {
+                    matmul_block(cb_diff, seed, row + k, j * kt + k, 0, false, 1, rows, kt);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < rows; ++i) {
+                    pack_tile<true>(i, cb_out, (c + i) * kt + j);
+                }
+                tile_regs_release();
+            }
         }
-        reconfig_data_format<SrcOrder::Reverse>(cb_diff, seed);
-        matmul_block_init(cb_diff, seed, false, kt, 1, kt);
-        for (uint32_t k = 0; k < kt; ++k) {
-            matmul_block(cb_diff, seed, row + k, k * kt, 0, false, kt, 1, kt);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t j = 0; j < kt; ++j) {
-            pack_tile(j, cb_out);
-        }
-        tile_regs_release();
-        cb_push_back(cb_out, kt);
+        cb_push_back(cb_out, block * kt);
         if constexpr (streamed) {
             cb_pop_front(cb_terms, terms_tiles);
             cb_pop_front(cb_diff, kt);
@@ -241,20 +250,16 @@ void kernel_main() {
         cb_push_back(cb_diff, chunks * kt);
         cb_wait_front(cb_diff, chunks * kt);
     }
-    if (group_chunks != 0) {
-        cb_wait_front(cb_seed, state_tiles);
-        correct(0, group_chunks, cb_seed);
-    }
+    correct(0, group_chunks, cb_seed);
     if (relay_head && holder) {
         carry_pass(split);
     }
-    if (chunks != group_chunks) {
-        cb_wait_front(cb_tail, state_tiles);
-        correct(group_chunks, chunks, cb_tail);
-        cb_pop_front(cb_tail, state_tiles);
-    }
+    correct(group_chunks, chunks, cb_tail);
     if (group_chunks != 0) {
         cb_pop_front(cb_seed, state_tiles);
+    }
+    if (chunks != group_chunks) {
+        cb_pop_front(cb_tail, state_tiles);
     }
     if (!streamed && chunks != 0) {
         cb_pop_front(cb_terms, terms_tiles);

@@ -144,7 +144,9 @@ tt::tt_metal::ProgramDescriptor build_program(
         std::move(terms_cb),
         kda_factory_detail::cb_descriptor(
             cb_diff, (streamed ? 2 : core_chunks) * kt, state_tile, tt::DataFormat::Float32, correction_set),
-        kda_factory_detail::cb_descriptor(cb_out, 2 * kt, output_tile, tt::DataFormat::Float16_b, correction_set),
+        // A block of chunk rows: all of a seed's chunks in place, two chunks streamed.
+        kda_factory_detail::cb_descriptor(
+            cb_out, (streamed ? 2 : core_chunks) * kt, output_tile, tt::DataFormat::Float16_b, correction_set),
         kda_factory_detail::cb_descriptor(cb_chron, 1, 64, tt::DataFormat::UInt32, correction_set),
         kda_factory_detail::cb_descriptor(cb_ctl, 1, 64, tt::DataFormat::UInt32, correction_set),
         kda_factory_detail::cb_descriptor(cb_e, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
@@ -211,7 +213,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         grid_x,
         core_chunks,
         attrs.num_links,
-        first_core};
+        first_core,
+        uint32_t(streamed)};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct);
     tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(writer_ct);
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout, sp_size, attrs.local_rows};

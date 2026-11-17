@@ -131,27 +131,31 @@ void kernel_main() {
     ctl[3] = group_chunks;
     cb_push_back(cb_ctl, 1);
 
-    // The head's first core copies a landed K x K state (column-major by tile) into a seed buffer of every core of the
-    // head (row-major by tile, at the same address on each), then counts it there (a program semaphore, zero at
-    // launch).
+    // The head's first core copies each landed tile column of a K x K state (column-major by tile) into a seed buffer
+    // of every core of the head (at the same address on each), then counts it there (a program semaphore, zero at
+    // launch): each core's chunk outputs need only the seed's columns that have landed.
     const uint32_t state_tile = get_tile_size(cb_seed);
+    const uint32_t column_bytes = kt * state_tile;
     const uint32_t landed = get_semaphore(landed_semaphore_id);
-    const auto distribute = [&](uint32_t source, uint32_t seed) {
+    const auto distribute = [&](uint32_t source, uint32_t seed, uint32_t j) {
         for (uint32_t d = 0; d < cores_per_head; ++d) {
             const uint32_t xy = get_common_arg_val<uint32_t>(head_core_args + d);
-            for (uint32_t i = 0; i < state_tiles; ++i) {
-                noc_async_write(
-                    source + (i % kt * kt + i / kt) * state_tile,
-                    get_noc_addr(xy & 0xFFFF, xy >> 16, seed + i * state_tile),
-                    state_tile);
-            }
+            noc_async_write(
+                source + j * column_bytes, get_noc_addr(xy & 0xFFFF, xy >> 16, seed + j * column_bytes), column_bytes);
         }
         noc_async_write_barrier();
         for (uint32_t d = 0; d < cores_per_head; ++d) {
             const uint32_t xy = get_common_arg_val<uint32_t>(head_core_args + d);
             noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, landed), 1);
         }
-        noc_async_atomic_barrier();
+    };
+    // A seed's columns, as they land: the entry state's are counts 1..kt, the tail's kt + 1..2 kt.
+    const auto receive = [&](uint32_t cb, uint32_t counted) {
+        cb_reserve_back(cb, state_tiles);
+        for (uint32_t j = 0; j < kt; ++j) {
+            kda_counter::wait(landed, counted + j + 1);
+            cb_push_back(cb, kt);
+        }
     };
 
     // The landing buffer's slots on the head core: the entry state (cb_ein's storage), then the relayed final state.
@@ -187,6 +191,9 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_ein, state_tiles);
             cb_push_back(cb_ein_exact, state_tiles);
+            for (uint32_t j = 0; j < kt && valid != 0; ++j) {
+                distribute(landing, get_write_ptr(cb_seed), j);
+            }
         } else {
             // The predecessor's sender writes each tile column of this head's entry state into cb_ein's storage, then
             // counts it.
@@ -194,11 +201,11 @@ void kernel_main() {
                 kda_counter::wait(arrival_semaphore, j + 1);
                 cb_push_back(cb_ein, kt);
                 cb_push_back(cb_ein_exact, kt);
+                if (valid != 0) {
+                    distribute(landing, get_write_ptr(cb_seed), j);
+                }
             }
             kda_counter::consume(arrival_semaphore, kt);
-        }
-        if (valid != 0) {
-            distribute(landing, get_write_ptr(cb_seed));
         }
     }
 
@@ -218,16 +225,15 @@ void kernel_main() {
             cb_push_back(cb_terms, 2 * kt);
         }
     };
+    if (!streamed && chunks != 0) {
+        cb_reserve_back(cb_terms, 2 * core_chunks * kt);
+        cb_push_back(cb_terms, 2 * core_chunks * kt);
+    }
     if (group_chunks != 0) {
-        kda_counter::wait(landed, 1);
-        cb_reserve_back(cb_seed, state_tiles);
-        cb_push_back(cb_seed, state_tiles);
+        receive(cb_seed, 0);
     }
     if constexpr (streamed) {
         stream_terms(0, group_chunks);
-    } else if (chunks != 0) {
-        cb_reserve_back(cb_terms, 2 * core_chunks * kt);
-        cb_push_back(cb_terms, 2 * core_chunks * kt);
     }
 
     if (relay_head && holder) {
@@ -239,20 +245,19 @@ void kernel_main() {
             kda_counter::wait(final_semaphore, j + 1);
             cb_push_back(cb_p, kt);
             cb_push_back(cb_p_exact, kt);
+            if (need_tail) {
+                distribute(landing + state_tiles * state_tile, get_write_ptr(cb_tail), j);
+            }
         }
         kda_counter::consume(final_semaphore, kt);
-        if (need_tail) {
-            distribute(landing + state_tiles * state_tile, get_write_ptr(cb_tail));
-        }
     }
 
     // The separated tail's chunks start from P.
     if (chunks != group_chunks) {
-        kda_counter::wait(landed, 2);
-        cb_reserve_back(cb_tail, state_tiles);
-        cb_push_back(cb_tail, state_tiles);
+        receive(cb_tail, kt);
     }
     if constexpr (streamed) {
         stream_terms(group_chunks, chunks);
     }
+    noc_async_atomic_barrier();
 }

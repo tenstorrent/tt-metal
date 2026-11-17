@@ -18,7 +18,8 @@ constexpr uint32_t grid_x = get_compile_time_arg_val(7);
 constexpr uint32_t core_chunks = get_compile_time_arg_val(8);
 constexpr uint32_t num_links = get_compile_time_arg_val(9);
 constexpr uint32_t first_core = get_compile_time_arg_val(10);
-constexpr auto output_args = TensorAccessorArgs<11>();
+constexpr bool streamed = get_compile_time_arg_val(11);
+constexpr auto output_args = TensorAccessorArgs<12>();
 constexpr auto carry_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 constexpr uint32_t state_tiles = kt * kt;
 
@@ -70,15 +71,17 @@ void kernel_main() {
 
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(0));
     const uint32_t out_tile = get_tile_size(cb_out);
+    // Compute packs a block of chunk rows at a time: all of a seed's chunks in place, one chunk streamed.
     const auto write_outputs = [&](uint32_t begin, uint32_t end) {
-        for (uint32_t c = begin; c < end; ++c) {
-            cb_wait_front(cb_out, kt);
-            const uint32_t page = (head * num_chunks + first_chunk + c) * kt;
-            for (uint32_t j = 0; j < kt; ++j) {
-                noc_async_write_page(page + j, output, get_read_ptr(cb_out) + j * out_tile);
+        const uint32_t block = streamed ? 1 : end - begin;
+        for (uint32_t first = begin; first < end; first += block) {
+            cb_wait_front(cb_out, block * kt);
+            const uint32_t page = (head * num_chunks + first_chunk + first) * kt;
+            for (uint32_t t = 0; t < block * kt; ++t) {
+                noc_async_write_page(page + t, output, get_read_ptr(cb_out) + t * out_tile);
             }
             noc_async_writes_flushed();
-            cb_pop_front(cb_out, kt);
+            cb_pop_front(cb_out, block * kt);
         }
     };
     write_outputs(0, group_chunks);
