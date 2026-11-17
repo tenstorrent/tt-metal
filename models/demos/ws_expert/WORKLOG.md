@@ -960,9 +960,37 @@ the expert-id-ordered outputs (out_eord) are gone.
   host writes the first time they are built).
 - Open:
   - ~10-12 ms a layer between replays (one chip 62.3 ms a replay against 52.1 ms of programs inside it; the Galaxy
-    74.1 against 64.5): outside the programs and their dispatch (DRAM clocks between them). Suspect: the trace's
-    command stream fetched from DRAM before its first program runs; not measured yet.
+    74.1 against 64.5). Resolved in stage 18: not a gap - the chips' 75 W power limit throttles AICLK.
   - The barrier: the stream's segment in a replay 52.8 ms against the stream alone 49.4 (its zeros, the two
     all-gathers and the dispatch: ~3.4 ms).
   - The fold: 9.05 ms against the 7.5-8 target; its end cores wait ~1.8 ms for slot flags (each cluster sends its row
     tiles in order, an end core holds one row tile of slots: a slow end core stalls its cluster).
+
+## Stage 18: the traced layer's missing time is AICLK throttling (tests/test_ws_layer.py run_trace_bisect; hold 217360)
+- run_trace_bisect: traces of the DRAM clocks alone, each phase alone, the layer, the layer twice; wall per replay
+  back to back against the clocks inside; then 20 replays back to back between two clocks outside the trace (the
+  wall-clock counter against host time) with AICLK / power / temperature / current sampled from sysfs (every chip on
+  a mesh). One chip T 31250 folded, 20 warm-up + 5 measured replays, then the 20 bracketed:
+| trace | host ms a replay | counter ms (cycles / 1350) | counter MHz | AICLK sampled under load |
+|---|---|---|---|---|
+| clocks only | 0.008 | 0.001 | - | 1350 |
+| head | 3.07 | 2.69 | 1184 | 1150-1350 |
+| stream | 42.84 | 36.64 | 1155 | 1137-1181 mostly |
+| fold | 11.46 | 9.04 | 1065 | down to 975 |
+| layer | 58.79 | 48.22 | 1107 | 1081-1118 mostly |
+- The counter (RISCV_DEBUG_REG_WALL_CLOCK) counts AICLK cycles: 1349.6 MHz against host time at idle, and under load
+  it tracks the sampled AICLK within ~1%. The unaccounted time scales with the work (the layer twice in one trace:
+  twice; between its two layers 1 us), a trace boundary costs ~7 us (one chip) / 68 us (Galaxy).
+- tt-smi limits: every chip of bh-glx-110-c10u20 (and 120-c10u02) has tdp_limit 75 W (tdc 500 A, fmax 1350, fw
+  19.16.0.0); 120-b08u08 / b09u08 / b09u02 have 130 W. Under the layer a chip draws ~69 W median (max ~110) with
+  AICLK held at ~1100-1200: the TDP throttler, not temperature (37 C) or current.
+- The Galaxy (c10u20, folded layer, device barrier): 72.25 ms a replay host time, 64.03 counter (chip 0 at 1196 MHz
+  effective); AICLK medians per chip 1093-1212 under load, chip 8 the slowest (1093, min 1043) - the coupled stream
+  runs at the slowest chip's pace.
+- So every device time in stages 11-17 (cycles / 1350) is the time at 1350 MHz; on c10 under sustained load the real
+  time is 10-25% longer. The eager layer looks faster than the traced one because its host gaps let AICLK recover.
+- The Tracy device trace profiler (--device-trace-profiler) failed to post-process these programs (TT_FATAL: start and
+  end marker names do not match); its host-device sync fit showed the same clock loss (1.3500 -> 1.3466 GHz over
+  the run).
+- Open: the same layer on a 130 W Galaxy; power per phase (the fold drops furthest).
+

@@ -808,6 +808,207 @@ def run_trace(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips, ntok):
     return res
 
 
+BRACKET = int(os.environ.get("WSY_BRACKET", "20"))
+_SAMPLER = r"""
+import glob, json, os, statistics, sys, time
+devs, stop = sys.argv[1].split(","), sys.argv[2]
+scale = dict(aiclk=1, w=1e-6, c=1e-3, a=1e-3)
+files = {}
+for d in devs:
+    base = f"/sys/class/tenstorrent/tenstorrent!{d}"
+    hw = (glob.glob(base + "/device/hwmon/hwmon*") or [""])[0]
+    files[d] = dict(aiclk=base + "/tt_aiclk", w=hw + "/power1_input", c=hw + "/temp1_input", a=hw + "/curr1_input")
+    if len(devs) > 1:  # (many chips: AICLK and power only)
+        files[d] = {k: files[d][k] for k in ("aiclk", "w")}
+s = {d: {k: [] for k in f} for d, f in files.items()}
+t_end = time.time() + 60
+while not os.path.exists(stop) and time.time() < t_end:
+    for d, f in files.items():
+        for k, fn in f.items():
+            try:
+                with open(fn) as fh:
+                    s[d][k].append(int(fh.read().strip()) * scale[k])
+            except (OSError, ValueError):
+                pass
+    time.sleep(0.002)
+st = lambda v: dict(min=round(min(v), 1), med=round(statistics.median(v), 1), max=round(max(v), 1))
+d0 = devs[0]
+r = {k: st(v) for k, v in s[d0].items() if v}
+r["n"] = len(s[d0]["aiclk"])
+r["aiclk_hist"] = {str(k): s[d0]["aiclk"].count(k) for k in sorted(set(s[d0]["aiclk"]))}
+if len(devs) > 1:  # (per chip: AICLK median / min, power median / max)
+    r["chips"] = {
+        d: [statistics.median(v["aiclk"]), min(v["aiclk"]), round(statistics.median(v["w"]), 1), round(max(v["w"]), 1)]
+        for d, v in s.items() if v["aiclk"] and v["w"]
+    }
+print(json.dumps(r))
+"""
+
+
+def telemetry_sampler(dev):
+    """Samples chip dev's AICLK (MHz), power (W), temperature (C) and current (A) from sysfs every ~2 ms in a child
+    process from now until the returned function is called; that function returns min / median / max of each. dev may
+    be a list of chips (PCI indices): the first as above, then every chip's AICLK median / min and power median / max."""
+    import subprocess
+    import sys
+    import tempfile
+
+    stop = tempfile.mktemp(prefix="wsy_tel_")
+    devs = ",".join(str(d) for d in (dev if isinstance(dev, (list, tuple)) else [dev]))
+    p = subprocess.Popen([sys.executable, "-c", _SAMPLER, devs, stop], stdout=subprocess.PIPE, text=True)
+    time.sleep(0.3)
+
+    def finish():
+        open(stop, "w").close()
+        out, _ = p.communicate(timeout=30)
+        os.remove(stop)
+        try:
+            import json
+
+            return json.loads(out.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return {}
+
+    return finish
+
+
+def run_trace_bisect(mesh, lc: LayerCfg, routed_lc: LCfg, tag):
+    """Where a traced layer's time between replays goes: traces of the DRAM clocks alone, of each phase alone, of the
+    layer, and of the layer twice, each replayed WS_WARM times synchronized and WS_MEAS times back to back: wall per
+    replay against the clocks' span inside it (the last replay), and the host's time in execute_trace. WSY_BISECT
+    picks the traces (comma separated: clocks, head, stream, fold, layer, layer2). WSY_PROF_READ=1 (the device
+    profiler on): its buffers read before and after the back-to-back replays, so they hold those replays only."""
+    N = mesh.get_num_devices()
+    allp = FOLD_PHASES if lc.fold else PHASES
+    if N > 1:  # (a mesh: the stream's zeros, the device barrier, then the stream - test_ws_layer's "barrier" layer)
+        allp = ("head", "stream:zero", "barrier", "stream:run") + (("fold",) if lc.fold else ("shared", "end"))
+    tel_chips = list(range(N)) if N > 1 else first_visible()
+    st, host = make_layer(mesh, lc, routed_lc)
+    nclk = 2 * len(allp) + 2
+    cprogs, cio, cdram = dram_clocks(mesh, nclk + 2)  # (first: its L1 scratch stays at the top; the last 2 bracket)
+    clk = aiclk_mhz(first_visible())
+    prof = os.environ.get("WSY_PROF_READ", "0") == "1"
+    layer_step(mesh, lc, st, clk, [0])
+    logger.info(f"WSY {tag}: {lc}, routed {routed_lc}, aiclk {clk} MHz")
+    sel = os.environ.get("WSY_BISECT", "clocks,head,stream,fold,layer,layer2").split(",")
+    out = {}
+    bench_util.DEVICE_ZERO = True
+    try:
+        for _ in range(2):
+            layer_programs(mesh, lc, st, allp, clocks=(cprogs, cio))
+        ttnn.synchronize_device(mesh)
+        # (the wall-clock counter against host time with the chip idle: two clocks 1 s apart)
+        sampler = telemetry_sampler(tel_chips)
+        t0 = time.perf_counter()
+        ttnn.generic_op(cio, cprogs[nclk])
+        ttnn.synchronize_device(mesh)
+        time.sleep(1.0)
+        ttnn.generic_op(cio, cprogs[nclk + 1])
+        ttnn.synchronize_device(mesh)
+        host_us = (time.perf_counter() - t0) * 1e6
+        bt = dram_clock_ticks(cdram, 0, nclk + 2)
+        out["idle"] = dict(counter_mhz=round((bt[nclk + 1] - bt[nclk]) / host_us, 1), tel=sampler())
+        logger.info(f"WSY {tag} SUMMARY bisect idle: {out['idle']}")
+
+        def body(name):
+            """The trace's programs; returns the number of clocks they write."""
+            if name == "clocks":
+                for i in range(2):
+                    ttnn.generic_op(cio, cprogs[i])
+                return 2
+            if name == "layer2":
+                assert N == 1, "layer2: one chip (its clocks' pages assume every phase ticks)"
+                layer_programs(mesh, lc, st, allp, clocks=(cprogs[: len(allp) + 1], cio))
+                layer_programs(mesh, lc, st, allp, clocks=(cprogs[len(allp) + 1 :], cio))
+                return nclk
+            ph = allp if name == "layer" else (name,)
+            layer_programs(mesh, lc, st, ph, clocks=(cprogs, cio))
+            return 1 + len([p for p in ph if p not in ("stream:zero", "barrier")])  # (the phases that launch tick)
+
+        for name in sel:
+            for _ in range(2):  # (every op of this trace run once before its capture)
+                body(name)
+            ttnn.synchronize_device(mesh)
+            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+            n = body(name)
+            ttnn.end_trace_capture(mesh, tid, cq_id=0)
+            walls = []
+            for _ in range(WARM):
+                t0 = time.perf_counter()
+                ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh)
+                walls.append((time.perf_counter() - t0) * 1e3)
+            if prof:
+                ttnn.ReadDeviceProfiler(mesh)
+            enq = 0.0
+            t0 = time.perf_counter()
+            for _ in range(MEAS):
+                t1 = time.perf_counter()
+                ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)
+                enq += time.perf_counter() - t1
+            ttnn.synchronize_device(mesh)
+            b2b = (time.perf_counter() - t0) * 1e3 / MEAS
+            if prof:
+                ttnn.ReadDeviceProfiler(mesh)
+            ticks = dram_clock_ticks(cdram, 0, n)
+            seg = [round((ticks[i + 1] - ticks[i]) / clk / 1e3, 3) for i in range(n - 1)]
+            inside = (ticks[-1] - ticks[0]) / clk / 1e3
+            # (BRACKET back-to-back replays between two clocks outside the trace: the wall-clock counter's cycles
+            # against host time, under load, with the chip's AICLK / power / temperature sampled meanwhile)
+            sampler = telemetry_sampler(tel_chips)
+            t0 = time.perf_counter()
+            ttnn.generic_op(cio, cprogs[nclk])
+            for _ in range(BRACKET):
+                ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)
+            ttnn.generic_op(cio, cprogs[nclk + 1])
+            ttnn.synchronize_device(mesh)
+            host_us = (time.perf_counter() - t0) * 1e6
+            tel = sampler()
+            bt = dram_clock_ticks(cdram, 0, nclk + 2)
+            out[name] = dict(
+                sync=round(statistics.median(walls[WARM // 2 :]), 3),
+                b2b=round(b2b, 3),
+                enqueue=round(enq * 1e3 / MEAS, 3),
+                inside=round(inside, 3),
+                outside=round(b2b - inside, 3),
+                ticks=seg,
+                bracket_host=round(host_us / 1e3 / BRACKET, 3),
+                bracket_counter=round((bt[nclk + 1] - bt[nclk]) / clk / 1e3 / BRACKET, 3),
+                counter_mhz=round((bt[nclk + 1] - bt[nclk]) / host_us, 1),
+                tel=tel,
+            )
+            logger.info(f"WSY {tag} SUMMARY bisect {name}: {out[name]}")
+            ttnn.release_trace(mesh, tid)
+    finally:
+        bench_util.DEVICE_ZERO = False
+    logger.info(f"WSY {tag} SUMMARY bisect (ms a replay; outside = back to back minus the clocks' span): {out}")
+    return out
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
+def test_ws_layer_trace_bisect_chip(mesh_device):
+    """run_trace_bisect on one chip (the routed stream as the one-chip proxy), T 31250, 640 experts."""
+    lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
+    run_trace_bisect(mesh_device, lc, proxy_lcfg(lc.G), "trace bisect chip e640 T 31250")
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dict(TORUS, trace_region_size=TRACE_REGION)], indirect=True)
+def test_ws_layer_trace_bisect_glx(mesh_device):
+    """run_trace_bisect on the Galaxy torus (the layer with the device barrier; WSY_BISECT clocks, layer)."""
+    lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
+    rlc = LCfg(
+        cycles=torus_cycles(*tuple(mesh_device.shape)),
+        slots="d0,d1,d0d1,any",
+        keep=2,
+        bcast=True,
+        noc_split=True,
+        y_rm=True,
+    )
+    run_trace_bisect(mesh_device, lc, rlc, "trace bisect glx e640 T 31250")
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
 def test_ws_layer_trace_chip(mesh_device):
