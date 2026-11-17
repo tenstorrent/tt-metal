@@ -110,14 +110,9 @@ void kernel_main() {
         const uint32_t base = get_write_ptr(cb_partials);
         for (uint32_t q = 0; q < G; ++q) {
             for (uint32_t r = 0; r < b.h; ++r) {
-                volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    stats_addr + (q * Mt + b.m * block_h + r) * STATS_ROW_BYTES);
-                volatile tt_l1_ptr uint32_t* dst =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + (q * b.h + r) * FP32_TILE_BYTES);
-                for (uint32_t i = 0; i < 16; ++i) {
-                    dst[i * 16] = src[i];             // face 0, row i, col 0
-                    dst[512 + i * 16] = src[16 + i];  // face 2, row 16 + i, col 0
-                }
+                stats_row_to_col0(
+                    stats_addr + (q * Mt + b.m * block_h + r) * STATS_ROW_BYTES,
+                    base + (q * b.h + r) * FP32_TILE_BYTES);
             }
         }
         cb_push_back(cb_partials, G * b.h);

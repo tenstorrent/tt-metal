@@ -30,6 +30,44 @@ constexpr uint32_t FP32_TILE_BYTES = 32 * 32 * sizeof(float);
 constexpr uint32_t STATS_ROW_BYTES = 32 * sizeof(float);
 constexpr uint32_t block_tiles = block_h * block_w;
 
+// A stats row (32 fp32 row sums, contiguous) <-> column 0 of an fp32 tile (face 0 rows 0..15 word 0, face 2 rows
+// 0..15 word 0). Both ends sit on the stats-critical chain. Plain (non-volatile) L1 pointers between two compiler
+// barriers: the 32 loads issue back to back instead of one stalled volatile load per word; the caller has already
+// synchronized on the data (semaphore / CB wait) and publishes it afterwards (CB push / NoC write).
+inline void stats_row_to_col0(uint32_t src_addr, uint32_t tile_addr) {
+    asm volatile("" ::: "memory");
+    const uint32_t* src = reinterpret_cast<const uint32_t*>(src_addr);
+    uint32_t* dst = reinterpret_cast<uint32_t*>(tile_addr);
+    uint32_t w[32];
+#pragma GCC unroll 32
+    for (uint32_t i = 0; i < 32; ++i) {
+        w[i] = src[i];
+    }
+#pragma GCC unroll 16
+    for (uint32_t i = 0; i < 16; ++i) {
+        dst[i * 16] = w[i];             // face 0, row i, col 0
+        dst[512 + i * 16] = w[16 + i];  // face 2, row 16 + i, col 0
+    }
+    asm volatile("" ::: "memory");
+}
+
+inline void col0_to_stats_row(uint32_t tile_addr, uint32_t dst_addr) {
+    asm volatile("" ::: "memory");
+    const uint32_t* src = reinterpret_cast<const uint32_t*>(tile_addr);
+    uint32_t* dst = reinterpret_cast<uint32_t*>(dst_addr);
+    uint32_t w[32];
+#pragma GCC unroll 16
+    for (uint32_t i = 0; i < 16; ++i) {
+        w[i] = src[i * 16];             // face 0, row i, col 0
+        w[16 + i] = src[512 + i * 16];  // face 2, row 16 + i, col 0
+    }
+#pragma GCC unroll 32
+    for (uint32_t i = 0; i < 32; ++i) {
+        dst[i] = w[i];
+    }
+    asm volatile("" ::: "memory");
+}
+
 struct BlockId {
     uint32_t q;  // slice (group position it came from)
     uint32_t m;  // row block

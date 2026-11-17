@@ -39,14 +39,7 @@ void kernel_main() {
         const uint32_t src_base = get_read_ptr(cb_partial);
         const uint32_t slot = stats_addr + (p * Mt + b.m * block_h) * STATS_ROW_BYTES;
         for (uint32_t r = 0; r < b.h; ++r) {
-            volatile tt_l1_ptr uint32_t* src =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_base + r * FP32_TILE_BYTES);
-            volatile tt_l1_ptr uint32_t* dst =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + r * STATS_ROW_BYTES);
-            for (uint32_t i = 0; i < 16; ++i) {
-                dst[i] = src[i * 16];             // face 0, row i, col 0
-                dst[16 + i] = src[512 + i * 16];  // face 2, row 16 + i, col 0
-            }
+            col0_to_stats_row(src_base + r * FP32_TILE_BYTES, slot + r * STATS_ROW_BYTES);
         }
         cb_pop_front(cb_partial, b.h);
         noc_async_write(slot, get_noc_addr(hub_xy >> 8, hub_xy & 0xFF, slot), b.h * STATS_ROW_BYTES);
