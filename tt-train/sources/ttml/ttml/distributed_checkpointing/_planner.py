@@ -211,8 +211,8 @@ def create_save_plan(
 ) -> SavePlan:
     """One file per mesh coordinate that writes something; each key's unique boxes assigned to their elected owners.
 
-    ``owner_of(key, replica group)`` returns the group's chunk this process writes, or ``None`` when another rank
-    writes it: the coordinator's election (``Election.owner_of``), which a single process runs too.
+    ``owner_of(key, replica group)`` returns the group's chunk this process writes, or ``None`` when another process
+    writes it, so the election of the writers is the caller's.
     """
     infos = _by_key(infos, "saved")
     owned: dict[str, list[Chunk]] = {}
