@@ -101,7 +101,7 @@ float get_pad_value(
 
     // INT32 max/min: static_cast<uint32_t>(±inf) is UB, so the int32 sentinel is carried as the float's bit
     // pattern and handed to fill_pad through PadValue's integer arm. Transpose and permute convert an INT32 pad
-    // value numerically, which turns this sentinel into 0, so their padding is refilled afterwards.
+    // value numerically, which turns this sentinel into 0, so a tiled result has its padding refilled afterwards.
     if (dtype == tt::tt_metal::DataType::INT32) {
         if (reduce_type == reduction_common::ReduceType::Max) {
             // SFPU int32 MAX reduce can return an incorrect maximum when the INT32_MIN bit pattern (0x80000000)
@@ -209,7 +209,7 @@ static Tensor reduce_impl(
                     int reduce_dim = i_dim;
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
-                        if (output_tensor.dtype() == DataType::INT32) {
+                        if (output_tensor.dtype() == DataType::INT32 && output_tensor.layout() == Layout::TILE) {
                             output_tensor = ttnn::fill_implicit_tile_padding(
                                 output_tensor,
                                 ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)},
