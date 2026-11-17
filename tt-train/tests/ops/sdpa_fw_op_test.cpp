@@ -2350,6 +2350,57 @@ using ttml::metal::ops::sdpa_fw::device::WorkUnit;
 
 // What every schedule must satisfy for the kernels to compute each item exactly once and for the senders
 // and mergers to find each other: full coverage, consecutive slots per item, matching semaphores, and
+// The work-list layout the three kernels decode, pinned at compile time. check_schedule below encodes
+// every unit a schedule produced, which only ever exercises the field values those schedules reach: no
+// schedule here fills the item, step or slot fields, and none puts more than two mergers on a core, so
+// sem_idx 2 and 3 are never encoded. encode_unit and decode_unit are constexpr, so each field can be
+// round-tripped at its maximum instead.
+constexpr bool unit_round_trips(const sdpa_items::WorkUnitFields& u) {
+    const sdpa_items::UnitWords w = sdpa_items::encode_unit(u);
+    const sdpa_items::WorkUnitFields d = sdpa_items::decode_unit(w.w0, w.w1, w.w2);
+    const bool whole = u.role == sdpa_items::kUnitWhole;
+    return d.item == u.item && d.role == u.role && d.num_partials == u.num_partials && d.sem_idx == u.sem_idx &&
+           d.slot == u.slot && d.merger_x == u.merger_x && d.merger_y == u.merger_y &&
+           d.num_items == (whole ? u.num_items : 1U) && d.step_begin == (whole ? 0U : u.step_begin) &&
+           d.step_end == (whole ? 0U : u.step_end);
+}
+
+constexpr uint32_t kItemMax = sdpa_items::unit_field_max(sdpa_items::kUnitItemBits);
+constexpr uint32_t kPartialsMax = sdpa_items::unit_field_max(sdpa_items::kUnitPartialsBits);
+constexpr uint32_t kStepMax = sdpa_items::unit_field_max(sdpa_items::kUnitStepBits);
+constexpr uint32_t kSlotMax = sdpa_items::unit_field_max(sdpa_items::kUnitSlotBits);
+constexpr uint32_t kNocMax = sdpa_items::unit_field_max(sdpa_items::kUnitNocBits);
+
+// A whole run at the top of every field it uses.
+static_assert(unit_round_trips(
+    sdpa_items::WorkUnitFields{.item = kItemMax, .role = sdpa_items::kUnitWhole, .num_items = 0xFFFFFFFFU}));
+// A sender and a merger at the top of theirs, on each of the four semaphores a core can hold -- including
+// sem_idx 2 and 3, which no schedule in this file reaches.
+static_assert(unit_round_trips(sdpa_items::WorkUnitFields{
+    .item = kItemMax,
+    .role = sdpa_items::kUnitSender,
+    .step_begin = kStepMax,
+    .step_end = kStepMax,
+    .sem_idx = 0U,
+    .slot = kSlotMax,
+    .merger_x = kNocMax,
+    .merger_y = kNocMax}));
+static_assert(unit_round_trips(
+    sdpa_items::WorkUnitFields{.role = sdpa_items::kUnitMerger, .num_partials = kPartialsMax, .sem_idx = 2U}));
+static_assert(unit_round_trips(
+    sdpa_items::WorkUnitFields{.role = sdpa_items::kUnitMerger, .num_partials = kPartialsMax, .sem_idx = 3U}));
+// Every field at its maximum at once must still survive the three words.
+static_assert(unit_round_trips(sdpa_items::WorkUnitFields{
+    .item = kItemMax,
+    .role = sdpa_items::kUnitMerger,
+    .step_begin = kStepMax,
+    .step_end = kStepMax,
+    .num_partials = kPartialsMax,
+    .sem_idx = sdpa_items::kMaxMergersPerCore - 1U,
+    .slot = kSlotMax,
+    .merger_x = kNocMax,
+    .merger_y = kNocMax}));
+
 // senders before whole items before mergers on every core.
 void check_schedule(
     const SDPAForwardShape& shape,
