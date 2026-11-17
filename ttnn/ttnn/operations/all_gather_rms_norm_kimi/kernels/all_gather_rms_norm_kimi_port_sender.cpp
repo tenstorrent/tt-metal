@@ -19,6 +19,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "all_gather_rms_norm_kimi_perf.hpp"
 
 using namespace tt::tt_fabric;
 
@@ -77,19 +78,25 @@ void kernel_main() {
     }
     volatile tt_l1_ptr PACKET_HEADER_TYPE* ctl_hdr = PacketHeaderPool::allocate_header();
     route_one_hop(ctl_hdr, dst_chip_id, dst_mesh_id);
-    conn.open();
+    {
+        MaybeDeviceZoneScope("sender_open");
+        conn.open();
+    }
 
     // ---- fence ----
-    ctl_hdr->to_noc_unicast_atomic_inc(
-        NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_xy >> 8, ready_xy & 0xFF, ready_addr), 1, true});
-    conn.wait_for_empty_write_slot();
-    conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(ctl_hdr), sizeof(PACKET_HEADER_TYPE));
     {
-        volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
-        noc_semaphore_wait_min(ready, 1);
-        noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
-        noc_async_atomic_barrier();
-    }
+        MaybeDeviceZoneScope("sender_fence");
+        ctl_hdr->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_xy >> 8, ready_xy & 0xFF, ready_addr), 1, true});
+        conn.wait_for_empty_write_slot();
+        conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(ctl_hdr), sizeof(PACKET_HEADER_TYPE));
+        {
+            volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+            noc_semaphore_wait_min(ready, 1);
+            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+            noc_async_atomic_barrier();
+        }
+    }  // sender_fence
 
     // ---- stats: send every slot the hub has handed over so far ----
     volatile tt_l1_ptr uint32_t* stats_tx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_tx));
@@ -119,48 +126,54 @@ void kernel_main() {
     // ---- bulk ----
     const uint64_t arrival_noc = get_noc_addr(recv_xy >> 8, recv_xy & 0xFF, arrival_addr);
     uint32_t h = 0, unflushed = 0, sent = 0;
-    for (uint32_t i = 0; i < n_blocks; ++i) {
-        const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
-        const uint32_t info = get_arg_val<uint32_t>(blocks_idx + 2 * i + 1);
-        const uint32_t n = info & 0xFFFF;
-        const bool entry_end = (info >> 17) & 1;
-        for (uint32_t k = 0; k < n; ++k) {
-            while (!cb_pages_available_at_front(cb, chunk_tiles * (unflushed + 1))) {
-                try_stats();
-            }
-            if constexpr (stats_window > 0) {
-                // a stats slot still owed (the relay) would queue behind every bulk packet in the channel: keep at most
-                // stats_window of them queued until it has gone out
-                while (stats_sent < n_stats &&
-                       conn.num_buffers_per_channel - conn.get_num_free_write_slots() >= stats_window) {
+    {
+        MaybeDeviceZoneScope("sender_bulk");
+        for (uint32_t i = 0; i < n_blocks; ++i) {
+            const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
+            const uint32_t info = get_arg_val<uint32_t>(blocks_idx + 2 * i + 1);
+            const uint32_t n = info & 0xFFFF;
+            const bool entry_end = (info >> 17) & 1;
+            for (uint32_t k = 0; k < n; ++k) {
+                while (!cb_pages_available_at_front(cb, chunk_tiles * (unflushed + 1))) {
+                    try_stats();
+                }
+                if constexpr (stats_window > 0) {
+                    // a stats slot still owed (the relay) would queue behind every bulk packet in the channel: keep at
+                    // most stats_window of them queued until it has gone out
+                    while (stats_sent < n_stats &&
+                           conn.num_buffers_per_channel - conn.get_num_free_write_slots() >= stats_window) {
+                        try_stats();
+                    }
+                }
+                const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
+                const uint64_t dst = get_noc_addr(xy >> 8, xy & 0xFF, landing_addr + k * chunk_bytes);
+                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
+                h = (h + 1 == batch) ? 0 : h + 1;
+                ++sent;
+                if ((sent % inc_every) == 0 || (entry_end && k + 1 == n)) {
+                    hdr->to_noc_fused_unicast_write_atomic_inc(
+                        NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, chunk_bytes);
+                } else {
+                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, chunk_bytes);
+                }
+                conn.wait_for_empty_write_slot();
+                conn.send_current_slot_non_blocking(src, chunk_bytes, reinterpret_cast<uint32_t>(hdr));
+                --chunks_left;
+                if (++unflushed == batch || chunks_left == 0) {
+                    noc_async_writes_flushed();  // sources + headers of the in-flight chunks have left L1
+                    cb_pop_front(cb, chunk_tiles * unflushed);
+                    unflushed = 0;
                     try_stats();
                 }
             }
-            const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
-            const uint64_t dst = get_noc_addr(xy >> 8, xy & 0xFF, landing_addr + k * chunk_bytes);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
-            h = (h + 1 == batch) ? 0 : h + 1;
-            ++sent;
-            if ((sent % inc_every) == 0 || (entry_end && k + 1 == n)) {
-                hdr->to_noc_fused_unicast_write_atomic_inc(
-                    NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, chunk_bytes);
-            } else {
-                hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, chunk_bytes);
-            }
-            conn.wait_for_empty_write_slot();
-            conn.send_current_slot_non_blocking(src, chunk_bytes, reinterpret_cast<uint32_t>(hdr));
-            --chunks_left;
-            if (++unflushed == batch || chunks_left == 0) {
-                noc_async_writes_flushed();  // sources + headers of the in-flight chunks have left L1
-                cb_pop_front(cb, chunk_tiles * unflushed);
-                unflushed = 0;
-                try_stats();
-            }
         }
-    }
+    }  // sender_bulk
     // ---- the stats that became ready only after the bulk ----
-    while (stats_sent < n_stats) {
-        try_stats();
+    {
+        MaybeDeviceZoneScope("sender_tail_stats");
+        while (stats_sent < n_stats) {
+            try_stats();
+        }
     }
     conn.close();
 }

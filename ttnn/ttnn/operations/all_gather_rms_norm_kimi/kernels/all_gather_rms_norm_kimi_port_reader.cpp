@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "all_gather_rms_norm_kimi_perf.hpp"
 
 constexpr uint32_t cb = get_compile_time_arg_val(0);
 constexpr uint32_t chunk_tiles = get_compile_time_arg_val(1);
@@ -59,6 +60,7 @@ void kernel_main() {
                 noc_semaphore_wait_min(relay_ready, relays);
             }
         } else if (!own_waited) {
+            MaybeDeviceZoneScope("preader_own_wait");
             noc_semaphore_wait_min(own_loaded, own_total);
             own_waited = true;
         }

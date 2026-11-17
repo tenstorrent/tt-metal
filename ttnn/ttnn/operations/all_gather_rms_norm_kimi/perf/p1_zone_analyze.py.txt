@@ -1,0 +1,48 @@
+# Perf 1 zone analyzer: python3 this [profile_log_device.csv]. Per chip: each zone's start / end relative to the chip's
+# earliest kernel start of the call, medians over the calls, split by core role (own / rem compute core).
+import csv, sys, collections, statistics as st
+path = sys.argv[1] if len(sys.argv) > 1 else "generated/profiler/.logs/profile_log_device.csv"
+F = 1350.0  # cycles per us (BH AICLK 1350 MHz)
+prog = collections.defaultdict(list)
+with open(path) as f:
+    next(f)
+    r = csv.reader(f)
+    hdr = [h.strip() for h in next(r)]
+    for x in r:
+        prog[(x[0], x[7])].append((int(x[1]), int(x[2]), x[3], int(x[5]), x[10], x[11]))
+res = collections.defaultdict(lambda: collections.defaultdict(list))
+spans = collections.defaultdict(list)
+starts = collections.defaultdict(list)
+for (chip, run), ev in prog.items():
+    names = {e[4] for e in ev}
+    if "sender_fence" not in names:
+        continue
+    ks = [e[3] for e in ev if e[4].endswith("-KERNEL") and e[5] == "ZONE_START"]
+    ke = [e[3] for e in ev if e[4].endswith("-KERNEL") and e[5] == "ZONE_END"]
+    t0 = min(ks)
+    spans[chip].append((max(ke) - t0) / F)
+    starts[chip].append(t0)
+    own = {(e[0], e[1]) for e in ev if e[4] == "reader_own_load"}
+    comp = {(e[0], e[1]) for e in ev if e[4] in ("compute_normalize", "reader_stats")}
+    open_ = {}
+    for cx, cy, risc, t, name, typ in sorted(ev, key=lambda e: e[3]):
+        if name.endswith("-KERNEL") or name.endswith("-FW"):
+            continue
+        k = (cx, cy, risc, name)
+        if typ == "ZONE_START":
+            open_[k] = t
+        elif typ == "ZONE_END" and k in open_:
+            s = open_.pop(k)
+            role = ("own" if (cx, cy) in own else "rem") if (cx, cy) in comp else ""
+            res[chip][(name, role, risc)].append(((s - t0) / F, (t - t0) / F))
+# launch skew: per call index, kernel start of each chip relative to the earliest chip (calls aligned by order)
+chips = sorted(starts)
+n = min(len(starts[c]) for c in chips)
+for c in chips:
+    starts[c].sort()
+skew = {c: st.median([(starts[c][i] - min(starts[d][i] for d in chips)) / F for i in range(n)]) for c in chips}
+for chip in chips:
+    print(f"== chip {chip}: span med {st.median(spans[chip]):.2f} us over {len(spans[chip])} calls; launch skew med {skew[chip]:.2f} us")
+    for (name, role, risc), v in sorted(res[chip].items(), key=lambda kv: st.median([s for s, _ in kv[1]])):
+        ss = [s for s, _ in v]; ee = [e for _, e in v]; dd = [e - s for s, e in v]
+        print(f"  {name:20s} {role:3s} {risc:7s} n={len(v):5d} start med {st.median(ss):6.2f} | end min {min(ee):6.2f} med {st.median(ee):6.2f} max {max(ee):6.2f} | dur med {st.median(dd):5.2f} max {max(dd):5.2f}")

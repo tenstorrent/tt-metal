@@ -20,6 +20,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "all_gather_rms_norm_kimi_common.hpp"
+#include "all_gather_rms_norm_kimi_perf.hpp"
 
 using namespace agrn;
 
@@ -57,6 +58,7 @@ void kernel_main() {
     cb_reserve_back(cb_x_block, n_tiles);
     if (own) {
         // ---- load_own_block: DRAM -> landing ----
+        MaybeDeviceZoneScope("reader_own_load");
         const auto in = TensorAccessor(in_args, in_addr, tile_bytes);
         const uint32_t dst = get_write_ptr(cb_x_block);
         for (uint32_t r = 0; r < b.h; ++r) {
@@ -86,7 +88,10 @@ void kernel_main() {
         // landed at the first 64 B boundary inside tile j (DRAM reads want a 64 B aligned L1 destination)
         uint32_t src0, src_stride;
         if constexpr (gamma_hub_mcast) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_gamma_go)), 1);
+            {
+                MaybeDeviceZoneScope("reader_gamma_wait");
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_gamma_go)), 1);
+            }
             src0 = ((stats_addr + G * Mt * STATS_ROW_BYTES + 63) & ~63u) + b.q * Wl_t * gamma_page;
             src_stride = gamma_page;
         } else {
@@ -112,6 +117,7 @@ void kernel_main() {
         cb_reserve_back(cb_partials, G * b.h);
         const uint32_t base = get_write_ptr(cb_partials);
         // stats_ready = mask of the slots the hub has multicast so far; copy each one as its bit appears
+        MaybeDeviceZoneScope("reader_stats");  // wait + copy, interleaved per slot
         constexpr uint32_t all = (1u << G) - 1;
         uint32_t seen = 0;
         while (seen != all) {
@@ -135,6 +141,7 @@ void kernel_main() {
     // ---- remote block: push each chunk once its receiver says it landed ----
     if (!own) {
         volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed));
+        MaybeDeviceZoneScope("reader_landed_wait");
         const uint32_t n_chunks = n_tiles / chunk_tiles;
         for (uint32_t k = 0; k < n_chunks; ++k) {
             noc_semaphore_wait_min(landed, k + 1);

@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "all_gather_rms_norm_kimi_perf.hpp"
 
 constexpr uint32_t sem_landed = get_compile_time_arg_val(0);
 constexpr uint32_t sem_relay_ready = get_compile_time_arg_val(1);
@@ -25,16 +26,20 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
     const uint32_t landed_addr = get_semaphore(sem_landed);
     const uint64_t relay_noc = get_noc_addr(port_xy >> 8, port_xy & 0xFF, get_semaphore(sem_relay_ready));
-    for (uint32_t e = 0; e < n_events; ++e) {
-        const uint32_t threshold = get_arg_val<uint32_t>(a++);
-        const uint32_t info = get_arg_val<uint32_t>(a++);
-        noc_semaphore_wait_min(arrived, threshold);
-        noc_semaphore_inc(get_noc_addr((info >> 8) & 0xFF, info & 0xFF, landed_addr), 1);
-        if ((info >> 16) & 1) {
-            noc_semaphore_inc(relay_noc, 1);
+    {
+        MaybeDeviceZoneScope("recv_notify");
+        for (uint32_t e = 0; e < n_events; ++e) {
+            const uint32_t threshold = get_arg_val<uint32_t>(a++);
+            const uint32_t info = get_arg_val<uint32_t>(a++);
+            noc_semaphore_wait_min(arrived, threshold);
+            noc_semaphore_inc(get_noc_addr((info >> 8) & 0xFF, info & 0xFF, landed_addr), 1);
+            if ((info >> 16) & 1) {
+                noc_semaphore_inc(relay_noc, 1);
+            }
         }
-    }
+    }  // recv_notify
     if (expect_in > 0) {
+        MaybeDeviceZoneScope("recv_drain");
         noc_semaphore_wait_min(arrived, expect_in);
         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);
     }

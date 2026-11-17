@@ -16,6 +16,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "all_gather_rms_norm_kimi_perf.hpp"
 
 constexpr uint32_t G = get_compile_time_arg_val(0);
 constexpr uint32_t slot_bytes = get_compile_time_arg_val(1);
@@ -72,6 +73,7 @@ void kernel_main() {
     // Runs before the own partials can arrive (the hub has nothing else to do yet). Replaces 20 cores per slice
     // reading the same pages; each compute reader waits gamma_go, then copies its block_w sticks from local L1.
     if constexpr (gamma_hub_mcast) {
+        MaybeDeviceZoneScope("hub_gamma");
         const uint32_t gbase = (stats_addr + G * slot_bytes + 63) & ~63u;  // DRAM reads land 64 B aligned
         const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_page);
         for (uint32_t n = 0; n < Wt; ++n) {
@@ -111,37 +113,43 @@ void kernel_main() {
             noc_semaphore_set_multicast(word, rect(r, ready_addr), rect_cores(r));
         }
     };
-    noc_semaphore_wait_min(own_partials, own_count);
-    if (kf > 0) {
-        hand_over(p, fwd_xy);
+    {
+        MaybeDeviceZoneScope("hub_own_wait");
+        noc_semaphore_wait_min(own_partials, own_count);
     }
-    if (kb > 0) {
-        hand_over(p, bwd_xy);
-    }
-    publish(p);
-    // the i-th slot from the forward side is P_{p-i}, from the backward side P_{p+i}; the port of that side relays
-    // every one but its last (kf - 1 / kb - 1 relays)
-    uint32_t nf = 0, nbk = 0;
-    while (nf < kf || nbk < kb) {
-        invalidate_l1_cache();
-        if (nf < kf && *sfwd > nf) {
-            ++nf;
-            const uint32_t q = (p + G - nf) % G;
-            if (nf < kf) {
-                hand_over(q, fwd_xy);
-            }
-            publish(q);
+    {
+        MaybeDeviceZoneScope("hub_stats");
+        if (kf > 0) {
+            hand_over(p, fwd_xy);
         }
-        if (nbk < kb && *sbwd > nbk) {
-            ++nbk;
-            const uint32_t q = (p + nbk) % G;
-            if (nbk < kb) {
-                hand_over(q, bwd_xy);
-            }
-            publish(q);
+        if (kb > 0) {
+            hand_over(p, bwd_xy);
         }
-    }
-    noc_async_write_barrier();
+        publish(p);
+        // the i-th slot from the forward side is P_{p-i}, from the backward side P_{p+i}; the port of that side relays
+        // every one but its last (kf - 1 / kb - 1 relays)
+        uint32_t nf = 0, nbk = 0;
+        while (nf < kf || nbk < kb) {
+            invalidate_l1_cache();
+            if (nf < kf && *sfwd > nf) {
+                ++nf;
+                const uint32_t q = (p + G - nf) % G;
+                if (nf < kf) {
+                    hand_over(q, fwd_xy);
+                }
+                publish(q);
+            }
+            if (nbk < kb && *sbwd > nbk) {
+                ++nbk;
+                const uint32_t q = (p + nbk) % G;
+                if (nbk < kb) {
+                    hand_over(q, bwd_xy);
+                }
+                publish(q);
+            }
+        }
+        noc_async_write_barrier();
+    }  // hub_stats
 
     // ---- drain_stats ----
     noc_semaphore_inc(get_noc_addr(sfwd_addr), 0u - kf);

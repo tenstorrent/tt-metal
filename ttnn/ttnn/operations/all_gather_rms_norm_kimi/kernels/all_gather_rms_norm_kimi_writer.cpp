@@ -13,6 +13,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "all_gather_rms_norm_kimi_common.hpp"
+#include "all_gather_rms_norm_kimi_perf.hpp"
 
 using namespace agrn;
 
@@ -38,7 +39,11 @@ void kernel_main() {
     });
 
     if (b.q == p) {
-        cb_wait_front(cb_partial, b.h);
+        {
+            MaybeDeviceZoneScope("writer_partial_wait");
+            cb_wait_front(cb_partial, b.h);
+        }
+        MaybeDeviceZoneScope("writer_export");
         const uint32_t src_base = get_read_ptr(cb_partial);
         const uint32_t slot = stats_addr + (p * Mt + b.m * block_h) * STATS_ROW_BYTES;
         for (uint32_t r = 0; r < b.h; ++r) {
@@ -52,9 +57,11 @@ void kernel_main() {
 
     // ---- store_block ---- (an own block waits until every port sending it has issued its reads)
     if (own_block_reads > 0 && b.q == p) {
+        MaybeDeviceZoneScope("writer_gate_wait");
         noc_semaphore_wait_min(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed)), own_block_reads);
     }
+    MaybeDeviceZoneScope("writer_store");  // per-chunk cb_out waits inside
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
     const uint32_t n_chunks = b.h * block_w / chunk_tiles;
     uint32_t t = 0;

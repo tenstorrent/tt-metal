@@ -33,6 +33,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "all_gather_rms_norm_kimi_common.hpp"
+#include "all_gather_rms_norm_kimi_perf.hpp"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -56,7 +57,7 @@ constexpr uint32_t cb_partial = get_compile_time_arg_val(C + 8);
 constexpr uint32_t cb_xg = get_compile_time_arg_val(C + 9);
 constexpr uint32_t cb_scaler = get_compile_time_arg_val(C + 10);
 constexpr uint32_t cb_rstd_full = get_compile_time_arg_val(C + 11);
-constexpr bool fuse_late = get_compile_time_arg_val(C + 12) != 0;  // x * gamma * rstd in one chain for late chunks
+constexpr bool fuse_late = get_compile_time_arg_val(C + 12) != 0;     // x * gamma * rstd in one chain for late chunks
 constexpr bool combine_col0 = get_compile_time_arg_val(C + 13) != 0;  // combine scoped to column 0 (one SFPU pass)
 // normalize mode: false = xg (x * gamma ahead of the stats, out = xg * rstd per chunk); true = scale (S = rstd * gamma
 // right after the combine, out = x * S per chunk: ONE pass per landed chunk)
@@ -238,6 +239,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_x_block, cb_x_block, cb_out);
 
     if (b.q == p) {
+        MaybeDeviceZoneScope("compute_partial");  // includes the own-x wait
         // ---- partial_block (a): sum_w x^2 per tile row, accumulated in fp32 DEST ----
         eltwise_chain(
             IterationShape::grid(h, block_w),
@@ -274,18 +276,30 @@ void kernel_main() {
     const uint32_t core_idx = b.q * nb + b.m;
     const uint32_t ahead_tab = get_common_arg_val<uint32_t>(row_base_idx + grid_y + core_idx / 4);
     const uint32_t ahead = (fuse_late || scale_mode) ? 0 : ((ahead_tab >> (8 * (core_idx % 4))) & 0xFF);
-    cb_wait_front(cb_gamma, block_w);  // held for every chunk (Row-mapped, offset per chunk)
-    for (uint32_t k = 0; k < ahead; ++k) {
-        gamma_chunk(k);
+    {
+        MaybeDeviceZoneScope("compute_gamma_wait");
+        cb_wait_front(cb_gamma, block_w);  // held for every chunk (Row-mapped, offset per chunk)
+    }
+    {
+        MaybeDeviceZoneScope("compute_xg_ahead");
+        for (uint32_t k = 0; k < ahead; ++k) {
+            gamma_chunk(k);
+        }
     }
 
     // ---- combine_stats_block: ss = ((P_0 + P_1) + P_2) + ... ; rstd = rsqrt(ss / W + eps) ----
-    cb_wait_front(cb_partials, G * h);  // caller-managed window (None, None) of the G loads
-    combine_stats_block(h, std::make_integer_sequence<uint32_t, G - 1>{});
-    cb_pop_front(cb_partials, G * h);
+    {
+        MaybeDeviceZoneScope("compute_stats_wait");
+        cb_wait_front(cb_partials, G * h);  // caller-managed window (None, None) of the G loads
+    }
+    {
+        MaybeDeviceZoneScope("compute_combine");
+        combine_stats_block(h, std::make_integer_sequence<uint32_t, G - 1>{});
+        cb_pop_front(cb_partials, G * h);
 
-    // ---- expand_rstd_block: column-broadcast rstd over the tile (one tile per block row) ----
-    unary_bcast<BroadcastDim::Col, input(cb_rstd), output(cb_rstd_full)>(IterationShape::tiles(h));
+        // ---- expand_rstd_block: column-broadcast rstd over the tile (one tile per block row) ----
+        unary_bcast<BroadcastDim::Col, input(cb_rstd), output(cb_rstd_full)>(IterationShape::tiles(h));
+    }
 
     if constexpr (scale_mode) {
         // ---- scale_block: S = rstd (per row, Col mapping) * gamma (per column, row broadcast) -> cb_xg (fp32) ----
@@ -301,7 +315,8 @@ void kernel_main() {
     }
 
     // ---- normalize_block: per chunk, out = xg * rstd (x * gamma * rstd for the chunks not done ahead) ----
-    cb_wait_front(cb_rstd_full, h);  // held for every chunk (Col-mapped, offset per chunk)
+    MaybeDeviceZoneScope("compute_normalize");  // includes the per-chunk landing waits
+    cb_wait_front(cb_rstd_full, h);             // held for every chunk (Col-mapped, offset per chunk)
     if (late_block && !fuse_late && ahead == 0) {
         const IterationShape block = IterationShape::grid(h, block_w).block_size(chunk_tiles);
         mul<input(cb_x_block, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),

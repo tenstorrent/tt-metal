@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,11 @@ from pathlib import Path
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
+
+# Per-stage device zones (kernels/all_gather_rms_norm_kimi_perf.hpp, MaybeDeviceZoneScope) are compiled in only when
+# AGRN_PERF_ZONES=1 at op build time: the breakdown runs turn them on; the ccl_perf harness (500 traced calls per
+# experiment) leaves them off, because their markers overflow the profiler's DRAM buffer and drop whole programs.
+PERF_ZONES = os.environ.get("AGRN_PERF_ZONES", "0") == "1"
 
 # ---- block / transport knobs (host constants, defined once) ----
 SLICES_PER_BLOCK = 1  # mechanism cap: a block never straddles slices
@@ -588,6 +594,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 COMPUTE_STORE_NOC,
                 OWN_STORE_GATE,
                 gamma_page,
+                PERF_ZONES,
             )
             program.semaphores = [
                 ttnn.SemaphoreDescriptor(id=s, core_ranges=op_crs, initial_value=0) for s in range(NUM_LOCAL_SEMS)
@@ -835,6 +842,9 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                     ),
                 )
             )
+            if PERF_ZONES:
+                for k in kernels:
+                    k.defines = list(k.defines) + [("AGRN_PERF_ZONES", "1")]
             program.kernels = kernels
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*coord), ttnn.MeshCoordinate(*coord))] = program
     return mesh_desc
