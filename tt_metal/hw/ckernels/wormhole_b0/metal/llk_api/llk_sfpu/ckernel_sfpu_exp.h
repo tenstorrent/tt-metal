@@ -339,14 +339,20 @@ inline void _sfpu_exp_21f_bf16_tti_configure_addrmod_() {
 
 // First part of a row pair of _sfpu_exp_21f_bf16_tti_, issued inline: loads, scale, range
 // reduction and both clamps. Row A lives in LREG0-2, row B in LREG4/5/7.
-template <bool SCALE_EN, bool CLAMP_NEGATIVE, bool BASE_TWO>
+// INCRWC_IN_HEAD (pairs after the first, without EXP_21F_TTI_STORE_INCR): the previous pair's stores
+// left RWC.Dst unchanged, so this pair loads 4 rows ahead and then advances RWC.Dst by 4 with a
+// TTI_INCRWC issued right after an SFPSWAP. INCRWC runs on the Matrix Unit, and in the cycle after
+// an SFPSWAP the SFPU accepts only SFPNOP, so the INCRWC takes no extra cycle.
+template <bool SCALE_EN, bool CLAMP_NEGATIVE, bool BASE_TWO, bool INCRWC_IN_HEAD = false>
 sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_head_(const std::uint16_t exp_base_scale_factor) {
     // Without the lower-clamp SFPSWAPs, the BASE_TWO upper clamp would read LREG4 one cycle
     // after the SFPMAD that writes it.
     static_assert(!BASE_TWO || CLAMP_NEGATIVE, "BASE_TWO needs CLAMP_NEGATIVE");
+    static_assert(!(INCRWC_IN_HEAD && EXP_21F_TTI_STORE_INCR), "the stores advance RWC.Dst");
+    constexpr std::uint32_t LOAD_OFFSET = INCRWC_IN_HEAD ? 2 * EXP_21F_TTI_ROW_B_DEST_OFFSET : 0;
     // val = sfpi::dst_reg[0] (row A) and sfpi::dst_reg[1] (row B)
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, EXP_21F_TTI_ROW_B_DEST_OFFSET);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, LOAD_OFFSET);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, LOAD_OFFSET + EXP_21F_TTI_ROW_B_DEST_OFFSET);
 
     if constexpr (SCALE_EN) {
         // Multiply each row by the BF16 scale immediate in-place.
@@ -369,6 +375,9 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_head_(const std::uint16_t exp_base_
         // into lreg_src_c and min(a, b) into lreg_dest; LCONST_0 is read as
         // 0.0 and, being a constant register, its write-back is masked.
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LCONST_0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        if constexpr (INCRWC_IN_HEAD) {
+            TTI_INCRWC(0, 2 * EXP_21F_TTI_ROW_B_DEST_OFFSET, 0, 0);
+        }
         TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LCONST_0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     }
 
@@ -383,6 +392,9 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_head_(const std::uint16_t exp_base_
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
         TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        if constexpr (INCRWC_IN_HEAD && !CLAMP_NEGATIVE) {
+            TTI_INCRWC(0, 2 * EXP_21F_TTI_ROW_B_DEST_OFFSET, 0, 0);
+        }
         TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     }
 }
@@ -424,8 +436,8 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_body_() {
     TTI_SFPSETEXP(0, p_sfpu::LREG5, p_sfpu::LREG4, SFPSETEXP_MOD1_ARG_EXPONENT);
 }
 
-// Last part of a row pair, issued inline: bf16 rounding, stores and the dest advance (from the
-// stores, or a TTI_INCRWC without EXP_21F_TTI_STORE_INCR).
+// Last part of a row pair, issued inline: bf16 rounding and stores (which also advance the dest
+// with EXP_21F_TTI_STORE_INCR; otherwise the next pair's head or the caller does).
 template <bool is_fp32_dest_acc_en>
 sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_tail_() {
     if constexpr (!is_fp32_dest_acc_en) {
@@ -453,10 +465,10 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_tail_() {
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
         TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
     } else {
-        // sfpi::dst_reg[0] = y_A; sfpi::dst_reg[1] = y_B; sfpi::dst_reg += 2;
+        // sfpi::dst_reg[0] = y_A; sfpi::dst_reg[1] = y_B; the next pair's head (or the caller after
+        // the last pair) does sfpi::dst_reg += 2.
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, EXP_21F_TTI_ROW_B_DEST_OFFSET);
-        TTI_INCRWC(0, 2 * EXP_21F_TTI_ROW_B_DEST_OFFSET, 0, 0);
     }
 }
 
@@ -571,8 +583,9 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     }
 
     // A row pair is _sfpu_exp_21f_bf16_tti_pair_head_ (8 instructions, + 2 for SCALE_EN, + 2 for
-    // CLAMP_NEGATIVE), _pair_body_ (16) and _pair_tail_ (2, + 2 for the bf16 rounding, + 1 for the
-    // TTI_INCRWC without EXP_21F_TTI_STORE_INCR). Only the body is recorded, into replay buffer
+    // CLAMP_NEGATIVE), _pair_body_ (16) and _pair_tail_ (2, + 2 for the bf16 rounding); without
+    // EXP_21F_TTI_STORE_INCR, one TTI_INCRWC per pair in an SFPSWAP shadow of the next pair's head
+    // and one after the last pair. Only the body is recorded, into replay buffer
     // slots [0, 16): cmath_common.h gives [16, 32) (ckernel::math::replay_buf_offset on) to the
     // FPU, whose matmul records its MVMUL sequence there in its init and replays it per tile, so a
     // longer record would corrupt a kernel that runs exp between two matmul calls. Head and tail
@@ -595,9 +608,13 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
 #pragma GCC unroll 0
         for (int i = 1; i < PAIRS; i++) {
-            _sfpu_exp_21f_bf16_tti_pair_head_<SCALE_EN, CLAMP_NEGATIVE, BASE_TWO>(exp_base_scale_factor);
+            _sfpu_exp_21f_bf16_tti_pair_head_<SCALE_EN, CLAMP_NEGATIVE, BASE_TWO, !EXP_21F_TTI_STORE_INCR>(
+                exp_base_scale_factor);
             TTI_REPLAY(0, EXP_21F_TTI_PAIR_BODY_LEN, 0, 0);
             _sfpu_exp_21f_bf16_tti_pair_tail_<is_fp32_dest_acc_en>();
+        }
+        if constexpr (!EXP_21F_TTI_STORE_INCR) {
+            TTI_INCRWC(0, 2 * EXP_21F_TTI_ROW_B_DEST_OFFSET, 0, 0);
         }
     }
     if constexpr (ITERATIONS % 2 != 0) {
