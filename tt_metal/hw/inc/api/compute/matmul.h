@@ -428,7 +428,9 @@ constexpr bool matmul_fe_tile_mop() {
     if constexpr (
         !row_mop_on && kt_key == 0 &&
         matmul_hifi2_half_wide(
-            MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncHalf, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb())) {
+            MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncHalf, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb()) &&
+        matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<13, K>(0) &&
+        !matmul_fe_mark::is_used_d<15, K>(0)) {
         return false;
     } else if constexpr (
         !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf &&
