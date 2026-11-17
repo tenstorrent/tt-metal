@@ -52,6 +52,10 @@ def pick_split(S, grid_cores=120):
         S == 1 and int(os.environ.get("HY4_B26_KC", "0")) > 0
     ):  # B26 (default OFF): k_chunk 64 at S=1 (G=8): -4.8 us on gather + split in the unit block; 8 chunks x 64 cover 512 keys per column
         return G, int(os.environ["HY4_B26_KC"])
+    if S > 1 and int(os.environ.get("HY4_B28_KC", "0")) > 0:
+        # B28 (default OFF): a column holds n ~ 256 +- 25 selected keys; with kc=128 a column has 2 or 3 ACTIVE chunks (n <= 256 / > 256) and the 3rd sender + 3rd partial state in the leader merge cost ~+8 us,
+        # so the split duration per chip is quantised by chunk count (49 vs 57 us, B28 nv dump). kc=160/192: always 2 active chunks for n in (kc, 2 kc]: equal work on every chip.
+        return G, int(os.environ["HY4_B28_KC"])
     if G == 2:
         return 2, 256
     return G, 128

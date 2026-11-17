@@ -50,6 +50,32 @@ def main():
         res(event="filled", fill=FILL)
         rec = OpRecorder()
         rec.install()
+        if (
+            os.environ.get("B28_NV", "0") == "1"
+        ):  # B28: per-chip valid-key counts of every split-SDPA call (eager round only)
+            import importlib
+
+            hs = importlib.import_module("models.demos.blackhole.hy4_preview.tt.hy4_split")
+            _orig = hs.sparse_sdpa_split
+            _cnt = [0]
+            res(event="b28_devids", ids=[int(i) for i in md.get_device_ids()])
+
+            def _wrap(q, kv, idx, *a, **k):
+                if hs._b28_on:
+                    try:
+                        ttnn.synchronize_device(md)
+                        nvs = []
+                        for t in ttnn.get_device_tensors(idx):
+                            x = ttnn.to_torch(t).reshape(-1, int(idx.shape[3])).to(torch.int64)
+                            nvs.append([int((x[r] != 0xFFFFFFFF).sum()) for r in range(min(4, x.shape[0]))])
+                        res(event="b28_nv", call=_cnt[0], S=int(idx.shape[2]), nv=nvs)
+                    except Exception as e:
+                        res(event="b28_nv_err", call=_cnt[0], err=repr(e)[:200])
+                _cnt[0] += 1
+                return _orig(q, kv, idx, *a, **k)
+
+            hs.sparse_sdpa_split = _wrap
+            hs._b28_on = True
         if MODE == "spec":
             rn = eng.runner
             rn.load([1000, 2000, 3000, 4000], [FILL - 8] * R, [[1, 2, 3]] * R, cap=[3] * R)
@@ -57,6 +83,8 @@ def main():
             ttnn.synchronize_device(md)
             rn.body("G")  # eager (records nothing: rec disabled), compiles at the filled bucket
             ttnn.synchronize_device(md)
+            if os.environ.get("B28_NV", "0") == "1":
+                hs._b28_on = False
             rn.load([1000, 2000, 3000, 4000], [FILL - 8] * R, [[1, 2, 3]] * R, cap=[3] * R)
             rn.set_park([0] * R)
             tr = ttnn.begin_trace_capture(md, cq_id=0)
