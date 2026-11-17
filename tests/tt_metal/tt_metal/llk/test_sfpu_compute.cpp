@@ -83,6 +83,17 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"sign", {{"SFPU_OP_CHAIN_0", "sign_tile_init(); sign_tile(0);"}}},
     {"rsqrt", {{"SFPU_OP_CHAIN_0", "rsqrt_tile_init(); rsqrt_tile(0);"}}},
     {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
+    {"add_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); add_unary_tile(0, 0x3F800000u);"}}},  // 1.0f
+    {"sub_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); sub_unary_tile(0, 0x3F000000u);"}}},  // 0.5f
+    // The host passes the reciprocal: this divides by 4.
+    {"div_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); div_unary_tile(0, 0x3E800000u);"}}},    // 0.25f
+    {"rsub_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); rsub_unary_tile(0, 0x3F800000u);"}}},  // 1 - x
+    // Same op, checked bit-exactly: on a 16-bit Dest rsub rounds to bf16 nearest-even, and the golden
+    // bfloat16(1 - x) rounds the same way. A truncating kernel fails it.
+    {"rsub_unary_rne",
+     {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); rsub_unary_tile(0, 0x3F800000u);"}}},  // 1 - x
+    {"rsub_tile",
+     {{"SFPU_OP_RSUB_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "rsub_tile_init(); rsub_tile(0, 0x3F800000u);"}}},  // 1 - x
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
     {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
     {"softplus",
@@ -699,6 +710,14 @@ const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_t
     {"rsub_unary_int32",
      {{"SFPU_OP_RSUB_INCLUDE", "1"},
       {"SFPU_OP_CHAIN_0", "rsub_unary_int32_tile_init(); rsub_unary_int32_tile(0, 0x7FFFFFFFu);"}}},
+    // Inputs are non-negative and both results stay non-negative, so Dest's integer encoding does not matter.
+    {"add_unary_int32",
+     {{"SFPU_OP_BINOP_WITH_SCALAR_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); add_unary_tile_int32(0, 1000u);"}}},
+    // x - (-5): a negative scalar keeps the result non-negative.
+    {"sub_unary_int32",
+     {{"SFPU_OP_BINOP_WITH_SCALAR_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); sub_unary_tile_int32(0, 0xFFFFFFFBu);"}}},
     {"logical_not_int32",
      {{"SFPU_OP_LOGICAL_NOT_INCLUDE", "1"},
       {"SFPU_OP_CHAIN_0", "logical_not_tile_init(); logical_not_tile<DataFormat::Int32>(0);"}}},
@@ -746,6 +765,12 @@ int32_t int32_unary_result(const std::string& op_name, int32_t x) {
     }
     if (op_name == "rsub_unary_int32") {
         return 0x7FFFFFFF - x;
+    }
+    if (op_name == "add_unary_int32") {
+        return x + 1000;
+    }
+    if (op_name == "sub_unary_int32") {
+        return x + 5;
     }
     if (op_name == "logical_not_int32") {
         return x == 0 ? 1 : 0;
@@ -910,6 +935,19 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "mul_unary") {
         return bfloat16(static_cast<float>(input) * 2.0f);
+    }
+    if (op_name == "add_unary") {
+        return bfloat16(static_cast<float>(input) + 1.0f);
+    }
+    if (op_name == "sub_unary") {
+        return bfloat16(static_cast<float>(input) - 0.5f);
+    }
+    if (op_name == "div_unary") {
+        return bfloat16(static_cast<float>(input) / 4.0f);
+    }
+    if (op_name == "rsub_unary" || op_name == "rsub_unary_rne" || op_name == "rsub_tile") {
+        // bfloat16(float) rounds to nearest even.
+        return bfloat16(1.0f - static_cast<float>(input));
     }
     if (op_name == "square") {
         return bfloat16(static_cast<float>(input) * static_cast<float>(input));
@@ -1670,6 +1708,9 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
     }
     if (op_name == "softplus") {
         return {0.06f, 0.02f};
+    }
+    if (op_name == "rsub_unary_rne" && !fp32_dest) {
+        return {0.0f, 0.0f};
     }
     return {0.06f, 0.006f};
 }
@@ -3455,6 +3496,10 @@ inline bool is_unary_sfpu_op_unsupported(tt::ARCH arch, const std::string& sfpu_
     if (arch == tt::ARCH::WORMHOLE_B0 && sfpu_op == "softcap") {
         return true;
     }
+    // The bit-exact rsub rounding check is written for Quasar's kernel.
+    if (arch != tt::ARCH::QUASAR && sfpu_op == "rsub_unary_rne") {
+        return true;
+    }
     return (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) &&
            (sfpu_op == "isinf" || sfpu_op == "isposinf" || sfpu_op == "isneginf" || sfpu_op == "isnan" ||
             sfpu_op == "isfinite");
@@ -3536,6 +3581,13 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "sign"),
         std::make_tuple(1, "rsqrt"),
         std::make_tuple(1, "mul_unary"),
+        std::make_tuple(1, "add_unary"),
+        std::make_tuple(1, "sub_unary"),
+        std::make_tuple(1, "div_unary"),
+        std::make_tuple(1, "rsub_unary"),
+        std::make_tuple(1, "rsub_tile"),
+        std::make_tuple(1, "rsub_unary_rne"),
+        std::make_tuple(4, "rsub_unary_rne"),
         std::make_tuple(4, "relu"),
         std::make_tuple(4, "relu_min"),
         std::make_tuple(4, "relu_max"),
@@ -3551,6 +3603,11 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "sign"),
         std::make_tuple(4, "rsqrt"),
         std::make_tuple(4, "mul_unary"),
+        std::make_tuple(4, "add_unary"),
+        std::make_tuple(4, "sub_unary"),
+        std::make_tuple(4, "div_unary"),
+        std::make_tuple(4, "rsub_unary"),
+        std::make_tuple(4, "rsub_tile"),
         std::make_tuple(1, "hardsigmoid"),
         std::make_tuple(1, "softsign"),
         std::make_tuple(1, "celu"),
@@ -3780,6 +3837,11 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture,
     ::testing::Values(
+        std::make_tuple(1, "add_unary"),
+        std::make_tuple(1, "sub_unary"),
+        std::make_tuple(1, "div_unary"),
+        std::make_tuple(1, "rsub_unary"),
+        std::make_tuple(1, "rsub_tile"),
         std::make_tuple(1, "ceil"),
         std::make_tuple(4, "ceil"),
         std::make_tuple(1, "floor"),
@@ -4210,6 +4272,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "left_shift"),
         std::make_tuple(1, "right_shift"),
         std::make_tuple(1, "rsub_unary_int32"),
+        std::make_tuple(1, "add_unary_int32"),
+        std::make_tuple(1, "sub_unary_int32"),
         std::make_tuple(1, "logical_not_int32"),
         std::make_tuple(1, "sum_int_col"),
         std::make_tuple(1, "sum_int_row"),

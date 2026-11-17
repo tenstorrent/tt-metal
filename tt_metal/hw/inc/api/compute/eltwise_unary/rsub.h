@@ -32,6 +32,10 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
+#ifdef ARCH_QUASAR
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Rsub, is_fp32_dest_acc_en>(
+        idst, scalar, VectorMode::RC)));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -40,6 +44,7 @@ ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
         idst,
         VectorMode::RC,
         scalar));
+#endif
 }
 
 /**
