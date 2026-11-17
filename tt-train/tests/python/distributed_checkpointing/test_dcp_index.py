@@ -66,6 +66,7 @@ def _index() -> Index:
             label,
             ("model/Llama/fc/weight", "model/Llama/tok_emb/weight"),
             chunks,
+            tp_split=(1, 1, 2, 1),
         ),
         "optimizer/exp_avg/model/Llama/fc/weight": Entry(
             "optimizer/exp_avg/model/Llama/fc/weight",
@@ -80,6 +81,7 @@ def _index() -> Index:
             [chunks[0]],
             param_ref="model/Llama/fc/weight",
             state_path=("exp_avg",),
+            tp_split=(1, 1, 2, 1),
         ),
         "model/Llama/blocks/0/attention/qkv_linear/weight": Entry(
             "model/Llama/blocks/0/attention/qkv_linear/weight",
@@ -95,6 +97,7 @@ def _index() -> Index:
                 ChunkRecord(Box((0, 0, 0, 0), (1, 1, 32, 16)), 0, 3072, 2048, 0x0BADC0DE),
                 ChunkRecord(Box((0, 0, 32, 0), (1, 1, 32, 16)), 1, 0, 2048, 0x00000001),
             ],
+            tp_split=(1, 1, 2, 1),
         ),
     }
     files = [FileRecord(data_file_name(0, 0, c), 8192, 0, 0, c) for c in dist_coords((2, 2))]
@@ -125,6 +128,14 @@ def test_index_round_trips_through_json_with_columnar_chunks():
     assert decoded.files == index.files
     assert decoded.scalars == index.scalars and type(decoded.scalars["optimizer/amsgrad"]) is bool
     assert decoded.live_key_map()["model/Llama/tok_emb/weight"] == "model/Llama/fc/weight"
+    assert all(entry["tp_split"] == [1, 1, 2, 1] for entry in encoded["state"].values()), "every entry records it"
+
+
+def test_a_malformed_tp_split_is_refused(expect_error):
+    encoded = json.loads(json.dumps(_index().to_json()))
+    encoded["state"]["model/Llama/blocks/0/attention/qkv_linear/weight"]["tp_split"] = [1, 2, 1]
+    with expect_error(CheckpointError, r"qkv_linear/weight': malformed tp_split \[1, 2, 1\]"):
+        Index.from_json(encoded)
 
 
 def test_index_rejects_newer_versions_and_foreign_formats(expect_error):

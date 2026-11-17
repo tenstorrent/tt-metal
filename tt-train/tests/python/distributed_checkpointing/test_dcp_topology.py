@@ -15,6 +15,7 @@ from ttml.distributed_checkpointing._topology import (
     global_shape,
     owner,
     replica_groups,
+    tp_split,
 )
 
 
@@ -152,3 +153,14 @@ def test_boxes_tile_grid_fast_path_agrees_with_the_pairwise_definition():
         assert boxes_tile(boxes, target) == _pairwise_tile(boxes, target), (boxes, target)
     assert grid_cases > 1000, "the fast path was exercised"
     assert pairwise_cases > 200, "the pairwise path was exercised"
+
+
+def test_tp_split_counts_every_mesh_axis_but_fsdps():
+    # Distribution axis 0 shards dim 3 (an FSDP axis), axis 1 shards dim 2 (tensor parallel).
+    fsdp_tp = world([S(3), S(2)], (4, 8))
+    assert tp_split(fsdp_tp, None, 4) == (1, 1, 8, 4), "without an FSDP axis every split counts"
+    assert tp_split(fsdp_tp, 0, 4) == (1, 1, 8, 1), "FSDP's own split leaves the rows in canonical order"
+    # Both axes split dim 2: only the one that is not FSDP's decides a fused weight's row order.
+    stacked = world([S(2), S(2)], (4, 8))
+    assert tp_split(stacked, None, 4) == (1, 1, 32, 1) and tp_split(stacked, 0, 4) == (1, 1, 8, 1)
+    assert tp_split(world([R(), R()], (4, 8)), None, 4) == (1, 1, 1, 1)

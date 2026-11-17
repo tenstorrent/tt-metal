@@ -76,8 +76,16 @@ def canonical_of(device: np.ndarray, transform, canonical_shape) -> np.ndarray:
     return out
 
 
+def tp_split_of(label: Label, rank: int) -> tuple[int, ...]:
+    """The TP split a save records for a rank-``rank`` tensor under ``label`` when none of its axes is FSDP's."""
+    return tuple(label.shard_count(d) for d in range(rank))
+
+
 def info(key, label, global_shape, transform, dtype="F32", role="param") -> TensorInfo:
-    return TensorInfo(key, role, dtype, "TILE", label, label_local_shape(label, global_shape), transform, (key,))
+    local_shape = label_local_shape(label, global_shape)
+    return TensorInfo(
+        key, role, dtype, "TILE", label, local_shape, transform, (key,), tp_split=tp_split_of(label, len(global_shape))
+    )
 
 
 class FakeCheckpoint:
