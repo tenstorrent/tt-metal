@@ -126,9 +126,8 @@ struct ProgramRunArgs {
     // Tensor arguments
     ////////////////////////////////////////////////////////////////////////
 
-    // The actual MeshTensor argument
-    // (Non-owning reference. Will also permit MeshTensorView when it becomes available.)
-    using TensorArgument = std::variant<std::reference_wrapper<const MeshTensor>>;
+    // The actual MeshTensor argument (see tensor_parameter.hpp)
+    using TensorArgument = tt::tt_metal::TensorArgument;
 
     // A TensorArgument must be specified:
     //  For EVERY TensorParameter in the ProgramSpec, when calling Program::set_program_run_args.
@@ -205,7 +204,6 @@ struct ProgramRunArgs {
 
 using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
 using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
-using TensorArgument = ProgramRunArgs::TensorArgument;
 using GlobalSemaphoreArgument = ProgramRunArgs::GlobalSemaphoreArgument;
 
 //-----------------------------------------------------

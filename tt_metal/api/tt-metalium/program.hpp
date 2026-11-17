@@ -8,7 +8,6 @@
 #include <memory>
 #include <vector>
 
-#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/run_args/validation_mode.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/workload/utils/table.hpp>
@@ -18,6 +17,7 @@ namespace tt::tt_metal {
 // Fwd declares
 struct ProgramDescriptor;
 struct ProgramSpec;
+struct ProgramRunArgs;
 class CircularBuffer;
 class Program;
 
@@ -125,8 +125,7 @@ public:
     // PER-DEVICE VALUES: tensor args cannot have per-device values, so every per-device value
     // (MeshWorkload::update_program_run_args_for_device) is kept.
     void update_tensor_args(
-        const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args,
-        ValidationMode validation = ValidationMode::FULL);
+        const Table<TensorParamName, TensorArgument>& tensor_args, ValidationMode validation = ValidationMode::FULL);
 
     //////////////////////////////
     // ID related functions:
