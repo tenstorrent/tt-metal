@@ -5,8 +5,10 @@
 #include "sdpa_fw_config.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <tt-metalium/kernel_types.hpp>
 
@@ -650,7 +652,7 @@ void check_chunks(
     check_l1(shape, floor_chunks(user_chunks(config, shape)), l1_budget_bytes, /* with_partials */ false);
 }
 
-SDPAForwardChunks resolve_chunks(
+SDPAForwardPlan resolve_plan(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,
     uint64_t l1_budget_bytes,
@@ -665,11 +667,28 @@ SDPAForwardChunks resolve_chunks(
     // being refused; validate checks the floor without them for the same reason.
     const bool may_cut = may_split(config, shape);
     user.allow_split = l1_bytes(cb_tiles(shape, floor_chunks(user), /* with_partials */ true)) <= l1_budget_bytes;
+    // One make_schedule per distinct chunking. The pick rates a candidate, asks the same candidate whether
+    // it cuts (for the L1 filter) and the L1 shrink asks again, and the factory wants the schedule of the
+    // chunking that wins; building each from scratch cost nine make_schedule calls on a miss, tens of
+    // milliseconds at 32 heads and S=16k.
+    std::map<std::array<uint32_t, 4>, SDPAForwardSchedule> rated;
+    const auto schedule_of = [&](const SDPAForwardChunks& candidate) -> const SDPAForwardSchedule& {
+        const std::array<uint32_t, 4> key{
+            candidate.Sq_chunk_t,
+            candidate.Sk_chunk_t,
+            candidate.heads_per_item,
+            static_cast<uint32_t>(candidate.allow_split)};
+        const auto it = rated.find(key);
+        if (it != rated.end()) {
+            return it->second;
+        }
+        return rated.emplace(key, schedule_for(config, shape, candidate, grid_cores)).first->second;
+    };
     if (user.Sq_chunk_t != 0U && user.Sk_chunk_t != 0U && user.heads_per_item != 0U) {
-        return user;
+        return SDPAForwardPlan{user, schedule_of(user)};
     }
     const auto cuts = [&](const SDPAForwardChunks& candidate) {
-        return may_cut && candidate.allow_split && schedule_for(config, shape, candidate, grid_cores).num_slots > 0U;
+        return may_cut && candidate.allow_split && schedule_of(candidate).num_slots > 0U;
     };
 
     // Shape rule for the unset knobs, from the chunk sweep on Blackhole (S=2048/4096, D=64/128, every mask
@@ -737,7 +756,7 @@ SDPAForwardChunks resolve_chunks(
                 l1_bytes(cb_tiles(shape, candidate, cuts(candidate))) > l1_budget_bytes) {
                 continue;  // the L1 shrink below only makes chunks smaller: one that does not fit is out
             }
-            const double us = schedule_for(config, shape, candidate, grid_cores).predicted_us;
+            const double us = schedule_of(candidate).predicted_us;
             if (us < best_us * kSmallerChunkMustWinBy) {
                 best = candidate;
                 best_us = us;
@@ -759,7 +778,15 @@ SDPAForwardChunks resolve_chunks(
         }
     }
     check_l1(shape, chunks, l1_budget_bytes, cuts(chunks));
-    return chunks;
+    return SDPAForwardPlan{chunks, schedule_of(chunks)};
+}
+
+SDPAForwardChunks resolve_chunks(
+    const SDPAForwardProgramConfig& config,
+    const SDPAForwardShape& shape,
+    uint64_t l1_budget_bytes,
+    uint32_t grid_cores) {
+    return resolve_plan(config, shape, l1_budget_bytes, grid_cores).chunks;
 }
 
 }  // namespace ttml::metal::ops::sdpa_fw::device

@@ -135,8 +135,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // sdpa_fw_config.cpp; the ring SDPA path builds the program directly, so the knobs are checked here as
     // well as in validate.
     const SDPAForwardShape shape = shape_of(query, key, value, mask_type, args.has_gate, args.return_intermediates);
-    const SDPAForwardChunks chunks =
-        resolve_chunks(args.program_config, shape, available_l1_bytes(*device), num_available_cores);
+    // resolve_plan rated its candidates by building their schedules, so it hands back the schedule of the
+    // chunking it kept rather than this factory building it a tenth time.
+    const auto [chunks, schedule] =
+        resolve_plan(args.program_config, shape, available_l1_bytes(*device), num_available_cores);
     const uint32_t Sq_chunk_t = chunks.Sq_chunk_t;
     const uint32_t Sk_chunk_t = chunks.Sk_chunk_t;
     const uint32_t heads_per_item = chunks.heads_per_item;
@@ -154,7 +156,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
-    const SDPAForwardSchedule schedule = schedule_for(args.program_config, shape, chunks, num_available_cores);
     const auto& per_core_units = schedule.per_core;
     const uint32_t num_cores = static_cast<uint32_t>(per_core_units.size());
     const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);

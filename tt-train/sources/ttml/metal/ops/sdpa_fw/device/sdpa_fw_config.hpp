@@ -200,10 +200,25 @@ void check_chunks(
     uint64_t l1_budget_bytes,
     uint32_t grid_cores);
 
+// The chunking and the schedule the program factory runs. resolve_plan rates its candidates by building
+// their schedules, so it hands back the one it kept rather than making the caller build it again; the
+// schedule is schedule_for(config, shape, chunks, grid_cores).
+struct SDPAForwardPlan {
+    SDPAForwardChunks chunks;
+    SDPAForwardSchedule schedule;
+};
+
 // check_chunks, then picks the unset knobs by a shape rule (four rows per item; up to four heads of a K/V
 // group stacked when there is a mask tensor, one otherwise; four or eight K/V tiles per step), shrinking them
 // until they fit l1_budget_bytes (with the split units' CBs when the schedule cuts) and keep the config's
 // cores busy. Throws when even the smallest config does not fit.
+SDPAForwardPlan resolve_plan(
+    const SDPAForwardProgramConfig& config,
+    const SDPAForwardShape& shape,
+    uint64_t l1_budget_bytes,
+    uint32_t grid_cores);
+
+// resolve_plan's chunking, for callers that do not need its schedule.
 SDPAForwardChunks resolve_chunks(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,
