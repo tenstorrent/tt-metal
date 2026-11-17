@@ -4,40 +4,28 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <map>
 #include <memory>
-#include <numeric>
 #include <optional>
-#include <set>
 #include <string>
-#include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
-#include "impl/context/metal_context.hpp"
+#include <tt-metalium/math.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -102,7 +90,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
                           spec.layout() == Layout::ROW_MAJOR;
     // dynamic_tensor_shape's runtime accessor fields would have no reader: a per-node binding builds only a
     // LocalTensorAccessor, which reads just its base address.
-    const bool is_per_node = per_core_allocation::is_per_core_allocation(memory_config);
+    const bool is_per_node = experimental::per_core_allocation::is_per_core_allocation(memory_config);
     TT_FATAL(
         !is_per_node || !tensor_parameter.relaxations.dynamic_tensor_shape,
         "TensorParameter '{}' is per-node allocated, which does not support dynamic_tensor_shape",
@@ -318,4 +306,4 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
     return resolved_tensor_parameters;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

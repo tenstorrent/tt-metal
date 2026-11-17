@@ -102,8 +102,23 @@ auto create_mesh_workload_from_workload_factory(
                       const typename device_operation_t::tensor_args_t& tensor_args,
                       typename device_operation_t::tensor_return_value_t& tensor_return_value) {
                       WorkloadFactory::create_mesh_workload(
-                          operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                          operation_attributes,
+                          tensor_coords,
+                          tensor_args,
+                          tensor_return_value,
+                          ttnn::MergePerDevicePrograms{});
                   }) {
+        // The factory runs the op itself, including its cache hits: it may merge per-device programs.
+        return WorkloadFactory::create_mesh_workload(
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value, ttnn::MergePerDevicePrograms{});
+    } else if constexpr (requires(
+                             const typename device_operation_t::operation_attributes_t& operation_attributes,
+                             const ttnn::MeshCoordinateRangeSet& tensor_coords,
+                             const typename device_operation_t::tensor_args_t& tensor_args,
+                             typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+                             WorkloadFactory::create_mesh_workload(
+                                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                         }) {
         return WorkloadFactory::create_mesh_workload(
             operation_attributes, tensor_coords, tensor_args, tensor_return_value);
     } else if constexpr (requires(
@@ -218,7 +233,7 @@ void enqueue_mesh_workload(
 
         // Metal has no implicit queue selection; pass the thread's current TTNN queue explicitly.
         auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
-            mesh_device, ttnn::core::get_current_command_queue_id_for_thread().get());
+            mesh_device->mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()));
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
@@ -227,7 +242,12 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    if (is_recording_command_list()) [[unlikely]] {
+        record_to_command_list(
+            get_operation_name<mesh_device_operation_t>(operation_attributes), mesh_device, workload);
+    } else {
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    }
 
     ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
 

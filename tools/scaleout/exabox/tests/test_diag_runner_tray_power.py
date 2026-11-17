@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for diag_runner.py's tray 12 V feed phase: the hot-swap
+"""Unit tests for diag/tray_power.py's tray 12 V feed phase: the hot-swap
 controller (HSC) and tray CPLD latch decode, the per-tray verdict, and the
 read-only gate on every ipmitool transaction. A fake BMC stands in for
 ipmitool, so no hardware is needed.
@@ -27,19 +27,14 @@ TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
-import diag_runner  # noqa: E402
-from diag_runner import (  # noqa: E402
-    FAIL,
-    PASS,
-    SKIP,
+import diag.tray_power as tray_power  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Phase  # noqa: E402
+from diag.tray_power import (  # noqa: E402
     TRAY_POWER_ALLOWED,
     TRAY_POWER_BUS,
     TRAY_POWER_CALL_S,
     TRAY_POWER_PHASE_S,
-    WARN,
-    Phase,
     TrayPowerReader,
-    build_diag_arg_parser,
     decode_cpld_power,
     decode_hsc_record,
     decode_hsc_status,
@@ -47,9 +42,11 @@ from diag_runner import (  # noqa: E402
     run_tray_power,
     tray_bdf_range,
 )
+from diag_runner import build_diag_arg_parser  # noqa: E402
+from tiers import TIERS  # noqa: E402
 
 CLEAN_HSC = {"word": 0x0000, "input": 0x00, "iout": 0x00}
-# SYS-5505 record words of a healthy feed, as hand-read on Blackhole Galaxy trays: no
+# Record words of a healthy feed, as hand-read on Blackhole Galaxy trays: no
 # FAULT_RECORD, FAULT_RECORD_LAST 0x0012, 12.22 V, IOUT peak 184.0 A, 43 C,
 # IOUT OC fault/warn limits 228 A / 219 A.
 CLEAN_REC = {0xFA: 0x0000, 0xFB: 0x0012, 0x8B: 0x0187, 0xA6: 2944, 0xAF: 43, 0x46: 3648, 0x4A: 3504}
@@ -102,10 +99,10 @@ class FakeBmc:
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
 
-def run_phase(bmc, tier="pre_reboot", dry_run=False, clock=None) -> Phase:
+def run_phase(bmc, dry_run=False, clock=None) -> Phase:
     phase = Phase(name="tray_power", gates=False)
     kw = {"clock": clock} if clock else {}
-    run_tray_power(tier, phase, dry_run, runner=bmc, **kw)
+    run_tray_power(phase, dry_run, runner=bmc, **kw)
     return phase
 
 
@@ -357,11 +354,8 @@ class TestTrayPowerPhase(unittest.TestCase):
         self.assertIn("not read", checks[1].details)
         self.assertIn(f"no reply in {TRAY_POWER_CALL_S:g} s", checks[1].details)
 
-    def test_other_tiers_and_dry_run_send_nothing(self):
-        for tier in ("light", "medium", "deploy"):
-            bmc = FakeBmc()
-            self.assertEqual([c.status for c in run_phase(bmc, tier=tier).checks], [SKIP])
-            self.assertEqual(bmc.calls, [])
+    def test_only_pre_reboot_runs_the_phase_and_dry_run_sends_nothing(self):
+        self.assertEqual([name for name, tier in TIERS.items() if tier.tray_power], ["pre_reboot"])
         bmc = FakeBmc()
         self.assertEqual([c.status for c in run_phase(bmc, dry_run=True).checks], [SKIP])
         self.assertEqual(bmc.calls, [])
@@ -468,7 +462,7 @@ class TestTrayPowerPhase(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, stdout=" 00 00\n", stderr="")
 
         clock.t = TRAY_POWER_PHASE_S - 4
-        with mock.patch.object(diag_runner, "run", fake_run):
+        with mock.patch.object(tray_power, "run", fake_run):
             reader.txn(TRAY_POWER_BUS[1], 0x40, 2, 0x79)
         self.assertEqual(seen["timeout"], 4)
 
@@ -508,7 +502,7 @@ class TestTrayPowerPhase(unittest.TestCase):
         self.assertEqual(bmc.calls, [])
 
 
-# Hand reads of one galaxy (SYS-5505): tray 2 HSC 0x40 latched OFF and
+# Hand reads of one galaxy : tray 2 HSC 0x40 latched OFF and
 # IOUT_OC with FAULT_RECORD 0x0022 and an IOUT peak of 235.5 A; the other seven
 # feeds peaked at 180.5-185.5 A. Raw IOUT peaks in 62.5 mA steps.
 OC_TRAY_PEAKS = {

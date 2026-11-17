@@ -5,7 +5,7 @@ import pytest
 import torch
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
-    get_valid_eltwise_binary_math_fidelities,
+    get_valid_math_fidelities,
 )
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -42,6 +42,8 @@ from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
     EN_DEST_REUSE,
+    ENABLE_DIRECT_INDEXING,
+    IN_FACE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -98,6 +100,55 @@ def get_eltwise_binary_transpose(formats):
 
 def _unique_dimensions(dimensions):
     return [list(dim) for dim in dict.fromkeys(tuple(dim) for dim in dimensions)]
+
+
+# Fills SrcB past its own tile; one datum reaching math breaks the result.
+SRCB_POISON = 1024.0
+
+
+def _faces(tile, tile_dimensions):
+    """Split one tilized tile into its faces, keyed by (face row, face column)."""
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    face_size = face_r_dim * FACE_C_DIM
+    return {
+        (fr, fc): tile[
+            (fr * num_faces_c_dim + fc)
+            * face_size : (fr * num_faces_c_dim + fc + 1)
+            * face_size
+        ].reshape(face_r_dim, FACE_C_DIM)
+        for fr in range(num_faces_r_dim)
+        for fc in range(num_faces_c_dim)
+    }
+
+
+def _srcb_own_shape_operands(
+    src_B_tilized_flat, tile_cnt, tile_dimensions, tile_dimensions_B
+):
+    """SrcB tiles of their own shape in SrcA-tile-sized L1 slots, poisoned past each tile.
+
+    Returns the L1 stimuli and, for the broadcast golden, an SrcA-shaped copy of each SrcB tile:
+    each SrcB face in the SrcA face at the same position, cut to SrcA's face rows, and poison
+    elsewhere.
+    """
+    size_A = tile_dimensions[0] * tile_dimensions[1]
+    size_B = tile_dimensions_B[0] * tile_dimensions_B[1]
+    assert size_B <= size_A, "SrcB tile must fit in an SrcA tile slot"
+    face_r_dim_A = get_tile_params(tile_dimensions)[0]
+
+    stimuli, golden_view = [], []
+    for tile in range(tile_cnt):
+        tile_B = src_B_tilized_flat[tile * size_A : tile * size_A + size_B]
+        poison = torch.full((size_A - size_B,), SRCB_POISON, dtype=tile_B.dtype)
+        stimuli.append(torch.cat([tile_B, poison]))
+
+        view = torch.full((size_A,), SRCB_POISON, dtype=tile_B.dtype)
+        faces_A = _faces(view, tile_dimensions)
+        for position, face_B in _faces(tile_B, tile_dimensions_B).items():
+            if position in faces_A:
+                rows = min(face_r_dim_A, face_B.shape[0])
+                faces_A[position][:rows] = face_B[:rows]
+        golden_view.append(view)
+    return torch.cat(stimuli), torch.cat(golden_view)
 
 
 def get_eltwise_binary_tile_dimensions(transpose_srca, broadcast_type):
@@ -263,6 +314,7 @@ def _run_eltwise_binary_test(
     tile_dimensions,
     acc_to_dest,
     *,
+    tile_dimensions_B=None,
     is_perf=False,
     perf_report=None,
     run_types=None,
@@ -273,6 +325,10 @@ def _run_eltwise_binary_test(
 
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
+    # SrcB takes SrcA's shape unless tile_dimensions_B gives it its own.
+    face_r_dim_B, num_faces_r_dim_B, num_faces_c_dim_B = get_tile_params(
+        tile_dimensions_B or tile_dimensions
+    )
 
     tile_rows, tile_cols = tile_dimensions
     tile_cnt_A = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
@@ -331,6 +387,11 @@ def _run_eltwise_binary_test(
 
     stimuli_A = src_A_tilized_flat
     stimuli_B = src_B_tilized_flat
+    golden_src_B = src_B_tilized_flat
+    if tile_dimensions_B is not None:
+        stimuli_B, golden_src_B = _srcb_own_shape_operands(
+            src_B_tilized_flat, tile_cnt_B, tile_dimensions, tile_dimensions_B
+        )
 
     # Prepare golden src_A: apply tile-level transpose if enabled
     # Hardware does transpose_faces then transpose_within_faces during unpack
@@ -364,12 +425,11 @@ def _run_eltwise_binary_test(
         )
 
     # Prepare golden src_B: apply broadcast if enabled
-    golden_src_B = src_B_tilized_flat
     if broadcast_type != BroadcastType.None_:
         broadcast_golden = get_golden_generator(BroadcastGolden)
         golden_src_B = broadcast_golden(
             broadcast_type,
-            src_B_tilized_flat,
+            golden_src_B,
             formats.input_format,
             num_faces=num_faces,
             tile_cnt=tile_cnt_A,
@@ -413,6 +473,9 @@ def _run_eltwise_binary_test(
             DEST_SYNC(dest_sync),
             REUSE_DEST_TYPE(reuse_dest_type=EltwiseBinaryReuseDestType.NONE),
             ACC_TO_DEST(acc_to_dest),
+            # Direct indexing is a Quasar-only feature; recorded as off so the perf CSV carries
+            # the same column as the Quasar side.
+            ENABLE_DIRECT_INDEXING(False),
         ],
         "runtimes": [
             generate_input_dim(
@@ -433,8 +496,9 @@ def _run_eltwise_binary_test(
                 input_num_blocks=num_blocks,
                 output_num_blocks=num_blocks,
             ),
-            NUM_FACES_R_DIM(num_faces_r_dim),
-            NUM_FACES_C_DIM(num_faces_c_dim),
+            IN_FACE_DIMS(face_r_dim, FACE_C_DIM, face_r_dim_B, FACE_C_DIM),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim_B),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim_B),
             TEST_FACE_DIMS(face_r_dim=face_r_dim),
             LOOP_FACTOR(loop_factor),
         ],
@@ -483,9 +547,7 @@ def _run_eltwise_binary_test(
     unpack_to_dest=[False],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
     math_op=lambda formats: get_eltwise_binary_math_ops(formats),
-    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
-        formats, math_op
-    ),
+    math_fidelity=lambda formats, math_op: get_valid_math_fidelities(formats, math_op),
     transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
         transpose_srca, BroadcastType.None_
@@ -531,7 +593,7 @@ def test_eltwise_binary(
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=get_bfp4_formats(),
-    math_fidelity=lambda formats: get_valid_eltwise_binary_math_fidelities(formats),
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     transpose_srca=Transpose.No,
     math_op=BFP4_MATH_OPS,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
@@ -921,6 +983,7 @@ def _run_eltwise_binary_dest_reuse_test(
             EN_DEST_REUSE(),
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
             ACC_TO_DEST(False),
+            ENABLE_DIRECT_INDEXING(False),
         ],
         "runtimes": [
             generate_input_dim(
@@ -940,8 +1003,14 @@ def _run_eltwise_binary_dest_reuse_test(
                 input_num_blocks=prepared["input_num_blocks"],
                 output_num_blocks=prepared["output_num_blocks"],
             ),
-            NUM_FACES_R_DIM(prepared["num_faces_r_dim"]),
-            NUM_FACES_C_DIM(prepared["num_faces_c_dim"]),
+            IN_FACE_DIMS(
+                prepared["face_r_dim"],
+                FACE_C_DIM,
+                prepared["face_r_dim"],
+                FACE_C_DIM,
+            ),
+            NUM_FACES_R_DIM(prepared["num_faces_r_dim"], prepared["num_faces_r_dim"]),
+            NUM_FACES_C_DIM(prepared["num_faces_c_dim"], prepared["num_faces_c_dim"]),
             TEST_FACE_DIMS(face_r_dim=prepared["face_r_dim"]),
             TILE_COUNT(prepared["tile_cnt_input"]),
             LOOP_FACTOR(loop_factor),
@@ -994,9 +1063,7 @@ def _run_eltwise_binary_dest_reuse_test(
     dest_acc=[DestAccumulation.No],
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
-    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
-        formats, math_op
-    ),
+    math_fidelity=lambda formats, math_op: get_valid_math_fidelities(formats, math_op),
     tile_dimensions=DEST_REUSE_TILE_DIMENSIONS,
     input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_dest_reuse_input_dimensions(
         dest_acc, dest_sync, formats, tile_dimensions

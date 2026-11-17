@@ -113,6 +113,8 @@ public:
 
     void initialize_distributed_context(int argc, char** argv);
 
+    [[nodiscard]] bool is_distributed_context_initialized() const;
+
     [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
         const;
 

@@ -26,7 +26,6 @@ class TtSegformerDWConv:
                 parameters=parameters["dwconv"],
                 groups=dim,
                 height_sharding=False,
-                act_block_h=32,
                 dtype=ttnn.bfloat8_b,
                 activation=activation,
                 reshard=True,

@@ -24,6 +24,19 @@ constexpr uint32_t kDerivedLogicalLt = 7;
 constexpr uint32_t kDerivedJointLPartialCol = 8;
 constexpr uint32_t kDerivedSlotCount = 9;
 
+// Lanes: up to kMaxLanes requests in one call (see RingJointSDPAInputs::num_lanes).
+// Lane b's record repeats slots kDerivedLogicalNt..kDerivedQValidTileCount at kDerivedLaneBase + b * kDerivedLaneStride
+// (index it as lane base + those names); the derived CB page grows to kDerivedLanePageBytes in lanes mode.
+constexpr uint32_t kMaxLanes = 8;
+constexpr uint32_t kDerivedLaneBase = 16;
+constexpr uint32_t kDerivedLaneStride = kDerivedQValidTileCount + 1;
+// A lane record is the contiguous slots 0..4; reordering or inserting a slot there would overlap the records.
+static_assert(
+    kDerivedLogicalNt == 0 && kDerivedQPreWrapStartTile == 1 && kDerivedQPreWrapTileCount == 2 &&
+        kDerivedQPostWrapStartTile == 3 && kDerivedQValidTileCount == 4 && kDerivedLaneBase >= kDerivedSlotCount,
+    "a lane record must be the contiguous slots kDerivedLogicalNt..kDerivedQValidTileCount");
+constexpr uint32_t kDerivedLanePageBytes = (kDerivedLaneBase + kMaxLanes * kDerivedLaneStride) * 4;
+
 // Common-runtime-arg layout: the metadata block (when present) precedes the logical-length pair.
 // slot_id addr, num_layers, layer_idx, batch count, kv_actual_isl addr
 constexpr uint32_t kReaderMetadataCommonArgCount = 5;

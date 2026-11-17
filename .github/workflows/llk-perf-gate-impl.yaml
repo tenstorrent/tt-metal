@@ -255,6 +255,8 @@ jobs:
           LLK_PERF_WAREHOUSE_TABLE: >-
             ${{ inputs.warehouse_table || vars.LLK_PERF_WAREHOUSE_TABLE }}
         run: |
+          # Gate verdict says why there is no verdict.
+          [ -n "$SNOWFLAKE_PRIVATE_KEY" ] || exit 0
           COMMITS_ARG=()
           if [ -n "$MATCH_REF" ]; then
             # Commits and trees only: enough for the merge base and the 200 commits before it.
@@ -584,6 +586,7 @@ jobs:
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
           SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
           THRESHOLD: ${{ inputs.threshold }}
+          MIN_CYCLES: ${{ inputs.min_cycles }}
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -646,6 +649,7 @@ jobs:
             --note "$NOTE" \
             --post-pass "$SLACK_ON_PASS" \
             --threshold "$THRESHOLD" \
+            --min-cycles "$MIN_CYCLES" \
             --module-thresholds "$MODULE_THRESHOLDS" \
             --part-out slack_part.json \
             --out slack_payload.json && exit 0
@@ -698,6 +702,7 @@ jobs:
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
           FAIL_WITHOUT_BASELINE: ${{ inputs.fail_without_baseline }}
+          HAVE_WAREHOUSE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY != '' }}
         run: |
           # The exit code and what kind of verdict it is: pass, regression, incomplete or no-compare.
           KIND=no-compare
@@ -718,6 +723,10 @@ jobs:
           fi
 
           if [ ! -f have_baseline.txt ]; then
+            if [ "$HAVE_WAREHOUSE_KEY" != "true" ]; then
+              echo "::warning::SWEEPS_SNOWFLAKE_KEY is empty, so the gate cannot read the baseline. No verdict; the job does not fail."
+              exit 0
+            fi
             echo "::error::The baseline read did not finish, so the gate has no verdict."
             echo "This is an infrastructure fault, not a performance result."
             exit 1

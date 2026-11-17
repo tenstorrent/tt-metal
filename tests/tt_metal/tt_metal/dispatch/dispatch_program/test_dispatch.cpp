@@ -41,6 +41,7 @@
 // CreateSemaphore with CoreType
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -225,6 +226,57 @@ TEST_F(MeshDispatchFixture, TensixTestInitLocalMemory) {
 
     workload.add_program(device_range, std::move(program));
     this->RunProgram(mesh_device, workload);
+}
+
+TEST_F(MeshDispatchFixture, TensixTestHostTransferStatsCountProgramLoads) {
+    if (!tt::tt_metal::test::buffer_transfers_recorded()) {
+        GTEST_SKIP() << "Program loads are not recorded on this target";
+    }
+    auto mesh_device = devices_[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    const CoreCoord core = {0, 0};
+    Program program = CreateProgram();
+    const KernelHandle kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    const std::vector<uint32_t> runtime_args = {1, 2, 3, 4};
+    SetRuntimeArgs(program, kernel, core, runtime_args);
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+
+    tt::tt_metal::test::HostTransferStatsScope transfer_stats;
+    constexpr uint32_t num_launches = 2;
+    for (uint32_t i = 0; i < num_launches; ++i) {
+        this->RunProgram(mesh_device, workload);
+    }
+
+    const uint64_t min_config_bytes = num_launches * runtime_args.size() * sizeof(uint32_t);
+    const auto no_time = HostTransferStats::Clock::duration::zero();
+    if (this->slow_dispatch_) {
+        // Slow dispatch rewrites the binaries, config and runtime args on every launch.
+        const auto binaries = transfer_stats.totals(HostTransferCategory::ProgramBinariesSlowDispatch);
+        EXPECT_GT(binaries.bytes, 0u);
+        EXPECT_EQ(binaries.bytes % num_launches, 0u);
+        EXPECT_EQ(binaries.transfers, num_launches);
+        EXPECT_GT(binaries.busy, no_time);
+        const auto config = transfer_stats.totals(HostTransferCategory::ProgramConfigSlowDispatch);
+        EXPECT_GT(config.bytes, min_config_bytes);
+        EXPECT_GT(config.busy, no_time);
+    } else {
+        // Fast dispatch uploads the binaries once and stages each launch's commands in the issue queue.
+        const auto binaries = transfer_stats.totals(HostTransferCategory::ProgramBinariesFastDispatch);
+        EXPECT_GT(binaries.bytes, 0u);
+        EXPECT_EQ(binaries.transfers, 1u);
+        EXPECT_GT(binaries.busy, no_time);
+        const auto config = transfer_stats.totals(HostTransferCategory::ProgramConfigFastDispatch);
+        EXPECT_GT(config.bytes, min_config_bytes);
+        EXPECT_EQ(config.transfers, num_launches);
+        EXPECT_EQ(config.busy, no_time);
+        EXPECT_EQ(transfer_stats.totals(HostTransferCategory::BufferWriteFastDispatch).transfers, 0u);
+    }
 }
 
 TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
@@ -521,20 +573,20 @@ std::optional<CoreCoord> quasar_dispatch_s_virtual_core(distributed::MeshDevice&
 }
 
 Program create_quasar_l1_write_program(
-    distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, uint32_t l1_address, uint32_t value) {
-    const experimental::KernelSpecName dm_kernel_name{"dispatch_s_test_dm"};
-    experimental::KernelSpec dm_kernel_spec{
+    distributed::MeshDevice& mesh_device, const NodeCoord& node, uint32_t l1_address, uint32_t value) {
+    const KernelSpecName dm_kernel_name{"dispatch_s_test_dm"};
+    KernelSpec dm_kernel_spec{
         .unique_id = dm_kernel_name,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "quasar_dispatch_s_test",
         .kernels = {dm_kernel_spec},
-        .work_units = {experimental::WorkUnitSpec{
+        .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {dm_kernel_name},
             .target_nodes = node,
@@ -542,10 +594,10 @@ Program create_quasar_l1_write_program(
     };
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = dm_kernel_name,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", l1_address}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", l1_address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
     experimental::SetProgramRunArgs(program, params);
@@ -588,7 +640,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     EXPECT_EQ(dispatch_s_logical.x, dispatch_logical.x);
     EXPECT_EQ(dispatch_s_logical.y, dispatch_logical.y);
 
-    const experimental::NodeCoord worker_node{0, 0};
+    const NodeCoord worker_node{0, 0};
     const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     constexpr uint32_t test_value = 0xdeadbeef;

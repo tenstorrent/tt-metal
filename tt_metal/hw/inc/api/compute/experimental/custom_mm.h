@@ -31,7 +31,7 @@ namespace ckernel {
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -83,7 +83,7 @@ ALWI void custom_mm_block_init(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -125,7 +125,7 @@ ALWI void custom_mm_block_init_short(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -174,7 +174,7 @@ ALWI void custom_mm_block(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -215,7 +215,7 @@ ALWI void custom_mm_block_unpack(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer from 1 to 256 (inclusive)

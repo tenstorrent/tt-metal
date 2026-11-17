@@ -205,6 +205,9 @@ from ttnn._ttnn.hd_socket import (
 
 from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
+    StreamCounter,
+    StreamInputCounters,
+    StreamOutputCounters,
 )
 
 from ttnn._ttnn.d2h_stream_service import (
@@ -622,12 +625,35 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
+# Sparse KV push: which of a requester's needed rows a push sends, and the cores it needs per link
+from ttnn._ttnn.operations.experimental import SparseKvPushPart, SPARSE_KV_PUSH_CORES_PER_LINK
+
+experimental.SparseKvPushPart = SparseKvPushPart
+experimental.SPARSE_KV_PUSH_CORES_PER_LINK = SPARSE_KV_PUSH_CORES_PER_LINK
+
 # PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
 from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
 
 experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
 experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
+experimental.PrefetcherPipeL1Source = _prefetcher_pipe.PrefetcherPipeL1Source
+experimental.PrefetcherPipeSpaceConfig = _prefetcher_pipe.PrefetcherPipeSpaceConfig
 experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
+experimental.create_prefetcher_pipe_spaces = _prefetcher_pipe.create_prefetcher_pipe_spaces
+
+# Command lists (Metal 2.0 replacement for trace). Experimental-only surface.
+from ttnn._ttnn.operations import command_list as _command_list
+
+experimental.CommandListBuilder = _command_list.CommandListBuilder
+experimental.CommandList = _command_list.CommandList
+
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use. Experimental-only surface.
+from ttnn._ttnn import program_spec as _program_spec
+
+for _name in dir(_program_spec):
+    if not _name.startswith("_"):
+        setattr(experimental, _name, getattr(_program_spec, _name))
+del _name
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 

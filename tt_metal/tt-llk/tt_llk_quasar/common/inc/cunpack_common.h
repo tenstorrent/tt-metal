@@ -39,10 +39,10 @@ union unpack_tilize_cfg_u
 };
 
 // Number of rows for Unpack functions
-constexpr static std::uint32_t UNPACR_STRIDE_MAX_ROWS = 8;
+constexpr std::uint32_t UNPACR_STRIDE_MAX_ROWS = 8;
 
 // 2x-packed Int8 Src storage (Int8_2x) exists only on the 4-row variant, not on base Quasar.
-constexpr static bool HAS_INT8_2X_SRC_FORMAT = MATH_ROWS == 4;
+constexpr bool HAS_INT8_2X_SRC_FORMAT = MATH_ROWS == 4;
 
 /**
  * Whether reprogramming OUT_DATA_FORMAT from buffer-descriptor \p unpack_src_format (L1) to

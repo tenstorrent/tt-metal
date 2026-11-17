@@ -6,10 +6,11 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -20,7 +21,7 @@ uint32_t num_pages(const ttnn::Tensor& input_tensor) {
 }
 
 uint32_t page_size(const ttnn::Tensor& input_tensor) {
-    auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto BUFFER_ALIGNMENT = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                 ? tt::tt_metal::hal::get_dram_alignment()
                                 : tt::tt_metal::hal::get_l1_alignment();
     const auto& shape = input_tensor.logical_shape();  // in anticipation of RM padding
@@ -45,7 +46,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -168,7 +168,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -301,20 +300,12 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
 
-    bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32 ||
-                            cb_data_format_output == tt::DataFormat::Int32 ||
-                            cb_data_format_output == tt::DataFormat::UInt32;
-    // Style B compute config: build ComputeHardwareConfig directly, matching the legacy
-    // ComputeConfigDescriptor{.fp32_dest_acc_en=...} (all other fields at legacy defaults).
+    // 8-bit ints go through 32-bit Dest; BH RM UInt8 is routed via UInt8->UInt32 at the user API.
+    bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format_output);
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    // Metal 2.0 requires an explicit unpack_modes entry for every Float32 DFB the compute
-    // kernel consumes when enable_32_bit_dest = true. The compute kernel consumes SRC_CB
-    // (via tilize) and TILIZE_CB (self-loop). UnpackToDest, not UnpackToSrc: SrcA/SrcB are
-    // only 19 bits wide, so unpacking Float32 there truncates it to tf32. MultiCoreTiledGeneric
-    // already sets UnpackToDest on the same two CBs.
-    // Int32/UInt32 take the same route: Quasar's tilize unpacks to Dest only when UnpackToDest
-    // is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
-    if (fp32_dest_acc_en) {
+    // UnpackToDest lowers to UnpackToDestFp32; only safe for 32-bit formats. 8-bit ints must
+    // stay on SrcA/int-FPU, otherwise BuildUnpackToDestModeVector corrupts the integer unpack.
+    if (requires_unpack_to_dest(cb_data_format_output)) {
         compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 

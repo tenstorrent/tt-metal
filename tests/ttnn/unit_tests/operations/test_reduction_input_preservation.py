@@ -41,3 +41,29 @@ def test_reduction_with_private_padding_matches_reference(device, shape, operati
         if operation in ("max", "min"):
             expected = expected.values
     torch.testing.assert_close(ttnn.to_torch(result).float(), expected.float(), rtol=0.02, atol=0.01)
+
+
+# Two ranges away from core (0, 0), like a sub-device partition. 8 cores give an uneven work split.
+SUB_CORE_GRIDS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 3)),
+        ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 1)),
+    ]
+)
+
+
+@pytest.mark.parametrize("shape", [(2, 7, 128), (2, 33, 40)])
+@pytest.mark.parametrize("operation", ["max", "min", "sum", "mean"])
+def test_reduction_on_sub_core_grids_preserves_input(device, shape, operation):
+    torch.manual_seed(0)
+    values = torch.rand(shape, dtype=torch.bfloat16)
+    # Negative zero and a subnormal change if fill_pad round-trips the caller's border tiles.
+    values.view(torch.int16).flatten()[:2] = torch.tensor([-32768, 1], dtype=torch.int16)
+    tensor = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
+    before = ttnn.to_torch(tensor).view(torch.int16).clone()
+    result = getattr(ttnn, operation)(tensor, dim=-1, keepdim=True, sub_core_grids=SUB_CORE_GRIDS)
+    expected = getattr(torch, operation)(values.float(), dim=-1, keepdim=True)
+    if operation in ("max", "min"):
+        expected = expected.values
+    torch.testing.assert_close(ttnn.to_torch(result).float(), expected.float(), rtol=0.02, atol=0.01)
+    assert torch.equal(ttnn.to_torch(tensor).view(torch.int16), before)

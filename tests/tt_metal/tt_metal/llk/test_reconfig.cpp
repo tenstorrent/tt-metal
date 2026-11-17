@@ -358,7 +358,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     const CoreCoord core = {0, 0};
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
-    const experimental::NodeCoord node{static_cast<std::uint32_t>(core.x), static_cast<std::uint32_t>(core.y)};
+    const NodeCoord node{static_cast<std::uint32_t>(core.x), static_cast<std::uint32_t>(core.y)};
 
     distributed::DeviceLocalBufferConfig f16_dram_cfg{
         .page_size = f16_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
@@ -380,50 +380,50 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, out_dram_cfg, mesh_device.get());
 
-    const experimental::DFBSpecName INP0_DFB{"in0"};
-    const experimental::DFBSpecName INP1_DFB{"in1"};
-    const experimental::DFBSpecName INP2_DFB{"in2"};
-    const experimental::DFBSpecName INP3_DFB{"in3"};
-    const experimental::DFBSpecName INP4_DFB{"in4"};
-    const experimental::DFBSpecName INP5_DFB{"in5"};
-    const experimental::DFBSpecName OUT_DFB{"out"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName INP0_DFB{"in0"};
+    const DFBSpecName INP1_DFB{"in1"};
+    const DFBSpecName INP2_DFB{"in2"};
+    const DFBSpecName INP3_DFB{"in3"};
+    const DFBSpecName INP4_DFB{"in4"};
+    const DFBSpecName INP5_DFB{"in5"};
+    const DFBSpecName OUT_DFB{"out"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    auto make_f16_input_dfb = [&](const experimental::DFBSpecName& name) {
-        return experimental::DataflowBufferSpec{
+    auto make_f16_input_dfb = [&](const DFBSpecName& name) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f16_tile_size,
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float16_b,
         };
     };
-    auto make_f32_input_dfb = [&](const experimental::DFBSpecName& name) {
-        return experimental::DataflowBufferSpec{
+    auto make_f32_input_dfb = [&](const DFBSpecName& name) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f32_tile_size,
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float32,
         };
     };
-    experimental::DataflowBufferSpec inp0_dfb_spec = make_f16_input_dfb(INP0_DFB);
-    experimental::DataflowBufferSpec inp1_dfb_spec = make_f16_input_dfb(INP1_DFB);
-    experimental::DataflowBufferSpec inp2_dfb_spec = make_f32_input_dfb(INP2_DFB);
-    experimental::DataflowBufferSpec inp3_dfb_spec = make_f32_input_dfb(INP3_DFB);
-    experimental::DataflowBufferSpec inp4_dfb_spec = make_f16_input_dfb(INP4_DFB);
-    experimental::DataflowBufferSpec inp5_dfb_spec = make_f16_input_dfb(INP5_DFB);
-    experimental::DataflowBufferSpec out_dfb_spec{
+    DataflowBufferSpec inp0_dfb_spec = make_f16_input_dfb(INP0_DFB);
+    DataflowBufferSpec inp1_dfb_spec = make_f16_input_dfb(INP1_DFB);
+    DataflowBufferSpec inp2_dfb_spec = make_f32_input_dfb(INP2_DFB);
+    DataflowBufferSpec inp3_dfb_spec = make_f32_input_dfb(INP3_DFB);
+    DataflowBufferSpec inp4_dfb_spec = make_f16_input_dfb(INP4_DFB);
+    DataflowBufferSpec inp5_dfb_spec = make_f16_input_dfb(INP5_DFB);
+    DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = f16_tile_size,
         .num_entries = kNumOps,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    using DFBEndpoint = experimental::DFBEndpointType;
-    using DFBAccess = experimental::DFBAccessPattern;
-    auto dfb_binding = [](const experimental::DFBSpecName& name, DFBEndpoint endpoint) {
-        return experimental::DFBBinding{
+    using DFBEndpoint = DFBEndpointType;
+    using DFBAccess = DFBAccessPattern;
+    auto dfb_binding = [](const DFBSpecName& name, DFBEndpoint endpoint) {
+        return DFBBinding{
             .dfb_spec_name = name,
             .accessor_name = name.get(),
             .endpoint_type = endpoint,
@@ -431,7 +431,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         };
     };
 
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp",
         .num_threads = 1,
@@ -458,15 +458,15 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
                   "src5_bank_id",
                   "num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
+            DataMovementHardwareConfig{
                 .config_2xx =
-                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
                         .disable_dfb_implicit_sync_for_all = true,
                     },
             },
     };
 
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
@@ -478,15 +478,15 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
+            DataMovementHardwareConfig{
                 .config_2xx =
-                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
                         .disable_dfb_implicit_sync_for_all = true,
                     },
             },
     };
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_unpack_quasar.cpp",
         .num_threads = 1,
@@ -499,7 +499,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
              dfb_binding(INP5_DFB, DFBEndpoint::CONSUMER),
              dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
-            experimental::ComputeHardwareConfig{
+            ComputeHardwareConfig{
                 .fpu_math_fidelity = MathFidelity::HiFi4,
                 .enable_32_bit_dest = true,
                 .unpack_modes =
@@ -508,13 +508,13 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
             },
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "reconfig_quasar",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers =
@@ -602,11 +602,11 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     }
     auto packed_golden = pack_vector<std::uint32_t, bfloat16>(golden);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src0_addr", static_cast<std::uint32_t>(inp0_dram->address())},
                  {"src0_bank_id", 0u},
@@ -622,15 +622,15 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
                  {"src5_bank_id", 0u},
                  {"num_tiles", 1u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", static_cast<std::uint32_t>(out_dram->address())},
                  {"bank_id", 0u},
                  {"num_tiles", kNumOps}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -690,7 +690,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     const CoreCoord core = {0, 0};
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
-    const experimental::NodeCoord node{static_cast<std::uint32_t>(core.x), static_cast<std::uint32_t>(core.y)};
+    const NodeCoord node{static_cast<std::uint32_t>(core.x), static_cast<std::uint32_t>(core.y)};
 
     distributed::DeviceLocalBufferConfig f16_dram_cfg{
         .page_size = f16_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
@@ -709,91 +709,90 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     auto out1_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
     auto out2_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
 
-    const experimental::DFBSpecName INP0_DFB{"in0"};
-    const experimental::DFBSpecName INP1_DFB{"in1"};
-    const experimental::DFBSpecName INP2_DFB{"in2"};
-    const experimental::DFBSpecName INP3_DFB{"in3"};
-    const experimental::DFBSpecName INP4_DFB{"in4"};
-    const experimental::DFBSpecName INP5_DFB{"in5"};
-    const experimental::DFBSpecName OUT0_DFB{"out0"};
-    const experimental::DFBSpecName OUT1_DFB{"out1"};
-    const experimental::DFBSpecName OUT2_DFB{"out2"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER0{"writer0"};
-    const experimental::KernelSpecName WRITER1{"writer1"};
-    const experimental::KernelSpecName WRITER2{"writer2"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName INP0_DFB{"in0"};
+    const DFBSpecName INP1_DFB{"in1"};
+    const DFBSpecName INP2_DFB{"in2"};
+    const DFBSpecName INP3_DFB{"in3"};
+    const DFBSpecName INP4_DFB{"in4"};
+    const DFBSpecName INP5_DFB{"in5"};
+    const DFBSpecName OUT0_DFB{"out0"};
+    const DFBSpecName OUT1_DFB{"out1"};
+    const DFBSpecName OUT2_DFB{"out2"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER0{"writer0"};
+    const KernelSpecName WRITER1{"writer1"};
+    const KernelSpecName WRITER2{"writer2"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    auto make_f16_input_dfb = [&](const experimental::DFBSpecName& name) {
-        return experimental::DataflowBufferSpec{
+    auto make_f16_input_dfb = [&](const DFBSpecName& name) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f16_tile_size,
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float16_b,
         };
     };
-    auto make_f32_input_dfb = [&](const experimental::DFBSpecName& name) {
-        return experimental::DataflowBufferSpec{
+    auto make_f32_input_dfb = [&](const DFBSpecName& name) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = f32_tile_size,
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float32,
         };
     };
-    experimental::DataflowBufferSpec inp0_dfb_spec = make_f16_input_dfb(INP0_DFB);
-    experimental::DataflowBufferSpec inp1_dfb_spec = make_f16_input_dfb(INP1_DFB);
-    experimental::DataflowBufferSpec inp2_dfb_spec = make_f32_input_dfb(INP2_DFB);
-    experimental::DataflowBufferSpec inp3_dfb_spec = make_f32_input_dfb(INP3_DFB);
-    experimental::DataflowBufferSpec inp4_dfb_spec = make_f16_input_dfb(INP4_DFB);
-    experimental::DataflowBufferSpec inp5_dfb_spec = make_f16_input_dfb(INP5_DFB);
-    experimental::DataflowBufferSpec out0_dfb_spec{
+    DataflowBufferSpec inp0_dfb_spec = make_f16_input_dfb(INP0_DFB);
+    DataflowBufferSpec inp1_dfb_spec = make_f16_input_dfb(INP1_DFB);
+    DataflowBufferSpec inp2_dfb_spec = make_f32_input_dfb(INP2_DFB);
+    DataflowBufferSpec inp3_dfb_spec = make_f32_input_dfb(INP3_DFB);
+    DataflowBufferSpec inp4_dfb_spec = make_f16_input_dfb(INP4_DFB);
+    DataflowBufferSpec inp5_dfb_spec = make_f16_input_dfb(INP5_DFB);
+    DataflowBufferSpec out0_dfb_spec{
         .unique_id = OUT0_DFB,
         .entry_size = f16_tile_size,
         .num_entries = 1,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
-    experimental::DataflowBufferSpec out1_dfb_spec{
+    DataflowBufferSpec out1_dfb_spec{
         .unique_id = OUT1_DFB,
         .entry_size = f32_tile_size,
         .num_entries = 1,
         .data_format_metadata = tt::DataFormat::Float32,
     };
-    experimental::DataflowBufferSpec out2_dfb_spec{
+    DataflowBufferSpec out2_dfb_spec{
         .unique_id = OUT2_DFB,
         .entry_size = f16_tile_size,
         .num_entries = 1,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    using DFBEndpoint = experimental::DFBEndpointType;
-    using DFBAccess = experimental::DFBAccessPattern;
-    auto dfb_binding = [](const experimental::DFBSpecName& name, DFBEndpoint endpoint) {
-        return experimental::DFBBinding{
+    using DFBEndpoint = DFBEndpointType;
+    using DFBAccess = DFBAccessPattern;
+    auto dfb_binding = [](const DFBSpecName& name, DFBEndpoint endpoint) {
+        return DFBBinding{
             .dfb_spec_name = name,
             .accessor_name = name.get(),
             .endpoint_type = endpoint,
             .access_pattern = DFBAccess::STRIDED,
         };
     };
-    auto make_writer_spec = [&](const experimental::KernelSpecName& writer_id,
-                                const experimental::DFBSpecName& out_dfb) {
-        return experimental::KernelSpec{
+    auto make_writer_spec = [&](const KernelSpecName& writer_id, const DFBSpecName& out_dfb) {
+        return KernelSpec{
             .unique_id = writer_id,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
             .num_threads = 1,
-            .dfb_bindings = {experimental::ConsumerOf(out_dfb, "in")},
+            .dfb_bindings = {ConsumerOf(out_dfb, "in")},
             .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
             .hw_config =
-                experimental::DataMovementHardwareConfig{
+                DataMovementHardwareConfig{
                     .config_2xx =
-                        experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                        DataMovementHardwareConfig::DataMovement2XXConfig{
                             .disable_dfb_implicit_sync_for_all = true,
                         },
                 },
         };
     };
 
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp",
         .num_threads = 1,
@@ -820,19 +819,19 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
                   "src5_bank_id",
                   "num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
+            DataMovementHardwareConfig{
                 .config_2xx =
-                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
                         .disable_dfb_implicit_sync_for_all = true,
                     },
             },
     };
 
-    experimental::KernelSpec writer0_spec = make_writer_spec(WRITER0, OUT0_DFB);
-    experimental::KernelSpec writer1_spec = make_writer_spec(WRITER1, OUT1_DFB);
-    experimental::KernelSpec writer2_spec = make_writer_spec(WRITER2, OUT2_DFB);
+    KernelSpec writer0_spec = make_writer_spec(WRITER0, OUT0_DFB);
+    KernelSpec writer1_spec = make_writer_spec(WRITER1, OUT1_DFB);
+    KernelSpec writer2_spec = make_writer_spec(WRITER2, OUT2_DFB);
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_pack_quasar.cpp",
         .num_threads = 1,
@@ -847,7 +846,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
              dfb_binding(OUT1_DFB, DFBEndpoint::PRODUCER),
              dfb_binding(OUT2_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
-            experimental::ComputeHardwareConfig{
+            ComputeHardwareConfig{
                 .fpu_math_fidelity = MathFidelity::HiFi4,
                 .enable_32_bit_dest = true,
                 .unpack_modes =
@@ -856,13 +855,13 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
             },
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER0, WRITER1, WRITER2, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "reconfig_pack_quasar",
         .kernels = {reader_spec, writer0_spec, writer1_spec, writer2_spec, compute_spec},
         .dataflow_buffers =
@@ -964,11 +963,11 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         packed_golden_op1[e] = std::bit_cast<std::uint32_t>(golden_op1_f32[e]);
     }
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src0_addr", static_cast<std::uint32_t>(inp0_dram->address())},
                  {"src0_bank_id", 0u},
@@ -984,25 +983,25 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
                  {"src5_bank_id", 0u},
                  {"num_tiles", 1u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER0,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", static_cast<std::uint32_t>(out0_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER1,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", static_cast<std::uint32_t>(out1_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER2,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", static_cast<std::uint32_t>(out2_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, params);
 

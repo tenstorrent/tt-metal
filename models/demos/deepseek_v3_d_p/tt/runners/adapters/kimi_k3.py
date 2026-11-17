@@ -46,6 +46,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # holds the TRIMMED upstream MLA reference, not a loadable full-model checkpoint.
     hf_model_default = "models/demos/deepseek_v3_d_p/reference/kimi_k3"
     default_gate_mode = "DEVICE_FP32"  # single expert group, as Kimi-K2.7
+    builds_missing_weight_cache = False  # LatentMoE: the checkpoint reader has no latent-projection tensors
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL. Inherited
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
@@ -285,18 +286,15 @@ class KimiK3Adapter(MLAPrefillAdapter):
         return None
 
     def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
-        """MLA layers migrate the request's tokens; a KDA layer migrates the version window decode reads
-        next, `[v * W, (v + 1) * W)` with `v = (real_len - 1) % 8` (k3_disagg_contract.md, section 5)."""
+        """MLA layers migrate the request's tokens; a KDA layer migrates its whole state, the one window
+        `[0, W)` its Snapshot configs span, whatever the prompt length."""
         if layer_idx in KimiK3Config.mla_layer_ids():
             return 0, real_len
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import KDA_VERSIONS, kda_window
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import kda_window
 
         # The window depends on the global head count only; any legal mesh gives the same value.
-        geometry = kimi_k3_kda_geometry((1, 1), sp_axis=0, tp_axis=1)
-        window = kda_window(geometry)
-        version = (real_len - 1) % KDA_VERSIONS
-        return version * window, (version + 1) * window
+        return 0, kda_window(kimi_k3_kda_geometry((1, 1), sp_axis=0, tp_axis=1))
 
     def load_hf_config(self):
         """The Kimi-K3 config, hand-built rather than loaded through `AutoConfig`.
