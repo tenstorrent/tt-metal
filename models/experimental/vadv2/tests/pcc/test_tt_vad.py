@@ -17,7 +17,7 @@ from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
 from models.experimental.vadv2.tt.model_preprocessing import (
     create_vadv2_model_parameters_vad,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.vadv2.common import load_torch_model
 
 

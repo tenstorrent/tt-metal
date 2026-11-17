@@ -50,7 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
 
 DEPTHS = [1, 5, 12, 24]
 # Each placement runs its production chunk: 5120 tokens on an 8x4 stage, 2560 on a 4x4 stage (640 tokens per
