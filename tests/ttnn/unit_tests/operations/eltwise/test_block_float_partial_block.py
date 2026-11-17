@@ -91,7 +91,8 @@ def test_pow_negative_exponent_block_float_partial_block(device, width, exponent
 @pytest.mark.parametrize("width", [33, 50, 64], ids=lambda w: f"W={w}")
 def test_logit_block_float_partial_block(device, width, eps):
     torch.manual_seed(0)
-    input_tensor = _to_device(torch.empty(2, 32, width).uniform_(0.2, 0.8), ttnn.bfloat8_b, device)
+    # Away from 0.5, where logit is 0 and would read as a dropped lane.
+    input_tensor = _to_device(torch.empty(2, 32, width).uniform_(0.6, 0.9), ttnn.bfloat8_b, device)
 
     result = ttnn.to_torch(ttnn.logit(input_tensor, eps=eps)).float()
     expected = torch.logit(ttnn.to_torch(input_tensor).float())
