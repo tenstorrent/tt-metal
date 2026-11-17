@@ -115,5 +115,16 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBUnknownTensorParameterFails) 
             ::testing::HasSubstr("borrows memory from TensorParameter 'nonexistent_tensor'")));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreBindingUnknownParameterFails) {
+    // A GlobalSemaphore binding must name a declared GlobalSemaphore parameter.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].advanced_options.global_semaphore_bindings = {
+        {.global_semaphore_parameter_name = GlobalSemaphoreParamName{"missing_sem"}, .accessor_name = "signal"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("references unknown GlobalSemaphore parameter 'missing_sem'")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

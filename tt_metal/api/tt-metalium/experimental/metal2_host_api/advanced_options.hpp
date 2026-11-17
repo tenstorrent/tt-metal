@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/global_semaphore_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp>
 #include <tt-metalium/workload/utils/group.hpp>
@@ -47,6 +48,8 @@ struct SRAMArena;
 }  // namespace tt::tt_metal::experimental
 
 namespace tt::tt_metal {
+
+class GlobalSemaphore;
 
 // Name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
@@ -85,6 +88,21 @@ struct ProgramAdvancedOptions {
     // AdvancedProgramRunArgs::prefetcher_pipe_args. A kernel's sender/receiver role is
     // derived from its WorkUnitSpec node coverage; see prefetcher_pipe_parameter.hpp.
     Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // GlobalSemaphore parameters (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A GlobalSemaphore is a user-managed semaphore that has the same address on every node it
+    // spans, on every device of its MeshDevice. Kernels use it to synchronize with kernels on
+    // other devices.
+    //
+    // GlobalSemaphore parameters declare the GlobalSemaphores the Program's kernels use.
+    // The actual GlobalSemaphore objects are supplied via AdvancedProgramRunArgs::global_semaphore_args.
+    //
+    // Invariant: each parameter is bound by at least one kernel
+    //            (KernelAdvancedOptions::global_semaphore_bindings).
+    Group<GlobalSemaphoreParameter> global_semaphore_parameters;
 };
 
 struct KernelAdvancedOptions {
@@ -247,6 +265,24 @@ struct KernelAdvancedOptions {
         NodeRangeSet extra_nodes;
     };
     Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // GlobalSemaphore bindings (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Declares that this data-movement kernel uses a GlobalSemaphore
+    // (declared in ProgramAdvancedOptions::global_semaphore_parameters).
+    // The kernel constructs the device object from the binding token:
+    //   experimental::GlobalSemaphore gs(global_sem::<accessor_name>)
+    //
+    // Compute kernels cannot bind a GlobalSemaphore.
+    struct GlobalSemaphoreBinding {
+        // Invariant: names a parameter declared in ProgramAdvancedOptions::global_semaphore_parameters.
+        GlobalSemaphoreParamName global_semaphore_parameter_name;
+        // Invariant: unique among this kernel's GlobalSemaphore bindings.
+        std::string accessor_name;  // GlobalSemaphore accessor name (used in the kernel source code)
+    };
+    Group<GlobalSemaphoreBinding> global_semaphore_bindings;
 };
 
 // Describes a resource allocation within a program's SRAM arena parameter.
@@ -490,6 +526,25 @@ struct AdvancedProgramRunArgs {
     // CAUTION: PrefetcherPipe is an RAII object owning durable L1. The user is responsible for keeping
     //          it alive until the last Program execution that uses it has completed on the device.
     Table<PrefetcherPipeParamName, PrefetcherPipeArgument> prefetcher_pipe_args;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // GlobalSemaphore arguments (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // The actual GlobalSemaphore argument. (Non-owning reference.)
+    using GlobalSemaphoreArgument = std::reference_wrapper<const tt::tt_metal::GlobalSemaphore>;
+
+    // A GlobalSemaphoreArgument must be specified:
+    //  For EVERY GlobalSemaphoreParameter in the ProgramSpec, when calling SetProgramRunArgs.
+    //  For any SUBSET of GlobalSemaphoreParameters, when calling UpdateProgramRunArgs.
+    //
+    // The supplied GlobalSemaphore MUST:
+    //  - live in the memory_type of its GlobalSemaphoreParameter;
+    //  - span every node of every kernel that binds its GlobalSemaphoreParameter.
+    //
+    // CAUTION: The user is responsible for keeping the GlobalSemaphore alive until the last
+    //          Program execution that uses it has completed on the device.
+    Table<GlobalSemaphoreParamName, GlobalSemaphoreArgument> global_semaphore_args;
 };
 
 struct SemaphoreAdvancedOptions {
@@ -528,6 +583,8 @@ struct SemaphoreAdvancedOptions {
 //------------------------------------------------
 
 using PrefetcherPipeBinding = KernelAdvancedOptions::PrefetcherPipeBinding;
+using GlobalSemaphoreBinding = KernelAdvancedOptions::GlobalSemaphoreBinding;
+using GlobalSemaphoreArgument = AdvancedProgramRunArgs::GlobalSemaphoreArgument;
 using PrefetcherPipeArgument = AdvancedProgramRunArgs::PrefetcherPipeArgument;
 using SRAMArenaArgument = AdvancedProgramRunArgs::SRAMArenaArgument;
 

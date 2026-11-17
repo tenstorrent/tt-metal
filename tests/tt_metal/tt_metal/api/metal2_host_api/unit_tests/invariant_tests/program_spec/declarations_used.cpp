@@ -119,5 +119,15 @@ TEST_F(ProgramSpecTestQuasar, CPU_SemaphoresSucceed) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_UnboundGlobalSemaphoreParameterFails) {
+    // A declared GlobalSemaphore parameter must be bound by at least one kernel.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.advanced_options.global_semaphore_parameters = {{.unique_id = GlobalSemaphoreParamName{"orphan_sem"}}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("GlobalSemaphore parameter 'orphan_sem' is defined but not bound by any kernel")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

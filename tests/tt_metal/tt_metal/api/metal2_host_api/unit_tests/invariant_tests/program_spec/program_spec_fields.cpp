@@ -207,5 +207,18 @@ TEST_F(ProgramSpecTestQuasar, CPU_MultipleWorkUnitsOnDifferentNodesSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_DuplicateGlobalSemaphoreParameterNameFails) {
+    // Two GlobalSemaphore parameters cannot share a name.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.advanced_options.global_semaphore_parameters = {
+        {.unique_id = GlobalSemaphoreParamName{"sem"}}, {.unique_id = GlobalSemaphoreParamName{"sem"}}};
+    spec.kernels[0].advanced_options.global_semaphore_bindings = {
+        {.global_semaphore_parameter_name = GlobalSemaphoreParamName{"sem"}, .accessor_name = "signal"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Duplicate GlobalSemaphoreParameter name 'sem'")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
