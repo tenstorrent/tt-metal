@@ -258,10 +258,12 @@ class MATH_OP(TemplateParameter):
                 temp_header.append(
                     f"constexpr auto REDUCE_DIM = ckernel::ReduceDim::{self.mathop.cpp_enum_value};"
                 )
-                if self.pool_type:
-                    temp_header.append(
-                        f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
-                    )
+
+        # The pool applies to reduce ops, but kernels that take no mathop (multidim reduce) read it too.
+        if self.pool_type:
+            temp_header.append(
+                f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
+            )
 
         # Optional extra unary operation (used when both a binary and unary op
         # need to be present in the same kernel, e.g. binary-eltwise followed by
@@ -1136,14 +1138,6 @@ class PERF_RUN_TYPE(TemplateParameter):
         return (
             f"\nconstexpr auto PERF_RUN_TYPE = PerfRunType::{self.perf_run_type.name};"
         )
-
-
-@dataclass
-class REDUCE_POOL_TYPE(TemplateParameter):
-    reduce_pool_type: ReducePool
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
 
 
 @dataclass

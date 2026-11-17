@@ -1232,7 +1232,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_reduce": "perf_sfpu_reduce"},
     },
     "perf_sfpu_reduce_sdpa": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1249,11 +1249,14 @@ PERF_TEST_SCHEMAS = {
             "loop_factor",
             "marker",
             "mathop",
-            "reduce_pool_type",
+            "pool_type",
             "tile_cnt",
             "unpack_to_dest",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "reduce_pool_type": "pool_type",
+        },
         "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
     "perf_sfpu_ternary": {
