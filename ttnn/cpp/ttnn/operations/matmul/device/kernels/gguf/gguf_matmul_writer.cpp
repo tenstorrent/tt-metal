@@ -2,25 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Input and output mover of the GGUF matmul. Every compute core holds its band's K tiles of the input row block (c_1,
-// at the same L1 address on every core of the grid). The band's collector reads them chunk by chunk, multicasts each
-// chunk to the band's rows and then sets the chunk count in their semaphore with a multicast ordered behind the data;
-// the others push each chunk once the count reaches it, so the matmul starts on chunk 0 while later chunks are in
-// flight. Then, per segment (gguf_matmul_program_factory.cpp Role): whole and finish write the bf16 output tile (c_16);
-// a tail sends its fp32 partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's
-// semaphore; a head moves its partial into this core's c_20; the first finish waits for all of this core's partials,
-// and each hands its own to the compute kernel. Codebook formats: the writer also runs its part of the grid lookups of
-// each record the reader asks for, between its own waits. GGUF_STREAM (decode, Q4_0 / Q4_1 / Q5_0 / Q5_1): between its
-// waits, and once its own input reads are over, the writer also reads the weight units the reader grants it
-// (gguf_matmul_reader.cpp) on this NoC. TQ2_0 with one input row (gguf_matmul_tq2_compute.cpp): the collector zeroes
-// every row of each input tile but row 0 before the multicast, and c_1 counts 32-byte pages. Compile args: K tiles
-// (c_1's; of the largest band), tiles per chunk, input semaphore, partial semaphore, format id, the lookup request,
-// answer and page address semaphores, one-row TQ2_0 (0 / 1), K bands (0 / 1), the input's and the output's
-// TensorAccessorArgs; GGUF_STREAM: c_0 pages, records per unit, the weight's TensorAccessorArgs. Runtime args:
-// collector, input address, output address, multicast rectangle (NoC x / y start, x / y end, in this writer's NoC
-// order), cores in it, segments, then per segment: tail: slot, role, finishing core NoC x, y; else: N tile, role,
-// partials, 0; with K bands, the band's first K tile and K tiles; GGUF_STREAM: N tiles, runs, per run its N tile,
-// first and end K group (the reader's), and the weight address.
+// Input and output mover of the GGUF decode matmul: multicasts the input in chunks, writes outputs and partials, and
+// does its share of grid lookups and weight reads. Args: gguf_matmul_program_factory.cpp.
 
 #include <cstdint>
 

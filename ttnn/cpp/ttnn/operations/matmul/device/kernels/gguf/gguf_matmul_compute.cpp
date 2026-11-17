@@ -2,17 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel of the GGUF matmul: a decoded weight tile goes from DEST to the matmul and never to L1
-// (api/compute/experimental/gguf_decode.h, dest_srca_mm.h). Per segment of an N tile one full-sync DEST acquire holds
-// the Float32 accumulator (tile 0) and two sets of (decoded tile, page, decoder scratch), tiles 1-3 and 4-6,
-// alternating per K tile. The pack thread decodes K tile k + 1 while the math thread multiplies tile k
-// (gguf_decode_overlap_*); the unpacker copies the next page into DEST meanwhile, before phase 2 where that phase's
-// stores are not arbitrated against it (Q2_K). The input arrives in chunks
-// (gguf_matmul_writer.cpp) and each K tile is waited for when first reached. Compile args: format id, K tiles of the
-// band (c_1 holds those), input tiles per chunk, input rows the matmul computes (8, 16 or 32), the band's first K tile.
-// Runtime args: segments, then per segment its first and end K tile and its role (gguf_matmul_program_factory.cpp
-// Role); a finish has the count of other cores' partials in place of its first K tile. Codebook formats also look up
-// part of each page's grid levels here (CodebookLookups).
+// Compute kernel of the GGUF decode matmul: per K tile, the pack thread decodes the weight tile in DEST while the math
+// thread multiplies the one before (gguf_decode.h, dest_srca_mm.h). Args: gguf_matmul_program_factory.cpp.
 
 #include <cstdint>
 

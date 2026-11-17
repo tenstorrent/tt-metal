@@ -2,26 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Input and output mover of the GGUF prefill matmul (gguf_matmul_prefill_program_factory.cpp). The cores of a band
-// (whole grid rows) share the band's M rows. The input goes to them in blocks of ur rows x kb K tiles (per M chunk, per
-// K block, per ur rows) through a ring of `slots` blocks in c_1, at the same address on every core. Block b comes from
-// sender b % senders (two: their writers use different NoCs, so two multicasts can be in flight). A sender reads each
-// of its blocks from DRAM into its own slot once the slot is free, waits until every core of the band has counted
-// itself ready for the block in the slot's ready semaphore on that sender (a count per slot, reset by the sender before
-// it multicasts into the slot, so that early counts of fast cores never stand in for a slow core), multicasts the
-// block and then its count (b / senders + 1) through the same command buffer, so the count lands after the data.
-// A core counts itself ready for block j as soon as block j - slots has been consumed (an idle core: received). The
-// output (c_16, subblocks of sh x sw tiles in compute order) is written to DRAM whenever this kernel would wait. K
-// split: band 1 sends its fp32 sums per unit of rows (c_17) to the one or two cores of band 0 holding its N tiles, into
-// their c_18, a ring of two units: each receiver grants a slot to its senders once its compute has freed it, and counts
-// the parts that landed, a partial semaphore per partner either way. N passes: the blocks repeat per pass.
-// Compile args: K tiles, N tiles, mc, kb, M chunks, slots (<= 4), four slot ready semaphores, two block count
-// semaphores, a source semaphore, senders (1 or 2), ur, two partial semaphores, N tiles per pass, passes, then the
-// input's and the output's TensorAccessorArgs. Runtime args: input address, output address, band rectangle (NoC x / y
-// start, x / y end, in this writer's NoC order), first M tile of the band, first N tile, N tiles (0: no output), sh,
-// sw, role (0, or 1 + the sender's index), the two senders' NoC x, y, first K tile of the band, K split role (0: none,
-// 1: send sums, 2: add the partners'), the plan's N tiles per core (a unit of sums is ur x that), K blocks, band cores,
-// K split partners, then six words per partner (below).
+// Input and output mover of the GGUF prefill matmul: multicasts the band's input blocks, writes the output, and moves
+// K-split partial sums between bands. Args: gguf_matmul_prefill_program_factory.cpp.
 
 #include <cstdint>
 

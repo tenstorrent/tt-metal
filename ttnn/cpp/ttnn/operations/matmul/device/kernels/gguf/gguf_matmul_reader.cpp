@@ -2,27 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Weight reader of the GGUF matmul: this core's records in compute order into c_0 as the decoder's L1 pages
-// (experimental/gguf_page.h). One-page groups store codes then scale rows, the page's own order: each lands in its page
-// with one read, a unit of them per transaction id, one or two units in flight. MXFP4 records (codes, scale row,
-// codes) land whole in two pages, one read each, one or two in flight. Larger groups land whole in a staging ring
-// (c_2), one read each, one or two in flight, and go into their pages from local L1, each codes part with the
-// group's scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to
-// the other pages. Codebook formats then fill in the pages' grid levels (lookup_grid) in GGUF_LOOKUP_PARTS parts of
-// their index words: this kernel the first GGUF_READER_PARTS, the writer of this core the next GGUF_WRITER_PARTS
-// (gguf_matmul_writer.cpp) on a request per record, the compute kernel the rest. GGUF_EXPANDED: the pages hold the
-// level codes already (gguf_host_packing.cpp), each K tile without its index words, and no lookups run. Compile args:
-// format id, c_0 pages, one-page groups per unit, staging slots, the lookup request, answer and page address
-// semaphores, reads in flight, records per DRAM page (gguf_records_per_page: page (g / R, n) holds K groups g of N tile
-// n consecutively), bytes per c_0 page (the decoder's L1 page, or one record when c_0 packs records), then the weight's
-// TensorAccessorArgs. Decode, one-page groups with packed c_0: a unit is the records of one DRAM page, at most
-// one-page-groups-per-unit of them, read with one transaction, never streamed. Decode, one-page groups: once the writer
-// of this core streams (answer semaphore nonzero), it reads every other unit on its own NoC, so that a core's reads use
-// both NoC ports of their DRAM bank; this kernel reserves the unit's pages, grants it (page address semaphore: its
-// first record, request semaphore: the count of grants) and pushes it when the writer has landed it (answer semaphore:
-// 1 + units landed).
-// Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group. With GGUF_PREFILL:
-// weight address, N tiles, first N tile, N tiles of this core, K groups, M chunks, first K group, N tiles per pass.
+// Weight reader of the GGUF matmul: this core's records into c_0 as the decoder's pages (one-page groups and MXFP4
+// directly, larger groups through c_2), plus its share of grid lookups. Args: gguf_matmul_program_common.hpp.
 
 #include <cstdint>
 

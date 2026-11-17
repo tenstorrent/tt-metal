@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The GGUF matmul compute kernels' segment ends (gguf_matmul_compute.cpp, gguf_matmul_tq2_compute.cpp; roles in
-// gguf_matmul_program_factory.cpp): c_16 bf16 output tiles, c_17 fp32 partials to other cores, c_18 the partials from
-// other cores, c_20 this core's own partial.
+// Segment ends of the GGUF matmul compute kernels: c_16 bf16 outputs, c_17 / c_18 partials between cores, c_20 own.
 
 #pragma once
 

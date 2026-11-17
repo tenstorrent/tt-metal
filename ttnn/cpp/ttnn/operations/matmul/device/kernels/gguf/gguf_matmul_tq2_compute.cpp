@@ -2,18 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel of the GGUF matmul for TQ2_0: the weight tiles are BFP2_b without exponents (gguf_host_packing.cpp),
-// which the matmul reads as -1, 0, +1 (srca_forced_exp.h), so nothing is decoded; HiFi3 keeps the products exact.
-// Each K group (one 256-element block per column) has its own scale d per column, applied once per window of K
-// groups: with one input row, K tile t's input sits in row g % window of its in0 tile (g = t / 8, the writer zeroes
-// the other rows and c_1 has 32-byte pages, so the tile starts 32 (g % window) bytes before the input tile), DEST row
-// g % window collects group g's partial, and the epilogue multiplies by the window's scale tile (row g % window = the
-// d of group g, fp32) and sums the rows. With more rows, each group is a window: its partial is multiplied by its d,
-// broadcast over the rows, and added. Then as gguf_matmul_compute.cpp: a whole N tile packs bf16, a head or tail an
-// fp32 partial, a finish adds the partials. Compile args: K tiles of the band (c_1 holds those), input tiles per chunk,
-// one input row (0 / 1), K groups per window, the band's first K tile (a whole window). Runtime args: segments, then
-// per segment its first and end K tile and its role (a finish has the count of other cores' partials in place of its
-// first K tile).
+// Compute kernel of the GGUF matmul for TQ2_0: the weight tiles are BFP2_b mantissas the matmul reads as -1, 0, +1
+// (srca_forced_exp.h), with each K group's scales applied per window. Args: gguf_matmul_program_factory.cpp.
 
 #include <cstdint>
 

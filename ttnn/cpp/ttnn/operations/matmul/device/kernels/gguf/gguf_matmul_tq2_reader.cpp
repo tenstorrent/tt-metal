@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Weight reader of the GGUF matmul for TQ2_0: this core's records in compute order into c_0 (64-byte pages), one read
-// each, a unit of them per transaction id, one or two units in flight. A record (gguf_host_packing.cpp group_tq2_0) is
-// the eight BFP2_b weight tiles of one K group of one N tile, then the fp16 scale d of each of its 32 columns. Each
-// record's scales go as fp32 into the scale tile of its window of K groups (c_3): group g's into row g % window.
-// Compile args: c_0 records, records per unit, reads in flight, K groups per window, c_3 tiles, c_3 tile bytes, then
-// the weight's TensorAccessorArgs. Runtime args: weight address, N tiles, runs, then per run its N tile, first and end
-// K group.
+// Weight reader of the GGUF matmul for TQ2_0: records into c_0 (64-byte pages), their scales as fp32 into c_3.
+// Args: gguf_matmul_program_factory.cpp.
 
 #include <cstdint>
 

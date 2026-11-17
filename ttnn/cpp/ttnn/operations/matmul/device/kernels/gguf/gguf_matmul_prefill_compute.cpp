@@ -2,19 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel of the GGUF prefill matmul (gguf_matmul_prefill_program_factory.cpp): per M chunk, per K block, the
-// core's kb x nc weight tiles are decoded once into c_4 (Float32, [kb][nc] tiles), then multiplied against all mc rows
-// of the input (c_1: units of ur rows x kb tiles, [ur][kb]) in sh x sw subblocks. Partials accumulate in L1 (c_24,
-// Float32, packer L1 accumulation); in the last K block each unit of rows goes to c_16 as bf16 once its sums are
-// complete. Decode on the math thread: GGUF_PF_PIPE 1, decode_block (the next page's copy beside each decode);
-// GGUF_PF_PIPE 0 (block-float codes never), per tile the page is copied into DEST tile 1 and decoded into tile 0, then
-// packed. K split (krole): band 1 packs its sums to c_17 for the writer to send, band 0 adds the partners'
-// (c_18); both in units of ur rows x the planned N tiles, the rows of each N tile together (subblocks of ur x 1).
-// Compile args: format id, mc, kb, M chunks, ur (sh divides it), N passes (the core's N tiles in passes of up to the
-// width below; a pass without any only consumes the input), c_16's pages. Runtime args: N
-// tiles of this core (0: nothing to do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole
-// blocks of that width, so that c_24's L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send
-// sums, 2: add them), K blocks.
+// Compute kernel of the GGUF prefill matmul: per M chunk and K block, decodes the core's weight tiles once into c_4 and
+// multiplies them against the chunk's rows, sums in L1. Args: gguf_matmul_prefill_program_factory.cpp.
 
 #include <cstdint>
 
