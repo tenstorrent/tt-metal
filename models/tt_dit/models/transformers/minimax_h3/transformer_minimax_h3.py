@@ -229,9 +229,11 @@ class MiniMaxH3Transformer3DModel(Module):
         audio_enabled: bool = True,
         num_output_heads: int = 1,
         pdd_head_fp32: bool = False,
+        matmul_profile: str | None = None,
     ) -> None:
         """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
         are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour.
+        `matmul_profile="image"`: the blocks take the image-tuned all-gather-matmul pins where there are any.
 
         `audio_enabled=False` is MiniMax-H3-Image: no audio projections and no audio rows in the packed sequence.
         `num_output_heads > 1` replaces the video head with that many per-step heads (PDD, Parallel Decoding
@@ -347,6 +349,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     use_persistent_ccl_buffers=use_persistent_ccl_buffers,
                     dynamic_length=dynamic_length,
                     norm_row_capacity=norm_row_capacity,
+                    matmul_profile=matmul_profile,
                 )
                 for _ in range(num_layers)
             ]

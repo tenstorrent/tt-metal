@@ -96,6 +96,33 @@ AGMM_PINNED_BLOCKING: dict[tuple[int, int], dict[str, tuple[int, int, int]]] = {
 }
 
 
+class AgmmLayout(NamedTuple):
+    """Worker-grid orientation, size and ring workers of an all-gather matmul pin."""
+
+    transposed: bool
+    grid: tuple[int, int]
+    workers_per_link: int
+
+
+# MiniMax-H3-Image overrides of the (video-tuned) pins above, per (K, N) and length class: (blocking, layout).
+# Swept on a 4x8 BH Galaxy with test_matmul_sweep_image_minimax_h3.py over traffic-weighted image row counts per
+# device (short: 544, 1056, 2112, 2560, 2976, 4608 -- 2K/4K text to image and edits; long: 7168, 9216, 14336 --
+# many-reference edits) and adopted only where no row count got more than 3% slower than the video pin (one
+# program serves every length in a class). Swept vs the video pin, weighted: ff1 short -20.5% (faster at every
+# row count), ff1 long -9.3%, to_out long -12.3%. to_qkv and the short to_out keep the video pin: their best
+# weighted candidates were slower at some served row count.
+IMAGE_AGMM_PINS: dict[tuple[int, int], dict[str, tuple[tuple[int, int, int], AgmmLayout]]] = {
+    (5376, 7168): {
+        "short": ((4, 7, 10), AgmmLayout(transposed=False, grid=(12, 9), workers_per_link=6)),
+        "long": ((6, 6, 14), AgmmLayout(transposed=True, grid=(12, 9), workers_per_link=7)),
+    },
+    (7168, 1344): {
+        "long": ((2, 28, 4), AgmmLayout(transposed=False, grid=(12, 9), workers_per_link=5)),
+    },
+}
+MATMUL_PROFILES = (None, "image")
+
+
 class AgmmPin(NamedTuple):
     """Frozen all-gather-matmul program of one layer: grid, blocking and orientation fixed for every M."""
 
@@ -113,20 +140,30 @@ AGMM_PINNED_TRANSPOSED: dict[tuple[int, int], bool] = {
 }
 
 
-def agmm_pins(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> dict[str, AgmmPin]:
-    """The AGMM program of a `(K, N)` layer per length class: one worker-grid orientation at every length and
-    the class's `AGMM_PINNED_BLOCKING`; classes with the same blocking share one pin."""
+def agmm_pins(
+    k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int, profile: str | None = None
+) -> dict[str, AgmmPin]:
+    """The AGMM program of a `(K, N)` layer per length class: the video pin (one worker-grid orientation at every
+    length and the class's `AGMM_PINNED_BLOCKING`), or with `profile="image"` the class's `IMAGE_AGMM_PINS` entry
+    where there is one; classes with the same program share one pin."""
     if (k, n) not in AGMM_PINNED_BLOCKING:
         raise ValueError(f"dynamic_length has no pinned AGMM blocking for (K, N)={(k, n)}; TP=4 layouts only")
+    if profile not in MATMUL_PROFILES:
+        raise ValueError(f"unknown matmul profile {profile!r}; expected one of {MATMUL_PROFILES}")
     transposed = AGMM_PINNED_TRANSPOSED[(k, n)]
     grid = agmm_worker_grid(full_grid, transposed, num_links)
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not) into `num_links` groups.
     in0_axis = grid.x if transposed else grid.y
-    workers = math.ceil(in0_axis / num_links)
-    pins: dict[tuple[int, int, int], AgmmPin] = {}
+    video_layout = AgmmLayout(transposed, (grid.x, grid.y), math.ceil(in0_axis / num_links))
+    overrides = IMAGE_AGMM_PINS.get((k, n), {}) if profile == "image" else {}
+    pins: dict[tuple, AgmmPin] = {}
+    chosen: dict[str, tuple] = {}
     for cls in LENGTH_CLASSES:
-        blocking = AGMM_PINNED_BLOCKING[(k, n)][cls.name]
-        if blocking not in pins:
+        blocking, layout = overrides.get(cls.name, (AGMM_PINNED_BLOCKING[(k, n)][cls.name], video_layout))
+        if layout.grid[0] > full_grid.x or layout.grid[1] > full_grid.y:
+            raise ValueError(f"AGMM grid {layout.grid} exceeds the device grid {(full_grid.x, full_grid.y)}")
+        key = (blocking, layout)
+        if key not in pins:
             m_block, k_block, n_block = blocking
             config = ttnn.MinimalMatmulConfig(
                 M_block_size=m_block,
@@ -134,10 +171,11 @@ def agmm_pins(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> d
                 N_block_size=n_block,
                 subblock_h=2,
                 subblock_w=2,
-                compute_with_storage_grid_size=grid,
+                compute_with_storage_grid_size=ttnn.CoreCoord(*layout.grid),
             )
-            pins[blocking] = AgmmPin(config, workers, transposed)
-    return {cls.name: pins[AGMM_PINNED_BLOCKING[(k, n)][cls.name]] for cls in LENGTH_CLASSES}
+            pins[key] = AgmmPin(config, layout.workers_per_link, layout.transposed)
+        chosen[cls.name] = key
+    return {name: pins[key] for name, key in chosen.items()}
 
 
 def agmm_kwargs(pins: dict[str, AgmmPin] | None, k: int, n: int, rows: int) -> dict:

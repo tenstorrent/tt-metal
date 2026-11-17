@@ -82,9 +82,11 @@ class MiniMaxH3TransformerBlock(Module):
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
+        matmul_profile: str | None = None,
     ) -> None:
         """`dynamic_length` freezes the ff1 / ff2 blockings and the one-hot gathers' blocking at construction, so
-        no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms."""
+        no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms.
+        `matmul_profile="image"` takes the image-tuned all-gather-matmul pins (`IMAGE_AGMM_PINS`) where they exist."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
@@ -128,6 +130,7 @@ class MiniMaxH3TransformerBlock(Module):
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
             dynamic_length=dynamic_length,
             norm_row_capacity=norm_row_capacity,
+            matmul_profile=matmul_profile,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -177,7 +180,9 @@ class MiniMaxH3TransformerBlock(Module):
         if dynamic_length:
             grid = mesh_device.compute_with_storage_grid_size()
             if self.use_fused_agmm:
-                self._ff1_pins = agmm_pins(*self._ff1_kn, full_grid=grid, num_links=ccl_manager.num_links)
+                self._ff1_pins = agmm_pins(
+                    *self._ff1_kn, full_grid=grid, num_links=ccl_manager.num_links, profile=matmul_profile
+                )
             if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
                 self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
         # The dynamic-length modulation gathers: one-hot [rows, 32] @ table [32, hidden_local] through

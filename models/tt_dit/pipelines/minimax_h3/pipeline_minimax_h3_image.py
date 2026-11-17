@@ -327,6 +327,9 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
             kv_gather_capacity=self._dit_kv_capacity,
             use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
             dynamic_length=self.dynamic_length,
+            # The image-tuned all-gather-matmul pins (agmm_config.IMAGE_AGMM_PINS); H3_IMAGE_MATMUL_PROFILE=video
+            # takes the video pins instead, for an A/B.
+            matmul_profile=None if os.environ.get("H3_IMAGE_MATMUL_PROFILE") == "video" else "image",
         )
 
     def _select_bucket(self, seq_len: int) -> int:
@@ -763,6 +766,11 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
             signpost("stop")
             ttnn.ReadDeviceProfiler(self.mesh_device)
         if not readback:
+            if timing:  # device-resident latents: no readback to time
+                logger.info(
+                    f"STEP_TIMING step {k} rows {request['rung']}: enqueue {1e3 * (enqueued - started):.1f} ms, device "
+                    f"wait {1e3 * (synced - enqueued):.1f} ms"
+                )
             return velocity  # [1, 1, V_cap, C] on device; the caller owns it
         v = local_device_to_torch(velocity).reshape(-1, velocity.shape[-1])[: request["target_rows"]].float()
         ttnn.deallocate(velocity)

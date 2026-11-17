@@ -112,6 +112,7 @@ class MiniMaxH3Attention(Module):
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
+        matmul_profile: str | None = None,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
         length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path."""
@@ -203,7 +204,7 @@ class MiniMaxH3Attention(Module):
         # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
         self._qkv_pins = self._out_pins = self._ring_sdpa_configs = None
         if dynamic_length and self.use_fused_agmm:
-            pin_kwargs = dict(full_grid=full_grid, num_links=ccl_manager.num_links)
+            pin_kwargs = dict(full_grid=full_grid, num_links=ccl_manager.num_links, profile=matmul_profile)
             self._qkv_pins = agmm_pins(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
             self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
         if dynamic_length and self.use_ring:
