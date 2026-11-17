@@ -48,8 +48,8 @@ std::optional<FabricDeviceBuild> build_fabric_routers(
 // Follow-ups: gate where every rank runs (fabric-disabled or managed-mode ranks skip this), a phase-2 gate, error text.
 void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl, std::exception_ptr phase1_error);
 
-// The gate's rule, run on every rank's headers: any failed rank, or ranks on different fabric configs or launches, is
-// fatal on every rank.
+// The gate's rule, run on every rank's headers: any failed rank, or ranks on different launches, is fatal on every
+// rank. Fabric configs may differ by mesh; the control plane validates them.
 void check_fabric_launch_headers(const std::vector<RouterChannelLayouts::LaunchHeader>& headers);
 
 // Phase 2: create the router kernels and compile the device's fabric program.

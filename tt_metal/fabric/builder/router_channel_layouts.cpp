@@ -18,6 +18,7 @@ namespace tt::tt_fabric {
 void RouterChannelLayouts::begin_launch() {
     std::lock_guard lock(mutex_);
     layouts_.clear();
+    ++launch_generation_;
 }
 
 void RouterChannelLayouts::publish(FabricNodeId node, chan_id_t eth_chan, RouterChannelLayout layout) {
@@ -80,6 +81,10 @@ void RouterChannelLayouts::exchange(
     const HeaderCheck& check) {
     const auto world_size = static_cast<size_t>(*context.size());
     std::vector<Record> local_records;
+    {
+        std::lock_guard lock(mutex_);
+        header.launch_generation = launch_generation_;
+    }
     if (header.status == 0) {
         try {
             std::lock_guard lock(mutex_);

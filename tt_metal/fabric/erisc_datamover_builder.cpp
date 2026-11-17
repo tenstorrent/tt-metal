@@ -871,8 +871,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // Worker channels need their buffer-index-counter L1 address set so the EDM kernel can reset it on each launch.
     // Channel 0 is always a worker. VC2 is also a worker channel when active.
     downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
-    if (static_allocator->get_num_sender_channels(2) > 0) {
-        size_t vc2_flat = config.num_used_sender_channels_per_vc[0] + config.num_used_sender_channels_per_vc[1];
+    if (sender_counts[2] > 0) {
+        size_t vc2_flat = sender_counts[0] + sender_counts[1];
         downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_flat] =
             sender_channels_buffer_index_semaphore_id[vc2_flat];
     }
@@ -1803,11 +1803,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             sender_channels_buffer_index_semaphore_id[i] = 0;
         }
         // VC2 supports a worker connection, so if it's present we'll add the relevant book-keeping
-        auto* static_allocator =
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
-        const auto vc2_flat =
-            static_allocator->get_num_sender_channels(0) + static_allocator->get_num_sender_channels(1);
-        if (static_allocator->get_num_sender_channels(2) > 0) {
+        const auto& sender_counts = actual_sender_channels_per_vc.value_or(config.num_used_sender_channels_per_vc);
+        const auto vc2_flat = sender_counts[0] + sender_counts[1];
+        if (sender_counts[2] > 0) {
             sender_channels_buffer_index_semaphore_id[vc2_flat] =
                 config.sender_channels_buffer_index_semaphore_address[vc2_flat];
             sender_channels_flow_control_semaphore_id[vc2_flat] =

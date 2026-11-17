@@ -61,7 +61,7 @@ public:
         uint32_t num_records = 0;
         uint32_t status = 0;
         uint32_t fabric_config = 0;
-        uint32_t launch_generation = 0;
+        uint32_t launch_generation = 0;  // set by exchange(): this registry's launch count
     };
     static_assert(std::is_trivially_copyable_v<LaunchHeader>);
     // Sees every rank's header, in rank order, before the records gather; throws to stop the launch.
@@ -90,6 +90,7 @@ public:
 private:
     mutable std::mutex mutex_;
     Map layouts_;
+    uint32_t launch_generation_ = 0;
 };
 
 }  // namespace tt::tt_fabric

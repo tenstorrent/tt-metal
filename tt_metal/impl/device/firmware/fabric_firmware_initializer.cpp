@@ -320,6 +320,8 @@ void FabricFirmwareInitializer::init(
         if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
             has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
             compile_fabric_only();
+        } else {
+            build_fabric_programs(/*parallel=*/false, {}, /*compile=*/false);
         }
         return;
     }
@@ -364,6 +366,8 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
         build_fabric_programs(/*parallel=*/false);
     } else {
+        // The fabric manager launched the routers; build them again, uncompiled, for their channel layouts.
+        build_fabric_programs(/*parallel=*/false, {}, /*compile=*/false);
         log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
     }
 }

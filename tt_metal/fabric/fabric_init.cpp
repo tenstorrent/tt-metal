@@ -17,7 +17,6 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "distributed_context.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <atomic>
 #include <string>
 
 // hack for test_basic_fabric_apis.cpp
@@ -74,20 +73,16 @@ void check_fabric_launch_headers(const std::vector<RouterChannelLayouts::LaunchH
         if (header.status != 0) {
             failed += fmt::format("{}{}", failed.empty() ? "" : ", ", rank);
         }
-        mismatch |= header.fabric_config != headers[0].fabric_config ||
-                    header.launch_generation != headers[0].launch_generation;
+        mismatch |= header.launch_generation != headers[0].launch_generation;
         launches += fmt::format(" rank {}: config {} launch {};", rank, header.fabric_config, header.launch_generation);
     }
     TT_FATAL(failed.empty(), "fabric launch: rank {} failed the phase-1 build (see its log)", failed);
-    TT_FATAL(!mismatch, "fabric launch: ranks disagree on the fabric config or launch:{}", launches);
+    TT_FATAL(!mismatch, "fabric launch: ranks disagree on the launch:{}", launches);
 }
 
 void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl, std::exception_ptr phase1_error) {
-    static std::atomic<uint32_t> launch_generation = 0;
     const RouterChannelLayouts::LaunchHeader header{
-        .status = phase1_error ? 1u : 0u,
-        .fabric_config = static_cast<uint32_t>(env_impl.get_fabric_config()),
-        .launch_generation = ++launch_generation};
+        .status = phase1_error ? 1u : 0u, .fabric_config = static_cast<uint32_t>(env_impl.get_fabric_config())};
     const auto& context = env_impl.full_world_distributed_context();
     if (phase1_error) {
         if (*context.size() == 1) {
