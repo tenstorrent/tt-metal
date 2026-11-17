@@ -500,7 +500,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_fast_tilize": "perf_fast_tilize"},
     },
     "perf_fast_tilize_full": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -519,6 +519,7 @@ PERF_TEST_SCHEMAS = {
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "num_guard_tiles",
             "tile_cnt",
             "unpack_to_dest",
         ],
@@ -526,7 +527,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_fast_tilize_full": "perf_fast_tilize_full"},
     },
     "perf_fast_untilize": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -543,6 +544,7 @@ PERF_TEST_SCHEMAS = {
             "full_rt_dim",
             "loop_factor",
             "marker",
+            "num_guard_tiles",
             "tile_cnt",
             "unpack_to_dest",
         ],
