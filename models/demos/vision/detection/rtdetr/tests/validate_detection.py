@@ -2,11 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import requests
 import torch
 from loguru import logger
 from PIL import Image
@@ -24,8 +26,11 @@ MIN_MATCHED_RATIO = 0.8
 MIN_LABEL_AGREEMENT = 0.9
 MIN_MEAN_IOU = 0.9
 MAX_MEAN_SCORE_ERROR = 0.1
+COCO_ROOT = Path(__file__).resolve().parents[1] / "datasets" / "coco"
+COCO_ANNOTATIONS_ENV = "COCO_VAL2017_ANNOTATIONS"
+DEFAULT_COCO_ANNOTATIONS_PATH = COCO_ROOT / "annotations" / "instances_val2017.json"
 COCO_IMAGES_ENV = "COCO_VAL2017_IMAGES"
-DEFAULT_COCO_IMAGES_PATH = Path(__file__).resolve().parents[1] / "datasets" / "coco" / "val2017"
+DEFAULT_COCO_IMAGES_PATH = COCO_ROOT / "val2017"
 NUM_VALIDATION_IMAGES = 500
 
 
@@ -70,11 +75,33 @@ def match_detections(torch_boxes, tt_boxes):
 
 
 def get_coco_images():
-    images_path = Path(os.environ.get(COCO_IMAGES_ENV, DEFAULT_COCO_IMAGES_PATH))
-    image_paths = sorted(images_path.glob("*.jpg"))[:NUM_VALIDATION_IMAGES]
+    """The first NUM_VALIDATION_IMAGES val2017 images, in filename order, whose license allows
+    commercial use and modification; images missing from the image directory are downloaded."""
+    annotations_path = Path(os.environ.get(COCO_ANNOTATIONS_ENV, DEFAULT_COCO_ANNOTATIONS_PATH))
+    if not annotations_path.is_file():
+        pytest.skip(f"Set {COCO_ANNOTATIONS_ENV} to the COCO val2017 annotations, e.g. instances_val2017.json")
+    annotations = json.loads(annotations_path.read_text())
 
-    if not images_path.is_dir() or not image_paths:
-        pytest.skip(f"Set {COCO_IMAGES_ENV} to the downloaded COCO val2017 directory")
+    allowed_licenses = {
+        entry["id"]
+        for entry in annotations["licenses"]
+        if "NonCommercial" not in entry["name"] and "NoDerivs" not in entry["name"]
+    }
+    images = sorted(
+        (image for image in annotations["images"] if image["license"] in allowed_licenses),
+        key=lambda image: image["file_name"],
+    )[:NUM_VALIDATION_IMAGES]
+
+    images_path = Path(os.environ.get(COCO_IMAGES_ENV, DEFAULT_COCO_IMAGES_PATH))
+    images_path.mkdir(parents=True, exist_ok=True)
+    image_paths = []
+    for image in images:
+        path = images_path / image["file_name"]
+        if not path.is_file():
+            response = requests.get(image["coco_url"], timeout=30)
+            response.raise_for_status()
+            path.write_bytes(response.content)
+        image_paths.append(path)
 
     return image_paths
 

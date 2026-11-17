@@ -9,7 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
+from tt_py_test_utils_common.comparison_funcs import comp_equal
 
 
 def run_alltoall_deepseek_with_trace(

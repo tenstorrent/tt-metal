@@ -134,9 +134,9 @@ void SwigluPackedBwProgramFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     const WorkSplit split = make_work_split(tensor_args.packed);
 
-    const uint32_t packed_addr = tensor_args.packed.buffer()->address();
-    const uint32_t dh_addr = tensor_args.dL_dh.buffer()->address();
-    const uint32_t dpacked_addr = output.buffer()->address();
+    const uint32_t packed_addr = tensor_args.packed.mesh_buffer().address();
+    const uint32_t dh_addr = tensor_args.dL_dh.mesh_buffer().address();
+    const uint32_t dpacked_addr = output.mesh_buffer().address();
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);

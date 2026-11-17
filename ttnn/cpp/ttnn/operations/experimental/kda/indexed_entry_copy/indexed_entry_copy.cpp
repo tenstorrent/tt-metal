@@ -9,8 +9,16 @@
 namespace ttnn::experimental::kda {
 
 ttnn::Tensor indexed_entry_copy(
-    const Tensor& source, const Tensor& destination, const Tensor& index, uint32_t index_scale, uint32_t index_offset) {
-    return ttnn::experimental::prim::indexed_entry_copy(source, destination, index, index_scale, index_offset);
+    const Tensor& source,
+    const Tensor& destination,
+    const Tensor& index,
+    uint32_t index_scale,
+    uint32_t index_offset,
+    const std::optional<Tensor>& zero_fill_at_zero,
+    const std::optional<Tensor>& paired_source,
+    const std::optional<Tensor>& paired_destination) {
+    return ttnn::experimental::prim::indexed_entry_copy(
+        source, destination, index, index_scale, index_offset, zero_fill_at_zero, paired_source, paired_destination);
 }
 
 }  // namespace ttnn::experimental::kda

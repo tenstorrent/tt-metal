@@ -60,7 +60,7 @@ int main() {
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
 
         // A MeshWorkload is a collection of programs that will be executed on the mesh. Each workload is
         // local to a single device. Here we create a workload for our single-device mesh.
@@ -107,15 +107,15 @@ int main() {
         // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
         // back to DRAM.
         std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
         auto reader = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/dataflow/read_tiles.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
         std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
         auto writer = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/dataflow/write_tile.cpp",

@@ -225,7 +225,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
         // First pass: Calculate minimums for each row/column
         size_t num_chips_in_mesh = intra_mesh_connectivity[mesh_id.get()].size();
-        bool is_single_chip = num_chips_in_mesh == 1 && user_meshes.size() == 1;
+        // A lone single-chip system. user_meshes holds only this process's meshes, so count the meshes of the whole
+        // fabric: a one-chip mesh in a multi-mesh graph (e.g. one stage of a pipeline of [1,1] meshes) still has
+        // N/E/S/W inter-mesh ports whose routing planes must be counted.
+        bool is_single_chip = num_chips_in_mesh == 1 && this->mesh_graph_->get_mesh_ids().size() == 1;
         bool may_have_intra_mesh_connectivity = !is_single_chip;
 
         if (may_have_intra_mesh_connectivity) {
@@ -2788,7 +2791,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
     if (this->fabric_context_ == nullptr) {
         log_warning(
             tt::LogFabric,
-            "ControlPlane: Fabric context is not set, cannot write fabric connections to Tensix cores for M%dD%d",
+            "ControlPlane: Fabric context is not set, cannot write fabric connections to Tensix cores for M{}D{}",
             *mesh_id,
             chip_id);
         return;
@@ -2812,7 +2815,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
             if (num_eth_endpoint >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
                 log_warning(
                     tt::LogFabric,
-                    "ControlPlane: Maximum number of fabric endpoints exceeded for M%dD%d, skipping further "
+                    "ControlPlane: Maximum number of fabric endpoints exceeded for M{}D{}, skipping further "
                     "connections",
                     *mesh_id,
                     chip_id);
