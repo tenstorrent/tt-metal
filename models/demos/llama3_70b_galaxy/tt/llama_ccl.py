@@ -17,6 +17,16 @@ LINE_AG = os.environ.get("LINE_AG", "0") == "1"
 # "WO_AG"); above it, a reduce-scatter plus all-gather (buffer key "WO"). Default 4096 is the original split.
 WO_AG_MAX = int(os.environ.get("LLAMA_GALAXY_WO_AG_MAX", "4096"))
 
+# LLAMA_GALAXY_PREFILL_SEQSPLIT=1 (opt-in, Wormhole ring prefill only): the residual stream between the
+# cluster_axis=0 reductions lives as seqlen/8 rows per device. The WO and FF2 all-reduces become a
+# reduce-scatter along the sequence (dim 2); the residual add and the RMSNorm then run on seqlen/8 rows,
+# and only the norm output is all-gathered (dim 2) for the next matmul. Unset = the original full-length
+# add + norm on every device. Applies to batch-1 prefill of PREFILL_SEQSPLIT_MIN..MAX rows (cold and
+# prefix-cached chunks alike: the add and norm do not depend on the position).
+PREFILL_SEQSPLIT = os.environ.get("LLAMA_GALAXY_PREFILL_SEQSPLIT", "0") == "1"
+PREFILL_SEQSPLIT_MIN = 2048
+PREFILL_SEQSPLIT_MAX = 8192
+
 # If set, use line for those AG ops in prefill, otherwise use ring if available
 USE_LINE_AG = {
     # "QKV",
@@ -1377,6 +1387,72 @@ class TT_CCL:
                     self.reduce_scatter_buffer_idx[cluster_axis] + 1
                 ) % self.num_cbs
 
+        return ttnn_tensor_out
+
+    def prefill_seqsplit_enabled(self, seq_len, batch_size=1):
+        """True when LLAMA_GALAXY_PREFILL_SEQSPLIT applies to this prefill (see PREFILL_SEQSPLIT)."""
+        rows_per_device = seq_len // self.cluster_shape[0]
+        return (
+            PREFILL_SEQSPLIT
+            and self.mode == "prefill"
+            and batch_size == 1
+            and self.use_prefetcher
+            and not self.is_blackhole
+            and not self.is_qwen
+            and self.use_ring_rs_prefill
+            and self.use_ring_ag_prefill
+            and PREFILL_SEQSPLIT_MIN <= seq_len <= PREFILL_SEQSPLIT_MAX
+            and seq_len % self.cluster_shape[0] == 0
+            and rows_per_device % 32 == 0
+        )
+
+    def _prefill_seqsplit_num_links(self):
+        # Same link count as ring_reduce_scatter / ring_all_gather.
+        return 4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self.model_config["GALAXY_NUM_LINKS"])
+
+    def prefill_seq_reduce_scatter(self, input_tensor_mesh, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        """Sum the partials over cluster_axis and keep this device's seqlen/N rows (scatter on dim 2).
+
+        Input [1, B, S/B, H] (B > 1 when the matmul ran in row slabs) -> output [1, 1, S/N, H], where the
+        device at position r along cluster_axis holds rows r*S/N .. (r+1)*S/N - 1. No persistent buffers:
+        the op allocates its own and synchronises through the barrier semaphore, as the "WO" key does.
+        """
+        B = input_tensor_mesh.shape[1]
+        input_tensor_mesh = ttnn.reshape(
+            input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+        )
+        seqlen = input_tensor_mesh.shape[-2]
+        ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
+            input_tensor=input_tensor_mesh,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            num_links=self._prefill_seqsplit_num_links(),
+            memory_config=memory_config,
+            topology=ttnn.Topology.Ring,
+            subdevice_id=self.worker_sub_device_id,
+            cluster_axis=cluster_axis,
+            num_workers_per_link=4 if seqlen > 128 else 1,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return ttnn_tensor_out
+
+    def prefill_seq_all_gather(self, input_tensor_mesh, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        """Inverse of prefill_seq_reduce_scatter's layout: [1, 1, S/N, H] per device -> [1, 1, S, H] everywhere."""
+        ttnn_tensor_out = ttnn.experimental.all_gather_async(
+            input_tensor=input_tensor_mesh,
+            persistent_output_buffer=None,
+            dim=2,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            num_links=self._prefill_seqsplit_num_links(),
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            memory_config=memory_config,
+            topology=ttnn.Topology.Ring,
+            subdevice_id=self.worker_sub_device_id,
+            cluster_axis=cluster_axis,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
     def ring_reduce_scatter(

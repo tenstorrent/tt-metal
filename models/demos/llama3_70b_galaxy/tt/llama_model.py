@@ -1069,6 +1069,8 @@ class TtTransformer(LightweightModule):
             rot_mats = (rot_cos_slice, rot_sin_slice)
 
         h = None
+        # LLAMA_GALAXY_PREFILL_SEQSPLIT: one decision per forward, so every layer agrees on the residual layout.
+        seqsplit = mode == "prefill" and self.tt_ccl.prefill_seqsplit_enabled(x.shape[-2], batch_size)
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
             x, h = layer(
@@ -1084,6 +1086,7 @@ class TtTransformer(LightweightModule):
                 chunk_start_idx_tensor=chunk_start_idx if mode == "prefill" else None,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
+                seqsplit=seqsplit,
             )
         # ttnn.deallocate(h)
         if mode == "decode" and self.use_prefetcher:

@@ -132,9 +132,9 @@ class TtLlamaMLP(LightweightModule):
             self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
-    def forward(self, x: ttnn.Tensor, mode, batch_size=1, return_intermediates=False):
+    def forward(self, x: ttnn.Tensor, mode, batch_size=1, return_intermediates=False, seqsplit=False):
         if mode == "prefill":
-            return self.forward_prefill(x, batch_size=batch_size)
+            return self.forward_prefill(x, batch_size=batch_size, seqsplit=seqsplit)
 
         intermediates = {} if return_intermediates else None
 
@@ -357,7 +357,7 @@ class TtLlamaMLP(LightweightModule):
 
         return w2_out_reduced
 
-    def forward_prefill(self, x: ttnn.Tensor, batch_size=1) -> ttnn.Tensor:
+    def forward_prefill(self, x: ttnn.Tensor, batch_size=1, seqsplit=False) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -497,6 +497,15 @@ class TtLlamaMLP(LightweightModule):
                 dtype=self.prefill_output_dtype,
             )
             ttnn.deallocate(w2_in)
+
+        if seqsplit:
+            # LLAMA_GALAXY_PREFILL_SEQSPLIT: reduce-scatter along the sequence only ([1, 1, seqlen/8, 2048]
+            # per device; the 1024-row slabs are flattened first). The decoder does the residual add.
+            w2_out_reduced = self.tt_ccl.prefill_seq_reduce_scatter(
+                w2_out, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.deallocate(w2_out)
+            return w2_out_reduced
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,

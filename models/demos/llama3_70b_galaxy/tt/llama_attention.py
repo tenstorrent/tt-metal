@@ -1092,6 +1092,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
+        seqsplit=False,
     ):
         if batch_size > 1:
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
@@ -1410,6 +1411,15 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
+        if seqsplit:
+            # LLAMA_GALAXY_PREFILL_SEQSPLIT: reduce-scatter along the sequence only; the decoder adds the
+            # residual and norms seqlen/8 rows, then all-gathers the norm output.
+            output_11SH_reduced = self.tt_ccl.prefill_seq_reduce_scatter(
+                output_11SH, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            output_11SH.deallocate()
+            return output_11SH_reduced
+
         # Reduce-scatter
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
@@ -1436,6 +1446,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
+        seqsplit=False,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -1448,6 +1459,7 @@ class TtLlamaAttention(LightweightModule):
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
+                seqsplit=seqsplit,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
