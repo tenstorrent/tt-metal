@@ -1013,6 +1013,89 @@ TEST(MultiHost, SC16BlitzSuperpodIntermeshPortAssignment) {
     check_intermesh_port_assignment_against_golden("SC16BlitzSuperpod_intermesh");
 }
 
+namespace {
+// Hardcoded full-mesh pin profiles (chip_id -> tray_id, asic_location). Each 4x4 mesh must
+// match the even or odd profile exactly — all 16 chips are checked per mesh.
+struct ExpectedPin {
+    std::uint32_t chip_id;
+    std::uint32_t tray_id;
+    std::uint32_t asic_location;
+};
+static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_c = {{
+    {0, 1, 3},
+    {1, 1, 7},
+    {2, 2, 7},
+    {3, 2, 3},
+    {4, 1, 4},
+    {5, 1, 8},
+    {6, 2, 8},
+    {7, 2, 4},
+    {8, 3, 4},
+    {9, 3, 8},
+    {10, 4, 8},
+    {11, 4, 4},
+    {12, 3, 3},
+    {13, 3, 7},
+    {14, 4, 7},
+    {15, 4, 3},
+}};
+static constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_c = {{
+    {0, 3, 2},
+    {1, 3, 6},
+    {2, 4, 6},
+    {3, 4, 2},
+    {4, 3, 1},
+    {5, 3, 5},
+    {6, 4, 5},
+    {7, 4, 1},
+    {8, 1, 1},
+    {9, 1, 5},
+    {10, 2, 5},
+    {11, 2, 1},
+    {12, 1, 2},
+    {13, 1, 6},
+    {14, 2, 6},
+    {15, 2, 2},
+}};
+static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_ab = {{
+    {0, 1, 3},
+    {1, 1, 7},
+    {2, 3, 7},
+    {3, 3, 3},
+    {4, 1, 4},
+    {5, 1, 8},
+    {6, 3, 8},
+    {7, 3, 4},
+    {8, 2, 4},
+    {9, 2, 8},
+    {10, 4, 8},
+    {11, 4, 4},
+    {12, 2, 3},
+    {13, 2, 7},
+    {14, 4, 7},
+    {15, 4, 3},
+}};
+static constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_ab = {{
+    {0, 2, 2},
+    {1, 2, 6},
+    {2, 4, 6},
+    {3, 4, 2},
+    {4, 2, 1},
+    {5, 2, 5},
+    {6, 4, 5},
+    {7, 4, 1},
+    {8, 1, 1},
+    {9, 1, 5},
+    {10, 3, 5},
+    {11, 3, 1},
+    {12, 1, 2},
+    {13, 1, 6},
+    {14, 3, 6},
+    {15, 3, 2},
+}};
+
+}  // namespace
+
 // Subtorus 4x4 pipeline rings (8/32/40-stage): every pinned chip must land on the exact
 // (tray_id, asic_location) from the hardcoded even/odd full-mesh profiles below. Uses the
 // MetalContext control plane (same instance as ControlPlaneFixture tests in the tt-run filter).
@@ -1034,86 +1117,6 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     const bool log_on_rank0 = *distributed_context.rank() == 0;
-
-    // Hardcoded full-mesh pin profiles (chip_id -> tray_id, asic_location). Each 4x4 mesh must
-    // match the even or odd profile exactly — all 16 chips are checked per mesh.
-    struct ExpectedPin {
-        std::uint32_t chip_id;
-        std::uint32_t tray_id;
-        std::uint32_t asic_location;
-    };
-    static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_c = {{
-        {0, 1, 3},
-        {1, 1, 7},
-        {2, 2, 7},
-        {3, 2, 3},
-        {4, 1, 4},
-        {5, 1, 8},
-        {6, 2, 8},
-        {7, 2, 4},
-        {8, 3, 4},
-        {9, 3, 8},
-        {10, 4, 8},
-        {11, 4, 4},
-        {12, 3, 3},
-        {13, 3, 7},
-        {14, 4, 7},
-        {15, 4, 3},
-    }};
-    static constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_c = {{
-        {0, 3, 2},
-        {1, 3, 6},
-        {2, 4, 6},
-        {3, 4, 2},
-        {4, 3, 1},
-        {5, 3, 5},
-        {6, 4, 5},
-        {7, 4, 1},
-        {8, 1, 1},
-        {9, 1, 5},
-        {10, 2, 5},
-        {11, 2, 1},
-        {12, 1, 2},
-        {13, 1, 6},
-        {14, 2, 6},
-        {15, 2, 2},
-    }};
-    static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_ab = {{
-        {0, 1, 3},
-        {1, 1, 7},
-        {2, 3, 7},
-        {3, 3, 3},
-        {4, 1, 4},
-        {5, 1, 8},
-        {6, 3, 8},
-        {7, 3, 4},
-        {8, 2, 4},
-        {9, 2, 8},
-        {10, 4, 8},
-        {11, 4, 4},
-        {12, 2, 3},
-        {13, 2, 7},
-        {14, 4, 7},
-        {15, 4, 3},
-    }};
-    static constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_ab = {{
-        {0, 2, 2},
-        {1, 2, 6},
-        {2, 4, 6},
-        {3, 4, 2},
-        {4, 2, 1},
-        {5, 2, 5},
-        {6, 4, 5},
-        {7, 4, 1},
-        {8, 1, 1},
-        {9, 1, 5},
-        {10, 3, 5},
-        {11, 3, 1},
-        {12, 1, 2},
-        {13, 1, 6},
-        {14, 3, 6},
-        {15, 3, 2},
-    }};
 
     const auto& mesh_graph = control_plane.get_mesh_graph();
     const auto& psd = control_plane.get_physical_system_descriptor();
@@ -1260,6 +1263,83 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
             total_pin_checks,
             even_mesh_pins.size());
     }
+}
+
+// [RING,RING] 4x4 prefill carve (ci/sc4_4x4_rr_mgd.textproto, ci/sc2_4x4_rr_mgd.textproto and their 1-link
+// variants): even meshes are the single-host in-Galaxy tori (the even-mesh pin profile), odd meshes are seam
+// tori (the odd-mesh profile) whose rows 0-1 and 2-3 sit on two different hosts, and every pair of
+// neighbouring stages shares 8 inter-mesh links. The meshes form a chain, with no wrap from the last stage.
+TEST(MultiHost, TestSubtorus4x4RingRingPrefillMgd) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        GTEST_SKIP() << "[RING,RING] prefill carve check requires a Blackhole Galaxy mock cluster";
+    }
+
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto& even_mesh_pins = psd.is_bh_galaxy_rev_c() ? even_mesh_pins_rev_c : even_mesh_pins_rev_ab;
+    const auto& odd_mesh_pins = psd.is_bh_galaxy_rev_c() ? odd_mesh_pins_rev_c : odd_mesh_pins_rev_ab;
+
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    ASSERT_GE(mesh_ids.size(), 3u) << "a prefill carve needs at least torus, seam, torus";
+
+    constexpr std::uint32_t torus_side = 4;
+    for (const MeshId mesh_id : mesh_ids) {
+        ASSERT_EQ(mesh_graph.get_mesh_shape(mesh_id), MeshShape(torus_side, torus_side))
+            << "mesh " << mesh_id.get() << " must be 4x4";
+        const bool seam = (mesh_id.get() % 2) == 1;
+        const auto& pins = seam ? odd_mesh_pins : even_mesh_pins;
+
+        // Every chip sits where the profile says: even meshes on ASICs {3,4,7,8}, odd meshes on {1,2,5,6}.
+        std::array<std::string, torus_side * torus_side> host_of_chip;
+        for (const auto& pin : pins) {
+            const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(FabricNodeId(mesh_id, pin.chip_id));
+            EXPECT_EQ(*psd.get_tray_id(asic_id), pin.tray_id) << "mesh " << mesh_id.get() << " chip " << pin.chip_id;
+            EXPECT_EQ(*psd.get_asic_location(asic_id), pin.asic_location)
+                << "mesh " << mesh_id.get() << " chip " << pin.chip_id;
+            host_of_chip[pin.chip_id] = psd.get_host_name_for_asic(asic_id);
+        }
+
+        std::set<std::string> hosts(host_of_chip.begin(), host_of_chip.end());
+        if (!seam) {
+            EXPECT_EQ(hosts.size(), 1u) << "in-Galaxy torus " << mesh_id.get() << " must sit on one host";
+            continue;
+        }
+        // Seam torus: tensor rows 0-1 on one host, rows 2-3 on the other (host_topology [2,1]).
+        EXPECT_EQ(hosts.size(), 2u) << "seam torus " << mesh_id.get() << " must span two hosts";
+        for (std::uint32_t row = 0; row < torus_side; ++row) {
+            for (std::uint32_t col = 0; col < torus_side; ++col) {
+                EXPECT_EQ(host_of_chip[(row * torus_side) + col], host_of_chip[(row / 2) * 2 * torus_side])
+                    << "seam torus " << mesh_id.get() << " row " << row << " col " << col;
+            }
+        }
+        EXPECT_NE(host_of_chip[0], host_of_chip[2 * torus_side])
+            << "seam torus " << mesh_id.get() << " rows 0-1 and 2-3 are on the same host";
+    }
+
+    // Collective: every rank agrees on each boundary's resolved pairs before the rank-0 count below.
+    expect_intermesh_resolved_pairs_consistent_across_ranks(control_plane);
+    if (*tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() != 0) {
+        return;
+    }
+    const auto boundaries = requested_intermesh_boundaries(control_plane);
+    std::set<std::pair<std::uint32_t, std::uint32_t>> neighbour_pairs;
+    for (const auto& [src, dst] : boundaries) {
+        neighbour_pairs.emplace(std::min(src, dst), std::max(src, dst));
+        EXPECT_EQ(std::max(src, dst) - std::min(src, dst), 1u) << "M" << src << " -> M" << dst << " is not a chain hop";
+        const auto resolved =
+            control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{src}, MeshId{dst}).size();
+        EXPECT_EQ(resolved, 8u) << "M" << src << " -> M" << dst << " must resolve 8 inter-mesh links";
+    }
+    EXPECT_EQ(neighbour_pairs.size(), mesh_ids.size() - 1) << "stages must form a chain with no wrap";
 }
 
 // CPU-only channel-rule check on the SC20 80-mesh Blitz decode ring (relaxed policy). Verifies the relaxed

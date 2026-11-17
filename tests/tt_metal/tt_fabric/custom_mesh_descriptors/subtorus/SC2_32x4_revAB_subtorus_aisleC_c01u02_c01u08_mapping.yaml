@@ -1,0 +1,5 @@
+# Two-host (2-rank) mock cluster mapping: the first two hosts of the SC4 revAB subtorus aisle C single pod (c01u02 -> c01u08 in cabling ring order).
+# Used by the [RING,RING] prefill carve check on the two-Galaxy descriptor (sc2_4x4_rr_mgd.textproto).
+rank_to_cluster_mock_cluster_desc:
+  0: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revAB_subtorus_aisleC/SC36_32x4_revAB_subtorus_aisleC_cluster_desc/SC36_32x4_revAB_subtorus_aisleC_cluster_desc_bh-glx-120-c01u02_rank_0.yaml"
+  1: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revAB_subtorus_aisleC/SC36_32x4_revAB_subtorus_aisleC_cluster_desc/SC36_32x4_revAB_subtorus_aisleC_cluster_desc_bh-glx-120-c01u08_rank_1.yaml"
