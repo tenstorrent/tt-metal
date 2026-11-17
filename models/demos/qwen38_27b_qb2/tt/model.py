@@ -185,11 +185,20 @@ class Qwen38Model:
         )
 
     def reset_cache(self, cache):
+        # QWEN38_RESET_SHARED (default 1): one zero tensor per state spec, copied into every layer's state, instead of
+        # a fill program per state and layer.
+        shared = os.environ.get("QWEN38_RESET_SHARED", "1") != "0"
+        zeros = {}
         for state in cache.layers:
             for name in ("key", "value", "conv", "recurrent"):
                 tensor = getattr(state, name)
                 if tensor is not None:
-                    ttnn.copy(ttnn.zeros_like(tensor), tensor)
+                    key = (tuple(tensor.shape), tensor.dtype, tensor.layout, tensor.memory_config())
+                    if not shared or key not in zeros:
+                        zeros[key] = ttnn.zeros_like(tensor)
+                    ttnn.copy(zeros[key], tensor)
+        for zero in zeros.values():
+            ttnn.deallocate(zero)
 
     def embed(self, tokens, *, batch, length, sharded=False, compact=False):
         if compact and (sharded or length != 1):
