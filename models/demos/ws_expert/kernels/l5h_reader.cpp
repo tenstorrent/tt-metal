@@ -566,6 +566,12 @@ void kernel_main() {
     constexpr uint32_t dst_l1 = idx_l1 + 256;
     volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1);
     uint32_t drained = 0, d_n = 0, d_r = 0, y_state = 0;
+#if defined(WL5_YSTATE)
+    uint64_t ybank[NUM_DRAM_BANKS];  // (bank b's NoC address of the result buffer's first row at this core's columns)
+    for (uint32_t b = 0; b < NUM_DRAM_BANKS; ++b) {
+        ybank[b] = os.get_noc_addr(b, DS * 64);  // (page b: bank b's first page)
+    }
+#endif
     auto qy = [&]() -> bool {
         if (y_state == 2) {
             if (!ncrisc_noc_posted_writes_sent(noc_index)) {
@@ -598,9 +604,31 @@ void kernel_main() {
             uint32_t l1 = get_read_ptr(y_cb);
 #endif
             const uint32_t m = counts[16 + (order[d_n] & 0xFFFF)] - d_r * 32;
-            for (uint32_t r = 0; r < (m < 32 ? m : 32); ++r, l1 += seg) {
+            const uint32_t nr = m < 32 ? m : 32;
+#if defined(WL5_YSTATE)
+            // (the row tile's rows grouped by DRAM bank: one write state a bank - its NoC coordinates, the size, posted
+            // - then only the source and the bank-local address a row; nothing else uses the write command buffer in
+            // between, and the next ordinary write reprograms it whole)
+            for (uint32_t b = 0; b < NUM_DRAM_BANKS; ++b) {
+                bool first = true;
+                for (uint32_t r = 0; r < nr; ++r) {
+                    const uint32_t pg = dst[r];
+                    if (pg % NUM_DRAM_BANKS != b) {
+                        continue;
+                    }
+                    const uint64_t a = ybank[b] + (uint64_t)((pg / NUM_DRAM_BANKS) * (HT * 64));
+                    if (first) {
+                        noc_async_write_one_packet_set_state<true>(a, seg);
+                        first = false;
+                    }
+                    noc_async_write_one_packet_with_state<true>(l1 + r * seg, (uint32_t)a);
+                }
+            }
+#else
+            for (uint32_t r = 0; r < nr; ++r, l1 += seg) {
                 noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1, os.get_noc_addr(dst[r], DS * 64), seg);
             }
+#endif
             y_state = 2;
             return true;
         }

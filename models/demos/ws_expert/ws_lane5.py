@@ -61,6 +61,7 @@ class L5Cfg:
     # the compute's pack-untilize of the down rows (WL_Y_RM on the compute only) regardless of the output path: -1 with
     # yrm (and not yt), 0 never, 1 always (diagnostics: untilize cost with tile writes, row writes without untilize)
     cu: int = -1
+    ystate: int = 0  # yrm: a row tile's row writes grouped by DRAM bank with the stateful one-packet writes (WL5_YSTATE)
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -297,6 +298,7 @@ def build_lane5(
                             defines=FAB_DEFS
                             + ([("WL5_OAFF", str(l5.oaff))] if l5.oaff else [])
                             + ([("WL5_Y_RM", "1")] if l5.yrm else [])
+                            + ([("WL5_YSTATE", "1")] if l5.yrm and l5.ystate else [])
                             + ([("WL5_YT", str(ysh.buffer_address()))] if l5.yrm and l5.yt else [])
                             + ([("WL5_Y_FENCE", str(fence_row))] if l5.yrm and fence_row is not None else [])
                             + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
