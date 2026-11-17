@@ -31,8 +31,8 @@ namespace detail {
 
 // One encoding of a scalar TTNN param, written to the kernel arguments recorded under its Metal name.
 struct CmdListMetalScalar {
-    std::string metal_cmd_list_param_name;  // "<TTNN param>/<factory type>/<Metal param>"
-    CmdListEncodeFn encode;                 // from the first TTNN record of the Metal name
+    std::string metal_cmd_list_param_name;  // "<TTNN param>/<factory type>/<program number>/<Metal param>"
+    CmdListEncodeFn encode;
     bool has_runtime = false;
     bool has_common_runtime = false;
 };
@@ -114,6 +114,8 @@ private:
     std::vector<BindScope> bind_scopes_;
     std::vector<ActiveBind> binds_;  // the binds of every scope in bind_scopes_, in push order
     detail::CmdListLayout layout_;
+    // Numbers each recorded program in its Metal names, so two programs never share an encoding.
+    std::size_t recorded_programs_ = 0;
 };
 
 // A replayable command list in device DRAM, bound to the command queue it was built for.

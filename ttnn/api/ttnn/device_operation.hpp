@@ -227,15 +227,13 @@ template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
         if (!sv.cmd_list_bindings) {
             continue;
         }
-        // The cache-miss enumeration: io tensors, then the parked op-owned tensors.
         CmdListProgramBindings& entry = programs.emplace_back(
             CmdListProgramBindings{.program = &program, .bindings = sv.cmd_list_bindings.get(), .bound_tensors = {}});
         for (const auto& binding : sv.bindings) {
-            const tt::tt_metal::MeshTensor& tensor =
-                binding.tensor_idx < io_mesh_tensors.size()
-                    ? io_mesh_tensors[binding.tensor_idx].get()
-                    : (*sv.op_owned_tensors)[binding.tensor_idx - io_mesh_tensors.size()];
-            entry.bound_tensors.emplace_back(binding.tensor_parameter_name, &tensor);
+            entry.bound_tensors.emplace_back(
+                binding.tensor_parameter_name,
+                &mesh_device_operation_t::SpecBindingSupport::bound_mesh_tensor(
+                    sv, io_mesh_tensors, binding.tensor_idx));
         }
     }
     record_to_command_list(operation_name, mesh_device, workload, programs);

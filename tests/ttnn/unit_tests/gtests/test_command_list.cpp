@@ -116,7 +116,6 @@ CmdListScalar integer(int64_t value) { return {value}; }
 
 TEST(CommandListParamsTest, EncodersProduceArgumentWords) {
     EXPECT_EQ(encode_uint32(integer(7)).to_uint32(), 7u);
-    EXPECT_EQ(encode_uint32(real(3.0)).to_uint32(), 3u);
     EXPECT_EQ(encode_uint32(integer(0xFFFFFFFF)).to_uint32(), 0xFFFFFFFFu);
     EXPECT_EQ(encode_int32_bits(integer(-1)).to_uint32(), 0xFFFFFFFFu);
     EXPECT_EQ(encode_float32_bits(real(1.0)).to_uint32(), 0x3F800000u);
@@ -138,8 +137,8 @@ TEST(CommandListParamsTest, EncodersRejectValuesTheyCannotRepresent) {
     };
     rejects(encode_uint32, integer(-1));
     rejects(encode_uint32, integer(int64_t{1} << 32));
-    rejects(encode_uint32, real(1.5));
-    rejects(encode_uint32, real(std::nan("")));
+    rejects(encode_uint32, real(3.0));
+    rejects(encode_uint16_low, real(1.0));
     rejects(encode_int32_bits, integer(int64_t{1} << 31));
     rejects(encode_uint16_low, integer(0x10000));
     rejects(encode_float32_bits, real(1e39));
@@ -268,7 +267,7 @@ TEST(CommandListBinderTest, RecordsBindingsWithOneEncodingPerMetalParam) {
     EXPECT_EQ(bindings.scalars[0].common_runtime_args.size(), 1u);
     EXPECT_EQ(bindings.scalars[1].metal_cmd_list_param_name, "scale_u16");
     EXPECT_THAT(bindings.scalars[1].runtime_args[0].nodes, ::testing::ElementsAre(m2::NodeCoord{1, 0}));
-    EXPECT_EQ(bindings.scalars[1].encode(real(1.0)).to_uint32(), 1u);
+    EXPECT_EQ(bindings.scalars[1].encode(integer(1)).to_uint32(), 1u);
 }
 
 TEST(CommandListBinderTest, RejectsInvalidBindings) {
@@ -402,13 +401,16 @@ TEST_F(CommandListDeviceParamsTest, SoftmaxUpdatesInputAndScaleOnEachQueue) {
     list_cq1.deallocate();
 }
 
-// Writes one op argument, "value", to two L1 words with different encodings.
+// Writes one op argument, "value", to two L1 words with different encodings. With `packed`, writer_a writes it
+// uint16-pair encoded to kAddressPacked instead, so one Metal param name has a different encoder per program.
 struct FanOutDeviceOperation {
     static constexpr uint32_t kAddressA = 100 * 1024;
     static constexpr uint32_t kAddressB = kAddressA + 64;
+    static constexpr uint32_t kAddressPacked = kAddressA + 128;
 
     struct operation_attributes_t {
         uint32_t value;
+        bool packed = false;
     };
     struct tensor_args_t {
         const Tensor& input_tensor;
@@ -433,8 +435,9 @@ struct FanOutDeviceOperation {
             run_params.kernel_run_args = {
                 m2::ProgramRunArgs::KernelRunArgs{
                     .kernel = m2::KernelSpecName{"writer_a"},
-                    .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode({0, 0}, {{"address", kAddressA}}),
-                    .common_runtime_arg_values = {{"value", encode_uint32(value)}}},
+                    .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(
+                        {0, 0}, {{"address", attributes.packed ? kAddressPacked : kAddressA}}),
+                    .common_runtime_arg_values = {{"value", writer_a_encoder(attributes)(value)}}},
                 m2::ProgramRunArgs::KernelRunArgs{
                     .kernel = m2::KernelSpecName{"writer_b"},
                     .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode({0, 0}, {{"address", kAddressB}}),
@@ -442,13 +445,17 @@ struct FanOutDeviceOperation {
             return {.spec = std::move(spec), .run_params = std::move(run_params)};
         }
 
+        static CmdListEncodeFn writer_a_encoder(const operation_attributes_t& attributes) {
+            return attributes.packed ? encode_uint16_pair : encode_uint32;
+        }
+
         static CmdListBindings map_cmd_list_parameters(
-            const operation_attributes_t& /*attributes*/,
+            const operation_attributes_t& attributes,
             const tensor_args_t& /*tensor_args*/,
             const m2::ProgramSpec& spec,
             const m2::ProgramRunArgs& run_params) {
             CmdListBinder binder{spec, run_params};
-            binder.param("value").common_runtime(m2::KernelSpecName{"writer_a"}, "value");
+            binder.param("value", writer_a_encoder(attributes)).common_runtime(m2::KernelSpecName{"writer_a"}, "value");
             binder.param("value", encode_uint16_pair, "value_u16_pair")
                 .common_runtime(m2::KernelSpecName{"writer_b"}, "value");
             return binder.finish();
@@ -492,6 +499,34 @@ TEST_F(CommandListDeviceParamsTest, OneKeywordFansOutToTwoEncodings) {
     list.enqueue(/*blocking=*/true);
     EXPECT_EQ(read_word(FanOutDeviceOperation::kAddressA), 0x1234u);
     EXPECT_EQ(read_word(FanOutDeviceOperation::kAddressB), 0x12341234u);
+    list.deallocate();
+}
+
+TEST_F(CommandListDeviceParamsTest, EachProgramKeepsItsOwnEncoder) {
+    const Tensor input = make_tensor(ttnn::Shape{1, 1, 32, 32}, 0.0f);
+    auto* device = tt::tt_metal::internal::get_device(*device_, MeshCoordinate(0, 0));
+    const auto read_word = [&](uint32_t address) {
+        std::vector<uint32_t> result;
+        tt::tt_metal::detail::ReadFromDeviceL1(device, CoreCoord{0, 0}, address, sizeof(uint32_t), result);
+        return result.at(0);
+    };
+
+    CommandListBuilder builder(*device_);
+    {
+        auto recording = builder.record_scope();
+        CmdListBindScope binds("fan_out", {{.name = "v", .invoke_name = "value", .value = integer(3)}});
+        (void)ttnn::device_operation::launch<FanOutDeviceOperation>({.value = 3}, {.input_tensor = input});
+        (void)ttnn::device_operation::launch<FanOutDeviceOperation>(
+            {.value = 3, .packed = true}, {.input_tensor = input});
+        binds.finish();
+    }
+    CommandList list = builder.build(QueueId{0});
+    builder.deallocate();
+
+    list.update_args({{"v", integer(0x1234)}}, /*blocking=*/true);
+    list.enqueue(/*blocking=*/true);
+    EXPECT_EQ(read_word(FanOutDeviceOperation::kAddressA), 0x1234u);
+    EXPECT_EQ(read_word(FanOutDeviceOperation::kAddressPacked), 0x12341234u);
     list.deallocate();
 }
 

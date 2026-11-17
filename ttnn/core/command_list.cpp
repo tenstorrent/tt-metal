@@ -28,19 +28,11 @@ thread_local ttnn::command_list::CommandListBuilder* t_recording = nullptr;
 
 int64_t integer_in(
     const ttnn::command_list::CmdListScalar& scalar, int64_t min, int64_t max, std::string_view encoder) {
-    if (const auto* real = std::get_if<double>(&scalar.value)) {
-        TT_FATAL(
-            std::trunc(*real) == *real && *real >= static_cast<double>(min) && *real <= static_cast<double>(max),
-            "{} needs an integer in [{}, {}], got {}",
-            encoder,
-            min,
-            max,
-            *real);
-        return static_cast<int64_t>(*real);
-    }
-    const int64_t integer = std::get<int64_t>(scalar.value);
-    TT_FATAL(integer >= min && integer <= max, "{} needs an integer in [{}, {}], got {}", encoder, min, max, integer);
-    return integer;
+    const auto* integer = std::get_if<int64_t>(&scalar.value);
+    TT_FATAL(integer != nullptr, "{} needs an integer, got {}", encoder, std::get<double>(scalar.value));
+    TT_FATAL(
+        *integer >= min && *integer <= max, "{} needs an integer in [{}, {}], got {}", encoder, min, max, *integer);
+    return *integer;
 }
 
 // Infinities and NaN pass through; finite values that float32 cannot hold are rejected rather than becoming inf.
@@ -84,7 +76,7 @@ struct RecordedTensor {
 
 struct RecordedScalar {
     std::string name;                       // TTNN param
-    std::string metal_cmd_list_param_name;  // "<TTNN param>/<factory type>/<Metal param>"
+    std::string metal_cmd_list_param_name;  // "<TTNN param>/<factory type>/<program number>/<Metal param>"
     CmdListEncodeFn encode;
     std::variant<metal::CmdListRuntimeArgInfo, metal::CmdListCommonRuntimeArgInfo> info;
 };
@@ -152,6 +144,7 @@ bool match_tensor_bind(
 // Returns whether the program binds the keyword.
 bool match_scalar_bind(
     const device_operation::detail::CmdListProgramBindings& program,
+    std::size_t program_number,
     const CmdListBind& bind,
     RecordedParameters& recorded) {
     bool matched = false;
@@ -160,8 +153,12 @@ bool match_scalar_bind(
             continue;
         }
         matched = true;
-        const std::string metal_name =
-            fmt::format("{}/{}/{}", bind.name, program.bindings->factory_name, binding.metal_cmd_list_param_name);
+        const std::string metal_name = fmt::format(
+            "{}/{}/{}/{}",
+            bind.name,
+            program.bindings->factory_name,
+            program_number,
+            binding.metal_cmd_list_param_name);
         for (const auto& arg : binding.runtime_args) {
             recorded.scalars.push_back(
                 {.name = bind.name,
@@ -189,6 +186,7 @@ bool match_scalar_bind(
 // bind's keyword.
 bool match_cmd_list_bind(
     const device_operation::detail::CmdListProgramBindings& program,
+    std::size_t program_number,
     const CmdListBind& bind,
     RecordedParameters& recorded) {
     const CmdListBindings& bindings = *program.bindings;
@@ -207,7 +205,7 @@ bool match_cmd_list_bind(
         bind.name,
         bindings.factory_name,
         bind.invoke_name);
-    return match_scalar_bind(program, bind, recorded);
+    return match_scalar_bind(program, program_number, bind, recorded);
 }
 
 }  // namespace
@@ -511,13 +509,13 @@ void CommandListBuilder::record(
     detail::RecordedParameters parameters;
     std::vector<ActiveBind*> matched;
     for (const auto& program : programs) {
+        const std::size_t program_number = recorded_programs_++;
         for (auto& active : binds_) {
-            if (detail::match_cmd_list_bind(program, active.bind, parameters)) {
+            if (detail::match_cmd_list_bind(program, program_number, active.bind, parameters)) {
                 matched.push_back(&active);
             }
         }
     }
-    // A Metal name keeps the encoder of its first TTNN record; later TTNN records of it come from the same factory.
     auto layout = layout_;
     metal::CmdListParameters metal_parameters;
     for (const auto& tensor : parameters.tensors) {
