@@ -84,11 +84,11 @@ ALWI void dest_srca_mm_page_to_dest(
  * byte words_offset (e.g. its scale fields) to DEST tile idst, as many rows in as they are in the page; words_shift
  * moves where the words are read from (not where they go), e.g. to a page's scale fields held in the page before it.
  * In a full-sync DEST, codes_idst 8 to 15 address the 32-bit rows of tiles 4 to 7 (Dst32b row bit 9 is kept, ISA
- * Dst.md Adj32) and put the codes in the upper half.
+ * Dst.md Adj32) and put the codes in the upper half; in a half-sync DEST codes_idst counts from the half in use.
  *
  * | Argument     | Description                                              | Type     | Valid Range          | Required |
  * |--------------|----------------------------------------------------------|----------|----------------------|----------|
- * | codes_idst   | DEST tile whose row numbers the codes' 16-bit rows take  | uint32_t | 1 to 15, full sync   | True     |
+ * | codes_idst   | DEST tile whose row numbers the codes' 16-bit rows take  | uint32_t | 1-15 full, 1-7 half  | True     |
  * | codes        | Codes at the start of the page                           | uint32_t | 16 to 1024, x 16     | True     |
  * | exp          | Exponent of every code (FP16 bias)                       | uint32_t | 0 to 30              | True     |
  * | words_offset | Byte offset of the words in the page                     | uint32_t | multiple of 64       | True     |
