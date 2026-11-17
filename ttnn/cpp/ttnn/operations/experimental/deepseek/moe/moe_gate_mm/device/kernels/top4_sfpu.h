@@ -28,7 +28,6 @@
  */
 
 namespace ckernel {
-
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
@@ -36,7 +35,6 @@ namespace ckernel {
 #include "sfpi.h"
 
 namespace sfpu {
-
 inline void _top4_configure_addrmod_() {
     // SFPU configuration shifts to use ADDRMOD4-7.
     constexpr uint32_t ADDRMOD_OFFSET = 4;
@@ -50,11 +48,6 @@ inline void _top4_configure_addrmod_() {
         .dest = {.incr = -6, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
         .set(ADDRMOD_OFFSET + ADDR_MOD_1);
-
-    addr_mod_t{
-        .dest = {.incr = 2, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_2);
 }
 
 inline void _calculate_top4_() {

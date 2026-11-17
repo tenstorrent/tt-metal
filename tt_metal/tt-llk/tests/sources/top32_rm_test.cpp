@@ -8,7 +8,7 @@
 //   llk_lib/experimental/llk_unpack_A_top32_rm.h      _llk_unpack_A_top32_rm_init_ / _
 //   llk_lib/experimental/llk_math_top32_rm.h          _llk_math_top32_rm_init_ / _
 //   sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h
-//       _top32_rm_init_ (and _top32_rm_configure_addrmod_ through it),
+//       _top32_rm_init_,
 //       _bitonic_top32_phases_steps_, _bitonic_top32_merge_, _bitonic_top32_rebuild_
 // Before this file every one of them was uncalled from tests/sources -- the only occurrence
 // of _top32_rm_init_ in the test tree was inside a comment in sort_headers_coexist_test.cpp.
@@ -488,7 +488,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    // _top32_rm_init_ programs this family's ADDR_MODs, MOP and REPLAY buffer. It cannot
+    // _llk_math_top32_rm_init_ programs this family's ADDR_MODs and MOP; _top32_rm_init_
+    // loads the SFPU control register (the execute sets/restores ADDR_MOD_6). It cannot
     // coexist with _topk_xl_init_<K, fused>() in one kernel -- they overlap in all three
     // (measured on BH p100a: the math thread hangs) -- which is why nothing here touches
     // the topk_xl family.

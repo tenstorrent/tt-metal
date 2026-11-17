@@ -19,8 +19,8 @@ namespace ckernel::sfpu
  */
 inline void _topk_xl_pack_supplied_indices_init_()
 {
-    // Keep ADDR_MOD_6's +32 stride live for the subsequent TopK sort/rebuild.
-    // Using it for +2 here would require restoring it in addition to the MOP.
+    // ADDR_MOD_6 stays at its dest += 2 invariant (the TopK sort/rebuild set and restore
+    // their own +32 stride in their execute), so use ADDR_MOD_0 here.
     // ADDR_MOD_0 is unused by those bitonic kernels; datacopy is reinitialized separately.
     addr_mod_t {
         .srca = {.incr = 0},

@@ -35,6 +35,8 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     // ADDR_MOD_7 is invariant state: zero advance, so it behaves like a NOOP.
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    // ADDR_MOD_6 is invariant state: dest += 2, so it behaves like dst_reg++.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 
     // Configure ZEROACC to auto-detect destination bank (non-legacy mode).
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);

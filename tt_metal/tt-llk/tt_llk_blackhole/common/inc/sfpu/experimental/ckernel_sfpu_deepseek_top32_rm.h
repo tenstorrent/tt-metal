@@ -263,6 +263,9 @@ inline void bitonic_top32_inc_x4_dest(std::uint32_t inc, bool cr)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _bitonic_top32_phases_steps_(const int idir)
 {
+    // The alternate stores advance dest through ADDR_MOD_6 by 16 rows.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 16}}.set(ADDR_MOD_6);
+
     bool dir = idir;
     // produce bitonic sequences len=16
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -314,6 +317,9 @@ inline void _bitonic_top32_phases_steps_(const int idir)
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
         dir = !dir;
     }
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min>
@@ -332,7 +338,7 @@ inline void _bitonic_top32_merge_(const bool across_tiles)
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _bitonic_top32_rebuild_(const bool idir, const bool skip_second)
+inline void _bitonic_top32_rebuild_body_(const bool idir, const bool skip_second)
 {
     // Step 5
     bool dir = idir;
@@ -366,6 +372,18 @@ inline void _bitonic_top32_rebuild_(const bool idir, const bool skip_second)
     }
 }
 
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void _bitonic_top32_rebuild_(const bool idir, const bool skip_second)
+{
+    // The alternate stores advance dest through ADDR_MOD_6 by 16 rows.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 16}}.set(ADDR_MOD_6);
+
+    _bitonic_top32_rebuild_body_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(idir, skip_second);
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+}
+
 // clang-format off
 /**
  * Produces bitonic top32 on 16 independent columns of 1024 elements
@@ -385,6 +403,9 @@ inline void _bitonic_top32_rebuild_(const bool idir, const bool skip_second)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min>
 inline void _bitonic_top32_of_1024_rm_pre_sorted_prep_(std::uint32_t dst_index)
 {
+    // The alternate stores advance dest through ADDR_MOD_6 by 16 rows.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 16}}.set(ADDR_MOD_6);
+
     constexpr std::uint32_t odd_col_offset = 2;
     constexpr bool decreasing              = false;
     const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
@@ -402,7 +423,7 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_prep_(std::uint32_t dst_index)
             bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
             dir = !dir;
         }
-        _bitonic_top32_rebuild_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(
+        _bitonic_top32_rebuild_body_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(
             /* idir */ decreasing, /* skip_second */ false);
         set_dst_write_addr_offset(tile_offset + odd_col_offset);
     }
@@ -414,11 +435,14 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_prep_(std::uint32_t dst_index)
     for (int col = 0; col < 2; col++)
     {
         _bitonic_top32_merge_<APPROXIMATION_MODE, is_fp32_dest_acc_en, decreasing>(/* across_tiles */ false);
-        _bitonic_top32_rebuild_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ dir, /* skip_second */ true);
+        _bitonic_top32_rebuild_body_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ dir, /* skip_second */ true);
         dir = !dir;
         set_dst_write_addr_offset(tile_offset + odd_col_offset);
     }
     set_dst_write_addr_offset(tile_offset);
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 // clang-format off
@@ -431,16 +455,22 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_prep_(std::uint32_t dst_index)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _bitonic_top32_of_1024_rm_pre_sorted_combine_(std::uint32_t dst_index)
 {
+    // The alternate stores advance dest through ADDR_MOD_6 by 16 rows.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 16}}.set(ADDR_MOD_6);
+
     constexpr std::uint32_t odd_col_offset = 2;
     constexpr bool decreasing              = false;
     constexpr bool increasing              = true;
     const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
     _bitonic_top32_merge_<APPROXIMATION_MODE, is_fp32_dest_acc_en, decreasing>(/* across_tiles */ true);
-    _bitonic_top32_rebuild_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ decreasing, /* skip_second */ true);
+    _bitonic_top32_rebuild_body_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ decreasing, /* skip_second */ true);
     set_dst_write_addr_offset(tile_offset + odd_col_offset);
     _bitonic_top32_merge_<APPROXIMATION_MODE, is_fp32_dest_acc_en, decreasing>(/* across_tiles */ true);
-    _bitonic_top32_rebuild_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ increasing, /* skip_second */ true);
+    _bitonic_top32_rebuild_body_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ increasing, /* skip_second */ true);
     set_dst_write_addr_offset(tile_offset);
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 // clang-format off
@@ -470,6 +500,9 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_combine_(std::uint32_t dst_inde
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index)
 {
+    // The alternate stores advance dest through ADDR_MOD_6 by 16 rows.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 16}}.set(ADDR_MOD_6);
+
     constexpr bool decreasing              = false;
     constexpr std::uint32_t odd_col_offset = 2;
     const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
@@ -665,22 +698,14 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index)
         bitonic_top32_ph3_st4_to_1(decreasing);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
     }
-}
 
-inline void _top32_rm_configure_addrmod_()
-{
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 16},
-    }
-        .set(ADDR_MOD_6);
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 inline void _top32_rm_init_()
 {
     _sfpu_load_config32_(0xF, 0x0, 0x4); // Set bit [2] of the SFPU_CONTROL_REG to enable index tracking mode
-    _top32_rm_configure_addrmod_();
 }
 
 } // namespace sfpu
