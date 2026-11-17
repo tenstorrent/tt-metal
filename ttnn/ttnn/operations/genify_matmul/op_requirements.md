@@ -322,3 +322,77 @@ No SUPPORTED change.
 - **Guard set.** PERF FOCUS 1–3, block_sharded, height_sharded, 4096³, the W pass and the L1 shapes are all within ±1% (PERF FOCUS 3: median of 5).
 - **Bottleneck now (ablation).** The B DRAM stream: B alone takes 550 µs, ≈ 411 GB/s for interleaved 2 KB tile reads from every bank. The A broadcast adds 28 µs, but its lockstep keeps the cores on the same DRAM rows: with A stubbed and compute on, the run is slower (744 µs vs 688 µs). Compute alone is 274 µs, and ~55 µs of compute stays outside the stream.
 - **Next.** A split B reader (half of each B slot filled by BRISC on NoC1 under a local slot handshake), or a rotating injector for A-heavy shapes (a rectangular landing zone as in R4). Neither was done: each is a structural change, and the gain depends on NoC0 link saturation, which was not measured. Same-bank coalesced reads measured slower (627 vs 578 µs).
+
+### [x] Refinement 10 — Weight multicast for sharded A (R2a height_sharded, R3a block_sharded): PDL 1×1 convs
+
+*Filed by the run operator after Perf 1, from the shape-set review of every model case against stock.*
+
+**Goal**: no SUPPORTED change. Speed up the `height_sharded` and `block_sharded` regimes, now the op's largest gap to stock. Every PDL 1×1-conv model case in `LOOSE_CASES` (bfp8, LoFi, the model's shard layouts in `extras.act_shard`) is 1.1–3.1× slower than its `achievable_ns`. Times are from the golden run after Perf 1:
+- R2 (`height_sharded`) re-reads all of B from DRAM on every shard core (op_design.md R2 → R2a):
+  - res3 shortcut 8192×256×512 (bf16 A): 41.0 µs vs 13.1 stock
+  - res3 reduce 8192×512×128: 20.1 vs 6.9
+  - res3 expand 8192×128×512: 23.5 vs 8.2
+  - res2 shortcut 32768×128×256: 19.0 vs 9.8
+- R3 (`block_sharded`) reads its B column slice from DRAM once per grid row (R3 → R3a):
+  - res5 reduce 2048×2048×512: 40.3 vs 16.1
+  - res5 expand 2048×512×2048: 43.0 vs 24.2
+  - res5 reduce 2048×1024×512: 19.8 vs 10.6
+
+Build the designed successors:
+- R2a: one injector reads each B chunk once and multicasts it to all of A's shard cores.
+- R3a: B column multicast down each grid column, beside the existing A row multicast.
+
+Make them the path for every height- and block-sharded call where they are correct. Carve out only shapes where they measure slower.
+
+**Implementation skill**: /perf-measure for the breakdown first; the multicast helpers in `ttnn/cpp/ttnn/kernel_lib/mcast/`.
+
+**Done when**:
+- Every PDL sharded model case is at or under its clock-scaled `achievable_ns`, or its remaining gap is explained by a measured floor.
+- Golden stays fully green: 1,512 supported pass, 0 fail.
+- The guard set shows no regression beyond ±3% elsewhere, PERF FOCUS 1–4 included.
+
+**Outcome**:
+- **What was built.** R2a and R3a: one fixed injector per B group multicasts B rounds, and the first bias / gate row rides one row round on the same channel. R3 is gated at ≥ 3 MiB of saved B re-reads.
+- **HS results.** All 12 PDL cases ran 0.38–0.81× of before. Examples: res3 shortcut 41.3 → 15.7 µs, res3 reduce 20.5 → 8.4, res3 expand 23.5 → 9.9, res2 shortcut 18.9 → 10.7. They are now 1.02–1.26× achievable.
+- **BS results.**
+  - res5 shortcut 78.0 → 30.4 (0.42× achievable), res5 expand 44.5 → 24.0 (0.99×), res5 reduce 19.3 → 14.9, res5 reduce 2 40.5 → 22.9, ASPP 1×1 19.8 → 18.4.
+  - The gated shapes (res4 reduce / expand / reduce 5, ASPP projection) are unchanged, as is ASPP pool (one grid row).
+- **Guard set.** PERF FOCUS 1–4 and the guard shapes are within noise.
+- **Remaining gaps are measured floors, not B traffic.**
+  - HS: two ~1.4 µs handshake rounds on 86–103-core groups, plus the injector's serial tile-read issue.
+  - R3 res5 reduce 2: the A row exchange is ~5.7 µs of bytes plus handshakes, and the 4 B rounds add 3.3 µs serialized behind them on the reader.
+  - res4 reduce: 16.0 µs remains with the matmul and the A bytes both stubbed. The cause is thin 2-tile K-blocks that each pay a full partials pack.
+- **Next.** Move the B channel onto the writer RISC so B rounds overlap the A rounds (this also lifts the R3 gate), then pipeline the A exchange two rounds deep. Not done here: each is a separate structural change to the writer / A exchange, outside this heading's B-multicast scope.
+
+### [ ] Refinement 11 — Interleaved split for narrow N and mid M (FLUX.2 proj_out, text-encoder projections, single-block projections, mid-M prefill)
+
+*Filed by the run operator after Perf 1, from the shape-set review of every model case against stock.*
+
+**Goal**: no SUPPORTED change. Fix the interleaved model cases still slower than their `achievable_ns`. Times are from the golden run after Perf 1:
+- FLUX.2 `proj_out` 2048×3072×128 (N = 4 tiles): 164.7 µs vs 61.0 stock.
+- Text encoder (bf16 × bfp8, HiFi2):
+  - `qkv_proj` 512×5120×3072: 232 vs 139
+  - `o_proj` 512×4096×2560: 96.7 vs 79.4
+  - `down` 512×16384×5120: 551 vs 509
+- FLUX.2 single blocks (M = 2,304, HiFi2):
+  - QKV 2304×6144×9216: 1390 vs 1245
+  - out 2304×12288×6144: 1983 vs 1689
+  - FF1 + SwiGLU 2304×6144×18432: 2614 vs 2398
+- Qwen3.8 prefill (bfp4, LoFi):
+  - qkvg 4096×5120×3584: 440 vs 372
+  - in_proj 1024×5120×4160: 165 vs 139
+  - the M = 512 rows: 0.89–0.94× of stock
+
+Start from a measured breakdown of each case: the regime and split `choose_split` picks, per-core DRAM traffic, and stage times.
+
+Likely levers:
+- Split-K (R1c) or a 2-D split for narrow N.
+- Choosing between R1, R1a and R1b by measured cost instead of the current ranking.
+- Block and subblock sizes for M = 2,304.
+
+**Implementation skill**: /perf-measure
+
+**Done when**:
+- Each listed case is at or under its clock-scaled `achievable_ns`, or its remaining gap is explained by a measured floor.
+- Golden stays fully green.
+- The guard set shows no regression beyond ±3%, PERF FOCUS 1–4 included.

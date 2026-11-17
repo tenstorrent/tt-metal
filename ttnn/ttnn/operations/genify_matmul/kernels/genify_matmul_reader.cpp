@@ -75,6 +75,17 @@
 // Batched B (R2 / R3): the host maps each shard onto (b0, row0) so no block straddles a batch; a shard
 // holding whole images walks them as the block's batch slices (block_batches), pushing the resident
 // shard image by image, i.e. sequentially.
+//
+// R2a / R3a weight multicast (Refinement 10, `bs_b_mcast` = 1, single B only): B does not vary along the
+// shard rows, so every core of a B group -- R3: a grid column (it owns one output column slice); R2: all of
+// A's shard cores -- needs the same B K-blocks. One fixed injector per group (`weight` channel, staggered
+// so R3's column injectors sit on different grid rows) reads them from DRAM once and multicasts them into
+// every group core's reserved cb_weight_tiles slot (lockstep CB pointers: one uniform walk). A B round
+// carries `b_round_kblocks` K-blocks (contiguous K rows; the CB holds whole rounds), reserved together and
+// pushed one per K-block; the injector issues the round's reads (trid per chunk) before the A round
+// (stall-shadow) and every core runs A round -> B round in that order, so the two channels cannot deadlock.
+// The walk's first bias / gate row is the same on the whole group (a DRAM hotspot when each core reads it):
+// the injector reads it beside B and multicasts it in one row round right after the first B round.
 
 // Per-stage device zones (Perf 1, PERMANENT -- free with the profiler off; never remove, extend instead).
 // One zone per question, per K-block (<= 5 executions per K-block; the 125-zone budget covers ~25 K-blocks
@@ -86,6 +97,9 @@
 //   rd_mcast_b   R1a B-line delivery
 //   rd_ds_kblock / rd_bs_kblock   one zone per R4 / R3 K-block (B issue + A round + barrier)
 //   rd_row / rd_residual          epilogue operand reads
+//   rd_b_issue     (Refinement 10) R2a / R3a injector: B round + first-row read issue
+//   rd_b_round     R2a / R3a B round (injector: trid barrier + send incl. the group's acks; receiver: wait)
+//   rd_row_round   R2a / R3a first bias / gate row round
 //   rd_tail_write  (Perf 2) the reader's share of the last block's output writes on NoC0, per output batch
 //                  (OCCUPANCY: includes the wait for the writer's post, i.e. for compute's epilogue)
 // Perf 2 head ramp (genify_matmul_kschedule.hpp): the R1 / R1a K loop walks the schedule's deliveries (one

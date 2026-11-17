@@ -221,6 +221,11 @@ SHARDED_B_MAX_CHUNKS = 1
 # deepened to 2g K-blocks when L1 allows): a round costs a handshake on the reader's serial chain beside the
 # A round, so thin K-blocks (R3's 1-2 output tiles per grid column) amortize it over several K-blocks.
 SHARDED_B_ROUND_BYTES = 32 * 1024
+# R3 only: the B rounds share the reader's serial chain with the A row exchange, so the B multicast pays only
+# when it removes enough DRAM traffic -- the (rows - 1) re-reads of B it saves. Measured on PDL (device ns,
+# multicast vs per-core reads): 0.97-2.1 MB saved runs 0-9% slower (res4 reduce / expand, ASPP projection),
+# 3.9 MB and up 3-61% faster (res4 shortcut, ASPP 1x1, res5). R2 has no A exchange: always on.
+BS_B_MCAST_MIN_SAVED_BYTES = 3 * 1024 * 1024
 # own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
 NO_OWN_KB = 0xFFFFFFFF
 
@@ -1865,9 +1870,13 @@ def sharded_b_round(geom: Geometry, blk: Blocking, walk_k_blocks, budget, in_pla
 
 def _sharded_b_channel(device, geom: Geometry, topo: BlockShardedTopology):
     """R2a / R3a: the weight channel (an unattached ttnn.Mcast), or None where the per-core reads stay: the
-    knob is off, B is batched (it varies along the rows), a group is a single core, or the receiver set is
-    not multicastable (an R2 core list of more than three rectangles)."""
+    knob is off, B is batched (it varies along the rows), a group is a single core, R3 saves less than
+    BS_B_MCAST_MIN_SAVED_BYTES of B re-reads, or the receiver set is not multicastable (an R2 core list of
+    more than three rectangles)."""
     if not SHARDED_B_MCAST or geom.tensor_batches != 1 or topo.rows < 2:
+        return None
+    saved = (topo.rows - 1) * geom.tensor_k_tiles * geom.tensor_n_tiles * geom.b_tile_bytes
+    if topo.cols > 1 and saved < BS_B_MCAST_MIN_SAVED_BYTES:
         return None
     staggered = ttnn.McastFixedSenderConfig(
         sender_index=SHARDED_B_INJECTOR, placement=ttnn.McastSenderPlacement.Staggered

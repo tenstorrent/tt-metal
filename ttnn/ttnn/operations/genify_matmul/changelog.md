@@ -891,3 +891,90 @@ Artifacts: `perf_experiments/<slug>/` and `tests/.../genify_matmul/perf_experime
 - Extend the raw K-walk (or give `matmul_block` a per-K-block A stride) to the epilogue-none and sb_h > 1 walks. That would lift the R1a head-ramp carve-out and round 1's SETC16 cost there.
 - Extend the tail split to the R2 / R3 / R4 descriptors with non-in-place output.
 - Focus tail now: epilogue 46.7 µs, then ~7 µs of write drain. The K-walk is 337.6 µs against the 318.6 µs FPU floor.
+
+## Refinement 10 — Weight multicast for sharded A (R2a height_sharded, R3a block_sharded): PDL 1×1 convs
+- Date: 2026-11-17
+- What was done:
+  - **Breakdown first (/perf-measure).** Baseline zones: R2 reads all of B on every shard core (res3 reduce: 6 MB of the same 64 tiles from 86 cores); R3 reads its column slice once per grid row.
+  - **R2a / R3a weight channel** (scheme-change, the designed successors). B does not vary along the shard rows, so every core of a *B group* needs the same B K-blocks. A B group is a grid column in R3; in R2 it is all of A's shard cores, R2 being R3's single-column case. One code path covers both:
+    - **Injector.** A fixed injector per group (`ttnn.Mcast` `weight` channel, `McastFixedSenderConfig(SHARDED_B_INJECTOR, Staggered)`, so R3's column injectors sit on different grid rows) reads each B round from DRAM once. It multicasts the round into every group core's reserved `cb_weight_tiles` slot. The slot address is the same everywhere because the walk is uniform, so the CB pointers stay in lockstep.
+    - **Rounds.** A B round carries `g` K-blocks (`SHARDED_B_ROUND_BYTES` = 32 KB, `g | num_k_blocks`, shrunk until the 2g-deep weight CB fits L1). The g slots are reserved together and pushed one per K-block.
+    - **Stall-shadow and ordering.** The injector issues the round's reads before the A round. Every core runs A round → B round per K-block, so the two channels cannot deadlock.
+    - **Where the channel is off.** Batched B (it varies along the rows), single-core groups, and R2 core sets the multicast cannot cover (more than 3 rectangles: `_sharded_b_channel` catches the helper's refusal) keep the per-core reads.
+  - **First bias / gate row on the B channel.** Every core reading the same row tiles was a DRAM bank hotspot (~2.4 µs after the K-walk, which the epilogue waited on). The injector now reads the row beside B (its own transaction id) and multicasts it in one row round right after the first B round, overlapping the matmul. Later blocks of a multi-block walk keep the per-core row read, because `cb_row` holds one row.
+  - **R3 traffic gate** (`BS_B_MCAST_MIN_SAVED_BYTES` = 3 MiB). In R3 the B round shares the reader's serial chain with the A row exchange. It pays only when the B re-reads it saves, `(rows − 1)·K·N·b`, are large. Measured: 0.97–2.1 MB saved ran 0–9% slower (res4 reduce / expand, ASPP projection); 3.9 MB and up ran 3–61% faster. R2 has no A exchange and wins at every size, so it is ungated.
+  - **Knobs parked at their measured best.**
+    - `SHARDED_B_MAX_CHUNKS = 1`. The chunked, trid-pipelined round (read chunk c+1 while sending chunk c) stays live, but each chunk is a full handshake + write-ack round (~1.2 µs on 86 cores). res3 reduce measured 6.9 / 10.3 / 15.1 µs for 1 / 4 / 8 chunks.
+    - `SHARDED_B_ROUND_BYTES`: one all-K round lost on res4 expand (compute waits for all of B); per-K-block rounds lost on res4 reduce5 and ASPP projection. Both shapes are now gated off.
+  - **Reused**: R3's walk, topology, blocking, CBs and compute kernel; R1a's line-delivery pattern (fixed sender, lockstep slot); R4's trid read tagging; the `ttnn.Mcast` attachment.
+  - **Added**:
+    - reader CT args 36–39 (`bs_b_mcast`, `b_chunks`, `b_chunk_k`, `b_round_kblocks`) and two small face templates;
+    - host `_sharded_b_channel`, `sharded_b_round`, `sharded_b_chunks`, `_sharded_b_depth`, and four knobs;
+    - zones `rd_b_issue`, `rd_b_round`, `rd_row_round`.
+- Accuracy achieved: bit-identical to the per-core-read stepping stone, since only where B's bytes come from changes. `test_genify_matmul_sharded_b_mcast.py` checks `torch.equal` with the multicast on and off for every case. All PDL sharded golden loose cases pass at their gates (bf8b LoFi: 0.999 / 0.06).
+- Golden test progress:
+  - `-k "(test_op_loose and (height_sharded or block_sharded)) or (test_op and not loose and (height_sharded or block_sharded) and (bias_relu or addcmul))"`: 323 passed, 60 xfailed (the permanent fp32 × 16-bit-DEST EXCLUSION), 0 failed. Re-run after the R3 gate: loose sharded + block_sharded bias cells, 173 passed, 30 xfailed.
+  - Unit regression net: `test_genify_matmul`, `_mcast`, `_dram_sharded`, `_epilogue`, `_extended`, `_residency`, `_stream_mcast`, `_height_sharded`, `_block_sharded`, `_sharded_b_mcast`: 152/152.
+- Perf (device ns, AICLK 1350 MHz = the reference clock, so `achievable_ns` is unscaled; one fresh run each; `perf/test_genify_matmul_perf_sharded.py`, every PDL sharded LOOSE case, multicast on (`mc1`) / off (`mc0`)):
+
+  | PDL case | before | after | achievable | after / before | after / achievable |
+  |---|---|---|---|---|---|
+  | HS res2 shortcut 32768×128×256 | 18.9 | 10.7 | 9.8 | 0.57× | 1.09 |
+  | HS res2 reduce 32768×128×64 | 6.3 | 4.9 | 4.0 | 0.78× | 1.23 |
+  | HS res2 expand 32768×64×256 | 13.2 | 8.9 | 8.7 | 0.67× | 1.02 |
+  | HS res2 reduce 32768×256×64 | 9.9 | 6.1 | 5.0 | 0.62× | 1.22 |
+  | HS res3 reduce 32768×256×128 | 16.7 | 10.3 | 9.4 | 0.62× | 1.10 |
+  | HS res3 expand 8192×128×512 | 23.5 | 9.9 | 8.2 | 0.42× | 1.21 |
+  | HS res3 reduce 8192×512×128 | 20.5 | 8.4 | 6.9 | 0.41× | 1.22 |
+  | HS decoder skip 8192×512×64 | 9.3 | 5.9 | 4.7 | 0.63× | 1.26 |
+  | HS decoder skip 32768×256×32 | 5.7 | 4.4 | 3.6 | 0.77× | 1.22 |
+  | HS semantic logits | 5.8 | 4.4 | 3.6 | 0.76× | 1.22 |
+  | HS heads 32768×32×32 | 5.3 | 4.3 | 3.5 | 0.81× | 1.23 |
+  | HS res3 shortcut 8192×256×512 (bf16 A) | 41.3 | 15.7 | 13.1 | 0.38× | 1.20 |
+  | BS res4 reduce 8192×512×256 | 19.0 | 18.9 | 16.6 | 0.99× (gated) | 1.14 |
+  | BS res4 expand 2048×256×1024 | 13.2 | 13.0 | 13.6 | 0.98× (gated) | 0.96 |
+  | BS res4 reduce 2048×1024×256 | 12.1 | 12.2 | 9.4 | 1.01× (gated) | 1.30 |
+  | BS res5 shortcut 2048×1024×2048 | 78.0 | 30.4 | 72.3 | 0.39× | 0.42 |
+  | BS res5 reduce 2048×1024×512 | 19.3 | 14.9 | 10.6 | 0.77× | 1.41 |
+  | BS res5 expand 2048×512×2048 | 44.5 | 24.0 | 24.2 | 0.54× | 0.99 |
+  | BS res5 reduce 2048×2048×512 | 40.5 | 22.9 | 16.1 | 0.57× | 1.42 |
+  | BS ASPP 1×1 2048×2048×256 | 19.8 | 18.4 | 13.8 | 0.93× | 1.33 |
+  | BS ASPP pool 1×2048×256 (1 grid row: no group) | 9.4 | 9.4 | 6.9 | 1.00× | 1.36 |
+  | BS ASPP projection 2048×1280×256 | 18.6 | 18.5 | 16.8 | 0.99× (gated) | 1.10 |
+  | BS res4 shortcut 2048×512×1024 (bf16 A) | 17.6 | 17.2 | 16.2 | 0.98× | 1.06 |
+
+  - **Guard set (old = commit a75cc721cfa's kernel + descriptor, same session).**
+    - PERF FOCUS 1: 392.1 / 392.1 µs.
+    - PERF FOCUS 2: 29.9 / 29.9.
+    - PERF FOCUS 3: median of 3, 69.7 → 67.0; the first single run read 67.3 → 71.0, which was noise.
+    - PERF FOCUS 4 (256×6144×18432 swiglu): 622.4 → 616.9.
+    - Upsample W pass: 12.8 / 12.9.
+    - 2048×256×512 (5 variants) and 4096³ (2): all within ±1%.
+- **Remaining gap (measured floors).**
+  - **HS (1.02–1.26×).** Two handshake rounds on the critical path: B, then the first row, ~1.4 µs each on a 103-core group (102 serialized acks to the injector, the multicast, the loopback write barrier). Plus the injector's serial issue of B's tile reads: 2.0 µs for 64 tiles. heads (1-tile B) is 4.3 µs: B round done at +1.7, row round at +3.2, epilogue +0.5.
+  - **R3, ablation on the multicast build.** res5 reduce 2: full 22.8 µs; A payload stubbed (sync kept) 17.1; matmul skipped (`SKIP_COMPUTE`) 20.9; both 14.6. So the A row exchange's bytes (~5.7 µs) and handshakes, plus 4 B rounds on the same reader chain (3.3 µs), bind it.
+  - **res4 reduce** stays at 16.0 µs with the matmul and the A bytes both stubbed. block_k = shard width = 2 tiles, so every K-block pays a full fp32 partials pack of the 32×1 block, plus an A round. B is not on its critical path, which is why the multicast does not move it.
+  - **ASPP pool** has one grid row, so there is no group to multicast to.
+- **Next (not done; each is its own structural change).**
+  - Move the B channel onto the writer RISC (BRISC / NoC1), so B rounds overlap the A rounds instead of queueing behind them on NCRISC. That is the R1b / R4 split-reader pattern, and it would also lift the R3 gate. It needs the writer to produce `cb_weight_tiles` and `cb_row`.
+  - Pipeline the A exchange: two rounds in flight on the depth-2 `cb_act_tiles`.
+  - Coarser R3 K-blocks: several peer shards per K-block, to cut the per-K-block partial packs.
+- Issues encountered:
+  - `if constexpr` inside `kernel_main` does not discard `->` on the `int` placeholder of an absent pipe face; moved into small templates.
+  - Bias / gate early-issue attempts each regressed one side:
+    - under the K-block barrier, the hotspot latency gated the push;
+    - on the per-core path, it lost its overlap with the matmul;
+    - issued early by every core, it collided with the injector's B reads.
+
+    Hence the row round.
+  - An R2 M split is never chosen: splitting a single-K-block walk double-buffers B. The multi-block test uses R3 for the M split.
+- Tests added:
+  - `test_genify_matmul_sharded_b_mcast.py` (10 cases, multicast on/off bit-identical, with spies on the descriptor's decisions):
+    - HS on PDL's 86-core 2-rectangle set with bias_relu;
+    - HS addcmul and swiglu;
+    - R3 res5 with multi-K-block rounds;
+    - a ragged last K shard with empty grid columns, at one and at all K-blocks per round;
+    - L1-forced multi-block walks (HS N split, R3 M split, R3 N split);
+    - a 4-rectangle scattered HS set that falls back;
+    - the R3 traffic gate on both sides.
+  - Perf bench `perf/test_genify_matmul_perf_sharded.py`: every PDL sharded LOOSE case × {mc1, mc0}, with ids `hs_<case>` / `bs_<case>` and a `GM_KNOBS` override hook for sweeps. It is the guard representative of the new path.

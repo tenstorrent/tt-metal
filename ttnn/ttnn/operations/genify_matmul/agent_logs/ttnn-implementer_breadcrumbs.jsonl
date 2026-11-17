@@ -26,3 +26,6 @@
 {"event":"hypothesis","refinement":8,"text":"PF3 bound by DRAM write stream (write-only 59.9us); A re-read 3x from DRAM (6.6MB) competes and reads form a whole-region prologue; L1 B reads are cheap for DRAM","ts":"2026-11-17T08:22:43+00:00"}
 {"event":"test_run","refinement":9,"result":"pass","detail":"R1b lands: stream_mcast 13/13; PERF FOCUS 4 1125->683us, twin 559->354, guidance M=1 308->212, timestep fp32 407->207","ts":"2026-11-17T09:01:49+00:00"}
 {"event":"test_run","refinement":9,"result":"pass","detail":"unit net 687/687; golden slice interleaved loose + R1b cartesian 204 passed 30 xfailed; PERF FOCUS 4 1125->645us (median of 3), guard set within +-1%","bottleneck":"B DRAM stream 550us (411 GB/s interleaved 2KB tiles); A lockstep +28us DM-only, compute 274us","ts":"2026-11-17T09:49:03+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-17T14:13:43+00:00"}
+{"event":"test_run","result":"pass","details":"R2a/R3a B mcast v1: unit HS/BS 27/27; PDL bench HS 0.53-0.92x, res5 0.40-0.79x, res4_reduce5/aspp_proj regress ~12%","ts":"2026-11-17T14:20:26+00:00"}
+{"event":"test_run","result":"pass","details":"final: unit net 152/152, golden sharded slice 323 pass/60 xfail + 173/30 after gate; PDL HS 0.38-0.81x before, BS res5 0.39-0.77x; guard flat","ts":"2026-11-17T14:59:10+00:00"}

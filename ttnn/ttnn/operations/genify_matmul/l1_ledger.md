@@ -164,7 +164,7 @@ PERF FOCUS 2 (1×4352 @ 4352×5120 bf4b): DRAM = B once = 12.5 MB (the roofline'
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
 | A | 0 | resident L1 block shards, read where they live; the own shard is consumed zero-copy | each A shard multicast once along its grid row (`cols − 1` receivers), `nb_n` times (1 when the output is in place) |
-| B | `rows · nb_m` | each core reads its column slice from DRAM (no column multicast yet) | none |
+| B | `rows · nb_m` | each core reads its column slice from DRAM (Refinement 10: 1 under the R3a column multicast, below) | none |
 | output | 0 | packed in place into the core's own L1 shard | none |
 | bias / gate | 1 per core block | per-block row read | none |
 | residual | 1 | streamed with the epilogue | none |
@@ -176,12 +176,23 @@ PDL res5 expand (2048×512 @ 512×2048 bf8b, grid 8×10): DRAM = B ×10 ≈ 11 M
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
 | A | 0 | resident L1 height shards holding all of K, consumed in place (`cb_act_shard` is compute's A operand; no NoC read at all) | none |
-| B | `C_A · nb_m` (`nb_m = 1` when the whole shard block fits) | each core reads its whole `K × N` B range from DRAM — no reuse across cores yet | none |
+| B | `C_A · nb_m` (`nb_m = 1` when the whole shard block fits) | each core reads its whole `K × N` B range from DRAM (Refinement 10: 1 under the R2a multicast, below) | none |
 | output | 0 | packed in place into the core's own L1 height shard | none (fallback: local writes through the sharded accessor) |
 | bias / gate | 1 per core block | per-block row read | none |
 | residual | 1 | streamed with the epilogue | none |
 
 PDL res3 reduce (8192×512 @ 512×128 bf8b, 86 cores): DRAM = B × 86 ≈ 6.0 MB (≈ 13 µs at 460 GB/s — the bound: 20.2 µs measured vs stock 6.9 µs). The next lever is the deferred R2a `height_sharded_mcast_b`: B once from DRAM, multicast to the shard cores.
+
+**R2a / R3a weight multicast as built (Refinement 10)** — `SHARDED_B_MCAST` (single B; groups of > 1 core; R2 core sets of ≤ 3 rectangles; R3 only when the saved B re-reads `(rows − 1)·K·N·b` ≥ `BS_B_MCAST_MIN_SAVED_BYTES` = 3 MiB). Crossings per tensor (R3 grid `rows × cols`; R2: `C_A` shard cores = one group):
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | 0 | unchanged (resident shards; R3 row multicast) | unchanged |
+| B | **1** (× `nb_m`) | one fixed injector per B group (R3: grid column, staggered over rows; R2: the shard set) reads each K-block once | multicast of each B round (`g` K-blocks) to the group's other `rows − 1` cores (R2: `C_A − 1`, two rectangles on PDL's 86 / 103-core sets) |
+| bias / gate | **1** for the walk's first block (then 1 per core block) | the injector reads the first row beside B and multicasts it in one row round (every core reading the same row tiles was a ~2.5 µs bank hotspot) | one row multicast per group |
+| output, residual | as R2 / R3 | unchanged | none |
+
+PDL res3 reduce (HS, 86 cores): B DRAM 6.0 MB → 70 KB; 20.6 → 8.4 µs. res5 reduce 2 (BS 8×10): B 11 MB → 1.1 MB; 40.9 → 22.9 µs. CB delta: **no new CB.** `cb_weight_tiles` holds whole B rounds: depth `2·g` K-blocks (`g` = `sharded_b_round`: the smallest divisor of `num_k_blocks` with a ≥ 32 KB round, shrunk until `_footprint` fits; `g` when the walk is one round; `g = 1` is the old `_weight_depth`). The receivers' slot is the landing zone (lockstep pointers; handshake = slot reserved). The `weight` channel adds 2 L1 semaphores per core. Shares with / why not: unchanged (in1 of the matmul, live beside `cb_act_tiles` / `cb_act_shard`).
 
 **R1d batched (Refinement 7)**: DRAM crossings as R1 per batch (A and B of batch b never cross batches); PERF FOCUS 3 (32 × 512×128 @ 128×1024 bf8b, B in L1): 96 cores, 70.8 µs (stock 123.0 µs).
 

@@ -81,7 +81,7 @@ def run_pdl_case(case, device):
 
 
 @pytest.mark.parametrize("b_mcast", ["on", "off"], ids=["mc1", "mc0"])
-@pytest.mark.parametrize("case", PDL_CASES, ids=[c[0] for c in PDL_CASES])
+@pytest.mark.parametrize("case", PDL_CASES, ids=[f"{c[4]}_{c[0]}" for c in PDL_CASES])
 def test_perf_pdl_sharded(case, b_mcast, device, monkeypatch):
     from ttnn.operations.genify_matmul import genify_matmul_program_descriptor as pd
 

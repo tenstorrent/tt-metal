@@ -12,7 +12,8 @@ BIT-IDENTICAL to the per-core-read stepping stone (SHARDED_B_MCAST False). Pins:
     that own no output columns;
   - multi-block walks (L1-forced M split in place, N split streamed): B per block, rows per core after the
     first block;
-  - an HS core set of four scattered cores (> 3 rectangles): the multicast cannot cover it, the op falls back.
+  - an HS core set of four scattered cores (> 3 rectangles): the multicast cannot cover it, the op falls back;
+  - R3's traffic gate (BS_B_MCAST_MIN_SAVED_BYTES; the other R3 cases run with it disabled).
 """
 
 import math
@@ -37,7 +38,9 @@ def _sharded(t, device, dtype, layout, grid, shard):
     return create_ttnn_input_tensor(t, device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=mc)
 
 
-def _run_both(device, monkeypatch, m, k, n, grid, shard, layout, epilogue="none", dtype=_BFP8, budget=None):
+def _run_both(
+    device, monkeypatch, m, k, n, grid, shard, layout, epilogue="none", dtype=_BFP8, budget=None, r3_gate=False
+):
     torch.manual_seed(0)
     A = torch.randn(1, 1, m, k)
     B = torch.randn(k, n) / math.sqrt(k)
@@ -58,6 +61,8 @@ def _run_both(device, monkeypatch, m, k, n, grid, shard, layout, epilogue="none"
         )
     if budget is not None:
         monkeypatch.setattr(pd, "l1_cb_budget", lambda *_: budget)
+    if not r3_gate:  # exercise the R3 multicast on shapes too small to pass its traffic gate
+        monkeypatch.setattr(pd, "BS_B_MCAST_MIN_SAVED_BYTES", 0)
     # Spies: what the descriptor decided on the multicast run (channel built? which blocking?).
     seen = {}
     real_channel, real_plan = pd._sharded_b_channel, pd.plan_block_sharded
@@ -102,6 +107,17 @@ def test_bs_multi_kblock_rounds(device, monkeypatch):
     """PDL res5 reduce: 8 K-blocks of 4 x 2 tiles; B rounds carry several K-blocks."""
     seen = _run_both(device, monkeypatch, 2048, 1024, 512, _rect(8, 10), [224, 128], _BS, "bias_relu")
     assert seen["mcast"] and seen["blk"].num_k_blocks == 8
+
+
+def test_bs_traffic_gate(device, monkeypatch):
+    """R3 keeps the per-core B reads when the multicast would save less than BS_B_MCAST_MIN_SAVED_BYTES (PDL
+    res4 reduce: 0.97 MB, measured slower with the multicast) and multicasts above it (res5 reduce, 5 MB)."""
+    assert not _run_both(device, monkeypatch, 8192, 512, 256, _rect(8, 8), [1024, 64], _BS, "bias_relu", r3_gate=True)[
+        "mcast"
+    ]
+    assert _run_both(device, monkeypatch, 2048, 1024, 512, _rect(8, 10), [224, 128], _BS, "bias_relu", r3_gate=True)[
+        "mcast"
+    ]
 
 
 def test_bs_ragged_k_and_empty_columns(device, monkeypatch):
