@@ -94,16 +94,11 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
 extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 #endif
 
-template <typename ProgramOrDescriptor>
-void append_fabric_connection_rt_args(
+WorkerFabricRouterChannel get_worker_fabric_router_channel(
     const FabricContext& fabric_context,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
-    const uint32_t link_idx,
-    ProgramOrDescriptor& worker_program_or_desc,
-    const tt::tt_metal::CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args,
-    CoreType core_type) {
+    uint32_t link_idx) {
     TT_FATAL(
         src_fabric_node_id != dst_fabric_node_id,
         "Expected different src and dst chip ids but got same, Src: {}, Dst: {}",
@@ -171,7 +166,23 @@ void append_fabric_connection_rt_args(
         dst_fabric_node_id,
         forwarding_links);
 
-    const auto fabric_router_channel = candidate_eth_chans[link_idx];
+    return WorkerFabricRouterChannel{
+        .eth_channel = candidate_eth_chans[link_idx], .forwarding_direction = forwarding_direction.value()};
+}
+
+template <typename ProgramOrDescriptor>
+void append_fabric_connection_rt_args(
+    const FabricContext& fabric_context,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    const uint32_t link_idx,
+    ProgramOrDescriptor& worker_program_or_desc,
+    const tt::tt_metal::CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type) {
+    const auto& control_plane = fabric_context.get_control_plane();
+    const auto [fabric_router_channel, forwarding_direction] =
+        get_worker_fabric_router_channel(fabric_context, src_fabric_node_id, dst_fabric_node_id, link_idx);
 
     uint32_t worker_teardown_semaphore_id;
     uint32_t worker_buffer_index_semaphore_id;
@@ -222,13 +233,13 @@ void append_fabric_connection_rt_args(
             static_cast<uint32_t>(emule_src),
             static_cast<uint32_t>(worker_core.x),
             static_cast<uint32_t>(worker_core.y),
-            static_cast<uint32_t>(forwarding_direction.value()),
+            static_cast<uint32_t>(forwarding_direction),
             static_cast<uint32_t>(emule_dst));
 #endif
     } else {
         // TODO: will be deprecated. currently for ethernet dispatch case
         //       ethernet core need to have same memory mapping as worker
-        const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
+        const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction);
 
         // src_chip_id is still required to get the fabric_router_virtual_core from tt_cluster
         ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);

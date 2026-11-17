@@ -1119,6 +1119,12 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         append_global_semaphore_crtas(kernel.global_semaphore_binding_handles(), out);
     };
 
+    // Patch every per-node RTA section that the framework (not the user) fills: the per-node
+    // TensorBinding section. Shared by the main kernel_run_args loop and the binding-only second pass.
+    auto patch_framework_rtas = [&](Kernel& kernel, const std::string& kernel_name) {
+        PatchPerNodeBindingRtas(kernel, tensor_by_param, kernel_name, /*require_all=*/true);
+    };
+
     // True if the kernel has a framework-filled section in its CRTA or RTA buffers.
     auto has_framework_arg_sections = [](const Kernel& kernel) {
         return !kernel.tensor_binding_handles().empty() || !kernel.scratchpad_binding_handles().empty() ||
@@ -1313,7 +1319,7 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
                 kernel->set_runtime_args(node, combined);
             }
         }
-        PatchPerNodeBindingRtas(*kernel, tensor_by_param, kernel_name.get(), /*require_all=*/true);
+        patch_framework_rtas(*kernel, kernel_name.get());
 
         // Assemble the kernel's per-enqueue CRTA buffer in five structurally-separate sections:
         //   1. User-named CRTAs: the scalars, in schema order, sourced from common_runtime_arg_values;
@@ -1377,15 +1383,17 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         // no named CRTAs or varargs, else validation would have required a kernel_run_args entry).
         // install_crtas allocates the buffer on the first SetProgramRunArgs call and patches it in place
         // on later ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
-        // Likewise, each node's RTA buffer is exactly the per-node TensorBinding section.
-        if (const uint32_t per_node_words = kernel->get_rta_layout().binding_section_words; per_node_words > 0) {
+        // Likewise, each node's RTA buffer is exactly the per-node framework sections.
+        const KernelRtaLayout& rta_layout = kernel->get_rta_layout();
+        if (const uint32_t per_node_words = rta_layout.vararg_section_offset - rta_layout.num_named_words;
+            per_node_words > 0) {
             if (kernel->cores_with_runtime_args().empty()) {
                 const std::vector<uint32_t> zeros(per_node_words, 0u);
                 for (const auto& node : kernel->logical_cores()) {
                     kernel->set_runtime_args(node, zeros);
                 }
             }
-            PatchPerNodeBindingRtas(*kernel, tensor_by_param, kernel_name, /*require_all=*/true);
+            patch_framework_rtas(*kernel, kernel_name);
         }
         std::vector<uint32_t> combined_crtas;
         append_framework_crta_sections(*kernel, combined_crtas);

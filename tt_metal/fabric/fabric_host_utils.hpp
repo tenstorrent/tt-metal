@@ -70,6 +70,24 @@ uint32_t compute_max_1d_hops(const std::vector<MeshShape>& mesh_shapes);
 // Returns 0 for empty input or single-chip meshes
 uint32_t compute_max_2d_hops(const std::vector<MeshShape>& mesh_shapes);
 
+class FabricContext;
+
+// The fabric router that a worker connection uses, and the direction it sends in.
+struct WorkerFabricRouterChannel {
+    chan_id_t eth_channel;
+    RoutingDirection forwarding_direction;
+};
+
+// Resolve the fabric router that a worker connection from `src_fabric_node_id` to its neighbor
+// `dst_fabric_node_id` over `link_idx` sends into.
+// precondition: the fabric of `fabric_context` is configured.
+// Throws if the two nodes are the same, are not neighbors, or `link_idx` is not a forwarding link between them.
+WorkerFabricRouterChannel get_worker_fabric_router_channel(
+    const FabricContext& fabric_context,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx);
+
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const ControlPlane& control_plane,
     const FabricNodeId& src_fabric_node_id,
