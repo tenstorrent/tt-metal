@@ -3,6 +3,7 @@
 
 #include "relay_affine_prefix_device_operation.hpp"
 
+#include <algorithm>
 #include <array>
 #include <set>
 #include <span>
@@ -11,6 +12,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
@@ -29,9 +31,14 @@ void RelayAffinePrefixOperation::validate_on_program_cache_hit(const operation_a
         {&in.initial_state, "initial_state"},
         {&in.actual_start, "actual_start"},
         {&in.landing, "landing"},
+        {&in.final_e, "final_e"},
+        {&in.final_b, "final_b"},
         {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}};
     kda_factory_detail::check_allocated_on_device(in.packed, tensors, operation_name);
     kda_factory_detail::check_distinct_buffers(tensors, operation_name);
+    // actual_end may share a buffer with actual_start, so it is only checked for allocation and device.
+    kda_factory_detail::check_allocated_on_device(
+        in.packed, {{in.actual_end ? &*in.actual_end : nullptr, "actual_end"}}, operation_name);
 }
 
 void RelayAffinePrefixOperation::validate_on_program_cache_miss(
@@ -80,9 +87,11 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
     const auto* mesh = in.packed.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(mesh->shape()[attrs.sequence_parallel_axis] >= 2, "{}: needs at least two SP ranks", operation_name);
+    // The relay's sender per link, then the final carry's second.
+    const uint32_t senders = 2 * attrs.num_links;
     TT_FATAL(
-        attrs.num_links > 0 && attrs.cores.size() >= heads + attrs.num_links,
-        "{}: needs a core per head, then a sender per link",
+        attrs.num_links > 0 && attrs.cores.size() >= heads + senders,
+        "{}: needs a core per head, then two senders per link",
         operation_name);
     TT_FATAL(
         (heads + attrs.num_links - 1) / attrs.num_links <= relay_affine_prefix_max_heads_per_link,
@@ -92,7 +101,7 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         attrs.num_links,
         (heads + attrs.num_links - 1) / attrs.num_links,
         relay_affine_prefix_max_heads_per_link);
-    const std::span<const CoreCoord> used_cores(attrs.cores.data(), heads + attrs.num_links);
+    const std::span<const CoreCoord> used_cores(attrs.cores.data(), heads + senders);
     TT_FATAL(
         std::set<CoreCoord>(used_cores.begin(), used_cores.end()).size() == used_cores.size(),
         "{}: the head and sender cores must be distinct",
@@ -108,8 +117,8 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
             grid.y);
     }
     TT_FATAL(
-        attrs.semaphore_addresses[0] != 0 && attrs.semaphore_addresses[1] != 0,
-        "{}: needs two global semaphores",
+        std::ranges::all_of(attrs.semaphore_addresses, [](uint32_t address) { return address != 0; }),
+        "{}: needs three global semaphores",
         operation_name);
     TT_FATAL(
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tt::constants::TILE_HW * sizeof(float),
@@ -151,6 +160,36 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
          {&in.landing, "landing"},
          {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}},
         operation_name);
+    // The final carry leaves each sender as a multicast along the SP axis, which a 2D fabric routes only along a
+    // straight axis.
+    TT_FATAL(
+        !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+            ttnn::ccl::is_axis_straight(*mesh, attrs.sequence_parallel_axis),
+        "{}: the final carry multicasts along a straight SP axis",
+        operation_name);
+    for (const auto& [tensor, name] : {std::pair{&in.final_e, "final_e"}, std::pair{&in.final_b, "final_b"}}) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+        kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
+        kda_factory_detail::check_dtype(*tensor, tt::tt_metal::DataType::FLOAT32, operation_name, name);
+        kda_factory_detail::check_interleaved(*tensor, operation_name, name);
+        kda_factory_detail::check_same_device(in.packed, *tensor, operation_name, name);
+        TT_FATAL(
+            tensor->logical_shape() == tt::tt_metal::Shape({heads, key_dim, key_dim}),
+            "{}: {} must be [B*H, K, K]",
+            operation_name,
+            name);
+    }
+    if (in.actual_end) {
+        kda_factory_detail::check_actual_start(in.packed, *in.actual_end, operation_name);
+    }
+    // A sender reuses the relay's packet headers for the carry, a write per tile of a column and the arrival
+    // increment, and reads the next column into a second stage slot.
+    const uint32_t slots = relay_affine_prefix_sender_slots(key_tiles, mesh->arch());
+    TT_FATAL(
+        slots * relay_affine_prefix_column_packets(key_tiles) >= key_tiles + 1 && slots >= 2,
+        "{}: the final carry needs {} packet headers and two stage slots per sender",
+        operation_name,
+        key_tiles + 1);
     kda_factory_detail::check_output_interleaved(attrs.entry_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
     kda_factory_detail::check_fp32_dest_acc(
@@ -178,15 +217,21 @@ RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::comp
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::FLOAT32, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
     };
-    return {spec(attrs.entry_mem_config), spec(ttnn::DRAM_MEMORY_CONFIG)};
+    // With a slab, the final carry is written into the slab's entry, in place.
+    return {
+        spec(attrs.entry_mem_config),
+        spec(ttnn::DRAM_MEMORY_CONFIG),
+        in.slab_index ? in.initial_state.tensor_spec() : spec(ttnn::DRAM_MEMORY_CONFIG)};
 }
 
 RelayAffinePrefixOperation::tensor_return_value_t RelayAffinePrefixOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
+    const auto specs = compute_output_specs(attrs, in);
     tensor_return_value_t outputs;
-    for (const auto& spec : compute_output_specs(attrs, in)) {
-        outputs.push_back(create_device_tensor(spec, in.packed.device()));
+    for (uint32_t i = 0; i < 2; ++i) {
+        outputs.push_back(create_device_tensor(specs[i], in.packed.device()));
     }
+    outputs.push_back(in.slab_index ? in.initial_state : create_device_tensor(specs[2], in.packed.device()));
     return outputs;
 }
 
@@ -206,14 +251,17 @@ RelayAffinePrefixOperation::create_op_performance_model(
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
-std::tuple<Tensor, Tensor> relay_affine_prefix(
+std::tuple<Tensor, Tensor, Tensor> relay_affine_prefix(
     const Tensor& packed,
     const Tensor& initial_state,
+    const Tensor& final_e,
+    const Tensor& final_b,
     const Tensor& actual_start,
+    const std::optional<Tensor>& actual_end,
     const Tensor& landing,
     const tt::tt_metal::MemoryConfig& entry_memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::array<uint32_t, 2>& semaphore_addresses,
+    const std::array<uint32_t, 3>& semaphore_addresses,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
@@ -237,8 +285,11 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
             .initial_state = initial_state,
             .actual_start = actual_start,
             .landing = landing,
+            .final_e = final_e,
+            .final_b = final_b,
+            .actual_end = actual_end,
             .slab_index = slab_index});
-    return {outputs[0], outputs[1]};
+    return {outputs[0], outputs[1], outputs[2]};
 }
 
 }  // namespace ttnn::experimental::prim
