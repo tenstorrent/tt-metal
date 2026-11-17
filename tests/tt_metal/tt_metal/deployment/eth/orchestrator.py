@@ -15,7 +15,7 @@ from argparse import ArgumentParser
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from contextlib import contextmanager, closing
-from typing import Union, Optional, Iterator, TypeAlias, cast
+from typing import Union, Optional, Iterator, Iterable, TypeAlias, cast
 
 from pssh.config import HostConfig
 from pssh.output import HostOutput
@@ -326,25 +326,8 @@ def test_dist(
     return test_pass
 
 
-def batch_worker(db: sqlite3.Connection, mergeid: str, runid: str, q: Queue[dict | str]) -> None:
-    db.execute(tableschema)
-
-    done = False
-    while not done:
-        batch = []
-        while not q.empty():
-            data = q.get_nowait()
-            if data == "DONE":
-                done = True
-                break
-            batch.append(data)
-
-        if batch:
-            print(batch)
-            now = int(time() * 1000)
-            with db:
-                db.executemany(
-                    """
+def insert_test_db(db: sqlite3.Connection, t: Iterable[tuple]):
+    query = """
 INSERT INTO eth_test_results(
     testrun_id,
     merge_id,
@@ -368,23 +351,46 @@ INSERT INTO eth_test_results(
     ?,
     ?
 )
-""",
+"""
+
+    with db:
+        db.executemany(query, t)
+
+
+def batch_worker(db: sqlite3.Connection, mergeid: str, runid: str, q: Queue[dict | str]) -> None:
+    db.execute(tableschema)
+
+    done = False
+    while not done:
+        batch = []
+        while not q.empty():
+            data = q.get_nowait()
+            if data == "DONE":
+                done = True
+                break
+            batch.append(data)
+
+        if batch:
+            print(batch)
+            now = int(time() * 1000)
+            insert_test_db(
+                db,
+                (
                     (
-                        (
-                            runid,
-                            mergeid,
-                            d["test"],
-                            now,
-                            d["src_core_uid"],
-                            d["dst_core_uid"],
-                            d["proc"],
-                            json.dumps(d["bw"]),
-                            json.dumps(d["errors"]),
-                            len(d["errors"]) == 0,
-                        )
-                        for d in batch
-                    ),
-                )
+                        runid,
+                        mergeid,
+                        d["test"],
+                        now,
+                        d["src_core_uid"],
+                        d["dst_core_uid"],
+                        d["proc"],
+                        json.dumps(d["bw"]),
+                        json.dumps(d["errors"]),
+                        len(d["errors"]) == 0,
+                    )
+                    for d in batch
+                ),
+            )
         else:
             sleep(0.1)
 
@@ -492,48 +498,23 @@ def dist_batch_worker(
 
         print(d)
         now = int(time() * 1000)
-        with db:
-            db.execute(
-                """
-INSERT INTO eth_test_results(
-    testrun_id,
-    merge_id,
-    testname,
-    timestamp_ms,
-    src_core_uid,
-    dst_core_uid,
-    proc,
-    bw,
-    errors,
-    passed
-) VALUES (
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?
-)
-""",
+        insert_test_db(
+            db,
+            (
                 (
-                    (
-                        runid,
-                        mergeid,
-                        d["test"],
-                        now,
-                        d["src_core_uid"],
-                        d["dst_core_uid"],
-                        d["proc"],
-                        json.dumps(d["bw"]),
-                        json.dumps(d["errors"]),
-                        len(d["errors"]) == 0,
-                    )
+                    runid,
+                    mergeid,
+                    d["test"],
+                    now,
+                    d["src_core_uid"],
+                    d["dst_core_uid"],
+                    d["proc"],
+                    json.dumps(d["bw"]),
+                    json.dumps(d["errors"]),
+                    len(d["errors"]) == 0,
                 ),
-            )
+            ),
+        )
 
 
 # Returns the write side of the pipe for the test output to be written to
