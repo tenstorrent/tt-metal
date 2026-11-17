@@ -64,7 +64,7 @@ void bind_tilize(nb::module_& mod) {
             - Interleaved: DRAM and L1
             - Sharded input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
             - Sharded output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
-            - ND sharded: L1 input and output
+            - ND sharded: L1 and DRAM input and output
     )doc";
 
     ttnn::bind_function<"tilize">(
