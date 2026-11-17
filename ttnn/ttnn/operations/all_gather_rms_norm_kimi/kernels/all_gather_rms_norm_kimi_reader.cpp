@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute-core reader (RISCV_1, NoC0). Core (q, m) owns block m of slice q (block_h x block_w tiles in `landing`).
-//   prepare_gamma_block   gamma sticks q*Wl_t .. +block_w (64 B DRAM pages) -> row 0 of block_w tiles (cb_gamma)
+//   prepare_gamma_block   gamma sticks q*Wl_t .. +block_w (64 B) -> row 0 of block_w tiles (cb_gamma); the sticks come
+//                         from the hub's multicast (GAMMA_HUB_MCAST: wait gamma_go) or from a per-core DRAM read
 //   load_own_block        (q == p) DRAM x -> cb_x_block (the landing shard), one barrier, then own_loaded++ on both
 //                         ports of the block's link (they read the own slice from here, L1 -> fabric)
 //   stats -> tiles        wait the hub's multicast (stats_ready), then col 0 of tile q'*h + r of cb_partials =
@@ -32,7 +33,7 @@ constexpr uint32_t sem_landed = get_compile_time_arg_val(C + 6);
 constexpr uint32_t tile_bytes = get_compile_time_arg_val(C + 7);
 constexpr uint32_t gamma_page = get_compile_time_arg_val(C + 8);
 constexpr uint32_t sem_gamma_go = get_compile_time_arg_val(C + 9);
-constexpr bool gamma_after_own = get_compile_time_arg_val(C + 10) != 0;
+constexpr bool gamma_hub_mcast = get_compile_time_arg_val(C + 10) != 0;
 constexpr auto in_args = TensorAccessorArgs<C + 11>();
 constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
@@ -78,32 +79,27 @@ void kernel_main() {
 
     // ---- prepare_gamma_block: stick n -> row 0 of tile j (face 0 row 0 = elements 0..15, face 1 row 0 = 16..31) ----
     {
-        if (gamma_after_own && !own) {
-            // keep DRAM quiet for the own x loads (the head of the stats chain); gamma is needed only after the
-            // stats round, so the remote cores read it once the hub has every own partial
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_gamma_go)), 1);
-        }
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_page);
         cb_reserve_back(cb_gamma, block_w);
         const uint32_t base = get_write_ptr(cb_gamma);
-        // DRAM reads want a 64 B aligned L1 destination: land each stick at the first 64 B boundary in its tile
-        const uint32_t pad = (64 - (base & 63)) & 63;
-        for (uint32_t j = 0; j < block_w; ++j) {
-            noc_async_read(gamma.get_noc_addr(b.q * Wl_t + j), base + j * tile_bytes + pad, gamma_page);
+        // stick j's 64 B source: the hub's multicast in my stats-scratch tail (GAMMA_HUB_MCAST), or my own DRAM read
+        // landed at the first 64 B boundary inside tile j (DRAM reads want a 64 B aligned L1 destination)
+        uint32_t src0, src_stride;
+        if constexpr (gamma_hub_mcast) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_gamma_go)), 1);
+            src0 = ((stats_addr + G * Mt * STATS_ROW_BYTES + 63) & ~63u) + b.q * Wl_t * gamma_page;
+            src_stride = gamma_page;
+        } else {
+            const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_page);
+            const uint32_t pad = (64 - (base & 63)) & 63;
+            for (uint32_t j = 0; j < block_w; ++j) {
+                noc_async_read(gamma.get_noc_addr(b.q * Wl_t + j), base + j * tile_bytes + pad, gamma_page);
+            }
+            noc_async_read_barrier();
+            src0 = base + pad;
+            src_stride = tile_bytes;
         }
-        noc_async_read_barrier();
         for (uint32_t j = 0; j < block_w; ++j) {
-            const uint32_t t = base + j * tile_bytes;
-            volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(t + pad);
-            uint32_t w[16];
-            for (uint32_t i = 0; i < 16; ++i) {
-                w[i] = src[i];
-            }
-            volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(t);
-            for (uint32_t i = 0; i < 8; ++i) {
-                dst[i] = w[i];            // elements 0..15 -> face 0 row 0
-                dst[128 + i] = w[8 + i];  // elements 16..31 -> face 1 row 0 (byte 512)
-            }
+            stick_to_row0(src0 + j * src_stride, base + j * tile_bytes);
         }
         cb_push_back(cb_gamma, block_w);
     }

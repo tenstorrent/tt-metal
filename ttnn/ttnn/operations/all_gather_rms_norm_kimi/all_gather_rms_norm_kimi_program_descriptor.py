@@ -46,9 +46,11 @@ PORT_BATCH_CHUNKS = 2  # chunks per port batch (cb_port_chunks holds 2 batches);
 PORT_BATCH_CHUNKS_MAX = 8  # packet-header pool cap
 INC_EVERY = 8  # fused arrival increment every this many chunks (+ every entry end)  [TRANSPORT]
 OUT_DEPTH_CHUNKS = 2  # cb_out depth in chunks
-# Remote-slice cores hold their gamma DRAM reads until the hub has every own partial (one multicast semaphore set),
-# so the 960 small gamma reads stop contending with the own x loads at the head of the stats chain. [OVERLAP]
-GAMMA_AFTER_OWN = True
+# gamma source: True = the hub reads the Wt sticks once per chip and multicasts them into every compute core's
+# stats-scratch tail (op_design.md regime R6); False = every compute core reads its block_w sticks from DRAM. The
+# per-core reads (20 cores per slice on the same 12 pages) took ~4.5 us and held up the stats chain.  [OVERLAP]
+GAMMA_HUB_MCAST = True
+GAMMA_STICK_BYTES = 64  # one 32-element bf16 stick = one DRAM-aligned gamma page (checked per call)
 STATS_SCRATCH_CAP_BYTES = 64 * 1024
 STATS_ROW_BYTES = 32 * 4  # 32 fp32 row sums per tile row (kernels/..._common.hpp mirrors it)
 
@@ -76,7 +78,7 @@ SEM_RELAY_READY = 2  # port: relay blocks landed (one ordered sender: the matchi
 SEM_LANDED = 3  # compute: landed chunks of this core's block (one ordered sender: one receiver)
 SEM_STATS_READY = 4  # compute: hub multicast of the stats landed
 SEM_OWN_PARTIALS = 5  # hub: own partial rows exported (fan-in, waited for its total)
-SEM_GAMMA_GO = 6  # compute: the hub has every own partial, remote cores may read gamma (GAMMA_AFTER_OWN)
+SEM_GAMMA_GO = 6  # compute: the hub's gamma multicast landed in the stats-scratch tail (GAMMA_HUB_MCAST)
 NUM_LOCAL_SEMS = 7
 
 
@@ -157,6 +159,10 @@ class Geometry:
     @property
     def op_cores(self):
         return self.row0 + self.compute
+
+    @property
+    def scratch_bytes(self):  # G stats slots, then (64 B aligned on device) the Wt gamma sticks
+        return self.G * self.slot_bytes + 64 + self.Wt * GAMMA_STICK_BYTES
 
     @property
     def slot_bytes(self):  # one slice's fp32 partial vector: Mt rows x 32 values (kernels: STATS_ROW_BYTES)
@@ -331,7 +337,7 @@ def get_resources(mesh_device, geo):
     )
     op_cores = geo.op_cores
     op_crs = op_core_crs(geo)
-    words = geo.G * geo.Mt * 32
+    words = geo.scratch_bytes // 4
     stats_mc = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -448,6 +454,10 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
     sfwd_addr, sbwd_addr = res.addr("sfwd"), res.addr("sbwd")
     in_addr, g_addr, out_addr = (int(t.buffer_address()) for t in (input_tensor, gamma, output))
     gamma_page = int(gamma.buffer_aligned_page_size())
+    if gamma_page > GAMMA_STICK_BYTES:
+        raise ValueError(
+            f"all_gather_rms_norm_kimi: gamma page {gamma_page} B exceeds the {GAMMA_STICK_BYTES} B stick slot"
+        )
     W = G * geo.Wl_t * 32
 
     comp_crs = compute_crs(geo)
@@ -487,7 +497,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 PORT_BATCH_CHUNKS,
                 INC_EVERY,
                 OUT_DEPTH_CHUNKS,
-                GAMMA_AFTER_OWN,
+                GAMMA_HUB_MCAST,
                 gamma_page,
             )
             program.semaphores = [
@@ -536,7 +546,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 tile_bytes,
                 gamma_page,
                 SEM_GAMMA_GO,
-                int(GAMMA_AFTER_OWN),
+                int(GAMMA_HUB_MCAST),
             ]
             reader_ct += list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
             reader_ct += list(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
@@ -701,6 +711,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 kb,
                 sfwd_addr,
                 sbwd_addr,
+                g_addr,
                 len(rects),
             ]
             for x0, y0, x1, y1, n in rects:
@@ -719,8 +730,11 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                         SEM_STATS_TX,
                         SEM_STATS_READY,
                         SEM_GAMMA_GO,
-                        int(GAMMA_AFTER_OWN),
-                    ],
+                        int(GAMMA_HUB_MCAST),
+                        gamma_page,
+                        geo.Wt,
+                    ]
+                    + list(ttnn.TensorAccessorArgs(gamma).get_compile_time_args()),
                     runtime_args=hub_rt,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0

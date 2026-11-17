@@ -68,6 +68,26 @@ inline void col0_to_stats_row(uint32_t tile_addr, uint32_t dst_addr) {
     asm volatile("" ::: "memory");
 }
 
+// One 32-element bf16 gamma stick (64 B) -> row 0 of a bf16 tile: elements 0..15 -> face 0 row 0, elements 16..31
+// -> face 1 row 0 (byte 512). Rows 1..31 are never read (row broadcast). The source may sit inside the destination
+// tile (the per-core DRAM path lands it there): all 16 words are loaded before any store.
+inline void stick_to_row0(uint32_t src_addr, uint32_t tile_addr) {
+    asm volatile("" ::: "memory");
+    const uint32_t* src = reinterpret_cast<const uint32_t*>(src_addr);
+    uint32_t* dst = reinterpret_cast<uint32_t*>(tile_addr);
+    uint32_t w[16];
+#pragma GCC unroll 16
+    for (uint32_t i = 0; i < 16; ++i) {
+        w[i] = src[i];
+    }
+#pragma GCC unroll 8
+    for (uint32_t i = 0; i < 8; ++i) {
+        dst[i] = w[i];
+        dst[128 + i] = w[8 + i];
+    }
+    asm volatile("" ::: "memory");
+}
+
 struct BlockId {
     uint32_t q;  // slice (group position it came from)
     uint32_t m;  // row block
