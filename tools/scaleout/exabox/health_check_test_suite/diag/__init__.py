@@ -11,8 +11,9 @@ decides what each tier asks of each phase. The phase modules:
     resets.py                         2  pre-test reset loop; 4  post-test reset
     device_tests.py                   3  deployment gtests and pytest stress tests
     triage.py                         5  kmd_triage first-step tools
-    qsfp.py, qsfp_ingest.py           6  QSFP tests (ETH dump collection and its conversion to checks)
-    sys_triage.py                     7  syseng sys-triage bundle
+    eth_status.py                     6  ETH status read (two tt-triage check_eth_status reads, judged)
+    qsfp.py, qsfp_ingest.py           7  QSFP tests (ETH dump collection and its conversion to checks)
+    sys_triage.py                     8  syseng sys-triage bundle
 
 and what they share: model.py (Check, Phase), common.py (subprocess, console and
 path helpers), galaxy.py (BH Galaxy topology), external.py (ingesting checks

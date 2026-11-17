@@ -138,7 +138,9 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:/opt/openmpi-v5.0.7-ulfm/bin:${PATH}"
 
 # torch, pytest and loguru are the deploy tier's didt pytest; versions follow
-# tt_metal/python_env/requirements-dev.txt. The wheel brings ttnn's own dependencies.
+# tt_metal/python_env/requirements-dev.txt. tools/triage/requirements.txt (tt-exalens,
+# tt-umd, pycapnp) is what tools/triage/triage.py needs, which the health check's ETH
+# status read runs. The wheel brings ttnn's own dependencies.
 # unsafe-best-match because the CPU torch index also serves numpy and friends.
 RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
     --mount=type=bind,target=/ctx \
@@ -151,6 +153,7 @@ RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
         pytest-timeout==2.4.0 \
         loguru==0.6.0 \
         -r /ctx/tools/scaleout/exabox/health_check_test_suite/test_infrastructure/requirements.txt \
+        -r /ctx/tools/triage/requirements.txt \
         /ctx/ttnn-*.whl
 
 COPY --from=tree --link --chown=1001:1001 /out/tt-metal /home/user/tt-metal
@@ -217,6 +220,7 @@ RUN for bin in \
     && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --help > /dev/null \
     && TRACY_NO_INVARIANT_CHECK=1 PYTHONDONTWRITEBYTECODE=1 \
         python3 -c 'import ttnn, pytest_timeout, conftest, tests.didt.op_test_base' \
+    && python3 -c 'import ttexalens, capnp, docopt, rich' \
     && python3 -m venv --system-site-packages /tmp/venv-smoke \
     && /tmp/venv-smoke/bin/python3 -m pip --version \
     && rm -rf /tmp/venv-smoke generated build/profiler /home/user/.cache
