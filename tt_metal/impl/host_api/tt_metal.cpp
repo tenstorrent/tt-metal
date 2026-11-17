@@ -52,7 +52,6 @@
 #include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <program.hpp>
 #include "program/dispatch.hpp"
 #include "program/program_impl.hpp"
