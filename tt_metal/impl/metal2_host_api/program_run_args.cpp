@@ -7,6 +7,7 @@
 #include <limits>
 #include <set>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
@@ -14,9 +15,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -27,7 +28,7 @@
 #include "impl/metal2_host_api/tensor_binding_crtas.hpp"
 #include "impl/program/program_impl.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ============================================================================
 // Validation Helpers
@@ -41,8 +42,60 @@ const Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const Prog
     return kp.advanced_options.runtime_varargs;
 }
 
-const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
+const experimental::AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(
+    const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.common_runtime_varargs;
+}
+
+// UpdateProgramRunArgs drops the per-device values of the named args it lists (see ProgramImpl::PerDeviceRunArgDrops).
+// Tensor args, DFB overrides and varargs cannot have per-device values, so only named args are recorded.
+static void RecordPerDeviceRunArgDrops(detail::ProgramImpl& program_impl, const ProgramRunArgs& params) {
+    if (!program_impl.tracks_per_device_run_args()) {
+        return;
+    }
+    using Key = detail::ProgramImpl::PerDeviceRunArgKey;
+    for (const auto& kernel_params : params.kernel_run_args) {
+        const std::string& kernel_name = kernel_params.kernel.get();
+        const KernelHandle kernel = program_impl.get_kernel_handle(kernel_name);
+        if (!program_impl.tracks_per_device_run_args_of(kernel)) {
+            continue;
+        }
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name);
+        TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
+        for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+            const auto it = schema->runtime_arg_name_to_slot.find(name);
+            if (it == schema->runtime_arg_name_to_slot.end()) {
+                continue;  // the update itself fails on it
+            }
+            for (const auto& [node, value] : per_node) {
+                program_impl.record_per_device_run_arg_drop(Key{kernel, node, static_cast<uint32_t>(it->second)});
+            }
+        }
+        for (const auto& [name, per_node] : kernel_params.runtime_array_arg_values) {
+            const auto it = schema->runtime_array_arg_slots.find(name);
+            if (it == schema->runtime_array_arg_slots.end()) {
+                continue;
+            }
+            for (const auto& [node, value] : per_node) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, node, static_cast<uint32_t>(it->second.first_slot)});
+            }
+        }
+        for (const auto& [name, value] : kernel_params.common_runtime_arg_values) {
+            const auto it = schema->common_runtime_arg_name_to_slot.find(name);
+            if (it != schema->common_runtime_arg_name_to_slot.end()) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, std::nullopt, static_cast<uint32_t>(it->second)});
+            }
+        }
+        for (const auto& [name, value] : kernel_params.common_runtime_array_arg_values) {
+            const auto it = schema->common_runtime_array_arg_slots.find(name);
+            if (it != schema->common_runtime_array_arg_slots.end()) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, std::nullopt, static_cast<uint32_t>(it->second.first_slot)});
+            }
+        }
+    }
 }
 
 // Validation of the array args a KernelRunArgs supplies, shared by the full and partial-update paths:
@@ -135,6 +188,37 @@ static std::optional<BufferDistributionSpec> resolve_shard_distribution(const Te
     return spec.compute_buffer_sharding_args().buffer_distribution_spec();
 }
 
+// The tensor_layout part of report_tensor_arg_mismatch, shared by both relaxed modes. Checked in two
+// parts, because the alignment is the one component of tensor_layout that
+// relax_tensor_layout_alignment frees. mode_name names the active relaxation, for the messages.
+static void report_tensor_layout_mismatch(
+    const TensorParamName& param_name,
+    const TensorLayout& runtime_layout,
+    const TensorLayout& expected_layout,
+    const TensorSpecRelaxations& relaxation,
+    std::string_view mode_name) {
+    TT_FATAL(
+        runtime_layout.get_data_type() == expected_layout.get_data_type() &&
+            runtime_layout.get_page_config() == expected_layout.get_page_config() &&
+            runtime_layout.get_memory_config() == expected_layout.get_memory_config(),
+        "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
+        "binding's declared layout. {} loosens the match only along the shape; dtype, page_config, and "
+        "memory_config must still match exactly.",
+        param_name,
+        mode_name);
+    if (!relaxation.relax_tensor_layout_alignment) {
+        TT_FATAL(
+            runtime_layout.get_alignment() == expected_layout.get_alignment(),
+            "TensorArgument for binding '{}' supplied a MeshTensor whose TensorLayout has {} where the binding "
+            "declares {}. {} lets the shape vary, but the tensor must still be padded to the declared alignment. "
+            "To accept other alignments, also set relax_tensor_layout_alignment.",
+            param_name,
+            runtime_layout.get_alignment(),
+            expected_layout.get_alignment(),
+            mode_name);
+    }
+}
+
 // Emit a precise diagnostic for a tensor argument that failed tensorspecs_match_with_relaxation, then
 // throw. Called only on the rejection path: the branches mirror the match to produce a specific
 // message, and the trailing TT_THROW guarantees rejection even if a branch ever drifts from the match.
@@ -144,28 +228,12 @@ static void report_tensor_arg_mismatch(
     const TensorSpec& expected_spec,
     const TensorSpecRelaxations& relaxation) {
     if (relaxation.dynamic_tensor_shape) {
-        // Checked in two parts, because the alignment is the one component of tensor_layout that
-        // relax_tensor_layout_alignment frees.
-        const TensorLayout& runtime_layout = runtime_spec.tensor_layout();
-        const TensorLayout& expected_layout = expected_spec.tensor_layout();
-        TT_FATAL(
-            runtime_layout.get_data_type() == expected_layout.get_data_type() &&
-                runtime_layout.get_page_config() == expected_layout.get_page_config() &&
-                runtime_layout.get_memory_config() == expected_layout.get_memory_config(),
-            "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-            "binding's declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
-            "page_config, and memory_config must still match exactly.",
-            param_name);
-        if (!relaxation.relax_tensor_layout_alignment) {
-            TT_FATAL(
-                runtime_layout.get_alignment() == expected_layout.get_alignment(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose TensorLayout has {} where the binding "
-                "declares {}. dynamic_tensor_shape lets the shape values vary, but the tensor must still be padded to "
-                "the declared alignment. To accept other alignments, also set relax_tensor_layout_alignment.",
-                param_name,
-                runtime_layout.get_alignment(),
-                expected_layout.get_alignment());
-        }
+        report_tensor_layout_mismatch(
+            param_name,
+            runtime_spec.tensor_layout(),
+            expected_spec.tensor_layout(),
+            relaxation,
+            "dynamic_tensor_shape");
         // The rank is the one shape term dynamic_tensor_shape still pins, and relax_logical_rank
         // frees it.
         if (!relaxation.relax_logical_rank) {
@@ -214,14 +282,12 @@ static void report_tensor_arg_mismatch(
                 expected_dist->cores().size());
         }
     } else if (relaxation.match_padded_shape_only) {
-        TT_FATAL(
-            runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
-            "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-            "binding's "
-            "declared layout. match_padded_shape_only loosens the match only along logical_shape (within the "
-            "constraint that padded_shape is preserved); dtype, page_config, memory_config, and alignment must "
-            "still match exactly.",
-            param_name);
+        report_tensor_layout_mismatch(
+            param_name,
+            runtime_spec.tensor_layout(),
+            expected_spec.tensor_layout(),
+            relaxation,
+            "match_padded_shape_only");
         TT_FATAL(
             runtime_spec.padded_shape() == expected_spec.padded_shape(),
             "TensorArgument for binding '{}' supplied a MeshTensor whose padded_shape does not match the binding's "
@@ -264,13 +330,14 @@ static void report_tensor_arg_mismatch(
 //       - match_page_size=true (with dynamic_tensor_shape): as above, plus the page size must
 //         match. A TIGHTENING rather than a relaxation -- it declares that the width is constant
 //         even though the shape varies, so the accessor can keep the page size compile-time.
-//       - relax_tensor_layout_alignment=true (with dynamic_tensor_shape): tensor_layout() need not match on its
-//         alignment, so a tensor padded differently from the declared one is accepted. Composes
-//         with the two flags above.
-//     relax_logical_rank and relax_tensor_layout_alignment are inert unless dynamic_tensor_shape is also set;
-//     the load-bearing field set for every combination is derived in one place, by
-//     pertinent_fields() (tensor_spec_relaxations.cpp), which both this validation and the
-//     relaxation-aware hash use.
+//       - relax_tensor_layout_alignment=true (with either flag): tensor_layout() need not match on
+//         its alignment. Under match_padded_shape_only the padded shape is still pinned, so only
+//         the logical shape and alignment that produce it may differ. Under dynamic_tensor_shape a
+//         tensor padded differently is accepted; there it composes with the two flags above.
+//     relax_logical_rank is inert unless dynamic_tensor_shape is also set, and
+//     relax_tensor_layout_alignment unless either flag is. The load-bearing field set for every
+//     combination is derived in one place, by pertinent_fields() (tensor_spec_relaxations.cpp),
+//     which both this validation and the relaxation-aware hash use.
 //     See the field doc comments in tensor_spec_relaxations.hpp for the full contracts.
 //   - When require_all is true: every declared TensorParameter must be set.
 //   - When require_all is false (partial update): any TensorParameter may be omitted; its
@@ -309,7 +376,7 @@ void ValidateTensorArgs(
 
 void ValidateSRAMArenaArgs(
     const Program& program,
-    const Table<SRAMArenaParamName, AdvancedProgramRunArgs::SRAMArenaArgument>& args,
+    const Table<experimental::SRAMArenaParamName, experimental::AdvancedProgramRunArgs::SRAMArenaArgument>& args,
     bool require_all) {
     const auto& declarations = program.impl().get_sram_arena_parameters();
     for (const auto& [name, argument] : args) {
@@ -328,7 +395,7 @@ void ValidateSRAMArenaArgs(
     if (require_all) {
         for (const auto& [name, declaration] : declarations) {
             TT_FATAL(
-                args.contains(SRAMArenaParamName{name}),
+                args.contains(experimental::SRAMArenaParamName{name}),
                 "SRAMArenaParameter '{}' is declared in the Program but has no SRAMArenaArgument entry.",
                 name);
         }
@@ -336,7 +403,8 @@ void ValidateSRAMArenaArgs(
 }
 
 void BindSRAMArenaArgs(
-    detail::ProgramImpl& program, const Table<SRAMArenaParamName, AdvancedProgramRunArgs::SRAMArenaArgument>& args) {
+    detail::ProgramImpl& program,
+    const Table<experimental::SRAMArenaParamName, experimental::AdvancedProgramRunArgs::SRAMArenaArgument>& args) {
     if (args.empty()) {
         return;
     }
@@ -472,7 +540,8 @@ void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const Prog
 // bind time in ProgramImpl::bind_prefetcher_pipe_parameters.
 void ValidatePrefetcherPipeArgs(
     const Program& program,
-    const Table<PrefetcherPipeParamName, AdvancedProgramRunArgs::PrefetcherPipeArgument>& pipe_args,
+    const Table<experimental::PrefetcherPipeParamName, experimental::AdvancedProgramRunArgs::PrefetcherPipeArgument>&
+        pipe_args,
     bool require_all) {
     const detail::ProgramImpl& program_impl = program.impl();
 
@@ -485,7 +554,7 @@ void ValidatePrefetcherPipeArgs(
             "ProgramRunArgs supplies a PrefetcherPipe argument for '{}', but the Program declares no "
             "PrefetcherPipeParameter of that name.",
             param_name);
-        const PrefetcherPipe& pipe = pipe_arg.get();
+        const experimental::PrefetcherPipe& pipe = pipe_arg.get();
         TT_FATAL(
             pipe.get_device() == binding->device,
             "PrefetcherPipeArgument for '{}' supplies a pipe allocated on a different MeshDevice than the one this "
@@ -534,7 +603,8 @@ void ValidatePrefetcherPipeArgs(
 // different object).
 void BindPrefetcherPipeArgs(
     detail::ProgramImpl& program_impl,
-    const Table<PrefetcherPipeParamName, AdvancedProgramRunArgs::PrefetcherPipeArgument>& pipe_args) {
+    const Table<experimental::PrefetcherPipeParamName, experimental::AdvancedProgramRunArgs::PrefetcherPipeArgument>&
+        pipe_args) {
     std::vector<detail::ProgramImpl::PrefetcherPipeParameterBind> binds;
     binds.reserve(pipe_args.size());
     for (const auto& [param_name, pipe_arg] : pipe_args) {
@@ -800,10 +870,10 @@ void PatchPerNodeBindingRtas(
         // TensorSpec validation already pins the per-node allocation flag (it is part of MemoryConfig equality),
         // so this only trips if the buffer disagrees with its own tensor's MemoryConfig.
         TT_FATAL(
-            per_core_allocation::is_per_core_allocation(*buffer),
+            experimental::per_core_allocation::is_per_core_allocation(*buffer),
             "Tensor argument for per-node TensorParameter '{}' is backed by a Buffer that is not per-node allocated.",
             handle.tensor_parameter_name);
-        const auto& node_addresses = per_core_allocation::get_per_core_addresses(*buffer);
+        const auto& node_addresses = experimental::per_core_allocation::get_per_core_addresses(*buffer);
         const uint32_t word = handle.addr_rta_offset / sizeof(uint32_t);
         for (const CoreCoord& node : kernel.logical_cores()) {
             auto a_it = node_addresses.find(node);
@@ -834,7 +904,9 @@ void PatchPerNodeBindingRtas(
 }
 
 uint32_t ResolveBorrowedDFBTensorAddress(
-    const dfb::detail::DataflowBufferImpl& dfb, const TensorParamName& tensor_name, const MeshTensor& tensor) {
+    const experimental::dfb::detail::DataflowBufferImpl& dfb,
+    const TensorParamName& tensor_name,
+    const MeshTensor& tensor) {
     const auto& buffer = *tensor.mesh_buffer().get_reference_buffer();
 
     // Attach-time legality checks (analogous to dynamic CB's
@@ -918,7 +990,7 @@ void AttachBorrowedDFBBuffers(
 // PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs
 // ============================================================================
 
-void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Setting ProgramRunArgs");
 
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec (the run-args
@@ -934,7 +1006,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         ValidateProgramRunArgs(program, params);
     }
 
-    detail::ProgramImpl& program_impl = program.impl();
+    tt_metal::detail::ProgramImpl& program_impl = program.impl();
 
     // Build a tensor_parameter_name -> MeshTensor lookup from the user's TensorArgument entries.
     // Used below to fill each kernel's TensorBinding CRTA section: at minimum, the binding's
@@ -1252,7 +1324,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Apply size overrides BEFORE attaching borrowed buffers so the borrowed per-bank fit check in
     // AttachBorrowedDFBBuffers validates the NEW size. Overrides are applied as a single batch so an alias
     // group can be validated for size agreement before any DFB is mutated.
-    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+    std::vector<tt_metal::detail::ProgramImpl::DfbSizeOverride> size_overrides;
     size_overrides.reserve(params.dfb_run_overrides.size());
     for (const auto& dfb_params : params.dfb_run_overrides) {
         if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
@@ -1271,16 +1343,19 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Install arena addresses after DFB, tensor, and pipe checks succeed.
     BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
     for (const auto& [param_name, tensor] : tensor_by_param) {
-        program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+        program_impl.set_bound_tensor_footprint(param_name, tt_metal::detail::make_bound_tensor_footprint(*tensor));
     }
     program_impl.mark_program_run_args_initialized();
+    // Every arg was just set for the whole program: per-device values are dropped (see
+    // ProgramImpl::PerDeviceRunArgDrops).
+    program_impl.record_per_device_run_args_drop_all();
 }
 
-void UpdateTensorArgs(
+void experimental::UpdateTensorArgs(
     Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
-    detail::ProgramImpl& program_impl = program.impl();
+    tt_metal::detail::ProgramImpl& program_impl = program.impl();
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec. (A legacy Program
     // would also fail the initialized-check below, but this gives the accurate reason.)
     TT_FATAL(
@@ -1348,7 +1423,7 @@ void UpdateTensorArgs(
     // Process DFB runtime parameters to update borrowed-memory DFB backing L1 Buffer*s.
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
     for (const auto& [param_name, tensor] : tensor_by_param) {
-        program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+        program_impl.set_bound_tensor_footprint(param_name, tt_metal::detail::make_bound_tensor_footprint(*tensor));
     }
 }
 
@@ -1571,10 +1646,10 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/false);
 }
 
-void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating ProgramRunArgs (partial fast-path)");
 
-    detail::ProgramImpl& program_impl = program.impl();
+    tt_metal::detail::ProgramImpl& program_impl = program.impl();
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec. (A legacy Program
     // would also fail the initialized-check below, but this gives the accurate reason.)
     TT_FATAL(
@@ -1589,7 +1664,6 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     if (!skip_validation) {
         ValidateUpdateProgramRunArgs(program, params);
     }
-
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,
     // retaining the value installed by the most recent SetProgramRunArgs. A supplied positional
     // vararg section refreshes that section wholesale.
@@ -1707,7 +1781,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     // ---- DFB size overrides (stateful: an unspecified DFB retains its current size) ----
     // Apply BEFORE re-attaching borrowed buffers below, so the borrowed per-bank fit check sees the
     // new size. Mirrors the SetProgramRunArgs path.
-    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+    std::vector<tt_metal::detail::ProgramImpl::DfbSizeOverride> size_overrides;
     size_overrides.reserve(params.dfb_run_overrides.size());
     for (const auto& dfb_params : params.dfb_run_overrides) {
         if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
@@ -1766,7 +1840,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         // Re-attach borrowed-memory DFBs for the supplied tensors (skip omitted ones).
         AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
         for (const auto& [param_name, tensor] : tensor_by_param) {
-            program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+            program_impl.set_bound_tensor_footprint(param_name, tt_metal::detail::make_bound_tensor_footprint(*tensor));
         }
     }
 
@@ -1776,6 +1850,8 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 
     // Install arena addresses after DFB, tensor, and pipe checks succeed.
     BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
+    // Only once the update succeeded: a failed update must not drop per-device values it never replaced.
+    RecordPerDeviceRunArgDrops(program_impl, params);
 }
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
@@ -1851,4 +1927,4 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
     return base;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

@@ -124,9 +124,11 @@ struct RingWritePlan {
 
 uint32_t tensor_rank_from_transport_rank(const ttnn::prim::RingJointSDPAParams& args, uint32_t transport_rank) {
     const auto& ag = args.all_gather_operation_attributes;
-    return ag.full_mesh ? ttnn::ccl::snake_ring::row_major_index(
-                              transport_rank, ag.mesh_rows, ag.mesh_cols, ag.snake_orientation)
-                        : transport_rank;
+    if (!ag.full_mesh) {
+        return transport_rank;
+    }
+    return ttnn::ccl::snake_ring::tensor_index(
+        transport_rank, ag.mesh_rows, ag.mesh_cols, ag.snake_orientation, ag.column_major_ranks);
 }
 
 ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan_from_attributes(
@@ -139,6 +141,7 @@ ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan_from_attributes(
         .mesh_cols = ag.mesh_cols,
         .ring_size = ag.ring_size,
         .route_plan_hash = ag.route_plan_hash,
+        .column_major_ranks = ag.column_major_ranks,
     };
 }
 
@@ -2124,7 +2127,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         .full_mesh = ag_attributes.full_mesh,
         .orientation = ag_attributes.snake_orientation,
         .mesh_rows = ag_attributes.mesh_rows,
-        .mesh_cols = ag_attributes.mesh_cols};
+        .mesh_cols = ag_attributes.mesh_cols,
+        .column_major_ranks = ag_attributes.column_major_ranks};
 
     const uint32_t q_heads_per_kv = NH / NHK;
 
@@ -2176,7 +2180,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // to skip joint K chunks that lie entirely beyond the real joint tail (padding).
         logical_lt,
         // Slots 36-39: transport-to-tensor rank mapping.
-        static_cast<uint32_t>(rank_mapping.full_mesh),
+        rank_mapping_compile_time_arg(rank_mapping),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
@@ -2358,7 +2362,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // joint_l_partial_col it drives the joint mask-generation gate.
         logical_lt,
         // Slots 32-35: transport-to-tensor rank mapping.
-        static_cast<uint32_t>(rank_mapping.full_mesh),
+        rank_mapping_compile_time_arg(rank_mapping),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
@@ -2434,7 +2438,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
         logical_lt,
         // Slots 42-45: transport-to-tensor rank mapping.
-        static_cast<uint32_t>(rank_mapping.full_mesh),
+        rank_mapping_compile_time_arg(rank_mapping),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
@@ -2811,7 +2815,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     bool gqa_mcast_enabled = false;
     std::string gqa_mcast_fallback_reason;
     std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
-    if (gqa_grouped_kv && build_kv_chains) {
+    // The grouped chains follow the per-length Q split, so dynamic_local_n builds none: every core reads its K/V
+    // from DRAM, as for B > 1.
+    if (gqa_grouped_kv && build_kv_chains && !dynamic_local_n) {
         std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
 
         for (uint32_t ci = 0; ci < num_cores; ++ci) {
@@ -3394,9 +3400,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = math_approx_mode,
     };
-    if (ksplit_count > 1) {
-        // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
-        // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
+    if (ksplit_count > 1 || (dynamic_local_n && !use_streaming_compute)) {
+        // Code size, not correctness: at O3 the K-split merge epilogue and the fp32 path under dynamic_local_n push
+        // the compute binaries past the kernel config buffer ("Program size too large"). O2 fits.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
 

@@ -27,7 +27,6 @@ from typing import NamedTuple, Optional, Protocol
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, device_scalar
 from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 
@@ -48,9 +47,9 @@ class KdaChunkScalars(NamedTuple):
     """The device scalars every KDA layer of one chunk reads; each is a one-element UINT32 tensor.
 
     `slot` selects the carry in the slabs, and `start` and `end` bound the chunk (`end` is `None` for full
-    capacity). `start` also marks a request head: at 0 the layers load zeros instead of the slot (the load's
-    `zero_fill_at_zero`), because a carry summarizes the whole prefix behind it and a new request must not
-    continue the previous one's. When `start != 0` the caller is responsible for the slot holding the
+    capacity). `start` also marks a request head: at 0 the layers' ops start from zeros instead of the slot's
+    carry, because a carry summarizes the whole prefix behind it and a new request must not continue the
+    previous one's. When `start != 0` the caller is responsible for the slot holding the
     correct state for the prefix before `start`.
     """
 
@@ -189,18 +188,17 @@ class TtK3KdaAttention(LightweightModule):
     `ttKDA` is purely functional and retains nothing, so the carry has to live somewhere with one
     address for the life of the run, or a captured trace could not advance the recurrence with no
     host in the loop. That somewhere is the migration slab itself, the way MLA's KV cache is its own
-    migration format: per chunk the layer loads its slot's carry into the model's one scratch carry,
-    runs, and stores the replacement back, every copy a device program that reads the slot on
-    device and belongs inside the captured region. `ttKDA.forward_slot` is that whole per-chunk
-    layer (load, TP all-gather, KDA, reduce-scatter, store), so it is what the layer's perf test
-    measures; `ttKDA.forward` stays the functional core.
+    migration format: per chunk the convolution, the SP relay and the final carry read the slot's
+    carry from the slabs and write the replacement back in place, each op reading the slot on
+    device. `ttKDA.forward` on `KdaStates.entry` is that whole per-chunk layer (TP all-gather, KDA,
+    reduce-scatter), so it is what the layer's perf test measures.
     """
 
     writes_kv = False
 
-    def __init__(self, kda, layer_idx: int, tp_axis: int, num_links: int, tp_topology, scratch: KdaState):
-        # The scratch carry and the slabs hold the contract's convolution pages; a shape check alone cannot tell a
-        # token-paged tail from them when a device holds one 64-channel head.
+    def __init__(self, kda, layer_idx: int, tp_axis: int, num_links: int, tp_topology):
+        # The slabs hold the contract's convolution pages; a shape check alone cannot tell a token-paged tail from
+        # them when a device holds one 64-channel head.
         if kda.convolution_page_channels != KDA_CONVOLUTION_PAGE_CHANNELS:
             raise ValueError(
                 f"KDA layer {layer_idx} pages its convolution tail by {kda.convolution_page_channels} channels, but "
@@ -208,8 +206,6 @@ class TtK3KdaAttention(LightweightModule):
             )
         self.kda = kda
         self.layer_idx = layer_idx
-        # BORROWED from the model and shared by its KDA layers: the only state `ttKDA.forward` reads.
-        self._scratch = scratch
         self._tp_axis = tp_axis
         self._num_links = num_links
         self._tp_topology = tp_topology
@@ -232,16 +228,10 @@ class TtK3KdaAttention(LightweightModule):
         # `[1, 1, T, d/tp]` -> `[1, T, d/tp]`: ttKDA takes three dimensions, and the leading one is batch.
         # The squeeze is a view over `normed`, which the block frees after this returns.
         hidden = ttnn.squeeze(normed, dim=0)
-        # The whole per-chunk layer: import this slot's carry (zeros at a request head) into the scratch, TP
-        # all-gather, KDA, output projection + reduce-scatter, export the replacement carry.
-        output = self.kda.forward_slot(
-            hidden,
-            self._scratch,
-            ctx.kda_states,
-            scalars.slot,
-            self.layer_idx,
-            actual_start=scalars.start,
-            actual_end=scalars.end,
+        # The whole per-chunk layer: TP all-gather, KDA on this slot's carry in the slabs (zeros at a request head),
+        # output projection + reduce-scatter.
+        output, _ = self.kda.forward(
+            hidden, ctx.kda_states.entry(scalars.slot, self.layer_idx), scalars.start, scalars.end
         )
 
         # `_project_output` reduce-scatters on the TP axis and returns `[B, T, d/tp]`, so the only
@@ -258,7 +248,6 @@ def build_attention(
     schedule,
     *,
     seq_len: int,
-    kda_scratch: Optional[KdaState] = None,
     sp_axis: int = 0,
     tp_axis: int = 1,
     num_links: int = 1,
@@ -312,8 +301,6 @@ def build_attention(
             )
         )
 
-    if kda_scratch is None:
-        raise ValueError(f"layer {layer_idx} is KDA and needs the model's scratch carry (kda_scratch)")
     return TtK3KdaAttention(
         ttKDA(
             mesh_device,
@@ -333,5 +320,4 @@ def build_attention(
         tp_axis=tp_axis,
         num_links=num_links,
         tp_topology=tp_topology,
-        scratch=kda_scratch,
     )

@@ -71,9 +71,8 @@ struct NewInfraProgramFactory {
     using tensor_args_t = Tensor;
     using tensor_return_value_t = Tensor;
 
-    static cached_program_t create(
-        const tensor_args_t& /*tensor_args*/, tensor_return_value_t& /*tensor_return_value*/) {
-        return cached_program_t(tt::tt_metal::Program(), SharedVariables{});
+    static cached_program_t create(const tensor_args_t& tensor_args, tensor_return_value_t& /*tensor_return_value*/) {
+        return cached_program_t(tt::tt_metal::CreateProgram(*tensor_args.device()), SharedVariables{});
     }
 
     static void override_runtime_arguments(
@@ -109,7 +108,7 @@ static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloa
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
 
 // ---------------------------------------------------------------------------
-// ProgramSpecFactoryConcept (Metal 2.0 op-porting stepping stone)
+// ProgramSpecFactoryConcept (Metal 2.0)
 //
 // Real ops already use create_program_artifacts (typecast, prod_all, …). The
 // checks below still (a) pin the concept's classification (it recognizes a
@@ -138,7 +137,7 @@ struct CustomProgramSpecFactory {
         const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
         return ttnn::device_operation::ProgramArtifacts{};
     }
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const OperationAttributes& /*attrs*/,
         const Tensor& /*tensor_args*/,
         Tensor& /*tensor_return_value*/,
@@ -168,7 +167,7 @@ struct MeshWorkloadSpecFactoryWithOverride {
         const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/) {
         return ttnn::device_operation::MeshWorkloadArtifacts{};
     }
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const OperationAttributes& /*attrs*/,
         const Tensor& /*tensor_args*/,
         Tensor& /*tensor_return_value*/,
@@ -472,7 +471,7 @@ TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterMapsProgramsPerCoordinate)
 struct PerCoordProdAllFactoryWithOverride : PerCoordProdAllFactory {
     static std::atomic<int> override_calls;
 
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const Op::operation_attributes_t& attrs,
         const Op::tensor_args_t& tensor_args,
         Op::tensor_return_value_t& tensor_return_value,

@@ -10,7 +10,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/placement/placement.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -144,4 +144,4 @@ void ValidateWorkUnitSpec(const WorkUnitSpec& work_unit, const ValidationContext
     TT_FATAL(num_compute_kernels <= 1, "WorkUnitSpec '{}' has more than one compute kernel", work_unit.name);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

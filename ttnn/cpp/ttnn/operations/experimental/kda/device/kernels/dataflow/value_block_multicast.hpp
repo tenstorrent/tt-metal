@@ -59,15 +59,14 @@ FORCE_INLINE void multicast_shared(
     noc.async_read_barrier();
     ready.wait(receivers);
     ready.set(0);
-    MulticastEndpoint destination;
     for (auto& input : inputs) {
         noc.async_write_multicast(
             CoreLocalMem<uint32_t>(input.slot),
-            destination,
+            *input.buffer,
             input.tiles * input.buffer->get_entry_size(),
             receivers,
             {},
-            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = input.slot},
+            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1},
             /*linked=*/true);
     }
     // The flag multicast issues from a different command buffer than the data, so only this flush orders the data

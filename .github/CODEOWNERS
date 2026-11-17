@@ -679,6 +679,7 @@ models/demos/wormhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn 
 models/experimental/ @tenstorrent/metalium-models-maintainers
 models/experimental/bevformer/ @mbezuljTT @njovanovicTT @ctr-ikasicTT @ctr-mdukicTT @ctr-mmicicTT @tenstorrent/metalium-models-maintainers
 models/experimental/exaone45_vl @changh95 @tenstorrent/metalium-models-maintainers
+models/experimental/kimi_k3_moonvit_v2/ @grechsteinerTT @sjameelTT @tenstorrent/metalium-models-maintainers
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers
 /models/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT @tenstorrent/metalium-models-maintainers
 models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers

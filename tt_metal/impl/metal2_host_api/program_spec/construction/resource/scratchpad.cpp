@@ -16,7 +16,7 @@
 
 #include "impl/metal2_host_api/llk_metadata.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -66,4 +66,4 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     return out;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

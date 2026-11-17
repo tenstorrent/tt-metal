@@ -18,10 +18,10 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "debug_tools_fixture.hpp"
@@ -32,9 +32,6 @@ namespace {
 
 using namespace tt;
 using namespace tt::tt_metal;
-using experimental::NodeCoord;
-using experimental::NodeRange;
-using experimental::NodeRangeSet;
 
 const std::string kMulticastKernel =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_multicast_writer.cpp";
@@ -99,18 +96,18 @@ void RunMulticastNodeSetTest(
     const uint32_t last_x = std::max(start_x, end_x);
     const bool skips_sender = !includes_sender && sender.y == 0 && sender.x >= first_x && sender.x <= last_x;
     const uint32_t num_targets = last_x - first_x + 1 - (skips_sender ? 1u : 0u);
-    const experimental::KernelSpecName kernel_name{"multicast_writer"};
+    const KernelSpecName kernel_name{"multicast_writer"};
     Program program = experimental::MakeProgramFromSpec(
         mesh_device,
-        experimental::ProgramSpec{
+        ProgramSpec{
             .name = "watcher_multicast_node_set",
-            .kernels = {experimental::KernelSpec{
+            .kernels = {KernelSpec{
                 .unique_id = kernel_name,
                 .source = kMulticastKernel,
                 .tensor_bindings =
                     {
-                        {.tensor_parameter_name = experimental::TensorParamName{"source"}, .accessor_name = "source"},
-                        {.tensor_parameter_name = experimental::TensorParamName{"target"}, .accessor_name = "target"},
+                        {.tensor_parameter_name = TensorParamName{"source"}, .accessor_name = "source"},
+                        {.tensor_parameter_name = TensorParamName{"target"}, .accessor_name = "target"},
                     },
                 .compile_time_args =
                     {
@@ -124,9 +121,9 @@ void RunMulticastNodeSetTest(
                         {"includes_sender", static_cast<uint32_t>(includes_sender)},
                     },
                 .hw_config =
-                    experimental::DataMovementHardwareConfig{
+                    DataMovementHardwareConfig{
                         .config_1xx =
-                            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            DataMovementHardwareConfig::DataMovement1XXConfig{
                                 .processor =
                                     noc == NOC::NOC_0 ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1,
                                 .noc = noc,
@@ -135,10 +132,10 @@ void RunMulticastNodeSetTest(
             }},
             .tensor_parameters =
                 {
-                    {.unique_id = experimental::TensorParamName{"source"}, .spec = source_spec},
-                    {.unique_id = experimental::TensorParamName{"target"}, .spec = target_spec},
+                    {.unique_id = TensorParamName{"source"}, .spec = source_spec},
+                    {.unique_id = TensorParamName{"target"}, .spec = target_spec},
                 },
-            .work_units = {experimental::WorkUnitSpec{
+            .work_units = {WorkUnitSpec{
                 .name = "main",
                 .kernels = {kernel_name},
                 .target_nodes = sender,
@@ -146,11 +143,11 @@ void RunMulticastNodeSetTest(
         });
     experimental::SetProgramRunArgs(
         program,
-        experimental::ProgramRunArgs{
+        ProgramRunArgs{
             .tensor_args =
                 {
-                    {experimental::TensorParamName{"source"}, experimental::TensorArgument{source}},
-                    {experimental::TensorParamName{"target"}, experimental::TensorArgument{target}},
+                    {TensorParamName{"source"}, TensorArgument{source}},
+                    {TensorParamName{"target"}, TensorArgument{target}},
                 },
         });
     if (!expect_error) {

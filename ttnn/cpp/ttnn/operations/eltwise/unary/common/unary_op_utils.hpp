@@ -36,6 +36,9 @@ std::map<std::string, std::string> get_defines(
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
+// Target dtype (second parameter) of a TYPECAST/BITCAST op, whichever type backs its parameters.
+std::optional<tt::tt_metal::DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op);
+
 // The SFPU chain defines of a lone op that a generated kernel computes in one pass over BF16
 // DEST, or none when the op runs its own kernel.
 std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
@@ -50,6 +53,16 @@ std::map<std::string, std::string> get_block_defines(
     const std::string& block_id = "0",
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
+
+// The packer ReLU configuration that computes a lone op as its tile is packed, as a
+// ckernel::ReluConfig expression, or none when the op runs on the SFPU. `sharded`: the input and
+// the output are both sharded, so no tile crosses the NoC.
+std::optional<std::string> get_pack_relu_config(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    bool sharded);
 
 template <typename T>
 bool is_parametrized_type(T val) {
