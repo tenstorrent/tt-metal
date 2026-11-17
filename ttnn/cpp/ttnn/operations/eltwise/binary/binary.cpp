@@ -5,6 +5,7 @@
 
 #include "binary.hpp"
 #include <cmath>
+#include <cstdint>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -439,6 +440,11 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                        \
         const std::optional<CoreRangeSet>& sub_core_grids,                                                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                   \
+        TT_FATAL(                                                                                          \
+            static_cast<int64_t>(rhs_in) >= INT32_MIN && static_cast<int64_t>(rhs_in) <= UINT32_MAX,       \
+            "{}: scalar {} does not fit in 32 bits",                                                       \
+            #NAME,                                                                                         \
+            static_cast<int64_t>(rhs_in));                                                                 \
         const auto rhs = static_cast<int32_t>(static_cast<uint32_t>(rhs_in));                              \
         /* Fast path: unary SFPU handles scalar bitwise/shift directly with no activations. */             \
         if (!sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&           \

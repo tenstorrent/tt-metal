@@ -498,6 +498,16 @@ def test_bitwise_uint32_scalar_above_int32_max(device, ttnn_function, torch_func
     assert torch.equal(torch_function(x_torch, scalar), tt_out)
 
 
+@pytest.mark.parametrize("scalar", [2**32, 2**40, -(2**31) - 1, -(2**40)])
+@pytest.mark.parametrize("ttnn_function", [ttnn.bitwise_and, ttnn.bitwise_or, ttnn.bitwise_xor])
+def test_bitwise_uint32_scalar_out_of_range_rejected(device, ttnn_function, scalar, expect_error):
+    x_torch = torch.zeros((32, 32), dtype=torch.uint32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "does not fit in 32 bits"):
+        ttnn_function(x_tt, scalar)
+
+
 @pytest.mark.parametrize(
     "ttnn_op",
     [
