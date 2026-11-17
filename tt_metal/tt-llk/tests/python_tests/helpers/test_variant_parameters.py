@@ -242,6 +242,10 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
         constants.append(
             f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};"
         )
+    elif mathop in SFPU_TERNARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
+        )
 
     return constants
 

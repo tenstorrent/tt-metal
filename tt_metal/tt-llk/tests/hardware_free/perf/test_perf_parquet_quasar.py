@@ -78,6 +78,7 @@ def test_quasar_schema_is_not_wh_bh_schema():
     # WH/BH-only columns must not land in the Quasar published table.
     wh_only = {c.name for c in WH_BH_SCHEMA} - {c.name for c in QSR_SCHEMA}
     assert "clamp_negative" in wh_only
+    assert "ternary_scalar_bits" in wh_only
 
 
 def test_arrow_schema_matches_quasar_db_schema():
