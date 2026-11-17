@@ -204,6 +204,18 @@ std::vector<Tensor> softplus_bw(
     float beta,
     float threshold,
     const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config) && std::bit_cast<uint32_t>(beta) == 0x3f800000u &&
+        std::bit_cast<uint32_t>(threshold) == 0x41a00000u) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::SOFTPLUS_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
     Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_mem_config);
