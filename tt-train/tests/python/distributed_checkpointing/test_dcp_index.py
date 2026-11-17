@@ -347,9 +347,9 @@ def test_without_overwrite_a_checkpoint_committed_during_finalize_is_refused_not
     tmp_path, monkeypatch, expect_error
 ):
     final = str(tmp_path / "step_0000010")
-    staging, _ = begin_staging(final)
+    staging = begin_staging(final, nonce=9, shared=False)
     write_index(staging, _index())
-    other, _ = begin_staging(final)
+    other = begin_staging(final, nonce=10, shared=False)
     other_index = _index()
     other_index.checkpoint_id = "the other save"
     write_index(other, other_index)
