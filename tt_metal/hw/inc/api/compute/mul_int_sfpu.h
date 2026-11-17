@@ -88,4 +88,90 @@ ALWI void mul_int_tile_init() {
 #endif
 }
 
+// clang-format off
+/**
+ * Performs an elementwise sign-magnitude fixed-point multiply of two integer inputs:
+ * y = sign * ((|x0| * |x1|) >> 23). Output overwrites odst in DST.
+ *
+ * x1 is a Q0.23 fixed-point scale, so y is x0 rescaled by x1 / 2^23. This is the quantization
+ * requant primitive. It is not mul_int_tile followed by a shift: a full multiply keeps the low
+ * 32 bits of the product and discards exactly the bits this operation returns.
+ *
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine. Quasar only.
+ *
+ * Operands are sign-magnitude Int32, Quasar's native integer DST layout. INT32_MIN has no
+ * sign-magnitude encoding and is not supported. The result is exact when each retained cross
+ * product fits in 23 bits and at most one operand reaches 2^23; for requant that holds whenever
+ * the result itself fits in 23 bits. Neither the multiply nor the accumulation saturates.
+ *
+ * The ensure_* flags are preconditions the caller asserts, each dropping instructions: a
+ * guaranteed-non-negative operand skips its sign handling, and an operand guaranteed below 2^23
+ * skips one cross product. Their order matches the Blackhole kernel's template parameters.
+ *
+ * Return value: None
+ *
+ * | Argument              | Description                                                           | Type     | Valid Range                                           | Required |
+ * |-----------------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst0                 | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst1                 | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst                  | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+template <
+    bool ensure_pos_a = false,
+    bool ensure_pos_b = false,
+    bool ensure_a_23bit = false,
+    bool ensure_b_23bit = false,
+    DataFormat data_format = DataFormat::Int32>
+ALWI void mul_int_tile_sm_and_shift23(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#if defined(ARCH_QUASAR)
+    static_assert(
+        data_format == DataFormat::Int32,
+        "Unsupported data format for mul_int_sm_and_shift23 on Quasar. Supported: Int32");
+    MATH((llk_math_eltwise_binary_sfpu_mul_int_sm_shift23<
+          APPROX,
+          data_format,
+          8 /*ITERATIONS*/,
+          true /*SIGN_MAGNITUDE_FORMAT*/,
+          ensure_pos_a,
+          ensure_pos_b,
+          ensure_a_23bit,
+          ensure_b_23bit>(idst0, idst1, odst)));
+#else
+    static_assert(data_format == DataFormat::Invalid, "mul_int_tile_sm_and_shift23 is implemented on Quasar only");
+#endif
+}
+
+/**
+ * Please refer to documentation for mul_int_tile_sm_and_shift23.
+ *
+ * The ensure_* flags must match the ones passed to mul_int_tile_sm_and_shift23: they decide whether
+ * the SFPLOADMACRO sequence that the fully-constrained shape runs on gets programmed. The argument
+ * order is the same, so the same template argument list works for both calls.
+ */
+template <
+    bool ensure_pos_a = false,
+    bool ensure_pos_b = false,
+    bool ensure_a_23bit = false,
+    bool ensure_b_23bit = false,
+    DataFormat data_format = DataFormat::Int32>
+ALWI void mul_int_tile_sm_and_shift23_init() {
+#if defined(ARCH_QUASAR)
+    static_assert(
+        data_format == DataFormat::Int32,
+        "Unsupported data format for mul_int_sm_and_shift23 on Quasar. Supported: Int32");
+    MATH((llk_math_eltwise_binary_sfpu_mul_int_sm_shift23_init<
+          APPROX,
+          data_format,
+          true /*SIGN_MAGNITUDE_FORMAT*/,
+          ensure_pos_a,
+          ensure_pos_b,
+          ensure_a_23bit,
+          ensure_b_23bit>()));
+#else
+    static_assert(data_format == DataFormat::Invalid, "mul_int_tile_sm_and_shift23 is implemented on Quasar only");
+#endif
+}
+
 }  // namespace ckernel

@@ -1268,3 +1268,196 @@ def test_eltwise_binary_sfpu_quant_quasar(
         is_perf=is_perf,
         perf_report=perf_report,
     )
+
+
+# ===========================================================================
+# Family 4 — mul_int32 sign-magnitude fixed-point multiply.
+# out = sign * ((|a| * |b|) >> 23). Operand b is a Q0.23 scale, so the result is a
+# rescaled by b / 2^23: the quantization requant primitive. It is not mul_int
+# followed by a shift, because a full 32-bit multiply keeps the low 32 bits of the
+# product and discards exactly the bits this operation returns.
+# ===========================================================================
+# The kernel sums 23-bit partial products and never forms the a_hi * b_hi term, so it
+# is exact only where each retained cross product fits in 23 bits and at most one
+# operand reaches 2^23. These two regimes stay inside that envelope and between them
+# cover every instruction in the kernel:
+#   "narrow": |a|, |b| < 2^23        - both high halves vanish, only the UPPER product runs
+#   "wide_a": |a| < 2^31, |b| < 2^15 - adds the a_hi * b_lo cross product
+# wide_a is the tight one: |a| >> 23 reaches 255 and |b| reaches 32767, whose product is
+# 8355585, just under the 2^23 the cross term must not exceed.
+#
+# Both regimes floor |a| * |b| at 2^23 so the result magnitude is never zero. A zero
+# magnitude with mixed operand signs would leave sign-magnitude negative zero, whose
+# cast to two's complement is a separate behaviour this test does not pin down.
+_SM_SHIFT23_SHIFT = 23
+
+# regime -> (|a| min, |a| max, |b| min, |b| max), each max exclusive
+#
+# "ensured" is "narrow" restricted to non-negative operands, which is the one shape where all
+# four ensure_* preconditions hold and so the only shape that runs on SFPLOADMACRO. It is a
+# separate op enumerator rather than a flag because the preconditions are compile-time template
+# arguments, and feeding it signed or wide operands would violate them rather than test them.
+_SM_SHIFT23_REGIMES = {
+    "narrow": (2**12, 2**23, 2**12, 2**23),
+    "wide_a": (2**23, 2**31, 2**12, 2**15),
+    "ensured": (2**12, 2**23, 2**12, 2**23),
+}
+
+SM_SHIFT23_SWEEP = dict(
+    regime=list(_SM_SHIFT23_REGIMES),
+    sign_magnitude=[False, True],
+)
+
+
+def _sm_shift23_operands(regime, n):
+    """Signed operands for one regime plus the exact golden, computed in int64 so the
+    product cannot overflow before the shift."""
+    a_min, a_max, b_min, b_max = _SM_SHIFT23_REGIMES[regime]
+    mag_a = torch.randint(a_min, a_max, (n,), dtype=torch.int64)
+    mag_b = torch.randint(b_min, b_max, (n,), dtype=torch.int64)
+    if regime == "ensured":
+        # ENSURE_POS_A / ENSURE_POS_B are asserted, so negative operands are out of contract.
+        sgn_a = torch.ones(n, dtype=torch.int64)
+        sgn_b = torch.ones(n, dtype=torch.int64)
+    else:
+        # Mixed signs on both operands so the abs, the XOR and the final set-sign all run.
+        sgn_a = torch.randint(0, 2, (n,), dtype=torch.int64) * 2 - 1
+        sgn_b = torch.randint(0, 2, (n,), dtype=torch.int64) * 2 - 1
+
+    golden = torch.where(sgn_a * sgn_b < 0, -1, 1) * (
+        (mag_a * mag_b) >> _SM_SHIFT23_SHIFT
+    )
+    return (
+        (sgn_a * mag_a).to(torch.int32),
+        (sgn_b * mag_b).to(torch.int32),
+        golden.to(torch.int32),
+    )
+
+
+def _run_mul_int_sm_shift23(
+    regime,
+    tile_indices,
+    sign_magnitude=False,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    src0_idx, src1_idx, dst_idx = tile_indices
+    dest_acc = DestAccumulation.Yes  # Int32 operands and result are 32-bit
+    num_faces = MAX_NUM_FACES
+    binary_op = "MUL_SM_SHIFT23_ENSURED" if regime == "ensured" else "MUL_SM_SHIFT23"
+
+    a_vals, b_vals, golden_active = _sm_shift23_operands(regime, MAX_TILE_ELEMENTS)
+
+    # SIGN_MAGNITUDE_FORMAT skips the two's-complement input cast, so Dest must already
+    # hold SMAG32; the default path expects raw two's complement. The golden is staged
+    # the same way, so both datapaths compare against the same arithmetic.
+    if sign_magnitude:
+        a_staged = int32_to_smag32(a_vals)
+        b_staged = int32_to_smag32(b_vals)
+        golden_active = int32_to_smag32(golden_active)
+    else:
+        a_staged, b_staged = a_vals, b_vals
+
+    buffer_A, tile_cnt = _stage_binary_operands(
+        a_staged, b_staged, tile_indices, torch.int32
+    )
+
+    golden_tensor = torch.zeros(MAX_TILE_ELEMENTS, dtype=torch.int32)
+    golden_tensor[:_PROCESSED_ELEMS] = golden_active[:_PROCESSED_ELEMS]
+
+    formats = InputOutputFormat(
+        input_format=DataFormat.Int32, output_format=DataFormat.Int32
+    )
+
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": formats,
+        "templates": [
+            SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(),
+            DATA_COPY_TYPE(DataCopyType.A2D),
+            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+            DEST_SYNC(),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+            SFPU_DST_ROUNDING_MODE(),
+            TYPECAST_FORMATS(),
+            BROADCAST_TYPE(BroadcastType.None_),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt),
+            NUM_FACES(num_faces),
+            TEST_FACE_DIMS(),
+            DEST_INDEX(0),
+            SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+            LOOP_FACTOR(loop_factor),
+            ZERO_POINT(0),
+        ],
+        "variant_stimuli": StimuliConfig(
+            buffer_A,
+            DataFormat.Int32,
+            buffer_A[:MAX_TILE_ELEMENTS],  # dummy buffer_B (unused by kernel)
+            DataFormat.Int32,
+            DataFormat.Int32,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=1,
+            num_faces=num_faces,
+            twos_complement=True,  # raw 32-bit identity staging
+        ),
+        "unpack_to_dest": True,
+        "dest_acc": dest_acc,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
+    res_from_L1 = configuration.run().result
+    assert len(res_from_L1) == len(golden_tensor)
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.int32)
+    assert passed_test(
+        golden_tensor[:_PROCESSED_ELEMS],
+        res_tensor[:_PROCESSED_ELEMS],
+        DataFormat.Int32,
+    ), (
+        f"{binary_op} regime={regime} (sign_magnitude={sign_magnitude}) mismatch "
+        f"(tile_indices={tile_indices})"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    **SM_SHIFT23_SWEEP,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
+def test_eltwise_binary_sfpu_mul_int_sm_shift23_quasar(
+    regime,
+    sign_magnitude,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Sign-magnitude fixed-point multiply sign * ((|a| * |b|) >> 23), Int32. The two
+    regimes bracket the kernel's exactness envelope: narrow operands exercise only the
+    high-half product, wide operand A adds the cross product. Run on both the
+    two's-complement and SIGN_MAGNITUDE_FORMAT (SMAG32) datapaths."""
+    _run_mul_int_sm_shift23(
+        regime,
+        tile_indices,
+        sign_magnitude,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
