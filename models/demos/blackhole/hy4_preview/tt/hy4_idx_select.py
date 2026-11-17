@@ -157,6 +157,7 @@ def select_v2(
     valid_local=None,
     blocked=False,
     fin=None,
+    blocked_out=None,
 ):
     """rows bf16 RM [1,1,S,n] local score rows -> ids u32 [S,1,1,K] global. Local stage = blockwise top-k (B blocks, kb each) + local merge to kloc; then AG + merge to K."""
     # blocked=True (HY4_IDX_BLK=1): ``rows`` is already [1,1,S*B,m] (written so by idx_score(blocks=B)) and cs_cand2 writes its outputs as [S,1,1,B*kb]: the 5 non-view reshapes of the stock chain disappear
@@ -176,7 +177,9 @@ def select_v2(
         int(
             os.environ.get("HY4_B36_CSPL_C", split)
         ),  # B36: tunable work split of the candidate kernel (default = split)
-        blocked_out=blocked,
+        blocked_out=blocked
+        if blocked_out is None
+        else blocked_out,  # B37: score layout and cs_cand2 output layout switchable separately
     )
     if os.environ.get("HY4_B36_SEL2", "0") == "1" and fin is not None and B <= 16:
         from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
