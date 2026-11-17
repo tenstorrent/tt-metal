@@ -350,6 +350,40 @@ PERF_TEST_SCHEMAS = {
             "perf_eltwise_unary_datacopy": "perf_eltwise_unary_datacopy"
         },
     },
+    "perf_eltwise_unary_datacopy_custom": {
+        "version": 1,
+        "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "full_ct_dim",
+            "full_rt_dim",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
+            "loop_factor",
+            "marker",
+            "num_blocks",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_eltwise_unary_datacopy_custom": "perf_eltwise_unary_datacopy_custom"
+        },
+    },
     "perf_eltwise_unary_typecast": {
         "version": 5,
         "columns": [
