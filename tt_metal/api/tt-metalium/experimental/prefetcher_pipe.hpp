@@ -315,7 +315,8 @@ std::vector<TensorPrefetcherReceiverShard> GetTensorPrefetcherReceiverShards(
 // with the pipe's geometry in the ProgramSpec, bind it from data-movement kernels via
 // KernelAdvancedOptions::prefetcher_pipe_bindings (optionally aliasing its ring with a relay DFB through
 // DFBAdvancedOptions::prefetcher_pipe_relays), then supply the PrefetcherPipe object in
-// AdvancedProgramRunArgs::prefetcher_pipe_args. See metal2_host_api/prefetcher_pipe_parameter.hpp.
+// AdvancedProgramRunArgs::prefetcher_pipe_args. See
+// tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp.
 
 // Return one (sender core, its receivers) entry for each pipe, preserving the caller's list order.
 std::vector<std::pair<CoreCoord, CoreRangeSet>> GetPrefetcherPipeSenderReceiverMapping(

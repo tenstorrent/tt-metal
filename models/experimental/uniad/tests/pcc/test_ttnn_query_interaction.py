@@ -9,7 +9,7 @@ from models.experimental.uniad.reference.query_interaction_module import QueryIn
 from models.experimental.uniad.tt.ttnn_query_interaction import TtQueryInteractionModule
 from models.experimental.uniad.reference.utils import Instances
 from models.experimental.uniad.tt.ttnn_utils import Instances as TtInstances
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.tt.model_preprocessing_encoder import (
     create_uniad_model_parameters_encoder,
 )

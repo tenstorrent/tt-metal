@@ -121,7 +121,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         DataFormat math_format = static_cast<DataFormat>(formats.math);
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, ENABLE_DIRECT_INDEXING>(
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE, ENABLE_DIRECT_INDEXING>(
             static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape, ACC_TO_DEST);
 
         PROFILER_SYNC();

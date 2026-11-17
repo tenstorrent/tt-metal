@@ -58,15 +58,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     }
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
+    const KernelSpecName DM_KERNEL{"dm_kernel"};
 
-    experimental::KernelSpec dm_kernel_spec{
+    KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source =
 
@@ -77,29 +77,29 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
                 .runtime_arg_names = {"address"},
                 .common_runtime_arg_names = {"value"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "single_dm_l1_write",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
               << std::endl;
 
@@ -192,7 +192,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> z{0xffffffffu};
-            slow_dispatch::WriteToL1(this->device(), experimental::NodeCoord{x, y}, address, z);
+            slow_dispatch::WriteToL1(this->device(), NodeCoord{x, y}, address, z);
         }
     }
 
@@ -200,33 +200,32 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
 
-    const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
-    experimental::KernelSpec dm_kernel_spec{
+    const KernelSpecName DM_KERNEL{"dm_kernel"};
+    KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 2,
         .runtime_arg_schema = {.runtime_arg_names = {"address", "value"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
     // Fan the SAME kernel to ALL 32 nodes.
-    const experimental::NodeRange all_nodes(
-        experimental::NodeCoord{0, 0}, experimental::NodeCoord{grid.x - 1, grid.y - 1});
-    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = all_nodes};
-    experimental::ProgramSpec spec{.name = "full_grid_l1a", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    const NodeRange all_nodes(NodeCoord{0, 0}, NodeCoord{grid.x - 1, grid.y - 1});
+    WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = all_nodes};
+    ProgramSpec spec{.name = "full_grid_l1a", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Give each node its own value through its per-node runtime args.
-    experimental::ProgramRunArgs params;
-    experimental::ProgramRunArgs::KernelRunArgs kra{.kernel = DM_KERNEL};
+    ProgramRunArgs params;
+    ProgramRunArgs::KernelRunArgs kra{.kernel = DM_KERNEL};
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
-            experimental::AddRuntimeArgsForNode(
-                kra.runtime_arg_values, experimental::NodeCoord{x, y}, {{"address", address}, {"value", sig_of(x, y)}});
+            AddRuntimeArgsForNode(
+                kra.runtime_arg_values, NodeCoord{x, y}, {{"address", address}, {"value", sig_of(x, y)}});
         }
     }
     params.kernel_run_args = {kra};
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -239,7 +238,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> r(1, 0xdeadbeefu);
             slow_dispatch::ReadFromL1(
-                this->device(), experimental::NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
+                this->device(), NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
             const uint32_t sig = sig_of(x, static_cast<uint32_t>(y));
             if (r[0] == sig) {
                 row += ". ";
@@ -282,7 +281,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> z(16, 0xC0FFEEu);
-            slow_dispatch::WriteToL1(this->device(), experimental::NodeCoord{x, y}, l1_address, z);
+            slow_dispatch::WriteToL1(this->device(), NodeCoord{x, y}, l1_address, z);
         }
     }
 
@@ -290,32 +289,29 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
 
-    const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
-    experimental::KernelSpec compute_kernel_spec{
+    const KernelSpecName COMPUTE_KERNEL{"risc_math"};
+    KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 4,
         .runtime_arg_schema = {.runtime_arg_names = {"l1_address"}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    const experimental::NodeRange all_nodes(
-        experimental::NodeCoord{0, 0}, experimental::NodeCoord{grid.x - 1, grid.y - 1});
-    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {COMPUTE_KERNEL}, .target_nodes = all_nodes};
-    experimental::ProgramSpec spec{
-        .name = "full_grid_compute", .kernels = {compute_kernel_spec}, .work_units = {main_wu}};
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    const NodeRange all_nodes(NodeCoord{0, 0}, NodeCoord{grid.x - 1, grid.y - 1});
+    WorkUnitSpec main_wu{.name = "main", .kernels = {COMPUTE_KERNEL}, .target_nodes = all_nodes};
+    ProgramSpec spec{.name = "full_grid_compute", .kernels = {compute_kernel_spec}, .work_units = {main_wu}};
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    experimental::ProgramRunArgs::KernelRunArgs kra{.kernel = COMPUTE_KERNEL};
+    ProgramRunArgs params;
+    ProgramRunArgs::KernelRunArgs kra{.kernel = COMPUTE_KERNEL};
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
-            experimental::AddRuntimeArgsForNode(
-                kra.runtime_arg_values, experimental::NodeCoord{x, y}, {{"l1_address", l1_address}});
+            AddRuntimeArgsForNode(kra.runtime_arg_values, NodeCoord{x, y}, {{"l1_address", l1_address}});
         }
     }
     params.kernel_run_args = {kra};
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -327,11 +323,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> r(16, 0xdeadbeefu);
             slow_dispatch::ReadFromL1(
-                this->device(),
-                experimental::NodeCoord{x, static_cast<uint32_t>(y)},
-                l1_address,
-                16 * sizeof(uint32_t),
-                r);
+                this->device(), NodeCoord{x, static_cast<uint32_t>(y)}, l1_address, 16 * sizeof(uint32_t), r);
             if (r == expected) {
                 row += ". ";
                 ++ok;
@@ -372,38 +364,38 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> z{sentinel};
-            slow_dispatch::WriteToL1(this->device(), experimental::NodeCoord{x, y}, address, z);
+            slow_dispatch::WriteToL1(this->device(), NodeCoord{x, y}, address, z);
         }
     }
 
     // Source at logical {0,0}; multicast rectangle = physical coords spanning the whole 8x4 grid.
-    const experimental::NodeCoord src_node{0, 0};
-    const CoreCoord p_lo = mesh_device->worker_core_from_logical_core(experimental::NodeCoord{0, 0});
-    const CoreCoord p_hi = mesh_device->worker_core_from_logical_core(experimental::NodeCoord{grid.x - 1, grid.y - 1});
+    const NodeCoord src_node{0, 0};
+    const CoreCoord p_lo = mesh_device->worker_core_from_logical_core(NodeCoord{0, 0});
+    const CoreCoord p_hi = mesh_device->worker_core_from_logical_core(NodeCoord{grid.x - 1, grid.y - 1});
     const uint32_t num_dests = grid.x * grid.y - 1;  // rectangle minus the (auto-excluded) source
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
 
-    const experimental::KernelSpecName MCAST{"mcast_writer"};
-    experimental::KernelSpec mcast_spec{
+    const KernelSpecName MCAST{"mcast_writer"};
+    KernelSpec mcast_spec{
         .unique_id = MCAST,
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/grid_multicast_writer.cpp",
         .num_threads = 1,
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"value", "result_addr", "mcast_x_start", "mcast_y_start", "mcast_x_end", "mcast_y_end", "num_dests"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
-    experimental::WorkUnitSpec wu{.name = "main", .kernels = {MCAST}, .target_nodes = src_node};
-    experimental::ProgramSpec spec{.name = "grid_mcast_fanout", .kernels = {mcast_spec}, .work_units = {wu}};
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    WorkUnitSpec wu{.name = "main", .kernels = {MCAST}, .target_nodes = src_node};
+    ProgramSpec spec{.name = "grid_mcast_fanout", .kernels = {mcast_spec}, .work_units = {wu}};
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = MCAST,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             src_node,
             {{"value", value},
              {"result_addr", address},
@@ -412,7 +404,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
              {"mcast_x_end", static_cast<uint32_t>(p_hi.x)},
              {"mcast_y_end", static_cast<uint32_t>(p_hi.y)},
              {"num_dests", num_dests}})}};
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -425,7 +417,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> r(1, 0u);
             slow_dispatch::ReadFromL1(
-                this->device(), experimental::NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
+                this->device(), NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
             if (r[0] == value) {
                 row += ". ";
                 ++ok;
