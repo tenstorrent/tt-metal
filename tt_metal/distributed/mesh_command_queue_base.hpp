@@ -6,6 +6,7 @@
 
 #include "mesh_command_queue.hpp"
 
+#include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 
 #include "tt_metal/impl/dispatch/host_transfer_stats.hpp"
@@ -152,6 +153,14 @@ private:
         const tt::tt_metal::DistributedHostBuffer& host_buffer,
         bool blocking,
         const tt::tt_metal::CoreRangeSet& logical_core_filter);
+
+    // Passes a MemoryPin for caller-owned host memory to enqueue_read_shards_nolock.
+    friend void tt::tt_metal::enqueue_read_shard_regions(
+        tt::tt_metal::distributed::MeshCommandQueue& queue,
+        const tt::tt_metal::MeshTensor& device_tensor,
+        const std::vector<tt::tt_metal::ShardRegionTransfer>& transfers,
+        bool blocking,
+        tt::tt_metal::MemoryPin host_pin);
 
 public:
     MeshCommandQueueBase(

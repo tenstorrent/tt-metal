@@ -342,13 +342,14 @@ def test_plugin_pool_admits_4x1m(monkeypatch):
             max_num_seqs=lanes * per_lane, max_num_batched_tokens=2048, disable_hybrid_kv_cache_manager=False
         ),
         # Lane mode: the plugin folds --data-parallel-size 4 into four in-process lanes of one engine.
-        parallel_config=SimpleNamespace(data_parallel_size=1, decode_context_parallel_size=1),
+        parallel_config=SimpleNamespace(data_parallel_size=1, tensor_parallel_size=1, decode_context_parallel_size=1),
         cache_config=_LayoutCacheConfig(
             block_size=SUB, num_gpu_blocks_override=None, kv_cache_layout=None, prefix_cache_retention_interval=None
         ),
         attention_config=SimpleNamespace(hisparse_config=None),
         additional_config={tt_config._RESOLVED_LANE_COUNT_KEY: lanes},
         speculative_config=None,
+        num_prefill_lookahead_tokens=0,  # VllmConfig's property (vLLM 0.31): no drafter, no lookahead
         kv_transfer_config=None,
         max_in_flight_tokens=2 * 2048,
     )

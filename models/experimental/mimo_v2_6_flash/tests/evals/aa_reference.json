@@ -1,0 +1,33 @@
+{
+  "_source": "Artificial Analysis, MiMo-V2.6-Flash (reasoning variant, benchmarked on Xiaomi's first-party API): https://artificialanalysis.ai/models/mimo-v2-6-flash, model record read 2026-11-07 (intelligenceIndex 26.73). Methodology: https://artificialanalysis.ai/methodology/intelligence-benchmarking. Xiaomi's API serves MiMo-V2.6-Flash (HF: MiMo-V2.6-Flash-RL); we serve MiMo-V2.6-Flash-MOPD (RL plus a short MOPD stage), so weights may differ.",
+  "mmmu_pro_aa": {
+    "score": 0.730635838150289,
+    "n": 1730,
+    "metric": "pass@1, 1 repeat (1264 of 1730)",
+    "url": "https://artificialanalysis.ai/models/mimo-v2-6-flash"
+  },
+  "acceptance_bars": {
+    "_note": "No published MiMo-V2.6-Flash score exists for these (Artificial Analysis has none; the model card has none). Bars come from comparable models' published numbers under other protocols (frames, prompts, dataset versions differ), so they are WEAKER EVIDENCE than a same-protocol reference: a floor that catches a broken encoder path, not proof of parity.",
+    "videomme_short": {
+      "metric": "videomme_perception_score,none",
+      "unit": "percent",
+      "direction": "min",
+      "bar": 75.0,
+      "basis": "Video-MME leaderboard, short videos w/o subtitles: Gemini 1.5 Pro 81.7, InternVL2.5-72B 82.8 (64 frames), Qwen2-VL-72B 80.1, GPT-4o 80.0 (video-mme.github.io). Whole-set w/o subtitles: Qwen3-Omni-30B-A3B-Instruct 70.5, Qwen2.5-Omni-7B 64.3. We sample 32 frames (fewer than most of those), so the bar sits below the 72B-class short scores."
+    },
+    "mmau_mini": {
+      "metric": "accuracy,none",
+      "unit": "percent",
+      "direction": "min",
+      "bar": 65.6,
+      "basis": "Qwen2.5-Omni-7B MMAU avg 65.60 (huggingface.co/Qwen/Qwen2.5-Omni-7B, split not stated); Qwen3-Omni-30B-A3B-Instruct 77.5 on MMAU-v05.15.25 (huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct). lmms-lab-audio/mmau test-mini may not be the v05.15.25 answer set."
+    },
+    "librispeech_clean": {
+      "metric": "wer,none",
+      "unit": "WER percent",
+      "direction": "max",
+      "bar": 2.5,
+      "basis": "LibriSpeech test-clean WER: Qwen3-Omni-30B-A3B-Instruct 1.22, Qwen2.5-Omni-7B 1.8, Whisper-large-v3 1.8 (the Qwen model cards). lmms-eval's prompt and normalizer differ from those cards'."
+    }
+  }
+}
