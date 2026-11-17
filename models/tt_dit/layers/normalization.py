@@ -270,7 +270,7 @@ class DistributedRMSNorm(Module):
             self.mesh_axis,
             self.mesh_device,
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
-            topology=self.ccl_manager.topology,
+            topology=self.ccl_manager.axis_topology(self.mesh_axis),
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
                 # Everything that changes the stats-buffer geometry (width, row capacity, heads per
                 # device, RoPE and weight presence/width), so modules never share a mismatched buffer.
@@ -437,7 +437,7 @@ class DistributedLayerNorm(Module):
             self.mesh_axis,
             self.mesh_device,
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
-            topology=self.ccl_manager.topology,
+            topology=self.ccl_manager.axis_topology(self.mesh_axis),
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
                 ("ln", tuple(x.shape)),
                 lambda: ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
@@ -900,7 +900,9 @@ class DistributedGroupNorm(Module):
             cluster_axis=self.cluster_axis,
             mesh_device=self.mesh_device,
             multi_device_global_semaphore=semaphores,
-            topology=self.ccl_manager.topology if self.ccl_manager is not None else ttnn.Topology.Linear,
+            topology=self.ccl_manager.axis_topology(self.cluster_axis)
+            if self.ccl_manager is not None
+            else ttnn.Topology.Linear,
             input_mask=self.mask.data,
             weight=self.weight.data,
             bias=self.bias.data,
