@@ -12,7 +12,7 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import quasar_dest_sync_modes
 from helpers.test_variant_parameters import fp32_bits
-from helpers.utils import result_tensor
+from helpers.utils import calculate_pcc, passed_test, result_tensor
 
 
 @pytest.mark.parametrize(
@@ -103,3 +103,64 @@ def test_result_tensor_rejects_length_mismatch():
         AssertionError, match="result has 2 datums, golden has 3"
     ):
         result_tensor([1.0, 2.0], DataFormat.Float32, torch.zeros(3))
+
+
+_PCC_DTYPES = [torch.float32, torch.bfloat16, torch.float16]
+
+
+@pytest.mark.parametrize("dtype", _PCC_DTYPES, ids=str)
+@pytest.mark.parametrize("constant_side", ["golden", "input"])
+def test_calculate_pcc_one_constant_tensor_is_uncorrelated(dtype, constant_side):
+    """A constant tensor has zero standard deviation; it cannot track a varying one."""
+    varying = torch.linspace(-4.0, 4.0, 1024).to(dtype)
+    constant = torch.full((1024,), 3.0, dtype=dtype)
+    golden, input = (
+        (constant, varying) if constant_side == "golden" else (varying, constant)
+    )
+    assert calculate_pcc(golden, input) == 0.0
+
+
+def test_calculate_pcc_constant_plus_one_outlier_is_still_low():
+    """One lane off a constant golden is a real (weak) correlation, not a degenerate one."""
+    golden = torch.full((1024,), 3.0)
+    golden[0] = 4.0
+    input = torch.linspace(-4.0, 4.0, 1024)
+    assert calculate_pcc(golden, input) < 0.99
+
+
+def test_calculate_pcc_both_constant_is_degenerate_match():
+    """Neither side varies, so there is no shape to disagree about; magnitude is the
+    tolerance check's job."""
+    assert (
+        calculate_pcc(torch.full((1024,), 1.0), torch.full((1024,), 1.0078125)) == 1.0
+    )
+
+
+def test_calculate_pcc_varying_tensors_unchanged():
+    golden = torch.linspace(-4.0, 4.0, 1024)
+    assert calculate_pcc(golden, golden * 2.0 + 1.0) == pytest.approx(1.0)
+    assert calculate_pcc(golden, -golden) == pytest.approx(-1.0)
+
+
+def _bf16_steps_around_one(n=1024):
+    """Distinct bf16 values just above 1.0, all within Float16_b tolerance of 1.0."""
+    steps = torch.arange(n) % 4
+    return (1.0 + steps * 2.0**-7).to(torch.bfloat16)
+
+
+def test_passed_test_a_constant_result_does_not_track_a_varying_golden():
+    """Within tolerance lane by lane, but it ignores the golden's variation entirely:
+    the PCC check is there to catch exactly this."""
+    golden = _bf16_steps_around_one()
+    result = torch.ones(golden.shape, dtype=torch.bfloat16)
+    assert not passed_test(golden, result, DataFormat.Float16_b, print_errors=False)
+
+
+def test_passed_test_a_constant_golden_is_judged_by_tolerance():
+    """A constant golden gives PCC nothing to measure, so lane noise within tolerance
+    still passes and noise beyond it still fails."""
+    golden = torch.ones(1024, dtype=torch.bfloat16)
+    assert passed_test(golden, _bf16_steps_around_one(), DataFormat.Float16_b)
+    assert not passed_test(
+        golden, _bf16_steps_around_one() * 2, DataFormat.Float16_b, print_errors=False
+    )
