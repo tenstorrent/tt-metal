@@ -38,10 +38,10 @@
 // landed, so the writer never refills a slab still being read.
 //
 // Face-direct im2col (see conv2d_3x3_gather_dataflow.hpp): the reader reserves the K-block's in0 tiles and pushes
-// them in row groups of in0_stream_rows tile-rows, in order, so compute multiplies each group as it lands. With a
-// split gather it raises gather_go once the block is reserved and the slab complete; the writer then gathers every
-// odd row group and counts them in gather_done, while the reader gathers the even ones. Only the reader touches
-// the CB's pointers; the writer writes into the reserved block, which starts at the CB base.
+// them in row groups of in0_stream_rows tile-rows (the last may be shorter), in order, so compute multiplies each group
+// as it lands. With a split gather it raises gather_go once the block is reserved and the slab complete; the writer
+// then gathers every odd row group and counts them in gather_done, while the reader gathers the even ones. Only the
+// reader touches the CB's pointers; the writer writes into the reserved block, which starts at the CB base.
 //
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
@@ -65,8 +65,6 @@ constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t ELEM_BYTES = 2;        // bf16 slab and im2col rows
 constexpr uint32_t TRID_GATHER = 4;       // ROW_MAJOR bands use trids 1..3
 constexpr uint32_t TRID_INPUT_TILES = 5;  // TILE footprint batches
-
-using conv2d_3x3::TaggedReads;
 
 }  // namespace
 
@@ -177,8 +175,7 @@ void kernel_main() {
                          face_taps * c_in_p == FACE_DIM && (face_taps == 1 || dilation == 1)),
         "face-direct: one output pixel steps the slab by one face row of adjacent, unpadded taps");
     static_assert(face_direct || band_last_tap == 2, "only face-direct reads a tap past the kernel row's last one");
-    constexpr uint32_t in0_groups = block_m_tiles / in0_stream_rows;
-    static_assert(in0_groups * in0_stream_rows == block_m_tiles, "row groups tile the in0 block");
+    constexpr uint32_t in0_groups = (block_m_tiles + in0_stream_rows - 1) / in0_stream_rows;
     static_assert(in0_groups == 1 || (face_direct && num_k_blocks == 1), "only a whole-K face-direct block streams");
     static_assert(!gather_split || (slab_split && in0_groups >= 2), "the writer gathers odd row groups");
     // The writer's row groups of every earlier K-block, for the cumulative gather_done count.
@@ -189,7 +186,7 @@ void kernel_main() {
     // so the slab always starts at the CB base.
     const uint32_t slab_l1 = tile_input ? get_read_ptr(cb_halo_slab) : get_write_ptr(cb_halo_slab);
     const uint64_t slab_noc = get_noc_addr(slab_l1);
-    TaggedReads reads;
+    conv2d_3x3::TaggedReads<face_direct> reads;
 
     if constexpr (zero_im2col_once) {
         const uint32_t im2col_rm_bytes = im2col_rm_depth_rows * block_k_tiles * get_tile_size(cb_im2col_rm);
@@ -201,7 +198,15 @@ void kernel_main() {
         reads.noc.write_zeros_l1_barrier();
     }
 
-    auto zero_fill = [&](uint32_t dst_l1, uint32_t bytes) { reads.zero_fill(dst_l1, bytes); };
+    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
+    auto zero_fill = [&](uint32_t dst_l1, uint32_t bytes) {
+        while (bytes > 0) {
+            const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
+            reads.read(zeros_noc, dst_l1, chunk);
+            dst_l1 += chunk;
+            bytes -= chunk;
+        }
+    };
 
     // Input pages [page, end_page) into consecutive L1 page slots from l1. With the split fill, runs of higher
     // shards are the writer's.
@@ -378,7 +383,10 @@ void kernel_main() {
                         if (gather_split && pushed % 2 == 1) {
                             Semaphore<>(gather_done_sem_id).wait_min(writer_groups_before + (pushed + 1) / 2);
                         }
-                        cb_push_back(cb_im2col_tiles, in0_stream_rows * block_k_tiles);
+                        const uint32_t row_end = (pushed + 1) * in0_stream_rows;
+                        const uint32_t rows =
+                            (row_end < block_m_tiles ? row_end : block_m_tiles) - pushed * in0_stream_rows;
+                        cb_push_back(cb_im2col_tiles, rows * block_k_tiles);
                     }
                 };
                 for (uint32_t group = 0; group < in0_groups; group += gather_split ? 2 : 1) {
@@ -387,7 +395,7 @@ void kernel_main() {
                         reads,
                         tiles_l1,
                         group * in0_stream_rows,
-                        (group + 1) * in0_stream_rows,
+                        (group + 1) * in0_stream_rows < block_m_tiles ? (group + 1) * in0_stream_rows : block_m_tiles,
                         o_first,
                         o_end,
                         kh,

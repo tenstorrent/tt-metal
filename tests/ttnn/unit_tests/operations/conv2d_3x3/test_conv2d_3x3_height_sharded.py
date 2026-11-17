@@ -11,6 +11,9 @@
   into its output shard, with ReLU state crossing the blocks.
 - weight multicast (regime R1): a ragged last core that runs fewer M-blocks stays outside the
   channel and streams its own weights, while the others take one multicast round per K-block.
+- face-direct im2col (stride * C_in == 16, ROW_MAJOR): the reader and the writer gather alternate in0 row
+  groups straight into tile faces, the writer reads the slab runs of higher-index shards, and compute
+  multiplies (and adds the bias to) each group as it lands; also with several M-blocks per shard.
 """
 
 import importlib
@@ -247,3 +250,72 @@ def test_conv2d_3x3_height_sharded_weight_mcast_ragged_core(dtype, layout, devic
     assert receivers is not None, "the weight multicast channel was not built"
     assert receivers.num_cores() == len(core_list) - 1
     assert not receivers.contains(core_list[-1]), "the ragged last core must stream its own weights"
+
+
+# ((H, W, C_in), C_out, padding, stride, dilation, ROW_MAJOR shard rows): every core's output is several tile-rows,
+# so in0 streams in several row groups split between the reader and the writer, and shards that do not start on an
+# image row put part of each footprint in higher-index shards.
+FACE_DIRECT_SHAPES = [
+    ((64, 128, 8), 64, 1, 2, 1, 1000),  # stem-like: two taps per face row; 8 tile-rows per core
+    ((32, 64, 16), 32, 1, 1, 1, 230),  # one tap per face row; the fourth face column is K padding only
+    ((48, 64, 8), 64, 1, 2, 1, 700),  # 3 tile-rows per core: an odd row-group count, a shorter last group
+]
+
+
+def _record_blocking(monkeypatch):
+    real_select = _pd.select_blocking
+    seen = []
+
+    def recording_select(g, grid, l1_budget):
+        b = real_select(g, grid, l1_budget)
+        seen.append((g, b))
+        return b
+
+    monkeypatch.setattr(_op_module, "select_blocking", recording_select)
+    return seen
+
+
+@pytest.mark.parametrize(
+    "with_bias,relu", [(True, True), (False, True), (True, False)], ids=["bias_relu", "relu", "bias"]
+)
+@pytest.mark.parametrize("case", FACE_DIRECT_SHAPES, ids=[_case_id(c) for c in FACE_DIRECT_SHAPES])
+def test_conv2d_3x3_height_sharded_face_direct(case, with_bias, relu, device, monkeypatch):
+    torch.manual_seed(11)
+    *case_hw, shard_rows = case
+    H, W, c_in = case_hw[0]
+    config = _row_major_config(device, H * W, c_in, ttnn.ROW_MAJOR_LAYOUT, shard_rows)
+    seen = _record_blocking(monkeypatch)
+    _run(tuple(case_hw), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, config, device, with_bias=with_bias, relu=relu)
+    ((g, b),) = seen
+    assert _pd.face_direct_im2col(g, b.block_k_tiles) and b.num_k_blocks == 1
+    assert b.in0_stream_rows < b.block_m_tiles, "the test expects several in0 row groups per M-block"
+
+
+def test_conv2d_3x3_height_sharded_face_direct_multi_m_block(device, monkeypatch):
+    """Two M-blocks per shard on the face-direct path: the writer refills its slab runs only after the reader
+    released the first block's slab, and the gather/push counters carry across blocks."""
+    torch.manual_seed(5)
+    *case_hw, shard_rows = FACE_DIRECT_SHAPES[0]
+    H, W, c_in = case_hw[0]
+    config = _row_major_config(device, H * W, c_in, ttnn.ROW_MAJOR_LAYOUT, shard_rows)
+    real_select = _pd.select_blocking
+
+    def two_blocks(g, grid, l1_budget):
+        b = real_select(g, grid, l1_budget)
+        assert g.sharded_output and b.core_m_tiles == 8
+        fit = _pd._footprint(g, b.core_m_tiles, 4, b.block_k_tiles, b.block_n_tiles)
+        assert fit["num_k_blocks"] == 1 and fit["in0_stream_rows"] < 4
+        return _pd.Conv3x3Blocking(
+            grid_x=b.grid_x,
+            core_m_tiles=b.core_m_tiles,
+            num_m_groups=b.num_m_groups,
+            block_m_tiles=4,
+            block_k_tiles=b.block_k_tiles,
+            block_n_tiles=b.block_n_tiles,
+            im2col_rm_depth_rows=b.im2col_rm_depth_rows,
+            out_depth_row_groups=b.out_depth_row_groups,
+            **fit,
+        )
+
+    monkeypatch.setattr(_op_module, "select_blocking", two_blocks)
+    _run(tuple(case_hw), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, config, device, with_bias=True, relu=True)

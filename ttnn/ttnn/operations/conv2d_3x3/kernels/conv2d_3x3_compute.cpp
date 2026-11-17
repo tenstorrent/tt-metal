@@ -9,7 +9,8 @@
 //
 // Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook. With one
 // K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it lands,
-// keeping the weights fronted across the calls; the bias add then runs once over the whole block.
+// keeping the weights fronted across the calls, and adds the bias once per bias_stream_groups groups, so only the
+// last chunk's bias add trails the gather.
 //
 // matmul_block leaves packer L1 accumulation on and (OutWithRelu) PACK_RELU on; every later pack
 // (untilize, tilize, combine, bias add) first restores the state it needs.
@@ -106,6 +107,7 @@ void kernel_main() {
     constexpr uint32_t im2col_tilize_width_tiles = get_compile_time_arg_val(26);
     constexpr bool face_direct = get_compile_time_arg_val(27) != 0;
     constexpr uint32_t in0_stream_rows = get_compile_time_arg_val(28);
+    constexpr uint32_t bias_stream_groups = get_compile_time_arg_val(29);
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
@@ -117,11 +119,11 @@ void kernel_main() {
     constexpr auto mm_shape = ckl::MatmulBlockShape::of(
         in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks);
     // One matmul call per in0 row group (face-direct, one K-block): the group's subblock rows x all of N.
-    constexpr uint32_t in0_groups = block_m_tiles / in0_stream_rows;
-    static_assert(in0_groups * in0_stream_rows == block_m_tiles && in0_stream_rows % out_subblock_h == 0);
+    // The last group may be shorter; every group is whole subblocks.
+    constexpr uint32_t in0_groups = (block_m_tiles + in0_stream_rows - 1) / in0_stream_rows;
+    static_assert(in0_stream_rows % out_subblock_h == 0);
     static_assert(in0_groups == 1 || (face_direct && num_k_blocks == 1 && !k_split));
-    constexpr auto stream_shape = ckl::MatmulBlockShape::of(
-        in0_stream_rows / out_subblock_h, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, 1);
+    static_assert(bias_stream_groups > 0);
     constexpr auto bias_shape =
         ckl::BiasAddShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_n_tiles);
     static_assert(block_m_tiles % combine_subblock_h == 0 && out_n_tiles % combine_subblock_w == 0);
@@ -188,6 +190,17 @@ void kernel_main() {
     if constexpr (has_bias) {
         bias.wait_front(out_n_tiles);
     }
+
+    // finalize_block over `shape`'s rows of the matmul partials: + bias, ReLU on this pack only.
+    auto add_bias = [&](const ckl::BiasAddShape& shape) {
+        // matmul_block leaves packer L1 accumulation on after its last K-block.
+        pack_reconfig_l1_acc(0);
+        if constexpr (apply_relu) {
+            pack_relu_config(ReluConfig::zero());
+        }
+        ckl::add_bias_bcast_rows<ckl::BiasBroadcast::RowBroadcast, ckl::OutputCBLayout::TileRowMajor>(
+            partials, bias, output_tiles, shape);
+    };
 
     // Sum the row's k_cols contributions per output tile and pack them; with a bias the fp32 sum goes
     // through cb_combined into the bias add, otherwise straight to the output shard.
@@ -264,6 +277,8 @@ void kernel_main() {
             }
         } else if constexpr (in0_groups > 1) {
             for (uint32_t group = 0; group < in0_groups; ++group) {
+                const uint32_t group_end =
+                    (group + 1) * in0_stream_rows < block_m_tiles ? (group + 1) * in0_stream_rows : block_m_tiles;
                 ckl::matmul_block<
                     /*transpose=*/false,
                     /*packer_l1_acc=*/true,
@@ -276,11 +291,33 @@ void kernel_main() {
                     weights,
                     output_tiles,
                     partials,
-                    stream_shape,
+                    ckl::MatmulBlockShape::of(
+                        (group_end - group * in0_stream_rows) / out_subblock_h,
+                        in1_num_subblocks,
+                        out_subblock_h,
+                        out_subblock_w,
+                        block_k_tiles,
+                        1),
                     {},
                     {},
                     /*in1_per_core_w=*/block_n_tiles,
                     /*out_row_width=*/block_n_tiles);
+                if constexpr (has_bias) {
+                    const uint32_t groups_done = group + 1;
+                    if (groups_done % bias_stream_groups == 0 || groups_done == in0_groups) {
+                        const uint32_t chunk_rows =
+                            group_end - (group / bias_stream_groups) * bias_stream_groups * in0_stream_rows;
+                        add_bias(ckl::BiasAddShape::of(
+                            chunk_rows / out_subblock_h,
+                            in1_num_subblocks,
+                            out_subblock_h,
+                            out_subblock_w,
+                            block_n_tiles));
+                        if constexpr (apply_relu) {
+                            pack_relu_config(ReluConfig::none());
+                        }
+                    }
+                }
             }
             weights.pop_front(block_k_tiles * block_n_tiles);
         } else {
@@ -305,19 +342,8 @@ void kernel_main() {
                 /*out_row_width=*/block_n_tiles);
         }
 
-        if constexpr (has_bias && !k_split) {
-            // Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook.
-            // With one
-            // K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it
-            // lands, keeping the weights fronted across the calls; the bias add then runs once over the whole block.
-            //
-            // matmul_block leaves packer L1 accumulation on after its last K-block.
-            pack_reconfig_l1_acc(0);
-            if constexpr (apply_relu) {
-                pack_relu_config(ReluConfig::zero());
-            }
-            ckl::add_bias_bcast_rows<ckl::BiasBroadcast::RowBroadcast, ckl::OutputCBLayout::TileRowMajor>(
-                partials, bias, output_tiles, bias_shape);
+        if constexpr (has_bias && !k_split && in0_groups == 1) {
+            add_bias(bias_shape);
         }
         if constexpr (apply_relu) {
             pack_relu_config(ReluConfig::none());

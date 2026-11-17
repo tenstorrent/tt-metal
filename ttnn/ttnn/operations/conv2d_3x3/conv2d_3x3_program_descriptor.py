@@ -93,9 +93,13 @@ FACE_DIRECT_WHOLE_K_BLOCK = True
 # whole fill on the reader.
 SLAB_SPLIT_NOCS = True
 # Face-direct in0 streaming: with one K-block per M-block, the reader pushes the in0 block in row groups of this
-# many tile-rows (rounded to whole matmul subblocks dividing the block) and compute runs one matmul call per group,
-# so the matmul overlaps the gather. A value >= block_m_tiles pushes and multiplies the whole block at once.
+# many tile-rows (rounded down to whole matmul subblocks; the last group may be shorter) and compute runs one matmul
+# call per group, so the matmul overlaps the gather. A value >= block_m_tiles pushes and multiplies the whole block
+# at once.
 IN0_STREAM_TILE_ROWS = 2
+# In0 streaming with a bias: row groups per bias-add call. Each call pays its own init and reconfig, and only the
+# last call trails the gather; a value >= the group count adds the bias once after the last matmul.
+BIAS_STREAM_GROUPS = 5
 # Face-direct gather split between the two data-movement RISCs: the writer gathers every other row group on NoC1
 # while the reader gathers the rest, since the gather is bound by read issue. Applies with the split slab fill (the
 # writer then holds the slab plan) and in0 streaming. False keeps the whole gather on the reader.
@@ -338,13 +342,12 @@ def face_direct_im2col(g: Conv3x3Geometry, bk):
 
 
 def _in0_stream_rows(g: Conv3x3Geometry, bm, bk, sb_h):
-    """Tile-rows per in0 push and matmul call: whole matmul subblocks dividing bm, at most IN0_STREAM_TILE_ROWS.
-    Only face-direct with one K-block per M-block streams (the reader produces in0, and a K-block walk would need
-    every row group of every K-block); otherwise the whole block."""
+    """Tile-rows per in0 push and matmul call: whole matmul subblocks, at most IN0_STREAM_TILE_ROWS; the last group
+    of a block may be shorter. Only face-direct with one K-block per M-block streams (the reader produces in0, and
+    a K-block walk would need every row group of every K-block); otherwise the whole block."""
     if not (face_direct_im2col(g, bk) and bk == g.tensor_k_tiles and not g.k_split):
         return bm
-    target = max(IN0_STREAM_TILE_ROWS, sb_h)
-    return max(r for r in range(sb_h, bm + 1, sb_h) if bm % r == 0 and r <= target)
+    return min(bm, max(IN0_STREAM_TILE_ROWS // sb_h, 1) * sb_h)
 
 
 def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
@@ -668,7 +671,7 @@ def create_program_descriptor(
     tilize_width = g.c_in_tiles if tap_major else bk
 
     stream_rows = b.in0_stream_rows
-    gather_split = GATHER_SPLIT_RISCS and face_direct and slab_split and bm // stream_rows >= 2
+    gather_split = GATHER_SPLIT_RISCS and face_direct and slab_split and _div_up(bm, stream_rows) >= 2
     # Semaphore ids: the R4 combine's four, then the split slab fill's two and the split gather's two; the weight
     # channel attaches after.
     sem_ids = (SEM_COMBINE_CREDIT, SEM_COMBINE_ARRIVAL, SEM_COMBINE_SEND_GO, SEM_COMBINE_SEND_DONE) if g.k_split else ()
@@ -756,6 +759,7 @@ def create_program_descriptor(
         tilize_width,
         int(face_direct),
         b.in0_stream_rows,
+        max(1, min(BIAS_STREAM_GROUPS, _div_up(bm, b.in0_stream_rows))),
     ]
 
     writer_ct_args = [

@@ -36,7 +36,7 @@
 // and raises slab_fwd_done; from the second block on it first waits for the reader's slab_free.
 //
 // Split face-direct gather: after issuing each K-block's weights the writer waits for the reader's gather_go (the
-// in0 block is reserved and the slab complete), then writes every odd row group of in0_stream_rows tile-rows on
+// in0 block is reserved and the slab complete), then writes every odd row group (in0_stream_rows tile-rows) on
 // NoC1, raising gather_done after each; the reader pushes the groups in order.
 //
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
@@ -127,17 +127,23 @@ void kernel_main() {
     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
     // ---- prefetch_bias: the core's output columns; stays fronted in cb_bias for the whole kernel. Slots
-    // past the last C_out tile (a short last N-slice) only feed output padding columns.
-    if constexpr (has_bias) {
-        const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
-        const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
-        cb_reserve_back(cb_bias, out_n_tiles);
-        uint32_t l1 = get_write_ptr(cb_bias);
-        for (uint32_t n = 0; n < out_valid_tiles; ++n, l1 += bias_tile_bytes) {
-            noc_async_read_page(out_n_tile_start + n, bias, l1);
+    // past the last C_out tile (a short last N-slice) only feed output padding columns. With the split slab fill
+    // it follows the first block's slab reads, which the reader waits on before it can gather.
+    auto prefetch_bias = [&]() {
+        if constexpr (has_bias) {
+            const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
+            const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
+            cb_reserve_back(cb_bias, out_n_tiles);
+            uint32_t l1 = get_write_ptr(cb_bias);
+            for (uint32_t n = 0; n < out_valid_tiles; ++n, l1 += bias_tile_bytes) {
+                noc_async_read_page(out_n_tile_start + n, bias, l1);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_bias, out_n_tiles);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_bias, out_n_tiles);
+    };
+    if constexpr (!slab_split) {
+        prefetch_bias();
     }
 
     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
@@ -268,20 +274,21 @@ void kernel_main() {
         tensor_kkh_tiles,
         block_k_tiles,
         band_last_tap>;
-    conv2d_3x3::TaggedReads gather_reads;
+    conv2d_3x3::TaggedReads<true> gather_reads;
     constexpr uint32_t TRID_GATHER = 1;
     // Every in0 K-block starts at the CB base: its capacity is one K-block.
     const uint32_t in0_l1 = get_write_ptr(cb_im2col_tiles);
     [[maybe_unused]] auto gather_odd_groups = [&](uint32_t k_block_seq) {
         Semaphore<>(gather_go_sem_id).wait_min(k_block_seq + 1);
         const int32_t kh = (k_block_seq % num_k_blocks) * block_k_tiles / tensor_kkh_tiles;
-        for (uint32_t group = 1; group < block_m_tiles / in0_stream_rows; group += 2) {
+        constexpr uint32_t in0_groups = (block_m_tiles + in0_stream_rows - 1) / in0_stream_rows;
+        for (uint32_t group = 1; group < in0_groups; group += 2) {
             gather_reads.begin(TRID_GATHER);
             FaceGather::tile_rows(
                 gather_reads,
                 in0_l1,
                 group * in0_stream_rows,
-                (group + 1) * in0_stream_rows,
+                (group + 1) * in0_stream_rows < block_m_tiles ? (group + 1) * in0_stream_rows : block_m_tiles,
                 o_first,
                 o_end,
                 kh,
@@ -296,6 +303,9 @@ void kernel_main() {
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         if constexpr (slab_split) {
             fill_forward_slab(m_block_idx);
+            if (m_block_idx == 0) {
+                prefetch_bias();
+            }
         }
         while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
             issue_weight_k_block();

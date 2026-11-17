@@ -25,13 +25,15 @@ namespace conv2d_3x3 {
 constexpr uint32_t TRID_CHECK_EVERY_PACKETS = 64;
 constexpr uint32_t TRID_MIN_FREE = (NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2;
 
+// fixed_reads: the kernel also issues read_local_fixed, whose command-buffer state every other read clobbers.
+template <bool fixed_reads>
 struct TaggedReads {
     Noc noc;
     uint32_t trid = 0;
     uint32_t packets_since_check = 0;
-    // The read command buffer holds the self-aimed fixed-size state of read_local_fixed; any other read
-    // reprograms it.
+    // Bytes of the self-aimed fixed-size state the read command buffer holds, 0 if another read reprogrammed it.
     uint32_t fixed_state_bytes = 0;
+    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE, noc.get_noc_id());
 
     FORCE_INLINE void begin(uint32_t new_trid) {
         trid = new_trid;
@@ -49,7 +51,9 @@ struct TaggedReads {
     }
 
     FORCE_INLINE void read(uint64_t src_noc_addr, uint32_t dst_l1_addr, uint32_t bytes) {
-        fixed_state_bytes = 0;
+        if constexpr (fixed_reads) {
+            fixed_state_bytes = 0;
+        }
         noc_async_read(src_noc_addr, dst_l1_addr, bytes);
         count_packets((bytes + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE);
     }
@@ -57,6 +61,7 @@ struct TaggedReads {
     // One-packet L1 -> L1 copy on this core; consecutive calls of one size only rewrite the two addresses.
     template <uint32_t bytes>
     FORCE_INLINE void read_local_fixed(uint32_t src_l1_addr, uint32_t dst_l1_addr) {
+        static_assert(fixed_reads);
         if (fixed_state_bytes != bytes) {
             dataflow_kernel_lib::set_read_state<bytes>(noc, src_l1_addr);
             fixed_state_bytes = bytes;
@@ -67,7 +72,6 @@ struct TaggedReads {
 
     // Zeros from the hardware zero region, which is MEM_ZEROS_SIZE bytes long.
     FORCE_INLINE void zero_fill(uint32_t dst_l1_addr, uint32_t bytes) {
-        const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE, noc.get_noc_id());
         while (bytes > 0) {
             const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
             read(zeros_noc, dst_l1_addr, chunk);
@@ -103,8 +107,9 @@ struct FaceGather {
     // Output pixels [o_lo, o_hi) x taps [tap0, tap0 + face_taps) of kernel row kh into the face at dst, one face
     // row per pixel. Within one output image row the pixels whose taps all lie in the image are consecutive and
     // read consecutive slab bytes; the rest copy or zero tap by tap.
+    template <typename Reads>
     static void face(
-        TaggedReads& reads,
+        Reads& reads,
         uint64_t slab_noc,
         uint32_t dst,
         uint32_t o_lo,
@@ -165,8 +170,9 @@ struct FaceGather {
     // Tile-rows [row_begin, row_end) of one K-block (kernel rows kh .. kh + kh_per_k_block - 1) of the M-block of
     // output pixels [o_first, o_end), into the K-block's tiles at tiles_l1. Rows past o_end stay stale: every
     // downstream phase is row-independent and those rows are never stored.
+    template <typename Reads>
     static void tile_rows(
-        TaggedReads& reads,
+        Reads& reads,
         uint32_t tiles_l1,
         uint32_t row_begin,
         uint32_t row_end,
