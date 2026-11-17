@@ -41,7 +41,9 @@ _ON_DISTRIBUTED_MESHES = pytest.mark.parametrize(
         pytest.param((2, 4), kda_device_params((2, 4)), 0, id="2x4-tp0"),
         pytest.param((2, 4), kda_device_params((2, 4)), 1, id="2x4-tp1"),
         pytest.param((4, 4), kda_device_params((4, 4)), 0, marks=_ON_4X4_STAGE, id="4x4-torus-x-tp0"),
-        pytest.param((4, 4), kda_device_params((4, 4), wrap_both_axes=True), 0, marks=_ON_4X4_STAGE, id="4x4-torus-xy-tp0"),
+        pytest.param(
+            (4, 4), kda_device_params((4, 4), wrap_both_axes=True), 0, marks=_ON_4X4_STAGE, id="4x4-torus-xy-tp0"
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
