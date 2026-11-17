@@ -40,6 +40,8 @@ inline constexpr std::string_view IDLE_HEADER = "device_id,eth_x,eth_y,channel,c
 // Bit set in the flags column of a row.
 inline constexpr uint32_t FLAG_OVERLAPPED = 1u << 0;  // another program was in flight on the device
 inline constexpr uint32_t FLAG_RESET = 1u << 1;       // a 64-bit counter went down in the window, its row is dropped
+inline constexpr uint32_t FLAG_STALE =
+    1u << 2;  // the firmware link counters did not refresh in the window, their rows are dropped
 
 inline constexpr int8_t NO_QUEUE = -1;
 
@@ -86,7 +88,8 @@ struct Delta {
 };
 
 // Nonzero differences only. A 32-bit value wraps; a 64-bit value that went down is dropped and sets FLAG_RESET in
-// *flags.
+// *flags. When the firmware poll counter did not move, every value read from L1 is stale: those rows are dropped and
+// FLAG_STALE is set.
 std::vector<Delta> diff(const Plan& plan, const Reading& before, const Reading& after, uint32_t* flags);
 
 std::string counter_name(llk::perf::eth::EthCounter counter);

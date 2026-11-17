@@ -57,7 +57,11 @@ def main():
                 ("TX", c.MAC_TX_CFG, TX_BITS),
                 ("RX", c.MAC_RX_CFG, RX_BITS),
             ):
-                word = core.noc_read32(address)
+                try:
+                    word = core.noc_read32(address)
+                except Exception as e:  # exalens safe mode refuses the MAC block
+                    print(f"refused: {type(e).__name__}: {e}; not retrying")
+                    raise SystemExit(1)
                 state = ", ".join(f"{k} {(word >> b) & 1}" for k, b in bits.items())
                 print(
                     f"device {device.id} core {core.to_str('noc0')} {label} cfg 0x{word:08x}: {state}"

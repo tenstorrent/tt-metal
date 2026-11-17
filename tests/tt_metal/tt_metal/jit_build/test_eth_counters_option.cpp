@@ -165,12 +165,35 @@ TEST(EthCountersDiff, SixtyFourBitValuesDoNotWrapAndAResetIsFlagged) {
     after.values[frames] = 0x100000010ull;  // crosses the 32-bit boundary
     before.values[bytes] = 1000;
     after.values[bytes] = 10;  // went down
+    after.values[index_of(*plan, ec::EthCounter::FW_LINK_POLL_ALIVE_COUNT, Kind::L1, NO_QUEUE)] += 1;
     uint32_t flags = 0;
     const auto deltas = diff(*plan, before, after, &flags);
     ASSERT_EQ(deltas.size(), 1u);
     EXPECT_EQ(deltas[0].item, frames);
     EXPECT_EQ(deltas[0].count, 0x11u);
     EXPECT_EQ(flags, FLAG_RESET);
+}
+
+TEST(EthCountersDiff, LinkCountersAreDroppedWhenTheFirmwarePollCounterDidNotMove) {
+    const auto plan = make_plan(ec::Arch::BLACKHOLE, 1, true);
+    ASSERT_TRUE(plan.has_value());
+    const size_t poll = index_of(*plan, ec::EthCounter::FW_LINK_POLL_ALIVE_COUNT, Kind::L1, NO_QUEUE);
+    const size_t frames = index_of(*plan, ec::EthCounter::FW_FRAMES_TXD, Kind::L1, NO_QUEUE);
+    const size_t words = index_of(*plan, ec::EthCounter::TXQ_WORD_CNT, Kind::TX_QUEUE, 0);
+    Reading before = flat(*plan, 5), after = flat(*plan, 5);
+    after.values[frames] += 9;
+    after.values[words] += 4;
+    uint32_t flags = 0;
+    auto deltas = diff(*plan, before, after, &flags);
+    ASSERT_EQ(deltas.size(), 1u);
+    EXPECT_EQ(deltas[0].item, words);
+    EXPECT_EQ(flags, FLAG_STALE);
+
+    after.values[poll] += 1;
+    flags = 0;
+    deltas = diff(*plan, before, after, &flags);
+    ASSERT_EQ(deltas.size(), 3u);
+    EXPECT_EQ(flags, 0u);
 }
 
 TEST(EthCountersNames, EveryCounterOfTheTablesHasAName) {
