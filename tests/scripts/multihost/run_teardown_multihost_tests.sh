@@ -49,6 +49,12 @@ for host in $(host_names); do
     || { echo "::error::the probe is not staged/executable on $host ($probe)"; exit 1; }
 done
 
+# The pgrep/pkill pattern that matches ONLY this run's ranks: the probe path is a unique mktemp path, so a
+# concurrent job's probe (under a different /tmp dir) is never counted or killed. The trailing character is
+# bracketed (teardown_mpi_prob[e]) so the regex does not match the pgrep/pkill command's own wrapper shell, which
+# carries the pattern in its cmdline — a bare pattern self-matches and would count/kill itself.
+probe_pat="${probe%e}[e]"
+
 launcher="$(command -v 'mpirun-ulfm' || command -v 'mpirun')"
 
 # the production launch line: one rank per host, tcp transport only (no shared-memory layer), tagged output
@@ -61,14 +67,14 @@ launch=(--host "$hosts" -np "$num_hosts" --map-by node --oversubscribe --bind-to
 ranks_still_alive() {
   local total=0 host
   for host in $(host_names); do
-    total=$((total + $(ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "pgrep -cf teardown_mpi_probe" 2>/dev/null || echo 0)))
+    total=$((total + $(ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "pgrep -cf '$probe_pat'" 2>/dev/null || echo 0)))
   done
   echo "$total"
 }
 
 kill_stragglers() {
   local host
-  for host in $(host_names); do ssh -o BatchMode=yes "$host" "pkill -9 -f teardown_mpi_probe" 2>/dev/null || true; done
+  for host in $(host_names); do ssh -o BatchMode=yes "$host" "pkill -9 -f '$probe_pat'" 2>/dev/null || true; done
 }
 
 failures=0
