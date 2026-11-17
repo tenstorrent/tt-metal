@@ -1405,10 +1405,9 @@ inline void program_max_min_swap_macro() {
     TTI_SFPSWAP(0 /*imm12_math*/, lreg_c, 12 + macro /*InstructionTemplate[macro]*/, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     constexpr std::uint32_t simple_bits = 0x80 /*enable*/ | (0 << 3) /*delay*/ | (4 + macro) /*template*/;
     constexpr std::uint32_t mad_bits = 0;
-    constexpr std::uint32_t round_bits = 0;
-    constexpr std::uint32_t store_bits = 0;
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+    // Round and Store bits (the upper half) are 0, so one zero-extending SFPLOADI writes the whole word. A half-word
+    // SFPLOADI (Mod0 8 / 10) must not follow an SFPSWAP (upstream SFPSWAP.md), and the template write is one.
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_USHORT, (mad_bits << 8) | simple_bits);
     TTI_SFPCONFIG(0, 4 + macro, 0);
 }
 
