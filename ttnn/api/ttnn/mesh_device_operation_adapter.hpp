@@ -1032,6 +1032,9 @@ public:
             // outlive the cache miss and every program on the occupied ranges can reference them.
             // Shared ownership keeps the device allocation alive for the life of the cache entry.
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
+            // GlobalSemaphores allocated by a MeshWorkloadSpecFactoryConcept factory, parked here so they
+            // stay allocated for the life of the cache entry. Shared by every range of the workload.
+            std::shared_ptr<std::vector<tt::tt_metal::GlobalSemaphore>> global_semaphores;
         };
 
         // Cache-hit tensor refresh, shared so the two adapters' hit paths cannot drift apart.
@@ -1379,6 +1382,10 @@ public:
 
             const auto mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
 
+            // Moving the vector keeps its elements in place, so run args that reference them stay valid.
+            auto global_semaphores =
+                std::make_shared<std::vector<tt::tt_metal::GlobalSemaphore>>(std::move(artifacts.global_semaphores));
+
             std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramSpec> program_specs;
             std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramRunArgs> run_params;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -1406,7 +1413,8 @@ public:
                         .bindings =
                             SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
                         .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
-                            per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)});
+                            per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs),
+                        .global_semaphores = global_semaphores});
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
