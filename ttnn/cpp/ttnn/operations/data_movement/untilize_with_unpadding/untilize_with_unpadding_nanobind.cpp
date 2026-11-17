@@ -53,7 +53,7 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
             - A BLOCK_SHARDED input must hold one matrix: every dimension before the last two has size 1
             - A WIDTH_SHARDED input keeps every dimension before the last two. With an interleaved output it must hold one matrix, and its padded width minus the output width must be less than its shard width. With a WIDTH_SHARDED output, the output width must equal the input's padded width or need every input shard: ``ceil(output_width / shard_width)`` equals the number of input cores
             - A HEIGHT_SHARDED output from a HEIGHT_SHARDED input that holds more than one matrix keeps every row
-            - ND sharded: L1 input with ROUND_ROBIN_1D shard distribution (the default), with an interleaved or sharded output; an ND sharded output needs an ND sharded input
+            - ND sharded: L1 and DRAM input with ROUND_ROBIN_1D shard distribution (the default), with an interleaved or sharded output; an ND sharded output needs an ND sharded input
     )doc";
 
     ttnn::bind_function<"untilize_with_unpadding">(
