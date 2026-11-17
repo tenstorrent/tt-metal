@@ -111,7 +111,7 @@ CI test matrices live in `tests/pipeline_reorg/*.yaml`; each entry has a `name` 
 - Test directory: `conv/`
 - Pipelines:
   - **Sanity:** `ttnn conv group`
-  - **Nightly:** `ttnn conv group`, `ttnn nightly conv tests`
+  - **Nightly:** `ttnn conv group` (`ttnn nightly conv tests` runs the separate `tests/ttnn/nightly/unit_tests/operations/conv/` suite, not this file)
 
 ### Example 3: Finding Tests for `dropout`
 
