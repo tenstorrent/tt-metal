@@ -316,8 +316,8 @@ finally:
 ## Adding a model
 
 A model provider builds the ttml model for an HF `model_type`, and loads and exports its weights. It subclasses
-`ModelProvider` in `ttml/models/provider.py`; the trainer makes one per run, with the run's config as `self.config` and
-the model's HF `config.json` as `self.hf_config`. The trainer calls four methods:
+`ModelProvider` in `ttml/models/provider/base.py`; the trainer makes one per run, with the run's config as
+`self.config` and the model's HF `config.json` as `self.hf_config`. The trainer calls four methods:
 
 - `check()`: raise `UnsupportedTrainingConfig` for anything the model can't train, including a `device.mesh` it can't
   be built on. It runs before the device opens.
@@ -334,8 +334,8 @@ own:
 - `_export_hf_model`: the model's weights, without the LoRA adapters, as an HF model directory.
 - `_export_adapter` / `_import_adapter`: the LoRA weights as PEFT tensors and adapter config, and back.
 
-Write it in `ttml/models/<model>/provider.py` and add it to `providers()` in `ttml/models/provider.py`, keyed by the
-`model_type`. `LlamaProvider` in `ttml/models/llama/provider.py` is the reference.
+Write it in `ttml/models/provider/<model>.py` and add it to `providers()` in `ttml/models/provider/__init__.py`, keyed
+by the `model_type`. `LlamaProvider` in `ttml/models/provider/llama.py` is the reference.
 
 ---
 

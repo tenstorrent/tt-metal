@@ -2,24 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Model providers: the only place that decides whether a model can be trained with a config, and that loads and
-exports its weights.
-
-A provider builds one family of HF models in ttml for ``ttml.unified_trainer``. Bringing up a family means subclassing
-``ModelProvider`` in ``ttml/models/<family>/provider.py`` and adding it to ``providers``, keyed by the ``model_type``
-of the HF ``config.json``; the trainer and its hosts don't change.
-"""
-
 from __future__ import annotations
 
 import json
 import os
 from abc import ABC, abstractmethod
-from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from .checkpoint import (
+from ..utils.checkpoint import (
     ADAPTER_CONFIG,
     BASE_MODEL_DIR,
     TT_CHECKPOINT,
@@ -31,16 +22,13 @@ from .checkpoint import (
     read_adapter,
     write_adapter,
 )
+from ..utils.errors import UnsupportedTrainingConfig
 
 if TYPE_CHECKING:
     from ttml.unified_trainer.configs import TrainerConfig
 
 # What a training run reads from a hub model: the weights, the configs and the tokenizer.
 _MODEL_FILES = ["*.safetensors", "*.json", "tokenizer.model", "chat_template.jinja"]
-
-
-class UnsupportedTrainingConfig(ValueError):
-    """This model can't be trained with this config. The message names the setting and says why."""
 
 
 class ModelProvider(ABC):
@@ -57,8 +45,8 @@ class ModelProvider(ABC):
         ...
         provider.export_weights(model, directory)  # a checkpoint, in the format config.checkpoint.format picks
 
-    ``load_weights`` and ``export_weights`` read and write the checkpoint formats (``ttml.models.checkpoint``). A
-    family provides what is its own, its HF model's weights and its LoRA adapters in PEFT's form, by implementing the
+    ``load_weights`` and ``export_weights`` read and write the checkpoint formats (``ttml.models.utils.checkpoint``).
+    A family provides what is its own, its HF model's weights and its LoRA adapters in PEFT's form, by implementing the
     abstract methods after them.
     """
 
@@ -197,28 +185,6 @@ class ModelProvider(ABC):
         raise UnsupportedTrainingConfig(f"checkpoint: {directory} is for {base!r}, this run trains {name!r}")
 
 
-@cache
-def providers() -> dict[str, type[ModelProvider]]:
-    """The provider of each model family, keyed by the ``model_type`` of the HF ``config.json``."""
-    # Imported here, not with the module: every provider subclasses this module's ``ModelProvider``.
-    from .llama.provider import LlamaProvider
-
-    return {"llama": LlamaProvider}
-
-
-def get_provider(config: TrainerConfig) -> ModelProvider:
-    """The provider of the family of ``config.model.name``, for the run ``config`` describes."""
-    hf_config = load_hf_config(config.model.name)
-    model_type = hf_config.get("model_type")
-    provider = providers().get(model_type)
-    if provider is None:
-        raise UnsupportedTrainingConfig(
-            f"model.name: no provider for model_type {model_type!r} ({config.model.name}); "
-            f"available: {sorted(providers())}"
-        )
-    return provider(config, hf_config)
-
-
 def load_hf_config(model_name: str) -> dict[str, Any]:
     """The ``config.json`` of a local model directory, or of a hub model (downloads only that file)."""
     path = Path(model_name) / "config.json"
@@ -259,15 +225,3 @@ def same_model(base: Any, model_name: str) -> bool:
         return os.path.basename(os.path.normpath(name))
 
     return base == model_name or tail(base) == tail(model_name)
-
-
-__all__ = [
-    "ModelProvider",
-    "UnsupportedTrainingConfig",
-    "get_provider",
-    "load_hf_config",
-    "model_dir",
-    "model_revision",
-    "providers",
-    "same_model",
-]

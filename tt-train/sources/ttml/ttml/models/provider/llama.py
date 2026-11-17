@@ -16,9 +16,10 @@ from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
 import numpy as np
 
-from ..checkpoint import AdapterState
-from ..peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
-from ..provider import ModelProvider, UnsupportedTrainingConfig, model_dir, model_revision
+from ..utils.checkpoint import AdapterState
+from ..utils.errors import UnsupportedTrainingConfig
+from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
+from .base import ModelProvider, model_dir, model_revision
 
 if TYPE_CHECKING:
     from pathlib import Path

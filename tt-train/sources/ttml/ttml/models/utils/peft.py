@@ -23,7 +23,7 @@ import numpy as np
 
 from ttml.common.utils import permute_proj_rows, unpermute_proj_rows
 
-from .provider import UnsupportedTrainingConfig
+from .errors import UnsupportedTrainingConfig
 
 PEFT_PREFIX = "base_model.model."
 
