@@ -370,7 +370,9 @@ async def main():
         program = "build/test/tt_metal/unit_tests_deployment"
         args = ["--gtest_filter=*DramDeployment_*"]
 
-        env = os.environ
+        env = os.environ.copy()
+        # testend parsing relies on gtest's "(N ms)" suffix; force it on regardless of the caller's env.
+        env["GTEST_PRINT_TIME"] = "1"
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
 

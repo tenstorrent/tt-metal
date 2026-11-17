@@ -835,6 +835,8 @@ async def main():
         env["ETH_TEST_EXPECTED_LINKS"] = os.environ.get("ETH_TEST_EXPECTED_LINKS", str(10))
         # Active Ethernet cores only accept kernels in slow dispatch.
         env["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
+        # testend parsing relies on gtest's "(N ms)" suffix; force it on regardless of the caller's env.
+        env["GTEST_PRINT_TIME"] = "1"
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
 
@@ -860,7 +862,9 @@ async def main():
     # gtest exits 0 on skipped or unmatched tests, so every requested test must have actually passed.
     if not opts.i:
         for t in tests:
-            statuses = [r.status for r in runs if r.name.endswith(t.value)]
+            # Match the full name: a suffix match would let e.g. "...06ExtendedStressTest" count as "StressTest".
+            pattern = re.compile(rf"\w+\.TensixDeploymentEthernet\d+{t.value}")
+            statuses = [r.status for r in runs if pattern.fullmatch(r.name)]
             if not statuses or any(s != "OK" for s in statuses):
                 msg = f"Test {t.value} did not pass (status: {', '.join(statuses) or 'not run'})"
                 print(msg, file=sys.stderr)
