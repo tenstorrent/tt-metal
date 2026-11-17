@@ -992,5 +992,19 @@ the expert-id-ordered outputs (out_eord) are gone.
 - The Tracy device trace profiler (--device-trace-profiler) failed to post-process these programs (TT_FATAL: start and
   end marker names do not match); its host-device sync fit showed the same clock loss (1.3500 -> 1.3466 GHz over
   the run).
-- Open: the same layer on a 130 W Galaxy; power per phase (the fold drops furthest).
+- The same on a 130 W Galaxy (bh-glx-120-b08u08, hold 217516; tdp_limit 130 W on all 32 chips, DRAM 14G against
+  c10u20's 16G), after a Galaxy reset, 20 warm-up + 5 measured replays, then 20 bracketed:
+| | c10u20 (75 W) | b08u08 (130 W) |
+|---|---|---|
+| one chip: head / stream / fold / layer, host ms a replay | 3.07 / 42.84 / 11.46 / 58.79 | 2.81 / 37.56 / 9.05 / 49.26 |
+| one chip: layer counter MHz, power median / max | 1107, 69 / 107 W | 1334, 100 / 117 W |
+| Galaxy traced layer back to back | 73.1 | 62.5 |
+| Galaxy inside a replay (DRAM clocks) | 64.5 | 61.9 |
+| Galaxy eager wall / eager device sum | 76.9 / 61.1 | 74.4 / 61.5 |
+| Galaxy chips' AICLK median under load | 1093-1212 | 1337-1350 |
+- b08u08: the traced Galaxy layer bit-identical to eager (y, counts, token lists, destinations, w); 64-token checks
+  on chips 0 and 31 pass (y PCC 0.99988). Unaccounted time ~0.5 ms a layer (one chip and Galaxy). Inside a replay:
+  head 2.70, stream 49.72 (its zeros and the barrier included), fold 9.44. Trace command stream 320 KB.
+- The stream's cycles are ~2% higher on b08u08 (one chip 37.4 against 36.6 ms of counter): its slower DRAM.
+- Open: the routed stream (49.7 ms on the Galaxy against the 14.8 target); power per phase on 75 W systems.
 
