@@ -14,7 +14,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
-#include "ttnn/core/tensor/kernels/d2d_relay_common.hpp"
+#include "d2d_relay_common.hpp"
 
 constexpr uint32_t terminate_value = get_named_compile_time_arg_val("terminate_value");
 constexpr uint32_t termination_addr = get_named_compile_time_arg_val("termination_addr");
@@ -25,6 +25,9 @@ constexpr uint32_t num_slots = get_named_compile_time_arg_val("num_slots");
 // own_slot == num_slots when this chip's coord does not take part.
 constexpr uint32_t own_slot = get_named_compile_time_arg_val("own_slot");
 constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+// Bytes of one ring slot (relay_slot_bytes): a page, or a group of pages packed into one packet.
+constexpr uint32_t max_page_size = get_named_compile_time_arg_val("max_page_size");
+constexpr uint32_t num_extra_segments = get_named_compile_time_arg_val("num_extra_segments");
 constexpr uint32_t max_payload = get_named_compile_time_arg_val("max_payload");
 constexpr uint32_t page_start = get_named_compile_time_arg_val("page_start");  // this lane's pages
 constexpr uint32_t page_end = get_named_compile_time_arg_val("page_end");
@@ -64,6 +67,7 @@ constexpr uint32_t entry_md_base = get_named_compile_time_arg_val("entry_md_base
 constexpr uint32_t num_credit_conns = get_named_compile_time_arg_val("num_credit_conns");
 // Staging, own backing and entry-side tensors all share the per-shard spec.
 constexpr auto tensor_args = TensorAccessorArgs<0>();
+constexpr uint32_t extra_segments_ct_offset = tensor_args.next_compile_time_args_offset();
 
 static_assert(num_slots >= 1 && num_slots <= 32, "pending set is a 32-bit mask");
 static_assert(num_credit_conns <= 4, "at most one credit connection per in-mesh direction");
@@ -75,10 +79,12 @@ static_assert(2u * kRingDepth <= 15u, "two lanes of trids must fit in 0..15");
 // Per-slot runtime args. Master: kMasterSlotArgs words per slot; sub: kSubSlotArgs.
 //   src_addr, dst_addr                       (both lanes)
 //   src_lanes, src_chip, src_mesh, src_noc_x, src_noc_y, src_acked_addr, credit_conn (master)
+//   src_addr, dst_addr per extra segment     (both lanes)
 constexpr uint32_t kSubSlotArgs = 2;
 constexpr uint32_t kMasterSlotArgs = 9;
+constexpr uint32_t kLaneSlotArgs = (is_master ? kMasterSlotArgs : kSubSlotArgs) + (2 * num_extra_segments);
 
-// Copy this lane's pages of slot k, then md_size bytes of metadata (none when 0), and
+// Copy this lane's pages of slot k (extra segments first), then md_size bytes of metadata (none when 0), and
 // Flush-increment the entry relay's arrived[k] in the same packet as the last write.
 template <typename SlotArgs>
 FORCE_INLINE void copy_slot_half(
@@ -90,9 +96,11 @@ FORCE_INLINE void copy_slot_half(
     uint32_t md_l1_addr,
     uint32_t md_size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_header) {
+    d2d_relay::stream_extra_segments<num_extra_segments, extra_segments_ct_offset, max_payload, max_page_size, kRingDepth, kTridBase>(
+        noc, z_conn, cb_l1_addr, slot.extra_arg, is_master, z_lanes > 1, data_header);
     auto in_acc = TensorAccessor(tensor_args, slot.src_addr);
     auto out_acc = TensorAccessor(tensor_args, slot.dst_addr);
-    d2d_relay::stream_pages_then_inc<page_size, max_payload, kRingDepth, kTridBase>(
+    d2d_relay::stream_pages_then_inc<page_size, max_payload, max_page_size, kRingDepth, kTridBase>(
         noc,
         z_conn,
         in_acc,
@@ -110,6 +118,7 @@ FORCE_INLINE void copy_slot_half(
 struct Slot {
     uint32_t src_addr;
     uint32_t dst_addr;
+    size_t extra_arg;  // RT index of the extra segments' address pairs
 };
 
 void kernel_main() {
@@ -126,8 +135,11 @@ void kernel_main() {
     }
     const size_t slot_args = arg;
     auto slot_at = [&](uint32_t k) {
-        const size_t base = slot_args + k * (is_master ? kMasterSlotArgs : kSubSlotArgs);
-        return Slot{get_arg_val<uint32_t>(base), get_arg_val<uint32_t>(base + 1)};
+        const size_t base = slot_args + k * kLaneSlotArgs;
+        return Slot{
+            get_arg_val<uint32_t>(base),
+            get_arg_val<uint32_t>(base + 1),
+            base + (is_master ? kMasterSlotArgs : kSubSlotArgs)};
     };
 
     // Headers: [0] data and the fused increments to the entry chip, [1] credits (route set per source).
@@ -140,7 +152,7 @@ void kernel_main() {
 
     Noc noc(noc_index);
     CircularBuffer scratch(scratch_cb);
-    const uint32_t cb_l1_addr = scratch.get_write_ptr() + (is_master ? 0u : kRingDepth * page_size);
+    const uint32_t cb_l1_addr = scratch.get_write_ptr() + (is_master ? 0u : kRingDepth * max_page_size);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
     if constexpr (!is_master) {
@@ -209,7 +221,7 @@ void kernel_main() {
                     stop = true;
                     break;
                 }
-                const size_t base = slot_args + k * kMasterSlotArgs;
+                const size_t base = slot_args + k * kLaneSlotArgs;
                 const uint32_t src_lanes = get_arg_val<uint32_t>(base + 2);
                 volatile tt_l1_ptr uint32_t* arrived =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrived_base + k * word_stride);
