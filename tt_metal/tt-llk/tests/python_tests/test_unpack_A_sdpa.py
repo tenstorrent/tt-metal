@@ -35,7 +35,6 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
-    DISABLE_SRC_ZERO_FLAG,
     INPUT_DIMENSIONS,
     NUM_BLOCKS,
     NUM_FACES,
@@ -231,7 +230,6 @@ def _run_unpack_A_sdpa(
                     partial_b=partial_face,
                     partial_face_math=partial_face,
                 ),
-                DISABLE_SRC_ZERO_FLAG(False),
             ],
             runtimes=[
                 UNPACK_TRANS_FACES(Transpose.No),

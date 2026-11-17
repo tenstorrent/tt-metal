@@ -1638,7 +1638,6 @@ PERF_TEST_SCHEMAS = {
             "block_rt_dim",
             "broadcast_type",
             "dest_acc",
-            "disable_src_zero_flag",
             "face_c_dim",
             "face_r_dim",
             "formats.input_A",

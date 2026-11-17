@@ -3,9 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The SDPA MOP streams one SrcA dvalid per face and no SrcB dummy. The generic
-// unpack-A execute runs that MOP once per tile, and A2D math makes the result an
-// identity datacopy.
+// The SDPA MOP streams SrcA without a SrcB dummy; A2D math is an identity copy.
 
 #include <algorithm>
 #include <cstdint>
