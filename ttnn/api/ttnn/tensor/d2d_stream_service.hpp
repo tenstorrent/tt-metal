@@ -22,6 +22,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/services/stream_counter.hpp"
 #include "ttnn/tensor/d2d_stage_gate.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -174,6 +175,13 @@ struct D2DStreamConfig {
     // Both sides must match. Needs a 2D fabric, share_fabric_links and no stage_gate.
     // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 turns it on for every stream.
     bool relay = false;
+
+    // Relay mode, receiver side: whether this process builds another D2D service on the same mesh after this
+    // receiver, as a middle pipeline stage builds its outbound sender after its inbound receiver. Then each entry
+    // relay takes a second forward lane only while another link of that direction stays free, so the later
+    // service still finds a router (two services on one chip cannot share one). A terminal stage builds no
+    // later service: it sets false, and its entry relays take every lane they can use.
+    bool reserve_links_for_later_service = true;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
@@ -248,6 +256,13 @@ public:
     // drain. Per-coord because each device's service core is independent.
     // TT_FATALs if metadata was not configured (Config::metadata_size_bytes == 0).
     tt::tt_metal::DeviceAddr get_metadata_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+
+    // This coord's output counters. produced is the data_ready counter: one step is every worker's inc for a
+    // transfer. pushed is consumed_sem on the first worker core: the service multicasts 1 per drained transfer.
+    // forwarded is the bytes_acked word in the socket config: the receiver adds 1 per consumed transfer.
+    // In relay mode the exit relay credits bytes_acked, and an exit chip's forwarded is its slot's cable_acked word.
+    tt::tt_metal::StreamOutputCounters get_output_counters(
+        const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Echo of Config::metadata_size_bytes (0 = metadata disabled).
     uint32_t get_metadata_size_bytes() const;
@@ -327,6 +342,11 @@ public:
     // after each transfer lands. Same address across the mesh. TT_FATALs if
     // metadata was not configured (Config::metadata_size_bytes == 0).
     tt::tt_metal::DeviceAddr get_metadata_addr() const;
+
+    // This coord's input counters. arrived is the bytes_sent word in the socket config: each sender lane adds 1 per
+    // landed transfer. consumed is the consumed counter: one step is every worker's inc for a transfer.
+    // In relay mode the entry relay feeds bytes_sent, and an entry chip's arrived is its slot's relay arrived word.
+    tt::tt_metal::StreamInputCounters get_input_counters(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Fabric-link lease — receiver-side mirror of the sender's (only meaningful when
     // Config::share_fabric_links == true; TT_FATALs otherwise). The receiver kernel

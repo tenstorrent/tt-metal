@@ -39,7 +39,7 @@ namespace tt::tt_metal {
 // that makes the census pick the mechanism under test.
 class SemScopeFixture : public MeshDispatchFixture {
 protected:
-    static constexpr experimental::NodeCoord core = {0, 0};
+    static constexpr NodeCoord core = {0, 0};
     static constexpr uint32_t iterations{64};
     static constexpr uint32_t concurrent_iterations{20};  // per-thread; NoC round-trips are slow on emu
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_smoke.cpp";
@@ -86,8 +86,8 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        experimental::SemaphoreSpec counter_sem{
-            .unique_id = experimental::SemaphoreSpecName{"counter_sem"},
+        SemaphoreSpec counter_sem{
+            .unique_id = SemaphoreSpecName{"counter_sem"},
             .target_nodes = core,
         };
 
@@ -98,47 +98,46 @@ protected:
         if (with_down) {
             defs.emplace("SEM_SCOPE_UPDOWN", "1");  // kernel also does down(N) after up(N)
         }
-        experimental::KernelSpec::CompilerOptions::Defines defines_obj(defs);
+        KernelSpec::CompilerOptions::Defines defines_obj(defs);
 
-        const experimental::KernelSpecName DM_KERNEL{"sem_scope_kernel"};
-        const experimental::KernelSpecName OBSERVER{"sem_scope_observer"};
-        std::vector<experimental::KernelSpec> kernel_specs;
-        kernel_specs.push_back(experimental::KernelSpec{
+        const KernelSpecName DM_KERNEL{"sem_scope_kernel"};
+        const KernelSpecName OBSERVER{"sem_scope_observer"};
+        std::vector<KernelSpec> kernel_specs;
+        kernel_specs.push_back(KernelSpec{
             .unique_id = DM_KERNEL,
             .source = kernel_path,
             .num_threads = 1,
             .compiler_options = {.defines = defines_obj},
             .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
+                {{.semaphore_spec_name = SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         });
-        std::vector<experimental::WorkUnitSpec> work_units{experimental::WorkUnitSpec{
+        std::vector<WorkUnitSpec> work_units{WorkUnitSpec{
             .name = "main",
             .kernels = {DM_KERNEL},
             .target_nodes = core,
         }};
         if (want == SemScope::EXTERNAL) {
             // The read-only observer whose off-node binding forces EXTERNAL.
-            kernel_specs.push_back(experimental::KernelSpec{
+            kernel_specs.push_back(KernelSpec{
                 .unique_id = OBSERVER,
                 .source = kernel_path_census,
                 .num_threads = 1,
                 .semaphore_bindings =
-                    {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
-                      .accessor_name = "counter"}},
+                    {{.semaphore_spec_name = SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
                 .runtime_arg_schema =
                     {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
-                .hw_config = experimental::DataMovementHardwareConfig{},
+                .hw_config = DataMovementHardwareConfig{},
             });
-            work_units.push_back(experimental::WorkUnitSpec{
+            work_units.push_back(WorkUnitSpec{
                 .name = "observer",
                 .kernels = {OBSERVER},
                 .target_nodes = second_node(),
             });
         }
 
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "sem_scope_smoke",
             .kernels = kernel_specs,
             .semaphores = {counter_sem},
@@ -146,18 +145,18 @@ protected:
         };
         program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
-        experimental::ProgramRunArgs params;
+        ProgramRunArgs params;
         params.kernel_run_args = {
-            experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs::KernelRunArgs{
                 .kernel = DM_KERNEL,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                    core, {{"report_addr", report_addr}, {"increment_times", iterations}}),
+                .runtime_arg_values =
+                    MakeRuntimeArgsForSingleNode(core, {{"report_addr", report_addr}, {"increment_times", iterations}}),
             },
         };
         if (want == SemScope::EXTERNAL) {
-            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
                 .kernel = OBSERVER,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     second_node(),
                     {{"report_addr", report_addr},
                      {"increment_times", 0u},
@@ -196,34 +195,32 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        experimental::Nodes sem_target = core;
+        Nodes sem_target = core;
         if (want == SemScope::EXTERNAL) {
-            sem_target = experimental::NodeRange{core, second_node()};
+            sem_target = NodeRange{core, second_node()};
         }
-        experimental::SemaphoreSpec counter_sem{
-            .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = sem_target};
-        experimental::SemaphoreSpec done_sem{
-            .unique_id = experimental::SemaphoreSpecName{"done_sem"}, .target_nodes = sem_target};
+        SemaphoreSpec counter_sem{.unique_id = SemaphoreSpecName{"counter_sem"}, .target_nodes = sem_target};
+        SemaphoreSpec done_sem{.unique_id = SemaphoreSpecName{"done_sem"}, .target_nodes = sem_target};
 
         std::map<std::string, std::string> defs{{mode_define, "1"}};
-        experimental::KernelSpec::CompilerOptions::Defines defines_obj(defs);
+        KernelSpec::CompilerOptions::Defines defines_obj(defs);
 
-        const experimental::KernelSpecName DM_KERNEL{"sem_scope_concurrent_kernel"};
-        experimental::KernelSpec kernel_spec{
+        const KernelSpecName DM_KERNEL{"sem_scope_concurrent_kernel"};
+        KernelSpec kernel_spec{
             .unique_id = DM_KERNEL,
             .source = kernel_path_concurrent,
             .num_threads = num_dms_,
             .compiler_options = {.defines = defines_obj},
             .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
-                 {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
+                {{.semaphore_spec_name = SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
+                 {.semaphore_spec_name = SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"report_addr", "increment_times", "num_threads", "self_noc_x", "self_noc_y"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
 
-        experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
-        experimental::ProgramSpec spec{
+        WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
+        ProgramSpec spec{
             .name = "sem_scope_concurrent",
             .kernels = {kernel_spec},
             .semaphores = {counter_sem, done_sem},
@@ -233,11 +230,11 @@ protected:
 
         // Its own virtual coords, for MODE_SELF_NOC_UP's self-targeted remote up.
         const CoreCoord core_virtual = mesh_device_->worker_core_from_logical_core(core);
-        experimental::ProgramRunArgs params;
+        ProgramRunArgs params;
         params.kernel_run_args = {
-            experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs::KernelRunArgs{
                 .kernel = DM_KERNEL,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     core,
                     {{"report_addr", report_addr},
                      {"increment_times", concurrent_iterations},
@@ -286,29 +283,26 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        const experimental::NodeRange two_nodes{core, second_node()};
-        experimental::SemaphoreSpec cached_sem{
-            .unique_id = experimental::SemaphoreSpecName{"cached_sem"}, .target_nodes = core};
-        experimental::SemaphoreSpec external_sem{
-            .unique_id = experimental::SemaphoreSpecName{"external_sem"}, .target_nodes = two_nodes};
-        experimental::SemaphoreSpec done_sem{
-            .unique_id = experimental::SemaphoreSpecName{"done_sem"}, .target_nodes = two_nodes};
+        const NodeRange two_nodes{core, second_node()};
+        SemaphoreSpec cached_sem{.unique_id = SemaphoreSpecName{"cached_sem"}, .target_nodes = core};
+        SemaphoreSpec external_sem{.unique_id = SemaphoreSpecName{"external_sem"}, .target_nodes = two_nodes};
+        SemaphoreSpec done_sem{.unique_id = SemaphoreSpecName{"done_sem"}, .target_nodes = two_nodes};
 
-        const experimental::KernelSpecName DM_KERNEL{"sem_coexist_kernel"};
-        experimental::KernelSpec kernel_spec{
+        const KernelSpecName DM_KERNEL{"sem_coexist_kernel"};
+        KernelSpec kernel_spec{
             .unique_id = DM_KERNEL,
             .source = kernel_path_coexist,
             .num_threads = num_dms_,
             .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"cached_sem"}, .accessor_name = "cached"},
-                 {.semaphore_spec_name = experimental::SemaphoreSpecName{"external_sem"}, .accessor_name = "external"},
-                 {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
+                {{.semaphore_spec_name = SemaphoreSpecName{"cached_sem"}, .accessor_name = "cached"},
+                 {.semaphore_spec_name = SemaphoreSpecName{"external_sem"}, .accessor_name = "external"},
+                 {.semaphore_spec_name = SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "num_threads"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
 
-        experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
-        experimental::ProgramSpec spec{
+        WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
+        ProgramSpec spec{
             .name = "sem_scope_coexist",
             .kernels = {kernel_spec},
             .semaphores = {cached_sem, external_sem, done_sem},
@@ -316,11 +310,11 @@ protected:
         };
         program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
-        experimental::ProgramRunArgs params;
+        ProgramRunArgs params;
         params.kernel_run_args = {
-            experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs::KernelRunArgs{
                 .kernel = DM_KERNEL,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     core,
                     {{"report_addr", report_addr},
                      {"increment_times", concurrent_iterations},
@@ -357,34 +351,33 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        experimental::SemaphoreSpec counter_sem{
-            .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
+        SemaphoreSpec counter_sem{.unique_id = SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
 
-        const experimental::KernelSpecName SENDER{"sem_remote_sender"};
-        const experimental::KernelSpecName RECEIVER{"sem_remote_receiver"};
-        experimental::KernelSpec sender_spec{
+        const KernelSpecName SENDER{"sem_remote_sender"};
+        const KernelSpecName RECEIVER{"sem_remote_receiver"};
+        KernelSpec sender_spec{
             .unique_id = SENDER,
             .source = kernel_path_remote,
             .num_threads = sender_threads,
             .compiler_options = {.defines = {{"REMOTE_SENDER", "1"}}},
             .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
+                {{.semaphore_spec_name = SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"increment_times", "remote_noc_x", "remote_noc_y"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
-        experimental::KernelSpec receiver_spec{
+        KernelSpec receiver_spec{
             .unique_id = RECEIVER,
             .source = kernel_path_remote,
             .num_threads = 1,
             .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
+                {{.semaphore_spec_name = SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "expected"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
 
-        experimental::WorkUnitSpec wu_recv{.name = "wu_recv", .kernels = {RECEIVER}, .target_nodes = core};
-        experimental::WorkUnitSpec wu_send{.name = "wu_send", .kernels = {SENDER}, .target_nodes = second_node()};
-        experimental::ProgramSpec spec{
+        WorkUnitSpec wu_recv{.name = "wu_recv", .kernels = {RECEIVER}, .target_nodes = core};
+        WorkUnitSpec wu_send{.name = "wu_send", .kernels = {SENDER}, .target_nodes = second_node()};
+        ProgramSpec spec{
             .name = "sem_scope_remote",
             .kernels = {sender_spec, receiver_spec},
             .semaphores = {counter_sem},
@@ -392,20 +385,20 @@ protected:
         };
         Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
-        experimental::ProgramRunArgs params;
+        ProgramRunArgs params;
         params.kernel_run_args = {
-            experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs::KernelRunArgs{
                 .kernel = SENDER,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     second_node(),
                     {{"increment_times", iters},
                      {"remote_noc_x", static_cast<uint32_t>(core_virtual.x)},
                      {"remote_noc_y", static_cast<uint32_t>(core_virtual.y)}}),
             },
-            experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs::KernelRunArgs{
                 .kernel = RECEIVER,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                    core, {{"report_addr", report_addr}, {"expected", expected}}),
+                .runtime_arg_values =
+                    MakeRuntimeArgsForSingleNode(core, {{"report_addr", report_addr}, {"expected", expected}}),
             },
         };
         experimental::SetProgramRunArgs(program, params);
@@ -422,7 +415,7 @@ protected:
     }
 
     struct CensusKernel {
-        experimental::NodeCoord node{core};
+        NodeCoord node{core};
         uint32_t num_threads = 1;
         uint32_t increments = 0;  // 0 for a binder that only reads
         bool reporter = false;    // exactly one kernel should report
@@ -434,10 +427,9 @@ protected:
 
     // Builds and runs a program with the given census shape; returns {baked_scope,
     // counter_value}.
-    std::pair<uint32_t, uint32_t> run_census(
-        const experimental::Nodes& sem_target, const std::vector<CensusKernel>& kernels) {
+    std::pair<uint32_t, uint32_t> run_census(const Nodes& sem_target, const std::vector<CensusKernel>& kernels) {
         // Sentinel prefill
-        experimental::NodeCoord reporter_node = core;
+        NodeCoord reporter_node = core;
         for (const auto& k : kernels) {
             if (k.reporter) {
                 reporter_node = k.node;
@@ -450,25 +442,23 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        experimental::SemaphoreSpec sem{
-            .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = sem_target};
+        SemaphoreSpec sem{.unique_id = SemaphoreSpecName{"counter_sem"}, .target_nodes = sem_target};
 
-        std::vector<experimental::KernelSpec> kernel_specs;
-        experimental::ProgramRunArgs params;
-        std::vector<std::pair<experimental::NodeCoord, std::vector<experimental::KernelSpecName>>> by_node;
+        std::vector<KernelSpec> kernel_specs;
+        ProgramRunArgs params;
+        std::vector<std::pair<NodeCoord, std::vector<KernelSpecName>>> by_node;
         for (size_t i = 0; i < kernels.size(); i++) {
             const auto& k = kernels[i];
-            const experimental::KernelSpecName name{"census_k" + std::to_string(i)};
-            kernel_specs.push_back(experimental::KernelSpec{
+            const KernelSpecName name{"census_k" + std::to_string(i)};
+            kernel_specs.push_back(KernelSpec{
                 .unique_id = name,
                 .source = kernel_path_census,
                 .num_threads = k.num_threads,
                 .semaphore_bindings =
-                    {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
-                      .accessor_name = "counter"}},
+                    {{.semaphore_spec_name = SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
                 .runtime_arg_schema =
                     {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
-                .hw_config = experimental::DataMovementHardwareConfig{},
+                .hw_config = DataMovementHardwareConfig{},
             });
             bool placed = false;
             for (auto& [node, names] : by_node) {
@@ -481,9 +471,9 @@ protected:
             if (!placed) {
                 by_node.push_back({k.node, {name}});
             }
-            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
                 .kernel = name,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     k.node,
                     {{"report_addr", report_addr},
                      {"increment_times", k.increments},
@@ -491,15 +481,14 @@ protected:
                      {"wait_min_total", k.wait_min_total}}),
             });
         }
-        std::vector<experimental::WorkUnitSpec> work_units;
+        std::vector<WorkUnitSpec> work_units;
         work_units.reserve(by_node.size());
         for (size_t w = 0; w < by_node.size(); w++) {
-            work_units.push_back(experimental::WorkUnitSpec{
+            work_units.push_back(WorkUnitSpec{
                 .name = "wu" + std::to_string(w), .kernels = by_node[w].second, .target_nodes = by_node[w].first});
         }
 
-        experimental::ProgramSpec spec{
-            .name = "sem_census", .kernels = kernel_specs, .semaphores = {sem}, .work_units = work_units};
+        ProgramSpec spec{.name = "sem_census", .kernels = kernel_specs, .semaphores = {sem}, .work_units = work_units};
         Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
         experimental::SetProgramRunArgs(program, params);
         workload.add_program(device_range, std::move(program));
@@ -541,34 +530,33 @@ protected:
         std::vector<uint32_t> zero_report(8, 0u);
         slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, zero_report);
 
-        experimental::SemaphoreSpec sem{.unique_id = experimental::SemaphoreSpecName{"sem"}, .target_nodes = core};
+        SemaphoreSpec sem{.unique_id = SemaphoreSpecName{"sem"}, .target_nodes = core};
         sem.advanced_options.max_value = run.max_value;
-        const experimental::KernelSpecName COMPUTE{"compute"};
-        experimental::KernelSpec ks{
+        const KernelSpecName COMPUTE{"compute"};
+        KernelSpec ks{
             .unique_id = COMPUTE,
             .source = kernel_path_compute,
             .num_threads = 1,
-            .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
+            .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
             .compile_time_args =
                 {{"pattern", run.pattern},
                  {"thread_sel", run.thread_sel},
                  {"nosync", run.nosync},
                  {"batch", run.batch}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_iters", "report_addr"}},
-            .hw_config = experimental::ComputeHardwareConfig{},  // double-buffered DST (pattern D: SyncHalf)
+            .hw_config = ComputeHardwareConfig{},  // double-buffered DST (pattern D: SyncHalf)
         };
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "sem_compute_atomic",
             .kernels = {ks},
             .semaphores = {sem},
             .work_units = {{.name = "main", .kernels = {COMPUTE}, .target_nodes = core}},
         };
-        experimental::ProgramRunArgs params;
-        params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs params;
+        params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
             .kernel = COMPUTE,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                core, {{"num_iters", run.num_iters}, {"report_addr", report_addr}}),
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(core, {{"num_iters", run.num_iters}, {"report_addr", report_addr}}),
         }};
 
         std::shared_ptr<distributed::MeshBuffer> in_buffer;
@@ -582,39 +570,39 @@ protected:
             out_buffer = distributed::MeshBuffer::create(dram_size, dram, mesh_device_.get());
             slow_dispatch::WriteToBuffer(*in_buffer, in);
 
-            const experimental::KernelSpecName READER{"reader"};
-            const experimental::KernelSpecName WRITER{"writer"};
-            const experimental::DataMovementHardwareConfig dm_hw_config{
-                .config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
-                    .disable_dfb_implicit_sync_for_all = true}};
+            const KernelSpecName READER{"reader"};
+            const KernelSpecName WRITER{"writer"};
+            const DataMovementHardwareConfig dm_hw_config{
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
             auto& compute = spec.kernels[0];
             compute.compiler_options.defines = {{"PATTERN_D_DFB", "1"}};
             // Self-loop bindings need distinct accessor names; the kernel uses dfb::mid for both sides.
             compute.dfb_bindings = {
-                experimental::ConsumerOf(experimental::DFBSpecName{"in"}, "in"),
-                experimental::ProducerOf(experimental::DFBSpecName{"mid"}, "mid"),
-                experimental::ConsumerOf(experimental::DFBSpecName{"mid"}, "mid_in"),
-                experimental::ProducerOf(experimental::DFBSpecName{"out"}, "out"),
+                ConsumerOf(DFBSpecName{"in"}, "in"),
+                ProducerOf(DFBSpecName{"mid"}, "mid"),
+                ConsumerOf(DFBSpecName{"mid"}, "mid_in"),
+                ProducerOf(DFBSpecName{"out"}, "out"),
             };
-            spec.kernels.push_back(experimental::KernelSpec{
+            spec.kernels.push_back(KernelSpec{
                 .unique_id = READER,
                 .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp",
                 .num_threads = 1,
-                .dfb_bindings = {experimental::ProducerOf(experimental::DFBSpecName{"in"}, "out")},
+                .dfb_bindings = {ProducerOf(DFBSpecName{"in"}, "out")},
                 .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"}},
                 .hw_config = dm_hw_config,
             });
-            spec.kernels.push_back(experimental::KernelSpec{
+            spec.kernels.push_back(KernelSpec{
                 .unique_id = WRITER,
                 .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
                 .num_threads = 1,
-                .dfb_bindings = {experimental::ConsumerOf(experimental::DFBSpecName{"out"}, "in")},
+                .dfb_bindings = {ConsumerOf(DFBSpecName{"out"}, "in")},
                 .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
                 .hw_config = dm_hw_config,
             });
             for (auto [name, entries] : {std::pair{"in", 2u}, std::pair{"mid", kComputeDepth}, std::pair{"out", 2u}}) {
-                spec.dataflow_buffers.push_back(experimental::DataflowBufferSpec{
-                    .unique_id = experimental::DFBSpecName{name},
+                spec.dataflow_buffers.push_back(DataflowBufferSpec{
+                    .unique_id = DFBSpecName{name},
                     .entry_size = tile_bytes,
                     .num_entries = entries,
                     .data_format_metadata = tt::DataFormat::Float16_b,
@@ -623,11 +611,11 @@ protected:
             spec.work_units[0].kernels = {COMPUTE, READER, WRITER};
             params.kernel_run_args.push_back(
                 {.kernel = READER,
-                 .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                 .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                      core, {{"src_addr", in_buffer->address()}, {"bank_id", 0u}, {"num_tiles", run.num_iters}})});
             params.kernel_run_args.push_back(
                 {.kernel = WRITER,
-                 .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                 .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                      core, {{"dst_addr", out_buffer->address()}, {"bank_id", 0u}, {"num_tiles", run.num_iters}})});
         }
         Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
@@ -806,9 +794,9 @@ protected:
         const auto grid = mesh_device_->compute_with_storage_grid_size();
         return grid.x >= 2 || grid.y >= 2;
     }
-    experimental::NodeCoord second_node() const {
+    NodeCoord second_node() const {
         const auto grid = mesh_device_->compute_with_storage_grid_size();
-        return grid.x >= 2 ? experimental::NodeCoord{1, 0} : experimental::NodeCoord{0, 1};
+        return grid.x >= 2 ? NodeCoord{1, 0} : NodeCoord{0, 1};
     }
 
     static constexpr uint32_t kNoReport = 0xDEADBEEFu;  // sentinel: outside every SemScope value
@@ -1079,50 +1067,48 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
     std::vector<uint32_t> sentinel(3, kNoReport);
     slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
-    const experimental::SemaphoreSpecName SEM_A{"sem_a"};
-    const experimental::SemaphoreSpecName SEM_B{"sem_b"};
-    experimental::SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
-    experimental::SemaphoreSpec sem_b{.unique_id = SEM_B, .target_nodes = core};
-    const experimental::KernelSpecName KA{"cached_ka"};
-    const experimental::KernelSpecName KB{"cached_kb"};
+    const SemaphoreSpecName SEM_A{"sem_a"};
+    const SemaphoreSpecName SEM_B{"sem_b"};
+    SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
+    SemaphoreSpec sem_b{.unique_id = SEM_B, .target_nodes = core};
+    const KernelSpecName KA{"cached_ka"};
+    const KernelSpecName KB{"cached_kb"};
     const uint32_t threads_a = 2;
     const uint32_t threads_b = num_dms_ - threads_a;
 
-    auto make_k = [&](const experimental::KernelSpecName& name,
-                      const experimental::SemaphoreSpecName& sem_name,
-                      uint32_t threads) {
-        return experimental::KernelSpec{
+    auto make_k = [&](const KernelSpecName& name, const SemaphoreSpecName& sem_name, uint32_t threads) {
+        return KernelSpec{
             .unique_id = name,
             .source = kernel_path_census,
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
     };
-    experimental::WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
-    experimental::ProgramSpec spec{
+    WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
+    ProgramSpec spec{
         .name = "two_cached_one_node",
         .kernels = {make_k(KA, SEM_A, threads_a), make_k(KB, SEM_B, threads_b)},
         .semaphores = {sem_a, sem_b},
         .work_units = {wu}};
     Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = KA,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 core,
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 1u},
                  {"wait_min_total", 0u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = KB,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 core,
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
@@ -1203,50 +1189,48 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     std::vector<uint32_t> sentinel(3, kNoReport);
     slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
-    const experimental::SemaphoreSpecName SEM_A{"sem_cached"};
-    const experimental::SemaphoreSpecName SEM_B{"sem_external"};
-    experimental::SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
-    experimental::SemaphoreSpec sem_b{.unique_id = SEM_B, .target_nodes = experimental::NodeRange{core, second_node()}};
-    const experimental::KernelSpecName KA{"cached_binder"};
-    const experimental::KernelSpecName KB{"barrier_user"};
+    const SemaphoreSpecName SEM_A{"sem_cached"};
+    const SemaphoreSpecName SEM_B{"sem_external"};
+    SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
+    SemaphoreSpec sem_b{.unique_id = SEM_B, .target_nodes = NodeRange{core, second_node()}};
+    const KernelSpecName KA{"cached_binder"};
+    const KernelSpecName KB{"barrier_user"};
     const uint32_t threads_a = 2;
     const uint32_t threads_b = num_dms_ - threads_a;
 
-    auto make_k = [&](const experimental::KernelSpecName& name,
-                      const experimental::SemaphoreSpecName& sem_name,
-                      uint32_t threads) {
-        return experimental::KernelSpec{
+    auto make_k = [&](const KernelSpecName& name, const SemaphoreSpecName& sem_name, uint32_t threads) {
+        return KernelSpec{
             .unique_id = name,
             .source = kernel_path_census,
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
     };
-    experimental::WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
-    experimental::ProgramSpec spec{
+    WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
+    ProgramSpec spec{
         .name = "cached_seeder_vs_user_slot",
         .kernels = {make_k(KA, SEM_A, threads_a), make_k(KB, SEM_B, threads_b)},
         .semaphores = {sem_a, sem_b},
         .work_units = {wu}};
     Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = KA,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 core,
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 1u},
                  {"wait_min_total", 0u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = KB,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 core,
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
@@ -1277,7 +1261,7 @@ TEST_F(SemScopeFixture, TestCensusMultiNodeSemPicksExternal) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes for a multi-node semaphore";
     }
-    const experimental::NodeRange two_nodes{experimental::NodeCoord{0, 0}, second_node()};
+    const NodeRange two_nodes{NodeCoord{0, 0}, second_node()};
     const auto [scope, count] =
         run_census(two_nodes, {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
     (void)count;
@@ -1322,7 +1306,7 @@ TEST_F(SemScopeFixture, TestCensusOffNodeBinderBlocksCached) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place a binder off the semaphore's node";
     }
-    const experimental::NodeCoord other = second_node();
+    const NodeCoord other = second_node();
     const auto [scope, count] = run_census(
         core,
         {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true},
@@ -1357,32 +1341,30 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
     std::vector<uint32_t> sentinel(2, kNoReport);
     slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
-    experimental::SemaphoreSpec sem_near{
-        .unique_id = experimental::SemaphoreSpecName{"sem_near"}, .target_nodes = core};
-    experimental::SemaphoreSpec sem_far{
-        .unique_id = experimental::SemaphoreSpecName{"sem_far"}, .target_nodes = second_node()};
+    SemaphoreSpec sem_near{.unique_id = SemaphoreSpecName{"sem_near"}, .target_nodes = core};
+    SemaphoreSpec sem_far{.unique_id = SemaphoreSpecName{"sem_far"}, .target_nodes = second_node()};
 
-    const experimental::KernelSpecName K{"slot_probe"};
-    experimental::KernelSpec ks{
+    const KernelSpecName K{"slot_probe"};
+    KernelSpec ks{
         .unique_id = K,
         .source = kernel_path_slot_probe,
         .num_threads = 2,
         .semaphore_bindings =
-            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_near"}, .accessor_name = "near_sem"},
-             {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_far"}, .accessor_name = "far_sem"}},
+            {{.semaphore_spec_name = SemaphoreSpecName{"sem_near"}, .accessor_name = "near_sem"},
+             {.semaphore_spec_name = SemaphoreSpecName{"sem_far"}, .accessor_name = "far_sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
-    experimental::WorkUnitSpec wu{.name = "wu", .kernels = {K}, .target_nodes = core};
-    experimental::ProgramSpec spec{
+    WorkUnitSpec wu{.name = "wu", .kernels = {K}, .target_nodes = core};
+    ProgramSpec spec{
         .name = "sem_id_collision", .kernels = {ks}, .semaphores = {sem_near, sem_far}, .work_units = {wu}};
     Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = K,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"report_addr", report_addr}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(core, {{"report_addr", report_addr}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
@@ -1402,21 +1384,21 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
 // A kernel may bind a given semaphore only once: a second binding would double-count that
 // kernel's instances in the census and distort the mechanism choice.
 TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
-    experimental::SemaphoreSpec sem{.unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
-    const experimental::KernelSpecName K{"double_binder"};
-    experimental::KernelSpec ks{
+    SemaphoreSpec sem{.unique_id = SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
+    const KernelSpecName K{"double_binder"};
+    KernelSpec ks{
         .unique_id = K,
         .source = kernel_path_census,
         .num_threads = 1,
         .semaphore_bindings =
-            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
-             {.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter_again"}},
+            {{.semaphore_spec_name = SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
+             {.semaphore_spec_name = SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter_again"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
-    experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
-    experimental::ProgramSpec spec{.name = "sem_double_bind", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
+    WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
+    ProgramSpec spec{.name = "sem_double_bind", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
     EXPECT_ANY_THROW({
         Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
         (void)program;

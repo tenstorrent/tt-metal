@@ -442,7 +442,7 @@ class QwenImageCheckpoint:
         sizes = [(latents_height, latents_width), *image_latents_sizes]
         spatial_freqs, prompt_freqs = self.pos_embed(
             video_fhw=[[(1, h // p, w // p) for h, w in sizes]],
-            device="cpu",
+            device=torch.device("cpu"),
             max_txt_seq_len=prompt_sequence_length,
         )
         padding = padded_spatial_sequence_length - spatial_freqs.shape[0]
