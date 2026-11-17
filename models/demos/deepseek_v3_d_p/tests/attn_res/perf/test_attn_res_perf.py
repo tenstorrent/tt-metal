@@ -96,10 +96,11 @@ _GALAXY = "SP8xTP4"
 # it reaches it. The untraced ordinary layer does not: its reads are host-dispatch bound on the 8x4 mesh, so it has
 # its own reference and, following the host CPU, a wider band. Untraced timings carry the host's dispatch jitter, so
 # the untraced boundary layer takes the wider band too (run 41946792821 read it at 372 us). Galaxies off the pool can
-# sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
+# sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1. The untraced ordinary reference is 150 us scaled
+# by the speedup of running the gather-softmax read as one program per mesh (176 -> 108 us median on one Galaxy).
 _GALAXY_REFERENCE_E2E_US = {
     "traced": {"boundary": 394.0, "ordinary": 118.0},
-    "untraced": {"boundary": 394.0, "ordinary": 150.0},
+    "untraced": {"boundary": 394.0, "ordinary": 92.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.

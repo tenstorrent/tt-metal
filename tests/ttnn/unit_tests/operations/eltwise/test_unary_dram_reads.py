@@ -43,6 +43,14 @@ OPS = {
 if is_blackhole():  # softcap is Blackhole only
     OPS["softcap"] = lambda t, **kw: ttnn.softcap(t, 10.0, **kw)
 
+# The read plan picks a flow from the op's cost class (unary_utils.cpp op_cost), not the op, so one op of each class
+# reaches every flow: light, mid, heavy, very heavy and unmeasured. The fallback for kernels that cannot run the work
+# queue (logit, logsigmoid) needs 512+ pages per core, so it is run in nightly test_unary_dram_reads_large.py.
+FLOW_OPS = ["relu", "silu", "elu", "gelu_accurate", "atan"]
+
+# With 4 KB pages, ops up to heavy count as light and the rest as very heavy; silu checks a mid op is promoted.
+LARGE_PAGE_OPS = ["relu", "silu", "gelu_accurate"]
+
 
 # DRAM sharded over num_shards banks. Height shards are whole rows; width shards are shard_width columns of every row,
 # shape[-1] // num_shards by default.
@@ -87,7 +95,7 @@ def run_against_default_path(op, a, device, memory_config, dtype=ttnn.bfloat16, 
     assert_equal(ttnn.to_torch(op(reference, sub_core_grids=DEFAULT_PATH_GRID)), ttnn.to_torch(out))
 
 
-@pytest.mark.parametrize("op_name", list(OPS))
+@pytest.mark.parametrize("op_name", FLOW_OPS)
 @pytest.mark.parametrize(
     "case, num_shards",
     [
@@ -104,7 +112,7 @@ def test_height_sharded(device, op_name, case, num_shards):
     run_against_default_path(OPS[op_name], random_input(shape), device, dram_sharded(shape, HEIGHT, num_shards))
 
 
-@pytest.mark.parametrize("op_name", list(OPS))
+@pytest.mark.parametrize("op_name", FLOW_OPS)
 @pytest.mark.parametrize(
     "case, width, num_shards",
     [
@@ -145,7 +153,7 @@ def test_fewer_tiles_than_cores(device, layout):
 # Light ops take bursts at 100 pages per core with many cores per bank and the queue with few. At 460 the default
 # split's cores start on 3 banks, where mid ops queue too with few cores per bank. Heavy and unmeasured ops keep the
 # default path.
-@pytest.mark.parametrize("op_name", list(OPS))
+@pytest.mark.parametrize("op_name", FLOW_OPS)
 @pytest.mark.parametrize("case", ["small", "bursts", "few_start_banks", "odd_shape"])
 def test_interleaved(device, op_name, case):
     if case == "odd_shape":
@@ -169,7 +177,7 @@ def test_interleaved(device, op_name, case):
     ],
     ids=["fp32-small", "fp32-one_page", "bfp8-small"],
 )
-@pytest.mark.parametrize("op_name", ["identity", "relu", "silu", "hardswish", "gelu_accurate", "logit"])
+@pytest.mark.parametrize("op_name", LARGE_PAGE_OPS)
 @pytest.mark.parametrize("layout", ["height", "width", "interleaved"])
 def test_other_formats(device, dtype, op_name, layout, size):
     width = 7 * 1024 if layout == "width" else 1024

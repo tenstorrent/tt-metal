@@ -15,7 +15,6 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA,
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
-    KDA_DECAY_LOGITS_L1_BYTES_PER_CORE,
     KDA_HISTORY_EXCHANGE_ROWS,
     KDA_HISTORY_EXCHANGE_SEMAPHORES,
     KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
@@ -32,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     validate_convolution_page_channels,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import persistent_semaphores
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import SlabEntry, persistent_semaphores
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -209,8 +208,8 @@ class ttKDA:
         self.active_seq_len_local = active_seq_len // self.sequence_parallel_size
         self._is_sequence_parallel = self.sequence_parallel_size > 1
         self._tp_cluster_axis = None if not self._is_sequence_parallel else self.tensor_parallel_axis
-        # A bounded gate is sigmoid(scale * (x @ W + bias)), applied by the add after the decay projection; chunk
-        # preparation applies the lower bound. The softplus gate applies its own activation after the projection.
+        # A bounded gate is sigmoid(scale * (x @ W + bias)), applied by the decay projection; chunk preparation
+        # applies the lower bound. The softplus gate applies its own activation after the projection.
         self._bounded_gate = config.gate_lower_bound is not None
         uses_grouped_scan = (
             self.sequence_parallel_size > 1 or program_config.recurrence.local_scan_strategy == "grouped"
@@ -361,14 +360,12 @@ class ttKDA:
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
+            # The bounded gate's sigmoid runs in the projection after its fused offset add (_compute_decay).
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
         )
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
-        )
-        # The bounded gate's FP32 logits (4 bytes per element) between the projection and the offset add.
-        self.decay_logits_memory_config = l1_when_it_fits(
-            mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_LOGITS_L1_BYTES_PER_CORE
         )
         # Experimental KDA operations reject packer_l1_acc=True: kernels that accumulate in L1 enable it
         # themselves. Keep this separate from projection matmuls, which accept the flag.
@@ -499,6 +496,11 @@ class ttKDA:
             raise ValueError(
                 f"hidden_states local T={sequence} does not match constructed T={self.active_seq_len_local}"
             )
+        if isinstance(state.recurrent, SlabEntry):
+            # Only the SP relay and final carry address a slab; the ops validate it.
+            if not self._is_sequence_parallel:
+                raise ValueError("a state slab entry needs a sequence-parallel layer (SP > 1)")
+            return
         if state.recurrent.shape != self._recurrent_state_shape:
             raise ValueError(f"recurrent state shape {state.recurrent.shape} != {self._recurrent_state_shape}")
         if state.convolution.shape != self._convolution_state_shape:
@@ -557,46 +559,21 @@ class ttKDA:
         The low-rank activations are read in place from the fused projection's columns at ``decay_rank_offset``.
         """
         weights = self.weights
-        if not self._bounded_gate:
-            gate = ttnn.linear(
-                projected,
-                weights.decay_output_projection,
-                bias=weights.decay_bias_flat,
-                program_config=self.decay_program_config,
-                memory_config=self.decay_memory_config,
-                compute_kernel_config=self.compute_config,
-                in0_column_offset=decay_rank_offset,
-            )
-            return self._softplus_decay(gate)
-        # sigmoid(r @ (A f_b) + A dt_bias) with A folded into the weights: FP32 logits plus the FP32 offset, one rounding
-        # to the BF16 gate; see _FP32_ARTIFACTS in tt/kda/weights.py. The gate is allocated before the logits so that
-        # the freed logits leave their L1 next to the circular buffers rather than below the gate.
-        # Indexed, not iterated: iterating a ttnn.Shape ends in an exception.
-        projected_shape = projected.shape
-        gate = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([projected_shape[0], projected_shape[1], weights.decay_output_projection.shape[-1]]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            self.device,
-            self.decay_memory_config,
-        )
-        logits = ttnn.linear(
+        gate = ttnn.linear(
             projected,
             weights.decay_output_projection,
+            bias=weights.decay_bias_flat,
             program_config=self.decay_program_config,
-            dtype=ttnn.float32,
-            memory_config=self.decay_logits_memory_config,
+            memory_config=self.decay_memory_config,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_config,
             in0_column_offset=decay_rank_offset,
         )
-        ttnn.add(
-            logits,
-            weights.decay_bias_flat,
-            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
-            memory_config=self.decay_memory_config,
-            output_tensor=gate,
-        )
-        ttnn.deallocate(logits)
+        if not self._bounded_gate:
+            return self._softplus_decay(gate)
+        # sigmoid(r @ (A f_b) + A dt_bias) with A folded into the weights, all in the projection: the matmul adds the
+        # FP32 offset to its FP32 logits on the SFPU (an FPU add would truncate it to TF32), applies the program
+        # config's sigmoid and rounds once to the BF16 gate; see _FP32_ARTIFACTS in tt/kda/weights.py.
         return gate
 
     def _softplus_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
@@ -668,7 +645,8 @@ class ttKDA:
 
         ``hidden_states`` is either TP-sharded, ``[B, T, H/TP]`` (the model's residual layout: the layer all-gathers
         it over TP for the column-parallel input projection, the counterpart of the output's reduce-scatter), or
-        already full width, ``[B, T, H]`` (no gather). :meth:`forward_slot` wraps this with a model's state slabs.
+        already full width, ``[B, T, H]`` (no gather). ``state`` may also be a model's slab entry
+        (``KdaStates.entry``), read and replaced in place.
 
         ``actual_start`` is the absolute global position of this chunk's first
         token. It selects the chronological SP segment order for MLA's
@@ -701,9 +679,12 @@ class ttKDA:
         inputs = self._project_inputs(hidden_states)
         if gathered:
             ttnn.deallocate(hidden_states)
+        convolution, convolution_slab = state.convolution, {}
+        if isinstance(convolution, SlabEntry):
+            convolution, convolution_slab = convolution.slab, convolution.op_kwargs()
         q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             inputs.projected,
-            state.convolution,
+            convolution,
             *self.weights.convolution_taps,
             self.config.q_dim,
             self.config.k_dim,
@@ -719,6 +700,7 @@ class ttKDA:
             # FP32 DST accumulates the four taps in FP32; BF16 DST biases q/k/v by about one BF16 ulp where taps
             # cancel large activations.
             compute_kernel_config=self.kda_compute_config,
+            **convolution_slab,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(
@@ -739,28 +721,3 @@ class ttKDA:
         ttnn.deallocate(inputs.projected)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
-
-    def forward_slot(
-        self,
-        hidden_states: ttnn.Tensor,
-        scratch: KdaState,
-        states,
-        slot: ttnn.Tensor,
-        layer_idx: int,
-        actual_start: ttnn.Tensor,
-        actual_end: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
-        """One model layer per chunk, its carry kept in the model's state slabs: import -> forward -> export.
-
-        ``states`` is the model's ``KdaStates`` (``tt/kda/state_adapter.py``, typed loosely because that module
-        imports this one). ``slot`` is its replicated one-element UINT32 device scalar, read on device by both copies,
-        so a captured trace follows the slot of the replay. ``scratch`` is overwritten with the slot's carry; the
-        replacement carry is stored back at ``(slot, layer_idx)`` and freed. ``actual_start`` also marks a request
-        head: where it reads 0 the import loads zeros instead of the slot. Returns the layer output.
-        """
-        states.import_layer(scratch, slot, layer_idx, zero_fill_at_zero=actual_start)
-        output, new_state = self.forward(hidden_states, scratch, actual_start, actual_end)
-        states.export_layer(new_state, slot, layer_idx)
-        ttnn.deallocate(new_state.recurrent)
-        ttnn.deallocate(new_state.convolution)
-        return output
