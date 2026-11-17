@@ -26,7 +26,7 @@ import ttnn
 
 from ._coordinator import checked_payload, current_group
 from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError, UnexpectedKeyError
-from ._index import Index, is_complete, read_header_json, read_index
+from ._index import Index, is_complete, read_checked_header, read_index
 from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan, unexpected_keys
 from ._safetensors import pread_all, read_file_header
 from ._state_dict import (
@@ -46,7 +46,7 @@ from ._state_dict import (
     restore_scalars,
 )
 from ._topology import chunk_boxes, crc31
-from ._train_state import TRAIN_STATE_KEY, check_train_state, missing_train_state, restore_train_state
+from ._train_state import check_train_state, missing_train_state, restore_train_state, train_state_of
 
 
 @dataclass
@@ -279,8 +279,8 @@ def load(
                 f"{ckpt_dir} is not a complete checkpoint (staging directory or missing index.json)"
             )
         index: Index = read_index(ckpt_dir)
-        header = read_header_json(ckpt_dir)
-        train_state = header[TRAIN_STATE_KEY]
+        header = read_checked_header(ckpt_dir)
+        train_state = train_state_of(header, ckpt_dir)
         missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
         if strict and missing_state:
             raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")
