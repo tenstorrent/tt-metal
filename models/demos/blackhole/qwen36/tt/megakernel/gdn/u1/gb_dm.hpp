@@ -42,6 +42,19 @@
                       // issued by the writer (BRISC / NOC0, writer_push_up) instead of the reader. Same bytes, same QIN
                       // counter protocol (each side: tiles, write barrier, then its +1s); only the NoC / RISC changes
 #endif
+#ifndef GB_STG_BARRIER
+#define GB_STG_BARRIER 0  // hang DIAGNOSTIC arm (E1_GB_STG_BARRIER, value = N > 0): the GB-STG win[1 - par] window writes run with
+                          // nothing else outstanding on the reader's NOC1 -- before the loop every read of this RISC is retired
+                          // (the count barrier + every trid 1..15, i.e. the trid 13 gdn_out ring read too) and every earlier
+                          // non-posted write is acked; at most N window writes are in flight (write barrier every N); write
+                          // barrier after the loop (also under GB_WBAR). Same bytes to the same DRAM pages
+#endif
+#ifndef GB_STG_NOC0
+#define GB_STG_NOC0 0  // hang FIX candidate (E1_GB_STG_NOC0): the GB-STG win[1 - par] window writes are issued by the writer
+                       // (BRISC / NOC0, writer_win) from the reader's staged window-out slots; the reader issues no DRAM write
+                       // in GB-STG. Handshake: one argblock word (wdone): the writer stores L + 1 once layer L's window writes
+                       // left L1 (writes flushed); the reader of layer L + 1 waits for it before it rewrites ctrl_l1 / wo_l1
+#endif
 #ifndef GB_NOROOT
 #define GB_NOROOT 0  // GTEXT2 (program.py, AR corners / Σ reducer DM): this core never holds an L2 root (asserted at the hook)
 #endif
@@ -108,11 +121,22 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
                          const CAcc& ctrl, uint32_t ctrl_bytes, uint32_t gin_l1, uint32_t qin_l1, uint32_t win_l1,
                          uint32_t wo_l1, uint32_t ctrl_l1, uint32_t cb_qpx, uint32_t npx, uint32_t cb_sht, uint32_t cb_kq,
                          volatile tt_l1_ptr uint32_t* in_ready, uint32_t in_target, const DAcc& dtb, const DAcc& nea,
-                         uint32_t bounce_l1, uint32_t tap1_l1) {
+                         uint32_t bounce_l1, uint32_t tap1_l1
+#if GB_STG_NOC0
+                         , volatile tt_l1_ptr uint32_t* wdone
+#endif
+                         ) {
     static_assert(B * T == 32 && K - 1 + T <= 8, "G-b: B * T == 32; the window rows fit face rows 0..7");
     constexpr uint32_t Lw = K - 1 + T, Lw_w = (Lw + 1) & ~1u;
     const uint32_t nconv = pb[kNconv];
     gpx::Ctrl<B, T, M, NV> c;
+#if GB_STG_NOC0
+    (void)Lw_w;
+    if (L) {  // the writer (same core) still parses ctrl_l1 / streams wo_l1 of layer L - 1 until it stored L (writer_layer)
+        pb[kDbgR] = (L << 8) | 6;
+        noc_semaphore_wait_min(wdone, L);
+    }
+#endif
 #if GB_WBAR
     noc_async_write_barrier();  // the previous layer's win[1 - par] writes read wo_l1 (rewritten below)
 #endif
@@ -224,18 +248,38 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
             cb_push_back(cb_sht, 4);
             if (j == 0) GBTS(5);
         }
+#if GB_STG_NOC0
+        // the writer's (writer_win, NOC0): no DRAM write on the reader's NOC1 here
+#else
+#if GB_STG_BARRIER
+        noc_async_read_barrier();  // every counted read of this RISC (DRAM, remote L1, the local row copies)
+        for (uint32_t t = 1; t <= NOC_MAX_TRANSACTION_ID; ++t) noc_async_read_barrier_with_trid(t);  // 13 = the gdn_out ring
+        noc_async_write_barrier();  // (trid 0 is not polled per id: non-posted multicasts wrap its outstanding counter)
+        uint32_t nfl = 0;
+#endif
         for (uint32_t j = 0; j < nconv; ++j) {  // win[1 - par] rows 0..Lw_w-1 of the live users (off the convs' path)
             const uint32_t col = pb[kConv + j * kConvW];
             for (uint32_t u = 0; u < B; ++u) {
                 if (c.hold[u]) continue;
                 const uint64_t dst = c.par ? wa.get_noc_addr(u * CT + col) : wb.get_noc_addr(u * CT + col);
                 const uint32_t o = wo_l1 + (j * B + u) * kCs;
+#if GB_STG_BARRIER
+                for (uint32_t hh = 0; hh < 2; ++hh) {
+                    noc_async_write(o + hh * 256, dst + hh * 512, Lw_w * 32);
+                    if (++nfl >= GB_STG_BARRIER) {
+                        noc_async_write_barrier();
+                        nfl = 0;
+                    }
+                }
+#else
                 noc_async_write(o, dst, Lw_w * 32);
                 noc_async_write(o + 256, dst + 512, Lw_w * 32);
+#endif
             }
         }
-#if !GB_WBAR
+#if !GB_WBAR || GB_STG_BARRIER
         noc_async_write_barrier();
+#endif
 #endif
     }
     GBTS(6);
@@ -315,6 +359,29 @@ inline void writer_push_up(volatile tt_l1_ptr uint32_t* pb, uint32_t gin_l1, uin
         const uint32_t xy = pb[kPush + 3 * i + 1];
         if ((xy >> 16) <= my_y[0]) continue;
         noc_semaphore_inc(get_noc_addr(xy & 0xFFFFu, xy >> 16, reinterpret_cast<uint32_t>(pb + kQinCnt)), 1);
+    }
+}
+#endif
+#if GB_STG_NOC0
+// GB_STG_NOC0: layer L's win[1 - par] rows 0..Lw_w-1 of the live users, from the reader's window-out slots (wo_l1) to DRAM on
+// the writer's NoC. Caller (writer_layer) guarantees the slots and the reader's ctrl page (ctrl_l1) are staged: it has seen
+// the conv output of every job in OUT, and the compute pops a job's SHT only after the reader pushed it, which the reader
+// does after the read barrier behind that job's window-out rows. They stay valid until this writer stores wdone = L + 1.
+template <uint32_t B, uint32_t T, uint32_t K, uint32_t CT, uint32_t M, uint32_t NV, typename WAcc>
+inline void writer_win(volatile tt_l1_ptr uint32_t* pb, const WAcc& wa, const WAcc& wb, uint32_t ctrl_l1, uint32_t wo_l1) {
+    constexpr uint32_t Lw = K - 1 + T, Lw_w = (Lw + 1) & ~1u;
+    const uint32_t nconv = pb[kNconv];
+    gpx::Ctrl<B, T, M, NV> c;
+    c.parse(ctrl_l1);
+    for (uint32_t j = 0; j < nconv; ++j) {
+        const uint32_t col = pb[kConv + j * kConvW];
+        for (uint32_t u = 0; u < B; ++u) {
+            if (c.hold[u]) continue;  // HOLD users: the reader's whole-tile bounce (before in_ready), other pages
+            const uint64_t dst = c.par ? wa.get_noc_addr(u * CT + col) : wb.get_noc_addr(u * CT + col);
+            const uint32_t o = wo_l1 + (j * B + u) * kCs;
+            noc_async_write(o, dst, Lw_w * 32);
+            noc_async_write(o + 256, dst + 512, Lw_w * 32);
+        }
     }
 }
 #endif
@@ -522,8 +589,14 @@ struct SvcEarly {
     void operator()() const { svc_early<KT_>(); }
 };
 #endif
+#if GB_STG_NOC0
+template <uint32_t B, uint32_t T, uint32_t NV, uint32_t VB, uint32_t RN, uint32_t KT_, uint32_t RD_, typename PAcc, typename Win>
+inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc& pre, uint32_t cb_out, uint32_t sc_l1,
+                         const Win& win, volatile tt_l1_ptr uint32_t* wdone) {
+#else
 template <uint32_t B, uint32_t T, uint32_t NV, uint32_t VB, uint32_t RN, uint32_t KT_, uint32_t RD_, typename PAcc>
 inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc& pre, uint32_t cb_out, uint32_t sc_l1) {
+#endif
     // OUT order (the compute's): gate pair, silu, conv 0, conv 1, [L2 root: Kt normalized k / q], pad to 4 per layer
     const uint32_t nconv = pb[kNconv];
     const bool root = !GB_NOROOT && pb[kRootPost] != 0;
@@ -607,6 +680,16 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
         ++n;
         GBTS(25);
     }
+#if GB_STG_NOC0
+    {
+        // every job's conv output was seen in OUT above (conv 0: the 4-page wait; conv 1: out1) => the reader staged every
+        // window-out slot of this layer. Flushed = the NIU has sent every request (the data left L1): the reader may move on
+        GBZ("GB-WWIN");
+        win();
+        noc_async_writes_flushed();
+        *wdone = L + 1;
+    }
+#endif
     for (; n & 3u; ++n) {  // the compute's pads
         cb_wait_front(cb_out, 1);
         cb_pop_front(cb_out, 1);
@@ -617,6 +700,9 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
         noc_semaphore_wait_min(pb + kRest, RN * (L + 1));  // this core's gate rows / vc / zs (wr_pgates reads the rows)
         pb[kDbgW] = (L << 8) | 4;
     }
+#if GB_STG_NOC0
+    noc_async_write_barrier();  // the window writes' DRAM acks (the next program reads win[1 - par]); long landed by now
+#endif
 }
 
 }  // namespace gb

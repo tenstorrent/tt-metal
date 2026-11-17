@@ -763,6 +763,18 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             "E1_GB: B*T == 32, early replay, lean table (eps_l2 = eps_norm: l2 eps == norm eps), VB == Vt"
         NC = len(cores)
         OGB = OGK + 6   # after the PERCORE words (k, n_fwd, 2 x (x, y))
+        # hang arms on the GB-STG win[1 - par] window writes (gb_dm.hpp; default off = unchanged sources / argblock):
+        #   E1_GB_STG_BARRIER=1 (N = 4) or =N >= 2, or E1_GB_STG_BARRIER_N=N: DIAGNOSTIC, reads retired before the loop, <= N writes in flight
+        #   E1_GB_STG_NOC0=1: FIX candidate, the writes go out from the writer (BRISC / NOC0); +1 argblock word (OWS, wdone)
+        #   E1_GB_NOCCNT=1: sim / bench probe, NIU response counters of both DM RISCs into 6 argblock words (OCN) at kernel end
+        _sb = int(os.environ.get("E1_GB_STG_BARRIER", "0") or 0)
+        STG_BAR = int(os.environ.get("E1_GB_STG_BARRIER_N", "4" if _sb == 1 else str(_sb))) if _sb else 0
+        STG_NOC0 = os.environ.get("E1_GB_STG_NOC0", "0") == "1"
+        NOCCNT = os.environ.get("E1_GB_NOCCNT", "0") == "1"
+        assert not (STG_BAR and STG_NOC0), "E1_GB_STG_BARRIER and E1_GB_STG_NOC0 are separate arms (NOC0 leaves no reader write to barrier)"
+        assert not _sb or STG_BAR >= 1, ("E1_GB_STG_BARRIER_N", STG_BAR)
+        OWS = OGB + 148 + 2 * NG   # after the G-b block (148 + [dtb, nea] bits per layer); asserted where the payload is built
+        OCN = OWS + (1 if STG_NOC0 else 0)
         # XS: windows (2 jobs) | window-out (one set per job) | reader ctrl page (+ dtb row @+512, nea row @+576) | ... | gate scratch
         # L1 diet: compact 512 B (job, user) window / window-out slots, one HOLD bounce tile, job 1's tap; then the gate scratch
         XWO = 2 * B * 512; XBN = XWO + 2 * B * 512; XT1 = XBN + 2048; XRC = XT1 + 2048; XWC = XRC + max(CTRL_B, 640)
@@ -782,7 +794,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'  const auto dt = {racc("dtb", 4096)};\n  const auto ne = {racc("nea", 4096)};\n'
                 f'  gb::reader_layer<{B}, {T}, {K}, {Ct}, {M}, {Nv}, {NC}, {Kt}>(g_ab + {OGB}, g_l, wa, wb, tp, ct, {ctrl_bytes}u, '
                 f'{("get_write_ptr(41)" if gb["gin_addr"] == "cb41" else str(int(gb["gin_addr"])) + "u")}, g_gb_qin, g_gb_xs, g_gb_xs + {XWO}u, g_gb_xs + {XRC}u, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, {GBC["kq"]}u, '
-                f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")}, dt, ne, g_gb_xs + {XBN}u, g_gb_xs + {XT1}u);\n}}\n'
+                f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")}, dt, ne, g_gb_xs + {XBN}u, g_gb_xs + {XT1}u{f", g_ab + {OWS}" if STG_NOC0 else ""});\n}}\n'
                 f'void gdn_gb_wait(uint32_t w) {{ (void)w; noc_semaphore_wait_min(g_ab + {OGB}, {1 + Vt + VB}u * (g_l + 1)); }}\n'
                 f'void gdn_gb_knq(uint32_t a) {{ gb::pull_knq<{Kt}>(g_ab + {OGB}, g_l, a); }}\n')
         GB_RINIT = (f'  g_gb_qin = get_write_ptr({GBC["qpx"]}); g_gb_xs = g_gb_qin + 6u * 2048u;\n'
@@ -797,10 +809,19 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 + (f'  gb::writer_push_up(g_ab + {OGB}, {("get_write_ptr(41)" if gb["gin_addr"] == "cb41" else str(int(gb["gin_addr"])) + "u")}, '
                    f'g_gb_xs - 6u * 2048u, (volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")});\n'
                    if os.environ.get("E1_GB_PUSHDIR", "0") == "1" else '') +
-                f'  gb::writer_layer<{B}, {T}, {Nv}, {VB}, {GB_RN}, {Kt}, {(Nv // Nk) * VB // int(os.environ.get("E1_GB_RSPLIT", "1"))}>(g_ab + {OGB}, g_gdn_l, pre, {GBC["out"]}u, g_gb_xs + {XSC}u);\n}}\n')
+                (f'  const auto wwa = {wacc("win_a_w", 2048)};\n  const auto wwb = {wacc("win_b_w", 2048)};\n'
+                   f'  const auto wwin = [&]() {{ gb::writer_win<{B}, {T}, {K}, {Ct}, {M}, {Nv}>(g_ab + {OGB}, wwa, wwb, g_gb_xs + {XRC}u, g_gb_xs + {XWO}u); }};\n'
+                   if STG_NOC0 else '') +
+                f'  gb::writer_layer<{B}, {T}, {Nv}, {VB}, {GB_RN}, {Kt}, {(Nv // Nk) * VB // int(os.environ.get("E1_GB_RSPLIT", "1"))}>(g_ab + {OGB}, g_gdn_l, pre, {GBC["out"]}u, g_gb_xs + {XSC}u{f", wwin, g_ab + {OWS}" if STG_NOC0 else ""});\n}}\n')
         GB_WINIT = (f'  g_gb_xs = get_write_ptr({GBC["qpx"]}) + 6u * 2048u; g_ab[{OGB} + 145] = get_read_ptr({GBC["out"]});\n'
                     f'  gb::g_gb_coef = get_write_ptr({ids["coef"][0]});\n')
         GB_WEND = f'  g_ab[{OGB}] = 0; g_ab[{OGB} + 1] = 0; g_ab[{OGB} + 131] = 0; g_ab[{OGB} + 132] = 0; g_ab[{OGB} + 144] = 0;\n'
+        if STG_NOC0:   # wdone: no reader waits on the last layer's value (reader L waits for L, L <= NG - 1)
+            GB_WEND += f'  g_ab[{OWS}] = 0;\n'
+        # E1_GB_NOCCNT: cumulative NIU responses of this RISC's NoC (atomic resp, write acks, read resp) once everything it issued retired
+        _cnt = lambda o: (f'  noc_async_read_barrier(); noc_async_write_barrier(); noc_async_atomic_barrier();\n'
+                          f'  for (uint32_t t = 0; t < 3; ++t) g_ab[{o} + t] = NOC_STATUS_READ_REG(noc_index, t);\n') if NOCCNT else ''
+        GB_REND, GB_WEND = _cnt(OCN), GB_WEND + _cnt(OCN + 3)
         GB_C = (f'#include "{HERE_}/gb_compute.hpp"\nstatic uint32_t g_gb_l;\n'
                 f'void gdn_gb_compute() {{ gb::compute_layer<{K}>(g_ab + {OGB}, g_gb_l, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, '
                 f'{ids["tmp"][0]}u, {GBC["out"]}u, {GBC["kq"]}u); }}\n')
@@ -852,7 +873,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (f'  g_ab[{OHM}] = 0; g_ab[{OHM} + 1] = 0;\n' if hold_skip else '')
         + (f'  noc_async_atomic_barrier();\n  g_ab[{OKT}] = 0; g_ab[{OKT} + 1] = 0;\n' if ktdd else '')   # every peer increment was awaited in-program
         + ('  noc_async_atomic_barrier();\n' if percore else '')   # the forwarders' corner bumps retired
-        + '}\n')
+        + (GB_REND if GB else '') + '}\n')
     tw = os.path.join(gen_dir, "g2_writer.cpp")
     open(tw, "w").write(
         f'{DM_OPT}#include "{hw}"\nvoid kernel_main();\nstatic volatile tt_l1_ptr uint32_t* g_ab;\nstatic uint32_t g_gdn_l = 0;\n'
@@ -956,6 +977,13 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             d_r = d_r + [("GB_NO_HOLD_BOUNCE", "1")]
         if os.environ.get("E1_GB_PUSHDIR", "0") == "1":   # hang arm: upward in-proj pushes on the writer / NOC0
             d_r, d_w = d_r + [("GB_PUSHDIR", "1")], d_w + [("GB_PUSHDIR", "1")]
+        if STG_BAR:   # hang DIAGNOSTIC arm: GB-STG window writes with no read outstanding, <= N in flight (bit-identical)
+            d_r = d_r + [("GB_STG_BARRIER", str(STG_BAR))]
+        if STG_NOC0:   # hang FIX candidate: GB-STG window writes on the writer / NOC0 (bit-identical)
+            d_r, d_w = d_r + [("GB_STG_NOC0", "1")], d_w + [("GB_STG_NOC0", "1")]
+        if STG_BAR or STG_NOC0:
+            print(f"[gb] GB-STG window-write arm: " + (f"E1_GB_STG_BARRIER N={STG_BAR} (reader / NOC1, serialized)" if STG_BAR else
+                  f"E1_GB_STG_NOC0 (writer / NOC0; wdone = argblock payload word {OWS})"), flush=True)
         if os.environ.get("E1_GB_GDIRECT", "1") == "1":   # gate rows straight into the head's coef slots / gate page (no DRAM)
             d_w = d_w + [("GB_GATE_DIRECT", "1"), ("GDN_GB_GATE_DIRECT", "1"), ("GB_COEF_REP", "9")]
         if os.environ.get("E1_GBC_GEARLY", "0") == "1":   # GBCOST: gate rows built while the convs run (bit-identical)
@@ -1004,6 +1032,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         if GB:
             assert len(pl) == OGB, (len(pl), OGB)
             pl += gb_blocks[i]
+            assert len(pl) == OWS, (len(pl), OWS)
+            pl += ([0] if STG_NOC0 else []) + ([0] * 6 if NOCCNT else [])   # OWS: wdone; OCN: reader x3, writer x3
         if GB_TS:   # E1_GB_TS (bench probe): 32 wall-clock stamp words per GDN layer (gbts slots), host reads the arg block back
             assert OTS in (None, len(pl)), (OTS, len(pl))
             OTS = len(pl)
@@ -1050,7 +1080,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                                 lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]] + ([GO["w"], GO["dbg"]] if GO else [])
     info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab) + (sum(c_.total_size for c_ in cbs[-3:]) if GO else 0),
                 gb_roots=(gb_roots if GB else None),   # G-b L2 root core indices (GTEXT: program.py asserts GB_NOROOT cores hold none)
-                ab_words=len(payloads[0]), NG=NG, ts_off=(AB_HDR + OTS if GB_TS else None), st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late, cut_fast=cut_fast, out_tile=out_tile)
+                ab_words=len(payloads[0]), NG=NG, ts_off=(AB_HDR + OTS if GB_TS else None), cnt_off=(AB_HDR + OCN if GB and NOCCNT else None), st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late, cut_fast=cut_fast, out_tile=out_tile)
     return dict(kernels=ks, cbs=cbs, io=io, info=info)
 
 

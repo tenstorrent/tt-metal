@@ -89,6 +89,7 @@ io = list(role.role["io"]) + [stamps]
 prog0 = program(0.0)
 progS = program(GAP) if os.environ.get("G2_STEP_GAP", "0") == "1" and GAP else prog0   # bench: profile the steps at G2_GAP_US
 ok_all = True
+CNT_OFF, cnt_prev = role.role["info"].get("cnt_off"), None   # E1_GB_NOCCNT=1: NIU response counters of the 24 GDN cores
 for step in range(STEPS):
     hold = HOLD if step == 1 else []
     if os.environ.get("G2_HOLD_SETS"):   # e.g. "x/1,5/0,2,3,4,5,6,7": HOLD users per step ('/'-separated, x = none), cycled
@@ -98,6 +99,16 @@ for step in range(STEPS):
     ttnn.generic_op(io, progS)
     ttnn.synchronize_device(dev)
     ok_all = role.check(f"g2 step {step}") and ok_all
+    if CNT_OFF is not None:   # cumulative since reset -> per-step deltas; columns: atomic resp, write acks, read resp
+        ab = ttnn.to_torch(role.role["io"][0]).reshape(len(cores), -1).to(torch.int64) & 0xFFFFFFFF
+        cnt = ab[:, CNT_OFF:CNT_OFF + 6]
+        if cnt_prev is not None:
+            d = (cnt - cnt_prev) & 0xFFFFFFFF
+            t = d.sum(0).tolist()
+            print(f"[g2 noccnt] step {step} (HOLD {hold}), {NG} GDN layers, sum over {len(cores)} cores: reader/NOC1 atomic {t[0]} "
+                  f"write {t[1]} read {t[2]} | writer/NOC0 atomic {t[3]} write {t[4]} read {t[5]}", flush=True)
+            print(f"[g2 noccnt] step {step} per core NOC1 writes {d[:, 1].tolist()} NOC0 writes {d[:, 4].tolist()}", flush=True)
+        cnt_prev = cnt
 print(f"[g2] BIT-IDENTICAL B={B} over {STEPS} steps x {NG} GDN layers in one engine-style program "
       f"(in_ready / out_ready / vb sems, argblock, HOLD {HOLD} on step 1): {ok_all}", flush=True)
 
