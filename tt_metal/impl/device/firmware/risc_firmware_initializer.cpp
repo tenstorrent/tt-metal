@@ -1520,9 +1520,8 @@ void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId devi
 #ifdef TT_METAL_USE_EMULE
     // Each core's core_info message and the reset jump word at the firmware launch address, as
     // initialize_and_launch_firmware writes them; the watcher and kernels read both.
-    auto write_core_state = [&](HalProgrammableCoreType core_type, CoreType coord_type, const CoreCoord& logical_core) {
-        const CoreCoord virtual_core =
-            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, coord_type);
+    auto write_core_state = [&](HalProgrammableCoreType core_type, const CoreCoord& logical_core,
+                                const CoreCoord& virtual_core) {
         auto core_info = populate_core_info_msg(device_id, core_type);
         core_info.view().absolute_logical_x() = logical_core.x;
         core_info.view().absolute_logical_y() = logical_core.y;
@@ -1537,48 +1536,8 @@ void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId devi
             sizeof(uint32_t),
             {static_cast<size_t>(device_id), virtual_core},
             jit_build_config.fw_launch_addr);
-        // Under TT_METAL_EMULE_REAL_FAST_DISPATCH the emulated core runs its firmware loop from here on.
-        emule::boot_core_firmware(
-            static_cast<int>(device_id), core_type, logical_core.x, logical_core.y, virtual_core.x, virtual_core.y);
     };
-    const CoreCoord grid = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    std::vector<emule::EmuleBootCore> boot_cores;
-    for (uint32_t y = 0; y < grid.y; y++) {
-        for (uint32_t x = 0; x < grid.x; x++) {
-            write_core_state(HalProgrammableCoreType::TENSIX, CoreType::WORKER, CoreCoord(x, y));
-            const CoreCoord virtual_core =
-                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord(x, y), CoreType::WORKER);
-            boot_cores.push_back({static_cast<uint32_t>(virtual_core.x), static_cast<uint32_t>(virtual_core.y), x, y});
-        }
-    }
-    if (hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) &&
-        !rtoptions_.get_use_quasar_tensix_dispatch_cores() &&
-        cluster_.get_soc_desc(device_id).get_num_dispatch_engine_cores() > 0) {
-        for (const CoreCoord& logical_core :
-             detail::get_quasar_soc_dispatch_engine_logical_cores(cluster_.get_soc_desc(device_id))) {
-            write_core_state(HalProgrammableCoreType::DISPATCH, CoreType::DISPATCH, logical_core);
-        }
-    }
-
-    // The emulator runs the part of Tensix firmware boot a kernel can observe, as the firmware binaries.
-    const ContextId ctx_id = descriptor_->metal_context().get_context_id();
-    const uint32_t tensix_index = hal_.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    std::map<uint32_t, std::string> firmware_binary_paths;
-    for (const auto processor_class : {HalProcessorClassType::DM, HalProcessorClassType::COMPUTE}) {
-        const auto class_index = static_cast<uint32_t>(processor_class);
-        for (uint32_t processor = 0;
-             processor < hal_.get_processor_types_count(HalProgrammableCoreType::TENSIX, class_index);
-             processor++) {
-            firmware_binary_paths[hal_.get_processor_index(HalProgrammableCoreType::TENSIX, processor_class, processor)] =
-                MetalContext::instance(ctx_id).build_env_manager().get_firmware_binary_path(
-                    device_id, tensix_index, class_index, processor);
-        }
-    }
-    emule::boot_firmware(
-        device_id,
-        MetalContext::instance(ctx_id).build_env_manager().get_device_build_env(device_id).build_env.get_defines(),
-        boot_cores,
-        firmware_binary_paths);
+    emule::initialize_firmware_state(device_id, *descriptor_->metal_context().get_context_id(), write_core_state);
 #else
     TT_THROW("Device {} is an emulated device, but tt-metal was built without TT_METAL_USE_EMULE", device_id);
 #endif

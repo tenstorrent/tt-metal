@@ -360,13 +360,25 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
-            // jit_build adds these to every kernel build (build.cpp, JitBuildState).
+            // The dispatch defines jit_build adds to every kernel build, copied from the kernel's build state.
             {
-                auto& kctx = MetalContext::instance(impl.get_context_id());
-                kd.defines["DISPATCH_MESSAGE_ADDR"] =
-                    std::to_string(kctx.dispatch_mem_map().get_dispatch_message_addr_start());
-                if (kctx.get_dispatch_query_manager().fds_signalling_enabled()) {
-                    kd.defines["FDS_SIGNALLING"] = "1";
+                const auto& hal = MetalContext::instance(impl.get_context_id()).hal();
+                const auto recipe = MetalContext::instance(impl.get_context_id())
+                                        .build_env_manager()
+                                        .get_kernel_build_state(
+                                            device->build_id(),
+                                            hal.get_programmable_core_type_index(k.get_kernel_programmable_core_type()),
+                                            enchantum::to_underlying(k.get_kernel_processor_class()),
+                                            k.get_kernel_processor_type(0))
+                                        .export_target_recipe(nullptr);
+                for (const auto& flag : recipe.defines) {
+                    for (const std::string_view name : {"DISPATCH_MESSAGE_ADDR", "FDS_SIGNALLING"}) {
+                        const std::string prefix = "-D" + std::string(name);
+                        if (flag.starts_with(prefix) && (flag.size() == prefix.size() || flag[prefix.size()] == '=')) {
+                            kd.defines[std::string(name)] =
+                                flag.size() == prefix.size() ? "" : flag.substr(prefix.size() + 1);
+                        }
+                    }
                 }
             }
             if (!k.get_full_kernel_name().empty()) {

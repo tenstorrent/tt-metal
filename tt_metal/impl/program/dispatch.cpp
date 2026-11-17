@@ -79,6 +79,9 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdev/rta_constants.h"
 #include "hostdev/remote_dfb_constants.h"
+#ifdef TT_METAL_USE_EMULE
+#include "emulated_program_runner.hpp"  // emule::kernel_text_slot
+#endif
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -631,7 +634,6 @@ uint32_t finalize_kernel_bins(
     // Emule runs host code, not RISC-V binaries. Each binary still gets a text slot, which tt-emule fills with
     // the kernel's identity, so a kernel-config block names its kernels wherever it is copied, as silicon's does.
     const bool is_emule = target == tt::TargetDevice::Emule;
-    constexpr uint32_t emule_kernel_text_size = 16;
 
     const auto& hal = metal_ctx.hal();
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
@@ -655,30 +657,22 @@ uint32_t finalize_kernel_bins(
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             const bool stored_in_config_buffer = hal.get_core_kernel_stored_in_config_buffer(programmable_core_type);
             if (is_emule) {
+#ifdef TT_METAL_USE_EMULE
                 for (uint32_t i = 0; i < num_binaries; i++) {
-                    // Text outside the config buffer goes where silicon loads the binary. HAL names that address
-                    // (the per-DM kernel link slot) only for Quasar's dispatch engines; elsewhere the text is empty.
-                    uint32_t kernel_text_offset = 0;
-                    uint32_t text_size = 0;
-                    if (stored_in_config_buffer) {
-                        kernel_text_offset = offset;
-                        text_size = emule_kernel_text_size;
-                        offset = tt::align(offset + text_size, l1_alignment);
-                    } else if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
-                        kernel_text_offset = static_cast<uint32_t>(
-                            hal.get_jit_build_config(
-                                   programmable_core_type_index,
-                                   enchantum::to_underlying(kernel->get_kernel_processor_class()),
-                                   kernel->get_kernel_processor_type(static_cast<int>(i)))
-                                .fw_base_addr);
-                        text_size = emule_kernel_text_size;
-                    }
+                    const auto slot = emule::kernel_text_slot(
+                        programmable_core_type,
+                        kernel->get_kernel_processor_class(),
+                        kernel->get_kernel_processor_type(static_cast<int>(i)),
+                        offset);
                     for (uint32_t processor_index : kernel->get_processor_indices_for_binary(static_cast<int>(i))) {
-                        kg->kernel_text_offsets[processor_index] = kernel_text_offset;
-                        kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
-                        kernel_config.kernel_text_size()[processor_index] = text_size;
+                        kg->kernel_text_offsets[processor_index] = slot.offset;
+                        kernel_config.kernel_text_offset()[processor_index] = slot.offset;
+                        kernel_config.kernel_text_size()[processor_index] = slot.size;
                     }
                 }
+#else
+                TT_THROW("An emulated device's program, but tt-metal was built without TT_METAL_USE_EMULE");
+#endif
                 continue;
             }
             const auto& binaries = kernel->binaries(build_key);
