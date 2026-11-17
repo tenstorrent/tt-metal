@@ -615,7 +615,7 @@ def populate_kv_chunk_address_table_block_cyclic(
             tp_axis == 1 - sp_axis
         ), f"TP-sharded KV chunk table needs distinct axes, got sp_axis={sp_axis}, tp_axis={tp_axis}"
     tp_factor = mesh_shape[tp_axis] if tp_axis is not None else 1
-    tokens_per_device = tokens_per_chunk_local // tp_factor  # 160 for 5k chunks on tp=4
+    tokens_per_device = tokens_per_chunk_local // tp_factor  # per-chip rows / tp
     assert (
         tokens_per_chunk_local % tp_factor == 0
     ), f"tokens_per_chunk_local ({tokens_per_chunk_local}) must be divisible by tp ({tp_factor})"
@@ -809,7 +809,7 @@ def populate_kv_chunk_address_table_dflash(
     )
     blocks_local = seq_local // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
-    tokens_per_chunk_local = chunk_size_global // sp  # 640 for 5k chunks on sp=8
+    tokens_per_chunk_local = chunk_size_global // sp  # chunk tokens / sp
     assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
         f"{chunk_size_global} tokens / sp({sp}) = {tokens_per_chunk_local}, "
         f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
