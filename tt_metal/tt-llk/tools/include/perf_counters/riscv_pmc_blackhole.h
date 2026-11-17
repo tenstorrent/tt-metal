@@ -10,7 +10,7 @@
 
 #include "perf_counters/riscv_pmc_types.h"
 
-// Blackhole baby cores (BRISC, NCRISC, TRISC0-2): select tables of the RISC-V performance monitor. Include through
+// Blackhole baby cores (BRISC, NCRISC, TRISC0-2, ERISC0 and ERISC1 of the ethernet tiles): select tables of the RISC-V performance monitor. Include through
 // perf_counters/riscv_pmc_inventory.h. Event 0 of every domain is a tie-off and is not listed.
 
 namespace llk::perf::riscv

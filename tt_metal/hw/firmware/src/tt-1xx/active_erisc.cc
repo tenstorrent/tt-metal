@@ -14,6 +14,7 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/riscv_pmc.hpp"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
@@ -344,7 +345,9 @@ int __attribute__((noinline)) main(void) {
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+                RiscvPmcBegin();
                 reinterpret_cast<void (*)()>(kernel_lma)();
+                RiscvPmcEnd();
                 set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
                 WAYPOINT("D");
             }

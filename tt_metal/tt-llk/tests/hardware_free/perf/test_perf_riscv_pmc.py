@@ -124,7 +124,8 @@ def test_csr_addresses_in_the_hw_header():
 
 def test_core_kind():
     assert riscv_pmc.core_kind("blackhole", "TRISC_1") == "baby"
-    assert riscv_pmc.core_kind("blackhole", "ERISC") is None
+    assert riscv_pmc.core_kind("blackhole", "ERISC") == "baby"
+    assert riscv_pmc.core_kind("blackhole", "UNKNOWN") is None
     assert riscv_pmc.core_kind("quasar", "QUASAR_NEO2_TRISC3") == "trisc"
     assert riscv_pmc.core_kind("quasar", "QUASAR_DM0") == "dm"
     assert riscv_pmc.core_kind("wormhole", "BRISC") is None
@@ -241,6 +242,21 @@ def test_tracy_decoder_skips_cores_without_the_monitor():
     analysis = _tracy_analysis()
     rows = [_marker(1, "BRISC", i, 1, 0) for i in (9092, 9093, 9094)]
     assert analysis.decode_riscv_pmc_markers(rows, "wormhole") is None
+    rows = [_marker(1, "ERISC", i, 1, 0) for i in (9092, 9093, 9094)]
+    assert analysis.decode_riscv_pmc_markers(rows, "wormhole") is None
+
+
+def test_tracy_decoder_names_blackhole_ethernet_events():
+    analysis = _tracy_analysis()
+    rows = [
+        _marker(3, "ERISC", 9092, 10, (7 << 32) | 9),
+        _marker(3, "ERISC", 9093, 11, (400 << 32) | 1000),
+        _marker(3, "ERISC", 9094, 12, (0xA0000000 << 32) | 0x10110111),
+    ]
+    df = analysis.decode_riscv_pmc_markers(rows, "blackhole")
+    assert list(df["risc_type"]) == ["ERISC"]
+    assert df["event3"][0].startswith("BP_PC_STALL_ANY|")
+    assert df["mcycle"][0] == 1000 and df["riscv_ipc_ratio"][0] == 0.4
 
 
 def test_tracy_decoder_short_stream_pairs_what_it_can():
