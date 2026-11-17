@@ -657,7 +657,7 @@ public:
 
     void generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
 
-    // Dispatches experimental::collect_kernel_meta, device is nullable
+    // Backs experimental::collect_kernel_meta
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
     // Metal 2.0: Mark this Program as created from ProgramSpec
