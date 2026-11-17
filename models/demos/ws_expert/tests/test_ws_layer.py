@@ -28,9 +28,21 @@ from models.demos.ws_expert.ws_layer import LayerCfg, gcfg, head, head_consts, p
 from models.demos.ws_expert.ws_sf import torus_cycles
 from models.demos.ws_expert.ws_shared import SCfg, build_shared, shared_span_us, shared_weights
 
-HEAD = os.environ.get("WSY_HEAD", "ttnn")  # "custom": router matmul + the routing program (ws_head); "ttnn": ttnn ops
-if HEAD == "custom":
-    from models.demos.ws_expert.ws_head import build_route, head_outputs, router_logits, top_from_lists
+# WSY_HEAD: "router": one program, the MoE block router's structure (ws_router); "custom": router matmul + the routing
+# program (ws_head); "ttnn": ttnn ops
+HEAD = os.environ.get("WSY_HEAD", "ttnn")
+from models.demos.ws_expert.ws_head import (
+    build_route,
+    clock_programs,
+    clock_stamps,
+    head_outputs,
+    route_span_us,
+    router_logits,
+    top_from_lists,
+)
+from models.demos.ws_expert.ws_router import build_router, logits_debug_tensor, router_inputs, router_span_us
+
+LOGITS = os.environ.get("WSY_LOGITS", "0") == "1"  # (router head: its logits written for the checks)
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
@@ -61,6 +73,13 @@ def make_layer(mesh, lc: LayerCfg, routed_lc: LCfg, seed=0):
     x = torch.zeros(N, lc.TX, H, dtype=torch.bfloat16)
     for c in range(N):
         x[c, : lc.T] = torch.randn(lc.T, H).to(torch.bfloat16)
+    # (WSY_LOGIT_SHIFT: every logit shifted by it - x's column 0 one, Wr's row 0 the shift; WSY_SKEW: the first n
+    # experts' logits + 50 on top, so every token routes to them)
+    shift, skew = float(os.environ.get("WSY_LOGIT_SHIFT", "0")), int(os.environ.get("WSY_SKEW", "0"))
+    if shift or skew:
+        x[:, : lc.T, 0] = 1.0
+        wr[0, :] = shift
+        wr[0, :skew] = shift + 50.0
     rcfg = gcfg(E, lc.G, lc.T)
     rtb = make_tables(shape, rcfg, routed_lc)
     per_chip = [slice_layout(rcfg, routed_lc.CHT, wg[o].float(), wu[o].float(), wd[o].float()) for o in rtb["own"]]
@@ -95,38 +114,101 @@ def make_layer(mesh, lc: LayerCfg, routed_lc: LCfg, seed=0):
         st["logits_t"] = ttnn.empty(
             [lc.TX, E], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=dram
         )
+    if HEAD == "router":  # (x arrives row-major, as the previous layer's end pass writes it)
+        st["hout"] = head_outputs(mesh, lc)
+        st["x_rm"] = ttnn.from_torch(
+            x.reshape(N * lc.TX, H), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=shard
+        )
+        st["wrT_t"], st["ids_t"] = router_inputs(mesh, wr)
+        st["logd_t"] = logits_debug_tensor(mesh, lc) if LOGITS else None
     return st, dict(x=x, wr=wr, wg=wg, wu=wu, wd=wd, w1=w1, w3=w3, w2=w2)
 
 
 def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=False):
-    """One layer: (head outputs, {phase: wall ms}, {phase: [device ms of span_chips]}); detail: the head's steps
-    synchronized apart (separate keys, not in the head's time); trace: log each phase's launch and end."""
+    """One layer: (head outputs, {phase: wall ms}, {phase: [device ms of span_chips]}); detail: the head's steps apart
+    (separate keys; the ttnn head synchronized apart, the custom head by wall-clock stamps between its programs);
+    trace: log each phase's launch and end."""
     sync = lambda: ttnn.synchronize_device(mesh)
     ph, dev = {}, {}
     sync()
     marks = [] if detail else None
     if HEAD == "custom":
         rmpd, rio, rst = build_route(mesh, lc, st["logits_t"], st["hout"])
+        if detail:  # (wall-clock stamps between the head's programs: their device times, no syncs in between)
+            cps, cst = clock_programs(mesh, 4)
+        sync()
+    if HEAD == "router":
+        rmpd, rio, rst = build_router(
+            mesh, lc, st["x_rm"], st["wrT_t"], st["ids_t"], st["hout"], st["logd_t"]
+        )
         sync()
     t0 = time.perf_counter()
     if trace:
         logger.info("WSY phase head: launch")
     if HEAD == "custom":
+        tick = (lambda i: ttnn.generic_op([cst, cst], cps[i])) if detail else (lambda i: None)
+        tick(0)
         router_logits(mesh, st["x_t"], st["wr_t"], out=st["logits_t"])
+        tick(1)
         x_rm = ttnn.to_layout(st["x_t"], ttnn.ROW_MAJOR_LAYOUT)
+        tick(2)
         ttnn.generic_op(rio, rmpd)
+        tick(3)
         hd = dict(x_rm=x_rm, logits=st["logits_t"], **{k: st["hout"][k] for k in ("idx_t", "dest_t", "counts_t", "w")})
+    elif HEAD == "router":
+        ttnn.generic_op(rio, rmpd)
+        hd = dict(x_rm=st["x_rm"], **{k: st["hout"][k] for k in ("idx_t", "dest_t", "counts_t", "w")})
+        if st["logd_t"] is not None:
+            hd["logits_T"] = st["logd_t"]
     else:
         hd = head(mesh, lc, st["x_t"], st["wr_t"], st["hc"], marks)
     sync()
-    if HEAD == "custom":
+    ph["head"] = (time.perf_counter() - t0) * 1e3
+    if HEAD == "router":
+        for ci in span_chips:
+            r = router_span_us(rst, ci, clk)
+            dev.setdefault("head", []).append(r["end"] / 1e3)
+            if detail:
+                for k, v in r.items():
+                    if k != "end":
+                        dev.setdefault(f"head_{k}", []).append(v / 1e3)
         for t in rio:
             if t.memory_config().buffer_type == ttnn.BufferType.L1:
                 ttnn.deallocate(t)
         del rmpd, rio, rst
+        for d in ttnn.get_device_tensors(hd["counts_t"]):
+            if bool((ttnn.to_torch(d).to(torch.int64) & 0xFFFFFFFF == 0xFFFFFFFF).any()):
+                raise RuntimeError("routing program: an owner core's records overflowed its capacity")
+    if HEAD == "custom":
+        if detail:
+            rel = lambda v, base: (((v - base + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)) / clk / 1e3
+            for ci in span_chips:
+                a, b, c, d = clock_stamps(cst, ci, 4)
+                r, r0 = route_span_us(rst, ci, clk)
+                steps = dict(
+                    head_matmul=rel(b, a),
+                    head_x_rm=rel(c, b),
+                    head_gap_in=rel(r0, c),
+                    head_routing=r["end"] / 1e3,
+                    head_gap_out=rel(d, r0) - r["end"] / 1e3,
+                    head_device=rel(d, a),
+                    **{f"route_{k}": v / 1e3 for k, v in r.items() if k != "end"},
+                )
+                for k, v in steps.items():
+                    dev.setdefault(k, []).append(v)
+            ttnn.deallocate(cst)
+            del cps, cst
+        for t in rio:
+            if t.memory_config().buffer_type == ttnn.BufferType.L1:
+                ttnn.deallocate(t)
+        del rmpd, rio, rst
+        # (outside the timed head: an owner core with more than its record capacity writes counts 0xFFFFFFFF; the
+        # stream must not run on them)
+        for d in ttnn.get_device_tensors(hd["counts_t"]):
+            if bool((ttnn.to_torch(d).to(torch.int64) & 0xFFFFFFFF == 0xFFFFFFFF).any()):
+                raise RuntimeError("routing program: an owner core's records overflowed its capacity")
     if trace:
         logger.info("WSY phase head: done")
-    ph["head"] = (time.perf_counter() - t0) * 1e3
     if detail:
         for (_, a), (n, b) in zip(marks, marks[1:]):
             dev[f"head_{n}"] = [(b - a) * 1e3]
@@ -238,20 +320,40 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
     off = torch.cumsum(cnt_ref, 0) - cnt_ref
     ok_idx = ok_dest = True
     for e in range(E):
-        sel = order[off[e] : off[e] + cnt_ref[e]]
-        mp = -(-int(cnt_ref[e]) // 32) * 32  # (the entries the stream reads: whole row tiles, padded with T)
-        ok_idx &= bool((idx[e, : cnt_ref[e]] == tk[sel]).all()) and bool((idx[e, cnt_ref[e] : mp] == T).all())
-        ok_dest &= bool((dest[e, : cnt_ref[e]] == tk[sel] * S + sel % K).all())
+        # (an expert's entries as a set: the router head's sources hold interleaved row tiles; each entry's token
+        # matches its result row)
+        n = int(cnt_ref[e])
+        sel = order[off[e] : off[e] + n]
+        mp = -(-n // 32) * 32  # (the entries the stream reads: whole row tiles, padded with T)
+        d = dest[e, :n]
+        ok_idx &= bool((idx[e, :n] == d // S).all()) and bool((idx[e, n:mp] == T).all())
+        ok_dest &= bool((torch.sort(d).values == torch.sort(tk[sel] * S + sel % K).values).all())
     toks = torch.arange(T) if ntok <= 0 or ntok >= T else torch.linspace(0, T - 1, ntok).round().long()
-    lg_dev = get(hd["logits"]).float().reshape(-1, E)[toks]
+    if "logits" in hd:
+        lg_dev = get(hd["logits"]).float().reshape(-1, E)[toks]
+    elif "logits_T" in hd:
+        lg_dev = get(hd["logits_T"]).float().reshape(E, -1).t()[toks].contiguous()
+    else:
+        lg_dev = None
     lg_ref = ref.h["x"][c, toks].float() @ ref.h["wr"].float()
     sc_ref = torch.softmax(lg_ref, -1) if lc.score == "softmax" else torch.sigmoid(lg_ref)
     kth = sc_ref.topk(K, -1).values[:, -1:]
     picked = sc_ref.gather(1, top[toks])
     same = int((torch.sort(top[toks], 1).values == torch.sort(sc_ref.topk(K, -1).indices, 1).values).all(1).sum())
     worst_pick = float((picked - kth).min() / kth.mean())  # < 0: a pick below torch's K-th score (near ties)
-    # the device's picks against a top-K of its own fp32 logits (exact compares: only exact ties may differ)
-    same_dev = int((torch.sort(top[toks], 1).values == torch.sort(lg_dev.topk(K, -1).indices, 1).values).all(1).sum())
+    # the device's picks against a top-K of its own fp32 logits: exact compares (custom head), or of its keys (router
+    # head: the logit with its low mantissa bits replaced by the expert id, compared sign-magnitude)
+    same_dev = None
+    if lg_dev is not None:
+        if HEAD == "router":
+            idm = 0xFF if E <= 256 else 0x1FF if E <= 512 else 0x3FF
+            key = (lg_dev.view(torch.int32) & ~idm) | torch.arange(E, dtype=torch.int32)
+            dev_top = (key ^ ((key >> 31) & 0x7FFFFFFF)).long().topk(K, -1).indices
+        else:
+            dev_top = lg_dev.topk(K, -1).indices
+        same_dev = int((torch.sort(top[toks], 1).values == torch.sort(dev_top, 1).values).all(1).sum())
+        if HEAD in ("custom", "router"):
+            assert same_dev == len(toks), f"the head's picks differ from a top-{K} of its logits"
     w_ref = picked / picked.sum(1, keepdim=True)
     eo = ref.routed(c, toks, top[toks])  # [n, K, H]
     res = get(st["res_t"]).float()[: T * S].reshape(T, S, lc.H)[toks]
@@ -281,10 +383,10 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
         counts=ok_cnt,
         lists=ok_idx,
         dests=ok_dest,
-        logits_pcc=pcc(lg_dev, lg_ref),
+        logits_pcc=pcc(lg_dev, lg_ref) if lg_dev is not None else None,
         w_pcc=pcc(w[toks], w_ref),
         same_topk=f"{same}/{len(toks)}",
-        topk_of_device_logits=f"{same_dev}/{len(toks)}",
+        topk_of_device_logits=f"{same_dev}/{len(toks)}" if same_dev is not None else None,
         worst_pick=round(worst_pick, 5),
         rows_pcc=pcc(res[:, :K], eo),
         shared_rows_pcc=pcc(res[:, K], sh),
@@ -306,19 +408,17 @@ def run_layer(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips, ntok, warm, meas)
     rows, drows = [], []
     nd = int(os.environ.get("WSY_HEAD_DETAIL", "0"))  # extra layers after the measured ones: head steps apart
     for i in range(warm + meas + nd):
-        hd, ph, dev = layer_step(
-            mesh, lc, st, clk, span_chips if warm <= i < warm + meas else (), i >= warm + meas, trace=i < 2
-        )
+        hd, ph, dev = layer_step(mesh, lc, st, clk, span_chips if i >= warm else (), i >= warm + meas, trace=i < 2)
         if warm <= i < warm + meas:
             rows.append((ph, dev))
             logger.info(f"WSY {tag} layer {i - warm + 1}/{meas}: wall ms {ph}, device ms {dev}")
         elif i >= warm + meas:
-            drows.append(dev)
+            drows.append(dict(dev, head_wall=[ph["head"]]))
         if i < warm + meas + nd - 1:
             del hd
     if drows:
-        hs = {k: round(statistics.median(r[k][0] for r in drows), 3) for k in drows[0]}
-        logger.info(f"WSY {tag} SUMMARY head steps ms (synchronized apart, median of {nd}): {hs}")
+        hs = {k: round(statistics.median(max(r[k]) for r in drows), 3) for k in drows[0]}
+        logger.info(f"WSY {tag} SUMMARY head steps ms (median of {nd} layers, max over chips {span_chips}): {hs}")
     ref = Ref(lc, host, st["rcfg"], st["scfg"])
     res = [check_chip(lc, ref, c, hd, st, ntok, tag)[0] for c in chips]
     M = torch.stack([ttnn.to_torch(ttnn.get_device_tensors(hd["counts_t"])[c]).long().reshape(-1) for c in range(N)])
@@ -347,7 +447,11 @@ def run_layer(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips, ntok, warm, meas)
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
-@pytest.mark.parametrize("nexp,T", [(64, 2048), (640, 31250), (640, 8192)], ids=["e64t2048", "e640t31250", "e640t8192"])
+@pytest.mark.parametrize(
+    "nexp,T",
+    [(64, 2048), (640, 2048), (640, 31250), (640, 8192)],
+    ids=["e64t2048", "e640t2048", "e640t31250", "e640t8192"],
+)
 def test_ws_layer_chip(mesh_device, nexp, T):
     """One chip (TT_VISIBLE_DEVICES): the routed stream as the one-chip proxy (every expert the chip's own)."""
     lc = LayerCfg(T=T, nexp=nexp)
@@ -392,3 +496,18 @@ def test_ws_layer_glx(mesh_device):
     )
     assert all(r["counts"] and r["lists"] and r["dests"] for r in res)
     assert min(r["y_pcc"] for r in res) > 0.999 and min(r["rows_pcc"] for r in res) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
+def test_ws_head_overflow(mesh_device, monkeypatch):
+    """The custom head with every token routed to owner 0's experts (6 x 8192 records against its 16K capacity):
+    the overflow shows in the counts and the layer stops before the stream."""
+    if HEAD not in ("custom", "router"):
+        pytest.skip("WSY_HEAD=custom or router only")
+    monkeypatch.setenv("WSY_SKEW", "6")
+    lc = LayerCfg(T=8192, nexp=640)
+    st, _ = make_layer(mesh_device, lc, proxy_lcfg(lc.G))
+    with pytest.raises(RuntimeError, match="overflowed"):
+        layer_step(mesh_device, lc, st, aiclk_mhz(first_visible()))
+    logger.info("WSY head overflow: caught on the host before the stream")

@@ -819,3 +819,67 @@ the expert-id-ordered outputs (out_eord) are gone.
   - Head exact (counts, token lists, destination lists).
   - One chip, every token: re-read identical, y against the rows as read worst 0.0039 relative.
 - The Galaxy's wall times run 2-8 ms over device time per program: the dispatch of a 32-chip mesh program.
+
+## Stage 14: the head as one program in the MoE block router's structure (ws_router.py, kernels wsr2_*.cpp)
+- Two custom heads on the way:
+  - ws_head.py (kept for comparison): ttnn router matmul (fp32 logits to DRAM) + one routing program (BRISC top-K by
+    integer compares of the fp32 bits, exp on the compute, the L1 exchange). One chip, device ms (wall-clock stamps
+    between its programs): matmul 3.57, x to row-major 1.14, routing 5.66 (its top-K 5.27), head 10.37 (Galaxy 10.47).
+  - ws_router.py (the head): moe_head's structure - the router on the cores' own compute, the top-K on the SFPU over
+    the logits in DEST, transposed (a token a column), the logits gathered as top-K runs to the token's owner.
+- ws_router design, 120 cores, every chip on its own tokens:
+  - Router groups: the 12 grid columns, 10 cores each (one NOC1 multicast rectangle). Core c holds W_r^T's expert
+    tiles 2c, 2c + 1 (all 120 K tiles, 480 KB bf16), loaded a K piece at a time each launch. A group takes a
+    contiguous range of ~81 row tiles; core c owns its group-local row tiles c, c + 10, ..
+  - x arrives row-major (the previous layer's end pass writes y row-major). Piece p (12 K tiles) of every row tile
+    is core p's: it reads the 32 row pieces (NOC0), tilizes them two row tiles ahead, and writes them posted into the
+    relay ring of the column's hub (the NOC1 multicast start end; NOC0 runs toward it, no wrap), the arrival flag
+    after them through the same command buffer. The hub alone multicasts the pieces in stream order into every
+    group core's x ring (20 pieces), credit-gated, at most two in flight, then returns the relay slot's grant
+    (NOC1, downward).
+  - Every core, every row tile: logits^T = W_r^T x^T for its 2 expert tiles (matmul_block, transposed in1, HiFi4,
+    fp32 DEST); still in DEST: the id tiles into DEST 2, 3, moe_head's router_topk_key (the expert id in the low
+    10 mantissa bits), the bitonic network over the pair (sort_run 16) -> its 64 experts' best 16 keys, one tile, to
+    the owner's gather ring. No logits are packed; nothing goes through DRAM.
+  - The owner: moe_head's loop over the 10 run tiles -> the token's top 12; DEST 1 = their logits (ids cleared),
+    exp; the NCRISC: w = e / sum e (soft float, a few tokens a pass) and the records.
+  - A barrier over the chip, then the L1 exchange (now wsr_exchange.hpp, shared with ws_head): counts, offsets,
+    runs, per-expert lists, fence. The exchange's record buffers reuse W_r^T's L1. An expert's list holds its
+    (token, slot) entries as a set (the sources hold interleaved row tiles).
+  - NoC: DRAM reads and the relay writes (posted) on NOC0; multicasts, run tiles, credits, exchange and the posted
+    DRAM writes on NOC1 (fenced); multicasts only from the column's NOC1 start end; nothing crosses a group's
+    rectangle before the barrier.
+- The keys: the network compares sign-magnitude (SFPSWAP), so clearing low mantissa bits keeps the order of
+  distinct logits of either sign; ties at the key's resolution (2^-13 relative) go by expert id. Checked against the
+  host's top-12 of the same fused keys of the device's own logits (WSY_LOGITS writes them): every token, logits as
+  drawn and shifted by -50 (all negative).
+- Limits: logits within (-87, 88) (exp in fp32); an owner core takes 16,384 records (6 experts' routed rows plus run
+  padding; 3,516 at balanced routing). Past it the owner writes count 0xFFFFFFFF and the layer raises on the host
+  before the stream (test_ws_head_overflow: T 8192, every token on owner 0's experts, 49,152 records).
+- Results, 20 warm-up + 5 measured layers (+ 5 layers for the head's steps), 1350 MHz, device ms (head: its
+  program's earliest start to latest end over the cores; Galaxy: max over chips 0, 31):
+| head | one chip | Galaxy |
+|---|---|---|
+| ttnn ops (stage 13) | 19.00 wall | 19.11 wall |
+| ws_head: ttnn matmul 3.57 + x to row-major 1.14 + routing program 5.66 | 10.37 | 10.47 |
+| ws_router, each row tile's owner tilizes and multicasts it | 4.01 | 4.04 |
+| x pieces from every core through the column hub's relay | 3.37 | 3.41 |
+| + weights a piece at a time, x tilized two row tiles ahead, records a few tokens a pass, 6 relay slots | 2.65 | 2.66 |
+- Where the head's cycles go (last row, one chip; per core, mean over the cores, max in brackets):
+  - compute: router matmuls 0.87 net, waiting for x 0.88 (1.09), keys and the pair's network 0.22, the owner's
+    merges 0.10, tilize 0.30; the loop ends at 2.31 ms;
+  - the exchange after the loop: B 0.19, C 0.15;
+  - the weights are all in at 0.19 ms (the first row tile starts on the first piece);
+  - NCRISC records 0.50; BRISC waiting for relay slots 1.58 (the relay ring is the throttle); the hub's multicasts
+    0.43 issue to sent, waiting for credits up to 0.83.
+- Earlier versions' x waits: 2.22 ms (owners multicasting: a row tile's owner tilized it right before its own router,
+  so the next blocks waited on its credits; and owners off the column's NOC1 start end wrapped), then 1.55 (the
+  NCRISC's records a whole row tile at a time held up its ring pushes and credits, and the hub's multicasts).
+- Layer, 20 + 5: one chip 56.46 ms wall (head 3.10, shared 5.65, stream 39.49, end 8.22); Galaxy 83.19 ms wall
+  (head 6.74, shared 7.92, stream 57.11, end 11.42; device head 2.66, shared 4.97, stream 49.26, end 8.42).
+- Accuracy:
+  - T 2048 every token: the picks are the top 12 of the fused keys of the device's logits on 2048/2048 tokens; w
+    PCC 0.9999997; y 0.99988; lists exact.
+  - Logits shifted by -50: 2048/2048 as well; w PCC 0.99877 (the keys' resolution at |logit| 50 is ~6e-3, the
+    matmul's own error there ~0.02).
+  - T 31250: routing exact, every-token re-read identical, y 0.99989; Galaxy y 0.99988 on chips 0 and 31.
