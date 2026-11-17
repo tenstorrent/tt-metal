@@ -524,3 +524,12 @@ def test_prompt_encode_scaling(mesh_device, guide_examples):
             pipe._force_prompt_pad = None
         warm = sorted(times[1:])
         logger.info(f"RESULT prompt_encode rung {rung}: warm min {warm[0] * 1e3:.0f} ms, median {warm[1] * 1e3:.0f} ms")
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_print_device_map(mesh_device):
+    """Physical chip id at each mesh coordinate (row = TP axis 0, column = SP axis 1), for reading per-chip profiles."""
+    ids = mesh_device.get_device_ids()
+    rows, cols = tuple(mesh_device.shape)
+    for r in range(rows):
+        logger.info(f"RESULT device_map row {r}: " + " ".join(f"{ids[r * cols + c]:2d}" for c in range(cols)))
