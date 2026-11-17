@@ -51,6 +51,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
@@ -73,7 +74,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE,
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 pytestmark = [run_for_blackhole(), pytest.mark.perf, pytest.mark.timeout(1800)]
 
@@ -95,10 +96,11 @@ _GALAXY = "SP8xTP4"
 # it reaches it. The untraced ordinary layer does not: its reads are host-dispatch bound on the 8x4 mesh, so it has
 # its own reference and, following the host CPU, a wider band. Untraced timings carry the host's dispatch jitter, so
 # the untraced boundary layer takes the wider band too (run 41946792821 read it at 372 us). Galaxies off the pool can
-# sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
+# sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1. The untraced ordinary reference is 150 us scaled
+# by the speedup of running the gather-softmax read as one program per mesh (176 -> 108 us median on one Galaxy).
 _GALAXY_REFERENCE_E2E_US = {
     "traced": {"boundary": 394.0, "ordinary": 118.0},
-    "untraced": {"boundary": 394.0, "ordinary": 150.0},
+    "untraced": {"boundary": 394.0, "ordinary": 92.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
@@ -135,10 +137,13 @@ def _perf_reference_e2e_us(layout: str, mode: str) -> dict[str, float]:
 def _assert_within_margin(what: str, measured_us: float, reference_us: float, margin: float) -> None:
     lower = reference_us * (1.0 - margin)
     upper = reference_us * (1.0 + margin)
-    assert lower <= measured_us <= upper, (
-        f"{what} {measured_us:.1f} us is outside performance range "
-        f"[{lower:.1f}, {upper:.1f}] us "
-        f"(reference {reference_us:.1f} us ± {margin:.0%})"
+    assert_perf_gate(
+        lower <= measured_us <= upper,
+        (
+            f"{what} {measured_us:.1f} us is outside performance range "
+            f"[{lower:.1f}, {upper:.1f}] us "
+            f"(reference {reference_us:.1f} us ± {margin:.0%})"
+        ),
     )
 
 

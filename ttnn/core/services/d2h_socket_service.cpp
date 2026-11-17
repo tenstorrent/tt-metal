@@ -988,6 +988,10 @@ DeviceAddr D2HStreamService::get_write_ack_counter_addr(const distributed::MeshC
     return it->second;
 }
 
+StreamCounter D2HStreamService::get_write_ack_counter(const distributed::MeshCoordinate& coord) const {
+    return {get_service_core(coord), get_write_ack_counter_addr(coord), num_workers_};
+}
+
 DeviceAddr D2HStreamService::get_worker_metadata_addr() const {
     require_d2h_owner(is_owner_, "D2HStreamService::get_worker_metadata_addr");
     TT_FATAL(metadata_worker_l1_addr_ != 0, "D2HStreamService::get_worker_metadata_addr: metadata was not configured.");

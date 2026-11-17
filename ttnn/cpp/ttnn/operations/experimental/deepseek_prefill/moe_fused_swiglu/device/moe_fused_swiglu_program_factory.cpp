@@ -416,12 +416,12 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
     const uint32_t dram_alignment = hal::get_dram_alignment();
     const uint32_t idx_page =
-        std::max<uint32_t>(tensor_arguments.global_expert_idx_table.buffer()->aligned_page_size(), dram_alignment);
-    const uint32_t start_page = std::max<uint32_t>(start_tensor.buffer()->aligned_page_size(), dram_alignment);
+        std::max<uint32_t>(tensor_arguments.global_expert_idx_table.mesh_buffer().aligned_page_size(), dram_alignment);
+    const uint32_t start_page = std::max<uint32_t>(start_tensor.mesh_buffer().aligned_page_size(), dram_alignment);
     // aligned_page_size() is a 64-bit DeviceAddr, and a narrowing conversion inside a braced-init
     // list is ill-formed, so the cast is what lets the three bounds share one std::max.
     const uint32_t counts_page = std::max<uint32_t>(
-        {static_cast<uint32_t>(tensor_arguments.counts.buffer()->aligned_page_size()), dram_alignment, start_page});
+        {static_cast<uint32_t>(tensor_arguments.counts.mesh_buffer().aligned_page_size()), dram_alignment, start_page});
     const bool phase_alias = blocking.phase_cb_alias(output_tile);
     const uint64_t l1_need = blocking.l1_bytes(activations_are_row_major, output_tile, true);
     TT_FATAL(
@@ -508,9 +508,9 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         activations_are_row_major,
         phase_alias,
         direct_write,
-        tensor_arguments.activations.buffer()->page_size(),
+        tensor_arguments.activations.mesh_buffer().page_size(),
         activation_slice,
-        std::max<uint32_t>(tensor_arguments.counts.buffer()->aligned_page_size(), dram_alignment),
+        std::max<uint32_t>(tensor_arguments.counts.mesh_buffer().aligned_page_size(), dram_alignment),
         idx_page,
         static_cast<uint32_t>(tensor_arguments.counts.logical_shape()[-1]),
         start_page,

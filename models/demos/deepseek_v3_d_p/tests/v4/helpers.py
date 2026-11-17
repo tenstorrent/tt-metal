@@ -11,8 +11,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_bit_identical
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 # How far below its model's floor a CSA layer is graded: with production top-k, bf16 can swap
 # near-tied candidates at the selection boundary, which no other attention kind is exposed to, and

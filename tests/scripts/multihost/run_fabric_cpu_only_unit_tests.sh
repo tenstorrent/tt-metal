@@ -383,6 +383,7 @@ run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Physi
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest.*:ChannelTrimmingFastPath.*:ChannelTrimmingGlobalOverride.*:ChannelTrimmingForwardedMask.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalNodeIdTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalSystemDescriptorDiff.*"
+run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestFactorySystemDescriptorSingleNodeTypes"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdHostFilter.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdChipsAbsentFromLive.*"
 
@@ -569,6 +570,9 @@ for mock in \
     run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_single_galaxy_2x2_line_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_2X2_Z}"
   fi
 done
+
+# Pipeline of three one-chip meshes (one rank per chip) linked over plain N/E/S/W ports.
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_galaxy_xyz_cluster_desc/bh_galaxy_xyz_cluster_desc.yaml tt-run --rank-binding tests/tt_metal/distributed/config/bh_galaxy_1x1_chain_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.BHGalaxy1x1MeshChainRoutingPlanes"
 
 fi # bh-single-galaxy
 

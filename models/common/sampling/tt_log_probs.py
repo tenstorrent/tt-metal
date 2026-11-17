@@ -549,6 +549,7 @@ class LogProbsCalculator:
         self,
         logits_tensor: ttnn.Tensor,
         indices_tensor: ttnn.Tensor,
+        scale_logprobs: ttnn.Tensor | None = None,
     ):
         """
         Calculate log-probs for a given logits tensor and indices tensor.
@@ -565,6 +566,9 @@ class LogProbsCalculator:
         # Calculating log-probs requires bfloat16 precision for near-stable sum-exp calculation
         if logits_tensor.dtype == ttnn.bfloat8_b:
             logits_tensor = ttnn.typecast(logits_tensor, ttnn.bfloat16, **self.common_args)
+
+        if scale_logprobs is not None:
+            logits_tensor = ttnn.multiply(logits_tensor, scale_logprobs, **self.common_args)
 
         # Compute global max and global sum(exp(logits - global_max)) for each chip
         self._compute_global_stats(logits_tensor)
