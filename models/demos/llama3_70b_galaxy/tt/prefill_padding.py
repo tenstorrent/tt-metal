@@ -76,3 +76,13 @@ def ring_sdpa_q_chunk_override(seqlen, default, q_chunk=None):
     if q_chunk is None or seqlen not in PREFILL_SLAB1024_SEQLENS or (seqlen // 8) % q_chunk != 0:
         return default
     return q_chunk
+
+
+# LLAMA_GALAXY_PREFILL_SDPA_Q64_2048=1 (opt-in): ring SDPA q_chunk_size 64 for the cold 2048 bucket.
+# At 2048 the default q_chunk 256 gives each device 8 heads x 2 slices = 16 work units for 70 cores;
+# 64 gives 64. Same mechanism as LLAMA_GALAXY_PREFILL_SLAB1024=64 at 4096/6144/8192. Read at call time.
+PREFILL_SDPA_Q64_2048_ENV = "LLAMA_GALAXY_PREFILL_SDPA_Q64_2048"
+
+
+def prefill_sdpa_q64_2048_enabled():
+    return os.environ.get(PREFILL_SDPA_Q64_2048_ENV, "0").strip() == "1"

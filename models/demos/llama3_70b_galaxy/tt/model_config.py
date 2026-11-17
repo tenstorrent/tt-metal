@@ -34,7 +34,11 @@ from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     convert_meta_to_hf,
     standardize_hf_keys,
 )
-from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_slab1024_q_chunk, ring_sdpa_q_chunk_override
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import (
+    prefill_sdpa_q64_2048_enabled,
+    prefill_slab1024_q_chunk,
+    ring_sdpa_q_chunk_override,
+)
 
 # HuggingFace reference-model wrappers are shared with models/tt_transformers instead of being
 # copied here, so a transformers version bump is fixed in one place (see Issue #42139 review).
@@ -60,6 +64,8 @@ def ring_sdpa_q_chunk_size(seqlen):
     must divide seqlen/8: 256 for every power of two >= 2048, 128 for 3072 and 5120.
     LLAMA_GALAXY_PREFILL_SLAB1024 can lower it at 4096/6144/8192 (prefill_padding.py)."""
     default = 256 if (seqlen // 8) % 256 == 0 else 128
+    if seqlen == 2048 and prefill_sdpa_q64_2048_enabled():
+        return 64
     return ring_sdpa_q_chunk_override(seqlen, default, PREFILL_SLAB1024_Q_CHUNK)
 
 
