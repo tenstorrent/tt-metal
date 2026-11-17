@@ -25,6 +25,33 @@ from .weight_bridge import (
 # Tags are matched only within this bridge's own communicator, so they cannot collide with other MPI traffic.
 _TAG_MANIFEST_LEN, _TAG_MANIFEST_BODY, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY = 0, 1, 2, 3
 
+# Race: while thread 0 captures a trace on CQ0, any command that thread 1 sends on CQ1 goes into the trace
+# instead of to the device (https://github.com/tenstorrent/tt-metal/issues/65971). The capture holds this lock;
+# the receiver thread takes it around each device call.
+_capture_lock = threading.Lock()
+_begin_trace_capture, _end_trace_capture = ttnn.begin_trace_capture, ttnn.end_trace_capture
+
+
+def _begin_trace_capture_locked(*args, **kwargs):
+    _capture_lock.acquire()
+    try:
+        return _begin_trace_capture(*args, **kwargs)
+    except BaseException:
+        _capture_lock.release()
+        raise
+
+
+def _end_trace_capture_locked(*args, **kwargs):
+    try:
+        return _end_trace_capture(*args, **kwargs)
+    finally:
+        _capture_lock.release()
+
+
+def _lock_trace_capture(enable: bool) -> None:
+    ttnn.begin_trace_capture = _begin_trace_capture_locked if enable else _begin_trace_capture
+    ttnn.end_trace_capture = _end_trace_capture_locked if enable else _end_trace_capture
+
 
 class ThreadedWeightBridge:
     """Moves an HF-keyed weight dict between ranks on a background thread over a private communicator.
@@ -61,6 +88,8 @@ class ThreadedWeightBridge:
 
     def connect(self) -> None:
         self._ctx = duplicate_distributed_context()
+        if self._submeshes is not None:
+            _lock_trace_capture(True)
         loop = self._sender_loop if self._submeshes is None else self._receiver_loop
         self._thread = threading.Thread(target=loop, daemon=True)
         self._thread.start()
@@ -73,6 +102,8 @@ class ThreadedWeightBridge:
             self._cv.notify_all()
         if self._thread is not None:
             self._thread.join()
+        if self._submeshes is not None:
+            _lock_trace_capture(False)
 
     def send_weights(self, weights: Dict[str, ttnn.Tensor], version: int) -> None:
         for k in sorted(weights):
@@ -165,8 +196,10 @@ class ThreadedWeightBridge:
                     while self._pending:
                         self._cv.wait()
                 self._recv_into_pads(manifest["entries"])
+                with _capture_lock:
+                    events = [ttnn.record_event(submesh, 1) for submesh in self._submeshes]
                 with self._cv:
-                    self._events = [ttnn.record_event(submesh, 1) for submesh in self._submeshes]
+                    self._events = events
                     self._version, self._pending = int(manifest["weight_version"]), True
                     self._cv.notify_all()
             with self._cv:
@@ -179,19 +212,20 @@ class ThreadedWeightBridge:
 
     def _recv_into_pads(self, entries: List[dict]) -> None:
         if self._recv_pads is None:
-            self._recv_pads = [
-                {
-                    e["key"]: ttnn.allocate_tensor_on_device(
-                        ttnn.Shape(e["shape"]),
-                        getattr(ttnn.DataType, e["dtype"]),
-                        getattr(ttnn.Layout, e["layout"]),
-                        submesh,
-                        ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                    for e in entries
-                }
-                for submesh in self._submeshes
-            ]
+            with _capture_lock:
+                self._recv_pads = [
+                    {
+                        e["key"]: ttnn.allocate_tensor_on_device(
+                            ttnn.Shape(e["shape"]),
+                            getattr(ttnn.DataType, e["dtype"]),
+                            getattr(ttnn.Layout, e["layout"]),
+                            submesh,
+                            ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                        for e in entries
+                    }
+                    for submesh in self._submeshes
+                ]
         for e in entries:
             host = ttnn.from_torch(
                 _torch_load_bytes(self._recv_blob(_TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY)),
@@ -199,4 +233,5 @@ class ThreadedWeightBridge:
                 layout=getattr(ttnn.Layout, e["layout"]),
             )
             for pads in self._recv_pads:
-                ttnn.copy_host_to_device_tensor(host, pads[e["key"]], cq_id=1)
+                with _capture_lock:
+                    ttnn.copy_host_to_device_tensor(host, pads[e["key"]], cq_id=1)
