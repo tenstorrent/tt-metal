@@ -795,7 +795,6 @@ def test_indexer_deepseek_rope_fallback(mesh_device, subshard):
         sp_axis=0,
         _index_rope_dim=64,
         index_args=SimpleNamespace(index_head_dim=width),
-        _index_rope_dim=64,
         _rope_perm=upload(perm, ttnn.ReplicateTensorToMesh(mesh_device)),
         hifi4_fp32_compute_kernel_config=ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True

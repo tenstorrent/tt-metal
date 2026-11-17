@@ -26,8 +26,6 @@ static const mailbox_t mailbox_unpack = mailboxes_arr;
 static const mailbox_t mailbox_math   = mailboxes_arr + 1;
 static const mailbox_t mailbox_pack   = mailboxes_arr + 2;
 
-static const mailbox_t profiler_barrier = reinterpret_cast<mailbox_t>(0x16AFF4U);
-
 // A BRISC read of a TRISC's PC buffer returns once that TRISC waits on its own PC buffer read with nothing queued and its
 // Tensix thread is idle, which trisc.cpp does when its kernel is done.
 static const mailbox_t trisc_pc_bufs[] = {
@@ -43,10 +41,6 @@ int main()
     commit_store(mailbox_math, ckernel::RESET_VAL);
     commit_store(mailbox_unpack, ckernel::RESET_VAL);
     commit_store(mailbox_pack, ckernel::RESET_VAL);
-
-    commit_store(profiler_barrier, 0U);
-    commit_store(profiler_barrier + 1, 0U);
-    commit_store(profiler_barrier + 2, 0U);
 
     device_setup();
 
