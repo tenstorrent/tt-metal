@@ -22,8 +22,7 @@ _KEEP_READING_SAME_SRC = 0b10
 
 def _clear_valid_flags():
     # The stall kernel only hangs while SrcA/SrcB are not valid, which earlier tests may have left set.
-    # KeepReadingSameSrc takes the banks back without moving the Matrix Unit to its other bank. Without it the Matrix
-    # Unit moves even when nothing was valid, and ends up reading the bank the Unpackers are not writing.
+    # KeepReadingSameSrc keeps the Matrix Unit on the bank the Unpackers write next.
     device = check_context().devices[0]
     debug_tensix = TensixDebug(
         OnChipCoordinate.create(TestConfig.TENSIX_LOCATION, device=device)
@@ -37,9 +36,8 @@ def _clear_valid_flags():
 
 
 def _matmul_after_recovery():
-    # A wrong result here means the Unpackers and the Matrix Unit were left on different SrcA/SrcB banks: the matmul
-    # then multiplies what an earlier launch unpacked (zeros right after the recovery reset), and so does every later
-    # kernel on this core.
+    # Fails when the hangs left the Unpackers and the Matrix Unit on different SrcA/SrcB banks: the matmul then
+    # multiplies what an earlier launch unpacked.
     run_matmul(
         MathFidelity.LoFi,
         (
@@ -70,8 +68,7 @@ def test_hang_recovery(order):
     if TestConfig.TEST_TARGET.run_simulator:
         pytest.skip()
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        _matmul_after_recovery()  # compiles the matmul for the run that launches it, then skips
-        pytest.skip()
+        _matmul_after_recovery()  # compiles the matmul; TestConfig.run ends the test here
     for kind in order:
         if kind == "stall":
             _clear_valid_flags()
