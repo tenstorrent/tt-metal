@@ -6,19 +6,19 @@
 
 #include <string>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <vector>
 
 #include "metal/common/program_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 // The shared layout header spells the tile geometry out so the kernel toolchain can compile it.
 static_assert(qkv_conv_bw::tile_height == tt::constants::TILE_HEIGHT);

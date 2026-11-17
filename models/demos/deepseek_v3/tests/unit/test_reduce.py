@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
 from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_SDPA, get_fabric_config
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(

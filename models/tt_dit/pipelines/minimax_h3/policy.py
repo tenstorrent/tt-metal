@@ -13,6 +13,9 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image
 
+# MINIMAX_H3_SHORT_EDGE, MINIMAX_H3_MAX_REFERENCE_AUDIOS and MINIMAX_H3_MAX_REFERENCES are unused here:
+# they are re-exported for the server, which imports every H3 value from this module.
+from .packing import MINIMAX_H3_SHORT_EDGE  # noqa: F401
 from .packing import (
     MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_CANVAS_MULTIPLE,
@@ -24,9 +27,11 @@ from .packing import (
     MINIMAX_H3_MIN_ASPECT_RATIO,
     resolve_canvas_size,
 )
-from .packing_ref2va import (
+from .packing_ref2va import (  # noqa: F401
+    MINIMAX_H3_MAX_REFERENCE_AUDIOS,
     MINIMAX_H3_MAX_REFERENCE_IMAGES,
     MINIMAX_H3_MAX_REFERENCE_VIDEOS,
+    MINIMAX_H3_MAX_REFERENCES,
     MiniMaxH3Reference,
     check_reference_aspect_ratio,
     check_reference_kinds,
@@ -247,6 +252,34 @@ class MiniMaxH3ReferenceInfo:
     audio_channels: int | None = None
 
 
+class MiniMaxH3AdmissionError(ValueError):
+    """Every reason `admit_request` rejected a request.
+
+    `errors` holds `(name, message)` pairs: `name` is the keyframe key or `MiniMaxH3ReferenceInfo.name`
+    the problem is about, or None when it is about the request as a whole.
+    """
+
+    def __init__(self, errors: list[tuple[str | None, str]]):
+        super().__init__("; ".join(message for _, message in errors))
+        self.errors = errors
+
+
+def _collect(errors: list[tuple[str | None, str]], name: str | None, check, *args) -> None:
+    try:
+        check(*args)
+    except ValueError as error:
+        errors.append((name, str(error)))
+
+
+def _check_reference_media(reference: MiniMaxH3ReferenceInfo) -> None:
+    if reference.kind == "video" and not (reference.fps and reference.fps > 0):
+        raise ValueError(f"{reference.name} reports no frame rate")
+    if reference.kind == "audio" and reference.audio_channels is None:
+        raise ValueError(f"{reference.name} has no audio stream")
+    if reference.audio_channels is not None and reference.audio_channels not in (1, MINIMAX_H3_AUDIO_CHANNELS):
+        raise ValueError(f"{reference.name} has {reference.audio_channels} audio channels; must be mono or stereo")
+
+
 def admit_request(
     *,
     aspect_ratio: str | None,
@@ -256,30 +289,31 @@ def admit_request(
     keyframe_sizes: Mapping[str, tuple[int, int]] | None = None,
     references: Sequence[MiniMaxH3ReferenceInfo] | None = None,
 ) -> None:
-    """Reject an unserved request from metadata alone, before queueing; `validate_request` checks decoded inputs."""
+    """Reject an unserved request from metadata alone, before queueing; `validate_request` checks decoded inputs.
+
+    Raises `MiniMaxH3AdmissionError` listing every problem found, not only the first.
+    """
+    errors: list[tuple[str | None, str]] = []
     if aspect_ratio is not None:
-        minimax_h3_parse_aspect_ratio(aspect_ratio)
+        _collect(errors, None, minimax_h3_parse_aspect_ratio, aspect_ratio)
     if duration_s is not None:
-        validate_duration(duration_s)
+        _collect(errors, None, validate_duration, duration_s)
     if (height is None) != (width is None):
-        raise ValueError("pass both height and width, or neither")
-    if height is not None:
-        _validate_explicit_canvas(height, width)
+        errors.append((None, "pass both height and width, or neither"))
+    elif height is not None:
+        _collect(errors, None, _validate_explicit_canvas, height, width)
     for name, size in (keyframe_sizes or {}).items():
-        _validate_keyframe_aspect_ratio(name, *size)
+        _collect(errors, name, _validate_keyframe_aspect_ratio, name, *size)
     if references is not None:
         if keyframe_sizes:
-            raise ValueError("references (ref2va) and keyframes (fl2va) are different tasks")
-        check_reference_kinds([reference.kind for reference in references])
+            errors.append((None, "references (ref2va) and keyframes (fl2va) are different tasks"))
+        _collect(errors, None, check_reference_kinds, [reference.kind for reference in references])
     for reference in references or ():
         if reference.size is not None:
-            check_reference_aspect_ratio(reference.name, *reference.size)
-        if reference.kind == "video" and not (reference.fps and reference.fps > 0):
-            raise ValueError(f"{reference.name} reports no frame rate")
-        if reference.kind == "audio" and reference.audio_channels is None:
-            raise ValueError(f"{reference.name} has no audio stream")
-        if reference.audio_channels is not None and reference.audio_channels not in (1, MINIMAX_H3_AUDIO_CHANNELS):
-            raise ValueError(f"{reference.name} has {reference.audio_channels} audio channels; must be mono or stereo")
+            _collect(errors, reference.name, check_reference_aspect_ratio, reference.name, *reference.size)
+        _collect(errors, reference.name, _check_reference_media, reference)
+    if errors:
+        raise MiniMaxH3AdmissionError(errors)
 
 
 def served_canvases() -> tuple[tuple[int, int], ...]:
