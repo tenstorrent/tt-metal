@@ -27,6 +27,7 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     PerfRunType,
+    SfpuImpl,
     Transpose,
     format_dict,
 )
@@ -57,7 +58,9 @@ from helpers.test_variant_parameters import (
     ENABLE_DIRECT_INDEXING,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATH_OP,
     NUM_FACES,
+    SFPU_IMPL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -327,6 +330,9 @@ def test_sfpu_add_parallel_matmul_quasar(
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
+            MATH_OP(mathop=MathOperation.SfpuElwadd),
+            # AddSrcs is plain SFPI; there is no SFPLOADMACRO variant of this kernel.
+            SFPU_IMPL(SfpuImpl.Sfpi),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
