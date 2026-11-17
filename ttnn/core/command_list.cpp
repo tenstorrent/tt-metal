@@ -346,7 +346,7 @@ CmdListBinder::Param CmdListBinder::param(
     std::string_view invoke_name, CmdListEncodeFn encode, std::optional<std::string> metal_cmd_list_param_name) {
     TT_FATAL(!invoke_name.empty(), "CmdListBinder::param: invoke_name must not be empty");
     TT_FATAL(encode != nullptr, "CmdListBinder::param: '{}' has no encoder", invoke_name);
-    std::string name = metal_cmd_list_param_name.value_or(std::string(invoke_name));
+    std::string name = std::move(metal_cmd_list_param_name).value_or(std::string(invoke_name));
     TT_FATAL(
         declared_params_.insert(name).second,
         "CmdListBinder: Metal param '{}' is declared twice; a factory pairs one encoding with each Metal param. To "
@@ -388,7 +388,7 @@ CmdListBinder::Param& CmdListBinder::Param::runtime(
     if (nodes.has_value()) {
         for (const auto& node : *nodes) {
             TT_FATAL(
-                values != nullptr && values->find(node) != values->end(),
+                values != nullptr && values->contains(node),
                 "CmdListBinder: the run args do not set runtime argument '{}' of kernel '{}' on node {}",
                 arg_name,
                 kernel_name,
