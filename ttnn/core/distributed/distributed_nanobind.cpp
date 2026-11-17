@@ -47,6 +47,7 @@
 #include "distribution_mode.hpp"
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
 
 namespace {
@@ -930,6 +931,31 @@ void py_module(nb::module_& mod) {
 
        Returns:
            List[Tensor]: The shards of the tensor corresponding to the devices.
+           )doc");
+    mod.def(
+        "cpu_shards",
+        &ttnn::cpu_shards,
+        nb::arg("tensor"),
+        nb::arg("coords"),
+        nb::arg("blocking") = true,
+        nb::arg("cq_id") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+       Read the shards of a device tensor at the given mesh coordinates to the host, in one command-queue batch.
+
+       The function form of ``Tensor.cpu_shards``. Returns one single-device host tensor per coordinate, in the order
+       given, as ``get_device_tensors`` returns a host tensor's shards. Every coordinate must be one the tensor holds a
+       shard at (``tensor.device_coords()``), and none may repeat. The device tensor and its topology label are
+       untouched.
+
+       Args:
+           tensor (Tensor): The device tensor to read.
+           coords (List[MeshCoordinate]): The coordinates to read, in the order the results are returned.
+           blocking (bool): Wait for the read to finish. Defaults to True.
+           cq_id (int, optional): The command queue to read on. Defaults to None, the current command queue.
+
+       Returns:
+           List[Tensor]: One single-device host tensor per coordinate.
            )doc");
     mod.def(
         "replicate_tensor_to_mesh_mapper",
