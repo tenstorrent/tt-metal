@@ -17,7 +17,9 @@ namespace ttml::metal::ops::ring_sdpa_fw {
 // step that divides St (main's pick_sk_chunk_t; a shard can be a tile or two long), no head stacking, and
 // the causal items placed as heavy/light pairs, never cut. The kernels it runs are the shared sdpa_fw ones,
 // so sdpa_fw_op_test drives this config through the ring steps on one device; the Galaxy ring test is the
-// only multi-device coverage.
+// only multi-device coverage. So every context-parallel ring step still runs main's chunking: letting the
+// ring resolve its own (a shard can be a tile or two long, so the pick's shape rule does not obviously
+// transfer) and adding a ring CI run is https://github.com/tenstorrent/tt-metal/issues/66072.
 SDPAForwardProgramConfig ring_program_config(uint32_t St);
 
 // Forward Program Factory: one SDPA forward program per device, so the SDPA shared variables are reused.
