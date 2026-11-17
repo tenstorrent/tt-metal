@@ -8,7 +8,7 @@
 // SCALAR-broadcast ELWMUL into the token's 4 fp32 DEST tiles: ELWMUL adds its product to DEST (the standard binary
 // path never clears it, and DEST starts each token cleared by the previous pack), so the S products accumulate there.
 // RT: 0 tokens, 1 stamps (0: compute start, 63: end, 1: cycles waiting for a token's inputs, 2: for output space).
-// CT: 0 S.
+// CT: 0 S. WE_ROWS_CB / WE_W_CB / WE_OUT_CB: the CBs (default 0, 1, 16; the fold puts them beside the shared expert's).
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
@@ -19,7 +19,12 @@ FORCE_INLINE uint32_t wall() { return *reinterpret_cast<volatile uint32_t*>(RISC
 
 void kernel_main() {
     constexpr uint32_t S = get_compile_time_arg_val(0);
-    constexpr uint32_t rows_cb = tt::CBIndex::c_0, w_cb = tt::CBIndex::c_1, out_cb = tt::CBIndex::c_16;
+#ifndef WE_ROWS_CB
+#define WE_ROWS_CB 0
+#define WE_W_CB 1
+#define WE_OUT_CB 16
+#endif
+    constexpr uint32_t rows_cb = WE_ROWS_CB, w_cb = WE_W_CB, out_cb = WE_OUT_CB;
     constexpr uint32_t TPR = 4;
     const uint32_t nt = get_arg_val<uint32_t>(0);
     volatile tt_l1_ptr uint32_t* stamps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(1));

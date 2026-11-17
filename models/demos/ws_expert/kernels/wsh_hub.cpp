@@ -7,7 +7,9 @@
 // .. (cluster-local; row tile r = CL + NCL i). Built three times (one source per RISC, WSH_ROLE):
 //   WSH_ROLE 0, BRISC (NOC0, DRAM reads): a row tile's 32 token rows (whole rows, H * 2 B each) into CB 7;
 //   WSH_ROLE 1, compute: tilizes the row tile (KT tiles wide, CB 7 -> CB 8, x's format, fp32 DEST);
-//   WSH_ROLE 2, NCRISC (NOC1): a non-blocking loop over
+//   WSH_ROLE 2, NCRISC (NOC1): a non-blocking loop over (each multicast into every NOC1 sub-rectangle of the cluster's
+//   rectangle: the hub's own with loopback, then the others; payload, then its flag as a 4-B multicast write through
+//   the same command buffer, which lands after the payload)
 //     QA x: the row tile's NB blocks (s = NB i + b: BK tiles of CB 8) into slot s % NX of every rectangle core's x
 //        ring + flag (s + 1), linked; block s waits until every cluster core has popped block s - NX (its word in
 //        this feeder's XPROG: cores credit the feeder of the block that reuses the slot), and until block s - 2 has
@@ -20,7 +22,12 @@
 // 8 start, 9 input waits, 10 output space waits, 11 end; role 2: 16 start, 17 x multicasts (issue to sent), 18 h
 // multicasts, 19 x blocks waiting for credits, 20 h rows waiting for arrivals, 21 end.
 // RT (role 0): 0 x addr, 1 cluster CL, 2 f, 3 NF, 4 cluster rows, 8 stamps; (role 1): 0 own rows, 8 stamps;
-//    (role 2): 0 f, 1 NF, 2 cluster rows, 3-6 the rectangle for NOC1 multicasts, 7 rectangle cores, 8 stamps, 9 hub.
+//    (role 2): 0 f, 1 NF, 2 cluster rows, 3-6 the hub's NOC1 multicast sub-rectangle, 7 its cores, 8 stamps, 9 hub,
+//    10 sub-rectangles, 11 + 5 (i - 1) .. : sub-rectangle i's NOC1 corners and cores; then the start barrier's master
+//    (NoC x | y << 8), whether this hub is it, and (the master) the member count and every member's NoC x | y << 8.
+// Role 2 starts with the hub's state words zeroed (x and h flags, XPROG, h counts: their L1 is another program's
+// between launches), then + 1 on the master's semaphore 2; the master waits for every member, then sets semaphore 3
+// on each; all wait for it.
 // CT (role 0): 0 KT, 1 NCL, 2 x row bytes, then TensorAccessorArgs(x); (role 1): 0 KT; (role 2): 0 BK, 1 KTD, 2 NX,
 //    3 NS, 4 GC, 5 xring, 6 xflags, 7 xprog, 8 hring, 9 hflags, 10 hcnt, 11 x tile bytes, 12 h tile bytes, 13 KT.
 #include <cstdint>
@@ -110,6 +117,46 @@ void kernel_main() {
     const uint32_t mx1 = get_arg_val<uint32_t>(5), my1 = get_arg_val<uint32_t>(6);
     const uint32_t nrec = get_arg_val<uint32_t>(7);
     const bool hub = get_arg_val<uint32_t>(9) != 0;
+    const uint32_t nsub = get_arg_val<uint32_t>(10);
+    // the payload and its flag into every sub-rectangle (src_flag holds the flag's value)
+    auto mcast = [&](uint32_t src, uint32_t dst, uint32_t bytes, uint32_t src_flag, uint32_t dst_flag) {
+        noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr(mx0, my0, mx1, my1, dst), bytes, nrec, true);
+        noc_async_write_multicast_loopback_src(
+            src_flag, get_noc_multicast_addr(mx0, my0, mx1, my1, dst_flag), 4, nrec, false);
+        for (uint32_t i = 1; i < nsub; ++i) {
+            const uint32_t a = 11 + 5 * (i - 1);
+            const uint32_t x0 = get_arg_val<uint32_t>(a), y0 = get_arg_val<uint32_t>(a + 1);
+            const uint32_t x1 = get_arg_val<uint32_t>(a + 2), y1 = get_arg_val<uint32_t>(a + 3);
+            const uint32_t n = get_arg_val<uint32_t>(a + 4);
+            noc_async_write_multicast(src, get_noc_multicast_addr(x0, y0, x1, y1, dst), bytes, n, true);
+            noc_async_write_multicast(src_flag, get_noc_multicast_addr(x0, y0, x1, y1, dst_flag), 4, n, false);
+        }
+    };
+    {  // the start: state words zeroed, then the barrier
+        auto zero = [](uint32_t base, uint32_t n) {
+            for (uint32_t i = 0; i < n; ++i) {
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + i * 16) = 0;
+            }
+        };
+        zero(xflags, NX);
+        zero(hflags, NS);
+        zero(xprog, GC);
+        zero(hcnt, NS);
+        const uint32_t b0 = 11 + 5 * (nsub - 1);
+        const uint32_t mxy = get_arg_val<uint32_t>(b0), cnt = get_semaphore(2), go = get_semaphore(3);
+        noc_semaphore_inc(get_noc_addr(mxy & 0xFF, mxy >> 8, cnt), 1);
+        noc_async_atomic_barrier();
+        if (get_arg_val<uint32_t>(b0 + 1)) {
+            const uint32_t n = get_arg_val<uint32_t>(b0 + 2);
+            noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cnt), n);
+            for (uint32_t j = 0; j < n; ++j) {
+                const uint32_t v = get_arg_val<uint32_t>(b0 + 3 + j);
+                noc_inline_dw_write(get_noc_addr(v & 0xFF, v >> 8, go), 1);
+            }
+            noc_async_write_barrier();
+        }
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go), 1);
+    }
     const uint32_t xscr_addr = get_semaphore(0), hscr_addr = get_semaphore(1);
     volatile tt_l1_ptr uint32_t* xscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xscr_addr);
     volatile tt_l1_ptr uint32_t* hscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hscr_addr);
@@ -142,14 +189,7 @@ void kernel_main() {
                 const uint32_t a = wall();
                 const uint32_t xs = s % NX;
                 *xscr = s + 1;
-                noc_async_write_multicast_loopback_src(
-                    get_read_ptr(xst_cb) + b * BK * xtile,
-                    get_noc_multicast_addr(mx0, my0, mx1, my1, xring + xs * BK * xtile),
-                    BK * xtile,
-                    nrec,
-                    true /*linked*/);
-                noc_semaphore_set_multicast_loopback_src(
-                    xscr_addr, get_noc_multicast_addr(mx0, my0, mx1, my1, xflags + xs * 16), nrec);
+                mcast(get_read_ptr(xst_cb) + b * BK * xtile, xring + xs * BK * xtile, BK * xtile, xscr_addr, xflags + xs * 16);
                 noc_async_writes_flushed();
                 if (++b == NB) {
                     cb_pop_front(xst_cb, KT);
@@ -167,10 +207,7 @@ void kernel_main() {
                 const uint32_t a = wall();
                 *hscr = q + 1;
                 const uint32_t slot = hring + hs * KTD * htile;
-                noc_async_write_multicast_loopback_src(
-                    slot, get_noc_multicast_addr(mx0, my0, mx1, my1, slot), KTD * htile, nrec, true /*linked*/);
-                noc_semaphore_set_multicast_loopback_src(
-                    hscr_addr, get_noc_multicast_addr(mx0, my0, mx1, my1, hflags + hs * 16), nrec);
+                mcast(slot, slot, KTD * htile, hscr_addr, hflags + hs * 16);
                 noc_async_writes_flushed();
                 ++q;
                 t_hm += wall() - a;

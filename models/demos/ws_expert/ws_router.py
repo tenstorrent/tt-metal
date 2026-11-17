@@ -207,7 +207,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None):
     ]
     if debug:
         cbs += [cb(9, ttnn.float32, 2 * EPC, cset), cb(10, ttnn.float32, EPC, cset)]
-    sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(5)]
+    sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(7)]
     mpd = mesh_program(mesh, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
     io = [x_rm, wrT, ids_t, wl1, ring, relay, xst, gring, idl1, st] + list(bufs.values())
     io += ([logd] if debug else []) + [outs[k] for k in ("w", "idx_t", "dest_t", "counts_t", "fence_t")]

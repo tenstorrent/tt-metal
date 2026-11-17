@@ -883,3 +883,69 @@ the expert-id-ordered outputs (out_eord) are gone.
   - Logits shifted by -50: 2048/2048 as well; w PCC 0.99877 (the keys' resolution at |logit| 50 is ~6e-3, the
     matmul's own error there ~0.02).
   - T 31250: routing exact, every-token re-read identical, y 0.99989; Galaxy y 0.99988 on chips 0 and 31.
+
+## Stage 15: the layer in a trace (tests/test_ws_layer.py run_trace, run_soak; bench_util device zeros)
+- A layer's programs back to back with no host IO (layer_programs): each phase builds its program, runs it and frees
+  its L1 tensors, so the phases alias L1 as in the eager layer; the whole layer captured once and replayed.
+- What had to change:
+  - Host writes: sharded_l1 / stamps_tensor wrote zeros from the host (from_torch). Under bench_util.DEVICE_ZERO they
+    allocate without a write; the uint32 tensors (state words) of the routed stream are zeroed by one small program
+    before it (9.5 KB a core). The head, shared expert and fold clear their own state words at the start of each
+    launch, then a barrier over their cores on program semaphores (reset by the dispatch every launch) before
+    anything is sent: their L1 is another program's between launches.
+  - Nothing may stay in L1 across phases: the routed stream's L1 tensors sit ~3 KB above its circular buffers, so
+    any persistent L1 tensor pushes them into the CBs (a pool of stamps did). Device times come from the eager
+    layers; the trace's DRAM clocks (one-core programs writing the wall clock to DRAM between the phases) time a
+    replay's programs.
+  - The zero-fill program's range count is a compile-time arg (one cached program a count, runtime args always the
+    same length).
+- One chip, T 31250, 20 warm-up + 5 measured replays: outputs (y, counts, token lists, destination lists, w)
+  bit-identical to the eager layer; every-token re-read equal. Wall per replay 62.3 ms; eager wall 56.5 (head 3.1,
+  shared 5.7, stream 39.5, end 8.3), device sum 52.3. Inside a replay the programs take 52.1 ms (head 2.71, shared
+  4.98, stream 36.60, end 7.81: the device sum); the other ~10 ms falls between replays.
+- The Galaxy: the whole-layer trace hung in replay (twice; the stream's lane kernels and fabric muxes waiting): each
+  chip ran the stream's zeros and then its stream with no sync between chips, so a neighbour's fabric writes (weight
+  slots, arrival counts, credits) could land before a chip's zeros and be wiped. Confirmed: the layer as two traces
+  split before the stream, a host synchronize after each, ran clean for 30 layers (76.9 ms a layer, bit-identical to
+  eager). The fix: one trace with a device barrier between the stream's zeros and the stream (two all-gathers of a
+  tiny DRAM tensor, one a torus axis, the second on the first's output), the stream's state words held allocated
+  across it.
+- The Galaxy, the folded layer (stage 16) in one trace with the barrier, 20 warm-up + 5 measured replays: bit-identical
+  to eager; 74.06 ms a layer (73.14 back to back) against eager 76.91 wall, device sum 61.10. Inside a replay (chip
+  0): head 2.70, stream 52.81 (its zeros and the barrier included; the stream alone 49.4), fold 8.99: 64.50 first
+  clock to last; ~9.5 ms between replays, as on one chip.
+- Without the trace, the layer's host work costs the Galaxy most: the same programs untraced (builds included)
+  130.9 ms back to back, 172.8 synchronized; with the zeros written from the host 781 ms.
+
+## Stage 16: the shared expert folded into the end pass (ws_fold.py, kernels wf_*.cpp, wsh_reader WSH_FOLD)
+- Where the end pass can run beside the shared expert: alone on the cores the column clusters leave (T 31250, 4 tokens
+  in flight), it is read-bound by the columns' vertical links:
+| end pass cores | HiFi4 | HiFi2 | LoFi |
+|---|---|---|---|
+| 120 (all) | 7.87 | - | - |
+| 20 (2 free columns) | 16.06 | - | - |
+| 26 (+ the rectangles' idle cores) | 12.83 | 12.45 | 12.61 |
+| 24, the 2 last rows | 9.37 | 8.76 | 8.60 |
+| 24, the 2 first rows | - | 8.51 | - |
+- So the shared expert's clusters take rectangles of 4 whole rows (rows 2-9; ws_shared layout "rows"), the end pass the
+  2 first rows. A 12-wide rectangle spans two NoC sub-rectangles (Blackhole's Tensix columns jump over the DRAM
+  columns): the hub multicasts into each, payload then a 4-B flag through the same command buffer. The shared expert
+  alone in that shape: 6.36 ms (4.97 in columns: the hub multicasts every block twice).
+- The fold, one program: each down core pack-untilizes its columns of a row tile's rows and writes them, posted on
+  NOC1, half a row tile at a time into the owning end core's L1 ring (2 slots of 16 rows; the row tile's end core
+  in the order the cluster produces them), then its flag word through the same command buffer; it waits for the end
+  core's credit (NOC0) before reusing a slot. The end core reads each token's 12 routed rows (NOC0), copies the
+  shared row from its ring, sums them in DEST (HiFi2; weight 1.0 for the shared row), writes y posted on NOC1 with a
+  fence. The result buffer holds 12 rows a token.
+- L1: a sharded tensor takes its address range on every core, so the end cores' rows, y rows and weights are plain
+  circular buffers (on the end cores only; the rows first, at the 64-B aligned base); only the ring and small state
+  are tensors.
+- Every launch starts with each writer's credits and end core's flags (and the shared expert's own flags) zeroed,
+  then a barrier over them: the first version, zeroed once at allocation, read the previous launch's flags from the
+  second launch on.
+- One chip, 20 + 5 launches: T 2048 and T 31250 every token exact against the routed sum plus the standalone shared
+  expert's rows (PCC 0.999995). Device 8.95 ms against shared 4.97 + end 7.90 apart; the end cores still wait 1.8 ms
+  for slot flags (each cluster sends its row tiles in order, an end core holds one row tile: one slow end core stalls
+  the cluster).
+- In the layer (head, stream, fold), 20 + 5: one chip 52.65 ms wall (56.46 unfolded), fold 9.06 ms device; Galaxy
+  77.22 ms wall (83.19 unfolded), fold 9.05 ms device (shared + end 13.37 apart); y PCC 0.99988, routing exact.

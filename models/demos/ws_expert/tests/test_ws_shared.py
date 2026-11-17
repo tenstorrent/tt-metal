@@ -33,7 +33,16 @@ def test_ws_shared_chip(mesh_device, T):
     bk, nx = int(os.environ.get("WSS_BK", "24")), int(os.environ.get("WSS_NX", "9"))
     h_dt = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("WSS_HDT", "bfp8")]
     cfg = SCfg(
-        T=T, w_dt=w_dt, fidelity=getattr(ttnn.MathFidelity, fid), NF=nf, XRM=xrm, XST=xst, BK=bk, NX=nx, h_dt=h_dt
+        T=T,
+        w_dt=w_dt,
+        fidelity=getattr(ttnn.MathFidelity, fid),
+        NF=nf,
+        XRM=xrm,
+        XST=xst,
+        BK=bk,
+        NX=nx,
+        h_dt=h_dt,
+        layout=os.environ.get("WSS_LAYOUT", "cols"),
     )
     H, I, S = cfg.H, cfg.IS, cfg.S
     TX = -(-(T + 1) // 32) * 32

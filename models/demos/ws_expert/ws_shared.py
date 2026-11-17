@@ -51,6 +51,8 @@ class SCfg:
     h_dt: object = ttnn.bfloat8_b  # (bf16: twice the h multicast bytes, about 1.2x the time)
     out_dt: object = ttnn.bfloat16
     fidelity: object = ttnn.MathFidelity.LoFi
+    layout: str = "cols"  # "cols": rectangles of whole logical columns; "rows": of whole rows (4 a cluster, from row0)
+    row0: int = 0
 
     KT = property(lambda s: s.H // 32)
     HT = property(lambda s: s.H // 32)
@@ -66,6 +68,18 @@ def clusters(mesh, cfg: SCfg):
     cores, the GC active ones in column-major order, the x feeders: the hub (the rectangle's NOC1 multicast start
     corner) then the rest of the rectangle's cores)."""
     g = mesh.compute_with_storage_grid_size()
+    if cfg.layout == "rows":
+        # (a rectangle of whole rows may span NoC sub-rectangles - Blackhole's Tensix columns jump over the DRAM
+        # columns: the hub, the core with the largest NoC (x, y), starts its own; the others lie at smaller x, so
+        # its NOC1 multicasts reach them without wrapping)
+        h = -(-(cfg.GC + 1) // g.x)
+        out = []
+        for c in range(cfg.NCL):
+            rect = [(x, y) for y in range(cfg.row0 + c * h, cfg.row0 + (c + 1) * h) for x in range(g.x)]
+            hub = max(rect, key=lambda cc: noc(mesh, *cc))
+            act = [cc for cc in rect if cc != hub][: cfg.GC]
+            out.append((rect, act, ([hub] + [cc for cc in rect if cc != hub and cc not in act])[: cfg.NF]))
+        return out
     w = -(-(cfg.GC + 1) // g.y)
     out, x = [], 0
     while x + w <= g.x and len(out) < cfg.NCL:
@@ -93,6 +107,19 @@ def shared_weights(mesh, cfg: SCfg, w1, w3, w2):
 def build_shared(mesh, cfg: SCfg, x_t, w13_t, w2_t, res_t):
     """generic_op mesh program of the shared expert; returns (mesh program, io tensors, stamps, active cores). res_t
     has NUM_DRAM_BANKS spare rows from T S (the posted row writes' fence)."""
+    pt = shared_parts(mesh, cfg, x_t, w13_t, w2_t, res_t)
+    p = ttnn.ProgramDescriptor(kernels=pt["kernels"], semaphores=pt["sems"], cbs=pt["cbs"])
+    R, Cn = tuple(mesh.shape)
+    mpd = ttnn.MeshProgramDescriptor()
+    mpd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, Cn - 1))] = p
+    return mpd, pt["io"], pt["stamps"], pt["active"]
+
+
+def shared_parts(mesh, cfg: SCfg, x_t, w13_t, w2_t, res_t, fold=None):
+    """The shared expert's kernels, CBs, semaphores, io tensors, stamps, active cores and clusters (a dict). fold (ws_fold):
+    the cluster cores send their rows into the end cores' L1 rings instead of res_t (wsh_reader.cpp WSH_FOLD): a dict of
+    ends (per cluster its end cores, logical), ring, flags (end cores' L1 addresses), fcred, fscr (L1 tensors on the
+    active cores)."""
     assert cfg.PAIRS % cfg.GC == 0 and cfg.KT % cfg.BK == 0 and cfg.NX <= 2 * cfg.NB - 1 and cfg.NS == 3
     KT, KTD, HT, BK, NX, NS, GC, NPAIR = cfg.KT, cfg.KTD, cfg.HT, cfg.BK, cfg.NX, cfg.NS, cfg.GC, cfg.NPAIR
     GW = 2 * NPAIR
@@ -125,15 +152,20 @@ def build_shared(mesh, cfg: SCfg, x_t, w13_t, w2_t, res_t):
         ("EXPERT_ACTIVATION_LIMIT", "7.0f"),
         ("EXPERT_ACTIVATION_ALPHA", "1.702f"),
     ]
-    geo = []  # per cluster: rows, blocks, NOC1 multicast rectangle, rectangle cores, feeders' NoC xy
+    geo = []  # per cluster: rows, blocks, NOC1 multicast (sub-)rectangles (the hub's first) with their cores, feeders
     for c, (rect, act, fs) in enumerate(cl):
         rows = len(range(c, cfg.R, cfg.NCL))
-        rs = noc_rects(mesh, rect)
-        assert len(rs) == 1
-        r0 = list(rs[0][:4])
+        hx, hy = noc(mesh, *fs[0])
+        rs = sorted(noc_rects(mesh, rect), key=lambda r: not (r[0] <= hx <= r[2] and r[1] <= hy <= r[3]))
+        assert (rs[0][2], rs[0][3]) == (hx, hy) and all(r[2] < hx for r in rs[1:]), "the hub starts its sub-rectangle"
+        sub = [[r[2], r[3], r[0], r[1], r[4]] for r in rs]
         fxy = [noc(mesh, *f)[0] | noc(mesh, *f)[1] << 8 for f in fs]
-        geo.append((rows, rows * cfg.NB, [r0[2], r0[3], r0[0], r0[1]], len(rect), fxy))
+        geo.append((rows, rows * cfg.NB, sub, len(rect), fxy))
     kernels = []
+    # (the start barrier: the cluster cores and the hubs count in at the master - the first hub; the fold's end core 0)
+    xy = lambda c: noc(mesh, *c)[0] | noc(mesh, *c)[1] << 8
+    master = fold["master"] if fold else xy(feeders[0])
+    members = [xy(c) for c in active + feeders]
     # the x feeders: gather (BRISC, NOC0), tilize (compute), multicasts (NCRISC, NOC1; the hub also the h rows)
     h_rt = [ttnn.RuntimeArgs() for _ in range(3)]
     for c, (_, _, fs) in enumerate(cl):
@@ -143,7 +175,11 @@ def build_shared(mesh, cfg: SCfg, x_t, w13_t, w2_t, res_t):
             own = len(range(f, rows, NF))
             h_rt[0][x][y] = [x_t.buffer_address(), c, f, NF, rows, 0, 0, 0, hst.buffer_address()]
             h_rt[1][x][y] = [own, 0, 0, 0, 0, 0, 0, 0, hst.buffer_address()]
-            h_rt[2][x][y] = [f, NF, rows] + r1 + [nrec, hst.buffer_address(), int(f == 0)]
+            first = not fold and (x, y) == feeders[0]
+            h_rt[2][x][y] = [f, NF, rows] + r1[0] + [hst.buffer_address(), int(f == 0), len(r1)] + sum(r1[1:], []) + [
+                master,
+                int(first),
+            ] + ([len(members)] + members if first else [])
     fset = crs(feeders)
     kernels += [
         ttnn.KernelDescriptor(
@@ -183,7 +219,9 @@ def build_shared(mesh, cfg: SCfg, x_t, w13_t, w2_t, res_t):
                     continue
                 cores.append((x, y))
                 wr_rt[x][y] = [w13_t.buffer_address(), w2_t.buffer_address(), j, c0_of(j)]
-                rd_rt[x][y] = [j, rows, nblk, c0_of(j), c, res_t.buffer_address(), cfg.T, len(fxy)] + fxy
+                rd_rt[x][y] = [j, rows, nblk, c0_of(j), c, res_t.buffer_address(), cfg.T, len(fxy)] + fxy + (
+                    [xy(e) for e in fold["ends"][c]] if fold else []
+                ) + [master]
                 cp_rt[x][y] = [st.buffer_address(), rows]
         cs = crs(cores)
         kernels += [
@@ -202,7 +240,14 @@ def build_shared(mesh, cfg: SCfg, x_t, w13_t, w2_t, res_t):
                 compile_time_args=[NPAIR, BK, KTD, DC, NS, NX, xflags.buffer_address(), xprog.buffer_address()]
                 + [hring.buffer_address(), hflags.buffer_address(), hcnt.buffer_address(), htile]
                 + [cfg.S, cfg.KSH, cfg.H * 2, cfg.NCL, KT]
-                + list(ttnn.TensorAccessorArgs(res_t).get_compile_time_args()),
+                + list(ttnn.TensorAccessorArgs(res_t).get_compile_time_args())
+                + (
+                    [len(fold["ends"][0]), fold["ring"], fold["flags"], fold["fcred"].buffer_address()]
+                    + [fold["fscr"].buffer_address(), GC]
+                    if fold
+                    else []
+                ),
+                defines=[("WSH_FOLD", "1")] if fold else [],
                 runtime_args=rd_rt,
                 config=dm(1),
             ),
@@ -227,13 +272,23 @@ def build_shared(mesh, cfg: SCfg, x_t, w13_t, w2_t, res_t):
         cb(16, cfg.h_dt, 2 * NPAIR, aset),
         ttnn.cb_descriptor_from_sharded_tensor(17, ysh),
     ]
-    sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=crs(active + feeders), initial_value=0) for s in range(2)]
-    p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
-    R, Cn = tuple(mesh.shape)
-    mpd = ttnn.MeshProgramDescriptor()
-    mpd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, Cn - 1))] = p
-    io = [x_t, w13_t, w2_t, xring, hring, xflags, xprog, hflags, hcnt, ysh, st, hst, res_t]
-    return mpd, io, (st, hst), active
+    # (2, 3: the start barrier; the fold puts them on its end cores too)
+    sems = [
+        ttnn.SemaphoreDescriptor(id=s, core_ranges=crs(active + feeders), initial_value=0)
+        for s in (range(2) if fold else range(4))
+    ]
+    io = [x_t, w13_t, w2_t, xring, hring, xflags, xprog, hflags, hcnt, ysh, st, hst]
+    io += [fold["fcred"], fold["fscr"]] if fold else []
+    return dict(
+        kernels=kernels,
+        cbs=cbs,
+        sems=sems,
+        io=io + [res_t],
+        stamps=(st, hst),
+        active=active,
+        feeders=feeders,
+        clusters=cl,
+    )
 
 
 def shared_span_us(sts, ci, clk):

@@ -22,8 +22,10 @@
 //      e_k / sum_k e_k (soft float), each token's w row ([16] fp32) to w page t (posted); records t | k << 16 | e << 20.
 //      QA_TOK tokens a pass, so the soft float does not hold up the other queues;
 //   (WSR_DEBUG_LOGITS) QL my logits tiles (CB 9) to the logits^T tensor (posted).
-// Then a barrier over the chip (every core's multicasts and gathers done, the compute done with W_r^T, whose L1 the
-// exchange's record buffers reuse), the flag words cleared for the next launch, the exchange (wsr_exchange.hpp).
+// A launch starts with this core's state words zeroed (flags, credits, the exchange's counts and offsets: their L1 is
+// another program's between launches), then a barrier over the chip (semaphores 5, 6; the BRISC waits for it too)
+// before anything is sent. At the end a barrier over the chip (every core's multicasts and gathers done, the compute
+// done with W_r^T, whose L1 the exchange's record buffers reuse), then the exchange (wsr_exchange.hpp).
 // RT: 0 me, 1 the group's first row tile, 2 its row tiles, 3 c, 4 T, 5 w, 6 idx, 7 dest, 8 counts, 9 fence, 10 stamps
 //     (2: loop done, 3: B done, 4: C done, 63: end; wall-clock cycles: 20 x multicasts issue to sent, 21 tilized x
 //     pieces in the relay waiting for credits / the stream order (the hub), 22 runs waiting for the owner's credit,
@@ -33,7 +35,8 @@
 // CT: wsr_exchange.hpp's, then 0 BK, 1 NX, 2 KT, 3 GS, 4 NG, 5 xring, 6 xflags, 7 xprog, 8 gcred, 9 garr, 10 gather
 //     ring, 11 id mask, 12 row tiles of x (the logits^T pages a row), 13 NR, 14 relay ring, 15 relay flags, 16 RGRANT,
 //     then TensorAccessorArgs(logits^T).
-// Semaphores: 0, 1 (the exchange), 2 (the barrier's count, core 0), 3 (the barrier's go), 4 (the flag value source).
+// Semaphores: 0, 1 (the exchange), 2 (the barrier's count, core 0), 3 (the barrier's go), 4 (the flag value source),
+// 5 (the start barrier's count, core 0), 6 (its go).
 #include "wsr_exchange.hpp"
 
 void kernel_main() {
@@ -85,6 +88,37 @@ void kernel_main() {
     const uint32_t xscr_addr = get_semaphore(4);
     volatile tt_l1_ptr uint32_t* xscr = p<uint32_t>(xscr_addr);
 
+    {  // the start: state words zeroed, then every core's
+        for (uint32_t i = 0; i < NX; ++i) {
+            word(xflags, i) = 0;
+        }
+        for (uint32_t m = 0; m < GS; ++m) {
+            word(xprog, m) = 0;
+            word(gcred, m) = 0;
+        }
+        word(garr, 0) = 0;
+        for (uint32_t i = 0; i < NR; ++i) {
+            word(rflags, i) = 0;
+        }
+        word(rgrant, 0) = 0;
+        for (uint32_t k = 0; k < NC; ++k) {
+            p<uint32_t>(cnt_in)[k] = 0;
+        }
+        for (uint32_t o = 0; o < NOWN; ++o) {
+            p<uint32_t>(off_in)[o] = 0;
+        }
+        const uint32_t cnt = get_semaphore(5), go = get_semaphore(6);
+        noc_semaphore_inc(noc_at(0, cnt), 1);
+        noc_async_atomic_barrier();
+        if (me == 0) {
+            noc_semaphore_wait(p<uint32_t>(cnt), NC);
+            for (uint32_t k = 0; k < NC; ++k) {
+                noc_inline_dw_write(noc_at(k, go), 1);
+            }
+            noc_async_write_barrier();
+        }
+        noc_semaphore_wait(p<uint32_t>(go), 1);
+    }
     const uint32_t nblk = n * NB;
     const uint32_t n_own = n > c ? (n - c + GS - 1) / GS : 0;
     // QX

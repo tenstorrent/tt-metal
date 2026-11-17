@@ -34,10 +34,11 @@ class LayerCfg:
     IS: int = 2944  # shared expert inner dim
     G: int = 4
     score: str = "softmax"  # or "sigmoid"
+    fold: bool = False  # the shared expert folded into the end pass (ws_fold): its rows never reach the result buffer
 
     TX = property(lambda s: -(-(s.T + 1) // 32) * 32)  # x rows: the tokens, then zero rows (row T: the lists' pad)
     RS = property(lambda s: -(-s.T // 32) * 32)  # token-list width (GCfg.RMAX 32)
-    S = property(lambda s: s.K + 1)  # result rows a token
+    S = property(lambda s: s.K if s.fold else s.K + 1)  # result rows a token
 
 
 def gcfg(nexp, G, T):

@@ -18,7 +18,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.ws_expert.bench_util import aiclk_mhz, pcc, quantize
+from models.demos.ws_expert import bench_util
+from models.demos.ws_expert.bench_util import aiclk_mhz, pcc, quantize, zero_pending
 from models.demos.ws_expert.tests.test_ws_fab_bench import TORUS
 from models.demos.ws_expert.tests.test_ws_lane import first_visible
 from models.demos.ws_expert.ws_end import build_end, end_span_us
@@ -35,14 +36,18 @@ from models.demos.ws_expert.ws_head import (
     build_route,
     clock_programs,
     clock_stamps,
+    dram_clock_ticks,
+    dram_clocks,
     head_outputs,
     route_span_us,
     router_logits,
     top_from_lists,
 )
 from models.demos.ws_expert.ws_router import build_router, logits_debug_tensor, router_inputs, router_span_us
+from models.demos.ws_expert.ws_fold import build_fold, fold_span_us
 
 LOGITS = os.environ.get("WSY_LOGITS", "0") == "1"  # (router head: its logits written for the checks)
+FOLD = os.environ.get("WSY_FOLD", "0") == "1"  # (the shared expert folded into the end pass: ws_fold)
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
@@ -113,6 +118,10 @@ def make_layer(mesh, lc: LayerCfg, routed_lc: LCfg, seed=0):
         st["hout"] = head_outputs(mesh, lc)
         st["logits_t"] = ttnn.empty(
             [lc.TX, E], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=dram
+        )
+    if N > 1:  # (layer_programs' "barrier": a tiny tensor a chip, gathered along each torus axis)
+        st["bar_t"] = ttnn.from_torch(
+            torch.zeros(N, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=shard
         )
     if HEAD == "router":  # (x arrives row-major, as the previous layer's end pass writes it)
         st["hout"] = head_outputs(mesh, lc)
@@ -198,8 +207,10 @@ def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=F
                     dev.setdefault(k, []).append(v)
             ttnn.deallocate(cst)
             del cps, cst
+        bench_util.l1_log("ran head (eager)")
         for t in rio:
             if t.memory_config().buffer_type == ttnn.BufferType.L1:
+                bench_util.l1_log(f"free {t.buffer_address()}")
                 ttnn.deallocate(t)
         del rmpd, rio, rst
         # (outside the timed head: an owner core with more than its record capacity writes counts 0xFFFFFFFF; the
@@ -239,6 +250,8 @@ def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=F
         ),
         ("end", lambda: build_end(mesh, lc.T, lc.K, lc.H, st["res_t"], hd["w"], st["y_t"]), end_span_us),
     )
+    if lc.fold:  # (the shared expert folded into the end pass: after the stream)
+        progs = (progs[1], ("fold", lambda: fold_program(mesh, lc, st, hd), fold_span_us))
     for name, build, span in progs:
         if name in os.environ.get("WSY_SKIP", "").split(","):
             continue
@@ -254,8 +267,10 @@ def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=F
         ph[name] = (time.perf_counter() - t0) * 1e3
         if span_chips:
             dev[name] = [span(stamps, ci, clk) / 1e3 for ci in span_chips]
+        bench_util.l1_log(f"ran {name} (eager)")
         for t in io:  # (the program's L1 tensors freed now: the next phase's ops place their CBs below them)
             if t.memory_config().buffer_type == ttnn.BufferType.L1:
+                bench_util.l1_log(f"free {t.buffer_address()}")
                 ttnn.deallocate(t)
         del mpd, io, stamps
     return hd, ph, dev
@@ -356,12 +371,12 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
             assert same_dev == len(toks), f"the head's picks differ from a top-{K} of its logits"
     w_ref = picked / picked.sum(1, keepdim=True)
     eo = ref.routed(c, toks, top[toks])  # [n, K, H]
-    res = get(st["res_t"]).float()[: T * S].reshape(T, S, lc.H)[toks]
+    res = get(st["res_t"]).float()[: T * S].reshape(T, S, lc.H)[toks]  # (fold: S = K, no shared rows)
     yd = get(st["y_t"]).float().reshape(T, lc.H)[toks]
     sh = ref.shared(c, toks)
     yr = (w[toks].unsqueeze(2) * eo).sum(1) + sh
     full = {}
-    if os.environ.get("WSY_FULLCHECK", "0") == "1":
+    if os.environ.get("WSY_FULLCHECK", "0") == "1" and not lc.fold:
         # every token: the result buffer read twice around a device sync (stable), and y against the end pass's sum
         # over the rows as read (bf16 gate weights, fp32 sums)
         ttnn.synchronize_device(st["res_t"].device())
@@ -389,7 +404,7 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
         topk_of_device_logits=f"{same_dev}/{len(toks)}" if same_dev is not None else None,
         worst_pick=round(worst_pick, 5),
         rows_pcc=pcc(res[:, :K], eo),
-        shared_rows_pcc=pcc(res[:, K], sh),
+        shared_rows_pcc=pcc(res[:, K], sh) if not lc.fold else None,
         y_pcc=pcc(yd, yr),
         y_max_rel=float((yd - yr).abs().max() / yr.abs().max()),
         **full,
@@ -454,7 +469,7 @@ def run_layer(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips, ntok, warm, meas)
 )
 def test_ws_layer_chip(mesh_device, nexp, T):
     """One chip (TT_VISIBLE_DEVICES): the routed stream as the one-chip proxy (every expert the chip's own)."""
-    lc = LayerCfg(T=T, nexp=nexp)
+    lc = LayerCfg(T=T, nexp=nexp, fold=FOLD)
     small = T <= 4096
     warm = int(os.environ.get("WSY_WARM", 1 if small else WARM))
     meas = int(os.environ.get("WSY_MEAS", 1 if small else MEAS))
@@ -467,14 +482,15 @@ def test_ws_layer_chip(mesh_device, nexp, T):
     res = run_layer(mesh_device, lc, rlc, f"chip e{nexp} T {T}", [0], ntok, warm, meas)
     assert all(r["counts"] and r["lists"] and r["dests"] for r in res)
     assert min(r["y_pcc"] for r in res) > 0.999 and min(r["rows_pcc"] for r in res) > 0.999
-    assert min(r["shared_rows_pcc"] for r in res) > 0.999
+    if not lc.fold:
+        assert min(r["shared_rows_pcc"] for r in res) > 0.999
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [TORUS], indirect=True)
 def test_ws_layer_glx(mesh_device):
     """The whole Galaxy torus: T 31250 tokens a chip, 640 experts streamed over 2 cycles x 2 links (G 4)."""
-    lc = LayerCfg(T=31250, nexp=640)
+    lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
     rlc = LCfg(
         cycles=torus_cycles(*tuple(mesh_device.shape)),
         slots="d0,d1,d0d1,any",
@@ -511,3 +527,410 @@ def test_ws_head_overflow(mesh_device, monkeypatch):
     with pytest.raises(RuntimeError, match="overflowed"):
         layer_step(mesh_device, lc, st, aiclk_mhz(first_visible()))
     logger.info("WSY head overflow: caught on the host before the stream")
+
+
+TRACE_REGION = 64 << 20
+
+
+PHASES = ("head", "shared", "stream", "end")
+FOLD_PHASES = ("head", "stream", "fold")
+
+
+def layer_programs(mesh, lc: LayerCfg, st, phases=None, diag=None, clk=None, clocks=None):
+    """One layer's programs (`phases` of them, in layer order) back to back, with no syncs and no host reads
+    (capturable in a trace; bench_util.DEVICE_ZERO set, so the L1 tensors' zeros come from a device program): each
+    phase builds its program, zeroes its new L1 tensors, runs and frees them, so the phases' L1 tensors sit where the
+    eager layer's do (the routed stream's leave it little slack: nothing may stay in L1 across phases). Returns the
+    head's outputs. diag (a dict, untraced only): each zero program and phase synchronized apart - wall ms, the bytes a
+    core zeroes, the phase's device ms (chip 0) - into it. clocks ((programs, io), ws_head.dram_clocks): a clock
+    program before the first phase and after each (the phases' times, dispatch included)."""
+    phases = phases or (FOLD_PHASES if lc.fold else PHASES)
+    ticks = iter(clocks[0]) if clocks else None
+    tick = (lambda: ttnn.generic_op(clocks[1], next(ticks))) if clocks else (lambda: None)
+    tick()
+    spans = dict(head=lambda t: router_span_us(t, 0, clk)["end"], shared=lambda t: shared_span_us(t, 0, clk))
+    spans.update(stream=lambda t: lane_span_us(t, 0, clk), end=lambda t: end_span_us(t, 0, clk))
+    spans.update(fold=lambda t: fold_span_us(t, 0, clk))
+
+    held = []  # (the stream's state tensors, kept across the barrier)
+
+    def run(name, mpd, io, stamps, zero=True, launch=True):
+        bench_util.l1_log(f"run {name} (traced layer)")
+        if diag is not None:
+            ttnn.synchronize_device(mesh)
+            t0 = time.perf_counter()
+        nz = zero_pending() if zero else bench_util.drop_pending()
+        if diag is not None:
+            ttnn.synchronize_device(mesh)
+            t1 = time.perf_counter()
+            diag[f"zero_{name}"] = dict(ms=round((t1 - t0) * 1e3, 3), bytes=nz)
+        if launch:
+            ttnn.generic_op(io, mpd)
+        if diag is not None and launch:
+            ttnn.synchronize_device(mesh)
+            diag[name] = dict(wall=round((time.perf_counter() - t1) * 1e3, 3), dev=round(spans[name](stamps) / 1e3, 3))
+        if launch:
+            tick()
+        for t in io:
+            if not launch and t.memory_config().buffer_type == ttnn.BufferType.L1 and t.dtype == ttnn.uint32:
+                held.append(t)  # (the zeroed state words stay allocated until after the barrier)
+                continue
+            if t.memory_config().buffer_type == ttnn.BufferType.L1:
+                bench_util.l1_log(f"free {t.buffer_address()}")
+                ttnn.deallocate(t)
+
+    hd = dict(x_rm=st["x_rm"], **{k: st["hout"][k] for k in ("idx_t", "dest_t", "counts_t", "w")})
+    # (the head, shared expert and end pass clear their own state words; the routed stream's are zeroed before it)
+    if "head" in phases:
+        with bench_util.self_zeroing():
+            built = build_router(mesh, lc, st["x_rm"], st["wrT_t"], st["ids_t"], st["hout"], st["logd_t"])
+        run("head", *built)
+    if "shared" in phases:
+        with bench_util.self_zeroing():
+            built = build_shared(mesh, st["scfg"], hd["x_rm"], st["w13_t"], st["w2s_t"], st["res_t"])[:3]
+        run("shared", *built)
+    # ("stream:zero": the stream built and its state words zeroed, not run - those few KB stay allocated, so nothing
+    # the barrier places in L1 lands on them; "barrier": every chip past that point (two all-gathers of a tiny DRAM
+    # tensor, one a torus axis, the second on the first's output) - no stream's fabric writes land before every
+    # chip's zeros; then the state words freed; "stream:run": built again - the same addresses - and run without the
+    # zeros)
+    for sp in [p for p in phases if p.startswith("stream") or p == "barrier"]:
+        if sp == "barrier":
+            g0 = ttnn.all_gather(st["bar_t"], 3, cluster_axis=0, num_links=1, topology=ttnn.Topology.Ring)
+            g1 = ttnn.all_gather(g0, 3, cluster_axis=1, num_links=1, topology=ttnn.Topology.Ring)
+            ttnn.deallocate(g0)
+            ttnn.deallocate(g1)
+            for t in held:
+                ttnn.deallocate(t)
+            held.clear()
+            continue
+        run(
+            "stream",
+            *build_lane(
+                mesh,
+                st["rcfg"],
+                st["rlc"],
+                hd["x_rm"],
+                hd["idx_t"],
+                hd["counts_t"],
+                st["ws_t"],
+                st["res_t"],
+                st["tab_t"],
+                st["rtb"],
+                0,
+                dest_t=hd["dest_t"],
+                fence_row=lc.T * lc.S,
+            ),
+            zero=sp != "stream:run",
+            launch=sp != "stream:zero",
+        )
+    if "end" in phases:
+        with bench_util.self_zeroing():
+            built = build_end(mesh, lc.T, lc.K, lc.H, st["res_t"], hd["w"], st["y_t"])
+        run("end", *built)
+    if "fold" in phases:
+        with bench_util.self_zeroing():
+            built = fold_program(mesh, lc, st, hd)
+        run("fold", *built)
+    for t in held:  # (no barrier followed: freed at the end)
+        ttnn.deallocate(t)
+    return hd
+
+
+def fold_program(mesh, lc: LayerCfg, st, hd):
+    """The shared expert folded into the end pass (ws_fold): y from the routed rows (K a token) and the shared rows
+    through L1."""
+    return build_fold(
+        mesh, st["scfg"], lc.K, hd["x_rm"], st["w13_t"], st["w2s_t"], st["res_t"], hd["w"], st["y_t"], st["hout"]["fence_t"]
+    )
+
+
+def run_trace(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips, ntok):
+    """The layer eager (the reference: checks, per-phase wall and device ms), then WS_WARM layers of its programs
+    back to back, one captured in a trace and replayed WS_WARM + WS_MEAS times: wall per layer (replay to synchronize,
+    and replays back to back) against the eager device sum, the head's outputs and y against the eager layer's
+    (bit-exact), the checks again. (The phases' stamps are freed with their phase, as in the eager layer: no device
+    spans from the replays.)"""
+    assert HEAD == "router", "the traced layer runs the router head (WSY_HEAD=router)"
+    N = mesh.get_num_devices()
+    st, host = make_layer(mesh, lc, routed_lc)
+    allp = FOLD_PHASES if lc.fold else PHASES
+    cprogs, cio, cdram = dram_clocks(mesh, len(allp) + 1)  # (first: its L1 scratch stays at the top)
+    clk_dev = first_visible()
+    clk = aiclk_mhz(clk_dev)
+    span_chips = sorted({0, N - 1})
+    logger.info(f"WSY {tag}: {N} chips, {lc}, routed {routed_lc}, aiclk {clk} MHz")
+    for _ in range(2):
+        hd, ph, dev = layer_step(mesh, lc, st, clk, span_chips)
+    eager_dev = {k: max(v) for k, v in dev.items()}
+    ref = Ref(lc, host, st["rcfg"], st["scfg"])
+    for c in chips:
+        check_chip(lc, ref, c, hd, st, ntok, f"{tag} eager")
+    names = ("y", "counts", "idx", "dest", "w")
+    snap = lambda h: {
+        k: [ttnn.to_torch(ttnn.get_device_tensors(t)[c]) for c in chips]
+        for k, t in zip(names, (st["y_t"], h["counts_t"], h["idx_t"], h["dest_t"], h["w"]))
+    }
+    s0 = snap(hd)
+    bench_util.DEVICE_ZERO = True
+    try:
+        for _ in range(2):
+            layer_programs(mesh, lc, st)
+        ttnn.synchronize_device(mesh)
+        t0 = time.perf_counter()
+        for _ in range(WARM):
+            layer_programs(mesh, lc, st)
+        ttnn.synchronize_device(mesh)
+        untraced = (time.perf_counter() - t0) * 1e3 / max(WARM, 1)  # (builds included: host-side)
+        walls_u = []
+        for _ in range(MEAS):
+            layer_programs(mesh, lc, st)
+            ttnn.synchronize_device(mesh)
+        for _ in range(MEAS):
+            t0 = time.perf_counter()
+            layer_programs(mesh, lc, st)
+            ttnn.synchronize_device(mesh)
+            walls_u.append((time.perf_counter() - t0) * 1e3)
+        diag = {}
+        layer_programs(mesh, lc, st, diag=diag, clk=clk)
+        logger.info(f"WSY {tag} SUMMARY device-zero layer, phases synchronized apart: {diag}")
+        # (the program cache over device-zero layers; then the same layers with the zeros from the host)
+        n0 = mesh.num_program_cache_entries()
+        for _ in range(3):
+            layer_programs(mesh, lc, st)
+        ttnn.synchronize_device(mesh)
+        n1 = mesh.num_program_cache_entries()
+        bench_util.DEVICE_ZERO = False
+        for _ in range(2):
+            layer_programs(mesh, lc, st)
+        ttnn.synchronize_device(mesh)
+        t0 = time.perf_counter()
+        for _ in range(MEAS):
+            layer_programs(mesh, lc, st)
+        ttnn.synchronize_device(mesh)
+        host_zero_b2b = (time.perf_counter() - t0) * 1e3 / max(MEAS, 1)
+        bench_util.DEVICE_ZERO = True
+        logger.info(
+            f"WSY {tag} SUMMARY program cache entries {n0} -> {n1} over 3 device-zero layers; host-zero layers back to "
+            f"back {host_zero_b2b:.2f} ms"
+        )
+        # (WSY_TRACE_STREAM=eager: head and shared in one trace, the end pass in another, the routed stream launched
+        # eagerly between them)
+        tmode = os.environ.get("WSY_TRACE_STREAM", "trace")
+        split = tmode == "eager"
+        synced = tmode == "sync"  # (two traces, a host synchronize after each: the stream's zeros done on every chip)
+        if tmode == "barrier":  # (one trace, a device barrier between the stream's zeros and its run)
+            allp = (
+                ("head", "stream:zero", "barrier", "stream:run", "fold")
+                if lc.fold
+                else ("head", "shared", "stream:zero", "barrier", "stream:run", "end")
+            )
+        if synced:
+            groups = (
+                [("head", "stream:zero"), ("stream:run", "fold")]
+                if lc.fold
+                else [("head", "shared", "stream:zero"), ("stream:run", "end")]
+            )
+        else:
+            groups = ([("head",), ("fold",)] if lc.fold else [("head", "shared"), ("end",)]) if split else [allp]
+        # (the whole-layer trace carries the DRAM clocks: each phase's time inside a replay)
+        clocks = (cprogs, cio) if not split and not synced else None
+        if clocks:
+            for _ in range(2):
+                layer_programs(mesh, lc, st, allp, clocks=clocks)
+            ttnn.synchronize_device(mesh)
+        tids = []
+        for g in groups:
+            tids.append(ttnn.begin_trace_capture(mesh, cq_id=0))
+            hd = layer_programs(mesh, lc, st, g, clocks=clocks)
+            ttnn.end_trace_capture(mesh, tids[-1], cq_id=0)
+            try:  # (the trace region's bytes so far: the captured command streams)
+                mv = ttnn.device.GetMemoryView(mesh, ttnn.BufferType.TRACE)
+                logger.info(
+                    f"WSY {tag} SUMMARY trace {len(tids)} {g} captured: trace region "
+                    f"{mv.total_bytes_allocated_per_bank * mv.num_banks} B allocated ({mv.num_banks} banks)"
+                )
+            except Exception as ex:  # (a report only)
+                logger.info(f"WSY {tag} trace region size unavailable: {ex}")
+
+        def layer():
+            ttnn.execute_trace(mesh, tids[0], cq_id=0, blocking=False)
+            if split:
+                layer_programs(mesh, lc, st, ("stream",))
+                ttnn.execute_trace(mesh, tids[1], cq_id=0, blocking=False)
+            if synced:
+                ttnn.synchronize_device(mesh)
+                ttnn.execute_trace(mesh, tids[1], cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh)
+
+        walls = []
+        for _ in range(WARM + MEAS):
+            t0 = time.perf_counter()
+            layer()
+            ttnn.synchronize_device(mesh)
+            walls.append((time.perf_counter() - t0) * 1e3)
+        t0 = time.perf_counter()
+        for _ in range(MEAS):
+            layer()
+        ttnn.synchronize_device(mesh)
+        b2b = (time.perf_counter() - t0) * 1e3 / max(MEAS, 1)
+        if clocks:
+            named = [p for p in allp if p not in ("stream:zero", "barrier")]  # (the phases that tick)
+            ticks = dram_clock_ticks(cdram, 0, len(named) + 1)
+            seg = {p: round((ticks[i + 1] - ticks[i]) / clk / 1e3, 3) for i, p in enumerate(named)}
+            logger.info(
+                f"WSY {tag} SUMMARY inside a replay (chip 0, the last; DRAM clocks between the programs): ms {seg}, "
+                f"first clock to last {(ticks[-1] - ticks[0]) / clk / 1e3:.2f}"
+            )
+        s1 = snap(hd)
+        same = {k: all(torch.equal(a, b) for a, b in zip(s0[k], s1[k])) for k in names}
+        for d in ttnn.get_device_tensors(hd["counts_t"]):
+            if bool((ttnn.to_torch(d).to(torch.int64) & 0xFFFFFFFF == 0xFFFFFFFF).any()):
+                raise RuntimeError("routing program: an owner core's records overflowed its capacity")
+        res = [check_chip(lc, ref, c, hd, st, ntok, f"{tag} trace")[0] for c in chips]
+        for tid in tids:
+            ttnn.release_trace(mesh, tid)
+    finally:
+        bench_util.DEVICE_ZERO = False
+    med = statistics.median(walls[WARM:])
+    logger.info(
+        f"WSY {tag} SUMMARY trace{' (head + shared, end; the stream eager)' if split else ''}"
+        f"{' (two traces, a synchronize after each)' if synced else ''}: {WARM} warm-up + "
+        f"{MEAS} measured replays; wall ms a layer (replay to synchronize, "
+        f"median) {med:.2f}, back to back {b2b:.2f}; the same programs untraced (device zeros, builds included) "
+        f"{untraced:.2f} back to back, {statistics.median(walls_u):.2f} synchronized; eager wall ms {', '.join(f'{k} {v:.2f}' for k, v in ph.items())}, "
+        f"total {sum(ph.values()):.2f}; device ms eager {', '.join(f'{k} {v:.2f}' for k, v in eager_dev.items())}, "
+        f"sum {sum(eager_dev.values()):.2f}; equal to the eager layer's: {same}"
+    )
+    assert all(same.values()), f"the traced layer's outputs differ from the eager layer's: {same}"
+    assert all(r["counts"] and r["lists"] and r["dests"] for r in res)
+    assert min(r["y_pcc"] for r in res) > 0.999
+    return res
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
+def test_ws_layer_trace_chip(mesh_device):
+    """The traced layer on one chip (the routed stream as the one-chip proxy), T 31250, 640 experts."""
+    lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
+    rlc = proxy_lcfg(lc.G)
+    run_trace(mesh_device, lc, rlc, "trace chip e640 T 31250", [0], int(os.environ.get("WSY_TOKENS", 256)))
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dict(TORUS, trace_region_size=TRACE_REGION)], indirect=True)
+def test_ws_layer_trace_glx(mesh_device):
+    """The traced layer on the Galaxy torus, as test_ws_layer_glx."""
+    lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
+    rlc = LCfg(
+        cycles=torus_cycles(*tuple(mesh_device.shape)),
+        slots="d0,d1,d0d1,any",
+        keep=2,
+        bcast=True,
+        noc_split=True,
+        y_rm=True,
+    )
+    chips = [int(c) for c in os.environ.get("WSY_CHIPS", "0,31").split(",")]
+    run_trace(mesh_device, lc, rlc, "trace glx e640 T 31250", chips, int(os.environ.get("WSY_TOKENS", 64)))
+
+
+def run_soak(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips):
+    """WSY_SOAK_ITERS layers (default 10000) in WSY_SOAK_MODE: "trace" (the whole layer one trace), "barrier" (one
+    trace, a device barrier between the stream's zeros and the stream), "sync" (two traces split there, a host
+    synchronize after each), "split" (head + shared and the end pass traced, the routed stream eager between them) or
+    "eager" (the layer's programs back to back, untraced). Every WSY_SOAK_CHECK layers (default 500) y and the head's outputs on `chips` against the first
+    eager layer's: bit-exact, else the y PCC; the wall per layer over the stretch."""
+    assert HEAD == "router"
+    iters = int(os.environ.get("WSY_SOAK_ITERS", "10000"))
+    every = int(os.environ.get("WSY_SOAK_CHECK", "500"))
+    mode = os.environ.get("WSY_SOAK_MODE", "trace")
+    st, _ = make_layer(mesh, lc, routed_lc)
+    clk = aiclk_mhz(first_visible())
+    hd, _, _ = layer_step(mesh, lc, st, clk)
+    names = ("y", "counts", "idx", "dest", "w")
+    snap = lambda: {
+        k: [ttnn.to_torch(ttnn.get_device_tensors(t)[c]) for c in chips]
+        for k, t in zip(names, (st["y_t"], hd["counts_t"], hd["idx_t"], hd["dest_t"], hd["w"]))
+    }
+    s0 = snap()
+    bench_util.DEVICE_ZERO = True
+    tids, bad, done = [], [], 0
+    try:
+        allp = FOLD_PHASES if lc.fold else PHASES
+        split_groups = [("head",), ("fold",)] if lc.fold else [("head", "shared"), ("end",)]
+        tail = ("stream:run", "fold") if lc.fold else ("stream:run", "end")
+        head_p = ("head", "stream:zero") if lc.fold else ("head", "shared", "stream:zero")
+        groups = {
+            "trace": [allp],
+            "barrier": [head_p + ("barrier",) + tail],  # (one trace, a device barrier before the stream)
+            "sync": [head_p, tail],  # (two traces, a host synchronize after each)
+            "split": split_groups,
+            "eager": [],
+        }[mode]
+        for _ in range(WARM):
+            layer_programs(mesh, lc, st)
+        ttnn.synchronize_device(mesh)
+        for g in groups:
+            tids.append(ttnn.begin_trace_capture(mesh, cq_id=0))
+            layer_programs(mesh, lc, st, g)
+            ttnn.end_trace_capture(mesh, tids[-1], cq_id=0)
+
+        def layer():
+            if mode == "eager":
+                layer_programs(mesh, lc, st)
+                return
+            ttnn.execute_trace(mesh, tids[0], cq_id=0, blocking=False)
+            if mode == "split":
+                layer_programs(mesh, lc, st, ("stream",))
+                ttnn.execute_trace(mesh, tids[1], cq_id=0, blocking=False)
+            if mode == "sync":
+                ttnn.synchronize_device(mesh)
+                ttnn.execute_trace(mesh, tids[1], cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh)
+
+        t0 = time.perf_counter()
+        while done < iters:
+            n = min(every, iters - done)
+            for _ in range(n):
+                layer()
+            ttnn.synchronize_device(mesh)
+            done += n
+            t1 = time.perf_counter()
+            s1 = snap()
+            same = {k: all(torch.equal(a, b) for a, b in zip(s0[k], s1[k])) for k in names}
+            ypcc = min(pcc(b.float(), a.float()) for a, b in zip(s0["y"], s1["y"]))
+            if not all(same.values()):
+                bad.append((done, same, ypcc))
+            logger.info(
+                f"WSY {tag} soak {mode}: {done}/{iters} layers, wall ms a layer {(t1 - t0) * 1e3 / n:.2f} over the last "
+                f"{n}; equal to the first layer's {same}, y pcc {ypcc:.6f}"
+            )
+            t0 = time.perf_counter()
+    finally:
+        for tid in tids:
+            ttnn.release_trace(mesh, tid)
+        bench_util.DEVICE_ZERO = False
+    logger.info(f"WSY {tag} SUMMARY soak {mode}: {done} layers, {len(bad)} checks off the first layer's: {bad[:5]}")
+    assert not bad, f"{len(bad)} soak checks differ from the first layer's"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
+def test_ws_layer_soak_chip(mesh_device):
+    lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
+    run_soak(mesh_device, lc, proxy_lcfg(lc.G), "soak chip", [0])
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dict(TORUS, trace_region_size=TRACE_REGION)], indirect=True)
+def test_ws_layer_soak_glx(mesh_device):
+    lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
+    rlc = LCfg(
+        cycles=torus_cycles(*tuple(mesh_device.shape)),
+        slots="d0,d1,d0d1,any",
+        keep=2,
+        bcast=True,
+        noc_split=True,
+        y_rm=True,
+    )
+    run_soak(mesh_device, lc, rlc, "soak glx", [0, 31])

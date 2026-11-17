@@ -20,6 +20,17 @@
 //     x | y << 8 (feeder 0: the hub).
 // CT: 0 NPAIR, 1 BK, 2 KTD, 3 DC, 4 NS, 5 NX, 6 xflags, 7 xprog, 8 hring, 9 hflags, 10 hcnt, 11 h tile bytes, 12 S,
 //     13 KSH, 14 result row bytes, 15 NCL, 16 KT, then TensorAccessorArgs(result).
+// WSH_FOLD (the shared expert folded into the end pass, ws_fold.py): QY sends each row tile's rows not to the result
+//   buffer but into the L1 ring of the end core that owns the row tile, half a row tile a slot: the cluster's row
+//   tile i is end core e = i % NE's k = i / NE-th; its half h (rows 16 h .. 16 h + 15) is the end core's half
+//   m = 2 k + h, in slot h, rows of rowb bytes, this core's columns at C0 64; then m + 1 into the slot's flag word for
+//   this core (J), both posted through the same command buffer (the flag lands after the rows). Slot h is free for
+//   half m once the end core's credit word e in this core's FCRED reads m - 1 (it finished half m - 2). No DRAM
+//   writes, no fence. Extra CT (after the accessor): NE, the end ring, its flags, FCRED, a scratch word (the flag's
+//   source), GC; extra RT (after the feeders): the cluster's NE end cores' NoC x | y << 8.
+// A launch starts with this core's state words zeroed (x and h flags; WSH_FOLD: FCRED - their L1 is another program's
+// between launches), then + 1 on the master's semaphore 2 (the first hub; WSH_FOLD: end core 0), and waits for
+// semaphore 3 (the master sets it once every member cleared its words). RT: the master's NoC x | y << 8 last.
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
@@ -41,6 +52,15 @@ void kernel_main() {
     constexpr uint32_t NCL = get_compile_time_arg_val(15);
     constexpr uint32_t KT = get_compile_time_arg_val(16);
     constexpr auto rargs = TensorAccessorArgs<17>();
+#ifdef WSH_FOLD
+    constexpr uint32_t fo = rargs.next_compile_time_args_offset();
+    constexpr uint32_t NE = get_compile_time_arg_val(fo);
+    constexpr uint32_t ering = get_compile_time_arg_val(fo + 1);
+    constexpr uint32_t eflags = get_compile_time_arg_val(fo + 2);
+    constexpr uint32_t fcred = get_compile_time_arg_val(fo + 3);
+    constexpr uint32_t fscr = get_compile_time_arg_val(fo + 4);
+    constexpr uint32_t GCW = get_compile_time_arg_val(fo + 5);
+#endif
     constexpr uint32_t xr_cb = tt::CBIndex::c_0, hr_cb = tt::CBIndex::c_2;
     constexpr uint32_t h_cb = tt::CBIndex::c_16, y_cb = tt::CBIndex::c_17;
     constexpr uint32_t seg = DC * 64;  // a row's bytes at this core's columns
@@ -55,6 +75,25 @@ void kernel_main() {
         return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + i * 16);
     };
 
+    {  // the start: state words zeroed, then the barrier
+        for (uint32_t i = 0; i < NX; ++i) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xflags + i * 16) = 0;
+        }
+        for (uint32_t i = 0; i < NS; ++i) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hflags + i * 16) = 0;
+        }
+#ifdef WSH_FOLD
+        for (uint32_t e = 0; e < NE; ++e) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fcred + e * 16) = 0;
+        }
+        const uint32_t mxy = get_arg_val<uint32_t>(8 + NF + NE);
+#else
+        const uint32_t mxy = get_arg_val<uint32_t>(8 + NF);
+#endif
+        noc_semaphore_inc(get_noc_addr(mxy & 0xFF, mxy >> 8, get_semaphore(2)), 1);
+        noc_async_atomic_barrier();
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(3)), 1);
+    }
     // ---- QB
     uint32_t b_s = 0, x_credited = 0, x_popped = 0;
     const uintptr_t xacked = (uintptr_t)get_cb_tiles_acked_ptr(xr_cb);
@@ -132,14 +171,23 @@ void kernel_main() {
     // ---- QY
     uint32_t y_i = 0;
     bool y_wait = false;
+#ifdef WSH_FOLD
+    uint32_t y_h = 0;  // (the half of row tile y_i to send next)
+#endif
     auto qy = [&]() -> bool {
         if (y_wait) {
             if (!ncrisc_noc_posted_writes_sent(noc_index)) {
                 return false;
             }
+            y_wait = false;
+#ifdef WSH_FOLD
+            if (++y_h < 2) {
+                return true;
+            }
+            y_h = 0;
+#endif
             cb_pop_front(y_cb, DC);
             ++y_i;
-            y_wait = false;
             return true;
         }
         if (y_i >= rows || !cb_pages_available_at_front(y_cb, DC)) {
@@ -147,10 +195,27 @@ void kernel_main() {
         }
         const uint32_t r = CL + NCL * y_i;
         uint32_t l1 = get_read_ptr(y_cb);
+#ifdef WSH_FOLD
+        const uint32_t e = y_i % NE, m = 2 * (y_i / NE) + y_h;
+        invalidate_l1_cache();
+        if (m >= 2 && word(fcred, e) < m - 1) {
+            return false;
+        }
+        const uint32_t exy = get_arg_val<uint32_t>(8 + NF + e), ex = exy & 0xFF, ey = exy >> 8;
+        const uint32_t slot = ering + y_h * 16 * rowb + C0 * 64;
+        l1 += y_h * 16 * seg;
+        for (uint32_t i = 0; i < 16 && r * 32 + 16 * y_h + i < T; ++i, l1 += seg) {
+            noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1, get_noc_addr(ex, ey, slot + i * rowb), seg);
+        }
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fscr) = m + 1;
+        noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(
+            fscr, get_noc_addr(ex, ey, eflags + (y_h * GCW + J) * 16), 4);
+#else
         for (uint32_t i = 0; i < 32 && r * 32 + i < T; ++i, l1 += seg) {
             noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(
                 l1, rs.get_noc_addr((r * 32 + i) * S + KSH, C0 * 64), seg);
         }
+#endif
         y_wait = true;
         return true;
     };
@@ -166,10 +231,12 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     noc_async_posted_writes_flushed();
+#ifndef WSH_FOLD
     // the posted row writes' fence: an acknowledged 4-B write into every DRAM bank (the result buffer's spare rows
     // from T S, nobody reads them) after them on the same NoC and VC; its acks mean every row landed
     for (uint32_t i = 0; i < NUM_DRAM_BANKS; ++i) {
         noc_async_write(get_semaphore(0), rs.get_noc_addr(T * S + i), 4);
     }
     noc_async_write_barrier();
+#endif
 }

@@ -17,9 +17,30 @@ import ttnn
 from models.demos.ws_expert.bench_util import aiclk_mhz, pcc
 from models.demos.ws_expert.tests.test_ws_lane import first_visible
 from models.demos.ws_expert.ws_end import build_end, end_cores, end_span_us, end_waits_k
+from models.demos.ws_expert.ws_shared import SCfg, clusters
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
+
+
+def end_core_set(mesh, which):
+    """The end pass's cores: "all"; "free20": the cores outside the shared expert's two cluster rectangles; "free26":
+    those plus each rectangle's cores that neither compute nor feed x (ws_shared.clusters); "rows2": the grid's two
+    last rows, every column; "rows2top": its first two rows."""
+    cores = end_cores(mesh)
+    if which == "all":
+        return cores
+    if which == "rows2":
+        gy = max(y for _, y in cores) + 1
+        return [c for c in cores if c[1] >= gy - 2]
+    if which == "rows2top":
+        return [c for c in cores if c[1] < 2]
+    cl = clusters(mesh, SCfg(T=31250))
+    rect = {c for r, _, _ in cl for c in r}
+    out = [c for c in cores if c not in rect]
+    if which == "free26":
+        out += [c for r, act, fs in cl for c in r if c not in act and c not in fs]
+    return out
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
@@ -41,8 +62,19 @@ def test_ws_end_chip(mesh_device, T, nbuf):
     y_t = ttnn.empty([T, H], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=dram)
     fid = os.environ.get("WSE_FID", "HiFi4")
     rnoc = os.environ.get("WSE_READ_NOC", "0")
+    cores = end_core_set(mesh_device, os.environ.get("WSE_CORES", "all"))
     mpd, io, st = build_end(
-        mesh_device, T, K, H, rows_t, w_t, y_t, nbuf=nbuf, fidelity=getattr(ttnn.MathFidelity, fid), read_noc=rnoc
+        mesh_device,
+        T,
+        K,
+        H,
+        rows_t,
+        w_t,
+        y_t,
+        nbuf=nbuf,
+        fidelity=getattr(ttnn.MathFidelity, fid),
+        read_noc=rnoc,
+        cores=cores,
     )
     clk = aiclk_mhz(first_visible())
     wall, dev = [], []
@@ -66,7 +98,7 @@ def test_ws_end_chip(mesh_device, T, nbuf):
     gb = T * (S * H * 2 + 64 + H * 2) / 1e9
     dm, wm = statistics.median(dev), statistics.median(wall)
     logger.info(
-        f"WSE end pass T {T} on {len(end_cores(mesh_device))} cores, {nbuf} tokens in flight a core, {fid}, reads on "
+        f"WSE end pass T {T} on {len(cores)} cores ({os.environ.get('WSE_CORES', 'all')}), {nbuf} tokens in flight a core, {fid}, reads on "
         f"NoC {rnoc}, {WARM} warm-up + {MEAS} measured launches, aiclk "
         f"{clk} MHz: device ms median {dm:.3f} (min {min(dev):.3f}), wall ms median {wm:.3f}; {gb:.2f} GB moved, "
         f"{gb / dm * 1e3:.0f} GB/s at device time; pcc {p:.6f}, max error {err:.2e} of max |y|; waits (K cycles, "

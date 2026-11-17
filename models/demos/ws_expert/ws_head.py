@@ -161,6 +161,33 @@ def clock_stamps(st, ci, n):
     return [int(v) for v in (ttnn.to_torch(ttnn.get_device_tensors(st)[ci]).to(torch.int64) & 0xFFFFFFFF).flatten()[:n]]
 
 
+def dram_clocks(mesh, n):
+    """n one-core programs, program i writing the chip's wall clock into page i of a DRAM tensor through a 64-B L1
+    scratch on core (0, 0) (allocate it before anything else: it stays); returns (programs, io, the DRAM tensor)."""
+    core = (0, 0)
+    scr = sharded_l1(mesh, [core], [1, 16], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    clk = ttnn.empty([n, 16], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    progs = []
+    for i in range(n):
+        rt = ttnn.RuntimeArgs()
+        rt[core[0]][core[1]] = [clk.buffer_address(), i, scr.buffer_address()]
+        k = ttnn.KernelDescriptor(
+            kernel_source=kpath("wsr_dclock.cpp"),
+            core_ranges=crs([core]),
+            compile_time_args=list(ttnn.TensorAccessorArgs(clk).get_compile_time_args()),
+            runtime_args=rt,
+            config=dm(0),
+        )
+        progs.append(mesh_program(mesh, ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[])))
+    return progs, [scr, clk], clk
+
+
+def dram_clock_ticks(clk, ci, n):
+    """The n clocks of chip ci (64-bit wall-clock cycles)."""
+    v = ttnn.to_torch(ttnn.get_device_tensors(clk)[ci]).to(torch.int64) & 0xFFFFFFFF
+    return [int(v[i, 0]) | int(v[i, 1]) << 32 for i in range(n)]
+
+
 def router_logits(mesh, x_t, wr_t, out=None):
     """logits = x Wr: [TX, nexp] fp32 TILE (HiFi4, fp32 accumulation), into out when given."""
     ck = ttnn.init_device_compute_kernel_config(

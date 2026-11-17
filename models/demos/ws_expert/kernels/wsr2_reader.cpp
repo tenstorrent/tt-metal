@@ -13,7 +13,8 @@
 //     word from the hub reads s + 1), then s + 1 into the slot's flag word at the hub. Both posted (no acks beside
 //     the DRAM reads on this NoC) and through the same command buffer, on one NoC and virtual channel: the flag lands
 //     after its payload. The hub (the group's NOC1 multicast start end) multicasts the piece into every group core's
-//     x ring. NOC0 runs toward the hub's end of the column: no wrap.
+//     x ring. NOC0 runs toward the hub's end of the column: no wrap. The first relay waits for the start barrier (the
+//     NCRISC's: semaphore 6), every core's relay flags cleared.
 // RT: 0 x, 1 W_r^T, 2 ids addrs, 3 the group's first row tile, 4 its row tiles, 5 c, 6 stamps (0: start, 5: weights
 //     in; wall-clock cycles: 6 waiting for x reads, 7 waiting for relay slots), 7 the hub's NoC x | y << 8.
 // CT: 0 KT, 1 BK, 2 EPC, 3 GS, 4 x row bytes, 5 NR, 6 relay ring, 7 relay flags, 8 RGRANT, 9 a scratch word (the
@@ -68,6 +69,7 @@ void kernel_main() {
     auto stream = [&](uint32_t q) { return (q / PPC) * NP + c + GS * (q % PPC); };
     uint32_t q_rd = 0, q_rl = 0, t_rd = 0, t_gr = 0, last = wall();
     bool gr_wait = false;
+    bool started = false;
     while (q_rl < total || w_p < NP) {
         if (w_p < NP && (w_p == 0 || q_rd > 0 || total == 0)) {  // (W_r^T piece w_p, after my first x read)
             for (uint32_t k = w_p * BK; k < (w_p + 1) * BK; ++k) {
@@ -100,6 +102,10 @@ void kernel_main() {
             last += wall() - a;
             cb_push_back(xs_cb, BK);
             ++q_rd;
+        }
+        if (q_rl < q_rd && !started) {
+            noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(6)), 1);
+            started = true;
         }
         if (q_rl < q_rd && cb_pages_available_at_front(tz_cb, BK)) {
             const uint32_t s = stream(q_rl);
