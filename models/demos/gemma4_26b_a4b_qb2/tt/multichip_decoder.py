@@ -1751,7 +1751,8 @@ class MultichipDecoder(OptimizedDecoder):
         """Assemble long replicated prefill outputs in bounded tiled groups."""
         length = hidden_states.shape[-2]
         if start_pos > 0:
-            return self._prefill_continuation(
+            created = set(self._collective_buffers) if getattr(self, "fused", None) is not None else None
+            out = self._prefill_continuation(
                 hidden_states,
                 rope_mats=rope_mats,
                 page_table=page_table,
@@ -1759,6 +1760,10 @@ class MultichipDecoder(OptimizedDecoder):
                 user_id=user_id,
                 start_pos=start_pos,
             )
+            if created is not None:
+                # WS5 (see fused_setup): free the one-row collective buffers the unfused batch-1 steps created
+                self._free_collective_buffers(set(self._collective_buffers) - created)
+            return out
         if start_pos < 0 or length <= self.chunk_size or self.sharded_residual:
             return super().prefill_forward(
                 hidden_states,
@@ -1843,6 +1848,17 @@ class MultichipDecoder(OptimizedDecoder):
 
     def _reduce_attention(self, value):
         return self.allreduce(ttnn.typecast(value, self.attention_ccl_dtype), role="attention")
+
+    def _free_collective_buffers(self, keys):
+        def free(value):
+            if isinstance(value, ttnn.Tensor):
+                ttnn.deallocate(value)
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    free(v)
+
+        for key in keys:
+            free(self._collective_buffers.pop(key))
 
     def allreduce(self, value, *, role="shared", output_memory=None):
         """``output_memory`` (one row, persistent CCL only): the all-gather writes this layout directly.
@@ -2232,11 +2248,10 @@ class MultichipDecoder(OptimizedDecoder):
 
         assert self.moe_b1 is not None and getattr(layer.shared_mlp, "input_gamma_folded", False)
         # Batch-1 decode now takes the fused path; the unfused batch-1 layer (the token-at-a-time prefix continuation,
-        # GEMMA4_26B_WS8_ROWS=0, and the layer tests) keeps no persistent L1: its one-row collectives use transient
-        # DRAM buffers and the router's top-k scale row is created now. Lazily created persistent L1 on top of the
-        # boundary's would sit below the prefill SDPA circular buffers (end 1423296) and fail the next long prefill.
-        self.persistent_ccl = False
-        self.collective_memory = ttnn.DRAM_MEMORY_CONFIG
+        # GEMMA4_26B_WS8_ROWS=0, and the layer tests) leaves no lazily created persistent L1 behind: the router's
+        # top-k scale row is created now, and the token-at-a-time continuation frees the one-row collective buffers it
+        # created (prefill_forward). On top of the boundary's, they would sit below the prefill SDPA circular buffers
+        # (end 1423296) and fail the next long prefill.
         layer.moe.router.topk_scale_l1()
         source = layer.moe.router.original.source
         self.fused = SimpleNamespace(
