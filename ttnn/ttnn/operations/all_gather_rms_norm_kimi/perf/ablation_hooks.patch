@@ -1,5 +1,5 @@
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
-index 79cdaec554f..879ccdce92d 100644
+index a2cbb5954e2..7d90f0cd1e7 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
 @@ -26,6 +26,7 @@ Knobs (single source of truth; every CB size / loop count / RT arg derives from
@@ -10,7 +10,7 @@ index 79cdaec554f..879ccdce92d 100644
  import math
  import struct
  from dataclasses import dataclass, field
-@@ -374,6 +375,7 @@ def op_core_crs(geo):
+@@ -427,6 +428,7 @@ def op_core_crs(geo):
  
  
  def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilon, cfg):
@@ -18,7 +18,7 @@ index 79cdaec554f..879ccdce92d 100644
      mesh = geo.mesh_device
      G, L = geo.G, geo.L
      virt = lambda c: mesh.worker_core_from_logical_core(c)
-@@ -426,6 +428,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -481,6 +483,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                  INC_EVERY,
                  OUT_DEPTH_CHUNKS,
                  gamma_page,
@@ -26,7 +26,7 @@ index 79cdaec554f..879ccdce92d 100644
              )
              program.semaphores = [
                  ttnn.SemaphoreDescriptor(id=s, core_ranges=op_crs, initial_value=0) for s in range(NUM_LOCAL_SEMS)
-@@ -496,6 +499,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -551,6 +554,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      compile_time_args=reader_ct,
                      runtime_args=ttnn.RuntimeArgs(),
                      common_runtime_args=reader_common,
@@ -34,7 +34,7 @@ index 79cdaec554f..879ccdce92d 100644
                      config=ttnn.DataMovementConfigDescriptor(
                          processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0
                      ),
-@@ -506,6 +510,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -561,6 +565,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      compile_time_args=writer_ct,
                      runtime_args=ttnn.RuntimeArgs(),
                      common_runtime_args=writer_common,
@@ -42,7 +42,7 @@ index 79cdaec554f..879ccdce92d 100644
                      config=ttnn.DataMovementConfigDescriptor(
                          processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1
                      ),
-@@ -516,6 +521,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -571,6 +576,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      compile_time_args=compute_ct,
                      runtime_args=ttnn.RuntimeArgs(),
                      common_runtime_args=compute_common,
@@ -50,8 +50,8 @@ index 79cdaec554f..879ccdce92d 100644
                      config=ccfg,
                  ),
              ]
-@@ -527,6 +533,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
-                     core = geo.ports[(l, d)]
+@@ -582,6 +588,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+                     core = pl.ports[(l, d)]
                      peer = next_c if d == FWD else prev_c
                      entries = port_stream(geo, p, l, d)
 +                    if "nobulk" in ABL:
@@ -59,7 +59,7 @@ index 79cdaec554f..879ccdce92d 100644
                      blocks = []  # (q, m, relay, entry_end)
                      for k, (q, ms) in enumerate(entries):
                          for i, m in enumerate(ms):
-@@ -593,6 +601,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -648,6 +656,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      up_p = (p - 1) % G if d == FWD else (p + 1) % G
                      up_entries = port_stream(geo, up_p, l, d)
                      local_entries = port_stream(geo, p, l, d)
@@ -91,10 +91,10 @@ index 519e66a8085..fc1fe64c2c7 100644
      if (b.q == p) {
          // ---- partial_block (a): sum_w x^2 per tile row, accumulated in fp32 DEST ----
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
-index 86b9b73f03e..07a1148123c 100644
+index 0b2fa9c36e7..4e6913dd320 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
-@@ -127,7 +127,9 @@ void kernel_main() {
+@@ -126,7 +126,9 @@ void kernel_main() {
          volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed));
          const uint32_t n_chunks = n_tiles / chunk_tiles;
          for (uint32_t k = 0; k < n_chunks; ++k) {
@@ -105,10 +105,10 @@ index 86b9b73f03e..07a1148123c 100644
          }
      }
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
-index e05e08a7279..7090902553a 100644
+index 4659a35ebed..748a1ae4575 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
-@@ -64,7 +64,9 @@ void kernel_main() {
+@@ -65,7 +65,9 @@ void kernel_main() {
              const uint32_t r = t / block_w;
              const uint32_t j = t - r * block_w;
              const uint32_t page = (b.m * block_h + r) * Wt + b.q * Wl_t + j;

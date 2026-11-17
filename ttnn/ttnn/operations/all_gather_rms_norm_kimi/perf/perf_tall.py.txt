@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Device time (eval/ccl_perf protocol) of the tall regime shape (1,1,2048,384): block_h > 1, ragged last block.
+
+Not collected by any suite. Copy into eval/golden_tests/all_gather_rms_norm_kimi/perf_tall.py and run:
+    CCL_PERF_EXPERIMENTS=5 CCL_PERF_OUT=<dir> scripts/run_safe_pytest.sh --no-precompile \\
+        eval/golden_tests/all_gather_rms_norm_kimi/perf_tall.py -s
+then delete the copy. No golden check (the acceptance tests cover the shape)."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from eval import ccl_perf
+
+for _k, _v in ccl_perf.PROFILER_ENV.items():  # before the mesh opens
+    os.environ.setdefault(_k, _v)
+
+import pytest  # noqa: E402
+import torch  # noqa: E402
+import ttnn  # noqa: E402
+
+from eval.golden_tests.all_gather_rms_norm_kimi.conftest import focus_mesh_or_skip  # noqa: E402
+from eval.golden_tests.all_gather_rms_norm_kimi.helpers import create_ttnn_gamma, create_ttnn_input_tensor  # noqa: E402
+from ttnn.operations.all_gather_rms_norm_kimi import all_gather_rms_norm_kimi  # noqa: E402
+
+SHAPE = (1, 1, 2048, 384)
+
+
+def test_perf_tall(_fabric_mesh_cache):
+    mesh = _fabric_mesh_cache.get(focus_mesh_or_skip(), trace_region_size=ccl_perf.TRACE_REGION_SIZE)
+    rows, cols = tuple(mesh.shape)
+    torch.manual_seed(0)
+    x = torch.randn((rows, cols, *SHAPE)).to(torch.bfloat16)
+    g = torch.randn((cols * SHAPE[-1],)).to(torch.bfloat16)
+    tx = create_ttnn_input_tensor(x, mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tg = create_ttnn_gamma(g, mesh, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    call = lambda: all_gather_rms_norm_kimi(tx, gamma=tg, cluster_axis=1, epsilon=1e-6, topology=ttnn.Topology.Ring,
+                                            num_links=2)
+    call()
+    out = Path(os.environ.get("CCL_PERF_OUT", ".eval/ccl_perf"))
+    ccl_perf.run(mesh, call, experiments=int(os.environ.get("CCL_PERF_EXPERIMENTS", "5")),
+                 out_path=out / "tall.json", label="tall_2048x384")

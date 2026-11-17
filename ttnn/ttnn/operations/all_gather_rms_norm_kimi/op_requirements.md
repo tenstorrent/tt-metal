@@ -67,7 +67,7 @@ Every axis value and knob of this contract is in SUPPORTED today. Optimize this 
 - **Golden baseline**: 7 / 7 (1 `supported_pass` + 6 regression checks; 0 loud categories)
 - **Perf**: fastest chip 29.82 µs, slowest 32.29 µs (roofline 7.6, target 10.1); not dispatch-bound
 
-### [ ] Refinement 1 — TRANSPORT: bring the bulk ring exchange to the example's measured transport
+### [x] Refinement 1 — TRANSPORT: bring the bulk ring exchange to the example's measured transport
 
 **Type**: perf
 
@@ -87,6 +87,8 @@ No SUPPORTED change.
 - The transport-only ablation and the harness's fastest chip both improve beyond noise on the PERF FOCUS cell, with the slowest chip not higher.
 - The golden suite (7/7), the acceptance tests (including the tall `block_h > 1` regime) and the bit-identical-repeat regression test stay green.
 - No regression on the tall regime shape `(1,1,2048,384)`, which is the other distinct kernel path (`block_h = 3`, ragged last block).
+
+**Outcome**: harness fastest chip 29.83 → 24.67 µs, slowest 32.32 → 27.77 µs (`perf/r1_final.json`). Transport-only (`nocompute,nostore`) 26.32 → 19.57 µs: the bulk adds 11.4 µs over the 8.19 µs skeleton (was 17.5), i.e. 360 KiB per link direction at 32.4 GB/s = 67% of the 48.5 GB/s link (was 21 GB/s, 43%). The example's 256-tile 2-link ring moves its bytes at about 39 GB/s per link. Tall `(1,1,2048,384)`: 80.4 → 58.0 µs. Levers: (1) **port placement**: each port at the row-0 worker nearest by NoC1 hops to its link's Ethernet core, the core found on the host from the fabric connection's router channel (no probe dispatch). This gave −4.05 µs. (2) **`PORT_BATCH_CHUNKS` 4 → 2**: −1.12 µs (1 and 3 are worse). `INC_EVERY` 2 and 4 regress at batch 4 and at batch 2; 16 only skews the chips; 8 stays. Not done: **7-tile packets** (a 12-tile slice block splits 6+6 or 7+5, the same 2 packets per block; only a block of 7k tiles gains, which means restructuring `block_h`/`block_w`, so it belongs to Refinement 3's block knobs) and **stats on link 1** (the overlap item already filed in Refinement 2). **Breakdown now** (fastest chip, µs): skeleton 8.19 / +store 11.79 / +compute 17.92 / local-only (`nobulk`) **23.71** / transport-only 19.57 / nocompute 20.78 / nostore 20.40 / full 24.70. **Local-only is now the binding term** (it is 1.0 µs under the full op; transport-only is 4.1 µs under local-only), so per the verifier note Refinement 3 (local compute) is the bigger remaining term than Refinement 2's transport tail.
 
 ### [ ] Refinement 2 — OVERLAP: shrink the exposed tail and the stats-critical chain
 

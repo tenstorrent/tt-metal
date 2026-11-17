@@ -31,3 +31,44 @@
   - Known infra artifact: running two test modules that each open the fabric mesh in one pytest session can fail the second one at mesh open. Run each file on its own.
 - **Tests added**: `test_all_gather_rms_norm_kimi.py` (planner; acceptance), `test_all_gather_rms_norm_kimi_precision_baseline.py` (verifier).
 - **Perf tooling added**: `perf/ablation_hooks.patch`, `perf/perf_ablate_nocheck.py.txt`, `perf/ablate_*.json`, `perf/verifier_baseline.json`, `perf/verifier_final.json`.
+
+## Refinement 1 — TRANSPORT: bring the bulk ring exchange to the example's measured transport
+- Date: 2026-11-17
+- What was done:
+  - **Port placement (TRANSPORT)**, taken from `examples/fabric_all_gather` (`_worker_nearest_noc1`, report.md):
+    - each port sits at the logical row-0 worker with the fewest NoC1 hops to its link's Ethernet core;
+    - the Ethernet core is resolved on the host with no device dispatch. The first fabric connection RT arg is the router's Ethernet channel (a throwaway `ProgramDescriptor` absorbs its semaphores), mapped through the example's `_chip_maps` (cluster + SoC descriptor);
+    - the receivers and the hub take the row-0 cores left;
+    - the placement is now per chip (`Row0Placement`), so a sender addresses the peer chip's ready port, receiver and hub through the peer's placement;
+    - the stats scratch and the semaphores cover all of logical row 0;
+    - `PORT_PLACEMENT` knob: `"centred"` reproduces Phase 0 exactly, and it is the automatic fallback when the host lookup fails.
+  - **`PORT_BATCH_CHUNKS` 4 → 2** after a co-tune sweep: batch 1/2/3/4 × `INC_EVERY` 2/4/8/16. `INC_EVERY` stays 8.
+  - `perf/ablation_hooks.patch` regenerated against the new descriptor. Added `perf/perf_tall.py.txt` (ccl_perf driver for the tall regime shape) and `perf/r1_*.json` (final + every ablation).
+- Perf (harness, PERF FOCUS cell, 5 experiments):
+  - fastest chip 29.83 → **24.67 µs** (placement −4.05, batch −1.12);
+  - slowest chip 32.32 → 27.77 µs;
+  - not dispatch-bound.
+- Tall `(1,1,2048,384)`: fastest chip 80.4 → 58.0 µs.
+- Transport-only (`nocompute,nostore`): 26.32 → 19.57 µs.
+  - The bulk now adds 11.4 µs over the skeleton (was 17.5).
+  - That is 360 KiB per link direction at 32.4 GB/s, 67% of the 48.5 GB/s link (was 43%).
+- Breakdown now (fastest chip, µs):
+
+  | Variant | µs |
+  |---|---|
+  | skeleton | 8.19 |
+  | +store | 11.79 |
+  | +compute | 17.92 |
+  | local-only (`nobulk`) | 23.71 |
+  | transport-only | 19.57 |
+  | full | 24.70 |
+
+  **Local-only now binds.** Refinement 3 is the larger remaining term, ahead of Refinement 2's tail.
+- Accuracy achieved: PCC = 0.999998, relative RMS ≤ 0.00246 on shapes [(1,1,32,32), (1,1,128,256), (1,1,640,384), (1,1,2048,384)] (unchanged).
+- Golden test progress: 7/7 (test_golden 1 + test_regression 6); acceptance 8/8; precision baseline 4/4.
+- Issues encountered:
+  - The ablation patch no longer applied after the placement change; it is regenerated.
+  - Not done, recorded as findings:
+    - 7-tile packets: a 12-tile slice block still needs 2 packets, so this needs a `block_h`/`block_w` restructure (Refinement 3's knobs).
+    - stats on link 1: Refinement 2's overlap item.
+- Tests added: none (the acceptance + determinism tests cover the changed path). Probe `probes/probe_001.py` printed the per-chip Ethernet channels and the nearest workers.

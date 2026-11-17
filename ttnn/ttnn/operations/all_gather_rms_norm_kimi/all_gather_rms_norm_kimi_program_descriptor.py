@@ -5,7 +5,10 @@
 
 Regime R1 of op_design.md: L1-landing ring gather + fp32 stats-ahead, normalize-on-landing.
 
-Core roles per chip (the same logical layout on every chip):
+Core roles per chip. The compute cores have the same logical layout on every chip; the ports, receivers and hub sit
+on logical row 0 per chip: each port at the row-0 worker nearest (NoC1 hops) to its link's Ethernet core, found on
+the host from the fabric connection's router channel (Row0Placement, PORT_PLACEMENT), so a sender addresses the PEER
+chip's ready port / receiver / hub by that chip's placement:
   ports      2L  one per (link l, direction d). Reader (RISCV_1, NoC0) reads chunks from compute cores' `landing`
                  (own slice, then the relay half once it landed) into cb_port_chunks; sender (RISCV_0, NoC1) runs the
                  ready fence, then sends every chunk into the SAME landing offset of the SAME logical core on the peer
@@ -20,7 +23,7 @@ Core roles per chip (the same logical layout on every chip):
 
 Knobs (single source of truth; every CB size / loop count / RT arg derives from them):
   BLOCK_W (None = the whole slice width), block_h (derived from the grid left after the ports), chunk_tiles (derived
-  from the router payload), PORT_BATCH_CHUNKS, INC_EVERY, OUT_DEPTH_CHUNKS, num_links.
+  from the router payload), PORT_PLACEMENT, PORT_BATCH_CHUNKS, INC_EVERY, OUT_DEPTH_CHUNKS, num_links.
 """
 
 from __future__ import annotations
