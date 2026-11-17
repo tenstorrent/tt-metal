@@ -19,6 +19,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
+    flat_axes,
     generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
@@ -196,6 +197,16 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     ],
     same=True,  # Input format and output format are the same
 )
+# Column names of the tuples ``generate_unpack_tilize_combinations`` returns.
+UNPACK_TILIZE_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "unpacker_sel",
+    "input_dimensions",
+    "tile_dimensions",
+    "block_ct_dim",
+)
 ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
     UNPACK_TILIZE_FORMATS
 )
@@ -207,12 +218,18 @@ PERF_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims=ALL_UNPACK_TILIZE_COMBINATIONS,
+    **flat_axes(UNPACK_TILIZE_FLAT_NAMES, ALL_UNPACK_TILIZE_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_tilize_quasar(
-    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpacker_sel,
+    input_dimensions,
+    tile_dimensions,
+    block_ct_dim,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -220,19 +237,6 @@ def test_unpack_tilize_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    combination = formats_dest_acc_sync_unpack_sel_dimensions_tile_dims
-    if len(combination) == 1 and isinstance(combination[0], tuple):
-        combination = combination[0]
-    (
-        formats,
-        dest_acc,
-        dest_sync,
-        unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-        block_ct_dim,
-    ) = combination
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     sequential_spec = StimuliSpec.sequential()

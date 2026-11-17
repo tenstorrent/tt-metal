@@ -12,6 +12,7 @@ from helpers.llk_params import (
     PerfRunType,
 )
 from helpers.param_config import (
+    flat_axes,
     generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
@@ -149,6 +150,14 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ],
 )
+# Column names of the tuples ``generate_pack_untilize_combinations`` returns.
+PACK_UNTILIZE_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "input_dimensions",
+    "tile_dimensions",
+)
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
     PACK_UNTILIZE_FORMATS
 )
@@ -167,23 +176,22 @@ PACK_UNTILIZE_FLOAT32_COMBINATIONS = generate_pack_untilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dimensions_tile_dims=ALL_PACK_UNTILIZE_COMBINATIONS,
+    **flat_axes(PACK_UNTILIZE_FLAT_NAMES, ALL_PACK_UNTILIZE_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_untilize_quasar(
-    formats_dest_acc_sync_dimensions_tile_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    input_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
 ):
-    combination = formats_dest_acc_sync_dimensions_tile_dims
-    if len(combination) == 1 and isinstance(combination[0], tuple):
-        combination = combination[0]
-    (formats, dest_acc, dest_sync, input_dimensions, tile_dimensions) = combination
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     sequential_spec = StimuliSpec.sequential()
@@ -271,9 +279,17 @@ def test_pack_untilize_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dimensions_tile_dims=PACK_UNTILIZE_FLOAT32_COMBINATIONS,
+    **flat_axes(PACK_UNTILIZE_FLAT_NAMES, PACK_UNTILIZE_FLOAT32_COMBINATIONS),
 )
-def test_pack_untilize_float32_quasar(formats_dest_acc_sync_dimensions_tile_dims):
+def test_pack_untilize_float32_quasar(
+    formats, dest_acc, dest_sync, input_dimensions, tile_dimensions
+):
     test_pack_untilize_quasar(
-        formats_dest_acc_sync_dimensions_tile_dims, [PerfRunType.L1_TO_L1], 1
+        formats,
+        dest_acc,
+        dest_sync,
+        input_dimensions,
+        tile_dimensions,
+        [PerfRunType.L1_TO_L1],
+        1,
     )

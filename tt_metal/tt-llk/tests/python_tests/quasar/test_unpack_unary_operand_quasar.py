@@ -26,6 +26,7 @@ from helpers.llk_params import (
     UnpackerEngine,
 )
 from helpers.param_config import (
+    flat_axes,
     generate_perf_input_dimensions,
     generate_reduced_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
@@ -187,6 +188,16 @@ UNPACK_FORMATS = input_output_formats(
     ]
 )
 # Int16 only pairs with itself; it is kept out of the perf sweep below.
+# Column names of the tuples ``generate_unpack_unary_operand_combinations`` returns.
+UNPACK_UNARY_OPERAND_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "transpose_en",
+    "unpacker_sel",
+    "input_dimensions",
+    "tile_dimensions",
+)
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS + input_output_formats([DataFormat.Int16])
 )
@@ -198,12 +209,18 @@ PERF_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinati
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    **flat_axes(UNPACK_UNARY_OPERAND_FLAT_NAMES, ALL_UNPACK_UNARY_OPERAND_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_unary_operand_quasar(
-    formats_dest_acc_sync_transpose_unpack_sel_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    transpose_en,
+    unpacker_sel,
+    input_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -211,16 +228,6 @@ def test_unpack_unary_operand_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync,
-        transpose_en,
-        unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_transpose_unpack_sel_dims
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(

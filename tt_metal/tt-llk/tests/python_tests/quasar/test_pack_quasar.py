@@ -25,6 +25,7 @@ from helpers.llk_params import (
     PerfRunType,
 )
 from helpers.param_config import (
+    flat_axes,
     generate_dest_depth_input_dimensions,
     generate_perf_input_dimensions,
     generate_reduced_input_dimensions,
@@ -177,6 +178,15 @@ PACK_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
+# Column names of the tuples ``generate_qsr_pack_combinations`` returns.
+PACK_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "input_dimensions",
+    "relu_type",
+    "tile_dimensions",
+)
 ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
 
@@ -208,12 +218,17 @@ PACK_DEST_DEPTH_COMBINATIONS = [
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dims_relu=ALL_PACK_COMBINATIONS,
+    **flat_axes(PACK_FLAT_NAMES, ALL_PACK_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_quasar(
-    formats_dest_acc_sync_dims_relu,
+    formats,
+    dest_acc,
+    dest_sync,
+    input_dimensions,
+    relu_type,
+    tile_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -221,15 +236,6 @@ def test_pack_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync,
-        input_dimensions,
-        relu_type,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_dims_relu
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -426,7 +432,17 @@ def test_pack_quasar(
 
 
 @pytest.mark.quasar
-@parametrize(formats_dest_acc_sync_dims_relu=PACK_DEST_DEPTH_COMBINATIONS)
-def test_pack_dest_depth_quasar(formats_dest_acc_sync_dims_relu):
-    # A lone parametrize argument arrives wrapped in a 1-tuple.
-    test_pack_quasar(formats_dest_acc_sync_dims_relu[0], [PerfRunType.L1_TO_L1], 1)
+@parametrize(**flat_axes(PACK_FLAT_NAMES, PACK_DEST_DEPTH_COMBINATIONS))
+def test_pack_dest_depth_quasar(
+    formats, dest_acc, dest_sync, input_dimensions, relu_type, tile_dimensions
+):
+    test_pack_quasar(
+        formats,
+        dest_acc,
+        dest_sync,
+        input_dimensions,
+        relu_type,
+        tile_dimensions,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )

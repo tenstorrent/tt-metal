@@ -19,6 +19,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
+    flat_axes,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -105,6 +106,11 @@ def generate_qsr_pack_l1_acc_combinations(
     return combinations
 
 
+# Column names of the tuples ``generate_qsr_pack_l1_acc_combinations`` returns.
+PACK_L1_ACC_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+)
 ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
     PACK_L1_ACC_FORMATS
 )
@@ -112,14 +118,15 @@ ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=ALL_PACK_L1_ACC_COMBINATIONS,
+    **flat_axes(PACK_L1_ACC_FLAT_NAMES, ALL_PACK_L1_ACC_COMBINATIONS),
     dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_l1_acc_quasar(
-    formats_dest_acc,
+    formats,
+    dest_acc,
     dest_sync,
     input_dimensions,
     run_types,
@@ -129,8 +136,6 @@ def test_pack_l1_acc_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    formats, dest_acc = formats_dest_acc
-
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]
