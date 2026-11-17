@@ -447,7 +447,7 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
 
-    // Same as enqueue_write_shard_to_sub_grid: the graph-capture hook is per-thread, and the shard
+    // Same as enqueue_write_shard_to_sub_grid: the graph-capture hook is per-thread, and sharded
     // reads below run on dispatch_thread_pool_ workers, so check it on the calling thread.
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(buffer.get())) {
         return;

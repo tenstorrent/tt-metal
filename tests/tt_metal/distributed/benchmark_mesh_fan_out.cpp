@@ -123,9 +123,9 @@ void BM_ReadShards(benchmark::State& state) {
     state.SetBytesProcessed(state.iterations() * static_cast<int64_t>(bytes) * mesh_device().num_devices());
 }
 
-// Times only the non-blocking enqueue_read_shards call, which issues the read commands on the calling thread.
-// The device round trip and the copy out of the completion queues finish in Finish, outside the timed region
-// but in total_us. The second argument reads from every device (0) or from the first one only (1).
+// Times only the non-blocking enqueue_read_shards call. The device round trip and the copy out of the completion
+// queues finish in Finish, outside the timed region but in total_us. The second argument reads from every device (0)
+// or from the first one only (1).
 void time_read_issue(benchmark::State& state, const std::shared_ptr<MeshBuffer>& buffer) {
     const bool one_device = state.range(1) != 0;
     const auto bytes = static_cast<uint32_t>(buffer->device_local_size());
