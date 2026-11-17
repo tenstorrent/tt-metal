@@ -1633,8 +1633,10 @@ def _check_output(out, case, mesh_device, op_name):
         if "dtype" in spec:
             want_dtype = DTYPE[spec["dtype"]]
             assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != {source} {want_dtype}"
-        if not pool_single_slice:
-            _check_placement(got, spec, mesh_device, op_name, i, source)
+        # A single-slice pool's flattened L1 output can't match the captured DRAM placement, but its
+        # layout must still be the requested one (TILE output takes a different kernel path).
+        placement_spec = {k: v for k, v in spec.items() if k != "mem"} if pool_single_slice else spec
+        _check_placement(got, placement_spec, mesh_device, op_name, i, source)
 
     for i, t in enumerate(tensors):
         _check_finite(from_tt(t, mesh_device), case, op_name, i)
