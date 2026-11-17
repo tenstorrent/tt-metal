@@ -35,10 +35,12 @@ class FCfg:
     send_cores: tuple = ((9, 9), (10, 8))  # logical cores of a sender chip's connections (link 0, 1)
 
 
-def slice_layout(cfg: GCfg, CHT, wg, wu, wd):
+def slice_layout(cfg: GCfg, CHT, wg, wu, wd, ks=False):
     """The senders' DRAM copy of the weights: per expert e and group core j, the core's slice (gate/up pair j
     [KT][2], then down columns [DCOLS j, DCOLS (j + 1)): [KTD][DCOLS]) in CHT-tile chunks q = (e GC + j) NCH + u, chunk q
     stored as pages (q // 8) CHT 8 + q % 8 + 8 k (k < CHT): CHT consecutive tiles of one DRAM bank (one read a chunk).
+    ks (the lane's K-split gate/up, LCfg.ks): core j = 10 c + r's gate/up part is K tiles [KSL r, KSL (r + 1)) x
+    interleaved columns [20 c, 20 c + 20) ([KSL][20], KSL = KT / 10) instead of pair j over all K.
     Returns a [pages * 32, 32] torch tensor (tile layout rows)."""
     E, KT, KTD, DC, P, HT = wg.shape[0], cfg.KT, cfg.PAIRS, cfg.DCOLS, cfg.PAIRS, cfg.HT
     from models.demos.ws_expert.ws_expert import interleave_gu
@@ -48,7 +50,12 @@ def slice_layout(cfg: GCfg, CHT, wg, wu, wd):
         gu = interleave_gu(wg[e], wu[e]).reshape(KT, 32, 2 * P, 32).permute(0, 2, 1, 3)  # [KT, 2P, 32, 32]
         dn = wd[e].reshape(KTD, 32, HT, 32).permute(0, 2, 1, 3)  # [KTD, HT, 32, 32]
         for j in range(cfg.GC):
-            tiles.append(gu[:, 2 * j : 2 * j + 2].reshape(-1, 32, 32))
+            if ks:
+                ksl, half = KT // 10, cfg.GC // 2
+                c, r = j // half, j % half
+                tiles.append(gu[ksl * r : ksl * (r + 1), 2 * half * c : 2 * half * (c + 1)].reshape(-1, 32, 32))
+            else:
+                tiles.append(gu[:, 2 * j : 2 * j + 2].reshape(-1, 32, 32))
             tiles.append(dn[:, DC * j : DC * (j + 1)].reshape(-1, 32, 32))
     t = torch.cat(tiles, 0)  # slice-major: [E GC WTOT, 32, 32]
     nq = t.shape[0] // CHT
@@ -208,7 +215,12 @@ class ACfg:
     relay: tuple = (10, 9)
     local: tuple = (9, 9)  # local lander
     branch: dict = field(  # branch -> (link 0 core, link 1 core)
-        default_factory=lambda: {"E": ((10, 8), (10, 7)), "W": ((9, 8), (9, 7)), "N": ((10, 6), (9, 6)), "S": ((10, 5), (9, 5))}
+        default_factory=lambda: {
+            "E": ((10, 8), (10, 7)),
+            "W": ((9, 8), (9, 7)),
+            "N": ((10, 6), (9, 6)),
+            "S": ((10, 5), (9, 5)),
+        }
     )
     torus: bool = False  # both axes wrap (FABRIC_2D_TORUS_XY): the branches use the wrap links
     own_slices: bool = False  # ws_t holds only this chip's experts (e % NCHIP == chip), in expert order

@@ -507,3 +507,270 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
     group's corner, alone on its NoC in that group, cannot leave its core once the lane design's fabric traffic is
     running. Not tested: the routers' landing writes into the group cores, the cores' NOC1 writes into the mux
     cores, DRAM read responses into the group, the BRISC's DRAM reads with transaction ids while it multicasts.
+
+### No group multicasts: unicast fan-out, then unicast chains (LoudBox 2 x 4 p150b, 2026-11-16)
+The 4-slot tray soak (160 experts a lane, T 31250, M 586, G 2) reproduces the wedge on this LoudBox in 7-30 s (launch
+50 clean at 52-53%, hung before launch 100 / 250); the wedged chip drops off PCIe within seconds (host reads
+0xffffffff, MMIO per-op timeout), so a timeout-triggered tt-triage only sees the other 7 chips. Node stayed up; tt-smi
+-r recovers. The fabric routers land on NOC1 (receiver_channel_local_write_noc_ids = 1), so reads off the multicast
+NoC are not enough while column 1 multicasts on NOC1. Instead every group multicast is replaced by unicasts:
+- LCfg.ucast (WL_UCAST, default): each x block / h row part as 20 unicast writes (payloads, then flags, one command
+  buffer). Correct (dynamic M min PCC 0.99992), soak 2300 launches / 300 s clean, but M 586 18.4%, M 2048 19.6%: a
+  column's links carry each block ~4-5 times (x waits 6.6 M cycles of 9.4 M on chip 0).
+- LCfg.xchain (WL_XCHAIN, default): x blocks as a chain - origin (c, r) copies into its slot and sends to its partner
+  (1 - c, r) (column 0 BRISC NOC0 east, column 1 NCRISC NOC1 west); in both columns rows >= r pass it one row down
+  (BRISC, NOC0), rows <= r one row up (NCRISC, NOC1), from the slot with its flag word (s + 1) as the flag source. Each
+  link carries a block once. A block's slot credit waits until both forwarders are past it (BRISC progress in
+  semaphore 0's low half). Stream-order gate (WG_XORDER) off with the chain (2: -3-4 points).
+- LCfg.hchain (WL_HCHAIN, default): the h row parts the same way from their leader (flagged locally, partner hop,
+  then down / up); the NCRISC gives row q to compute only once both forwarders are past both parts (semaphore 0's
+  high half; no semaphore left beside the mux connections).
+| group traffic (4 slots, keep 2, 5 warm-up + 5 measured) | M 586 util tile | M 2048 | soak 300 s |
+|---|---|---|---|
+| multicasts (ucast 0) | 50.4% | 70.1% (tray worklog) | hangs in 7-30 s |
+| unicast fan-out | 18.4% | 19.6% | 2300 launches clean |
+| x chain, h fan-out | 31.1% | 33.7% | 2872 launches clean |
+| x chain + h chain (default) | 38.1% | 41.1% | 3243 launches clean, 38.6% |
+PCC 0.99994 everywhere (x + h chain also with out_all: every expert checked; dynamic M min 0.99992). No help: hops
+without a flush (WL_XNOFLUSH, +0.8 points), a deeper x ring (BK 12 / NX 15, BK 10 / NX 18). Chip 0 at M 586 still
+waits 1.9 M cycles on x (h 0.3 M) of 4.5 M. Caveat: the h ring has no slot credits (as before: NS sized by the host);
+the chain skews arrival by up to 10 hops; covered by PCC so far, not by a proof.
+- Hop-by-hop x credits (LCfg.xhop, WL_XHOP; the flat routed expert's scheme: each writer checks only its target's
+  freed count, pushed to the row above / below / partner): correct (out_all, dynamic M) but 37.9% vs 38.1%, and it
+  deadlocked within 50 soak launches (all chips reachable; compute waiting on weights / x; likely the chain's cores
+  drifting apart). Off by default.
+- x block timeline (test_ws_lane_tray_trace, WL_DEFS=WG_TRACE0=912; chip 0 group 0, 40 blocks): a hop ~0.9-1 K
+  cycles, the last core gets a block ~11.8 K cycles after its send (median); origins send ~1.2 K after the block is
+  tilized, but blocks become ready in bursts, one x row (6 blocks) every ~14 K cycles.
+- Shorter chains (LCfg.jump, WL_JUMP: the origin also sends to row (r + 5) % 10 of both columns; each column then has
+  two entries, every row reached once, at most 4 hops, checked on the host): last-core delivery 9.6 K, h waits 0.3 ->
+  0.17 M, but 38.2% (x waits unchanged 2.07 M); with BK 12 / NX 15 / LOOK 60 35.5%. Off by default.
+- The limit is x ring capacity, not hop latency: NX 9 x BK 20 = 180 K-tiles = 1.5 rows of x a core, and block s waits
+  until every core has consumed s - NX; the chain's far cores get blocks ~10 K later than the near ones, which 1.5 rows
+  cannot cover. (The earlier "deeper ring" runs, BK 12 / NX 15 and BK 10 / NX 18, kept 180 K-tiles.) BK 20 with a
+  longer LOOK (30, 42) does not fit L1 beside 4 slots. With 3 weight slots (d0,d1,any, keep 1) the L1 for NX 18:
+| 3 slots, chains | M 586 | M 2048 | chip 0 waits x / weight / h (K, M 586) |
+|---|---|---|---|
+| NX 9 | 33.1% | 40.1% | 2032 / 364 / 302 |
+| NX 18 | 36.7% | 54.4% | 62 / 971 / 1294 |
+| NX 18 + jump | 38.1% | 51.8% | 118 / 743 / 1389 |
+  x waits are gone with NX 18; M 586 then needs the 4th weight slot (weights) and a deeper h ring (NS 4 rows, the same
+  capacity-vs-skew problem for h). L1 is the constraint: 4 slots + an x ring of ~3 rows + a deeper h ring.
+- L1 audit (a group core, 4 slots, BK 20 / NX 9): weight slots 829,440 B (4 x 207,360), x ring 195,840, h ring
+  163,840 (bf16), CB 7 row-major gather 122,880 (XRM 3), CB 8 tilize staging 108,800 (5 blocks), CB 16 / 17 28,672;
+  ~1,449 KB of the 1,460,288 B bank. Freed for the x ring: bfp8 h (-76.8 KB; the packer now switches format around the
+  down outputs, WX_H_PACK_DIFFERS - it packed bf16 outputs as bfp8 before: PCC nan), XRM 2 (-41 KB), staging slack 2
+  blocks instead of 4 (LCfg.xst, -43.5 KB). NX 18 misses by ~26 KB.
+| chains, 4 slots, 5 + 5 launches | M 586 | M 2048 | chip 0 waits x / weight / h (K, M 586) | PCC |
+|---|---|---|---|---|
+| NX 9, bf16 h (previous default) | 38.1% | 41.1% | 1967 / 5 / 308 | 0.99994 |
+| NX 9, bfp8 h | 39.5% | 42.5% | 1872 / 5 / 227 | 0.99988 |
+| NX 15, bfp8 h, XRM 2, xst 2 | 48.0% | 57.8% | 372 / 73 / 836 | 0.99988 |
+| NX 16, bfp8 h, XRM 2, xst 2 (new chain default) | 47.9% | 58.7% | 291 / 93 / 899 | 0.99988 |
+| NX 15 + NS 5 / NX 14 + NS 6 | 47.6% / 46.9% | 57.6% / 55.7% | h 830 / 754 | 0.99988 |
+| NX 16 + jump | 46.2% | 57.9% | 243 / 99 / 1085 | 0.99988 |
+  A deeper h ring or the jump does not help: the h waits that remain are not ring capacity. New default (chains):
+  out_all + dynamic M pass (min PCC 0.99986), soak 300 s: 3406 launches clean, util tile median 50.1% at the 640-expert
+  lane load (multicasts: 52-53% until they wedged). The multicast build (ucast=0) keeps NX 9, bf16 h, XRM 3: 50.6%.
+  (ucast=0 had failed the "xchain needs ucast" assert since the chains became the default; the chain flags now just
+  do not apply without ucast.)
+
+### Unicast benches for the exchange roofline (tests/test_uc_bench.py, kernels/uc_bench.cpp; one chip, column 1)
+| | 4,352 B | 10,880 B | 21,760 B |
+|---|---|---|---|
+| one hop, streamed (B/cyc) | 59.6 | 59.9 | 59.9 |
+| one hop, flushed after each block | 37.8 | 48.7 | 53.8 |
+| all 9 hops of a column at once, streamed / flushed (a stream) | 55.3 / 36.4 | 59.2 / 48.2 | 59.5 / 53.2 |
+| 10-core chain, dedicated RISC a hop: latency a hop | 141 cyc | 236 cyc | 396 cyc |
+| chain throughput (S slots) | 28.8 (S 16) | 36.0 (S 8) | 21.7 (S 4) / 42.6 (S 8) |
+NOC0 down and NOC1 up the same within 2%. A link carries ~60 B/cyc (94% of 64); links of one column are independent.
+Chain throughput = S x B / round trip (Little). The lane chain's hops measured ~0.9-1 K cycles (shared RISC loops),
+2.5x the dedicated 396.
+Roofline at M 586 (a core takes 26.4 B/cyc of x + h at 100% util): the busiest NOC0 column link needs ~45 B/cyc at
+100% (90% of the chained x + h, plus the x gather's DRAM responses) -> link bandwidth caps util at ~130%; not binding.
+The binding one is Little's law: ring bytes >= consume rate x delivery skew + the row in use. With dedicated-RISC hops
+(3.6 K for 9) NX ~10 would cover 80%; with the lane's ~10 K skew it takes NX ~16 (what the L1 rework found).
+NIU request FIFOs are off under tt-metal (NIU_CFG_0 0x6005, bit 16 clear; CMD_BUF_OVFL 0), so tt-regen-spec contract
+D8 (a command dropped when the FIFO is full) is not the wedge. D6b (at most one path-reserving multicast tree in a
+router per NoC at a time, else a request is lost: counted sent, acks missing) matches the lane design's many concurrent
+group multicasts; it does not explain the single-multicaster repro (multicast + DRAM read responses), whose DRAM reads
+already use static VC 1 (D31).
+- ttsim's NoC model (src/noc_perf.h) says that with the request FIFOs off a command-buffer trigger before the last
+  request has left takes its registers (that request lost, the counters counting both). Tested: the multicast build
+  (ucast=0, 4 slots) with every multicast packet (payload split at 16 KB, then the flag) flushed before the command
+  buffer is programmed again (WL_MC_FLUSHPKT): tray soak hung after ~200 launches (18 s; util 52%), as without it.
+  Not the wedge.
+
+## Chain hops in pieces, non-blocking forwarders (2026-11-16)
+- WL_XP / WL_HP (LCfg.xp / hp): an x block / h row part hops in P pieces on tile boundaries, piece p's flag at word p
+  of the slot's 16 B (sent from word p of the source: a NoC write keeps the 16 B offset, so origins fill all four
+  scratch words; first try sent them from word 0 and hung). A slot is complete at word P - 1. Each forwarder call
+  passes on every landed piece up to the end of its block (one piece a call: xp 4 fell to 37%).
+- WL_FNB (LCfg.fnb): no blocking flush after a hop; walked counts published once the RISC's writes have left.
+- WL_FPRIO (forwarders polled between every queue): 35-38% at M 586, h waits double. Off.
+- WL_HARRW (h tile arrival as a per-producer word, no barrier + atomic in Q2): neutral. Off.
+- Tray, same session (M 586 / M 2048): xp 1 no fnb 46.1 / 54.2; xp 2 + fnb 48.7 / 58.2; xp 2 alone 47.6 / 54.5;
+  fnb alone 46.5 / 55.4; xp 4 hp 2 + fnb 46.8 / 51.5 (x waits fall ~45%, h waits rise more). New default xp 2, hp 1,
+  fnb. Soak 300 s: 3361 launches clean, 50.1%. All tray tests pass (dynamic M min pcc 0.99987).
+- Per-chip spread at M 586 is wide (44-52%); M 2048 is stable to +-0.3.
+
+## Where the h waits come from (2026-11-16)
+- Compute h waits split (stamp 44, waits list's 5th): the end-of-expert drains are only ~85K of ~0.95M at M 586; the
+  rest is in-loop. DN_LAG 2 (WS_GCFG "h_dt=bfp8;XRM=2;dn_lag=2"): h waits 1050K -> 382K but x waits 205K -> 727K,
+  util unchanged (48.4% / 58.6%): the waits move between x and h, the total holds -> a throughput limit of the data
+  movement, not h latency or row order. Arrival-order h rows (rows are produced in the same order by all 20 cores and
+  arrive near in order) would not help: not built.
+- Busy-only loop time (calls that did something), M 586 chip 0, K cycles: BRISC forwarders 648 (st[60]), own weights 7
+  (st[61]); NCRISC up-forwarders 426 (st[478]), weight queues ~910 (loop time). The chain hops cost the RISCs about the
+  NoC injection time of the bytes they pass on (~55 B/cyc), on both RISCs.
+- WL_FASYNC (forwarders issue only on a free write command buffer, yield otherwise): 40.3% / 43.0% (xp 4: 32.9%). Like
+  WL_FPRIO: any yield inside a hop costs the hop a loop turn. Off.
+
+## RISC busy time (2026-11-16)
+- Busy-only timers for every queue (calls that did something; BRISC st[490..495], NCRISC st[480..484], riscs log
+  line). Tray M 586 chip 0, K cycles, loop span ~3470K a core (steady state 16 x 108K = 1730K):
+  BRISC forwarders 645, x origin 70, gather 164, h out 117, h leader 5, own 7 -> ~1010 busy;
+  NCRISC weights / outputs / h leader 347, x origin 63, x ring + credits 506, h ring 43, forwarders 401 -> ~1360.
+- Neither RISC is saturated (29% / 39% of the span; at most ~58% / ~79% even if all of it fell in the steady state).
+  Offloading forwarding (idle cores, BRISC on NOC1) would not raise a throughput cap that is not there: the limit is
+  the latency of the x / h exchange loops against their buffering (x ring slots, h ring rows; L1-bound).
+- (Busy shares are of the whole ~3.47M span; see the timeline below: the span is all 16 experts, not 2x the window.)
+
+## Start-up / first expert (2026-11-16)
+- Timeline log (test `timeline`: loop starts and each expert's end, median / max over the 40 cores, K cycles from the
+  compute start). Tray M 586 chip 0: BRISC loop starts at 0.9, NCRISC at 7.9 (fabric mux connect), compute at 0.9;
+  experts (19 rows each) end at 272, 483, 673, 880, 1076 (max 1108), ... 3418 (max 3499): ~200K an expert after the
+  first's 272K. Chip 7 similar, with one slow expert (321K, its second) and a last-expert spread median -> max of 127K.
+- So the first expert costs ~70K over steady state (~2% of the launch), not ~1.7M: my earlier "span is 2x the window"
+  read "cyc/expert" (span / (G x (E - 1)), per chip-expert) as per lane-expert. End to end (launch start to the last
+  core's end) the util is ~8% below the steady-state metric: the first expert's excess plus the tail skew (last
+  expert's median -> max 80-130K).
+
+## K-split gate/up benches (2026-11-16; toward moe_fused_swiglu's K x N layout in a group)
+Idea: a group's 10 rows split gate/up K (12 K tiles each), its 2 columns split N (10 pairs each); core (c, r) still
+holds 1/20 of the weights (12 x 20 = 240 tiles, as 120 x 2 today), x[:, K_r] is shared only with the partner (one
+hop, no chain), partials are reduce-scattered down the column (core (c, r) owns pair 10c + r: the same h tile it
+produces today, so the h exchange is unchanged). All fp32 DEST, LoFi, one core, Blackhole aiclk 1350.
+- Matmul (test_mm_bench ksplit, x bfp8, W bfp4, partials packed plain): 1x4 K 12 / 24 / 30 / 120: 17.52 / 17.39 /
+  17.36 / 17.28 cyc a tile (91.3 / 92.0 / 92.2 / 92.6%); bf16 and bfp8 partial packing the same; 1x2 K 12 18.08.
+- Fold + SwiGLU (test_fold_bench; moe_fused_swiglu's add_tiles fold, two contributions a call into DEST, one init
+  a window): fold only C 2 / 4 / 5 / 10: 71 / 178 / 276 / 305 cyc an h tile (gate + up), bf16 = bfp8; fold +
+  SwiGLU 1141 for every C = copy + SwiGLU alone (the PACK SFPU bounds it). One init a tile instead: 421 at C 10.
+  h error against fp32 partials (h packed bf16): bf16 partials rel 2.4e-3 (pcc 0.999996), bfp8 1.0e-2 (0.99995).
+- A whole row on one core (test_fold_bench row; resident operands; gate/up + epilogue + down 6 columns K 20; 360
+  tile products = 5760 cyc at 100%): today 1 x 20 (1x2 K 120 + SwiGLU) 6481 (88.9%), without SwiGLU 6420; 10 x 2
+  matmuls only 6414 (89.8%); 10 x 2 + fold C 10 + SwiGLU 6952 (82.9%, bf16 = bfp8 partials); C 5 6870 (83.8%),
+  C 4 6802 (84.7%). Today's SwiGLU hides under the matmuls (+60); the K split's fold + SwiGLU costs ~540 a row.
+- Column reduce-scatter (test_rs_bench, kernels/rs_bench.cpp; 10 cores of column 1, dedicated RISCs, every core
+  sends each other core its pair's (gate, up) tiles a row: payload + flag from one command buffer, flush a row,
+  slot credits as inline writes; R 400 rows):
+| split | partials | D | capacity (cyc a row) | at T 6950: lag median / max |
+|---|---|---|---|---|
+| direction (BRISC NOC0 down, NCRISC NOC1 up) | bf16 | 2 / 4 | 3095 / 3072 | 2519 / 3049 |
+| direction | bfp8 | 2 / 4 | 1910 / 1956 | 1579 / 1851 |
+| gate / up (moe: gate NOC0, up NOC1, half wrapping) | bf16 | 2 / 4 | 3081 / 3076 | 2946 / 3511 |
+| gate / up | bfp8 | 2 / 4 | 2145 / 2169 | 1846 / 2277 |
+  Keeps up at the compute's row rate with D 2 (landing 2 x 10 x 2 bf16 tiles = 80 KB); lag ~2.5 K cycles (today's
+  x chain: ~10-12 K to the last core, which needed NX ~16 x BK 20 of x ring). The direction split beats the gate /
+  up split here (its wrap-around paths). Busiest link (the column's middle, all-to-all): 25 pairs x 4 KB a row =
+  ~14 B/cyc at T 6950 vs today's x chain ~20 B/cyc on every link (+ h ~3 on both).
+- Per core per row, bytes in: today x 130 KB (chained, forwarded by every core) + h 20 KB; 10 x 2 x 6.5 KB (half from
+  the partner) + bf16 partials 36 KB + h 20 KB.
+
+## K-split groups, single-chip prototype (ws_ks.py, kernels ks_*.cpp; 2026-11-17)
+Same harness as ws_group (one chip, injector-landed weights "l1", x gathered from DRAM by index and tilized on the
+group cores, each group's last expert checked), only gate/up changed: core (c, r) holds W_gu[K tiles 12 r .. 12 r +
+11, pairs 10 c .. 10 c + 9] (the injector's WG_INJ_KS slice), computes 20 bf16 partial tiles a row (5 x 1x4, K 12);
+partials of pair 10 c + r go to core (c, r) (rows below: BRISC NOC0, rows above: NCRISC NOC1, itself: local NoC
+write; payload + flag from one command buffer, slot credits as inline writes), which folds the 10 contributions in
+fp32 DEST (add_tiles, acc_to_dest), applies SwiGLU and produces h tile j as before. h (column leaders + multicasts),
+down, output, weights: unchanged. No x chain: x[:, K_r] goes partner to partner, one hop.
+- x gather: halves of every row (384 B reads, 4x the 1 x 20 groups' read count) slowed G 4 (59.7% M 586): the
+  partners now gather / tilize whole 12-tile rows alternately (KS_XALT, 768 B reads): G 4 = G 1 (71%).
+- Compute (MATH time a row, G 4 M 586): gate/up 4.4 K, fold 0.75-0.8 K, down 2.2 K, tilize 0.2 K = 7.6 K vs 5.76 K
+  at 100% (today's 1 x 20 row: ~7.2 K). One full matmul init a row (after the fold); gate/up <-> down switch only
+  srcB. Folding two rows at a time (KS_FOLD2) saves fold time but the down loses it (SwiGLU x 2 on PACK): no gain.
+  Folding before the row's gate/up: worse.
+- Results (G 4, 32 experts, util tile; PCC 0.99994 with bf16 h, 0.99988 bfp8 h):
+| config | M 586 | M 2048 |
+|---|---|---|
+| ws_group 1 x 20 multicasts (2 slots, same session) | 79.3-80.9% | 82.1% |
+| ws_ks first version (halves of x rows, 3 inits a row) | 59.7% | 64.5% |
+| + whole x rows alternately, one init a row | 71.0% | 71.1% |
+| + NXR 8, TL 3, DN_LAG 2 (fold of 1 row, D 3) | 74.7% | 75.3% |
+| lane-like L1: 4 weight slots reserved, bfp8 h, XRM 2, D 3, NXR 8, TL 3, DN_LAG 2 | 75.5% | 75.8% |
+  The lane-like L1 fits: weights 4 x 207 KB + x ring 8 x 12 bfp8 tiles (104 KB) + landing 3 x 20 bf16 (123 KB) +
+  partial ring 2 x 20 bf16 (82 KB) + h ring (82 KB bfp8) + staging. Waits a core at M 586 (K cycles of ~1.0 M):
+  tilize 36, x 20, weights 3, h 4, landing 8 - it is compute-bound (5.76 / 7.6 = 76%). Dynamic M (0 / 1-row
+  experts) passes. Unicast only (no group multicast except the h leaders', which a lane port replaces with the h chain).
+
+## K split on the lane (tray, 2026-11-17): every output written, bf16 partials
+Port of ws_ks to the lane design (LCfg.ks / WL_KS in wl_writer / wl_reader, kernels/kl_compute.cpp): the x chain is
+replaced by whole x rows partner to partner and the bf16 partial reduce-scatter; weights, fabric, h chain unchanged.
+own slices in the K-split layout (ws_fab.slice_layout ks=1). out_all (every expert's down rows to DRAM, every expert
+PCC-checked) is now the LCfg default.
+Fixes found on the way:
+- h ring slot credits (LCfg.hcred / WL_HCRED, default on): each core broadcasts its consumed h rows to its column and
+  partner; every write into a core's h slot (tile to the leader, chain start, hops) waits for it. Without them the
+  K split showed intermittent PCC 0.9977-0.9986 dips (one core's columns, an expert's first row: a fast core
+  overwrote a slow core's h slot); the chain build had the same latent gap (NS sized by the host). ~0.6 point.
+- KS_OVL final drain: the last expert's drain ran downs of the previous expert's rows with the last expert's down
+  weights (fold lag 2, 1-row experts: PCC ~0 for the last expert). Found by M 5 / dynamic M, fixed.
+- Slot table fields widened to 3 bits (5 weight slots); NS >= DN_LAG asserted (NS 2 with DN_LAG 3 deadlocked).
+Steps (tray M 586, util tile median over 8 chips x 5 launches after 20 warm-up; all outputs written):
+| change | M 586 | note |
+|---|---|---|
+| chains (previous default), out_all | 47.1% | M 2048 53.4% |
+| ks=1 | 52.0% | M 2048 67.3% |
+| + h credits, wpoll 1 | 51.3% | correct (was dipping) |
+| + KS_OVL: an expert's last folds / downs overlap the next one's first rows (drain only if it reuses the slot) | 52.4% | |
+| + sched_c 7 (schedule planned with the faster compute) | 53.2% | |
+| + ks_bal 5: partials by distance (BRISC itself + 4 down, NCRISC 5 up, wrapping the column ring) | 54.1% | row 0's BRISC had 822K busy vs row 9's 109K |
+| + DN_LAG 3, fold lag 2 | 54.6-54.9% | waits now: weight skew a core -> landing / h |
+| + 5th weight slot (d0,d1,d0d1,any,any; model 0.664 -> 0.762), PD 1, ydep 1, NXR 5, TL 2, NS 3 | 56.8-57.3% | M 2048 67.0% |
+| + KS_XDIRECT: compute tilizes x straight into its ring slot (no CB 8 staging), XRM 3, NXR 6, TL 5 | 57.8% | M 2048 68.8% |
+No gain: h all-to-all instead of the chain (ha2a; h waits fall, landing waits rise), all partials on the BRISC
+(47.4%), weight queues twice a turn, output flush instead of barrier, deeper landing / x rings at 4 slots, 4-slot
+typings other than d0,d1,d0d1,any. The pipelined x gather (8 rows of ids a read, several rows of reads in flight) is
+in but neutral.
+Final configs (WS_LANE / WS_GCFG):
+- bfp8 h: "slots=d0,d1,d0d1,any,any;keep=2;ks=1;wpoll=1;ks_ovl=1;sched_c=7;ks_bal=5;ks_pd=1;ydep=1;ks_xdirect=1;
+  ks_fl=2;ks_d=3;ks_nxr=6;ks_tl=5" / "dn_lag=3;NS=3;XRM=3": M 586 57.8% (54.4-61.8), M 2048 68.8%, PCC 0.99988;
+  dynamic M min 0.99986, M 0 / 5 pass; soak 300 s: 2098 launches, 56.1%, PCC 0.99988.
+- bf16 h: the same with ks_nxr=4;ks_tl=3 / "dn_lag=3;NS=3;XRM=2;h_dt=bf16": M 586 55.4-55.8%, M 2048 66.0%,
+  PCC 0.99994; dynamic M min 0.99992, M 0 / 5 pass.
+- Galaxy not run: the lane model says 5 slots are worse on the 8 x 4 torus (0.698 -> 0.652, random timing).
+
+## K split on the lane, part 2 (tray, 2026-11-17): weights without the router's ack wait, group layout
+Same harness (all outputs written, bf16 partials, util tile median over 8 chips x 5 launches after 20 warm-up).
+- Weight transport: test_mux_bench gives 26.2 GB/s a link with the fused write + increment flushed (the router waits
+  for the write's ack before the increment) and 43.7 GB/s without. LCfg.arr_nf (WL_ARR_NF) drops the flush on the
+  weight packets: M 5 (weights only) 72 K -> 56 K cycles a chip-expert, M 586 57.2 -> 59.5%, weight waits ~0. PCC
+  unchanged (every expert checked); dynamic M identical with and without; soak 300 s: 3172 launches, no hang.
+  arr_write (plain arrival writes): 56.1%.
+- With the faster weights 4 slots match 5 (59.7 vs 59.5%), freeing 207 KB for deeper rings.
+- Position: the group cores' gate/up MATH time a row depends on the columns (per-core stamps 64-67 added: pack
+  waits on the partial / h / y CBs and MATH DEST waits are small; the slow cores are in columns 1-2 / 7-8 and row 9,
+  and swapping the groups' columns moves the slowness with the columns). ws_lane.group_layout: G <= 2 now uses
+  columns (4, 5) / (9, 10), muxes in 3 / 8 (WS_GLAYOUT overrides; WS_MUXROWS for the mux rows):
+| layout (a, b, mux) | M 586 |
+|---|---|
+| (1,2,0) (4,5,3) (old) | 59.5% |
+| (1,2,0) (7,8,6) | 58.7-59.1% |
+| (4,5,3) (7,8,6) | 58.7% |
+| (1,2,0) (9,10,8) | 60.6% |
+| (3,4,2) or (5,6,4) with (9,10,8) | 61.2-61.3% |
+| (4,5,3) (9,10,8) | 62.4-62.8% |
+  Mux rows (0,1) / (8,9) / (0,9): within noise.
+- Deeper buffers in the freed L1: XRM 4, landing D 4, x ring 8 rows, tilize look-ahead 7, NS 4: 63.8%.
+- No gain: fold with 2 inits instead of 6 (MATH fold 0.74 -> 0.31 K a row, but the down then waits that long for the
+  SwiGLU on PACK; kept), fold before the gate/up (ks_ff; with fold lag 2 it hangs) or after the down (ks_fz), idle
+  back-off of the data-movement loops (idle), sched_c 5 / 10 / 14, ks_pd 2.
+Final configs (WS_LANE / WS_GCFG), every output written, bf16 partials:
+  "slots=d0,d1,d0d1,any;keep=2;ks=1;wpoll=1;ks_ovl=1;sched_c=7;ks_bal=5;ydep=1;ks_xdirect=1;arr_nf=1;ks_fl=2;ks_pd=1;
+  ks_d=4;ks_nxr=8;ks_tl=7"
+| h | WS_GCFG | M 586 | M 2048 | PCC | dynamic M min PCC |
+|---|---|---|---|---|---|
+| bfp8 | dn_lag=3;NS=4;XRM=4 | 63.8% | 68.9% | 0.99988 | 0.99983 |
+| bf16 | dn_lag=3;NS=4;XRM=4;h_dt=bf16 | 61.3% | 67.3% | 0.99994 | 0.99993 |
+  M 0 / M 5 pass for both. (Part 1's best: 57.8% / 55.5%.)

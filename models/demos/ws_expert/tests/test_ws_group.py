@@ -14,7 +14,7 @@ from models.demos.ws_expert.ws_expert import interleave_gu
 from models.demos.ws_expert.ws_group import GCfg, build
 
 
-def run_group(device, cfg: GCfg, Ms, seed=0):
+def run_group(device, cfg: GCfg, Ms, seed=0, builder=build):
     assert len(Ms) == cfg.nexp and max(Ms) <= cfg.MMAX
     torch.manual_seed(seed)
     x = torch.randn(cfg.T + 1, cfg.H)
@@ -35,7 +35,7 @@ def run_group(device, cfg: GCfg, Ms, seed=0):
     wgu_t = to_dev(wgu, cfg.w_dt, device)
     wd_t = to_dev(wd.reshape(-1, cfg.H), cfg.w_dt, device)
     out_t = to_dev(torch.zeros(cfg.G * cfg.RMAX * 32, cfg.H), cfg.out_dt, device)
-    prog, io, st, _ = build(device, cfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t)
+    prog, io, st, _ = builder(device, cfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t)
     ttnn.generic_op(io, prog)
     ttnn.synchronize_device(device)
     clk = aiclk_mhz(0)

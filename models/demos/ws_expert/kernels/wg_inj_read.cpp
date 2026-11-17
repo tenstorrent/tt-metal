@@ -25,6 +25,16 @@ void kernel_main() {
     const uint32_t tb = get_tile_size(0);
     const auto gs = TensorAccessor(gargs, get_arg_val<uint32_t>(1), tb);
     const auto ds = TensorAccessor(dargs, get_arg_val<uint32_t>(2), tb);
+    // gate/up tile u of core j's slice of weight set e (W_gu: [sets * KT][2 PAIRS], gate / up interleaved)
+    auto gu_page = [](uint32_t e, uint32_t j, uint32_t u) -> uint32_t {
+#ifdef WG_INJ_KS
+        // K split (ws_ks): core j = 10 c + r holds K tiles [KSL r, +KSL) x columns [PAIRS c, +PAIRS) ([KSL][PAIRS])
+        constexpr uint32_t KSL = WG_INJ_KS, NC = PAIRS;
+        return (e * KT + KSL * (j % 10) + u / NC) * 2 * PAIRS + NC * (j / 10) + u % NC;
+#else
+        return (e * KT + u / 2) * 2 * PAIRS + 2 * j + u % 2;
+#endif
+    };
 #ifdef WG_INJ_P
     // fabric-like mode: the P weight sets' slices of this injector's targets are loaded into L1 once
     // ([p][t][WTOT] tiles: all of CB 0); the writer lands expert e from set (e / G) % P (no DRAM in the steady state)
@@ -36,7 +46,7 @@ void kernel_main() {
             uint32_t l1 = pre + (p * NT + t) * WTOT * tb;
             for (uint32_t u = 0; u < WTOT; ++u, l1 += tb) {
                 if (u < WGU) {
-                    noc_async_read_page((p * KT + u / 2) * 2 * PAIRS + 2 * j + u % 2, gs, l1);
+                    noc_async_read_page(gu_page(p, j, u), gs, l1);
                 } else {
                     const uint32_t v = u - WGU;
                     noc_async_read_page((p * KTD + v / DCOLS) * HT + DCOLS * j + v % DCOLS, ds, l1);
@@ -60,7 +70,7 @@ void kernel_main() {
                 uint32_t l1 = get_write_ptr(0);
                 for (uint32_t u = u0; u < u0 + CH; ++u, l1 += tb) {
                     if (u < WGU) {
-                        noc_async_read_page((e * KT + u / 2) * 2 * PAIRS + 2 * j + u % 2, gs, l1);
+                        noc_async_read_page(gu_page(e, j, u), gs, l1);
                     } else {
                         const uint32_t v = u - WGU;
                         noc_async_read_page((e * KTD + v / DCOLS) * HT + DCOLS * j + v % DCOLS, ds, l1);

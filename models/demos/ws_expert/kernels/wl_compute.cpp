@@ -54,7 +54,7 @@ constexpr uint32_t WGU = kt * gw, WDN = ktd * dcols;  // weight tiles of a slot
 
 FORCE_INLINE uint32_t wall() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 
-uint32_t t_til = 0, t_xw = 0, t_ww = 0, t_hw = 0;
+uint32_t t_til = 0, t_xw = 0, t_ww = 0, t_hw = 0, t_hd = 0;  // (t_hd: h waits of the end-of-expert drains)
 volatile uint32_t* counts = reinterpret_cast<volatile uint32_t*>(counts_l1);
 uint32_t g_, nexp_g;
 volatile uint32_t* order = reinterpret_cast<volatile uint32_t*>(order_l1);
@@ -95,6 +95,14 @@ FORCE_INLINE void pop_finished_down(uint32_t upto_n) {  // pop experts < upto_n 
 #define SRCB_TO_H()
 #define SRCB_TO_X()
 #endif
+// the packer runs in h's format (CB 16) except for the down outputs (CB 17): when they differ (bfp8 h), it switches
+#ifdef WX_H_PACK_DIFFERS
+#define PACK_TO_Y() pack_reconfig_data_format(h_cb, y_cb)
+#define PACK_TO_H() pack_reconfig_data_format(y_cb, h_cb)
+#else
+#define PACK_TO_Y()
+#define PACK_TO_H()
+#endif
 
 FORCE_INLINE void down_row() {
     SRCB_TO_H();
@@ -109,6 +117,7 @@ FORCE_INLINE void down_row() {
         t_ww += wall() - a;
     }
     cb_reserve_back(y_cb, dcols);
+    PACK_TO_Y();
     for (uint32_t b = 0; b < dcols / DB; ++b) {
         tile_regs_acquire();
         for (uint32_t k = 0; k < ktd; ++k) {
@@ -121,6 +130,7 @@ FORCE_INLINE void down_row() {
         }
         tile_regs_release();
     }
+    PACK_TO_H();
     cb_pop_front(hr_cb, ktd);
     cb_push_back(y_cb, dcols);
     SRCB_TO_X();
@@ -183,7 +193,7 @@ void kernel_main() {
     wd_end = nexp_g ? rows_of(0) : 0;
     for (uint32_t n = 0; n < nexp_g; ++n) {
         if (n == 1) {
-            t_til = t_xw = t_ww = t_hw = 0;
+            t_til = t_xw = t_ww = t_hw = t_hd = 0;
         }
         const uint32_t R = rows_of(n);
         use_slot(w_cb, order[n] >> 16, WGU);
@@ -235,8 +245,12 @@ void kernel_main() {
         }
         cb_pop_front(w_cb, WGU);  // this expert's gate/up weights are done
         pop_finished_down(n);
-        while (consumed < produced) {  // drain its down rows: the expert (and its slot) is done
-            down_row();
+        {
+            const uint32_t hw0 = t_hw;
+            while (consumed < produced) {  // drain its down rows: the expert (and its slot) is done
+                down_row();
+            }
+            t_hd += t_hw - hw0;
         }
         pop_finished_down(n + 1);
         if (n < 200) {
@@ -248,4 +262,5 @@ void kernel_main() {
     UNPACK(stamps[41] = t_xw);
     UNPACK(stamps[42] = t_ww);
     UNPACK(stamps[43] = t_hw);
+    UNPACK(stamps[44] = t_hd);
 }
