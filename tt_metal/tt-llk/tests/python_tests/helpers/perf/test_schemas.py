@@ -898,8 +898,8 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_matmul": "perf_matmul"},
     },
-    "perf_pack_dest_bank": {
-        "version": 5,
+    "perf_pack_l1_acc": {
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -931,7 +931,10 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
-        "test_name_aliases": {"perf_pack_dest_bank": "perf_pack_dest_bank"},
+        "test_name_aliases": {
+            "perf_pack_dest_bank": "perf_pack_l1_acc",
+            "perf_pack_l1_acc": "perf_pack_l1_acc",
+        },
     },
     "perf_pack": {
         "version": 3,

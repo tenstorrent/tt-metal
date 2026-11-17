@@ -9,6 +9,7 @@ TEST_NAME_ALIASES = {
     "perf_eltwise_typecast": "perf_eltwise_unary_typecast",
     "perf_fast_untilize_baseline_compare": "perf_pack_untilize",
     "perf_math_transpose": "perf_transpose_dest",
+    "perf_pack_dest_bank": "perf_pack_l1_acc",
     "perf_vif_targets": "perf_vif_equiv_sweep",
 }
 
