@@ -42,8 +42,7 @@ pytestmark = [
 _TIMING_SAMPLES = 5
 # Host-time targets (ms) per (layout, mode), as tests/measure measures them: untraced fastest of 10 after 10 warm-up,
 # traced one replay, both with the CPU clock held. LoudBox SP8xTP1 and QuietBox SP4xTP1 report until a CI run gives
-# their targets. SP8xTP1 and SP4xTP1 open FABRIC_1D_RING, every other case a 2D fabric with K3's payload
-# (kda_device_params).
+# their targets.
 _TARGETS_MS = {
     ("SP8xTP4", "untraced"): 1.47,
     ("SP8xTP4", "traced"): 1.244,
