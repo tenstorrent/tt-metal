@@ -26,7 +26,7 @@ from typing import Tuple
 from models.common.utility_functions import nearest_32
 from pathlib import Path
 from enum import Enum, auto
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     check_checkpoint_index,
     load_hf_state_dict,
@@ -504,10 +504,24 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
 @dataclass
 class LlamaOptimizations:
     bfp4_mlp: bool
+    # Opt-in (LLAMA_GALAXY_FF2_BFP4=1): MLP FF2 (w2, down-projection) weights in bfp4 at LoFi instead of
+    # bfp8 at HiFi2, decode and prefill. Read when the optimizations object is built. Llama only
+    # (llama_mlp.py ignores it for Qwen).
+    bfp4_ff2: bool = field(
+        default_factory=lambda: os.environ.get("LLAMA_GALAXY_FF2_BFP4", "0") == "1",
+        repr=False,
+    )
     # Future fields will go here:
     # bfp8_activations: bool
     # bfp8_layernorm: bool
     # bfp8_ccl: bool
+
+    def __repr__(self):
+        # Unset: same text as the generated dataclass repr. Set: the repr changes, so callers that key a
+        # weight-cache marker on repr(optimizations) (demo/text_demo.py build_variant) see a different
+        # variant and cold-load instead of handing a placeholder w2 to a bfp4 cache miss.
+        extra = ", bfp4_ff2=True" if self.bfp4_ff2 else ""
+        return f"{self.__class__.__qualname__}(bfp4_mlp={self.bfp4_mlp!r}{extra})"
 
     @classmethod
     def accuracy(cls, model_name):
@@ -780,6 +794,16 @@ class TtModelArgs:
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
+            )
+            # Decode FF2 with bfp4 weights (LlamaOptimizations.bfp4_ff2): compute_kernel_config_hifi2 with
+            # LoFi (tech_reports/LLMs/llms.md: "Use LoFi for BFP4 weights"; bfp4 has 3 mantissa bits, so the
+            # second HiFi2 pass adds little). fp32 dest accumulation is kept as on the bfp8 FF2 path (K=3584).
+            self.compute_kernel_config_lofi_fp32acc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+                dst_full_sync_en=True,
             )
             self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,

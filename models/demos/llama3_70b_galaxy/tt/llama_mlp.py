@@ -90,6 +90,17 @@ class TtLlamaMLP(LightweightModule):
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
+        # Opt-in LLAMA_GALAXY_FF2_BFP4=1 (LlamaOptimizations.bfp4_ff2): w2 in bfp4, FF2 matmuls at LoFi.
+        # Qwen's sharded w2 is bf16 (as_sharded_tensor), so this stays Llama-only. The weight cache file
+        # differs by dtype (ttnn.as_tensor appends _dtype_BFLOAT4_B), so the bfp8 file is never reused.
+        self.ff2_bfp4 = bool(getattr(args.optimizations, "bfp4_ff2", False)) and not args.is_qwen
+        w2_dtype = ttnn.bfloat4_b if self.ff2_bfp4 else ttnn.bfloat8_b
+        if self.ff2_bfp4:
+            self.ff2_decode_compute_kernel_config = args.compute_kernel_config_lofi_fp32acc
+            self.ff2_prefill_compute_kernel_config = args.compute_kernel_config_lofi
+        else:
+            self.ff2_decode_compute_kernel_config = args.compute_kernel_config_hifi2
+            self.ff2_prefill_compute_kernel_config = args.compute_kernel_config_hifi2_fp16
 
         # Sharded weights
         w1_dim = (-1, -2)
@@ -99,13 +110,13 @@ class TtLlamaMLP(LightweightModule):
         self.w1 = as_sharded_tensor(
             "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
+        self.w2 = as_sharded_tensor("w2_sharded", w2_dtype, dim=w2_dim)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
         self.w1_interleaved = as_interleaved_tensor(
             "w1_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
-        self.w2_interleaved = as_interleaved_tensor("w2_interleaved", ttnn.bfloat8_b, dim=w2_dim)
+        self.w2_interleaved = as_interleaved_tensor("w2_interleaved", w2_dtype, dim=w2_dim)
         self.w3_interleaved = as_interleaved_tensor(
             "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
@@ -304,7 +315,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.linear(
                 w2_in_for_matmul,
                 self.w2_interleaved,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                compute_kernel_config=self.ff2_decode_compute_kernel_config,
                 dtype=ttnn.bfloat8_b,
                 program_config=None,
                 memory_config=None,
@@ -316,7 +327,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.linear(
                 w2_in_for_matmul,
                 self.w2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                compute_kernel_config=self.ff2_decode_compute_kernel_config,
                 dtype=ttnn.bfloat8_b,
                 program_config=pc_2_for_matmul,
                 memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
@@ -466,7 +477,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.linear(
                 w2_in_gathered,
                 self.w2_interleaved,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                compute_kernel_config=self.ff2_prefill_compute_kernel_config,
                 dtype=self.prefill_output_dtype,
                 program_config=short_lens_pc_2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -482,7 +493,7 @@ class TtLlamaMLP(LightweightModule):
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 matmul_config=minimal_pc_2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                compute_kernel_config=self.ff2_prefill_compute_kernel_config,
                 dtype=self.prefill_output_dtype,
             )
             ttnn.deallocate(w2_in)
