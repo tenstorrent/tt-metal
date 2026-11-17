@@ -27,17 +27,17 @@
       "sc4": {
         "probe": "@1020k",
         "8kw": {
-          "throughput_tok_s": 30640,
-          "ttft_s": 26.87,
-          "chunk_time_ms": 579
+          "throughput_tok_s": 26933,
+          "ttft_s": 27.2,
+          "chunk_time_ms": 695
         }
       },
       "sc1": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 9714,
-          "ttft_s": 90.27,
-          "chunk_time_ms": 517
+          "throughput_tok_s": 7817,
+          "ttft_s": 93.58,
+          "chunk_time_ms": 645
         }
       },
       "sc4_4x4": {
