@@ -32,10 +32,11 @@
 #include "tt_metal/tt_metal/dram/mimir_remote_test.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 
-// The Glean MM-6 plan names dram_neighbour, dram_sharded, one_packet, interleaved, direct_write and the PCIe-style
-// tests to adapt. Their host sides use fast-dispatch fixtures on Tensix or worker cores, and their kernels use the NoC
-// dataflow API, which no Mimir CCE kernel has run yet. Mimir also has no PCIe. So these tests use the
-// experimental/cce_gddr.h path through cce_copy_ops.cpp.
+// These tests cover the remote-DRAM intent of upstream dram_neighbour and dram_sharded. Those host sides use
+// fast-dispatch fixtures on Tensix or worker cores and their kernels use the NoC dataflow API, which a CCE cannot issue
+// because it has no NoC interface. So these tests use the experimental/cce_gddr.h path through cce_copy_ops.cpp.
+// one_packet and direct_write are covered by MimirRemoteTl1; interleaved needs a runtime change for 64-bit bank
+// offsets, and the PCIe tests have no analogue on Mimir.
 
 namespace tt::tt_metal::mimir_test::remote_dram {
 
@@ -1376,9 +1377,13 @@ TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM6, MimirRemoteDram, ::testing::ValuesIn(remote_dram_view_params()), remote_dram_view_name);
 INSTANTIATE_TEST_SUITE_P(
-    MM6, MimirRemoteDramTrafficMatrix, ::testing::ValuesIn(remote_dram_source_params()), remote_dram_source_name);
+    RemoteDram, MimirRemoteDram, ::testing::ValuesIn(remote_dram_view_params()), remote_dram_view_name);
+INSTANTIATE_TEST_SUITE_P(
+    RemoteDram,
+    MimirRemoteDramTrafficMatrix,
+    ::testing::ValuesIn(remote_dram_source_params()),
+    remote_dram_source_name);
 
 namespace {
 

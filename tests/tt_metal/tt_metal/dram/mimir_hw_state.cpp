@@ -85,7 +85,7 @@ struct AttEndpointExpected {
     uint64_t value;
 };
 
-// Entry word = x | (y << 6), same on both D2D tiles (chippy noc2axi_m2k.py _MIMIR_ET_ENDPOINTS).
+// Entry word = x | (y << 6), same on both D2D tiles, as Chippy bring-up programs them.
 inline constexpr AttEndpointExpected kAttEndpointsExpected[] = {
     {64, 0x184},
     {65, 0x144},
@@ -271,7 +271,7 @@ void add_ss_bar_window(
     add_range_register("OFFSET", 0x10, offset);
 }
 
-// Chippy noc2axi_m2k.py noc2axi_mimir_bar_cfg programs BAR0-2 with UMD's DMRISC remap entries 0-2: config space, the
+// Chippy bring-up programs BAR0-2 with UMD's DMRISC remap entries 0-2: config space, the
 // Mimir's CCE SRAM, then its GDDR. D2D1 reaches GDDR one D2D lane above D2D0. BAR3 is spare.
 void append_ss_bar_expected(std::vector<MimirRegister>& registers, const D2dTile& tile) {
     const tt::umd::GrendelAddressWindows windows;

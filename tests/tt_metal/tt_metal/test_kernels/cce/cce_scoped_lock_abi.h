@@ -25,11 +25,11 @@ inline constexpr uint32_t kOldBase = 0xBB00, kNewBase = 0xAA00;
 // The lock covers lines [kArgLockFirstLine, kArgLockFirstLine + kArgLockNumLines). kArgWarmedFlagOffset (consumer ->
 // producer) and kArgPublishedFlagOffset (producer -> consumer) are flag lines the host zeroes; each flag is set to 1.
 // kArgResultOffset is the consumer's kNumResultLines result lines. kArgPollBudget* is rdcycle cycles per bounded wait
-// or poll and must be nonzero.
-// MM41 args. kArgConsumerCount and kArgConsumerIndex (kModeMultiConsumer): consumer c sets the warmed flag line
-// kArgWarmedFlagOffset + c * kLineBytes. kArgRingSlots, kArgSlotLines and kArgRounds (kModeRingWrap): the ring is
-// kArgRingSlots slots of kArgSlotLines lines from kArgRegionOffset, at most kNumLines lines, and kArgRounds rounds
-// fill slot round % kArgRingSlots. kArgTargetCce (kModeNonSnoopingProducer): the consumer's CCE.
+// or poll and must be nonzero. Args of the multi-consumer, ring and cross-CCE modes. kArgConsumerCount and
+// kArgConsumerIndex (kModeMultiConsumer): consumer c sets the warmed flag line kArgWarmedFlagOffset + c * kLineBytes.
+// kArgRingSlots, kArgSlotLines and kArgRounds (kModeRingWrap): the ring is kArgRingSlots slots of kArgSlotLines lines
+// from kArgRegionOffset, at most kNumLines lines, and kArgRounds rounds fill slot round % kArgRingSlots. kArgTargetCce
+// (kModeNonSnoopingProducer): the consumer's CCE.
 inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgPollBudgetLo = 2, kArgPollBudgetHi = 3,
                           kArgRegionOffset = 4, kArgLockFirstLine = 5, kArgLockNumLines = 6, kArgWarmedFlagOffset = 7,
                           kArgPublishedFlagOffset = 8, kArgResultOffset = 9, kArgConsumerCount = 10,
@@ -48,18 +48,18 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgPollBudgetLo =
 // (kFlagLandedAtFirstRead if they hold NEW), polls them, discards every probe line from its caches and sets published.
 // The consumer reads every probe word through the uncached alias: locked lines must read NEW in TL1, unlocked lines
 // OLD.
-// kModeMultiConsumer (MM41): kArgConsumerCount consumers on harts of the producer's CCE. Each consumer reads every
+// kModeMultiConsumer: kArgConsumerCount consumers on harts of the producer's CCE. Each consumer reads every
 // probe word through the cache and sets its own warmed flag line. The producer waits for every warmed flag, acquires
 // the lock, stores NEW to the locked lines' probe words through the cache, releases the lock, polls the locked lines
 // through the uncached alias until they read NEW, and sets published. Each consumer then acquires and releases the
 // lock and reads as in kModeInvalidateOnAcquire.
-// kModeRingWrap (MM41): for each round r the producer waits until the consumer's read pointer (the warmed flag line)
+// kModeRingWrap: for each round r the producer waits until the consumer's read pointer (the warmed flag line)
 // is at least r + 1 - kArgRingSlots, acquires slot r % kArgRingSlots, stores ring_word(r, w) to every word w of the
 // slot through the cache, releases the slot, polls the slot through the uncached alias until it reads those values
 // (the release flush has no completion register) and sets its write pointer (the published flag line) to r + 1. The
 // consumer waits for the write pointer to pass r, acquires the slot, reads every word through the cache and counts the
 // words that are not ring_word(r, w) (kStatusMismatchedWords), releases the slot and sets its read pointer to r + 1.
-// kModeNonSnoopingProducer (MM41): the producer runs on another CCE and reaches the consumer's TL1 (CCE
+// kModeNonSnoopingProducer: the producer runs on another CCE and reaches the consumer's TL1 (CCE
 // kArgTargetCce) by SPA only: it waits for warmed by SPA load, stores NEW to every probe word, `fence`, then sets
 // published, all by SPA store, which the consumer's caches do not snoop by default. The consumer runs as in
 // kModeInvalidateOnAcquire, except that after published it polls every probe word through the uncached alias until

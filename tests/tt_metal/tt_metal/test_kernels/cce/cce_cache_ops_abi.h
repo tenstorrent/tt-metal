@@ -18,16 +18,17 @@ using cce_test_status_abi::kLineBytes;
 // modes need 64 B aligned data and whole lines; the write-path modes need 8 B aligned data and an even word count.
 // kArgFlagOffset (64 B aligned, own line) and kArgPollBudget* (rdcycle cycles, nonzero) are read by the hart-to-hart
 // modes only.
-// kArgStrideBytes, kArgCount and kArgAuxOffset (a hart-local TL1 offset, 64 B aligned) are read by the MM41 modes that
-// name them. MM41 args (from kArgSeed) are described with the modes that read them. kArgTraceOffset is a 64 B aligned
-// offset in the kernel's own TL1 that receives per-pass records after the mode's work, through the uncached alias.
+// kArgStrideBytes, kArgCount and kArgAuxOffset (a hart-local TL1 offset, 64 B aligned) are read by the extended modes
+// (kModeDiscardFull and later) that name them. Extended-mode args (from kArgSeed) are described with the modes that
+// read them. kArgTraceOffset is a 64 B aligned offset in the kernel's own TL1 that receives per-pass records after the
+// mode's work, through the uncached alias.
 // kArgTargetCce is the CCE whose TL1 an SPA mode reads or writes at the package SPA (experimental::cce_sram_address).
 // kArgDataWindowCycles bounds a mode's second, shorter data poll (rdcycle cycles, nonzero). kArgPeerStatusOffset (own
 // TL1, 64 B aligned, 0 for none) and kArgPeerMagic name another kernel's status line and done magic that
 // kModeExternalReader waits for.
 // Every region a mode touches (data, flag lines, trace, aux lines up to aux + (count - 1) * stride, other words) must
 // lie inside the test TL1 area, from the end of the harts' kernel text to the end of the hart-cacheable port (4 MiB),
-// computed in 64 bits; flag and trace offsets a mode uses must be nonzero. Otherwise the code is kCodeBadArgs (MM41
+// computed in 64 bits; flag and trace offsets a mode uses must be nonzero. Otherwise the code is kCodeBadArgs (extended
 // modes).
 inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgDataOffset = 2, kArgNumWords = 3, kArgValue = 4,
                           kArgOldValue = 5, kArgFlagOffset = 6, kArgPollBudgetLo = 7, kArgPollBudgetHi = 8,
@@ -64,11 +65,12 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgDataOffset = 2
 // alias, fence per pass. kModeWriteCachedRangeFlush: 64-bit cached stores and the L2 range flush per pass.
 // kModeWriteCachedFastFlush (upstream mode 3): 64-bit cached stores, then bare FLUSH64 writes per line, per pass, and
 // one fence at the end.
-// kModeNull: writes only its status line (MM41 EightHartLaunch); the data args are not read.
+// kModeNull: writes only its status line (MimirCacheProbe.EightHartLaunch); the data args are not read.
 // kModeReadConfig: reads the CCE snoop-master config (NOC_SNOOP_TL_MASTER_CFG) into kStatusRegisterA and the L2
 // CONFIGURATION register into kStatusRegisterB; the data args are not read.
 //
-// MM41 modes. "Old" word i is kArgOldValue + i and "new" word i is kArgValue + i unless a mode says otherwise.
+// Extended modes (kModeDiscardFull and later). "Old" word i is kArgOldValue + i and "new" word i is kArgValue + i
+// unless a mode says otherwise.
 // kModeDiscardFull: one inline-asm block cleans both caches (cflush.d.l1 x0, then FLUSH64 of every cacheable TL1 line
 // and a drain load), stores the new values cached, counts them in a cached read (kStatusCachedBefore) and runs
 // cdiscard.d.l1 x0, so no stack store falls between the clean and the discard. Then a bare FLUSH64 per line and an
@@ -142,7 +144,7 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgDataOffset = 2
 // word is churn_word(round, i), runs INVALIDATE64 per line when kStepL2Invalidate is set, reads cached
 // (kStatusStaleBefore sums words not yet churn_word(round, i); kStatusRegisterA sums the read's cycles), then reads
 // cached again (kStatusRegisterB sums those cycles). kStatusMatches counts rounds whose second read was complete.
-// MM41 modes count completed passes or rounds in kStatusPasses. kModeWipeFull, kModePartialLineEvict,
+// Extended modes count completed passes or rounds in kStatusPasses. kModeWipeFull, kModePartialLineEvict,
 // kModeSharedReader, kModeExternalReader, kModeDirtyRace (over its whole line) and kModeChurnConsumer first read their
 // region cached and put the number of words that are not old (lines left cached by an earlier leg or launch) in
 // kStatusCachedBefore, then drop the region from L1 D$ and L2 before their own cached reads.
@@ -192,7 +194,7 @@ constexpr uint32_t churn_word(uint32_t value, uint32_t round, uint32_t word) { r
 // Status line, written once at exit: every field, `fence w, w`, then the magic. kStatusFirstMismatchWord and
 // kStatusObserved describe the first word of the final check that did not hold the new value. kStatusFlagReady is 1
 // once the hart saw the flag it waits for within its budget. kStatusCycles is the rdcycle count of the mode's work.
-// kStatusRegisterA/B/C are per-mode values, described with the mode. kStatusPasses counts an MM41 mode's completed
+// kStatusRegisterA/B/C are per-mode values, described with the mode. kStatusPasses counts an extended mode's completed
 // passes or rounds.
 using cce_test_status_abi::kStatusCode;
 using cce_test_status_abi::kStatusMagic;

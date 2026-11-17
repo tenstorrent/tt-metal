@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// MM-8 port of the test_scoped_lock_cache CLM rows (ScopedLockCacheCLM{InvalidateOnAcquire,FlushOnRelease,
+// Port of upstream test_scoped_lock_cache.cpp's CLM cases (ScopedLockCacheCLM{InvalidateOnAcquire,FlushOnRelease,
 // LockedRangeOnly}): a producer and a consumer hart on one CCE, one Program, with the scoped-lock cache ops
 // (scoped_lock_cache_ops.h) on a probe region in TL1. The observer of an invalidate is the acquiring consumer's cached
 // read after the producer moved TL1 under its cache; the observer of a flush is the consumer's read through the
@@ -346,12 +346,7 @@ TEST_P(MimirDmScopedLockClm, CacheOps) {
         hex_words(host_probe));
     record_leg("consumer", "observed", observed);
     log_info(
-        tt::LogTest,
-        "MM8 scoped lock {}: producer {}; consumer {}; {}",
-        label,
-        producer_detail,
-        consumer_detail,
-        observed);
+        tt::LogTest, "scoped lock {}: producer {}; consumer {}; {}", label, producer_detail, consumer_detail, observed);
 
     ASSERT_EQ(producer_status[abi::kStatusCode], abi::kCodeDone) << label << ": producer " << producer_detail;
     ASSERT_EQ(consumer_status[abi::kStatusCode], abi::kCodeDone) << label << ": consumer " << consumer_detail;
@@ -384,11 +379,12 @@ TEST_P(MimirDmScopedLockClm, CacheOps) {
         << label << ": guard after the result lines was overwritten";
 }
 
-INSTANTIATE_TEST_SUITE_P(MM8, MimirDmScopedLockClm, ::testing::ValuesIn(all_clm_cases()), clm_case_name);
+INSTANTIATE_TEST_SUITE_P(DmSuitePort, MimirDmScopedLockClm, ::testing::ValuesIn(all_clm_cases()), clm_case_name);
 
-// MM41 scoped-lock analogues (plan increments 2-3), each on every CCE of the descriptor.
+// Scoped-lock cases beyond the upstream CLM cases: several consumers, a wrapping ring, an unsnooped sibling-CCE
+// producer. Each runs on every CCE of the descriptor.
 
-// Set by MM41/MimirCacheWriterProbe.ExternalWriters (SiblingSpa, SnoopOffInvalidate): whether a sibling CCE's SPA
+// Set from MimirCacheWriterProbe.ExternalWriters results (SiblingSpa, SnoopOffInvalidate): whether a sibling CCE's SPA
 // stores reach this CCE's cached copy with no invalidate.
 inline constexpr bool kSiblingSpaWritesSnooped = false;
 // Offsets in the region hart's data area: consumer c's warmed flag line at kMultiWarmedFlagOffset + c * 64.
@@ -401,7 +397,7 @@ inline constexpr uint32_t kRingSlotLines = 2;
 inline constexpr uint32_t kRingRounds = 3 * kRingSlots;
 static_assert(kRingSlots * kRingSlotLines <= abi::kNumLines);
 
-// One kernel of an MM41 scoped-lock Program.
+// One kernel of a MimirCacheScopedLock Program.
 struct LockKernel {
     uint32_t cce_index = 0;
     uint32_t hart = kCceKernelHart;
@@ -410,7 +406,7 @@ struct LockKernel {
     CceStatusLine status_line = kProducerStatusLine;
 };
 
-std::vector<uint32_t> mm41_lock_args(uint32_t mode, uint64_t region_offset, uint32_t hart) {
+std::vector<uint32_t> lock_mode_args(uint32_t mode, uint64_t region_offset, uint32_t hart) {
     std::vector<uint32_t> args(abi::kNumArgs, 0);
     args[abi::kArgMode] = mode;
     args[abi::kArgStatusOffset] = static_cast<uint32_t>(tl1_done_block(hart));
@@ -435,7 +431,7 @@ CceStatuses run_lock_kernels(IDevice* device, const std::vector<LockKernel>& ker
     return run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
 }
 
-std::string mm41_lock_detail(const std::vector<uint32_t>& status) {
+std::string lock_status_detail(const std::vector<uint32_t>& status) {
     return fmt::format("{}, rounds {}", status_detail(status), status[abi::kStatusRounds]);
 }
 
@@ -459,7 +455,7 @@ void expect_consumer_results(
         hex_words(warm),
         hex_words(cached_after),
         hex_words(uncached_after));
-    log_info(tt::LogTest, "MM41 scoped lock {}: {}", label, observed);
+    log_info(tt::LogTest, "scoped lock {}: {}", label, observed);
     record_leg(label, "observed", observed);
     const std::vector<uint32_t> new_values = sentinel_values(abi::kNewBase);
     EXPECT_EQ(warm, sentinel_values(abi::kOldBase)) << label << ": cached reads before the lock. " << observed;
@@ -505,7 +501,7 @@ TEST_P(MimirCacheScopedLock, MultiConsumer) {
         std::vector<uint32_t>(
             (kMultiPublishedFlagOffset - kMultiWarmedFlagOffset + abi::kLineBytes) / sizeof(uint32_t), 0));
     std::vector<LockKernel> kernels;
-    std::vector<uint32_t> producer_args = mm41_lock_args(abi::kModeMultiConsumer, region_offset, kProducerHart);
+    std::vector<uint32_t> producer_args = lock_mode_args(abi::kModeMultiConsumer, region_offset, kProducerHart);
     producer_args[abi::kArgLockFirstLine] = params.lock_first_line;
     producer_args[abi::kArgLockNumLines] = params.lock_num_lines;
     producer_args[abi::kArgWarmedFlagOffset] = static_cast<uint32_t>(region_offset + kMultiWarmedFlagOffset);
@@ -535,14 +531,14 @@ TEST_P(MimirCacheScopedLock, MultiConsumer) {
         region_offset,
         params.lock_first_line,
         params.lock_first_line + params.lock_num_lines - 1);
-    log_info(tt::LogTest, "MM41 scoped lock {}", label);
+    log_info(tt::LogTest, "scoped lock {}", label);
     const CceStatuses statuses = run_lock_kernels(device, kernels);
     ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     const std::vector<uint32_t>& producer = statuses->front();
-    log_info(tt::LogTest, "MM41 scoped lock {}: producer {}", label, mm41_lock_detail(producer));
+    log_info(tt::LogTest, "scoped lock {}: producer {}", label, lock_status_detail(producer));
     RecordProperty(
         "landed_at_first_read", (producer[abi::kStatusFlags] & abi::kFlagLandedAtFirstRead) != 0 ? "yes" : "no");
-    ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label << ": producer " << mm41_lock_detail(producer);
+    ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label << ": producer " << lock_status_detail(producer);
     const std::vector<uint32_t> old_values = sentinel_values(abi::kOldBase);
     const std::vector<uint32_t> new_values = sentinel_values(abi::kNewBase);
     std::vector<uint32_t> tl1_values = old_values;
@@ -554,8 +550,8 @@ TEST_P(MimirCacheScopedLock, MultiConsumer) {
         const uint32_t hart = consumer + 1;
         const std::vector<uint32_t>& status = (*statuses)[hart];
         const std::string consumer_label = fmt::format("{} consumer hart {}", label, hart);
-        log_info(tt::LogTest, "MM41 scoped lock {}: {}", consumer_label, mm41_lock_detail(status));
-        EXPECT_EQ(status[abi::kStatusCode], abi::kCodeDone) << consumer_label << ": " << mm41_lock_detail(status);
+        log_info(tt::LogTest, "scoped lock {}: {}", consumer_label, lock_status_detail(status));
+        EXPECT_EQ(status[abi::kStatusCode], abi::kCodeDone) << consumer_label << ": " << lock_status_detail(status);
         if (status[abi::kStatusCode] == abi::kCodeDone) {
             expect_consumer_results(
                 device,
@@ -597,7 +593,7 @@ TEST_P(MimirCacheScopedLock, RingWrap) {
     write_cce_tl1(device, cce_index, region_offset + kWarmedFlagOffset, std::vector<uint32_t>(abi::kWordsPerLine, 0));
     write_cce_tl1(
         device, cce_index, region_offset + kPublishedFlagOffset, std::vector<uint32_t>(abi::kWordsPerLine, 0));
-    std::vector<uint32_t> producer_args = mm41_lock_args(abi::kModeRingWrap, region_offset, kProducerHart);
+    std::vector<uint32_t> producer_args = lock_mode_args(abi::kModeRingWrap, region_offset, kProducerHart);
     producer_args[abi::kArgWarmedFlagOffset] = static_cast<uint32_t>(region_offset + kWarmedFlagOffset);
     producer_args[abi::kArgPublishedFlagOffset] = static_cast<uint32_t>(region_offset + kPublishedFlagOffset);
     producer_args[abi::kArgResultOffset] = static_cast<uint32_t>(tl1_data(kConsumerHart));
@@ -615,7 +611,7 @@ TEST_P(MimirCacheScopedLock, RingWrap) {
         kRingSlotLines,
         region_offset,
         kRingRounds);
-    log_info(tt::LogTest, "MM41 scoped lock {}", label);
+    log_info(tt::LogTest, "scoped lock {}", label);
     const CceStatuses statuses = run_lock_kernels(
         device,
         {{.cce_index = cce_index, .hart = kProducerHart, .args = producer_args},
@@ -629,18 +625,18 @@ TEST_P(MimirCacheScopedLock, RingWrap) {
     const std::vector<uint32_t>& consumer = (*statuses)[1];
     log_info(
         tt::LogTest,
-        "MM41 scoped lock {}: producer {}; consumer {}",
+        "scoped lock {}: producer {}; consumer {}",
         label,
-        mm41_lock_detail(producer),
-        mm41_lock_detail(consumer));
-    ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label << ": producer " << mm41_lock_detail(producer);
-    ASSERT_EQ(consumer[abi::kStatusCode], abi::kCodeDone) << label << ": consumer " << mm41_lock_detail(consumer);
+        lock_status_detail(producer),
+        lock_status_detail(consumer));
+    ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label << ": producer " << lock_status_detail(producer);
+    ASSERT_EQ(consumer[abi::kStatusCode], abi::kCodeDone) << label << ": consumer " << lock_status_detail(consumer);
     EXPECT_EQ(producer[abi::kStatusRounds], kRingRounds) << label;
     EXPECT_EQ(consumer[abi::kStatusRounds], kRingRounds) << label;
     EXPECT_EQ(consumer[abi::kStatusMismatchedWords], 0u)
         << label << ": consumer read stale slot words; first at round "
         << (consumer[abi::kStatusFirstMismatchWord] >> 8) << " word "
-        << (consumer[abi::kStatusFirstMismatchWord] & 0xFF) << ": " << mm41_lock_detail(consumer);
+        << (consumer[abi::kStatusFirstMismatchWord] & 0xFF) << ": " << lock_status_detail(consumer);
     const uint32_t slot_words = kRingSlotLines * abi::kWordsPerLine;
     const std::vector<uint32_t> region_words =
         read_cce_tl1(device, cce_index, region_offset, kRingSlots * slot_words * sizeof(uint32_t));
@@ -691,7 +687,7 @@ TEST_P(MimirCacheScopedLock, NonSnoopingProducer) {
         kConsumerHart,
         params.lock_first_line,
         params.lock_first_line + params.lock_num_lines - 1);
-    log_info(tt::LogTest, "MM41 scoped lock {}", label);
+    log_info(tt::LogTest, "scoped lock {}", label);
     const CceStatuses statuses = run_lock_kernels(
         device,
         {{.cce_index = producer_cce, .hart = kProducerHart, .args = producer_args},
@@ -705,13 +701,13 @@ TEST_P(MimirCacheScopedLock, NonSnoopingProducer) {
     const std::vector<uint32_t>& consumer = (*statuses)[1];
     log_info(
         tt::LogTest,
-        "MM41 scoped lock {}: producer {}; consumer {}",
+        "scoped lock {}: producer {}; consumer {}",
         label,
-        mm41_lock_detail(producer),
-        mm41_lock_detail(consumer));
-    ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label << ": producer " << mm41_lock_detail(producer);
+        lock_status_detail(producer),
+        lock_status_detail(consumer));
+    ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label << ": producer " << lock_status_detail(producer);
     ASSERT_EQ(consumer[abi::kStatusCode], abi::kCodeDone)
-        << label << ": consumer " << mm41_lock_detail(consumer)
+        << label << ": consumer " << lock_status_detail(consumer)
         << (consumer[abi::kStatusCode] == abi::kCodeDataTimeout ? kFreshSessionNote : "");
     const std::vector<uint32_t> new_values = sentinel_values(abi::kNewBase);
     expect_consumer_results(
@@ -726,6 +722,6 @@ TEST_P(MimirCacheScopedLock, NonSnoopingProducer) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    MM41, MimirCacheScopedLock, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+    CceCache, MimirCacheScopedLock, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::dm_scoped_lock

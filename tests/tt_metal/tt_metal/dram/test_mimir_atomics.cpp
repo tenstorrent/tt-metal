@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// MM42: Mimir test plan section 4.2 (atomics) on CCE harts. Tier A is RISC-V AMO and LR/SC on cached words of the
-// hart's own TL1 (AMOs on the uncached alias or above 4 MiB are illegal). No AMO runs while an iDMA or ITN write may
-// target that TL1 (MIM-560). Tier M is iDMA L1 accumulate into the issuing CCE's own TL1 (cce_idma_copy
-// kModeAccumulate), checked against a host model of the cce-dv reference arithmetic.
+// Atomics on CCE harts, in two classes. Hart AMOs: RISC-V AMO (Zaamo) and LR/SC (Zalrsc) by a hart on cached words of
+// its own TL1; AMOs on the uncached alias or above 4 MiB are illegal. No AMO runs while an iDMA or ITN write may target
+// that TL1: a hart's uncached store or AMO into TL1 can be corrupted when such a write arrives at the same time. iDMA
+// accumulate: iDMA L1 accumulate into the issuing CCE's own TL1 (cce_idma_copy kModeAccumulate), checked against a host
+// model of the emulator's accumulate arithmetic.
 
 #include <gtest/gtest.h>
 
@@ -56,8 +57,8 @@ inline constexpr uint64_t kAccumulateDestinationFromData = 0x10000;
 inline constexpr uint32_t kAccumulateValueMask = 0x000FFFFFu;
 inline constexpr uint32_t kLeadingGuardTag = 0x900;
 
-// L1 accumulate formats (cce-dv software/lib/include/cce_dv.hpp:396-401; Quasar noc_parameters.h defines no UINT8) and
-// the one operation the emulator reference runs (emu_l1_atomic.cpp:230,239). INT32 and INT8 are sign-magnitude.
+// L1 accumulate formats (Quasar noc_parameters.h defines no UINT8) and the one operation the emulator's accumulate
+// model runs. INT32 and INT8 are sign-magnitude.
 inline constexpr uint32_t kFormatFp32 = NOC_AT_ACC_FP32, kFormatFp16A = NOC_AT_ACC_FP16_A,
                           kFormatFp16B = NOC_AT_ACC_FP16_B, kFormatInt32 = NOC_AT_ACC_INT32,
                           kFormatInt32Complement = NOC_AT_ACC_INT32_COMPL, kFormatUint32 = NOC_AT_ACC_INT32_UNS,
@@ -97,7 +98,7 @@ std::string status_detail(const std::vector<uint32_t>& status) {
         status[abi::kStatusFirstMismatch]);
 }
 
-// A timeout code may leave a command in flight, so the next run needs a fresh session (MIM-601).
+// A timeout code may leave a command in flight, so the next run needs a fresh session.
 std::string idma_code_note(uint32_t code) { return idma_code_leaves_command_in_flight(code) ? kFreshSessionNote : ""; }
 
 uint32_t leg_seed(uint32_t tag) { return mimir_test_seed() ^ (tag * 0x9E3779B9u); }
@@ -348,7 +349,7 @@ CceKernelLaunch idma_kernel(const IdmaBatch& batch) {
 
 // Runs one Program; each status line in launch order, or none after an ADD_FAILURE on the host deadline.
 CceStatuses run_program(IDevice* device, const std::vector<CceKernelLaunch>& launches, const std::string& label) {
-    log_info(tt::LogTest, "MM42 {}", label);
+    log_info(tt::LogTest, "atomics {}", label);
     Program program = CreateProgram();
     CceStatuses statuses = run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
     if (!statuses.has_value()) {
@@ -384,19 +385,16 @@ void expect_codes_done(
     const std::vector<AmoLaunch>& launches,
     const std::string& label) {
     for (size_t index = 0; index < statuses.size(); ++index) {
-        log_info(tt::LogTest, "MM42 {}: hart {} {}", label, launches[index].hart, status_detail(statuses[index]));
+        log_info(tt::LogTest, "atomics {}: hart {} {}", label, launches[index].hart, status_detail(statuses[index]));
         EXPECT_EQ(statuses[index][abi::kStatusCode], abi::kCodeDone)
             << label << ": CCE" << launches[index].cce_index << " hart " << launches[index].hart << " "
             << status_detail(statuses[index]);
     }
 }
 
-// L1 accumulate arithmetic, ported from the cce-dv reference the emulator test checks against
-// (software/lib/src/cce_dv.cpp at 92fa786a5489: signed_mag_add_int8 :491-545, signed_mag_add_int32 :547-596,
-// signed_mag_add_uint8 :598-614, signed_mag_add_uint32 :616-633, AtomicAddIt :635-684; source first, then the old
-// destination, as emu_l1_atomic.cpp:131-136). The signed formats are sign-magnitude. With saturation enabled, an
-// operand at the format's maximum (0x7F/0xFF, 0x7FFFFFFF/0xFFFFFFFF) is the result; the magnitude is clamped either
-// way.
+// L1 accumulate arithmetic as the emulator's model computes it: source first, then the old destination. The signed
+// formats are sign-magnitude. With saturation enabled, an operand at the format's maximum (0x7F/0xFF,
+// 0x7FFFFFFF/0xFFFFFFFF) is the result; the magnitude is clamped either way.
 uint32_t sign_magnitude_add(uint32_t a, uint32_t b, bool disable_saturation, uint32_t bits) {
     const uint32_t sign_mask = 1u << (bits - 1);
     const uint32_t magnitude_mask = sign_mask - 1;
@@ -636,7 +634,7 @@ TEST_P(MimirAtomicProbe, TwoHartAmo) {
         kCount,
         kValue,
         seed);
-    log_info(tt::LogTest, "MM42 {}", label);
+    log_info(tt::LogTest, "atomics {}", label);
     Program program = CreateProgram();
     const CceStatuses statuses = run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
     ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
@@ -645,7 +643,7 @@ TEST_P(MimirAtomicProbe, TwoHartAmo) {
     uint32_t lrsc_return_sum = 0;
     for (uint32_t hart = 0; hart < kNumHarts; ++hart) {
         const std::vector<uint32_t>& status = (*statuses)[hart];
-        log_info(tt::LogTest, "MM42 {}: hart {} {}", label, hart, status_detail(status));
+        log_info(tt::LogTest, "atomics {}: hart {} {}", label, hart, status_detail(status));
         RecordProperty(fmt::format("hart{}_status", hart), status_detail(status));
         EXPECT_EQ(status[abi::kStatusCode], abi::kCodeDone)
             << label << ": hart " << hart << " " << status_detail(status);
@@ -668,7 +666,8 @@ TEST_P(MimirAtomicProbe, TwoHartAmo) {
         << label << ": host view of the LR/SC word after the flush";
 }
 
-INSTANTIATE_TEST_SUITE_P(MM42, MimirAtomicProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    CceAtomics, MimirAtomicProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 struct SweepPoint {
     uint32_t value = 0;
@@ -806,7 +805,7 @@ void run_sweep_leg(IDevice* device, uint32_t cce_index, const SweepLeg& leg, uin
         : interleaved == 0                         ? ": no overlap seen, contention not exercised"
                                                    : ": participants overlapped");
     record_leg(leg.name, "contention", contention);
-    log_info(tt::LogTest, "MM42 {}: {}", label, contention);
+    log_info(tt::LogTest, "atomics {}: {}", label, contention);
     EXPECT_TRUE(compare_words(
         label + " totals (lost or duplicated update) and untouched words",
         expected_region,
@@ -824,8 +823,8 @@ TEST_P(MimirAtomicLocal, OpMatrix) {
         "unsupported",
         "sub-word AMO (amo*.b/.h, Zabha) and amocas.w/.d/.q (Zacas): not in the toolchain (__riscv_zabha / "
         "__riscv_zacas undefined), not executed; partial write: the only CCE partial-write store is the uncached "
-        "partial store, a MIM-560 / GRENSV-1699 class, not executed; AMO on the uncached alias or above 4 MiB: "
-        "illegal, not executed; misaligned AMO: not executed");
+        "partial store, which a concurrent ITN write to the same TL1 can corrupt, not executed; AMO on the uncached "
+        "alias or above 4 MiB: illegal, not executed; misaligned AMO: not executed");
 
     struct Entry {
         uint32_t op = 0;
@@ -1069,7 +1068,7 @@ TEST_P(MimirAtomicLocal, Ordering) {
             consumer[abi::kStatusObservedFirst],
             consumer[abi::kStatusObservedSecond]);
         record_leg(leg_name, "result", result);
-        log_info(tt::LogTest, "MM42 {}: {}", label, result);
+        log_info(tt::LogTest, "atomics {}: {}", label, result);
         if (leg == abi::kLegFlushRelease) {
             EXPECT_EQ(consumer[abi::kStatusMismatches], 0u) << label << ": " << result;
         }
@@ -1163,7 +1162,7 @@ TEST_P(MimirAtomicLocal, CleanDirtyLine) {
             control == old_lines[line_words] ? "still cached: the hart held its lines across launches"
                                              : "not the warm value: the cache did not hold its lines, inconclusive");
         record_leg(leg_name, "result", result);
-        log_info(tt::LogTest, "MM42 {}: {}", label, result);
+        log_info(tt::LogTest, "atomics {}: {}", label, result);
         EXPECT_EQ(status[abi::kStatusObservedFirst], new_lines[0]) << label << ": TL1 before the AMO";
         EXPECT_EQ(control, old_lines[line_words]) << label << ": the hart did not hold its lines across launches";
         if (invalidates) {
@@ -1185,7 +1184,7 @@ TEST_P(MimirAtomicLocal, CleanDirtyLine) {
 
 // CleanDirtyLine's snoop-enabled leg: the sibling CCE's iDMA (snoop bit set) writes the line while this hart holds it
 // cached, between launches; the AMO then runs with no invalidate. Asserts the fresh value: the iDMA snoop tag applies
-// to writes from a sibling CCE into this CCE's TL1 (GRENSV-3774, GRENSV-1577); own-CCE iDMA writes into own TL1 are
+// to writes from a sibling CCE into this CCE's TL1; own-CCE iDMA writes into own TL1 are
 // never snooped. Own hang-prone row (iDMA snoop bit).
 TEST_P(MimirAtomicLocal, CleanDirtyLineSnoopedWrite) {
     constexpr uint32_t kValue = 5;
@@ -1242,11 +1241,10 @@ TEST_P(MimirAtomicLocal, CleanDirtyLineSnoopedWrite) {
                                    : "neither",
         control_held ? "still cached, so a fresh value means the snoop refreshed the line" : "not held, inconclusive");
     RecordProperty("result", result);
-    log_info(tt::LogTest, "MM42 {}: {}", label, result);
+    log_info(tt::LogTest, "atomics {}: {}", label, result);
     EXPECT_EQ(status[abi::kStatusObservedFirst], new_line[0]) << label << ": the iDMA write did not land in TL1";
-    EXPECT_EQ(returned, new_line[0])
-        << label << ": iDMA snoop packet tag not honoured for a sibling-CCE write (GRENSV-3774, GRENSV-1577); "
-        << "seen on the mimir_2x_package emulator 2026-10-22. " << result;
+    EXPECT_EQ(returned, new_line[0]) << label << ": iDMA snoop packet tag not honoured for a sibling-CCE write; "
+                                     << "seen on the mimir_2x_package emulator 2026-10-22. " << result;
 }
 
 // The model of kModeStorm / kModeSoak: replays every participant's draws over the initial region. Swap slots keep
@@ -1418,7 +1416,7 @@ void run_storm_leg(
         : interleaved == 0 ? ": no overlap seen, contention not exercised"
                            : ": participants overlapped");
     record_leg(leg_name, "contention", contention);
-    log_info(tt::LogTest, "MM42 {}: {}", label, contention);
+    log_info(tt::LogTest, "atomics {}: {}", label, contention);
     if (soak) {
         EXPECT_TRUE(std::all_of(
             barrier_counts.begin(),
@@ -1531,11 +1529,11 @@ TEST_P(MimirAtomicLocal, Soak) {
 
 class MimirAtomicItnControl : public MimirAtomicCceTest {};
 
-// Tier A's Mimir0.CCE0 -> Mimir0.CCE1 control, on every CCE as the receiver with its sibling as the writer: the writer
+// Plain-write control for the hart-AMO cases, on every CCE as the receiver with its sibling as the writer: the writer
 // hart stores a word into the receiver's TL1 over the ITN (plain SPA store), then a flag. The receiver holds the line
 // cached, waits for the flag with uncached loads only, then L2 INVALIDATE64 and cdiscard, then amoadd.w, so no AMO
-// runs while the ITN write may be in flight (MIM-560). The AMO must return the written word.
-TEST_P(MimirAtomicItnControl, Cce0ToCce1PlainWrite) {
+// runs while the ITN write may be in flight. The AMO must return the written word.
+TEST_P(MimirAtomicItnControl, SiblingWriteThenAmo) {
     constexpr uint32_t kValue = 7;
     const uint32_t receiver_cce = GetParam();
     const uint32_t writer_cce = sibling_cce(receiver_cce);
@@ -1581,7 +1579,7 @@ TEST_P(MimirAtomicItnControl, Cce0ToCce1PlainWrite) {
         : cached_after_flag == written   ? "fresh: snooped, or the line was evicted"
                                          : "neither");
     RecordProperty("snoop", snoop);
-    log_info(tt::LogTest, "MM42 {}: {}", label, snoop);
+    log_info(tt::LogTest, "atomics {}: {}", label, snoop);
     EXPECT_EQ(receiver[abi::kStatusObservedFirst], old_line[0]) << label << ": cached read before the write";
     EXPECT_EQ(receiver[abi::kStatusReturnedLo], written) << label << ": the AMO did not see the ITN write";
     std::vector<uint32_t> expected = old_line;
@@ -1590,9 +1588,10 @@ TEST_P(MimirAtomicItnControl, Cce0ToCce1PlainWrite) {
         compare_words(label + " line", expected, read_cce_tl1(device, receiver_cce, layout.target, abi::kLineBytes)));
 }
 
-INSTANTIATE_TEST_SUITE_P(MM42, MimirAtomicLocal, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 INSTANTIATE_TEST_SUITE_P(
-    MM42, MimirAtomicItnControl, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+    CceAtomics, MimirAtomicLocal, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    CceAtomics, MimirAtomicItnControl, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 std::string format_name(uint32_t format) {
     switch (format) {
@@ -1647,11 +1646,11 @@ std::string classify_accumulate(
 class MimirAccumProbe : public MimirAtomicCceTest {};
 
 // One 64 B accumulate per (format, operation) from hart 0, on full-range seeded data. Op 0x9 with INT32, UINT32, INT8
-// and UINT8 (both saturation settings) is checked against the model (the emulator reference runs INT32, INT8 and UINT8;
-// UINT32 is commented out there and the Quasar register docs call it unsupported); INT32_COMPL, FP32, FP16_A and
-// FP16_B with op 0x9, and INT32 with every other operation, are recorded by what the destination held. The first point,
-// INT32 op 0x9, also records whether an accumulate acks at all on BE5. Stops at the first point that did not ack
-// (MIM-601). Records only, except that every modeled INT32, INT8 and UINT8 add point must land and match the model.
+// and UINT8 (both saturation settings) is checked against the model (the emulator's model covers INT32, INT8 and UINT8,
+// not UINT32); INT32_COMPL, FP32, FP16_A and FP16_B with op 0x9, and INT32 with every other operation, are recorded by
+// what the destination held. The first point, INT32 op 0x9, also records whether an accumulate acks at all on BE5.
+// Stops at the first point that did not ack. Records only, except that every modeled INT32, INT8 and UINT8 add point
+// must land and match the model.
 // Own hang-prone row: an unsupported (format, operation) may never ack.
 TEST_P(MimirAccumProbe, FmtOpMatrix) {
     const uint32_t cce_index = GetParam();
@@ -1713,7 +1712,7 @@ TEST_P(MimirAccumProbe, FmtOpMatrix) {
         const std::string result =
             fmt::format("{}{}; {}", modeled ? "" : "no model: ", classification, idma_status_detail(status));
         RecordProperty(point_name, result);
-        log_info(tt::LogTest, "MM42 {}: {}", label, result);
+        log_info(tt::LogTest, "atomics {}: {}", label, result);
         if (index == 0) {
             RecordProperty(
                 "accumulate_acks_on_be5", (status[idma_abi::kStatusFlags] & idma_abi::kFlagAcked) != 0 ? "yes" : "no");
@@ -1744,7 +1743,8 @@ TEST_P(MimirAccumProbe, FmtOpMatrix) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM42, MimirAccumProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    CceAtomics, MimirAccumProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 class MimirAtomicIdmaAccum : public MimirAtomicCceTest {};
 
@@ -1761,7 +1761,7 @@ bool run_accumulate(IDevice* device, const std::vector<IdmaBatch>& batches, cons
     for (size_t index = 0; index < batches.size(); ++index) {
         const std::vector<uint32_t>& status = (*statuses)[index];
         const uint32_t code = status[idma_abi::kStatusCode];
-        log_info(tt::LogTest, "MM42 {}: hart {} {}", label, batches[index].hart, idma_status_detail(status));
+        log_info(tt::LogTest, "atomics {}: hart {} {}", label, batches[index].hart, idma_status_detail(status));
         record_leg(fmt::format("hart{}", batches[index].hart), "status", idma_status_detail(status));
         EXPECT_EQ(code, idma_abi::kCodeLanded)
             << label << ": hart " << batches[index].hart << " " << idma_status_detail(status) << idma_code_note(code);
@@ -1795,7 +1795,7 @@ TEST_P(MimirAtomicIdmaAccum, SingleHart) {
 }
 
 // Every hart accumulates four 256 B blocks onto one shared destination. Each hart's data poll waits for the sum of
-// every hart's contribution, so no hart stores its status while another's accumulate may be in flight (MIM-560).
+// every hart's contribution, so no hart stores its status while another's accumulate may be in flight.
 TEST_P(MimirAtomicIdmaAccum, AllHartsShared) {
     const uint32_t cce_index = GetParam();
     IDevice* device = open_device();
@@ -1838,7 +1838,7 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsShared) {
 
 // Every hart accumulates four 256 B blocks onto its own destination block; the blocks sit back to back from hart 0's
 // destination. Every hart polls the whole region for every hart's result (kArgPollRegion*) before its status store, so
-// no status store overlaps another hart's accumulate (MIM-560).
+// no status store overlaps another hart's accumulate.
 TEST_P(MimirAtomicIdmaAccum, AllHartsDisjoint) {
     constexpr uint32_t kBlockBytes = 256;
     const uint32_t cce_index = GetParam();
@@ -1885,8 +1885,8 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsDisjoint) {
     expect_accumulate_destination(device, region, expected, 1, label);
 }
 
-// Bursts of 1, 8 and 64 back-to-back 64 B accumulates onto one line, on command buffer 0 and 1. The VC stays BE5
-// (MIM-407: own TL1 to own TL1).
+// Bursts of 1, 8 and 64 back-to-back 64 B accumulates onto one line, on command buffer 0 and 1. The VC stays BE5 (own
+// TL1 to own TL1).
 TEST_P(MimirAtomicIdmaAccum, BackToBack) {
     const uint32_t cce_index = GetParam();
     IDevice* device = open_device();
@@ -1949,7 +1949,7 @@ TEST_P(MimirAtomicIdmaAccum, MaxOutstanding) {
     const uint32_t code = status[idma_abi::kStatusCode];
     RecordProperty("pending_high_water", static_cast<int>(status[idma_abi::kStatusPendingHighWater]));
     RecordProperty("vc_space_cycles", static_cast<int>(status[idma_abi::kStatusVcSpaceCycles]));
-    log_info(tt::LogTest, "MM42 {}: {}", label, idma_status_detail(status));
+    log_info(tt::LogTest, "atomics {}: {}", label, idma_status_detail(status));
     EXPECT_EQ(code, idma_abi::kCodeLanded) << label << ": " << idma_status_detail(status) << idma_code_note(code);
     expect_accumulate_destination(device, batch, expected, 1, label);
 }
@@ -1957,7 +1957,7 @@ TEST_P(MimirAtomicIdmaAccum, MaxOutstanding) {
 // AMO, then accumulate, then AMO on the same word, each a separate launch so nothing overlaps: amoadd.w (then a flush),
 // a 64 B INT32 accumulate onto the line, then L2 INVALIDATE64, cdiscard and amoadd.w. The combined result must hold
 // every step. Values stay positive and small, so two's-complement and sign-magnitude adds agree.
-TEST_P(MimirAtomicIdmaAccum, MixedPathControl) {
+TEST_P(MimirAtomicIdmaAccum, SequentialAmoAccumulateAmo) {
     constexpr uint32_t kFirstValue = 3;
     constexpr uint32_t kSecondValue = 11;
     const uint32_t cce_index = GetParam();
@@ -1967,7 +1967,7 @@ TEST_P(MimirAtomicIdmaAccum, MixedPathControl) {
     const uint32_t seed = leg_seed(1);
     const std::vector<uint32_t> initial = seeded_words(2 * line_words, seed, kAccumulateValueMask);
     write_cce_tl1(device, cce_index, layout.target, initial);
-    const std::string label = fmt::format("MixedPathControl on CCE{}, seed 0x{:08x}", cce_index, seed);
+    const std::string label = fmt::format("SequentialAmoAccumulateAmo on CCE{}, seed 0x{:08x}", cce_index, seed);
 
     const std::vector<uint32_t> first =
         run_line_state(device, cce_index, abi::kLegClean, kFirstValue, seed, label + " first AMO");
@@ -2000,6 +2000,6 @@ TEST_P(MimirAtomicIdmaAccum, MixedPathControl) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    MM42, MimirAtomicIdmaAccum, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+    CceAtomics, MimirAtomicIdmaAccum, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::atomics

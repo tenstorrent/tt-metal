@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// MM-8 quasar_addrgen / quasar_im2col port: address generator 0 on a CCE runs each upstream example pattern and pops
+// Port of quasar_addrgen / quasar_im2col: address generator 0 on a CCE runs each upstream example pattern and pops
 // its addresses into own TL1; the host compares them with the hardware loop of addrgen_api.hpp. Upstream only prints
 // the addresses. Interleaved_Banking is not ported (it needs the NoC bank table).
 
@@ -126,7 +126,7 @@ void run_case(const AddrgenCase& addrgen_case) {
     args[abi::kArgNumAddresses] = addrgen_case.num_addresses;
     const std::string label =
         fmt::format("{} on CCE{} hart {} ({} addresses)", addrgen_case.name, kCce, kHart, addrgen_case.num_addresses);
-    log_info(tt::LogTest, "MM8 addrgen {}", label);
+    log_info(tt::LogTest, "addrgen {}", label);
 
     const CceKernelLaunch launch{
         .cce_index = kCce,
@@ -163,7 +163,7 @@ void run_case(const AddrgenCase& addrgen_case) {
     }
     log_info(
         tt::LogTest,
-        "MM8 addrgen {}: {} of {} address pairs match the loop model in {} cycles{}{}",
+        "addrgen {}: {} of {} address pairs match the loop model in {} cycles{}{}",
         label,
         addrgen_case.num_addresses - mismatches,
         addrgen_case.num_addresses,
@@ -183,7 +183,7 @@ TEST_P(MimirDmAddrgen, Pattern) {
 
 // The upstream QuasarAddrgenOps cases, Interleaved_Banking excepted, then the upstream QuasarIm2ColOps cases.
 INSTANTIATE_TEST_SUITE_P(
-    MM8,
+    DmSuitePort,
     MimirDmAddrgen,
     ::testing::Values(
         AddrgenCase{"Strided1D_SrcOnly", abi::kPattern1d, true, false, 10},

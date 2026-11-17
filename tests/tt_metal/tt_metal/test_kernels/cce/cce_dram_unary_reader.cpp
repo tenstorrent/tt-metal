@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// dram_unary reader (MM-8 port): GDDR -> TL1 staging ring with SPA loads, handing each chunk to the writer hart on the
-// same CCE through the filled semaphore. Staging data, semaphores and the status line go through the uncached alias.
-// Before reusing a slot the reader waits for the writer's drained count, then `fence r, w`. After staging a chunk it
-// issues `fence w, w` and the absolute filled store.
+// dram_unary reader (port of data_movement/dram_unary): GDDR -> TL1 staging ring with SPA loads, handing each chunk to
+// the writer hart on the same CCE through the filled semaphore. Staging data, semaphores and the status line go through
+// the uncached alias. Before reusing a slot the reader waits for the writer's drained count, then `fence r, w`. After
+// staging a chunk it issues `fence w, w` and the absolute filled store.
 
 #include "cce_dram_unary_abi.h"
 #include "cce_dram_unary_common.h"

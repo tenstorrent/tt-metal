@@ -4,8 +4,9 @@
 
 // RISC-V AMOs (Zaamo) and LR/SC (Zalrsc) on cached words of the hart's own TL1. Flags and the status line go through
 // the uncached alias, except kModeOrdering's flag and ack words, which are cached AMO targets. No iDMA or ITN write
-// targets this TL1 while they are stored (MIM-560). Sub-word AMOs and amocas
-// are not in the toolchain (no Zabha, no Zacas), so no mode issues them.
+// targets this TL1 while they are stored: a hart's uncached store or AMO into TL1 can be corrupted when an iDMA or ITN
+// write to the same TL1 arrives at the same time. Sub-word AMOs and amocas are not in the toolchain (no Zabha, no
+// Zacas), so no mode issues them.
 
 #include "cce_amo_ops_abi.h"
 #include "cce_test_common.h"
@@ -907,7 +908,7 @@ static void run_itn_writer(const Args& args, const WaitDeadline& deadline, Statu
     *data = args.value;
     // SPA accesses are outside the cacheable port and may be I/O, which `fence w, w` does not order.
     asm volatile("fence" ::: "memory");
-    // The data write has landed before the flag lets the receiver run its AMO (MIM-560).
+    // The data write has landed before the flag lets the receiver run its AMO.
     bool is_visible = *data == args.value;
     while (!is_visible && !deadline.expired()) {
         is_visible = *data == args.value;
@@ -928,7 +929,7 @@ static void run_itn_receiver(const Args& args, const WaitDeadline& deadline, Sta
     read_line_cached(line);
     status.words[abi::kStatusObservedFirst] = words[0];
     *own_tl1_words(flag_line(args.flag_offset, 0)) = 1;
-    // Only uncached loads until the writer's flag shows its ITN writes have landed (MIM-560).
+    // Only uncached loads until the writer's flag shows its ITN writes have landed.
     volatile uint32_t* written = own_tl1_words(flag_line(args.flag_offset, 1));
     if (!cce_test::wait_until(deadline, [written] { return *written == 1; })) {
         status.fail(abi::kCodePeerTimeout);

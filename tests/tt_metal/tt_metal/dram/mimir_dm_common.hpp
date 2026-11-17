@@ -39,7 +39,7 @@ inline constexpr uint64_t kPollBudgetCycles = 1ull << 22;
 inline constexpr std::chrono::seconds kPollBudgetHostTime{50};
 inline constexpr std::chrono::milliseconds kRecheckDelay{500};
 inline constexpr const char* kFreshSessionNote =
-    ". The kernel may still be running; start a fresh emulator session before the next run (MIM-601).";
+    ". The kernel may still be running; start a fresh emulator session before the next run.";
 
 // The descriptor this run is configured with, e.g. "mimir_2x_package", with every character that is not a letter or
 // digit replaced by '_'.
@@ -64,7 +64,8 @@ inline void record_descriptor_properties(const metal_SocDescriptor& soc) {
         "topology", fmt::format("{} Mimirs, {} CCEs", topology.num_mimirs, topology.num_cces));
 }
 
-// One plan section 2.3 field of a leg, as the gtest property `<leg>_<field>`.
+// Records one failure-triage field of a leg (source, destination, core, length, alignment, mode, seed, kernel, status
+// or first_mismatch) as the gtest property `<leg>_<field>`.
 inline void record_leg(const std::string& leg, const std::string& field, const std::string& value) {
     ::testing::Test::RecordProperty(leg + "_" + field, value);
 }
@@ -129,7 +130,8 @@ inline std::vector<std::vector<uint32_t>> read_status_lines(
 
 // Poisons the status line of every launch, launches `program`, which already holds their kernels, with
 // launch_on_idle_cces, waits for every status magic, ends the Program and returns each status line in launch order.
-// None when `host_deadline` passed: a kernel may still be running, and nothing else may run in this session (MIM-601).
+// None when `host_deadline` passed: a kernel may still be running, and nothing else may run in this session: resetting
+// a CCE while traffic to it is in flight wedges the path to it until the emulator restarts.
 inline CceStatuses launch_and_wait_for_statuses(
     IDevice* device,
     Program& program,
@@ -196,7 +198,7 @@ inline ::testing::AssertionResult compare_with_recheck(
         const uint32_t reread = read_words(mismatch * sizeof(uint32_t), sizeof(uint32_t)).front();
         log_info(
             tt::LogTest,
-            "MM8 {}: word {} read 0x{:08x}, then 0x{:08x} after {} ms",
+            "{}: word {} read 0x{:08x}, then 0x{:08x} after {} ms",
             label,
             mismatch,
             actual[mismatch],

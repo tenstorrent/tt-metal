@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Scoped-lock cache ops, consumer hart (MM-8 port of the test_scoped_lock_cache CLM rows). It observes the producer
-// hart's NEW stores on the same CCE: in kModeInvalidateOnAcquire through its own cache after acquiring the lock, in
-// kModeFlushOnRelease through the uncached alias, which reads TL1 past every cache. It stores what it read to the
-// result lines through the uncached alias before the status line. The MM41 modes (kModeMultiConsumer, kModeRingWrap,
-// kModeNonSnoopingProducer) are described in cce_scoped_lock_abi.h.
+// Scoped-lock cache ops, consumer hart (port of upstream test_scoped_lock_cache.cpp's CLM cases). It observes the
+// producer hart's NEW stores on the same CCE: in kModeInvalidateOnAcquire through its own cache after acquiring the
+// lock, in kModeFlushOnRelease through the uncached alias, which reads TL1 past every cache. It stores what it read to
+// the result lines through the uncached alias before the status line. The multi-consumer, ring and cross-CCE modes
+// (kModeMultiConsumer, kModeRingWrap, kModeNonSnoopingProducer) are described in cce_scoped_lock_abi.h.
 
 #include "cce_scoped_lock_abi.h"
 #include "cce_scoped_lock_common.h"

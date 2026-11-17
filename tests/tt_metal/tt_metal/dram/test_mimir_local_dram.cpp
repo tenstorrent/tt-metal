@@ -34,10 +34,11 @@
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 #include "tt_metal/tt_metal/test_kernels/cce/cce_idma_copy_abi.h"
 
-// The Glean MM-4 plan names existing DRAM tests to port: dram_unary, api/test_dram, api/test_direct, the DRAM
-// loopback and single-DM L1-write tests, and dram_sharded. Their kernels reach DRAM through the NoC dataflow API
-// (Noc::async_read/async_write with AllocatorBank<DRAM>), which no Mimir CCE kernel has run yet. So these tests
-// move the data with the CCE's iDMA, through cce_idma_copy.cpp's kModeTridBatch, until that is proven.
+// These tests cover the local-DRAM intent of upstream dram_unary, api/test_dram, api/test_direct, the DRAM loopback and
+// single-DM L1-write tests, and dram_sharded. Those kernels reach DRAM through the NoC dataflow API (Noc::async_read/
+// async_write with AllocatorBank<DRAM>), which a CCE cannot issue because it has no NoC interface. So these tests move
+// the data with the CCE's iDMA, through cce_idma_copy.cpp's kModeTridBatch; dram_unary also has a SPA-load port in
+// MimirDmDramUnary.
 
 namespace tt::tt_metal::mimir_test::local_dram {
 
@@ -237,7 +238,7 @@ struct HartCopy {
 };
 
 // Every own-TL1 destination of one launch, as back-to-back guarded blocks. Each hart polls the XOR of the whole region
-// before its status store, so no hart stores to this TL1 while another hart's iDMA may still be writing it (MIM-560).
+// before its status store, so no hart stores to this TL1 while another hart's iDMA may still be writing it.
 struct PollRegion {
     uint64_t tl1_offset = 0;
     uint32_t num_bytes = 0;
@@ -257,7 +258,7 @@ uint32_t command_bytes(const HartCopy& copy) { return std::min(copy.num_bytes, a
 
 bool is_host_verified(const HartCopy& copy) { return copy.reads_gddr || copy.host_verified; }
 
-// MIM-407: a copy from own TL1 uses the GDDR tile's backend (GDDR0 is the low 4 GiB of a Mimir, GDDR1 the high), any
+// A copy from own TL1 uses the GDDR tile's backend (GDDR0 is the low 4 GiB of a Mimir, GDDR1 the high), any
 // other copy kBackendFromRemote.
 uint32_t backend_for(const HartCopy& copy) {
     if (copy.reads_gddr) {
@@ -306,7 +307,7 @@ CceStatuses run_hart_copies(
     return run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
 }
 
-// A timeout code may leave a command in flight, so the next run needs a fresh session (MIM-601).
+// A timeout code may leave a command in flight, so the next run needs a fresh session.
 std::string code_note(uint32_t code) { return idma_code_leaves_command_in_flight(code) ? kFreshSessionNote : ""; }
 
 // Every copy of a launch ended with its success code after issuing every command. A pending high water of 0 is logged,
@@ -330,7 +331,7 @@ std::string code_note(uint32_t code) { return idma_code_leaves_command_in_flight
                 code_note(status[abi::kStatusCode]));
         }
         if (status[abi::kStatusPendingHighWater] == 0) {
-            log_info(tt::LogTest, "MM4 {} hart {}: pending high water 0", label, copy.hart);
+            log_info(tt::LogTest, "Local DRAM {} hart {}: pending high water 0", label, copy.hart);
         }
     }
     if (failures.empty()) {
@@ -878,13 +879,13 @@ TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM4, MimirLocalDram, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(LocalDram, MimirLocalDram, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 namespace {
 
 using namespace mimir_contract;
 
-// MIM-407 request VC of an own-TL1 -> GDDR iDMA copy: the destination tile's column.
+// iDMA request VC of an own-TL1 -> GDDR iDMA copy: the destination tile's column.
 uint32_t idma_gddr_write_backend(const GddrTarget& target, uint32_t dram_offset) {
     const uint64_t chiplet_offset = static_cast<uint64_t>(target.slot_base) * target.slot_stride + dram_offset;
     return mimir_test::gddr_backend_for(chiplet_offset);
@@ -1093,8 +1094,7 @@ std::vector<std::vector<uint32_t>> run_idma_staging_copies(
     }
     return ::testing::AssertionFailure()
            << failures
-           << "A timeout code may leave a command in flight; start a fresh emulator session before the next run "
-              "(MIM-601).";
+           << "A timeout code may leave a command in flight; start a fresh emulator session before the next run.";
 }
 
 // GDDR -> own TL1 staging -> GDDR on the local Mimir by iDMA, one slot at a time, `pages_per_copy` DRAM alignments per

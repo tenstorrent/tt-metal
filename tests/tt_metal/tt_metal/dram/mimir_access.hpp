@@ -49,8 +49,9 @@ inline uint32_t cce_hart_count() {
     return MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::DRAM);
 }
 
-// TL1 test layout. Offsets are CCE TL1 offsets starting at the DRAM core type's HAL L1 UNRESERVED; MM3's echo slots
-// (0x200 B) sit in the first 0x1000 bytes. The host adds the HAL L1 NoC offset, kernels add MEM_L1_UNCACHED_BASE.
+// TL1 test layout. Offsets are CCE TL1 offsets starting at the DRAM core type's HAL L1 UNRESERVED;
+// the cce_args_echo slots of the MimirKernelLoad tests (0x200 B) sit in the first 0x1000 bytes. The host adds the HAL
+// L1 NoC offset, kernels add MEM_L1_UNCACHED_BASE.
 inline constexpr uint64_t kTl1EchoSlotBytes = 64;
 inline constexpr uint64_t kTl1HartWindowOffset = 0x1000;
 inline constexpr uint64_t kTl1HartWindowBytes = 0x40000;
@@ -186,8 +187,8 @@ inline MimirCceL1AddressInfo mimir_cce_l1_address(
     return info;
 }
 
-// Which part of CCE TL1 a host access may touch. MM-0/1 and firmware-state reads: WholeTl1 (reserved regions allowed).
-// Tests that run kernels (MM-3 onward): Unreserved.
+// Which part of CCE TL1 a host access may touch. Host-only tests (MimirHost*) and firmware-state reads: WholeTl1
+// (reserved regions allowed). Tests that run kernels: Unreserved.
 enum class Tl1Range { WholeTl1, Unreserved };
 
 inline void check_cce_tl1_access(uint64_t tl1_offset, uint64_t size_bytes, Tl1Range range) {

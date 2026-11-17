@@ -4,11 +4,12 @@
 
 // iDMA copies with every poll bounded. kModeIdmaStrided issues one command per element from address generator 0
 // through command buffer 0; completion is a bounded ack poll on trid 0, then a bounded poll of the destination data.
-// The command-buffer ack follows the write response; MIM-628 (done fires on accept) covers only the iDMA sideband
-// done_id, which no mode here uses. The status line is written only after the data poll (MIM-560), through the
-// uncached alias. The MM4x modes (kModeTridBatch, kModeAccumulate, kModeTridTable, kModeTridStream) set the trid per
-// command and wait on each trid's pending count, all under one budget. kModeTridBatch and kModeAccumulate run on
-// command buffer 0 or 1; the other modes on command buffer 0.
+// The command-buffer ack follows the write response; the iDMA sideband done_id, which advances when a descriptor is
+// accepted rather than when it completes, is not used by any mode here. The status line is written only after the data
+// poll, through the uncached alias: a hart's uncached store into TL1 can be corrupted when an iDMA or ITN write to it
+// arrives at the same time. The per-trid modes (kModeTridBatch and later) set the trid per command and wait on each
+// trid's pending count, all under one budget; kModeTridScopeObserver only reads one trid's pending count.
+// kModeTridBatch and kModeAccumulate run on command buffer 0 or 1; the other modes on command buffer 0.
 
 #include "cce_idma_blocking_copy.h"
 #include "cce_idma_copy_abi.h"
@@ -472,7 +473,7 @@ struct TableCommand {
 
 // Reads entry `command` of the kModeTridTable table. Returns false when an operand kind is unknown, the VC, trid or
 // length is out of range, or a host-verified entry writes the kernel's own TL1: it gets no data poll, so the status
-// store could overlap its landing (MIM-560).
+// store could overlap its landing.
 static bool read_table_command(uint32_t table_offset, uint32_t command, TableCommand& table_command) {
     const volatile uint32_t* entry =
         cce_test::own_tl1_words(table_offset + command * abi::kTableWords * sizeof(uint32_t));
@@ -687,8 +688,8 @@ static Report run_scope_observer(uint32_t trid) {
 
 static bool line_offset_valid(uint32_t offset) { return offset != 0 && offset % abi::kLineBytes == 0; }
 
-// The MM4x modes. The status line and trace are written after the last data poll (MIM-560).
-static void run_mm4x_mode(uint32_t mode, uint32_t status_offset, uint64_t budget_cycles) {
+// The per-trid modes (kModeTridBatch and later). The status line and trace are written after the last data poll.
+static void run_trid_mode(uint32_t mode, uint32_t status_offset, uint64_t budget_cycles) {
     const uint32_t destination_kind = get_arg_val<uint32_t>(abi::kArgDstKind);
     const uint32_t peer_flag_offset = get_arg_val<uint32_t>(abi::kArgPeerFlagOffset);
     const uint32_t trace_offset = get_arg_val<uint32_t>(abi::kArgTraceOffset);
@@ -795,7 +796,7 @@ void kernel_main() {
     const uint32_t num_elements = get_arg_val<uint32_t>(abi::kArgNumElements);
     const uint32_t source_stride_bytes = get_arg_val<uint32_t>(abi::kArgSourceStrideBytes);
     if (mode >= abi::kModeTridBatch) {
-        run_mm4x_mode(mode, status_offset, budget_cycles);
+        run_trid_mode(mode, status_offset, budget_cycles);
         return;
     }
 

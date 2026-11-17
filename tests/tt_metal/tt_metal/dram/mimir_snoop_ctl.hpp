@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Test-side snoop controls for MM41 (plan runtime edit R2). Both write CCE registers through the Mimir's SMC with
+// Test-side snoop controls for the cache tests: ScopedSramRemapSnoop sets cmd_snoop on a CCE's SRAM remap entry, and
+// ScopedSnoopMasterConfig writes NOC_SNOOP_TL_MASTER_CFG. Both write CCE registers through the Mimir's SMC with
 // tt::Cluster register accesses and restore the value they found when the guard ends. Neither register is set by
 // UMD's emulator bring-up beyond its defaults, and nothing shows that uncore reset restores them, so every write is
 // undone by its guard.

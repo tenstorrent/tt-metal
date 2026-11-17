@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared by the MM-7 Tensor Prefetcher tests on Mimir CCEs.
+// Shared by the Tensor Prefetcher tests (test_mimir_prefetcher.cpp) and test_mimir_trid.cpp (CceReceiverProgram).
 
 #pragma once
 

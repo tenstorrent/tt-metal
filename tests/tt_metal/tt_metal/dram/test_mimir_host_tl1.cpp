@@ -142,7 +142,7 @@ const HalDramL1Region& hal_region_of(const std::vector<HalDramL1Region>& regions
 
 class MimirHostTl1Cce : public ::testing::TestWithParam<uint32_t> {};
 
-INSTANTIATE_TEST_SUITE_P(MM1, MimirHostTl1Cce, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(HostTl1, MimirHostTl1Cce, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 struct BoundaryWindow {
     uint32_t cce_index;

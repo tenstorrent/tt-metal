@@ -398,7 +398,8 @@ TEST(MimirFwLoadNegative, SkipLoadNeverDone) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM2, MimirFwLaunch, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    FirmwareLoad, MimirFwLaunch, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 namespace {
 

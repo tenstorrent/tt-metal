@@ -20,62 +20,58 @@ inline constexpr uint32_t kMaxParticipants = 8;
 // kArgParticipant (0 .. kArgNumParticipants - 1). kArgFlagOffset (64 B aligned) holds 2 * kMaxParticipants flag lines
 // the host zeroes: ready flags first, then done flags, one line per participant. Every region a mode touches (target
 // extent, flags, results, table) must lie in the test TL1 area below the 4 MiB cacheable port, else kCodeBadArgs.
-// kArgPollBudget* is rdcycle cycles per bounded wait and must be nonzero.
-// MM42 args (from kArgResultOffset). kArgResultOffset (64 B aligned, own TL1) receives per-participant results the
-// status line has no room for; kArgTableOffset (64 B aligned, own TL1) is a host-written table of kArgNumPoints
-// entries. kArgOperation is a kOp* code, kArgStrideBytes the distance between participants' words, kArgLeg selects a
-// leg of a mode, kArgSeed seeds kModeStorm and kModeSoak, kArgPeerCce names the other CCE of kModeItnWriter.
-// Modes from kModeOpMatrix share one budget, started at kernel entry, across every wait and loop of the launch.
+// kArgPollBudget* is rdcycle cycles per bounded wait and must be nonzero. Args from kArgResultOffset, read by every
+// mode (those a mode does not use are ignored). kArgResultOffset (64 B aligned, own TL1) receives per-participant
+// results the status line has no room for; kArgTableOffset (64 B aligned, own TL1) is a host-written table of
+// kArgNumPoints entries. kArgOperation is a kOp* code, kArgStrideBytes the distance between participants' words,
+// kArgLeg selects a leg of a mode, kArgSeed seeds kModeStorm and kModeSoak, kArgPeerCce names the other CCE of
+// kModeItnWriter. Modes from kModeOpMatrix share one budget, started at kernel entry, across every wait and loop of the
+// launch.
 inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgPollBudgetLo = 2, kArgPollBudgetHi = 3,
                           kArgTargetOffset = 4, kArgCount = 5, kArgValue = 6, kArgFlagOffset = 7,
                           kArgNumParticipants = 8, kArgParticipant = 9, kArgResultOffset = 10, kArgTableOffset = 11,
                           kArgNumPoints = 12, kArgOperation = 13, kArgStrideBytes = 14, kArgLeg = 15, kArgSeed = 16,
                           kArgPeerCce = 17, kNumArgs = 18;
 
-// kModeTwoHartIncrement (MM42 TwoHartAmo probe): every participant discards both lines from its L1 D$ (participant 0
-// also from L2), sets its ready flag and waits for all ready flags, then does kArgCount amoadd.w of kArgValue on the
-// word at kArgTargetOffset and kArgCount LR/SC increments of kArgValue on the word one line later (each bounded by
-// kMaxScRetries attempts), then sets its done flag. Participant 0 waits for every done flag, reads both words with
-// amoadd.w of 0 (kStatusAmoFinal, kStatusLrScFinal), then flushes L1 D$ and the two lines from L2 so the host sees
-// them. kStatusAmoReturnSum / kStatusLrScReturnSum are the sums of the values each
-// operation returned (the word before that hart's update).
-// kModeOpMatrix (one participant): entry i of the kOpEntryWords-word table runs operation kOpEntryOperation on the
-// doubleword (or word) at kArgTargetOffset + i * kLineBytes with kOpEntryOperand; the CAS operations compare with
-// kOpEntryCompare. The kernel writes the value the operation returned and its LR/SC attempts back into the entry, then
-// flushes L1 D$ and the target lines from L2.
-// kModeSweep (Hotspot, Distributed, Wrap, LrScCas): table entry p is {value, count}. For each p, every participant
-// waits at a barrier, then does count increments of value with kArgOperation (a kOp*Add* code) on the word at
-// kArgTargetOffset + p * kSweepPointBytes + kArgParticipant * kArgStrideBytes (stride 0: one shared word). Participant
-// p's result for point q is kSweepResultWords words at kArgResultOffset + (participant * kArgNumPoints + q) *
-// kSweepResultBytes. Every participant flushes its L1 D$ before its done flag; participant 0 waits for every done
-// flag and flushes the points from L2.
-// kModeLineState (CleanDirtyLine, MixedPathControl): one participant runs leg kArgLeg (kLeg*) on the line at
-// kArgTargetOffset; the control line is the next line. kStatusReturnedLo is what amoadd.w of kArgValue on word 0
-// returned, kStatusObservedFirst word 0 read through the uncached alias before the AMO, kStatusObservedSecond the
-// control line's word 0 read through the cache.
-// kModeOrdering (two participants): kArgCount rounds of message passing. Participant 0 stores round data through the
-// cache to the line at kArgTargetOffset, releases flag word kArgTargetOffset + kLineBytes with amoswap.w.rl and waits
-// for the ack word one line later with amoadd.w.aq of 0; participant 1 waits for the flag the same way, discards the
-// data line from its L1 D$, reads it through the cache and counts mismatches (kStatusMismatches,
-// kStatusFirstMismatch, kStatusObservedFirst / Second for the first one), then releases the ack. kLegFlushRelease
-// flushes the data line from L1 D$ before the release; kLegReleaseOnly does not.
+// kModeTwoHartIncrement (MimirAtomicProbe.TwoHartAmo): every participant discards both lines from its L1 D$
+// (participant 0 also from L2), sets its ready flag and waits for all ready flags, then does kArgCount amoadd.w of
+// kArgValue on the word at kArgTargetOffset and kArgCount LR/SC increments of kArgValue on the word one line later
+// (each bounded by kMaxScRetries attempts), then sets its done flag. Participant 0 waits for every done flag, reads
+// both words with amoadd.w of 0 (kStatusAmoFinal, kStatusLrScFinal), then flushes L1 D$ and the two lines from L2 so
+// the host sees them. kStatusAmoReturnSum / kStatusLrScReturnSum are the sums of the values each operation returned
+// (the word before that hart's update). kModeOpMatrix (one participant): entry i of the kOpEntryWords-word table runs
+// operation kOpEntryOperation on the doubleword (or word) at kArgTargetOffset + i * kLineBytes with kOpEntryOperand;
+// the CAS operations compare with kOpEntryCompare. The kernel writes the value the operation returned and its LR/SC
+// attempts back into the entry, then flushes L1 D$ and the target lines from L2. kModeSweep (Hotspot, Distributed,
+// Wrap, LrScCas): table entry p is {value, count}. For each p, every participant waits at a barrier, then does count
+// increments of value with kArgOperation (a kOp*Add* code) on the word at kArgTargetOffset + p * kSweepPointBytes +
+// kArgParticipant * kArgStrideBytes (stride 0: one shared word). Participant p's result for point q is
+// kSweepResultWords words at kArgResultOffset + (participant * kArgNumPoints + q) * kSweepResultBytes. Every
+// participant flushes its L1 D$ before its done flag; participant 0 waits for every done flag and flushes the points
+// from L2. kModeLineState (CleanDirtyLine, SequentialAmoAccumulateAmo): one participant runs leg kArgLeg (kLeg*) on the
+// line at kArgTargetOffset; the control line is the next line. kStatusReturnedLo is what amoadd.w of kArgValue on word
+// 0 returned, kStatusObservedFirst word 0 read through the uncached alias before the AMO, kStatusObservedSecond the
+// control line's word 0 read through the cache. kModeOrdering (two participants): kArgCount rounds of message passing.
+// Participant 0 stores round data through the cache to the line at kArgTargetOffset, releases flag word
+// kArgTargetOffset + kLineBytes with amoswap.w.rl and waits for the ack word one line later with amoadd.w.aq of 0;
+// participant 1 waits for the flag the same way, discards the data line from its L1 D$, reads it through the cache and
+// counts mismatches (kStatusMismatches, kStatusFirstMismatch, kStatusObservedFirst / Second for the first one), then
+// releases the ack. kLegFlushRelease flushes the data line from L1 D$ before the release; kLegReleaseOnly does not.
 // kModeNeighbourWrite: participant 0 does kArgCount amoadd.w of kArgValue on word 0 of the line at kArgTargetOffset
 // while participant p > 0 stores neighbour_word(kArgSeed, p, i) through the cache to word p for i < kArgCount. Every
-// participant flushes its L1 D$ before its done flag; participant 0 waits for every done flag and flushes the line
-// from L2.
-// kModeStorm / kModeSoak: kArgCount operations per participant drawn from storm_draw (below) on kStormClasses lines
+// participant flushes its L1 D$ before its done flag; participant 0 waits for every done flag and flushes the line from
+// L2. kModeStorm / kModeSoak: kArgCount operations per participant drawn from storm_draw (below) on kStormClasses lines
 // (kArgLeg kLegShared: one set at kArgTargetOffset; kLegDisjoint: participant p's set at kArgTargetOffset + p *
 // kStormSetBytes). kModeStorm uses slot 0 of each width; kModeSoak picks the slot, and runs the operations in bursts
 // from soak_burst with a barrier after a burst when soak_barrier says so. Results per participant: kStormResultWords
-// words at kArgResultOffset + participant * kLineBytes. Flushes as kModeSweep.
-// kModeItnWriter (MM42 ItnControl, on the writer CCE): waits for the ready flag line at kArgFlagOffset of CCE
-// kArgPeerCce with SPA loads, stores kArgValue to word 0 at kArgTargetOffset of that CCE, full fence, loads the word
-// back over SPA until it reads kArgValue (kCodeReadBackTimeout if it never does; no flag is stored then), full fence,
-// then stores 1 to the next flag line. kModeItnReceiver (on CCE kArgPeerCce's hart): discards the target line from L1
-// D$ and L2, reads it through the cache (kStatusObservedFirst), sets its ready flag, waits for the writer's flag with
-// uncached loads, reads word 0 through the cache again (kStatusObservedSecond), then L2 INVALIDATE64 and cdiscard on
-// the line, then amoadd.w of kArgValue; kStatusReturnedLo is what it returned. Then it flushes the line from L1 D$ and
-// L2.
+// words at kArgResultOffset + participant * kLineBytes. Flushes as kModeSweep. kModeItnWriter (MimirAtomicItnControl,
+// on the writer CCE): waits for the ready flag line at kArgFlagOffset of CCE kArgPeerCce with SPA loads, stores
+// kArgValue to word 0 at kArgTargetOffset of that CCE, full fence, loads the word back over SPA until it reads
+// kArgValue (kCodeReadBackTimeout if it never does; no flag is stored then), full fence, then stores 1 to the next flag
+// line. kModeItnReceiver (on CCE kArgPeerCce's hart): discards the target line from L1 D$ and L2, reads it through the
+// cache (kStatusObservedFirst), sets its ready flag, waits for the writer's flag with uncached loads, reads word 0
+// through the cache again (kStatusObservedSecond), then L2 INVALIDATE64 and cdiscard on the line, then amoadd.w of
+// kArgValue; kStatusReturnedLo is what it returned. Then it flushes the line from L1 D$ and L2.
 inline constexpr uint32_t kModeTwoHartIncrement = 0, kModeOpMatrix = 1, kModeSweep = 2, kModeLineState = 3,
                           kModeOrdering = 4, kModeNeighbourWrite = 5, kModeStorm = 6, kModeSoak = 7, kModeItnWriter = 8,
                           kModeItnReceiver = 9, kNumModes = 10;
