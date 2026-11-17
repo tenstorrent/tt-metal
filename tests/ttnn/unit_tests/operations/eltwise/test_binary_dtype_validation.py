@@ -250,3 +250,25 @@ def test_binary_rejects_non_default_output_tile_on_cache_hit(device, expect_erro
     ttnn.add(tensor_a, tensor_b, output_tensor=to_device())
     with expect_error(RuntimeError, "supports only 32x32 tiles"):
         ttnn.add(tensor_a, tensor_b, output_tensor=to_device(ttnn.Tile((16, 32))))
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda a, b, **k: ttnn.add(a, b, **k),
+        lambda a, b, **k: ttnn.subtract(a, b, **k),
+        lambda a, b, **k: ttnn.multiply(a, b, **k),
+        lambda a, b, **k: ttnn.maximum(a, b, **k),
+        lambda a, b, **k: ttnn.add(a, 2.0, **k),
+    ],
+    ids=["add", "subtract", "multiply", "maximum", "add_scalar"],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 64, 96), (1, 1, 33, 40)])
+def test_binary_rejects_row_major_output_for_tile_inputs(device, op, shape, expect_error):
+    torch_a = torch.randn(shape, dtype=torch.bfloat16)
+    torch_b = torch.rand(shape, dtype=torch.bfloat16) + 0.5
+    a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(shape, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must match input tensor A layout"):
+        op(a, b, output_tensor=out)
