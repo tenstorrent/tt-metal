@@ -46,6 +46,10 @@ PORT_BATCH_CHUNKS = 2  # chunks per port batch (cb_port_chunks holds 2 batches);
 PORT_BATCH_CHUNKS_MAX = 8  # packet-header pool cap
 INC_EVERY = 8  # fused arrival increment every this many chunks (+ every entry end)  [TRANSPORT]
 OUT_DEPTH_CHUNKS = 2  # cb_out depth in chunks
+# Remote-slice cores compute xg = x * gamma for this many landed chunks before the stats combine (own cores: all of
+# their block). After the stats only out = xg * rstd is left per chunk, so the first stores start right after the
+# combine; a chunk that lands after the combine pays both multiplies on its tail.  [OVERLAP]
+XG_AHEAD_CHUNKS = 0
 # gamma source: True = the hub reads the Wt sticks once per chip and multicasts them into every compute core's
 # stats-scratch tail (op_design.md regime R6); False = every compute core reads its block_w sticks from DRAM. The
 # per-core reads (20 cores per slice on the same 12 pages) took ~4.5 us and held up the stats chain.  [OVERLAP]
@@ -65,8 +69,7 @@ CB_PARTIALS = 3  # G * block_h fp32 col tiles (UnpackToDestFp32)
 CB_XSQ_SUM = 4  # fp32, UnpackToDestFp32
 CB_RSTD = 5
 CB_PARTIAL = 6
-CB_RSTD_FULL = 7
-CB_SCALE = 8
+CB_XG = 8  # x * gamma (fp32), computed before the stats land; out = xg * rstd after
 CB_SCALER = 9
 # ---- port-core CB ----
 CB_PORT_CHUNKS = 0
@@ -272,7 +275,13 @@ def build_geometry(mesh_device, padded_shape, cluster_axis, num_links):
     row_base = [0xFFFFFFFF] + [(y - 1) * gx for y in range(1, gy)]
 
     cap = max(1, max_payload // tile_bytes)
-    chunk_tiles = max(d for d in range(1, cap + 1) if (block_h * block_w) % d == 0 and (last_h * block_w) % d == 0)
+    # a chunk is a whole number of block rows or a run inside one block row: the compute addresses it as one
+    # (rows x cols) window of the block (gamma column offset, rstd row offset)
+    chunk_tiles = max(
+        d
+        for d in range(1, cap + 1)
+        if (block_h * block_w) % d == 0 and (last_h * block_w) % d == 0 and (block_w % d == 0 or d % block_w == 0)
+    )
     geo = Geometry(
         mesh_device=mesh_device,
         G=G,
@@ -498,6 +507,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 INC_EVERY,
                 OUT_DEPTH_CHUNKS,
                 GAMMA_HUB_MCAST,
+                XG_AHEAD_CHUNKS,
                 gamma_page,
             )
             program.semaphores = [
@@ -520,14 +530,14 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
 
             bh, bw = geo.block_h, geo.block_w
             # cb_out's capacity must stay a multiple of its push quantum (chunk) when the gamma side is wider
-            gamma_out_pages = -(-max(bw, OUT_DEPTH_CHUNKS * chunk) // chunk) * chunk
             program.cbs = [
                 ttnn.cb_descriptor_from_sharded_tensor(CB_X_BLOCK, res.landing),
-                cb([CB_GAMMA, CB_OUT], ttnn.bfloat16, gamma_out_pages, comp_crs),  # gamma dead before normalize
+                cb(CB_GAMMA, ttnn.bfloat16, bw, comp_crs),  # held until the last chunk's xg
+                cb(CB_OUT, ttnn.bfloat16, OUT_DEPTH_CHUNKS * chunk, comp_crs),
                 cb(CB_PARTIALS, ttnn.float32, G * bh, comp_crs),
                 cb([CB_XSQ_SUM, CB_RSTD], ttnn.float32, bh, comp_crs),  # xsq popped by the reduce before combine
-                cb([CB_PARTIAL, CB_RSTD_FULL], ttnn.float32, bh, comp_crs),  # partial exported before the stats land
-                cb(CB_SCALE, ttnn.float32, bh * bw, comp_crs),
+                cb(CB_PARTIAL, ttnn.float32, bh, comp_crs),
+                cb(CB_XG, ttnn.float32, bh * bw, comp_crs),  # own cores hold the whole block of xg
                 cb(CB_SCALER, ttnn.bfloat16, 1, comp_crs),
                 cb(CB_PORT_CHUNKS, ttnn.bfloat16, 2 * batch * chunk, port_crs),
             ]
@@ -555,8 +565,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             writer_ct += list(ttnn.TensorAccessorArgs(output).get_compile_time_args())
             compute_common = [p] + geo.row_base
             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
-            compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_RSTD_FULL]
-            compute_ct += [CB_SCALE, CB_SCALER]
+            compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_XG]
+            compute_ct += [CB_SCALER, XG_AHEAD_CHUNKS]
 
             ccfg = ttnn.ComputeConfigDescriptor()
             ccfg.math_fidelity = cfg.math_fidelity
