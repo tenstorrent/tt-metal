@@ -30,7 +30,8 @@ constexpr uint32_t kPrefillL1Budget = 1250 * 1024;  // bytes of circular buffers
 constexpr double kPrefillDecodeCycles = 300.0;      // one weight tile: page copy, decode, pack
 constexpr double kPrefillSumCycles = 150.0;         // one tile of a K split's sums: send, add
 
-// The formats with a decoder of fixed per-tile cost and no codebook lookups (the expanded layouts are not among them).
+// The formats with a decoder of fixed per-tile cost; the codebook formats also in their expanded layouts (whose pages
+// hold the level codes: no lookups), so that both layouts of a weight give the same outputs.
 bool prefill_format_supported(DataType dtype) {
     switch (dtype) {
         case DataType::GGUF_Q8_0:
@@ -49,7 +50,21 @@ bool prefill_format_supported(DataType dtype) {
         case DataType::GGUF_IQ4_XS:
         case DataType::GGUF_Q1_0:
         case DataType::GGUF_Q2_0:
-        case DataType::GGUF_TQ1_0: return true;
+        case DataType::GGUF_TQ1_0:
+        case DataType::GGUF_IQ2_XXS:
+        case DataType::GGUF_IQ2_XS:
+        case DataType::GGUF_IQ2_S:
+        case DataType::GGUF_IQ3_XXS:
+        case DataType::GGUF_IQ3_S:
+        case DataType::GGUF_IQ1_S:
+        case DataType::GGUF_IQ1_M:
+        case DataType::GGUF_IQ2_XXS_EXPANDED:
+        case DataType::GGUF_IQ2_XS_EXPANDED:
+        case DataType::GGUF_IQ2_S_EXPANDED:
+        case DataType::GGUF_IQ3_XXS_EXPANDED:
+        case DataType::GGUF_IQ3_S_EXPANDED:
+        case DataType::GGUF_IQ1_S_EXPANDED:
+        case DataType::GGUF_IQ1_M_EXPANDED: return true;
         default: return false;
     }
 }
@@ -317,8 +332,11 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     TensorAccessorArgs(*input.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 
-    // The reader generates the core's records itself; the prefill formats have no codebook lookups.
+    // The reader generates the core's records itself, and does all of a codebook page's grid lookups: the prefill
+    // writer moves the input and the compute kernel decodes each weight tile once per M chunk.
     std::map<std::string, std::string> reader_defines = lookup_defines(weight);
+    reader_defines["GGUF_READER_PARTS"] = reader_defines["GGUF_LOOKUP_PARTS"];
+    reader_defines["GGUF_WRITER_PARTS"] = reader_defines["GGUF_MATH_PARTS"] = reader_defines["GGUF_UNPACK_PARTS"] = "0";
     reader_defines["GGUF_PREFILL"] = "1";
     shared_variables_t shared;
     for (uint32_t parity = 0; parity < 2; parity++) {
