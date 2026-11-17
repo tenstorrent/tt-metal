@@ -60,13 +60,16 @@ F(bm, bk) = (2*band_stride_px(bm) + band_len_px(bm)) * c_in_p * 2       # slab  
           <= L1_CB_BUDGET_BYTES
 ```
 
-Worked values, Phase 0 INPUTS (bf16, with bias, 1300 KB budget assumed; every core runs one M-block, `bm = 1`):
+Worked values, Phase 0 INPUTS (bf16, with bias; every core runs one M-block, `bm = 1`). Budget on Blackhole p150
+(11x10 grid): `get_max_worker_l1_unreserved_size()` 1530976 B - 128 KB headroom = 1399904 B (1367 KB). Verified
+against `select_blocking` on device (verification_report.md); bf8_b weights shrink every row by the `T_w` terms
+(deep-K bf8_b solves to `bk = 32`, 1072 KB):
 
 | Shape | cores | bk / tensor_kkh_tiles | slab px | weights | total |
 |-------|-------|-----------------------|---------|---------|-------|
 | 16x34x32 -> 32, p0 | 14 | 3 / 3 | 102 | 12 KB | 46 KB |
 | 32x64x128 -> 128, p1 | 64 | 12 / 12 | 102 | 192 KB | 329 KB |
-| 32x64x128 -> 128, p18 d18 (refinement) | 64 | 12 / 12 | 204 | 192 KB | 355 KB |
+| 32x64x128 -> 128, p18 d18 | 64 | 12 / 12 | 204 | 192 KB | 355 KB |
 | 8x16x2048 -> 256, p1 | 4 | 24 / 192 (below tap floor 64: one kh block of weights is 2 x 1.5 MB) | 66 | 768 KB | 1256 KB |
 
 ## Data-movement budget (chosen split: M only, R0)

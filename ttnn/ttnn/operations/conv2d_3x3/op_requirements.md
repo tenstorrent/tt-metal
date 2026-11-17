@@ -1,0 +1,181 @@
+# Operation Requirements: conv2d_3x3
+
+## Definition
+- **Formula**: `out[h_out*W_out + w_out, n] = act( bias[n] + sum_{kh,kw in 0..2, c < C_in} in[h_in*W + w_in, c] * w[n, c, kh, kw] )`, with `h_in = h_out*s + kh*d - p` and `w_in = w_out*s + kw*d - p`. `in = 0` outside `[0,H) x [0,W)`. `act in {identity, relu}`. `H_out = (H + 2p - 2d - 1)//s + 1` (same for W).
+- **PyTorch Reference**: `eval/golden_tests/conv2d_3x3/helpers.py:pytorch_conv2d_3x3`:
+  ```python
+  def pytorch_conv2d_3x3(x, w, *, input_height, input_width, bias=None, padding=0, stride=1, dilation=1, activation=None):
+      H, W, c_in = input_height, input_width, x.shape[-1]
+      xn = x.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
+      out = torch.nn.functional.conv2d(xn, w.float(), None if bias is None else bias.float(),
+                                       stride=stride, padding=padding, dilation=dilation)
+      out = torch.relu(out) if activation == "relu" else out
+      return out.permute(0, 2, 3, 1).reshape(1, 1, -1, out.shape[1]).to(x.dtype)
+  ```
+- **Import Path**: `from ttnn.operations.conv2d_3x3 import conv2d_3x3, prepare_conv2d_weights, prepare_conv2d_bias, default_compute_kernel_config`
+- **Function Signature**:
+  ```python
+  conv2d_3x3(input_tensor: ttnn.Tensor,            # [1, 1, H*W, C_in]
+             weight_tensor: ttnn.Tensor,           # prepare_conv2d_weights output, [1, 1, K_p, C_out] TILE
+             *, input_height: int, input_width: int,
+             bias: ttnn.Tensor | None = None,      # prepare_conv2d_bias output, [1, 1, 1, C_out], dtype = weight dtype
+             padding: int = 0, stride: int = 1, dilation: int = 1,
+             activation: str | None = None,        # None | "relu"
+             compute_kernel_config: ttnn.ComputeConfigDescriptor | None = None) -> ttnn.Tensor
+             # -> [1, 1, H_out*W_out, C_out], TILE, dtype = input dtype
+  prepare_conv2d_weights(torch_weight, *, stride=1, padding=0, dilation=1, input_dtype, input_layout,
+                         weight_dtype, input_memory_config, device) -> ttnn.Tensor
+  prepare_conv2d_bias(torch_bias, *, <same keywords>) -> ttnn.Tensor
+  ```
+
+## Phases
+
+> **Non-regression rule**: Every refinement must pass all tests from prior phases.
+> **Drift signal**: XPASS-strict failures mean the implementer added support but forgot to update SUPPORTED. The implementer fixes by updating SUPPORTED.
+> **Checkbox protocol**: Implementer marks `[x]` when the refinement is complete and all tests pass, `[~]` when real work landed but at least one named axis value is deferred (treated as completed by the queue, surfaced as partial), `[ ]` only when nothing usable was produced.
+> **Refinement ID + follow-up naming (mandatory — the runner parses this)**: Primary refinements are `Refinement N` (e.g. `Refinement 1`, `Refinement 2`). When you ship `[~]` partial and file the sharper follow-up the partial-tick protocol requires, name it by appending a lowercase letter to the parent's number: `Refinement 1b`, `Refinement 1c`, … (never `Refinement 1.5`, `Refinement 1 (follow-up)`, or a fresh number). Order follow-ups immediately after their parent so the queue runs them before later refinements — a partial's remaining-blocker follow-up must be picked next, not leapfrogged. The runner's parser matches exactly `Refinement \d+[a-z]?`; any other shape is invisible to the queue and silently skipped.
+> **One native dispatch (run mandate)**: every path dispatches exactly one device program. A `ttnn.to_layout` / `ttnn.tilize` / `ttnn.untilize` / `ttnn.to_memory_config` / `ttnn.fill_implicit_tile_padding` wrapper around the op is therefore not available even as a partial-tick fallback. Layout, placement and padding are handled in-kernel or the refinement ships `[ ]`.
+
+### [x] Phase 0 — Core Implementation
+
+- **SUPPORTED dtype**: [bfloat16]
+- **SUPPORTED weight_dtype**: [bfloat16, bfloat8_b] (bf8_b and the mixed bf16 x bf8_b cell promoted by the verifier after a gate-lifted probe passed)
+- **SUPPORTED layout**: [ROW_MAJOR]
+- **SUPPORTED memory_layout**: [INTERLEAVED] (DRAM)
+- **SUPPORTED shape-derived axes**: channel_alignment = tile_aligned; hw_alignment = hw_aligned; stride_mode ∈ {unit, strided}; dilation_mode ∈ {unit, dilated}; padding_mode ∈ {valid, same} (strided/dilated promoted by the verifier; the kernel already took s, d as CT args)
+- **SUPPORTED op-specific axes**: bias_mode ∈ {with_bias, no_bias}; activation = none; fp32_dest_acc_en = True
+- **Cores**: M (output pixels, tile-rows) split row-major over the full live grid (regime R0), one M-block per core on every INPUT; per-core weight stream
+- **Compute config**: caller fidelity/approx honored; fp32 DEST (gated True); packer-L1 fp32 accumulation over 3 kh K-blocks
+- **Golden baseline**: 64 / 64 supported cells passing (1399 xfail_expected, 480 invalid_skipped, 0 loud) per `golden_results/verifier_report.json`
+
+### [ ] Refinement 1 — TILE / bf8_b activation, fused ReLU, unaligned C_in (interleaved path)
+
+**Goal**: add `ttnn.TILE_LAYOUT` to `SUPPORTED["layout"]`, `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, `"relu"` to `SUPPORTED["activation"]`, and `"c_in_unaligned"` to `SUPPORTED["channel_alignment"]` on the DRAM-interleaved path. This moves all 416 INTERLEAVED xfail cells to passing: every dtype x weight_dtype x layout x activation x alignment combination, including the mixed bf8_b-activation x bf16-weight cells.
+
+**Implementation skill**: /memory-layouts, /numeric-formats-metal
+
+**Verifier notes**:
+- **TILE input** is op_design regime **R3** and stays in-kernel. The M-block's footprint tile-rows (bands rounded out to 32-pixel tile rows) are read per band, with one trid fence per band, never one barrier per tile. Compute untilizes them into `cb_halo_slab` (bf16 RM), which becomes a compute->reader CB. Gather, tilize and matmul are unchanged.
+  - TILE `C_in_p = roundup32(C_in)`. `per_pixel_channels`/`padded_k` already return it, so prepared weights already match.
+- **bf8_b activation**:
+  - `cb_im2col_tiles` and `cb_output_tiles` take the activation dtype. The untilize source CB uses the input dtype.
+  - Re-quantizing im2col rows to bf8_b is exact: tap boundaries are multiples of `C_in_p` (32-aligned on TILE), so every 16-element exponent group stays inside one pixel's channels, in both layouts.
+  - Mixed cells must pass in this pass. Use EXCLUSIONS only for `severity=bug` cells, never for precision misses.
+- **ReLU**: MUST apply only to the final value (prompt rule).
+  - With bias: `pack_relu_config(ReluConfig::zero())` immediately before `add_bias_bcast_rows`, then `none()` after it.
+  - Without bias: `LastBlockTarget::OutWithRelu`.
+  - The helper sets PACK_RELU and never clears it (lessons file, 2026-11-17 planner entry). Clear it after every `matmul_block` call and again at the top of the tilize `PreKBlockFn`. Otherwise the next M-block's tilize relu-clamps activations and the next K-block's partials.
+- **c_in_unaligned**: lanes `C_in..C_in_p` are not data.
+  - On RM interleaved they are DRAM page-alignment padding. On TILE they are tile padding. Weight rows there are zero, so `0 x Inf/NaN = NaN`.
+  - The gate-lifted probe passes today only because `from_torch` writes full aligned pages (`tt_metal/impl/buffers/dispatch.cpp:108-109`). An input written by an upstream device op leaves stale bytes there (verification_report.md, probe 003).
+  - Zero the lanes in-kernel, e.g.:
+    - read only `C_in * 2` B per pixel into slab rows whose lanes were zeroed once at kernel start, or
+    - zero-fill each tap's lane tail from `MEM_ZEROS_BASE` (512 B chunks, mechanism cap 6).
+  - Either way the kernel needs the real `C_in` as a CT arg.
+  - Add a regression whose input lanes hold NaN, e.g. a TILE input built with NaN tile padding, and assert a finite output.
+  - The kh-block K-pad zero-fill already exists.
+- **Performance bar**: this path is on Refinement 3's critical path. Keep Phase 0's full-grid M split and per-band read batching on the TILE leg. Do not tilize or untilize per tile.
+- **Ordering**: before Refinement 2. Its TILE untilize stage and ReLU epilogue are what the 13 TILE bf8_b HEIGHT LOOSE layers and stem.conv1 need.
+
+**Done when**: every golden `test_op` cell with `memory_layout=INTERLEAVED` passes (0 xfail on the interleaved path). The 9 `test_regression.py` C_in = 8 tap-shift cases run and pass. The NaN-lane regression passes. The acceptance and precision-baseline suites stay green.
+
+### [ ] Refinement 2 — HEIGHT_SHARDED input and output (regime R2), all layouts
+
+**Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` to `SUPPORTED["memory_layout"]` for every layout/dtype in SUPPORTED after Refinement 1 (RM bf16, TILE bf16, TILE bf8_b). This moves the 494 HEIGHT_SHARDED xfail cells to passing, including 14 Panoptic LOOSE_CASES: stem.conv1 (RM bf16, C_in = 8, stride 2) and the 13 TILE bf8_b HEIGHT layers.
+
+**Verifier notes**:
+- No implementation skill covers sharded placement. `/memory-layouts` is RM/TILE layout, not placement.
+- Build per op_design **R2**:
+  - **Grid and block**:
+    - The grid is the input shard grid, read from `input_tensor.shard_spec()`. Never assume a grid (prompt MUST).
+    - One M-block is the whole output shard (sharded block default), clamped by `select_blocking`.
+    - The L1 budget must subtract the resident input and output shard bytes.
+  - **Output (native placement is mandatory)**:
+    - HEIGHT shard `[roundup32(ceil(M / n_cores)), C_out_p]` on the same grid.
+    - `cb_output_tiles` is backed on the output shard via `ttnn.cb_descriptor_from_sharded_tensor`, so packs land in place and the writer moves no output. Routing output through TensorAccessor writes or DRAM does not count as implementing HEIGHT_SHARDED.
+  - **Input**: a TensorAccessor over the sharded input reads page runs from ANY owner core.
+    - `num_contiguous_pages` coalesces when `contiguous_page_stride() == 1`, which is the sharded case. One NoC read per run replaces Phase 0's one DRAM read per pixel, the measured R0 bottleneck on large M.
+    - Shards are not row-aligned, and the halo reaches `d*W + d` rows, several shards away for ASPP-like reach (prompt MUST).
+    - The core's own shard portion enters the slab through the same L1->L1 path. That is a layout transform (the slab is kh-banded and contiguous across shard edges), not an interleaved re-read. Zero-copy consumption of the resident shard is lamp P8 (perf). The input never round-trips DRAM.
+- **stem.conv1**: shard `[4767, 8]` on 110 cores, so `C_in_p = 8` (16 B rows, L1-aligned), `K_p = 96` (kh-block pad 24 -> 32 zero-filled), stride 2. It needs Refinement 1's c_in_unaligned lane rules and ReLU.
+- **L1 risk shapes**:
+  - stem.conv3 (38 tile-rows per core, C_out = 128) is expected to need `bm < core_m_tiles` once shards occupy L1.
+  - `semantic decoder.res2.fuse_conv.0` (C_in_p = 288, slab ~480 KB) needs `bk` at its 9-tile tap floor. The solve handles both cases if the shard bytes are subtracted.
+- Update `l1_ledger.md`: `cb_output_tiles` capacity becomes the shard, and shard bytes enter the budget.
+- **Performance bar**: Refinement 3 measures exactly this path. Fill the shard grid, batch halo reads per band, and keep the `cb_weights` quantum (`bk*bn`) and depth unchanged so the multicast receiver drops in.
+
+**Done when**: every golden `test_op` cell with `memory_layout=HEIGHT_SHARDED` passes. All 14 HEIGHT LOOSE_CASES pass at their pinned 110-core geometry. Both dispatches hit the program cache. No regression on the interleaved path.
+
+### [ ] Refinement 3 — Weight multicast for the HEIGHT-sharded Panoptic layers
+
+**Type**: perf
+
+**Goal**:
+- **Target**: no LOOSE case carries an `attention:` perf flag, so the region is free-selected. It is the HEIGHT-sharded TILE bf8_b Panoptic layers in their exact LOOSE config (bf8_b x bf8_b, fp32 DEST, HiFi4 as pinned, with bias, ReLU). The most-impacted shape is `semantic decoder.res2.fuse_conv.0`: `(128, 256, 288) -> 256`, 103 cores, 320-row shards.
+- **Why weights dominate**: every core streams the full prepared weight (705 KB bf8_b), about 72 MB of DRAM reads per call. Phase 0 measured a full-grid weight stream saturating at ~190 GB/s aggregate (32x64x128: 73 of 98 us was weights), so these layers are expected to be weight-read-bound.
+- **Lever**: the weights are reuse-shared across the M split (op_design regime **R1**, a `deferred` row; the prompt's "one reader core multicasting each block"). Build the read-once + multicast variant:
+  - Use the multicast helper: host `ttnn.Mcast` + `attach()`, kernel `McastArgs` (`mcast/kernel/mcast_args.hpp`).
+  - One injector (or a rotating one) reads each `bk x bn` K-block once and multicasts it into every core's `cb_weights` slot. Receivers push exactly as the Phase 0 writer does.
+  - Catalog: `shared_input_reuse` (⭐⭐⭐: read once + mcast, double-buffer the injector), `mcast_topology` (a 1-D work split needs a 2-D rectangle multicast), `noc_placement`.
+- **Measure**: validate by building the variant and measuring device-ns. Do not infer the win from a weights-stubbed ablation. No SUPPORTED change.
+
+**Done when**:
+- Measured device-ns improves on `semantic decoder.res2.fuse_conv.0` and on the other weight-dominated HEIGHT layers.
+- The golden suite, including LOOSE_CASES, stays green.
+- No regression across the config-spanning guard set, one representative per kernel path x layout x placement:
+  - R0 RM bf16 interleaved (e.g. 32x64x128 -> 128),
+  - R0 TILE bf8_b interleaved,
+  - HEIGHT RM (stem.conv1),
+  - HEIGHT TILE (e.g. `res3.{1,2,3}.conv2`),
+  - the few-core deep-K `8x16x2048 -> 256`, where an extra semaphore round per K-block can cost more than it saves.
+
+### [ ] Refinement 4 — BLOCK_SHARDED: K split across core columns + row reduce-scatter (regime R4)
+
+**Goal**: add `ttnn.TensorMemoryLayout.BLOCK_SHARDED` to `SUPPORTED["memory_layout"]` for every layout/dtype/activation in SUPPORTED. This moves the 489 BLOCK_SHARDED xfail cells to passing, including the 9 BLOCK LOOSE_CASES: res4.0, `res4.{1..5}` and its LoFi twin, res5.0/1/2 (d = 2, 4, 8), aspp.convs.1/2/3 (C_in up to 2048, d up to 18).
+
+**Verifier notes**:
+- This is a **scheme-change** and stands alone. The caller cut the dependent axis (c, inside K) across `n_cols` core columns, so partial sums cross cores. No implementation skill covers this class. Required topology per op_design **R4**:
+  - **Per-core work**: each core builds the slab of its own channel slice (halo along its core column, from any owner, same rules as Refinement 2). It gathers its K-slice against its column's weight K-slice and produces fp32 partials `[bm, tensor_n_tiles]`.
+  - **Weight layout**: `prepare_conv2d_weights` lays the weight out per column, rows ordered `(col, kh, kw, c_slice)`, keyed on `input_memory_config` (prompt MUST). `padded_k` already computes `n_cols * 3 * roundup32(3 * C_slice_p)`.
+  - **Combine**: a row-local reduce-scatter. After its last K-block each core NoC-writes partial N-slice y into column y's per-peer slot CB and increments column y's semaphore. Column y waits for `n_cols - 1` arrivals, sums in fp32 (DEST), adds bias, applies ReLU, then packs into its BLOCK output shard `[roundup32(ceil(M / n_rows)), roundup32(ceil(C_out / n_cols))]`, backed on the output shard.
+  - **ReLU never touches a partial** (prompt MUST).
+  - Catalog for the combine: `tensix_all_reduce_compute` (accumulate directly into DST, init once per batch) and `tensix_all_reduce`.
+- R4b (activation all-gather, no partial combine) is a perf alternative for the shapes where the full-C_in slab fits. It is not a substitute. R4 is the only scheme that fits aspp (its full-C_in RM slab is 3.3 MB).
+- **Ordering**: hardest remaining refinement, placed right after the perf-1 slot. Land the combine on the small golden BLOCK cells first, then the LOOSE shapes.
+- **LoFi twin**: runs at `math_fidelity=LoFi` with tolerance `(0.996, 0.08)`. Fidelity is honored, never gated.
+
+**Done when**: every golden `test_op` cell with `memory_layout=BLOCK_SHARDED` passes and all 9 BLOCK LOOSE_CASES pass at their pinned grids. No ReLU is applied before the combine; a test with a negative-heavy partial distribution would expose it. No regression on interleaved or HEIGHT.
+
+### [ ] Refinement 5 — Speed up the BLOCK-sharded res4 layer
+
+**Type**: perf
+
+**Goal**:
+- **Target**: free-selected (no flagged LOOSE case): `res4.{1..5}.conv2 @ LoFi`, i.e. `(32, 64, 256) -> 256`, 8x8 BLOCK grid, `[256, 32]` shards. It is the most repeated Panoptic 3x3 layer (x5), in Panoptic's real compute config.
+- **Costs after Refinement 4**: a ~229 KB fp32 partial combine per core, and every core of a column streaming that column's weight K-slice from DRAM.
+- **Levers** (pick from `ttnn/ttnn/operations/examples/master.md`):
+  - multicast each column's weight K-slice down the column. The slice is reuse-shared along the column's M split (`mcast_topology`: 1-D channels on a 2-D split; `shared_input_reuse`).
+  - the R4b activation all-gather where the full-C_in slab fits: res4.x exchanges ~92 KB of activation instead of 229 KB of partials (op_design R4b row).
+  - the combine's DST accumulation shape (`tensix_all_reduce_compute`).
+- **Scope**: one ⭐⭐⭐ lever per phase. No SUPPORTED change.
+
+**Done when**: measured device-ns improves on `res4.{1..5}.conv2 @ LoFi` with its `(0.996, 0.08)` tolerance still holding. The golden suite stays green. No regression across the guard set (Refinement 3's set plus one BLOCK representative per layout).
+
+### [ ] Refinement 6 — Speed up stem.conv1
+
+**Type**: perf
+
+**Goal**:
+- **Target**: free-selected: `stem.conv1`, i.e. `(512, 1024, 8) -> 64`, stride 2, HEIGHT RM bf16 x bf8_b weights, 110 cores, `[4767, 8]` shards. It is the largest spatial layer.
+- **Bound**: fixed cost, not bytes.
+  - `tensor_kkh_tiles = 1`, so every M-block pays 3 tilize inits, 3 matmul inits and 3 packer-L1 passes over `bm x bn` fp32 tiles for a single K tile each.
+  - The gather issues one fixed-size 48 B read per output pixel per kh.
+- **Levers** (several ⭐/⭐⭐ ones fit one phase):
+  - lamp P1: `bk = tensor_k_tiles`, one K-block per M-block, allowed by mechanism cap 3; catalog `compute_block_size`.
+  - lamp P7: `set_read_state` / `read_with_state` for the constant-size combined read.
+  - lamp P2: `im2col_rm_depth_rows = block_m_tiles`.
+  - lamp P8: gather in-shard taps straight from the shard-backed CB.
+  - `trid_double_issue` / `split_reader`, once the gather is classified issue-bound. Use the lessons-file method: same reads, local-L1 source.
+- **Scope**: no SUPPORTED change.
+
+**Done when**: measured device-ns improves on stem.conv1 with the golden suite green and no regression across the guard set (Refinement 3's set).
