@@ -1583,6 +1583,18 @@ class Glm53Generator(_ReadinessGenerator):
         if err is not None:
             raise err
 
+    @staticmethod
+    def _rows_extend_published(b: _CacheBinding, rows: dict) -> bool:
+        """every caller row lists the slot's published entries over its whole coverage first (unchanged, or new blocks
+        past the coverage only): a step that addresses positions inside the published coverage reads the same table
+        before and after _write_page_rows publishes these rows (spec_step_chain's GLM53_SPEC_PT_DEFER)"""
+        for slot, row in rows.items():
+            row = torch.as_tensor(row).reshape(-1)
+            c = int(b.coverage[slot])
+            if c == 0 or row.numel() < c or not torch.equal(row[:c].to(torch.int64), b.pt_shadow[slot, :c]):
+                return False
+        return True
+
     def _rows_unchanged(self, b: _CacheBinding, rows: dict[int, torch.Tensor], used: Optional[dict[int, int]]) -> bool:
         """every caller row lists exactly the slot's published entries (same coverage) and its used positions fit that
         coverage: _write_page_rows would publish nothing. The serving adapter passes every live slot's whole row on each
@@ -3059,7 +3071,11 @@ class Glm53Generator(_ReadinessGenerator):
         per m' device steps. m' stops short of m where one more step would pass the context / the drafter's cache (the
         single step's check, per step) or the slot's page-table coverage (every verify position of the m' steps and the
         last step's drafts inside mapped blocks); the first step keeps spec_step's checks. page_row: as
-        spec_step_submit's (written once, before the first replay)."""
+        spec_step_submit's (written once, before the first replay; GLM53_SPEC_PT_DEFER (default 1): behind it when every
+        passed row only extends its published row -- the same entries over the slot's coverage, new blocks past it --
+        and the first step's positions fit the published coverage: that step reads no changed entry, and the write
+        (host + one copy enqueued on CQ 0 behind the replay) overlaps it instead of leaving the device idle; 0: always
+        before)."""
         t0, tp = _time.perf_counter(), 0.0
         b = self._binding(kv_cache)
         self._spec_settle(b)
@@ -3069,27 +3085,54 @@ class Glm53Generator(_ReadinessGenerator):
         K, multi = int(sp.K), bool(self.spec_groups())
         bases = sorted(b.spec["groups"]) if multi else [0]  # (GLM53_SPEC_PARTIAL: the entered subset)
         L = {s: int(b.slots[s].seq_len) for s in bases}
+        lim, bs = self._spec_limit(b), int(self.backend.block_size)
+        rows, td = None, 0.0
         if page_row is not None:
             rows = {int(s): r for s, r in page_row.items()} if multi else {0: page_row}
-            tp = _time.perf_counter()
-            self._write_page_rows(b, rows, {s: L[s] + K + 1 for s in rows})
-            tp = _time.perf_counter() - tp
-        lim, bs = self._spec_limit(b), int(self.backend.block_size)
+            defer = (
+                os.environ.get("GLM53_SPEC_PT_DEFER", "1") == "1"
+                and all(L[s] + 2 * K + 1 <= min(lim, int(b.coverage[s]) * bs) for s in bases)
+                and self._rows_extend_published(b, rows)
+            )
+            if not defer:
+                tp = _time.perf_counter()
+                self._write_page_rows(b, rows, {s: L[s] + K + 1 for s in rows})
+                tp = _time.perf_counter() - tp
+                rows = None
         if any(L[s] + 2 * K + 1 > lim for s in bases):
             raise ValueError(f"speculative step at lengths {L}: the next step's positions pass the context")
-        n = 1  # (step j's verify base is at most L + j (K + 1); its drafts reach K past its K + 1 verify positions)
-        while n < int(m) and all(L[s] + (n + 1) * (K + 1) + K <= min(lim, int(b.coverage[s]) * bs) for s in bases):
-            n += 1
         read_async = getattr(sp, "read_async", None)
         handles, t_first = [], None
-        for _ in range(n):
+
+        def launch():
+            nonlocal t_first
             sp.step()
             t_first = _time.perf_counter() if t_first is None else t_first
             pending, events = read_async() if callable(read_async) else (sp.read(), [])
             handles.append(SpecPending(binding=b, L=None, pending=pending, events=list(events)))
-        # (entry, page-row write seconds, first replay enqueued, every replay + record copy enqueued): the served
-        # adapter's GLM53_STACK_SPEC_TIMING splits the submit into the lead-in the device waits for and the rest
-        self.chain_marks = (t0, tp, t_first, _time.perf_counter())
+
+        launch()
+        if rows is not None:  # (GLM53_SPEC_PT_DEFER: the rows' write while the device runs the first step)
+            td = _time.perf_counter()
+            try:
+                self._write_page_rows(b, rows, {s: L[s] + K + 1 for s in rows})
+            except BaseException:
+                h = handles[0]  # (the first step ran: its record is collected before the error leaves)
+                h.L = {s: int(b.slots[s].seq_len) for s in bases} if multi else int(b.slots[0].seq_len)
+                b.spec_pending = h
+                self.spec_step_collect(h)
+                raise
+            td = _time.perf_counter() - td
+            self.counters["page_rows_deferred"] = self.counters.get("page_rows_deferred", 0) + 1
+        n = 1  # (step j's verify base is at most L + j (K + 1); its drafts reach K past its K + 1 verify positions)
+        while n < int(m) and all(L[s] + (n + 1) * (K + 1) + K <= min(lim, int(b.coverage[s]) * bs) for s in bases):
+            n += 1
+        for _ in range(n - 1):
+            launch()
+        # (entry, page-row write seconds before the first replay, first replay enqueued, every replay + record copy
+        # enqueued, deferred page-row write seconds): the served adapter's GLM53_STACK_SPEC_TIMING splits the submit
+        # into the lead-in the device waits for and the rest
+        self.chain_marks = (t0, tp, t_first, _time.perf_counter(), td)
         c = self.counters
         c["spec_readback_async"] = c.get("spec_readback_async", 0) + sum(bool(h.events) for h in handles)
         c["spec_chains"] = c.get("spec_chains", 0) + 1

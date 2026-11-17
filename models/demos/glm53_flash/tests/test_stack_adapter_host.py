@@ -2008,6 +2008,11 @@ class _MockSpec:
         c = self._rec["c"] + self._rec["n"] + 1  # pos_v row 0
         rows = [int(io.tokens.t[0])] + self._drafts
         assert len(st) == c, f"verify at {c}: the slot's state holds {len(st)} tokens"
+        # the step addresses positions c .. c + 2K (verify + the next drafts): mapped in the published device table (the
+        # null block 0 marks the row's uncovered tail; GLM53_SPEC_PT_DEFER publishes a grown row behind the first step)
+        pt = getattr(getattr(io, "page_table", None), "t", None)
+        if pt is not None and pt.dim() == 2 and int(pt.shape[1]) > (c + 2 * self.K) // BLOCK_SIZE:
+            assert int(pt[0, (c + 2 * self.K) // BLOCK_SIZE]) != 0, f"step at {c}: position {c + 2 * self.K} unmapped"
         a = [(r + 1) % VOCAB for r in rows]
         n = 0
         for j in range(1, self.K + 1):
@@ -2846,14 +2851,16 @@ def _served_chain_lone(monkeypatch):
     device's K drafts in the 11-wide block, the verify (fused_sample) chains 3 device steps -- every record collected
     after the last replay -- and commits all their tokens at once; the stream equals plain greedy and each proposal
     continues the chain's last step (the plugin's count = the 3 steps' total); a second live row: the ordinary decode
-    answers one token per row (count 1)"""
+    answers one token per row (count 1). The block table grows as vLLM's does (the block's positions allocated per
+    verify): the rows that only gained blocks are written behind the first replay (GLM53_SPEC_PT_DEFER, default on) and
+    the mock step asserts every position it addresses is mapped in the published table"""
     monkeypatch.setenv("GLM53_SPEC_STEPS_PER_CALL", "3")
     K, M = 3, 3
     Kp = gvs.spec_plugin_k(K, M)
     ad, backend, gen, kv = _spec_adapter(K, good=lambda step: step % (K + 1))
     assert ad.spec_steps_per_call == M and Kp == 11
     prompt = _prompt(100, 7)
-    table = _table([_blocks(0, 400)], B)
+    table = _table([_blocks(0, 101)], B)
     out, _ = ad.prefill_forward(_history([prompt]), page_table=table, kv_cache=kv, prompt_lens=[100], start_pos=[0],
                                 empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
     stream, pos = [int(out[0, 0])], 100
@@ -2862,11 +2869,12 @@ def _served_chain_lone(monkeypatch):
     stream.append(int(ids[0, 0]))
     pos += 1
     ct, cp, ac = _block({0: ([stream[-1]], pos)}, Kp)
-    s0 = backend.spec.counters["steps"]
+    s0, r0 = backend.spec.counters["steps"], gen.counters["page_table_refresh"]
     for _ in range(4):
         do = ad.propose_draft_tokens(Kp, ct, cp, ac)
         assert do.num_valid.tolist() == [K, 0, 0, 0] and tuple(do.draft_token_ids.shape) == (B, Kp)
         drafts = [int(v) for v in do.draft_token_ids[0, :K].tolist()]
+        table = _table([_blocks(0, pos + 2 * (Kp + 1))], B)  # (vLLM: the block's positions + lookahead allocated)
         acc, counts = _fused_verify(ad, kv, Kp, {0: (stream[-1], pos, drafts)}, table)
         new = [int(v) for v in acc[0, : int(counts[0])].tolist()]
         assert M <= len(new) <= M * (K + 1) and counts[1:].tolist() == [1, 1, 1]
@@ -2877,6 +2885,7 @@ def _served_chain_lone(monkeypatch):
     assert gen.counters["spec_chains"] == 4 and ad.spec_stats["committed"] == len(stream) - 2
     assert ad.spec_stats["committed"] > 4 * M  # (drafts accepted inside the chain)
     assert stream == [(prompt[-1] + 1 + i) % VOCAB for i in range(len(stream))]  # = plain greedy (next = t + 1)
+    assert gen.counters["page_table_refresh"] > r0 and gen.counters.get("page_rows_deferred", 0) >= 1
     do = ad.propose_draft_tokens(Kp, ct, cp, ac)
     drafts = [int(v) for v in do.draft_token_ids[0, :K].tolist()]
     p2 = _prompt(80, 30)
