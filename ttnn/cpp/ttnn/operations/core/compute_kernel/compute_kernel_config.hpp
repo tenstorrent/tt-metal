@@ -10,7 +10,7 @@
 #include <optional>
 #include <tt-umd/types/arch.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn {
@@ -68,7 +68,7 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 //
 // The result's per-DFB unpack_modes table is left default for the program factory to set.
 //
-tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config);
+tt::tt_metal::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config);
 
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config,

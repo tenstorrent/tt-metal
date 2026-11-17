@@ -9,7 +9,9 @@ import math
 import os
 import random
 import sys
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -34,6 +36,7 @@ from models.demos.common.prefill.prefill_chunk import (
     validate_media_refs,
 )
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+    chunk_key,
     connect_layer_completion_channel,
     start_layer_completion_drain,
     wait_for_layer_completions,
@@ -46,11 +49,13 @@ from models.demos.common.prefill.runners.migration import (
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_PAD_TOKEN_ID,
     h2d_row_len,
+    install_crash_diagnostics,
     load_trace_token_ids,
     num_mtp_tokens,
     resolve_trace_dir,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -108,12 +113,12 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 
 
 def _load_env_config(check_budget: bool = True) -> None:
-    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
+    global SP_FACTOR, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
     global MTP_DECODE_LEVELS, FORWARD_CHUNKS, H2D_METADATA_SIZE_BYTES, MEDIA_MAX_REFS, MEDIA
-    SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
-    TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
-    GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
-    CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    # The host payload is one row per SP chip, in SP order, whichever mesh axis SP runs on; the
+    # runner's H2D mapper (PREFILL_SP_AXIS) places the rows, so the producer needs only the factor.
+    SP_FACTOR = int(os.environ.get("PREFILL_SP", 8))
+    CHUNK_SIZE = prefill_chunk_tokens()
     # Tokens per forward, a multiple of the chunk size; must match the runner's.
     forward_tokens_budget = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
     assert not check_budget or (
@@ -186,7 +191,7 @@ def _h2d_rows(tokens, actual_start: int = 0):
     # Same host-side reshuffle as the engine's H2D prefill connector: a chunk starting mid-slab (multi-turn
     # resume) is rotated so each SP chip receives the tokens the KV writer places on it (identity when the
     # start is chunk-aligned).
-    sp = GLOBAL_MESH_SHAPE[0]
+    sp = SP_FACTOR
     stride = h2d_row_len(CHUNK_SIZE, sp)
     assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
     tokens = rotate_chunk_tokens(list(tokens), actual_start, sp)
@@ -196,7 +201,7 @@ def _h2d_rows(tokens, actual_start: int = 0):
 def _h2d_forward_rows(chunks, starts):
     """``[sp, 1, FORWARD_CHUNKS * CHUNK_SIZE / sp]`` rows of one packed forward: chip c gets slice c of every
     chunk's rotated tokens, in chunk order (pack_forward_tokens). One chunk gives _h2d_rows."""
-    sp = GLOBAL_MESH_SHAPE[0]
+    sp = SP_FACTOR
     assert all(len(t) == CHUNK_SIZE for t in chunks), f"every chunk is {CHUNK_SIZE} tokens"
     tokens = pack_forward_tokens(chunks, starts, sp)
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, len(tokens) // sp))
@@ -241,7 +246,7 @@ def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
-    sp = GLOBAL_MESH_SHAPE[0]
+    sp = SP_FACTOR
     stride = h2d_row_len(CHUNK_SIZE, sp)
     actual_end = actual_start + CHUNK_SIZE if actual_end is None else actual_end
     slots = mtp_lookahead_positions(actual_start, sp, stride, actual_end, MTP_LEVELS)
@@ -616,6 +621,54 @@ class RunStats:
     total_chunks: int = 0
 
 
+class _ChunkRetireClock:
+    """Producer-clock span of each chunk: the drain seeing its first layer ack to seeing its last.
+
+    Every stamp is time.perf_counter() on this process, so chunk time and retire cadence need no cross-host clock
+    and no per-chunk device sync. One CHUNK_RETIRE line per chunk feeds the summarizer; its layers= field
+    (layer span @ ms after the first ack) feeds the pipeline gantt.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pushed = {}
+        self._first_ack = {}
+        self._acks = {}
+        self._layer_acks = {}
+        self.warmup = False
+
+    def on_push(self, key: tuple) -> None:
+        with self._lock:
+            self._pushed.setdefault(key, deque()).append(self.warmup)
+
+    def on_ack(self, c) -> None:
+        key = chunk_key(c)
+        with self._lock:
+            now = time.perf_counter()
+            self._first_ack.setdefault(key, now)
+            self._acks[key] = self._acks.get(key, 0) + 1
+            self._layer_acks.setdefault(key, []).append((c.layer_start, c.layer_end, now))
+
+    def on_retire(self, key: tuple, retire_ts: float) -> None:
+        with self._lock:
+            queued = self._pushed.get(key)
+            warmup = queued.popleft() if queued else None
+            if queued is not None and not queued:
+                del self._pushed[key]
+            first_ts = self._first_ack.pop(key, None)
+            acks = self._acks.pop(key, 0)
+            layer_acks = self._layer_acks.pop(key, [])
+        if warmup is None or first_ts is None:
+            logger.warning(f"[producer] CHUNK_RETIRE for unpushed chunk {key}")
+            return
+        slot_id, pos_start, pos_end = key
+        logger.info(
+            f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} first={first_ts:.6f} "
+            f"retire={retire_ts:.6f} warmup={int(warmup)} acks={acks} "
+            f"layers={','.join(f'{a}-{b}@{(t - first_ts) * 1000.0:.1f}' for a, b, t in layer_acks)}"
+        )
+
+
 def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
     """Push cfg's requests as forwards: ``push_fn(pushes) -> ms`` gets one forward's ChunkPush list, a single chunk
     at forward_chunks == 1. Above that, each forward takes one run of consecutive chunks per slot (round-robin or
@@ -773,15 +826,46 @@ def _has_index_config(table) -> bool:
     return _num_model_configs(table) > 1 and ADAPTER.cache_kind(1) == "index"
 
 
+def _read_chunks(table, device_map, config_id, layer, slot_id, positions) -> list:
+    """Raw bytes of the chunk at each position of one layer, from a single batched read."""
+    locs = [table.lookup(layer, pos, slot_id, config_id) for pos in positions]
+    unique_ids = {}
+    for loc in locs:
+        if loc.device_group_index not in unique_ids:
+            unique_ids[loc.device_group_index] = _resolve_unique_id(
+                table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+            )
+    sizes = [loc.size_bytes for loc in locs]
+    blob = memoryview(
+        ttnn.experimental.disaggregation.read_dram_umd_batch(
+            [unique_ids[loc.device_group_index] for loc in locs], [loc.noc_addr for loc in locs], sizes
+        )
+    )
+    chunks, offset = [], 0
+    for size in sizes:
+        chunks.append(blob[offset : offset + size])
+        offset += size
+    return chunks
+
+
+def _prefetched(items, load):
+    """Yield (item, load(item)) with the next item's load already running. The batched DRAM read
+    releases the GIL, so one layer's read overlaps the previous layer's decode and PCC."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(load, items[0]) if items else None
+        for i, item in enumerate(items):
+            loaded = pending.result()
+            pending = pool.submit(load, items[i + 1]) if i + 1 < len(items) else None
+            yield item, loaded
+
+
 def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
-    rows = []
-    for pos in range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-        loc = table.lookup(layer, pos, slot_id, config_id)
-        unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
-        raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-        rows.append(decode(raw, head_dim))
+    positions = range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
+    rows = [decode(raw, head_dim) for raw in _read_chunks(table, device_map, config_id, layer, slot_id, positions)]
     return torch.cat(rows, dim=0)[: read_len - start]
 
 
@@ -795,7 +879,7 @@ def _golden_pe_as_device(golden_pe, layout: str):
 
 
 def _kvpe_pcc_vs_golden(golden, device_kv, kv_lora: int, golden_pe_layout: str = "half_split"):
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     _, pcc_nope = comp_pcc(golden[:, :kv_lora], device_kv[:, :kv_lora])
     _, pcc_pe = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], golden_pe_layout), device_kv[:, kv_lora:])
@@ -899,7 +983,7 @@ def _check_mtp_kv_slots(
         return None
     logger.info(f"[producer] slot {slot_id} MTP: golden KV from {golden_dir} (pe columns: {pe_layout})")
 
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     rejected = "half_split" if pe_layout == "interleaved" else "interleaved"
     min_pcc = 1.0
@@ -929,7 +1013,7 @@ def _read_slot_kv_and_check_pcc_gpt_oss(
 
     from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from models.demos.gpt_oss_d_p.tt.runners.acceptance import validate_kv_for_pcc
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
@@ -1016,7 +1100,7 @@ def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, rea
 
     from safetensors import safe_open
 
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
@@ -1098,7 +1182,7 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
 
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from models.demos.minimax_m3.tt.runners.prefill_kv_validation import _hf_to_meta_rotary_perm
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim, rotary_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM, mc.ROTARY_DIM
@@ -1231,7 +1315,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     )
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     # The pe half needs re-basing only if the model rotates it. The adapter's own declaration wins:
     # `cache_half_pccs` names a second case (a natively interleaved indexer RoPE) where the answer
@@ -1257,6 +1341,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     checked = 0
     unreferenced = []
     missing_golden = []
+    local_layers = []
     for layer in range(NUM_LAYERS):
         # A hybrid attention stack writes a KV slab on only some layers, so the table publishes rows
         # for only those. Decide from the MODEL, not from what is on disk: a shared or dense-variant
@@ -1273,15 +1358,15 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
         except KeyError:
             continue
+        local_layers.append(layer)
 
-        decoded_rows = []
-        for pos in range(first_pos, read_end, tokens_per_block):
-            loc = table.lookup(layer, pos, slot_id)
-            unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
-            raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-            decoded_rows.append(_decode_kv_chunk(raw, HEAD_DIM))
-        device_kv = torch.cat(decoded_rows, dim=0)[skip_rows : skip_rows + cmp_len]
+    def read_kvpe(layer):
+        return _read_kv_slice(
+            table, device_map, 0, layer, slot_id, read_end, HEAD_DIM, _decode_kv_chunk, start=first_pos
+        )[skip_rows : skip_rows + cmp_len]
 
+    logger.info(f"[producer] slot {slot_id} KV check: torch threads={torch.get_num_threads()}")
+    for layer, device_kv in _prefetched(local_layers, read_kvpe):
         # A single PCC scalar per half per layer cannot separate a static per-column error from one
         # that accumulates per token, which is the question the depth curve actually poses. The
         # tensor is already in host memory here, so dumping it costs no device time. bfloat16 is
@@ -1388,23 +1473,21 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         min_index = 1.0
         checked_index = 0
         mtp_index_pcc = None
+        local_index_rows = []
         for layer, golden_dir in index_rows:
             loc0 = table.lookup(layer, 0, slot_id, 1)
             try:
                 _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
             except KeyError:
                 continue
+            local_index_rows.append((layer, golden_dir))
 
-            decoded_rows = []
-            for pos in range(first_pos, read_end, tokens_per_block):
-                loc = table.lookup(layer, pos, slot_id, 1)
-                unique_id = _resolve_unique_id(
-                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
-                )
-                raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-                decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
-            dev_ik = torch.cat(decoded_rows, dim=0)[skip_rows : skip_rows + cmp_len]
+        def read_index(row):
+            return _read_kv_slice(
+                table, device_map, 1, row[0], slot_id, read_end, index_head_dim, _decode_kv_chunk, start=first_pos
+            )[skip_rows : skip_rows + cmp_len]
 
+        for (layer, golden_dir), dev_ik in _prefetched(local_index_rows, read_index):
             is_mtp_row = layer == mtp_index_layer
             golden_ik = _load_golden_index_k(
                 golden_dir,
@@ -1739,6 +1822,8 @@ def _run_validator(rank: int, world_size: int) -> None:
 
 
 def main() -> None:
+    # Stacks on SIGUSR1 and an uncaught-exception marker for run_multirank_pcc.sh's watchdogs.
+    install_crash_diagnostics()
     parser = argparse.ArgumentParser(
         prog="prefill_producer",
         description="H2D producer for the prefill runner. Config comes from a YAML manifest "
@@ -1802,22 +1887,33 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
+    retire_clock = _ChunkRetireClock()
+
     def push_forward(pushes: list) -> float:
         for p in pushes:
             logger.info(
                 f"[producer] push slot={p.slot_id} cidx={p.chunk_idx} start={p.actual_start} end={p.actual_end}"
             )
+        for p in pushes:
+            retire_clock.on_push((p.slot_id, p.actual_start, p.actual_end))
         push_start = time.perf_counter()
         _push(service, payload_bytes, *_forward_payload(pushes, lambda slot_id: pools_by_trace[slot_traces[slot_id]]))
         return (time.perf_counter() - push_start) * 1000.0
 
     # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
     # for the barrier would leave the runner blocked on a full ring and the barrier waiting on the runner.
-    drain = start_layer_completion_drain(completion_channel, num_layers=layer_bound, chunk_layers=chunk_layers)
+    drain = start_layer_completion_drain(
+        completion_channel,
+        num_layers=layer_bound,
+        chunk_layers=chunk_layers,
+        on_completion=retire_clock.on_ack,
+        on_chunk_complete=lambda key, cov: retire_clock.on_retire(key, time.perf_counter()),
+    )
     try:
         warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
         if warmup_chunks > 0:
             logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+            retire_clock.warmup = True
             warmup = [
                 ChunkPush(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
                 for cidx in range(warmup_chunks)
@@ -1826,6 +1922,7 @@ def main() -> None:
                 push_forward(warmup[i : i + FORWARD_CHUNKS])
             service.barrier()
             wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
+            retire_clock.warmup = False
             logger.info("[producer] warmup complete; starting the measured request")
 
         stats = run_schedule(cfg, push_fn=push_forward)

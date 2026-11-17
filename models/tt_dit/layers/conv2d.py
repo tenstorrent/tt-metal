@@ -35,6 +35,14 @@ class Conv2d(Module):
         packer_l1_acc=False,
     )
 
+    # Keep each conv's halo/reader config tensors in DRAM instead of L1_SMALL. They stay allocated
+    # with every cached program, so a model that runs many input sizes fills L1_SMALL without it.
+    config_tensors_in_dram: bool = False
+
+    # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
+    # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
+    # so ttnn picks the slicing from the L1 free at call time. Models can extend the table for their
+    # own convs with configure_conv2d.
     slice_params = {
         (1, 4): {
             (512, 512, 512, 64): 16,
@@ -418,9 +426,6 @@ class Conv2d(Module):
             on_host=True,
         )
 
-        self._prepared_weight = None
-        self._prepared_bias = None
-
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
@@ -435,11 +440,8 @@ class Conv2d(Module):
         self.ccl_manager = ccl_manager
         self.use_barrier = use_barrier
 
-        # Prepared (device-resident) weight/bias tensors.  Populated lazily on the first
-        # forward call so they are ready before any trace capture begins.  Stored as plain
-        # attributes (not Parameter) because their shape differs from the raw OIHW weights.
-        self._prepared_weight: ttnn.Tensor | None = None
-        self._prepared_bias: ttnn.Tensor | None = None
+        # (batch, height, width, num_slices) -> device (weight, bias) prepared for that input.
+        self._prepared: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
 
     @classmethod
     def from_torch(
@@ -470,15 +472,15 @@ class Conv2d(Module):
 
         return model
 
+    def _release_prepared(self) -> None:
+        for weight, bias in self._prepared.values():
+            ttnn.deallocate(weight)
+            if bias is not None:
+                ttnn.deallocate(bias)
+        self._prepared.clear()
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # Invalidate any previously prepared device tensors so they are re-prepared on the
-        # next forward call with the new weights.
-        if self._prepared_weight is not None:
-            ttnn.deallocate(self._prepared_weight)
-            self._prepared_weight = None
-        if self._prepared_bias is not None:
-            ttnn.deallocate(self._prepared_bias)
-            self._prepared_bias = None
+        self._release_prepared()
 
         bias = state.pop("bias", None)
         if bias is not None:
@@ -488,12 +490,7 @@ class Conv2d(Module):
             state["bias"] = torch.cat([bias, bias_zeros])
 
     def deallocate_weights(self) -> None:
-        if self._prepared_weight is not None:
-            ttnn.deallocate(self._prepared_weight)
-            self._prepared_weight = None
-        if self._prepared_bias is not None:
-            ttnn.deallocate(self._prepared_bias)
-            self._prepared_bias = None
+        self._release_prepared()
         super().deallocate_weights()
 
     def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
@@ -537,20 +534,27 @@ class Conv2d(Module):
                 raise ValueError(msg)
 
         slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
+        num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
         slice_config = (
-            ttnn.Conv2dSliceConfig(
-                num_slices=slice_params[(h, w, self.in_channels, self.out_channels)],
-                slice_type=ttnn.Conv2dDRAMSliceWidth,
-            )
-            if (h, w, self.in_channels, self.out_channels) in slice_params
+            ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
+            if num_slices is not None
             else None
         )
 
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
-        conv_config = ttnn.Conv2dConfig(act_block_h_override=32, weights_dtype=self.weight.dtype)
+        conv_config = ttnn.Conv2dConfig(
+            act_block_h_override=32,
+            weights_dtype=self.weight.dtype,
+            config_tensors_in_dram=self.config_tensors_in_dram,
+        )
 
-        if self._prepared_weight is None:
+        # The prepared layout depends on the input size and the slice config. The input memory config,
+        # layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each
+        # Conv2d instance always gets inputs with the same memory config, layout and dtype.
+        prepared_key = (b, h, w, num_slices)
+        prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
+        if prepared_weight is None:
             base_kwargs = {
                 "in_channels": in_channels,
                 "out_channels": out_channels,
@@ -565,7 +569,7 @@ class Conv2d(Module):
                 "device": self.mesh_device,
                 "conv_config": conv_config,
             }
-            self._prepared_weight = ttnn.prepare_conv_weights(
+            prepared_weight = ttnn.prepare_conv_weights(
                 weight_tensor=self.weight.data,
                 weights_format="OIHW",
                 input_memory_config=x.memory_config(),
@@ -575,22 +579,22 @@ class Conv2d(Module):
                 slice_config=slice_config,
                 **base_kwargs,
             )
-            self._prepared_weight = ttnn.to_device(self._prepared_weight, self.mesh_device)
+            prepared_weight = ttnn.to_device(prepared_weight, self.mesh_device)
             if self.bias is not None:
-                self._prepared_bias = ttnn.prepare_conv_bias(
+                prepared_bias = ttnn.prepare_conv_bias(
                     bias_tensor=self.bias.data,
                     input_memory_config=x.memory_config(),
                     input_layout=x.get_layout(),
                     input_dtype=x.dtype,
                     **base_kwargs,
                 )
-                self._prepared_bias = ttnn.to_device(self._prepared_bias, self.mesh_device)
+                prepared_bias = ttnn.to_device(prepared_bias, self.mesh_device)
 
         try:
-            x, (out_height, out_width), (self._prepared_weight, self._prepared_bias) = ttnn.conv2d(
+            x, (out_height, out_width), (prepared_weight, prepared_bias) = ttnn.conv2d(
                 input_tensor=x,
-                weight_tensor=self._prepared_weight,
-                bias_tensor=self._prepared_bias,
+                weight_tensor=prepared_weight,
+                bias_tensor=prepared_bias,
                 in_channels=in_channels,
                 out_channels=out_channels,
                 device=self.mesh_device,
@@ -617,6 +621,7 @@ class Conv2d(Module):
                 f"{tuple(self.mesh_device.shape)}: {m.group(1)}"
             )
             raise RuntimeError(msg) from e
+        self._prepared[prepared_key] = (prepared_weight, prepared_bias)
 
         x = ttnn.reshape(x, (b, out_height, out_width, -1))
 
@@ -626,3 +631,27 @@ class Conv2d(Module):
             )
 
         return x
+
+
+def configure_conv2d(
+    module: Module,
+    *,
+    slice_params: dict[tuple[int, ...], dict[tuple[int, int, int, int], int]] | None = None,
+    config_tensors_in_dram: bool | None = None,
+) -> None:
+    """Configure every Conv2d in ``module``'s tree.
+
+    ``slice_params`` (same layout as ``Conv2d.slice_params``) is added on top of the shared table for
+    each mesh shape it names, for these instances only. ``config_tensors_in_dram`` overrides the
+    class default for them.
+    """
+    if isinstance(module, Conv2d):
+        if slice_params is not None:
+            table = dict(Conv2d.slice_params)
+            for mesh_shape, entries in slice_params.items():
+                table[mesh_shape] = {**Conv2d.slice_params.get(mesh_shape, Conv2d.slice_default), **entries}
+            module.slice_params = table
+        if config_tensors_in_dram is not None:
+            module.config_tensors_in_dram = config_tensors_in_dram
+    for _, child in module.named_children():
+        configure_conv2d(child, slice_params=slice_params, config_tensors_in_dram=config_tensors_in_dram)

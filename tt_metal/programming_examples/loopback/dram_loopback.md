@@ -22,7 +22,7 @@ auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program = CreateProgram();
+Program program = CreateProgram(*mesh_device);
 ```
 
 ## Create buffers in DRAM and L1
@@ -52,8 +52,8 @@ Declare the data movement kernel on core `{0,0}` that performs the copy.
 ```cpp
 constexpr CoreCoord core = {0, 0};
 std::vector<uint32_t> dram_copy_compile_time_args;
-TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
-TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
+TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
+TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
 auto dram_copy_kernel_id = CreateKernel(
     program,
     "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",

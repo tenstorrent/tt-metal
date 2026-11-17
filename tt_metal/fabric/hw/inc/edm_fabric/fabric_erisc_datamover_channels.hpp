@@ -434,15 +434,65 @@ using ReceiverChannelBuffersFromAllocs =
 template <typename HEADER_TYPE, auto& ChannelBuffers>
 using SenderEthChannelBuffers = StaticSizedSenderEthChannelBuffers<HEADER_TYPE, ChannelBuffers>;
 
+// A sender channel's connection to its producer, whatever the channel's slot count: the producer's location info, the
+// connection semaphore, the producer's credit address (cached when it connects) and the command buffer of its credits.
+// One type for every channel, so code that only opens and closes connections exists once. An aggregate: the derived
+// interfaces initialize it in place.
+template <uint8_t WORKER_HANDSHAKE_NOC>
+struct EdmChannelWorkerConnection {
+    [[nodiscard]] FORCE_INLINE uint32_t get_worker_semaphore_address() const {
+        return cached_worker_semaphore_address & 0xFFFFFFFF;
+    }
+
+    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
+    FORCE_INLINE void cache_producer_noc_addr() {
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+        const auto& worker_info = *worker_location_info_ptr;
+        uint64_t worker_semaphore_address;
+        worker_semaphore_address = get_noc_addr(
+            (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
+        this->cached_worker_semaphore_address = worker_semaphore_address;
+    }
+
+    [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
+        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
+    }
+
+    // Closes the connection: the semaphore back to unused, `read_counter` (the credits returned so far) into the
+    // producer's location info, and +1 on the producer's teardown semaphore.
+    template <bool posted = false, bool RISC_CPU_DATA_CACHE_ENABLED>
+    FORCE_INLINE void close_connection(uint32_t read_counter) const {
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+        const auto& worker_info = *worker_location_info_ptr;
+        uint64_t worker_semaphore_address = get_noc_addr(
+            (uint32_t)worker_info.worker_xy.x,
+            (uint32_t)worker_info.worker_xy.y,
+            worker_info.worker_teardown_semaphore_address);
+
+        *this->connection_live_semaphore = tt::tt_fabric::connection_interface::unused_connection_value;
+
+        worker_location_info_ptr->edm_read_counter = read_counter;
+
+        noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
+    }
+
+    volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr = nullptr;
+    uint64_t cached_worker_semaphore_address = 0;
+    volatile tt_l1_ptr uint32_t* const connection_live_semaphore = nullptr;
+    uint8_t sender_sync_noc_cmd_buf = write_at_cmd_buf;
+};
+
 // Base class for channel worker interfaces
 // Derived classes implement specific counter management strategies.
 template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED>
-struct EdmChannelWorkerInterface {
-    EdmChannelWorkerInterface() :
-        worker_location_info_ptr(nullptr),
-        cached_worker_semaphore_address(0),
-        connection_live_semaphore(nullptr),
-        sender_sync_noc_cmd_buf(write_at_cmd_buf) {}
+struct EdmChannelWorkerInterface : EdmChannelWorkerConnection<WORKER_HANDSHAKE_NOC> {
+    using Connection = EdmChannelWorkerConnection<WORKER_HANDSHAKE_NOC>;
+    using Connection::cached_worker_semaphore_address;
+    using Connection::connection_live_semaphore;
+    using Connection::sender_sync_noc_cmd_buf;
+    using Connection::worker_location_info_ptr;
+
+    EdmChannelWorkerInterface() : Connection{nullptr, 0, nullptr, write_at_cmd_buf} {}
 
     EdmChannelWorkerInterface(
         // TODO: PERF: See if we can make this non-volatile and then only
@@ -456,10 +506,7 @@ struct EdmChannelWorkerInterface {
         volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value) :
-        worker_location_info_ptr(worker_location_info_ptr),
-        cached_worker_semaphore_address(0),
-        connection_live_semaphore(connection_live_semaphore),
-        sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
+        Connection{worker_location_info_ptr, 0, connection_live_semaphore, sender_sync_noc_cmd_buf} {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
         static_cast<DERIVED*>(this)->reset_counters();
     }
@@ -468,10 +515,6 @@ struct EdmChannelWorkerInterface {
     //
     // local_wrptr trails from_remote_wrptr
     // we have new data if they aren't equal
-
-    [[nodiscard]] FORCE_INLINE uint32_t get_worker_semaphore_address() const {
-        return cached_worker_semaphore_address & 0xFFFFFFFF;
-    }
 
     // Only used for persistent connections (i.e. upstream is EDM)
     template <bool enable_deadlock_avoidance>
@@ -511,26 +554,6 @@ struct EdmChannelWorkerInterface {
 
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
     }
-
-    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
-    FORCE_INLINE void cache_producer_noc_addr() {
-        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        const auto& worker_info = *worker_location_info_ptr;
-        uint64_t worker_semaphore_address;
-        worker_semaphore_address = get_noc_addr(
-            (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
-        this->cached_worker_semaphore_address = worker_semaphore_address;
-    }
-
-    [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
-        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
-    }
-
-
-    volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
-    uint64_t cached_worker_semaphore_address = 0;
-    volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
-    uint8_t sender_sync_noc_cmd_buf;
 };
 
 // Derived class for static-sized sender channels with fixed number of buffer slots.

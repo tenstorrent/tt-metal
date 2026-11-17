@@ -326,19 +326,19 @@ void MorehAdamOperation::MorehAdamProgramFactory::override_runtime_arguments(
     constexpr uint32_t kReaderLrIdx = 5, kReaderStepIdx = 10, kComputeStepIdx = 0;
 
     const auto addr_or_zero = [](const std::optional<Tensor>& t) -> uint32_t {
-        return t.has_value() ? t->buffer()->address() : 0u;
+        return t.has_value() ? t->mesh_buffer().address() : 0u;
     };
     // Mirrors create_descriptor's push order; a null optional was emitted as 0u there too.
     const std::array<uint32_t, 5> reader_addrs{
-        tensor_args.param_in.buffer()->address(),
-        tensor_args.grad.buffer()->address(),
-        tensor_args.exp_avg_in.buffer()->address(),
-        tensor_args.exp_avg_sq_in.buffer()->address(),
+        tensor_args.param_in.mesh_buffer().address(),
+        tensor_args.grad.mesh_buffer().address(),
+        tensor_args.exp_avg_in.mesh_buffer().address(),
+        tensor_args.exp_avg_sq_in.mesh_buffer().address(),
         addr_or_zero(tensor_args.max_exp_avg_sq_in)};
     const std::array<uint32_t, 4> writer_addrs{
-        output_tensor.at(0)->buffer()->address(),
-        output_tensor.at(1)->buffer()->address(),
-        output_tensor.at(2)->buffer()->address(),
+        output_tensor.at(0)->mesh_buffer().address(),
+        output_tensor.at(1)->mesh_buffer().address(),
+        output_tensor.at(2)->mesh_buffer().address(),
         addr_or_zero(output_tensor.at(3))};
 
     const uint32_t f2u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);

@@ -381,7 +381,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, k);
     std::vector<uint32_t> reader_values(indexer_common::reader::Count, 0u);
     const std::array<uint32_t, 6> reader_prefix = {
-        q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), 0u, k_batch_page_offset, kv_len_tiles};
+        q.mesh_buffer().address(),
+        k.mesh_buffer().address(),
+        w.mesh_buffer().address(),
+        0u,
+        k_batch_page_offset,
+        kv_len_tiles};
     std::copy(reader_prefix.begin(), reader_prefix.end(), reader_values.begin());
     append_multicast_axes(reader_values, phys);
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_id, reader_values);
@@ -390,7 +395,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     tt::tt_metal::SetCommonRuntimeArgs(
         program,
         writer_id,
-        {out.buffer()->address(), kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
+        {out.mesh_buffer().address(), kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
     for (uint32_t row = 0; row < rows_used; ++row) {
         for (uint32_t col = 0; col < cols_used; ++col) {
             const CoreCoord core{col, row};
@@ -442,13 +447,13 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     // Refresh the uniform reader block once per dispatch, then copy it to each program.
     // Fused-only slots stay zero on the single-chip/unfused path.
     const std::array<uint32_t, indexer_common::reader::Count> reader_values = {
-        tensors.q.buffer()->address(),
-        tensors.k.buffer()->address(),
-        tensors.weights.buffer()->address(),
+        tensors.q.mesh_buffer().address(),
+        tensors.k.mesh_buffer().address(),
+        tensors.weights.mesh_buffer().address(),
         0u,
         k_batch_page_offset,
         kv_len_tiles};
-    const uint32_t out_address = out.buffer()->address();
+    const uint32_t out_address = out.mesh_buffer().address();
     for (auto& [range, shared] : cached.shared_variables) {
         auto& program = cached.workload.get_programs().at(range);
         auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel);

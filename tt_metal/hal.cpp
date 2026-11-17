@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <hal.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <cstdint>

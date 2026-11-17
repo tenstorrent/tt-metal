@@ -5,12 +5,14 @@
 #include "mla_q_rope_program_factory.hpp"
 
 #include <cstdint>
-#include <tt-metalium/host_api.hpp>
+#include <optional>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "mla_q_rope_device_operation.hpp"
 #include "mla_q_rope_device_operation_types.hpp"
 
 // L1 circular buffer sizes (tiles). Tr <= 4 (asserted below), max_dst_tiles = 4
@@ -36,12 +38,18 @@ constexpr auto kWriterKernelPath =
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/mla_q_rope/device/kernels/compute/mla_q_rope_kernel.cpp";
 
-constexpr uint32_t kReaderArgQInAddr = 0;
-constexpr uint32_t kReaderArgCosAddr = 1;
-constexpr uint32_t kReaderArgSinAddr = 2;
-constexpr uint32_t kReaderArgTransAddr = 3;
+// Kernel push order: reader, writer, then the single compute kernel on all cores
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
+constexpr uint32_t kComputeKernelIdx = 2U;
 
-constexpr uint32_t kWriterArgQOutAddr = 0;
+// reader runtime args
+constexpr uint32_t kQInAddrIdx = 0U;
+constexpr uint32_t kCosAddrIdx = 1U;
+constexpr uint32_t kSinAddrIdx = 2U;
+constexpr uint32_t kTransAddrIdx = 3U;
+// writer runtime args
+constexpr uint32_t kQOutAddrIdx = 0U;
 
 constexpr auto kQPeCbIndex = tt::CBIndex::c_0;
 constexpr auto kCosCbIndex = tt::CBIndex::c_1;
@@ -62,19 +70,24 @@ namespace ttml::metal::ops::mla_q_rope::device {
 
 using namespace tt::constants;
 
-struct MlaQRopeKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute;
-};
+namespace {
 
-MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
+// q_in's (batch, sequence tile row) blocks over the device's compute grid. create_descriptor() pins it against
+// split_work_to_cores, and override_runtime_arguments() walks the same cores from it.
+WorkSplit make_work_split(const ttnn::Tensor& q_in) {
+    const auto& shape = q_in.logical_shape();
+    return compute_work_split(q_in.device()->compute_with_storage_grid_size(), shape[0] * (shape[2] / TILE_HEIGHT));
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor MlaQRopeProgramFactory::create_descriptor(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& q_in = tensor_args.q_in;
     auto& q_out = output;
 
     auto* device = q_in.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     const auto q_shape = q_in.logical_shape();
     const uint32_t B = q_shape[0];
@@ -98,10 +111,12 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
         Tr);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
+    const WorkSplit split = make_work_split(q_in);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2);
 
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(q_in.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
@@ -130,24 +145,17 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     const uint32_t trig_cb_num_tiles = kCbDoubleBuffer * Tr;
     const uint32_t rotated_interm_cb_num_tiles = dst_batch ? max_chunk_tiles : Tr;
 
-    [[maybe_unused]] auto cb_q_pe =
-        create_circular_buffer(program, all_cores, kQPeCbIndex, data_format, single_tile_size, q_pe_cb_num_tiles);
-    [[maybe_unused]] auto cb_cos =
-        create_circular_buffer(program, all_cores, kCosCbIndex, data_format, single_tile_size, trig_cb_num_tiles);
-    [[maybe_unused]] auto cb_sin =
-        create_circular_buffer(program, all_cores, kSinCbIndex, data_format, single_tile_size, trig_cb_num_tiles);
-    [[maybe_unused]] auto cb_trans =
-        create_circular_buffer(program, all_cores, kTransCbIndex, data_format, single_tile_size, 1U);
-    [[maybe_unused]] auto cb_nope =
-        create_circular_buffer(program, all_cores, kNopeCbIndex, data_format, single_tile_size, nope_cb_num_tiles);
-    [[maybe_unused]] auto cb_rotated_in = create_circular_buffer(
-        program, all_cores, kRotatedInIntermCbIndex, data_format, single_tile_size, rotated_interm_cb_num_tiles);
-    [[maybe_unused]] auto cb_cos_interm =
-        create_circular_buffer(program, all_cores, kCosIntermCbIndex, data_format, single_tile_size, Tr);
-    [[maybe_unused]] auto cb_sin_interm =
-        create_circular_buffer(program, all_cores, kSinIntermCbIndex, data_format, single_tile_size, Tr);
-    [[maybe_unused]] auto cb_rope_out =
-        create_circular_buffer(program, all_cores, kRopeOutCbIndex, data_format, single_tile_size, rope_cb_num_tiles);
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kQPeCbIndex, data_format, single_tile_size, q_pe_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kCosCbIndex, data_format, single_tile_size, trig_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kSinCbIndex, data_format, single_tile_size, trig_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kTransCbIndex, data_format, single_tile_size, 1U));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kNopeCbIndex, data_format, single_tile_size, nope_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kRotatedInIntermCbIndex, data_format, single_tile_size, rotated_interm_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kCosIntermCbIndex, data_format, single_tile_size, Tr));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kSinIntermCbIndex, data_format, single_tile_size, Tr));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kRopeOutCbIndex, data_format, single_tile_size, rope_cb_num_tiles));
 
     auto* q_in_buffer = q_in.buffer();
     auto* cos_buffer = tensor_args.cos_cache.buffer();
@@ -180,80 +188,69 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
         dst_batch_heads,
     };
 
-    MlaQRopeKernels kernels;
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
-    kernels.compute = create_compute_kernel(
-        program, all_cores, compute_compile_time_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+    desc.kernels.push_back(  // kReaderKernelIdx
+        make_reader_kernel_descriptor(all_cores, reader_compile_time_args, {}, kReaderKernelPath));
+    desc.kernels.push_back(  // kWriterKernelIdx
+        make_writer_kernel_descriptor(all_cores, writer_compile_time_args, {}, kWriterKernelPath));
+    desc.kernels.push_back(  // kComputeKernelIdx
+        make_compute_kernel_descriptor(
+            all_cores, compute_compile_time_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
 
+    // Slots as named at the top of the file; override_runtime_arguments() rewrites the addresses on every cache hit.
+    // The block counts and tile bases follow from the hashed q_in shape and attributes.
+    auto& reader = desc.kernels[kReaderKernelIdx];
+    auto& writer = desc.kernels[kWriterKernelIdx];
+    auto& compute = desc.kernels[kComputeKernelIdx];
     const uint32_t packed_block_stride = H * Th;
-    for_each_core_with_work(
-        num_cores,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_blocks_per_core_group_1,
-        num_blocks_per_core_group_2,
-        [&](const CoreWork& work) {
-            const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
-            const uint32_t b_start = start_block / Ts;
-            const uint32_t sb_start = start_block % Ts;
-            // Packed: tile id of (b, sb, h=0) = block_index * H * Th
-            const uint32_t packed_base = start_block * packed_block_stride;
-            // Head-major: tile id of (b, h=0, sb) = b * H * tiles_per_head + sb * Th
-            const uint32_t head_major_base = b_start * H * tiles_per_head + sb_start * Th;
-            const uint32_t q_in_tile_base = args.packed_input ? packed_base : head_major_base;
-            const uint32_t q_out_tile_base = args.packed_input ? head_major_base : packed_base;
-            SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {q_in_buffer->address(),
-                 cos_buffer->address(),
-                 sin_buffer->address(),
-                 trans_buffer->address(),
-                 num_blocks,
-                 sb_start,
-                 q_in_tile_base});
-            SetRuntimeArgs(
-                program, kernels.writer, core, {q_out_buffer->address(), num_blocks, sb_start, q_out_tile_base});
-            SetRuntimeArgs(program, kernels.compute, core, {num_blocks});
-        });
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
+        const uint32_t b_start = start_block / Ts;
+        const uint32_t sb_start = start_block % Ts;
+        // Packed: tile id of (b, sb, h=0) = block_index * H * Th
+        const uint32_t packed_base = start_block * packed_block_stride;
+        // Head-major: tile id of (b, h=0, sb) = b * H * tiles_per_head + sb * Th
+        const uint32_t head_major_base = b_start * H * tiles_per_head + sb_start * Th;
+        const uint32_t q_in_tile_base = args.packed_input ? packed_base : head_major_base;
+        const uint32_t q_out_tile_base = args.packed_input ? head_major_base : packed_base;
+        reader.emplace_runtime_args(
+            core, {q_in_buffer, cos_buffer, sin_buffer, trans_buffer, num_blocks, sb_start, q_in_tile_base});
+        writer.emplace_runtime_args(core, {q_out_buffer, num_blocks, sb_start, q_out_tile_base});
+        compute.emplace_runtime_args(core, {num_blocks});
+    });
 
-    return cached_program_t{
-        std::move(program), {kernels.reader, kernels.writer, kernels.compute, num_cores, num_cores_y}};
+    return desc;
 }
 
 void MlaQRopeProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*args*/,
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& shared = cached_program.shared_variables;
-    auto& program = cached_program.program;
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const WorkSplit split = make_work_split(tensor_args.q_in);
 
-    auto* q_in_buffer = tensor_args.q_in.buffer();
-    auto* cos_buffer = tensor_args.cos_cache.buffer();
-    auto* sin_buffer = tensor_args.sin_cache.buffer();
-    auto* trans_buffer = tensor_args.trans_mat.buffer();
-    auto* q_out_buffer = output.buffer();
+    const uint32_t q_in_addr = tensor_args.q_in.buffer()->address();
+    const uint32_t cos_addr = tensor_args.cos_cache.buffer()->address();
+    const uint32_t sin_addr = tensor_args.sin_cache.buffer()->address();
+    const uint32_t trans_addr = tensor_args.trans_mat.buffer()->address();
+    const uint32_t q_out_addr = output.buffer()->address();
 
-    auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
 
-    for_each_core(shared.num_cores, shared.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-        {
-            auto& ra = reader_runtime_args[core.x][core.y];
-            ra[kReaderArgQInAddr] = q_in_buffer->address();
-            ra[kReaderArgCosAddr] = cos_buffer->address();
-            ra[kReaderArgSinAddr] = sin_buffer->address();
-            ra[kReaderArgTransAddr] = trans_buffer->address();
-        }
-        {
-            auto& ra = writer_runtime_args[core.x][core.y];
-            ra[kWriterArgQOutAddr] = q_out_buffer->address();
-        }
+        auto& reader_args = reader_runtime_args[core.x][core.y];
+        reader_args[kQInAddrIdx] = q_in_addr;
+        reader_args[kCosAddrIdx] = cos_addr;
+        reader_args[kSinAddrIdx] = sin_addr;
+        reader_args[kTransAddrIdx] = trans_addr;
+
+        auto& writer_args = writer_runtime_args[core.x][core.y];
+        writer_args[kQOutAddrIdx] = q_out_addr;
     });
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(MlaQRopeDeviceOperation, MlaQRopeProgramFactory);
 
 }  // namespace ttml::metal::ops::mla_q_rope::device

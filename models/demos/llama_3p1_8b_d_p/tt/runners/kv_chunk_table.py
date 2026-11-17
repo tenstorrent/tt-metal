@@ -3,6 +3,7 @@
 """Build the native/legacy shared KvChunkAddressTable for Llama prefill."""
 
 import socket
+import zlib
 
 from .kv_layout import PrefillKVLayout
 
@@ -47,7 +48,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
     }
     api = ttnn.experimental.disaggregation
     base_addresses = tuple(int(t.buffer_address()) for t in (kv_cache.k, kv_cache.v))
-    host_name = socket.gethostname()
+    host_name = f"host-{zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF:08x}"
     configs = {}
     for name in layout.config_names:
         cfg = api.KvChunkAddressTableConfig()
