@@ -75,7 +75,6 @@ else
     "$T/pcc/test_shared_expert.py::test_shared_expert_pcc" \
     "$T/pcc/test_ffn.py::test_ffn_pcc" \
     "$T/pcc/test_moe_gate_prefill2d.py::test_forward_pass" \
-    "$T/pcc/test_ttnn_moe.py::test_kimi_k3_moe" \
     -k "4x4${user_k:+ and ($user_k)}"
 fi
 

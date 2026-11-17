@@ -15,6 +15,7 @@ from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload_size
 
 ADAPTER = get_adapter("kimi_k3_1")
 MESH = (8, 4)
@@ -32,12 +33,13 @@ STAGES = compute_layer_split(
 # runner builds it (one more fails): stage 0 is the bound at 76; stages 1-3 fit 77 / 77 / 93.
 PP4_MAX_USERS = 76
 
-# The runner's mesh: 8x4 torus, the adapter's fabric payload and L1_SMALL, the default trace region.
+# The runner's mesh: 8x4 torus, the adapter's fabric payload (raised to one combine row of the MoE block, K3.1's MoE, as
+# the runner raises it) and L1_SMALL, the default trace region.
 PLACEMENT = [
     pytest.param(
         MESH,
         torus_xy_device_params(
-            fabric_payload_size=ADAPTER.fabric_payload_size(),
+            fabric_payload_size=moe_block_fabric_payload_size(KimiK31Config, ADAPTER.fabric_payload_size()),
             l1_small_size=ADAPTER.l1_small_size,
             trace_region_size=TRACE_REGION_SIZE,
         ),

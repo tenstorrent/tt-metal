@@ -3,9 +3,9 @@
 
 """Which MoE a prefill block builds: TtMoe or the MoE block's C++ ops (ttnn.experimental.moe_block).
 
-A model whose config class is in _BLOCK_DEFAULT runs the MoE block (tt/kimi_k3/moe_block_ffn.py: the gate / shared
-expert from the checkpoint, the routed experts from the TtMoe tensorbin cache); none does yet. Every other model runs
-TtMoe. A caller's ``moe_impl`` ("block" / "ttmoe"), else $MOE_IMPL, overrides the model's default.
+Kimi-K3 and Kimi-K3.1 run the MoE block (tt/kimi_k3/moe_block_ffn.py: the gate / shared expert and the latent pair
+from the checkpoint, the routed experts from the TtMoe tensorbin cache). Every other model runs TtMoe. A caller's
+``moe_impl`` ("block" / "ttmoe"), else $MOE_IMPL, overrides the model's default.
 
 A mesh that runs the block opens with:
 - L1_SMALL: the model's L1_SMALL_SIZE, its one figure, which holds the block's persistent words' slab
@@ -26,10 +26,19 @@ moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
 BLOCK = "block"
 TTMOE = "ttmoe"
-_BLOCK_DEFAULT: tuple = ()  # model config classes whose MoE is the block by default
+_BLOCK_DEFAULT = ("KimiK3Config", "KimiK31Config")  # model config classes whose MoE is the block by default
 
-# The persistent words' slab a core, where the model's word sets need less than MoEBlockConfig.words_slab_bytes:
-_MODEL_WORDS_SLAB: dict = {}
+# The persistent words' slab a core, where the model's word sets need less than MoEBlockConfig.words_slab_bytes. The
+# slab sits in L1_SMALL (the model's L1_SMALL_SIZE holds it), at the top of L1 above ring_mla's static CBs (MLA's
+# chunked attention places them up to a fixed ceiling, 1564224): every byte here is a byte less for them, so the slab
+# is the busiest core's need plus 16 B.
+# - Kimi-K3 / K3.1 (the same MoE): 1712 B. Its busiest cores are the head's ports at chunk 5120 (4x4 SP-axis-1 stage
+#   and 8x4): the mailbox, the x gather's and routing exchange's words, the padded-forward metadata (64 B aligned), the
+#   combine barrier, the dispatch semaphores and the router iteration words - 1696 B.
+_MODEL_WORDS_SLAB = {
+    "KimiK3Config": 1712,
+    "KimiK31Config": 1712,
+}
 
 
 def _model_name(model_cfg) -> Optional[str]:

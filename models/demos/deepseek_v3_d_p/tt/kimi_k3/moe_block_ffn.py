@@ -7,10 +7,10 @@ post-ffn_norm residual as it is.
     x [1, 1, S/SP, H/TP] bf16 TILE (ffn_norm's output: rows over the SP axis, columns over TP)
     -> MoEBlock -> routed + shared [1, 1, S/SP, H/TP] bf16 TILE (what TtMoe returns, unsqueezed)
 
-Kimi-K3 (kimi_k3/block.py) and GLM-5.3 (tt_prefill_block.py), where tt/moe_impl.py picks the block. The model's own
-weights, per layer: the gate (rows permuted to the block's expert order), the shared expert and (K3) the latent pair
-from the checkpoint ($KIMI_K3_CKPT / $GLM53_HF_MODEL, fp8 dequantized); the routed experts laid out on the device from
-TtMoe's bfp4 ttnn cache (cache_path, else K3's: weights.cache_root) by flat_gather.
+Kimi-K3 / K3.1 (kimi_k3/block.py) and GLM-5.3 (tt_prefill_block.py), where tt/moe_impl.py picks the block. The
+model's own weights, per layer: the gate (rows permuted to the block's expert order), the shared expert and (K3) the
+latent pair from the checkpoint (_k3_checkpoint / $GLM53_HF_MODEL, fp8 dequantized); the routed experts laid out on the
+device from TtMoe's bfp4 ttnn cache (cache_path, else K3's: weights.cache_root) by flat_gather.
 
 Expert order: TtMoe holds checkpoint expert gtab[group, chip, le] in slot le of a chip (ExpertMapping, column-major;
 group / chip the chip's coordinates off / along the SP axis); the block's chip n (block_order_perm) holds expert
@@ -77,6 +77,25 @@ class MoEBlockFfnOptions:
     combine_snap: Optional[float] = None
     combine_landing: Optional[str] = None
     sp_axis: int = 0
+
+
+@dataclass
+class MoEBlockPacking:
+    """A packed forward's MoE padding for the MoE block - TtMoe's PackedPadding (moe/tt_moe_gate_prefill.py) for the
+    block, built once a forward and shared by every MoE layer. Eager: the forward's chunks (PrefillChunks, empty ones
+    at the tail); traced: its metadata words on device (common/prefill/prefill_chunk.py forward_metadata_words - the
+    runtime's persistent record, rewritten before every replay). The block's planner reads each chunk's real rows from
+    them and skips the pad rows (a partial chunk's, ahead of a full one too); nothing else is built."""
+
+    chunks: Optional[list] = None
+    forward_metadata: Optional[ttnn.Tensor] = None
+
+    def ffn_kwargs(self) -> dict:
+        assert (self.chunks is None) != (self.forward_metadata is None), "MoEBlockPacking: chunks or forward_metadata"
+        return dict(chunks=self.chunks) if self.chunks is not None else dict(forward_metadata=self.forward_metadata)
+
+    def deallocate(self) -> None:  # (as PackedPadding's; the runtime owns forward_metadata)
+        pass
 
 
 def _combine_config(opts: "MoEBlockFfnOptions"):
@@ -168,15 +187,23 @@ def block_order_perm(mesh, epc, sp_axis: int = 0) -> torch.Tensor:
     return torch.tensor(perm, dtype=torch.long)
 
 
-def _k3_checkpoint() -> Path:
-    """Kimi-K3's checkpoint: $KIMI_K3_CKPT, else the prefill runner's $PREFILL_HF_MODEL (its K3 runs set only that)."""
+def _k3_checkpoint(model_name: str = "KimiK3Config") -> Path:
+    """The checkpoint of a Kimi-K3 family model: K3 - $KIMI_K3_CKPT, else the prefill runner's $PREFILL_HF_MODEL (its
+    K3 runs set only that); K3.1 (the same MoE) - its adapter's (KimiK31Adapter: $KIMI_K31_HF_MODEL, else
+    $PREFILL_HF_MODEL, else hf_model_default)."""
+    if model_name == "KimiK31Config":
+        from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
+
+        a = KimiK31Adapter
+        return Path(os.environ.get(a.env_var) or os.environ.get("PREFILL_HF_MODEL") or a.hf_model_default)
     return Path(os.environ.get("KIMI_K3_CKPT") or os.environ.get("PREFILL_HF_MODEL") or "")
 
 
-def _cache_dir(mesh, sp_axis: int = 0):
+def _cache_dir(mesh, sp_axis: int = 0, model_name: str = "KimiK3Config"):
     """K3's TtMoe tensorbin cache for this mesh (weights.cache_root), where the caller gives no cache_path."""
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 
+    assert model_name == "KimiK3Config", f"MoE block: {model_name} gives its TtMoe cache as cache_path"
     path = cache_root(_k3_checkpoint(), tuple(mesh.shape), 1 - sp_axis)
     assert path is not None, "MoE block: the routed experts come from the TtMoe cache, and it is off"
     return path
@@ -204,7 +231,7 @@ def _glm_nonrouted(layer_idx: int, hf_config):
     return dequantize_state_dict(t, hf_config, dtype=torch.float32), p
 
 
-def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0):
+def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0, model_name: str = "KimiK3Config"):
     """The layer's non-routed weights in the block's expert order: dict of float32 torch tensors (router weight / bias,
     shared gate / up / down, K3: latent down / up / norm)."""
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
@@ -227,7 +254,7 @@ def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0):
             "up": t[sp + "up_proj.weight"].float(),
             "down": t[sp + "down_proj.weight"].float(),
         }
-    ckpt = _k3_checkpoint()
+    ckpt = _k3_checkpoint(model_name)
     assert (ckpt / "model.safetensors.index.json").is_file(), f"K3 MoE block: no checkpoint at {ckpt}"
     p = layer_prefix(ckpt, layer_idx)
     keys = {f"g.{k}": p + v for k, v in GATE_KEYS.items()}
@@ -459,7 +486,9 @@ class TtK3MoEBlockFfn:
         if sources is not None:
             cache = "host weights"  # (the log's label: no TtMoe cache, no checkpoint looked up)
         else:
-            cache = self.cache if self.cache is not None else _cache_dir(self.mesh, self.options.sp_axis)
+            cache = (
+                self.cache if self.cache is not None else _cache_dir(self.mesh, self.options.sp_axis, self.model_name)
+            )
         for n in dst:
             pages = (int(dst[n].shape[-2]) // 32) * (int(dst[n].shape[-1]) // 32)
             got = sum(int(sub[n][0].numel()) for _, _, sub in batches)
@@ -570,7 +599,15 @@ class TtK3MoEBlockFfn:
             from concurrent.futures import ThreadPoolExecutor
 
             pool = ThreadPoolExecutor(max_workers=1)
-            fut = pool.submit(host_weights, self.mesh, self.dims, self.layer_idx, self.hf_config, self.options.sp_axis)
+            fut = pool.submit(
+                host_weights,
+                self.mesh,
+                self.dims,
+                self.layer_idx,
+                self.hf_config,
+                self.options.sp_axis,
+                self.model_name,
+            )
         routed = self._routed_w.get(routed_key)
         if routed is None:
             routed = (
