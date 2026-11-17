@@ -187,6 +187,15 @@ PREP_NORM_SLIM = True
 # R-PREP prep writer: a head's state cores are told that their row landed after that head's block, not after the
 # row's last one.
 PREP_HEAD_UP = True
+# The inverse norms (L2 norm of q / k, RMS norm) on whole tiles: rsqrt(sum + eps) * scale only on the vectors that hold
+# column 0, where the row sum is and which every reader broadcasts (8 of a tile's 32 vectors).
+NORM_RSQRT_COL0 = True
+# R-PREP prep core, at most 16 value heads: softplus and sigmoid of the gate tiles on their left faces only (the gate
+# columns are the value heads').
+PREP_GATES_LEFT = True
+# R-PREP prep core with STATE_FOLD: the chunk vectors exp(c), exp(c_last - c) and -exp(c) only in column 0 of their
+# tiles; the products that read them broadcast it (FPU by column / by row, the M~ product by row).
+PREP_VEC_COL0 = True
 # PREP_NORM_SPLIT: a prep core whose stride position is past the inbox depth sends a row only when the state cores
 # have freed its slot, and its next row's head blocks wait for that send. It normalizes this many of its norm units
 # between the conv and the heads of each later row (the time it would wait), where their o precedes its own rows.
@@ -1537,8 +1546,8 @@ def create_program_descriptor(
                 and _prep_plan_bytes(split_plans, token_dtype) <= budget
             ):
                 norm_split, prep_plans = True, split_plans
-    if tail and not (prep is not None and norm_split and fold):
-        # The tail needs the norm units' routing and the folded step: without them, no tail.
+    if tail and not (prep is not None and norm_split):
+        # The tail needs the norm units' routing: without it, no tail.
         return create_program_descriptor(
             inputs,
             outputs,
@@ -2120,6 +2129,9 @@ def create_program_descriptor(
             ("GDN_RMS_ONE_COPY", str(int(RMS_ONE_COPY and prep is None and unit_lag(unit_depth)))),
             ("GDN_PREP_NORM_SPLIT", str(int(norm_split))),
             ("GDN_PREP_HEAD_UP", str(int(PREP_HEAD_UP))),
+            ("GDN_RSQRT_COL0", str(int(NORM_RSQRT_COL0))),
+            ("GDN_GATES_LEFT", str(int(PREP_GATES_LEFT and value_heads <= 16))),
+            ("GDN_VEC_COL0", str(int(PREP_VEC_COL0))),
             ("GDN_SILU_BF16", str(int(PREP_SILU_BF16) if prep is not None and conv_on_fpu else 0)),
             ("GDN_SILU_MID", str(int(PREP_SILU_MID) if prep is not None and conv_on_fpu else 0)),
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),

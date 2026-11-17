@@ -38,6 +38,10 @@ constexpr uint32_t CM_M = 2;  // FOLD prep core: M, M (*) -exp(c)^T, QD x (M (*)
 constexpr uint32_t CM_MT = 3;
 constexpr uint32_t CM_QDMT = 4;
 constexpr uint32_t FOLD_MAT_PAGES = 5;
+// Host PREP_VEC_COL0 (folded prep core): exp(c), exp(c_last - c) and -exp(c) only in column 0 of their tiles (8 of
+// 32 SFPU vectors each); their readers broadcast it: the FPU products by column / by row of the transposed tile, the
+// M~ product by the row of the transposed tile.
+constexpr bool VEC_COL0 = PREP && FOLD && FPU_KNT && GDN_VEC_COL0 != 0;
 constexpr uint32_t KN_SCALE_BITS = (FOLD     ? GDN_FOLD_UNBIAS_BITS
                                     : FPU_KN ? FPU_UNBIAS_BITS
                                              : ONE_BITS) |
@@ -111,12 +115,31 @@ ALWI void head_prep_vectors(uint32_t row_last) {
         load(cb_tok_coef, CHUNK_BEC_BETA, 2);
         load(cb_chunk_vec, CV_C, 3);
     }
-    binop_with_scalar_tile_init();
-    rsub_unary_tile(1, c_last_bits);  // c_last - c[s] (<= 0 on token rows)
-    exp_tile_init<false>();
-    exp_tile<false>(0);  // exp(c)
-    exp_tile<false>(1);  // exp(c_last - c)
-    if constexpr (M_BETA) {
+    if constexpr (VEC_COL0) {
+#ifdef TRISC_MATH
+        binop_with_scalar_tile_init();
+        sfpu_col0(
+            1, [=] { ckernel::sfpu::calculate_binop_with_scalar<APPROX, RSUB_UNARY, 1, DST_ACCUM_MODE>(c_last_bits); });
+        exp_tile_init<false>();
+        sfpu_col0(0, [] { ckernel::sfpu::calculate_exponential<false, DST_ACCUM_MODE, false, 1>(); });
+        sfpu_col0(1, [] { ckernel::sfpu::calculate_exponential<false, DST_ACCUM_MODE, false, 1>(); });
+#endif
+        copy_dest_values_init();
+        copy_dest_values<DataFormat::Float32>(0, 3);
+#ifdef TRISC_MATH
+        binop_with_scalar_tile_init();
+        sfpu_col0(
+            3, [] { ckernel::sfpu::calculate_binop_with_scalar<APPROX, MUL_UNARY, 1, DST_ACCUM_MODE>(KN_SCALE_BITS); });
+#endif
+    } else {
+        binop_with_scalar_tile_init();
+        rsub_unary_tile(1, c_last_bits);  // c_last - c[s] (<= 0 on token rows)
+        exp_tile_init<false>();
+        exp_tile<false>(0);  // exp(c)
+        exp_tile<false>(1);  // exp(c_last - c)
+    }
+    if constexpr (VEC_COL0) {
+    } else if constexpr (M_BETA) {
         copy_dest_values_init();
         copy_dest_values<DataFormat::Float32>(0, 3);
         binop_with_scalar_tile_init();
@@ -214,8 +237,15 @@ ALWI void head_block(uint32_t head) {
     transpose_dest<true>(2);
     if constexpr (FOLD) {
         transpose_dest<true>(3);
-        mul_binary_tile_init();
-        mul_binary_tile(1, 3, 0);  // M (*) -exp(c)^T: kn's row scaling as M's column scaling (fp32)
+        if constexpr (VEC_COL0) {
+            copy_dest_values_init();
+            copy_dest_values<DataFormat::Float32>(1, 0);
+            sfpu_bcast_row_init();
+            sfpu_mul_bcast_row(0, 3);  // row 0 of the transposed tile is -exp(c)^T
+        } else {
+            mul_binary_tile_init();
+            mul_binary_tile(1, 3, 0);  // M (*) -exp(c)^T: kn's row scaling as M's column scaling (fp32)
+        }
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -261,9 +291,17 @@ ALWI void head_block(uint32_t head) {
         tile_regs_acquire();
         if (part == 1) {
             reconfig_data_format(cb_kq_rows, cb_chunk_vec_mm);
-            mul_init(cb_kq_rows, cb_chunk_vec_mm);
+            if constexpr (VEC_COL0) {
+                mul_bcast_cols_init(cb_kq_rows, cb_chunk_vec_mm);
+            } else {
+                mul_init(cb_kq_rows, cb_chunk_vec_mm);
+            }
             for (uint32_t kt = 0; kt < Kt; ++kt) {
-                mul_tiles(cb_kq_rows, cb_chunk_vec_mm, Kt + kt, CV_EC, kt);
+                if constexpr (VEC_COL0) {
+                    mul_tiles_bcast_cols(cb_kq_rows, cb_chunk_vec_mm, Kt + kt, CV_EC, kt);
+                } else {
+                    mul_tiles(cb_kq_rows, cb_chunk_vec_mm, Kt + kt, CV_EC, kt);
+                }
             }
         }
         reconfig_data_format(cb_kq_rows, cb_chunk_mat);
@@ -341,9 +379,17 @@ ALWI void head_block(uint32_t head) {
     if constexpr (FPU_KNT) {
         tile_regs_acquire();
         reconfig_data_format(cb_knT, cb_chunk_vec_mm);
-        mul_init(cb_knT, cb_chunk_vec_mm);
+        if constexpr (VEC_COL0) {
+            mul_bcast_rows_init(cb_knT, cb_chunk_vec_mm);
+        } else {
+            mul_init(cb_knT, cb_chunk_vec_mm);
+        }
         for (uint32_t kt = 0; kt < Kt; ++kt) {
-            mul_tiles(cb_knT, cb_chunk_vec_mm, kt, CV_WT, kt);
+            if constexpr (VEC_COL0) {
+                mul_tiles_bcast_rows(cb_knT, cb_chunk_vec_mm, kt, CV_WT, kt);
+            } else {
+                mul_tiles(cb_knT, cb_chunk_vec_mm, kt, CV_WT, kt);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -797,9 +843,9 @@ ALWI void chunk_state_prepped(
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_first(0, cb_o_acc, vt0);
+        pack_first(0, o_cb, vt0);
         for (uint32_t i = 1; i < n; ++i) {
-            pack_at(i, cb_o_acc, vt0 + i);
+            pack_at(i, o_cb, vt0 + i);
         }
         tile_regs_release();
     }
