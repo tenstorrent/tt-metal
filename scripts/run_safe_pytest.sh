@@ -15,7 +15,7 @@
 #   Skips flock, device resets, and triage (these require real hardware).
 #   No hang protection — sim runs at kHz, so wall-clock timeouts are meaningless.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--precompile|--precompile-wait|--no-precompile] [--jit-server=host:port] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -30,6 +30,21 @@
 #               wrapper masks pytest's exit code, so a profiled run is reported
 #               PASS as long as profiling completed, regardless of the underlying
 #               test result. Hangs are still detected and still reset the device.
+#   --precompile
+#               Load tests/plugins/precompile.py: a child pytest runs the selected tests on a
+#               mock of this machine and builds the kernels they need into the kernel cache,
+#               while the real run, plain pytest, starts right away. Hardware only.
+#   --precompile-wait
+#               Same, but the real run starts only once the child has built every kernel.
+#   --no-precompile
+#               Plain pytest; kernels compile when a test first needs them.
+#               With none of the three, the plugin decides after collection: on (as
+#               --precompile) for more than $PRECOMPILE_NARROW_MAX_IDS (default 3) tests
+#               outside its skip list, so -k and -m selections count too. Off under the
+#               simulator.
+#   --jit-server=host:port[,host:port]
+#               While precompile is on, build the child's kernels on JIT compile server(s).
+#               The real run itself always compiles locally.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -71,8 +86,26 @@ fi
 DEV_MODE=false
 FAIL_FAST=true
 PROFILE_MODE=false
+PRECOMPILE_MODE=auto
+JIT_SERVER=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --precompile)
+            PRECOMPILE_MODE=stream
+            shift
+            ;;
+        --precompile-wait)
+            PRECOMPILE_MODE=wait
+            shift
+            ;;
+        --no-precompile)
+            PRECOMPILE_MODE=off
+            shift
+            ;;
+        --jit-server=*)
+            JIT_SERVER="${1#*=}"
+            shift
+            ;;
         --dev)
             DEV_MODE=true
             shift
@@ -94,7 +127,7 @@ done
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided"
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]"
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--precompile|--precompile-wait|--no-precompile] [--jit-server=host:port] <test_path> [extra_pytest_args...]"
     exit 3
 fi
 
@@ -255,6 +288,25 @@ else
 fi
 if [[ "$FAIL_FAST" == true ]]; then
     PYTEST_CMD+=(-x)
+fi
+if [[ "$PRECOMPILE_MODE" != off && "$SIM_MODE" == true ]]; then
+    [[ "$PRECOMPILE_MODE" != auto ]] && echo "SAFE_PYTEST: precompile is hardware-only; ignored under the simulator" >&2
+    PRECOMPILE_MODE=off
+fi
+# --jit-server wins over an exported PRECOMPILE_JIT_SERVER.
+JIT_SERVER="${JIT_SERVER:-${PRECOMPILE_JIT_SERVER:-}}"
+if [[ "$PRECOMPILE_MODE" != off ]]; then
+    # auto: the plugin decides after collection, from the tests collected.
+    export PRECOMPILE_DECIDE=$([[ "$PRECOMPILE_MODE" == auto ]] && echo auto || echo on)
+    export PRECOMPILE_WAIT=$([[ "$PRECOMPILE_MODE" == wait ]] && echo 1 || echo 0)
+    export PRECOMPILE_JIT_SERVER="$JIT_SERVER"
+    # The plugin lives in this checkout's tests package; make sure that is the one imported.
+    export PYTHONPATH="${REPO_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+    PYTEST_CMD+=(-p tests.plugins.precompile)
+    echo "SAFE_PYTEST: precompile ${PRECOMPILE_MODE/auto/auto (decided after collection)}${JIT_SERVER:+, JIT server ${JIT_SERVER}}" >&2
+else
+    echo "SAFE_PYTEST: precompile off$([[ "$SIM_MODE" == true ]] && echo " (simulator)")" >&2
+    [[ -n "$JIT_SERVER" ]] && echo "SAFE_PYTEST: --jit-server has no effect while precompile is off" >&2
 fi
 PYTEST_CMD+=("$@")
 
