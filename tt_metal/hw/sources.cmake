@@ -174,6 +174,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/sdpa_custom_mm.h
     inc/api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/sdpa_sub_custom.h
+    inc/api/compute/experimental/sfpu_binary_bcast_pack.h
     inc/api/compute/experimental/sdpa_weighted_reduce.h
     inc/api/compute/experimental/semaphore_compute_impl.h
     inc/api/compute/experimental/sinkhorn.h

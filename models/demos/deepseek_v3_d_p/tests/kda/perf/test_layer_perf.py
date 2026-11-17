@@ -41,10 +41,11 @@ _TIMING_SAMPLES = 5
 # Host-time targets (ms) per (layout, mode), as tests/measure measures them: untraced fastest of 10 after 10 warm-up,
 # traced one replay, both with the CPU clock held. Galaxy: 3 runs on one Galaxy. LoudBox SP8xTP1 and QuietBox SP4xTP1
 # report until a CI run gives their targets. SP8xTP1 and SP4xTP1 open FABRIC_1D_RING, every other case a 2D fabric with
-# K3's payload (kda_device_params).
+# K3's payload (kda_device_params). Both Galaxy targets then less the 19 us that fusing the decay gate's offset add and
+# sigmoid into its matmul saved (#65914).
 _TARGETS_MS = {
-    ("SP8xTP4", "untraced"): 1.49,
-    ("SP8xTP4", "traced"): 1.27,
+    ("SP8xTP4", "untraced"): 1.47,
+    ("SP8xTP4", "traced"): 1.25,
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
 _REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2")
