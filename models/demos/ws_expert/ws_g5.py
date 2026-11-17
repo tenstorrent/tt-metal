@@ -63,7 +63,7 @@ def core_geom(cfg, j):
     """(c, r, K offset, KSL, down column start, down columns, owner) of core j = 5 c + r."""
     c, r = j // NR, j % NR
     k0, ksl, dc = row_geom(cfg, r)
-    ds = (cfg.PC * c + r) * dc if r < OWN_ROWS else OWN_ROWS * 4 * NCOL + dc * c
+    ds = (cfg.PAIRS // NCOL * c + r) * dc if r < OWN_ROWS else OWN_ROWS * 4 * NCOL + dc * c
     return c, r, k0, ksl, ds, dc, r < OWN_ROWS
 
 
