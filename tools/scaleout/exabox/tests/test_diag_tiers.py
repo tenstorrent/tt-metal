@@ -7,8 +7,9 @@
 
 The shell wrappers validate the tier name themselves, before any Python runs,
 so a tier added to tiers.py and not to them is a tier nobody can launch. The
-docker wrapper also hardcodes which tiers want the sys-triage mounts, and
-run_health_check.py its own --tier choices. These tests fail until they agree.
+docker wrapper also hardcodes which tiers want the sys-triage mounts and the
+syseng package, and run_health_check.py its own --tier choices. These tests
+fail until they agree.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
 
 ACCEPTED = set(TIERS) | set(DEPRECATED_TIER_ALIASES)
 
-# A case-statement arm listing the tiers, e.g. `daily|weekly|full|pre_bmc_reboot|light|...)`.
+# A case-statement arm listing the tiers, e.g. `flash|daily|weekly|full|pre_bmc_reboot|light|...)`.
 TIER_ARM_RE = re.compile(r"^\s*((?:[a-z_]+\|)+[a-z_]+)\)", re.MULTILINE)
 
 
@@ -58,6 +59,13 @@ class TestShellWrappersAgree(unittest.TestCase):
         self.assertEqual(
             {name for name, tier in TIERS.items() if tier.sys_triage}, {"full", "pre_bmc_reboot", "post_bmc_reboot"}
         )
+
+    def test_docker_qsfp_tiers(self):
+        # run_diag_docker.sh sets WANT_QSFP, which installs the syseng package and
+        # warns about missing BMC API credentials, on every tier but these.
+        self.assertEqual({name for name, tier in TIERS.items() if not tier.qsfp_tests}, {"flash"})
+        text = (SUITE_DIR / "run_diag_docker.sh").read_text()
+        self.assertIn("[[ ${TIER} != flash ]]", text)
 
     def test_run_health_check_tier_choices(self):
         # parse_args() builds and parses in one go, so read the call instead.
