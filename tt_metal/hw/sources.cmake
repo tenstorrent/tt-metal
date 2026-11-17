@@ -260,6 +260,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/profiler/event_metadata.hpp
     inc/internal/profiler/fabric_event_profiler.hpp
     inc/internal/profiler/kernel_profiler_streaming.hpp
+    inc/internal/profiler/noc_counters.hpp
     inc/internal/profiler/noc_debugging_metadata.hpp
     inc/internal/profiler/noc_debugging_profiler.hpp
     inc/internal/profiler/noc_event_profiler.hpp
