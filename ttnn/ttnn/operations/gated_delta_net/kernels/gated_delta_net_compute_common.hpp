@@ -395,6 +395,9 @@ ALWI void silu_tile_bf16(uint32_t dst) {
 }
 
 // GDN_SILU_MID: x / (1 + exp(-x)) with the bf16 arm's exp, two reciprocal iterations, no rounding to bf16.
+#ifndef GDN_STATE_LEAN
+#define GDN_STATE_LEAN 0
+#endif
 #ifndef GDN_FOLD_ORDER
 #define GDN_FOLD_ORDER 0
 #endif
@@ -1265,7 +1268,11 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
         const bool held = HOLD && first != 0;
         const uint32_t count = (n_state - first) < UPDATE_BATCH ? (n_state - first) : UPDATE_BATCH;
         tile_regs_acquire();
-        begin_loads(src);
+        // Host STATE_LEAN: no load setup for a batch that loads nothing, one pack setup per batch.
+        constexpr bool LEAN = GDN_STATE_LEAN != 0;
+        if (!(LEAN && held && !first_in_pair)) {
+            begin_loads(src);
+        }
         // To cb_state_out the tiles run rotated by `rot` (packed in run order); the writer maps them back.
         const uint32_t run0 = dst == cb_state_out ? first + rot : first;
         auto run_tile = [&](uint32_t i) {
@@ -1293,7 +1300,11 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
         // A batch pushed to cb_state_out moves its write pointer: the next batch packs from index 0.
         const uint32_t pack_base = dst == cb_state_out && !HOLD ? 0 : first;
         for (uint32_t i = 0; i < count; ++i) {
-            pack_first(i, dst, pack_base + i);
+            if (LEAN && i != 0) {
+                pack_at(i, dst, pack_base + i);
+            } else {
+                pack_first(i, dst, pack_base + i);
+            }
         }
         if (held) {
             release_keep();

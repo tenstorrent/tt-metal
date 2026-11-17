@@ -255,6 +255,9 @@ STATE_FOLD = "auto"
 STATE_FOLD_UNBIAS_BITS = 0x3F801800
 # STATE_FOLD, U and O in one window: the v products of both first, then the state products of both.
 STATE_FOLD_ORDER = True
+# R-PREP state update: no load setup for the held batch (it loads nothing after its first step) and one pack setup
+# per batch instead of one per tile. Decode builds keep theirs (B=1 measured 11.95 -> 12.23 us with it).
+STATE_LEAN = True
 # STATE_FOLD: PREP_M_BETA_UNBIAS_Q of the folded step, where v passes the FPU as well (M x V). The smallest setting of
 # the scan at which no gate case's state error is above the unfolded step's.
 STATE_FOLD_M_UNBIAS_Q = 4
@@ -2158,6 +2161,7 @@ def create_program_descriptor(
             ("GDN_NORM_FPU", str(int(prep is not None and PREP_NORM_FPU))),
             ("GDN_L2_FPU", str(int(l2_fpu))),
             ("GDN_FOLD_ORDER", str(int(STATE_FOLD_ORDER))),
+            ("GDN_STATE_LEAN", str(int(STATE_LEAN) if prep is not None else 0)),
             ("GDN_TAIL_FPU", str(int(tail_fpu))),
             ("GDN_L2_UNBIAS_BITS", f"{_float_bits(PREP_L2_UNBIAS):#x}u"),
             ("GDN_L2_Q_SCALE_BITS", f"{_float_bits(key_dim**-0.5 * PREP_L2_UNBIAS):#x}u"),
