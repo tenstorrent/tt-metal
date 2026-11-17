@@ -745,12 +745,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // Quasar is single-NoC, so its multicast channels are lowered for NOC_0, and its kernels say NOC_0 too: the
     // multicast helpers check that a sender's NoC matches its channel's.
     const bool is_quasar_mm = device.arch() == tt::ARCH::QUASAR;
-    const auto dm_hw_config =
-        [is_quasar_mm](tt_metal::DataMovementProcessor proc, tt_metal::NOC noc) -> DataMovementHardwareConfig {
+    const auto dm_hw_config = [is_quasar_mm](tt_metal::DataMovementProcessor proc,
+                                             tt_metal::NOC noc) -> DataMovementHardwareConfig {
         return DataMovementHardwareConfig{
-            .config_1xx =
-                DataMovementHardwareConfig::DataMovement1XXConfig{
-                    .processor = proc, .noc = is_quasar_mm ? tt_metal::NOC::NOC_0 : noc},
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = proc, .noc = is_quasar_mm ? tt_metal::NOC::NOC_0 : noc},
             .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
         };
     };

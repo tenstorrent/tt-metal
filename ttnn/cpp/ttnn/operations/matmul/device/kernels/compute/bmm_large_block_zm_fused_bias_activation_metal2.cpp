@@ -22,7 +22,7 @@
 
 #include "api/compute/eltwise_binary.h"
 #include "experimental/kernel_args.h"
-#ifdef SFPU_ACTIVATION
+#if defined(SFPU_ACTIVATION) || defined(FUSE_BIAS_SFPU)
 #include "bmm_fused_activation.hpp"
 #endif
 
@@ -651,14 +651,7 @@ void kernel_main() {
                                 copy_tile(bias_dfb_id, bias_tile_idx, sfpu_bias_tiles_per_acquire + t);
                             }
                             tile_regs_commit();
-                            // As in apply_activation_from_pack: wait for the math thread's DEST, then address
-                            // the packer's half of it.
-                            PACK(TTI_SEMWAIT(
-                                p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                                semaphore::t6_sem(semaphore::MATH_PACK),
-                                p_stall::STALL_ON_ZERO));
-                            PACK(TT_SETC16(
-                                DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                            pack_sfpu_begin();
                             sfpu_add_bcast_row_init_pack();
                             for (uint32_t t = 0; t < count; t++) {
                                 sfpu_add_bcast_row_pack(t, sfpu_bias_tiles_per_acquire + t);
@@ -673,7 +666,7 @@ void kernel_main() {
                                     activation_param2>::apply(t);
                             }
 #endif
-                            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                            pack_sfpu_end();
                             for (uint32_t t = 0; t < count; t++) {
                                 pack_tile<true>(t, untilize_mode_out_dfb_id, first + t);
                             }
@@ -746,24 +739,11 @@ void kernel_main() {
                         untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #ifdef SFPU_ACTIVATION
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-
-                        // Flip destination register offset for PACKER access
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<
-                                activation_type,
-                                activation_param0,
-                                activation_param1,
-                                activation_param2>::apply(i);
-                        }
-
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        apply_activation_from_pack<
+                            activation_type,
+                            activation_param0,
+                            activation_param1,
+                            activation_param2>(out_subblock_num_tiles);
 #else
                         tile_regs_wait();
 #endif
