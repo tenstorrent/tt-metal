@@ -59,6 +59,8 @@ WS5_SHARED_B1 = os.environ.get("GEMMA4_26B_WS5_SHARED_B1", "1") != "0"
 WS5_MERGED = os.environ.get("GEMMA4_26B_WS5_MERGED", "1") != "0"
 # WS5: batch-1 q / k / v norm + RoPE one head per core (fused_decode/heads.py).
 WS5_HEADS = os.environ.get("GEMMA4_26B_WS5_HEADS", "1") != "0"
+# WS5: the attn boundary and RouterB1 in one program (the router weights stream while the boundary runs)
+WS5_JOIN_ROUTER = os.environ.get("GEMMA4_26B_WS5_JOIN_ROUTER", "1") != "0"
 
 
 class DecodeRopeRows:
@@ -2311,12 +2313,16 @@ class MultichipDecoder(OptimizedDecoder):
             )
         finally:
             attention.fused_partial = False
-        router_in, expert_in, shared_in = f.boundary.attn(partial, f.g_attn, f.router_scale)
-        packed = (
-            f.router(router_in)
-            if f.router is not None
-            else self.layer.moe.router.decode_packed(router_in, prescaled=True)
-        )
+        if f.router is not None and WS5_JOIN_ROUTER:
+            # the router's matmul cores stream their weights while the boundary runs (one program)
+            packed, expert_in, shared_in = f.boundary.attn(partial, f.g_attn, f.router_scale, router=f.router)
+        else:
+            router_in, expert_in, shared_in = f.boundary.attn(partial, f.g_attn, f.router_scale)
+            packed = (
+                f.router(router_in)
+                if f.router is not None
+                else self.layer.moe.router.decode_packed(router_in, prescaled=True)
+            )
         moe = self.moe_b1
         f.last_route = packed  # the routing row of this step (tests read it back after a replay)
         boundary = f.boundary

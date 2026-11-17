@@ -32,6 +32,14 @@ void kernel_main() {
     for (uint32_t t = 0; t < kt; ++t) {
         noc_async_read(s_w.get_noc_addr(core * kt + t), w_l1 + 2048 * t, 2048);
     }
+    constexpr uint32_t wait_ready = get_compile_time_arg_val(w_args.next_compile_time_args_offset());
+    constexpr uint32_t ready_sem = get_compile_time_arg_val(w_args.next_compile_time_args_offset() + 1);
+    if constexpr (wait_ready) {
+        // in the attn boundary's program: x is written once the boundary core increments this semaphore
+        volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem));
+        noc_semaphore_wait(sem, 1);
+        noc_semaphore_set(sem, 0);
+    }
     cb_reserve_back(cb_x, kt);
     const uint32_t x_l1 = get_write_ptr(cb_x);
     // the core's x slice (kt x 32 FP32 values) in one read into the last activation tile's rows 16..31 (faces 2 / 3,

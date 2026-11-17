@@ -40,6 +40,7 @@ class RouterB1:
         self.mm_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
         self.red_set = ttnn.CoreRangeSet([ttnn.CoreRange(self.reducer, self.reducer)])
         self.all_set = self.mm_set.merge(self.red_set)
+        self.mm_noc = [mesh.worker_core_from_logical_core(c) for c in self.cores]
         r = mesh.worker_core_from_logical_core(self.reducer)
         self.red_noc = (r.x, r.y)
         # weight tiles in core order: core (n, kb) holds W[(kb kt + t) tiles, n tile] at pages c kt + t
@@ -63,6 +64,14 @@ class RouterB1:
     def __call__(self, x):
         """x: the flat FP32 router input (one-core sharded tensor, value h at byte 4 h; fused_decode/boundary.py).
         Returns the packed routing row [1, 1, 32, 2k] bf16 ROW_MAJOR (L1)."""
+        kernels, sems, cbs, io, out = self.parts(x)
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
+        return out
+
+    def parts(self, x, ready_sem=None):
+        """The router's kernels / semaphores / CBs / io tensors and its output, for its own program or one it joins
+        (GemmaBoundary.attn with a router: ready_sem = a program semaphore on the matmul cores that the boundary
+        increments once x is written; the matmul cores read their weights meanwhile)."""
         device = self.mesh
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, TILE, 2 * (self.k + self.extra)]),
@@ -114,7 +123,9 @@ class RouterB1:
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNELS / "router_mm_reader.cpp"),
                 core_ranges=self.mm_set,
-                compile_time_args=[cb_x, cb_w, self.kt] + ttnn.TensorAccessorArgs(self.weight).get_compile_time_args(),
+                compile_time_args=[cb_x, cb_w, self.kt]
+                + ttnn.TensorAccessorArgs(self.weight).get_compile_time_args()
+                + [0 if ready_sem is None else 1, ready_sem or 0],
                 runtime_args=reader_rt,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
             ),
@@ -157,7 +168,6 @@ class RouterB1:
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
             ),
         ]
-        ttnn.generic_op(
-            [x, self.weight, self.pes, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
-        )
-        return out
+        if ready_sem is not None:
+            sems.append(ttnn.SemaphoreDescriptor(ready_sem, ttnn.CoreType.WORKER, self.mm_set, 0))
+        return kernels, sems, cbs, [x, self.weight, self.pes, out], out

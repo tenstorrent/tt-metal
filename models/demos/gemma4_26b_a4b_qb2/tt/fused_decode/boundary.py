@@ -204,8 +204,11 @@ class GemmaBoundary:
         pregathered=False,
         tokens=None,
         table=None,
+        joined=None,
     ):
-        """outs: written as row 0 of TILE tensors (half each by bnd_reader.cpp / bnd_sender.cpp); flat_outs: the next
+        """joined: (kernels, semaphores, cbs, io, ready_sem, notify NOC coords) of a program run in this one on other
+        cores (RouterB1.parts): the sender increments `ready_sem` on each notify core once flat output 0 is packed.
+        outs: written as row 0 of TILE tensors (half each by bnd_reader.cpp / bnd_sender.cpp); flat_outs: the next
         compute outputs, packed straight into flat tensors on the boundary core. pregathered: the producers wrote the
         flat partial buffer (self.part) themselves; `parts` are then placeholders."""
         T = self.T
@@ -287,6 +290,11 @@ class GemmaBoundary:
         io += [vf] if vf is not None else []
         if site:
             io.append(recv)
+        j_kernels, j_sems, j_cbs, j_io, ready_sem, notify = joined if joined else ([], [], [], [], 0, [])
+        assert not notify or flat_outs, "the joined program waits on flat output 0"
+        io += [t for t in j_io if all(t is not u for u in io)]
+        notify_ct = [len(notify), ready_sem]
+        notify_rt = [v for xy in notify for v in xy]
 
         mesh_program = ttnn.MeshProgramDescriptor()
         for coord in self.coords:
@@ -295,6 +303,7 @@ class GemmaBoundary:
             sender_ct = [payload, chunk, fwd, bwd, slots, self.CB_PART, 2 * T, T, self.htiles, len(outs)]
             sender_ct += [self.CB_O0, fp32_mask] + acc(o[0]) + acc(o[1]) + acc(o[2])
             sender_ct += [self.CB_SYNC, 1 if pregathered else 0, npart, c, self.ring] + acc(p0) + acc(p1)
+            sender_ct += [self.CB_O0 + len(outs)] + notify_ct
             sender_rt = ttnn.RuntimeArgs()
             sender_rt[self.core.x][self.core.y] = (
                 [
@@ -306,6 +315,7 @@ class GemmaBoundary:
                 ]
                 + [t.buffer_address() for t in o]
                 + [p0.buffer_address(), p1.buffer_address()]
+                + notify_rt
             )
             kernels = [
                 ttnn.KernelDescriptor(
@@ -337,7 +347,7 @@ class GemmaBoundary:
                     ),
                 ),
             ]
-            program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+            program = ttnn.ProgramDescriptor(kernels=kernels + j_kernels, semaphores=list(j_sems), cbs=cbs + j_cbs)
             if site:
                 fabric_args = []
                 src = self.mesh.get_fabric_node_id(coord)
@@ -370,11 +380,20 @@ class GemmaBoundary:
         self._run(0, [hidden], gamma, 1, self.res[0], self.res[0], [self.qkv_in])
         return self.qkv_in
 
-    def attn(self, partial, gamma, router_scale, *, shared_gamma=False):
+    def attn(self, partial, gamma, router_scale, *, shared_gamma=False, router=None):
         """partial: this device's o_proj output, [1, 1, 32, hidden] BF16 TILE (row 0). gamma: gammas([post_attention,
         expert, shared]) (shared_gamma=False: gammas([post_attention, expert]), shared_in = the plain normed vector);
-        router_scale: fp32_vector(router input scale). Returns (router_in FP32, expert_in BF16, shared_in FP32)."""
+        router_scale: fp32_vector(router input scale). Returns (router_in FP32, expert_in BF16, shared_in FP32).
+        router: a RouterB1 run in the same program (flat_router): its matmul cores read their weights while the
+        boundary runs and start once router_in is packed; then returns (packed routing row, expert_in, shared_in)."""
         outs = [self.router_in, self.expert_in, self.shared_in]
+        joined = None
+        if router is not None:
+            assert self.flat_router
+            assert all((c.x, c.y) != (self.core.x, self.core.y) for c in router.cores + [router.reducer])
+            ready = 1
+            kernels, sems, cbs, io, packed = router.parts(self.router_in, ready_sem=ready)
+            joined = (kernels, sems, cbs, io, ready, [(n.x, n.y) for n in router.mm_noc])
         self._run(
             1,
             [partial],
@@ -386,8 +405,9 @@ class GemmaBoundary:
             vf=router_scale,
             out2_gamma=shared_gamma,
             flat_outs=outs if self.flat_router else (outs[1:] if self.flat_moe else ()),
+            joined=joined,
         )
-        return self.router_in, self.expert_in, self.shared_in
+        return (packed if router is not None else self.router_in), self.expert_in, self.shared_in
 
     def moe_pregathered(self, gamma, layer_scalar):
         """moe() with the shared / routed partials already written flat into self.part (pages [0, T) / [T, 2 T)) by

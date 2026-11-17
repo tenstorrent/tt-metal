@@ -19,7 +19,7 @@
 //    FP32 (64 B face rows at bytes 0 / 1024 of each 4 KB tile).
 //
 // runtime args: [part_addr, slot_addr, recv_noc_x, recv_noc_y, sem_addr, out0_addr, out1_addr, out2_addr, p0_addr,
-//                p1_addr, <fabric connection manager args>]
+//                p1_addr, (notify_x, notify_y) x notify, <fabric connection manager args>]
 
 #include <stdint.h>
 
@@ -60,11 +60,16 @@ void kernel_main() {
     constexpr uint32_t ring = get_compile_time_arg_val(o2_args.next_compile_time_args_offset() + 4);
     constexpr auto p0_args = TensorAccessorArgs<o2_args.next_compile_time_args_offset() + 5>();
     constexpr auto p1_args = TensorAccessorArgs<p0_args.next_compile_time_args_offset()>();
+    // a program joined on other cores (RouterB1): increment semaphore `ready_sem` on `notify` cores once flat output 0
+    // (cb_flat0) is packed
+    constexpr uint32_t cb_flat0 = get_compile_time_arg_val(p1_args.next_compile_time_args_offset());
+    constexpr uint32_t notify = get_compile_time_arg_val(p1_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t ready_sem = get_compile_time_arg_val(p1_args.next_compile_time_args_offset() + 2);
     constexpr uint32_t chunks = (payload + chunk - 1) / chunk;
     constexpr uint32_t half = htiles / 2;
 
     if constexpr (slots > 0) {
-        size_t arg_idx = 10;
+        size_t arg_idx = 10 + 2 * notify;  // after the notify NOC coords
         auto fabric = FabricConnectionManager::build_from_args<
             FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(arg_idx);
         PacketHeaderPool::reset();
@@ -128,6 +133,17 @@ void kernel_main() {
         (void)cb_part;
     }
 
+    if constexpr (notify > 0) {
+        // the joined program's cores read flat output 0 from this core once their semaphore is raised
+        cb_wait_front(cb_flat0, tiles);
+        const uint32_t sem_l1 = get_semaphore(ready_sem);
+        for (uint32_t i = 0; i < notify; ++i) {
+            const uint32_t x = get_arg_val<uint32_t>(10 + 2 * i);
+            const uint32_t y = get_arg_val<uint32_t>(11 + 2 * i);
+            noc_semaphore_inc(get_noc_addr(x, y, sem_l1), 1);
+        }
+        noc_async_atomic_barrier();
+    }
     // Outputs: flat -> row 0 of the consumer's tiles [0, half) (bnd_reader.cpp writes the rest).
     if constexpr (outs > 0) {
         DeviceZoneScopedN("BND_WRITE");
