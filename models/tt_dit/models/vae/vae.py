@@ -442,7 +442,8 @@ class VaeResnetBlock(Module):
         h = self.conv2.forward(h)
 
         if self.conv_shortcut is not None:
-            x = self.conv_shortcut.forward(x)
+            # Persistent buffers are keyed by shape: each image size would keep its own set.
+            x = self.conv_shortcut.forward(x, use_persistent_buffer=False)
 
         return x + h
 
