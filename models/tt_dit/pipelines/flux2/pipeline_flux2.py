@@ -52,15 +52,6 @@ _PROMPT_SEQUENCE_LENGTH = 512
 # channels: a channel split adds a reduce-scatter and all-gathers whose programs compile at every new
 # image size. Rows go on the longer mesh axis.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
-    (1, 8): {
-        "sp_axis": 0,
-        "tp_axis": 1,
-        "encoder_tp_axis": 1,
-        "vae_h_axis": 1,
-        "vae_w_axis": 0,
-        "num_links": 1,
-        "topology": ttnn.Topology.Linear,
-    },
     # SP4/TP2 denoised Klein 1% faster than SP2/TP4 at 1024². H4xW2 decoded faster than H2xW4 (0.56 s
     # against 0.78); a channel split TP2 + H4 was faster still (0.47 s).
     (2, 4): {
