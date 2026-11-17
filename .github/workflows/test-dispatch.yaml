@@ -82,11 +82,10 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      # 4-D matrix: board x dtype x shape x shard, with P100a limited by
-      # `exclude` to ONE combo (bf16 x 32x32). One shard per combo: the harness
-      # runs --in-process (device opened once, whole suite in ~1 min), so
-      # sharding only multiplied runner/setup cost. Grid = 4 N150 cells + 1
-      # P100a cell = 5, all off the ONE arch-agnostic build. The shard axis and
+      # 4-D matrix: board x dtype x shape x shard. One shard per combo: the
+      # harness runs --in-process (device opened once, whole suite in ~1 min),
+      # so sharding only multiplied runner/setup cost. Grid = 2 boards x
+      # 2 dtypes x 2 shapes = 8 cells, all off the ONE arch-agnostic build. The shard axis and
       # the -shard-N artifact suffix are kept so the dashboard's download glob
       # is unchanged; `shard:` must match SHARD_TOTAL below and the dashboard
       # workflow's SHARD_TOTAL env. include entries attach
@@ -112,11 +111,6 @@ jobs:
         dtype: [bf16, fp32]
         shape: [32x32, 256x256]
         shard: [1]
-        exclude:
-          - board: p100a
-            dtype: fp32
-          - board: p100a
-            shape: 256x256
         include:
           - board: n150
             label: tt-ubuntu-2204-N150-viommu-stable
