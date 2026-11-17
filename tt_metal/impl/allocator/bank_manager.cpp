@@ -672,25 +672,6 @@ AllocatorState::BufferTypeState BankManager::extract_state(
     return state;
 }
 
-AllocatorState::BufferTypeState BankManager::extract_merged_state() const {
-    AllocatorState::BufferTypeState merged_state;
-    bool first = true;
-
-    // Merge states from all allocators
-    for (const auto& allocator_id : allocator_dependencies_.allocator_ids()) {
-        auto state = extract_state(allocator_id);
-
-        if (first) {
-            merged_state = std::move(state);
-            first = false;
-        } else {
-            merged_state.merge(state);
-        }
-    }
-
-    return merged_state;
-}
-
 void BankManager::mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size) {
     auto* alloc = get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
@@ -728,22 +709,20 @@ void BankManager::mark_deallocated(AllocatorDependencies::AllocatorID allocator_
     invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
 }
 
-void BankManager::apply_state(
+void BankManager::override_state(
     const AllocatorState::BufferTypeState& state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
-    // Validate compatibility
-    TT_FATAL(
-        can_apply_state(state),
-        "Cannot apply state: incompatible configuration (buffer_type: expected {}, got {} | num_banks: expected {}, "
-        "got {} | bank_size: expected {}, got {})",
-        enchantum::to_string(buffer_type_),
-        enchantum::to_string(state.buffer_type),
-        num_banks(),
-        state.num_banks,
-        bank_size(),
-        state.bank_size);
+    // Validate that state can be applied
+    TT_FATAL(can_apply_state(state), "Cannot apply state: incompatible configuration");
 
     auto* alloc = get_allocator_from_id(target_allocator_id);
     TT_FATAL(alloc, "Allocator not initialized for ID {}", target_allocator_id.get());
+
+    // Clear current allocations
+    for (DeviceAddr addr : allocated_buffers_[target_allocator_id.get()]) {
+        alloc->deallocate(addr);
+    }
+    allocated_buffers_[target_allocator_id.get()].clear();
+    allocated_ranges_cache_[target_allocator_id.get()].reset();
 
     // Apply each allocated region
     for (const auto& [start_addr, end_addr] : state.allocated_regions) {
@@ -767,25 +746,6 @@ void BankManager::apply_state(
 
     // Invalidate caches for dependent allocators
     invalidate_allocated_ranges_cache_for_dependent_allocators(target_allocator_id);
-}
-
-void BankManager::override_state(
-    const AllocatorState::BufferTypeState& state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
-    // Validate that state can be applied
-    TT_FATAL(can_apply_state(state), "Cannot apply state: incompatible configuration");
-
-    auto* alloc = get_allocator_from_id(target_allocator_id);
-    TT_FATAL(alloc, "Allocator not initialized for ID {}", target_allocator_id.get());
-
-    // Clear current allocations
-    for (DeviceAddr addr : allocated_buffers_[target_allocator_id.get()]) {
-        alloc->deallocate(addr);
-    }
-    allocated_buffers_[target_allocator_id.get()].clear();
-    allocated_ranges_cache_[target_allocator_id.get()].reset();
-
-    // Apply state
-    apply_state(state, target_allocator_id);
 }
 
 bool BankManager::can_apply_state(const AllocatorState::BufferTypeState& state) const {
