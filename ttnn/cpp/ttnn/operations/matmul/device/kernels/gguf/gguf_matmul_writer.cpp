@@ -41,6 +41,9 @@ void kernel_main() {
     constexpr uint32_t input_sem = get_compile_time_arg_val(2);
     constexpr uint32_t partial_sem = get_compile_time_arg_val(3);
     constexpr auto FMT = static_cast<Format>(get_compile_time_arg_val(4));
+    // IQ2_S's 2 KiB level table is copied to the stack: a static copy would be zeroed at every launch. The 4 KiB tables
+    // (IQ1_S, IQ1_M) stay in L1, as the stack has no room for them.
+    alignas(4) std::uint16_t stack_copy[table_entries<FMT>() == 1024 ? 1024 : 2];
     constexpr uint32_t request_sem = get_compile_time_arg_val(5), answer_sem = get_compile_time_arg_val(6);
     constexpr uint32_t address_sem = get_compile_time_arg_val(7);
     constexpr bool zero_rows = get_compile_time_arg_val(8) == 1;
@@ -153,9 +156,14 @@ void kernel_main() {
                 }
                 asm volatile("fence" ::: "memory");
                 answers.set(++served);
-                if (served == 1) {
-                    // The local copy once the first request is answered, while the reader works on the next.
-                    table = local_level_table<FMT>(table_copy);
+                if (served == (table_entries<FMT>() * 2 <= 1024 ? 1u : 2u)) {
+                    // The local copy once the first request (IQ2_S: the second) is answered, while the reader works on the
+                    // next.
+                    if constexpr (table_entries<FMT>() * 2 <= 1024) {
+                        table = local_level_table<FMT>(table_copy);
+                    } else {
+                        table = local_level_table<FMT, sizeof(stack_copy)>(stack_copy);
+                    }
                 }
             }
         }

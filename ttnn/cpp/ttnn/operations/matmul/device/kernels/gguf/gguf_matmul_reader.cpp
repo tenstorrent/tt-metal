@@ -36,6 +36,9 @@ alignas(4) std::uint16_t table_copy[1024 / 2];  // local_level_table
 void kernel_main() {
     using namespace experimental::gguf;
     constexpr auto FMT = static_cast<Format>(get_compile_time_arg_val(0));
+    // IQ2_S's 2 KiB level table is copied to the stack: a static copy would be zeroed at every launch. The 4 KiB tables
+    // (IQ1_S, IQ1_M) stay in L1, as the stack has no room for them.
+    alignas(4) std::uint16_t stack_copy[table_entries<FMT>() == 1024 ? 1024 : 2];
     constexpr uint32_t ring = get_compile_time_arg_val(1);
     constexpr uint32_t unit = get_compile_time_arg_val(2);
     constexpr uint32_t slots = get_compile_time_arg_val(3);
@@ -215,7 +218,13 @@ void kernel_main() {
         Semaphore requests(request_sem), answers(answer_sem), address(address_sem);
         uint32_t asked = 0;
         if constexpr (is_codebook<FMT>() && !expanded) {
-            table = local_level_table<FMT>(table_copy);
+            if constexpr (table_entries<FMT>() * 2 <= 1024) {
+                table = local_level_table<FMT>(table_copy);
+            } else if (total >= 3) {  // the copy pays off over a few records
+                table = local_level_table<FMT, sizeof(stack_copy)>(stack_copy);
+            } else {
+                table = level_table<FMT>();
+            }
         }
         for (uint32_t i = 0; i < total; i++) {
             if (i + in_flight < total) {
