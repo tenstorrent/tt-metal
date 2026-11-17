@@ -138,7 +138,7 @@ fl_bb_plan() {  # the bus-bar stage's parts in FLEET_BUSBAR_ORDER order, for the
     code) o="$o${o:+, then }code readback (exalens, no load: each core's firmware and kernel code in L1 by strong-majority vote across chips, then a re-read; ${FL_BB_CODE_B} s budget, $FL_BB_CODE_SCOPE scope${FLEET_CODE_ELF_DIR:+, ELF compare}, $([ "$FL_BB_CODE_SCOPE" = smoke ] && echo "2 Tensix + 1 ETH cores per chip" || echo "the next run carries on from the last core read"))" ;;
     maxutil) o="$o${o:+, then }max-util (tt-metal unit_tests_didt_max_util, FPU 92 % DRAM 92 % duty 100 % on every chip, prebuilt archive fleet/maxutil.pin): $FL_BB_MU_LOAD s ($FL_BB_MU_MODE) after ${FL_BB_MU_SETUP} s setup, then ${FL_BB_MU_CRC} s per-core output CRC vote" ;;
     pv) if [ "${FL_PV_SWAP:-}" = maxutil ]; then o="$o${o:+, then }max-util in place of the power virus (FLEET_PV_SWAP=maxutil: this box failed the power virus repeatedly): $FL_BB_MU_LOAD s ($FL_BB_MU_MODE)"
-        else o="$o${o:+, then }the power virus (${FL_PV_RUNNER:-run-ttx} single-core-matrix-pv-fp32-noc.ttx broadcast on $([ -n "$FL_PV_CHIPS" ] && echo "chips $FL_PV_CHIPS only" || echo "every chip"), fleet/pv.pin; a load only, no numeric check; --tdp does not cap it): $FL_BB_PV_LOAD s, stopped early at a brick >= $FL_PV_BRICK_C C or a feed > $FL_PV_FEED_A A (chips' power never stops it), then a glx_reset and recount (tt-smi -glx_reset with its root-port rescan) before C5 and every later tt-metal step"; fi ;; esac; done; echo "$o"
+        else o="$o${o:+, then }the power virus ($([ -n "${FL_PV_AUTO:-}" ] && echo "auto (stock run-ttx where it can run, else run-ttx-kmdtlb)" || echo "${FL_PV_RUNNER:-run-ttx}") single-core-matrix-pv-fp32-noc.ttx broadcast on $([ -n "$FL_PV_CHIPS" ] && echo "chips $FL_PV_CHIPS only" || echo "every chip"), fleet/pv.pin; a load only, no numeric check; --tdp does not cap it): $FL_BB_PV_LOAD s, stopped early at a brick >= $FL_PV_BRICK_C C or a feed > $FL_PV_FEED_A A (chips' power never stops it), then a glx_reset and recount (tt-smi -glx_reset with its root-port rescan) before C5 and every later tt-metal step"; fi ;; esac; done; echo "$o"
 }
 fl_numeric() { grep -q -- '--numeric-every' ./ub0_repro.py 2>/dev/null; }
 # --mode=smoke: run.sh maps it to FLEET=quick with FL_SMOKE=1, so it runs plain run.sh's
@@ -242,12 +242,15 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   # galaxy (11-13, 242 of 240 s, ~168 W per chip); fl_pv_guard keeps it off any box where another process holds a device, or stops
   # a root telemetry collector service for it. run-ttx-kmdtlb is run-ttx with fleet/pv/kmdtlb.py: every TLB window
   # it uses comes from the driver, so fl_pv_guard lets it run beside the telemetry collector (no stop) and still skips it for any
-  # other holder. auto (default, every mode, smoke included): stock run-ttx only, its collector stopped where that works; where the
-  # guard would skip it the power virus is skipped with the WARNING (how to opt in) and the summary says NOT RUN. auto never picks
-  # run-ttx-kmdtlb (11-16: it dropped a chip on b03u02 and a09u08 and left about 2 GB of host memory per run on
-  # shared exabox nodes); FLEET_PV_RUNNER=run-ttx-kmdtlb still runs it. pv_umd was removed (it hung all 32 chips on its first
+  # other holder. auto (default, every mode, smoke included): stock run-ttx where it can run (no other device
+  # holder, or sudo stops the collector service); where it cannot (the telemetry collector holds a window and no sudo stops it, as
+  # on every exabox node) run-ttx-kmdtlb, with one line naming the runner and why; the power virus is skipped with the WARNING
+  # (summary: NOT RUN) only where neither runner can run. (11-16: run-ttx-kmdtlb dropped a chip on b03u02 and a09u08; the A/B in
+  # results/pv-runner-ab-9626 judges it. The 2-4 GB of host memory each device-opening job loses on shared exabox nodes is not
+  # the runner's: it is kernel side, most likely tt-kmd, under any runner, and predates kmdtlb; kmdtlb.py holds no mmap, pinned or DMA memory.) A set
+  # FLEET_PV_RUNNER overrides: that runner only. pv_umd was removed (it hung all 32 chips on its first
   # device run)
-  FL_PV_RUNNER=${FLEET_PV_RUNNER:-auto}; FL_PV_AUTO=""
+  FL_PV_RUNNER=${FLEET_PV_RUNNER:-auto}; FL_PV_AUTO=""; FL_PV_EXCL_RC=""; FL_PV_EXCL_WHY=""
   case $FL_PV_RUNNER in run-ttx|run-ttx-kmdtlb) ;; auto) FL_PV_AUTO=1; FL_PV_RUNNER=run-ttx ;;
     *) echo "FLEET_PV_RUNNER takes run-ttx, run-ttx-kmdtlb or auto (got '$FL_PV_RUNNER'; pv_umd was removed)" >&2; exit 1 ;; esac
   # FLEET_MIX_CHECK_EACH: 1 (default) compares every one of a mix launch's FL_LOAD_HEAVY_N
@@ -377,9 +380,11 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
     || { echo "FLEET_BUSBAR_RW_CHECK_S takes seconds > 0 (got '$FL_BB_RW_CK')" >&2; exit 1; }
   FL_BB_RWP_S=$(( FL_BB_RW_WALL + 60 ))
   FL_BB_STEP_S=$(( ${FLEET_BUSBAR_QUIET_S:-10} + ${FLEET_BUSBAR_BURST_S:-90} + 60 ))   # setup 60 s (measured 39-49 s)
-  # full lengthens only this chunk, 750 s (same code path as plain's 90 s): at the measured 11.19 checked
-  # 16k_bf8_lofi outputs/s per chip that is 8,392 >= 8,100 (750 s keeps the full plan 15 s inside its budget, test_plan_margin) (the catch target for a quad host's 81:00.0 fault). Duration only: added to the run budget
-  FL_DIDT_X_DEF=10; FL_BB_HV_DEF=90; [ "$FLEET" = full ] && [ -z "${FLEET_BUSBAR_HEAVY_S:-}" ] && { FL_BB_HV_DEF=750; FL_DIDT_X_DEF=90; FL_EXTRA_S=$(( ${FL_EXTRA_S:-0} + 660 )); }
+  # full lengthens only this chunk, 750 s (same code path as plain's 90 s). Not yet measured: the count of checked
+  # 16k_bf8_lofi outputs per chip over the whole 750 s chunk with the extras (all-gather and DRAM) running; the 11.19 outputs/s
+  # per chip x 750 s = 8,392 was measured without them (goal 33 target: 8,100 per chip, the catch target for a quad host's
+  # 81:00.0 fault). 750 s keeps the full plan 15 s inside its budget (test_plan_margin). No retune. Duration only: added to the run budget
+  FL_DIDT_X_DEF=10; FL_BB_HV_DEF=90; [ "$FLEET" = full ] && [ -z "${FLEET_BUSBAR_HEAVY_S:-}" ] && { FL_BB_HV_DEF=750; FL_DIDT_X_DEF=$FL_BB_HV_DEF; FL_EXTRA_S=$(( ${FL_EXTRA_S:-0} + 660 )); }
   # the open after the C9 reset, every mode alike; its delay and a planned FLEET_OPEN_PLAN_S open and close are duration only,
   # added to the run budget like the full chunk's (outside the 30 min stage budget)
   FL_OPEN_DELAY=${FLEET_OPEN_DELAY_S:-60}; [[ $FL_OPEN_DELAY =~ ^[0-9]+$ ]] \
@@ -395,7 +400,7 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   # time is unchanged. Scaled from the chunk length, not the mode; time over plain's 2 s is duration only, on the budget
   FL_N4_S=$(( (FL_BB_HV + 49) / 50 )); [ "$FL_N4_S" -gt 2 ] && FL_EXTRA_S=$(( ${FL_EXTRA_S:-0} + FL_N4_S - 2 ))
   # goal 54 stage 2 N5: the extra number formats (bf16 HiFi4, bfp4 LoFi, bf8 HiFi2, bfp4 HiFi3, fp32 HiFi4, int32 eltwise)
-  # run only in the heavy chunk's last FL_DIDT_X_S s (10 plain, 90 full, the whole chunk in smoke), inside its FL_BB_HV: no stage time added
+  # run only in the heavy chunk's last FL_DIDT_X_S s (10 plain, the whole 750 s chunk in full, the whole chunk in smoke), inside its FL_BB_HV: no stage time added
   FL_DIDT_X_OPS=${FLEET_DIDT_X_OPS:-16k_hifi4,16k_bfp4_lofi,16k_bf8_hifi2,16k_bfp4_hifi3,8k_fp32_hifi4,8k_int32_eltwise}; [[ $FL_DIDT_X_OPS =~ ^[0-9a-z_]+(,[0-9a-z_]+)*$ ]] \
     || { echo "FLEET_DIDT_X_OPS takes ub0_repro.py HEAVY names, comma-separated (got '$FL_DIDT_X_OPS')" >&2; exit 1; }
   FL_DIDT_X_S=${FLEET_DIDT_X_S:-$FL_DIDT_X_DEF}; [[ $FL_DIDT_X_S =~ ^[1-9][0-9]*$ ]] || { echo "FLEET_DIDT_X_S takes whole seconds (got '$FL_DIDT_X_S')" >&2; exit 1; }
@@ -479,7 +484,7 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   echo "resets (C2, C9): run whatever the QSFP far hosts do; no peer snapshot is taken"
   exit 0
 }
-fl_isfault() { case "$*" in "HSC FAIL "*": IOUT peak "*) return 0 ;; *WARN*|"NEIGHBOUR CHANGE"*|"GATE BUSY"*) return 1 ;; *FAIL*|*HANG*|*DROP*|*LOST*|*MISSING*) return 0 ;; esac; return 1; }
+fl_isfault() { case "$*" in "HSC FAIL "*) return 0 ;; *WARN*|"NEIGHBOUR CHANGE"*|"GATE BUSY"*) return 1 ;; *FAIL*|*HANG*|*DROP*|*LOST*|*MISSING*) return 0 ;; esac; return 1; }
 # another process (e.g. an H3 server) took the chips after the start gate passed. fl_holder names who holds them
 # now, read-only (gate.sh's holder check only, FLEET_GATE_HOLDERS_ONLY: no workload scan, crictl or docker; never a signal):
 # one "pid P (user U): command" per process outside this run that holds the device or owns a CHIP_IN_USE lock. Not holders:
@@ -527,20 +532,34 @@ FL_AFTX='s/ \[after fault (.*, no reset)\]$//'
 # fl_find <line>: a finding. A fault (FAIL, HANG, DROP, LOST, MISSING; not a WARN, NEIGHBOUR CHANGE or GATE BUSY)
 # turns on full capture: every later snapshot of the run reads lspci -vvv, SEL, exalens.
 # Most callers run it in a pipeline subshell, so FC=1 alone would be lost: $FL_OUT/fc_on carries it (lib/heavy_logs.sh hl_full).
+fl_drop_mark() {  # <DROP line>: the line, plus " [still missing from an earlier drop]" when every chip it names was named by an earlier
+  # DROP line and no recount (rk_recheck: fl_drop_prune) showed it ok since. The stages' DROP lines list every chip not ok, old losses
+  # included; final_verdict.py fold() counts only an unmarked repeat as dropped again. The chips it names are kept in drop_named.txt
+  local f=$FL_OUT/drop_named.txt b all=1 bs
+  bs=$(sed -E 's/^[^(]*\([0-9]+ chips lost//; s/\) (in|after|at) .*//; s/\(root port [^)]*\)//g' <<< "$1" | grep -oE '[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]' | sort -u)
+  [ -n "$bs" ] || { echo "$1"; return 0; }
+  while IFS= read -r b; do grep -qxF -- "$b" "$f" 2> /dev/null || { all=0; echo "$b" >> "$f"; }; done <<< "$bs"
+  if [ $all = 1 ]; then echo "$1 [still missing from an earlier drop]"; else echo "$1"; fi
+}
+fl_drop_prune() {  # <recount lines "<bdf> <chip> <state>">: chips the recount shows ok are no longer named: a later loss of them is a new drop
+  local f=${FL_OUT:-}/drop_named.txt; [ -s "$f" ] || return 0
+  awk 'NR == FNR { if ($3 == "ok") { b = $1; sub(/^0000:/, "", b); ok[b] = 1 } next } !($0 in ok)' <(echo "$1") "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+  return 0
+}
 fl_find() {
   # what the yield's own kill leaves in the stopped load is no finding; from C9 on, findings count again
   if [ -n "${FL_YIELD:-}" ] && [ -z "${FL_C9_ON:-}" ]; then say "not judged (the load was stopped for the broker yield): $*"; return 0; fi
   # another process took the chips (fl_taken): a fault line is not judged, not_judged.txt only, never a finding
   if fl_isfault "$*" && fl_taken; then echo "$*" >> "$FL_OUT/not_judged.txt"; say "NOT JUDGED (chips taken by another process): $*"; return 0; fi
-  case "$*" in "HSC FAIL "*": IOUT peak "*) ;;   # a feed's peak FAIL is its own finding per feed: an earlier fail of the same chips never drops it
-    *) fl_isfault "$*" && fl_bb_dup find "$*" && return 0 ;; esac   # a bus-bar part never re-reports a recorded fault
+  fl_isfault "$*" && fl_bb_dup find "$*" && return 0   # a bus-bar part never re-reports a recorded fault
+  case "$*" in "CHIP DROP tray "*|"POWER DROP tray "*) [ -z "${FL_OUT:-}" ] || ! declare -F fl_drop_mark > /dev/null || set -- "$(fl_drop_mark "$*")" ;; esac   # a chip still missing from an earlier drop line is marked, not a second drop
   case "$*" in *"after fault ("*) ;; *) [ -z "${FL_BB_AFTER:-}" ] || set -- "$* [$FL_BB_AFTER]" ;; esac   # found on chips a fault left with no reset (fl_bb_cont)
   echo "$*" >> "$FL_OUT/findings.txt"; say "$*"
   local p; p=$(tail -n1 "$FL_OUT/phases.txt" 2>/dev/null)   # the stage it came from, for the per-tray why lines
   case "$*" in NUMERIC\ *|L1\ FAIL\ *|L1\ WARN\ *) p=numeric ;; esac   # a numeric mismatch is stage 5, never the bus-bar stage
   printf '%s\t%s\n' "${p%% *}" "$*" >> "$FL_OUT/finding_stage.tsv"
-  local cap=0   # the bus-bar peak FAIL names IOUT_OC_WARN_LIMIT: its '*WARN*' is no warning, it is a FAIL
-  case "$*" in "HSC FAIL "*": IOUT peak "*) cap=1 ;;
+  local cap=0
+  case "$*" in "HSC FAIL "*) cap=1 ;;   # a latch line names VIN_UV_WARN: its '*WARN*' is a latch bit, no warning
     *WARN*|"NEIGHBOUR CHANGE"*|"GATE BUSY"*) ;;
     *FAIL*|*HANG*|*DROP*|*LOST*|*MISSING*|"ETH INCOMPLETE "*"start reset skipped; ETH not-active-at-open not judged"*) cap=1 ;; esac   # an ETH INCOMPLETE (not judged) core line still gets the capture
   [ "$cap" = 1 ] || return 0
@@ -1508,14 +1527,21 @@ fl_aer_stage_after() {  # <phase>: read again; an uncorrectable rise is an AER F
   # and FLEET_AER_STAGE_MIN events an AER WARN (the whole-run delta's grading, lk_check, with a higher event floor: a short
   # stage's hours floor makes 2 events read as 120/h), each naming BDF, tray and stage. Reported lines go
   # to aer_stage/reported, so lk_check post shows the same chip's whole-run line as INFO, not a second finding.
-  local d=$FL_OUT/aer_stage t0 h l; [ -s "$d/$1_pre.tsv" ] || return 0
-  # shellcheck disable=SC2046  # the endpoints read before the stage
-  python3 "$FL_DIR/fleet_py.py" aer "${SYS:-${TRAY_REPRO_SYS:-/sys}}" $(awk -F'\t' 'NR > 1 && $2 == "ep" { print $1 }' "$d/$1_pre.tsv") > "$d/$1_post.tsv" 2> /dev/null || return 0
+  local d=$FL_OUT/aer_stage t0 h l rp; [ -s "$d/$1_pre.tsv" ] || return 0
+  # each endpoint read before the stage, with its root port (<bdf>@<port>): a chip that left PCIe has no sysfs path to find its port by
+  # shellcheck disable=SC2046  # the endpoints, one word each
+  python3 "$FL_DIR/fleet_py.py" aer "${SYS:-${TRAY_REPRO_SYS:-/sys}}" $(awk -F'\t' 'NR > 1 && $2 == "rp" { rp[$3] = $1 } NR > 1 && $2 == "ep" { ep[++n] = $1 }
+    END { for (i = 1; i <= n; i++) print ep[i] (ep[i] in rp ? "@" rp[ep[i]] : "") }' "$d/$1_pre.tsv") > "$d/$1_post.tsv" 2> /dev/null || return 0
   read -r t0 < "$d/$1_t0" || t0=$(date +%s); h=$(awk -v s=$(( $(date +%s) - t0 )) 'BEGIN { printf "%.4f", s / 3600 }')
-  # FLEET_AER_STAGE_FAIL (20, 0 = off): one root port +N correctable with every other +2 or less is an AER FAIL naming the
-  # chip; one the AER poll already reported live this stage (same chip and port) is not written twice
+  # FLEET_AER_STAGE_FAIL (20, 0 = off): one root port +N correctable with every other +2 or less is an AER WARN naming the
+  # chip, and an AER FAIL only when that chip left PCIe or an uncorrectable count under it rose (a correctable-only rise is
+  # no failure: user msgs #9628, #9646); a WARN the AER poll already reported live this stage (same root port) is not
+  # written twice
   while IFS= read -r l; do if [ -n "$l" ]; then
-      case $l in "AER FAIL "*": correctable +"*) grep -qxF "${l%%, host *}" "$d/live" 2> /dev/null && continue ;; esac
+      # the live line names every chip under the port ("a (tray 1), b (tray 1) root port P, host H: correctable +N live at minute"),
+      # the stage-end line one chip: they match by severity and root port; a FAIL is never held back by a live WARN
+      case $l in "AER WARN "*": correctable +"*) rp=${l#* root port }; rp=${rp%%,*}
+        grep -qE "^AER WARN .* root port ${rp//./\\.}\$" "$d/live" 2> /dev/null && continue ;; esac
       fl_find "$l"; echo "${l%%, host *}" >> "$d/reported"; fi
   done < <(python3 "$FL_DIR/fleet_py.py" aerdelta "$d/$1_pre.tsv" "$d/$1_post.tsv" \
     "${FLEET_AER_RATE_WARN:-6}" "$h" "${FLEET_AER_STAGE_MIN:-10}" "${H:-?}" "during $(fl_pn "$1")" "${FLEET_AER_STAGE_FAIL:-20}" 2> /dev/null)
@@ -2028,10 +2054,11 @@ fl_aer_sample() {  # <state.json> <sudo prefix or ""> <bdf=tray list>: one aerra
   # shellcheck disable=SC2086  # $3 is the bdf=tray word list
   FLEET_AER_STAGE_FAIL=${FLEET_AER_STAGE_FAIL:-20} FLEET_AER_HOST=${H:-?} timeout 20 python3 "$FL_DIR/fleet_py.py" aerrate "${SYS:-/sys}" "$1" "$1.dmesg" "$(date +%s)" "${FLEET_AER_MIN_WARN:-500}" $3
 }
-fl_aer_live() {  # the AER poll's rows on stdin to stdout; its live AER FAIL (one port crossed FLEET_AER_STAGE_FAIL this
+fl_aer_live() {  # the AER poll's rows on stdin to stdout; its live AER WARN (one port crossed FLEET_AER_STAGE_FAIL this
   # stage, the others +2 or less) is a finding the minute it crosses, keyed in aer_stage/live so the stage end does not repeat it
+  # (the stage end turns it into a FAIL when the chip left PCIe or an uncorrectable count rose)
   local l; while IFS= read -r l; do case $l in
-    "AER FAIL "*) fl_find "$l"; mkdir -p "$FL_OUT/aer_stage"; echo "${l%%, host *}" | tee -a "$FL_OUT/aer_stage/reported" >> "$FL_OUT/aer_stage/live" ;;
+    "AER WARN "*" live at minute "*) fl_find "$l"; mkdir -p "$FL_OUT/aer_stage"; echo "${l%%, host *}" | tee -a "$FL_OUT/aer_stage/reported" >> "$FL_OUT/aer_stage/live" ;;
     *) echo "$l" ;; esac; done
 }
 fl_aer_stop() {  # stop the poll, one last sample (any rise since the last one, per_min over at least a minute), then one
@@ -2260,6 +2287,22 @@ fl_bb_notrun() {  # <part> <why> [skipped]: the line for a part fl_bb_cont does 
 fl_bb_ncyc() {  # <ub0_repro.py --cycles result.json>: the cycles whose burst ended (0 if none or unread)
   python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("cycles") or []))' "$1" 2>/dev/null || echo 0
 }
+fl_late_drop() {  # <what> <BDFs missing before the glx_reset, short form (41:00.0)>: a chip the glx_reset's own recount (rk_glx_evidence,
+  # RK_GLX_MISS) finds missing that <BDFs> lacks gets a DROP line, one per tray, and joins the loss (chips, seen) whether or not the reset
+  # brings it back; fl_bb_pv_run's late DROP, for the reset after any other stage drop (fl_bb_cont)
+  local late ub g ga bd l n
+  late=$(echo "${RK_GLX_MISS:-}" | sed -n 's/^chip \([^ ]*\) (\([^,]*\), tray .*/\2 \1/p' | sed 's/^[0-9a-fA-F]\{4,\}://' |
+    awk -v k=" $2 " 'NF && index(k, " " $1 " ") == 0' | while read -r l n; do echo "$(rk_tray "$l") $l $n"; done)
+  [ -n "$late" ] || return 0
+  # an earlier loss (seen) already holds its place, capture and chips: a late drop after it neither moves `at` nor captures again
+  [ "${seen:-0}" = 1 ] || fl_lost "$1" > /dev/null || { seen=1; at=$1; }   # back by now: fl_lost's loss mark
+  chips="$chips $(echo "$late" | awk '$3 ~ /^[0-9]+$/ { printf "%s ", $3 }')"
+  for ub in $(echo "$late" | awk 'NF { print $1 }' | sort -u); do
+    g=$(echo "$late" | awk -v u="$ub" '$1 == u' | grep -c .); bd=$(echo "$late" | awk -v u="$ub" '$1 == u { printf "%s%s", (n++ ? " " : ""), $2 }')
+    ga=$(( g + $(for l in $2; do rk_tray "$l"; done | awk -v u="$ub" '$1 == u' | grep -c .) ))
+    fl_find "$([ "$ga" -ge 8 ] && echo POWER || echo CHIP) DROP tray $ub ($g chips lost: $bd$([ "$ga" != "$g" ] && echo "; $ga chips of the tray missing before its glx_reset judged")) in the $1, missing before its glx_reset"
+  done
+}
 fl_bb_cont() {  # <part>: 0 to run it, 1 not to; FL_BB_TRAYS: the trays the part may load ("" = as FLEET_LOAD_TRAYS)
   local p=$1 gone sig why f t lt=""
   FL_BB_TRAYS=""
@@ -2272,7 +2315,8 @@ fl_bb_cont() {  # <part>: 0 to run it, 1 not to; FL_BB_TRAYS: the trays the part
   if [ "$sig" != "${FL_BB_RECSIG:-}" ]; then
     f="$FL_OUT/busbar/recover_${p// /_}"
     say "bus-bar stage: $why before $p: recovering with glx_reset, root-port rescan and recount"
-    RK_STEP="bus-bar stage recovery before $p" rk_reset "$f.log"; FL_BB_RECST=${RK_RESET_STAT:-NONE}
+    RK_GLX_MISS=""; RK_STEP="bus-bar stage recovery before $p" rk_reset "$f.log"; FL_BB_RECST=${RK_RESET_STAT:-NONE}
+    fl_late_drop "bus-bar stage recovery before $p" "$gone"
     say "bus-bar stage: recovery before $p: $RK_RESET_LBL $FL_BB_RECST${RK_RESET_WHY:+ ($RK_RESET_WHY)}"
     FL_BB_NONE=${RK_RESET_NONE:-0}; FL_BB_NOWHY=${RK_RESET_WHY:-}
     RK_BEFORE=$(rk_snap); RK_AFTER=""; RK_OPEN_RAN=""; rk_recheck "bus-bar stage recovery before $p" "$f.check"
@@ -2394,7 +2438,7 @@ fl_busbar() {  # every mode, first load after C2 (one try): the bus-bar stage,
   # $FL_OUT/busbar, chunk_load.py h3shape parts, one cq, as e9831c5 ran them: every bus-bar drop so far came under the CCL mix,
   # not at peak kW; G3 after chunk 1), step = fl_bb_step. After a loss, vr_pg fall, hang or CCL failure the next part runs once
   # fl_bb_cont has recovered. Never writes a power limit.
-  local x mk lt0=${FLEET_LOAD_TRAYS:-}; FL_ETH_PREV=""; FL_BB_RECSIG=""; FL_BB_RECST=""; FL_BB_HUNG1=""; FL_BB_HUNG_OK=""; FL_BB_PIN1=""; FL_BB_FAULTS=""; FL_BB_PGS=""; FL_BB_PGT=""; FL_BB_TRAYS=""; FL_BB_BACK=0; FL_BB_PART=""; FL_BB_LAST=""; FL_BB_NONE=0; FL_BB_NOWHY=""; FL_BB_UNOPEN=""; FL_BB_OPCHK=""; FL_BB_NORUN=""; FL_BB_AFTER=""; FL_BB_AFTWHAT=""; FL_BB_AFTRAN=""; FL_BB_LDLINE=""; FL_BB_LOW=""; FL_BB_LDXY=""; mkdir -p "$FL_OUT/busbar"; : > "$FL_OUT/busbar/named.tsv"; : > "$FL_OUT/busbar/parts.txt"; fl_power_start "$FL_OUT/busbar/power.txt"; fl_aer_start "$FL_OUT/busbar/aer_rate.txt" "bus-bar stage"; pf_start "$FL_OUT/busbar"
+  local x mk lt0=${FLEET_LOAD_TRAYS:-}; FL_ETH_PREV=""; FL_BB_RECSIG=""; FL_BB_RECST=""; FL_BB_HUNG1=""; FL_BB_HUNG_OK=""; FL_BB_PIN1=""; FL_BB_FAULTS=""; FL_BB_PGS=""; FL_BB_PGT=""; FL_BB_TRAYS=""; FL_BB_BACK=0; FL_BB_PART=""; FL_BB_LAST=""; FL_BB_NONE=0; FL_BB_NOWHY=""; FL_BB_UNOPEN=""; FL_BB_OPCHK=""; FL_BB_NORUN=""; FL_BB_AFTER=""; FL_BB_AFTWHAT=""; FL_BB_AFTRAN=""; FL_BB_LDLINE=""; FL_BB_LOW=""; FL_BB_LDXY=""; mkdir -p "$FL_OUT/busbar"; : > "$FL_OUT/busbar/named.tsv"; : > "$FL_OUT/busbar/parts.txt"; fl_power_start "$FL_OUT/busbar/power.txt"; fl_aer_start "$FL_OUT/busbar/aer_rate.txt" "bus-bar stage"; pf_start "$FL_OUT/busbar"; fl_bb_brick_line
   FL_BB_TRY=0; FL_BB_NJ=0; FL_BB_RAN=0; FL_C7_NJ=""; FL_C7_BAD=""; local bad=""   # ub0_repro.py and chunk_load.py tries (#11334), of them not judged at device open, other parts that loaded
   for x in ${FL_BB_ORDER//,/ }; do
     by_check; [ -n "${FL_YIELD:-}" ] && { fl_skip "bus-bar stage $x" "$FL_YIELD"; continue; }   # no part starts after the broker yield
@@ -2718,6 +2762,21 @@ fl_pv_brick_start() {  # <file>: read-only TEMP_PWRBRK* temperatures ("epoch nam
       sleep "${FLEET_PV_BRICK_POLL_S:-10}"; done ) < /dev/null >> "$1" 2> /dev/null &
   FL_PV_BRICK_PID=$!
 }
+fl_bb_brick_line() {  # every mode, once before the bus-bar load: one line, the brick temperature read ran (bricks, hottest) or WARNING why it is off
+  local ip=() w="" o="" n=0 m=""
+  if [ ${#HSC_IP[@]} = 0 ] && ! hsc_route; then w="no ipmitool route (${HSC_WHY:-unknown})"
+  else
+    ip=("${HSC_IP[@]}")
+    if [ "${ip[0]}" = sudo ] && ! timeout -k 2 5 sudo -n -l ipmitool sdr type Temperature > /dev/null 2>&1; then w="sudo -n -l refuses ipmitool sdr type Temperature"
+    else
+      o=$(hsc_i2c timeout -k 2 20 "${ip[@]}" sdr type Temperature 2> /dev/null < /dev/null \
+        | awk -F'|' '$1 ~ /PWRBRK/ && match($5, /[0-9.]+ degrees C/) { v = substr($5, RSTART, RLENGTH - 10) + 0; n++; if (n == 1 || v > m) m = v } END { if (n) print n, m }')
+      [ -n "$o" ] || w="the read answered with no TEMP_PWRBRK row"
+    fi
+  fi
+  if [ -n "$w" ]; then say "bus-bar stage: WARNING brick temperature read OFF before the load: $w (the power virus leg tries it again)"
+  else n=${o% *}; m=${o#* }; say "bus-bar stage: brick temperature read ran before the load: $n bricks, hottest $m C (the power virus leg reads it again)"; fi
+}
 fl_pv_brick_stop() { [ -n "${FL_PV_BRICK_PID:-}" ] || return 0; kill "$FL_PV_BRICK_PID" 2> /dev/null; wait "$FL_PV_BRICK_PID" 2> /dev/null; FL_PV_BRICK_PID=""; }
 fl_pv_psu_start() {  # <file>: the BMC's per-PSU W ("epoch name W") as fast as psu_read answers, every FLEET_PV_PSU_POLL_S (1),
   # until fl_pv_psu_stop (the fast PSU reads pv.py streams to disk). No read: one "# no PSU read: <why>" line, then it ends
@@ -2746,6 +2805,39 @@ fl_slurm_excl() {  # 0 when run.sh runs inside a running Slurm job that holds th
   timeout 20 scontrol show hostnames "$nl" 2> /dev/null | grep -qxF -- "$h" || return 1
   FL_SLURM_EXCL="Slurm job $j holds $h exclusively (OverSubscribe=NO)"
 }
+# fl_pv_fuser <1 beside-collector, else 0>: the holder scan a user without NOPASSWD: ALL can complete (MINFRA-2596 row d): when sudo -n -l
+# lists `fuser -v <the 32 device nodes>`, that one read-only command names every holder. FL_PV_FRC: 0 no holder (rc 1 with empty output),
+# 10 holders (FL_PV_FO lists them: pid, comm, user; ours (run.sh, its tree, its ancestors, its Slurm job) and, beside the collector, the collector and its plumbing left out), 11 not
+# completed (no root, not listed, or unreadable output; FL_PV_FO says why when it was asked). FLEET_PV_SUDO=0: never asked.
+fl_pv_fuser() {
+  local n d=${FLEET_DEVD:-/dev/tenstorrent} nodes=() fu frc rows h
+  FL_PV_FRC=11; FL_PV_FO=""
+  [ "${FLEET_PV_SUDO:-1}" = 1 ] && [ "$(id -u)" != 0 ] && command -v sudo > /dev/null 2>&1 || return 0
+  for n in $(seq 0 31); do nodes+=("$d/$n"); done
+  timeout -k 2 5 sudo -n -l fuser -v "${nodes[@]}" < /dev/null > /dev/null 2>&1 || return 0
+  fu=$(timeout -k 2 30 sudo -n fuser -v "${nodes[@]}" < /dev/null 2>&1); frc=$?
+  fu=$(grep -vE 'does not exist|Cannot stat' <<< "$fu")
+  # ours, as pv_holders.py counts it: run.sh's whole tree (a child holds a node while run-ttx runs), its ancestors, and the processes of
+  # its own Slurm job (cgroup job_<n>); the pids come from /proc (FLEET_PROC), never from the fuser line
+  local pr=${FLEET_PROC:-/proc} a p q k jb pj mine=" $$ "
+  for (( a = $$, k = 0; k < 64; k++ )); do a=$(sed -E 's/^.*\) [A-Za-z] ([0-9]+) .*/\1/' "$pr/$a/stat" 2> /dev/null) || break
+    [[ $a =~ ^[0-9]+$ ]] && [ "$a" -gt 0 ] || break; mine+="$a "; [ "$a" = 1 ] && break; done
+  jb=$(grep -ohE '/job_[0-9]+(/|$)' "$pr/$$/cgroup" 2> /dev/null | head -n 1); jb=${jb%/}   # '/job_77/' (a step cgroup) and '/job_77' (the job cgroup itself) are the same job
+  for p in $(awk '{ sub(/^[^ ]+: +/, ""); if ($2 ~ /^[0-9]+$/ && $3 ~ /^[A-Za-z.]+$/) print $2 }' <<< "$fu" | sort -un); do
+    [[ $mine == *" $p "* ]] && continue
+    for (( q = p, k = 0; k < 64; k++ )); do q=$(sed -E 's/^.*\) [A-Za-z] ([0-9]+) .*/\1/' "$pr/$q/stat" 2> /dev/null) || break
+      [[ $q =~ ^[0-9]+$ ]] && [ "$q" -gt 1 ] || break; [ "$q" = $$ ] && { mine+="$p "; break; }; done
+    [ -z "$jb" ] || [[ $mine == *" $p "* ]] || { pj=$(grep -ohE '/job_[0-9]+(/|$)' "$pr/$p/cgroup" 2> /dev/null | head -n 1); pj=${pj%/}; [ "$pj" != "$jb" ] || mine+="$p "; }
+  done
+  read -r rows h < <(awk -v me="$$" -v mine="$mine" -v bc="$1" '{ sub(/^[^ ]+: +/, ""); if ($2 ~ /^[0-9]+$/ && $3 ~ /^[A-Za-z.]+$/) { r++
+      if ($2 == me || index(mine, " " $2 " ") || (bc == 1 && tolower($4) ~ /^tt[_-]metrics[_-]exp|^tt[_-]fabric[_-]manag|tt[_-]telemetry|telemetry[_-]collector/)) next
+      l = l (l ? ", " : "") $2 " (" $4 ", user " $1 ") holds a device node" } } END { print r + 0, l }' <<< "$fu")
+  if [ -n "$h" ]; then FL_PV_FRC=10; FL_PV_FO=$h
+  elif [ "$rows" -gt 0 ]; then FL_PV_FRC=0
+  elif [ $frc = 1 ] && ! grep -q '[^[:space:]]' <<< "$fu"; then FL_PV_FRC=0
+  else FL_PV_FO="sudo -n fuser -v failed (rc $frc: $(head -c 120 <<< "$fu" | tr '\n' ' '))"; fi
+  return 0
+}
 fl_pv_guard() {  # $1 the part's name: 0 when no other process holds a Tenstorrent device node (fleet/pv_holders.py),
   # else the WARNING (said, and kept in FL_PV_SKIP for the run summary and the RESULT line) and 1. run-ttx
   # programs fixed TLB windows itself and hung chips beside another TLB user (tt_telemetry_collector maps windows 0 and 1);
@@ -2768,9 +2860,28 @@ fl_pv_guard() {  # $1 the part's name: 0 when no other process holds a Tenstorre
   # With FL_PV_RUNNER run-ttx-kmdtlb both scans take --beside-collector: the telemetry collector (its process or pod), the
   # tt-metrics-exporter and the fabric-manager agent (by comm) hold no window that runner touches, so they no longer skip the
   # virus (one line names them) and are never stopped; every other holder does
-  # FL_PV_AUTO (FLEET_PV_RUNNER=auto): stock run-ttx only, never run-ttx-kmdtlb; where the guard skips
-  # it, its WARNING adds that the power virus is NOT RUN and how to opt in to run-ttx-kmdtlb
-  local o rc s=() sf=() w i n=${FLEET_PV_SCANS:-5} ex="" trust="" no nrc bc=()
+  # FL_PV_AUTO (FLEET_PV_RUNNER=auto, the default): each call tries stock run-ttx first (no other TLB user, or a root
+  # collector service it can stop); where that guard would skip it (the collector runs and no sudo stops it, as on every exabox
+  # node) it runs the scans again for run-ttx-kmdtlb, which runs beside the collector. One line names the runner and why; the skip
+  # WARNING (NOT RUN) stays only where neither runner can run. FLEET_PV_RUNNER=run-ttx or run-ttx-kmdtlb overrides: that runner only
+  local o rc s=() sf=() w i n=${FLEET_PV_SCANS:-5} ex="" trust="" no nrc bc=() sfx arc why
+  if [ -z "${FL_PV_PHASE:-}" ]; then   # the outer call: pick the runner, then the body below runs once per runner tried
+    if [ -n "${FL_PV_AUTO:-}" ]; then
+      FL_PV_RUNNER=run-ttx; FL_PV_PHASE=stock; FL_PV_STOCKWHY=""
+      fl_pv_guard "$1"; arc=$?; why="no other process holds a device node (or a collector service it could stop did)"
+      if [ $arc != 0 ]; then
+        FL_PV_RUNNER=run-ttx-kmdtlb; FL_PV_PHASE=kmdtlb
+        fl_pv_guard "$1"; arc=$?; why="stock run-ttx cannot run here (${FL_PV_STOCKWHY:-a device holder}) and run-ttx-kmdtlb runs beside the telemetry collector"
+        [ $arc = 0 ] || FL_PV_RUNNER=run-ttx
+      fi
+      why="auto: $why"
+    else
+      FL_PV_PHASE=set; fl_pv_guard "$1"; arc=$?; why="FLEET_PV_RUNNER=${FL_PV_RUNNER:-run-ttx} set"
+    fi
+    FL_PV_PHASE=""
+    [ $arc != 0 ] || say "$1: power virus runner ${FL_PV_RUNNER:-run-ttx} ($why)"
+    return $arc
+  fi
   [ "${FL_PV_RUNNER:-run-ttx}" = run-ttx-kmdtlb ] && bc=(--beside-collector)
   [ "$(id -u)" = 0 ] || { [ "${FLEET_PV_SUDO:-1}" = 1 ] && sudo_all && { s=(sudo -n); sf=(--sudo); }; }
   FL_PV_SCAN=("${s[@]}" python3 "$FL_DIR/pv_holders.py" --self "$$" --proc "${FLEET_PROC:-/proc}" --glob "${FLEET_DEVD:-/dev/tenstorrent}*"
@@ -2778,8 +2889,22 @@ fl_pv_guard() {  # $1 the part's name: 0 when no other process holds a Tenstorre
   FL_PV_NAMES=("${s[@]}" python3 "$FL_DIR/pv_holders.py" --self "$$" --proc "${FLEET_PROC:-/proc}" --names "${bc[@]}"); FL_PV_NAMED=""
   for (( i = 1; i <= n; i++ )); do
     o=$("${FL_PV_SCAN[@]}"); rc=$?
+    if [ $rc = 11 ] && [ ${#s[@]} = 0 ]; then   # no root, no NOPASSWD: ALL: sudo -n fuser -v over the 32 nodes completes the scan when listed
+      fl_pv_fuser "${bc[*]:+1}"; sfx=""; case $o in *"beside the telemetry collector: "*) sfx="; beside the telemetry collector: ${o##*beside the telemetry collector: }" ;; esac
+      case $FL_PV_FRC in
+        0) rc=0; o=${sfx#; }; [ -n "${FL_PV_FSAID:-}" ] || { FL_PV_FSAID=1; say "$1: holder scan completed by sudo -n fuser -v over the 32 device nodes (listed by sudo -n -l): no process holds one"; } ;;
+        10) rc=10; o="$FL_PV_FO$sfx" ;;
+        *) [ -z "$FL_PV_FO" ] || o="$o; $FL_PV_FO" ;;
+      esac
+    fi
     if [ $rc = 11 ]; then   # incomplete, no holder seen: clean only under an exclusive Slurm allocation (asked once)
-      [ -n "$ex" ] || { fl_slurm_excl && ex=1 || ex=0; }
+      [ -n "$ex" ] || {
+        # auto runs this guard twice (stock run-ttx, then run-ttx-kmdtlb), and again after a collector stop: the scontrol answer is read once per run
+        if [ -n "${FL_PV_AUTO:-}" ] && [ -n "${FL_PV_EXCL_RC:-}" ]; then ex=$FL_PV_EXCL_RC; FL_SLURM_EXCL=${FL_PV_EXCL_WHY:-}
+        else fl_slurm_excl && ex=1 || ex=0; [ -z "${FL_PV_AUTO:-}" ] || { FL_PV_EXCL_RC=$ex; FL_PV_EXCL_WHY=$FL_SLURM_EXCL; }; fi
+        # run-ttx-kmdtlb inside a Slurm job of ours: processes others left on the node do not block it (the job logs one line naming them,
+        # on exabox nodes); an exclusive allocation is not needed, the name check below still stops it beside any other known TLB user
+        if [ "$ex" = 0 ] && [ ${#bc[@]} -gt 0 ] && [[ ${SLURM_JOB_ID:-} =~ ^[0-9]+$ ]]; then ex=1; FL_SLURM_EXCL="our own Slurm job $SLURM_JOB_ID holds a share of this node"; fi; }
       if [ "$ex" = 1 ]; then   # trusted only when no process it can list is a known TLB user by name, all read
         no=$("${FL_PV_NAMES[@]}"); nrc=$?
         case $nrc in
@@ -2793,7 +2918,7 @@ fl_pv_guard() {  # $1 the part's name: 0 when no other process holds a Tenstorre
     [ $i -lt "$n" ] && sleep "${FLEET_PV_SCAN_GAP_S:-2}"
   done
   if [ $rc = 0 ]; then
-    [ -n "$trust" ] && say "$1: $trust; $FL_SLURM_EXCL, so the power virus runs: no visible process holds a device and none is a known TLB user by name, and processes others left on a node allocated to our job do not block it"
+    [ -n "$trust" ] && say "$1: WARNING $trust; $FL_SLURM_EXCL, so the power virus runs: no visible process holds a device and none is a known TLB user by name, and processes others left on a node allocated to our job do not block it"
     o="$o${trust:+; $trust}"; case $o in *"beside the telemetry collector: "*)
       say "$1: runs beside the telemetry collector (${o##*beside the telemetry collector: }): $FL_PV_RUNNER takes every TLB window from the driver and never writes another's" ;; esac
     return 0
@@ -2809,11 +2934,14 @@ fl_pv_guard() {  # $1 the part's name: 0 when no other process holds a Tenstorre
     fi
     o="$o; $FL_PV_PAUSE_WHY"
   fi
+  if [ "${FL_PV_PHASE:-}" = stock ]; then FL_PV_STOCKWHY=$o; return 1; fi   # auto: run-ttx-kmdtlb is tried next, no WARNING yet
   if [ ${#bc[@]} -gt 0 ]; then
     w="WARNING power virus SKIPPED: $o: the power virus runner run-ttx-kmdtlb runs beside the telemetry collector, the tt-metrics-exporter and the fabric-manager agent only, never beside another device user"
+    [ -n "${FL_PV_AUTO:-}" ] && w="$w; power virus NOT RUN: neither runner can run here (stock run-ttx: ${FL_PV_STOCKWHY:-a device holder}), so this run has no power virus coverage"
   else
     w="WARNING power virus SKIPPED: $o: the power virus runner ${FL_PV_RUNNER:-run-ttx} is not device-tested beside another TLB user (run-ttx programs fixed TLB windows itself and hung chips there)"
-    [ -n "${FL_PV_AUTO:-}" ] && w="$w; power virus NOT RUN: the default runner (auto) never picks run-ttx-kmdtlb (it dropped chips and left host memory behind on two exabox nodes, 11-16), so this run has no power virus coverage; set FLEET_PV_RUNNER=run-ttx-kmdtlb to run it beside a telemetry collector"
+    # a runner forced to run-ttx (FLEET_PV_RUNNER=run-ttx, e.g. from a launcher) never tries run-ttx-kmdtlb: say so plainly
+    [ -z "${FL_PV_AUTO:-}" ] && [ "${FLEET_PV_RUNNER:-}" = run-ttx ] && w="$w; power virus NOT RUN: FLEET_PV_RUNNER=run-ttx forces the stock runner, so run-ttx-kmdtlb (which runs beside the telemetry collector) was not tried: unset FLEET_PV_RUNNER or set it to auto, and this run has no power virus coverage"
   fi
   say "$w"; FL_PV_SKIP=${FL_PV_SKIP:+$FL_PV_SKIP$'\n'}$w; FL_PV_NOTRUN=1; return 1   # FL_PV_NOTRUN: the guard's skip, the only RESULT 'NOT RUN'
 }
@@ -2961,7 +3089,7 @@ fl_bb_pv_run() {  # the bus-bar stage's power virus part: fleet/pv.py, FL_PV_RUN
   s0=$(rk_snap | awk '$3 == "ok" { print $1 }')   # the chips answering before the load
   fl_pv_psu_start "$d/psu.txt"
   [ -n "${HSC_LEG:-}" ] && [ -n "${HSC_POLL_PID:-}" ] && hf="$(fl_hsc_f "$HSC_LEG").vin"
-  fl_pv_brick_start "$d/brick.txt" || say "$nm: no brick temperature reads ($FL_PV_BRICK_WHY); it stops on feeds where the HSC reads work, else it runs with no stop (chips' power is not a stop)"
+  fl_pv_brick_start "$d/brick.txt" || say "$nm: WARNING: bus-bar brick temperature check OFF, no reads ($FL_PV_BRICK_WHY); it stops on feeds where the HSC reads work, else it runs with no stop (chips' power is not a stop)"
   [ -n "$hf" ] || say "$nm: no HSC feed reads in this leg; it stops on bricks where read, else it runs with no stop (chips' power is not a stop)"
   say "$nm: $FL_BB_PV_LOAD s of $FL_PV_RUNNER single-core-matrix-pv-fp32-noc.ttx on $([ -n "$FL_PV_CHIPS" ] && echo "chips $FL_PV_CHIPS only" || echo "all chips") (a load only, no numeric check; --tdp does not cap it)"
   hb_start "$nm" "$d/run.log"; fl_pv_watch_start "$d/holder.stop"
@@ -3042,7 +3170,7 @@ fl_bb_pv_run() {  # the bus-bar stage's power virus part: fleet/pv.py, FL_PV_RUN
     for ub in $(echo "$late" | awk 'NF { print $1 }' | sort -u); do
       g=$(echo "$late" | awk -v u="$ub" '$1 == u' | grep -c .); ga=$(( g + $(echo "$pre" | awk -v u="$ub" '$1 == u' | grep -c .) ))
       bd=$(echo "$late" | awk -v u="$ub" '$1 == u { printf "%s%s", (n++ ? " " : ""), $2 }')
-      fl_find "$([ "$ga" -ge 8 ] && echo POWER || echo CHIP) DROP tray $ub ($g chips lost: $bd) in the $nm ($FL_BB_PV_LOAD s $FL_PV_RUNNER load), missing before its glx_reset"
+      fl_find "$([ "$ga" -ge 8 ] && echo POWER || echo CHIP) DROP tray $ub ($g chips lost: $bd$([ "$ga" != "$g" ] && echo "; $ga chips of the tray missing before its glx_reset judged")) in the $nm ($FL_BB_PV_LOAD s $FL_PV_RUNNER load), missing before its glx_reset"
     done
     pre=$(printf '%s\n%s\n' "$pre" "$(echo "$late" | cut -d' ' -f1,2)" | grep -a .)   # no second DROP line after the reset
   fi
@@ -3317,9 +3445,10 @@ fl_open_after() {  # $1 why not ("" runs it). FL_OPEN_DELAY s after
   # the last end reset's recount (FL_RECOUNT_T), one fabric open and close of the box's own chips (fleet/fabric_open.py, the load
   # stages' open path); fl_hsc_latch_end's under-voltage after-read comes after it. A chip lost at the open: one DROP finding per
   # tray naming its BDFs, then the glx_reset-first recovery through rk_end (RK_STEP=C9: the one reset path and Reset: label).
-  # Root-port AER: every chip's root port aer_dev_correctable/nonfatal/fatal read before and after the open; a
-  # rise is an AER FAIL naming the chip by BDF, tray and root port, and gets the same glx_reset-first recovery as a lost chip.
-  local d=$FL_OUT/open k="" why=${1:-} w g s lost lf= ub n bd rs1 ar bl rc9 tr9 ch9 wh9 hd="delay $FL_OPEN_DELAY s (FLEET_OPEN_DELAY_S / --open-delay)"
+  # Root-port AER: every chip's root port aer_dev_correctable/nonfatal/fatal read before and after the open; an uncorrectable
+  # rise or a gone chip is an AER FAIL naming the chip by BDF, tray and root port, with the same glx_reset-first recovery as a
+  # lost chip; a correctable-only rise is an AER WARN naming the chip, no reset.
+  local d=$FL_OUT/open k="" why=${1:-} w g s lost lf= ub n bd rs1 ar arf bl rc9 tr9 ch9 wh9 hd="delay $FL_OPEN_DELAY s (FLEET_OPEN_DELAY_S / --open-delay)"
   [ -z "$why" ] && [ "${HOLD:-0}" = 1 ] && why="--hold leaves the chips as they are"
   [ -z "$why" ] && [ "${RK_GLXRAN:-0}" != 1 ] && [ "${RK_GLX_RAN:-0}" != 1 ] && why="no glx_reset ran"   # RK_GLX_RAN: a clean glx_reset; RK_GLXRAN: rk_end's re-power
   [ -z "$why" ] && [ -n "$(rk_snap | awk '$3 != "ok"')" ] && why="chips missing after the reset: $(rk_snap | awk '$3 != "ok" { print $1 }' | rk_list)"
@@ -3335,9 +3464,15 @@ fl_open_after() {  # $1 why not ("" runs it). FL_OPEN_DELAY s after
   FL_LAUNCH0_S=${FLEET_OPEN_S:-180} FL_WATCH_LOSS=1 fl_watch "${FLEET_OPEN_S:-180}" "${FLEET_OPEN_HANG_S:-120}" "" "$d" "${FL_JOBS[@]}"
   s=${FL_RC[open]:-none}; fl_open_aer "$bl" > "$d/aer_after.tsv" 2>&1
   ar=$(fl_open_aerdiff "$d/aer_before.tsv" "$d/aer_after.tsv")
+  # stack-22 rule (user msgs #9628, #9646): an uncorrectable rise, or a chip gone from the bus, is an AER FAIL; a correctable-only
+  # rise under a chip that still answers is an AER WARN naming the chip (no reset for it)
+  # (the FAIL chips go to a file: fl_find's say line is stdout, and must reach the log, not the variable)
+  : > "$d/aer_fail.txt"
   echo "$ar" | while read -r b rp dc dn df; do [ -n "$b" ] || continue
-    fl_find "AER FAIL tray $(rk_tray "$b") ${b#0000:} root port ${rp#0000:}: aer_dev_correctable +$dc, aer_dev_nonfatal +$dn, aer_dev_fatal +$df at the fabric open $g s after the C9 reset"
+    if [ "$dn" -gt 0 ] || [ "$df" -gt 0 ] || [ "$(rk_snap | awk -v c="$b" '$1 == c { print $3 }')" != ok ]; then v=FAIL; echo "$b" >> "$d/aer_fail.txt"; else v=WARN; fi
+    fl_find "AER $v tray $(rk_tray "$b") ${b#0000:} root port ${rp#0000:}: aer_dev_correctable +$dc, aer_dev_nonfatal +$dn, aer_dev_fatal +$df at the fabric open $g s after the C9 reset"
   done
+  arf=$(cat "$d/aer_fail.txt")
   if [ "$s" = loss ] || [ -n "$(rk_snap | awk '$3 != "ok"')" ]; then
     lf=1
     lost=$(rk_snap | awk '$3 != "ok"' | while read -r b c st; do echo "$(rk_tray "$b") ${b#0000:} $(fl_open_rp "$d/aer_before.tsv" "$b")"; done)
@@ -3349,7 +3484,7 @@ fl_open_after() {  # $1 why not ("" runs it). FL_OPEN_DELAY s after
   elif [ "$s" != 0 ]; then
     fl_find "FABRIC OPEN $([ "$s" = 1 ] && echo FAIL || echo HANG) at the fabric open $g s after the C9 reset (rc $s, no chip lost): $(tail -1 "$d/run.log" 2>/dev/null | cut -c1-200); log $d/run.log"
   fi
-  if { [ "$s" != 0 ] && [ "$s" != 1 ]; } || [ -n "$ar" ] || [ -n "$lf" ]; then   # a loss, a hang or a root-port AER rise: the glx_reset first, then the recount (rk_end), never tt-smi -r
+  if { [ "$s" != 0 ] && [ "$s" != 1 ]; } || [ -n "$arf" ] || [ -n "$lf" ]; then   # a loss, a hang or a root-port AER FAIL (an uncorrectable rise or a gone chip): the glx_reset first, then the recount (rk_end), never tt-smi -r
     rs1=$RK_RESETS; rc9=${RK_RC:-}; tr9=${RK_TRAYS:-}; ch9=${RK_CHIPS:-}; wh9=${RK_WHAT:-}; mkdir -p "$OUT/end_open$k"
     RK_PHASE="C9 reset after the open" RK_STEP=C9 rk_end "$OUT/end_open$k" "$chips" "$seen" "at the open after the C9 reset"
     echo "$RK_RESET_NEW" | grep -a . | while read -r l; do fl_find "$l"; done
@@ -3357,9 +3492,9 @@ fl_open_after() {  # $1 why not ("" runs it). FL_OPEN_DELAY s after
     [ -z "$(rk_snap | awk '$3 != "ok"')" ] && { RK_RC=$rc9; RK_TRAYS=$tr9; RK_CHIPS=$ch9; RK_WHAT=$wh9; }   # every chip back: the C9 rc and wording stand, so the SUSPECT reruns still run; chips still missing keep rk_end's rc
   fi
   case $([ -n "$lf" ] && echo loss || echo "$s") in   # a chip lost after the open reads as a loss whatever the open's rc (0, 1 or a hang)
-    0) [ -n "$ar" ] && FL_OPEN_LINE="Open after reset: $hd, opened $g s after the C9 recount: AER FAIL; glx_reset after it: $(rk_snap | awk '$3 == "ok"' | grep -c .) chips back" ||
-       FL_OPEN_LINE="Open after reset: $hd, opened $g s after the C9 recount: PASS ($(grep -ao '"s": [0-9.]*' "$d/rows.jsonl" 2>/dev/null | tail -1 | grep -o '[0-9.]*$') s open and close)" ;;
-    1) FL_OPEN_LINE="Open after reset: $hd, opened $g s after the C9 recount: FAIL (no chip lost; $d/run.log)$([ -n "$ar" ] && echo "; AER FAIL; glx_reset after it: $(rk_snap | awk '$3 == "ok"' | grep -c .) chips back")" ;;
+    0) [ -n "$arf" ] && FL_OPEN_LINE="Open after reset: $hd, opened $g s after the C9 recount: AER FAIL; glx_reset after it: $(rk_snap | awk '$3 == "ok"' | grep -c .) chips back" ||
+       FL_OPEN_LINE="Open after reset: $hd, opened $g s after the C9 recount: $([ -n "$ar" ] && echo "AER WARN (correctable only)" || echo PASS) ($(grep -ao '"s": [0-9.]*' "$d/rows.jsonl" 2>/dev/null | tail -1 | grep -o '[0-9.]*$') s open and close)" ;;
+    1) FL_OPEN_LINE="Open after reset: $hd, opened $g s after the C9 recount: FAIL (no chip lost; $d/run.log)$([ -n "$arf" ] && echo "; AER FAIL; glx_reset after it: $(rk_snap | awk '$3 == "ok"' | grep -c .) chips back")" ;;
     *) FL_OPEN_LINE="Open after reset: $hd, opened $g s after the C9 recount: $([ -n "$lost" ] && echo "LOST $(echo "$lost" | awk 'NF { printf "%s%s (tray %s)", (k++ ? ", " : ""), $2, $1 }')" || { [ "$s" = loss ] && echo "LOSS reported by the open, every chip present at the recount" || echo "HANG"; }); glx_reset after it: $(rk_snap | awk '$3 == "ok"' | grep -c .) chips back" ;;
   esac
   FL_OPEN_LINE="$FL_OPEN_LINE; root-port AER: $([ -n "$ar" ] && echo "rose on $(echo "$ar" | awk '{ sub(/^0000:/, "", $2); printf "%s%s", (k++ ? ", " : ""), $2 }')" ||
@@ -3536,7 +3671,7 @@ fl_report() {  # after the RESULT line: findings, skipped phases, one line per t
     # under it, one line per finding: part | stage | evidence | cause -> next; a clean tray costs nothing
     [ $((nf + nw + nx + nv)) -gt 0 ] && python3 "$FL_DIR/tray_why.py" "$f" "$u" --stages "$FL_OUT/finding_stage.tsv" ${dt:+--drop-trays "$dt"} 2>/dev/null
     awk -F'|' -v t="(tray $u)" 'index($1, t) { print "    tt-metal " $2 " = " $1 ": " $3 }' "$FL_OUT/devmap.txt" 2>/dev/null
-  done; python3 "$FL_DIR/tray_why.py" "$f" --box 2>/dev/null; } | tee "$FL_OUT/trays.txt"   # the tray lines for the run's last line (rr_final), then the box-level line if 3 or more trays share a bus-bar cause; the loop only prints
+  done; } | tee "$FL_OUT/trays.txt"   # the tray lines for the run's last line (rr_final); the loop only prints
   fl_hsc_latch_table   # the tray HSC latch before/after table, or its one not-read line
   [ -n "$FL_STOP" ] && ! fl_pretake && case $FL_STOP in gate*) RK_RC=10 ;; esac   # a FAIL judged before the take stays rc 8
   [ "$RK_RC" = 0 ] && [ "$fails" -gt 0 ] && RK_RC=8   # 14 (a glx_reset left a chip missing) already counts as a fail

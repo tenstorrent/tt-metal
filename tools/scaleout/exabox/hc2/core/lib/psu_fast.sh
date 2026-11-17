@@ -33,20 +33,28 @@ pf_route() {  # "ok <sdr cache> <ipmitool words>" or "off <why>" on stdout; PF_N
   elif ! command -v ipmitool > /dev/null 2>&1; then echo "off ipmitool not found"; return
   elif [ "$(id -u)" = 0 ]; then ip=(ipmitool)
   else ip=(sudo -n ipmitool); fi
-  { read -r b < /proc/sys/kernel/random/boot_id; } 2> /dev/null
-  for c in "${PF_SDR:-${b:+/tmp/sdr.cache.$b}}" "$FL_OUT/psu/sdr.cache"; do   # reliability/telemetry.py's per-boot cache when there, else our own dump
+  local own="$FL_OUT/psu/sdr.cache" dr   # under sudo: the one fixed path the sudoers rule lists (MINFRA-2596 b1, b2), our own file, never heavy_logs.sh's
+  [ "${ip[0]}" = sudo ] && own=${PF_SDR_FIXED:-/tmp/tray-test-psu-sdr.cache}
+  { read -r b < /proc/sys/kernel/random/boot_id; } 2> /dev/null   # under sudo the per-boot cache is tried first too: when sudo -n -l does not list a read of it, the fixed path is next
+  for c in "${PF_SDR:-${b:+${PF_SDR_DIR:-/tmp}/sdr.cache.$b}}" "$own"; do   # reliability/telemetry.py's per-boot cache when there, else our own dump
     [ -n "$c" ] || continue
-    if [ "$c" = "$FL_OUT/psu/sdr.cache" ] && [ "${PF_NODUMP:-0}" = 1 ]; then
+    if [ "$c" = "$own" ] && [ "${PF_NODUMP:-0}" = 1 ]; then
       [ -s "$c" ] && [ -r "$c" ] || { echo "off route not ready before the stage"; return; }   # a dump takes ~1 min of in-band IPMI: never in a load stage
-    elif [ "$c" = "$FL_OUT/psu/sdr.cache" ]; then mkdir -p "${c%/*}"
+      # with no prep answer the cache counts only when this run's own dump (rc 0) marked it: under sudo the fixed path outlives runs
+      # (root-owned, in /tmp), and on the root path a half-written or killed dump must not be read in a stage either
+      [ "$(cat "$FL_OUT/psu/sdr.dumped" 2> /dev/null)" = "$c" ] || { echo "off route not ready before the stage"; return; }
+    elif [ "$c" = "$own" ]; then mkdir -p "${c%/*}"
       [ "${ip[0]}" = sudo ] && ! timeout --foreground -k 2 5 sudo -n -l ipmitool sdr dump "$c" > /dev/null 2>&1 \
         && { echo "off no root, and sudo -n -l does not allow ipmitool sdr dump"; return; }   # the exact command, never sudo -n true
-      rm -f "$c"; timeout --foreground -k 5 "${PF_DUMP_S:-180}" "${ip[@]}" sdr dump "$c" > /dev/null 2>&1
+      rm -f "$c" "$FL_OUT/psu/sdr.dumped" 2> /dev/null; timeout --foreground -k 5 "${PF_DUMP_S:-180}" "${ip[@]}" sdr dump "$c" > /dev/null 2>&1; dr=$?
+      # under sudo the file may be a root-owned one from an earlier run that rm cannot remove (sticky /tmp): a dump that failed or timed out never leaves a cache we use
+      [ "${ip[0]}" != sudo ] || [ "$dr" = 0 ] || { echo "off ipmitool sdr dump failed under sudo (rc $dr)"; return; }
       [ -s "$c" ] || { echo "off ipmitool sdr dump wrote no SDR cache"; return; }
+      [ "$dr" != 0 ] || echo "$c" > "$FL_OUT/psu/sdr.dumped"   # this run's dump wrote it (read back by PF_NODUMP under sudo)
     elif [ ! -s "$c" ] || [ ! -r "$c" ]; then continue; fi
     # shellcheck disable=SC2086  # PF_NAMES: one word per sensor
     [ "${ip[0]}" = sudo ] && ! timeout --foreground -k 2 5 sudo -n -l ipmitool "-S$c" sensor reading $PF_NAMES -c > /dev/null 2>&1 \
-      && { echo "off no root, and sudo -n -l does not allow ipmitool sensor reading"; return; }
+      && { [ "$c" = "$own" ] || continue; echo "off no root, and sudo -n -l does not allow ipmitool sensor reading"; return; }
     # shellcheck disable=SC2086
     o=$("${lk[@]}" timeout --foreground -k 2 10 "${ip[@]}" "-S$c" sensor reading $PF_NAMES -c 2> /dev/null)   # one at a time with the HSC reads
     n=$(grep -cE '^Power_PSU[0-9]+,[0-9]' <<< "$o")

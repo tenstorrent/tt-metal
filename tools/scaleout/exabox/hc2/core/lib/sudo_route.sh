@@ -6,7 +6,7 @@
 # sudo_route_check <part>...: asks sudo only `sudo -n -l <exact command>` (it lists rules and runs
 # nothing; the rescan part also runs a bare `sudo -n -l`), each under a 5 s cap with stdin closed: it never prompts, never blocks and never runs a privileged command.
 # Parts: hsc (under-voltage/HSC reads: VIN, IOUT, STATUS_*), clear (the HSC CLEAR_FAULTS write), cpld (fleet CPLD/AER reads),
-# sensors (BMC sensor reads), drop (drop-time CPLD read and pre-reset HSC/CPLD dump), rescan (root-port rescan after
+# sensors (BMC sensor reads), busbar (the bus-bar stage's brick temperatures: ipmitool sdr type Temperature), drop (drop-time CPLD read and pre-reset HSC/CPLD dump), rescan (root-port rescan after
 # glx_reset), cycles (power cycles), recovery (recovery cycles). The probe cap is 5 s (SR_PROBE_S, for tests only).
 # Sets SR_STATE (full, partial or none), SR_LINE (the WARN line; empty with full sudo) and SR_TAG (the RESULT line suffix;
 # empty with full sudo). Each part is judged by the check its own reader uses: every reader probes its exact command
@@ -20,15 +20,16 @@ SR_STATE="" SR_LINE="" SR_TAG=""
 SR_PROBE_S=${SR_PROBE_S:-5}
 sr_label() { case $1 in
   hsc) echo "under-voltage/HSC (VIN, IOUT) reads" ;; clear) echo "HSC CLEAR_FAULTS" ;; cpld) echo "CPLD reads" ;; drop) echo "drop-time CPLD read and pre-reset HSC/CPLD dump" ;;
-  sensors) echo "BMC sensor reads" ;; rescan) echo "root-port rescan after glx_reset" ;;
+  sensors) echo "BMC sensor reads" ;; busbar) echo "bus-bar brick temperature reads" ;; rescan) echo "root-port rescan after glx_reset" ;;
   cycles) echo "power cycles" ;; recovery) echo "recovery cycles" ;; *) echo "$1" ;; esac; }
 sr_cmds() { case $1 in   # one exact command per line; the part works when any one is listed
   hsc) echo "ipmitool raw 0x06 0x52 0x11 0x40 0x02 0x79" ;;
   clear) echo "ipmitool raw 0x06 0x52 0x11 0x40 0x00 0x03" ;;
   cpld) echo "ipmitool raw 0x06 0x52 0x11 0x80 0x01 0x1E" ;;
   sensors) echo "ipmitool sdr type Power Supply" ;;
+  busbar) echo "ipmitool sdr type Temperature" ;;
   drop) echo "ipmitool raw 0x06 0x52 0x11 0x80 0x01 0x1E"; echo "ipmitool raw 0x06 0x52 0x11 0x40 0x02 0x79" ;;
-  rescan) echo "tee /sys/bus/pci/rescan" ;;
+  rescan) local u r; for u in 00 40 80 c0; do for r in 01.1 01.2 01.3 01.4 01.5 01.6 01.7 02.1; do echo "tee /sys/bus/pci/devices/0000:$u:$r/rescan"; done; done ;;   # run.sh rk_rescan's exact forms (MINFRA-2596)
   cycles|recovery) echo "ipmitool raw 0x06 0x52 0x09 0x62 0x00 0x14 0x5F 0x54 0x37 0x53"; echo "ipmitool chassis power cycle" ;;
   esac; }
 sr_route_ok() {  # <part> <route>: the route's reader would run: 'sudo -n <cmd>' when sudo -n -l lists <cmd> <read>, else the command is on PATH
@@ -48,15 +49,14 @@ sudo_route_check() {
   [ "$(id -u)" = 0 ] && { SR_STATE=full SR_LINE="" SR_TAG=""; return 0; }
   for p in "$@"; do
     l=no
-    v=""; case $p in hsc|clear|drop) v=${TRAY_REPRO_HSC_IPMITOOL:-} ;; sensors) v=${TRAY_REPRO_PSU_IPMITOOL:-} ;; esac
+    v=""; case $p in hsc|clear|busbar|drop) v=${TRAY_REPRO_HSC_IPMITOOL:-} ;; sensors) v=${TRAY_REPRO_PSU_IPMITOOL:-} ;; esac
     if [ -n "$v" ]; then  # the reader uses this route as is (hsc_route, hsc_dump, psu_read)
       sr_route_ok "$p" "$v" && l=yes
-    elif [ "$p" = rescan ]; then  # same rule as run.sh rk_can_root: a tee-only rule does not count
-      command -v sudo > /dev/null 2>&1 && timeout "$SR_PROBE_S" sudo -n -l < /dev/null 2> /dev/null | grep -qE 'NOPASSWD: *(.*, *)?ALL *(,|$)' && l=yes
     elif command -v sudo > /dev/null 2>&1; then
       while IFS= read -r c; do
         [ -n "$c" ] || continue; read -ra a <<< "$c"; [ "$c" = "ipmitool sdr type Power Supply" ] && a=(ipmitool sdr type "Power Supply")
         timeout "$SR_PROBE_S" sudo -n -l "${a[@]}" < /dev/null > /dev/null 2>&1 && { l=yes; break; }
+        [ $? = 124 ] && break   # a sudo that hangs hangs on every form: one cap per part, not one per form
       done < <(sr_cmds "$p")
     fi
     if [ "$l" = yes ]; then ok+=("$(sr_label "$p")"); else off+=("$(sr_label "$p")"); fi
@@ -67,6 +67,6 @@ sudo_route_check() {
     SR_TAG="; NO SUDO: $(sr_join "${off[@]}") disabled"
   else SR_STATE=partial
     SR_LINE="WARNING: PARTIAL SUDO on $host: works: $(sr_join "${ok[@]}"); DISABLED for this run: $(sr_join "${off[@]}")"
-    SR_TAG="; PARTIAL SUDO: $(sr_join "${off[@]}") disabled"
+    SR_TAG="; PARTIAL SUDO: $(sr_join "${off[@]}") disabled; ran: $(sr_join "${ok[@]}")"
   fi
   return 0; }

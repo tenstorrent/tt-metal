@@ -42,18 +42,6 @@
 #       all         the five in that order, one per try (the default; default tries 5, one shape 3)
 #     It stops at the first drop of <bdf>'s tray and prints the minutes from the shape's load start to it, the tray and
 #     its BDFs. The load runs at the box's own TDP: no power limit is read for it or written.
-#   repro.sh busbar-confirm [--tries N] [--dry-run]   (opt-in, never in plain's or --mode=full's step list; no bdf, no --known-dropped-tray)
-#     A confirm step for a box whose plain run.sh feed-peak FAIL (HSC FAIL ... IOUT peak) already flagged it, not a
-#     screen for a clean box. One try is run.sh cut to the bus-bar stage, all 4 trays: 25 min of the CCL mix chunk, then
-#     the heavy chunk with the extra DIDT formats over the whole 15 min (variant F of #12436), about 42 min of load, about
-#     45 min with setup. Stops at the first drop. Default tries 1.
-#     The verdict comes only from a tray drop (POWER DROP or CHIP DROP), an HSC power latch (OFF, IOUT_OC, VIN_UV_WARN or
-#     VIN_UV_FAULT, alone or together) in the try's findings. Only a drop or an OFF+IOUT_OC latch names a tray; any other
-#     latch alone is a hit that names the box's bus bar set (FAIL bus bar set (box), latch only: <latch> on HSC <addr>). A feed peak against its warn or trip limit is never a verdict: healthy trays go over
-#     warn under this load; the peaks print for information only. Under the result it prints per tray and feed: peak-hold
-#     A against warn and trip, STATUS_WORD before and after, CPLD TRAY_OFF, the time to the drop (from the start of the
-#     load and into the heavy chunk) and the box kW. A clean confirm run does not clear a box: variant F dropped c21u08
-#     2 of 5 and c31u02 0 of 12 (#12436). Exit 8 on a drop or latch, 0 on none, 9 another fault stopped the loop, 10 busy.
 #   --known <bdf>[,<bdf>]  known standing faults on this host: a try whose only fault lines name these chips (and no
 #     other) is a miss and the loop goes on, instead of stopping (exit 9). E.g. --repro numeric 88:00.0 --known
 #     47:00.0 on a host where 47:00.0 (tray 2) is lost at every start reset. Not the repro's own bdf.
@@ -81,8 +69,8 @@ tray_of() { case $(( 0x${1%%:*} & 0xF0 )) in 0) echo 1 ;; 64) echo 2 ;; 192) ech
 declare -A FASTEST=([83:00.0]=busbar [88:00.0]=heavy [03:00.0]=dram)
 
 NAME=${1:-}; [ $# -gt 0 ] && shift
-case $NAME in -h|--help) usage; exit 0 ;; numeric|warm-reset|tray-drop|busbar-confirm) ;; '') usage >&2; exit 1 ;;
-  *) die "unknown repro '$NAME' (numeric, warm-reset, tray-drop, busbar-confirm)" ;; esac
+case $NAME in -h|--help) usage; exit 0 ;; numeric|warm-reset|tray-drop) ;; busbar-confirm) die "repro busbar-confirm was removed: run.sh --mode=full runs the extra number formats over its whole heavy chunk (a feed peak alone is never a verdict)" ;; '') usage >&2; exit 1 ;;
+  *) die "unknown repro '$NAME' (numeric, warm-reset, tray-drop)" ;; esac
 SHAPES=""; [ "$NAME" = tray-drop ] && { SHAPES=$(python3 -I fleet/drop_shapes.py list | cut -f1 | paste -sd' ')   # its shapes in try order
   [ -n "$SHAPES" ] || die "fleet/drop_shapes.py lists no tray-drop shape"; }
 BDF=""; SHAPE=""; WAY=""; TRIES=""; DRY=0; KNOWN=""; KD=${TRAY_TEST_KNOWN_DROPPED:-}; RUN_ARGS=()
@@ -115,25 +103,20 @@ while [ $# -gt 0 ]; do
     *) [ -z "$BDF" ] || die "one bdf only (got '$BDF' and '$1')"; BDF=$1 ;;
   esac; shift
 done
-if [ "$NAME" = busbar-confirm ]; then
-  [ -z "$BDF$WAY$SHAPE$KNOWN" ] || die "busbar-confirm takes no bdf, --way, --shape or --known (it loads the whole box and judges every tray)"
-  [ -z "$KD" ] || die "busbar-confirm takes no --known-dropped-tray (nor TRAY_TEST_KNOWN_DROPPED): the confirm run loads every tray and a dropped one is its finding"
-else
-  [ -n "$BDF" ] || die "$NAME needs the chip's bdf, e.g. 83:00.0"
-  BDF=${BDF,,}; BDF=${BDF#0000:}
-  [[ $BDF =~ ^[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]] || die "bad bdf '$BDF' (want bus:dev.fn, e.g. 83:00.0)"
-  TRAY=$(tray_of "$BDF") || die "bdf $BDF is on no tray 1-4 (bus & 0xF0 must be 00, 40, c0 or 80)"
-  KL=""; IFS=, read -ra ks <<< "${KNOWN#,}"
-  for k in "${ks[@]}"; do k=${k,,}; k=${k#0000:}; [ -n "$k" ] || continue
-    [[ $k =~ ^[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]] || die "--known: bad bdf '$k' (want bus:dev.fn, e.g. 47:00.0)"
-    tray_of "$k" > /dev/null || die "--known: bdf $k is on no tray 1-4"
-    [ "$k" != "$BDF" ] || die "--known $k is the repro's own chip: its fault is the hit"; KL="$KL $k"; done
-  KL=${KL# }
-  if [ -n "$KD" ]; then
-    [[ $KD =~ ^[1-4]$ ]] || die "--known-dropped-tray takes a tray number 1-4 (got '$KD')"
-    [ "$KD" != "$TRAY" ] || die "--known-dropped-tray=$KD is the tray of $BDF: that tray would not be tested"
-    RUN_ARGS=("--known-dropped-tray=$KD" "${RUN_ARGS[@]}")
-  fi
+[ -n "$BDF" ] || die "$NAME needs the chip's bdf, e.g. 83:00.0"
+BDF=${BDF,,}; BDF=${BDF#0000:}
+[[ $BDF =~ ^[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]] || die "bad bdf '$BDF' (want bus:dev.fn, e.g. 83:00.0)"
+TRAY=$(tray_of "$BDF") || die "bdf $BDF is on no tray 1-4 (bus & 0xF0 must be 00, 40, c0 or 80)"
+KL=""; IFS=, read -ra ks <<< "${KNOWN#,}"
+for k in "${ks[@]}"; do k=${k,,}; k=${k#0000:}; [ -n "$k" ] || continue
+  [[ $k =~ ^[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]] || die "--known: bad bdf '$k' (want bus:dev.fn, e.g. 47:00.0)"
+  tray_of "$k" > /dev/null || die "--known: bdf $k is on no tray 1-4"
+  [ "$k" != "$BDF" ] || die "--known $k is the repro's own chip: its fault is the hit"; KL="$KL $k"; done
+KL=${KL# }
+if [ -n "$KD" ]; then
+  [[ $KD =~ ^[1-4]$ ]] || die "--known-dropped-tray takes a tray number 1-4 (got '$KD')"
+  [ "$KD" != "$TRAY" ] || die "--known-dropped-tray=$KD is the tray of $BDF: that tray would not be tested"
+  RUN_ARGS=("--known-dropped-tray=$KD" "${RUN_ARGS[@]}")
 fi
 if [ -n "${SINCE:-}" ] && [[ ! $SINCE =~ ^[[:space:]]*$ ]]; then
   s=$(date -d "$SINCE" +%s 2> /dev/null) || die "--since: not a time: '$SINCE'"
@@ -146,7 +129,6 @@ if [ "$NAME" = numeric ]; then
     else WAY=all; WHY="no recorded way for $BDF: heavy, dram, busbar in turn"; fi
   fi
   case $WAY in heavy|dram|dram-mix|busbar|all) ;; *) die "--way takes heavy, dram, dram-mix, busbar or all (got '$WAY')" ;; esac
-elif [ "$NAME" = busbar-confirm ]; then WAY=busbar-confirm; WHY="the confirm variant F, one fixed way"
 elif [ "$NAME" = tray-drop ]; then
   [ -z "$WAY" ] || die "tray-drop takes --shape, not --way"
   [ -n "$SHAPE" ] || { SHAPE=all; WHY="no --shape: every shape in try order, the one the H3 drops point to first"; }
@@ -154,7 +136,7 @@ elif [ "$NAME" = tray-drop ]; then
   [ "$SHAPE" = all ] || WHY="--shape given"; WAY=$SHAPE
 else [ -z "$WAY$SHAPE" ] || die "warm-reset takes no --way or --shape"; WAY=warm-reset; WHY="no load, the start and end warm resets"; fi
 [ "$NAME" = tray-drop ] || [ -z "$SHAPE" ] || die "--shape goes with tray-drop only"
-[ -n "$TRIES" ] || case $NAME:$WAY in busbar-confirm:*) TRIES=1 ;; tray-drop:all) TRIES=$(wc -w <<< "$SHAPES") ;; tray-drop:*) TRIES=3 ;;
+[ -n "$TRIES" ] || case $NAME:$WAY in tray-drop:all) TRIES=$(wc -w <<< "$SHAPES") ;; tray-drop:*) TRIES=3 ;;
   *:heavy|*:dram-mix) TRIES=3 ;; *:dram|*:busbar) TRIES=4 ;; *:all) TRIES=6 ;; *) TRIES=5 ;; esac
 [[ $TRIES =~ ^[1-9][0-9]?$ ]] || die "--tries takes 1-99 (got '$TRIES')"
 
@@ -175,7 +157,7 @@ hit() {  # finding line -> 0 if it is this repro's fault on this chip
   if [ "$NAME" = numeric ]; then [[ $1 == NUMERIC* && $1 != *PASS* ]] && names "$BDF" "$1"
   elif [ "$NAME" = tray-drop ]; then [[ $1 == "POWER DROP tray $TRAY "* || $1 == "CHIP DROP tray $TRAY "* ]]
   else [[ $1 == "RESET FAIL "* ]] && names "$BDF" "$1"; fi; }
-fault() { [[ $1 =~ (FAIL|HANG|DROP|LOST|MISSING|INCOMPLETE) && ( $1 != *WARN* || $1 == "HSC FAIL "*": IOUT peak "* ) ]]; }   # the bus-bar peak FAIL names IOUT_OC_WARN_LIMIT
+fault() { [[ $1 =~ (FAIL|HANG|DROP|LOST|MISSING|INCOMPLETE) && ( $1 != *WARN* || $1 == "HSC FAIL "* ) ]]; }   # an HSC FAIL latch line names VIN_UV_WARN
 known() {  # fault line -> 0 if it is a declared known fault: every bdf it names is a --known chip or on the
   # --known-dropped-tray, or it is that tray's own KNOWN DROP line; a line naming no chip is never known
   local l=$1 b n=0 r='([0-9a-f]{4}:)?[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]'
@@ -247,79 +229,6 @@ else:
     print(f"{(drop - float(t0)) / 60:.1f} min from the bus-bar stage start to the drop ({how} {at}; no shape row)")
 ' "$f" 2> /dev/null; }
 
-if [ "$NAME" = busbar-confirm ]; then   # the opt-in confirm step: variant F of #12436, not part of plain's or full's step list
-  CENV="FLEET_REPRO=numeric FLEET_BUSBAR_ORDER=mix,heavy FLEET_BUSBAR_CHUNK_MIN=25 FLEET_BUSBAR_HEAVY_S=900 FLEET_DIDT_X_S=900"
-  cmin() { awk -v s="$1" 'BEGIN { printf "%.1f", s / 60 }'; }
-  cpeak() { [[ $1 == "HSC FAIL "*": IOUT peak "* ]]; }   # the feed-peak FAIL: information here, never the verdict
-  chit() {  # finding line -> 0 if it is a drop or an HSC power latch: the only verdicts
-    [[ $1 == "POWER DROP "* || $1 == "CHIP DROP "* ]] && return 0
-    [[ $1 == "HSC FAIL "* ]] && ! cpeak "$1" && [[ $1 == *" set during "* || $1 == *" latched during "* ]]; }   # any latch hsc_check.sh names: OFF, IOUT_OC, VIN_UV_WARN, VIN_UV_FAULT, alone or together
-  # only a drop or an OFF+IOUT_OC latch names a tray: F has only run on the three suspect boxes, so whether
-  # healthy trays latch VIN_UV_WARN under it is not measured; any other latch alone names the box's bus bar set
-  # an OFF+IOUT_OC set during the run or a leg names the tray, also after an under-voltage part of the same HSC's line
-  # ("VIN_UV_WARN latched during ...; OFF+IOUT_OC set during ...", or the end read's "VIN_UV_WARN+OFF+IOUT_OC set during");
-  # a "; OFF+IOUT_OC pre-existing" tail is not new and does not
-  ctray() { [[ $1 == "POWER DROP "* || $1 == "CHIP DROP "* ]] && return 0; chit "$1" || return 1; local rest=${1#*HSC 0x4?: }
-    [[ $rest =~ (^|[;+ ])([A-Z_]+\+)*OFF\+IOUT_OC\ set\ during ]]; }
-  echo "repro busbar-confirm: the whole box, up to $TRIES tr$([ "$TRIES" = 1 ] && echo y || echo ies), each one plain run.sh cut to the bus-bar stage: 25 min of the CCL mix, then the heavy chunk with the extra formats over its 15 min (about 42 min of load); stops at the first drop or HSC latch; a feed peak is never a verdict"
-  RA=""; [ ${#RUN_ARGS[@]} = 0 ] || RA=" $(printf '%q ' "${RUN_ARGS[@]}")"; RA=${RA% }
-  if [ "$DRY" = 1 ]; then
-    for k in $(seq "$TRIES"); do echo "try $k: $CENV $RUNSH$RA${TRAY_REPRO_HEAVY_LOGS:+ (TRAY_REPRO_HEAVY_LOGS=$TRAY_REPRO_HEAVY_LOGS)}"; done
-    exit 0
-  fi
-  H=$(hostname -s); T0=$(date +%s); HITS=$(mktemp); OUT=$(mktemp); trap 'rm -f "$HITS" "$OUT"' EXIT
-  for k in $(seq "$TRIES"); do
-    ts=$(date +%s); mark=$(mktemp -p . .repro_mark.XXXXXX)
-    echo "$(date '+%F %T %Z') $H: busbar-confirm try $k of $TRIES: $CENV $RUNSH$RA"
-    : > "$HITS"; : > "$OUT"
-    # shellcheck disable=SC2046
-    env $CENV TRAY_REPRO_HEAVY_LOGS="${TRAY_REPRO_HEAVY_LOGS:-0}" bash "$RUNSH" "${RUN_ARGS[@]}" 2>&1 | while IFS= read -r l; do
-      printf '%s\n' "$l"; printf '%s\n' "$l" >> "$OUT"; [ -s "$HITS" ] || { f=${l#* * * * }; chit "$f" && date +%s > "$HITS"; }; done
-    rc=${PIPESTATUS[0]}
-    d=$(find . -maxdepth 1 -type d -name "run_${H}_*" -newer "$mark" | sort | tail -n1); rm -f "$mark"
-    fd=${d:+$d/fleet/findings.txt}; fl=""; [ -n "$fd" ] && [ -f "$fd" ] && fl=$(grep -a . "$fd")
-    # no findings file (no run dir found): the drops and HSC lines the stream showed still count
-    [ -n "$fl" ] || fl=$(grep -aE '(POWER DROP|CHIP DROP|HSC FAIL) ' "$OUT" | while IFS= read -r l; do printf '%s\n' "${l#* * * * }"; done)
-    hl=$(while IFS= read -r l; do chit "$l" && printf '%s\n' "$l"; done <<< "$fl")
-    pk=$(while IFS= read -r l; do cpeak "$l" && printf '%s\n' "$l"; done <<< "$fl")
-    other=$(while IFS= read -r l; do fault "$l" && ! chit "$l" && ! cpeak "$l" && printf '%s\n' "$l"; done <<< "$fl")
-    show() {  # the per-tray table and the feed peaks, information only
-      if [ -z "$d" ]; then echo "confirm table: no run dir found for this try"
-      else python3 -I fleet/busbar_confirm.py "$d" "$OUT" "$ts" || echo "confirm table: the table helper failed (the verdict above stands)"; fi
-      [ -z "$pk" ] || { echo "  feed peaks over warn or trip (information only, not a verdict):"; printf '%s\n' "$pk" | sed 's/^/    /'; }; }
-    if [ -n "$hl" ]; then
-      te=$(cat "$HITS" 2> /dev/null); [ -n "$te" ] || te=$(date +%s)
-      nh=$(grep -ac . <<< "$hl"); tl=$(while IFS= read -r l; do ctray "$l" && printf '%s\n' "$l"; done <<< "$hl" | head -n1)
-      tr=$(grep -oE 'tray [1-4]' <<< "$tl" | head -n1 | cut -d' ' -f2); fs="$nh finding$([ "$nh" = 1 ] || echo s)"
-      if [ -n "$tl" ]; then who="tray ${tr:-?}"; fh="FAIL tray ${tr:-?} ($fs)"
-      else   # a latch alone: the box's bus bar set, never a tray
-        l1=$(head -n1 <<< "$hl"); lt=$(sed -E 's/^.*HSC 0x4[0-9a-fA-F]: //; s/ (set|latched) during.*//' <<< "$l1")
-        who="bus bar set (box), latch only"; fh="FAIL bus bar set (box), latch only: ${lt:-latch} on $(grep -oE 'HSC 0x4[0-9a-fA-F]' <<< "$l1" | head -n1) ($fs)"
-      fi
-      echo "$fh: busbar-confirm hit on try $k of $TRIES, $(cmin $((te - ts))) min into the try, $(cmin $((te - T0))) min after the repro started"
-      printf '%s\n' "$hl" | sed 's/^/  /'
-      show
-      if [ -n "$tl" ]; then
-        echo "  cause: tray ${tr:-?} lost its 12 V under the bus-bar confirm load or latched an HSC power fault (POWER DROP = the whole tray or its vr_pg fell; CHIP DROP = chips left PCIe with the tray powered; HSC OFF+IOUT_OC = the feed latched off on over-current): the bus bar, tray power or supply; judged from the drop and the latches only; run dir $d"
-      else
-        echo "  cause: the box's bus bar set: an HSC latched (OFF, IOUT_OC, VIN_UV_WARN or VIN_UV_FAULT) under the bus-bar confirm load with no tray drop and no OFF+IOUT_OC; no tray is named (only a drop or OFF+IOUT_OC names a tray; whether healthy trays latch VIN_UV_WARN under this load is not measured); run dir $d"
-      fi
-      [ -z "$other" ] || { echo "  other findings in the same try:"; printf '%s\n' "$other" | sed 's/^/    /'; }
-      echo "RESULT: busbar-confirm hit ${who} (try $k of $TRIES, $(cmin $((te - ts))) min into the try, $(cmin $((te - T0))) min in all)"
-      exit 8
-    fi
-    if [ "$rc" = 10 ]; then echo "GATE repro busbar-confirm: try $k could not start, host busy or serving (run.sh exit 10); stopped after $(cmin $(( $(date +%s) - T0 ))) min"; exit 10; fi
-    if [ -n "$other" ] || { [ "$rc" != 0 ] && [ "$rc" != 8 ]; } || { [ "$rc" = 8 ] && [ -z "$pk" ]; }; then
-      echo "STOPPED repro busbar-confirm: try $k of $TRIES ended with run.sh exit $rc, no drop and no HSC latch${d:+ (run dir $d)}; another fault or an incomplete try, not this repro's:"
-      [ -n "$other" ] && printf '%s\n' "$other" | sed 's/^/  /' || echo "  (no other fault line in ${fd:-the findings: no run dir found})"
-      show; exit 9
-    fi
-    echo "$(date '+%F %T %Z') $H: busbar-confirm try $k of $TRIES: no drop and no HSC latch ($(cmin $(( $(date +%s) - ts ))) min; run.sh exit $rc)"
-    show
-  done
-  echo "NO DROP busbar-confirm: no tray drop and no HSC power latch (OFF, IOUT_OC, VIN_UV_WARN or VIN_UV_FAULT) in $TRIES tries, $(cmin $(( $(date +%s) - T0 ))) min. A clean confirm run does not clear a box (variant F dropped c21u08 2 of 5 and c31u02 0 of 12, #12436)"
-  exit 0
-fi
 echo "repro $NAME $BDF (tray $TRAY): way $WAY ($WHY), up to $TRIES tries, each one plain run.sh cut to the fault's stages; stops at the first hit"
 [ -z "$KL$KD" ] || echo "known faults (a try with only these is a miss):${KL:+ $KL}${KD:+ tray $KD (--known-dropped-tray)}"
 RA=""; [ ${#RUN_ARGS[@]} = 0 ] || RA=" $(printf '%q ' "${RUN_ARGS[@]}")"; RA=${RA% }

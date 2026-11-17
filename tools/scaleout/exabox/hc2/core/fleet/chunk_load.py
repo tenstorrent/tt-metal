@@ -130,7 +130,7 @@ ap.add_argument(
     "--heavy-x-s",
     type=float,
     default=0.0,
-    help="seconds at the end of each chunk that also run the --heavy-x ops (run.sh: 10 plain, 90 full, 2 smoke)",
+    help="seconds at the end of each chunk that also run the --heavy-x ops (run.sh: 10 plain, 750 full, 2 smoke)",
 )
 ap.add_argument(
     "--heavy-n",

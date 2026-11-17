@@ -27,6 +27,7 @@ import argparse
 import re
 import sys
 
+STILL = " [still missing from an earlier drop]"  # lib/fleet.sh fl_drop_mark's tail on a DROP line
 BDF = r"[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]"
 TRAY = {0x0: 1, 0x4: 2, 0xC: 3, 0x8: 4}  # bus high digit -> tray (fleet_py.tbdf)
 # faceplate QSFP-DD port -> (ASIC, ETH channels); the same map as fleet_py.QSFP (tt-metal board.cpp UBB_BLACKHOLE)
@@ -436,13 +437,21 @@ def pcie(v, l):
 def drop(v, l):
     """A chip or tray drop (fl_find's '(CHIP|POWER) DROP tray N (k chips lost: <BDFs>) <when>'): a fault naming every chip
     it lists by tray, ASIC and BDF, one per line (one line per tray), even when a reset brought the chips back."""
+    still = l.endswith(
+        STILL
+    )  # fl_find: every chip it names was named by an earlier drop line and no recount showed it ok since
+    if still:
+        l = l[: -len(STILL)]
     m = re.match(r"^(CHIP|POWER) DROP tray ([1-4]) \((\d+) chips lost(.*?)\) ((?:in|after|at) .*)$", l)
     if not m:
         return False
-    t, bs = m.group(2), list(dict.fromkeys(re.findall(BDF, m.group(4))))
+    t, bs = m.group(2), list(dict.fromkeys(re.findall(BDF, re.sub(r"\(root port [^)]*\)", "", m.group(4)))))
+    # a late drop: the stage's chips plus the late ones
+    ga = re.search(r"(\d+) chips of the tray missing before its glx_reset judged", m.group(4))
     v.fault(
-        ("drop", l[:120]),
-        f"{'chip' if m.group(1) == 'CHIP' else 'tray power'} drop: {m.group(3)} chips lost on tray {t} {m.group(5)[:120]}",
+        ("drop", l[:120], tuple(bs), still),
+        f"{'chip' if m.group(1) == 'CHIP' else 'tray power'} drop: {m.group(3)} chips lost on tray {t} {m.group(5)[:120]}"
+        + (f"; {ga.group(1)} chips of the tray were missing in all when it was judged" if ga else ""),
         "; ".join(chip(b) for b in bs) or f"tray {t}",
         f"see the Repair recommendation line (tray {t})",
     )
@@ -507,51 +516,6 @@ def thermal(v, l):
     return True
 
 
-def hsc_peak(v, l):
-    """A tray 12 V feed whose bus-bar peak reached its own warn limit (lib/hsc_check.sh hsc_peak_judge): the tray (its BDFs as
-    a range), the feed, the peak against the limit and the run's TDP. At 160 W or lower (or an older line with no TDP) the bus
-    bar is blamed; above it, or with the TDP unread, the verdict asks for a rerun at the box's default TDP."""
-    m = re.match(
-        rf"^HSC FAIL tray ([1-4]) \(({BDF})-({BDF})\) HSC (0x[0-9a-fA-F]{{2}}): IOUT peak ([0-9.]+) A during (.*?), "
-        r"at or above its own IOUT_OC_WARN_LIMIT ([0-9.]+) A \(4Ah\)"
-        r"(?:, (?:at TDP (?P<low>[0-9]+) W per chip|feed at its limit at (?P<high>[0-9]+) W[^,]*|(?P<unread>TDP not read)[^,]*))?"
-        r"(?:, trip IOUT_OC_FAULT_LIMIT (?P<trip>[0-9.]+) A(?: \(46h\), (?:(?P<over>the peak is [0-9.]+ A over it)|(?P<at>the peak is at its trip limit)))?)?",
-        l,
-    )
-    if not m:
-        return False
-    u, b1, b2, a, pk, st, wl = m.group(1, 2, 3, 4, 5, 6, 7)
-    a = a.lower()
-    f = {"0x40": "A", "0x42": "B"}.get(a)
-    feed = f"feed {f} (HSC {a})" if f else f"feed (HSC {a})"
-    tdp = m.group("low") or m.group("high")
-    at = f"{tdp} W per chip" if tdp else "a TDP that was not read" if m.group("unread") else ""
-    # 'the peak is N A over it' / 'the peak is at its trip limit' (lib/hsc_check.sh): a peak above or at the trip limit must
-    # not read like one below it
-    trip = (
-        (
-            f", over its {m.group('trip')} A trip limit"
-            if m.group("over")
-            else f", at its {m.group('trip')} A trip limit"
-            if m.group("at")
-            else f", {m.group('trip')} A trip limit"
-        )
-        if m.group("trip")
-        else ""
-    )
-    what = (
-        f"12 V feed at its over-current warn limit: tray {u} {feed}, peak {pk} A against its {wl} A "
-        f"warn limit{trip}, during {st}" + (f", at {at}" if at else "")
-    )
-    if m.group("high") or m.group("unread"):
-        why = f"a healthy feed can reach its limit at {at}" if tdp else "the TDP was not read"
-        do = f"rerun run.sh at the box's default TDP before any bus-bar work ({why})"
-    else:
-        do = f"check the bus bar and 12 V feed {f or a} of tray {u}, then replace the bus bar if the peak stays at the limit; no tray board for a feed peak alone"
-    v.fault(("hscpeak", u, a), what, f"tray {u} (BDF range {b1}-{b2}, not two chips), HSC {a}", do)
-    return True
-
-
 def generic(v, l):
     m = re.match(r"^((?:[A-Z][A-Z0-9-]*\s)+?)(FAIL|HANG)\b:?\s*(.*)$", l)
     if not m:
@@ -591,7 +555,7 @@ def verdict(rc, vtext="", findings="", result="", commit="?", mode=""):
         # tray 3 finding was pinned to tray 1 or read as a hang. Parse without it, shown beside where (as tray_why.untag)
         g = AFTER.search(l)
         l, v.tag = (l[: g.start()], g.group(1)) if g else (l, "")
-        for f in (eth, eth_more, preflight, chunk, numeric, aer, pcie, drop, link, thermal, hsc_peak):
+        for f in (eth, eth_more, preflight, chunk, numeric, aer, pcie, drop, link, thermal):
             if f(v, l):
                 break
         else:
@@ -653,6 +617,31 @@ def verdict(rc, vtext="", findings="", result="", commit="?", mode=""):
 def fold(v):
     """One fault per part: a missing-cable line and the Ethernet-link-down line of the same chips are one fault; a power
     brick overheat goes first, and the load and PCIe faults of that run are named as coming with it."""
+    # a chip named by two drop lines (a stage's and the reset's after it) is one fault: a line whose chips are all named
+    # by an earlier one joins it, one with new chips keeps only those. A late drop (the reset's own recount of the same stage's
+    # loss) and a line fl_find marked still missing (the chips never came back since the earlier line: a stage's DROP line lists
+    # every chip not ok, old losses too) are "the same chips again"; any other drop of chips all named before came after a
+    # reset brought them back, so it is counted: "dropped N times"
+    named, kept, times = {}, [], {}
+    for k, (w, where, do) in v.faults:
+        if k[0] == "drop" and k[2]:
+            new = [b for b in k[2] if b not in named]
+            if not new:
+                i = named[k[2][0]]
+                what = w.split(" chips lost on ", 1)[-1]
+                if k[3] or "missing before its glx_reset" in w or "missing in all when it was judged" in w:
+                    add = f"; the same chips again: {what}"
+                else:
+                    times[i] = times.get(i, 1) + 1
+                    add = f"; the chips came back and dropped again: {what} (dropped {times[i]} times)"
+                kept[i] = (kept[i][0], (kept[i][1][0] + add, *kept[i][1][1:]))
+                continue
+            for b in new:
+                named[b] = len(kept)
+            if len(new) < len(k[2]):
+                where = "; ".join(chip(b) for b in new)
+        kept.append((k, (w, where, do)))
+    v.faults = kept
     down = {frozenset((k[1][0], k[2][0])): w for k, (w, _, _) in v.faults if k[0] == "eth"}
     cab = {frozenset(k[1:3]) for k, _ in v.faults if k[0] == "cable"}
     v.faults = [

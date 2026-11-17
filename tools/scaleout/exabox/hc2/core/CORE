@@ -79,7 +79,6 @@ lib/vcore.sh
 fleet/agentp.sh
 fleet/agloop.py
 fleet/bb_load.py
-fleet/busbar_confirm.py
 fleet/chunk_load.py
 fleet/chunk_sched.py
 fleet/drop_shapes.py

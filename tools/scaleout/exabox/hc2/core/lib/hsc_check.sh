@@ -18,8 +18,9 @@
 #   run; READ_IOUT_PEAK 0xA6 (2 B, 62.5 mA/LSB) and READ_TEMP_PEAK 0xAF (2 B, deg C), which clear when read, only through
 #   hsc_peaks: once before the CLEAR_FAULTS (the peak since the last read), once just before each load leg (this zeroes
 #   them) and once right after it (that leg's peak). A feed's peak during the bus-bar stage at or above its own
-#   IOUT_OC_WARN_LIMIT is an HSC FAIL naming the tray, its BDFs and the feed (every mode: the feed sits at its over-current
-#   limit; YYZ2 c21u08, d26u08 and c31u02 dropped trays on such feeds); in any other leg it is a WARN, as is a peak more than
+#   IOUT_OC_WARN_LIMIT is an 'HSC WARN' line (WARN only, with the TDP, the warn and the trip limits): healthy trays at 160 W
+#   peaked 0.5-8.5 A over it (YYZ2 repro runs), so only a drop or a latched OFF, IOUT_OC, VIN_UV_WARN or VIN_UV_FAULT names a
+#   tray (a FAIL); in any other leg a peak at the limit is a WARN too, as is a peak more than
 #   HSC_PEAK_PCT (20) % above the median of the other feeds' leg peaks. A warn limit that reads 0, nothing or outside
 #   HSC_OC_LIM_MIN_A (50) .. HSC_OC_LIM_MAX_A (1000) A is 'limit unread': a NOTE line, never judged.
 #   The run-start peaks (from before the run) join the one 'HSC WARN host: ...; latched before the run: pre-existing' line
@@ -51,6 +52,10 @@
 #   run end and after a leg that latched a UV bit: one line per field in fleet/hsc/limits_<when>. 59h = 0 is "UV fault
 #   reporting disabled". A VIN_UV_WARN latch means VIN fell below 58h at least once, depth unknown: a READ_VIN taken after
 #   the latch is "VIN after latch", never the sag. Only a poll sample below 58h during the leg is a measured minimum.
+#   All four are read by default (55h, 57h, 58h and 59h answered on 8 of 8 HSCs in 41 saved runs on 7 boxes). No single
+#   register read sets STATUS_CML (#12677, b02u02: 55h 0/55, 57h 0/55, 58h 0/15, 59h 1/56, FAh 1/32, a STATUS_WORD-only control
+#   0/70; HSCs that got no probe reads still latched CML 0x80 under bus-bar load): CML rose with bus traffic, 8 of 8 HSCs with the
+#   VIN sampler on against 2-3 of 8 with it off. A CML-only latch stays a comm-fault WARN, never a power FAIL.
 #   Fast poll (HSC_VIN_FAST, default 1; 0 = the 2 s VIN+IOUT sampler, for the A/B): READ_VIN of every HSC back to back
 #   with no sleep, READ_IOUT with it every HSC_IOUT_EVERY (2)nd sweep, so the sag rule and pv.py's feed stop keep their
 #   IOUT at least as often as the 2 s sampler (one per HSC every ~5 s), and VIN reads about twice as often. KCS
@@ -201,17 +206,20 @@ hsc_limv() {  # <code> <raw decimal, "-" or empty>: a VIN limit (bits 6:0 x 125 
     *) if [ "$1" = 0x59 ] && [ $(( $2 % 128 )) = 0 ]; then echo "0 V (UV fault reporting disabled)"
        else awk -v r="$2" 'BEGIN { printf "%.2f V", (r % 128) * 0.125 }'; fi ;; esac
 }
+hsc_limwhy() {  # <code> <raw>: the limit as text ("not read" where the read gave nothing)
+  hsc_limv "$1" "$2"
+}
 hsc_limits() {  # <when>: the four VIN limits of every HSC -> fleet/hsc/limits_<when> (TSV: tray addr 55h 57h 58h 59h raw, "-" =
   # not read) and limits_<when>.txt (one line per HSC and field); HSC_LIM_F names it for the latch wording; one say line
   local f t a c r row nm x sum
   f=$(fl_hsc_f "limits_$1"); : > "$f.txt"; : > "$f.tmp"
   for t in $HSC_TRAYS; do for a in $HSC_ADDRS; do row="$t"$'\t'"$a"
-    for c in 0x55 0x57 0x58 0x59; do r=$(hsc_rd "$t" "$a" $c); row+=$'\t'"${r:--}"
+    for c in 0x55 0x57 0x58 0x59; do r=""; r=$(hsc_rd "$t" "$a" $c); row+=$'\t'"${r:--}"
       case $c in 0x55) nm="VIN_OV_FAULT_LIMIT" ;; 0x57) nm="VIN_OV_WARN_LIMIT" ;; 0x58) nm="VIN_UV_WARN_LIMIT" ;; *) nm="VIN_UV_FAULT_LIMIT" ;; esac
-      echo "tray $t ($(hsc_bdfs "$t")) HSC $a $nm (${c#0x}h): $(hsc_limv $c "$r")${r:+ (raw $r)}" >> "$f.txt"; done
+      echo "tray $t ($(hsc_bdfs "$t")) HSC $a $nm (${c#0x}h): $(hsc_limwhy "$c" "$r")${r:+ (raw $r)}" >> "$f.txt"; done
     echo "$row" >> "$f.tmp"; done; done
   mv "$f.tmp" "$f"; HSC_LIM_F=$f
-  sum=$(for x in 3:0x55 4:0x57 5:0x58 6:0x59; do c=${x#*:}; cut -f"${x%%:*}" "$f" | while read -r r; do echo "${c#0x}h $(hsc_limv "$c" "$r")"; done | sort | uniq -c; done |
+  sum=$(for x in 3:0x55 4:0x57 5:0x58 6:0x59; do c=${x#*:}; cut -f"${x%%:*}" "$f" | while read -r r; do echo "${c#0x}h $(hsc_limwhy "$c" "$r")"; done | sort | uniq -c; done |
     awk '{ c = $1; k = $2; sub(/^ *[0-9]+ [^ ]+ /, ""); x = (k == "55h" ? "OV fault" : k == "57h" ? "OV warn" : k == "58h" ? "UV warn" : "UV fault") " (" k ")"
       s = s (k == lk ? ", " : (s == "" ? "" : "; ") x " ") $0 " on " c; lk = k } END { print s }')
   fl_hsc_say "HSC VIN limits $1: ${sum:-not read} (per HSC: $f.txt)"
@@ -235,15 +243,17 @@ hsc_tdps() {  # the run's per-chip TDP by tray, "1=160 2=160 3=160 4=160" (the h
   for t in 1 2 3 4; do [ -z "${m[$t]:-}" ] || printf '%s=%s ' "$t" "${m[$t]}"; done | sed 's/ $//'; echo
 }
 hsc_peak_judge() {  # <stage name> <leg peaks> [<oc limits>] [pre] [fail] [<tdps>]: per feed at or above its own warn limit, or HSC_PEAK_PCT % over
-  # the median of the other feeds' leg peaks: "HSC FAIL ..." for the warn limit when the 5th argument is "fail" (the bus-bar
-  # stage), else "HSC WARN ..."; the median rule is WARN only, never FAIL. "NOTE <key> <line>" per feed whose warn limit does
+  # the median of the other feeds' leg peaks: always "HSC WARN ...", never a FAIL (the bus-bar stage's
+  # healthy trays peaked 0.5-8.5 A over the warn limit at 160 W, 114 of 128 good tray-runs in the 35 YYZ2 repro runs, so a peak at the warn
+  # limit named good trays). Only a drop or an HSC latch (OFF, IOUT_OC, VIN_UV_WARN, VIN_UV_FAULT) names a tray. With the 5th argument "fail"
+  # (the value that marks the bus-bar stage; its awk name is bbstage) the warn line also names the TDP and the trip limit. "NOTE <key> <line>" per feed whose warn limit does
   # not read (0, nothing, outside HSC_OC_LIM_MIN_A .. HSC_OC_LIM_MAX_A): never judged. Then one "HSC peak after" line. The
   # limits file holds raw counts of 1 A, the peaks READ_IOUT_PEAK counts of 1/16 A.
   # pre (peaks read at run start, from before the run): one "HSC PRE <item>" line per feed instead, for the caller's one host WARN line
-  # tdps (hsc_tdps): every HSC FAIL line names the run's per-chip TDP of its tray; the bus bar is blamed only at HSC_BLAME_TDP_W (160) W or
+  # tdps (hsc_tdps): every bus-bar peak WARN line names the run's per-chip TDP of its tray; the bus bar is blamed only at HSC_BLAME_TDP_W (160) W or
   # lower: above it the line reads "feed at its limit at <TDP> W" (healthy feeds peak 1.5-4 A under their warn limit at 160 W, more above),
   # and a TDP not read blames nothing
-  awk -F'\t' -v st="$1" -v pre="${4:-}" -v fail="${5:-}" -v pct="${HSC_PEAK_PCT:-20}" -v lmin="${HSC_OC_LIM_MIN_A:-50}" -v lmax="${HSC_OC_LIM_MAX_A:-1000}" -v fp="$2" -v tdps="${6:-}" -v blame="${HSC_BLAME_TDP_W:-160}" -v r1="01:00.0-08:00.0" -v r2="41:00.0-48:00.0" \
+  awk -F'\t' -v st="$1" -v pre="${4:-}" -v bbstage="${5:-}" -v pct="${HSC_PEAK_PCT:-20}" -v lmin="${HSC_OC_LIM_MIN_A:-50}" -v lmax="${HSC_OC_LIM_MAX_A:-1000}" -v fp="$2" -v tdps="${6:-}" -v blame="${HSC_BLAME_TDP_W:-160}" -v r1="01:00.0-08:00.0" -v r2="41:00.0-48:00.0" \
       -v r3="c1:00.0-c8:00.0" -v r4="81:00.0-88:00.0" '
     function med(A, n,  i, j, x) { for (i = 2; i <= n; i++) { x = A[i]; for (j = i - 1; j >= 1 && A[j] > x; j--) A[j + 1] = A[j]; A[j + 1] = x }
       return n % 2 ? A[(n + 1) / 2] : (A[n / 2] + A[n / 2 + 1]) / 2 }
@@ -259,7 +269,7 @@ hsc_peak_judge() {  # <stage name> <leg peaks> [<oc limits>] [pre] [fail] [<tdps
         if (!(k in WL) && !pre) printf "NOTE oclim_%s_%s tray %d (%s) HSC %s: IOUT_OC limit unread (46h/4Ah raw %s), so the peak %.1f A during %s is not judged against it\n", t, a, t, R[t], a, (k in LU) ? LU[k] : "-/-", P[k], st
         if ((k in WL) && P[k] >= WL[k]) { x = sprintf("at or above its own IOUT_OC_WARN_LIMIT %.1f A (4Ah)", WL[k]); w = w ", " x
           tx = !(t in TD) ? "TDP not read (not blamed on the bus bar)" : (TD[t] > blame + 0) ? sprintf("feed at its limit at %d W (TDP above %d W: not blamed on the bus bar)", TD[t], blame) : sprintf("at TDP %d W per chip", TD[t])
-          if (!pre && fail == "fail") printf "HSC FAIL %s, %s, %s, %s\n", h, x, tx, (k in FL) ? (P[k] > FL[k]) ? sprintf("trip IOUT_OC_FAULT_LIMIT %.1f A (46h), the peak is %.1f A over it", FL[k], P[k] - FL[k]) : (P[k] == FL[k]) ? sprintf("trip IOUT_OC_FAULT_LIMIT %.1f A (46h), the peak is at its trip limit", FL[k]) : sprintf("trip IOUT_OC_FAULT_LIMIT %.1f A (46h), margin to the trip %.1f A", FL[k], FL[k] - P[k]) : "IOUT_OC_FAULT_LIMIT (46h) not read"
+          if (!pre && bbstage == "fail") printf "HSC WARN %s, %s, %s, %s; WARN only, not a tray verdict (healthy feeds reach it at full load; only a drop or an HSC latch names a tray)\n", h, x, tx, (k in FL) ? (P[k] > FL[k]) ? sprintf("trip IOUT_OC_FAULT_LIMIT %.1f A (46h), the peak is %.1f A over it", FL[k], P[k] - FL[k]) : (P[k] == FL[k]) ? sprintf("trip IOUT_OC_FAULT_LIMIT %.1f A (46h), the peak is at its trip limit", FL[k]) : sprintf("trip IOUT_OC_FAULT_LIMIT %.1f A (46h), margin to the trip %.1f A", FL[k], FL[k] - P[k]) : "IOUT_OC_FAULT_LIMIT (46h) not read"
           else if (!pre) printf "HSC WARN %s, %s; WARN only, not a finding\n", h, x }
         m = 0; delete O; for (j = 1; j <= n; j++) if (j != i && (K[j] in P)) O[++m] = P[K[j]]
         if (m >= 3) { md = med(O, m); if (P[k] > md * (1 + pct / 100)) {
@@ -316,7 +326,7 @@ fl_hsc_after() {  # <phase>: stop the sampler, read again, judge each HSC
   hsc_step_line after "$(fl_pn "$1")" "$f.after" "$f.peak"
   while IFS= read -r l; do case $l in
     "HSC WARN "*) fl_find "$l" ;;   # sag or VIN floor: a warn, never a FAIL
-    "HSC FAIL "*) if [[ $l != *": IOUT peak "* && $l =~ ^HSC\ FAIL\ tray\ ([1-4])\ .*\ HSC\ (0x4[02]): ]]; then   # a peak FAIL sets no latch, so it never hides the end read's latch FAIL; that read names an HSC once only (fl_hsc_latch_end)
+    "HSC FAIL "*) if [[ $l =~ ^HSC\ FAIL\ tray\ ([1-4])\ .*\ HSC\ (0x4[02]): ]]; then   # that read names an HSC once only (fl_hsc_latch_end)
         k=$(fl_hsc_f "pset_${BASH_REMATCH[1]}_${BASH_REMATCH[2]}"); [ -s "$k" ] && l+="; per-part reads: $(sed 's/$/, then/' "$k" | paste -sd' ' - | sed 's/, then$//')"   # the part that set it
         fl_pn "$1" > "$(fl_hsc_f "failed_${BASH_REMATCH[1]}_${BASH_REMATCH[2]}")"; fi
       fl_find "$l" ;;
@@ -325,7 +335,7 @@ fl_hsc_after() {  # <phase>: stop the sampler, read again, judge each HSC
     "HSC sag after "*) echo "$l" >> "$(fl_hsc_f sag)"; fl_hsc_say "$l" ;;   # hsc_tray_power ranks the feeds from it
     ?*) fl_hsc_say "$l" ;;
   esac; done < <(if [ "$1" = busbar ]; then HSC_LOAD="${FL_BB_LDLINE:-}" HSC_LOAD_LOW="${FL_BB_LOW:-}" HSC_LOAD_XY="${FL_BB_LDXY:-}" hsc_judge "$(fl_pn "$1")" "$f.before" "$f.after" "$f.vin"
-    else hsc_judge "$(fl_pn "$1")" "$f.before" "$f.after" "$f.vin"; fi; hsc_peak_judge "$(fl_pn "$1")" "$f.peak" "$(fl_hsc_f oc_limits)" "" "$([ "$1" = busbar ] && echo fail)" "$(hsc_tdps)")   # bus-bar: its load reached; a peak at its warn limit is a FAIL there
+    else hsc_judge "$(fl_pn "$1")" "$f.before" "$f.after" "$f.vin"; fi; hsc_peak_judge "$(fl_pn "$1")" "$f.peak" "$(fl_hsc_f oc_limits)" "" "$([ "$1" = busbar ] && echo fail)" "$(hsc_tdps)")   # bus-bar: its load reached; its peak line adds the TDP and the trip limit and stays a WARN
   if [ "$1" = busbar ]; then while IFS= read -r l; do fl_hsc_say "$l"; done < <(hsc_load_sum "$(fl_pn "$1")" "$f.vin"); fi   # the bus-bar stage: its load summary
   return 0
 }
@@ -584,7 +594,7 @@ fl_hsc_latch_start() {  # before C2: record every HSC (each bit already set: a p
   hsc_limits start   # 55h/57h/58h/59h of every HSC
   lim=$(cut -f5 "$HSC_LIM_F" | grep -x '[0-9]*' | awk '{ printf "%.2f V (58h raw %d)\n", ($1 % 128) * 0.125, $1 % 128 }' | sort | uniq -c | awk '{ c = $1; sub(/^ *[0-9]+ /, ""); printf "%s%s on %d HSC(s)", (n++ ? ", " : ""), $0, c }')
   { echo "HSC UV warn limit (VIN_UV_WARN_LIMIT): ${lim:-not read}; a VIN_UV_WARN latch means VIN fell below it at least once, depth unknown"
-    echo "HSC UV fault limit (VIN_UV_FAULT_LIMIT 59h): $(cut -f6 "$HSC_LIM_F" | while read -r x; do hsc_limv 0x59 "$x"; done | sort | uniq -c | awk '{ c = $1; sub(/^ *[0-9]+ /, ""); printf "%s%s on %d HSC(s)", (n++ ? ", " : ""), $0, c }')"
+    echo "HSC UV fault limit (VIN_UV_FAULT_LIMIT 59h): $(cut -f6 "$HSC_LIM_F" | while read -r x; do hsc_limwhy 0x59 "$x"; done | sort | uniq -c | awk '{ c = $1; sub(/^ *[0-9]+ /, ""); printf "%s%s on %d HSC(s)", (n++ ? ", " : ""), $0, c }')"
   } > "$(fl_hsc_f latch_limit)"
   local pre=""   # every bit already set: one HSC WARN line for all HSCs, never a verdict
   while IFS=$'\t' read -r t a bd sw si x cm _; do case $t in '#'*) continue ;; esac
