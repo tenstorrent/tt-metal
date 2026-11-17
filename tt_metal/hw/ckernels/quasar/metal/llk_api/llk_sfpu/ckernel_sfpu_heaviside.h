@@ -9,13 +9,14 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "ckernel_sfpu_converter.h"
 #include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
 inline void heaviside_init() {
-    // The row's last SFPSTORE steps Dest by one SFPU pass (SFP_ROWS = 2 counter rows, the step sfpi's
+    // The row's last store steps Dest by one SFPU pass (SFP_ROWS = 2 counter rows, the step sfpi's
     // dst_reg++ takes), so the body needs no TTINCRWC. Same ADDR_MOD_6 value as init_typecast. The
     // SFPU load/store addr_mod field is 3 bits wide on Quasar, so the body names slot 6 directly.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
@@ -25,41 +26,40 @@ inline void heaviside_init() {
 /**
  * @brief heaviside(v) = `value` at v == 0 (either zero), 0.0 for a set sign bit, 1.0 otherwise.
  *
- * Raw SFPU body, 7 instructions per row. The sfpi form (copysgn + add, then an sfpi::abs(v) == 0 arm)
- * cost 11 on Quasar: an SFPLOADI, SFPMOV + SFPSETSGN + SFPADDI for the sign arm, SFPABS + SFPSETCC for
- * the zero test, an SFPMOV merge, a TTINCRWC and a rolled RISC loop. Here the row is three stores: an
- * unpredicated store of `value` to every lane; then 1.0 to the lanes SFPLZ with NOSGN|CC_NE0 enables,
- * those with (bits & 0x7fffffff) != 0 -- the same |v| != 0 test as before, so -0.0 keeps `value`;
- * then 0.0 to those of them that SFPSETCC LT0 leaves enabled, the ones whose sign bit is set
- * (SFPSETCC only writes the flags of enabled lanes; imm12 bit 11 clear reads src_c as INT32, whose
- * sign is bit 31). Both forms dispatch on the sign bit rather than a float compare, so NaN lands where
- * it did: a NaN with a clear sign bit is 1.0, with a set one 0.0.
+ * 7 SFPU instructions per row, written as three stores that narrow the enabled lanes: 1.0 to every
+ * lane; 0.0 to the lanes whose bits, read as a two's-complement integer, are <= 0 (a set sign bit, or
+ * +0); then `value` to those of them that compare >= -0.0 as floats, which leaves the two zeros
+ * (v_and only narrows the lanes the v_if enabled). The previous form (copysgn + add, then an
+ * sfpi::abs(v) == 0 arm) cost 11: an SFPLOADI, SFPMOV + SFPSETSGN + SFPADDI for the sign arm,
+ * SFPABS + SFPSETCC for the zero test, an SFPMOV merge, a TTINCRWC and a rolled RISC loop.
+ *
+ * The sign comes from the integer compare, not a float one, so NaN lands where it did before: a NaN
+ * with a clear sign bit is 1.0, with a set one 0.0. A float compare cannot do that; it is false for a
+ * NaN of either sign. The -0.0 bound keeps -0.0 in the `value` lanes whether the float compare orders
+ * -0.0 below +0.0 or treats them as equal.
  *
  * @tparam APPROXIMATION_MODE: Unused; the kernel is exact in both modes.
  * @tparam ITERATIONS: Number of SFPU passes (two Dest rows each) to process.
  * @param value: The value returned at v == 0, as fp32 bits.
- * @note Call @ref heaviside_init first: ADDR_MOD_7 is {dest.incr = 0} from the common SFPU init and
- *       ADDR_MOD_6 is {dest.incr = SFP_ROWS} from heaviside_init; nothing may rewrite it in between.
+ * @note Call @ref heaviside_init first: the last store advances Dest through the ADDR_MOD_6 it
+ *       programs ({dest.incr = SFP_ROWS}); nothing may rewrite it in between.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(const std::uint32_t value) {
-    TT_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, value >> 16);
+    const sfpi::vFloat s = Converter::as_float(value);
+    const sfpi::vFloat neg_zero = -0.0f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*dest_reg_addr*/);
-        // every lane: value
-        TTI_SFPSTORE(p_sfpu::LREG4, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*dest_reg_addr*/);
-        // enable |v| != 0
-        TTI_SFPLZ(p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
-        //   -> 1.0
-        TTI_SFPSTORE(p_sfpu::LCONST_1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*dest_reg_addr*/);
-        //   narrow to sign bit set
-        TTI_SFPSETCC(0 /*imm12_math: src_c as INT32*/, p_sfpu::LREG0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-        //   -> 0.0; steps Dest
-        TTI_SFPSTORE(p_sfpu::LCONST_0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0 /*dest_reg_addr*/);
-        TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, sfpi::SFPENCC_MOD1_EI_RI);
+        sfpi::vFloat v = sfpi::dst_reg[0];
+
+        sfpi::dst_reg[0] = sfpi::vFloat(1.0f);
+        v_if(sfpi::as<sfpi::vInt>(v) <= 0) {
+            sfpi::dst_reg[0] = sfpi::vFloat(0.0f);
+            v_and(v >= neg_zero);
+            sfpi::dst_reg[0].mode(ADDR_MOD_6) = s;
+        }
+        v_endif;
     }
 }
 
