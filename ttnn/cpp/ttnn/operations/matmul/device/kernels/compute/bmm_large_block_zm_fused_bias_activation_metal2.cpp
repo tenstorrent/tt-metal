@@ -16,10 +16,13 @@
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
 #endif
+#ifdef FUSE_BIAS_SFPU
+#include "api/compute/experimental/sfpu_binary_bcast_pack.h"
+#endif
 
 #include "api/compute/eltwise_binary.h"
 #include "experimental/kernel_args.h"
-#ifdef SFPU_ACTIVATION
+#if defined(SFPU_ACTIVATION) || defined(FUSE_BIAS_SFPU)
 #include "bmm_fused_activation.hpp"
 #endif
 
@@ -617,17 +620,86 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-                reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
-                if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
-                } else {
-                    add_init(mm_partials_dfb_id, bias_dfb_id);
-                }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the buffer for reuse across bh/batch iterations.
                 // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
                 if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_dfb.wait_front(bias_ntiles);
+                }
+#ifdef FUSE_BIAS_SFPU
+                // FP32 bias on FP32 partials: an FPU add reads both through SrcA/SrcB as TF32, which drops the
+                // bias's low 13 mantissa bits, a per-column error that does not average out. Both buffers
+                // unpack to DEST unchanged instead, and the SFPU adds the bias's row 0 to every row in FP32.
+                // Each output tile takes two DEST tiles (its partials and its bias tile), so an acquire uses four:
+                // all of FP32 DEST in half sync, half of it in full sync.
+                static_assert(row_broadcast_bias, "FUSE_BIAS_SFPU takes a row-broadcast bias");
+                constexpr uint32_t sfpu_bias_tiles_per_acquire = 2;
+                reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
+                // One copy init serves both buffers: the factory gives the bias the partials' format (FP32) and
+                // tile shape (32x32), and nothing below changes the unpack or math state.
+                copy_init(mm_partials_dfb_id);
+                for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+                    uint32_t in1_index_subblock_offset = 0;
+                    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                        const bool is_last_in1_subblock_padded =
+                            last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
+                        // Unlike the FPU path, the output is reserved before the partials are popped: the chunks
+                        // below unpack and pack one at a time. The two buffers keep separate counters, so neither
+                        // wait depends on the other; when they share L1, chunk i packs over partials that chunk i
+                        // has already unpacked to DEST.
+                        mm_partials_dfb.wait_front(out_subblock_num_tiles);
+                        untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
+                        for (uint32_t first = 0; first < out_subblock_num_tiles; first += sfpu_bias_tiles_per_acquire) {
+                            const uint32_t count =
+                                std::min<uint32_t>(sfpu_bias_tiles_per_acquire, out_subblock_num_tiles - first);
+                            tile_regs_acquire();
+                            for (uint32_t t = 0; t < count; t++) {
+                                copy_tile(mm_partials_dfb_id, first + t, t);
+                            }
+                            for (uint32_t t = 0; t < count; t++) {
+                                const uint32_t k = (first + t) % out_subblock_w;
+                                // Padded output columns of the last in1 subblock read bias tile 0; the
+                                // writer drops them.
+                                const uint32_t bias_tile_idx =
+                                    (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
+                                        ? 0u
+                                        : in1_index_subblock_offset + k;
+                                copy_tile(bias_dfb_id, bias_tile_idx, sfpu_bias_tiles_per_acquire + t);
+                            }
+                            tile_regs_commit();
+                            pack_sfpu_begin();
+                            sfpu_add_bcast_row_init_pack();
+                            for (uint32_t t = 0; t < count; t++) {
+                                sfpu_add_bcast_row_pack(t, sfpu_bias_tiles_per_acquire + t);
+                            }
+#ifdef SFPU_ACTIVATION
+                            ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
+                            for (uint32_t t = 0; t < count; t++) {
+                                ActivationApplyHelper<
+                                    activation_type,
+                                    activation_param0,
+                                    activation_param1,
+                                    activation_param2>::apply(t);
+                            }
+#endif
+                            pack_sfpu_end();
+                            for (uint32_t t = 0; t < count; t++) {
+                                pack_tile<true>(t, untilize_mode_out_dfb_id, first + t);
+                            }
+                            tile_regs_release();
+                        }
+                        mm_partials_dfb.pop_front(out_subblock_num_tiles);
+                        untilize_mode_out_dfb.push_back(out_subblock_num_tiles);
+
+                        in1_index_subblock_offset += out_subblock_w;
+                    }
+                }
+#else
+                reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
+                if constexpr (row_broadcast_bias) {
+                    add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
+                } else {
+                    add_init(mm_partials_dfb_id, bias_dfb_id);
                 }
 #ifdef ARCH_QUASAR
                 // Quasar (§7): the accumulation above left the pack BFD on mm_partials_dfb_id; the bias pack
@@ -683,24 +755,11 @@ void kernel_main() {
                         untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #ifdef SFPU_ACTIVATION
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-
-                        // Flip destination register offset for PACKER access
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<
-                                activation_type,
-                                activation_param0,
-                                activation_param1,
-                                activation_param2>::apply(i);
-                        }
-
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        apply_activation_from_pack<
+                            activation_type,
+                            activation_param0,
+                            activation_param1,
+                            activation_param2>(out_subblock_num_tiles);
 #else
                         tile_regs_wait();
 #endif
@@ -713,6 +772,7 @@ void kernel_main() {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
+#endif  // FUSE_BIAS_SFPU
                 if constexpr (bias_per_group || num_blocks_w_dim > 1) {
                     bias_dfb.pop_front(bias_ntiles);
                 }
