@@ -61,8 +61,19 @@ SUPPORTED = {
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED],
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
+
+_SHARDED = (
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -118,11 +129,10 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_con
                 f"rms_norm: output memory_layout={memory_config.memory_layout!r} not in SUPPORTED "
                 f"{SUPPORTED['memory_layout']}"
             )
-        if memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        if memory_config.memory_layout in _SHARDED:
             in_mc = input_tensor.memory_config()
-            if (
-                in_mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                and in_mc.shard_spec != memory_config.shard_spec
+            if in_mc.memory_layout in _SHARDED and (
+                in_mc.memory_layout != memory_config.memory_layout or in_mc.shard_spec != memory_config.shard_spec
             ):
                 raise UnsupportedAxisValue("rms_norm: sharded input and sharded output must share one shard spec")
     shard_spec = input_tensor.memory_config().shard_spec
@@ -155,9 +165,7 @@ def rms_norm(
 
     if memory_config is None:  # sharded input -> output inherits its placement; otherwise DRAM interleaved
         in_mc = input_tensor.memory_config()
-        memory_config = (
-            in_mc if in_mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else ttnn.DRAM_MEMORY_CONFIG
-        )
+        memory_config = in_mc if in_mc.memory_layout in _SHARDED else ttnn.DRAM_MEMORY_CONFIG
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
         input_tensor.dtype,

@@ -40,9 +40,13 @@ void kernel_main() {
     constexpr bool ROW_FLAT = get_compile_time_arg_val(17) != 0;     // RM shard: tile-row = 32 consecutive sticks
     constexpr bool OUT_SHARD_RM = get_compile_time_arg_val(18) != 0;  // RM out sticks live in the local shard
     constexpr uint32_t OUT_STRIDE = get_compile_time_arg_val(19);     // shard stick pitch in bytes
-    constexpr auto o_args = TensorAccessorArgs<20>();
-    const uint32_t first_stick = get_arg_val<uint32_t>(peers_base + 2 * (N_W > 1 ? N_W : 0));
-    const uint32_t core_sticks = get_arg_val<uint32_t>(peers_base + 2 * (N_W > 1 ? N_W : 0) + 1);
+    constexpr bool W_PAD = get_compile_time_arg_val(20) != 0;         // slices cover more W tiles/elements than W
+    constexpr auto o_args = TensorAccessorArgs<21>();
+    constexpr uint32_t tail_base = peers_base + 2 * (N_W > 1 ? N_W : 0);
+    const uint32_t first_stick = get_arg_val<uint32_t>(tail_base);
+    const uint32_t core_sticks = get_arg_val<uint32_t>(tail_base + 1);
+    const uint32_t slice_valid_elems = get_arg_val<uint32_t>(tail_base + 2);  // valid W elements in the slice
+    const uint32_t slice_elem0 = get_arg_val<uint32_t>(tail_base + 3);        // global W element offset
 
     constexpr uint32_t TILE_DIM = 32;
     constexpr uint32_t num_seg = Wt / Sb;
@@ -53,7 +57,8 @@ void kernel_main() {
 
     const uint32_t tile_bytes = dfb_tiles.get_tile_size();
     const auto acc = TensorAccessor(o_args, o_addr, IS_RM ? W * ES : tile_bytes);
-    const uint32_t slice_off = slice_tile0 * TILE_DIM * ES;
+    const uint32_t slice_off = slice_elem0 * ES;  // interleaved RM: byte offset of the slice in a stick
+    const uint32_t slice_bytes = slice_valid_elems * ES;
 
     // ---- W-split partial exchange (all-gather inside a row group) ----
     // Row block bi: wait the local partial tiles (cb_psend), unicast each to every peer's cb_part at
@@ -123,17 +128,18 @@ void kernel_main() {
                     }
                     dfb_rm.wait_front(Sb);
                     const uint32_t base = dfb_rm.get_read_ptr();
-                    const uint32_t off = slice_off + seg * SEG_BYTES;
-                    const uint32_t avail = W * ES - off;
+                    const uint32_t seg_off = seg * SEG_BYTES;  // byte offset inside the slice
+                    const uint32_t avail = slice_bytes > seg_off ? slice_bytes - seg_off : 0;
                     const uint32_t bytes = avail < SEG_BYTES ? avail : SEG_BYTES;
-                    for (uint32_t k = 0; k < valid_rows; ++k) {
+                    for (uint32_t k = 0; bytes > 0 && k < valid_rows; ++k) {
                         if constexpr (OUT_SHARD_RM) {
                             noc_async_write(
                                 base + k * SEG_BYTES,
-                                get_noc_addr(o_addr + (stick0 - first_stick + k) * OUT_STRIDE + off),
+                                get_noc_addr(o_addr + (stick0 - first_stick + k) * OUT_STRIDE + seg_off),
                                 bytes);
                         } else {
-                            noc_async_write(base + k * SEG_BYTES, acc.get_noc_addr(stick0 + k, off), bytes);
+                            noc_async_write(
+                                base + k * SEG_BYTES, acc.get_noc_addr(stick0 + k, slice_off + seg_off), bytes);
                         }
                     }
                     noc_async_write_barrier();
@@ -144,8 +150,13 @@ void kernel_main() {
                 const uint32_t base = dfb_tiles.get_read_ptr();
                 for (uint32_t rr = 0; rr < rb; ++rr) {
                     for (uint32_t c = 0; c < Sb; ++c) {
-                        noc_async_write_tile(
-                            (tr0 + rr) * Wt_full + slice_tile0 + seg * Sb + c, acc, base + (rr * Sb + c) * tile_bytes);
+                        const uint32_t g = slice_tile0 + seg * Sb + c;  // global tile column
+                        if constexpr (W_PAD) {
+                            if (g >= Wt_full) {
+                                continue;  // pad tile of a ragged last slice: nothing to store
+                            }
+                        }
+                        noc_async_write_tile((tr0 + rr) * Wt_full + g, acc, base + (rr * Sb + c) * tile_bytes);
                     }
                 }
                 noc_async_write_barrier();

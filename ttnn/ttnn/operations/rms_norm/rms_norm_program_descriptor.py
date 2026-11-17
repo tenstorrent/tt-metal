@@ -19,6 +19,7 @@ GAMMA_BUDGET = 128 * 1024  # bytes of resident gamma tiles
 RM_DEPTH = 2  # tile-rows of RM sticks buffered in cb_x_rm
 SHARD_TIGHT_BYTES = 900 * 1024  # in+out resident shards beyond this leave too little L1 for full-size windows
 SHARD_TIGHT_G_CAP = 2  # compute window cap (tiles) under that pressure
+GAMMA_ALIGN = 64  # extra bytes of gamma-stick scratch: reads start at an aligned-down address
 OUT_DEPTH = 2  # windows buffered in cb_out_tiles / cb_out_rm
 
 # Circular buffer slots (single source; passed to kernels as compile-time args)
@@ -46,6 +47,17 @@ def _div_up(a, b):
 
 def _fp32_bits(v):
     return struct.unpack("I", struct.pack("f", float(v)))[0]
+
+
+@dataclass
+class CorePlan:
+    core: object
+    first_row: int  # first tile-row (TILE) of the core's row group
+    rows: int  # tile-rows
+    j: int  # W slice index within the row group
+    first_stick: int = 0  # RM shard: global index of the shard's first stick
+    n_sticks: int = 0  # RM shard: valid sticks
+    group: int = 0  # row group id (cores sharing one Σx² combine)
 
 
 @dataclass
@@ -106,10 +118,17 @@ def _cb(index, dtype, page_size, num_pages, core_ranges):
     )
 
 
-def height_shard_spec(tensor):
-    """The HEIGHT_SHARDED shard spec of `tensor`, or None when it is not height-sharded."""
+SHARDED_LAYOUTS = (
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+)
+
+
+def tensor_shard_spec(tensor):
+    """The shard spec of `tensor`, or None when it is not height/width/block-sharded."""
     mc = tensor.memory_config()
-    return mc.shard_spec if mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else None
+    return mc.shard_spec if mc.memory_layout in SHARDED_LAYOUTS else None
 
 
 def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compute_kernel_config):
@@ -151,16 +170,56 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     # Intermediates follow the DEST width: fp32 only when fp32 DEST accumulation is on.
     im_dtype = ttnn.float32 if compute_kernel_config.fp32_dest_acc_en else ttnn.bfloat16
     im_tile = ttnn.tile_size(im_dtype)
-    in_spec = height_shard_spec(input_tensor)
-    out_spec = height_shard_spec(output_tensor)
+    in_spec = tensor_shard_spec(input_tensor)
+    out_spec = tensor_shard_spec(output_tensor)
     shard_spec = in_spec if in_spec is not None else out_spec
-    if shard_spec is not None:
+    shard_layout = (input_tensor if in_spec is not None else output_tensor).memory_config().memory_layout
+    cross_core = shard_layout in (ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED)
+    if shard_spec is not None and cross_core:
+        # Each core owns a W slice of its shard; the cores of one grid row (row group) combine their
+        # partial sums exactly like the W-split regime: n_w slices per group, n_r groups.
+        sw = shard_spec.shape[1]
+        n_w = (
+            len(ttnn.corerange_to_cores(shard_spec.grid, row_wise=True))
+            if (shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED)
+            else _div_up(W, sw)
+        )
+        n_r = len(ttnn.corerange_to_cores(shard_spec.grid, row_wise=True)) // n_w
+    elif shard_spec is not None:
         n_w, n_r = 1, 1  # each core owns whole rows of its shard: the reduction is local
     else:
         n_w, n_r = pick_w_split(Wt, total_tile_rows, grid.x * grid.y, im_tile)
     Wt_full = Wt
-    Wt = Wt_full // n_w  # per-core slice width in tiles (every per-core CB / loop below is slice-sized)
-    if shard_spec is not None:
+    # per-core slice width in tiles (every per-core CB / loop below is slice-sized) and in elements
+    if shard_spec is not None and cross_core:
+        slice_w = shard_spec.shape[1]
+        Wt = _div_up(slice_w, TILE)
+    else:
+        Wt = Wt_full // n_w
+        slice_w = Wt * TILE
+    w_pad = n_w * slice_w > W if not is_rm else False  # TILE: slices cover more columns than W
+    if shard_spec is not None and cross_core:
+        # Shard i sits at (row group i // n_w, slice i % n_w) (ROW_MAJOR orientation). Group g owns the
+        # tile-rows (RM: sticks) of shard row g.
+        shard_cores = ttnn.corerange_to_cores(shard_spec.grid, row_wise=True)
+        sh_rows = shard_spec.shape[0]
+        core_plan = []
+        if is_rm:
+            total_sticks = images * H
+            rows_max = _div_up(sh_rows, TILE)
+        else:
+            rows_max = sh_rows // TILE
+        for i, core in enumerate(shard_cores):
+            g, j = divmod(i, n_w)
+            if is_rm:
+                first_stick = g * sh_rows
+                n_sticks = max(0, min(sh_rows, total_sticks - first_stick))
+                core_plan.append(CorePlan(core, 0, _div_up(n_sticks, TILE), j, first_stick, n_sticks, g))
+            else:
+                first = min(g * rows_max, total_tile_rows)
+                core_plan.append(CorePlan(core, first, min(rows_max, total_tile_rows - first), j, 0, 0, g))
+        all_cores = shard_spec.grid
+    elif shard_spec is not None:
         # Core i of the shard grid (shard order) owns tile-rows [i*sh, (i+1)*sh) of the flattened tensor.
         core_plan = []
         shard_cores = ttnn.corerange_to_cores(
@@ -174,13 +233,13 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             for i, core in enumerate(shard_cores):
                 first_stick = i * sh_sticks
                 n_sticks = max(0, min(sh_sticks, total_sticks - first_stick))
-                core_plan.append((core, 0, _div_up(n_sticks, TILE), 0, first_stick, n_sticks))
+                core_plan.append(CorePlan(core, 0, _div_up(n_sticks, TILE), 0, first_stick, n_sticks))
             rows_max = _div_up(sh_sticks, TILE)
         else:
             sh = shard_spec.shape[0] // TILE
             for i, core in enumerate(shard_cores):
                 first = min(i * sh, total_tile_rows)
-                core_plan.append((core, first, min(sh, total_tile_rows - first), 0, 0, 0))
+                core_plan.append(CorePlan(core, first, min(sh, total_tile_rows - first), 0, 0, 0))
             rows_max = sh
         all_cores = shard_spec.grid
     elif n_w == 1:
@@ -191,7 +250,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         first = 0
         for group, rows in ((group1, rows_g1), (group2, rows_g2)):
             for core in ttnn.corerange_to_cores(group, row_wise=True):
-                core_plan.append((core, first, rows, 0, 0, 0))
+                core_plan.append(CorePlan(core, first, rows, 0, 0, 0, group=first))
                 first += rows
         rows_max = rows_g1
     else:
@@ -205,17 +264,20 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             rows = base_rows + (1 if g < extra else 0)
             for j in range(n_w):
                 lin = g * n_w + j
-                core_plan.append((ttnn.CoreCoord(lin % grid.x, lin // grid.x), first, rows, j, 0, 0))
+                core_plan.append(CorePlan(ttnn.CoreCoord(lin % grid.x, lin // grid.x), first, rows, j, 0, 0, g))
             first += rows
-        all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c[0], c[0]) for c in core_plan])
+        all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c.core, c.core) for c in core_plan])
     row_flat = shard_spec is not None and is_rm  # RM shard: tile-rows are flat runs of shard sticks
     g_cap = G_CAP
     if shard_spec is not None and not is_rm:
         shard_bytes = (shard_spec.shape[0] // TILE) * Wt * (in_tile + out_tile)
         if shard_bytes > SHARD_TIGHT_BYTES:
             g_cap = SHARD_TIGHT_G_CAP  # the shards leave little L1: shrink the per-window intermediates
+    rows_blk = rows_max
+    if n_w > 1:  # the gathered-partials buffer (2 parities x Rb x n_w tiles) bounds the row block
+        rows_blk = max(1, min(rows_max, PART_BUDGET // (2 * n_w * im_tile)))
     blk = pick_blocking(
-        Wt, rows_max, in_tile, g_tile, has_gamma, force_resident=in_spec is not None and not is_rm, g_cap=g_cap
+        Wt, rows_blk, in_tile, g_tile, has_gamma, force_resident=in_spec is not None and not is_rm, g_cap=g_cap
     )
     Rb, Wb, Sb = blk.Rb, blk.Wb, blk.Sb
     G = Rb * Sb
@@ -236,10 +298,14 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         g_pages = Wt if blk.gamma_resident else 2 * Sb
         cbs.append(_cb(CB_GAMMA, g_dtype, g_tile, g_pages, all_cores))
         if not g_is_tile:
-            cbs.append(_cb(CB_GAMMA_RM, g_dtype, Sb * TILE * es_g, 1, all_cores))
+            cbs.append(_cb(CB_GAMMA_RM, g_dtype, Sb * TILE * es_g + GAMMA_ALIGN, 1, all_cores))
         cbs.append(_cb(CB_XN, im_dtype, im_tile, G, all_cores))
     cbs.append(_cb(CB_SQ, im_dtype, im_tile, G, all_cores))
-    cbs.append(_cb(CB_STAT, im_dtype, im_tile, Rb, all_cores))
+    # cb_stat is re-pushed in place (Sigma -> [combine ->] inv_rms), so a short tail block (rb < Rb) walks the
+    # write pointer past the CB end and the front-relative Col-broadcast read of its stat tiles would wrap.
+    # 2 (or, with the cross-core combine's extra push, 3) blocks of pages keep every block contiguous.
+    stat_pages = Rb if Rb == 1 else (3 if n_w > 1 else 2) * Rb
+    cbs.append(_cb(CB_STAT, im_dtype, im_tile, stat_pages, all_cores))
     if n_w > 1:
         cbs.append(_cb(CB_PSEND, im_dtype, im_tile, Rb, all_cores))
         cbs.append(_cb(CB_PART, im_dtype, im_tile, 2 * Rb * n_w, all_cores))
@@ -255,7 +321,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         int(is_rm), es_x, Wt, Sb, Rb, int(blk.resident), int(has_gamma), es_g, int(blk.gamma_resident),
         W, H, Ht_img, CB_X_RM, CB_X, CB_SCALER, CB_GAMMA, CB_GAMMA_RM, int(g_is_tile), Wt_full,
         int(in_tile_sharded), int(row_flat), int(in_spec is not None and is_rm),
-        (in_spec.shape[1] * es_x) if (in_spec is not None and is_rm) else 0,
+        (in_spec.shape[1] * es_x) if (in_spec is not None and is_rm) else 0, int(w_pad),
     ]  # fmt: skip
     reader_ct.extend(
         ttnn.TensorAccessorArgs().get_compile_time_args()  # sharded input: local shard, no accessor
@@ -271,7 +337,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     writer_ct = [
         int(is_rm), es_x, Wt, Sb, Rb, W, H, Ht_img, CB_OUT_TILES, CB_OUT_RM, Wt_full, n_w, CB_PSEND, CB_PART,
         SEM_PART[0], SEM_PART[1], int(out_tile_sharded), int(row_flat), int(out_spec is not None and is_rm),
-        (out_spec.shape[1] * es_x) if (out_spec is not None and is_rm) else 0,
+        (out_spec.shape[1] * es_x) if (out_spec is not None and is_rm) else 0, int(w_pad),
     ]  # fmt: skip
     writer_ct.extend(
         ttnn.TensorAccessorArgs().get_compile_time_args()
@@ -302,12 +368,22 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
 
     group_cores = {}  # row group -> its cores' physical coords, in slice order
     if n_w > 1:
-        for core, first_row, rows, j, _fs, _ns in core_plan:
-            phys = device.worker_core_from_logical_core(core)
-            group_cores.setdefault(first_row, []).append((phys.x, phys.y))
+        for cp in core_plan:
+            phys = device.worker_core_from_logical_core(cp.core)
+            group_cores.setdefault(cp.group, []).append((phys.x, phys.y))
     covered = 0
-    for core, first_row, rows, j, first_stick, n_sticks in core_plan:
+    for cp in core_plan:
+        core, first_row, rows, j, first_stick, n_sticks = (
+            cp.core,
+            cp.first_row,
+            cp.rows,
+            cp.j,
+            cp.first_stick,
+            cp.n_sticks,
+        )
         slice_tile0 = j * Wt
+        slice_elem0 = j * slice_w
+        slice_valid = max(0, min(slice_w, W - slice_elem0))
         is_last_slice = int(j == n_w - 1)
         reader_rt[core.x][core.y] = [
             x_addr,
@@ -319,11 +395,13 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             is_last_slice,
             first_stick,
             n_sticks,
+            slice_valid,
+            slice_elem0,
         ]
         writer_rt[core.x][core.y] = (
             [o_addr, first_row, rows, slice_tile0, j]
-            + [v for xy in group_cores.get(first_row, []) for v in xy]
-            + [first_stick, n_sticks]
+            + [v for xy in group_cores.get(cp.group, []) for v in xy]
+            + [first_stick, n_sticks, slice_valid, slice_elem0]
         )
         compute_rt[core.x][core.y] = [rows, inv_w_bits, eps_bits]
         covered += rows if j == 0 else 0
