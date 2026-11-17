@@ -3132,8 +3132,10 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_RingChunking_SingleDevice) {
 }
 
 // =============================================================================
-// Long rows: the online softmax state against an fp64 reference. Then the adversarial review tests
-// (PR 62646): host fuzz of the scheduler and the pick, and device edge cases of the split path.
+// Long rows: the online softmax state against an fp64 reference. Then host fuzz of the scheduler and the
+// pick (every schedule's units cover their item's steps exactly, and whatever validate accepts the factory
+// resolves), and device edge cases of the split path (one-tile shapes, odd row counts and head widths,
+// scores large enough to overflow a fully masked row's partial).
 // =============================================================================
 
 namespace {
@@ -3663,9 +3665,9 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitEdge_DefaultPick
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_LargeScoresStayFinite) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // A piece whose first step lies past a row's diagonal sees only masked scores on that row: its running max is
-    // the mask value, so its P is exp(scale * s) rather than exp(0), and a review asked whether raw scores in the
-    // hundreds could overflow that row's partial to inf, which alpha_p = 0 would turn into NaN in the fold (the
-    // uncut kernel has K tile 0 unmasked at step 0 for every row, so its max is always real). Q, K in [-40, 40] at
+    // the mask value, so its P is exp(scale * s) rather than exp(0). This checks that raw scores in the hundreds
+    // do not overflow that row's partial to inf, which alpha_p = 0 would turn into NaN in the fold (the uncut
+    // kernel has K tile 0 unmasked at step 0 for every row, so its max is always real). Q, K in [-40, 40] at
     // D=64 put |QK^T| in the thousands; both runs stay finite and agree, so the fold holds there.
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
