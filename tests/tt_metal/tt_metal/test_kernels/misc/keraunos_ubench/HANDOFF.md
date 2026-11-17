@@ -30,7 +30,7 @@ Port the X280 bandwidth and latency microbenchmarks (tt-metal PR #60692, `kzhao/
 | `.../keraunos_ubench/latency.cpp` | Ping-pong initiator and responder; transport is CpuStore, Idma or Eth |
 | `.../keraunos_ubench/transport_bw.cpp` | Per-hart bandwidth: IdmaMetal, IdmaLean or CpuStore64; start gate across harts |
 | `.../keraunos_ubench/eth_bw_sender.cpp`, `eth_bw_receiver.cpp` | Streamed Ethernet sends with a handshake and a closing flag |
-| `tests/tt_metal/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench.cpp` | Host side: `Session` (one device open for the whole binary), one parameterized test per sweep point, statistics, data checks, JSONL records. Its header comment lists the run filters and the environment variables |
+| `tests/tt_metal/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench.cpp` | Host side: `Session` (one device open for the whole binary), one parameterized test per sweep point, statistics, data checks and the result log. Its header comment lists the run filters and the environment variables |
 | `tests/tt_metal/tt_metal/perf_microbenchmark/sources.cmake`, `CMakeLists.txt` | Builds the `test_keraunos_ubench` executable under `TT_UMD_BUILD_GRENDEL_JTAG`, with the quasar include dir for `dev_mem_map.h` |
 
 ## Tests
@@ -54,7 +54,7 @@ The `KeraunosUbenchEth*` suites have no loopback check: without the loopback the
 - Every bandwidth case checks the moved data with a host readback. This matters because of the NIU write-ack issue: an ack does not prove the data landed.
 
 **Results:**
-- Appended to `$KERAUNOS_UBENCH_OUTPUT`, default `keraunos_ubench.jsonl`, as one JSON object per configuration.
+- Logged with `log_info`, one line per case: p50/p90/p99 for latency, rates for bandwidth. Raw samples are not written out.
 - Values are emulator RTL cycles. Clock ratios between domains on the emulator (CCE, NoC, D2D, Ethernet) need not match silicon.
 - Set `KERAUNOS_UBENCH_CCE_MHZ` to also log ns and GB/s.
 

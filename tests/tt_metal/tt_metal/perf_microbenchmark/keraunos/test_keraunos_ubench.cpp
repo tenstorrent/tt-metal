@@ -29,8 +29,7 @@
 //   $B --gtest_filter='-*KeraunosUbenchEth*'   # on-chip
 //   $B --gtest_filter='*KeraunosUbenchEth*'    # Ethernet
 //
-// Environment (output and topology only; every case is its own test):
-//   KERAUNOS_UBENCH_OUTPUT        JSONL path, appended (keraunos_ubench.jsonl)
+// Environment (topology and display only; every case is its own test):
 //   KERAUNOS_UBENCH_HSIO          tile of the measuring core (0)
 //   KERAUNOS_UBENCH_PEER_HSIO     tile of the cross-tile peer (1)
 //   KERAUNOS_UBENCH_CCE_MHZ       if set, the log also shows ns and GB/s at this CCE clock (records stay cycles)
@@ -49,7 +48,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -106,35 +104,8 @@ std::optional<double> cce_mhz() {
 std::pair<uint32_t, uint32_t> split(uint64_t v) { return {static_cast<uint32_t>(v), static_cast<uint32_t>(v >> 32)}; }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Records: one JSON object per line, raw cycles and counts only. Statistics in the log are for reading; the record
-// keeps the raw values so they can be recomputed.
+// Statistics and formatting
 // ---------------------------------------------------------------------------------------------------------------
-
-class Record {
-public:
-    explicit Record(const std::string& suite) { add_str("suite", suite); }
-    Record& add_str(const std::string& k, const std::string& v) {
-        fields_.push_back(fmt::format("\"{}\":\"{}\"", k, v));
-        return *this;
-    }
-    Record& add(const std::string& k, uint64_t v) {
-        fields_.push_back(fmt::format("\"{}\":{}", k, v));
-        return *this;
-    }
-    template <typename T>
-    Record& add_list(const std::string& k, const std::vector<T>& v) {
-        fields_.push_back(fmt::format("\"{}\":[{}]", k, fmt::join(v, ",")));
-        return *this;
-    }
-    void write() const {
-        const char* path = std::getenv("KERAUNOS_UBENCH_OUTPUT");
-        std::ofstream out(path != nullptr ? path : "keraunos_ubench.jsonl", std::ios::app);
-        out << "{" << fmt::format("{}", fmt::join(fields_, ",")) << "}\n";
-    }
-
-private:
-    std::vector<std::string> fields_;
-};
 
 // Floor-index percentile of a sorted sample set: element floor(p * (n - 1) / 100).
 uint64_t percentile(const std::vector<uint32_t>& sorted, uint32_t p) {
@@ -419,15 +390,6 @@ TEST_F(KeraunosUbench, TimerCheck) {
         r.aux[tc::kMonotonicReads],
         r.aux[tc::kMonotonicZeroDelta]);
 
-    Record("timer_check")
-        .add("hsio", own.hsio)
-        .add("adds", adds)
-        .add("loads", loads)
-        .add("peer_hsio", peer ? peer->hsio : 0)
-        .add_list("cycles", std::vector<uint64_t>(std::begin(r.cycles), std::end(r.cycles)))
-        .add_list("aux", std::vector<uint64_t>(std::begin(r.aux), std::end(r.aux)))
-        .write();
-
     // A counter that goes backwards cannot bracket anything.
     EXPECT_EQ(r.aux[tc::kMonotonicBackwards], 0u);
     // A counter that does not advance across adds is not counting cycles.
@@ -512,9 +474,8 @@ void run_latency(Session& s, const LatencyEnd& a, const LatencyEnd& b, const Lat
     ASSERT_EQ(ra.status, kStatusDone) << run.name << "\n" << trace;
     ASSERT_EQ(rb.status, kStatusDone) << run.name << "\n" << trace;
 
-    auto rtt = s.read(a.core, base + samples_offset(a.hart), samples);
-    auto turn = s.read(b.core, base + samples_offset(b.hart), samples);
-    auto rtt_sorted = rtt, turn_sorted = turn;
+    auto rtt_sorted = s.read(a.core, base + samples_offset(a.hart), samples);
+    auto turn_sorted = s.read(b.core, base + samples_offset(b.hart), samples);
     std::sort(rtt_sorted.begin(), rtt_sorted.end());
     std::sort(turn_sorted.begin(), turn_sorted.end());
 
@@ -529,26 +490,6 @@ void run_latency(Session& s, const LatencyEnd& a, const LatencyEnd& b, const Lat
         cycles_str(percentile(turn_sorted, 90)),
         cycles_str(percentile(turn_sorted, 99)),
         cycles_str(ra.cycles[latency::kRendezvous]));
-
-    Record("latency")
-        .add_str("case", run.name)
-        .add("transport", static_cast<uint32_t>(run.transport))
-        .add("payload_bytes", run.payload_bytes)
-        .add("txq", run.txq)
-        .add("a_hsio", a.core.hsio)
-        .add("a_hart", a.hart)
-        .add("b_hsio", b.core.hsio)
-        .add("b_hart", b.hart)
-        .add("warmup", warmup)
-        .add("samples", samples)
-        .add("rendezvous_cycles", ra.cycles[latency::kRendezvous])
-        .add("rtt_p50", percentile(rtt_sorted, 50))
-        .add("rtt_p90", percentile(rtt_sorted, 90))
-        .add("rtt_p99", percentile(rtt_sorted, 99))
-        .add("turn_p50", percentile(turn_sorted, 50))
-        .add_list("rtt_cycles", rtt)
-        .add_list("turn_cycles", turn)
-        .write();
 
     if (run.transport == LatencyTransport::Eth && run.payload_bytes != 0) {
         // The initiator's payload landed at the same offset on the responder.
@@ -711,21 +652,6 @@ TEST_P(KeraunosUbenchTransportBw, Run) {
         static_cast<uint64_t>(bytes_per_hart * harts),
         rate_str(bytes_per_hart * harts, span_inj),
         rate_str(bytes_per_hart * harts, span_drained));
-
-    Record("transport_bandwidth")
-        .add_str("case", name)
-        .add_str("mech", mech_name(mech))
-        .add_str("dst", local ? "local" : "tile")
-        .add("src_hsio", own.hsio)
-        .add("dst_hsio", dst_core.hsio)
-        .add("harts", harts)
-        .add("size", size)
-        .add("n", kTransfers)
-        .add("warmup", kBwWarmup)
-        .add("data_errors", data_errors)
-        .add_list("injection_cycles", inj)
-        .add_list("drained_cycles", drained)
-        .write();
     EXPECT_EQ(data_errors, 0u) << name << ": destination is not the source pattern";
 }
 
@@ -789,22 +715,6 @@ TEST_P(KeraunosUbenchEthBandwidth, Run) {
         rate_str(bytes, rs.cycles[eth_bw::kDelivered]),
         cycles_str(rs.cycles[eth_bw::kHandshakeRtt]),
         rs.aux[eth_bw::kTxqBusySpins]);
-
-    Record("eth_bandwidth")
-        .add_str("case", name)
-        .add("tx_hsio", tx.hsio)
-        .add("rx_hsio", rx.hsio)
-        .add("size", size)
-        .add("txqs", txqs)
-        .add("n", kTransfers)
-        .add("warmup", kBwWarmup)
-        .add("injection_cycles", rs.cycles[eth_bw::kInjection])
-        .add("acked_cycles", rs.cycles[eth_bw::kAcked])
-        .add("delivered_cycles", rs.cycles[eth_bw::kDelivered])
-        .add("handshake_rtt_cycles", rs.cycles[eth_bw::kHandshakeRtt])
-        .add("txq_busy_polls", rs.aux[eth_bw::kTxqBusySpins])
-        .add("data_errors", data_errors)
-        .write();
     EXPECT_EQ(data_errors, 0u) << name << ": receiver data region is not the sender's pattern";
 }
 
