@@ -73,7 +73,12 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         return partial
 
     def _dflash_tap_layer(self, target_layer_idx: int) -> int:
-        """DSpark taps target t at layer t+1's attention input, so tap 23 belongs to the rank starting at 24."""
+        """DSpark taps target t at layer t+1's attention input, so tap 23 belongs to the rank starting at 24.
+
+        DFlash2 (MLA, taps 19/37/66/78/90) uses the same site. ASSUMED, not verified: both drafters were
+        trained on hiddens captured the same way (the serving engine's aux-hidden capture at the input of layer
+        t+1), and under AttnRes that input is exactly the read before attn_norm. A wrong site shows up as a
+        uniformly low drafter PCC at every layer, with c_kv and k_pe equally bad."""
         return target_layer_idx + 1
 
     def _my_mla_layer_ids(self):
@@ -113,8 +118,9 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         super().compile(kv_caches)
 
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
-        """Three stages, always, in table-config order: kvpe, KDA recurrent, KDA convolution. Under DSpark
-        the drafter's K and V follow, as in the shared runtime.
+        """Three stages, always, in table-config order: kvpe, KDA recurrent, KDA convolution. Under DFlash
+        the drafter's stages follow, as in the shared runtime: K and V for DSpark (GQA), one latent stage for
+        DFlash2 (MLA).
 
         Kimi-K3 writes a KV slab on 24 of its 93 layers, so a 12-layer rank owns 3. The shared
         implementation reports the rank's LAYER span, which disagrees with the cache it describes
@@ -181,8 +187,8 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             raise RuntimeError(f"KDA slabs hold {slabs.num_slots} slots but the runtime serves {self.config.num_users}")
 
     def _dflash_stages(self, end_layer: int):
-        """The drafter's K and V after the three stages. Their rows continue the model's layer axis (93..97 on
-        the tail), where the drafter's layer completions are numbered too."""
+        """The drafter's stages after the three (K and V, or the MLA latent). Their rows continue the model's
+        layer axis (93..97 on the tail), where the drafter's layer completions are numbered too."""
         return self._dflash_migration_stages(end_layer) if self.config.dflash_enabled else []
 
     def kv_table_layer_rows(self, stage_layouts):

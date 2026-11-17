@@ -1417,3 +1417,50 @@ def allocate_dflash_kv_cache(
     # K and V are independent caches → two separate on-device zero-fills (the old path shared one host
     # buffer across two from_torch copies).
     return _alloc_zeroed(), _alloc_zeroed()
+
+
+def allocate_dflash_mla_kv_cache(
+    mesh_device: ttnn.MeshDevice,
+    config: DFlashDrafterConfig,
+    cache_seq: int,
+    *,
+    sp_axis: int = 0,
+    tp_axis: int = 1,
+    num_users: int = 1,
+    tp_shard_kv: bool = False,
+    bank_aligned: bool = True,
+    dtype: ttnn.DataType = ttnn.bfloat8_b,
+) -> ttnn.Tensor:
+    """Allocate the MLA (DFlash2) drafter's ONE context latent cache, the MLA analog of
+    ``allocate_dflash_kv_cache``: caller-owned, passed into ``TtDFlashMlaDrafter.forward``.
+
+    It is a KVPE cache in every respect but depth -- ``[num_users * num_hidden_layers, 1, cache_seq / (sp[*tp]),
+    kv_lora_rank + qk_rope_head_dim]``, user-major, bf8/TILE, ND-DRAM-sharded in 32-token bank chunks -- so it is
+    allocated by ``init_kvpe_cache`` itself. That keeps it byte-compatible with
+    ``populate_kv_chunk_address_table_block_cyclic`` (the drafter's migration config reuses the verifier's
+    block-cyclic walk) and with ``update_padded_kv_cache``'s KVPE write, including KV dedup.
+
+    ``tp_shard_kv``: KV dedup, each chip holds ``cache_seq / (sp * tp)`` rows (one latent head cannot be
+    head-sharded over TP the way the GQA drafter's kv-heads are). The runtime passes the verifier's own
+    setting, so both block-cyclic configs of the merged table share one device-group layout. Must match
+    ``TtDFlashMlaDrafter(tp_shard_kv=...)``.
+
+    Per chip per user: ``layers * 576 * 1.0625 B * cache_seq / (sp * (tp if deduped else 1))`` -- ~50 MB at 512k
+    deduped on an 8x4 mesh, ~200 MB replicated."""
+    assert config.is_mla, "allocate_dflash_mla_kv_cache needs an MLA drafter config"
+    assert num_users >= 1, f"num_users ({num_users}) must be >= 1"
+    tp = mesh_device.shape[tp_axis]
+    dedup_axis = tp_axis if (tp_shard_kv and tp > 1) else None
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=config.latent_dim,
+        mesh_device=mesh_device,
+        seq_len=cache_seq,
+        mesh_shape=tuple(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=config.num_hidden_layers,
+        num_users=num_users,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        tp_axis=dedup_axis,
+        bank_aligned=bank_aligned,
+    )

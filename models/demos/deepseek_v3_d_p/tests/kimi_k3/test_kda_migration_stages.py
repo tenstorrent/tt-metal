@@ -100,7 +100,7 @@ def test_dspark_drafter_rows_match_its_layer_completions():
 
     tail = _runtime(72, 21, dflash=True)
     tail._dflash_k_cache, tail._dflash_v_cache = _tensor(0x4000, ()), _tensor(0x5000, ())
-    tail.drafter = SimpleNamespace(config=SimpleNamespace(num_hidden_layers=5))
+    tail.drafter = SimpleNamespace(config=SimpleNamespace(num_hidden_layers=5, is_mla=False))
     *_, k, v = tail.kv_migration_stages(_caches(72, 21))
     assert [(s.base_addr, s.first_layer, s.count) for s in (k, v)] == [(0x4000, 93, 5), (0x5000, 93, 5)]
     layout = layer_completion_layout(SPLITS, 3, extra_layers=5)
@@ -109,8 +109,26 @@ def test_dspark_drafter_rows_match_its_layer_completions():
 
     upstream = _runtime(0, 24, dflash=True)
     upstream._dflash_k_cache = None
+    upstream.drafter = SimpleNamespace(config=SimpleNamespace(num_hidden_layers=5, is_mla=False))
     stages = upstream.kv_migration_stages(_caches(0, 24))
     assert [(s.base_addr, s.count) for s in stages[3:]] == [(0, 0), (0, 0)]
+
+
+def test_dflash2_mla_drafter_is_one_latent_stage_on_the_layer_axis():
+    """An MLA drafter (K3 DFlash2) migrates ONE latent cache, on the same rows its 5 layer completions use."""
+    mla = SimpleNamespace(config=SimpleNamespace(num_hidden_layers=5, is_mla=True))
+    tail = _runtime(72, 21, dflash=True)
+    tail._dflash_latent_cache = _tensor(0x6000, ())
+    tail.drafter = mla
+    *verifier, latent = tail.kv_migration_stages(_caches(72, 21))
+    assert len(verifier) == 3
+    assert (latent.base_addr, latent.first_layer, latent.count) == (0x6000, 93, 5)
+
+    upstream = _runtime(0, 24, dflash=True)
+    upstream._dflash_latent_cache = None
+    upstream.drafter = mla
+    stages = upstream.kv_migration_stages(_caches(0, 24))
+    assert [(s.base_addr, s.count) for s in stages[3:]] == [(0, 0)]
 
 
 def test_table_layer_rows_follow_the_gathered_stages():

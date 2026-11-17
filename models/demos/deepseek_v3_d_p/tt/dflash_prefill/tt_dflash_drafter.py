@@ -90,10 +90,7 @@ class TtDFlashDrafter:
             self.cache_seq % self.sp_factor == 0
         ), f"seq-parallel needs cache_seq {self.cache_seq} divisible by sp {self.sp_factor}"
 
-        assert (
-            config.num_key_value_heads % self.tp_factor == 0
-        ), f"num_kv_heads {config.num_key_value_heads} must be divisible by tp {self.tp_factor}"
-        self.kv_heads_local = config.num_key_value_heads // self.tp_factor
+        self._validate_tail_geometry()
 
         self.default_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -136,6 +133,15 @@ class TtDFlashDrafter:
         self._running_owned = True
 
     # ------------------------------------------------------------------ setup
+    def _validate_tail_geometry(self) -> None:
+        """Attention-mode-specific shape checks, run before any weight is loaded. GQA splits its kv-heads
+        across TP (column-parallel k/v_proj)."""
+        assert self.config.is_mla is False, "TtDFlashDrafter is the GQA drafter; use TtDFlashMlaDrafter for MLA"
+        assert (
+            self.config.num_key_value_heads % self.tp_factor == 0
+        ), f"num_kv_heads {self.config.num_key_value_heads} must be divisible by tp {self.tp_factor}"
+        self.kv_heads_local = self.config.num_key_value_heads // self.tp_factor
+
     def _mesh_mappers(self):
         """Row-parallel (shard tensor dim 0 on TP) and column-parallel (shard tensor dim 1 on TP)
         2D-weight mappers, replicating on the SP axis.
@@ -149,35 +155,35 @@ class TtDFlashDrafter:
         mapper_col = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=col)
         return mapper_row, mapper_col
 
+    def _linear_w(self, torch_w: torch.Tensor, mapper) -> ttnn.Tensor:
+        """HF Linear weight [out, in] -> device [in, out] (what ttnn.linear wants), bf8, DRAM."""
+        t = torch_w.transpose(-2, -1).contiguous()
+        return ttnn.as_tensor(
+            t,
+            device=self.mesh_device,
+            dtype=WEIGHT_DTYPE,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+    def _norm_w(self, torch_w: torch.Tensor) -> ttnn.Tensor:
+        """RMSNorm weight [dim] -> [1, 1, dim/32, 32] ROW_MAJOR bf16, replicated (matches ttMLA)."""
+        t = torch_w.reshape(1, 1, -1, ttnn.TILE_SIZE)
+        return ttnn.as_tensor(
+            t,
+            device=self.mesh_device,
+            dtype=NORM_WEIGHT_DTYPE,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
     def _load_weights(self, state_dict: dict):
         cfg = self.config
-        H, kv_dim, D = cfg.hidden_size, cfg.kv_dim, cfg.head_dim
-        mapper_row, mapper_col = self._mesh_mappers()
-        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
-
-        def _linear_w(torch_w, mapper):
-            # torch_w is the HF Linear weight [out, in]; ttnn.linear wants [in, out].
-            t = torch_w.transpose(-2, -1).contiguous()
-            return ttnn.as_tensor(
-                t,
-                device=self.mesh_device,
-                dtype=WEIGHT_DTYPE,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mapper,
-            )
-
-        def _norm_w(torch_w):
-            # RMSNorm weight [dim] -> [1, 1, dim/32, 32] ROW_MAJOR bf16, replicated (matches ttMLA).
-            t = torch_w.reshape(1, 1, -1, ttnn.TILE_SIZE)
-            return ttnn.as_tensor(
-                t,
-                device=self.mesh_device,
-                dtype=NORM_WEIGHT_DTYPE,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate,
-            )
+        H = cfg.hidden_size
+        mapper_row, _ = self._mesh_mappers()
+        _linear_w = self._linear_w
 
         # FC context projection, one row-parallel block per target layer: fc(concat[h_1..h_n]) == Σ_i fc_slice_i
         # @ h_i, so it accumulates at tap time. Build only this rank's owned blocks (columns keyed by target id).
@@ -193,7 +199,7 @@ class TtDFlashDrafter:
         # ranks accumulate + forward the FC partial and skip materializing these tensors.
         if not self.build_kv_tail:
             self.hidden_norm = None
-            self.k_proj, self.v_proj, self.k_norm = [], [], []
+            self._clear_tail_weights()
             return
 
         # hidden_norm spans the full H=7168 → it MUST be the DISTRIBUTED (TP-sharded) norm, exactly
@@ -209,7 +215,18 @@ class TtDFlashDrafter:
             num_links=self.num_links,
             topology=self.topology,
         )
+        self._load_tail_weights(state_dict)
 
+    def _clear_tail_weights(self) -> None:
+        """Non-tail ranks hold no per-draft-layer tensors."""
+        self.k_proj, self.v_proj, self.k_norm = [], [], []
+
+    def _load_tail_weights(self, state_dict: dict) -> None:
+        """Per-draft-layer GQA tail: k/v proj column-parallel (KV heads split across TP), k_norm replicated."""
+        cfg = self.config
+        H, kv_dim, D = cfg.hidden_size, cfg.kv_dim, cfg.head_dim
+        _, mapper_col = self._mesh_mappers()
+        _linear_w, _norm_w = self._linear_w, self._norm_w
         src = torch.argsort(interleaved_to_halfsplit_perm(D))  # [0, 64, 1, 65, ...] for head_dim=128
 
         # Per draft layer: k/v proj column-parallel (KV heads split across TP), per-head k_norm replicated.
@@ -415,11 +432,7 @@ class TtDFlashDrafter:
         block-cyclic-gathered, so each chip's tap slice is exactly the rows its cache shard will hold, and
         the interleaved indexed rope op derives each chip's shard offset on-device from the whole-cache table
         built once in ``__init__``."""
-        assert self.build_kv_tail, (
-            "forward() on a non-tail drafter (build_kv_tail=False); non-tail ranks forward the partial "
-            "via export_partial instead"
-        )
-        assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
+        self._check_forward_args(d2h_service, metadata_msg)
         cfg = self.config
         # Sanity-check the un-sharded cache dims (layer/head_dim are not seq/SP-sharded, so .shape is
         # unambiguous here); the seq (dim 2) capacity is checked in GLOBAL tokens below.
@@ -437,6 +450,67 @@ class TtDFlashDrafter:
         assert (
             k_cache.shape[-1] == cfg.head_dim and v_cache.shape[-1] == cfg.head_dim
         ), f"kv cache head_dim {k_cache.shape[-1]}/{v_cache.shape[-1]} != {cfg.head_dim}"
+        target_hidden = self._context_feature(kv_actual_global, actual_end=actual_end, metadata=metadata)
+
+        for i in range(cfg.num_hidden_layers):
+            k = ttnn.linear(
+                target_hidden,
+                self.k_proj[i],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            v = ttnn.linear(
+                target_hidden,
+                self.v_proj[i],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            k = self._split_heads(k)  # [1, kvh_local, seq, head_dim]
+            v = self._split_heads(v)
+            k = ttnn.rms_norm(
+                k,
+                weight=self.k_norm[i],
+                epsilon=cfg.rms_norm_eps,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.default_compute_kernel_config,
+            )
+            k = self._rope_indexed(k, kv_actual_global, metadata)
+            # The cache is bf8 (align w/ the decode KV cache) while k/v leave the projections in bf16;
+            # update_padded_kv_cache FATALs unless cache and input dtypes match exactly, so typecast down
+            # first — TILE both sides, so no relayout (mirrors MLA _to_cache_format). Keyed off *_cache.dtype
+            # so a bf16-cache caller (override) still works.
+            if k.dtype != k_cache.dtype:
+                k_cast = ttnn.typecast(k, k_cache.dtype)
+                ttnn.deallocate(k)
+                k = k_cast
+            if v.dtype != v_cache.dtype:
+                v_cast = ttnn.typecast(v, v_cache.dtype)
+                ttnn.deallocate(v)
+                v = v_cast
+            # Write this chunk into slot `slot_idx`, draft layer `i` (see _write_cache).
+            for cache, tensor in ((k_cache, k), (v_cache, v)):
+                self._write_cache(cache, tensor, i, slot_idx, kv_actual_global, actual_end, metadata)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            # Ack AFTER both caches are written, so one ack means draft layer i is complete for K and V.
+            self._ack_layer(i, d2h_service, metadata_msg, on_layer_complete, layer_ack_base, trace_controller)
+        ttnn.deallocate(target_hidden)
+
+    # ------------------------------------------------------------------ shared finalize helpers
+    def _check_forward_args(self, d2h_service, metadata_msg) -> None:
+        assert self.build_kv_tail, (
+            "forward() on a non-tail drafter (build_kv_tail=False); non-tail ranks forward the partial "
+            "via export_partial instead"
+        )
+        assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
+
+    def _context_feature(
+        self, kv_actual_global: int, *, actual_end: Optional[int], metadata: Optional[tuple]
+    ) -> ttnn.Tensor:
+        """The drafter's context feature ``hidden_norm(fc(concat taps))`` for this chunk, replicated on TP
+        ``[1, 1, seq_local, H]``. Consumes the FC accumulator (and any imported upstream partial) and checks
+        the chunk's offset/extent against the cache depth and the rope table. Shared by every attention mode:
+        the context feature is what both the GQA k/v_proj and MLA's kv_a_proj_with_mqa read."""
         # Combine this rank's accumulated FC partials across TP and add any upstream partial (import_partial).
         reduced = self._finalize_sharded_partial()  # [1,1,seq,H/tp] (or full H when tp==1)
         seq = reduced.shape[2]  # PER-CHIP seq (dim2, unchanged by the hidden scatter) == chunk_local
@@ -487,100 +561,85 @@ class TtDFlashDrafter:
         assert (
             chunk_global == self.chunk_size
         ), f"chunk_global ({chunk_global}) != chunk_size the rope table was built for ({self.chunk_size})"
+        return target_hidden
 
-        for i in range(cfg.num_hidden_layers):
-            k = ttnn.linear(
-                target_hidden,
-                self.k_proj[i],
-                compute_kernel_config=self.default_compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    def _rope_indexed(self, t: ttnn.Tensor, kv_actual_global: int, metadata: Optional[tuple]) -> ttnn.Tensor:
+        """Indexed (block-cyclic, whole-cache table) RoPE for this chunk; the op derives each chip's offset
+        on-device from kv_actual_global (host scalar, or metadata[1] on the traced path)."""
+        if metadata is not None:
+            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                t,
+                self._rope["cos_matrix"],
+                self._rope["sin_matrix"],
+                self._rope["trans_matrix"],
+                metadata[1],  # actual_start = kv_actual_global
+                cluster_axis=self.sp_axis,
             )
-            v = ttnn.linear(
-                target_hidden,
-                self.v_proj[i],
-                compute_kernel_config=self.default_compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+            t,
+            self._rope["cos_matrix"],
+            self._rope["sin_matrix"],
+            self._rope["trans_matrix"],
+            kv_actual_global=kv_actual_global,
+            cluster_axis=self.sp_axis,
+        )
+
+    def _write_cache(
+        self,
+        cache: ttnn.Tensor,
+        tensor: ttnn.Tensor,
+        layer_idx: int,
+        slot_idx: int,
+        kv_actual_global: int,
+        actual_end: Optional[int],
+        metadata: Optional[tuple],
+        tp_axis: Optional[int] = None,
+    ) -> None:
+        """Write this chunk into slot ``slot_idx``, draft layer ``layer_idx``. update_padded_kv_cache derives
+        each chip's local write offset on-device from kv_actual_global (the same call the MLA chunked-prefill
+        path makes) and is mesh-aware, unlike fill_cache_for_user_, whose program factory names out
+        mesh_dispatch_coordinate and so cannot express the per-chip staircase at all. ``tp_axis`` (MLA latent
+        only): KV dedup, each chip keeps its 1/tp window of the TP-replicated input, as the verifier's KVPE.
+        ALWAYS keyword args: the two nanobind overloads order the scalars differently."""
+        num_layers = self.config.num_hidden_layers
+        if metadata is not None:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache,
+                tensor,
+                metadata[0],  # slot_idx
+                metadata[1],  # kv_actual_global
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                cluster_axis=self.sp_axis,
+                valid_global=metadata[2],  # actual_end
+                tp_axis=tp_axis,
             )
-            k = self._split_heads(k)  # [1, kvh_local, seq, head_dim]
-            v = self._split_heads(v)
-            k = ttnn.rms_norm(
-                k,
-                weight=self.k_norm[i],
-                epsilon=cfg.rms_norm_eps,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.default_compute_kernel_config,
+        else:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache,
+                tensor,
+                slot_idx=slot_idx,
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                kv_actual_global=kv_actual_global,
+                cluster_axis=self.sp_axis,
+                valid_global=actual_end,
+                tp_axis=tp_axis,
             )
-            if metadata is not None:
-                k = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
-                    k,
-                    self._rope["cos_matrix"],
-                    self._rope["sin_matrix"],
-                    self._rope["trans_matrix"],
-                    metadata[1],  # actual_start = kv_actual_global
-                    cluster_axis=self.sp_axis,
-                )
+
+    def _ack_layer(
+        self, layer_idx: int, d2h_service, metadata_msg, on_layer_complete, layer_ack_base: int, trace_controller
+    ) -> None:
+        """Per-draft-layer migration ack, fired after that layer's cache writes. Ordering carries the meaning on
+        the device path: the record is enqueued on the same CQ behind this layer's writes, and LayerAckService
+        numbers records positionally, so these land as global layers layer_ack_base..layer_ack_base +
+        num_hidden_layers - 1 behind the verifier's own acks."""
+        if d2h_service is not None:
+            ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+        elif on_layer_complete is not None:
+            # The controller splits the capture at the ack, like kv_ack.zero_pad_and_ack.
+            if trace_controller is not None and trace_controller.has_layer_ack():
+                trace_controller.layer_ack(layer_ack_base + layer_idx)
             else:
-                k = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
-                    k,
-                    self._rope["cos_matrix"],
-                    self._rope["sin_matrix"],
-                    self._rope["trans_matrix"],
-                    kv_actual_global=kv_actual_global,
-                    cluster_axis=self.sp_axis,
-                )
-            # The cache is bf8 (align w/ the decode KV cache) while k/v leave the projections in bf16;
-            # update_padded_kv_cache FATALs unless cache and input dtypes match exactly, so typecast down
-            # first — TILE both sides, so no relayout (mirrors MLA _to_cache_format). Keyed off *_cache.dtype
-            # so a bf16-cache caller (override) still works.
-            if k.dtype != k_cache.dtype:
-                k_cast = ttnn.typecast(k, k_cache.dtype)
-                ttnn.deallocate(k)
-                k = k_cast
-            if v.dtype != v_cache.dtype:
-                v_cast = ttnn.typecast(v, v_cache.dtype)
-                ttnn.deallocate(v)
-                v = v_cast
-            # Write this chunk into slot `slot_idx`, draft layer `i`. update_padded_kv_cache derives each
-            # chip's local write offset on-device from kv_actual_global (the same call the MLA chunked-prefill
-            # path makes) and is mesh-aware, unlike fill_cache_for_user_, whose program factory names out
-            # mesh_dispatch_coordinate and so cannot express the per-chip staircase at all.
-            # ALWAYS keyword args: the two nanobind overloads order the scalars differently.
-            for cache, tensor in ((k_cache, k), (v_cache, v)):
-                if metadata is not None:
-                    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                        cache,
-                        tensor,
-                        metadata[0],  # slot_idx
-                        metadata[1],  # kv_actual_global
-                        layer_idx=i,
-                        num_layers=cfg.num_hidden_layers,
-                        cluster_axis=self.sp_axis,
-                        valid_global=metadata[2],  # actual_end
-                    )
-                else:
-                    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                        cache,
-                        tensor,
-                        slot_idx=slot_idx,
-                        layer_idx=i,
-                        num_layers=cfg.num_hidden_layers,
-                        kv_actual_global=kv_actual_global,
-                        cluster_axis=self.sp_axis,
-                        valid_global=actual_end,
-                    )
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
-            # Ack AFTER both caches are written, so one ack means draft layer i is complete for K and V.
-            # Ordering carries the meaning on the device path: the record is enqueued on the same CQ behind
-            # this layer's writes, and LayerAckService numbers records positionally, so these land as global
-            # layers layer_ack_base..layer_ack_base+num_hidden_layers-1 behind the verifier's own acks.
-            if d2h_service is not None:
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
-            elif on_layer_complete is not None:
-                # The controller splits the capture at the ack, like kv_ack.zero_pad_and_ack.
-                if trace_controller is not None and trace_controller.has_layer_ack():
-                    trace_controller.layer_ack(layer_ack_base + i)
-                else:
-                    ttnn.synchronize_device(self.mesh_device)
-                    on_layer_complete(layer_ack_base + i)
-        ttnn.deallocate(target_hidden)
+                ttnn.synchronize_device(self.mesh_device)
+                on_layer_complete(layer_ack_base + layer_idx)
