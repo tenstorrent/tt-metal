@@ -53,11 +53,26 @@ def end_tokens(c, e, NE, NCL, R, T):
 
 
 def build_fold(
-    mesh, scfg: SCfg, K, x_t, w13_t, w2_t, rows_t, w_t, y_t, fence_t, top=True, nbuf=4, fidelity=None, no_shared=False
+    mesh,
+    scfg: SCfg,
+    K,
+    x_t,
+    w13_t,
+    w2_t,
+    rows_t,
+    w_t,
+    y_t,
+    fence_t,
+    top=True,
+    nbuf=4,
+    fidelity=None,
+    no_shared=False,
+    slices=0,
 ):
     """generic_op mesh program of the fold; returns (mesh program, io tensors, stamps (shared, its hubs, end cores)).
     rows_t: the routed rows [T K + spare, H] row-major; w_t: the gate weights [TX, 16] fp32; y_t: [T, H] row-major;
-    fence_t: NUM_DRAM_BANKS 64-B pages (the y writes' fence); no_shared (a check): the shared rows' weight 0."""
+    fence_t: NUM_DRAM_BANKS 64-B pages (the y writes' fence); no_shared (a check): the shared rows' weight 0; slices
+    (a diagnostic, WF_SLICES): each routed row read as that many equal pieces."""
     cfg, ends = fold_cfg(mesh, scfg, top)
     fidelity = fidelity or ttnn.MathFidelity.HiFi2
     cl = clusters(mesh, cfg)
@@ -116,7 +131,7 @@ def build_fold(
             + [eflags.buffer_address(), GC, fcred.buffer_address(), CB_ROWS, CB_W]
             + ta(rows_t)
             + ta(w_t),
-            defines=[("WF_NO_SHARED", "1")] if no_shared else [],
+            defines=([("WF_NO_SHARED", "1")] if no_shared else []) + ([("WF_SLICES", str(slices))] if slices else []),
             runtime_args=rd_rt,
             config=dm(1, 0),
         ),

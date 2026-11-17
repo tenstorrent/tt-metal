@@ -715,7 +715,17 @@ def fold_program(mesh, lc: LayerCfg, st, hd):
     """The shared expert folded into the end pass (ws_fold): y from the routed rows (K a token) and the shared rows
     through L1."""
     return build_fold(
-        mesh, st["scfg"], lc.K, hd["x_rm"], st["w13_t"], st["w2s_t"], st["res_t"], hd["w"], st["y_t"], st["hout"]["fence_t"]
+        mesh,
+        st["scfg"],
+        lc.K,
+        hd["x_rm"],
+        st["w13_t"],
+        st["w2s_t"],
+        st["res_t"],
+        hd["w"],
+        st["y_t"],
+        st["hout"]["fence_t"],
+        slices=int(os.environ.get("WSY_FOLD_SLICES", "0")),  # (a diagnostic: the routed rows read in that many pieces)
     )
 
 

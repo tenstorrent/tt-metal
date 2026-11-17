@@ -117,9 +117,24 @@ void kernel_main() {
             t_res += wall() - a;
             const uint32_t slot = issued % NBUF, l1 = rows_base + slot * tok_bytes;
             noc_async_read_set_trid(1 + slot);
+#if defined(WF_SLICES)
+            // (diagnostic: each routed row read as WF_SLICES equal pieces - the reads a column-slice-major layout of the
+            // routed rows would take - same bytes, same destination)
+            static_assert(row_bytes % (WF_SLICES * 64) == 0, "WF_SLICES pieces of 64 B multiples");
+            for (uint32_t j = 0; j < K; ++j) {
+                const uint64_t src = rs.get_noc_addr(t * K + j);
+                for (uint32_t q = 0; q < WF_SLICES; ++q) {
+                    noc_async_read(
+                        src + q * (row_bytes / WF_SLICES),
+                        l1 + j * TPR * tile_bytes + q * (row_bytes / WF_SLICES),
+                        row_bytes / WF_SLICES);
+                }
+            }
+#else
             for (uint32_t j = 0; j < K; ++j) {
                 noc_async_read_page(t * K + j, rs, l1 + j * TPR * tile_bytes);
             }
+#endif
             noc_async_read(me | (ering + (h * 16 + i % 16) * row_bytes), l1 + K * TPR * tile_bytes, row_bytes);
             noc_async_read_page(t, ws, w_scr + slot * 64);
             noc_async_read_set_trid(0);
