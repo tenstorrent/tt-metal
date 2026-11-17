@@ -217,6 +217,10 @@ class Qwen38TPDecoder(Qwen38Decoder):
             bs, aa = [split(state_dict[f"linear_attn.in_proj_{n}.weight"]) for n in ("b", "a")]
             pieces = []
             for qp, kp, vp, zp, bp, ap in zip(split(q), split(k), split(v), zs, bs, aa):
+                if self.gdn_packed:
+                    # Packed op rows: a before b, both in the tile column after z.
+                    pieces.append(torch.cat([qp, kp, vp, zp, ap, bp]))
+                    continue
                 pieces.append(
                     torch.cat(
                         [

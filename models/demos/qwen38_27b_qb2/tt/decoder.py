@@ -113,6 +113,11 @@ def gdn_chain():
     return os.environ.get("QWEN38_GDN", "fused") == "chain"
 
 
+def gdn_packed():
+    """The fused op takes the projection rows [qkv | z | a | b] as they are; QWEN38_GDN_PACKED=0 slices them first."""
+    return not gdn_chain() and os.environ.get("QWEN38_GDN_PACKED", "1") != "0"
+
+
 class Qwen38Decoder(LightweightModule):
     PAGE_SIZE = 32
     CHUNK_SIZE = DEFAULT_POLICY["chunk_size"]
@@ -120,6 +125,7 @@ class Qwen38Decoder(LightweightModule):
     def __init__(self):
         self._cache_initialization_pending = None
         self.gdn_chain = gdn_chain()
+        self.gdn_packed = gdn_packed()
 
     @classmethod
     def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, replicated_mesh=False):
@@ -215,9 +221,10 @@ class Qwen38Decoder(LightweightModule):
         if self.kind == "linear_attention":
             names = ("qkv", "z", "b", "a")
             pieces = []
-            for name in names:
+            # Packed op rows: a before b, both in the tile column after z.
+            for name in ("qkv", "z", "a", "b") if self.gdn_packed else names:
                 w = state_dict[f"linear_attn.in_proj_{name}.weight"]
-                pieces.append(torch.nn.functional.pad(w, (0, 0, 0, (-w.shape[0]) % 32)))
+                pieces.append(w if self.gdn_packed else torch.nn.functional.pad(w, (0, 0, 0, (-w.shape[0]) % 32)))
             self.weights["linear_attn.packed.weight"] = upload(
                 torch.cat(pieces, dim=0).T, self._weight_dtype("linear_attn.packed.weight")
             )
@@ -946,13 +953,20 @@ class Qwen38Decoder(LightweightModule):
             packed = self._linear(x, "linear_attn.packed")
         if packed.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
             packed = ttnn.to_memory_config(packed, ttnn.DRAM_MEMORY_CONFIG)
-        if tuple(packed.shape) != (1, b * t, packed.shape[-1]):
-            packed = ttnn.reshape(packed, [1, b * t, packed.shape[-1]])
-        qkv = packed[:, :, :conv_width]
-        z = packed[:, :, conv_width : conv_width + z_width]
-        # The op takes both gate inputs raw.
-        beta = packed[:, :, conv_width + z_width : conv_width + z_width + hv]
-        a = packed[:, :, conv_width + z_width + gate_width : conv_width + z_width + gate_width + hv]
+        if self.gdn_packed:
+            width = conv_width + z_width + 2 * hv
+            if tuple(packed.shape) != (1, b * t, width):
+                # A view: the reader-alignment columns stay behind the logical width (one tile row in compact decode).
+                packed = ttnn.reshape(packed, [1, b * t, width], [1, *list(packed.padded_shape)[-2:]])
+            qkv, z, beta, a = packed, None, None, None
+        else:
+            if tuple(packed.shape) != (1, b * t, packed.shape[-1]):
+                packed = ttnn.reshape(packed, [1, b * t, packed.shape[-1]])
+            qkv = packed[:, :, :conv_width]
+            z = packed[:, :, conv_width : conv_width + z_width]
+            # The op takes both gate inputs raw.
+            beta = packed[:, :, conv_width + z_width : conv_width + z_width + hv]
+            a = packed[:, :, conv_width + z_width + gate_width : conv_width + z_width + gate_width + hv]
         # Both states are written in place: trace replay finds them at the captured addresses.
         output, _, _ = gated_delta_net(
             qkv,
@@ -965,6 +979,7 @@ class Qwen38Decoder(LightweightModule):
             epsilon=self.eps,
             conv_state_out=state.conv,
             recurrent_state_out=state.recurrent,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         output = ttnn.reshape(output, [1, 1, b, z_width] if compact else [b, t, z_width])
         return self._linear(output, "linear_attn.out_proj")
