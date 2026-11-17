@@ -24,6 +24,10 @@ ttnn::Tensor select_final_carry(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphores,
     const std::optional<ttnn::Tensor>& actual_end = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    uint32_t sequence_parallel_axis = 0);
+    uint32_t sequence_parallel_axis = 0,
+    const std::optional<ttnn::Tensor>& slab = std::nullopt,
+    const std::optional<ttnn::Tensor>& slab_index = std::nullopt,
+    uint32_t slab_index_scale = 1,
+    uint32_t slab_index_offset = 0);
 
 }  // namespace ttnn::experimental::kda

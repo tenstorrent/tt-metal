@@ -92,20 +92,28 @@ tt::tt_metal::ProgramDescriptor build_program(
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = tiles_cb, .data_format = state_format, .page_size = page_size}}},
     });
+    // Two aligned slots: the chronology scalars, then the slab index (select_final_carry_common.hpp).
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = mode_page_bytes,
+        .total_size = 2 * mode_page_bytes,
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = mode_cb, .data_format = tt::DataFormat::UInt32, .page_size = mode_page_bytes}}},
+            .buffer_index = mode_cb, .data_format = tt::DataFormat::UInt32, .page_size = 2 * mode_page_bytes}}},
     });
 
     const auto& end_tensor = in.actual_end.value_or(in.actual_start);
     std::vector<uint32_t> reader_args = {
         tiles_cb, mode_cb, packet_pages, sp_size, attrs.local_rows, in.actual_end.has_value(), tail_groups, head_tiles};
+    const bool slab = in.slab.has_value();
+    const auto slab_args = kda_factory_detail::slab_kernel_args(
+        slab ? &*in.slab : nullptr, attrs.slab_index_scale, attrs.slab_index_offset);
+    reader_args.insert(reader_args.end(), slab_args.begin(), slab_args.end());
+    reader_args.insert(reader_args.end(), {state_tiles, mode_page_bytes / static_cast<uint32_t>(sizeof(uint32_t))});
+    const auto& slab_index = slab ? *in.slab_index : in.actual_start;
     tt::tt_metal::TensorAccessorArgs(in.rank_final.buffer()).append_to(reader_args);
     tt::tt_metal::TensorAccessorArgs(in.prefix_final.buffer()).append_to(reader_args);
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(reader_args);
     tt::tt_metal::TensorAccessorArgs(end_tensor.buffer()).append_to(reader_args);
+    tt::tt_metal::TensorAccessorArgs(slab_index.buffer()).append_to(reader_args);
     std::vector<uint32_t> writer_args = {
         tiles_cb, mode_cb, packet_pages, page_size, targets_forward + targets_backward, uint32_t(unicast_peers)};
     // sp_rank and the multicast hops are runtime args, so a range's per-chip programs merge into one.
@@ -134,7 +142,11 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::KernelHandle writer_id = 1;
     // Every core reads the same buffers, so they are bound once per kernel.
     desc.kernels[reader_id].emplace_common_runtime_args(
-        {in.rank_final.buffer(), in.prefix_final.buffer(), in.actual_start.buffer(), end_tensor.buffer()});
+        {in.rank_final.buffer(),
+         in.prefix_final.buffer(),
+         in.actual_start.buffer(),
+         end_tensor.buffer(),
+         slab_index.buffer()});
     desc.kernels[writer_id].emplace_common_runtime_args({output.buffer()});
 
     const auto drain_core = mesh->worker_core_from_logical_core(fabric_cores.front());

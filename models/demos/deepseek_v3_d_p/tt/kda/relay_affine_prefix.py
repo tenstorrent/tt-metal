@@ -20,7 +20,25 @@ consecutive calls.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import ttnn
+
+
+@dataclass(frozen=True)
+class SlabEntry:
+    """Entry ``index * scale + offset`` of a ``[entries, ...]`` state slab; ``index`` is a replicated UINT32 device
+    scalar the KDA ops read on device, so a captured trace follows the index of each replay. The ops read the carry
+    from the entry (zeros where ``actual_start`` reads 0) and write the replacement back in place."""
+
+    slab: ttnn.Tensor
+    index: ttnn.Tensor
+    scale: int = 1
+    offset: int = 0
+
+    def op_kwargs(self) -> dict:
+        return {"slab_index": self.index, "slab_index_scale": self.scale, "slab_index_offset": self.offset}
+
 
 # A sender core's count semaphores, one per head it serves (relay_affine_prefix_max_heads_per_link).
 _MAX_HEADS_PER_LINK = 14
@@ -125,11 +143,15 @@ class RelayAffinePrefix:
                 self._landing_shape, ttnn.float32, ttnn.TILE_LAYOUT, self.mesh_device, self._landing_memory_config
             )
 
-    def __call__(self, packed, initial_state, actual_start):
+    def __call__(self, packed, initial_state: ttnn.Tensor | SlabEntry, actual_start):
         """Return this rank's entry states (in L1) and the final state, both [BH, K, K] FP32. Frees the landing buffer
-        once the relay has run."""
+        once the relay has run. A slab entry ``initial_state`` is read in place (zeros at a request's head)."""
         # Reserving here suffices only when no program of this rank runs between its predecessor's relay and its own.
         self.reserve()
+        slab_kwargs = {}
+        if isinstance(initial_state, SlabEntry):
+            slab_kwargs = initial_state.op_kwargs()
+            initial_state = initial_state.slab
         result = ttnn.experimental.kda.relay_affine_prefix(
             packed,
             initial_state,
@@ -142,6 +164,7 @@ class RelayAffinePrefix:
             sequence_parallel_axis=self.axis,
             entry_memory_config=self.entry_memory_config,
             compute_kernel_config=self.compute_config,
+            **slab_kwargs,
         )
         # Every write into it is consumed within the call: the predecessor's entry columns by this rank's heads, and
         # the last rank's final state by the first rank's writer.

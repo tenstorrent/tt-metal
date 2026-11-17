@@ -31,7 +31,11 @@ ttnn::Tensor select_final_carry(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphores,
     const std::optional<ttnn::Tensor>& actual_end,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    uint32_t sequence_parallel_axis) {
+    uint32_t sequence_parallel_axis,
+    const std::optional<ttnn::Tensor>& slab,
+    const std::optional<ttnn::Tensor>& slab_index,
+    uint32_t slab_index_scale,
+    uint32_t slab_index_offset) {
     // Validation runs on cache misses only; the device must be known before then to pick the links.
     TT_FATAL(
         prefix_final.storage_type() == StorageType::DEVICE && prefix_final.is_allocated(),
@@ -55,7 +59,11 @@ ttnn::Tensor select_final_carry(
         num_links,
         topology,
         cores,
-        semaphore_addresses(semaphores));
+        semaphore_addresses(semaphores),
+        slab,
+        slab_index,
+        slab_index_scale,
+        slab_index_offset);
 }
 
 }  // namespace ttnn::experimental::kda

@@ -18,7 +18,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_affine_prefix(
     const std::vector<tt::tt_metal::CoreCoord>& cores,
     uint32_t sequence_parallel_axis,
     const std::optional<ttnn::MemoryConfig>& entry_memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& slab_index,
+    uint32_t slab_index_scale,
+    uint32_t slab_index_offset) {
     TT_FATAL(
         packed.storage_type() == StorageType::DEVICE && packed.is_allocated(),
         "relay_affine_prefix: packed must be an allocated device tensor");
@@ -43,7 +46,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_affine_prefix(
         sequence_parallel_axis,
         local_rows,
         num_links,
-        cores);
+        cores,
+        slab_index,
+        slab_index_scale,
+        slab_index_offset);
 }
 
 }  // namespace ttnn::experimental::kda

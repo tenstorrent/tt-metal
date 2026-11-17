@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -24,6 +25,8 @@ struct RelayAffinePrefixParams {
     // L1 addresses of the caller's entry-state and final-state arrival counters, kept alive across calls: a peer
     // counts into them before this rank's call starts, and each call subtracts the columns it consumed.
     std::array<uint32_t, 2> semaphore_addresses{};
+    uint32_t slab_index_scale = 1;
+    uint32_t slab_index_offset = 0;
 };
 
 // The landing buffer's K x K slots per head core: entry state, final state.
@@ -38,6 +41,18 @@ struct RelayAffinePrefixInputs {
     // the SP line between them: a rank's writer copies the entry and final states out at the end of its call, and its
     // predecessor's next call overwrites them as soon as it starts.
     Tensor landing;
+    // initial_state is then a [entries, H, K, K] slab, read at its entry (zeros at actual_start == 0).
+    std::optional<Tensor> slab_index;
 };
+
+// The heads and K of a relay: initial_state is [B*H, K, K], or a [entries, H, K, K] slab with slab_index.
+struct RelayStateGeometry {
+    uint32_t heads;
+    uint32_t key_dim;
+};
+inline RelayStateGeometry relay_state_geometry(const RelayAffinePrefixInputs& in) {
+    const auto& state = in.initial_state.logical_shape();
+    return in.slab_index ? RelayStateGeometry{state[1], state[2]} : RelayStateGeometry{state[0], state[1]};
+}
 
 }  // namespace ttnn::experimental::prim
