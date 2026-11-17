@@ -1484,6 +1484,29 @@ PERF_TEST_SCHEMAS = {
             "perf_custom_mm_reuse_dest_srcb": "perf_custom_mm_reuse_dest_srcb"
         },
     },
+    "perf_sdpa_custom_mm_reuse_dest_srcb": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "kt_dim",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "nt_dim",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_sdpa_custom_mm_reuse_dest_srcb": "perf_sdpa_custom_mm_reuse_dest_srcb"
+        },
+    },
     "perf_matmul_custom": {
         "version": 1,
         "columns": [

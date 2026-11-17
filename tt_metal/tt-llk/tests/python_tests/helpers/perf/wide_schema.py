@@ -185,6 +185,8 @@ DB_SCHEMA = [
     Column("producer_kt", "int64", True, "configuration"),
     Column("reuse_kt", "int64", True, "configuration"),
     Column("reuse_nt", "int64", True, "configuration"),
+    Column("kt_dim", "int64", True, "configuration"),
+    Column("nt_dim", "int64", True, "configuration"),
     Column("compression_case", "string", True, "configuration"),
     Column("capacity", "int64", True, "configuration"),
     Column("cos_base", "int64", True, "configuration"),
