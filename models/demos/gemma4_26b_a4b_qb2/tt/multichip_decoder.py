@@ -2231,6 +2231,13 @@ class MultichipDecoder(OptimizedDecoder):
             return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float().reshape(-1)[:hidden]
 
         assert self.moe_b1 is not None and getattr(layer.shared_mlp, "input_gamma_folded", False)
+        # Batch-1 decode now takes the fused path; the unfused batch-1 layer (the token-at-a-time prefix continuation,
+        # GEMMA4_26B_WS8_ROWS=0, and the layer tests) keeps no persistent L1: its one-row collectives use transient
+        # DRAM buffers and the router's top-k scale row is created now. Lazily created persistent L1 on top of the
+        # boundary's would sit below the prefill SDPA circular buffers (end 1423296) and fail the next long prefill.
+        self.persistent_ccl = False
+        self.collective_memory = ttnn.DRAM_MEMORY_CONFIG
+        layer.moe.router.topk_scale_l1()
         source = layer.moe.router.original.source
         self.fused = SimpleNamespace(
             boundary=boundary,

@@ -1014,14 +1014,7 @@ class GeneralizedRouter:
 
         source = self.original.source
         router = source.source
-        if getattr(self, "_topk_scale_l1", None) is None:
-            self._topk_scale_l1 = ttnn.to_memory_config(
-                ttnn.to_layout(
-                    ttnn.reshape(ttnn.typecast(router.per_expert_scale, ttnn.bfloat16), (1, 1, 1, 128)),
-                    ttnn.ROW_MAJOR_LAYOUT,
-                ),
-                ttnn.L1_MEMORY_CONFIG,
-            )
+        self.topk_scale_l1()
         # prescaled (WS5 fused boundary): the input already is normalized * scale * scalar_root_size, FP32.
         scaled = (
             normalized
@@ -1041,6 +1034,20 @@ class GeneralizedRouter:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         return router_topk_b1(logits, self._topk_scale_l1, 8)
+
+    def topk_scale_l1(self):
+        """per_expert_scale as one bf16 row in L1 for router_topk_b1 (created once; WS5 creates it at model init so
+        it sits with the other persistent L1, above the prefill circular buffers)."""
+        if getattr(self, "_topk_scale_l1", None) is None:
+            router = self.original.source.source
+            self._topk_scale_l1 = ttnn.to_memory_config(
+                ttnn.to_layout(
+                    ttnn.reshape(ttnn.typecast(router.per_expert_scale, ttnn.bfloat16), (1, 1, 1, 128)),
+                    ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                ttnn.L1_MEMORY_CONFIG,
+            )
+        return self._topk_scale_l1
 
     def decode_indices(self):
         if self.last_decode_indices is None:
