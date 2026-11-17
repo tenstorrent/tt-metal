@@ -215,5 +215,9 @@ def test_checkpoint_decoder_numerics(generator, text_layer_inputs, layer_number)
 @pytest.mark.parametrize("boundary", ["partial_page", "sliding_window"])
 def test_cached_continuation(generator, monkeypatch, boundary):
     monkeypatch.setenv("GEMMA4_PREFIX_TRACE_SUFFIX", "1")
+    # Bit-exact contract of the token-at-a-time continuation; WS8 rows are tested in test_ws8_rows_prefill.py.
+    from models.demos.gemma4_26b_a4b_qb2.tt import generator as generator_module
+
+    monkeypatch.setattr(generator_module, "WS8_ROWS", False)
     start = 31 if boundary == "partial_page" else generator.model.config.sliding_window - 1
     check_continuation(generator, start)

@@ -73,6 +73,10 @@ def test_host_sampling_forwards_cached_prefix():
 
 def test_traced_suffix_uses_explicit_tokens_without_sampling(monkeypatch):
     monkeypatch.setenv("GEMMA4_PREFIX_TRACE_SUFFIX", "1")
+    # The token-at-a-time traced suffix is the WS8_ROWS=0 path (WS8 rows: tests/test_ws8_rows_prefill.py).
+    from models.demos.gemma4_26b_a4b_qb2.tt import generator as generator_module
+
+    monkeypatch.setattr(generator_module, "WS8_ROWS", False)
     monkeypatch.setattr(ttnn, "reshape", torch.reshape)
     monkeypatch.setattr(ttnn, "clone", torch.clone)
     generator = object.__new__(Gemma4Generator)

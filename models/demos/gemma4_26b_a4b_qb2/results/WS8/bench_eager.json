@@ -1,0 +1,28 @@
+{
+ "prefix": 8192,
+ "rows_vs_serial_last_logits": {
+  "pcc": 0.982034,
+  "top1_equal": true,
+  "suffix": 32
+ },
+ "rows_512": {
+  "seconds": 1.362,
+  "tok_s": 375.9
+ },
+ "rows_2048": {
+  "seconds": 5.489,
+  "tok_s": 373.1
+ },
+ "serial_32": {
+  "seconds": 2.265,
+  "tok_s": 14.1
+ },
+ "cold_prefill_8704": {
+  "seconds": 4.313,
+  "tok_s": 2018.0
+ },
+ "cold_prefill_10240": {
+  "seconds": 4.9,
+  "tok_s": 2090.0
+ }
+}

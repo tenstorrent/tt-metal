@@ -20,6 +20,12 @@ from models.common.sampling.generator import (
 from models.common.tt_ccl import get_tt_ccl
 from models.demos.gemma4_26b_a4b_qb2.tt.model import MODEL_ID, REVISION, Gemma4Model
 
+# WS8 (perf/PLAN.md): prefix-cache continuation as same-user decode rows, up to 32 per step. 0 = the
+# token-at-a-time continuation (MultichipDecoder._prefill_continuation).
+WS8_ROWS = os.environ.get("GEMMA4_26B_WS8_ROWS", "1") != "0"
+WS8_ROWS_MAX = int(os.environ.get("GEMMA4_26B_WS8_ROWS_MAX", "32"))
+WS8_TRACE = os.environ.get("GEMMA4_26B_WS8_TRACE", "1") != "0"
+
 
 class _Gemma4SamplingGenerator(SamplingGenerator):
     """Include the public-token copy in the canonical sampling trace."""
@@ -106,6 +112,7 @@ class Gemma4Generator:
         self.table_host = None
         self.owned_cache = None
         self.owned_table = None
+        self.ws8_steps = {}
         self.counters = dict.fromkeys(
             (
                 "model_replays",
@@ -225,6 +232,9 @@ class Gemma4Generator:
             ttnn.release_trace(self.mesh, self.trace_id)
             self.trace_id = None
         self._trace_returns_logits = False
+        for step in getattr(self, "ws8_steps", {}).values():
+            ttnn.release_trace(self.mesh, step.trace)
+        self.ws8_steps = {}
 
     def reset(self):
         # Only standalone-owned caches are cleared. External callers retain
@@ -456,7 +466,16 @@ class Gemma4Generator:
                 and not return_all_logits
                 and all(isinstance(t, torch.Tensor) and t.shape[0] == 1 for t in self._tables(page_table))
             )
-            if trace_suffix:
+            rows_suffix = (
+                WS8_ROWS
+                and start > 0
+                and suffix_length >= 1
+                and not return_all_logits
+                and all(isinstance(t, torch.Tensor) and t.shape[0] > row for t in self._tables(page_table))
+            )
+            if rows_suffix:
+                logits = self._prefill_rows(tokens[row], start, int(length), page_table, row, kv_cache)
+            elif trace_suffix:
                 # Reuse the canonical logits-only trace: explicit input tokens
                 # and absolute positions, with no sampling or RNG advancement.
                 for position in range(start, int(length)):
@@ -494,6 +513,98 @@ class Gemma4Generator:
             return result
         logits = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)
         return ttnn.reshape(logits, (len(outputs), 1, self.model.config.vocab_size // 4))
+
+    def _prefill_rows(self, ids, start, end, page_table, row, kv_cache):
+        """WS8: a cached-prefix continuation as same-user decode rows, up to 32 positions per step (the WS6 verify
+        contract: per-row RoPE / SDPA positions, K/V written in row order by one PagedUpdateRows per tensor and layer).
+        One 32-row step is traced per (cache, table shape); short chunks pad with position -1 rows (no cache write,
+        no attention). Returns the last position's logits as [1, 1, 1, vocab/4] (vocab-sharded, like prefill)."""
+        host_tables = [t[row : row + 1].to(torch.int32) for t in self._tables(page_table)]
+        per_layer = len(host_tables) == len(self.model.layers)
+        key = (id(kv_cache[0][0]), tuple(tuple(t.shape) for t in host_tables))
+        step = self.ws8_steps.get(key) if WS8_TRACE else None
+        if step is None:
+            step = self._ws8_step(host_tables, per_layer, kv_cache)
+            if WS8_TRACE:
+                for old in self.ws8_steps.values():
+                    ttnn.release_trace(self.mesh, old.trace)
+                self.ws8_steps = {}
+                self._ws8_fill(step, ids, start, min(end, start + WS8_ROWS_MAX), host_tables)
+                self._ws8_run(step, eager=True)  # compile before capture
+                step.trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                try:
+                    step.logits = self._ws8_run(step, eager=True)
+                finally:
+                    ttnn.end_trace_capture(self.mesh, step.trace, cq_id=0)
+                self.ws8_steps[key] = step
+        n = 0
+        for chunk in range(start, end, WS8_ROWS_MAX):
+            n = min(WS8_ROWS_MAX, end - chunk)
+            self._ws8_fill(step, ids, chunk, chunk + n, host_tables)
+            if WS8_TRACE:
+                ttnn.execute_trace(self.mesh, step.trace, cq_id=0, blocking=False)
+            else:
+                step.logits = self._ws8_run(step, eager=True)
+        self.counters["ws8_rows_prefills"] = self.counters.get("ws8_rows_prefills", 0) + 1
+        return ttnn.clone(step.logits[:, :, n - 1 : n, :])
+
+    def _ws8_step(self, host_tables, per_layer, kv_cache):
+        rows = 32
+        up = lambda value, dtype: self.model.upload(value, dtype, ttnn.ROW_MAJOR_LAYOUT)
+        write_pos = [up(torch.full((1,), -1, dtype=torch.int32), ttnn.int32) for _ in range(rows)]
+        tables = [up(t.repeat(rows, 1), ttnn.int32) for t in host_tables]
+        writes = [SimpleNamespace(positions=write_pos, page_table=up(t, ttnn.int32)) for t in host_tables]
+        return SimpleNamespace(
+            tokens=up(torch.zeros(1, 1, 1, rows, dtype=torch.int32), ttnn.uint32),
+            current_pos=up(torch.full((1, rows), -1, dtype=torch.int32), ttnn.uint32),
+            cache_pos=up(torch.full((rows,), -1, dtype=torch.int32), ttnn.int32),
+            write_pos=write_pos,
+            tables=tables,
+            writes=writes,
+            per_layer=per_layer,
+            kv_cache=kv_cache,
+            trace=None,
+            logits=None,
+        )
+
+    def _ws8_fill(self, step, ids, first, last, host_tables):
+        rows = 32
+        n = last - first
+        positions = torch.full((rows,), -1, dtype=torch.int32)
+        positions[:n] = torch.arange(first, last, dtype=torch.int32)
+        token_rows = torch.zeros(1, 1, 1, rows, dtype=torch.int32)
+        token_rows.flatten()[:n] = ids[first:last].to(torch.int32)
+        self._copy(token_rows, step.tokens, "ws8_input_writes")
+        self._copy(positions.reshape(1, rows), step.current_pos, "ws8_input_writes")
+        self._copy(positions, step.cache_pos, "ws8_input_writes")
+        for r in range(rows):
+            self._copy(positions[r : r + 1], step.write_pos[r], "ws8_input_writes")
+        # Page tables change only between requests (same shape: a new request's blocks).
+        if getattr(step, "host_tables", None) is None or any(
+            not torch.equal(a, b) for a, b in zip(step.host_tables, host_tables)
+        ):
+            for table, write, host in zip(step.tables, step.writes, host_tables):
+                self._copy(host.repeat(rows, 1), table, "ws8_table_writes")
+                self._copy(host, write.page_table, "ws8_table_writes")
+            step.host_tables = [t.clone() for t in host_tables]
+
+    def _ws8_run(self, step, *, eager):
+        model = self.model
+        for number, layer in enumerate(model.layers):
+            layer.layer.self_attn.kv_write_rows = step.writes[number if step.per_layer else 0]
+        try:
+            out = model.decode_forward(
+                step.tokens,
+                current_pos=step.current_pos,
+                cache_pos=step.cache_pos,
+                page_table=tuple(step.tables) if step.per_layer else step.tables[0],
+                kv_cache=step.kv_cache,
+                batch=32,
+            )
+        finally:
+            for layer in model.layers:
+                layer.layer.self_attn.kv_write_rows = None
+        return out[0] if isinstance(out, tuple) else out
 
     def sample_prefill(self, logits, *, output_tokens=None):
         """Use the canonical common sampler for standalone and serving prefill."""
