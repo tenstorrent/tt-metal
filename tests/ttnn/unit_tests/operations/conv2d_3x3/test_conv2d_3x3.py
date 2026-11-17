@@ -206,6 +206,21 @@ def test_input_shape_contract_violation(device, expect_error):
         conv2d_3x3(tt_input, tt_weight, input_height=2 * H, input_width=W, padding=padding)
 
 
+def test_bias_dtype_contract_violation(device, expect_error):
+    """The bias must carry the weight dtype (what prepare_conv2d_bias emits): a bf16 bias next to
+    bf8_b weights is a contract error, not a mis-sized bias buffer."""
+    torch.manual_seed(42)
+    H, W, c_in, c_out, padding = 16, 16, 32, 32, 1
+    kwargs = _prepare_kwargs(device, padding)
+    tt_weight = prepare_conv2d_weights(
+        torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16), **{**kwargs, "weight_dtype": ttnn.bfloat8_b}
+    )
+    tt_bias = prepare_conv2d_bias(torch.randn(c_out).to(torch.bfloat16), **kwargs)
+    _, tt_input = _make_input(H, W, c_in, device)
+    with expect_error(ValueError, "conv2d_3x3"):
+        conv2d_3x3(tt_input, tt_weight, input_height=H, input_width=W, bias=tt_bias, padding=padding)
+
+
 def test_weight_k_contract_violation(device, expect_error):
     """Weights prepared for C_in = 64 (K_p = 576) must be rejected for a C_in = 32 activation (K_p = 288)."""
     torch.manual_seed(42)

@@ -130,7 +130,7 @@ INPUT_TAGGERS = {
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
-    "weight_dtype": [ttnn.bfloat16],
+    "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.ROW_MAJOR_LAYOUT],
     "memory_layout": [_ML.INTERLEAVED],
     "fp32_dest_acc_en": [True],
@@ -138,8 +138,8 @@ SUPPORTED = {
     "activation": ["none"],
     "channel_alignment": ["tile_aligned"],
     "hw_alignment": ["hw_aligned"],
-    "stride_mode": ["unit"],
-    "dilation_mode": ["unit"],
+    "stride_mode": ["unit", "strided"],
+    "dilation_mode": ["unit", "dilated"],
     "padding_mode": ["valid", "same"],
 }
 
@@ -329,6 +329,12 @@ def _check_contract(
     if bias is not None:
         if list(bias.shape) != [1, 1, 1, c_out] or bias.layout != ttnn.TILE_LAYOUT:
             raise ValueError(f"conv2d_3x3: bias must be TILE [1, 1, 1, {c_out}], got {list(bias.shape)}")
+        # cb_bias pages are sized from the weight tile format (prepare_conv2d_bias emits weight_dtype).
+        if bias.dtype != weight_tensor.dtype:
+            raise ValueError(
+                f"conv2d_3x3: bias dtype {bias.dtype} must match weight dtype {weight_tensor.dtype} "
+                f"(use prepare_conv2d_bias with the same weight_dtype)"
+            )
 
 
 def validate(
