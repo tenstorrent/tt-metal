@@ -18,9 +18,6 @@ std::string channel_name(const LogicalChannel& channel) {
     if (channel.kind == ChannelKind::Receiver) {
         return "rx";
     }
-    if (channel.host_rdma) {
-        return "host_rdma";
-    }
     return channel.from ? std::string(enchantum::to_string(**channel.from)) : "worker";
 }
 

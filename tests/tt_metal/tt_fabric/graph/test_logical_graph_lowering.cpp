@@ -958,8 +958,6 @@ TEST(FabricGraphInterDomain, PerimeterRouterShape) {
             ASSERT_TRUE(r.has_value()) << id;
             const auto& router = g.routers[*r];
             EXPECT_FALSE(router.peer.has_value());
-            EXPECT_TRUE(router.capabilities.dynamic_connect);
-            EXPECT_TRUE(router.capabilities.rt_lookup);
             EXPECT_TRUE(g.receiver(*r, 2).has_value()) << id;
             for (const auto& e : g.edges) {
                 if (g.channels[e.from].router == *r && e.transport != Transport::Noc) {

@@ -89,6 +89,21 @@ const RouterChannelLayout& layout_of(const InterDomainPort& port) {
     return *layout;
 }
 
+// Connect and disconnect write the far router's L1 at this router's addresses (the handshake, the control block).
+uint32_t layout_fingerprint() {
+    const auto& config = router_config();
+    uint32_t h = 2166136261u;  // FNV-1a
+    for (const size_t v :
+         {config.handshake_addr,
+          config.inter_domain_ctrl_address,
+          sizeof(InterDomainRouterControl),
+          offsetof(InterDomainRouterControl, peer_marker),
+          offsetof(InterDomainRouterControl, marker)}) {
+        h = (h ^ static_cast<uint32_t>(v)) * 16777619u;
+    }
+    return h;
+}
+
 }  // namespace
 
 std::vector<InterDomainPort> get_inter_domain_ports() {
@@ -105,7 +120,8 @@ InterDomainMetadata get_inter_domain_metadata(const InterDomainPort& port, uint3
         .domain_id = domain_id,
         .vc2_receiver_channel_addr = vc2_rx.base_address,
         .vc2_receiver_channel_slots = vc2_rx.num_slots,
-        .max_packet_size_bytes = static_cast<uint32_t>(router_config().channel_buffer_size_bytes)};
+        .max_packet_size_bytes = static_cast<uint32_t>(router_config().channel_buffer_size_bytes),
+        .layout_fingerprint = layout_fingerprint()};
 }
 
 InterDomainState get_inter_domain_state(const InterDomainPort& port) { return read_control(port).state; }
@@ -121,6 +137,12 @@ void connect_inter_domain(
         port.node,
         port.eth_chan,
         port.link_trained ? "Z isn't supported yet" : "the link never trained");
+    TT_FATAL(
+        peer.layout_fingerprint == layout_fingerprint(),
+        "inter-domain: {} eth channel {}: domain {}'s router L1 layout differs from this one's",
+        port.node,
+        port.eth_chan,
+        peer.domain_id);
     const auto before = read_control(port);
     TT_FATAL(
         before.state == InterDomainState::DRAIN && before.command == InterDomainCommand::NONE,

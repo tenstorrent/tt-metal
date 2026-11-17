@@ -33,6 +33,7 @@ std::unique_ptr<FabricBuildSession> begin_fabric_build_session(tt::tt_metal::Met
     }
     auto& fabric_context = env_impl.get_control_plane().get_fabric_context();
     fabric_context.get_builder_context().clear_router_channel_layouts();
+    fabric_context.get_builder_context().set_inter_domain_ports({});
     return create_fabric_build_session(fabric_context);
 }
 

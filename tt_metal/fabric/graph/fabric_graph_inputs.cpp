@@ -182,20 +182,24 @@ std::vector<UnusedLink> unused_links(
         for (const auto& peer : fsd->get_asic_neighbors(*fsd_asic)) {
             const auto peer_address = fsd->get_physical_node_id(peer);
             const auto cables = fsd->get_eth_connections(*fsd_asic, peer);
-            // the peer chip as live knows it (a trained cable to it, or discovery), else by address
-            const auto peer_id = psd.find_asic_id(peer_address);
-            uint64_t key = peer_id ? **peer_id : std::hash<PhysicalNodeId>{}(peer_address);
+            // the peer chip as live knows it: a trained cable to it, else discovery. Else a placeholder, not an asic
+            // id: a hash of its address, which only groups its cables.
+            std::optional<uint64_t> key;
             for (const auto& c : cables) {
                 if (auto it = live.find(c.src_chan); it != live.end()) {
                     key = it->second.first;
                 }
+            }
+            if (!key) {
+                const auto peer_id = psd.find_asic_id(peer_address);
+                key = peer_id ? **peer_id : std::hash<PhysicalNodeId>{}(peer_address);
             }
             for (const auto& c : cables) {
                 if (!live.contains(c.src_chan)) {
                     missing.push_back(UnusedLink{
                         .node = *node,
                         .chan = c.src_chan,
-                        .peer_asic = key,
+                        .peer_asic = *key,
                         .peer_chan = static_cast<chan_id_t>(c.dst_chan),
                         .peer_in_domain = mapper.find_fabric_node_id_from_physical_node_id(peer_address).has_value(),
                         .trained = false});
