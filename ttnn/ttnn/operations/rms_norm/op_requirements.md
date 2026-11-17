@@ -23,7 +23,7 @@
 - **Compute config**: HiFi4 + fp32_dest_acc_en default (config passed through)
 - **Golden baseline**: 436 / 436 supported cells pass
 
-### [ ] Refinement 1 — Precision surface + TILE gamma (perf-flagged-profile contract, part 1)
+### [x] Refinement 1 — Precision surface + TILE gamma (perf-flagged-profile contract, part 1)
 
 **Goal**: the perf-profile loose cases (`_PERF_BASE`: bf16, `fp32_dest_acc_en=False`, HiFi2, bf16 **TILE** gamma) are the config every perf refinement targets. Land that whole contract:
 - add `False` to `SUPPORTED["fp32_dest_acc_en"]` (fp32 input + `False` stays an `ExcludedCell`); drop `cb_sq`/`cb_xn`/`cb_stat` to bf16 pages when DEST is 16-bit and keep fp32 when it is on;
@@ -37,6 +37,8 @@ Cells that fail out of the box go to `EXCLUSIONS`, not their own refinement.
 **Verifier notes**: the numerics bundle and gamma layout are one refinement because the perf-1 target needs both. Knob-turn class (descriptor-level CB formats + reader gamma path). Keep the multi-core row split and the segment-batched reader/writer on the new paths — don't ship a naive TILE-gamma path that perf 1 will rewrite. The untilize helper cannot output bf8b (RM is INVALID for bf8b, so no conflict).
 
 **Done when**: `fp32_dest_acc_en=False`, bf8b and TILE/bf8b gamma `xfail_expected` cells move to `supported_pass`; the perf-profile loose cases (interleaved) pass at PCC 0.9995; zero `xpass_drift`.
+
+**Outcome**: landed; loose interleaved perf cases pass. Wide rows (W>2048) run with fp32 DEST promoted internally because bf16-DEST sequential Σx² accumulation is biased (up to 20%); a bf16 reduction tree is the lever for perf refinement to evaluate. No device-ns measured here (correctness refinement).
 
 ### [ ] Refinement 2 — W-split across cores with cross-core partial combine (perf-flagged-profile contract, part 2)
 
