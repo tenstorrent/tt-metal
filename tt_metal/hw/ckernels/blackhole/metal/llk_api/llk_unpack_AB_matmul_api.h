@@ -24,8 +24,11 @@ constexpr bool llk_unpack_AB_matmul_kernel_ttsync() {
 // FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
 // runtime addresses + per-tile sizes. The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
-// full_mop: every MOP register, as main programs it
-template <std::uint32_t auto_ttsync = false, bool stream_narrow = false, std::uint32_t reuse_dir = 0, std::uint32_t stream_z = 0, bool full_mop = false>
+template <
+    std::uint32_t auto_ttsync = false,
+    bool stream_narrow = false,
+    std::uint32_t reuse_dir = 0,
+    std::uint32_t stream_z = 0>
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -40,7 +43,7 @@ inline void llk_unpack_AB_matmul_init_impl(
     static_assert(
         auto_ttsync == 0 || auto_ttsync == 3 || llk_unpack_AB_matmul_kernel_ttsync(),
         "only a kernel the firmware restores may turn Auto TTSync on");
-    _llk_unpack_AB_matmul_init_<0, 0, auto_ttsync, stream_narrow, stream_z, reuse_dir, full_mop>(
+    _llk_unpack_AB_matmul_init_<0, 0, auto_ttsync, stream_narrow, stream_z, reuse_dir>(
         transpose,
         ct_dim,
         rt_dim,
@@ -117,7 +120,7 @@ constexpr bool llk_unpack_AB_matmul_kernel_has_narrow_format() {
     return false;
 }
 
-template <std::uint32_t auto_ttsync = false, std::uint32_t reuse_dir = 0, std::uint32_t stream_z = 0, bool full_mop = false>
+template <std::uint32_t auto_ttsync = false, std::uint32_t reuse_dir = 0, std::uint32_t stream_z = 0>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -180,7 +183,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
             unpB_face_r_dim,
             MATH_FIDELITY == ckernel::MathFidelity::HiFi4,
             MATH_FIDELITY == ckernel::MathFidelity::LoFi)) {
-        llk_unpack_AB_matmul_init_impl<auto_ttsync, true, 0, 0, full_mop>(
+        llk_unpack_AB_matmul_init_impl<auto_ttsync, true, 0, 0>(
             transpose,
             ct_dim,
             rt_dim,
@@ -192,7 +195,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
             partial_face_a,
             partial_face_b);
     } else {
-        llk_unpack_AB_matmul_init_impl<auto_ttsync, false, reuse_dir, stream_z, full_mop>(
+        llk_unpack_AB_matmul_init_impl<auto_ttsync, false, reuse_dir, stream_z>(
             transpose,
             ct_dim,
             rt_dim,

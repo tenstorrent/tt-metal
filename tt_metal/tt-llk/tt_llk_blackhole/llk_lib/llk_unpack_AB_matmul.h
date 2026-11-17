@@ -82,22 +82,12 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
     }
 }
 
-// The matmul's unpack MOP: template 0 without B or halo, which the expander runs from Flags, InsnA0 and SkipA0 only.
-// full_mop: every MOP register, as main programs it (the default cells of a kernel with no constant matmul block)
-template <bool full_mop = false>
+// The matmul's unpack MOP: template 0 without B or halo, every MOP register as main programs it (the three-register write of
+// be9e4990e5d moved the layout into a packer-done wait on ccl F32 4x1x1 HiFi2 kt 1, +0.14 cy/block over 5 shifts, for no measured gain)
 inline void _llk_unpack_AB_matmul_program_mop_(const std::uint32_t context_0_instr, const std::uint32_t context_1_instr)
 {
-    if constexpr (full_mop)
-    {
-        ckernel_unpack_template tmp = ckernel_unpack_template(false, false, context_0_instr, 0, 0, 0, context_1_instr, 0, 0);
-        tmp.program();
-        return;
-    }
-    volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
-    mop_sync();
-    mop_cfg[1] = 0;
-    mop_cfg[3] = context_0_instr;
-    mop_cfg[7] = context_1_instr;
+    ckernel_unpack_template tmp = ckernel_unpack_template(false, false, context_0_instr, 0, 0, 0, context_1_instr, 0, 0);
+    tmp.program();
 }
 
 /**
@@ -166,7 +156,7 @@ inline void _llk_unpack_AB_matmul_narrow_tile_body_(const bool partial_face)
  * The 8-bit form of @ref _llk_unpack_AB_matmul_mop_config_: the streamed operand's address advances with one
  * CFGSHIFTMASK per tile.
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool full_mop = false>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 inline void _llk_unpack_AB_matmul_narrow_mop_config_(
     const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
 {
@@ -203,7 +193,7 @@ inline void _llk_unpack_AB_matmul_narrow_mop_config_(
             });
     }
 
-    _llk_unpack_AB_matmul_program_mop_<full_mop>(lltt::replay_insn(0, replay_buf_run_len), lltt::replay_insn(replay_buf_run_len, replay_buf_run_len));
+    _llk_unpack_AB_matmul_program_mop_(lltt::replay_insn(0, replay_buf_run_len), lltt::replay_insn(replay_buf_run_len, replay_buf_run_len));
 }
 
 /**
@@ -221,7 +211,7 @@ inline void _llk_unpack_AB_matmul_narrow_mop_config_(
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, std::uint32_t stream_z = 0, std::uint32_t reuse_dir = 0, bool full_mop = false>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, std::uint32_t stream_z = 0, std::uint32_t reuse_dir = 0>
 inline void _llk_unpack_AB_matmul_mop_config_(
     const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
 {
@@ -244,7 +234,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                     TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 0, stream_z);
                 });
-            _llk_unpack_AB_matmul_program_mop_<full_mop>(lltt::replay_insn(0, 2), lltt::replay_insn(2, 2));
+            _llk_unpack_AB_matmul_program_mop_(lltt::replay_insn(0, 2), lltt::replay_insn(2, 2));
             return;
         }
     }
@@ -392,7 +382,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             });
     }
 
-    _llk_unpack_AB_matmul_program_mop_<full_mop>(lltt::replay_insn(0, replay_buf_run_len), lltt::replay_insn(replay_buf_run_len, replay_buf_run_len));
+    _llk_unpack_AB_matmul_program_mop_(lltt::replay_insn(0, replay_buf_run_len), lltt::replay_insn(replay_buf_run_len, replay_buf_run_len));
 }
 
 /**
@@ -427,11 +417,10 @@ inline void _llk_unpack_AB_matmul_mop_config_(
 template <
     std::uint32_t kernel_broadcast_a = 0,
     std::uint32_t kernel_broadcast_b = 0,
-    std::uint32_t auto_ttsync                 = false,
+    std::uint32_t auto_ttsync        = false,
     bool stream_narrow               = false,
     std::uint32_t stream_z           = 0,
-    std::uint32_t reuse_dir          = 0,
-    bool full_mop                    = false>
+    std::uint32_t reuse_dir          = 0>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t transpose       = 0,
     const std::uint32_t ct_dim          = 1,
@@ -489,11 +478,11 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim));
     if constexpr (stream_narrow)
     {
-        _llk_unpack_AB_matmul_narrow_mop_config_<kernel_broadcast_a, kernel_broadcast_b, full_mop>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
+        _llk_unpack_AB_matmul_narrow_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
     }
     else
     {
-        _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b, stream_z, reuse_dir, full_mop>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
+        _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b, stream_z, reuse_dir>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
     }
 }
 

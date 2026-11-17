@@ -445,16 +445,6 @@ constexpr bool matmul_fe_tile_mop() {
 }
 #endif
 
-// a plain call that takes none of the matmul forms in a kernel with no constant block: the unpack MOP as main programs it (either
-// reuse direction), so the unpack TRISC of minimal_matmul's default cells is the pack PR's
-template <std::uint32_t llk_dir, std::uint32_t kt_key, DataFormat form_out, DataFormat in0_format, DataFormat in1_format, DataFormat out_format,
-          std::uint32_t block_rt, std::uint32_t block_ct>
-constexpr bool matmul_fe_main_unpack() {
-    return kt_key == 0 && form_out == DataFormat::Invalid && in0_format == DataFormat::Invalid &&
-           in1_format == DataFormat::Invalid && out_format == DataFormat::Invalid && block_rt == 0 && block_ct == 0 &&
-           !matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, block_rt + kt_key>>(0);
-}
-
 #ifdef TRISC_MATH
 // a plain call that takes none of the matmul forms in a kernel with no constant block (minimal_matmul's default cells), and every
 // plain call in a kernel bound by the kernel config buffer: main's math code, so the kernel's math TRISC is main's
@@ -513,7 +503,7 @@ ALWI void matmul_block_init_llk(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_matmul_init<unpack_ttsync, llk_dir, stream_z, matmul_fe_main_unpack<llk_dir, kt_key, form_out, in0_format, in1_format, out_format, block_rt, block_ct>()>(
+    UNPACK((llk_unpack_AB_matmul_init<unpack_ttsync, llk_dir, stream_z>(
         in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 #ifdef TRISC_MATH
     if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
@@ -728,9 +718,7 @@ ALWI void matmul_init(
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
-    // main's unpack MOP in a kernel with no plain call of constant ct and rt (tag 8, read at the end of the unit)
-    UNPACK((llk_unpack_AB_matmul_init<false, 0, 0, !matmul_fe_mark::is_used_d<8, std::integral_constant<DataFormat, in0_format>>(0)>(
-        in0_cb_id, in1_cb_id, transpose)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 #else
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
