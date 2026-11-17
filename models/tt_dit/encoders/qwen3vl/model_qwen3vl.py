@@ -289,6 +289,9 @@ class Qwen3VlTextEncoder(Module):
             the vision rows after decoder layers `0 .. len(deepstack_embeds) - 1`. The reference keys
             these off the list length, not the vision layer indexes they came from.
         """
+        if num_layers is not None and num_layers < 1:
+            msg = f"num_layers must be >= 1, got {num_layers}"
+            raise ValueError(msg)
         if (vision_embeds is None) != (vision_runs is None):
             msg = "vision_embeds and vision_runs must be passed together"
             raise ValueError(msg)

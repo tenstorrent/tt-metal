@@ -995,7 +995,7 @@ class CCLManager:
         return tensor
 
     def get_ag_hyperparams(self, shape, rows=None):
-        if (rows or shape[2]) > 512:
+        if (shape[2] if rows is None else rows) > 512:
             return {
                 "chunks_per_sync": 16,
                 "num_workers_per_link": 3,

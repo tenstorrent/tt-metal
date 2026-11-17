@@ -79,9 +79,10 @@ class RMSNorm(Module):
             msg = "row_capacity supports neither a bias nor a fused activation"
             raise ValueError(msg)
         shape = list(x.shape)
+        folded = [1, math.prod(shape[:-2]), *shape[-2:]]
         # The fused distributed RMSNorm without a cluster axis normalizes each [1, batch, N, C] row locally.
         x = ttnn.experimental.dit_fused_distributed_rmsnorm(
-            ttnn.reshape(x, [1, math.prod(shape[:-2]), *shape[-2:]]),
+            x if shape == folded else ttnn.reshape(x, folded),
             None,
             self.mesh_device,
             [],
@@ -89,9 +90,9 @@ class RMSNorm(Module):
             epsilon=self.norm_eps,
             weight=self.weight.data if self.weight is not None else None,
             compute_kernel_config=compute_kernel_config,
-            row_capacity=row_capacity * math.prod(shape[:-2]),
+            row_capacity=row_capacity * folded[1],
         )
-        return ttnn.reshape(x, shape)
+        return x if shape == folded else ttnn.reshape(x, shape)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:

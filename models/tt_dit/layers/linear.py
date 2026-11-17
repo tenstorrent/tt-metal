@@ -685,8 +685,9 @@ class RowParallelLinear(Module):
             K = weight.padded_shape[-2]
             M, N = x[0].padded_shape[-2], weight.padded_shape[-1]
 
-            core_grid = get_matmul_core_grid(self.mesh_device)
-            matmul_config = matmul_config or get_matmul_config(M, K, N, core_grid, default_block_size)
+            if matmul_config is None:
+                core_grid = get_matmul_core_grid(self.mesh_device)
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=list(x),
                 weight_tensor=weight,
