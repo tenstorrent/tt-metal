@@ -95,15 +95,6 @@ _BCST_COL_RT_DIM = 1
 _CPP_SOURCE = "sources/eltwise_bcast_col_custom_test.cpp"
 
 
-def _geometry_params(num_faces, face_r_dim, num_blocks, num_tiles_in_block):
-    return [
-        NUM_FACES(num_faces, num_faces, num_faces),
-        TEST_FACE_DIMS(face_r_dim),
-        NUM_BLOCKS(num_blocks),
-        NUM_TILES_IN_BLOCK(num_tiles_in_block),
-    ]
-
-
 def create_eltwise_bcast_col_custom_config(
     formats,
     mathop,
@@ -147,15 +138,14 @@ def create_eltwise_bcast_col_custom_config(
         ),
         PRESERVE_SRC_ZERO_FLAG(preserve_src_zero_flag),
     ]
-    # Perf builds compile the tile shape and block split in, so TILE_LOOP does not pay for
-    # runtime trip counts; the kernel reads them as constants whenever LLK_PROFILER is set.
-    # perf/perf_schema_derive.py reads these lists statically: it follows `+`, conditional
-    # expressions and local helpers that return a list, but not .extend().
-    templates = templates + (_geometry_params(*geometry) if is_perf else [])
     runtimes = [
         TILE_COUNT(tile_count),
         LOOP_FACTOR(loop_factor),
-    ] + ([] if is_perf else _geometry_params(*geometry))
+        NUM_FACES(num_faces, num_faces, num_faces),
+        TEST_FACE_DIMS(face_r_dim),
+        NUM_BLOCKS(num_blocks),
+        NUM_TILES_IN_BLOCK(num_tiles_in_block),
+    ]
 
     return create_test_or_perf_config(
         is_perf=is_perf,
