@@ -152,6 +152,20 @@ def test_triu(mesh_device: ttnn.MeshDevice, diagonal: int) -> None:
     assert torch.allclose(result_torch, ref, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_replay_with_new_input_compiles_nothing(mesh_device: ttnn.MeshDevice) -> None:
+    shape = (1, 1, 64, 64)
+    double = Tracer(lambda x: ttnn.multiply(x, 2.0), device=mesh_device)
+    double(tensor.from_torch(torch.randn(shape, dtype=torch.bfloat16), device=mesh_device))
+    entries = mesh_device.num_program_cache_entries()
+
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    result = double(tensor.from_torch(x, device=mesh_device))
+
+    assert mesh_device.num_program_cache_entries() == entries
+    assert torch.equal(tensor.to_torch(result), x * 2)
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 2), (2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "mesh_axes",
