@@ -7,9 +7,8 @@
 #include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_ops.h"
-#include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -21,46 +20,62 @@ namespace sfpu {
 // 0.0/1.0/-1.0 in LReg9-11, so no sfpi code that needs them may run between the init and the loop;
 // the next op's init restores them.
 //
-// result = lut(x) + 0.5. Raw TTI rather than sfpi::lut, as on Blackhole (#65331): sfpi serialised
-// every pass as load / lut / addi / store plus a TTINCRWC (5 slots per pass of SFP_ROWS rows). The
-// hardware leaves the LUT destination free, so the passes alternate their result between LReg4 and
-// LReg5 and pipeline: each pass's load and store sit between the previous pass's SFPLUT and its
-// SFPADDI (4 slots per pass). The two-pass steady state is recorded once (executing as it records) and replayed; the
-// stores walk Dest through ADDR_MOD_6 (+SFP_ROWS, programmed by sigmoid_appx_init the way init_typecast does), so no
-// TTINCRWC per pass. Same SFPLUT mode and SFPADDI immediate as before.
+// result = lut(x) + 0.5. A plain per-pass sfpi loop serialises every pass as load / lut / addi /
+// store plus a TTINCRWC (5 slots per pass of SFP_ROWS rows). The LUT destination is free, so the
+// passes alternate their result between two LRegs and pipeline: each pass's load and store sit
+// between the previous pass's SFPLUT and its SFPADDI (4 slots per pass). The two-pass steady state
+// is recorded once and replayed; the stores walk Dest through ADDR_MOD_6 (+SFP_ROWS, programmed by
+// sigmoid_appx_init the way init_typecast does), so no TTINCRWC per pass. Same SFPLUT mode and
+// SFPADDI immediate as before.
+//
+// The recorded body runs once per replay, so every value it carries from one pass to the next has to
+// sit in the same LReg at its end as at its start. sfpi does not know the block repeats, so those
+// values are pinned through l_reg[]; that costs no instruction as long as the generated body matches
+// the *_REPLAY_LEN below (check the disassembly if the body or the sfpi version changes). Quasar's
+// REPLAY cannot execute while it records (sfpi rejects lltt::Exec), so the body is recorded without
+// executing and replayed for every pass.
+inline constexpr sfpi::LRegs SIGMOID_APPX_EVEN_LREG = sfpi::LRegs::LReg4;
+inline constexpr sfpi::LRegs SIGMOID_APPX_ODD_LREG = sfpi::LRegs::LReg5;
+inline constexpr unsigned SIGMOID_APPX_REPLAY_START = 0;
+inline constexpr unsigned SIGMOID_APPX_REPLAY_LEN = 8;
+
 template <int ITERATIONS = 8>
 inline void calculate_sigmoid_appx() {
-    static_assert(ITERATIONS >= 4 && ITERATIONS % 2 == 0, "calculate_sigmoid_appx pipelines passes in pairs");
-    constexpr unsigned HALF_BF16 = 0x3F00;  // SFPADDI immediate: 0.5f
-    constexpr unsigned LUT_MODE = sfpi::SFPLUT_MOD0_SGN_RETAIN;
-    constexpr unsigned NEXT_PASS = ckernel::math::SFP_ROWS;  // Dest offset of one pass
+    static_assert(ITERATIONS >= 2 && ITERATIONS % 2 == 0, "calculate_sigmoid_appx pipelines passes in pairs");
 
     // Passes 0 and 1 in flight.
-    TTI_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*pass 0*/);
-    TTI_SFPLUT(p_sfpu::LREG4, LUT_MODE);
-    TTI_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, NEXT_PASS /*pass 1*/);
-    TTI_SFPLUT(p_sfpu::LREG5, LUT_MODE);
-    TTI_SFPADDI(HALF_BF16, p_sfpu::LREG4, 0 /*instr_mod1*/);
+    {
+        sfpi::vFloat even = sfpi::lut<sfpi::LutMode::Fp8x3>(sfpi::dst_reg[0]);
+        sfpi::l_reg[SIGMOID_APPX_ODD_LREG] = sfpi::lut<sfpi::LutMode::Fp8x3>(sfpi::dst_reg[1]);
+        sfpi::l_reg[SIGMOID_APPX_EVEN_LREG] = even + 0.5f;
+    }
     // Body for passes r, r+1 (r even): load r+2, store r, lut r+2, addi r+1; then the same one pass
     // on. The two passes still unstored put each load two passes ahead of the counter.
-    load_replay_buf<0 /*start*/, 8 /*len*/, true /*exec_while_loading*/>([] {
-        TTI_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 2 * NEXT_PASS /*pass r+2*/);
-        TTI_SFPSTORE(p_sfpu::LREG4, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
-        TTI_SFPLUT(p_sfpu::LREG4, LUT_MODE);
-        TTI_SFPADDI(HALF_BF16, p_sfpu::LREG5, 0 /*instr_mod1*/);
-        TTI_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 2 * NEXT_PASS /*pass r+3*/);
-        TTI_SFPSTORE(p_sfpu::LREG5, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
-        TTI_SFPLUT(p_sfpu::LREG5, LUT_MODE);
-        TTI_SFPADDI(HALF_BF16, p_sfpu::LREG4, 0 /*instr_mod1*/);
-    });
+    lltt::record(SIGMOID_APPX_REPLAY_START, SIGMOID_APPX_REPLAY_LEN);
+    {
+        sfpi::vFloat even = sfpi::l_reg[SIGMOID_APPX_EVEN_LREG];
+        sfpi::vFloat odd = sfpi::l_reg[SIGMOID_APPX_ODD_LREG];
+        sfpi::vFloat next = sfpi::dst_reg[2];
+        sfpi::dst_reg[0].mode(ADDR_MOD_6) = even;
+        even = sfpi::lut<sfpi::LutMode::Fp8x3>(next);
+        odd += 0.5f;
+        next = sfpi::dst_reg[2];
+        sfpi::dst_reg[0].mode(ADDR_MOD_6) = odd;
+        sfpi::l_reg[SIGMOID_APPX_ODD_LREG] = sfpi::lut<sfpi::LutMode::Fp8x3>(next);
+        sfpi::l_reg[SIGMOID_APPX_EVEN_LREG] = even + 0.5f;
+    }
 #pragma GCC unroll 8
-    for (int d = 4; d < ITERATIONS; d += 2) {
-        TTI_REPLAY(0 /*start*/, 8 /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*exec_while_loading*/, 0 /*load*/);
+    for (int d = 2; d < ITERATIONS; d += 2) {
+        lltt::replay(SIGMOID_APPX_REPLAY_START, SIGMOID_APPX_REPLAY_LEN);
     }
     // Drain passes ITERATIONS-2 and ITERATIONS-1.
-    TTI_SFPADDI(HALF_BF16, p_sfpu::LREG5, 0 /*instr_mod1*/);
-    TTI_SFPSTORE(p_sfpu::LREG4, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
-    TTI_SFPSTORE(p_sfpu::LREG5, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
+    {
+        sfpi::vFloat even = sfpi::l_reg[SIGMOID_APPX_EVEN_LREG];
+        sfpi::vFloat odd = sfpi::l_reg[SIGMOID_APPX_ODD_LREG];
+        odd += 0.5f;
+        sfpi::dst_reg[0].mode(ADDR_MOD_6) = even;
+        sfpi::dst_reg[0].mode(ADDR_MOD_6) = odd;
+    }
 }
 
 inline void sigmoid_appx_init() {

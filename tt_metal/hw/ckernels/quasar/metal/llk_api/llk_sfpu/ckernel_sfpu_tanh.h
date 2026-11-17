@@ -7,6 +7,8 @@
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "lltt.h"
+#include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -70,30 +72,41 @@ inline void tanh_init() {
     sfpi::vConstFloatPrgm2 = 0.281917631626129150390625;
 }
 
-// Pipelined across passes the way the Blackhole LUT kernels are (#65331): _calculate_tanh_sfp_rows_
-// issues load / SFPNONLINEAR / store plus a TTINCRWC per pass of SFP_ROWS rows (4 slots), each
-// waiting on the one before. Here the next pass's SFPLOAD and the previous pass's SFPSTORE sit
-// between an SFPNONLINEAR and its consumer (3 slots per pass); the steady-state body is recorded
-// once (executing as it records) and replayed; the store walks Dest through ADDR_MOD_6 (+SFP_ROWS, programmed by
-// tanh_init the way init_typecast does), so no TTINCRWC per pass. Same instruction and mode as before.
+// Pipelined across passes: _calculate_tanh_sfp_rows_ issues load / SFPNONLINEAR / store plus a
+// TTINCRWC per pass of SFP_ROWS rows (4 slots), each waiting on the one before. Here the next pass's
+// SFPLOAD and the previous pass's SFPSTORE sit between an SFPNONLINEAR and its consumer (3 slots per
+// pass); the steady-state body is recorded once and replayed; the store walks Dest through
+// ADDR_MOD_6 (+SFP_ROWS, programmed by tanh_init the way init_typecast does), so no TTINCRWC per
+// pass. Same instruction and mode as before.
+//
+// The recorded body runs once per replay, so every value it carries from one pass to the next has to
+// sit in the same LReg at its end as at its start. sfpi does not know the block repeats, so those
+// values are pinned through l_reg[]; that costs no instruction as long as the generated body matches
+// the *_REPLAY_LEN below (check the disassembly if the body or the sfpi version changes). Quasar's
+// REPLAY cannot execute while it records (sfpi rejects lltt::Exec), so the body is recorded without
+// executing and replayed for every pass.
+inline constexpr sfpi::LRegs TANH_RESULT_LREG = sfpi::LRegs::LReg1;
+inline constexpr unsigned TANH_REPLAY_START = 0;
+inline constexpr unsigned TANH_REPLAY_LEN = 3;
+
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_tanh() {
-    static_assert(ITERATIONS >= 2, "calculate_tanh pipelines at least two passes");
-    constexpr unsigned NEXT_PASS = ckernel::math::SFP_ROWS;  // Dest offset of the pass after the counter
+    static_assert(ITERATIONS >= 1, "calculate_tanh needs at least one pass");
 
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*pass 0*/);
-    TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::TANH_MODE);
+    sfpi::l_reg[TANH_RESULT_LREG] = sfpi::approx_tanh(sfpi::dst_reg[0]);
     // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), tanh pass r+1.
-    load_replay_buf<0 /*start*/, 3 /*len*/, true /*exec_while_loading*/>([] {
-        TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, NEXT_PASS);
-        TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
-        TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::TANH_MODE);
-    });
-#pragma GCC unroll 8
-    for (int d = 2; d < ITERATIONS; d++) {
-        TTI_REPLAY(0 /*start*/, 3 /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*exec_while_loading*/, 0 /*load*/);
+    lltt::record(TANH_REPLAY_START, TANH_REPLAY_LEN);
+    {
+        sfpi::vFloat result = sfpi::l_reg[TANH_RESULT_LREG];
+        sfpi::vFloat next = sfpi::dst_reg[1];
+        sfpi::dst_reg[0].mode(ADDR_MOD_6) = result;
+        sfpi::l_reg[TANH_RESULT_LREG] = sfpi::approx_tanh(next);
     }
-    TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        lltt::replay(TANH_REPLAY_START, TANH_REPLAY_LEN);
+    }
+    sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::vFloat(sfpi::l_reg[TANH_RESULT_LREG]);
 }
 
 }  // namespace sfpu

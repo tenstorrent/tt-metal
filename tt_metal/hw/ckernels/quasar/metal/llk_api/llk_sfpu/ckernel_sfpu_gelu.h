@@ -15,6 +15,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -32,39 +33,54 @@ namespace ckernel::sfpu {
 // no sfpi code that needs them may run between the init and the loop; each op's init restores them
 // via _init_sfpu_config_reg_, so a following op is unaffected.
 //
-// Raw TTI rather than sfpi::lut, as on Blackhole (#65331): sfpi serialised every pass as load / lut /
-// loadi 0.5 / mad / store plus a TTINCRWC (6 slots per pass of SFP_ROWS rows) with the LUT input and
-// the MAD result both on LReg3. Here the 0.5 is loaded into LReg0 once per call, the LUT result goes
-// to LReg1, and the passes pipeline: the next pass's SFPLOAD and the previous pass's SFPSTORE sit
-// between the MAD and the LUT that feeds it (4 slots per pass). The steady-state body is recorded
-// once (executing as it records) and replayed; the store walks Dest through ADDR_MOD_6 (+SFP_ROWS, programmed by
-// gelu_init<true> the way init_typecast does), so no TTINCRWC per pass. Same LUT mode bits and the
-// same x * 0.5 + lut MAD as before; only the register roles and the schedule change.
+// A plain per-pass sfpi loop serialises every pass as load / lut / loadi 0.5 / mad / store plus a
+// TTINCRWC (6 slots per pass of SFP_ROWS rows). Here the 0.5 is loaded once per call and the passes
+// pipeline: the next pass's SFPLOAD and the previous pass's SFPSTORE sit between the MAD and the LUT
+// that feeds it (4 slots per pass). The steady-state body is recorded once and replayed; the store
+// walks Dest through ADDR_MOD_6 (+SFP_ROWS, programmed by gelu_init<true> the way init_typecast
+// does), so no TTINCRWC per pass. Same LUT mode and the same x * 0.5 + lut MAD as before.
+//
+// The recorded body runs once per replay, so every value it carries from one pass to the next has to
+// sit in the same LReg at its end as at its start. sfpi does not know the block repeats, so those
+// values are pinned through l_reg[]; that costs no instruction as long as the generated body matches
+// the *_REPLAY_LEN below (check the disassembly if the body or the sfpi version changes). Quasar's
+// REPLAY cannot execute while it records (sfpi rejects lltt::Exec), so the body is recorded without
+// executing and replayed for every pass.
 // =============================================================================
+
+inline constexpr sfpi::LRegs GELU_APPX_HALF_LREG = sfpi::LRegs::LReg0;
+inline constexpr sfpi::LRegs GELU_APPX_RESULT_LREG = sfpi::LRegs::LReg1;
+inline constexpr unsigned GELU_APPX_REPLAY_START = 0;
+inline constexpr unsigned GELU_APPX_REPLAY_LEN = 4;
 
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_gelu_appx() {
-    static_assert(ITERATIONS >= 2, "calculate_gelu_appx pipelines at least two passes");
-    constexpr unsigned LUT_MODE = sfpi::SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | sfpi::SFPLUTFP32_MOD0_SGN_UPDATE;
-    constexpr unsigned HALF_BF16 = 0x3F00;                   // SFPLOADI fp16b immediate: 0.5f
-    constexpr unsigned NEXT_PASS = ckernel::math::SFP_ROWS;  // Dest offset of the pass after the counter
+    static_assert(ITERATIONS >= 1, "calculate_gelu_appx needs at least one pass");
 
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, HALF_BF16);
-    TTI_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*pass 0*/);
-    TTI_SFPLUTFP32(p_sfpu::LREG1, LUT_MODE);
-    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, 0 /*instr_mod1*/);
-    // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), lut pass r+1, mad pass r+1.
-    load_replay_buf<0 /*start*/, 4 /*len*/, true /*exec_while_loading*/>([] {
-        TTI_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, NEXT_PASS);
-        TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
-        TTI_SFPLUTFP32(p_sfpu::LREG1, LUT_MODE);
-        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, 0 /*instr_mod1*/);
-    });
-#pragma GCC unroll 8
-    for (int d = 2; d < ITERATIONS; d++) {
-        TTI_REPLAY(0 /*start*/, 4 /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*exec_while_loading*/, 0 /*load*/);
+    sfpi::l_reg[GELU_APPX_HALF_LREG] = sfpi::vFloat(0.5f);
+    {
+        sfpi::vFloat half = sfpi::l_reg[GELU_APPX_HALF_LREG];
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::l_reg[GELU_APPX_RESULT_LREG] =
+            in * half + sfpi::lut<sfpi::LutMode::Fp16x6_HWM3>(in, sfpi::LutSign::Update);
+        sfpi::l_reg[GELU_APPX_HALF_LREG] = half;
     }
-    TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
+    // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), lut pass r+1, mad pass r+1.
+    lltt::record(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+    {
+        sfpi::vFloat half = sfpi::l_reg[GELU_APPX_HALF_LREG];
+        sfpi::vFloat result = sfpi::l_reg[GELU_APPX_RESULT_LREG];
+        sfpi::vFloat in = sfpi::dst_reg[1];
+        sfpi::dst_reg[0].mode(ADDR_MOD_6) = result;
+        sfpi::l_reg[GELU_APPX_RESULT_LREG] =
+            in * half + sfpi::lut<sfpi::LutMode::Fp16x6_HWM3>(in, sfpi::LutSign::Update);
+        sfpi::l_reg[GELU_APPX_HALF_LREG] = half;
+    }
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        lltt::replay(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+    }
+    sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::vFloat(sfpi::l_reg[GELU_APPX_RESULT_LREG]);
 }
 
 // =============================================================================
