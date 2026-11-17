@@ -86,7 +86,11 @@ void kernel_main() {
     DataflowBuffer clear_value_cb(clear_value_cb_id);
     DataflowBuffer in_cb_0(in_cb_id_0);
 
+#ifdef ARCH_QUASAR
+    constexpr DataFormat copy_format = DataFormat::Int32;
+#else
     constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
+#endif
 
     constexpr uint32_t mpwi_cb_tile_idx = 0;
     constexpr uint32_t data_dst_idx = 0;
@@ -130,10 +134,10 @@ void kernel_main() {
     right_inc_cb.wait_front(1);
     down_left_wrap_inc_cb.wait_front(1);
     up_left_wrap_inc_cb.wait_front(1);
+    clear_value_cb.wait_front(1);  // the reader always pushes it; pop it on every path to balance credits
     if constexpr (is_large_kernel) {
         intra_kernel_right_inc_cb.wait_front(1);
         intra_kernel_down_left_wrap_inc_cb.wait_front(1);
-        clear_value_cb.wait_front(1);
     }
 
     compute_kernel_hw_startup(in_cb_id_0, in_cb_id_0);
@@ -154,15 +158,17 @@ void kernel_main() {
             tile_regs_acquire();
             uint32_t intra_kernel_h = 0;
             uint32_t intra_kernel_w = 0;
+            // copy_init per source CB: the Quasar unpack init binds the CB, not just its format.
             reconfig_data_format_srca(compute_tmp_idx_cb_id);
-            copy_init(compute_tmp_idx_cb_id);
             if (first_iteration) {  // move the initial indexes from the reader to DST
                 in_idx_cb.wait_front(1);
+                copy_init(in_idx_cb_id);
                 copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
                 in_idx_cb.pop_front(1);
                 first_iteration = false;
             } else {  // move incremented indexes from compute back to DST
                 compute_tmp_idx_cb.wait_front(1);
+                copy_init(compute_tmp_idx_cb_id);
                 copy_tile(compute_tmp_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
                 compute_tmp_idx_cb.pop_front(1);
             }
@@ -191,7 +197,6 @@ void kernel_main() {
                 if (last_c_block && last_chunk) {  // increment for the next kernel position
                     increment_needed = true;
                     reconfig_data_format_srca(compute_tmp_idx_cb_id);
-                    copy_init(compute_tmp_idx_cb_id);
                     // update the current index column
                     if (current_idx_col + stride_w + eff_kernel_w > in_w_padded) {
                         // we reached the right edge, wrap down and to the left
@@ -199,27 +204,31 @@ void kernel_main() {
                         if (current_idx_row + stride_h + eff_kernel_h > in_h_padded) {
                             // we reached the bottom right corner, wrap to the top and to the left
                             current_idx_row = 0;
+                            copy_init(up_left_wrap_inc_cb_id);
                             copy_tile(up_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                         } else {
                             current_idx_row += stride_h;
+                            copy_init(down_left_wrap_inc_cb_id);
                             copy_tile(down_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                         }
                     } else {
                         // we are still in the same row, move to the right
                         current_idx_col += stride_w;
+                        copy_init(right_inc_cb_id);
                         copy_tile(right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                     }
                 } else if (is_large_kernel) {  // only need to increment within C block if multiple chunks
                     if (!last_chunk) {         // increment for the next chunk within the same C block
                         increment_needed = true;
                         reconfig_data_format_srca(compute_tmp_idx_cb_id);
-                        copy_init(compute_tmp_idx_cb_id);
                         if (intra_kernel_w + sticks_per_chunk < kernel_w) {  // move right in this row
                             intra_kernel_w += sticks_per_chunk;
+                            copy_init(intra_kernel_right_inc_cb_id);
                             copy_tile(intra_kernel_right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                         } else {  // move down to the next row
                             intra_kernel_w = 0;
                             intra_kernel_h += 1;
+                            copy_init(intra_kernel_down_left_wrap_inc_cb_id);
                             copy_tile(intra_kernel_down_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                         }
                     }
@@ -259,11 +268,17 @@ void kernel_main() {
 
             pack_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_tmp_cb_id);
+#ifdef ARCH_QUASAR
+            pack_init(pack_tmp_cb_id);  // Quasar bakes the pack target at init
+#endif
             pack_tile<true>(data_dst_idx, pack_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output data)
             pack_tmp_cb.push_back(1);
 
             pack_idx_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_idx_tmp_cb_id);
+#ifdef ARCH_QUASAR
+            pack_init(pack_idx_tmp_cb_id);  // Quasar bakes the pack target at init
+#endif
             pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output indexes)
             pack_idx_tmp_cb.push_back(1);
 
@@ -273,6 +288,9 @@ void kernel_main() {
             if (!is_last_iteration) {
                 compute_tmp_idx_cb.reserve_back(1);
                 pack_reconfig_data_format(compute_tmp_idx_cb_id);
+#ifdef ARCH_QUASAR
+                pack_init(compute_tmp_idx_cb_id);  // Quasar bakes the pack target at init
+#endif
                 pack_tile<true>(
                     index_scratch_out_dst_idx,
                     compute_tmp_idx_cb_id,
@@ -289,9 +307,9 @@ void kernel_main() {
     right_inc_cb.pop_front(1);
     down_left_wrap_inc_cb.pop_front(1);
     up_left_wrap_inc_cb.pop_front(1);
+    clear_value_cb.pop_front(1);
     if constexpr (is_large_kernel) {
         intra_kernel_right_inc_cb.pop_front(1);
         intra_kernel_down_left_wrap_inc_cb.pop_front(1);
-        clear_value_cb.pop_front(1);
     }
 }

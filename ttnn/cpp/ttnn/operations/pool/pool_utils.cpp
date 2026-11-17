@@ -109,6 +109,10 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
 }
 
 DataType get_index_data_type(uint32_t in_h, uint32_t in_w) {
+    // Quasar has no UInt16/UInt32 formats and its SFPU integer add is Int32-only.
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR) {
+        return DataType::INT32;
+    }
     uint32_t hw = in_h * in_w;
     if (hw <= std::numeric_limits<uint16_t>::max()) {
         return DataType::UINT16;
