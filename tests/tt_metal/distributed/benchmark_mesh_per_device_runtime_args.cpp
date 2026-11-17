@@ -187,11 +187,11 @@ void kernel_main() {
         run(state, workload, set_per_device);
     } else if (mode == 2) {
         run(state, workload, [&] {
-            m2x::UpdateProgramRunArgs(program, update_values, /*skip_validation=*/true);
+            m2x::UpdateProgramRunArgs(program, update_values, m2::ValidationMode::SKIP);
             set_per_device();
         });
     } else {
-        run(state, workload, [&] { m2x::UpdateProgramRunArgs(program, update_address, /*skip_validation=*/true); });
+        run(state, workload, [&] { m2x::UpdateProgramRunArgs(program, update_address, m2::ValidationMode::SKIP); });
     }
 }
 
