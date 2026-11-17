@@ -1640,10 +1640,15 @@ void expect_split_matches_unsplit(
     const xt::xarray<float>& unsplit_output,
     const FoldErrorTerms& terms,
     const std::string& name) {
-    constexpr float kTwoUlpRel = 7.8125e-3F;   // 2^-7: two bf16 ULP in [0.25, 0.5), one in [0.5, 1)
+    constexpr float kUlpRel = 7.8125e-3F;      // 2^-7: one to two bf16 ULP in every binade
     constexpr float kTruncRel = 9.765625e-4F;  // 2^-10: one TF32 truncation, worst case
+    // Held near the data. The terms above grow with the unshared steps and reach 0.148 at ManyPieces,
+    // where a merger that dropped a partial (about 7% on its rows) would pass this check and only the
+    // logsumexp would catch it. The worst element measured across the suite is 1.3e-2 (2.4e-2 on the
+    // 13-partial row), so 2^-5 keeps a margin over the data and still bites at every partial count.
+    constexpr float kMaxRel = 3.125e-2F;  // 2^-5
     const float unshared_steps = static_cast<float>(terms.partials + terms.extra_unsplit_steps);
-    const float rel_tol = kTwoUlpRel + 2.0F * kTruncRel * unshared_steps;
+    const float rel_tol = std::min(kUlpRel + 2.0F * kTruncRel * unshared_steps, kMaxRel);
     const float mean_rel_tol = 1e-3F + 0.5F * kTruncRel * unshared_steps;
     const xt::xarray<float> gap = xt::abs(split_output - unsplit_output);
     const xt::xarray<float> bound = rel_tol * xt::abs(unsplit_output);
