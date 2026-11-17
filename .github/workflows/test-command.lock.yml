@@ -1869,7 +1869,7 @@ jobs:
                           "mobilenetv3",
                           "retinanet",
                           "ssd512",
-                          "vadv1",
+                          "vad",
                           "openpdn-mnist",
                           "yunet",
                           "xtts-v2",
