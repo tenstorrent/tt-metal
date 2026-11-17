@@ -12,6 +12,7 @@ touch numpy views of host buffers and file descriptors. A byte budget bounds the
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import threading
 import time
@@ -48,6 +49,7 @@ from ._state_dict import (
     fsdp_gate,
     world_record,
 )
+from ._topology import Chunk, owner
 from ._train_state import TRAIN_STATE_KEY, capture_train_state
 
 
@@ -93,6 +95,13 @@ def _logical_bytes(view: np.ndarray, sizes: tuple[int, ...], itemsize: int) -> n
             f"{itemsize}; its host layout is padded or sharded in a way save does not handle"
         )
     return view
+
+
+def _one_process_owner(key: str, group: list[Chunk]) -> Chunk:
+    """The writer of a replica group in a single-process save: one process holds every coordinate, so it writes the
+    chunk at the coordinate ``owner`` picks."""
+    coord = owner(key, [c.mesh_coord for c in group])
+    return next(c for c in group if c.mesh_coord == coord)
 
 
 def _write_chunk(fd: int, offset: int, view: np.ndarray, budget: _ByteBudget, charged: int) -> int:
@@ -163,12 +172,13 @@ def save(
     if os.path.exists(ckpt_dir) and not overwrite:
         raise CheckpointError(f"{ckpt_dir} already exists; pass overwrite=True to replace it")
     os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
-    staging, _ = begin_staging(ckpt_dir)
+    staging = begin_staging(ckpt_dir, secrets.randbits(31), shared=False)
     try:
         t1 = time.perf_counter()
         plan: SavePlan = create_save_plan(
             [lt.info for lt in live],
             file_for_coord=lambda c: data_file_name(0, 0, c),
+            owner_of=_one_process_owner,
             file_metadata=lambda c: {
                 "ttml.format": f"{FORMAT}/{VERSION}",
                 "ttml.writer": {"world_rank": 0, "mesh_id": 0, "coord": list(c)},

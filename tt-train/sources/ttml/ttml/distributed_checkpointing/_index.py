@@ -331,12 +331,16 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
 # --- staging and JSON files ----------------------------------------------------------------------------------------
 
 
-def begin_staging(final_dir: str) -> tuple[str, int]:
-    """Create ``<final_dir>.partial-<nonce>/data``; returns the staging path and the nonce."""
-    nonce = secrets.randbits(31)
-    staging = f"{final_dir.rstrip('/')}{PARTIAL_MARK}{nonce}"
-    os.makedirs(os.path.join(staging, DATA_DIR), exist_ok=False)
-    return staging, nonce
+def staging_dir(final_dir: str, nonce: int) -> str:
+    return f"{final_dir.rstrip('/')}{PARTIAL_MARK}{int(nonce)}"
+
+
+def begin_staging(final_dir: str, nonce: int, shared: bool) -> str:
+    """Create ``<final_dir>.partial-<nonce>/data`` and return the staging path. Save passes the nonce its ranks agreed
+    on; with ``shared`` the directory may already exist, since every rank of a multi-rank save creates it."""
+    staging = staging_dir(final_dir, nonce)
+    os.makedirs(os.path.join(staging, DATA_DIR), exist_ok=shared)
+    return staging
 
 
 def finalize_staging(staging: str, final_dir: str, overwrite: bool = False) -> None:

@@ -23,7 +23,7 @@ from math import prod
 import numpy as np
 import ttnn
 
-from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError
+from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError, UnexpectedKeyError
 from ._index import Index, is_complete, read_checked_header, read_index
 from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan
 from ._safetensors import pread_all, read_file_header
@@ -237,7 +237,13 @@ def load(
         live.extend(state_live)
     by_key = {lt.key: lt for lt in live}
     roles = {"param", "buffer"} | ({"optimizer_state"} if optimizer is not None else set())
-    plan: LoadPlan = create_load_plan(index, [lt.info for lt in live], strict=strict, roles=roles)
+    plan: LoadPlan = create_load_plan(index, [lt.info for lt in live], roles=roles)
+    if strict and plan.missing:
+        raise MissingKeyError(f"{len(plan.missing)} live tensor(s) have no entry in the checkpoint: {plan.missing[:5]}")
+    if strict and plan.unexpected:
+        raise UnexpectedKeyError(
+            f"{len(plan.unexpected)} checkpoint entr(ies) have no live tensor: {plan.unexpected[:5]}"
+        )
     for key, kplan in plan.keys.items():
         check_undeclared_fusion(by_key[key], kplan.entry)
     if optimizer is not None:

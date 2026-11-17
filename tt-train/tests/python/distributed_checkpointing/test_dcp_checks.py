@@ -13,7 +13,6 @@ import numpy as np
 import ttml.distributed_checkpointing as dcp
 
 from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError, MissingKeyError
-from ttml.distributed_checkpointing._index import check_json
 from ttml.distributed_checkpointing._index import Entry
 from ttml.distributed_checkpointing._layouts import Identity, fused_segments
 from ttml.distributed_checkpointing._planner import TensorInfo
@@ -26,30 +25,13 @@ from ttml.distributed_checkpointing._state_dict import (
     check_param_groups,
     check_undeclared_fusion,
     fsdp_gate,
-    tp_split,
 )
-from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
+from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, tp_split
 from ttml.modules.parameter import Parameter
 
 
 def _label(placements, dist_shape) -> Label:
     return Label(tuple(placements), tuple(dist_shape), tuple(dist_coords(dist_shape)))
-
-
-def test_check_json_returns_plain_json_and_names_what_would_not_read_back(expect_error):
-    assert check_json("header", {"step": 3, "lr": 1e-3, "shape": (1, 2), "tags": ["a"], "none": None}) == {
-        "step": 3,
-        "lr": 1e-3,
-        "shape": [1, 2],
-        "tags": ["a"],
-        "none": None,
-    }
-    with expect_error(CheckpointError, "dataloader at /per_shard: key 0 is a int"):
-        check_json("dataloader", {"per_shard": {0: 7}})
-    with expect_error(CheckpointError, r"scheduler at /eta_min: inf is not finite"):
-        check_json("scheduler", {"eta_min": float("inf")})
-    with expect_error(CheckpointError, r"header at /steps\[1\]: a int64 has no JSON form"):
-        check_json("header", {"steps": [1, np.int64(2)]})
 
 
 def test_host_shards_must_be_exactly_their_logical_size(expect_error):

@@ -23,6 +23,8 @@ from dcp_oracle import (
     assert_shards_equal,
     device_global,
     expected_shards,
+    info,
+    one_process_owner,
     per_shard_fused,
     tp_split_of,
     world,
@@ -33,11 +35,9 @@ from ttml.distributed_checkpointing._errors import (
     CheckpointError,
     CoverageError,
     DtypeMismatchError,
-    MissingKeyError,
     RoleMismatchError,
     ShapeMismatchError,
     TopologyError,
-    UnexpectedKeyError,
 )
 from ttml.distributed_checkpointing._index import ChunkRecord, data_file_name
 from ttml.distributed_checkpointing._layouts import Compose, Identity, Pad, fused_segments
@@ -231,7 +231,7 @@ def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
         )
         for i in range(64)
     ]
-    plan = create_save_plan(infos, lambda c: data_file_name(0, 0, c))
+    plan = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
     assert len(plan.files) == 32 and all(f.items for f in plan.files), "every device file gets some chunks"
     assert plan.bytes_written == 64 * 8 * 32 * 64 * 2
     for fplan in plan.files:
@@ -244,13 +244,31 @@ def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
     assert {plan.files[c.file].coord[1] for c in entries["model/blocks/3/w"].chunks} == set(range(8))
 
 
+def test_a_save_plan_writes_only_the_chunks_owner_of_gives_this_process():
+    """Where another process writes a replica group, owner_of returns None for it: the group gets no write here, a key
+    this process writes nothing of gets no entry in its part of the index, and only the coordinates that write get a
+    file."""
+    infos = [info(key, TP8_DP4, (1, 1, 64, 32), Identity()) for key in ("w", "v")]
+
+    def owner_of(key, group):
+        own = one_process_owner(key, group)
+        return own if key == "w" and own.mesh_coord[1] < 4 else None
+
+    plan = create_save_plan(infos, lambda c: data_file_name(0, 0, c), owner_of)
+    written = [item for fplan in plan.files for item in fplan.items]
+    assert {item.key for item in written} == {"w"} and len(written) == 4
+    assert sorted(f.coord for f in plan.files) == sorted(item.chunk.mesh_coord for item in written)
+    entries = plan.entries({(item.key, item.file): 0 for item in written})
+    assert list(entries) == ["w"] and len(entries["w"].chunks) == 4
+
+
 def test_two_live_tensors_under_one_key_are_refused(expect_error):
     # A dict by key would keep one of them and silently not save or not load the other.
     info = TensorInfo(
         "w", "param", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",), tp_split=tp_split_of(SINGLE, 4)
     )
     with expect_error(CheckpointError, "w: two live tensors have this key; only one of them would be saved"):
-        create_save_plan([info, info], lambda c: data_file_name(0, 0, c))
+        create_save_plan([info, info], lambda c: data_file_name(0, 0, c), one_process_owner)
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (arange((1, 1, 64, 32)), SINGLE, Identity())})
     with expect_error(CheckpointError, "only one of them would be loaded"):
@@ -280,15 +298,36 @@ def test_mismatches_are_refused_before_any_read(expect_error):
         from ttml.distributed_checkpointing._planner import create_load_plan
 
         create_load_plan(ckpt.index, dests)
-    with expect_error(MissingKeyError, "no entry"):
-        ckpt.load({"other": (SINGLE, Identity(), (1, 1, 64, 32))})
-    plan, _ = ckpt.load(
-        {"other": (SINGLE, Identity(), (1, 1, 64, 32)), "w": (SINGLE, Identity(), (1, 1, 64, 32))}, strict=False
-    )
+    # The plan lists what is missing and unexpected; load judges them under strict.
+    plan, _ = ckpt.load({"other": (SINGLE, Identity(), (1, 1, 64, 32))})
+    assert plan.missing == ["other"] and plan.unexpected == ["w"]
+    plan, _ = ckpt.load({"other": (SINGLE, Identity(), (1, 1, 64, 32)), "w": (SINGLE, Identity(), (1, 1, 64, 32))})
     assert plan.missing == ["other"] and plan.unexpected == []
-    with expect_error(UnexpectedKeyError, "no live tensor"):
-        ckpt.save({"w": (canonical, TP8_DP4, Identity()), "extra": (canonical, TP8_DP4, Identity())})
-        ckpt.load({"w": (SINGLE, Identity(), (1, 1, 64, 32))})
+    ckpt.save({"w": (canonical, TP8_DP4, Identity()), "extra": (canonical, TP8_DP4, Identity())})
+    plan, _ = ckpt.load({"w": (SINGLE, Identity(), (1, 1, 64, 32))})
+    assert plan.missing == [] and plan.unexpected == ["extra"]
+
+
+def test_a_rank_plans_only_the_shards_of_the_coordinates_it_holds():
+    """With local_coords (a multi-rank load) only the replica groups with a coordinate this rank holds are planned;
+    the ranks' parts together are the plan of one process."""
+    canonical = arange((1, 1, 64, 32))
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (canonical, TP8_DP4, Identity())})
+    dest = info("w", FSDP32_ROWS, canonical.shape, Identity())
+    whole = create_load_plan(ckpt.index, [dest]).keys["w"]
+    halves = [set(FSDP32_ROWS.mesh_coords[:16]), set(FSDP32_ROWS.mesh_coords[16:])]
+    parts = [create_load_plan(ckpt.index, [dest], local_coords=coords).keys["w"] for coords in halves]
+    assert [len(part.boxes) for part in parts] == [16, 16] and {**parts[0].boxes, **parts[1].boxes} == whole.boxes
+
+    def by_group(reads):
+        return sorted(reads, key=lambda r: (r.group, r.chunk))
+
+    assert by_group(parts[0].reads + parts[1].reads) == by_group(whole.reads)
+    # A replicated group is planned by every rank holding one of its coordinates: DP row 0 holds one of each.
+    row0 = {c for c in TP8_DP4.mesh_coords if c[0] == 0}
+    replicated = create_load_plan(ckpt.index, [info("w", TP8_DP4, canonical.shape, Identity())], local_coords=row0)
+    assert len(replicated.keys["w"].boxes) == 8
 
 
 def test_a_missing_chunk_is_a_coverage_error(expect_error):
@@ -336,7 +375,7 @@ def test_chunks_that_are_not_one_grid_are_found_by_scanning():
     assert_shards_equal(shards["w"], expected_shards(canonical, tp2))
 
 
-def test_roles_scope_the_unexpected_keys_of_a_load(expect_error):
+def test_roles_scope_the_unexpected_keys_of_a_load():
     ckpt = FakeCheckpoint()
     ckpt.save(
         {"w": (arange((1, 1, 64, 32)), SINGLE, Identity()), "opt/w": (arange((1, 1, 64, 32)), SINGLE, Identity())}
@@ -347,10 +386,8 @@ def test_roles_scope_the_unexpected_keys_of_a_load(expect_error):
             "w", "param", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",), tp_split=tp_split_of(SINGLE, 4)
         )
     ]
-    assert create_load_plan(ckpt.index, model_only, strict=False).unexpected == ["opt/w"]
-    with expect_error(UnexpectedKeyError, "opt/w"):
-        create_load_plan(ckpt.index, model_only, strict=True)
-    plan = create_load_plan(ckpt.index, model_only, strict=True, roles=["param"])
+    assert create_load_plan(ckpt.index, model_only).unexpected == ["opt/w"]
+    plan = create_load_plan(ckpt.index, model_only, roles=["param"])
     assert plan.unexpected == [] and list(plan.keys) == ["w"], "optimizer state is out of a model-only load's scope"
 
 
@@ -413,7 +450,7 @@ def test_a_label_sharding_a_dim_the_tensor_lacks_is_refused_at_save(expect_error
             tp_split=tp_split_of(label, 4),
         )
         with expect_error(TopologyError, "model/w: distribution axis 1 shards dim"):
-            create_save_plan([info], lambda c: data_file_name(0, 0, c))
+            create_save_plan([info], lambda c: data_file_name(0, 0, c), one_process_owner)
 
 
 def test_saved_chunks_that_overlap_or_leave_a_gap_are_refused_at_load(expect_error):
@@ -475,8 +512,8 @@ def test_save_planning_is_cached_per_label_and_shape(expect_error):
         for i in range(16)
     ]
     _replica_layout.cache_clear()
-    first = create_save_plan(infos, lambda c: data_file_name(0, 0, c))
-    second = create_save_plan(infos, lambda c: data_file_name(0, 0, c))
+    first = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
+    second = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
     stats = _replica_layout.cache_info()
     assert stats.misses == 1 and stats.hits == 31, "one grouping for 16 keys of one label, reused by the next save"
     assert [f.items[0].key for f in first.files] == [f.items[0].key for f in second.files]
@@ -492,7 +529,7 @@ def test_save_planning_is_cached_per_label_and_shape(expect_error):
             key, "param", "BF16", "TILE", bad, (1, 1, 4, 4), Identity(), (key,), tp_split=tp_split_of(bad, 4)
         )
         with expect_error(TopologyError, f"{key}: distribution axis 1 shards dim 5"):
-            create_save_plan([info], lambda c: data_file_name(0, 0, c))
+            create_save_plan([info], lambda c: data_file_name(0, 0, c), one_process_owner)
     after = _replica_layout.cache_info()
     assert (
         after.misses - before.misses == 1 and after.hits - before.hits == 1

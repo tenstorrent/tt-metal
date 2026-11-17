@@ -33,7 +33,7 @@ from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameter
 from ._index import Entry
 from ._layouts import DECLARATIONS, Compose, Identity, Segments, Transform, declared_transform
 from ._planner import TensorInfo
-from ._topology import Label, Placement, global_shape
+from ._topology import Label, Placement, global_shape, tp_split
 
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
@@ -176,15 +176,6 @@ def _module_name(key: str) -> str:
 def _fsdp_axis(tensor: Any) -> int | None:
     """The mesh axis FSDP shards ``tensor`` over (an autograd tensor of a ``fully_shard``-ed module), or None."""
     return getattr(tensor, "_fsdp_axis", None) if getattr(tensor, "_fsdp_managed", False) else None
-
-
-def tp_split(label: Label, fsdp_axis: int | None, rank: int) -> tuple[int, ...]:
-    """Per dim of a rank-``rank`` tensor, how many shards the mesh axes other than ``fsdp_axis`` split it into: the TP
-    split, which decides a fused weight's row order. FSDP splits rows that are already in canonical order, so it is
-    left out."""
-    return tuple(
-        int(np.prod([label.dist_shape[a] for a in label.shard_axes(d) if a != fsdp_axis])) for d in range(rank)
-    )
 
 
 def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) -> None:
