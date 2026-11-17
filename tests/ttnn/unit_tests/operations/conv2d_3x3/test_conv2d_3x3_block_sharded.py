@@ -256,6 +256,52 @@ def test_conv2d_3x3_block_sharded_multi_m_block(dtype, layout, with_bias, device
     _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=with_bias, relu=True)
 
 
+@pytest.mark.parametrize("dtype,layout", LAYOUTS)
+def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, device, monkeypatch):
+    """One-tile-row M-blocks over 20 output tile-rows on 3 grid rows of 7-tile-row shards: rows 0 and 1 run 7
+    M-blocks (21 weight multicast rounds per column, interleaved with 7 combine rounds), the last row runs 6 and
+    must stream its own weight slice. W_out = 40, so a tile-row's taps span two image rows."""
+    torch.manual_seed(5)
+    (H, W, c_in), c_out = (16, 40, 64), 64
+    shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+    config = _block_config(H * W, c_in, layout, shard)
+    real_select = _pd.select_blocking
+    real_column_mcast = _pd._column_weight_mcast
+    channels = []
+
+    def one_tile_row_blocks(g, grid, l1_budget):
+        b = real_select(g, grid, l1_budget)
+        assert g.k_split and b.core_m_tiles == 7 and b.num_m_groups == 3
+        fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles)
+        return _pd.Conv3x3Blocking(
+            grid_x=b.grid_x,
+            core_m_tiles=b.core_m_tiles,
+            num_m_groups=b.num_m_groups,
+            block_m_tiles=1,
+            block_k_tiles=b.block_k_tiles,
+            block_n_tiles=b.block_n_tiles,
+            im2col_rm_depth_rows=b.im2col_rm_depth_rows,
+            out_depth_row_groups=b.out_depth_row_groups,
+            **fit,
+        )
+
+    def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+        channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+        channels.append((channel, list(work)))
+        return channel
+
+    monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+    monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+    _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+    ((channel, work),) = channels
+    assert channel is not None, "the column weight multicast channel was not built"
+    receivers, group_size, _ = channel
+    k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+    assert group_size == 2 and receivers.num_cores() == 2 * k_cols
+    assert not any(receivers.contains(core) for core, row, _ in work if row == 2), "the ragged row streams its own"
+
+
 def test_conv2d_3x3_block_sharded_grid_column_mismatch(device, expect_error):
     """A shard grid with more columns than C_in has channel slices is refused before dispatch."""
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])

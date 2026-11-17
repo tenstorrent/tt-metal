@@ -251,3 +251,73 @@ Lamps measured (kept at design defaults):
     - The writer-only scatter knob setting.
     - Grid-column contract error.
   - `test_conv2d_3x3_perf.py::test_conv2d_3x3_block_sharded_perf`: the 9 BLOCK LOOSE layers. `CONV2D_3X3_PERF_ABLATION=1` skips the PCC check for ablation profiling.
+
+## Refinement 5 — Speed up the BLOCK-sharded res4 layer
+- Date: 2026-11-17
+- What was done: two perf levers, chosen from a per-RISC zone breakdown and ablations on `res4.{1..5}.conv2 @ LoFi`. No SUPPORTED change.
+  - **Diagnosis.** Zones per RISC, LoFi, p50 core, 60.1 us:
+    - the reader's gather ran 1.4 -> 38.2 us and waited only 2.6 us of it for CB space;
+    - compute's tilize waited on it (unpack: 30 of 40 us of the matmul phase);
+    - the weight stream (24 us) was hidden;
+    - the combine phase added ~14 us.
+
+    The gather issued one 192 B L1 read per output pixel per kh, 768 per core. The heading's suggested levers did not aim at that bound:
+    - weights were measured hidden;
+    - R4b would multiply the binding gather and tilize work by `k_cols` = 8;
+    - the combine's FPU add is ~1.4 us.
+  - **Lever 1: tap-major im2col** (`TAP_MAJOR_IM2COL`, gated by `tap_major_im2col()`: stride 1, `C_in_p % 32 == 0`, no padded lanes in any slice, `bk` whole taps).
+    - The reader lays each tile-row out as one `[32 pixels, C_in_p]` block per tap. At stride 1, the pixels of one output image row read consecutive slab pixels, so a tap costs one read per image-row run plus zero reads for padding. On res4.x that is about 100 reads per core instead of 768.
+    - Compute tilizes each block `C_in_p / 32` wide, which yields the same tiles in the same `[m][k]` order. The output is bit-identical to the old path (probe: res4.x LoFi / HiFi4, 32x64x128 interleaved; max diff 0).
+    - Measured: 60.1 -> 41.7 us (LoFi).
+  - **Lever 2: per-column weight multicast** (the heading's named lever).
+    - Once the gather was fast, the reader waited 13.9 us for CB space, and the 64-core per-core weight stream became the bound: 5 MB from DRAM in ~21 us. Stubbing it gave 41.7 -> 36.1 us.
+    - The R1 channel is now attached under the K split with one group per grid column (`ttnn.Mcast(..., group = participating rows, McastFixedSenderConfig(), ColumnMajor)`; `RowMajor` on a COL_MAJOR grid). The column's first participating row reads its K-slice and multicasts it down the column. A ragged last row with fewer M-blocks streams its own slice.
+    - The writer kernel is unchanged: its sender / receiver / fallback branch already serves any group layout. The channel's semaphores follow the four combine semaphores.
+    - Measured: 41.7 -> 36.0 us, equal to the weights-stubbed number.
+  - **Reused / added.**
+    - Reused: the R1 writer branch and `cb_weights` protocol, the gather's slab addressing and zero-fill, and the tilize helper.
+    - Added: one reader branch, a tilize-width CT arg, the host predicate, and the column grouping.
+- Accuracy achieved:
+  - Bit-identical to the pre-refinement output.
+  - res4.x LoFi: PCC 0.99954, rel-RMS 0.0186 (gate 0.996 / 0.08).
+  - res4.x HiFi4: PCC 0.99969, rel-RMS 0.0103.
+  - Golden tolerances (0.997, 0.04) / (0.99, 0.12) hold on every cell run.
+- Golden test progress:
+  - Slice of all 23 LOOSE cases plus every `test_op` cell of 32x64x128 (p1 and d18), 24x40x32, 16x34x32 and 8x8x32: 383 passed, 120 INVALID skipped, 0 failed.
+  - Unit dir: 229 / 229 (3 added).
+  - BLOCK unit file plus res4.x / res2.x perf layers clean under `--dev`: 48 / 48.
+- Measured (Blackhole p150b, DEVICE KERNEL DURATION, one fresh-cache run per variant; "off" = both levers parked, same session):
+
+  | Shape | off | on |
+  |-------|-----|----|
+  | res4.{1..5}.conv2 @ LoFi | 60.3 us | 35.2 us |
+  | res4.{1..5}.conv2 (HiFi4) | 78.8 us | 54.1 us |
+  | res4.0.conv2 (s 2, gather gated off) | 81.5 us | 81.5 us |
+  | res5.0.conv2 (d 2) | 211.3 us | 141.5 us |
+  | res5.1 / res5.2 (bk splits a tap) | 266.3 / 265.8 us | 266.6 / 265.5 us |
+  | aspp.convs.1 / 2 (short last slice) | 400.3 / 401.0 us | 400.0 / 400.4 us |
+  | aspp.convs.3 (column multicast only) | 205.3 us | 187.4 us |
+  | HEIGHT stem.conv2 / stem.conv3 | 264.4 / 330.9 us | 126.0 / 201.9 us |
+  | HEIGHT res2.x / res3.x / center_head.1 | 76.5 / 40.8 / 79.1 us | 38.1 / 33.3 / 45.5 us |
+  | HEIGHT sem res2.fuse_conv.0 / inst res2.fuse_conv.1 | 466.6 / 132.7 us | 392.3 / 98.1 us |
+  | HEIGHT stem.conv1 (RM, C_in 8, s 2: gated off) | 214.4 us | 214.5 us |
+  | interleaved 128x256x64 RM / TILE bf16 / TILE bf8_b | 210.0 / 102.5 / 93.8 us | 185.7 / 64.1 / 52.4 us |
+  | interleaved 64x128x128 RM / TILE bf16 / TILE bf8_b | 80.4 / 60.8 / 52.3 us | 76.1 / 52.4 / 44.1 us |
+  | interleaved 32x64x128 RM / TILE bf8_b | 25.8 / 24.2 us | 24.4 / 23.7 us |
+  | interleaved 8x16x2048 TILE bf16 (few-core deep K) | 291.6 us | 291.6 us |
+
+  None of the 41 perf-harness shapes regressed (worst +0.5%, noise).
+- **Bottleneck now** (res4.x LoFi, 35 us; zones plus a scatter-writes-stubbed ablation):
+  - 3.4 us slab untilize.
+  - ~18 us of compute-bound matmul phase (tilize ~8 us + matmul ~10 us; the reader waits 7.7 us for CB space).
+  - ~14 us of combine. The partial scatter's bytes are 11.6 us of it: stubbed, 35.2 -> 23.6 us (HiFi4 54.1 -> 42.4 us). The direct all-to-all puts 16 slices (512 KB) per direction on the middle link of each 8-core row.
+- **Next levers, not taken** (each restructures the combine protocol; the heading scopes one ⭐⭐⭐ lever per phase):
+  - Pipeline the scatter under the last K-block by pushing the partials per row group.
+  - Use a reduce-then-forward topology (e.g. recursive halving nearest-first: ≤128 KB per link per step).
+  - bf16 partials would halve the bytes, but that is a precision change.
+  - Gather gates: res5.1/5.2 need a tap-aligned `bk` preference in `select_blocking` (bk 3 splits a 2-tile tap); aspp needs per-slice-width compute kernels (its short last slice forces the row layout on the shared compute kernel).
+- Issues encountered: none on device; both levers passed every test on their first run.
+- Tests added: `test_conv2d_3x3_block_sharded.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row` (RM bf16, TILE bf16, TILE bf8_b).
+  - One-tile-row M-blocks over 3 grid rows of 7-tile-row shards, 20 output tile-rows: rows 0-1 take 21 multicast rounds per column, interleaved with 7 combine rounds.
+  - The ragged last row (6 M-blocks) must stay out of its column's channel.
+  - W_out = 40, so tap-major runs straddle image rows.

@@ -180,7 +180,7 @@
   - aspp.convs.1 / 2 / 3: 400.8 / 401.5 / 205.2 us.
 - Weights are not on the critical path of any BLOCK LOOSE layer (stubbed: at most 13 us), so the per-column weight multicast was left to Refinement 5. The remaining scatter on res4.x is ~12.6 us; the rest is compute and the gather path. Details in changelog.md.
 
-### [ ] Refinement 5 — Speed up the BLOCK-sharded res4 layer
+### [x] Refinement 5 — Speed up the BLOCK-sharded res4 layer
 
 **Type**: perf
 
@@ -194,6 +194,30 @@
 - **Scope**: one ⭐⭐⭐ lever per phase. No SUPPORTED change.
 
 **Done when**: measured device-ns improves on `res4.{1..5}.conv2 @ LoFi` with its `(0.996, 0.08)` tolerance still holding. The golden suite stays green. No regression across the guard set (Refinement 3's set plus one BLOCK representative per layout).
+
+**Outcome**:
+- **Measured** (DEVICE KERNEL DURATION, same session, both levers off -> on):
+  - res4.{1..5}.conv2 @ LoFi: 60.3 -> 35.2 us. The tap-major gather alone gave 41.7 us; the column weight multicast took it to 36.0 us.
+  - res4.x @ HiFi4: 78.8 -> 54.1 us. res5.0: 211.3 -> 141.5 us. res4.0 (stride 2, gather lever gated off): 81.5 us, unchanged.
+  - Output is bit-identical to the old path. res4.x LoFi PCC 0.99954, rel-RMS 0.0186.
+  - Nothing regressed across the 41-shape perf harness (worst +0.5%). Shared-path wins elsewhere include HEIGHT stem.conv2 264 -> 126 us, stem.conv3 331 -> 202 us, res2.x 76.5 -> 38.1 us, center_head.1 79 -> 45.5 us, and interleaved 128x256x64 TILE bf8_b 93.8 -> 52.4 us.
+- **Bound found**: the reader's im2col gather, at one 192 B L1 read per output pixel per kh (768 per core, 37 us). Compute's tilize waited on it. The suggested levers did not target it:
+  - weights were hidden behind the gather;
+  - R4b multiplies the gather and tilize by `k_cols`;
+  - the combine's add is ~1.4 us.
+- **Levers built**:
+  - Tap-major im2col: one read per tap per image-row run, about 100 reads per core.
+  - With the gather fast, the per-core weight stream was exposed (5 MB from DRAM on 64 cores, about 21 us; stubbing it gave 41.7 -> 36.1 us), so the named column multicast was built next. It is one channel with one group per grid column and measured 36.0 us, equal to the stub.
+- **Bottleneck now** (LoFi):
+  - The partial scatter: stubbing its writes gives 35.2 -> 23.6 us (HiFi4 54.1 -> 42.4 us). The all-to-all puts 512 KB per direction on the middle link of each 8-core row.
+  - Then a compute-bound matmul phase of ~18 us (tilize ~8 us + matmul ~10 us), then the 3.4 us slab untilize.
+- **Next, not taken** (each changes the combine protocol, beyond one ⭐⭐⭐ lever per phase):
+  - Pipeline the scatter under the last K-block, with per-row-group partial pushes.
+  - Use a reduce-then-forward topology that cuts the middle-link load.
+  - bf16 partials would halve the bytes, but that is a precision change.
+- **Gather gates**: res5.1/5.2 and aspp.convs.1/2/3 still use the per-pixel gather.
+  - res5.1/5.2: L1-solved `bk` 3 splits a 2-tile tap. A tap-aligned `bk` preference in `select_blocking` would enable it.
+  - aspp: the last channel slice is short, and the one shared compute kernel fixes the tilize width. Per-slice-width compute kernels would enable it.
 
 ### [ ] Refinement 6 — Speed up stem.conv1
 
