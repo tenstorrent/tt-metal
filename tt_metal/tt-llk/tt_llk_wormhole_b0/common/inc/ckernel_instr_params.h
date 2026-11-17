@@ -94,17 +94,17 @@ struct p_srcb
     constexpr static std::uint32_t BACKWARD_PASS = 0x1;
 };
 
-constexpr static std::uint32_t SETADC_CH0(std::uint32_t cnt)
+constexpr std::uint32_t SETADC_CH0(std::uint32_t cnt)
 {
     return cnt;
 }
 
-constexpr static std::uint32_t SETADC_CH1(std::uint32_t cnt)
+constexpr std::uint32_t SETADC_CH1(std::uint32_t cnt)
 {
     return cnt << 2;
 }
 
-constexpr static std::uint32_t SETADC_CH01(std::uint32_t cnt)
+constexpr std::uint32_t SETADC_CH01(std::uint32_t cnt)
 {
     return cnt << 2 | cnt;
 }
@@ -414,7 +414,7 @@ struct p_adddmareg
     constexpr static std::uint32_t REG_PLUS_IMM = 1;
 };
 
-constexpr static std::uint32_t REG2FLOP_FLOP_INDEX(std::uint32_t addr)
+constexpr std::uint32_t REG2FLOP_FLOP_INDEX(std::uint32_t addr)
 {
     return addr - THCON_CFGREG_BASE_ADDR32;
 }

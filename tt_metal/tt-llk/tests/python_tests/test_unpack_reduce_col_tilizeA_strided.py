@@ -29,7 +29,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
 )
-from helpers.tile_constants import DEFAULT_TILE_C_DIM, MAX_FACE_R_DIM
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, get_tile_params
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test, result_tensor
 
@@ -40,9 +40,14 @@ UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = [
 ]
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES = [ReducePool.Max, ReducePool.Average]
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_DEST_SYNC = [DestSync.Half, DestSync.Full]
-UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES = [2, 4]
-# num_faces=4 is a full 32-row tile. [16, 32] is one face-row, so partial heights stay on num_faces=2.
-UNPACK_REDUCE_COL_TILIZEA_STRIDED_PARTIAL_FACE_R_DIMS = [8, 4]
+# 32x32 is a full four-face tile. 16x32 is one face-row (two faces), and the shorter 8x32 and 4x32
+# tiles are two faces with a partial face height.
+UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_DIMENSIONS = [
+    [32, 32],
+    [16, 32],
+    [8, 32],
+    [4, 32],
+]
 
 
 def unpack_reduce_col_tilizeA_strided_dest_acc(formats):
@@ -59,12 +64,6 @@ def unpack_reduce_col_tilizeA_strided_max_tiles_per_iter(dest_acc):
     return [4, 8]
 
 
-def unpack_reduce_col_tilizeA_strided_face_r_dim(num_faces):
-    if num_faces == 2:
-        return [MAX_FACE_R_DIM, *UNPACK_REDUCE_COL_TILIZEA_STRIDED_PARTIAL_FACE_R_DIMS]
-    return [MAX_FACE_R_DIM]
-
-
 def _math_fidelity(pool_type):
     return MathFidelity.LoFi if pool_type == ReducePool.Max else MathFidelity.HiFi4
 
@@ -73,8 +72,7 @@ def _math_fidelity(pool_type):
     formats=UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
     dest_acc=unpack_reduce_col_tilizeA_strided_dest_acc,
     max_tiles_per_iter=unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
-    num_faces=UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES,
-    face_r_dim=unpack_reduce_col_tilizeA_strided_face_r_dim,
+    tile_dimensions=UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_DIMENSIONS,
     pool_type=UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
     dest_sync=UNPACK_REDUCE_COL_TILIZEA_STRIDED_DEST_SYNC,
 )
@@ -82,9 +80,8 @@ def test_unpack_reduce_col_tilizeA_strided(
     formats,
     dest_acc,
     max_tiles_per_iter,
-    num_faces,
+    tile_dimensions,
     pool_type,
-    face_r_dim,
     dest_sync,
     *,
     is_perf=False,
@@ -92,8 +89,9 @@ def test_unpack_reduce_col_tilizeA_strided(
     run_types=None,
     loop_factor=1,
 ):
-    num_faces_r_dim = num_faces // 2
-    tile_dimensions = [face_r_dim * num_faces_r_dim, DEFAULT_TILE_C_DIM]
+    tile_dimensions = list(tile_dimensions)
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    num_faces = num_faces_r_dim * num_faces_c_dim
     tile_shape = construct_tile_shape(tile_dimensions)
     input_dimensions = [tile_dimensions[0], max_tiles_per_iter * DEFAULT_TILE_C_DIM]
 
