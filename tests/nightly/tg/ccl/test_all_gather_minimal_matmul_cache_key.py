@@ -49,7 +49,21 @@ H3_CASES = [
 
 def _layer_pin(mesh, layer, length_class="short"):
     cfg = H3_LAYERS[layer]
-    return agmm_pins(cfg["K"], cfg["N"], full_grid=mesh.compute_with_storage_grid_size(), num_links=2)[length_class]
+    # The DiT block's matmul compute config, which the pins derive theirs from.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return agmm_pins(
+        cfg["K"],
+        cfg["N"],
+        full_grid=mesh.compute_with_storage_grid_size(),
+        num_links=2,
+        compute_kernel_config=compute_kernel_config,
+    )[length_class]
 
 
 def _layer_cores(grid):
@@ -59,7 +73,7 @@ def _layer_cores(grid):
 def _run_layer(mesh, layer, tile_rows, pin, pingpong=None, **overrides):
     """One AGMM call of `layer` at `tile_rows` per chip with the pin's program (overrides on top); `pingpong` =
     (semaphores, barrier, buffer) set. Host-tilized tensors keep the op the only device op in the window."""
-    config = pin.config
+    config = pin.matmul_config
     grid = config.compute_with_storage_grid_size
     cfg = {
         **H3_LAYERS[layer],
@@ -115,7 +129,7 @@ def _run_layer(mesh, layer, tile_rows, pin, pingpong=None, **overrides):
 def _pingpong_sets(mesh, layer, persistent, pin):
     """Two A/B sets of (gather semaphores, barrier semaphore, capacity gather buffer), as the model alternates."""
     cfg = H3_LAYERS[layer]
-    grid = pin.config.compute_with_storage_grid_size
+    grid = pin.matmul_config.compute_with_storage_grid_size
     cores = _layer_cores((grid.x, grid.y))
     sems = [create_global_semaphores(mesh, mesh.get_num_devices(), cores, 0) for _ in range(2)]
     barriers = [ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(2)]
