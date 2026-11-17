@@ -42,6 +42,7 @@ public:
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
      * @param chip_facts The chip's routing facts (edge capabilities, ring predicates), bound at chip scope
      * @param connection_registry Optional registry to record connections for testing
+     * @param archetype Optional shape and turns to use instead of deriving them (for plugin builders)
      * @return A unique_ptr to the constructed ComputeMeshRouterBuilder
      */
     static std::unique_ptr<ComputeMeshRouterBuilder> build(
@@ -52,7 +53,8 @@ public:
         FabricNodeId local_node,
         const RouterLocation& location,
         const ChipRoutingFacts& chip_facts,
-        std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
+        std::shared_ptr<ConnectionRegistry> connection_registry = nullptr,
+        std::optional<RouterArchetype> archetype = std::nullopt);
 
     // ============ FabricRouterBuilder Interface Implementation ============
 
@@ -75,6 +77,13 @@ public:
      * @return SenderWorkerAdapterSpec for external connections
      */
     SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx);
+
+    /**
+     * Connect this router's receiver on `vc` to `downstream`'s sender channel (`vc`, `channel`).
+     * The single connection the turn-set wiring makes per target; public so a plugin builder can
+     * wire routers itself.
+     */
+    void connect_to_downstream_channel(ComputeMeshRouterBuilder& downstream, uint32_t vc, uint32_t channel);
 
     uint32_t get_downstream_sender_channel(
         bool is_2D_routing, eth_chan_directions downstream_direction, uint32_t vc) const;
