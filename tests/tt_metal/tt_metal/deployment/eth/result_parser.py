@@ -52,6 +52,7 @@ testtimeout = re.compile(f"({timeregex}).*Test \| Timed out! You probably need t
 locinfo = "sdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], rdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], score: \[(.*) \((.*)\)\], rcore: \[(.*) \((.*)\)\], processor: \[(.*)\], link: \[(.*)\]"
 testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
 testasic = re.compile(f"({timeregex}).*Test \|   UBB: (.*), Chip: (.*), BDF: (.*), SN: (.*) .*")
+testdistcore = re.compile(f"({timeregex}).*Test \|     testing dist (\S*) (\S*) .*")
 
 
 class EventType(Enum):
@@ -71,6 +72,7 @@ class EventType(Enum):
     TESTDONE = auto()
     MISSINGLINKS = auto()
     TIMEOUT = auto()
+    TESTDISTCORE = auto()
 
 
 @dataclass
@@ -380,6 +382,19 @@ def parse_asic(l: str) -> Optional[Event]:
     return Event(EventType.ASIC, extra)
 
 
+def parse_distcore(l: str) -> Optional[Event]:
+    m = testdistcore.match(l)
+    if m is None:
+        return None
+
+    extra = {
+        "uid": m.group(2),
+        "proc": m.group(3),
+    }
+    # print(f"\tTESTDISTCORE {extra}")
+    return Event(EventType.TESTDISTCORE, extra)
+
+
 def parse_line(l: str, logf: Optional[TextIO]) -> Optional[Event]:
     if print_logs:
         print(f"l: {l}")
@@ -392,6 +407,7 @@ def parse_line(l: str, logf: Optional[TextIO]) -> Optional[Event]:
         parse_testdevices,
         parse_teststart,
         parse_l1datacmp,
+        parse_distcore,
         parse_testend,
         parse_datacmp,
         parse_timeout,
@@ -456,7 +472,7 @@ async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRu
     proc: str = ""
     bw: dict = {}
 
-    serialnums: dict[str, str] = {}
+    serialnums: dict[str, str] = {"": "UNKNOWN"}
     runs: list[TestRun] = []
     links: list[TestedLink] = []
     errors: list = []
@@ -501,6 +517,13 @@ async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRu
             rcore_uid = e.extra["rcore_uid"]
             ltype = e.extra["type"]
             proc = ""
+            errors = []
+            bw = {}
+        elif e.typ == EventType.TESTDISTCORE:
+            score_uid = e.extra["uid"]
+            proc = e.extra["proc"]
+            score = rcore = rcore_uid = ""
+            ltype = ""
             errors = []
             bw = {}
         elif e.typ == EventType.ASIC:

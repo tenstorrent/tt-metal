@@ -114,7 +114,7 @@ ORDER BY ENDPOINT_A, ENDPOINT_B;
 tableschema = """
 CREATE TABLE IF NOT EXISTS eth_test_results(
     testrun_id,
-    snapshot_id,
+    merge_id,
     testname,
     timestamp_ms,
     src_core_uid,
@@ -182,7 +182,7 @@ def run_pair(
     hosts: tuple[HostSettings, HostSettings],
     argv: str,
     env: dict[str, str | int],
-    wfd: Optional[int] = None,
+    wfds: Optional[tuple[int, int]] = None,
     sync: bool = True,
 ) -> tuple[int, int]:
     hostnames = [h.hostname for h in hosts]
@@ -199,7 +199,10 @@ def run_pair(
     outputs = client.run_command(f"cd %s && {e} {argv}", host_args=args)
     # outputs = client.run_command("cd %s && for i in $(seq 10); do echo $i; sleep .4; done # sh run2.sh %d", host_args=args)
 
-    readers = [spawn(handle_output, host, host_output, wfd) for host, host_output in zip(hosts, outputs)]
+    fds: tuple[Optional[int], Optional[int]] = (None, None)
+    if wfds:
+        fds = wfds
+    readers = [spawn(handle_output, host, host_output, wfd) for host, host_output, wfd in zip(hosts, outputs, fds)]
 
     joinall(readers)
     client.join(outputs)
@@ -251,7 +254,7 @@ def test_pair(
     test: DistTestCase,
     links: str,
     precompile=True,
-    wfd: Optional[int] = None,
+    wfds: Optional[tuple[int, int]] = None,
 ) -> bool:
     endpoint_pairs = getlinks(db, *[h.hostname for h in hosts])  # TODO
     if len(endpoint_pairs) == 0:
@@ -279,7 +282,7 @@ def test_pair(
             print(f"Kernel precompilation failed with exit codes: {', '.join(str(e) for e in exitcodes)}")
             return False
 
-    exitcodes = run_pair(hosts, cmd, env, wfd)
+    exitcodes = run_pair(hosts, cmd, env, wfds)
     if sum(exitcodes) > 0:
         print(f"Test run failed with exit codes: {', '.join(str(e) for e in exitcodes)}")
         return False
@@ -306,18 +309,22 @@ def test_single(
 
 
 def test_dist(
-    db: sqlite3.Connection, tests: list[DistTestCase], hosts: list[HostSettings], links: str, wfd: Optional[int]
+    db: sqlite3.Connection,
+    tests: list[DistTestCase],
+    hosts: list[HostSettings],
+    links: str,
+    wfds: Optional[tuple[int, int]],
 ) -> bool:
     test_pass = True
     for p in pairs(hosts):
         for t in tests:
             print(f"Testing {t} on {p[0].hostname} <-> {p[1].hostname}")
-            test_pass = test_pass and test_pair(db, p, t, links, wfd=wfd)  # TODO: In parallel
+            test_pass = test_pass and test_pair(db, p, t, links, wfds=wfds)  # TODO: In parallel
 
     return test_pass
 
 
-def batch_worker(db: sqlite3.Connection, snapid: str, runid: str, q: Queue[dict | str]) -> None:
+def batch_worker(db: sqlite3.Connection, mergeid: str, runid: str, q: Queue[dict | str]) -> None:
     db.execute(tableschema)
 
     done = False
@@ -338,7 +345,7 @@ def batch_worker(db: sqlite3.Connection, snapid: str, runid: str, q: Queue[dict 
                     """
 INSERT INTO eth_test_results(
     testrun_id,
-    snapshot_id,
+    merge_id,
     testname,
     timestamp_ms,
     src_core_uid,
@@ -363,7 +370,7 @@ INSERT INTO eth_test_results(
                     (
                         (
                             runid,
-                            snapid,
+                            mergeid,
                             d["test"],
                             now,
                             d["src_core_uid"],
@@ -382,9 +389,7 @@ INSERT INTO eth_test_results(
 
 # Returns the write side of the pipe for the test output to be written to
 @contextmanager
-def prepare_test_runner(
-    dbpath: str, worker: Callable[[sqlite3.Connection, str, str, Queue[dict | str]], None], snapid: str, runid: str
-) -> Iterator[int]:
+def prepare_test_runner(dbpath: str, mergeid: str, runid: str) -> Iterator[int]:
     rfd, wfd = os.pipe()
     make_nonblocking(wfd)
 
@@ -406,7 +411,7 @@ def prepare_test_runner(
 
     def dbcontext():
         with closing(sqlite3.connect(f"file:{dbpath}?mode=rw")) as conn:
-            worker(conn, snapid, runid, q)
+            batch_worker(conn, mergeid, runid, q)
 
     threads = (
         Thread(target=lambda: asyncio.run(runner())),
@@ -424,17 +429,111 @@ def prepare_test_runner(
             t.join(2)  # TODO
 
 
+def qiter(q: Queue[dict | str]):
+    while True:
+        while not q.empty():
+            d = q.get_nowait()
+            if d is None:
+                continue
+
+            if d == "DONE":
+                return
+
+            yield d
+            d = None
+
+
+def linkiter(ls: str) -> list[tuple[str, str]]:
+    r = [l.split(",") for l in ls.split(" ")]
+    for l in r:
+        assert len(l) == 2
+
+    return [(l[0], l[1]) for l in r]
+
+
+def dist_batch_worker(
+    db: sqlite3.Connection, mergeid: str, runid: str, links: str, q1: Queue[dict | str], q2: Queue[dict | str]
+) -> None:
+    db.execute(tableschema)
+
+    for d1, d2, l in zip(qiter(q1), qiter(q2), linkiter(links), strict=True):
+        batch: list[dict] = []
+
+        bw1 = d1["bw"]
+        bw2 = d2["bw"]
+
+        d = {
+            "test": d1["test"],
+            "src_core_uid": d1["src_core_uid"],
+            "dst_core_uid": d2["src_core_uid"],
+            "proc": d1["proc"],
+            "bw": bw1 if bw1["bw"] > bw2["bw"] else bw2,
+            "errors": d1["errors"] + d2["errors"],
+        }
+
+        if d["src_core_uid"] != l[0]:
+            d["src_core_uid"], d["dst_core_uid"] = d["dst_core_uid"], d["src_core_uid"]
+        if d["src_core_uid"] != l[0] and d["dst_core_uid"] != l[1]:
+            raise Exception(f"Unknown link {d}, expected {l}")
+
+        print(d)
+        now = int(time() * 1000)
+        with db:
+            db.execute(
+                """
+INSERT INTO eth_test_results(
+    testrun_id,
+    merge_id,
+    testname,
+    timestamp_ms,
+    src_core_uid,
+    dst_core_uid,
+    proc,
+    bw,
+    errors,
+    passed
+) VALUES (
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?
+)
+""",
+                (
+                    (
+                        runid,
+                        mergeid,
+                        d["test"],
+                        now,
+                        d["src_core_uid"],
+                        d["dst_core_uid"],
+                        d["proc"],
+                        json.dumps(d["bw"]),
+                        json.dumps(d["errors"]),
+                        len(d["errors"]) == 0,
+                    )
+                ),
+            )
+
+
 # Returns the write side of the pipe for the test output to be written to
 @contextmanager
-def prepare_dist_test_runner(
-    dbpath: str, worker: Callable[[sqlite3.Connection, str, str, Queue[dict | str]], None], snapid: str, runid: str
-) -> Iterator[int]:
-    rfd, wfd = os.pipe()
-    make_nonblocking(wfd)
+def prepare_dist_test_runner(dbpath: str, mergeid: str, runid: str, linkspec: str) -> Iterator[tuple[int, int]]:
+    rfd1, wfd1 = os.pipe()
+    make_nonblocking(wfd1)
 
-    q = Queue()
+    rfd2, wfd2 = os.pipe()
+    make_nonblocking(wfd2)
 
-    async def runner():
+    q1, q2 = Queue(), Queue()
+
+    async def runner(rfd: int, q: Queue):
         print("running in asyncio thread")
         pipe = os.fdopen(rfd, "rb", buffering=0)
 
@@ -450,10 +549,11 @@ def prepare_dist_test_runner(
 
     def dbcontext():
         with closing(sqlite3.connect(f"file:{dbpath}?mode=rw")) as conn:
-            worker(conn, snapid, runid, q)
+            dist_batch_worker(conn, mergeid, runid, linkspec, q1, q2)
 
     threads = (
-        Thread(target=lambda: asyncio.run(runner())),
+        Thread(target=lambda rfd, q: asyncio.run(runner(rfd, q)), args=[rfd1, q1]),
+        Thread(target=lambda rfd, q: asyncio.run(runner(rfd, q)), args=[rfd2, q2]),
         Thread(target=dbcontext),
     )
 
@@ -461,9 +561,10 @@ def prepare_dist_test_runner(
         t.start()
 
     try:
-        yield wfd
+        yield wfd1, wfd2
     finally:  # TODO Error handling
-        os.close(wfd)
+        os.close(wfd1)
+        os.close(wfd2)
         for t in threads:
             t.join(2)  # TODO
 
@@ -472,7 +573,7 @@ def main() -> int:
     parser = ArgumentParser()
     parser.add_argument("-d", type=str, help="Path to the sqlite3 db with hardware info")
     parser.add_argument("-r", type=str, help="Test run ID")
-    parser.add_argument("-s", type=str, help="Snapshot ID")
+    parser.add_argument("-s", type=str, help="Merged Snapshot ID")
     parser.add_argument("-c", type=str, help="INI host config file")
     parser.add_argument("-l", type=str, help="List of links to test")
     parser.add_argument("-t", type=str, help="Test to run")
@@ -495,17 +596,17 @@ def main() -> int:
 
     links = opts.l
 
-    snapid = opts.s if opts.s else "snapshot_id"
+    mergeid = opts.s if opts.s else "merge_id"
     runid = opts.r if opts.r else "run_id"
 
     test_pass = True
     if opts.t in [t.value for t in TestCase]:
-        with prepare_test_runner(dbpath, batch_worker, snapid, runid) as wfd:
+        with prepare_test_runner(dbpath, mergeid, runid) as wfd:
             test_pass = test_pass and test_single(db, [TestCase(opts.t)], hs, links, wfd)
 
     if opts.t in [t.value for t in DistTestCase]:
-        with prepare_dist_test_runner(dbpath, batch_worker, snapid, runid) as wfd:
-            test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links, wfd)
+        with prepare_dist_test_runner(dbpath, mergeid, runid, links) as wfds:
+            test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links, wfds)
 
     return 0 if test_pass else 1
 
