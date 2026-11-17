@@ -228,8 +228,10 @@ SWAP_NOC_ROWS_ONE_UNIT = 2
 # Logical core rectangles (x_lo, y_lo, x_hi, y_hi), inclusive, whose pair cores take the opposite NoCs of the row rule.
 SWAP_NOC_CORES = ()
 # S0 tiles per DRAM read barrier on a core (None: the whole slice at once). Bounds the bulk a core queues at the banks
-# ahead of other cores' small window reads.
-S0_READ_TILES = None
+# ahead of other cores' small window reads. "auto": 8 tiles on R-QKCORE pair cores with one or two whole-V units
+# (decode B=8 36.48 -> 35.81 us, B=16 70.25 -> 68.90, 3 interleaved pairs; 4 tiles 37.3 at B=8, 12 tiles 70.1 at
+# B=16), the whole slice elsewhere (B=32 with 8: 152.7 against 150.4).
+S0_READ_TILES = "auto"
 # R-QKCORE pair cores running several units (sequences of one value head, so one key head): kn^T and d are computed
 # once per core and held for every unit (SHARE_QK_FINISH), and a unit's RMS norm runs after the next unit's token step
 # (UNIT_LAG), so the core's last state is final, and written, while the norms run.
@@ -1725,7 +1727,10 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
         reader_ct += [ROW_STAGE_SLOTS if row_stage_bytes else 0, int(conv_on_fpu), group_cols, WINDOW_DEPTH]
         s0_tiles = Kt * v_block_tiles
-        reader_ct += [pieces, int(chunked), role, inbox, min(S0_READ_TILES or s0_tiles, s0_tiles), cs_split]
+        s0_read = S0_READ_TILES
+        if s0_read == "auto":
+            s0_read = 8 if qk_cores and pieces == 1 and prep is None and core_units <= 2 else None
+        reader_ct += [pieces, int(chunked), role, inbox, min(s0_read or s0_tiles, s0_tiles), cs_split]
         reader_ct += [int(tokens == 1)]  # decode: window rows issued ahead of the other inputs
         reader_ct += [heads]  # R-PREP: value heads per prep group
         reader_ct += reader_accessor_ct
