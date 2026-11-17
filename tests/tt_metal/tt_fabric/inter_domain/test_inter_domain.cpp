@@ -257,16 +257,18 @@ TEST(InterDomain, Sanity) {
             std::vector<uint8_t> route;
             std::function<void(Program&, std::vector<uint32_t>&)> connect;
         };
-        std::map<uint64_t, std::vector<Send>> sends;  // by sending chip
+        // by pass, then sending chip: a router's worker channel takes one worker at a time, so the sends through the
+        // chip across (pass 1) go after the ones straight across it
+        std::map<std::pair<uint32_t, uint64_t>, std::vector<Send>> sends;
         for (const auto& [chips, cable] : cables) {
             const auto port = cable.port;
-            sends[chips.first].push_back(
+            sends[{0, chips.first}].push_back(
                 Send{kCore, chips.second, 0, {}, [port](Program& program, std::vector<uint32_t>& args) {
                          append_inter_domain_connection_rt_args(port, program, kCore, args);
                      }});
             for (const auto& [far, rx] : peer.rx) {
                 if (far != chips.second) {
-                    sends[chips.first].push_back(
+                    sends[{1, chips.first}].push_back(
                         Send{kFarCore, far, 2, {}, [port](Program& program, std::vector<uint32_t>& args) {
                                  append_inter_domain_connection_rt_args(port, program, kFarCore, args);
                              }});
@@ -287,7 +289,7 @@ TEST(InterDomain, Sanity) {
                 const bool x_axis = ingress == RoutingDirection::E || ingress == RoutingDirection::W;
                 route[x_axis ? shape[0] + at[1] : at[0]] =
                     1u << control_plane.routing_direction_to_eth_direction(port.direction);
-                sends[asic].push_back(Send{
+                sends[{0, asic}].push_back(Send{
                     kBehindCore,
                     chips.second,
                     1,
@@ -297,7 +299,8 @@ TEST(InterDomain, Sanity) {
                     }});
             }
         }
-        for (auto& [asic, chip_sends] : sends) {
+        for (auto& [key, chip_sends] : sends) {
+            const uint64_t asic = key.second;
             IDevice* dev = device_of.at(asic);
             const uint32_t base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
             std::vector<uint32_t> data(kBytes / 4);
