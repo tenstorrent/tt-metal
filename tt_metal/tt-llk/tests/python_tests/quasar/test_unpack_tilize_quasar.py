@@ -226,7 +226,7 @@ def test_unpack_tilize_quasar(
     (
         formats,
         dest_acc,
-        dest_sync_mode,
+        dest_sync,
         unpacker_sel,
         input_dimensions,
         tile_dimensions,
@@ -279,7 +279,7 @@ def test_unpack_tilize_quasar(
                 if unpacker_sel == UnpackerEngine.UnpB
                 else DataCopyType.A2D
             ),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),

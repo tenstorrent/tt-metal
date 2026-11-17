@@ -15,7 +15,7 @@ from quasar.test_pack_l1_acc_quasar import test_pack_l1_acc_quasar as run_pack_l
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=ALL_PACK_L1_ACC_COMBINATIONS,
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=True),
     input_dimensions=INPUT_DIMENSIONS,
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -24,7 +24,7 @@ from quasar.test_pack_l1_acc_quasar import test_pack_l1_acc_quasar as run_pack_l
 def test_perf_pack_l1_acc_quasar(
     perf_report,
     formats_dest_acc,
-    dest_sync_mode,
+    dest_sync,
     input_dimensions,
     run_types,
     loop_factor,
@@ -32,7 +32,7 @@ def test_perf_pack_l1_acc_quasar(
 ):
     run_pack_l1_acc(
         formats_dest_acc,
-        dest_sync_mode,
+        dest_sync,
         input_dimensions,
         run_types=run_types,
         loop_factor=loop_factor,

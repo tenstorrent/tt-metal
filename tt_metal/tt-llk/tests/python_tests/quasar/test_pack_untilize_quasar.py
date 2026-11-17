@@ -182,7 +182,7 @@ def test_pack_untilize_quasar(
     combination = formats_dest_acc_sync_dimensions_tile_dims
     if len(combination) == 1 and isinstance(combination[0], tuple):
         combination = combination[0]
-    (formats, dest_acc, dest_sync_mode, input_dimensions, tile_dimensions) = combination
+    (formats, dest_acc, dest_sync, input_dimensions, tile_dimensions) = combination
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -219,7 +219,7 @@ def test_pack_untilize_quasar(
             generate_input_dim(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
             ),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             UNPACKER_ENGINE_SEL(),
         ],
         "runtimes": [

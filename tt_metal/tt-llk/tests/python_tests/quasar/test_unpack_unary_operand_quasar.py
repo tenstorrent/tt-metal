@@ -214,7 +214,7 @@ def test_unpack_unary_operand_quasar(
     (
         formats,
         dest_acc,
-        dest_sync_mode,
+        dest_sync,
         transpose_en,
         unpacker_sel,
         input_dimensions,
@@ -234,7 +234,7 @@ def test_unpack_unary_operand_quasar(
     num_faces = tile_shape.total_num_faces()
 
     num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -298,7 +298,7 @@ def test_unpack_unary_operand_quasar(
                 if unpacker_sel == UnpackerEngine.UnpB
                 else DataCopyType.A2D
             ),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(transpose_en),
             UNPACK_TRANS_WITHIN_FACE(transpose_en),
         ],

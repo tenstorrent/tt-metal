@@ -261,14 +261,14 @@ def test_eltwise_binary(
     is_perf=False,
     perf_report=None,
 ):
-    dest_sync_mode, dest_acc = dest_sync_dest_acc
+    dest_sync, dest_acc = dest_sync_dest_acc
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 
     num_blocks, input_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -317,7 +317,7 @@ def test_eltwise_binary(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
             ENABLE_DIRECT_INDEXING(enable_direct_indexing),
             # This kernel is a plain binary op: no broadcast and no dest reuse. Stated here so

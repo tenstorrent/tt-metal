@@ -207,7 +207,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     (
         formats,
         dest_acc,
-        dest_sync_mode,
+        dest_sync,
         input_dimensions,
         pool_type,
         tile_dimensions,
@@ -272,7 +272,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         "templates": [
             MATH_OP(mathop=mathop, pool_type=pool_type),
             MATH_FIDELITY(math_fidelity),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             generate_input_dim(

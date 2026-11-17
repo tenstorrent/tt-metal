@@ -201,7 +201,7 @@ def test_eltwise_unary_datacopy_quasar(
         dest_acc,
         data_copy_type,
         input_dimensions,
-        dest_sync_mode,
+        dest_sync,
         dest_index,
         tile_dimensions,
     ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
@@ -219,7 +219,7 @@ def test_eltwise_unary_datacopy_quasar(
     num_faces = tile_shape.total_num_faces()
 
     num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -252,7 +252,7 @@ def test_eltwise_unary_datacopy_quasar(
                 if data_copy_type == DataCopyType.B2D
                 else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),

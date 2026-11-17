@@ -103,7 +103,7 @@ def test_sfpu_square_trisc3_quasar(
 
     Same parameter coverage as test_sfpu_square_quasar.
     """
-    format_variant, dest_sync_mode, input_dimensions = formats_dest_acc_sync_dims[0]
+    format_variant, dest_sync, input_dimensions = formats_dest_acc_sync_dims[0]
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
@@ -143,7 +143,7 @@ def test_sfpu_square_trisc3_quasar(
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

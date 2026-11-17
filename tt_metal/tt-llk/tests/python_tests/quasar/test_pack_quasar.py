@@ -224,7 +224,7 @@ def test_pack_quasar(
     (
         formats,
         dest_acc,
-        dest_sync_mode,
+        dest_sync,
         input_dimensions,
         relu_type,
         tile_dimensions,
@@ -243,7 +243,7 @@ def test_pack_quasar(
     num_faces = tile_shape.total_num_faces()
 
     num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -328,7 +328,7 @@ def test_pack_quasar(
         "test_name": "sources/quasar/pack_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             RELU_TYPE(relu_type),
         ],
         "runtimes": [
