@@ -71,10 +71,17 @@ std::vector<chan_id_t> bind_eth_channels(const LogicalGraph& g, const LiveEthCha
 std::map<FabricNodeId, RouterIndex> legacy_handshake_masters(
     const LogicalGraph& g, const std::vector<chan_id_t>& eth_chans) {
     // FabricBuilder::discover_channels, then create_routers: directions in FabricContext::routing_directions
-    // order into one hash map, then each direction's channels by plane into another; the master is its first.
+    // order into one hash map, then each direction's channels by plane into another, then the perimeter routers by
+    // channel; the master is its first.
     std::map<FabricNodeId, std::map<RoutingDirection, std::vector<RouterIndex>>> chips;
+    std::map<FabricNodeId, std::map<chan_id_t, RouterIndex>> perimeter;
     for (RouterIndex r = 0; r < g.routers.size(); ++r) {
         const auto& p = g.routers[r].port;
+        if (p.capability == EdgeCapability::INTERDOMAIN) {
+            perimeter[p.node].emplace(eth_chans.at(r), r);
+            chips[p.node];
+            continue;
+        }
         auto& planes = chips[p.node][*p.direction];
         planes.resize(std::max<size_t>(planes.size(), p.plane + 1));
         planes[p.plane] = r;
@@ -92,6 +99,9 @@ std::map<FabricNodeId, RouterIndex> legacy_handshake_masters(
             for (RouterIndex r : planes) {
                 routers.insert({eth_chans.at(r), r});
             }
+        }
+        for (const auto& [chan, r] : perimeter[node]) {
+            routers.insert({chan, r});
         }
         masters[node] = routers.begin()->second;
     }
