@@ -116,6 +116,17 @@
 #include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
 
+// R1a injector stall-shadow (Refinement 11, host R1A_INJECTOR_AHEAD): a line injector issues K-block kb+1's
+// DRAM reads (own transaction id) before it multicasts kb, so its line's read and multicast overlap instead
+// of alternating. Needs operand rings of GM_R1A_DEPTH >= 3 K-blocks (compute holds kb-1 while kb is sent and
+// kb+1 lands). The helper walk only (no head ramp, no residency, one batch per block). 1 = read, barrier, send.
+#ifndef GM_R1A_AHEAD
+#define GM_R1A_AHEAD 1
+#endif
+#ifndef GM_R1A_DEPTH
+#define GM_R1A_DEPTH 2
+#endif
+
 namespace {
 
 // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
@@ -262,6 +273,12 @@ void kernel_main() {
     // produced into cb_act_tiles by the writer).
     constexpr bool reads_act = !act_on_writer && (!operand_mcast || a_sends);
     constexpr bool reads_weight = !operand_mcast || b_sends;
+    constexpr bool r1a_prefetch = GM_R1A_AHEAD > 1;
+    constexpr uint32_t r1a_depth = GM_R1A_DEPTH;
+    static_assert(
+        !r1a_prefetch || (GM_R1A_AHEAD == 2 && r1a_depth >= 3 && operand_mcast && !gm_ks::ramp && !weight_resident &&
+                          !act_resident && block_batches == 1),
+        "the R1a injector prefetch runs on the plain R1a helper walk only");
 
     // A rides the A-line channel, B the B-line channel (absent under R1).
     constexpr auto mc_act = dataflow_kernel_lib::
@@ -453,6 +470,10 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t ds_total = nb_m * num_k_blocks;
     constexpr uint32_t weight_block_bytes = weight_block_tiles * b_tile_bytes;
     [[maybe_unused]] const uint32_t weight_base = get_write_ptr(cb_weight_tiles);
+    // R1a prefetch: the operand rings' bases (the CBs are exactly r1a_depth K-blocks) and the K-blocks pushed so
+    // far (every R1a K-block pushes both operands, so one sequence addresses both rings).
+    [[maybe_unused]] const uint32_t act_base = get_write_ptr(cb_act_tiles);
+    [[maybe_unused]] uint32_t r1a_seq = 0;
     [[maybe_unused]] auto ds_issue_weight = [&](uint32_t j) {
         cb_reserve_back(cb_weight_tiles, (j - ds_seq + 1) * weight_block_tiles);
         const uint32_t kbj = j % num_k_blocks;
@@ -655,7 +676,45 @@ void kernel_main() {
                             // A residency (the twin): the M-block's A is read on its first N-block only.
                             // R1b: cb_act_tiles has its own producer (the writer's A stream).
                             const bool load_act = !act_on_writer && (!act_resident || nbk == 0);
-                            {
+                            if constexpr (r1a_prefetch) {
+                                // Injector stall-shadow: K-block j of this walk lands in ring slot r1a_seq + j - kb;
+                                // its reads carry trid (seq % 2) + 1. kb's reads were issued one K-block ago (at
+                                // kb = 0: now), kb+1's go out now, before kb is retired and multicast.
+                                auto issue = [&](uint32_t j) {
+                                    const uint32_t seq = r1a_seq + j - kb;
+                                    dataflow_kernel_lib::set_read_trid(noc, seq % 2 + 1);
+                                    if (batch_valid && a_sends) {
+                                        read_act(
+                                            act_base + (seq % r1a_depth) * act_block_bytes,
+                                            a_row_base,
+                                            KS::k0(j),
+                                            blk_rows,
+                                            KS::kv(j),
+                                            block_k_tiles);
+                                    }
+                                    if (batch_valid && b_sends) {
+                                        read_weight(
+                                            weight_base + (seq % r1a_depth) * weight_block_bytes,
+                                            b_base,
+                                            KS::k0(j),
+                                            KS::kv(j),
+                                            blk_cols);
+                                    }
+                                    dataflow_kernel_lib::set_read_trid(noc, 0);
+                                };
+                                const bool ahead = kb + 1 < KS::n;
+                                MaybeDeviceZoneScope("rd_reserve");
+                                cb_reserve_back(cb_act_tiles, (a_sends && ahead ? 2 : 1) * act_block_tiles);
+                                cb_reserve_back(cb_weight_tiles, (b_sends && ahead ? 2 : 1) * weight_block_tiles);
+                                if constexpr (a_sends || b_sends) {
+                                    if (kb == 0) {
+                                        issue(0);
+                                    }
+                                    if (ahead) {
+                                        issue(kb + 1);
+                                    }
+                                }
+                            } else {
                                 MaybeDeviceZoneScope("rd_reserve");
                                 if (load_act) {
                                     cb_reserve_back(cb_act_tiles, act_block_tiles);
@@ -666,7 +725,12 @@ void kernel_main() {
                             }
                             const uint32_t act_l1 = get_write_ptr(cb_act_tiles);
                             const uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
-                            if constexpr (reads_act || reads_weight) {
+                            if constexpr (r1a_prefetch) {
+                                if constexpr (a_sends || b_sends) {
+                                    MaybeDeviceZoneScope("rd_barrier");
+                                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, r1a_seq % 2 + 1);
+                                }
+                            } else if constexpr (reads_act || reads_weight) {
                                 {
                                     MaybeDeviceZoneScope("rd_issue");
                                     if (batch_valid && reads_act && load_act) {
@@ -710,6 +774,7 @@ void kernel_main() {
                             if (load_weight) {
                                 cb_push_back(cb_weight_tiles, weight_block_tiles);
                             }
+                            ++r1a_seq;
                         }
                     }
 

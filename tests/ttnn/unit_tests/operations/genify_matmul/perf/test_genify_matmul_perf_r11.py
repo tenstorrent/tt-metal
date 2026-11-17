@@ -90,7 +90,7 @@ def test_perf_r11(case, device, monkeypatch, request):
     out = genify_matmul(ta, tb, compute_kernel_config=cfg, **kwargs)
     ttnn.synchronize_device(device)
     if os.environ.get("GENIFY_MATMUL_CHECK") == "1":
-        ref = A.float() @ B.float()
+        ref = A.float() @ ttnn.to_torch(tb).float()  # the quantized (bfp8 / bfp4) weight the op saw
         if epilogue == "swiglu":
             t = ref.reshape(1, m, n // 64, 2, 32)
             ref = (torch.nn.functional.silu(t[..., 0, :]) * t[..., 1, :]).reshape(1, m, n // 2)

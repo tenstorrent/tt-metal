@@ -93,6 +93,19 @@ SINGLE_WALK_K_BLOCKS = 2
 # in DEST; splitting it would change precision, not speed), and only where the Perf 2 head ramp does not
 # already shorten the fill (the raw walk: 384x1536x1024 bias measured +5% with both).
 MIN_K_BLOCKS = 8
+# R1a injector stall-shadow (Refinement 11). Each R1a K-block is a serial chain on the line injector: read its
+# line's K-block (barrier), then multicast it; the zones of text-encoder down 512x16384x5120 show the readers
+# never waiting on CB space (DM-bound, 545 us against a ~425 us K-walk). 2: the injector issues K-block kb+1's
+# reads (own transaction id) before it multicasts kb, so read and multicast overlap; needs operand rings of
+# R1A_PREFETCH_DEPTH K-blocks (compute holds kb-1 while kb goes out and kb+1 lands; the solve shrinks block_k
+# to fit). Plain R1a helper walks only (the raw walk's head ramp schedules its own deliveries; residency walks
+# are one K-block). 1 = read, barrier, multicast (no overlap). Measured: FLUX proj_out 2048x3072x128 (A line
+# injectors ~4x the K-walk) 66.6 -> 58.8 us; where the K-walk is about as long as the injector stream it
+# loses (text-encoder o_proj 85.4 -> 89.3 us, Qwen M = 512 rows +4..8%, text-encoder down flat), so it is
+# gated to injector-bound walks: split_cost's busiest-core read term >= R1A_PREFETCH_MIN_RATIO x the K-walk.
+R1A_INJECTOR_AHEAD = 2
+R1A_PREFETCH_DEPTH = 3
+R1A_PREFETCH_MIN_RATIO = 2.0
 # Operand residency knob (Refinement 8). A per-core walk that is ONE block with ONE K-block that K cannot
 # split (S1, K < SINGLE_WALK_K_BLOCKS * BLOCK_K_FLOOR: short-K shapes, whose output is many times their
 # inputs, so the output write stream binds) reads its whole A and B before compute starts, and the
@@ -453,13 +466,17 @@ def grid_candidates(geom: Geometry, gx: int, gy: int):
                 core_m = _cdiv(tm, gm)
                 n_per = _cdiv(tn, gn)
                 q_n = max(geom.q_n_min, min(Q_N_MAX // _row_subblock_h(geom, gm, core_m), _pow2_floor(n_per)))
-                core_n = _round_up(n_per, q_n)
-                ub, um, un = _cdiv(tb, core_b), _cdiv(tm, core_m), _cdiv(tn, core_n)
-                placement = _placement_for(ub, um, un, gx, gy)
-                if placement is None:
-                    continue
-                grid = GridChoice(ub, um, un, core_b, core_m, core_n, q_n, placement)
-                seen.setdefault((ub, um, un, core_b, core_m, core_n, q_n), grid)
+                # SPLIT_COST_MODEL (Refinement 11): also the epilogue's own quantum, so a column count that the
+                # 4-tile subblock quantum would round away stays a candidate (Qwen in_proj M = 1024: 11x10
+                # with 3x13 regions instead of 8x11 with 4x12); split_cost prices its narrower subblock.
+                for q in (q_n, geom.q_n_min) if SPLIT_COST_MODEL else (q_n,):
+                    core_n = _round_up(n_per, q)
+                    ub, um, un = _cdiv(tb, core_b), _cdiv(tm, core_m), _cdiv(tn, core_n)
+                    placement = _placement_for(ub, um, un, gx, gy)
+                    if placement is None:
+                        continue
+                    grid = GridChoice(ub, um, un, core_b, core_m, core_n, q, placement)
+                    seen.setdefault((ub, um, un, core_b, core_m, core_n, q), grid)
     return list(seen.values())
 
 
@@ -526,6 +543,20 @@ def _attach_k_head_ramp(readers, compute, blk, mode, epilogue):
     defs = [("GM_K_RAMP", "1"), ("GM_COMPACT_A", "1" if compact_a else "0")]
     for k in [*readers, compute]:
         k.defines = list(k.defines) + defs
+
+
+def r1a_prefetch(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """R1A_INJECTOR_AHEAD: the plain R1a helper walk with rings deep enough for the injector stall-shadow."""
+    mode = operand_mode(geom, grid, blk)
+    return (
+        R1A_INJECTOR_AHEAD > 1
+        and mode == 1
+        and blk.num_k_blocks > 1
+        and blk.block_batches == 1
+        and not (blk.weight_resident or blk.act_resident)
+        and not k_head_ramp(blk, mode, geom.epilogue)[0]
+        and blk.depth_act == blk.depth_weight >= R1A_PREFETCH_DEPTH  # one ring depth addresses both
+    )
 
 
 def operand_mode(geom: Geometry, grid: GridChoice, blk: "Blocking"):
@@ -597,6 +628,11 @@ def padded_work(grid: GridChoice, blk: "Blocking"):
 
 def split_cost(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     """SPLIT_COST_MODEL: estimated cycles of a split (the max of its overlapped streams)."""
+    return max(split_cost_terms(geom, grid, blk))
+
+
+def split_cost_terms(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """(K-walk, DRAM stream, busiest core's reads, busiest core's writes) in cycles."""
     walk = padded_work(grid, blk) * geom.tensor_k_tiles * tile_k_cycles(geom, blk.sb_h, blk.sb_w)
     out_bytes = geom.tensor_batches * geom.tensor_m_tiles * geom.out_n_tiles * geom.o_tile_bytes
     dram = (read_traffic(geom, grid, blk) + out_bytes) / DRAM_BYTES_PER_CYCLE
@@ -609,7 +645,7 @@ def split_cost(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     mode = operand_mode(geom, grid, blk)
     core_bytes = max(a_core, b_core) if mode == 1 else (0 if mode == 2 else a_core + b_core)
     core_out = grid.core_batches * grid.core_m_tiles * geom.out_block_n(grid.core_n_tiles) * geom.o_tile_bytes
-    return max(walk, dram, core_bytes / CORE_READ_BYTES_PER_CYCLE, core_out / CORE_WRITE_BYTES_PER_CYCLE)
+    return walk, dram, core_bytes / CORE_READ_BYTES_PER_CYCLE, core_out / CORE_WRITE_BYTES_PER_CYCLE
 
 
 def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
@@ -795,6 +831,20 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
         finer = replace(blk, block_k_tiles=bk, num_k_blocks=nkb, last_block_k_tiles=last)
         if bk < blk.block_k_tiles and operand_mode(geom, grid, finer) == 1:
             blk = finer
+    # R1A_INJECTOR_AHEAD: deepen the operand rings of a plain R1a helper walk (shrinking block_k when they do
+    # not fit), as long as the walk stays R1a.
+    d = R1A_PREFETCH_DEPTH
+    deeper = replace(blk, depth_act=max(d, blk.depth_act), depth_weight=max(d, blk.depth_weight))
+    walk, _, core_read, _ = split_cost_terms(geom, grid, blk)
+    if R1A_INJECTOR_AHEAD > 1 and core_read >= R1A_PREFETCH_MIN_RATIO * walk and r1a_prefetch(geom, grid, deeper):
+        bm, bn = blk.block_m_tiles, blk.block_n_tiles
+        depths = (deeper.depth_act, deeper.depth_weight)
+        bk_max = min(blk.block_k_tiles, _block_k_max(geom, bm, bn, budget, depths))
+        if bk_max >= min(geom.tensor_k_tiles, BLOCK_K_FLOOR):
+            bk, nkb, last = _k_split(geom.tensor_k_tiles, bk_max)
+            deeper = replace(deeper, block_k_tiles=bk, num_k_blocks=nkb, last_block_k_tiles=last)
+            if r1a_prefetch(geom, grid, deeper):
+                blk = deeper
     # Write batching: grows only the output CB term of F (DEPTH_OUT * batch row groups).
     groups = blk.block_m_tiles // blk.sb_h
     row_group_bytes = blk.sb_h * geom.out_block_n(blk.block_n_tiles) * geom.o_tile_bytes
@@ -1242,6 +1292,10 @@ def create_program_descriptor(
         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
     _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
     _attach_k_head_ramp(readers, compute, blk, mode, epilogue)
+    if r1a_prefetch(geom, grid, blk):
+        defs = [("GM_R1A_AHEAD", str(R1A_INJECTOR_AHEAD)), ("GM_R1A_DEPTH", str(min(blk.depth_act, blk.depth_weight)))]
+        for k in readers:
+            k.defines = list(k.defines) + defs
     descriptor.kernels = [*readers, writer, compute]
     return descriptor
 
