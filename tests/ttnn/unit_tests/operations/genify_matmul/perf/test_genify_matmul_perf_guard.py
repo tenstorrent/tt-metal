@@ -52,3 +52,32 @@ def test_perf(mkn, fid, device):
     )
     out = genify_matmul(ta, tb, compute_kernel_config=cfg)
     ttnn.synchronize_device(device)
+
+
+# Refinement 1: one representative per new numeric path (activation / weight dtype, DEST width),
+# at the model's own fidelity. (m, k, n, A dtype, B dtype, out dtype, fidelity, fp32_dest_acc_en)
+FORMAT_CASES = [
+    (2048, 5120, 4160, "bfloat16", "bfloat4_b", "bfloat16", "LoFi", True),  # Qwen prefill, bf4b weight
+    (512, 5120, 3072, "bfloat16", "bfloat8_b", "bfloat16", "HiFi2", True),  # FLUX text encoder, bf8b weight
+    (1, 6144, 6144, "float32", "bfloat16", "float32", "HiFi2", True),  # FLUX timestep linear_2, fp32 A
+    (2048, 256, 512, "bfloat8_b", "bfloat8_b", "bfloat8_b", "LoFi", False),  # bf8b x bf8b, 16-bit DEST
+    (4096, 256, 1024, "bfloat8_b", "bfloat8_b", "bfloat8_b", "LoFi", False),  # PDL upsample W pass
+    (64, 16384, 256, "bfloat16", "bfloat16", "bfloat16", "HiFi4", False),  # 16-bit DEST, capped K-walk
+]
+
+
+@pytest.mark.parametrize(
+    "case", FORMAT_CASES, ids=[f"{m}-{k}-{n}-{a}-{w}-{f}-acc{int(acc)}" for m, k, n, a, w, _, f, acc in FORMAT_CASES]
+)
+def test_perf_formats(case, device):
+    m, k, n, a_dt, w_dt, o_dt, fid, acc = case
+    torch.manual_seed(0)
+    A = torch.randn(1, m, k)
+    B = torch.randn(k, n) / math.sqrt(k)
+    ta = create_ttnn_input_tensor(A, device, dtype=getattr(ttnn, a_dt), layout=ttnn.TILE_LAYOUT)
+    tb = create_ttnn_input_tensor(B, device, dtype=getattr(ttnn, w_dt), layout=ttnn.TILE_LAYOUT)
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=getattr(ttnn.MathFidelity, fid), fp32_dest_acc_en=acc, math_approx_mode=False
+    )
+    out = genify_matmul(ta, tb, dtype=getattr(ttnn, o_dt), compute_kernel_config=cfg)
+    ttnn.synchronize_device(device)

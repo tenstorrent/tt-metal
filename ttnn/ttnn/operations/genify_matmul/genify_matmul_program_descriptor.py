@@ -39,6 +39,11 @@ DEPTH_OUT = 2  # output row groups in flight
 
 # ---- Blocking knobs ----
 BLOCK_K_FLOOR = 8  # smallest K-block the solve accepts (clamped to tensor_k_tiles)
+# Precision knob, 16-bit DEST only: the longest K chain accumulated inside DEST before the packer
+# folds it into cb_partials (packer L1 accumulation). A bf16 DEST running sum swamps small addends,
+# so the error grows with the in-DEST chain: K = 16384 as one 171-tile K-block measured rel-RMS 0.185
+# (stock ttnn.matmul 0.027); capped at 8 tiles 0.019 (32 tiles: 0.046). fp32 DEST is uncapped.
+DEST16_BLOCK_K_MAX = 8
 Q_N_MAX = 4  # subblock quantum on core_n_tiles (a 4-tile subblock always exists)
 # Core-assignment knob: a factorization whose per-core output tiles W are within (1 + GRID_W_SLACK)
 # of the best W competes on aggregate DRAM read traffic (R summed over the used cores). R1 has no
@@ -82,6 +87,7 @@ class Geometry:
     p_tile_bytes: int
     p_dtype: object
     dest_limit: int
+    block_k_cap: int  # longest in-DEST K chain (DEST16_BLOCK_K_MAX with 16-bit DEST, else all of K)
 
 
 @dataclass(frozen=True)
@@ -153,6 +159,7 @@ def _geometry(a, b, out, fp32_dest_acc_en):
         p_tile_bytes=ttnn.tile_size(p_dtype),
         p_dtype=p_dtype,
         dest_limit=4 if fp32_dest_acc_en else 8,
+        block_k_cap=tensor_k_tiles if fp32_dest_acc_en else min(tensor_k_tiles, DEST16_BLOCK_K_MAX),
     )
 
 
@@ -309,7 +316,7 @@ def _k_split(tk, bk_max):
 
 
 def _make_blocking(geom, block_b, bm, bn, bk_max):
-    block_k, nkb, last = _k_split(geom.tensor_k_tiles, bk_max)
+    block_k, nkb, last = _k_split(geom.tensor_k_tiles, min(bk_max, geom.block_k_cap))
     sb_h, sb_w = choose_subblock(bm, bn, geom.dest_limit)
     return Blocking(block_b, bm, bn, block_k, nkb, last, sb_h, sb_w)
 
@@ -318,10 +325,11 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
     tk = geom.tensor_k_tiles
     block_b = grid.core_batches  # costs no L1 (the helper's batch loop reuses per-batch CBs)
     cm, cn = grid.core_m_tiles, grid.core_n_tiles
-    k_floor = min(tk, BLOCK_K_FLOOR)
+    k_floor = min(tk, BLOCK_K_FLOOR, geom.block_k_cap)
+    one_k_block = geom.block_k_cap >= tk  # the precision cap allows K in a single DEST chain
 
     # S1: whole per-core region, one resident K-block, no accumulator.
-    if _footprint(geom, cm, cn, tk, partials=False) <= budget:
+    if one_k_block and _footprint(geom, cm, cn, tk, partials=False) <= budget:
         return _make_blocking(geom, block_b, cm, cn, tk)
 
     # S2: whole region, K-walk with the accumulator.
@@ -348,7 +356,7 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
                 best_key, best = key, (bm, bn)
     if best is not None:
         bm, bn = best
-        if _footprint(geom, bm, bn, tk, partials=False) <= budget:
+        if one_k_block and _footprint(geom, bm, bn, tk, partials=False) <= budget:
             return _make_blocking(geom, block_b, bm, bn, tk)
         return _make_blocking(geom, block_b, bm, bn, _block_k_max(geom, bm, bn, budget))
 

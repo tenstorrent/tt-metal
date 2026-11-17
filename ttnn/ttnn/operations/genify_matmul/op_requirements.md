@@ -50,7 +50,7 @@
 - **Compute config**: honours the caller's `math_fidelity` / `math_approx_mode`. `fp32_dest_acc_en=True` only. The default comes from `default_compute_kernel_config()` (HiFi4, fp32 DEST).
 - **Golden baseline**: 94 supported_pass, 2088 xfail_expected, 0 xpass_drift, 0 xfail_wrong_mode. There is 1 supported_fail, a harness L1-capture false-negative on an expected-`ValueError` test (see verification_report.md).
 
-### [ ] Refinement 1 — Numerical configurability (activation, weight and DEST formats)
+### [x] Refinement 1 — Numerical configurability (activation, weight and DEST formats)
 
 **Goal**: Add these values to SUPPORTED, for every placement and epilogue the op supports at the time:
 - `ttnn.bfloat8_b` and `ttnn.float32` to `SUPPORTED["dtype"]`;
@@ -79,6 +79,8 @@ Cells that fail out of the box go to `EXCLUSIONS` with a reason, not into their 
 - **Expected unblock.** 24 loose cases are blocked only by `weight_dtype`, plus the cartesian dtype / acc cells.
 
 **Done when**: every golden cell (cartesian and loose) whose only unsupported axes are among dtype / weight_dtype / fp32_dest_acc_en passes or is an EXCLUSION with a stated reason. The phase-0 suites stay green, and the guard set shows no device-ns regression on bf16.
+
+**Outcome**: SUPPORTED widened to dtype {bf16, bf8b, fp32}, weight_dtype {bf16, bf8b, bf4b} and fp32_dest_acc_en {True, False}. The only EXCLUSION is the permanent fp32 × acc=False. Golden: 60/60 cartesian and 27/27 newly unlocked loose cells pass. No kernel change was needed. New precision knob `DEST16_BLOCK_K_MAX = 8`: with 16-bit DEST, a single long DEST chain gave rel-RMS 0.18 at K = 16k; capped, it is 0.019, and it is also 0.76–0.96× device time. The bf16 / fp32-DEST blocking is unchanged.
 
 ### [ ] Refinement 2 — Fused epilogues: bias, bias_relu, swiglu, addcmul
 

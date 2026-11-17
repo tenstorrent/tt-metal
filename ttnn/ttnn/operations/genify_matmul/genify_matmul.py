@@ -72,10 +72,13 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "weight_dtype": [ttnn.bfloat16],
+    # Refinement 1: every CB page format derives from its tensor (A, B, output) or from the DEST
+    # width (partials: Float32 with fp32 DEST, Float16_b with 16-bit DEST); the matmul_block helper
+    # owns the unpack/pack data-format reconfig, so mixed formats need no kernel change.
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32],
+    "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "fp32_dest_acc_en": [True],
+    "fp32_dest_acc_en": [True, False],
     "placement": ["interleaved"],
     "epilogue": ["none"],
     # m_non_aligned is a knob-turn already realized by the Phase 0 geometry (op_design.md, TARGET
