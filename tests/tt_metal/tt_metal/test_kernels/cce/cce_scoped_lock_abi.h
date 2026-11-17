@@ -13,7 +13,7 @@
 namespace cce_scoped_lock_abi {
 
 using cce_test_status_abi::kLineBytes;
-inline constexpr uint32_t kWordsPerLine = kLineBytes / sizeof(uint32_t);
+using cce_test_status_abi::kWordsPerLine;
 
 // The probe region is kNumLines lines of TL1; the first word of each line is its probe word. The host seeds line l's
 // probe word with kOldBase + l, and the producer stores kNewBase + l (test_scoped_lock_cache.cpp sentinels).

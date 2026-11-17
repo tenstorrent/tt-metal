@@ -977,8 +977,6 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(cce_partition_params()),
     cce_partition_name);
 
-// Rdcycle cycles per kernel poll, as kPollBudgetCycles in dram/mimir_dm_common.hpp.
-constexpr uint64_t kIdmaPollBudgetCycles = 1ull << 22;
 // The status line sits past the largest staging block (kEmuGddrBackingPage) at L1 UNRESERVED.
 constexpr uint32_t kIdmaStatusOffsetFromStaging = static_cast<uint32_t>(kEmuGddrBackingPage);
 
@@ -1011,7 +1009,7 @@ std::vector<uint32_t> idma_staging_copy_args(const IdmaStagingCopy& copy, uint32
          .backend_vc = copy.backend_vc,
          .status_offset = staging_dev_addr + kIdmaStatusOffsetFromStaging,
          .len_bytes = len_bytes,
-         .poll_budget_cycles = kIdmaPollBudgetCycles,
+         .poll_budget_cycles = kPollBudgetCycles,
          .source = copy.reads_gddr ? gddr : staging,
          .destination = copy.reads_gddr ? staging : gddr,
          .expected_xor = copy.expected_xor,

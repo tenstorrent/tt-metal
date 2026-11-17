@@ -28,7 +28,7 @@ void kernel_main() {
     static_assert(len_bytes <= abi::kMaxBytesInPacket, "one iDMA command per copy");
 
     const uint64_t staging_address = experimental::cce_sram_address(cce_index, staging_l1_address);
-    const cce_test::WaitDeadline deadline(cce_test::kIdmaWaitBudgetCycles);
+    const cce_test::WaitDeadline deadline(cce_test_status_abi::kPollBudgetCycles);
     for (uint32_t slot = 0; slot < num_slots; slot++) {
         const uint64_t offset = static_cast<uint64_t>(slot_base + slot) * slot_stride;
         if (!cce_test::idma_copy_and_wait(

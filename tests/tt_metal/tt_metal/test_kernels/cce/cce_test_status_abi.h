@@ -6,11 +6,17 @@
 
 #include <stdint.h>
 
-// The status line and the operand kinds every CCE test kernel ABI shares. Each kernel ABI header includes this and
-// re-exports, in its own namespace, the names it uses; the kernels and the host tests both include it.
+// The line size, poll budget, status line and operand kinds every CCE test kernel ABI shares. Each kernel ABI header
+// includes this and re-exports, in its own namespace, the names it uses; the kernels and the host tests both include
+// it.
 namespace cce_test_status_abi {
 
 inline constexpr uint32_t kLineBytes = 64;
+inline constexpr uint32_t kWordsPerLine = kLineBytes / sizeof(uint32_t);
+
+// Rdcycle cycles per kernel wait or poll: the host passes it as the kernels' budget arg, and the iDMA kernels with
+// compile-time args use it directly.
+inline constexpr uint64_t kPollBudgetCycles = 1ull << 22;
 
 // The host fills a status line with kStatusPoison before launch; the kernel writes its done magic to kStatusMagic last.
 inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1;
