@@ -439,8 +439,8 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
-    elif mathop == MathOperation.Softplus:
-        # for_op spans the t < -5 tail and the linear threshold.
+    elif mathop in (MathOperation.Softplus, MathOperation.Softsign):
+        # for_op spans softplus' t < -5 tail and linear threshold, and softsign's [-5, 5].
         spec = for_op(mathop, input_format).spec_A
         min_val = spec.low
         max_val = spec.high
@@ -995,6 +995,7 @@ _APPROX_MATHOPS = (
     MathOperation.Gelu,
     MathOperation.Reciprocal,
     MathOperation.Rsqrt,
+    MathOperation.Softsign,
 )
 _QSR_EXTRA_MATHOPS = (
     MathOperation.Relu,
@@ -1056,6 +1057,7 @@ OP_CONFIGS = [
     # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
     OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Softsign, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
