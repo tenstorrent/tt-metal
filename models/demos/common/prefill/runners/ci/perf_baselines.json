@@ -33,17 +33,17 @@
           }
         },
         "8kw": {
-          "throughput_tok_s": 31210,
-          "ttft_s": 26.29,
-          "chunk_time_ms": 569
+          "throughput_tok_s": 33161,
+          "ttft_s": 23.04,
+          "chunk_time_ms": 502
         }
       },
       "sc1": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 9906,
-          "ttft_s": 88.2,
-          "chunk_time_ms": 507
+          "throughput_tok_s": 11449,
+          "ttft_s": 73.97,
+          "chunk_time_ms": 438
         }
       },
       "sc4_4x4": {
@@ -57,9 +57,9 @@
       "sc1_4x4": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 5932,
-          "ttft_s": 125.4,
-          "chunk_time_ms": 833
+          "throughput_tok_s": 6579,
+          "ttft_s": 108.88,
+          "chunk_time_ms": 748
         }
       }
     },
