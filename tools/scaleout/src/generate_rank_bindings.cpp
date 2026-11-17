@@ -489,8 +489,8 @@ struct ProgramArgs {
     std::size_t max_solutions = 0;    // --max-solutions/-n: cap (0 = all up to solver cap); implies --all-solutions
     bool distinct_host_sets = false;  // --distinct-host-sets/-d: one solution per unique host set
     bool allow_shape_permutations = false;  // hidden: disable the solver's unique_shapes dedup
-    std::optional<std::string> mock_cluster_desc_from_fsd;
-    std::optional<std::string> offline_fsd;  // --offline: map on this FSD instead of a discovered cluster
+    // --offline: map on this FSD instead of a discovered cluster
+    std::optional<std::string> offline_fsd;
 };
 
 /**
@@ -532,10 +532,6 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         "Keep only one solution per unique set of HOSTS: after enumeration, solutions that occupy the same hosts "
         "(even if they wire/assign the meshes differently) are collapsed to the first. Only meaningful with "
         "--all-solutions.")(
-        "mock-cluster-desc-from-fsd",
-        "Write one mock cluster descriptor per host of this Factory System Descriptor (.textproto) into "
-        "--output-dir, plus a rank mapping for multi-host FSDs, then exit. Runs without MPI; -m/-M are not used.",
-        cxxopts::value<std::string>())(
         "offline",
         "Map on --factory-system-descriptor without a cluster: write one mock cluster descriptor per FSD host into "
         "<output-dir>/mock_cluster_desc, then the usual outputs, with phase2_mock_mapping.yaml pointing at those "
@@ -561,18 +557,6 @@ ProgramArgs parse_arguments(int argc, char** argv) {
 
         const bool has_m = result.contains("mesh-graph-descriptor");
         const bool has_M = result.contains("mesh-graph-descriptor-mapping");
-        if (result.contains("mock-cluster-desc-from-fsd")) {
-            if (has_m || has_M) {
-                throw std::invalid_argument("--mock-cluster-desc-from-fsd does not take -m or -M");
-            }
-            if (!result.contains("output-dir")) {
-                throw std::invalid_argument("--mock-cluster-desc-from-fsd requires --output-dir");
-            }
-            ProgramArgs args;
-            args.mock_cluster_desc_from_fsd = result["mock-cluster-desc-from-fsd"].as<std::string>();
-            args.output_dir = result["output-dir"].as<std::string>();
-            return args;
-        }
         if (has_m == has_M) {
             throw std::invalid_argument(
                 "Exactly one of --mesh-graph-descriptor (-m) or --mesh-graph-descriptor-mapping (-M) is required");
@@ -636,18 +620,6 @@ int main(int argc, char** argv) {
     // Parse arguments first (before MPI initialization)
     ProgramArgs args = parse_arguments(argc, argv);
 
-    if (args.mock_cluster_desc_from_fsd.has_value()) {
-        try {
-            std::cout << tt::scaleout_tools::generate_cluster_descriptor_from_fsd(
-                             *args.mock_cluster_desc_from_fsd, *args.output_dir, "mock_cluster_desc")
-                      << std::endl;
-            return 0;
-        } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << std::endl;
-            return 1;
-        }
-    }
-
     // --offline: FSD host index -> generated mock cluster descriptor, written before MetalContext starts.
     std::map<int, std::string> offline_rank_to_desc;
     if (args.offline_fsd.has_value()) {
@@ -696,10 +668,8 @@ int main(int argc, char** argv) {
         log_info(tt::LogFabric, "PSD discovery complete");
 
         // Gather mock cluster descriptor paths from all ranks (when TT_METAL_MOCK_CLUSTER_DESC_PATH is set)
-        std::map<int, std::string> mpi_rank_to_cluster_desc_path;
-        if (args.offline_fsd.has_value()) {
-            mpi_rank_to_cluster_desc_path = offline_rank_to_desc;
-        } else {
+        std::map<int, std::string> mpi_rank_to_cluster_desc_path = offline_rank_to_desc;
+        if (!args.offline_fsd.has_value()) {
             gather_mock_cluster_desc_paths(context, mpi_rank_to_cluster_desc_path);
         }
 
