@@ -23,9 +23,9 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
@@ -39,7 +39,7 @@ namespace {
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
-using namespace tt::tt_metal::experimental::test_helpers;
+using namespace tt::tt_metal::test_helpers;
 using namespace ttnn;
 
 // ============================================================================
@@ -183,14 +183,14 @@ void run_strided_dfb_copy_test(
     ProgramRunArgs run_params;
     run_params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
-            .kernel = experimental::KernelSpecName{"reader"},
+            .kernel = KernelSpecName{"reader"},
             .advanced_options =
                 AdvancedKernelRunArgs{
                     .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
                 },
         },
         ProgramRunArgs::KernelRunArgs{
-            .kernel = experimental::KernelSpecName{"writer"},
+            .kernel = KernelSpecName{"writer"},
             .advanced_options =
                 AdvancedKernelRunArgs{
                     .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
@@ -235,8 +235,8 @@ TEST_P(TensorAccessorStridedDFBTest, Gen1StridedPagesCopy) {
         reader = MakeMinimalGen1DMKernel("reader", DataMovementProcessor::RISCV_0);
         writer = MakeMinimalGen1DMKernel("writer", DataMovementProcessor::RISCV_1);
         // STRIDED with 1 thread: stride=1, each thread accesses all DFB entries
-        reader.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
-        writer.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
+        reader.dfb_bindings.push_back(ProducerOf(DFBSpecName{"staging_dfb"}, "my_dfb"));
+        writer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"staging_dfb"}, "my_dfb"));
     };
 
     switch (params.dtype) {
@@ -307,8 +307,8 @@ TEST_P(TensorAccessorStridedDFBTest, QuasarStridedPagesCopy) {
         reader = MakeMinimalGen2DMKernel("reader", kNumDMThreads);
         writer = MakeMinimalGen2DMKernel("writer", kNumDMThreads);
         // STRIDED with 3 threads: each thread owns every 3rd DFB entry
-        reader.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
-        writer.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
+        reader.dfb_bindings.push_back(ProducerOf(DFBSpecName{"staging_dfb"}, "my_dfb"));
+        writer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"staging_dfb"}, "my_dfb"));
     };
 
     // DFB depth: 2 entries per DM thread (double-buffer) × 3 threads = 6 entries

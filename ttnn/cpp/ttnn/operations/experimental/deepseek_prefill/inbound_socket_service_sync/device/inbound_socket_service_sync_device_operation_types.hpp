@@ -52,6 +52,8 @@ struct InboundSocketServiceSyncInputs {
     std::optional<Tensor> tokens_out;
     std::optional<Tensor> overhang_out;
     std::optional<Tensor> metadata_out;
+    // Empty, or one destination per extra backing, in segment order.
+    std::vector<Tensor> extras_out;
 };
 
 }  // namespace ttnn::experimental::prim

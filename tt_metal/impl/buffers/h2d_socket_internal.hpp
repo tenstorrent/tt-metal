@@ -19,12 +19,13 @@ enum class H2DMode : uint8_t;
 namespace tt::tt_metal::experimental::detail {
 
 // Friend access struct: lets this translation unit reach H2DSocket's non-blocking writes
-// (try_write_impl, try_stage_impl, notify_receiver_unfenced) without exposing them on the
-// public H2DSocket surface.
+// (try_write_impl, try_stage_impl, notify_receiver_unfenced) and which write path it uses, without
+// exposing them on the public H2DSocket surface.
 struct H2DSocketTryWriteAccess {
     static bool try_write(distributed::H2DSocket& socket, void* data, uint32_t num_pages);
     static uint32_t try_stage(distributed::H2DSocket& socket, ttsl::Span<const uint8_t* const> pages);
     static void publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets);
+    static bool writes_through_window(const distributed::H2DSocket& socket);
 };
 
 // Non-blocking H2DSocket write. Returns true if `num_pages` were successfully
@@ -47,6 +48,13 @@ inline uint32_t try_stage(distributed::H2DSocket& socket, ttsl::Span<const uint8
 
 inline void publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets) {
     H2DSocketTryWriteAccess::publish_staged(sockets);
+}
+
+// True when the socket writes through its own receiver window (posted on Blackhole silicon for Tensix and DRAM
+// receivers; an L2CPU receiver's LIM window is not posted); false when no TLB was free and it fell back to
+// cluster.write_core, or when it was attached from another process.
+inline bool writes_through_window(const distributed::H2DSocket& socket) {
+    return H2DSocketTryWriteAccess::writes_through_window(socket);
 }
 
 // Friend access struct: lets this translation unit construct an H2DSocket that
