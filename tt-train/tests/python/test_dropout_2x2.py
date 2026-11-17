@@ -106,5 +106,5 @@ def test_copies_along_one_axis_and_shards_along_the_other_are_refused(
         ttml.ops.dropout.dropout(x, PROB)
     # Probability 0, the way out the error names, passes the tensor through.
     passed = ttml.ops.dropout.dropout(x, 0.0).get_value()
-    for device, (out, piece) in enumerate(zip(device_slices(passed), device_slices(x.get_value()))):
-        np.testing.assert_array_equal(out, piece, err_msg=f"device {device}")
+    for device, out in enumerate(device_slices(passed)):
+        np.testing.assert_array_equal(out, np.ones_like(out), err_msg=f"device {device}")

@@ -260,7 +260,6 @@ class Llama(AbstractModuleBase):
                     weight_init=ttml.init.normal(0.0, 0.02),
                 )
         else:
-            self.tp_size = 1
             self.padded_vocab_size = round_up_to_tile(config.vocab_size)
             self.fc = LinearLayer(
                 config.hidden_size,

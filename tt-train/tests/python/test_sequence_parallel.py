@@ -19,6 +19,7 @@ from ttml.models.llama import Llama, LlamaConfig
 from ttml.modules import LoraColumnParallelLinear, LoraConfig, LoraModel
 from ttml.parallel import TPStrategy
 from bf16_ulp import assert_within_bf16_ulp
+from tp_block import assert_identical_across_devices, device_slices
 
 TP_AXIS_SIZE = 2  # the 'tp' extent of conftest's tp_mesh fixture
 
@@ -74,15 +75,10 @@ def token_ids(batch: int, seq_len: int, seed: int):
 
 
 def per_rank(tensor) -> np.ndarray:
-    """Every tp rank's copy of ``tensor`` stacked along dim 1, which is 1 on every tensor here, so SP
-    and TP tensors compare rank by rank whatever their placement. The layout is imposed by a composer
-    rather than read off the tensor, so the comparison does not depend on how each op labelled its output."""
-    mesh = ttml.mesh()
-    dims = [0] * len(mesh.shape)
-    dims[mesh.axis_index("tp")] = 1
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    composer = ttnn.create_mesh_composer(device, ttnn.MeshComposerConfig(dims))
-    return tensor.to_numpy(ttnn.DataType.FLOAT32, composer=composer).astype(np.float64)
+    """Every tp rank's copy of ``tensor``, stacked, so SP and TP tensors compare rank by rank whatever their placement.
+    The copies are read device by device rather than composed by the label, so the comparison does not depend on how
+    each op labelled its output."""
+    return np.stack(device_slices(tensor.get_value())).astype(np.float64)
 
 
 def backward(model, ids, mask) -> None:
@@ -187,9 +183,8 @@ class TestMatchesTensorParallel:
             column = [(n, m) for n, m in model.named_modules() if isinstance(m, LoraColumnParallelLinear)]
             assert len(column) == 2 * N_LAYERS  # qkv_linear and w_gate_up per block
             for name, module in column:
-                grads = per_rank(module.lora_A.tensor.get_grad_tensor())
-                assert np.abs(grads).max() > 0, f"{name}: a zero gradient would prove nothing"
-                np.testing.assert_array_equal(grads[:, 0], grads[:, 1], err_msg=f"{name}: tp ranks disagree")
+                grad = assert_identical_across_devices(module.lora_A.tensor.get_grad(), f"{name}: lora_A gradient")
+                assert np.abs(grad).max() > 0, f"{name}: a zero gradient would prove nothing"
         assert_same_grads(sp_lora, tp_lora)
 
 
@@ -204,8 +199,7 @@ class TestValidation:
     def test_dropout_keeps_the_tp_copies_identical(self):
         model = Llama(config(TP, attention_dropout=0.1, mlp_dropout=0.1))
         backward(model, token_ids(1, SEQ_LEN, seed=8), build_causal_mask(SEQ_LEN, device=True))
-        grad = per_rank(model.parameters()["Llama/blocks/0/mlp_norm/gamma"].get_grad_tensor())
-        np.testing.assert_array_equal(grad[:, 0], grad[:, 1])
+        assert_identical_across_devices(model.parameters()["Llama/blocks/0/mlp_norm/gamma"].get_grad(), "mlp_norm grad")
 
     def test_rejects_kv_cache(self, expect_error):
         """Single-token decode has no sequence to shard, so the model refuses before any collective."""

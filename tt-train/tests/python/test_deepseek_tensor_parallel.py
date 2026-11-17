@@ -125,6 +125,7 @@ def reset_graph():
     ids=["dense-direct_q", "dense-low_rank_q", "sparse_ep-direct_q", "sparse_ep-low_rank_q", "padded_vocab"],
 )
 def test_matches_the_replicated_model(moe_type, q_lora_rank, vocab):
+    ttml.manual_seed(0)
     reference = DeepSeek(config(use_tp=False, moe_type="dense", q_lora_rank=q_lora_rank, vocab=vocab))
     model = DeepSeek(config(use_tp=True, moe_type=moe_type, q_lora_rank=q_lora_rank, vocab=vocab))
     params = model.parameters()

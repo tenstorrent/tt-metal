@@ -149,6 +149,7 @@ def _synced_step(model: DeepSeek, ids: np.ndarray, targets: np.ndarray, mapper) 
 class TestExpertParallelMoE:
     def test_gradients_match_the_dense_moe(self, dp_tp_mesh):
         dp = ep = dp_tp_mesh.axis_size("dp")
+        ttml.manual_seed(0)
         dense = _deepseek("dense", None)
         model = _deepseek("sparse_ep", "dp")
         params = model.parameters()

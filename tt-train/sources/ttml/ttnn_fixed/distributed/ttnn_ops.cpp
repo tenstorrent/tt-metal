@@ -210,7 +210,7 @@ ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std
     // ROW_MAJOR cannot hold block floats, so they make the trip as BFLOAT16 and are cast back, as in ttnn's own
     // ROW_MAJOR detours.
     const auto dtype = tensor.dtype();
-    const bool block_float = dtype == ttnn::DataType::BFLOAT8_B || dtype == ttnn::DataType::BFLOAT4_B;
+    const bool block_float = tt::tt_metal::is_block_float(dtype);
     auto row_major = ttnn::to_layout(
         block_float ? ttnn::typecast(tensor, ttnn::DataType::BFLOAT16) : tensor, ttnn::Layout::ROW_MAJOR);
     auto tiled = ttnn::to_layout(

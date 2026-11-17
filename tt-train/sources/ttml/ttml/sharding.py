@@ -67,18 +67,13 @@ class Sharding:
         self._mesh_shape = []
         self._placements = ()
         self._per_axis_error = None
-        if value.storage_type() != ttnn.StorageType.DEVICE or not value.is_allocated():
-            # Its label is read against the mesh it is on, so there is nothing to read.
-            self._per_axis_error = (
-                "cannot read the placement per mesh axis of a tensor that is not allocated on a device mesh (a host "
-                "tensor, or a deallocated one)"
-            )
-            return
-        self._mesh_shape = list(_mesh_device().shape)
         try:
             self._placements = tuple(ttml.core.distributed.placements_per_axis(value))
-        except RuntimeError as e:
+        except RuntimeError as e:  # a host or deallocated tensor, or a label that does not cover the mesh
             self._per_axis_error = _fatal_message(e)
+            return
+        # Only after a successful read: for a host tensor, _mesh_device() would open a device if none is open.
+        self._mesh_shape = list(_mesh_device().shape)
 
     @classmethod
     def from_tensor(cls, tensor: ttml.autograd.Tensor) -> Sharding:

@@ -53,7 +53,6 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
         self.rope_params = rope_params
-        self.sequence_parallel = sequence_parallel
         self.sdpa_op = (
             ttml.ops.attention.scaled_dot_product_attention_composite
             if use_composite_sdpa
@@ -190,9 +189,6 @@ class GroupedQueryAttention(AbstractModuleBase):
     ) -> ttml.autograd.Tensor:
         if kv_cache is None:
             return self.forward_no_kv(input, mask)
-        if self.sequence_parallel:
-            # Single-token decode has no sequence to shard.
-            raise NotImplementedError("sequence_parallel does not support the KV-cache path")
         if layer_idx is None or new_tokens is None:
             raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
         return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens)
