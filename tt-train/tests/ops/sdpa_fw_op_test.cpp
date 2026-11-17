@@ -18,6 +18,7 @@
 #include <random>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt_stl/reflection.hpp>
@@ -596,6 +597,30 @@ struct SDPATestConfig {
     std::string test_name = "SDPA Test";
 };
 
+// Two schedules place the same units on the same cores in the same order: the runs then fold the same
+// partials in the same order, which is what lets two runs of the same inputs be compared bit for bit.
+bool same_units(
+    const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& a,
+    const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& b) {
+    if (a.per_core.size() != b.per_core.size() || a.num_slots != b.num_slots) {
+        return false;
+    }
+    for (std::size_t core = 0; core < a.per_core.size(); ++core) {
+        if (a.per_core[core].size() != b.per_core[core].size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < a.per_core[core].size(); ++i) {
+            const auto& x = a.per_core[core][i];
+            const auto& y = b.per_core[core][i];
+            if (std::tie(x.item, x.role, x.num_items, x.step_begin, x.step_end, x.num_partials, x.slot) !=
+                std::tie(y.item, y.role, y.num_items, y.step_begin, y.step_end, y.num_partials, y.slot)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 // kernel_output / kernel_lse, when given, receive the kernel's output and logsumexp so callers can compare
 // runs with each other; reference_lse the float reference's logsumexp. keep_alive receives the device inputs
 // (Q, K, V, the mask tensor if any), so a caller can hold them past the call and force the next call's
@@ -750,12 +775,16 @@ void run_sdpa_test(
         auto* device = &autograd::ctx().get_device();
         const uint64_t l1_budget_bytes = ttml::metal::available_l1_bytes(*device);
         const auto grid = device->compute_with_storage_grid_size();
-        const auto picked = ttml::metal::ops::sdpa_fw::device::resolve_chunks(
-            config.program_config,
-            ttml::metal::ops::sdpa_fw::device::shape_of(
-                query, key, value, config.mask_type, /* has_gate */ true, return_intermediates),
-            l1_budget_bytes,
-            grid.x * grid.y);
+        const auto plan_of = [&](const ttml::metal::SDPAForwardProgramConfig& knobs, bool has_gate) {
+            return ttml::metal::ops::sdpa_fw::device::resolve_plan(
+                knobs,
+                ttml::metal::ops::sdpa_fw::device::shape_of(
+                    query, key, value, config.mask_type, has_gate, return_intermediates),
+                l1_budget_bytes,
+                grid.x * grid.y);
+        };
+        const auto gated_plan = plan_of(config.program_config, /* has_gate */ true);
+        const auto picked = gated_plan.chunks;
         const ttml::metal::SDPAForwardProgramConfig pinned{
             .q_chunk_size = picked.Sq_chunk_t * 32U,
             .k_chunk_size = picked.Sk_chunk_t * 32U,
@@ -763,6 +792,15 @@ void run_sdpa_test(
             .max_pieces = config.program_config.max_pieces,  // same schedule too: the merge order is part of
             .num_cores = config.program_config.num_cores,    // the numerics the two runs must share
             .causal_pairs = config.program_config.causal_pairs};
+        // Pinning the knobs does not pin the cut: item_fixed_us() counts the gate's reads, so the gated
+        // run's items are dearer and the fair share they are cut against moves with the gate. Both runs
+        // keep the same chunking, but one may cut an item the other leaves whole, and then the two fold
+        // different partials and check (2) below is not the kernel's to pass.
+        const bool same_schedule = same_units(gated_plan.schedule, plan_of(pinned, /* has_gate */ false).schedule);
+        EXPECT_TRUE(same_schedule)
+            << "The gated and ungated runs of " << config.test_name
+            << " schedule different units, so their merge orders differ. Pin max_pieces = 1 on this config, "
+               "or pick knobs whose two schedules agree.";
         auto ungated = ttml::metal::sdpa_fw(
             query,
             key,
@@ -784,8 +822,9 @@ void run_sdpa_test(
             << "Gated kernel output != ungated kernel output * sigmoid(gate) in " << config.test_name
             << " (MSE: " << compute_mse(expected_from_ungated, result_xtensor) << ")";
 
-        // (2) the logsumexp is packed before the gate path runs, so it must be bit-identical.
-        if (return_intermediates) {
+        // (2) the logsumexp is packed before the gate path runs, so it must be bit-identical -- while the
+        // two runs fold the same partials in the same order, which same_schedule is.
+        if (return_intermediates && same_schedule) {
             EXPECT_TRUE(xt::all(xt::equal(interm_xtensor, core::to_xtensor(ungated[1].value()))))
                 << "Gate changed the intermediates (logsumexp) in " << config.test_name;
         }
