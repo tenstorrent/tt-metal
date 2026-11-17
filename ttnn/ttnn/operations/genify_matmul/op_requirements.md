@@ -191,7 +191,7 @@ Baseline device time, for Refinement 6:
 
 Next levers are Refinement 6's: trid-pipelined B stream depth 3–4, and a larger A round per handshake.
 
-### [ ] Refinement 5 — block_sharded placement (regime R3: cross-core A K-slice exchange)
+### [x] Refinement 5 — block_sharded placement (regime R3: cross-core A K-slice exchange)
 
 **Goal**: Add `"block_sharded"` to `SUPPORTED["placement"]`:
 - A is L1 block-sharded: rows over grid rows, **K over grid columns**;
@@ -211,6 +211,8 @@ Required topology (op_design.md R3/R3a):
 - **Model inputs.** PDL's block-sharded convs are bf8b with bias / bias_relu (Refinements 1 and 2). The ASPP-pool cell (M = 1 on an 8×1 grid) under-fills the grid; correctness only here.
 
 **Done when**: every block_sharded golden cell (cartesian INPUTS and the PDL res4 / res5 / ASPP loose cases) passes with the requested shard spec, and earlier cells stay green.
+
+**Outcome**: `block_sharded` is in SUPPORTED as regime R3. The own shard is zero-copy via `cb_act_shard` + `In0SourceFn`; peers come over a rotating-sender row multicast (`BS_ROW_MCAST`, with unicast as the other setting); B is read from DRAM per core; the output is packed in place in the requested shard. Golden `-k block_sharded`: 311 passed (300 cartesian + 11 PDL), 150 xfail (fp32 × 16-bit-DEST EXCLUSION, batched weight), 0 failed. PDL device time with the multicast: res5 shortcut 79.8 µs (stock 72.4), res4 reduce 18.7 (16.6), res5 expand 45.6 (24.2), ASPP 1×1 19.6 (13.8). Remaining headroom: wide-N shapes are B-bound (B crosses DRAM once per grid row). Next lever: R3a's B column multicast.
 
 ### [ ] Refinement 6 — Speed up PERF FOCUS 2 (Qwen3.8 decode MLP down)
 

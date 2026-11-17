@@ -19,8 +19,8 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
 | `cb_bias_row` (bias, bias_relu; built in Refinement 2) | `block_n_tiles` | `block_n_tiles` (the whole N-block row, read for every row group) | `{b: streams, m: streams (broadcast over m), n: spans → block_n_tiles, k: streams (unused)}` | bias dtype | reader | compute | one block | **None.** It is live across the whole epilogue while `cb_partials` and `cb_output_tiles` are both in use. Single-buffered: one fetch per block, so a second slot buys almost nothing (a lamp if the per-block bias read ever shows up in a profile). |
 | `cb_gate_row` (addcmul; built in Refinement 2) | `block_n_tiles` | `block_n_tiles` | `{b: streams, m: streams (broadcast), n: spans → block_n_tiles, k: streams}` | gate dtype (= output dtype) | reader | compute | one block | **None.** Concurrent with `cb_partials` and `cb_residual_tiles` in the same chain step. Only one of `cb_bias_row` / `cb_gate_row` exists per program (the epilogues are exclusive), so they **alias by construction**: the same index range is never allocated twice. |
 | `cb_residual_tiles` (addcmul; built in Refinement 2) | `depth_residual · sb_h · block_n_tiles` | one row group + one in flight | `{b: streams, m: streams (row groups), n: spans → block_n_tiles, k: streams}` | output dtype | reader | compute | whole kernel | **None.** It streams concurrently with `cb_output_tiles`, so the reader and the writer would both touch one CB, which breaks the ownership rule. `depth_residual = 2` is double buffering. |
-| `cb_act_shard` (later: R2, R3) | the A shard's tiles (`cb_descriptor_from_sharded_tensor`) | the whole shard (resident) | `{b: streams, m: spans → shard_m_tiles (= block_m_tiles), n: streams, k: spans → shard_k_tiles}` | A dtype | reader (one `cb_push_back`, no NoC) | compute | kernel | **Backed on the A tensor's own L1**, so it adds 0 bytes to the CB budget. It replaces `cb_act_tiles` in R2 (that CB is then not allocated). R3 keeps `cb_act_tiles` for the peer K-slices; same format, so `In0SourceFn` can select either. |
-| `cb_output_shard` (later: R2, R3, R4 when `block_n_tiles == out shard width`) | the output shard's tiles | the whole shard | `{b: streams, m: spans → block_m_tiles, n: spans → block_n_tiles, k: streams}` | output dtype | compute | writer (wait/pop only) | kernel | **Backed on the output tensor's L1**, 0 extra bytes. It replaces `cb_output_tiles`. |
+| `cb_act_shard` (index 5; R3 built in Refinement 5; later R2) | the A shard's tiles (`cb_descriptor_from_sharded_tensor`) | the whole shard (resident) | `{b: streams, m: spans → shard_m_tiles (= block_m_tiles), n: streams, k: spans → shard_k_tiles}` | A dtype | reader (one `cb_push_back`, no NoC) | compute | kernel | **Backed on the A tensor's own L1**, so it adds 0 bytes to the CB budget. It replaces `cb_act_tiles` in R2 (that CB is then not allocated). R3 keeps `cb_act_tiles` for the peer K-slices; same format, so `In0SourceFn` can select either. |
+| `cb_output_shard` (R4, R3 when `block_n_tiles == out shard width`; later R2) | the output shard's tiles | the whole shard | `{b: streams, m: spans → block_m_tiles, n: spans → block_n_tiles, k: streams}` | output dtype | compute | writer (wait/pop only) | kernel | **Backed on the output tensor's L1**, 0 extra bytes. It replaces `cb_output_tiles`. |
 
 **Refinement 2 (epilogues) as built.**
 - `cb_partials` is allocated whenever epilogue ≠ none, still exactly one block. The matmul packs its last K-block there (`LastBlockTarget::Interm`), and the epilogue drains it into `cb_output_tiles`.
@@ -38,6 +38,13 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
 - **`cb_output_shard` (index 17) replaces `cb_output_tiles`**: backed on the worker's own L1 output shard (`cb_descriptor_from_sharded_tensor`), so it adds 0 CB bytes (`_footprint(..., out_in_place=True)` drops the `depth_out` term). The op builds that shard spec (shard w on bank w's worker, `[padded rows, out_sw·32]`), so `out_block_n == out shard width` always holds and the compute packs in place; the writer only retires row groups.
 - **`cb_act_tiles` is also allocated on every non-worker core the A broadcast writes** (A's shard cores and the rest of the workers' bounding rectangle), at the same address: it is the multicast landing zone there, never pushed or popped. A sender-only core addresses the workers' slot as `base + (K-block % depth_act) · slot bytes` (CT `act_cb_blocks = DEPTH_ACT`).
 - One `ttnn.Mcast` channel (`act`) adds 2 L1 semaphores per participating core; the B line channel is absent.
+
+**Refinement 5 (R3 `block_sharded`) as built.** Per core of A's block-shard grid (column c = K shard, row r = M shard):
+- **`cb_act_shard` (index 5)** is backed on the core's own A shard (`cb_descriptor_from_sharded_tensor`, 0 CB bytes). The reader pushes `block_m · shard_k` tiles of it on the core's own K turn (no NoC); compute selects it for K-block `own_kb = c` through `In0SourceFn`. With `nb_m > 1` the pushes walk the shard row-block by row-block; with `nb_n > 1` (only when `nb_m == 1`) each N-block pass wraps the whole shard, so the ring always lines up with the shard rows.
+- **`cb_act_tiles`** (`depth_act · block_m · shard_k`) is the landing zone of the row peers' K-slices. Under the rotating row multicast (`BS_ROW_MCAST`, default) every core of a grid row reserves / pushes round kb's slot (the sender too, receiving the loopback copy), so the row's write pointers stay in lockstep and each multicast lands at the sender's own slot address; compute retires the own round's slot unread (`PostKBlockFn`). Under the unicast stepping stone the own round pushes nothing there.
+- **`cb_weight_tiles`, `cb_partials`, epilogue rows**: as R1, with `block_k = shard_k` (one peer shard per K-block, `num_k_blocks` = grid columns), `block_n` = the output shard's B columns (×2 for swiglu).
+- **Output**: `cb_output_shard` (in place) when `block_n` is the whole output shard width, with `block_m` the largest divisor of the shard rows that fits. Fallback when no such block fits: `block_m = shard_m`, the N range split, `cb_output_tiles` streamed and written by the writer through the output's sharded accessor (every page is local).
+- `_footprint(..., out_in_place)` prices it; `l1_cb_budget` already deducts A's and the output's resident shards. The 16-bit-DEST chain cap is NOT applied to R3 (`block_k` is the shard width; every golden cell has `shard_k ≤ 8`).
 
 ## Symbol table (non-block parameters and their bounds)
 
@@ -121,3 +128,15 @@ Prefill gate_up (grid 11×10, block 6×28, `nb = 1`): DRAM ≈ 21 MB (A) + 25 MB
 | residual | 1 | streamed with the epilogue | none |
 
 PERF FOCUS 2 (1×4352 @ 4352×5120 bf4b): DRAM = B once = 12.5 MB (the roofline's traffic); NoC = 8 A shards × 34 KB multicast.
+
+**R3 `block_sharded` as built (Refinement 5)** — DRAM / NoC crossings per tensor (grid `rows × cols`):
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | 0 | resident L1 block shards, read where they live; the own shard is consumed zero-copy | each A shard multicast once along its grid row (`cols − 1` receivers), `nb_n` times (1 when the output is in place) |
+| B | `rows · nb_m` | each core reads its column slice from DRAM (no column multicast yet) | none |
+| output | 0 | packed in place into the core's own L1 shard | none |
+| bias / gate | 1 per core block | per-block row read | none |
+| residual | 1 | streamed with the epilogue | none |
+
+PDL res5 expand (2048×512 @ 512×2048 bf8b, grid 8×10): DRAM = B ×10 ≈ 11 MB (the bound: 45.6 µs vs stock 24.2 µs); NoC = each 7×2-tile A shard multicast to 7 row peers. The next lever is R3a's B column multicast (B once from DRAM).

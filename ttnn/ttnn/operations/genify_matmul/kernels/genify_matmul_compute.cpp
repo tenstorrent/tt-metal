@@ -28,6 +28,12 @@
 // Sigmoid + MulBinary composition (one SFPU pass and one DEST copy fewer per output tile); it is a
 // chain element, not a raw-LLK bypass of the chain (the chain still owns init, DEST sync, CB sync and
 // data-format reconfig).
+//
+// Regime R3 `block_sharded` (Refinement 5): K-block `own_kb` (this core's grid column) is its own resident
+// A shard, pushed by the reader into cb_act_shard (backed on the shard, zero-copy); the helper's
+// In0SourceFn selects that CB for the block (same data format as cb_act_tiles: both are A). Under the
+// rotating row multicast (`own_round_slot`) the reader also pushes the own round's lockstep slot of
+// cb_act_tiles; a PostKBlockFn retires it unread. Every other regime passes own_kb = NO_OWN_KB.
 
 #include <cstdint>
 #include "api/compute/matmul.h"
@@ -65,6 +71,9 @@ constexpr bool silu_fp32_precision = get_compile_time_arg_val(18) != 0;
 // swiglu B-column order inside the block: 0 = gate half then up half (the R1 / R1a reader permutes per
 // tile); 1 = natural (gate, up) tile pairs (R4 reads whole bank-shard rows in one coalesced read).
 constexpr bool swiglu_natural_pairs = get_compile_time_arg_val(19) != 0;
+constexpr uint32_t cb_act_shard = get_compile_time_arg_val(20);     // R3: A's resident shard (zero-copy)
+constexpr bool own_round_slot = get_compile_time_arg_val(21) != 0;  // R3a: retire the own round's slot
+constexpr uint32_t NO_OWN_KB = 0xFFFFFFFFu;
 
 constexpr bool has_epilogue = epilogue != 0;
 constexpr bool is_bias = epilogue == 1 || epilogue == 2;
@@ -91,6 +100,28 @@ struct LastKBlockInnerDim {
     }
 };
 
+// R3: K-block own_kb reads this core's resident A shard instead of cb_act_tiles.
+struct OwnShardSource {
+    uint32_t own_kb;
+    ALWI uint32_t operator()(uint32_t block, uint32_t in0_cb_id) const {
+        return block == own_kb ? cb_act_shard : in0_cb_id;
+    }
+};
+
+// R3a: the own round's cb_act_tiles slot only kept the row's write pointers in lockstep; retire it.
+struct RetireOwnRoundSlot {
+    uint32_t own_kb;
+    ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool /*is_last*/) const {
+        if constexpr (own_round_slot) {
+            if (block == own_kb) {
+                CircularBuffer act_buf(cb_act_tiles);
+                act_buf.wait_front(block_m_tiles * block_k_tiles);
+                act_buf.pop_front(block_m_tiles * block_k_tiles);
+            }
+        }
+    }
+};
+
 // silu(x) = x * sigmoid(x) in one SFPU pass (see the file header). `fp32_precision` selects the
 // sigmoid algorithm (silu_tile's template arg); DEST is read and written in its configured width either way.
 template <bool fp32_precision, ckl::Dst Slot = ckl::Dst::D0>
@@ -111,7 +142,8 @@ ALWI void run_matmul(
     CircularBuffer& weight_buf,
     CircularBuffer& out_buf,
     CircularBuffer& interm_buf,
-    const ckl::MatmulBlockShape& shape) {
+    const ckl::MatmulBlockShape& shape,
+    uint32_t own_kb) {
     ckl::matmul_block<
         /*transpose=*/false,
         /*packer_l1_acc=*/true,
@@ -122,9 +154,10 @@ ALWI void run_matmul(
         ckl::InputPolicy::WaitAndPopPerKBlock,
         ckl::NoPostCompute,
         ckl::NoPreKBlock,
-        ckl::NoPostKBlock,
+        RetireOwnRoundSlot,
         /*untilize_block_ct_dim=*/0,
-        LastKBlockInnerDim>(
+        LastKBlockInnerDim,
+        OwnShardSource>(
         act_buf,
         weight_buf,
         out_buf,
@@ -134,8 +167,9 @@ ALWI void run_matmul(
         ckl::NoPreKBlock{},
         /*in1_per_core_w=*/block_n_tiles,
         /*out_row_width=*/block_n_tiles,
-        ckl::NoPostKBlock{},
-        LastKBlockInnerDim{});
+        RetireOwnRoundSlot{own_kb},
+        LastKBlockInnerDim{},
+        OwnShardSource{own_kb});
 }
 
 // epilogue_block: cb_partials (one fronted block) -> cb_output_tiles (row by row).
@@ -206,6 +240,7 @@ ALWI void run_epilogue(
 
 void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
+    const uint32_t own_kb = get_arg_val<uint32_t>(1);  // R3: this core's K shard; NO_OWN_KB elsewhere
 
     // matmul maps in0 -> SrcB, in1 -> SrcA: Reverse is mandatory.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_tiles, cb_weight_tiles, cb_output_tiles);
@@ -216,7 +251,7 @@ void kernel_main() {
         const auto shape = ckl::MatmulBlockShape::of(
             in0_num_subblocks, in1_num_subblocks, sb_h, sb_w, block_k_tiles, num_k_blocks, block_batches);
         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-            run_matmul<ckl::LastBlockTarget::Out>(act_buf, weight_buf, out_buf, interm_buf, shape);
+            run_matmul<ckl::LastBlockTarget::Out>(act_buf, weight_buf, out_buf, interm_buf, shape, own_kb);
         }
     } else {
         // One batch slice per matmul call: cb_partials holds exactly one block, and the epilogue
@@ -228,7 +263,7 @@ void kernel_main() {
             residual_dfb(is_addcmul ? cb_residual_tiles : cb_partials), out_dfb(cb_output_tiles);
         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
             for (uint32_t bi = 0; bi < block_batches; ++bi) {
-                run_matmul<ckl::LastBlockTarget::Interm>(act_buf, weight_buf, out_buf, interm_buf, shape);
+                run_matmul<ckl::LastBlockTarget::Interm>(act_buf, weight_buf, out_buf, interm_buf, shape, own_kb);
                 // The helper leaves packer L1 accumulation on after a multi-K-block walk; the
                 // epilogue packs fresh tiles (bias helper prerequisite: caller disables L1_ACC).
                 pack_reconfig_l1_acc(0);

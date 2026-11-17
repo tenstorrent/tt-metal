@@ -300,3 +300,50 @@
     - a ragged last bank (N = 704) with the output shard order checked;
     - a host plan test pinning the K and M splits.
   - Perf guard `test_perf_dram_sharded` (4 R4 representatives, among them PERF FOCUS 2).
+
+## Refinement 5 — block_sharded placement (regime R3: cross-core A K-slice exchange)
+- Date: 2026-11-17
+- What was done:
+  - **Op file.** `SUPPORTED["placement"]` now includes `block_sharded`. `validate()` runs `_validate_block_sharded()`: B interleaved; A L1 BLOCK_SHARDED, ROW_MAJOR, a rectangular grid of exactly (K shards) × (M shards), whole-tile shards; the output L1 BLOCK_SHARDED on A's grid with A's shard height, ROW_MAJOR, whole-tile width that owns every output column. The requested spec is honoured exactly; with `memory_config=None` the op builds the default (`block_sharded_output_memory_config`: `[shard_h, ceil(out_n_tiles / cols)·32]`). Layout errors map to `UnsupportedAxisValue`.
+  - **Host (`create_block_sharded_program_descriptor`).**
+    - Topology (`block_sharded_topology`): core (c, r) owns A rows of grid row r × output shard c; K-block kb = the A shard of grid column kb (`num_k_blocks` = grid columns, `block_k` = shard width, a ragged last K shard via `last_block_k_tiles`).
+    - Blocking (`choose_block_sharded_blocking`): `block_n` = the output shard's B columns (×2 swiglu), output packed in place (`cb_output_shard`); `block_m` = the largest divisor of the shard rows that fits. Fallback: whole shard rows with an N split, output streamed through `cb_output_tiles` and the writer's (sharded, all-local) accessor.
+    - CBs: `cb_act_shard` (index 5) backed on A's shard (zero-copy); `cb_act_tiles` for peer K-slices; `cb_weight_tiles` / `cb_partials` / epilogue rows as R1.
+    - Exchange: one `ttnn.Mcast` channel, one group per grid row, `McastRotatingSenderConfig()` (senders rotate in column = K order). Knob `BS_ROW_MCAST` (default True); False = the unicast stepping stone.
+  - **Reader** (`block_sharded` branch): per K-block, B's column slice read from DRAM first (R1's per-tile reads, factored into `read_weight`), then the A round. Own turn: push the resident shard rows into `cb_act_shard` (no NoC). R3a: send them from L1 to the row peers' reserved `cb_act_tiles` slot. Peer turn: `receive(kb)`, or (unicast) read the peer's shard tiles through A's sharded accessor (`read_act`). One barrier per K-block. Under the multicast every core also reserves / pushes its own round's slot so the row's CB write pointers stay in lockstep.
+  - **Compute**: `OwnShardSource` (`In0SourceFn`) selects `cb_act_shard` for K-block `own_kb`; `RetireOwnRoundSlot` (`PostKBlockFn`) pops the own round's lockstep slot under the multicast. Other regimes pass `own_kb = NO_OWN_KB`.
+  - **Reused**: R1 reader A/B read loops (now lambdas shared by R1 and R3), compute kernel and helpers, the writer (in place or accessor), `_reader_ct` / `_writer_ct` / `_compute_ct`, `_footprint`, `choose_subblock`, `l1_cb_budget`, the `ttnn.Mcast` attachment. **Added**: the R3 descriptor branch, topology / blocking / default output config, reader R3 branch (3 CT args, 1 RT arg), the two compute functors (2 CT args, 1 RT arg).
+- Accuracy achieved:
+  - PDL res4 reduce 8192×512×256 bf8b LoFi bias_relu: PCC 0.99984, rel-RMS 0.021 (gate 0.999 / 0.06).
+  - PDL res5 shortcut 2048×1024×2048 (ragged last grid row: 2048 = 9×224 + 32): PCC 0.99988, rel-RMS 0.017.
+  - PDL ASPP projection 2048×1280×256 (5-tile K shards): PCC 0.99984, rel-RMS 0.021.
+  - cartesian 384×1536×1024 bf16 HiFi4: PCC 0.9999985, rel-RMS 0.0017 (gate 0.9999 / 0.01).
+- Golden test progress:
+  - `test_golden.py -k block_sharded`: 311 passed, 150 xfailed, 0 failed, 0 XPASS. That is 300/300 single-weight cartesian cells plus all 11 PDL loose cases (res4 / res5 / ASPP 1×1 / ASPP pool / ASPP projection / res4 shortcut). The xfails are 60 cells on the permanent fp32 × 16-bit-DEST EXCLUSION and 90 batched-weight cells (`weight_batch=batched` is not supported yet; Refinement 7).
+  - Regression net: unit files `test_genify_matmul`, `_epilogue`, `_extended`, `_mcast`, `_dram_sharded`: 84/84 pass.
+- Perf (device ns, PDL configs bf8b LoFi, one fresh run each; perf guard `test_perf_block_sharded`):
+
+  | PDL case | row mcast (default) | unicast stepping stone | stock |
+  |---|---|---|---|
+  | res5 shortcut 2048×1024×2048 | 79.8 µs | 91.4 µs | 72.4 µs |
+  | res4 reduce 8192×512×256 bias_relu | 18.7 µs | 45.8 µs | 16.6 µs |
+  | res5 expand 2048×512×2048 | 45.6 µs | 48.0 µs | 24.2 µs |
+  | ASPP 1×1 2048×2048×256 bias_relu | 19.6 µs | 52.5 µs | 13.8 µs |
+
+  - The rotating row multicast is 1.05–2.7× faster than unicast, so it is the default.
+  - Finding (not done here; the heading scopes B to per-core DRAM reads): the wide-N shapes are B-bound. B crosses DRAM once per grid row (res5 expand: about 11 MB, 10 rows). The next lever is R3a's B column multicast: B is read once per grid column by a fixed or staggered injector and multicast down the column, as in R1a's `weight` line channel. The per-K-block A/B ordering is the same as R1a's, so it stays deadlock-free.
+  - Finding: 1-tile K shards (res4 expand, K = 256 on 8 columns) make every round a 1-tile-wide K-block, which is latency-bound per handshake.
+- Issues encountered:
+  - The rotating sender sits inside its own receiver group, so its multicast loopback-writes its own `cb_act_tiles` slot. Solution: a lockstep slot on the own round, reserved and pushed by the reader and retired unread by compute.
+  - The 16-bit-DEST in-DEST K-chain cap (`DEST16_BLOCK_K_MAX`) is not applied to R3, because `block_k` is the shard width. Every golden cell has `shard_k ≤ 8`.
+- Tests added:
+  - `test_genify_matmul_block_sharded.py` (12 cases):
+    - cartesian-shaped cells across dtypes and epilogues;
+    - PDL res5 with a ragged last grid row;
+    - ASPP pool (M = 1, 8×1 grid, bf16 → bf8b);
+    - a ragged last K shard together with a grid column that owns no output columns;
+    - a single K shard (no exchange);
+    - unicast vs multicast bit-identical;
+    - the default output placement;
+    - the M-split and the N-split streamed-output fallbacks under a forced L1 budget.
+  - Perf guard `test_perf_block_sharded`: 4 PDL representatives × {mcast, unicast}.

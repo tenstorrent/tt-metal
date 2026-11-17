@@ -200,3 +200,55 @@ def test_perf_dram_sharded(case, device):
     kwargs = {"activation": "swiglu"} if epilogue == "swiglu" else {}
     out = genify_matmul(ta, tb, compute_kernel_config=cfg, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, **kwargs)
     ttnn.synchronize_device(device)
+
+
+# Refinement 5: regime R3 `block_sharded` (A L1 block-sharded: rows over grid rows, K over grid
+# columns; output L1 block-sharded on A's grid). PDL's 1x1 convs at their own config (bf8b x bf8b,
+# LoFi, fp32 DEST, bf8b bias). `exchange`: the peer K-slice exchange (BS_ROW_MCAST True = rotating row
+# multicast, the default; False = the unicast stepping stone). (m, k, n, shard, grid (x, y), epilogue)
+BLOCK_SHARDED_CASES = [
+    (2048, 1024, 2048, (224, 128), (8, 10), "none"),  # res5 shortcut
+    (8192, 512, 256, (1024, 64), (8, 8), "bias_relu"),  # res4 reduce
+    (2048, 512, 2048, (224, 64), (8, 10), "none"),  # res5 expand
+    (2048, 2048, 256, (256, 256), (8, 8), "bias_relu"),  # ASPP 1x1
+]
+
+
+@pytest.mark.parametrize("exchange", ["mcast", "unicast"])
+@pytest.mark.parametrize(
+    "case",
+    BLOCK_SHARDED_CASES,
+    ids=[f"{m}-{k}-{n}-{gx}x{gy}-{e}" for m, k, n, _, (gx, gy), e in BLOCK_SHARDED_CASES],
+)
+def test_perf_block_sharded(case, exchange, device, monkeypatch):
+    from ttnn.operations.genify_matmul import genify_matmul_program_descriptor as pd
+
+    monkeypatch.setattr(pd, "BS_ROW_MCAST", exchange == "mcast")
+    m, k, n, shard, (gx, gy), epilogue = case
+    torch.manual_seed(0)
+    A = torch.randn(1, 1, m, k)
+    B = torch.randn(k, n) / math.sqrt(k)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+    a_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, list(shard), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    o_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [shard[0], -(-n // (32 * gx)) * 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ta = create_ttnn_input_tensor(A, device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=a_mc)
+    tb = create_ttnn_input_tensor(B, device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    kwargs = {}
+    if epilogue == "bias_relu":
+        kwargs["bias"] = create_ttnn_input_tensor(
+            torch.randn(1, n), device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        )
+        kwargs["activation"] = "relu"
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
+    )
+    out = genify_matmul(ta, tb, compute_kernel_config=cfg, memory_config=o_mc, **kwargs)
+    ttnn.synchronize_device(device)

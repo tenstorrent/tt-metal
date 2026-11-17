@@ -24,6 +24,13 @@ sharded one column shard per bank, A is L1 width-sharded over K. One worker per 
 optimal bank -> worker assignment) streams its bank's shard with one coalesced read per K-block, and
 every A shard crosses the NoC once: its owning core multicasts it, in its K turn (rotating senders), to
 the workers. The output is packed in place into the worker's own L1 width shard.
+
+Regime R3 `block_sharded` (Refinement 5, `create_block_sharded_program_descriptor`): A is L1 block-
+sharded (rows over grid rows, K over grid columns), B interleaved, the output L1 block-sharded on A's
+grid. Core (column c, row r) owns its shard rows x output shard c and walks K one A shard per K-block:
+its own shard zero-copy (cb_act_shard), its row peers' shards over a rotating-sender row multicast
+(BS_ROW_MCAST; unicast peer reads otherwise), B's column slice from DRAM. The output is packed in place
+into the core's own output shard.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ CB_WEIGHT_TILES = 1  # B K-blocks, reader -> compute
 CB_BIAS_ROW = 2  # bias N-block row (bias / bias_relu), reader -> compute, one per block
 CB_GATE_ROW = 3  # gate N-block row (addcmul), reader -> compute, one per block
 CB_RESIDUAL_TILES = 4  # residual row groups (addcmul), reader -> compute
+CB_ACT_SHARD = 5  # R3: A's own L1 shard (zero-copy), reader (push only) -> compute (own K-block)
 CB_OUTPUT_TILES = 16  # output row groups, compute -> writer
 CB_OUTPUT_SHARD = 17  # R4: the output's own L1 shard (zero-copy), compute -> writer (wait/pop only)
 CB_PARTIALS = 24  # K-accumulator (packer L1 acc), compute -> compute; num_k_blocks > 1 or epilogue != none
@@ -104,6 +112,12 @@ STAGGER_INJECTORS = True
 # the NoC the bank workers read B on (the reader runs on NCRISC = NOC_0, the preferred DRAM-read NoC),
 # which also selects get_optimal_dram_bank_to_logical_worker_assignment's worker per bank.
 DS_READ_NOC = ttnn.NOC.NOC_0
+# R3 `block_sharded` (Refinement 5) peer K-slice exchange. True (R3a): a rotating-sender row multicast,
+# every A shard crosses the NoC once per grid row. False (R3 stepping stone): every core unicast-reads
+# its row peers' shards through A's sharded TensorAccessor (each shard is read cols - 1 times).
+BS_ROW_MCAST = True
+# own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
+NO_OWN_KB = 0xFFFFFFFF
 
 
 def _cdiv(a, b):
@@ -551,6 +565,8 @@ def _cb(index, dtype, page_size, num_pages, core_ranges):
 # Reader CT args [23, 27): regime R4 role (dram_sharded, worker, K-blocks per A round, act CB depth in
 # K-blocks). Every non-R4 reader passes these zeros.
 _DS_ROLE_ABSENT = (0, 0, 1, DEPTH_ACT)
+# Reader CT args [27, 30): regime R3 role (block_sharded, row multicast, cb_act_shard id).
+_BS_ROLE_ABSENT = (0, 0, CB_ACT_SHARD)
 
 
 def _reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t):
@@ -600,7 +616,7 @@ def _writer_ct(cb_out, blk, out_block_n_tiles, geom, out, out_in_place):
     ]
 
 
-def _compute_ct(cb_out, blk, epilogue, cb_row, out, swiglu_natural_pairs):
+def _compute_ct(cb_out, blk, epilogue, cb_row, out, swiglu_natural_pairs, own_round_slot=False):
     return [
         CB_ACT_TILES,
         CB_WEIGHT_TILES,
@@ -624,6 +640,9 @@ def _compute_ct(cb_out, blk, epilogue, cb_row, out, swiglu_natural_pairs):
         # swiglu: the block's B columns are in natural (gate, up) tile-pair order (R4 coalesced bank
         # reads) instead of the reader's gate-half / up-half permutation (R1 / R1a).
         int(swiglu_natural_pairs),
+        CB_ACT_SHARD,
+        # R3a: the reader pushes a lockstep cb_act_tiles slot on the core's own K turn; compute retires it.
+        int(own_round_slot),
     ]
 
 
@@ -631,9 +650,13 @@ def create_program_descriptor(
     a, b, out, compute_config, epilogue="none", row=None, residual=None, placement="interleaved"
 ):
     """`row` = bias (bias / bias_relu) or gate (addcmul); `residual` = addcmul residual. Regime
-    selection: R4 for placement dram_sharded, else R1 (sub-selecting R1a)."""
+    selection: R4 for placement dram_sharded, R3 for block_sharded, else R1 (sub-selecting R1a)."""
     if placement == "dram_sharded":
         return create_dram_sharded_program_descriptor(
+            a, b, out, compute_config, epilogue=epilogue, row=row, residual=residual
+        )
+    if placement == "block_sharded":
+        return create_block_sharded_program_descriptor(
             a, b, out, compute_config, epilogue=epilogue, row=row, residual=residual
         )
     device = a.device()
@@ -730,11 +753,12 @@ def create_program_descriptor(
             geom.weight_batch_stride,
             row_addr,
             res_addr,
+            NO_OWN_KB,
         ]
         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
         writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
-        compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n]
+        compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB]
 
     # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
     # specialized, so every core hosts exactly one reader. Plain R1 is a single group (0, 0).
@@ -757,6 +781,7 @@ def create_program_descriptor(
                     a_sends,
                     b_sends,
                     *_DS_ROLE_ABSENT,
+                    *_BS_ROLE_ABSENT,
                     *reader_accessor_ct,
                 ],
                 runtime_args=rt,
@@ -1024,6 +1049,7 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
             0,
             row_addr,
             res_addr,
+            NO_OWN_KB,
         ]
 
     worker_rt, other_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -1034,7 +1060,7 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
         cols_valid = min(sw, geom.tensor_n_tiles - col0)
         out_region = [0, 1, 0, geom.tensor_m_tiles, col0 // out_div, cols_valid // out_div, 1, nb_m, 1]
         writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
-        compute_rt[core.x][core.y] = [nb_m]
+        compute_rt[core.x][core.y] = [nb_m, NO_OWN_KB]
     for x, y in others:
         other_rt[x][y] = reader_args(None)
 
@@ -1042,7 +1068,18 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
         return ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
             core_ranges=ranges,
-            compile_time_args=[*reader_ct, 0, 0, 0, 1, int(worker), k_blocks_per_round, DEPTH_ACT, *reader_accessor_ct],
+            compile_time_args=[
+                *reader_ct,
+                0,
+                0,
+                0,
+                1,
+                int(worker),
+                k_blocks_per_round,
+                DEPTH_ACT,
+                *_BS_ROLE_ABSENT,
+                *reader_accessor_ct,
+            ],
             runtime_args=rt,
             config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NOC_0 (DS_READ_NOC)
         )
@@ -1089,3 +1126,254 @@ def _attach_act_broadcast(descriptor, readers, device, topo: DramShardedTopology
     mc.attach(descriptor, "act", readers, 0)
     for reader in readers:
         ttnn.attach_absent_mcast(reader, "weight")
+
+
+# ---------------------------------------------------------------------------
+# Regime R3 `block_sharded` (Refinement 5)
+# ---------------------------------------------------------------------------
+
+
+class BlockShardedLayoutError(ValueError):
+    """The A / output shard layout is outside what regime R3 accepts (the op file maps it to a support refusal)."""
+
+
+@dataclass(frozen=True)
+class BlockShardedTopology:
+    """A's block-shard grid: grid row r holds A rows [r*shard_m, ...), grid column c holds K tiles
+    [c*shard_k, ...); output shard (c, r) holds the same rows x output columns [c*out_w, ...)."""
+
+    grid: object  # CoreRange: A's (and the output's) shard grid
+    rows: int  # grid rows = M shards
+    cols: int  # grid columns = K shards = K-blocks per walk
+    shard_m_tiles: int
+    shard_k_tiles: int
+    out_w_tiles: int  # output shard width (tiles)
+
+    def core(self, c, r):
+        return ttnn.CoreCoord(self.grid.start.x + c, self.grid.start.y + r)
+
+
+def _padded_m_rows(a):
+    m_rows = 1
+    for d in list(a.shape)[:-2]:
+        m_rows *= d
+    return m_rows * _round_up(list(a.shape)[-2], TILE)  # every image is tile-padded on its own
+
+
+def _block_shard_grid(spec):
+    box = spec.grid.bounding_box()
+    if spec.grid.num_cores() != box.grid_size().x * box.grid_size().y:
+        raise BlockShardedLayoutError("block_sharded needs a rectangular shard grid")
+    if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+        raise BlockShardedLayoutError("block_sharded needs ROW_MAJOR shard orientation (K over grid columns)")
+    return box
+
+
+def block_sharded_output_memory_config(a, b, swiglu=False):
+    """The default output placement when none is requested: L1 block-sharded on A's grid, A's shard
+    height, the output's columns split over the grid columns."""
+    spec = a.memory_config().shard_spec
+    box = _block_shard_grid(spec)
+    out_n_tiles = _cdiv(list(b.shape)[-1] // (2 if swiglu else 1), TILE)
+    width = _cdiv(out_n_tiles, box.grid_size().x) * TILE
+    out_spec = ttnn.ShardSpec(spec.grid, [spec.shape[0], width], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, out_spec)
+
+
+def block_sharded_topology(a, out_mc, swiglu=False, out_n=None) -> BlockShardedTopology:
+    """Validate the R3 layout (A and the requested output placement) and derive its topology."""
+    a_mc = a.memory_config()
+    if a_mc.buffer_type != ttnn.BufferType.L1 or a_mc.memory_layout != ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        raise BlockShardedLayoutError("block_sharded needs A L1 BLOCK_SHARDED (read A where it lives)")
+    spec = a_mc.shard_spec
+    box = _block_shard_grid(spec)
+    if spec.shape[0] % TILE or spec.shape[1] % TILE:
+        raise BlockShardedLayoutError(f"block_sharded needs whole-tile A shards; got {spec.shape}")
+    shard_m, shard_k = spec.shape[0] // TILE, spec.shape[1] // TILE
+    mt = _padded_m_rows(a) // TILE
+    kt = _cdiv(list(a.shape)[-1], TILE)
+    rows, cols = box.grid_size().y, box.grid_size().x
+    if _cdiv(mt, shard_m) != rows or _cdiv(kt, shard_k) != cols:
+        raise BlockShardedLayoutError(
+            f"block_sharded needs A's shard grid to be exactly (K shards) x (M shards) = "
+            f"{_cdiv(kt, shard_k)} x {_cdiv(mt, shard_m)}; got {cols} x {rows}"
+        )
+    if out_mc.buffer_type != ttnn.BufferType.L1 or out_mc.memory_layout != ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        raise BlockShardedLayoutError(f"block_sharded writes an L1 BLOCK_SHARDED output; got {out_mc}")
+    o_spec = out_mc.shard_spec
+    if o_spec is None or o_spec.grid != spec.grid or o_spec.shape[0] != spec.shape[0]:
+        raise BlockShardedLayoutError(
+            "block_sharded writes the output on A's shard grid with A's shard height; " f"got {o_spec}"
+        )
+    if o_spec.orientation != ttnn.ShardOrientation.ROW_MAJOR or o_spec.shape[1] % TILE:
+        raise BlockShardedLayoutError(f"block_sharded needs a ROW_MAJOR whole-tile output shard; got {o_spec}")
+    out_w = o_spec.shape[1] // TILE
+    if out_n is not None and _cdiv(_cdiv(out_n, TILE), out_w) > cols:
+        raise BlockShardedLayoutError(f"block_sharded output shard width {o_spec.shape[1]} leaves columns unowned")
+    return BlockShardedTopology(box, rows, cols, shard_m, shard_k, out_w)
+
+
+def choose_block_sharded_blocking(geom: Geometry, topo: BlockShardedTopology, budget: int):
+    """R3 extent knobs -> (Blocking, out_in_place). block_k = the A shard width (one peer shard per
+    K-block, num_k_blocks = grid columns). Preferred: block_n = the output shard's B columns (output
+    packed in place) with block_m the largest divisor of the shard rows that fits. Fallback: the whole
+    shard rows with the N range split (output streamed through cb_output_tiles); the own shard is
+    re-pushed per N-block, which wraps cb_act_shard only when nb_m == 1, so the two splits never mix."""
+    bk, kt = topo.shard_k_tiles, geom.tensor_k_tiles
+    nkb = _cdiv(kt, bk)
+    last = kt - (nkb - 1) * bk
+    partials = nkb > 1
+    bn_full = topo.out_w_tiles * (2 if geom.swiglu else 1)
+
+    def blocking(bm, bn):
+        sb_h, sb_w = choose_subblock(bm, bn, geom.dest_limit)
+        return Blocking(1, bm, bn, bk, nkb, last, sb_h, sb_w, geom.epilogue)
+
+    for bm in sorted(_divisors(topo.shard_m_tiles), reverse=True):
+        if _footprint(geom, bm, bn_full, bk, partials=partials, out_in_place=True) <= budget:
+            return blocking(bm, bn_full), True
+    q = geom.q_n_min
+    for nb_n in range(2, _cdiv(bn_full, q) + 1):
+        bn = _round_up(_cdiv(bn_full, nb_n), q)
+        if _footprint(geom, topo.shard_m_tiles, bn, bk, partials=partials) <= budget:
+            return blocking(topo.shard_m_tiles, bn), False
+    raise RuntimeError(f"genify_matmul: even the minimum block_sharded block does not fit the L1 CB budget of {budget}")
+
+
+def plan_block_sharded(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None):
+    """R3 blocking decision (geometry, topology, blocking, out_in_place). Exposed for tests / perf tooling."""
+    geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual)
+    topo = block_sharded_topology(a, out.memory_config(), geom.swiglu)
+    budget = l1_cb_budget(a.device(), [t for t in (a, b, out, row, residual) if t is not None])
+    blk, in_place = choose_block_sharded_blocking(geom, topo, budget)
+    return geom, topo, blk, in_place
+
+
+def create_block_sharded_program_descriptor(a, b, out, compute_config, epilogue="none", row=None, residual=None):
+    """Regime R3. One reader / compute / writer per core of A's grid; every core is both a sender (its
+    own K turn) and a receiver (its row peers' turns) of its grid row's A exchange."""
+    device = a.device()
+    geom, topo, blk, in_place = plan_block_sharded(
+        a, b, out, bool(compute_config.fp32_dest_acc_en), epilogue=epilogue, row=row, residual=residual
+    )
+    grid = ttnn.CoreRangeSet([topo.grid])
+    out_block_n_tiles = geom.out_block_n(blk.block_n_tiles)
+    cb_row = CB_GATE_ROW if epilogue == "addcmul" else CB_BIAS_ROW
+    cb_out = CB_OUTPUT_SHARD if in_place else CB_OUTPUT_TILES
+    row_mcast = BS_ROW_MCAST and topo.cols > 1
+    out_div = 2 if geom.swiglu else 1
+    bn_full = topo.out_w_tiles * out_div  # B columns per grid column
+    # Every core of a row walks the same nominal block sequence (lockstep CB pointers for the multicast).
+    nb_m = topo.shard_m_tiles // blk.block_m_tiles
+    nb_n = _cdiv(bn_full, blk.block_n_tiles)
+
+    # ---- CBs ----
+    cbs = [
+        _cb(CB_ACT_TILES, a.dtype, geom.a_tile_bytes, DEPTH_ACT * blk.block_m_tiles * blk.block_k_tiles, grid),
+        # The own K-slice: backed on A's resident shard (zero-copy).
+        ttnn.cb_descriptor_from_sharded_tensor(CB_ACT_SHARD, a),
+        _cb(CB_WEIGHT_TILES, b.dtype, geom.b_tile_bytes, DEPTH_WEIGHT * blk.block_k_tiles * blk.block_n_tiles, grid),
+    ]
+    if in_place:
+        # Output packed in place into the core's own L1 shard (block_n == the shard's B columns).
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_SHARD, out))
+    else:
+        cbs.append(_cb(CB_OUTPUT_TILES, out.dtype, geom.o_tile_bytes, DEPTH_OUT * blk.sb_h * out_block_n_tiles, grid))
+    if blk.use_partials:
+        cbs.append(_cb(CB_PARTIALS, geom.p_dtype, geom.p_tile_bytes, blk.block_m_tiles * blk.block_n_tiles, grid))
+    if row is not None:
+        cbs.append(_cb(cb_row, row.dtype, geom.row_tile_bytes, blk.block_n_tiles, grid))
+    if residual is not None:
+        cbs.append(
+            _cb(
+                CB_RESIDUAL_TILES,
+                residual.dtype,
+                geom.r_tile_bytes,
+                DEPTH_RESIDUAL * blk.sb_h * blk.block_n_tiles,
+                grid,
+            )
+        )
+
+    row_t = row if row is not None else b
+    res_t = residual if residual is not None else b
+    reader_ct = [
+        *_reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t),
+        0,  # operand_mcast
+        0,  # a_sends
+        0,  # b_sends
+        *_DS_ROLE_ABSENT,
+        1,  # block_sharded
+        int(row_mcast),
+        CB_ACT_SHARD,
+        *_reader_accessor_ct(a, b, row_t, res_t),
+    ]
+    writer_ct = _writer_ct(cb_out, blk, out_block_n_tiles, geom, out, out_in_place=in_place)
+    compute_ct = _compute_ct(cb_out, blk, epilogue, cb_row, out, swiglu_natural_pairs=False, own_round_slot=row_mcast)
+
+    a_addr, b_addr, out_addr = a.buffer_address(), b.buffer_address(), out.buffer_address()
+    row_addr = row.buffer_address() if row is not None else 0
+    res_addr = residual.buffer_address() if residual is not None else 0
+    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for r in range(topo.rows):
+        row0 = r * topo.shard_m_tiles
+        rows_valid = min(topo.shard_m_tiles, geom.tensor_m_tiles - row0)
+        for c in range(topo.cols):
+            core = topo.core(c, r)
+            col0 = c * bn_full
+            cols_valid = max(0, min(bn_full, geom.tensor_n_tiles - col0))
+            region = [0, 1, row0, rows_valid, col0, cols_valid, 1, nb_m, nb_n]
+            reader_rt[core.x][core.y] = [
+                a_addr,
+                b_addr,
+                *region,
+                geom.tensor_m_tiles,
+                geom.tensor_k_tiles,
+                geom.tensor_n_tiles,
+                0,
+                row_addr,
+                res_addr,
+                c,  # own_kb
+            ]
+            out_region = [0, 1, row0, rows_valid, col0 // out_div, cols_valid // out_div, 1, nb_m, nb_n]
+            writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
+            compute_rt[core.x][core.y] = [nb_m * nb_n, c]
+
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
+        core_ranges=grid,
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NOC_0
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "genify_matmul_writer.cpp"),
+        core_ranges=grid,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    compute = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "genify_matmul_compute.cpp"),
+        core_ranges=grid,
+        compile_time_args=compute_ct,
+        runtime_args=compute_rt,
+        config=compute_config,
+    )
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
+    if row_mcast:
+        # One channel group per grid row (RowMajor groups of `cols` cores); the senders rotate through
+        # the row in column (= K shard) order, so round kb's sender is the core owning K shard kb.
+        mc = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(handshake=True),
+            grid,
+            topo.cols,
+            ttnn.McastRotatingSenderConfig(),
+            ttnn.McastCoreOrder.RowMajor,
+        )
+        mc.attach(descriptor, "act", [reader], 0)
+    else:
+        ttnn.attach_absent_mcast(reader, "act")
+    ttnn.attach_absent_mcast(reader, "weight")
+    descriptor.kernels = [reader, writer, compute]
+    return descriptor

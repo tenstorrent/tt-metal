@@ -20,7 +20,10 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .genify_matmul_program_descriptor import (
     TILE,
+    BlockShardedLayoutError,
     DramShardedLayoutError,
+    block_sharded_output_memory_config,
+    block_sharded_topology,
     create_program_descriptor,
     dram_sharded_output_memory_config,
 )
@@ -86,7 +89,9 @@ SUPPORTED = {
     "fp32_dest_acc_en": [True, False],
     # Refinement 4: dram_sharded = regime R4 (B streamed from its DRAM bank shards by one worker per
     # bank, A broadcast from its own width-shard cores, output in place in an op-built L1 width shard).
-    "placement": ["interleaved", "dram_sharded"],
+    # Refinement 5: block_sharded = regime R3 (A's K-slices exchanged along each grid row -- own shard
+    # zero-copy, peers over a rotating-sender row multicast; B from DRAM; output in place in its shard).
+    "placement": ["interleaved", "dram_sharded", "block_sharded"],
     # Refinement 2: every epilogue runs inside the same program on the accumulated block
     # (matmul_block -> cb_partials -> add_bias_bcast_rows / eltwise_chain -> cb_output_tiles).
     "epilogue": ["none", "bias", "bias_relu", "swiglu", "addcmul"],
@@ -184,6 +189,8 @@ def validate(
         raise UnsupportedAxisValue("genify_matmul: weight layout must be TILE_LAYOUT")
     if axes["placement"] == "dram_sharded":
         _validate_dram_sharded(input_tensor, weight, activation, memory_config)
+    elif axes["placement"] == "block_sharded":
+        _validate_block_sharded(input_tensor, weight, activation, memory_config)
     else:
         # R1 / R1a read B and write the output through interleaved accessors.
         if weight.memory_config().memory_layout != _ML.INTERLEAVED:
@@ -223,6 +230,26 @@ def _validate_dram_sharded(input_tensor, weight, activation, memory_config):
         raise UnsupportedAxisValue(
             f"genify_matmul: dram_sharded builds its own output shard spec {op_mc.shard_spec}; got {spec}"
         )
+
+
+def _block_sharded_output_mc(input_tensor, weight, activation, memory_config):
+    if memory_config is not None:
+        return memory_config
+    return block_sharded_output_memory_config(input_tensor, weight, swiglu=activation == "swiglu")
+
+
+def _validate_block_sharded(input_tensor, weight, activation, memory_config):
+    """R3 layout gate: A L1 BLOCK_SHARDED (ROW_MAJOR, rows over grid rows, K over grid columns, the grid
+    exactly covering A), B interleaved; the output is L1 BLOCK_SHARDED on A's grid with A's shard height
+    (the requested spec, or the op's default when memory_config is None)."""
+    if weight.memory_config().memory_layout != _ML.INTERLEAVED:
+        raise UnsupportedAxisValue("genify_matmul: placement 'block_sharded' needs an interleaved weight")
+    n_out = weight.shape[-1] // 2 if activation == "swiglu" else weight.shape[-1]
+    try:
+        out_mc = _block_sharded_output_mc(input_tensor, weight, activation, memory_config)
+        block_sharded_topology(input_tensor, out_mc, swiglu=activation == "swiglu", out_n=n_out)
+    except BlockShardedLayoutError as e:
+        raise UnsupportedAxisValue(f"genify_matmul: {e}") from e
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +336,9 @@ def genify_matmul(
     if placement == "dram_sharded":
         # The op chooses the output shard spec: one width shard per bank worker.
         out_mc = dram_sharded_output_memory_config(input_tensor, weight, swiglu=activation == "swiglu")
+    elif placement == "block_sharded":
+        # Exactly the requested shard spec (validated), or the op's default block-shard placement.
+        out_mc = _block_sharded_output_mc(input_tensor, weight, activation, memory_config)
     else:
         out_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
