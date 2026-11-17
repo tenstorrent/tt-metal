@@ -29,7 +29,13 @@ namespace ttml::metal {
  *                 slots * item rows * (d_v / 32 + 2) fp32 tiles, about 5 to 12 MiB at d = 128 with the
  *                 default picks (at most one slot per core, scaling with the rows of an item). Every
  *                 distinct shape that cuts holds its own, so a workload with many sequence lengths
- *                 (padded rollouts, say) should set 1 unless the cut shapes are few.
+ *                 would want 1 unless its cut shapes are few. Setting it needs the metal::sdpa_fw entry
+ *                 point above: ops::scaled_dot_product_attention and its Python binding take no config,
+ *                 so a model always runs the pick. No consumer needs the opt-out today -- a padded
+ *                 rollout reaches the cut only through a causal run of the fused op, and the rollout
+ *                 paths do not (the Llama completer runs the composite op, Qwen3's passes a mask tensor,
+ *                 which makes the mask Arbitrary and may_split false). Give the autograd op a config
+ *                 before one does.
  * num_cores:      cores to use (at most the compute grid).
  * causal_pairs:   place the causal work items as main did instead of longest first: query chunk i of a
  *                 stack with chunk (n - 1 - i), the pairs in contiguous blocks over the cores (when the
