@@ -36,14 +36,11 @@ inline void llk_math_gguf_decode_group_copy(const std::uint32_t dst_index, const
     sfpu::sfpu_gguf_decode_group_copy<FMT, DELTA>(dst_index, rows);
 }
 
-// PARAMS, BODY: phase 1 (scales) and phase 2 (codes); a decoded tile needs both, in that order. Block-float codes
-// (ckernel::gguf::bfp_codes) are in the 16-bit rows that the decoded tile's rows address; in the upper half of a
-// half-sync DEST those are rows 2 base + 64 dst_index, whose 32-bit rows alias the half's tiles (dest_srca_mm codes
-// post).
+// PARAMS, BODY: phase 1 (scales) and phase 2 (codes); a decoded tile needs both, in that order. sfpu_gguf_decode_start
+// adds the half-sync DEST base, once.
 template <std::uint32_t FMT, bool PARAMS = true, bool BODY = true, bool BESIDE_UNPACK = true>
 inline void llk_math_gguf_decode_tile(const std::uint32_t dst_index, const std::uint32_t ti, const std::uint32_t rows) {
-    const std::uint32_t r = sfpu::gguf::bfp_codes<FMT> ? rows + get_dest_buffer_base() : rows;
-    sfpu::sfpu_gguf_decode_tile<FMT, PARAMS, BODY, BESIDE_UNPACK>(dst_index, ti, r);
+    sfpu::sfpu_gguf_decode_tile<FMT, PARAMS, BODY, BESIDE_UNPACK>(dst_index, ti, rows);
 }
 
 // Whether phase 2 of FMT has DEST stores that are not arbitrated against the unpackers: no copy may run beside it.

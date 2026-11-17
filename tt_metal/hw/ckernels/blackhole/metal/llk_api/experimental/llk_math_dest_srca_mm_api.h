@@ -22,9 +22,9 @@ inline void llk_math_dest_srca_mm_page_post(const std::uint32_t dst_index) {
     _llk_math_dest_srca_mm_unpack_post_(dst_index);
 }
 
-// The codes' 16-bit rows: those of tile codes_index, 2 base + 64 codes_index, inside the DEST half in use.
+// The codes' 16-bit rows: those of tile codes_index, 64 codes_index past the DEST half in use.
 inline void llk_math_dest_srca_mm_codes_post(const std::uint32_t dst_index, const std::uint32_t codes_index) {
-    _llk_math_dest_srca_mm_codes_post_(dst_index, (codes_index << 6) + 2 * get_dest_buffer_base());
+    _llk_math_dest_srca_mm_codes_post_(dst_index, (codes_index << 6) + get_dest_buffer_base());
 }
 
 inline void llk_math_dest_srca_mm_page_wait(const std::uint32_t page_operand, const std::uint32_t dst_index) {
