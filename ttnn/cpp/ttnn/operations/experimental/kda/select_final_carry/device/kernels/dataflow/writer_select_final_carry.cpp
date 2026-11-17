@@ -19,14 +19,10 @@ constexpr uint32_t mode_cb = get_compile_time_arg_val(1);
 constexpr uint32_t packet_pages = get_compile_time_arg_val(2);
 constexpr uint32_t page_size = get_compile_time_arg_val(3);
 constexpr uint32_t line_targets = get_compile_time_arg_val(4);
-constexpr uint32_t start_hops_forward = get_compile_time_arg_val(5);
-constexpr uint32_t range_hops_forward = get_compile_time_arg_val(6);
-constexpr uint32_t start_hops_backward = get_compile_time_arg_val(7);
-constexpr uint32_t range_hops_backward = get_compile_time_arg_val(8);
 // On a 2D fabric whose SP axis turns, a multicast cannot follow the axis: every send goes to each other rank as a
 // 2D unicast instead (the per-peer connection, chip and mesh follow the connection arguments).
-constexpr bool unicast_peers = get_compile_time_arg_val(9);
-constexpr auto output_args = TensorAccessorArgs<10>();
+constexpr bool unicast_peers = get_compile_time_arg_val(5);
+constexpr auto output_args = TensorAccessorArgs<6>();
 
 // Write the final carry: the rank holding it writes it locally and multicasts it along the sequence-parallel line,
 // and the other ranks wait for its arrival.
@@ -36,6 +32,11 @@ void kernel_main() {
     size_t arg = 0;
     const uint32_t send_begin = get_arg_val<uint32_t>(arg++);
     const uint32_t send_end = get_arg_val<uint32_t>(arg++);
+    // The multicast's first hop and hop count in each direction (zero range: no neighbor that way).
+    const uint32_t start_hops_forward = get_arg_val<uint32_t>(arg++);
+    const uint32_t range_hops_forward = get_arg_val<uint32_t>(arg++);
+    const uint32_t start_hops_backward = get_arg_val<uint32_t>(arg++);
+    const uint32_t range_hops_backward = get_arg_val<uint32_t>(arg++);
     const auto output = TensorAccessor(output_args, output_address);
 
     cb_wait_front(mode_cb, 1);

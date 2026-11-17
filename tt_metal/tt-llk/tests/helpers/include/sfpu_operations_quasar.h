@@ -432,7 +432,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::i0)
     {
-        i0_init();
+        // The Compute API's i0_tile_init expression, so the bare init's dispatch to i0_init is what runs.
+        SFPU_UNARY_INIT(i0);
     }
     else if constexpr (OPERATION == SfpuType::i1)
     {
