@@ -6073,7 +6073,7 @@ class WhereGolden:
 
 @register_golden
 class TernarySFPUGolden:
-    """Golden for the ternary SFPU kernels (addcmul / addcdiv / lerp / snake_beta).
+    """Golden for the ternary SFPU kernels (addcmul / addcdiv / lerp / mac / snake_beta).
 
     All operate element-wise on three same-shaped operands (a, b, c) — and, for
     the addc kernels, a scalar constant — so, like where, each result depends only
@@ -6084,6 +6084,7 @@ class TernarySFPUGolden:
         addcmul:    out = a + (value * b * c)
         addcdiv:    out = a + (value * b / c)
         lerp:       out = a + c * (b - a)
+        mac:        out = a * b + c
         snake_beta: out = a + sin(b * a)^2 / c    (a=x, b=alpha, c=beta)
 
     Known limitation: this reference computes in fp32 with a single final cast,
@@ -6119,6 +6120,8 @@ class TernarySFPUGolden:
             result = a + (value * b / c)
         elif operation == MathOperation.SfpuLerp:
             result = a + c * (b - a)
+        elif operation == MathOperation.SfpuMac:
+            result = a * b + c
         elif operation == MathOperation.SfpuSnakeBeta:
             result = a + torch.sin(b * a) ** 2 / c
         else:

@@ -134,6 +134,8 @@
 // 2. Add the SfpuType enumerator if it is not there.
 // 3. Add the `if constexpr` branch in call_ternary_sfpu_operation_quasar()
 //    and init_ternary_sfpu_operation_quasar().
+#include "llk_sfpu/ckernel_sfpu_lerp.h"
+#include "llk_sfpu/ckernel_sfpu_mac.h"
 #include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 
@@ -2316,6 +2318,11 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     }
 }
 
+// lerp and mac take the Dest float format as a template argument and accept Float32 and Float16_b only; the
+// kernels branch on is_fp32_dest_acc_en, so the format follows the Dest precision.
+template <bool is_fp32_dest_acc_en>
+inline constexpr DataFormat ternary_float_format = is_fp32_dest_acc_en ? DataFormat::Float32 : DataFormat::Float16_b;
+
 /**
  * @brief Initialize shared SFPU state and the selected Quasar ternary operation.
  *
@@ -2330,6 +2337,17 @@ void init_ternary_sfpu_operation_quasar()
     if constexpr (OPERATION == SfpuType::where)
     {
         _llk_math_eltwise_ternary_sfpu_init_<OPERATION>();
+    }
+    else if constexpr (OPERATION == SfpuType::lerp)
+    {
+        // The Compute API's lerp_tile_init expression.
+        SFPU_TERNARY_INIT_FN(lerp, sfpu::lerp_init, (APPROX));
+    }
+    else if constexpr (OPERATION == SfpuType::mac)
+    {
+        // The Compute API's mac_tile_init expression. It records into replay bank 0, so it must run after any FPU
+        // datacopy MOP that stages the operands and immediately before the calculate step.
+        SFPU_TERNARY_INIT_FN(mac, sfpu::mac_init, (APPROX, is_fp32_dest_acc_en, ternary_float_format<is_fp32_dest_acc_en>));
     }
     else
     {
@@ -2367,6 +2385,37 @@ void call_ternary_sfpu_operation_quasar(
     {
         SFPU_TERNARY_CALL_TINY_TILE(
             DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_where, (APPROX, ITERATIONS), src0_tile, src1_tile, src2_tile, dst_tile, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::lerp)
+    {
+        // The Compute API's lerp_tile expression: out = src0 + src2 * (src1 - src0).
+        static_assert(TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32, "lerp addresses Dest in 32x32 tiles");
+        SFPU_TERNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_lerp,
+            (APPROX, is_fp32_dest_acc_en, ternary_float_format<is_fp32_dest_acc_en>, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            src2_tile,
+            dst_tile,
+            vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::mac)
+    {
+        // The Compute API's mac_tile expression: out = src0 * src1 + src2. The recorded body fixes the tiles to
+        // (0, 1, 2) -> 0, so the indices are checked but otherwise ignored by the kernel.
+        static_assert(TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32, "mac addresses Dest in 32x32 tiles");
+        SFPU_TERNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_mac,
+            (APPROX, is_fp32_dest_acc_en, ternary_float_format<is_fp32_dest_acc_en>, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            src2_tile,
+            dst_tile,
+            vector_mode);
     }
     else
     {
