@@ -32,6 +32,7 @@
  },
  "blackhole": {
   "perf_compressed_custom_mm": 8.2,
+  "perf_csa_index_remap": 12.5,
   "perf_custom_mm": 56.4,
   "perf_custom_mm_reuse_dest_srcb": 28.4,
   "perf_eltwise_add_scalar": 7.8,

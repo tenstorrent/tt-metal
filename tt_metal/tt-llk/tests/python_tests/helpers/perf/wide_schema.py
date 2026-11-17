@@ -95,6 +95,7 @@ DB_SCHEMA = [
     Column("clobber_lregs", "bool", True, "configuration"),
     Column("clobber_op", "int64", True, "configuration"),
     Column("ct_dim", "int64", True, "configuration"),
+    Column("csa_row_offset", "int64", True, "configuration"),
     Column("dest_sync", "string", True, "configuration"),
     Column("enable_direct_indexing", "bool", True, "configuration"),
     Column("dst_index", "int64", True, "configuration"),
