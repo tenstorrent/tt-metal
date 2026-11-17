@@ -12,4 +12,6 @@ import pytest
 
 def pytest_collection_modifyitems(items):
     for item in items:
-        item.add_marker(pytest.mark.use_module_device)
+        # Mesh tests (test_genify_matmul_mesh.py) use the root `mesh_device` fixture instead.
+        if "device" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.use_module_device)
