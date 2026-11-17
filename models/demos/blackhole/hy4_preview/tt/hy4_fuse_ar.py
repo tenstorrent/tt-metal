@@ -345,7 +345,11 @@ class Hy4FuseAR:
     def fused_with(self, rr, part, T=1):
         """ONE launch: Hy4RowsReduce (rr) on `part`, then this all-reduce on rr.out (FAR kernels wait for the RP writers' semaphore incs). Returns the landing tensor."""
         par, rr._par = rr._par, 1 - rr._par
-        ttnn.generic_op([part, rr.recvs[par], rr.out, self.recv, self.out], self._build(rr.out, T, rp=(rr, part, par)))
+        ttnn.generic_op(
+            [part, rr.recvs[par], rr.out, self.recv, self.out]
+            + ([rr.fold] if getattr(rr, "fold", None) is not None else []),
+            self._build(rr.out, T, rp=(rr, part, par)),
+        )
         return self.out
 
     def __call__(self, part, T=4):
@@ -367,8 +371,9 @@ class FusedPartial:
     """The un-reduced [1,1,T,6144] bf16 TILE DRAM partial of a column-sharded matmul (attention o_proj, MoE routed+shared): returned instead of the all-reduced tensor when the layer fuses
     the all-reduce into the next iHC pre call (``Hy4FuseAR`` + ``Hy4IHCFused.pre(land=...)``)."""
 
-    def __init__(self, part, rp=None):
+    def __init__(self, part, rp=None, fold=None):
         self.part = part
+        self.fold = fold  # B30 (HY4_B30_RPFOLD=1): the shared-expert output [1,1,T,6144] of this mesh row, added inside the rows-phase reducer (no placement matmul + add)
         self.rp = rp  # Hy4RowsReduce: `part` is then the TP32 [1,1,4T,6144] partial of the 4 token blocks (rows phase fused into the all-reduce program)
 
 
@@ -439,8 +444,11 @@ def pre_with(ihc, far, x, w4, y, pp_prev, x_out):
     T = int(x.shape[2]) // 4
     rp = getattr(y, "rp", None)
     if rp is not None:  # TP32 tail: rows-phase reduce + column all-reduce + iHC pre in ONE mesh program
-        res = ihc.pre(x, w4, fuse=(far, part, rp), pp_prev=pp_prev, x_out=x_out)
+        fold = getattr(y, "fold", None)
+        res = ihc.pre(x, w4, fuse=(far, part, rp) + ((fold,) if fold is not None else ()), pp_prev=pp_prev, x_out=x_out)
         ttnn.deallocate(part)
+        if fold is not None:
+            ttnn.deallocate(fold)
         return res
     if os.environ.get("HY4_FAR_FUSED", "1") == "1":  # stage 2b: AR + iHC pre in ONE mesh program
         res = ihc.pre(x, w4, fuse=(far, part), pp_prev=pp_prev, x_out=x_out)

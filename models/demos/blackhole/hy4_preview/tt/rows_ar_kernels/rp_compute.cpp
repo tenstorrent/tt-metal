@@ -18,10 +18,16 @@ void kernel_main() {
     constexpr uint32_t SUB = get_compile_time_arg_val(5);
     constexpr uint32_t MODE = get_compile_time_arg_val(6);  // debug 1: own chunk only (copy)
     constexpr uint32_t NR = NS - 1;
+#ifdef RP_FOLD
+    constexpr uint32_t CB_FLD = 14;
+#endif
 
     compute_kernel_hw_startup(CB_RECV, CB_RECV, CB_OUT);
     cb_wait_front(CB_OWN, Q);
     cb_wait_front(CB_RECV, NR * Q);
+#ifdef RP_FOLD
+    cb_wait_front(CB_FLD, Q);
+#endif
     cb_reserve_back(CB_OUT, Q);
     for (uint32_t t0 = 0; t0 < Q; t0 += SUB) {
         const uint32_t n = (Q - t0 < SUB) ? (Q - t0) : SUB;
@@ -38,6 +44,13 @@ void kernel_main() {
                 add_binary_tile(i, n, i);
             }
         }
+#ifdef RP_FOLD
+        copy_init(CB_FLD);
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_tile(CB_FLD, t0 + i, n);
+            add_binary_tile(i, n, i);
+        }
+#endif
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t i = 0; i < n; ++i) {
@@ -47,5 +60,8 @@ void kernel_main() {
     }
     cb_push_back(CB_OUT, Q);
     cb_pop_front(CB_OWN, Q);
+#ifdef RP_FOLD
+    cb_pop_front(CB_FLD, Q);
+#endif
     cb_pop_front(CB_RECV, NR * Q);
 }

@@ -131,6 +131,11 @@ class Hy4RowsReduce:
         out_addr = self.out.buffer_address()
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
         CB_RECV, CB_OUT, CB_STG, CB_PAY, CB_OWN, CB_SCR = 8, 9, 10, 11, 12, 13
+        fold = getattr(
+            self, "fold", None
+        )  # B30 (HY4_B30_RPFOLD=1): the shared-expert output [T rows] of this mesh row, added to the own block inside the reducer (needs the packed mode)
+        CB_FLD = 14
+        assert fold is None or self.pk
         link_p = [list(range(l * self.per, (l + 1) * self.per)) for l in range(self.links)]
         link_of = {p: l for l, ps in enumerate(link_p) for p in ps}
 
@@ -172,14 +177,16 @@ class Hy4RowsReduce:
                     ],
                 )
                 cb_scr = ttnn.CBDescriptor(
-                    total_size=NB * Q * 2 * self.rb,
+                    total_size=(NB + (1 if fold is not None else 0)) * Q * 2 * self.rb,
                     core_ranges=red_set,
                     format_descriptors=[
                         ttnn.CBFormatDescriptor(buffer_index=CB_SCR, data_format=ttnn.bfloat16, page_size=self.rb)
                     ],
                 )
                 NTC = self.ntc
-                cbs = [cb_recv, tcb(CB_OUT, NTC), cb_stg, tcb(CB_PAY, NB * NTC), tcb(CB_OWN, NTC), cb_scr]
+                cbs = [cb_recv, tcb(CB_OUT, NTC), cb_stg, tcb(CB_PAY, NB * NTC), tcb(CB_OWN, NTC), cb_scr] + (
+                    [tcb(CB_FLD, NTC)] if fold is not None else []
+                )
                 sems = [ttnn.SemaphoreDescriptor(s, ttnn.CoreType.WORKER, comm_set, 0) for s in range(1)]
                 kernels = []
                 rt_rd, rt_cp, rt_wr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -195,14 +202,17 @@ class Hy4RowsReduce:
                         kernel_source=f"{KDIR}/rp_reader.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=red_set,
-                        compile_time_args=[CB_RECV, Q, CB_OWN, CB_PAY, tileb, T, h, CB_STG, CB_SCR] + acc(part),
+                        compile_time_args=[CB_RECV, Q, CB_OWN, CB_PAY, tileb, T, h, CB_STG, CB_SCR]
+                        + acc(part)
+                        + (acc(fold) if fold is not None else []),
                         runtime_args=rt_rd,
-                        common_runtime_args=[in_addr, gsem_addr],
+                        common_runtime_args=[in_addr, gsem_addr]
+                        + ([fold.buffer_address()] if fold is not None else []),
                         config=ttnn.ReaderConfigDescriptor(),
                     )
                 )
                 if self.pk:
-                    kernels[-1].defines = [("RP_PK", "1")]
+                    kernels[-1].defines = [("RP_PK", "1")] + ([("RP_FOLD", "1")] if fold is not None else [])
                 kernels.append(
                     ttnn.KernelDescriptor(
                         kernel_source=(
@@ -231,6 +241,8 @@ class Hy4RowsReduce:
                         ),
                     )
                 )
+                if fold is not None:
+                    kernels[-1].defines = [("RP_FOLD", "1")]
                 kernels.append(
                     ttnn.KernelDescriptor(
                         kernel_source=f"{KDIR}/rp_writer.cpp",
@@ -296,5 +308,8 @@ class Hy4RowsReduce:
     def __call__(self, part):
         """part: [1,1,32,6144] bf16 TILE DRAM (rows 0..4T-1 valid). Returns self.out: rows 0..T-1 = this chip's token block reduced over the group of 4 chips (other rows 0)."""
         par, self._par = self._par, 1 - self._par
-        ttnn.generic_op([part, self.recvs[par], self.out], self._build(part, par))
+        ttnn.generic_op(
+            [part, self.recvs[par], self.out] + ([self.fold] if getattr(self, "fold", None) is not None else []),
+            self._build(part, par),
+        )
         return self.out

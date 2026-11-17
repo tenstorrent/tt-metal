@@ -28,7 +28,7 @@ try:
     W = load_moe_layer(1, load_experts=False)
     gate = Hy4Gate(md, W["gate_weight"], W["gate_bias"], mode="fused")
     assert gate._sk is not None, "HY4_SKINNY=router required"
-    blk = Hy4MoeTp32Block(md, ccl, gate, None, T)
+    blk = Hy4MoeTp32Block(md, ccl, gate, type("Tp24Experts", (), {})(), T)
     comp = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).reshape(-1)
 
     def mk(rep):
@@ -76,12 +76,22 @@ try:
                 p("MISMATCH", rep, d, ta.tolist(), tb.tolist())
         res["equal"].append(ok)
         p("EQUAL", rep, ok)
+    if os.environ.get("PROF") == "1":
+        tok, gt = mk(0)
+        xa = ttnn.to_layout(ttnn.reshape(blk._ag_rows(tok, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT)
+        for _ in range(4):
+            gate.route_words(xa)
+        ttnn.synchronize_device(md)
+        ttnn.ReadDeviceProfiler(md)
+        raise SystemExit(0)
     tok, gt = mk(0)
     res["us"]["path_a_router_pack_agroute"] = round(traced_us(md, lambda: path_a(tok, gt)), 1)
     res["us"]["path_b_agx_tilize_routelocal"] = round(traced_us(md, lambda: path_b(tok, gt)), 1)
     res["us"]["agx_tilize_only"] = round(
         traced_us(md, lambda: ttnn.to_layout(ttnn.reshape(blk._ag_rows(tok, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT)), 1
     )
+    xa = ttnn.to_layout(ttnn.reshape(blk._ag_rows(tok, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT)
+    res["us"]["route_words_only"] = round(traced_us(md, lambda: gate.route_words(xa)), 1)
     res["us"]["router_only"] = round(traced_us(md, lambda: gate.forward(gt)), 1)
     p("US", res["us"])
 finally:

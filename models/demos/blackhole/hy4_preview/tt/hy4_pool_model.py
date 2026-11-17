@@ -372,6 +372,11 @@ class Hy4PoolDecoder(Hy4Decoder):
             # HY4_TP32_TAIL=oneshot at the verify shape (verify-opt track): rows-phase reduce (packed T = S rows, nrp 24) + column all-reduce + the next iHC pre in ONE mesh program
             from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import FusedPartial
 
+            if part is not None and os.environ.get("HY4_B30_RPFOLD", "0") == "1":
+                pt = blk.forward_partial(
+                    h, tok, fold=None
+                )  # B30: the shared-expert output joins inside the rows-phase reducer
+                return FusedPartial(pt, rp=self.rp_v, fold=part)
             pt = blk.forward_partial(h, tok, fold=part)
             if part is not None:
                 ttnn.deallocate(part)

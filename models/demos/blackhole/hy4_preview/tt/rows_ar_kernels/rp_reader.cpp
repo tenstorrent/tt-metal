@@ -21,6 +21,11 @@ void kernel_main() {
     constexpr uint32_t CB_STG = get_compile_time_arg_val(7);
     constexpr uint32_t CB_SCR = get_compile_time_arg_val(8);
     constexpr auto in_args = TensorAccessorArgs<9>();
+#ifdef RP_FOLD  // B30: the shared-expert output of this mesh row ([T rows] std tile tensor) is added to the OWN block
+                // (CB_FLD, wire format of CB_OWN) instead of a separate placement matmul + add
+    constexpr uint32_t CB_FLD = 14;
+    constexpr auto fold_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+#endif
     constexpr uint32_t NB = 4;
     constexpr uint32_t NR = NB - 1;
 #ifdef RP_PK
@@ -43,6 +48,9 @@ void kernel_main() {
     const uint32_t by = get_arg_val<uint32_t>(7);
     const uint32_t sid = get_arg_val<uint32_t>(8);
     const auto in_acc = TensorAccessor(in_args, in_addr, 2048);
+#ifdef RP_FOLD
+    const auto fold_acc = TensorAccessor(fold_args, get_common_arg_val<uint32_t>(2), 2048);
+#endif
 
     cb_reserve_back(CB_RECV, NR * NTC);
     cb_reserve_back(CB_OWN, NTC);
@@ -83,6 +91,35 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
+#ifdef RP_FOLD
+        {
+            cb_reserve_back(CB_FLD, NTC);
+            const uint32_t fld = get_write_ptr(CB_FLD);
+            const uint32_t fscr =
+                scr + NB * Q * 2 * RB;  // scratch piece area after the NB blocks (CB_SCR holds NB + 1 of them)
+            for (uint32_t i = 0; i < Q; ++i) {
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_read(
+                        fold_acc.get_noc_addr(p * Q + i, f * 512),
+                        fscr + (i * 2 + f) * RB,
+                        RB);  // rows 0..T-1 of the fold tile
+                }
+            }
+            noc_async_read_barrier();
+            for (uint32_t i = 0; i < Q; ++i) {
+                for (uint32_t f = 0; f < 2; ++f) {
+                    for (uint32_t t = 0; t < T; ++t) {
+                        const uint32_t y = i * T + t;
+                        noc_async_write(
+                            fscr + (i * 2 + f) * RB + t * 32,
+                            get_noc_addr(fld + ((y >> 4) * 2 + f) * 512 + (y & 15) * 32),
+                            32);
+                    }
+                }
+            }
+            noc_async_write_barrier();
+        }
+#endif
 #else
         for (uint32_t b = 0; b < NB; ++b) {
             const uint32_t base = (b == r) ? own : (pay + b * CHUNK);
@@ -124,5 +161,8 @@ void kernel_main() {
     }
     noc_semaphore_set(sem, 0);
     cb_push_back(CB_OWN, NTC);
+#ifdef RP_FOLD
+    cb_push_back(CB_FLD, NTC);
+#endif
     cb_push_back(CB_RECV, NR * NTC);
 }

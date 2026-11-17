@@ -21,6 +21,9 @@ RED_AG = os.environ.get("HY4_TP32_RED", "") == "ag"
 ROUTE_LOCAL = (
     os.environ.get("HY4_TP32_ROUTE", "") == "local"
 )  # router on the gathered x (every chip routes all Tt tokens, writes the route words itself): no pack, no route all-gather
+ROUTE16 = (
+    os.environ.get("HY4_B30_ROUTE16", "0") == "1"
+)  # B30: ROUTE_LOCAL at Tt <= 16 (T=16 skinny router: 16-row tiles, two tokens per merge core)
 ROUTE_ROW = (
     os.environ.get("HY4_B29_ROUTE_ROW", "0") == "1"
 )  # B29 (default OFF): per-mesh-row router (T <= 8) writes the packed route words itself (skinny select merge ROUTE mode): no router_select program, no pack ops; the row all-gather stays
@@ -129,7 +132,12 @@ class Hy4MoeTp32Block:
         """router + gathers + TP32 kernel + shared-expert fold -> the un-reduced [1,1,4T,HID] bf16 TILE partial of this chip (rows = the Tt tokens of the 4 mesh rows in row order)."""
         T, Tt = self.T, self.Tt
         route_all = None
-        if ROUTE_LOCAL and forced_routing is None and Tt <= 8 and hasattr(self.gate, "route_words"):
+        if (
+            ROUTE_LOCAL
+            and forced_routing is None
+            and Tt <= (16 if ROUTE16 else 8)
+            and hasattr(self.gate, "route_words")
+        ):
             x_all = ttnn.to_layout(ttnn.reshape(self._ag_rows(tt_x_tokens, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT)
             self.last_routing = None
             route_all = self.gate.route_words(

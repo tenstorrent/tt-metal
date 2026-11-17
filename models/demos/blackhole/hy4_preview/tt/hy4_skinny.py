@@ -395,7 +395,10 @@ class SkinnyRouter:
         from models.demos.blackhole.hy4_preview.tt.hy4_router_select import router_select  # noqa: F401  (import check)
 
     def _scores_ks(self, x, T, select=False, route=False):
-        assert T <= 8 and (select or not route)
+        assert (T <= 8 or (route and T <= 16 and self.tiny != 8)) and (select or not route)
+        TR = (
+            16 if T > 8 else 8
+        )  # B30: fp32 partial / score / rank tile rows (T in 9..16: route mode, two tokens per select merge core)
         md, KL = self.md, self.KT // NB
         core_set = _core_set(self.cores)
         if select:
@@ -425,14 +428,14 @@ class SkinnyRouter:
         CB_X, CB_W, CB_P, CB_RED, CB_B, CB_S, CB_R = range(7)
         CB_SEL, CB_STG = 7, 8
         f32tile = lambda idx, n: ttnn.CBDescriptor(
-            total_size=1024 * n,
+            total_size=128 * TR * n,
             core_ranges=core_set,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=idx,
                     data_format=ttnn.float32,
-                    page_size=1024,
-                    tile=ttnn.TileDescriptor(ttnn.Tile([8, 32])),
+                    page_size=128 * TR,
+                    tile=ttnn.TileDescriptor(ttnn.Tile([TR, 32])),
                 )
             ],
         )
@@ -466,7 +469,7 @@ class SkinnyRouter:
                     ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.uint32, page_size=nbytes)
                 ],
             )
-            cbs += [raw(CB_SEL, 1024), raw(CB_STG, 1280)]
+            cbs += [raw(CB_SEL, 1024 * ((T + NB - 1) // NB)), raw(CB_STG, 128 * max(T, 8) + 256)]
         readers = []
         for i, cc in enumerate(self.cores):
             ph = [dict(addr=self.w.buffer_address(), sbk=KL, pn=NB, nsub=1, nbuf=ring // KL)]
@@ -527,6 +530,7 @@ class SkinnyRouter:
             int(select),
             int(route),
             T,
+            TR,
             XR,
             ring,
             self.w.buffer_address(),
@@ -677,7 +681,7 @@ class SkinnyRouter:
 
     def route(self, x, T):
         """x std tile bf16 [1,1,T,6144] (T <= 8, K-split + fused select only) -> the TP32 route tensor int32 RM [1,1,1,16 T] DRAM (per token 8 ids, 8 words = bf16 score bits), written by the select merge core of each token."""
-        assert self.ksplit and self.fsel and T <= 8
+        assert self.ksplit and self.fsel and T <= 16
         return self._scores_ks(x, T, select=True, route=True)
 
     def forward(self, x, T):
