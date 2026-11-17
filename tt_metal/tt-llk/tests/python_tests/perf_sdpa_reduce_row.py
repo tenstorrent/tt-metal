@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Blaze perf coverage for the supported Max row reduction.
-
-Sum remains a documented functional skip, and MATH_ISOLATE is omitted because
-MATH only stages SrcA into Dest; the SDPA reduction itself runs on PACK.
+"""MATH_ISOLATE is omitted because MATH only stages SrcA into Dest; the SDPA
+reduction itself runs on PACK.
 """
 
 import pytest
