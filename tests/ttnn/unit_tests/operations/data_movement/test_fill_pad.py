@@ -112,6 +112,31 @@ def test_fill_pad_float(
     assert_quality(padded_torch_tensor, padded_torch_output_tensor)
 
 
+# Two ranges away from core (0, 0), like a sub-device partition. 8 cores give an uneven work split.
+SUB_CORE_GRIDS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 3)),
+        ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 1)),
+    ]
+)
+
+
+@pytest.mark.parametrize("shape", [(17, 17), (97, 97), (1, 2, 3, 97, 97)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_fill_pad_sub_core_grids(device, shape, dtype):
+    torch.manual_seed(1234)
+    fill_value = 1.5
+    torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
+        shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
+    )
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, sub_core_grids=SUB_CORE_GRIDS)
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
+
+    assert_quality(padded_torch_tensor, padded_torch_output_tensor)
+
+
 BLOCK_FLOAT_FILL_PAD = {
     ttnn.bfloat8_b: {"pcc": 0.9999, "fill_values": (1.5, float("inf"), float("-inf"))},
     ttnn.bfloat4_b: {"pcc": 0.95, "fill_values": (1.5,)},

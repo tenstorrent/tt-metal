@@ -219,6 +219,7 @@ tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu
 tt_metal/impl/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/impl/program/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/sources.cmake @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @cfjchu @riverwuTT @akerteszTT
+tt_metal/impl/sram_arena/ @riverwuTT @akerteszTT
 tt_metal/impl/sub_device/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/tensor/ @akerteszTT @riverwuTT @aliaksei-sala
 tt_metal/impl/threading/ @cfjchu @tt-asaigal @msudumbrekar-TT @ezaiakinTT
@@ -678,6 +679,7 @@ models/demos/wormhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn 
 models/experimental/ @tenstorrent/metalium-models-maintainers
 models/experimental/bevformer/ @mbezuljTT @njovanovicTT @ctr-ikasicTT @ctr-mdukicTT @ctr-mmicicTT @tenstorrent/metalium-models-maintainers
 models/experimental/exaone45_vl @changh95 @tenstorrent/metalium-models-maintainers
+models/experimental/kimi_k3_moonvit_v2/ @grechsteinerTT @sjameelTT @tenstorrent/metalium-models-maintainers
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers
 /models/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT @tenstorrent/metalium-models-maintainers
 models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers

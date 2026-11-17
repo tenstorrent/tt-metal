@@ -21,6 +21,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     MATH_TRANSPOSE_FACES,
     NUM_BLOCKS,
     NUM_FACES,
@@ -314,7 +315,11 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
     configuration = TestConfig(
         "sources/transpose_dest_test.cpp",
         formats,
-        templates=[MATH_TRANSPOSE_FACES(math_transpose_faces)],
+        templates=[
+            # The kernel only syncs Dest in halves.
+            DEST_SYNC(DestSync.Half),
+            MATH_TRANSPOSE_FACES(math_transpose_faces),
+        ],
         runtimes=[
             # When math_transpose_faces is False, unpack_transpose_faces should be Transpose.Yes
             # This mode is supported only for 32-bit dest

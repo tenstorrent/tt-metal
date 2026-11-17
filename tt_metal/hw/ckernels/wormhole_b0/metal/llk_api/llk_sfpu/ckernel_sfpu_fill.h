@@ -33,7 +33,7 @@ inline void _calculate_fill_int_(const std::uint32_t value) {
             sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = fill_val;
             sfpi::dst_reg++;
         }
-    } else if constexpr (INSTRUCTION_MODE == InstrModLoadStore::LO16) {
+    } else if constexpr (INSTRUCTION_MODE == InstrModLoadStore::UINT16) {
         // Materialize the 16-bit immediate once, outside the loop
         sfpi::vUInt fill_val = static_cast<std::uint16_t>(value & 0xFFFF);
         for (int d = 0; d < ITERATIONS; d++) {
@@ -41,7 +41,7 @@ inline void _calculate_fill_int_(const std::uint32_t value) {
             sfpi::dst_reg++;
         }
     } else {
-        static_assert(false, "INSTRUCTION_MODE must be one of: INT32, LO16.");
+        static_assert(false, "INSTRUCTION_MODE must be one of: INT32, UINT16.");
     }
 }
 

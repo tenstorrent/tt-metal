@@ -14,6 +14,8 @@ message FactorySystemDescriptor {
         // Instance path segments from the root to this host, e.g.
         // ["bh_galaxy_sp_0", "bh_galaxy_node_0", "node_0"].
         repeated string instance_path = 7;
+        // This host's node type as named in the cabling descriptor, e.g. "BH_GALAXY_REV_C_XY_TORUS".
+        string node_type = 8;
     }
 
     message BoardLocationType {
