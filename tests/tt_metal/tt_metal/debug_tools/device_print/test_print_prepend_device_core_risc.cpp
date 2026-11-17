@@ -187,12 +187,14 @@ TEST_F(DevicePrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     }
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
+    bool ran = false;
     for (auto& mesh_device : this->devices_) {
         if (mesh_device->impl().get_devices()[0]->get_active_ethernet_cores(true).empty()) {
             const auto device_id = mesh_device->get_device_ids()[0];
             log_info(tt::LogTest, "Skipping device {} due to no active ethernet cores...", device_id);
             continue;
         }
+        ran = true;
         this->RunTestOnDevice(
             [](DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device, true);
@@ -201,4 +203,7 @@ TEST_F(DevicePrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     }
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, false);
+    if (!ran) {
+        GTEST_SKIP() << "No device has an active ethernet core";
+    }
 }

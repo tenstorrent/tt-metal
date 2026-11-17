@@ -5,11 +5,15 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 
+#include <fmt/ranges.h>
 #include <gmock/gmock.h>
 
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+
+#include "impl/program/slow_dispatch.hpp"
+#include "tests/tt_metal/tt_metal/eth/eth_test_common.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -162,6 +166,264 @@ public:
             EXPECT_TRUE(FileContainsNoneOfStrings(dprint_file_name, absent));
         }
     }
+
+    // Runs the kernel on every RISC type that can run it on each device, one RISC type at a time, and checks that every
+    // RISC that ran it printed exactly `expected_lines`, in order, and that nothing else printed.
+    void TestOutputOnEveryRisc(
+        const std::string& kernel_path,
+        const std::vector<std::string>& expected_lines,
+        ttsl::Span<const uint32_t> runtime_args = {}) {
+        ForEveryRisc(kernel_path, runtime_args, [&](const std::string& label, const std::vector<std::string>& lines) {
+            return LinesMatchGlobs(label, lines, expected_lines);
+        });
+    }
+
+    // TestCallstack on every RISC type: each RISC's lines contain `present` in order and none of `absent`.
+    void TestCallstackOnEveryRisc(
+        const std::string& kernel_path,
+        const std::vector<std::string>& present,
+        const std::vector<std::string>& absent = {}) {
+        ForEveryRisc(kernel_path, {}, [&](const std::string& label, const std::vector<std::string>& lines) {
+            std::size_t next = 0;
+            for (const auto& line : lines) {
+                while (next < present.size() && StringContainsGlob(line, present[next])) {
+                    next++;
+                }
+                for (const auto& forbidden : absent) {
+                    if (StringContainsGlob(line, forbidden)) {
+                        log_info(tt::LogTest, "Test Error: {} printed \"{}\":\n\t{}", label, forbidden, line);
+                        return false;
+                    }
+                }
+            }
+            if (next < present.size()) {
+                log_info(tt::LogTest, "Test Error: {} never printed \"{}\" in order", label, present[next]);
+                return false;
+            }
+            return true;
+        });
+    }
+
+private:
+    using RunKernel = std::function<void(
+        const std::shared_ptr<distributed::MeshDevice>&, const std::string& kernel_path, ttsl::Span<const uint32_t>)>;
+
+    // A RISC type the tests print from, with how to run a kernel on it.
+    struct PrintRisc {
+        std::string name;  // for failure messages
+        CoreCoord core;    // the logical core the kernel runs on
+        // The RISC names in its lines' prefix. Left empty where this file doesn't know them (Quasar); then only the
+        // number of RISCs that print is checked.
+        std::vector<std::string> prefix_names;
+        std::size_t num_riscs = 1;  // how many RISCs of the core run the kernel
+        bool needs_fresh_devices = false;
+        RunKernel run;
+    };
+
+    // Runs the kernel on each PrintRisc of each device, with the prefix on, and checks that exactly that RISC type's
+    // RISCs printed, each with lines that `lines_match(label, lines)` accepts.
+    void ForEveryRisc(
+        const std::string& kernel_path,
+        ttsl::Span<const uint32_t> runtime_args,
+        const std::function<bool(const std::string& label, const std::vector<std::string>& lines)>& lines_match) {
+        MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, true);
+        for (auto& mesh_device : this->devices_) {
+            const ChipId device_id = mesh_device->get_device_ids()[0];
+            for (const auto& risc : PrintRiscs(mesh_device)) {
+                SCOPED_TRACE(fmt::format("device {}, {}", device_id, risc.name));
+                if (risc.needs_fresh_devices) {
+                    RequestFreshDevicesAfterThisTest();
+                }
+                MetalContext::instance().dprint_server()->clear_log_file();
+                risc.run(mesh_device, kernel_path, runtime_args);
+
+                const std::string core = fmt::format("{}:{}", device_id, risc.core.str());
+                bool matches = true;
+                std::vector<std::string> names;
+                for (const auto& [prefix, lines] : ReadLinesPerRisc(dprint_file_name)) {
+                    if (DevicePrintPrefixCore(prefix) != core) {
+                        ADD_FAILURE() << (prefix.empty() ? std::string("a line without the prefix") : prefix)
+                                      << " printed, but the kernel ran on " << core
+                                      << "; first line: " << lines.front();
+                        matches = false;
+                        continue;
+                    }
+                    names.push_back(prefix.substr(core.size() + 1));
+                    if (!lines_match(fmt::format("{} in {}", prefix, dprint_file_name), lines)) {
+                        ADD_FAILURE() << prefix << " printed unexpected lines";
+                        matches = false;
+                    }
+                }
+                if (risc.prefix_names.empty()) {
+                    EXPECT_EQ(names.size(), risc.num_riscs)
+                        << "RISCs that printed: " << fmt::format("{}", fmt::join(names, ", "));
+                    matches = matches && names.size() == risc.num_riscs;
+                } else {
+                    EXPECT_THAT(names, ::testing::UnorderedElementsAreArray(risc.prefix_names));
+                    matches =
+                        matches && std::is_permutation(
+                                       names.begin(), names.end(), risc.prefix_names.begin(), risc.prefix_names.end());
+                }
+                if (!matches) {
+                    DumpFile(dprint_file_name);
+                }
+            }
+        }
+    }
+
+    // The RISC types of a device that can run a kernel in this dispatch mode.
+    std::vector<PrintRisc> PrintRiscs(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        const auto& hal = MetalContext::instance().hal();
+        const bool quasar = mesh_device->arch() == tt::ARCH::QUASAR;
+        std::vector<PrintRisc> riscs;
+
+        if (quasar) {
+            riscs.push_back(
+                {.name = "DM",
+                 .core = kDefaultPrintNode,
+                 .run = RunOnTensix(experimental::DataMovementHardwareConfig{})});
+        } else {
+            for (const auto& [processor, noc, name, prefix] :
+                 {std::tuple{DataMovementProcessor::RISCV_0, NOC::NOC_0, "BRISC", "BR"},
+                  std::tuple{DataMovementProcessor::RISCV_1, NOC::NOC_1, "NCRISC", "NC"}}) {
+                riscs.push_back(
+                    {.name = name,
+                     .core = kDefaultPrintNode,
+                     .prefix_names = {prefix},
+                     .run = RunOnTensix(experimental::DataMovementHardwareConfig{
+                         .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                             .processor = processor, .noc = noc}})});
+            }
+        }
+
+        // A compute kernel runs on every TRISC of one Tensix engine.
+        const uint32_t num_triscs = hal.get_processor_class_num_fw_binaries(
+            hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX),
+            static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
+        riscs.push_back(
+            {.name = "compute",
+             .core = kDefaultPrintNode,
+             .prefix_names = quasar ? std::vector<std::string>{} : std::vector<std::string>{"TR0", "TR1", "TR2"},
+             .num_riscs = num_triscs,
+             .run = RunOnTensix(experimental::ComputeHardwareConfig{})});
+
+        // Ethernet kernels run only in slow dispatch, and this file places them on Wormhole and Blackhole only.
+        auto* device = mesh_device->impl().get_devices()[0];
+        if (!quasar && IsSlowDispatch()) {
+            for (const bool active : {true, false}) {
+                const auto cores =
+                    active ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+                if (cores.empty()) {
+                    continue;
+                }
+                const auto core_type = active ? HalProgrammableCoreType::ACTIVE_ETH : HalProgrammableCoreType::IDLE_ETH;
+                const uint32_t num_eriscs = hal.get_num_risc_processors(core_type);
+                const CoreCoord core = *std::min_element(cores.begin(), cores.end());
+                for (uint32_t erisc = 0; erisc < num_eriscs; erisc++) {
+                    riscs.push_back(
+                        {.name = fmt::format("{} ERISC{}", active ? "active" : "idle", erisc),
+                         .core = core,
+                         .prefix_names = {num_eriscs == 1 ? std::string("ER") : fmt::format("ER{}", erisc)},
+                         .needs_fresh_devices = !active,
+                         .run = RunOnEthernet(core, static_cast<DataMovementProcessor>(erisc), active)});
+                }
+            }
+        }
+
+        if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+            riscs.push_back({.name = "DRISC", .core = kDramPrintCore, .prefix_names = {"DR"}, .run = RunOnDram()});
+        }
+        return riscs;
+    }
+
+    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint, which runs no DRISC firmware; subchannel 1 does.
+    static constexpr CoreCoord kDramPrintCore{0, 1};
+
+    static distributed::MeshCoordinateRange FirstDevice() {
+        const distributed::MeshCoordinate zero(0, 0);
+        return distributed::MeshCoordinateRange(zero, zero);
+    }
+
+    // A kernel on kDefaultPrintNode, placed through the Metal 2.0 host API (Tensix only).
+    RunKernel RunOnTensix(
+        const std::variant<experimental::DataMovementHardwareConfig, experimental::ComputeHardwareConfig>& hw_config) {
+        return [this, hw_config](
+                   const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+                   const std::string& kernel_path,
+                   ttsl::Span<const uint32_t> runtime_args) {
+            const experimental::KernelSpecName name{"print"};
+            experimental::KernelSpec kernel{
+                .unique_id = name,
+                .source = std::filesystem::path{kernel_path},
+                .num_threads = 1,
+                .hw_config = hw_config,
+            };
+            kernel.advanced_options.num_runtime_varargs = static_cast<uint32_t>(runtime_args.size());
+            experimental::ProgramSpec spec{
+                .name = "dprint_every_risc",
+                .kernels = {kernel},
+                .work_units = {experimental::WorkUnitSpec{
+                    .name = "main", .kernels = {name}, .target_nodes = kDefaultPrintNode}},
+            };
+            Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+            // SetProgramRunArgs rejects run args for a kernel that declares none.
+            if (!runtime_args.empty()) {
+                experimental::ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = name};
+                kernel_run_args.advanced_options.runtime_varargs[kDefaultPrintNode] =
+                    std::vector<uint32_t>(runtime_args.begin(), runtime_args.end());
+                experimental::ProgramRunArgs run_args;
+                run_args.kernel_run_args.push_back(std::move(kernel_run_args));
+                experimental::SetProgramRunArgs(program, run_args);
+            }
+            distributed::MeshWorkload workload;
+            workload.add_program(FirstDevice(), std::move(program));
+            RunProgram(mesh_device, workload);
+        };
+    }
+
+    // A kernel on one ERISC of an Ethernet core, placed through the original host API.
+    RunKernel RunOnEthernet(const CoreCoord& core, DataMovementProcessor processor, bool active) {
+        return [this, core, processor, active](
+                   const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+                   const std::string& kernel_path,
+                   ttsl::Span<const uint32_t> runtime_args) {
+            distributed::MeshWorkload workload;
+            workload.add_program(FirstDevice(), CreateProgram(*mesh_device));
+            Program& program = workload.get_programs().at(FirstDevice());
+            EthernetConfig config{.noc = static_cast<NOC>(processor), .processor = processor};
+            config.eth_mode = active ? Eth::SENDER : Eth::IDLE;
+            eth_test_common::set_arch_specific_eth_config(config);
+            const KernelHandle kernel = CreateKernel(program, kernel_path, core, config);
+            SetRuntimeArgs(program, kernel, core, runtime_args);
+            RunProgram(mesh_device, workload);
+        };
+    }
+
+    // A kernel on the DRISC of kDramPrintCore. Fast dispatch can't launch DRAM-core kernels, so there it is launched
+    // the way resident DRAM-core kernels are; its prints still go through the fast-dispatch print path.
+    RunKernel RunOnDram() {
+        return [this](
+                   const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+                   const std::string& kernel_path,
+                   ttsl::Span<const uint32_t> runtime_args) {
+            distributed::MeshWorkload workload;
+            workload.add_program(FirstDevice(), CreateProgram(*mesh_device));
+            Program& program = workload.get_programs().at(FirstDevice());
+            const KernelHandle kernel =
+                CreateKernel(program, kernel_path, kDramPrintCore, DramConfig{.noc = tt_metal::NOC::NOC_0});
+            SetRuntimeArgs(program, kernel, kDramPrintCore, runtime_args);
+            if (IsSlowDispatch()) {
+                RunProgram(mesh_device, workload);
+                return;
+            }
+            IDevice* device = mesh_device->impl().get_devices()[0];
+            program.impl().compile(device, /*force_slow_dispatch=*/true);
+            slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);
+            slow_dispatch::WaitProgramDone(*device, program);
+            MetalContext::instance().dprint_server()->await();
+        };
+    }
 };
 
 TEST_F(DevicePrintOutputFixture, PrintSimpleString) {
@@ -171,7 +433,7 @@ TEST_F(DevicePrintOutputFixture, PrintSimpleString) {
         "Second line.",
     };
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_simple_string.cpp", messages);
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_simple_string.cpp", messages);
 }
 
 TEST_F(DevicePrintOutputFixture, PrintSingleUintArg) {
@@ -180,7 +442,8 @@ TEST_F(DevicePrintOutputFixture, PrintSingleUintArg) {
         "Printing uint32_t from arg: 42",
     };
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_single_uint_arg.cpp", messages, runtime_args);
+    TestOutputOnEveryRisc(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_single_uint_arg.cpp", messages, runtime_args);
 }
 
 TEST_F(DevicePrintOutputFixture, PrintFactorial) {
@@ -189,7 +452,8 @@ TEST_F(DevicePrintOutputFixture, PrintFactorial) {
         "factorial(5) = 120",
     };
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_factorial.cpp", messages, runtime_args);
+    TestOutputOnEveryRisc(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_factorial.cpp", messages, runtime_args);
 }
 
 TEST_F(DevicePrintOutputFixture, PrintBasicTypes) {
@@ -213,7 +477,7 @@ TEST_F(DevicePrintOutputFixture, PrintBasicTypes) {
         "Repeated args: 32 -16 0x20 -16",
     };
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_basic_types.cpp", messages);
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_basic_types.cpp", messages);
 }
 
 TEST_F(DevicePrintOutputFixture, PrintWithFormatSpecified) {
@@ -244,7 +508,7 @@ TEST_F(DevicePrintOutputFixture, PrintManyIterations) {
         messages.push_back("Test iteration: " + std::to_string(i));
     }
 
-    TestOutput(kPrintIterationsKernel, messages, runtime_args);
+    TestOutputOnEveryRisc(kPrintIterationsKernel, messages, runtime_args);
 }
 
 // Test that printing from multiple RISCs on the same core works and doesn't interleave messages.
@@ -355,11 +619,11 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
 // risc_count_per_iter * num_worker_cores times: fewer => the aggregation dropped data, more =>
 // it duplicated data. Run with TT_METAL_DEVICE_PRINT=1 to route through the DRAM aggregation path.
 TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscsAllWorkers) {
+    if (this->arch_ != tt::ARCH::WORMHOLE_B0 && this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Wormhole and Blackhole only";
+    }
     size_t device_counter = 0;
     for (auto& mesh_device : this->devices_) {
-        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
-            continue;  // WH/BH only.
-        }
         device_counter++;
 
         distributed::MeshWorkload workload;
@@ -435,11 +699,11 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscsAllWorkers) {
 // DMs* (DM2..DM7). Isolates whether the contention bug is within a single rocket-core group, or
 // requires the mix of rocket + baby-risc contenders.
 TEST_F(DevicePrintOutputFixture, PrintConcurrentRocketRiscs) {
+    if (this->arch_ != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar only: rocket cores are a Quasar-specific concept";
+    }
     size_t device_counter = 0;
     for (auto& mesh_device : this->devices_) {
-        if (mesh_device->arch() != tt::ARCH::QUASAR) {
-            continue;  // Quasar-only: rocket cores are a Quasar-specific concept.
-        }
         device_counter++;
 
         distributed::MeshWorkload workload;
@@ -482,11 +746,11 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentRocketRiscs) {
 // (4 Tensix engines × 4 TRISCs = 16 threads). Complements PrintConcurrentRocketRiscs so we can
 // localize the locking bug to rocket-only, baby-risc-only, or the cross-group case.
 TEST_F(DevicePrintOutputFixture, PrintConcurrentBabyRiscs) {
+    if (this->arch_ != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar only";
+    }
     size_t device_counter = 0;
     for (auto& mesh_device : this->devices_) {
-        if (mesh_device->arch() != tt::ARCH::QUASAR) {
-            continue;  // Quasar-only.
-        }
         device_counter++;
 
         distributed::MeshWorkload workload;
@@ -562,7 +826,7 @@ TEST_F(DevicePrintOutputFixture, PrintAllArgumentSizes) {
         "32 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32",
     };
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", messages);
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", messages);
 }
 
 // When DWARF debug info is present in the ELF, enum values are printed as their symbolic names.
@@ -586,7 +850,7 @@ TEST_F(DevicePrintOutputFixture, PrintEnumValue) {
         "BitEnum full name value: flags::BitEnum::Flag2 | flags::BitEnum::Flag3",
     };
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_enum_value.cpp", messages);
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_enum_value.cpp", messages);
 }
 
 TEST_F(DevicePrintOutputFixture, PrintBuiltinTypes) {
@@ -601,7 +865,7 @@ TEST_F(DevicePrintOutputFixture, PrintBuiltinTypes) {
         "cvllu=98765432109876",
     };
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", messages);
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", messages);
 }
 
 TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
@@ -612,7 +876,7 @@ TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
         "Compile time string: Hello world!",
     };
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", messages);
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", messages);
 }
 
 // Type names are extracted from __PRETTY_FUNCTION__ at compile time and resolved from the ELF on the
@@ -627,7 +891,7 @@ TEST_F(DevicePrintOutputFixture, PrintTypeName) {
         "with value: float = 1",
     };
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_type_name.cpp", messages);
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_type_name.cpp", messages);
 }
 
 TEST_F(DevicePrintOutputFixture, PrintReorder) {
@@ -758,7 +1022,7 @@ TEST_F(DevicePrintOutputFixture, PrintCallstackSkipUnderflow) {
 }
 
 TEST_F(DevicePrintOutputFixture, PrintCallstackCurrent) {
-    TestCallstack(
+    TestCallstackOnEveryRisc(
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_helper.cpp",
         /* present */ {"CALLSTACK_BEGIN", "kernel_main", "CALLSTACK_END"},
         /* absent */ {"current"});

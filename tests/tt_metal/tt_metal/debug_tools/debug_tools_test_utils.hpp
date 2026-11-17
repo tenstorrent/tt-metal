@@ -6,6 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <deque>
@@ -400,6 +401,47 @@ inline std::map<std::string, std::vector<std::string>> ReadLinesPerRisc(const st
     return lines_per_risc;
 }
 
+// Checks that `actual` holds exactly the `expected` lines, in order. Expected lines may use the '*' and '?' globs. On
+// a mismatch, logs the first difference, naming the lines `label` (for example "0:1-2:TR0 in <file>").
+inline bool LinesMatchGlobs(
+    std::string_view label, const std::vector<std::string>& actual, const std::vector<std::string>& expected) {
+    for (std::size_t i = 0; i < std::max(actual.size(), expected.size()); i++) {
+        if (i >= actual.size()) {
+            log_info(
+                tt::LogTest,
+                "Test Error: {} has {} line(s), expected {}; line {} should be:\n\t{}",
+                label,
+                actual.size(),
+                expected.size(),
+                i + 1,
+                expected[i]);
+            return false;
+        }
+        if (i >= expected.size()) {
+            log_info(
+                tt::LogTest,
+                "Test Error: {} has {} line(s), expected {}; line {} is:\n\t{}",
+                label,
+                actual.size(),
+                expected.size(),
+                i + 1,
+                actual[i]);
+            return false;
+        }
+        if (!StringMatchesGlob(actual[i], expected[i])) {
+            log_info(
+                tt::LogTest,
+                "Test Error: line {} of {} did not match expected:\n\t{}\n\t{}",
+                i + 1,
+                label,
+                actual[i],
+                expected[i]);
+            return false;
+        }
+    }
+    return true;
+}
+
 // Checks a DPRINT log written with the prefix: each RISC printed exactly its expected lines, in order, and nothing
 // else was printed. Keys are prefixes such as "0:1-2:TR0"; expected lines may use the '*' and '?' globs. On a
 // mismatch, logs the whole file.
@@ -419,48 +461,14 @@ inline bool FileMatchesLinesPerRisc(
             matches = false;
         }
     }
+    const std::vector<std::string> no_lines;
     for (const auto& [prefix, expected_lines] : expected) {
         const auto it = actual.find(prefix);
-        const std::size_t num_actual = it == actual.end() ? 0 : it->second.size();
-        for (std::size_t i = 0; i < std::max(num_actual, expected_lines.size()); i++) {
-            if (i >= num_actual) {
-                log_info(
-                    tt::LogTest,
-                    "Test Error: {} printed {} line(s) in {}, expected {}; line {} should be:\n\t{}",
-                    prefix,
-                    num_actual,
-                    file_name,
-                    expected_lines.size(),
-                    i + 1,
-                    expected_lines[i]);
-                matches = false;
-                break;
-            }
-            if (i >= expected_lines.size()) {
-                log_info(
-                    tt::LogTest,
-                    "Test Error: {} printed {} line(s) in {}, expected {}; line {} is:\n\t{}",
-                    prefix,
-                    num_actual,
-                    file_name,
-                    expected_lines.size(),
-                    i + 1,
-                    it->second[i]);
-                matches = false;
-                break;
-            }
-            if (!StringMatchesGlob(it->second[i], expected_lines[i])) {
-                log_info(
-                    tt::LogTest,
-                    "Test Error: line {} of {} in {} did not match expected:\n\t{}\n\t{}",
-                    i + 1,
-                    prefix,
-                    file_name,
-                    it->second[i],
-                    expected_lines[i]);
-                matches = false;
-                break;
-            }
+        if (!LinesMatchGlobs(
+                fmt::format("{} in {}", prefix, file_name),
+                it == actual.end() ? no_lines : it->second,
+                expected_lines)) {
+            matches = false;
         }
     }
     if (!matches) {

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/debug/device_print.h"
+#if defined(COMPILE_FOR_TRISC)
+#include "api/compute/common.h"  // get_arg_val
+#endif
 
 /*
  * Test printing from a kernel running on BRISC.

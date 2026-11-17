@@ -104,6 +104,7 @@ EthernetConfig make_active_eth_config() {
 TEST_F(DevicePrintFixture, TwoWorkerKernelsSameProgram) {
     MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
+    bool ran = false;
     for (auto& mesh_device : this->devices_) {
         // Kernel placement is bounds-checked against the compute grid, which is a single node on
         // some Quasar configurations.
@@ -112,6 +113,7 @@ TEST_F(DevicePrintFixture, TwoWorkerKernelsSameProgram) {
             log_info(tt::LogTest, "Skipping device (need a compute grid at least 2 wide, have {}x{})", grid.x, grid.y);
             continue;
         }
+        ran = true;
 
         distributed::MeshWorkload workload;
         workload.add_program(single_device_range(), make_worker_print_program(*mesh_device, {{0, 0}, {1, 0}}));
@@ -120,6 +122,9 @@ TEST_F(DevicePrintFixture, TwoWorkerKernelsSameProgram) {
         expect_one_risc_per_core_printed(
             this->dprint_file_name, mesh_device->get_device_ids()[0], {{0, 0}, {1, 0}}, kWorkerExpected);
         MetalContext::instance().dprint_server()->clear_log_file();
+    }
+    if (!ran) {
+        GTEST_SKIP() << "No device has a compute grid at least 2 wide";
     }
 }
 
@@ -131,6 +136,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
     }
     MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
+    bool ran = false;
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->impl().get_devices()[0];
         const auto eth_cores = device->get_active_ethernet_cores(true);
@@ -139,6 +145,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
                 tt::LogTest, "Skipping device {} (need >=2 active ETH cores, have {})", device->id(), eth_cores.size());
             continue;
         }
+        ran = true;
 
         distributed::MeshWorkload workload;
         Program& program = add_empty_program(*mesh_device, workload);
@@ -153,6 +160,9 @@ TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
             std::vector<CoreCoord>(eth_cores.begin(), eth_cores.end()),
             kEriscExpected);
         MetalContext::instance().dprint_server()->clear_log_file();
+    }
+    if (!ran) {
+        GTEST_SKIP() << "No device has two active ethernet cores";
     }
 }
 
@@ -178,6 +188,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthProgramsBackToBack) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
+    bool ran = false;
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->impl().get_devices()[0];
         const auto eth_cores = device->get_active_ethernet_cores(true);
@@ -185,6 +196,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthProgramsBackToBack) {
             log_info(tt::LogTest, "Skipping device {} (no active ETH cores)", device->id());
             continue;
         }
+        ran = true;
 
         const CoreCoord core = *eth_cores.begin();
         const EthernetConfig config = make_active_eth_config();
@@ -200,5 +212,8 @@ TEST_F(DevicePrintFixture, TwoActiveEthProgramsBackToBack) {
         expected.insert(expected.end(), kEriscExpected.begin(), kEriscExpected.end());
         EXPECT_TRUE(FileMatchesLines(this->dprint_file_name, expected));
         MetalContext::instance().dprint_server()->clear_log_file();
+    }
+    if (!ran) {
+        GTEST_SKIP() << "No device has an active ethernet core";
     }
 }
