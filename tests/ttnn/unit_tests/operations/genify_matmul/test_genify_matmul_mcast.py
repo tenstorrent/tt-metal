@@ -10,7 +10,11 @@ Pins what the golden suite does not see:
     part in every line multicast (CB pointers in lockstep) and write nothing for them;
   - staggered vs first-core injectors give bit-identical results (same K order, only the source of
     the operand bytes changes);
-  - a per-core walk that would be one K-block is split in SINGLE_WALK_K_BLOCKS (read overlaps compute).
+  - a per-core walk that would be one K-block is split in SINGLE_WALK_K_BLOCKS (read overlaps compute);
+  - Refinement 11: the split cost model's plans for narrow N / mid M (proj_out and the text-encoder qkv go
+    R1a; a short helper-walk R1a walk is re-split into MIN_K_BLOCKS K-blocks).
+The orientation / padded-tail / single-walk cases pin the plans they exercise under the legacy ranking
+(SPLIT_COST_MODEL = False, MIN_K_BLOCKS = 1), which still produces them.
 Accuracy gate: helpers.TOLERANCES via run_genify_matmul (the golden-suite runner).
 """
 
@@ -69,7 +73,8 @@ def _run(inputs, epilogue, device):
         ((1, 6000, 1024), (1024, 4992), "swiglu", "rect_t"),  # empty M-tail block on the last row region
     ],
 )
-def test_r1a_orientation_and_padded_tail(a_shape, b_shape, epilogue, placement, device):
+def test_r1a_orientation_and_padded_tail(a_shape, b_shape, epilogue, placement, device, monkeypatch):
+    monkeypatch.setattr(pd, "SPLIT_COST_MODEL", False)  # the legacy ranking still builds every orientation / tail
     geom, grid, blk = _plan(device, a_shape, b_shape, epilogue)
     assert pd.uses_operand_mcast(geom, grid, blk), f"expected regime R1a, got {grid}"
     assert grid.placement == placement, f"expected a {placement} split, got {grid}"
@@ -92,8 +97,36 @@ def test_r1a_injector_placement_bit_identical(device, monkeypatch):
     assert torch.equal(outs[0], outs[1])
 
 
-def test_single_walk_k_split(device):
+def test_single_walk_k_split(device, monkeypatch):
     """One block per core and K fits one K-block: the walk is split so the read overlaps compute."""
+    monkeypatch.setattr(pd, "MIN_K_BLOCKS", 1)  # (the R1a re-split would take this walk further)
     _, grid, blk = _plan(device, (1, 384, 1536), (1536, 1024))
     assert blk.num_k_blocks == pd.SINGLE_WALK_K_BLOCKS, f"{grid} {blk}"
     _run(((1, 384, 1536), (1536, 1024)), "bias", device)
+
+
+def test_r1a_min_k_blocks(device):
+    """Refinement 11: a short R1a walk on the helper (epilogue none, no head ramp) is re-split into
+    MIN_K_BLOCKS K-blocks of >= BLOCK_K_FLOOR, still above the R1a gate; the raw walk keeps its ramp."""
+    geom, grid, blk = _plan(device, (1, 384, 1536), (1536, 1024))
+    assert pd.uses_operand_mcast(geom, grid, blk), f"{grid} {blk}"
+    assert blk.num_k_blocks == max(1, 48 // max(pd.BLOCK_K_FLOOR, -(-48 // pd.MIN_K_BLOCKS))), f"{grid} {blk}"
+    _, _, blk_bias = _plan(device, (1, 384, 1536), (1536, 1024), "bias")
+    assert blk_bias.num_k_blocks == pd.SINGLE_WALK_K_BLOCKS, f"{blk_bias}"
+    _run(((1, 384, 1536), (1536, 1024)), "none", device)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, grid_n",
+    [
+        ((1, 2048, 3072), (3072, 128), 4),  # FLUX proj_out: was 64x1 R1 (every core re-read all of B)
+        ((1, 512, 5120), (5120, 3072), None),  # text-encoder qkv: was R1b (one A injector for 96 cores)
+    ],
+)
+def test_split_cost_model_r1a(a_shape, b_shape, grid_n, device):
+    """Refinement 11: the cost model trades per-core work for traffic / injector load and picks R1a."""
+    geom, grid, blk = _plan(device, a_shape, b_shape)
+    assert pd.uses_operand_mcast(geom, grid, blk), f"{grid} {blk}"
+    if grid_n is not None:
+        assert grid.grid_n == grid_n, f"{grid}"
+    _run((a_shape, b_shape), "none", device)

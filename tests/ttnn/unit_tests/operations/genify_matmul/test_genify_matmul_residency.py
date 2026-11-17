@@ -57,7 +57,10 @@ def _run(device, a, b, *, dtype=_BF16, wdtype=_BF16, acc=True, epilogue="none", 
 @pytest.mark.parametrize("l1_cost", [0.25, 1.0], ids=["l1_discount", "bytes_are_bytes"])
 def test_perf_focus_3_split(device, monkeypatch, l1_cost):
     """PERF FOCUS 3: the discounted ranking reads A from DRAM once (32x3x1, A resident, 8-column B
-    blocks); bytes-are-bytes keeps the Refinement 7 split (32x1x3) with B resident."""
+    blocks); bytes-are-bytes keeps the Refinement 7 split (32x1x3) with B resident. Pinned under the legacy
+    ranking (SPLIT_COST_MODEL = False) whose L1 discount it documents; the Refinement 11 cost model picks a
+    32x2x1 split for the golden case (measured 66.9 vs 69.6 us, median of 4)."""
+    monkeypatch.setattr(pd, "SPLIT_COST_MODEL", False)
     monkeypatch.setattr(pd, "L1_READ_COST", l1_cost)
     grid, blk, _ = _plan(device, _PF3["a"], _PF3["b"], dtype=_BFP8, wdtype=_BFP8, acc=False, b_mc=_L1)
     if l1_cost < 1.0:

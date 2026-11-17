@@ -5,9 +5,9 @@
 
 Host side of the blocking scheme:
   * choose_split()    — the core-assignment knob: logical (grid_b, grid_m, grid_n) factorization.
-                        Candidates within (1 + GRID_W_SLACK) of the best per-core output tiles W are
-                        blocked (choose_blocking) and ranked by (aggregate read traffic incl. block
-                        re-reads, W, cores).
+                        Every candidate is blocked (choose_blocking) and ranked by its estimated time
+                        (split_cost: max of the padded K-walk, the DRAM stream and the operand
+                        injectors; Refinement 11), then aggregate read traffic, W, cores.
   * choose_blocking() — the extent knobs (block_batches, block_m_tiles, block_n_tiles, block_k_tiles /
                         num_k_blocks / last_block_k_tiles), solved coarsest-first against the L1 budget
                         (steps S1..S4), plus the derived output subblock (sb_h, sb_w).
@@ -84,6 +84,15 @@ DEST16_BLOCK_K_MAX = 8
 # the depth-2 operand CBs is dead L1. 2 measured 0.79x on 384x1536x1024, 0.92x on 32x1024x2048, neutral
 # elsewhere. 1 = unsplit.
 SINGLE_WALK_K_BLOCKS = 2
+# R1a K-walk granularity (Refinement 11): an R1a walk of fewer K-blocks than this is re-split into this many
+# (each >= BLOCK_K_FLOOR and still above the R1a gate MCAST_MIN_KBLOCK_BYTES). The coarsest K-block that fits
+# L1 left mid-M walks at 2-3 K-blocks, and every R1a K-block is a serial chain (line injector read ->
+# barrier -> A line multicast -> B line multicast) that nothing overlaps before compute's first block: text
+# encoder o_proj 512x4096x2560 (3 K-blocks of 43) 96.1 -> 85.1 us at 8, Qwen prefill M = 512 rows -4 to
+# -12%. 1 = the coarsest K-block (no re-split). Multi-K-block walks only (a one-K-block walk accumulates K
+# in DEST; splitting it would change precision, not speed), and only where the Perf 2 head ramp does not
+# already shorten the fill (the raw walk: 384x1536x1024 bias measured +5% with both).
+MIN_K_BLOCKS = 8
 # Operand residency knob (Refinement 8). A per-core walk that is ONE block with ONE K-block that K cannot
 # split (S1, K < SINGLE_WALK_K_BLOCKS * BLOCK_K_FLOOR: short-K shapes, whose output is many times their
 # inputs, so the output write stream binds) reads its whole A and B before compute starts, and the
@@ -118,6 +127,27 @@ Q_N_MAX = 4  # subblock quantum on core_n_tiles (a 4-tile subblock always exists
 # W strictly first picked e.g. a 1x108 N-only split for M=9472, K=5120, N=3456 (W 296 vs 324) that
 # made every core read all of A (10.5 GB instead of 1.3 GB, 4.5x slower).
 GRID_W_SLACK = 0.25
+# Split-ranking cost model (Refinement 11). The W-slack + traffic ranking above never let a split trade
+# per-core work for traffic or injector load: FLUX proj_out 2048x3072x128 kept a 64x1 R1 split that re-read
+# all of B on every core (161 us; 11x4 R1a 64 us), text-encoder qkv 512x5120x3072 an R1b split capped by
+# its single A injector (233 us; 8x8 R1a 136 us), and the FLUX single blocks 9x9 / 9x10 splits over
+# 11x10 / 11x9 ones that do 12-18% less work per core. True: rank every candidate by split_cost (cycles):
+#   max(padded K-walk, (operand reads + output writes) / DRAM rate, busiest reading core / one core's rate)
+# with the K-walk = the core's padded block work (nb_m*block_m x nb_n*block_n, every core walks it) x K x
+# the tile-K cost (FPU cycles per fidelity phase, or the subblock's operand unpacks when they bind).
+# False: the legacy ranking (W within GRID_W_SLACK, then traffic).
+SPLIT_COST_MODEL = True
+FPU_CYCLES_PER_TILE_K = 17.5  # per fidelity phase (LoFi 1, HiFi2 2, HiFi3 3, HiFi4 4); measured 16.6-18.0 LoFi
+UNPACK_CYCLES_PER_TILE = 12  # one operand tile unpack per K step: a 1 x w subblock costs (1 + w) / w of it
+DRAM_BYTES_PER_CYCLE = 296  # ~400 GB/s interleaved tile reads / writes at 1.35 GHz
+# One core's operand stream: an R1 core reading its own A + B (proj_out 13x1: 1.77 MB per core in 78 us,
+# ~23 GB/s), an R1a line injector reading its line's K-block then multicasting it (serial; proj_out 11x4:
+# 1.18 MB per A line in 63.9 us, 8x4: 1.57 MB in 81 us, ~19 GB/s). R1b's injector has its own price
+# (ACT_STREAM_INJECTOR_COST, inside read_traffic).
+CORE_READ_BYTES_PER_CYCLE = 15
+# One core's output stream (the writer's tile writes + per-row-group flush): PERF FOCUS 3 (17.8 MB of 1088 B
+# tiles) wrote 557 KB per core in 69.8 us on a 32-core split (~8 GB/s) against 66.6 us on 96 cores.
+CORE_WRITE_BYTES_PER_CYCLE = 6
 L1_RESERVE_BYTES = 0  # L1 held back for foreign tensors
 # Split-ranking cost of an operand byte read from L1 (interleaved L1 tensor) relative to one read from
 # DRAM (Refinement 8). DRAM bandwidth is what R1 runs out of -- including on write-bound shapes, where
@@ -269,6 +299,7 @@ class Geometry:
     r_tile_bytes: int = 0  # residual tile bytes (addcmul), else 0
     a_in_l1: bool = False  # operand A / B is an L1 tensor (split ranking: L1_READ_COST)
     b_in_l1: bool = False
+    fidelity_phases: int = 4  # math fidelity passes per tile-K (split_cost); LoFi 1 .. HiFi4 4
 
     @property
     def swiglu(self):
@@ -331,7 +362,15 @@ class Blocking:
 # ---------------------------------------------------------------------------
 
 
-def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None):
+_FIDELITY_PHASES = {
+    ttnn.MathFidelity.LoFi: 1,
+    ttnn.MathFidelity.HiFi2: 2,
+    ttnn.MathFidelity.HiFi3: 3,
+    ttnn.MathFidelity.HiFi4: 4,
+}
+
+
+def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None, math_fidelity=None):
     a_shape = list(a.shape)
     b_shape = list(b.shape)
     lead = a_shape[:-2]
@@ -372,6 +411,7 @@ def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=N
         r_tile_bytes=ttnn.tile_size(residual.dtype) if residual is not None else 0,
         a_in_l1=a.memory_config().buffer_type == ttnn.BufferType.L1,
         b_in_l1=b.memory_config().buffer_type == ttnn.BufferType.L1,
+        fidelity_phases=_FIDELITY_PHASES.get(math_fidelity, 4),
     )
 
 
@@ -541,11 +581,65 @@ def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     return (a_per_core + b_per_core) * grid.grid_b * grid.grid_m * grid.grid_n
 
 
+def tile_k_cycles(geom: Geometry, sb_h: int, sb_w: int):
+    """Cycles per output tile per K tile: the FPU's fidelity passes, or the subblock's operand unpacks
+    (sb_h + sb_w tiles per sb_h * sb_w products) when they bind."""
+    return max(FPU_CYCLES_PER_TILE_K * geom.fidelity_phases, UNPACK_CYCLES_PER_TILE * (sb_h + sb_w) / (sb_h * sb_w))
+
+
+def padded_work(grid: GridChoice, blk: "Blocking"):
+    """Output tiles a core's walk computes: every core walks the nominal blocks of the grid-uniform region
+    (a ragged last block still runs its full block_m x block_n)."""
+    nb_m = _cdiv(grid.core_m_tiles, blk.block_m_tiles)
+    nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
+    return grid.core_batches * nb_m * blk.block_m_tiles * nb_n * blk.block_n_tiles
+
+
+def split_cost(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """SPLIT_COST_MODEL: estimated cycles of a split (the max of its overlapped streams)."""
+    walk = padded_work(grid, blk) * geom.tensor_k_tiles * tile_k_cycles(geom, blk.sb_h, blk.sb_w)
+    out_bytes = geom.tensor_batches * geom.tensor_m_tiles * geom.out_n_tiles * geom.o_tile_bytes
+    dram = (read_traffic(geom, grid, blk) + out_bytes) / DRAM_BYTES_PER_CYCLE
+    # The busiest reading core: R1 reads its own A (once per N-block) and B (once per M-block); an R1a line
+    # injector reads + multicasts one of them for its line; R1b's injector is priced inside read_traffic.
+    nb_m = 1 if blk.weight_resident else _cdiv(grid.core_m_tiles, blk.block_m_tiles)
+    nb_n = 1 if blk.act_resident else _cdiv(grid.core_n_tiles, blk.block_n_tiles)
+    a_core = grid.core_batches * grid.core_m_tiles * geom.tensor_k_tiles * geom.a_tile_bytes * nb_n
+    b_core = grid.core_batches * grid.core_n_tiles * geom.tensor_k_tiles * geom.b_tile_bytes * nb_m
+    mode = operand_mode(geom, grid, blk)
+    core_bytes = max(a_core, b_core) if mode == 1 else (0 if mode == 2 else a_core + b_core)
+    core_out = grid.core_batches * grid.core_m_tiles * geom.out_block_n(grid.core_n_tiles) * geom.o_tile_bytes
+    return max(walk, dram, core_bytes / CORE_READ_BYTES_PER_CYCLE, core_out / CORE_WRITE_BYTES_PER_CYCLE)
+
+
 def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
-    """Core-assignment knob + extent knobs together. Among the factorizations whose W is within
-    (1 + GRID_W_SLACK) of the best W, solve the blocking of each and take the lexicographic min of
-    (aggregate read traffic incl. block re-reads, W, used cores)."""
+    """Core-assignment knob + extent knobs together. SPLIT_COST_MODEL: solve the blocking of every
+    factorization and take the lexicographic min of (split_cost, aggregate read traffic, W, used cores);
+    candidates are visited in W order and the walk stops once W alone (the unpadded FPU floor) exceeds the
+    best cost. Legacy: among the factorizations whose W is within (1 + GRID_W_SLACK) of the best W, the
+    lexicographic min of (aggregate read traffic incl. block re-reads, W, used cores)."""
     candidates = grid_candidates(geom, gx, gy)
+    if SPLIT_COST_MODEL:
+        floor = geom.tensor_k_tiles * FPU_CYCLES_PER_TILE_K * geom.fidelity_phases
+        best_key, best = None, None
+        for grid in sorted(candidates, key=grid_work):
+            if best_key is not None and grid_work(grid) * floor > best_key[0]:
+                break
+            try:
+                blk = choose_blocking(geom, grid, budget)
+            except RuntimeError:
+                continue
+            key = (
+                split_cost(geom, grid, blk),
+                read_traffic(geom, grid, blk),
+                grid_work(grid),
+                grid.grid_b * grid.grid_m * grid.grid_n,
+            )
+            if best_key is None or key < best_key:
+                best_key, best = key, (grid, blk)
+        if best is None:
+            raise RuntimeError(f"genify_matmul: even the minimum block does not fit the L1 CB budget of {budget} bytes")
+        return best
     w_cap = min(grid_work(g) for g in candidates) * (1 + GRID_W_SLACK)
     best_key, best = None, None
     for grid in candidates:
@@ -693,6 +787,14 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
     blk = _choose_blocking(geom, grid, budget, depths)
     if depths is not None and operand_mode(geom, grid, blk) != 2:
         blk = _choose_blocking(geom, grid, budget)  # the solved K-block missed the R1b gate: plain depths
+    # MIN_K_BLOCKS: an R1a walk without the head ramp (the ramp already shortens the fill on the raw walk:
+    # 384x1536x1024 bias +5% re-split under it).
+    mode = operand_mode(geom, grid, blk)
+    if 1 < blk.num_k_blocks < MIN_K_BLOCKS and mode == 1 and not k_head_ramp(blk, mode, geom.epilogue)[0]:
+        bk, nkb, last = _k_split(geom.tensor_k_tiles, max(BLOCK_K_FLOOR, _cdiv(geom.tensor_k_tiles, MIN_K_BLOCKS)))
+        finer = replace(blk, block_k_tiles=bk, num_k_blocks=nkb, last_block_k_tiles=last)
+        if bk < blk.block_k_tiles and operand_mode(geom, grid, finer) == 1:
+            blk = finer
     # Write batching: grows only the output CB term of F (DEPTH_OUT * batch row groups).
     groups = blk.block_m_tiles // blk.sb_h
     row_group_bytes = blk.sb_h * geom.out_block_n(blk.block_n_tiles) * geom.o_tile_bytes
@@ -743,28 +845,38 @@ def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int, depths=None)
     if bk_max >= k_floor:
         return _make_blocking(geom, block_b, cm, cn, bk_max, depths)
 
-    # S3: shrink the output block; minimize A/B re-reads, ties to the larger block.
+    # S3: shrink the output block; minimize A/B re-reads, ties to the larger block. SPLIT_COST_MODEL
+    # (Refinement 11): minimize the block's split_cost instead -- it prices the padded work of a block that
+    # does not divide the region (every core walks nominal blocks: FLUX single out's 7x20 region in 12-wide
+    # blocks computed 7x24, 1760 us; 10-wide blocks, 1x2 subblock, 1544 us) against the re-reads -- and let
+    # block_n step by the epilogue's own quantum (q_n_min) as well as the split's subblock quantum q_n.
+    def solved(bm, bn):
+        if one_k_block and _footprint(geom, bm, bn, tk, partials=False) <= budget:
+            return _make_blocking(geom, block_b, bm, bn, tk)
+        return _make_blocking(geom, block_b, bm, bn, _block_k_max(geom, bm, bn, budget, depths), depths)
+
+    quanta = sorted({grid.q_n, geom.q_n_min}) if SPLIT_COST_MODEL else [grid.q_n]
     best_key, best = None, None
     seen = set()
     for nb_m in range(1, cm + 1):
         bm = _cdiv(cm, nb_m)
-        for nb_n in range(1, _cdiv(cn, grid.q_n) + 1):
-            bn = _round_up(_cdiv(cn, nb_n), grid.q_n)
-            if (bm, bn) in seen:
-                continue
-            seen.add((bm, bn))
-            if _footprint(geom, bm, bn, k_floor, partials=True, depth_weight=dw, depth_act=da) > budget:
-                continue
-            eff_nb_m, eff_nb_n = _cdiv(cm, bm), _cdiv(cn, bn)
-            reread = tk * (cm * geom.a_tile_bytes * (eff_nb_n - 1) + cn * geom.b_tile_bytes * (eff_nb_m - 1))
-            key = (reread, -(bm * bn))
-            if best_key is None or key < best_key:
-                best_key, best = key, (bm, bn)
+        for q in quanta:
+            for nb_n in range(1, _cdiv(cn, q) + 1):
+                bn = _round_up(_cdiv(cn, nb_n), q)
+                if (bm, bn) in seen:
+                    continue
+                seen.add((bm, bn))
+                if _footprint(geom, bm, bn, k_floor, partials=True, depth_weight=dw, depth_act=da) > budget:
+                    continue
+                eff_nb_m, eff_nb_n = _cdiv(cm, bm), _cdiv(cn, bn)
+                reread = tk * (cm * geom.a_tile_bytes * (eff_nb_n - 1) + cn * geom.b_tile_bytes * (eff_nb_m - 1))
+                key = (reread, -(bm * bn))
+                if SPLIT_COST_MODEL:
+                    key = (split_cost(geom, grid, solved(bm, bn)),) + key
+                if best_key is None or key < best_key:
+                    best_key, best = key, (bm, bn)
     if best is not None:
-        bm, bn = best
-        if one_k_block and _footprint(geom, bm, bn, tk, partials=False) <= budget:
-            return _make_blocking(geom, block_b, bm, bn, tk)
-        return _make_blocking(geom, block_b, bm, bn, _block_k_max(geom, bm, bn, budget, depths), depths)
+        return solved(*best)
 
     # S4
     raise RuntimeError(f"genify_matmul: even the minimum block does not fit the L1 CB budget of {budget} bytes")
@@ -807,10 +919,11 @@ def l1_cb_budget(device, op_tensors):
     return room - L1_RESERVE_BYTES
 
 
-def plan(a, b, out, fp32_dest_acc_en, device, epilogue="none", row=None, residual=None):
+def plan(a, b, out, fp32_dest_acc_en, device, epilogue="none", row=None, residual=None, math_fidelity=None):
     """The full blocking decision (geometry, grid, blocking). Exposed for tests / perf tooling.
-    `row` is the bias (bias / bias_relu) or gate (addcmul) tensor, `residual` the addcmul residual."""
-    geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual)
+    `row` is the bias (bias / bias_relu) or gate (addcmul) tensor, `residual` the addcmul residual;
+    `math_fidelity` feeds the split cost model (None = HiFi4, the op's default)."""
+    geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual, math_fidelity)
     grid_size = device.compute_with_storage_grid_size()
     gx, gy = grid_size.x, grid_size.y
     budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
@@ -954,7 +1067,15 @@ def create_program_descriptor(
         )
     device = a.device()
     geom, grid, blk, (gx, gy) = plan(
-        a, b, out, bool(compute_config.fp32_dest_acc_en), device, epilogue=epilogue, row=row, residual=residual
+        a,
+        b,
+        out,
+        bool(compute_config.fp32_dest_acc_en),
+        device,
+        epilogue=epilogue,
+        row=row,
+        residual=residual,
+        math_fidelity=compute_config.math_fidelity,
     )
     cores, core_ranges = _logical_cores(grid, gx)
 
