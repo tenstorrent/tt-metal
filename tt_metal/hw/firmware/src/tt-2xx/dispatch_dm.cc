@@ -15,6 +15,8 @@
 #include "hostdev/dev_msgs.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "api/kernel_thread_globals.h"
+#include "internal/quiesce_common.h"
+#include "internal/tt-2xx/quasar/noc_quiesce.h"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -95,6 +97,37 @@ inline void wait_subordinates() {
     WAYPOINT("NTD");
 }
 
+inline void init_quiesce_slot() {
+    invalidate_l2_cache_range(MEM_QUIESCE_BASE, MEM_QUIESCE_SIZE);
+    volatile tt_l1_ptr quiesce_msg_t* slot = quiesce_slot();
+    for (uint32_t i = 0; i < QUIESCE_MAX_CQS; ++i) {
+        slot->target_op_count[i] = 0U;
+        slot->op_started_count[i] = 0U;
+    }
+    slot->control = QUIESCE_CTRL_NONE;
+    slot->status = QUIESCE_STATUS_RUNNING;
+    asm volatile("fence" ::: "memory");
+}
+
+[[noreturn]] inline void quiesce_and_park_dispatch_tile() {
+    WAYPOINT("QP");
+    wait_subordinates();
+    for (int i = 1; i < NUM_DM_CORES; i++) {
+        *((volatile uint8_t*)&(subordinate_sync->dm1) + i - 1) = RUN_SYNC_MSG_PARK;
+    }
+    asm volatile("fence" ::: "memory");
+    wait_subordinates();
+    noc_quiesce_hart_barrier();
+    noc_quiesce_router_drain_delay();
+    WAYPOINT("QD");
+    asm volatile("fence" ::: "memory");
+    quiesce_slot()->status = QUIESCE_STATUS_QUIESCED;
+    asm volatile("fence" ::: "memory");
+    while (true) {
+        asm volatile("nop");
+    }
+}
+
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
@@ -111,6 +144,7 @@ extern "C" uint32_t _start1() {
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
         zero_semaphore_regions();
+        init_quiesce_slot();
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
@@ -174,6 +208,8 @@ extern "C" uint32_t _start1() {
                         DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                         notify_dispatch_core_done(dispatch_addr, noc_index);
                     }
+                } else if (quiesce_requested()) {
+                    quiesce_and_park_dispatch_tile();
                 }
             }
 
@@ -238,9 +274,17 @@ extern "C" uint32_t _start1() {
     while (1) {
         WAYPOINT("W1");
         while (true) {
-            if (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
-                *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
+            const uint8_t sync_msg = *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1);
+            if (sync_msg == RUN_SYNC_MSG_GO || sync_msg == RUN_SYNC_MSG_LOAD) {
                 break;
+            }
+            if (sync_msg == RUN_SYNC_MSG_PARK) {
+                noc_quiesce_hart_barrier();
+                *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
+                asm volatile("fence" ::: "memory");
+                while (true) {
+                    asm volatile("nop");
+                }
             }
             asm("nop; nop; nop; nop; nop");
         }
@@ -271,6 +315,7 @@ extern "C" uint32_t _start1() {
         record_stack_usage(stack_free);
         WAYPOINT("D1");
         DEVICE_PRINT_KERNEL_FINISHED();
+        noc_quiesce_hart_barrier();
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }

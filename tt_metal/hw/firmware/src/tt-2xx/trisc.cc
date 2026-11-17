@@ -292,11 +292,19 @@ extern "C" std::uint32_t _start1() {
     DPRINT("TRISC-FW: initialized\n");
     while (1) {
         WAYPOINT("W");
-        while (*trisc_run != RUN_SYNC_MSG_GO) {
+        std::uint8_t run_msg;
+        while ((run_msg = *trisc_run) != RUN_SYNC_MSG_GO) {
             if constexpr (COMPILE_FOR_TRISC == 0) {
-                if (*trisc_run == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
+                if (run_msg == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
                     init_sync_registers();
                     *trisc_run = RUN_SYNC_MSG_DONE;
+                }
+            }
+            if (run_msg == RUN_SYNC_MSG_PARK) {
+                *trisc_run = RUN_SYNC_MSG_DONE;
+                asm volatile("fence" ::: "memory");
+                while (true) {
+                    asm volatile("nop");
                 }
             }
         }

@@ -19,6 +19,8 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
+#include "internal/quiesce_common.h"
+#include "internal/tt-2xx/quasar/noc_quiesce.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
 // The TensorAccessor address-generator path (internal/tensor/generated_noc_addr.h) only exists with the ATT backend,
 // and ttsim doesn't model the address generators.
@@ -306,6 +308,45 @@ inline void wait_subordinates_and_finish_dfbs(DfbImplicitSyncTxnMasks pending) {
 
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
+inline void init_quiesce_slot() {
+    invalidate_l2_cache_range(MEM_QUIESCE_BASE, MEM_QUIESCE_SIZE);
+    volatile tt_l1_ptr quiesce_msg_t* slot = quiesce_slot();
+    for (uint32_t i = 0; i < QUIESCE_MAX_CQS; ++i) {
+        slot->target_op_count[i] = 0U;
+        slot->op_started_count[i] = 0U;
+    }
+    slot->control = QUIESCE_CTRL_NONE;
+    slot->status = QUIESCE_STATUS_RUNNING;
+    asm volatile("fence" ::: "memory");
+}
+
+[[noreturn]] inline void quiesce_and_park_worker_tile() {
+    constexpr uint32_t RUN_SYNC_MSG_ALL_PARK = 0x05050505U;
+    static_assert(RUN_SYNC_MSG_PARK == 0x05U);
+    WAYPOINT("QP");
+    // Ensure neo0_trisc0 has finished any pending init_sync_registers() and all harts are idle.
+    wait_subordinates();
+    for (int i = 1; i < NUM_DM_CORES; i++) {
+        *((volatile uint8_t*)&(subordinate_sync->dm1) + i - 1) = RUN_SYNC_MSG_PARK;
+    }
+    subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_PARK;
+    subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_PARK;
+    subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_PARK;
+    subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_PARK;
+    asm volatile("fence" ::: "memory");
+    wait_subordinates();
+    quiesce_go_signalling();
+    noc_quiesce_hart_barrier();
+    noc_quiesce_router_drain_delay();
+    WAYPOINT("QD");
+    asm volatile("fence" ::: "memory");
+    quiesce_slot()->status = QUIESCE_STATUS_QUIESCED;
+    asm volatile("fence" ::: "memory");
+    while (true) {
+        asm volatile("nop");
+    }
+}
+
 // Publishes RUN_MSG_DONE in go_message, the go being completed, and tells the dispatcher. worker_completion_group is
 // the FDS group for this launch, or 0 when the launch is on the NOC.
 inline void signal_dispatch_core_done(volatile tt_l1_ptr go_msg_t* go_message, uint32_t worker_completion_group) {
@@ -341,6 +382,7 @@ extern "C" uint32_t _start1() {
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
         zero_semaphore_regions();
+        init_quiesce_slot();
         // Originally initialized to WAIT by host firmware initializer.
         // Will be set back to WAIT immediately before running kernels.
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
@@ -430,6 +472,8 @@ extern "C" uint32_t _start1() {
                     // txn is not issued. dispatch_s only puts RUN_MSG_GO on the FDS wire, so this always uses NOC.
                     // The ack also frees the slot the reset arrived in, before the dispatcher sends the next go.
                     signal_dispatch_core_done(go_message, /*worker_completion_group=*/0);
+                } else if (quiesce_requested()) {
+                    quiesce_and_park_worker_tile();
                 }
             }
 
@@ -554,9 +598,17 @@ extern "C" uint32_t _start1() {
         // WAYPOINT("GW");
         WAYPOINT("W1");
         while (true) {
-            if (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
-                *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
+            const uint8_t sync_msg = *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1);
+            if (sync_msg == RUN_SYNC_MSG_GO || sync_msg == RUN_SYNC_MSG_LOAD) {
                 break;
+            }
+            if (sync_msg == RUN_SYNC_MSG_PARK) {
+                noc_quiesce_hart_barrier();
+                *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
+                asm volatile("fence" ::: "memory");
+                while (true) {
+                    asm volatile("nop");
+                }
             }
             asm("nop; nop; nop; nop; nop");
         }
@@ -605,6 +657,7 @@ extern "C" uint32_t _start1() {
         }
         WAYPOINT("D1");
         DEVICE_PRINT_KERNEL_FINISHED();
+        noc_drain_trid_range(0U, NOC_QUIESCE_USER_TRID_MAX);
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }

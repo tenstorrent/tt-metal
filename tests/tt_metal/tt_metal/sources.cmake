@@ -33,6 +33,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_quasar_events.cpp
     test_quasar_mesh_buffers.cpp
     test_quasar_mesh_workloads.cpp
+    test_quasar_quiesce.cpp
     test_quasar_semaphores.cpp
     test_quasar_sub_devices.cpp
     test_quasar_trace.cpp
