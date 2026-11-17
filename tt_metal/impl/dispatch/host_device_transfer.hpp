@@ -12,6 +12,10 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 
+namespace tt::umd {
+class SysmemBuffer;
+}  // namespace tt::umd
+
 namespace tt::tt_metal {
 class CoreRangeSet;
 class IDevice;
@@ -30,6 +34,9 @@ void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
         ttsl::Span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
 }
+// Same as above, for a `host_buffer` that lies inside `pinned_src`, a pinned mapping of the buffer's device. Writes
+// large enough for DMA read straight from the pinned pages instead of going through the driver's bounce buffer.
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, tt::umd::SysmemBuffer& pinned_src);
 // Copies `host_buffer` into the shards of a sharded `buffer` that live on `logical_core_filter` cores only.
 void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter);
 
@@ -49,7 +56,11 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);
 // Copies `host_buffer` to `address` within DRAM channel `dram_channel`. The address must be outside the reserved DRAM
 // region.
 bool WriteToDeviceDRAMChannel(
-    IDevice& device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer);
+    IDevice& device,
+    int dram_channel,
+    uint32_t address,
+    std::span<const uint8_t> host_buffer,
+    tt::umd::SysmemBuffer* pinned_src = nullptr);
 bool WriteToDeviceDRAMChannel(IDevice& device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
 
 // Copies `host_buffer.size()` bytes from `address` within DRAM channel `dram_channel` into `host_buffer`.
