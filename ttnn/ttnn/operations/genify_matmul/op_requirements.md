@@ -82,7 +82,7 @@ Cells that fail out of the box go to `EXCLUSIONS` with a reason, not into their 
 
 **Outcome**: SUPPORTED widened to dtype {bf16, bf8b, fp32}, weight_dtype {bf16, bf8b, bf4b} and fp32_dest_acc_en {True, False}. The only EXCLUSION is the permanent fp32 × acc=False. Golden: 60/60 cartesian and 27/27 newly unlocked loose cells pass. No kernel change was needed. New precision knob `DEST16_BLOCK_K_MAX = 8`: with 16-bit DEST, a single long DEST chain gave rel-RMS 0.18 at K = 16k; capped, it is 0.019, and it is also 0.76–0.96× device time. The bf16 / fp32-DEST blocking is unchanged.
 
-### [ ] Refinement 2 — Fused epilogues: bias, bias_relu, swiglu, addcmul
+### [x] Refinement 2 — Fused epilogues: bias, bias_relu, swiglu, addcmul
 
 **Goal**: Add `bias`, `bias_relu`, `swiglu` and `addcmul` to `SUPPORTED["epilogue"]`. Each runs inside the same device program, on the accumulated block, before the output is packed. Follow op_design.md "Block Operation Realization" rows 2', 3a, 3b and 3c:
 
@@ -115,6 +115,11 @@ Cells that fail out of the box go to `EXCLUSIONS` with a reason, not into their 
 - **Never a host-side or ttnn-op epilogue.** That is a prompt MUST.
 
 **Done when**: every golden cell whose only unsupported axis value is one of the four epilogues passes (cartesian INPUTS plus the interleaved loose cases, among them PERF FOCUS 1 and 4 and the FLUX addcmul cases), within `helpers` tolerances, with phase-0 and Refinement 1 cells still green.
+
+**Outcome**: SUPPORTED epilogue = {none, bias, bias_relu, swiglu, addcmul}, all running in the one program on the L1 block (`matmul_block<Interm>` → `add_bias_bcast_rows` / `eltwise_chain`).
+- Golden: 240/240 cartesian interleaved epilogue cells and 13/13 interleaved loose epilogue cases pass, among them PERF FOCUS 1 (rms 0.0085 against the 0.03 limit) and 4. The unit dir is green.
+- Fused cost on PERF FOCUS 1: 1655 µs against 1572 µs for the epilogue-none twin. An ablation shows the plumbing is free and the remaining ~5% is the serialized SFPU silu, already cut from 124 to 83 µs by the bf16-precision sigmoid knob.
+- Next lever (Refinement 3): fold silu·up into the last K-block's pack (subblock-local gate/up permutation), or overlap the epilogue with the next block's K-walk.
 
 ### [ ] Refinement 3 — Speed up PERF FOCUS 1 (Qwen3.8 prefill gate_up + SwiGLU, 2048 tokens)
 

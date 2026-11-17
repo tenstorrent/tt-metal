@@ -81,3 +81,48 @@ def test_perf_formats(case, device):
     )
     out = genify_matmul(ta, tb, dtype=getattr(ttnn, o_dt), compute_kernel_config=cfg)
     ttnn.synchronize_device(device)
+
+
+# Refinement 2: one representative per fused-epilogue kernel path at the model's own config, each
+# next to its epilogue-none twin (same shape, same formats) so the epilogue's cost stays visible.
+# (m, k, n, A dtype, B dtype, fidelity, fp32_dest_acc_en, epilogue)
+EPILOGUE_CASES = [
+    (2048, 5120, 8704, "bfloat16", "bfloat4_b", "LoFi", True, "swiglu"),  # PERF FOCUS 1
+    (2048, 6144, 3072, "bfloat16", "bfloat16", "HiFi2", True, "addcmul"),  # FLUX attn out + gated residual
+    (2048, 256, 512, "bfloat8_b", "bfloat8_b", "LoFi", False, "bias_relu"),  # PDL 1x1 conv
+    (384, 1536, 1024, "bfloat16", "bfloat16", "HiFi4", True, "bias"),
+]
+
+
+@pytest.mark.parametrize("fused", [True, False], ids=["fused", "none"])
+@pytest.mark.parametrize(
+    "case",
+    EPILOGUE_CASES,
+    ids=[f"{m}-{k}-{n}-{a}-{w}-{f}-acc{int(acc)}-{e}" for m, k, n, a, w, f, acc, e in EPILOGUE_CASES],
+)
+def test_perf_epilogues(case, fused, device):
+    m, k, n, a_dt, w_dt, fid, acc, epilogue = case
+    torch.manual_seed(0)
+    A = torch.randn(1, m, k)
+    B = torch.randn(k, n) / math.sqrt(k)
+    a_dtype, w_dtype = getattr(ttnn, a_dt), getattr(ttnn, w_dt)
+    ta = create_ttnn_input_tensor(A, device, dtype=a_dtype, layout=ttnn.TILE_LAYOUT)
+    tb = create_ttnn_input_tensor(B, device, dtype=w_dtype, layout=ttnn.TILE_LAYOUT)
+    kwargs = {}
+    if fused and epilogue in ("bias", "bias_relu"):
+        bias_dtype = ttnn.bfloat8_b if w_dtype == ttnn.bfloat4_b else w_dtype
+        kwargs["bias"] = create_ttnn_input_tensor(torch.randn(1, n), device, dtype=bias_dtype, layout=ttnn.TILE_LAYOUT)
+        if epilogue == "bias_relu":
+            kwargs["activation"] = "relu"
+    elif fused and epilogue == "swiglu":
+        kwargs["activation"] = "swiglu"
+    elif fused and epilogue == "addcmul":
+        kwargs["residual"] = create_ttnn_input_tensor(
+            torch.randn(1, m, n), device, dtype=a_dtype, layout=ttnn.TILE_LAYOUT
+        )
+        kwargs["gate"] = create_ttnn_input_tensor(torch.randn(1, n), device, dtype=a_dtype, layout=ttnn.TILE_LAYOUT)
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=getattr(ttnn.MathFidelity, fid), fp32_dest_acc_en=acc, math_approx_mode=False
+    )
+    out = genify_matmul(ta, tb, compute_kernel_config=cfg, **kwargs)
+    ttnn.synchronize_device(device)

@@ -58,6 +58,9 @@ constexpr uint32_t cb_row = get_compile_time_arg_val(14);    // bias (1, 2) or g
 constexpr uint32_t cb_residual_tiles = get_compile_time_arg_val(15);
 constexpr uint32_t block_m_tiles = get_compile_time_arg_val(16);
 constexpr uint32_t epilogue_block_tiles = get_compile_time_arg_val(17);  // chain DEST lanes per acquire
+// 1: silu runs the full-precision (fp32) sigmoid; 0: the bf16-precision sigmoid (host picks 0 only
+// for a non-fp32 output, whose own rounding dominates).
+constexpr bool silu_fp32_precision = get_compile_time_arg_val(18) != 0;
 
 constexpr bool has_epilogue = epilogue != 0;
 constexpr bool is_bias = epilogue == 1 || epilogue == 2;
@@ -76,11 +79,14 @@ struct LastKBlockInnerDim {
     }
 };
 
-// silu(x) = x * sigmoid(x) in one SFPU pass (see the file header).
-template <ckl::Dst Slot = ckl::Dst::D0>
-struct Silu : ckl::UnaryOp<Silu<Slot>, Slot> {
+// silu(x) = x * sigmoid(x) in one SFPU pass (see the file header). `fp32_precision` selects the
+// sigmoid algorithm (silu_tile's template arg); DEST is read and written in its configured width either way.
+template <bool fp32_precision, ckl::Dst Slot = ckl::Dst::D0>
+struct Silu : ckl::UnaryOp<Silu<fp32_precision, Slot>, Slot> {
     static ALWI void init() { silu_tile_init(); }
-    static ALWI void exec_impl(uint32_t slot_offset) { silu_tile(ckl::to_u32(Slot) + slot_offset); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        silu_tile<fp32_precision && DST_ACCUM_MODE>(ckl::to_u32(Slot) + slot_offset);
+    }
 };
 
 // Epilogue none: no accumulator CB when there is a single K-block; the helper only needs a
@@ -157,7 +163,7 @@ ALWI void run_epilogue(
                     DataFormatReconfig::Enabled,
                     TileAddressing::Strided),
                 Dst::D0>{partials_dfb, StridedTileRange{0, block_n_tiles}},
-            Silu<Dst::D0>{},
+            Silu<silu_fp32_precision, Dst::D0>{},
             CopyTile<
                 input(
                     cb_partials,

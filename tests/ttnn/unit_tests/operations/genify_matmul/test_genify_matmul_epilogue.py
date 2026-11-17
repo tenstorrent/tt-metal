@@ -62,3 +62,22 @@ def test_epilogue_formats(dtype, weight_dtype, acc, epilogue, device):
 @pytest.mark.parametrize("epilogue", EPILOGUES)
 def test_epilogue_l1_act_out(epilogue, device):
     _run(((1, 1, 128, 1024), (1024, 512)), epilogue, device, extras={"act_buffer": "l1", "out_buffer": "l1"})
+
+
+@pytest.mark.parametrize("epilogue", EPILOGUES)
+def test_epilogue_multi_block(epilogue, device):
+    """A per-core region too big for one L1 block (S3 shrink): several blocks per core, so the bias /
+    gate row is refreshed per block and the residual stream crosses block boundaries."""
+    from ttnn.operations.genify_matmul.genify_matmul_program_descriptor import plan
+
+    a_shape, b_shape = (1, 8192, 512), (512, 8192)
+    n_out = b_shape[-1] // 2 if epilogue == "swiglu" else b_shape[-1]
+    a = ttnn.allocate_tensor_on_device(ttnn.Shape(list(a_shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    b = ttnn.allocate_tensor_on_device(ttnn.Shape(list(b_shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    o = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 8192, n_out]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    _, grid, blk, _ = plan(a, b, o, True, device, epilogue=epilogue)
+    blocks = -(-grid.core_m_tiles // blk.block_m_tiles) * -(-grid.core_n_tiles // blk.block_n_tiles)
+    assert blocks > 1, f"expected a multi-block walk, got {grid} {blk}"
+    for t in (a, b, o):
+        ttnn.deallocate(t)
+    _run((a_shape, b_shape), epilogue, device)

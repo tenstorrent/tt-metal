@@ -44,7 +44,11 @@ DEPTH_WEIGHT = 2  # B K-blocks in flight
 DEPTH_OUT = 2  # output row groups in flight
 DEPTH_RESIDUAL = 2  # residual row groups in flight (addcmul)
 # Epilogue chain DEST lanes per acquire (eltwise_chain block_size; the chain clamps it to DEST).
-EPILOGUE_BLOCK_TILES = 1
+EPILOGUE_BLOCK_TILES = 4
+# swiglu silu precision knob: the fp32-precision sigmoid (exp polynomial + Newton reciprocal per row)
+# made the epilogue SFPU-bound. With a non-fp32 output the bf16-precision sigmoid is enough (the output
+# rounding dominates); a float32 output always keeps the fp32 sigmoid.
+SWIGLU_FAST_SILU = True
 
 # ---- Blocking knobs ----
 BLOCK_K_FLOOR = 8  # smallest K-block the solve accepts (clamped to tensor_k_tiles)
@@ -562,6 +566,7 @@ def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=No
         CB_RESIDUAL_TILES,
         blk.block_m_tiles,
         EPILOGUE_BLOCK_TILES,
+        0 if (SWIGLU_FAST_SILU and out.dtype != ttnn.float32) else 1,  # silu_fp32_precision
     ]
 
     reader_rt = ttnn.RuntimeArgs()

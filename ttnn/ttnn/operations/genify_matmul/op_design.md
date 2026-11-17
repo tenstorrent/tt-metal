@@ -338,6 +338,14 @@ Phase 0 = the first four rows. The remaining rows are reserved for later refinem
 | 3c | `epilogue_addcmul_block` | grid `(block_m, block_n)` | `eltwise_chain`: `BinaryFpu<Mul, input(cb_partials, None, None, Block), input(cb_gate_row, BroadcastDim::Row, None, None, Row)>{D0}`, `CopyTile<input(cb_residual_tiles), D1>`, `AddBinary<D0,D1,D0>`, `PackTile<output(cb_output_tiles, PerOuter, PerOuter)>` | `cb_partials` (caller-managed), `cb_gate_row` (caller-managed), `cb_residual_tiles` (per tile) | `cb_output_tiles` | `cb_partials` empty |
 | 4 | `store_block` | row groups `sb_h × out_block_n` | dataflow | `cb_output_tiles` (wait/pop `sb_h·out_block_n`) | DRAM / L1 interleaved out | — |
 
+> **Implemented (Refinement 2).** Row 3b is built as `CopyTile<Strided, D0>{gate base 0, stride block_n}`, `Silu<D0>`, `CopyTile<Strided, D1>{up base block_n/2}`, `MulBinary<D0,D1,D0>`, `PackTile<output(cb_output_tiles, PerOuter, PerOuter)>`.
+> - `Silu` is a kernel-local chain element on the chain's documented `UnaryOp` CRTP extension point (`silu_tile` / `silu_tile_init`). It replaces Sigmoid + MulBinary: one SFPU pass and one DEST copy fewer per output tile.
+> - Its sigmoid precision is a host knob, `SWIGLU_FAST_SILU`. A non-fp32 output uses the bf16-precision sigmoid; a float32 output keeps the fp32 one. The epilogue is SFPU-bound, so this cut its cost from 124 to 83 µs on PERF FOCUS 1.
+> - The chain's DEST lanes per acquire are the knob `EPILOGUE_BLOCK_TILES` = 4 (clamped by the chain to DEST). It measured flat.
+> - Rows 3a and 3c are as tabled.
+> - The bias / gate row is waited before the first batch's epilogue of a block and popped after the last. The compute calls `matmul_block` once per batch slice (batch = 1), because `cb_partials` holds exactly one block, so the lifecycle stays per block under `block_batches > 1`.
+> - After each Interm matmul the caller turns packer L1 accumulation off (`pack_reconfig_l1_acc(0)`, the bias-helper prerequisite).
+
 `LastKBlockInnerDim` is a functor returning `last_block_k_tiles` when `block == num_k_blocks−1`, else `block_k` (the hook described at `matmul_block_helpers.hpp:206-212`).
 
 ## API Mapping

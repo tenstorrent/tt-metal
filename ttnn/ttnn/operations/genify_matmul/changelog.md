@@ -110,3 +110,80 @@
   - `perf/test_genify_matmul_perf_guard.py::test_perf_formats`: one representative per new format
     path (bf4b LoFi, bf8b HiFi2, fp32 A, bf8b × bf8b 16-bit DEST ×2, capped 16-bit-DEST K-walk).
     Baseline device ns: 1016036, 1343873, 404437, 20310, 44777, 108567.
+
+## Refinement 2 — Fused epilogues: bias, bias_relu, swiglu, addcmul
+- Date: 2026-11-17
+- What was done: `SUPPORTED["epilogue"]` is now {none, bias, bias_relu, swiglu, addcmul}. Every
+  epilogue runs inside the same single `generic_op` program, on the block accumulated in L1, before
+  the output is packed. There is no second pass over the output and no host-side or ttnn-op epilogue.
+  - **Reused**: the R1 split and blocking, `cb_partials`, the matmul_block call (now templated on
+    `LastBlockTarget`), the writer, and the reader's K-walk.
+  - **Compute**: with an epilogue, `matmul_block<…, Interm>` lands the block in `cb_partials` (once
+    per batch slice), then `pack_reconfig_l1_acc(0)`, then one epilogue block op:
+    - bias / bias_relu: `add_bias_bcast_rows<RowBroadcast, TileRowMajor>`, with PACK_RELU set and
+      reset around it for bias_relu;
+    - swiglu: `eltwise_chain` over (block_m, block_n/2), Strided gate/up `CopyTile` + a
+      kernel-local `Silu` chain element + `MulBinary`;
+    - addcmul: `eltwise_chain` with an FPU `Mul` against the row-broadcast gate, then a `CopyTile`
+      of the residual and an SFPU `AddBinary` (no DEST reuse ahead of an FPU op).
+    - The epilogue-none path is unchanged (`LastBlockTarget::Out`).
+  - **Reader**:
+    - swiglu gate/up column permutation inside each N-block;
+    - the bias / gate N-block row, read once per block and pushed after the first batch's K-walk so
+      it never stalls the K-block prefetch;
+    - residual row groups (sb_h × block_n, depth 2) after each batch's K-walk.
+  - **Host**:
+    - `q_n ≥ 2` for swiglu, `out_block_n = block_n/2`, and the writer region in output columns;
+    - the `E_bias` / `E_addcmul` / `cb_partials` terms are inside `_footprint`, so the solve
+      prices them; `_block_k_max` derives its fixed part from `_footprint`;
+    - bias / gate / residual join the tensor list, and the `validate()` gate requires
+      interleaved TILE epilogue tensors.
+  - **Knobs** (single source in the program descriptor): `DEPTH_RESIDUAL = 2`,
+    `EPILOGUE_BLOCK_TILES = 4` (measured flat, 1708 → 1696 µs, kept as a live knob),
+    `SWIGLU_FAST_SILU = True` (see below).
+- Accuracy achieved (PCC / relative RMS, limit in brackets):
+  - PERF FOCUS 1, Qwen prefill 2048×5120×8704 bf16×bf4b LoFi swiglu: 0.999988 / 0.0085 [0.9995 / 0.03].
+    The other Qwen prefill and FLUX swiglu cases are the same to 3 digits.
+  - FLUX addcmul (128 / 256 / 2048 × 6144×3072, HiFi2): 0.999994 / 0.0037–0.0038.
+  - FLUX time_mod 1×6144×52224, fp32 A, bias → bf16: 0.999991 / 0.0060.
+  - 384×1536×1024, fp32 out: bias 0.00071, bias_relu 0.00086, swiglu 0.00159, addcmul 0.00077
+    [0.99999 / 0.005].
+  - 384×1536×1024, bf8b with 16-bit DEST: rms 0.010–0.024 [0.15].
+  - 384×1536×1024, bf16×bf4b: rms 0.0017–0.0025 [0.01].
+- Golden test progress (slices run):
+  - cartesian interleaved epilogue cells: 240/240 pass, 48 xfail (the permanent fp32 × acc=False
+    EXCLUSION);
+  - interleaved loose epilogue cases: 13/13 pass, among them PERF FOCUS 1 (prefill 2048 swiglu,
+    bf4b), PERF FOCUS 4 (FLUX 256 swiglu), the 3 FLUX addcmul cases and the fp32 time_mod bias.
+  - The epilogue cells on height / block / dram-sharded placements stay xfail until Refinements 4, 5
+    and 7.
+  - Unit dir: 611 passed, 42 skipped (env-gated perf guard).
+- Perf (device ns, fused vs the epilogue-none twin of the same shape and formats, one fresh run each):
+  - swiglu 2048×5120×8704 bf4b LoFi: 1655 µs vs 1572 µs;
+  - addcmul 2048×6144×3072 HiFi2: 1773 µs vs 1716 µs;
+  - bias_relu 2048×256×512 bf8b: 20.4 µs vs 20.8 µs (noise);
+  - bias 384×1536×1024: 102.9 µs vs 101.6 µs.
+  - The split and the block are unchanged by the epilogue (11×9, 6×32 on PERF FOCUS 1). The output
+    CB is half the size, which gives K-block 9 instead of 8.
+  - Ablation with the chain compute stubbed (`CKL_ELTWISE_CHAIN_SKIP_COMPUTE`) gives 1564 µs, the
+    same as the twin. The Interm / `cb_partials` plumbing is free, and the remaining overhead is the
+    epilogue's own compute, which runs serialized after the matmul on each core.
+  - That compute was SFPU-bound: the fp32-precision sigmoid inside silu took ~1.7k cycles per output
+    tile. `SWIGLU_FAST_SILU` (bf16-precision sigmoid, applied only to non-fp32 outputs) cut it from
+    124 to 83 µs, with swiglu accuracy unchanged at 3 digits.
+- Issues encountered: none blocking.
+  - The precompile farm's best-effort up-front compile fails on this box with an sfpi toolchain
+    mismatch (`__xtt_vector8`). The tests compile locally and are unaffected.
+  - **Finding for Refinement 3.** The swiglu epilogue still costs ~5% of PERF FOCUS 1. It sits on
+    the critical path because each core runs it after its last K-block. Two levers: overlap it with
+    the next block's K-walk (only matters when there are several blocks per core), or fold
+    silu·up into the last K-block's PostComputeFn with a subblock-local gate/up permutation. The
+    second needs a helper change: the packer would have to pack only half the subblock.
+- Tests added:
+  - `test_genify_matmul_epilogue.py`, 40 cases:
+    - 4 epilogues × 5 shapes (single K-block, 2-D grid, folded batch, M = 1, deep ragged K);
+    - × 3 formats (bf8b with 16-bit DEST, fp32 out, bf16×bf4b with a bf8b bias);
+    - × L1 A / out;
+    - × a pinned multi-block-per-core walk.
+  - `perf/test_genify_matmul_perf_guard.py::test_perf_epilogues`: one representative per epilogue
+    path at the model config, each with its epilogue-none twin.
