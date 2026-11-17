@@ -168,9 +168,9 @@ TEST(EthCountersDiff, SixtyFourBitValuesDoNotWrapAndAResetIsFlagged) {
     after.values[index_of(*plan, ec::EthCounter::FW_LINK_POLL_ALIVE_COUNT, Kind::L1, NO_QUEUE)] += 1;
     uint32_t flags = 0;
     const auto deltas = diff(*plan, before, after, &flags);
-    ASSERT_EQ(deltas.size(), 1u);
-    EXPECT_EQ(deltas[0].item, frames);
-    EXPECT_EQ(deltas[0].count, 0x11u);
+    ASSERT_EQ(deltas.size(), 2u);  // the poll counter and the frames
+    EXPECT_EQ(deltas[1].item, frames);
+    EXPECT_EQ(deltas[1].count, 0x11u);
     EXPECT_EQ(flags, FLAG_RESET);
 }
 
