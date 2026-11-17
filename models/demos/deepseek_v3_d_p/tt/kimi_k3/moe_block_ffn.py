@@ -1,173 +1,191 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Kimi-K3's MoE layers on the MoE block (models/demos/moe_block), K3_MOE_IMPL=block: router, shared expert, latent
-projections and routed experts in one call, on the post-ffn_norm residual as it is.
+"""A prefill model's MoE layers on the MoE block (models/demos/moe_block/tt/moe_block.py, the
+ttnn.experimental.moe_block C++ ops): router, shared expert, latent projections and routed experts in one call, on the
+post-ffn_norm residual as it is.
 
     x [1, 1, S/SP, H/TP] bf16 TILE (ffn_norm's output: rows over the SP axis, columns over TP)
-    -> MoEBlock (KIMI_K3: 896 experts top-16, latent 3584 + its norm, SiTU shared expert 6144)
-    -> routed + shared [1, 1, S/SP, H/TP] bf16 TILE (what TtMoe returns, unsqueezed)
+    -> MoEBlock -> routed + shared [1, 1, S/SP, H/TP] bf16 TILE (what TtMoe returns, unsqueezed)
 
-GLM-5.3 (256 experts top-8, H 6144) too, through TtPrefillBlock (MOE_IMPL=block): weka only - the gate and shared expert
-from $GLM53_HF_MODEL (fp8 dequantized), the routed experts from the model's own weight cache (cache_path).
+Kimi-K3 (kimi_k3/block.py, K3_MOE_IMPL=block) and GLM-5.3 (tt_prefill_block.py, MOE_IMPL=block). The model's own
+weights, per layer: the gate (rows permuted to the block's expert order), the shared expert and (K3) the latent pair
+from the checkpoint ($KIMI_K3_CKPT / $GLM53_HF_MODEL, fp8 dequantized); the routed experts laid out on the device from
+TtMoe's bfp4 ttnn cache (cache_path, K3: $K3_BLOCK_WEKA_CACHE or CI's on Weka) by flat_gather.
 
-K3_BLOCK_WEIGHTS:
-  random (default) - seeded random weights: four distinct experts repeated over the 896 (the block tests' pool), one
-      set for every layer (the routed experts laid out once). The integration does not depend on their values.
-  ci - random's weights with the router replaced by the one TtMoe's CI perf gate (test_kimi_moe_perf) runs:
-      $K3_BLOCK_CI_GATE (torch.save of run_model's gate_weights, MOE_X_DUMP) or create_gate_weights(seed 9012), its
-      rows permuted to the block's expert order as weka's are - so the block routes CI's x exactly as TtMoe does.
-  weka - the model's own weights, per layer: the gate (bf16, rows permuted to the block's expert order), the shared
-      expert and the latent pair from the checkpoint ($KIMI_K3_CKPT); the routed experts read back from TtMoe's ttnn
-      cache ($K3_BLOCK_WEKA_CACHE, default CI's on Weka) - bfp4 tensorbins, one per (local expert, projection), each
-      chip's expert of that slot - dequantized on the host and laid out again the block's way. Nothing is written;
-      every run reads and converts again (~15 GB of bfp4 a layer: one layer first).
+Expert order: TtMoe holds checkpoint expert gtab[group, chip, le] in slot le of a chip (ExpertMapping, column-major;
+group / chip the chip's coordinates off / along the SP axis); the block's chip n (block_order_perm) holds expert
+b = n EPC + le there. The experts stay where TtMoe put them and the gate's rows (and bias) are permuted to match.
 
-Expert order: TtMoe holds checkpoint expert gtab[c, r, le] in slot le of chip (r, c) (ExpertMapping, column-major);
-the block holds expert b = (r C + c) EPC + le there. The experts stay where TtMoe put them: block expert b is the
-checkpoint's gtab[c, r, le], and the gate's rows (and bias) are permuted to match.
-
-One block per (mesh, chunk) serves every layer, built at the first call (after the model's own ops placed their L1:
-the exchange's arena address is baked into its kernels); with weka weights each layer holds its own MoELayer.
-K3_BLOCK_CHECK=N: the first N calls of each layer checked against a host model of the block on the device's own
-routing (PCC logged; > 0.98 asserted).
+One MoEBlock (and its MoEBlockResources) per (mesh, chunk) serves every layer, built at the first call (after the
+model's own ops placed their L1); each layer holds its MoEBlockWeights. The block's persistent words live in L1_SMALL;
+MoEBlockFfnOptions holds the block's few non-default choices (the combine's snap, ...), production's by default.
+release_blocks(mesh) frees the blocks' resources (persistent L1_SMALL / L1 / DRAM) at once: call it before closing the
+mesh (else they stay allocated until garbage collection, and the resources fail on a closed mesh).
 """
 
 from __future__ import annotations
 
-import dataclasses
+import json
 import os
-import resource
 import time
+import types
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_words_slab
+from models.demos.moe_block.tt.flat_gather import flat_face_map, flat_weights_module, gather, gather_batches
+from models.demos.moe_block.tt.moe_block import MoEBlock, MoEBlockWeights, sp_tp, to_mesh_order
 
-LINKS = 2  # (the block's exchange plans its ports for 2)
-POOL = 4  # (distinct random experts, repeated over the 896)
-_BLOCKS: dict = {}  # (id(mesh), chunk) -> (mesh, MoEBlock, the weights it was built with)
-_POOL_EXPERTS: dict = (
-    {}
-)  # (id(mesh), chunk) -> (mesh, RoutedExperts): real_gate's random experts, shared by every layer
-_DONE: dict = {}  # id(mesh) -> (mesh, the done words every layer's flat op shares - L1: one a layer moved the arena)
-_FACE_MAPS: dict = {}  # (H, I, E, the layout's packing fields) -> flat_gather.flat_face_map: the same every layer
-
-
-def _cache_dir(mesh):
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import _checkpoint_identity
-
-    R, C = tuple(mesh.shape)
-    ckpt = Path(os.environ.get("KIMI_K3_CKPT", ""))
-    root = Path(os.environ.get("K3_BLOCK_WEKA_CACHE", _WEKA_CACHE))
-    return root / f"kimi_k3_bh_{R * C}dev" / _checkpoint_identity(ckpt) / f"mesh{R}x{C}.tpaxis1"
-
-
-def weka_device_sources(mesh, layer_idx: int, epc: int, cache=None):
-    """TtMoe's cached routed experts of a layer straight to DRAM (bfp4 as stored, interleaved): flat_gather's sources,
-    s = le * 3 + (0 gate, 1 up, 2 down) - each [1, 1, in, out] a chip (W^T: the flat op's orientation)."""
-    cache = Path(cache) if cache is not None else _cache_dir(mesh)
-    srcs = []
-    for le in range(epc):
-        for proj in ("gate", "up", "down"):
-            hits = sorted(cache.glob(f"layer_{layer_idx}.routed_expert.local_{le}_{proj}_dtype_*.tensorbin"))
-            assert hits, f"K3_BLOCK_WEIGHTS=weka: no layer_{layer_idx}.routed_expert.local_{le}_{proj} in {cache}"
-            assert "BFLOAT4_B" in hits[0].name, f"flat_gather copies bfp4 faces: {hits[0].name}"
-            host = ttnn.load_tensor(str(hits[0]))
-            srcs.append(ttnn.to_device(host, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-            del host
-    return srcs
-
-
+LINKS = 2
+GATHER_EXPERTS = 4  # (local experts a flat_gather batch)
 _WEKA_CACHE = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill"
+_BLOCKS: dict = {}  # (id(mesh), chunk, options) -> (mesh, MoEBlockResources, MoEBlock)
+_FACE_MAPS: dict = {}  # ((H, I, E, layout), experts a batch) -> gather_batches of flat_face_map: the same every layer
 
 
-def block_model(model_cfg):
-    """The block's model (KIMI_K3 / GLM_53), checked against the model's config."""
-    from models.demos.moe_block.moe_block import GLM_53, KIMI_K3
+def release_blocks(mesh_device=None):
+    """Drop the cached blocks (of mesh_device; None: of every mesh) and release their resources (arena, words) now."""
+    for key in [k for k in list(_BLOCKS) if mesh_device is None or k[0] == id(mesh_device)]:
+        _, res, _ = _BLOCKS.pop(key)
+        res.release()
 
-    if model_cfg.NUM_ROUTED_EXPERTS == GLM_53.num_experts and model_cfg.EMB_SIZE == GLM_53.emb_dim:
-        m = GLM_53
-        got = (
-            model_cfg.NUM_ROUTED_EXPERTS,
-            model_cfg.NUM_EXPERTS_PER_TOKEN,
-            model_cfg.EMB_SIZE,
-            model_cfg.MOE_INTERMEDIATE_SIZE,
-        )
-        want = (m.num_experts, m.top_k, m.emb_dim, m.routed_expert_hidden_dim)
-        assert got == want, f"MOE_IMPL=block: config (E, top-k, H, I) {got} != GLM_53 {want}"
-        return m
-    m = KIMI_K3
-    got = (
+
+@dataclass(frozen=True)
+class MoEBlockFfnOptions:
+    """The MoE block's choices a caller may change; None / the defaults are production's.
+
+    combine_snap: the combine's snap q (a power of two: every routed term rounded to a multiple of q, so the sum is
+        bit-identical in any landing order); None: the MoEBlockConfig default (2^-14); 0: off.
+    combine_landing: the combine's landing pool (CombineLanding): "rings" (one ring a source chip, in the accumulators'
+        L1), "shared" (slot grants from one free list), "flat_cores" (rings in the flat expert cores' free L1),
+        "shared_flat_cores" (shared's grants on flat_cores' slots); None: the planner's (rings or flat_cores, ranked).
+    sp_axis: the mesh axis SP runs on (1: the 4x4 tray-half stage, SP on the axis-1 ring, TP on the axis-0 line); the
+        block's ops run on the transposed mesh (MoEBlockConfig.sp_axis)."""
+
+    combine_snap: Optional[float] = None
+    combine_landing: Optional[str] = None
+    sp_axis: int = 0
+
+
+def _combine_config(mb, opts: "MoEBlockFfnOptions"):
+    """The combine's CombineConfig for these options (None: MoEBlock's default)."""
+    if opts.combine_landing is None:
+        return None
+    landing = {
+        "rings": mb.CombineLanding.Rings,
+        "shared": mb.CombineLanding.Shared,
+        "flat_cores": mb.CombineLanding.FlatCores,
+        "shared_flat_cores": mb.CombineLanding.SharedFlatCores,
+    }[opts.combine_landing]
+    cc = mb.CombineConfig()
+    cc.landing = landing
+    return cc
+
+
+def block_dims(model_cfg):
+    """The block's MoEModelDims (GLM-5.3 / Kimi-K3), checked against the model's config - or a config's own
+    moe_block_dims() -> (MoEModelDims, flat activation name), for a model the block runs without a branch here (the block
+    tests' DeepSeek V4.1-Flash)."""
+    own = getattr(model_cfg, "moe_block_dims", None)
+    if own is not None:
+        return own()
+    mb = ttnn.experimental.moe_block
+    E, K, H, I = (
         model_cfg.NUM_ROUTED_EXPERTS,
         model_cfg.NUM_EXPERTS_PER_TOKEN,
         model_cfg.EMB_SIZE,
         model_cfg.MOE_INTERMEDIATE_SIZE,
-        model_cfg.ROUTED_EXPERT_HIDDEN_SIZE,
     )
-    want = (m.num_experts, m.top_k, m.emb_dim, m.routed_expert_hidden_dim, m.latent_dim)
-    assert got == want, f"K3_MOE_IMPL=block: config (E, top-k, H, I, latent) {got} != KIMI_K3 {want}"
-    return m
-
-
-def random_weights(m, seed=0):
-    """Seeded random MoEWeights at m's shapes (the block tests' generator: POOL distinct experts over all E)."""
-    from models.demos.moe_block.moe_block import MoEWeights, fuse_gate_up
-
-    g = torch.Generator().manual_seed(seed)
-    r = lambda *s, sc=0.02: torch.randn(*s, generator=g) * sc  # noqa: E731
-    H, Hr, I, E = m.emb_dim, m.routed_width, m.routed_expert_hidden_dim, m.num_experts
-    pool = [{"gate_up": fuse_gate_up(r(I, Hr), r(I, Hr)), "down": r(Hr, I)} for _ in range(POOL)]
-    Is = m.shared_expert_hidden_dim
-    return MoEWeights(
-        router={"weight": r(E, H), "bias": r(E, sc=0.01)},
-        routed=[pool[e % POOL] for e in range(E)],
-        shared={"gate_up": fuse_gate_up(r(Is, H), r(Is, H)), "down": r(H, Is)},
-        latent={"down": r(Hr, H), "up": r(H, Hr), "norm": 1.0 + r(Hr, sc=0.1)},
+    if (E, K, H, I) == (256, 8, 6144, 2048):  # GLM-5.3
+        silu = mb.ExpertActivation(kind=mb.ExpertActivationKind.Silu)
+        return (
+            mb.MoEModelDims(
+                num_experts=E,
+                top_k=K,
+                emb_dim=H,
+                routed_expert_hidden_dim=I,
+                routed_expert_activation=silu,
+                router=mb.RouterSpec(score_func=mb.RouterScoreFunc.Sigmoid, route_scale=2.5),
+                shared_expert_hidden_dim=2048,
+                shared_expert_activation=silu,
+            ),
+            "silu",
+        )
+    got = (E, K, H, I, model_cfg.ROUTED_EXPERT_HIDDEN_SIZE)
+    assert got == (896, 16, 7168, 3072, 3584), f"MoE block: config (E, top-k, H, I, latent) {got}: not GLM-5.3 / K3"
+    situ = mb.ExpertActivation(kind=mb.ExpertActivationKind.Situ, beta=4.0, linear_beta=25.0)
+    return (
+        mb.MoEModelDims(
+            num_experts=E,
+            top_k=K,
+            emb_dim=H,
+            routed_expert_hidden_dim=I,
+            routed_expert_activation=situ,
+            router=mb.RouterSpec(score_func=mb.RouterScoreFunc.Sigmoid, route_scale=1.0),
+            shared_expert_hidden_dim=6144,
+            shared_expert_activation=situ,
+            latent_dim=3584,
+            latent_norm=True,
+        ),
+        "situ",
     )
 
 
-def ci_router(mesh, m):
-    """TtMoe CI perf gate's router in the block's expert order (module docstring: ci)."""
-    path = os.environ.get("K3_BLOCK_CI_GATE")
-    if path:
-        gate = torch.load(path)["gate"]
-    else:
-        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_gate_weights
-
-        gate = create_gate_weights(m.num_experts, m.emb_dim, seed=9012)
-    R, C = tuple(mesh.shape)
-    epc = m.num_experts // (R * C)
-    gtab = _gtab(mesh, epc)
-    perm = torch.tensor(
-        [int(gtab[c, r, le]) for r in range(R) for c in range(C) for le in range(epc)], dtype=torch.long
-    )
-    return {"weight": gate["weight"].float()[perm].contiguous(), "bias": gate["e_score_correction_bias"].float()[perm]}
-
-
-def _gtab(mesh, epc):
-    """gtab[c, r, le]: the checkpoint expert TtMoe holds in slot le of chip (r, c)."""
+def _gtab(mesh, epc, sp_axis: int = 0):
+    """gtab[group, chip, le]: the checkpoint expert TtMoe holds in slot le of the chip at coordinate chip along the SP
+    axis and group off it (SP on axis 0: chip (r, c) is gtab[c, r]; on axis 1: gtab[r, c])."""
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
-    R, C = tuple(mesh.shape)
+    shape = tuple(mesh.shape)
     return ExpertMapping.create_global_expert_idx_table(
-        experts_per_chip=epc, dispatch_group_size=R, num_dispatch_groups=C
+        experts_per_chip=epc, dispatch_group_size=shape[sp_axis], num_dispatch_groups=shape[1 - sp_axis]
     )
 
 
-def _rss_gb():
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
+def block_order_perm(mesh, epc, sp_axis: int = 0) -> torch.Tensor:
+    """perm[b]: the checkpoint expert the block holds as expert b = n epc + le - the one TtMoe keeps in slot le of the
+    mesh chip that is the block's chip n (to_mesh_order: with SP on axis 1 mesh chip (mr, mc) is the block's (mc, mr)).
+    """
+    gtab = _gtab(mesh, epc, sp_axis)
+    SP, TP = sp_tp(mesh.shape, sp_axis)
+    perm = []
+    for n in range(SP * TP):
+        sr, tc = divmod(n, TP)
+        mr, mc = (sr, tc) if sp_axis == 0 else (tc, sr)
+        group, chip = (mc, mr) if sp_axis == 0 else (mr, mc)
+        perm.extend(int(gtab[group, chip, le]) for le in range(epc))
+    return torch.tensor(perm, dtype=torch.long)
 
 
-def glm_nonrouted(layer_idx: int, hf_config):
-    """GLM-5.3 layer's gate (weight, e_score_correction_bias) and shared expert from $GLM53_HF_MODEL, fp8 dequantized."""
-    import json
+def _k3_checkpoint() -> Path:
+    """Kimi-K3's checkpoint: $KIMI_K3_CKPT, else the prefill runner's $PREFILL_HF_MODEL (its K3 runs set only that)."""
+    return Path(os.environ.get("KIMI_K3_CKPT") or os.environ.get("PREFILL_HF_MODEL") or "")
 
+
+def _cache_dir(mesh, sp_axis: int = 0):
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import _checkpoint_identity
+
+    R, C = tuple(mesh.shape)
+    ckpt = _k3_checkpoint()
+    root = Path(os.environ.get("K3_BLOCK_WEKA_CACHE") or os.environ.get("TT_KIMI_K3_PREFILL_TTNN_CACHE") or _WEKA_CACHE)
+    return root / f"kimi_k3_bh_{R * C}dev" / _checkpoint_identity(ckpt) / f"mesh{R}x{C}.tpaxis{1 - sp_axis}"
+
+
+def _glm_nonrouted(layer_idx: int, hf_config):
+    """GLM-5.3 layer's gate and shared expert from $GLM53_HF_MODEL, fp8 dequantized."""
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_tensors
     from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict
 
-    ckpt = Path(os.environ.get("GLM53_HF_MODEL", "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"))
+    ckpt = Path(
+        os.environ.get("GLM53_HF_MODEL")
+        or os.environ.get("PREFILL_HF_MODEL")  # (the prefill runner's)
+        or "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"
+    )
     with (ckpt / "model.safetensors.index.json").open(encoding="utf-8") as f:
         wm = json.load(f)["weight_map"]
     p = f"model.layers.{layer_idx}.mlp."
@@ -175,20 +193,14 @@ def glm_nonrouted(layer_idx: int, hf_config):
     assert names, f"MOE_IMPL=block: no {p}gate / shared_experts keys in {ckpt}"
     t = load_tensors(ckpt, {k: k for k in names})
     if hf_config is None or getattr(hf_config, "quantization_config", None) is None:
-        import types
-
         with (ckpt / "config.json").open(encoding="utf-8") as f:  # (only its quantization_config is read)
             hf_config = types.SimpleNamespace(quantization_config=json.load(f).get("quantization_config"))
-    t = dequantize_state_dict(t, hf_config, dtype=torch.float32)
-    return t, p
+    return dequantize_state_dict(t, hf_config, dtype=torch.float32), p
 
 
-def weka_weights(mesh, m, layer_idx: int, routed: bool = True, cache=None, hf_config=None):
-    """The layer's own weights in the block's expert order (module docstring) -> (MoEWeights with routed None: gate /
-    shared / latent from the checkpoint, flat): flat = per chip (row-major), per local expert (Wg [Hr, I], Wu [Hr, I],
-    Wd [I, Hr]) bf16 - TtMoe's cached W^T is the flat op's orientation as it is; block expert k EPC + le = flat[k][le]
-    (routed False: flat None - real_gate's). bf16, not the contract's fused fp32 (RoutedExperts' conversion of 896
-    distinct experts held ~120 GB of fp32 at once: the host OOM-killed the run)."""
+def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0):
+    """The layer's non-routed weights in the block's expert order: dict of float32 torch tensors (router weight / bias,
+    shared gate / up / down, K3: latent down / up / norm)."""
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
         GATE_KEYS,
         LATENT_KEYS,
@@ -196,499 +208,533 @@ def weka_weights(mesh, m, layer_idx: int, routed: bool = True, cache=None, hf_co
         layer_prefix,
         load_tensors,
     )
-    from models.demos.moe_block.moe_block import MoEWeights, fuse_gate_up
 
-    t0 = time.time()
     R, C = tuple(mesh.shape)
-    E, epc = m.num_experts, m.num_experts // (R * C)
-    gtab = _gtab(mesh, epc)
-    perm = torch.tensor(
-        [int(gtab[c, r, le]) for r in range(R) for c in range(C) for le in range(epc)], dtype=torch.long
-    )
-
-    if m.latent_dim is None:  # (GLM-5.3)
-        t, p = glm_nonrouted(layer_idx, hf_config)
-        router = {
-            "weight": t[p + "gate.weight"].float()[perm].contiguous(),
-            "bias": t[p + "gate.e_score_correction_bias"].float()[perm],
-        }
+    perm = block_order_perm(mesh, dims.num_experts // (R * C), sp_axis)
+    if dims.latent_dim is None:  # (GLM-5.3)
+        t, p = _glm_nonrouted(layer_idx, hf_config)
         sp = p + "shared_experts."
-        shared = {
-            "gate_up": fuse_gate_up(t[sp + "gate_proj.weight"].float(), t[sp + "up_proj.weight"].float()),
+        return {
+            "router_weight": t[p + "gate.weight"].float()[perm].contiguous(),
+            "router_bias": t[p + "gate.e_score_correction_bias"].float()[perm].contiguous(),
+            "gate": t[sp + "gate_proj.weight"].float(),
+            "up": t[sp + "up_proj.weight"].float(),
             "down": t[sp + "down_proj.weight"].float(),
         }
-        latent = None
-    else:
-        ckpt = Path(os.environ.get("KIMI_K3_CKPT", ""))
-        assert (ckpt / "model.safetensors.index.json").is_file(), f"K3_BLOCK_WEIGHTS=weka: no checkpoint at {ckpt}"
-        p = layer_prefix(ckpt, layer_idx)
-        keys = {f"g.{k}": p + v for k, v in GATE_KEYS.items()}
-        keys.update({f"s.{k}": p + v for k, v in SHARED_EXPERT_KEYS.items()})
-        keys.update({f"l.{k}": p + v for k, v in LATENT_KEYS.items()})
-        t = load_tensors(ckpt, keys)
-        router = {
-            "weight": t["g.weight"].float()[perm].contiguous(),
-            "bias": t["g.e_score_correction_bias"].float()[perm],
-        }
-        shared = {
-            "gate_up": fuse_gate_up(t["s.gate_proj"].float(), t["s.up_proj"].float()),
-            "down": t["s.down_proj"].float(),
-        }
-        latent = {"down": t["l.down_proj"].float(), "up": t["l.up_proj"].float(), "norm": t["l.norm"].float()}
-    t1 = time.time()
+    ckpt = _k3_checkpoint()
+    assert (ckpt / "model.safetensors.index.json").is_file(), f"K3 MoE block: no checkpoint at {ckpt}"
+    p = layer_prefix(ckpt, layer_idx)
+    keys = {f"g.{k}": p + v for k, v in GATE_KEYS.items()}
+    keys.update({f"s.{k}": p + v for k, v in SHARED_EXPERT_KEYS.items()})
+    keys.update({f"l.{k}": p + v for k, v in LATENT_KEYS.items()})
+    t = load_tensors(ckpt, keys)
+    return {
+        "router_weight": t["g.weight"].float()[perm].contiguous(),
+        "router_bias": t["g.e_score_correction_bias"].float()[perm].contiguous(),
+        "gate": t["s.gate_proj"].float(),
+        "up": t["s.up_proj"].float(),
+        "down": t["s.down_proj"].float(),
+        "latent_down": t["l.down_proj"].float(),
+        "latent_up": t["l.up_proj"].float(),
+        "latent_norm": t["l.norm"].float(),
+    }
 
-    w = MoEWeights(router=router, routed=None, shared=shared, latent=latent)
-    if not routed:
-        logger.info(f"K3 real_gate layer {layer_idx}: gate / shared / latent from the checkpoint in {t1 - t0:.0f} s")
-        return w, None
-    cache = Path(cache) if cache is not None else _cache_dir(mesh)
-    stem = f"layer_{layer_idx}.routed_expert"
-    flat = [[None] * epc for _ in range(R * C)]
-    for le in range(epc):
-        mats = {}
+
+_CACHE_LISTINGS: dict = {}  # cache dir -> {tensor name: tensorbin}: one directory listing a dir, not one glob a file
+
+
+def _cached_tensorbin(cache, name: str) -> Path:
+    """The tensorbin TtMoe's as_tensor wrote for cache_file_name `name` (`{name}_dtype_{dtype}_layout_{layout}`): the
+    bfp4 TILE name first (one stat), else a lookup in the directory's listing - a K3 layer reads 168 of them from a
+    directory of tens of thousands of entries, which a glob a file lists in full each time."""
+    cache = Path(cache)
+    direct = cache / f"{name}_dtype_BFLOAT4_B_layout_TILE.tensorbin"
+    if direct.is_file():
+        return direct
+    for refresh in (False, True):
+        listing = None if refresh else _CACHE_LISTINGS.get(cache)
+        if listing is None:
+            listing = {}
+            with os.scandir(cache) as it:
+                for e in it:
+                    if e.name.endswith(".tensorbin") and "_dtype_" in e.name:
+                        listing.setdefault(e.name.split("_dtype_", 1)[0], []).append(e.name)
+            _CACHE_LISTINGS[cache] = listing
+        hits = sorted(listing.get(name, []))
+        if hits:
+            return cache / hits[0]
+    raise AssertionError(f"MoE block: no {name} in {cache}")
+
+
+def device_sources(mesh, layer_idx: int, epc: int, cache, experts=None):
+    """TtMoe's cached routed experts of a layer straight to DRAM (bfp4 as stored, interleaved): flat_gather's sources,
+    s = le * 3 + (0 gate, 1 up, 2 down) - each [1, 1, in, out] a chip (W^T: the flat op's orientation). experts: the
+    local experts to load (default all epc), s counted from the first."""
+    srcs = []
+    for le in range(epc) if experts is None else experts:
         for proj in ("gate", "up", "down"):
-            hits = sorted(cache.glob(f"{stem}.local_{le}_{proj}_dtype_*.tensorbin"))
-            assert hits, f"K3_BLOCK_WEIGHTS=weka: no {stem}.local_{le}_{proj} tensorbin in {cache}"
-            host = ttnn.load_tensor(str(hits[0]))  # (host, every chip's [1, 1, in, out] - TtMoe stores W^T)
-            mats[proj] = [ttnn.to_torch(d).reshape(d.shape[-2], d.shape[-1]) for d in ttnn.get_device_tensors(host)]
-            del host
-        for k in range(R * C):  # (row-major chips: the mapper's dims (0, 1))
-            flat[k][le] = tuple(mats[n][k].to(torch.bfloat16).contiguous() for n in ("gate", "up", "down"))
-        del mats
-        if le == 0:
-            wg, wu, wd = flat[0][0]
-            logger.info(
-                f"K3 weka layer {layer_idx}: routed expert slot 0 Wg {tuple(wg.shape)} Wu {tuple(wu.shape)} Wd "
-                f"{tuple(wd.shape)} (expect [{m.routed_width}, {m.routed_expert_hidden_dim}] x 2 / "
-                f"[{m.routed_expert_hidden_dim}, {m.routed_width}]) from {cache}"
-            )
-    logger.info(
-        f"K3 weka layer {layer_idx}: checkpoint {t1 - t0:.0f} s, {epc} x 3 routed tensorbins {time.time() - t1:.0f} s; "
-        f"max RSS {_rss_gb():.0f} GB"
-    )
-    return w, flat
-
-
-def host_moe(x, w, m, ids, wts, flat=None):
-    """The block's math in fp32 on the host for any routed experts (the matrix test's reference assumes a pool):
-    expert e from w.routed (the contract), or from flat (weka: per chip, per local expert (Wg, Wu, Wd))."""
-    from models.demos.moe_block.moe_block import act_host, split_gate_up
-
-    epc = None if flat is None else len(flat[0])
-
-    def expert(e):  # -> gate [I, Hr], up [I, Hr], down [Hr, I]
-        if flat is not None:
-            wg, wu, wd = flat[e // epc][e % epc]
-            return wg.float().T, wu.float().T, wd.float().T
-        gate, up = split_gate_up(w.routed[e]["gate_up"].float())
-        return gate, up, w.routed[e]["down"].float()
-
-    x = x.float()
-    h = x if m.latent_dim is None else x @ w.latent["down"].float().T
-    acc = torch.zeros(x.shape[0], m.routed_width)
-    for e in torch.unique(ids).tolist():
-        tok, kk = (ids == e).nonzero(as_tuple=True)
-        gate, up, down = expert(e)
-        a = act_host(m.routed_expert_activation, h[tok] @ gate.T, h[tok] @ up.T)
-        acc.index_add_(0, tok, (a @ down.T) * wts[tok, kk].float().unsqueeze(1))
-    y = acc
-    if m.latent_dim is not None:
-        if m.latent_norm:
-            y = y * torch.rsqrt(y.pow(2).mean(-1, keepdim=True) + m.norm_eps) * w.latent["norm"].float()
-        y = y @ w.latent["up"].float().T
-    if w.shared is not None:
-        gs, us = split_gate_up(w.shared["gate_up"].float())
-        y = y + act_host(m.shared_expert_activation, x @ gs.T, x @ us.T) @ w.shared["down"].float().T
-    return y
-
-
-def device_routing(rows, S, K):
-    """The joint routing rows (per chip [S / 32, 32 x 2K] uint16, row-major chip order) -> ids, weights [N S, K]."""
-    ids, wts = [], []
-    for t in rows:
-        u = t.to(torch.int64).reshape(S, 2 * K) & 0xFFFF
-        ids.append(u[:, :K])
-        wb = u[:, K:]
-        wts.append(torch.where(wb >= 32768, wb - 65536, wb).to(torch.int16).view(torch.bfloat16).float())
-    return torch.cat(ids), torch.cat(wts)
-
-
-class _L1Trace:
-    """Logs every L1 tensor allocated / freed through ttnn's Python entry points while open (K3_BLOCK_L1_TRACE=1): its
-    address, bytes a core and the caller - where the block's persistent L1 lands and which transient ones left holes
-    above it."""
-
-    def __init__(self):
-        import traceback
-
-        self.n = 0
-        self.saved = {}
-
-        def where():
-            for fr in reversed(traceback.extract_stack()[:-2]):
-                if (
-                    "models/demos" in fr.filename or "ttnn/bringup" in fr.filename
-                ) and "moe_block_ffn" not in fr.filename:
-                    return f"{Path(fr.filename).name}:{fr.lineno} {fr.name}"
-            return "?"
-
-        def per_core(t):
-            ss = t.memory_config().shard_spec
-            return ss.shape[0] * ss.shape[1] * t.element_size() if ss is not None else -1
-
-        def wrap_alloc(name):
-            fn = getattr(ttnn, name)
-            self.saved[name] = fn
-
-            def call(*a, **k):
-                t = fn(*a, **k)
-                try:
-                    if (
-                        isinstance(t, ttnn.Tensor)
-                        and t.storage_type() == ttnn.StorageType.DEVICE
-                        and t.memory_config().buffer_type == ttnn.BufferType.L1
-                    ):
-                        self.n += 1
-                        logger.info(
-                            f"K3_L1_TRACE +{self.n} @{int(t.buffer_address())} {per_core(t)} B {name} {where()}"
-                        )
-                except Exception:  # noqa: BLE001 (a diagnostic)
-                    pass
-                return t
-
-            setattr(ttnn, name, call)
-
-        for name in ("allocate_tensor_on_device", "from_torch"):
-            wrap_alloc(name)
-        dealloc = ttnn.deallocate
-        self.saved["deallocate"] = dealloc
-
-        def free(t, *a, **k):
-            try:
-                if t.is_allocated() and t.memory_config().buffer_type == ttnn.BufferType.L1:
-                    logger.info(f"K3_L1_TRACE - @{int(t.buffer_address())} {per_core(t)} B {where()}")
-            except Exception:  # noqa: BLE001
-                pass
-            return dealloc(t, *a, **k)
-
-        ttnn.deallocate = free
-        gs = ttnn.create_global_semaphore
-        self.saved["create_global_semaphore"] = gs
-
-        def sem(*a, **k):
-            s_ = gs(*a, **k)
-            try:
-                logger.info(f"K3_L1_TRACE +sem @{int(ttnn.get_global_semaphore_address(s_))} {where()}")
-            except Exception:  # noqa: BLE001
-                pass
-            return s_
-
-        ttnn.create_global_semaphore = sem
-
-    def close(self):
-        for name, fn in self.saved.items():
-            setattr(ttnn, name, fn)
+            path = _cached_tensorbin(cache, f"layer_{layer_idx}.routed_expert.local_{le}_{proj}")
+            assert "BFLOAT4_B" in path.name, f"flat_gather copies bfp4 faces: {path.name}"
+            # (straight to the device, as TtMoe loads its cache - no host tensor of all 32 chips in Python)
+            t = ttnn.load_tensor(str(path), device=mesh)
+            if t.memory_config().buffer_type != ttnn.BufferType.DRAM or t.memory_config().is_sharded():
+                t = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
+            srcs.append(t)
+    return srcs
 
 
 class TtK3MoEBlockFfn:
-    """One K3 MoE layer on the shared MoE block: __call__(ffn_norm's x [1, 1, S/SP, H/TP]) -> [1, 1, S/SP, H/TP]."""
+    """One MoE layer on the shared MoE block: __call__(ffn_norm's x [1, 1, S/SP, H/TP]) -> [1, 1, S/SP, H/TP]."""
 
-    def __init__(self, mesh_device, model_cfg, layer_idx: int, seed: int = 0, hf_config=None, cache_path=None):
-        self.hf_config, self.cache_path = hf_config, cache_path  # (GLM: the dequant config, the routed experts' cache)
-        self.kind = os.environ.get("K3_BLOCK_WEIGHTS", "random" if cache_path is None else "weka")
-        assert self.kind in (
-            "random",
-            "ci",
-            "weka",
-            "real_gate",
-        ), f"K3_BLOCK_WEIGHTS={self.kind}: random, ci, weka or real_gate"
-        self.mesh, self.layer_idx, self.seed = mesh_device, int(layer_idx), int(seed)
-        self.model = block_model(model_cfg)
-        self.calls = 0
-        self.w = None  # (weka / real_gate: this layer's host weights; weka's routed experts in self.flat)
-        self.flat = None  # (weka: per chip, per local expert (Wg, Wu, Wd) bf16 - dropped once laid out and checked)
-        # (weka: the flat op's layout made on the device from TtMoe's bfp4 cache - flat_gather - unless K3_BLOCK_LAYOUT
-        # =host: dequantized, packed and requantized on the host, ~4 min a layer)
-        self.device_layout = self.kind == "weka" and os.environ.get("K3_BLOCK_LAYOUT", "device") == "device"
-        self.gather_check = self.device_layout and os.environ.get("K3_BLOCK_GATHER_CHECK") == "1"
-        self.layer = None  # (weka / real_gate: this layer's MoELayer, the block switches between them)
+    def __init__(
+        self,
+        mesh_device,
+        model_cfg,
+        layer_idx: int,
+        hf_config=None,
+        cache_path=None,
+        state_dict=None,
+        options: Optional[MoEBlockFfnOptions] = None,
+    ):
+        self.mesh, self.layer_idx, self.hf_config = mesh_device, int(layer_idx), hf_config
+        self.options = options or MoEBlockFfnOptions()
+        self.cache = Path(cache_path) if cache_path is not None else None
+        # (a TtPrefillBlock state dict holding the MoE's host weights - gate_weights, shared_expert_weights,
+        # routed_expert_weights, K3: latent_weights - as the synthetic-weight tests give TtMoe: the block's weights are
+        # made from them, expert e on chip e // (E / N), instead of from the checkpoint and the TtMoe cache)
+        self.host_sd = state_dict if state_dict and state_dict.get("routed_expert_weights") is not None else None
+        self.dims, self.act = block_dims(model_cfg)
+        self.model_name = model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", "")
+        # (this layer's weights in the ops' layouts, made at the first call that needs them: each part kept by what its
+        # layout depends on - _packing - so a block with another plan gets weights laid out for it)
+        self._heads: dict = {}  # head packing key -> MoEHeadWeights
+        self._routed_w: dict = {}  # routed packing key -> (gidx, w_gu, w_d)
+        self._w_up = None  # (a latent model's tail W': its layout does not depend on the chunk)
+        self._prepared: dict = {}  # (head key, routed key) -> MoEBlockWeights
+        self._by_block: dict = {}  # id(block) -> (block, its MoEBlockWeights): a call's lookup, no planning
 
-    def _l1_list(self, block, layer):
-        """The L1 tensors the block keeps between calls: where, how much a core (the top of L1 is what the model's
-        other programs' circular buffers need - a persistent L1 buffer there clashes with them)."""
-        from models.demos.moe_block.moe_block import l1_tensors
-
-        roots = [(block, "block"), (layer, "layer"), (_DONE, "_DONE"), (_POOL_EXPERTS, "_POOL_EXPERTS")]
-        rows = []
-        for path, t in l1_tensors(roots):
-            mc = t.memory_config()
-            ss = mc.shard_spec
-            if ss is not None:
-                cores = ss.grid.num_cores()
-                per_core = ss.shape[0] * ss.shape[1] * t.element_size()
-                where = f"{cores} cores {ss.grid}"
-            else:
-                cores = 0
-                per_core = -1
-                where = str(mc.memory_layout)
-            rows.append((int(t.buffer_address()), per_core, path, tuple(t.shape), str(t.dtype), where))
-        rows.sort(key=lambda r: r[0])
-        tot = sum(r[1] for r in rows if r[1] > 0)
-        logger.info(f"K3_BLOCK_L1 {len(rows)} persistent L1 tensors, {tot >> 10} KB a core summed (sharded ones):")
-        for a, b, path, shape, dt, where in rows:
-            logger.info(f"K3_BLOCK_L1   @{a} {b} B a core  {path}  {shape} {dt}  {where[:160]}")
-        if rows:
-            lo, hi = rows[0][0], max(a + max(b, 0) for a, b, *_ in rows)
-            logger.info(f"K3_BLOCK_L1 span: lowest @{lo}, highest end {hi} -> {(hi - lo) >> 10} KB from the lowest")
-
-    def _l1_report(self, when):
-        """The L1 the model holds when the block is built: free a core (to the lowest allocation), the allocator's view."""
-        from models.demos.moe_block.tt.se_engine3 import ARENA_MAX, l1_free_bytes
-
-        mv = ttnn.get_memory_view(self.mesh, ttnn.BufferType.L1)
-        logger.info(
-            f"K3 MoE block L1 {when}: free below the lowest allocation {l1_free_bytes(self.mesh) >> 10} KB a core "
-            f"(ARENA_MAX {ARENA_MAX >> 10} KB); allocator: allocated {int(mv.total_bytes_allocated_per_bank) >> 10} KB, "
-            f"free {int(mv.total_bytes_free_per_bank) >> 10} KB, largest free block "
-            f"{int(mv.largest_contiguous_bytes_free_per_bank) >> 10} KB a bank"
-        )
-        ms = ttnn.get_memory_view(self.mesh, ttnn.BufferType.L1_SMALL)
-        logger.info(
-            f"K3 MoE block L1_SMALL {when}: allocated {int(ms.total_bytes_allocated_per_bank)} B, free "
-            f"{int(ms.total_bytes_free_per_bank)} B, largest free block {int(ms.largest_contiguous_bytes_free_per_bank)} B a "
-            f"bank"
-        )
-
-    def _weights(self):
-        if self.w is None:
-            if self.kind == "random":
-                self.w = random_weights(self.model, self.seed)
-            elif self.kind == "ci":
-                self.w = dataclasses.replace(
-                    random_weights(self.model, self.seed), router=ci_router(self.mesh, self.model)
-                )
-            else:
-                need_host = self.kind == "weka" and (
-                    not self.device_layout or self.gather_check or int(os.environ.get("K3_BLOCK_CHECK", "0")) > 0
-                )
-                self.w, self.flat = weka_weights(
-                    self.mesh,
-                    self.model,
-                    self.layer_idx,
-                    routed=need_host,
-                    cache=self.cache_path,
-                    hf_config=self.hf_config,
-                )
-                if self.kind == "real_gate":  # (the random pool's experts, for the host check)
-                    self.w = dataclasses.replace(self.w, routed=random_weights(self.model, self.seed).routed)
-        return self.w
-
-    def _moe_layer(self, chunk):
-        """This layer's MoELayer (weka / real_gate): its routed experts laid out (real_gate: the random pool's, one set
-        for every layer), host weights kept without them (59 GB of bf16 a weka layer otherwise)."""
-        from models.demos.moe_block.moe_block import Geometry, MoEDtypes, MoELayer, RoutedExperts
-
-        if self.layer is None:
-            g = Geometry.of(self.mesh, self.model, chunk, LINKS, zigzag=False)
-            w, dt = self._weights(), MoEDtypes()
-            t0 = time.time()
-            if self.kind == "real_gate":
-                key = (id(self.mesh), chunk)
-                hit = _POOL_EXPERTS.get(key)
-                if hit is None or hit[0] is not self.mesh:
-                    hit = _POOL_EXPERTS[key] = (self.mesh, RoutedExperts(self.mesh, g, self.model, w.routed, dt))
-                experts = hit[1]
-            else:  # (weka: the flat op laid out on the device from TtMoe's cache, or from the bf16 host experts)
-                from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
-
-                from models.demos.moe_block.moe_block import _FLAT_ACT
-
-                m = self.model
-                op = FlatRoutedExpert(
-                    self.mesh,
-                    "fake" if self.device_layout else self.flat,
-                    m=RoutedExperts.cap_of(g),
-                    H=m.routed_width,
-                    I=m.routed_expert_hidden_dim,
-                    gids=RoutedExperts.gids_of(g),
-                    n_global=m.num_experts,
-                    wdtype="bf4",
-                    act=_FLAT_ACT[m.routed_expert_activation.kind],
-                    pin=1,
-                    layout=RoutedExperts.layout_of(g, m, True),
-                )
-                if self.device_layout:
-                    self._gather(op, m, g)
-                # (every layer's flat op shares one done-words buffer, as the GLM / DSv4.1 adapters do: the layers run one
-                # at a time and each launch leaves it zeroed; one L1 buffer a layer piled up and moved the head's arena
-                # at layer 10 - "the arena landed at 207296, not 209344: L1 allocated since")
-                shared = _DONE.get(id(self.mesh))
-                if shared is None or shared[0] is not self.mesh:
-                    _DONE[id(self.mesh)] = (self.mesh, op.done)
-                else:
-                    ttnn.deallocate(op.done)
-                    op.done = shared[1]
-                experts = RoutedExperts(self.mesh, g, m, None, dt, op=op)
-                if int(os.environ.get("K3_BLOCK_CHECK", "0")) == 0:
-                    self.flat = None  # (laid out, nothing to check: the host experts go now)
-            light = dataclasses.replace(w, routed=None)
-            self.layer = MoELayer(self.mesh, g, self.model, lambda: light, experts, dt)
-            logger.info(
-                f"K3 {self.kind} layer {self.layer_idx}: MoELayer in {time.time() - t0:.0f} s; max RSS {_rss_gb():.0f} GB"
-            )
-        return self.layer
-
-    def _gather(self, op, m, g):
-        """Fill the flat op's (uninitialised) weight tensors on the device from TtMoe's cached bfp4 experts."""
-        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import WEIGHT_LAYOUT_KEYS
-        from ttnn.bringup.flat_routed_expert_ttnn.flat_gather import flat_face_map, gather
-
-        t0 = time.time()
-        lay = dict(op.plan)
-        E = g.experts_per_chip
-        key = (
-            m.routed_width,
-            m.routed_expert_hidden_dim,
-            E,
-            repr([lay.get(k) for k in WEIGHT_LAYOUT_KEYS] + [lay.get("nu"), lay.get("hg")]),
-        )
-        maps = _FACE_MAPS.get(key)
-        if maps is None:
-            maps = _FACE_MAPS[key] = flat_face_map(m.routed_width, m.routed_expert_hidden_dim, E, lay)
-            logger.info(
-                f"K3 weka gather: face maps in {time.time() - t0:.0f} s - "
-                + ", ".join(f"{n} {t.shape[0]} pages ({int((t < 0).sum())} zero faces)" for n, t in maps.items())
-            )
-        t1 = time.time()
-        srcs = weka_device_sources(self.mesh, self.layer_idx, E, cache=self.cache_path)
-        t2 = time.time()
-        for name, fm in maps.items():
-            dst = getattr(op, name)
-            pages = (int(dst.shape[-2]) // 32) * (int(dst.shape[-1]) // 32)
-            assert pages == fm.shape[0], f"{name}: {pages} pages, the face map {fm.shape[0]}"
-            gather(self.mesh, srcs, fm, dst)
-        t3 = time.time()
-        for t in srcs:
-            ttnn.deallocate(t)
-        logger.info(
-            f"K3 weka layer {self.layer_idx}: device layout - {len(srcs)} tensorbins to DRAM {t2 - t1:.0f} s, gather "
-            f"{t3 - t2:.1f} s; max RSS {_rss_gb():.0f} GB"
-        )
-        if self.gather_check:  # (the host path's tensors, value for value)
-            from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
-
-            from models.demos.moe_block.moe_block import _FLAT_ACT, RoutedExperts
-
-            ref = FlatRoutedExpert(
-                self.mesh,
-                self.flat,
-                m=RoutedExperts.cap_of(g),
-                H=m.routed_width,
-                I=m.routed_expert_hidden_dim,
-                gids=RoutedExperts.gids_of(g),
-                n_global=m.num_experts,
-                wdtype="bf4",
-                act=_FLAT_ACT[m.routed_expert_activation.kind],
-                pin=1,
-                layout=RoutedExperts.layout_of(g, m, True),
-            )
-            for name in maps:  # (chip by chip: the whole mesh in fp32 would be ~80 GB a tensor)
-                bad, peak, shape = 0, 0.0, None
-                for da, db in zip(
-                    ttnn.get_device_tensors(getattr(op, name)), ttnn.get_device_tensors(getattr(ref, name))
-                ):
-                    a, b = ttnn.to_torch(da).float(), ttnn.to_torch(db).float()
-                    shape = tuple(a.shape)
-                    bad += int((a != b).sum())
-                    peak = max(peak, float(b.abs().max()))
-                    del a, b
-                logger.info(
-                    f"K3_GATHER_CHECK layer {self.layer_idx} {name}: {shape} a chip, {bad} values differ from the host "
-                    f"layout over {self.mesh.get_num_devices()} chips (|host| max {peak:.3g})"
-                )
-                assert bad == 0, f"K3 gather: {name} differs from the host layout in {bad} values"
-            for name in maps:
-                ttnn.deallocate(getattr(ref, name))
-            ttnn.deallocate(ref.done)  # (L1: left allocated it would move the head's arena - see _DONE)
-            ttnn.deallocate(ref.gidx)
-
-    def _block(self, chunk):
-        """(the block, this call's MoELayer - None: random, the block's own weights - , the host weights to check)."""
-        from models.demos.moe_block.moe_block import MoEBlock, WeightCache
-
-        layer = None if self.kind in ("random", "ci") else self._moe_layer(chunk)
-        key = (id(self.mesh), chunk)
+    def _block(self, chunk, forward_chunks: int = 1):
+        opts = self.options
+        key = (id(self.mesh), chunk, int(forward_chunks), opts)
         hit = _BLOCKS.get(key)
-        if hit is None or hit[0] is not self.mesh:
-            built = self._weights() if layer is None else layer
-            logger.info(
-                f"K3 MoE block: building for chunk {chunk} (first MoE layer {self.layer_idx}, {self.kind} weights)"
+        if hit is not None and hit[0] is not self.mesh:  # (another mesh at this id: its block goes now)
+            _BLOCKS.pop(key)[1].release()
+            hit = None
+        if hit is None:
+            mb = ttnn.experimental.moe_block
+            cfg = mb.MoEBlockConfig(
+                chunk_tokens=chunk,
+                num_links=LINKS,
+                persist_l1_small=True,  # (the ops' words in L1_SMALL: MoEBlock)
             )
-            self._l1_report("before the block")
-            trace = _L1Trace() if os.environ.get("K3_BLOCK_L1_TRACE") == "1" else None
-            try:
-                from models.demos.moe_block.moe_block import MoEOptions
-
-                opts = MoEOptions(head=os.environ.get("MOE_BLOCK_HEAD", "auto"))  # (MOE_BLOCK_HEAD=ops: the ops head)
-                block = MoEBlock(
-                    self.mesh, self.model, chunk, built, WeightCache(path=None, layer=0), options=opts, num_links=LINKS
+            cfg.sp_axis = opts.sp_axis
+            cfg.forward_chunks = int(forward_chunks)
+            if opts.combine_snap is not None:  # (else the config's default snap)
+                cfg.combine_snap = opts.combine_snap
+            # (the model's slab, the one its mesh opened L1_SMALL for: moe_impl.moe_block_words_slab)
+            cfg.words_slab_bytes = moe_block_words_slab(self.model_name)
+            dtypes = mb.MoEDtypes()
+            t0 = time.time()
+            res = mb.MoEBlockResources(self.mesh, self.dims, cfg, dtypes)
+            block = MoEBlock(
+                self.mesh,
+                res,
+                dtypes=dtypes,
+                max_tokens_per_expert=max(chunk, 256),
+                # (the flat plan's own choices: the gate/up read pieces from its weight block's bytes, the sub-blocks
+                # fitted into the combine's arena)
+                layout=mb.FlatLayoutOptions(),
+                combine=_combine_config(mb, opts),
+            )
+            logger.info(f"MoE block: {opts}, flat layout {block.expert_kw['layout']}")
+            logger.info(
+                f"MoE block: built for chunk {chunk} at layer {self.layer_idx} in {time.time() - t0:.1f} s - "
+                f"accumulators {block.accumulators}, capacity {block.expert_kw['max_tokens_per_expert']}, arena "
+                f"{block.arena_spec.memory_config.shard_spec.shape[0] * 64 >> 10} KB a core"
+            )
+            fit = mb.plan_moe_head(res, dtypes, block.accumulators)
+            if fit.ok and len(fit.planned):
+                p, lay = fit.planned[0], fit.planned[0].layout
+                logger.info(
+                    f"MoE block: head engine {lay.engine_columns}x{lay.engine_rows}, MT {lay.row_tiles_per_core}, "
+                    f"{lay.row_chunks} chunk(s), KB {lay.k_step_tiles}, "
+                    f"predicted {p.predicted_us:.0f} us {fit.note}"
                 )
-            finally:
-                if trace is not None:
-                    trace.close()
-            # (the exchange's own flat op - never launched when every layer brings its MoELayer - shares the layers'
-            # done words: its own was a second 2 KB of persistent L1 on that core, reserved on every core)
-            shared = _DONE.get(id(self.mesh))
-            xop = getattr(getattr(getattr(block, "exchange", None), "block", None), "op", None)
-            if layer is not None and shared is not None and shared[0] is self.mesh and xop is not None:
-                if getattr(xop, "done", None) is not None and xop.done is not shared[1]:
-                    ttnn.deallocate(xop.done)
-                    xop.done = shared[1]
-            logger.info(f"K3 MoE block: {block.summary}")
-            self._l1_report("after the block")
-            if os.environ.get("K3_BLOCK_L1_LIST") == "1":
-                self._l1_list(block, layer)
-            hit = _BLOCKS[key] = (self.mesh, block, built)
-        return hit[1], layer, self._weights()
+            hit = _BLOCKS[key] = (self.mesh, res, block)
+        return hit[2]
 
-    def __call__(self, x):
+    # The flat plan's fields the routed experts' layout is made from (flat_weight_regions / flat_weight_shapes: the
+    # gate/up weight slots and their column groups, the down cores' columns and bank rotation, the banks).
+    _ROUTED_PACKING = (
+        "dram_banks",
+        "gate_up_weight_slots",
+        "column_groups_per_weight_slot",
+        "gate_up_pairs_per_core",
+        "units_per_core",
+        "gate_up_k_blocks",
+        "down_core_count",
+        "down_columns_per_core",
+        "down_first_columns",
+        "down_weight_region_tiles",
+    )
+
+    def _routed_layout(self, block) -> dict:
+        """The flat plan (as_dict) the block's routed experts are laid out for."""
+        mb = ttnn.experimental.moe_block
         R, C = tuple(self.mesh.shape)
-        chunk = int(x.shape[-2]) * R
-        block, layer, w = self._block(chunk)
+        N, E = R * C, self.dims.num_experts
+        kw = block.expert_kw
+        return mb.flat_routed_expert_plan(
+            self.mesh,
+            self.dims.routed_width,
+            self.dims.routed_expert_hidden_dim,
+            E // N,
+            E,
+            kw["max_tokens_per_expert"],
+            weights_bf8=False,
+            pin=1,
+            layout=kw["layout"],
+        ).as_dict()
+
+    def _packing(self, block) -> tuple:
+        """(head key, routed key): what this layer's prepared weights' layouts depend on, for the block. The chunk picks
+        the block's plans, so two blocks may need differently packed weights:
+        * the head's (prepare_moe_head_weights): its planned layout's GX x GY matmul cores (the regions, GY K blocks
+          dealt round-robin over a column's cores), MT (the gate / up and down pass widths) and K step KB (the blocks'
+          K rows), and the shared expert's weight dtype - not NCH or NIT (row chunks / router iterations);
+        * the routed experts' (flat_gather): the flat plan's _ROUTED_PACKING fields.
+        The tail's W' (prepare_moe_tail_weights) is laid out by the engine's columns and K ranges, from the grid and
+        the model's dims - the same at every chunk."""
+        mb = ttnn.experimental.moe_block
+        fit = mb.plan_moe_head(block.resources, block.dtypes, block.accumulators)
+        assert fit.ok and len(fit.planned), f"MoE block layer {self.layer_idx}: the head does not plan: {fit.reason}"
+        lay = fit.planned[0].layout
+        head = (
+            lay.engine_columns,
+            lay.engine_rows,
+            lay.row_tiles_per_core,
+            lay.k_step_tiles,
+            str(block.dtypes.shared_weights),
+        )
+        flat = self._routed_layout(block)
+        routed = tuple(
+            (k, tuple(v) if isinstance(v, (list, tuple)) else v) for k in self._ROUTED_PACKING for v in [flat.get(k)]
+        )
+        return head, routed
+
+    def _routed(self, block, sources=None):
+        """This layer's flat expert tensors (gidx, w_gu, w_d), laid out on the device from TtMoe's bfp4 cache - or from
+        sources(experts): the same plain sources (s = le * 3 + gate / up / down, [1, 1, in, out] bfp4 a chip, DRAM) made
+        some other way (_host_sources)."""
+        fw = flat_weights_module()
+        R, C = tuple(self.mesh.shape)
+        N, E = R * C, self.dims.num_experts
+        epc, Hr, I = E // N, self.dims.routed_width, self.dims.routed_expert_hidden_dim
+        kw = block.expert_kw
+        lay = self._routed_layout(block)
+        lo = kw["layout"]
+        key = (Hr, I, epc, tuple(lo.key()), kw["max_tokens_per_expert"])
+        # (the layer's sources go to DRAM GATHER_EXPERTS local experts at a time and are freed after their gather:
+        # all 3 epc of them next to the laid-out dest held one layer's routed weights twice - 65 MB a bank on K3, which
+        # the last layer of an SC4 stage at 100 slots did not have)
+        per = GATHER_EXPERTS
+        t0 = time.time()
+        batches = _FACE_MAPS.get((key, per))
+        if batches is None:
+            maps = flat_face_map(Hr, I, epc, lay)
+            NT = (Hr // 32) * (I // 32)
+            batches = _FACE_MAPS[(key, per)] = gather_batches(maps, NT, epc, per)
+            del maps
+            logger.info(
+                f"MoE block gather: face maps in {time.time() - t0:.0f} s, {len(batches)} batches of {per} experts"
+            )
+        shapes = fw.flat_weight_shapes(Hr, I, epc, lay)
+        dst = {
+            n: fw.uninitialized_bank_sharded(*shapes[n], lay["dram_banks"], ttnn.bfloat4_b, self.mesh)
+            for n in ("w_gu", "w_d")
+        }
+        if sources is not None:
+            cache = "host weights"  # (the log's label: no TtMoe cache, no checkpoint looked up)
+        else:
+            cache = self.cache if self.cache is not None else _cache_dir(self.mesh, self.options.sp_axis)
+        for n in dst:
+            pages = (int(dst[n].shape[-2]) // 32) * (int(dst[n].shape[-1]) // 32)
+            got = sum(int(sub[n][0].numel()) for _, _, sub in batches)
+            assert pages == got, f"{n}: {pages} pages, the face map {got}"
+        t_load = t_gather = 0.0
+        n_srcs = 0
+        for e0, e1, sub in batches:
+            t1 = time.time()
+            srcs = (
+                sources(range(e0, e1))
+                if sources is not None
+                else device_sources(self.mesh, self.layer_idx, epc, cache, experts=range(e0, e1))
+            )
+            t2 = time.time()
+            for n, (rows, fm) in sub.items():
+                gather(self.mesh, srcs, fm, dst[n], pages=rows)
+            for t in srcs:
+                ttnn.deallocate(t)
+            n_srcs += len(srcs)
+            t_load, t_gather = t_load + t2 - t1, t_gather + time.time() - t2
+        gids = torch.arange(E, dtype=torch.int32).reshape(N, 1, epc)  # (the block's chip n holds n epc ..)
+        gids = gids[to_mesh_order(list(range(N)), self.mesh.shape, self.options.sp_axis)]  # (in device order)
+        gidx = ttnn.from_torch(
+            gids,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
+        logger.info(
+            f"MoE block layer {self.layer_idx}: {n_srcs} tensorbins to DRAM {t_load:.0f} s, gather {t_gather:.1f} s "
+            f"in {len(batches)} batches ({cache})"
+        )
+        return gidx, dst["w_gu"], dst["w_d"]
+
+    def _host_sources(self, experts):
+        """The state dict's routed experts as flat_gather's plain sources (device_sources' layout): per local expert le
+        and projection, chip n's expert n * epc + le transposed to [in, out], bfp4 in DRAM - a batch of experts at a
+        time, so the host holds one projection of every chip at once (not the layer packed)."""
+        R, C = tuple(self.mesh.shape)
+        N = R * C
+        epc = self.dims.num_experts // N
+        rw = self.host_sd["routed_expert_weights"]
+        E = self.dims.num_experts
+        assert len(rw) == E, f"MoE block: {len(rw)} routed experts in the state dict, the model has {E}"
+        same = N > 1 and all(rw[n * epc + i] is rw[i] for n in range(1, N) for i in range(epc))
+        srcs = []
+        for le in experts:
+            for proj in ("gate_proj", "up_proj", "down_proj"):
+                if same:
+                    x, mapper = rw[le][proj].T.contiguous().reshape(1, 1, *rw[le][proj].T.shape), None
+                else:
+                    chips = to_mesh_order(list(range(N)), self.mesh.shape, self.options.sp_axis)  # (device order)
+                    x = torch.stack([rw[n * epc + le][proj].T for n in chips]).unsqueeze(1).contiguous()
+                    mapper = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+                srcs.append(
+                    ttnn.from_torch(
+                        x,
+                        dtype=ttnn.bfloat4_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=mapper if mapper is not None else ttnn.ReplicateTensorToMesh(self.mesh),
+                    )
+                )
+                del x
+        return srcs
+
+    def _host_sd_weights(self):
+        """The non-routed weights from the state dict (the model's expert order: no permutation), as host_weights."""
+        sd = self.host_sd
+        g, s = sd["gate_weights"], sd["shared_expert_weights"]
+        w = {
+            "router_weight": g["weight"].float().contiguous(),
+            "router_bias": g["e_score_correction_bias"].float().contiguous(),
+            "gate": s["gate_proj"].float(),
+            "up": s["up_proj"].float(),
+            "down": s["down_proj"].float(),
+        }
+        lat = sd.get("latent_weights")
+        if self.dims.latent_dim is not None:
+            assert lat is not None, "MoE block: a latent model's state dict without latent_weights"
+            w.update(
+                latent_down=lat["down_proj"].float(), latent_up=lat["up_proj"].float(), latent_norm=lat["norm"].float()
+            )
+        return w
+
+    def _weights(self, block):
+        """This layer's MoEBlockWeights for the block: each part laid out for the block's plans (_packing) - made for
+        the first block that needs that layout, reused by every block with the same one."""
+        seen = self._by_block.get(id(block))
+        if seen is not None and seen[0] is block:  # (held: its id is not reused while the entry lives)
+            return seen[1]
+        head_key, routed_key = self._packing(block)
+        hit = self._prepared.get((head_key, routed_key))
+        if hit is not None:
+            self._by_block[id(block)] = (block, hit)
+            return hit
+        mb = ttnn.experimental.moe_block
+        res = block.resources
+        t0 = time.time()
+        head, w_up = self._heads.get(head_key), self._w_up
+        if head is None and self.host_sd is None:
+            cached = self._load_head_cache(block)
+            if cached is not None:
+                head = cached[0]
+                w_up = w_up if w_up is not None else cached[1]
+        need_host = head is None or (self.dims.latent_dim is not None and w_up is None)
+        fut, pool = None, None
+        if need_host and self.host_sd is None:
+            # (the checkpoint read + dequant on a thread while the routed experts' tensorbins load: ~9 s of a K3
+            # layer's ~50 s hidden behind the NFS-bound reads)
+            from concurrent.futures import ThreadPoolExecutor
+
+            pool = ThreadPoolExecutor(max_workers=1)
+            fut = pool.submit(host_weights, self.mesh, self.dims, self.layer_idx, self.hf_config, self.options.sp_axis)
+        routed = self._routed_w.get(routed_key)
+        if routed is None:
+            routed = (
+                self._routed(block, sources=self._host_sources) if self.host_sd is not None else self._routed(block)
+            )
+            self._routed_w[routed_key] = routed
+        t1 = time.time()
+        if need_host:
+            w = self._host_sd_weights() if self.host_sd is not None else fut.result()
+            if pool is not None:
+                pool.shutdown()
+            host = lambda k: ttnn.from_torch(w[k], dtype=ttnn.float32)  # noqa: E731
+            if head is None:
+                head = mb.prepare_moe_head_weights(
+                    host("gate"),
+                    host("up"),
+                    host("down"),
+                    host("latent_down") if "latent_down" in w else None,
+                    host("router_weight"),
+                    host("router_bias"),
+                    resources=res,
+                    dtypes=block.dtypes,
+                    accumulators=block.accumulators,
+                )
+            if w_up is None and "latent_up" in w:
+                w_up = mb.prepare_moe_tail_weights(
+                    host("latent_up"), host("latent_norm"), resources=res, row_blocks=block.row_blocks
+                )
+            del w
+            if self.host_sd is None:
+                self._save_head_cache(block, head, w_up)
+        self._heads[head_key], self._w_up = head, w_up
+        gidx, w_gu, w_d = routed
+        weights = MoEBlockWeights(head=head, expert_ids=gidx, gate_up=w_gu, down=w_d, w_up=w_up)
+        self._prepared[(head_key, routed_key)] = weights
+        self._by_block[id(block)] = (block, weights)
+        logger.info(
+            f"MoE block layer {self.layer_idx}: weights for head {head_key}, {len(self._heads)} head / "
+            f"{len(self._routed_w)} routed layouts held; routed {t1 - t0:.0f} s (the checkpoint read alongside), then "
+            f"the head / tail weights {time.time() - t1:.0f} s; {time.time() - t0:.0f} s in all"
+        )
+        return weights
+
+    def _head_cache_dir(self, block):
+        """Where this layer's head / tail weights in the ops' layouts are kept (device-ready tensorbins), so the
+        checkpoint is dequantized once: $MOE_BLOCK_WEIGHT_CACHE (unset: none). Keyed by the checkpoint, the mesh, the layer and everything the layouts depend on (the
+        head's plan, the dtypes, the accumulators)."""
+        import hashlib
+
+        root = os.environ.get("MOE_BLOCK_WEIGHT_CACHE")
+        if not root:  # (opt-in until the hit path has run in CI: TODO default next to the TtMoe cache)
+            return None
+        mb = ttnn.experimental.moe_block
+        fit = mb.plan_moe_head(block.resources, block.dtypes, block.accumulators)
+        lay = fit.planned[0].layout if fit.ok and len(fit.planned) else None
+        ckpt = (
+            os.environ.get("KIMI_K3_CKPT") or os.environ.get("PREFILL_HF_MODEL") or os.environ.get("GLM53_HF_MODEL", "")
+        )
+        key = repr(
+            (
+                "v1",
+                Path(ckpt).name,
+                tuple(self.mesh.shape),
+                self.options.sp_axis,
+                self.dims.num_experts,
+                self.dims.emb_dim,
+                self.dims.latent_dim,
+                block.accumulators,
+                str(block.dtypes.shared_weights),
+                None
+                if lay is None
+                else (lay.engine_columns, lay.engine_rows, lay.row_tiles_per_core, lay.row_chunks, lay.k_step_tiles),
+            )
+        )
+        return Path(root) / hashlib.sha1(key.encode()).hexdigest()[:16] / f"layer_{self.layer_idx}"
+
+    _HEAD_FIELDS = ("w", "w_router", "router_bias", "router_index")
+
+    def _load_head_cache(self, block):
+        d = self._head_cache_dir(block)
+        if d is None or not (d / "done").exists():
+            return None
+        mb = ttnn.experimental.moe_block
+        load = lambda n: ttnn.load_tensor(str(d / f"{n}.tensorbin"), device=self.mesh)  # noqa: E731
+        head = mb.MoEHeadWeights(*(load(n) for n in self._HEAD_FIELDS))
+        w_up = load("w_up") if (d / "w_up.tensorbin").exists() else None
+        return head, w_up
+
+    def _save_head_cache(self, block, head, w_up):
+        d = self._head_cache_dir(block)
+        if d is None:
+            return
+        if d.exists():
+            return
+        tmp = d.with_name(f"{d.name}.tmp{os.getpid()}")
+        try:
+            # (written aside, then renamed into place: a concurrent run never reads a half-written layer)
+            tmp.mkdir(parents=True, exist_ok=True)
+            for n in self._HEAD_FIELDS:
+                ttnn.dump_tensor(str(tmp / f"{n}.tensorbin"), getattr(head, n))
+            if w_up is not None:
+                ttnn.dump_tensor(str(tmp / "w_up.tensorbin"), w_up)
+            (tmp / "done").touch()
+            os.rename(tmp, d)
+        except OSError as e:  # (read-only, full, or another run renamed first: the cache is optional)
+            logger.warning(f"MoE block layer {self.layer_idx}: head weights not cached in {d}: {e}")
+
+    def __call__(
+        self,
+        x,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
+        actual_start: Optional[int] = None,
+        metadata=None,
+        forward_metadata=None,
+        chunks=None,
+        forward_chunks: Optional[int] = None,
+    ):
+        """x: ffn_norm's [1, 1, S/SP, H/TP]. The padding as TtMoe takes it (main's one-chunk contract): actual_isl None
+        - every row real; else the chunk's real tokens, from actual_start (None: 0) - eager, host-written words - or,
+        on the traced path, metadata = main's (slot_id, actual_start, actual_end) device tensors (read on device every
+        call; actual_isl then only turns padding awareness on, as in TtMoe). A packed forward (common/prefill/
+        prefill_chunk.py: forward_chunks chunks back to back on each SP chip): forward_metadata = the forward's metadata
+        words as one uint32 device tensor (traceable), or chunks = its PrefillChunks (eager); forward_chunks defaults to
+        len(chunks), else 1. Padding tokens are not routed, dispatched or computed by the routed experts; the shared
+        expert and the tail skip the row tiles holding none (MoEBlock.__call__)."""
+        R = sp_tp(self.mesh.shape, self.options.sp_axis)[0]  # (SP: the token shards)
+        F = int(forward_chunks) if forward_chunks is not None else (len(chunks) if chunks is not None else 1)
+        block = self._block(int(x.shape[-2]) * R, F)
+        weights = self._weights(block)
         tmp = None
         if x.dtype != ttnn.bfloat16 or x.layout != ttnn.TILE_LAYOUT:
             x = tmp = ttnn.to_layout(ttnn.typecast(x, ttnn.bfloat16), ttnn.TILE_LAYOUT)
-        check = self.calls < int(os.environ.get("K3_BLOCK_CHECK", "0"))
-        if check:
-            block.keep_taps = "device"
-        y = block(x) if layer is None else block(x, layer=layer)
-        if check:
-            self._check(block, w, x, y)
-            block.keep_taps = False
+        span = {}
+        if forward_metadata is not None or chunks is not None:
+            assert actual_isl is None and metadata is None, "MoE block: a packed forward's padding or one chunk's"
+            span = dict(metadata=forward_metadata) if forward_metadata is not None else dict(chunks=chunks)
+        elif actual_isl is not None:
+            assert padding_side == "right", f"MoE block: padding_side {padding_side!r} (main's chunks pad on the right)"
+            assert F == 1, f"MoE block: a forward of {F} chunks takes forward_metadata or chunks"
+            if metadata is not None:  # (traced: main's device scalars, read every call)
+                span = dict(metadata=metadata)
+            else:
+                start = int(actual_start or 0)
+                span = dict(actual_start=start, actual_end=start + int(actual_isl))
+        y = block(x, weights, **span)
+        if not getattr(block, "_logged_l1_small", False):  # (the block's persistent words, all made)
+            from models.demos.moe_block.tt.moe_block import l1_small_bytes
+
+            mv = ttnn.get_memory_view(self.mesh, ttnn.BufferType.L1_SMALL)
+            logger.info(
+                f"MoE block: L1_SMALL {l1_small_bytes(self.mesh)} B a bank allocated after its first call (the mesh "
+                f"has {int(mv.total_bytes_allocated_per_bank) + int(mv.total_bytes_free_per_bank)} B)"
+            )
+            block._logged_l1_small = True
+        if getattr(block, "_logged_arena", None) != block.arena_address:  # (where each call's arena lands)
+            logger.info(
+                f"MoE block layer {self.layer_idx}: arena at {block.arena_address} (was "
+                f"{getattr(block, '_logged_arena', None)}); x {x.memory_config().buffer_type} {tuple(x.shape)}"
+            )
+            block._logged_arena = block.arena_address
         if tmp is not None:
             ttnn.deallocate(tmp)
-        self.calls += 1
-        if self.kind == "weka" and self.calls >= int(os.environ.get("K3_BLOCK_CHECK", "0")) and self.flat is not None:
-            self.flat = None  # (laid out and checked: the host experts go - ~59 GB of bf16 a layer)
         return y
-
-    def _check(self, block, w, x, y):
-        """y against the host model on the device's own routing."""
-        g, m, shape = block.geometry, self.model, tuple(self.mesh.shape)
-        composer = ttnn.ConcatMesh2dToTensor(self.mesh, mesh_shape=shape, dims=(2, 3))
-        T, H = g.chunk_tokens, m.emb_dim
-        xs = ttnn.to_torch(x, mesh_composer=composer).reshape(T, H).float()
-        ys = ttnn.to_torch(y, mesh_composer=composer).reshape(T, H).float()
-        ids, wts = device_routing(block.taps()["rows"], g.tokens_per_chip, m.top_k)
-        y_ref = host_moe(xs, w, m, ids, wts, flat=self.flat)
-        p = torch.corrcoef(torch.stack([ys.flatten(), y_ref.flatten()]))[0, 1].item()
-        finite = bool(torch.isfinite(ys).all())
-        load = torch.bincount(ids.flatten(), minlength=m.num_experts).float()
-        chip = load.reshape(-1, m.num_experts // (shape[0] * shape[1])).sum(1)
-        logger.info(
-            f"K3_BLOCK_CHECK layer {self.layer_idx} ({self.kind}): PCC {p:.5f} vs the host model (device routing); "
-            f"x |max| {xs.abs().max():.3g}, y |max| {ys.abs().max():.3g}, finite {finite}; routing: chip max/mean "
-            f"{chip.max() / chip.mean():.2f}, expert max/mean {load.max() / load.mean():.2f}, {int((load == 0).sum())} "
-            f"experts empty"
-        )
-        assert finite and p > 0.98, f"K3 MoE block layer {self.layer_idx}: PCC {p:.5f}, finite {finite}"
