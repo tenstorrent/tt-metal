@@ -189,6 +189,12 @@ SHAPES = [
     (9184, 5376, 5376, 11, 10, True, "qkv_nt"),
     (4736, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
     (9184, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
+    # Image-to-video (one first-frame keyframe) lengths: 5 s pads to 5248 rows per device (17 M tiles per core on
+    # the non-transposed grid), 10 s to 9600 (25 on the transposed grid).
+    (5248, 5376, 5376, 11, 10, True, "qkv_nt"),
+    (5248, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
+    (9600, 5376, 5376, 12, 9, True, "qkv"),
+    (9600, 5376, 7168, 12, 9, True, "ff1_swiglu_t"),
     # Longer lengths: there M > N, so the model's qkv / ff1 run on the op's transposed grid (12x9, 6 in0 workers per
     # link = the config's num_workers_per_link), with the approx-mode compute config.
     (9184, 5376, 5376, 12, 9, True, "qkv"),

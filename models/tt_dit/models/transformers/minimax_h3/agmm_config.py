@@ -65,11 +65,12 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple] = {
     (5376, 5376, 10): (6, 6, 16),
     (5376, 5376, 11): (4, 6, 16),
     (5376, 5376, 12): (4, 6, 16),
+    (5376, 5376, 17): (5, 7, 16, (1, 4)),  # image-to-video 5 s on 4x8 (5248 rows): 1.46 -> 0.87 ms
     (5376, 7168, 1): (2, 21, 6),
     (5376, 7168, 2): (2, 6, 12),
     (5376, 7168, 3): (4, 3, 14),
     (5376, 7168, 4): (4, 3, 16),
-    (5376, 7168, 5): (5, 3, 22, (1, 2)),  # MINIMAX_H3_FF1_AGMM_LEGACY=1: (6, 3, 16), see below
+    (5376, 7168, 5): (5, 6, 22, (1, 2)),  # MINIMAX_H3_FF1_AGMM_LEGACY=1: (6, 3, 16), see below
     (5376, 7168, 6): (6, 3, 16),
     (5376, 7168, 7): (4, 6, 14),
     (5376, 7168, 8): (4, 3, 16),
@@ -77,6 +78,7 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple] = {
     (5376, 7168, 10): (6, 3, 16),
     (5376, 7168, 11): (6, 3, 16),
     (5376, 7168, 12): (4, 3, 16),
+    (5376, 7168, 17): (6, 6, 22, (1, 2)),  # image-to-video 5 s on 4x8 (5248 rows): 2.30 -> 1.20 ms
     (7168, 1344, 1): (2, 14, 6),
     (7168, 1344, 2): (2, 8, 6),
     (7168, 1344, 3): (6, 7, 4),
@@ -93,9 +95,9 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple] = {
 
 
 # At 15 rows per core (5 s on 4x8), M_block 5 (5 + 5 + 5 rows) with a one-row subblock beats M_block 6 (6 + 6 + 3)
-# on both all-gather matmuls. ff1 also takes one N block over its 22 columns per core (subblock 1 x 2); to_qkv keeps
-# its one N block of 16 (subblock 1 x 4). K_block is unchanged in both, so every output tile accumulates in the same
-# order (bit-identical). The previous entries stay reachable for A/B: MINIMAX_H3_FF1_AGMM_LEGACY=1 /
+# on both all-gather matmuls. ff1 also takes one N block over its 22 columns per core (subblock 1 x 2) and K block 6
+# (a reassociation, one-forward error checked on four prompts); to_qkv keeps its one N block of 16 (subblock 1 x 4) and
+# its K block (bit-identical). The previous entries stay reachable for A/B: MINIMAX_H3_FF1_AGMM_LEGACY=1 /
 # MINIMAX_H3_QKV_AGMM_LEGACY=1 (unset or 0: the new entry; other values raise at import).
 def _legacy_switch(name: str) -> bool:
     value = os.environ.get(name, "0").strip()
@@ -107,8 +109,12 @@ def _legacy_switch(name: str) -> bool:
 # On the op's transposed grid (M > N, 12x9) at 24 rows per core (10 s on 4x8): one N block over the 19 (to_qkv) / 25
 # (ff1) columns per core instead of a block of 16 plus a 3-tile tail, M block 6 with a one-row subblock (to_qkv 1.94 ->
 # 1.31 ms, ff1 3.01 -> 2.34 ms; 928 -> 877 ms per 10 s forward). K_block is unchanged; ff1 renders bit-identical,
-# to_qkv does not. Not used on the non-transposed grid, where the same per_core_M has fewer columns per core.
+# to_qkv does not. At 25 rows per core (image-to-video 10 s, 9600 rows) the same one-N-block layouts with M block 5
+# (to_qkv 1.66 -> 1.35 ms, ff1 2.57 -> 2.09 ms). Not used on the non-transposed grid, where the same per_core_M has
+# fewer columns per core.
 AGMM_TRANSPOSED_BLOCK_SIZES: dict[tuple[int, int, int], tuple] = {
+    (5376, 5376, 5): (5, 7, 20, (1, 4)),
+    (5376, 7168, 5): (5, 6, 26, (1, 2)),
     (5376, 5376, 12): (6, 6, 20, (1, 4)),
     (5376, 7168, 12): (6, 3, 26, (1, 2)),
 }

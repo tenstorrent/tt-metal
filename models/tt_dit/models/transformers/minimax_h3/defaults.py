@@ -61,7 +61,6 @@ DEFAULTS: dict[str, str] = {
     # Matmul blockings
     "MINIMAX_H3_FF2_MMRS_BLOCKING": "1",
     "MINIMAX_H3_TO_OUT_MMRS_BLOCKING": "1",
-    "MINIMAX_H3_AGMM_BLOCKS": "5376,7168,5=5,6,22,1,2",
 }
 
 for _name, _value in DEFAULTS.items():
