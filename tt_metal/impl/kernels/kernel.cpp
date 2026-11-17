@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <ranges>
 #include <set>
 #include <string_view>
@@ -401,6 +402,13 @@ void Kernel::process_scratchpad_binding_handles(const std::function<void(
                                                     const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
         callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_metadata);
+    }
+}
+
+void Kernel::process_global_semaphore_binding_handles(
+    const std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>& callback) const {
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        callback(handle.accessor_name, handle.addr_crta_word);
     }
 }
 
@@ -796,6 +804,13 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
         hash_llk_metadata(handle.llk_metadata);
     }
+    // GlobalSemaphore binding handles: the accessor name and its CRTA word are baked into the generated
+    // `global_sem::` token. The bound address is a run arg, so it is not part of the cache key.
+    hasher.update(static_cast<uint64_t>(this->global_semaphore_binding_handles_.size()));
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
+    }
     // PrefetcherPipe binding handles: the slot id is baked into the generated `pipe::` token.
     hasher.update(static_cast<uint64_t>(this->prefetcher_pipe_binding_handles_.size()));
     for (const auto& handle : this->prefetcher_pipe_binding_handles_) {
@@ -948,6 +963,22 @@ std::size_t Kernel::logical_common_runtime_arg_count() const {
 }
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
+
+void SetGlobalSemaphoreBindingAddress(Kernel& kernel, GlobalSemaphoreBindingHandle& binding, DeviceAddr address) {
+    TT_FATAL(
+        address <= std::numeric_limits<uint32_t>::max(),
+        "GlobalSemaphore address {} for accessor '{}' on kernel '{}' exceeds uint32_t max.",
+        address,
+        binding.accessor_name,
+        kernel.name());
+    binding.bound_address = static_cast<uint32_t>(address);
+    // If the CRTA buffer is not allocated yet, SetProgramRunArgs copies bound_address into the
+    // GlobalSemaphore section when it builds the buffer.
+    if (!kernel.common_runtime_args().empty()) {
+        RuntimeArgsData& crta = kernel.common_runtime_args_data();
+        crta[binding.addr_crta_word] = binding.bound_address;
+    }
+}
 
 void SetScratchpadBindingAddress(Kernel& kernel, ScratchpadBindingHandle& binding, DeviceAddr address) {
     TT_FATAL(

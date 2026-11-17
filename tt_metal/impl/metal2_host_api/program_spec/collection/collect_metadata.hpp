@@ -31,6 +31,8 @@ struct CollectedSpecData {
         sram_arena_parameter_by_name;
     std::unordered_map<experimental::PrefetcherPipeParamName, const experimental::PrefetcherPipeParameter*>
         prefetcher_pipe_by_name;
+    std::unordered_map<experimental::GlobalSemaphoreParamName, const experimental::GlobalSemaphoreParameter*>
+        global_semaphore_parameter_by_name;
 
     // ------------------------------------------------------------------------
     // Resource -> Users lookups.
@@ -58,6 +60,17 @@ struct CollectedSpecData {
     // - Every kernel in a vector has a scratchpad binding naming this key
     //   (some k->scratchpad_bindings entry has scratchpad_spec_name == key).
     std::unordered_map<ScratchpadSpecName, std::vector<const KernelSpec*>> scratchpad_binders;
+
+    // GlobalSemaphore binders (derived from kernel GlobalSemaphore bindings).
+    // Tracks which kernels bind a given GlobalSemaphoreParameter.
+    //
+    // Invariants:
+    // - Every key is a key in global_semaphore_parameter_by_name.
+    // - Every vector is non-empty.
+    // - Every pointer is non-nullptr, and the pointers in each vector are unique within the vector.
+    // - Every pointer k is the registered kernel: kernel_by_name[k->unique_id] == k.
+    // - Every kernel in a vector has a GlobalSemaphore binding naming this key.
+    std::unordered_map<experimental::GlobalSemaphoreParamName, std::vector<const KernelSpec*>> global_semaphore_binders;
 
     // DFB endpoint info (derived from kernel bindings).
     //

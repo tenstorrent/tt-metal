@@ -78,6 +78,11 @@ void ValidateSRAMArenaAllocation(
     uint32_t l1_alignment);
 }  // namespace experimental
 
+// global_semaphore.cpp
+void ValidateGlobalSemaphoreParameter(const experimental::GlobalSemaphoreParameter& parameter);
+void ValidateGlobalSemaphoreBindings(const KernelSpec& kernel);
+void ValidateGlobalSemaphoreParametersUsed(const ValidationContext& ctx);
+
 // scratchpad.cpp
 void ValidateScratchpadSpec(
     const ScratchpadSpec& scratchpad, const CollectedSpecData& collected, uint32_t l1_alignment, tt::ARCH arch);

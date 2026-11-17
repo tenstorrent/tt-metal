@@ -218,6 +218,28 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     size_t scratchpad_base_crta_word);
 
 // ----------------------------------------------------------------------------
+// GlobalSemaphores (global_semaphore.cpp)
+// ----------------------------------------------------------------------------
+
+// The union of the nodes of every kernel that binds the GlobalSemaphore parameter.
+NodeRangeSet GlobalSemaphoreBinderNodes(
+    const experimental::GlobalSemaphoreParamName& parameter_name, const CollectedSpecData& collected);
+
+// Register GlobalSemaphore bindings with a Kernel.
+// Per-kernel resolved GlobalSemaphore bindings:
+//  - one CRTA word per binding (the bound GlobalSemaphore's address), in declaration order
+//  - the section sits right after the scratchpad section and before varargs, so each binding's
+//    absolute CRTA word index is fixed at codegen time.
+// The address stays 0 until run args bind a GlobalSemaphore.
+struct GlobalSemaphoreBindingsForKernel {
+    std::vector<GlobalSemaphoreBindingHandle> handles;
+    uint32_t section_words = 0;  // == number of GlobalSemaphore bindings
+};
+
+GlobalSemaphoreBindingsForKernel ResolveGlobalSemaphoreBindingsForKernel(
+    const KernelSpec& kernel, size_t global_semaphore_base_crta_word);
+
+// ----------------------------------------------------------------------------
 // Drivers (resource.cpp)
 // ----------------------------------------------------------------------------
 

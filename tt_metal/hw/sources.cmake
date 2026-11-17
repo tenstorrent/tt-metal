@@ -231,6 +231,8 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/dataflow_buffer.h
     inc/api/dataflow/dfb_access.h
     inc/api/dataflow/dfb_binding_token.h
+    inc/api/dataflow/global_semaphore.h
+    inc/api/dataflow/global_semaphore_binding_token.h
     inc/api/dataflow/prefetcher_pipe_binding_token.h
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h

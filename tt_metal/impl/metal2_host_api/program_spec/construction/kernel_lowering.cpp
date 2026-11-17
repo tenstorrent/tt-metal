@@ -391,6 +391,12 @@ LoweredKernel LowerKernel(
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
     ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
 
+    // Resolve GlobalSemaphore bindings: their section follows the scratchpad section and precedes varargs.
+    GlobalSemaphoreBindingsForKernel gs_bindings = ResolveGlobalSemaphoreBindingsForKernel(
+        kernel_spec, /*global_semaphore_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
+    ta_bindings.crta_layout.global_semaphore_section_words = gs_bindings.section_words;
+    ta_bindings.crta_layout.vararg_section_offset += gs_bindings.section_words;
+
     // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
     std::vector<uint32_t> compile_args = cta_varargs;
     compile_args.insert(compile_args.end(), ta_bindings.cta_words.begin(), ta_bindings.cta_words.end());
@@ -487,6 +493,9 @@ LoweredKernel LowerKernel(
     // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
     // or SRAMArena argument binding will later fill each handle's allocated_address.
     kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
+
+    // Attach the GlobalSemaphore bindings (part of the kernel cache key). Run args fill each handle's bound_address.
+    kernel->set_global_semaphore_binding_handles(std::move(gs_bindings.handles));
 
     // PrefetcherPipe accessors -> program slot ids (also part of the kernel cache key).
     if (!resource_bindings.prefetcher_pipes.empty()) {

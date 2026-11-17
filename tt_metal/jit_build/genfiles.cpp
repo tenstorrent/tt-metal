@@ -321,6 +321,21 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     });
     sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
+    // GlobalSemaphore bindings: sorted by name for a deterministic header (Kernel::compute_hash hashes
+    // them in binding order; both orders carry the same set, so the cache key is stable).
+    struct GlobalSemaphoreEntry {
+        string name;
+        uint32_t addr_crta_word;
+    };
+    vector<GlobalSemaphoreEntry> global_semaphore_entries;
+    settings.process_global_semaphore_binding_handles(
+        [&global_semaphore_entries](const string& name, uint32_t addr_crta_word) {
+            global_semaphore_entries.push_back({name, addr_crta_word});
+        });
+    sort(global_semaphore_entries.begin(), global_semaphore_entries.end(), [](const auto& a, const auto& b) {
+        return a.name < b.name;
+    });
+
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
     struct TensorBindingSequenceEntry {
         string name;
@@ -364,6 +379,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         // Defines PrefetcherPipeBindingToken. Header-only and dependency-free (the token is just
         // the slot id); the kernel includes api/dataflow/prefetcher_pipe.h itself to use it.
         content << "#include \"api/dataflow/prefetcher_pipe_binding_token.h\"\n";
+    }
+
+    if (!global_semaphore_entries.empty()) {
+        // Defines GlobalSemaphoreBindingToken. Header-only and dependency-free; the kernel includes
+        // api/dataflow/global_semaphore.h itself to construct the GlobalSemaphore.
+        content << "#include \"api/dataflow/global_semaphore_binding_token.h\"\n";
     }
 
     if (!sem_entries.empty()) {
@@ -452,6 +473,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                     << static_cast<uint32_t>(entry.prefetcher_pipe_id) << "};\n";
         }
         content << "}  // namespace pipe\n";
+    }
+
+    // Emit GlobalSemaphore bindings: one token per accessor, carrying the CRTA word of the bound address.
+    if (!global_semaphore_entries.empty()) {
+        content << "namespace global_sem {\n";
+        for (const auto& entry : global_semaphore_entries) {
+            content << "constexpr GlobalSemaphoreBindingToken " << entry.name << "{" << entry.addr_crta_word << "u};\n";
+        }
+        content << "}  // namespace global_sem\n";
     }
 
     // Emit Semaphore bindings

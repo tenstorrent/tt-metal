@@ -832,7 +832,7 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
 
         // CRTA word count is fully determined by ProgramSpec resolution:
         //   [ named | tensor bindings | scratchpads | common varargs ]
-        // vararg_section_offset == named + bindings + scratchpads.
+        // vararg_section_offset == named + bindings + scratchpads + GlobalSemaphores.
         const KernelCrtaLayout layout = kernel->get_crta_layout();
         const size_t crta_words =
             static_cast<size_t>(layout.vararg_section_offset) + schema->num_common_runtime_varargs;
@@ -899,6 +899,22 @@ const std::unordered_map<std::string, ProgramImpl::RegisteredSRAMArenaParameter>
 ProgramImpl::get_sram_arena_parameters() const {
     static const std::unordered_map<std::string, RegisteredSRAMArenaParameter> empty;
     return metal2_registry_ ? metal2_registry_->sram_arena_parameters : empty;
+}
+
+void ProgramImpl::register_global_semaphore_parameter(
+    const std::string& name, BufferType memory_type, CoreRangeSet binder_nodes, const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->global_semaphore_parameters.try_emplace(
+        name, RegisteredGlobalSemaphoreParameter{memory_type, std::move(binder_nodes), std::cref(device)});
+    TT_FATAL(inserted, "Duplicate GlobalSemaphore parameter name: {}", name);
+}
+
+const std::unordered_map<std::string, ProgramImpl::RegisteredGlobalSemaphoreParameter>&
+ProgramImpl::get_global_semaphore_parameters() const {
+    static const std::unordered_map<std::string, RegisteredGlobalSemaphoreParameter> empty;
+    return metal2_registry_ ? metal2_registry_->global_semaphore_parameters : empty;
 }
 
 const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {

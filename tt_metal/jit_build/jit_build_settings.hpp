@@ -106,10 +106,10 @@ inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<Se
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
-// The CRTA buffer is laid out as four back-to-back sections:
-//   [ user-named CRTAs | TensorBinding section | Scratchpad section | vararg CRTAs ]
+// The CRTA buffer is laid out as five back-to-back sections:
+//   [ user-named CRTAs | TensorBinding section | Scratchpad section | GlobalSemaphore section | vararg CRTAs ]
 //
-// Sections 1–3 are fixed-size at spec-resolution time. This struct records their sizes (and the
+// Sections 1–4 are fixed-size at spec-resolution time. This struct records their sizes (and the
 // resulting vararg section start offset) so consumers don't have to re-derive them by walking the
 // binding handles.
 //
@@ -122,6 +122,9 @@ inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<Se
 // allocated by the framework at program-compile time (not user-supplied), and patched into the
 // buffer then. It sits BEFORE varargs so each binding's absolute CRTA offset is fixed at codegen
 // time (varargs are open-ended / runtime-counted, so a section after them would not be).
+//
+// Section 4 (GlobalSemaphore) holds one address word per GlobalSemaphore binding. The address comes
+// from the GlobalSemaphore that the run args bind.
 struct KernelCrtaLayout {
     // Section 1 size, in words. The user-named CRTAs: one word per scalar, then the CRTA arrays
     // (see KernelArrayArgs), in declaration order.
@@ -130,7 +133,9 @@ struct KernelCrtaLayout {
     uint32_t binding_section_words = 0;
     // Section 3 size, in words. Equals the number of scratchpad bindings (one address word each).
     uint32_t scratchpad_section_words = 0;
-    // Start offset of section 4 (varargs), in words.
+    // Section 4 size, in words. Equals the number of GlobalSemaphore bindings (one address word each).
+    uint32_t global_semaphore_section_words = 0;
+    // Start offset of section 5 (varargs), in words.
     // Stored (not computed on demand) so it can be set from a known value at spec resolution
     // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
     uint32_t vararg_section_offset = 0;
@@ -287,6 +292,13 @@ public:
                                                         uint32_t size_bytes,
                                                         uint32_t addr_crta_word,
                                                         const std::optional<LLKMetadata>&)>&) const {}
+
+    // GlobalSemaphore binding callback (Metal 2.0):
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `global_sem::` namespace
+    //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
+    //    bound GlobalSemaphore's address
+    virtual void process_global_semaphore_binding_handles(
+        const std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>&) const {}
 
     // PrefetcherPipe binding callback (Metal 2.0):
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace

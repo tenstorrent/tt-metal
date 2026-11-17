@@ -691,6 +691,27 @@ public:
     // Return the program's SRAMArena parameter declarations.
     const std::unordered_map<std::string, RegisteredSRAMArenaParameter>& get_sram_arena_parameters() const;
 
+    // Describes the required memory type, nodes and device of a GlobalSemaphore argument.
+    struct RegisteredGlobalSemaphoreParameter {
+        BufferType memory_type;
+        // The nodes of every kernel that binds the parameter.
+        CoreRangeSet binder_nodes;
+        // invariant: The device outlives the program.
+        std::reference_wrapper<const distributed::MeshDevice> device;
+    };
+
+    // Declare the required memory type, nodes and device for a named GlobalSemaphore argument.
+    // precondition: device outlives the program.
+    // side-effect: Add the declaration to the program's runtime argument schema.
+    void register_global_semaphore_parameter(
+        const std::string& name,
+        BufferType memory_type,
+        CoreRangeSet binder_nodes,
+        const distributed::MeshDevice& device);
+
+    // Return the program's GlobalSemaphore parameter declarations.
+    const std::unordered_map<std::string, RegisteredGlobalSemaphoreParameter>& get_global_semaphore_parameters() const;
+
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
     uint32_t get_dfb_handle(const std::string& name) const;
@@ -921,6 +942,7 @@ private:
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
         std::unordered_map<std::string, RegisteredSRAMArenaParameter> sram_arena_parameters;
+        std::unordered_map<std::string, RegisteredGlobalSemaphoreParameter> global_semaphore_parameters;
 
         std::vector<DFBStorageBinding> dfb_storage_bindings;
     };

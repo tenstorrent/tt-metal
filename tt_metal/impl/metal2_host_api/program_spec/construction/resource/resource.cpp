@@ -79,6 +79,13 @@ ProgramResources RegisterResources(
     for (const auto& parameter : spec.advanced_options.sram_arena_parameters) {
         program_impl.register_sram_arena_parameter(parameter.unique_id.get(), parameter.properties, mesh_device);
     }
+    for (const auto& parameter : spec.advanced_options.global_semaphore_parameters) {
+        program_impl.register_global_semaphore_parameter(
+            parameter.unique_id.get(),
+            parameter.memory_type,
+            GlobalSemaphoreBinderNodes(parameter.unique_id, collected),
+            mesh_device);
+    }
     resources.tensor_parameters = RegisterTensorParameters(spec, mesh_device, program_impl);
     resources.dfbs = RegisterDataflowBuffers(spec, collected, risc_masks, program_impl);
 

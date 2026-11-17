@@ -54,12 +54,16 @@ void CollectNameLookups(const ProgramSpec& spec, CollectedSpecData& collected) {
         auto [it, inserted] = collected.prefetcher_pipe_by_name.try_emplace(pipe_parameter.unique_id, &pipe_parameter);
         TT_FATAL(inserted, "Duplicate PrefetcherPipeParameter name '{}'", pipe_parameter.unique_id);
     }
+    for (const auto& parameter : spec.advanced_options.global_semaphore_parameters) {
+        auto [it, inserted] = collected.global_semaphore_parameter_by_name.try_emplace(parameter.unique_id, &parameter);
+        TT_FATAL(inserted, "Duplicate GlobalSemaphoreParameter name '{}'", parameter.unique_id);
+    }
 }
 
 // Phase 2 -- "Resource -> Users lookups". Needs phase 1 (every reference is resolved against a *_by_name map).
-// Establishes: the invariants of dfb_endpoints, scratchpad_binders and prefetcher_pipe_relays.
-// Bindings to resources that have no stored index (semaphores, tensor parameters, pipes) are only
-// checked for dangling references here.
+// Establishes: the invariants of dfb_endpoints, scratchpad_binders, global_semaphore_binders and
+// prefetcher_pipe_relays. Bindings to resources that have no stored index (semaphores, tensor parameters, pipes) are
+// only checked for dangling references here.
 void CollectResourceUsers(const ProgramSpec& spec, CollectedSpecData& collected) {
     // dfb_endpoints: one record per kernel DFB binding.
     for (const auto& kernel : spec.kernels) {
@@ -115,6 +119,28 @@ void CollectResourceUsers(const ProgramSpec& spec, CollectedSpecData& collected)
                 binding.scratchpad_spec_name,
                 binding.accessor_name);
             collected.scratchpad_binders[binding.scratchpad_spec_name].push_back(&kernel);
+        }
+    }
+
+    // global_semaphore_binders: a kernel binds a given GlobalSemaphore parameter at most once, which keeps
+    // each vector free of repeated kernels.
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<experimental::GlobalSemaphoreParamName> bound_parameters;
+        for (const auto& binding : kernel.advanced_options.global_semaphore_bindings) {
+            TT_FATAL(
+                collected.global_semaphore_parameter_by_name.contains(binding.global_semaphore_parameter_name),
+                "Kernel '{}' references unknown GlobalSemaphore parameter '{}'",
+                kernel.unique_id,
+                binding.global_semaphore_parameter_name);
+            auto [it, inserted] = bound_parameters.insert(binding.global_semaphore_parameter_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' binds GlobalSemaphore parameter '{}' more than once (latest under accessor_name '{}'). "
+                "A kernel may bind a given GlobalSemaphore parameter at most once.",
+                kernel.unique_id,
+                binding.global_semaphore_parameter_name,
+                binding.accessor_name);
+            collected.global_semaphore_binders[binding.global_semaphore_parameter_name].push_back(&kernel);
         }
     }
 

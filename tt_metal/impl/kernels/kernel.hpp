@@ -204,6 +204,15 @@ struct ScratchpadBindingHandle {
     std::optional<SRAMArenaSource> allocation_override;
 };
 
+// Metal 2.0: per-kernel resolved GlobalSemaphore binding (KernelAdvancedOptions::GlobalSemaphoreBinding).
+// Emitted as a constexpr token in the `global_sem::` namespace.
+struct GlobalSemaphoreBindingHandle {
+    std::string accessor_name;    // user-facing identifier (kernel symbol in `global_sem::`)
+    std::string parameter_name;   // the GlobalSemaphoreParameter this binding names
+    uint32_t addr_crta_word = 0;  // word index of the address slot within the kernel's CRTA buffer
+    uint32_t bound_address = 0;   // address of the bound GlobalSemaphore; 0 until run args bind one
+};
+
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
 // One accessor names one program PrefetcherPipe slot (dense id the kernel constructs its
 // PrefetcherPipe with); the slot resolves to whichever pipe of the accessor's group is present
@@ -379,6 +388,20 @@ public:
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
     }
+    // GlobalSemaphore binding handles are set post-construction (before compile: they are part of
+    // the kernel cache key and of kernel_bindings_generated.h).
+    // Non-const accessor lets run-arg binding fill each handle's bound_address.
+    void process_global_semaphore_binding_handles(
+        const std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>&) const override;
+    const std::vector<GlobalSemaphoreBindingHandle>& global_semaphore_binding_handles() const {
+        return global_semaphore_binding_handles_;
+    }
+    std::vector<GlobalSemaphoreBindingHandle>& global_semaphore_binding_handles() {
+        return global_semaphore_binding_handles_;
+    }
+    void set_global_semaphore_binding_handles(std::vector<GlobalSemaphoreBindingHandle> handles) {
+        global_semaphore_binding_handles_ = std::move(handles);
+    }
     // PrefetcherPipe binding handles are set post-construction (before compile: they are part of
     // the kernel cache key and of kernel_bindings_generated.h).
     void process_prefetcher_pipe_binding_handles(
@@ -522,6 +545,8 @@ protected:
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
     // Metal 2.0: PrefetcherPipe accessors -> program slot (set post-construction, like scratchpads).
     std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
+    // Metal 2.0: GlobalSemaphore bindings (set post-construction, like scratchpads; run args fill bound_address).
+    std::vector<GlobalSemaphoreBindingHandle> global_semaphore_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
     // Metal 2.0: array arguments (set post-construction, like scratchpads).
@@ -565,6 +590,10 @@ private:
 // precondition: binding belongs to kernel, and address is a nonzero L1 address.
 // side-effect: Update the kernel's common runtime argument slot if storage exists.
 void SetScratchpadBindingAddress(Kernel& kernel, ScratchpadBindingHandle& binding, DeviceAddr address);
+
+// Record the address of the GlobalSemaphore bound to `binding`.
+// side-effect: Patches the address into the kernel's CRTA buffer if the buffer is allocated.
+void SetGlobalSemaphoreBindingAddress(Kernel& kernel, GlobalSemaphoreBindingHandle& binding, DeviceAddr address);
 
 class DataMovementKernel : public Kernel {
 public:
