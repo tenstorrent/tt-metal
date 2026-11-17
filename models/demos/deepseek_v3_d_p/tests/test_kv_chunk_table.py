@@ -90,23 +90,6 @@ def test_kimi_k3_kda_config_names_match_decode(tmp_path, monkeypatch):
     assert [table.config(i).chunk_n_tokens for i in (1, 2)] == [96, 64]
 
 
-def _with_distribution_rank(rank):
-    return SimpleNamespace(
-        tensor_topology=lambda: SimpleNamespace(distribution_shape=lambda: [4] * rank),
-    )
-
-
-def test_full_mesh_gather_of_a_striped_cache_is_refused_with_sp_on_axis_1(expect_error):
-    # Striped over every mesh coordinate (rank-2 topology): the row-major label is the stripe order only at
-    # sp_axis=0, so a full-mesh gather at sp_axis=1 must raise instead of returning rows out of order.
-    striped = _with_distribution_rank(2)
-    assert_full_mesh_stripe_order(striped, 0, "test")
-    with expect_error(RuntimeError, "needs sp_axis=0, got sp_axis=1"):
-        assert_full_mesh_stripe_order(striped, 1, "test")
-    # Sharded on one axis (rank-1 topology): no full-mesh ordering to get wrong.
-    assert_full_mesh_stripe_order(_with_distribution_rank(1), 1, "test")
-
-
 # ---- Kimi-K3.1: DSA index cache next to the KDA slabs ------------------------------------------------
 # Host-only: the real populate walks run off gathered stage layouts, so no device is needed.
 _K31_MESH = (8, 4)
@@ -239,3 +222,20 @@ def test_kimi_k31_index_and_kda_share_one_table(tmp_path, monkeypatch):
 
     for k31_id, (reference, ref_id) in enumerate([(dsa, 0), (dsa, 1), (k3, 1), (k3, 2)]):
         assert _config_contents(k31, k31_id) == _config_contents(reference, ref_id), f"config {k31_id:02d}"
+
+
+def _with_distribution_rank(rank):
+    return SimpleNamespace(
+        tensor_topology=lambda: SimpleNamespace(distribution_shape=lambda: [4] * rank),
+    )
+
+
+def test_full_mesh_gather_of_a_striped_cache_is_refused_with_sp_on_axis_1(expect_error):
+    # Striped over every mesh coordinate (rank-2 topology): the row-major label is the stripe order only at
+    # sp_axis=0, so a full-mesh gather at sp_axis=1 must raise instead of returning rows out of order.
+    striped = _with_distribution_rank(2)
+    assert_full_mesh_stripe_order(striped, 0, "test")
+    with expect_error(RuntimeError, "needs sp_axis=0, got sp_axis=1"):
+        assert_full_mesh_stripe_order(striped, 1, "test")
+    # Sharded on one axis (rank-1 topology): no full-mesh ordering to get wrong.
+    assert_full_mesh_stripe_order(_with_distribution_rank(1), 1, "test")
