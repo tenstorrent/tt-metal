@@ -78,11 +78,17 @@ launch=(--host "$hosts" -np "$num_hosts" --map-by node --oversubscribe --bind-to
 # --------------------------------------------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------------------------------------------
-# how many of this job's ranks are still alive on any host (should be 0 once the job has been torn down)
+# How many of this job's ranks are still alive on any host (should be 0 once the job has been torn down). Prints
+# the count on success, or "ERROR" if any host could not be censused — `pgrep -c` prints 0 but EXITS 1 when there
+# is no match, so the remote command ends in `|| true` to keep that a clean 0 (a bare `|| echo 0` would append a
+# second line and break the arithmetic); ssh transport failure (e.g. rc 255) or a non-numeric count is treated as
+# a census failure, not as zero survivors, so "nothing left" is never asserted from a census we could not take.
 ranks_still_alive() {
-  local total=0 host
+  local total=0 host n
   for host in $(host_names); do
-    total=$((total + $(ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "pgrep -cf '$probe_pat'" 2>/dev/null || echo 0)))
+    n=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "pgrep -cf '$probe_pat' || true" 2>/dev/null)
+    if [ $? -ne 0 ] || ! [[ "$n" =~ ^[0-9]+$ ]]; then echo "ERROR"; return 1; fi
+    total=$((total + n))
   done
   echo "$total"
 }
@@ -138,7 +144,11 @@ expect() {
       problem="expected exit $exact, got $rc"
     fi
   fi
-  if [ "$alive" -ne 0 ]; then problem="${problem:+$problem; }$alive rank(s) still alive on the hosts"; fi
+  if ! [[ "$alive" =~ ^[0-9]+$ ]]; then
+    problem="${problem:+$problem; }could not census the hosts (ssh/pgrep failed); cannot confirm the job was torn down"
+  elif [ "$alive" -ne 0 ]; then
+    problem="${problem:+$problem; }$alive rank(s) still alive on the hosts"
+  fi
   if [ -z "$problem" ]; then
     echo "  PASS  $name  (exit $rc, nothing left)"
   else
