@@ -355,7 +355,7 @@ class TtLlamaMLP(LightweightModule):
         """
         seq_len = x.shape[-2]
         # Wormhole keeps main's fixed prefill link count (3); Blackhole uses the mesh link budget.
-        prefill_num_links = self.model_config["GALAXY_NUM_LINKS"] if self.args.is_blackhole else 3
+        prefill_num_links = self.model_config["GALAXY_PREFILL_NUM_LINKS"] if self.args.is_blackhole else 3
         use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         # Blackhole: the DRAM-sharded decode copies of w1/w3 (self.w1/self.w3) are laid out for the BH decode
         # path, not for the 7x10 2D-mcast prefill config below, which reads them as garbage (1-layer prefill

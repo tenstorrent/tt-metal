@@ -1359,6 +1359,12 @@ class TT_CCL:
 
         return ttnn_tensor_out
 
+    def _galaxy_links(self):
+        """Link cap for this CCL's mode: Blackhole prefill uses GALAXY_PREFILL_NUM_LINKS (see model_config)."""
+        if self.mode == "prefill":
+            return self.model_config.get("GALAXY_PREFILL_NUM_LINKS", self.model_config["GALAXY_NUM_LINKS"])
+        return self.model_config["GALAXY_NUM_LINKS"]
+
     def ring_reduce_scatter(
         self,
         input_tensor_mesh,
@@ -1389,7 +1395,7 @@ class TT_CCL:
         # Wormhole / prefetcher path keeps main's fixed link count (4); Blackhole caps to the links
         # physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
         num_links = (
-            4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self.model_config["GALAXY_NUM_LINKS"])
+            4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self._galaxy_links())
         )
         # Seeing better performance for longer sequence lengths with num_workers_per_link = 4
         if seqlen > 128:
@@ -1571,7 +1577,7 @@ class TT_CCL:
         # Wormhole / prefetcher path keeps main's fixed link count (4); Blackhole caps to the links
         # physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
         num_links = (
-            4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self.model_config["GALAXY_NUM_LINKS"])
+            4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self._galaxy_links())
         )
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
@@ -1630,7 +1636,7 @@ class TT_CCL:
 
         div_axis = core_grid.x if force_transpose else core_grid.y
         # Wormhole / prefetcher path is unconstrained (matches main); Blackhole caps to GALAXY_NUM_LINKS.
-        max_links = 4 if (self.use_prefetcher and not self.is_blackhole) else self.model_config["GALAXY_NUM_LINKS"]
+        max_links = 4 if (self.use_prefetcher and not self.is_blackhole) else self._galaxy_links()
         num_links = 1
         for nl in [4, 3, 2, 1]:
             if nl <= max_links and div_axis % nl == 0:

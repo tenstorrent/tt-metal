@@ -730,8 +730,13 @@ class TtModelArgs:
             # Blackhole galaxy physically exposes 2 inter-chip links (Wormhole 6U exposes 4); the
             # ring/line CCLs index eth channels by link, so 4 overruns the available channels.
             self.model_config["GALAXY_NUM_LINKS"] = int(os.getenv("GALAXY_NUM_LINKS", "2"))
+            # Prefill collectives on 2 links corrupt data at random on the BH galaxy (same prompt, different
+            # first token; worst for 65-128-token prompts and prefix-cached prefills). On 1 link every case
+            # is right, so prefill uses 1 link; decode keeps GALAXY_NUM_LINKS.
+            self.model_config["GALAXY_PREFILL_NUM_LINKS"] = int(os.getenv("GALAXY_PREFILL_NUM_LINKS", "1"))
         else:
             self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
+            self.model_config["GALAXY_PREFILL_NUM_LINKS"] = self.model_config["GALAXY_NUM_LINKS"]
         self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]

@@ -781,7 +781,7 @@ class TtTransformer(LightweightModule):
                 dim=3,
                 num_links=3
                 if (self.use_prefetcher and not getattr(self.args, "is_blackhole", False))
-                else self.model_config["GALAXY_NUM_LINKS"],
+                else self.model_config["GALAXY_PREFILL_NUM_LINKS"],
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",

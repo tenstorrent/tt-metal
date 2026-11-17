@@ -1061,7 +1061,7 @@ class TtLlamaAttention(LightweightModule):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         # Wormhole keeps main's fixed prefill link count (3); Blackhole uses the mesh link budget.
-        prefill_num_links = self.model_config["GALAXY_NUM_LINKS"] if self.is_blackhole else 3
+        prefill_num_links = self.model_config["GALAXY_PREFILL_NUM_LINKS"] if self.is_blackhole else 3
         ###
         # QKV matmuls
         ###
