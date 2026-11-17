@@ -118,15 +118,16 @@ def _fpu_add_bf16(a, b):
     return torch.where((a == 0) | (b == 0), (a + b).float().to(torch.bfloat16), rounded)
 
 
-# The bf16 sum as Quasar rounds it: twice, on the hardware, on ttsim and on craq-sim from b05091aa. A craq-sim build
-# older than b05091aa rounds once, so the FPU add and subtract cases fail on it (_ROUNDING_HINT says so).
-_FPU_ADD_ROUNDINGS = (_fpu_add_bf16,)
+def _sfpu_multiply_bf16(a, b):
+    """bf16 a * b as Quasar's SFPU multiply gives it out of fast mode: the float32 product, with its low 16 bits
+    dropped. The product of two bf16 values is exact in float32, so only the drop rounds. The Wormhole and Blackhole
+    LLKs round to nearest even instead."""
+    product = (a.float() * b.float()).contiguous()
+    return (product.view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
 
-# What a failed FPU add or subtract comparison tells the reader who runs on an older craq-sim.
-_ROUNDING_HINT = (
-    "On craq-sim, a bf16 add or subtract on the FPU kernel is exact only from build b05091aa, which rounds the FPU add "
-    "twice, as the hardware does. An older build rounds once and fails here."
-)
+
+# The bf16 sum as Quasar rounds it: twice, as the hardware and ttsim do.
+_FPU_ADD_ROUNDINGS = (_fpu_add_bf16,)
 
 
 def _add_goldens(ta, tb):

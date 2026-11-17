@@ -696,27 +696,28 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // Subtile broadcast runs in bf16 and fp32. In bf16 the compute expands ROW, COL and SCALAR with unary_bcast. That
     // takes no 32-bit operand on Quasar, so in fp32 the reader expands them in software and the compute copies them.
 
-    // In bf16, add and subtract run the FPU kernel; multiply, divide, maximum and minimum run the SFPU kernel; and
-    // multiply runs the FPU kernel in fast and approximate mode. In fp32 all six run the SFPU kernel. The SFPU kernel
-    // runs no other op here: each needs its own validation on Quasar.
+    // In bf16 and MX, add and subtract run the FPU kernel; multiply, divide, maximum and minimum run the SFPU kernel;
+    // and multiply runs the FPU kernel in fast and approximate mode. In fp32 all six run the SFPU kernel. The SFPU
+    // kernel runs no other op here: each needs its own validation on Quasar.
     const BinaryOpType op_type = attributes.binary_op_type;
     if (op_type != BinaryOpType::ADD && op_type != BinaryOpType::SUB && op_type != BinaryOpType::MUL &&
         op_type != BinaryOpType::DIV && op_type != BinaryOpType::MAXIMUM && op_type != BinaryOpType::MINIMUM) {
         return false;
     }
-    // a and b in one format, bf16 or fp32; the output's format is checked below. Mixed formats are not validated on
-    // Quasar.
+    // a and b in one format: bf16, fp32 or one MX format. The output's format is checked below. Mixed formats are not
+    // validated on Quasar.
     const DataType dtype = a.dtype();
-    if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32) || (!is_scalar && b->dtype() != dtype)) {
+    const bool mx_in = is_mx(dtype);
+    if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && !mx_in) || (!is_scalar && b->dtype() != dtype)) {
         return false;
     }
     // The factory packs a scalar in a's format into the ring of b, whose format is derived: a's on the SFPU kernel,
-    // else bf16. The two must agree, as in the Metal 2.0 slice. The kernel check below implies it today.
+    // else bf16. The two must agree, as in the Metal 2.0 slice. The kernel check and the MX check below imply it today.
     if (is_scalar && ((attributes.is_sfpu && !is_block_float(dtype)) ? dtype : DataType::BFLOAT16) != dtype) {
         return false;
     }
     // Implied by the format, but checked, so that a routing change falls back instead of running untested: fp32 runs
-    // only the SFPU kernel, and bf16 runs add and subtract only on the FPU kernel.
+    // only the SFPU kernel, and bf16 and MX run add and subtract only on the FPU kernel.
     const bool fp32 = dtype == DataType::FLOAT32;
     if (fp32 && !attributes.is_sfpu) {
         return false;
@@ -746,7 +747,18 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
 
     // is_binary_sfpu_op sees only the INPUT dtypes, so add(bf16, bf16, dtype=float32) reaches here with
     // is_sfpu false. data_type(), not dtype(), on TensorSpec.
-    if (out_spec.data_type() != dtype) {
+    // The unpacker and the packer convert MX through Float16_b. Validated on Quasar: MX in with its own MX format or
+    // bf16 out, and bf16 in with an MX format out.
+    const DataType out_dtype = out_spec.data_type();
+    const bool mx_out = is_mx(out_dtype);
+    if (out_dtype != dtype && !(mx_in && out_dtype == DataType::BFLOAT16) && !(dtype == DataType::BFLOAT16 && mx_out)) {
+        return false;
+    }
+    // MX takes no scalar, no subtile broadcast and no activation: those paths are not validated with MX on Quasar. An
+    // outer-dim broadcast only maps whole tiles, so it stays admitted.
+    if ((mx_in || mx_out) && (is_scalar || attributes.subtile_broadcast_type != SubtileBroadcastType::NONE ||
+                              !attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
+                              !attributes.post_activations.empty())) {
         return false;
     }
     // get_shard_volumes counts every operand's shard in the output's tiles, so those must be 32x32 too.
