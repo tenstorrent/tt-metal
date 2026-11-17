@@ -28,6 +28,7 @@ from ...models.transformers.flux3_klein.transformer_flux3_klein import (
     Flux3KleinPlan,
     Flux3KleinSequenceLayout,
     Flux3KleinTransformer,
+    ids_digest,
     padded_length,
     timestep_inputs,
 )
@@ -472,7 +473,7 @@ class Flux3KleinPipeline:
             cond_embedded = transformer.embed_image_cond(tokens)
             ttnn.deallocate(tokens)
 
-        def sample(text_rows: ttnn.Tensor, text_ids: torch.Tensor, text_valid: int):
+        def sample(branch: int, text_rows: ttnn.Tensor, text_ids: torch.Tensor, text_valid: int):
             lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[-2]}
             layout = Flux3KleinSequenceLayout(sp, lengths, text_valid, cond_valid)
             sample_ids = {"image": ids, "text": text_ids}
@@ -481,9 +482,10 @@ class Flux3KleinPipeline:
             tokens = self._upload_rows(text_rows, sp)
             embedded = transformer.embed_text(tokens)
             ttnn.deallocate(tokens)
-            # one plan per mode lengths and image / text ids; the prompt length and the reference's size and ids are
-            # written into it when they change
-            key = (model, sp, tuple(sorted(lengths.items())), _ids_digest({"image": ids, "text": text_ids}))
+            # one plan per sample branch, mode lengths and image / text ids; the prompt length and the reference's
+            # size and ids are written into it when they change. The branch keeps the conditional and null-text
+            # samples apart, so a request never rewrites a plan it already holds.
+            key = (model, branch, sp, tuple(sorted(lengths.items())), _ids_digest({"image": ids, "text": text_ids}))
             plan = self._plan_cache.pop(key, None)
             if plan is None:
                 plan = transformer.prepare_plan(layout, sample_ids)
@@ -495,9 +497,9 @@ class Flux3KleinPipeline:
                 self._plan_cache.pop(next(iter(self._plan_cache))).deallocate()
             return plan, embedded
 
-        samples = [sample(*text)]
+        samples = [sample(0, *text)]
         if guidance is not None:
-            samples.append(sample(*self._null_text))
+            samples.append(sample(1, *self._null_text))
         image_axes = [None, self._sp_axis, None]
         rows, rows_padded = noise.shape[0], padded_length(noise.shape[0], sp)
         if x_host is not None:
@@ -585,10 +587,7 @@ class Flux3KleinPipeline:
 
 def _ids_digest(ids: dict[str, torch.Tensor]) -> tuple:
     """A key for a request's token ids (shape + content), so a cached plan is reused only for identical ids."""
-    return tuple(
-        (name, tuple(t.shape), hashlib.sha1(t.contiguous().numpy().tobytes()).hexdigest())
-        for name, t in sorted(ids.items())
-    )
+    return tuple((name, *ids_digest(t)) for name, t in sorted(ids.items()))
 
 
 def _load_dit_state(snapshot: Path) -> dict[str, torch.Tensor]:

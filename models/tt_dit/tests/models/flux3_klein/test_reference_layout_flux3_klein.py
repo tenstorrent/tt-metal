@@ -84,6 +84,11 @@ def test_every_legal_reference_has_a_canvas():
         canvas_for(*canvas)
 
 
+def single_rows(layout: Flux3KleinSequenceLayout) -> list[tuple[str, int]]:
+    """(mode, row) of each real single-stage row in order."""
+    return [(m, i) for m, start, stop in layout.single_ranges() for i in range(start, stop)]
+
+
 def _layout(cond_valid: int, cond_rows: int, text: int = 512, text_valid: int = 300, image: int = 4096, sp: int = 8):
     return Flux3KleinSequenceLayout(sp, {"image": image, "image_cond": cond_rows, "text": text}, text_valid, cond_valid)
 
@@ -91,7 +96,7 @@ def _layout(cond_valid: int, cond_rows: int, text: int = 512, text_valid: int = 
 @pytest.mark.parametrize("cond_valid, cond_rows", [(4096, 4096), (2584, 4096), (10625, 16384), (16384, 16384), (0, 0)])
 def test_masked_rows_after_attended(cond_valid, cond_rows):
     layout = _layout(cond_valid, cond_rows)
-    rows = layout.single_rows()
+    rows = single_rows(layout)
     assert len(rows) == layout.total
     attended = layout.attended()
     assert attended == 4096 + cond_valid + 300
@@ -108,6 +113,6 @@ def test_masked_rows_after_attended(cond_valid, cond_rows):
 def test_full_bucket_keeps_unpadded_layout():
     full = _layout(4096, 4096)
     legacy = Flux3KleinSequenceLayout(8, {"image": 4096, "image_cond": 4096, "text": 512}, 300)
-    assert full.single_rows() == [(m, i) for m in legacy.modes for i in range(legacy.lengths[m])]
+    assert single_rows(full) == [(m, i) for m in legacy.modes for i in range(legacy.lengths[m])]
     assert torch.equal(full.assembly_indices(), legacy.assembly_indices())
     assert torch.equal(full.mode_ids(), legacy.mode_ids())

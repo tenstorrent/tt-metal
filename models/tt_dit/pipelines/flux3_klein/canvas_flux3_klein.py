@@ -4,8 +4,9 @@
 
 """The VAE encoder on fixed reference canvases. A reference (BFL's prepared image, sides multiples of 16) sits in the
 top-left corner of the smallest canvas that holds it, the rest masked out at runtime, so every reference size runs the
-programs of its canvas. The masked encoder matches the encoder on the image alone: the area right of and below the image is zeroed before every 3x3 conv and strided downsample (their zero
-padding), GroupNorm statistics cover the image only, and the mid-block attention biases the keys outside it away."""
+programs of its canvas. The masked encoder matches the encoder on the image alone: the area right of and below the
+image is zeroed before every 3x3 conv and strided downsample (their zero padding), GroupNorm statistics cover the image
+only, and the mid-block attention biases the keys outside it away."""
 
 from __future__ import annotations
 
@@ -172,11 +173,15 @@ class CanvasMasks:
                 # the attention keys' bias, built on device: 0 inside the image, KEY_MASK_BIAS outside, in 32 columns
                 # that a query extension of 1 / 32 per column sums back to the bias
                 cols32 = tensor.from_torch(cols.expand(1, 1, w, 32).contiguous(), device=device, mesh_axes=[None] * 4)
-                inside = ttnn.multiply(ttnn.repeat(fr16, ttnn.Shape((1, 1, w, 32))), cols32)
-                ttnn.deallocate(cols32)
+                rows32 = ttnn.repeat(fr16, ttnn.Shape((1, 1, w, 32)))
+                inside = ttnn.multiply(rows32, cols32)
+                for t in (rows32, cols32):
+                    ttnn.deallocate(t)
                 # (inside - 1) * 1e5: exactly 0 inside (no bf16 1e5 - 1e5 cancellation)
-                bias = ttnn.multiply(ttnn.subtract(inside, 1.0), -KEY_MASK_BIAS)
+                outside = ttnn.subtract(inside, 1.0)
                 ttnn.deallocate(inside)
+                bias = ttnn.multiply(outside, -KEY_MASK_BIAS)
+                ttnn.deallocate(outside)
                 self.key_bias = ttnn.reshape(bias, (1, 1, h * w, 32))
 
     def shard(self, h: int, w: int) -> CanvasLevelMask:
@@ -263,17 +268,27 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
         h_local = h // ctx.h_factor
         local = attn._tp_factor > 1 and h_local % attn._tp_factor == 0 and h_local // attn._tp_factor * w % 32 == 0
         if local:
-            q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+            steps = [lambda t: ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)]
             if ctx.h_factor > 1:
-                q = ttnn.mesh_partition(q, dim=2, cluster_axis=ctx.h_mesh_axis, memory_config=q.memory_config())
-            q = ttnn.mesh_partition(q, dim=2, cluster_axis=tp_axis, memory_config=q.memory_config())
-            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
+                steps.append(
+                    lambda t: ttnn.mesh_partition(
+                        t, dim=2, cluster_axis=ctx.h_mesh_axis, memory_config=t.memory_config()
+                    )
+                )
+            steps.append(lambda t: ttnn.mesh_partition(t, dim=2, cluster_axis=tp_axis, memory_config=t.memory_config()))
+            steps.append(lambda t: ttnn.to_layout(t, ttnn.TILE_LAYOUT))
+            for step in steps:
+                previous, q = q, step(q)
+                ttnn.deallocate(previous)
         rows = int(q.shape[2])
         program_config = sdpa_config_for_rows(program_config, rows)
         # one extra tile column: the queries' 1 / 32 per column picks up the keys' bias, the values' zeros add nothing
+        unextended = (q, k, v)
         q = ttnn.concat([q, self._constant((1, 1, rows, 32), 1.0 / 32)], dim=-1)
         k = ttnn.concat([k, masks.key_bias], dim=-1)
         v = ttnn.concat([v, self._constant((1, 1, h * w, 32), 0.0)], dim=-1)
+        for t in unextended:
+            ttnn.deallocate(t)
         o = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,

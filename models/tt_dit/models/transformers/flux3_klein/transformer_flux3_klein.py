@@ -29,7 +29,8 @@ if TYPE_CHECKING:
 MODES = ("image", "image_cond", "text")
 # the early stacks whose attended length changes per request (prompt length; reference size within its bucket)
 VARIABLE_MODES = ("image_cond", "text")
-# host RoPE rows kept for the image and text ids (one per served shape and text bucket)
+# host RoPE rows kept for the image and text ids: the served set (5 image shapes, the text buckets) is ~160 MB
+# (4096^2: 65536 rows x 128 fp32 x cos / sin = 64 MB); 16 entries bound it to ~1 GB per process
 ROPE_ROWS_CACHE_SIZE = 16
 IN_CHANNELS = {"image": 128, "image_cond": 128, "text": 20480}
 PAD_MODE_ID = 3
@@ -177,10 +178,6 @@ class Flux3KleinSequenceLayout:
         ranges.append(("image_cond", self.cond_valid, self.lengths["image_cond"]))
         return [r for r in ranges if r[2] > r[1]]
 
-    def single_rows(self) -> list[tuple[str, int]]:
-        """(mode, row) of each real single-stage row in order."""
-        return [(m, i) for m, start, stop in self.single_ranges() for i in range(start, stop)]
-
     def _source_row(self, mode: str, i: int | torch.Tensor) -> int | torch.Tensor:
         device, local = i // self.rows[mode], i % self.rows[mode]
         offset = sum(self.rows[m] for m in MODES[: MODES.index(mode)])
@@ -204,6 +201,11 @@ class Flux3KleinSequenceLayout:
             return torch.cat([*ids, torch.full((self.total_padded - self.total,), PAD_MODE_ID)])
         pad = self.padded[mode] - self.lengths[mode]
         return torch.tensor([MODES.index(mode)] * self.lengths[mode] + [PAD_MODE_ID] * pad, dtype=torch.int64)
+
+
+def ids_digest(ids: torch.Tensor) -> tuple:
+    """Shape and content key of token ids."""
+    return tuple(ids.shape), hashlib.sha1(ids.contiguous().numpy().tobytes()).hexdigest()
 
 
 def rope_rows(ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -535,7 +537,7 @@ class Flux3KleinTransformer(Module):
 
     def _rope_rows(self, ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # the image and text ids repeat across requests: their host rows are kept (a few shapes and text buckets)
-        key = (tuple(ids.shape), hashlib.sha1(ids.contiguous().numpy().tobytes()).digest())
+        key = ids_digest(ids)
         rows = self._rope_rows_cache.pop(key, None) or rope_rows(ids)
         self._rope_rows_cache[key] = rows
         while len(self._rope_rows_cache) > ROPE_ROWS_CACHE_SIZE:
