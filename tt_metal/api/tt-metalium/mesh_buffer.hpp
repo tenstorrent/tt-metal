@@ -53,7 +53,9 @@ struct ReplicatedBufferConfig {
 // Specifies sharded MeshBuffer.
 // Write APIs for sharded buffers will split the data so that each device in the virtual mesh will only get a fraction
 // of the data.
-struct ShardedBufferConfig {
+struct [[deprecated(
+    "Use ReplicatedBufferConfig with per-device writes, or a TT-NN distributed tensor, instead. This API will be "
+    "removed after 2027-02-20.")]] ShardedBufferConfig {
     // Note: Only 2D sharding and replication is supported by the APIs exposed through this struct.
     // This interface will likely change over time depending on the status of native ND sharding.
     // Global buffer size. Each device will get a fraction of this size.
@@ -76,8 +78,19 @@ struct ShardedBufferConfig {
     Shape2D physical_shard_shape() const;
 };
 
-enum class MeshBufferLayout : uint8_t { REPLICATED, SHARDED };
-using MeshBufferConfig = std::variant<ReplicatedBufferConfig, ShardedBufferConfig>;
+enum class [[deprecated(
+    "ShardedBufferConfig is deprecated, so every MeshBuffer is replicated. This API will be removed after "
+    "2027-02-20.")]] MeshBufferLayout : uint8_t {
+    REPLICATED,
+    SHARDED
+};
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+using MeshBufferConfig
+    [[deprecated("Use ReplicatedBufferConfig instead. This API will be removed after 2027-02-20.")]] =
+        std::variant<ReplicatedBufferConfig, ShardedBufferConfig>;
+#pragma GCC diagnostic pop
 
 class MeshBuffer;
 
@@ -89,7 +102,7 @@ struct PerNodeMeshDeviceMemorySpan;
 distributed::MeshBuffer create_sram_buffer_view(
     distributed::MeshDevice&, const TensorSpec&, const PerNodeMeshDeviceMemorySpan&);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
-    const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
+    const tt::tt_metal::distributed::ReplicatedBufferConfig& replicated_config,
     const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::distributed::MeshCoordinate& coord);
@@ -102,10 +115,28 @@ namespace tt::tt_metal::distributed {
 class MeshBuffer {
 public:
     static std::shared_ptr<MeshBuffer> create(
+        const ReplicatedBufferConfig& replicated_config,
+        const DeviceLocalBufferConfig& device_local_config,
+        MeshDevice* mesh_device,
+        std::optional<DeviceAddr> address = std::nullopt);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    [[deprecated(
+        "Use the overload that takes a ReplicatedBufferConfig instead. This API will be removed after "
+        "2027-02-20.")]]
+    static std::shared_ptr<MeshBuffer> create(
         const MeshBufferConfig& mesh_buffer_config,
         const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
+#pragma GCC diagnostic pop
+    // Creates a non-owning MeshBuffer at `address` on `mesh_device`, with `source`'s global config and
+    // `device_local_config`.
+    static std::shared_ptr<MeshBuffer> create_view(
+        const MeshBuffer& source,
+        const DeviceLocalBufferConfig& device_local_config,
+        MeshDevice* mesh_device,
+        DeviceAddr address);
     ~MeshBuffer();
 
     // MeshBuffer manages device memory and owns the backing allocation. Copying would create
@@ -130,10 +161,28 @@ public:
     DeviceAddr device_local_size() const { return device_local_size_; }
     DeviceAddr address() const { return address_; };
 
-    MeshBufferLayout global_layout() const;
-    const MeshBufferConfig& global_config() const { return config_; }
+    [[deprecated(
+        "ShardedBufferConfig is deprecated, so every MeshBuffer is replicated. This API will be removed after "
+        "2027-02-20.")]] MeshBufferLayout
+    global_layout() const;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    [[deprecated(
+        "Use create_view() to create a MeshBuffer with the same config, or replicated_config(). This API will be "
+        "removed after 2027-02-20.")]]
+    const MeshBufferConfig& global_config() const {
+        return config_;
+    }
+#pragma GCC diagnostic pop
+    // The config of a replicated MeshBuffer. Fails for a MeshBuffer created with the deprecated ShardedBufferConfig.
+    const ReplicatedBufferConfig& replicated_config() const;
 
-    const ShardedBufferConfig& global_shard_spec() const;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    [[deprecated(
+        "ShardedBufferConfig is deprecated. This API will be removed after 2027-02-20.")]] const ShardedBufferConfig&
+    global_shard_spec() const;
+#pragma GCC diagnostic pop
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
     Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
@@ -171,13 +220,25 @@ public:
     // std::nullopt if the MeshBuffer never owned an allocation: it was created at an explicit address.
     std::optional<std::uint64_t> unique_id() const { return unique_id_; }
 
+    [[deprecated(
+        "ShardedBufferConfig is deprecated, so every MeshBuffer is replicated. This API will be removed after "
+        "2027-02-20.")]]
     uint32_t datum_size_bytes() const;
+    [[deprecated(
+        "ShardedBufferConfig is deprecated, so every MeshBuffer is replicated. This API will be removed after "
+        "2027-02-20.")]]
     Shape2D physical_shard_shape() const;
+    [[deprecated(
+        "ShardedBufferConfig is deprecated, so every MeshBuffer is replicated. This API will be removed after "
+        "2027-02-20.")]]
     std::pair<bool, bool> replicated_dims() const;
     uint32_t page_size() const { return device_local_config_.page_size; }
     uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
 private:
+    // The private members hold and take the deprecated MeshBufferConfig until ShardedBufferConfig is removed.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
     MeshBuffer(
         const MeshBufferConfig& config,
@@ -245,10 +306,11 @@ private:
         const tt::tt_metal::experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan&);
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
-        const tt::tt_metal::distributed::MeshBufferConfig&,
+        const tt::tt_metal::distributed::ReplicatedBufferConfig&,
         const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
         tt::tt_metal::distributed::MeshDevice*,
         const tt::tt_metal::distributed::MeshCoordinate&);
+#pragma GCC diagnostic pop
 };
 
 }  // namespace tt::tt_metal::distributed

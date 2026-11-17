@@ -2377,7 +2377,7 @@ ReceiverSideResources build_receiver_side(
             .bottom_up = std::nullopt,
             .sub_device_id = std::nullopt,
         };
-        distributed::MeshBufferConfig mesh_config = distributed::ReplicatedBufferConfig{
+        distributed::ReplicatedBufferConfig mesh_config{
             .size = aligned_shard_size * static_cast<DeviceAddr>(num_workers),
         };
         metadata_buffer = distributed::MeshBuffer::create(mesh_config, device_local, mesh.get());

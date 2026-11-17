@@ -533,7 +533,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
                 .bottom_up = std::nullopt,
                 .sub_device_id = std::nullopt,
             };
-            distributed::MeshBufferConfig worker_metadata_mesh = distributed::ReplicatedBufferConfig{
+            distributed::ReplicatedBufferConfig worker_metadata_mesh{
                 .size = aligned_shard_size * static_cast<DeviceAddr>(num_workers_),
             };
             metadata_worker_buffer_ =

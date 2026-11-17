@@ -211,7 +211,7 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
         .sub_device_id = std::nullopt,
     };
 
-    MeshBufferConfig config_mesh_buffer_specs = ReplicatedBufferConfig{
+    ReplicatedBufferConfig config_mesh_buffer_specs{
         .size = config_buffer_size,
     };
 

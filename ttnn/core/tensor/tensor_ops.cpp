@@ -507,11 +507,8 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
     if (input_tensor.layout() != Layout::ROW_MAJOR || !changing_last_dim) {
         const auto& input_buffer = input_tensor.device_storage().get_mesh_buffer();
 
-        auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-            input_buffer.global_config(),
-            input_buffer.device_local_config(),
-            input_buffer.device(),
-            input_buffer.address());
+        auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create_view(
+            input_buffer, input_buffer.device_local_config(), input_buffer.device(), input_buffer.address());
 
         MeshTensor view_mesh_tensor = mesh_tensor_from_buffer_with_topology(
             std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
@@ -524,8 +521,8 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         auto new_device_config = input_buffer.device_local_config();
         new_device_config.page_size = new_spec.compute_page_size_bytes();
 
-        auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-            input_buffer.global_config(), new_device_config, input_buffer.device(), input_buffer.address());
+        auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create_view(
+            input_buffer, new_device_config, input_buffer.device(), input_buffer.address());
 
         MeshTensor view_mesh_tensor = mesh_tensor_from_buffer_with_topology(
             std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
@@ -557,11 +554,8 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         .sharding_args = new_sharding_args,
         .bottom_up = device_local_config.bottom_up};
 
-    auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-        input_tensor.mesh_buffer().global_config(),
-        new_device_config,
-        input_tensor.device(),
-        input_tensor.mesh_buffer().address());
+    auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create_view(
+        input_tensor.mesh_buffer(), new_device_config, input_tensor.device(), input_tensor.mesh_buffer().address());
 
     ttnn::DeviceStorage view_storage(
         input_tensor.device_storage(),
@@ -609,11 +603,8 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
     }
 
     const auto& input_buffer = input_tensor.device_storage().get_mesh_buffer();
-    auto new_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-        input_buffer.global_config(),
-        input_buffer.device_local_config(),
-        input_buffer.device(),
-        input_buffer.address());
+    auto new_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create_view(
+        input_buffer, input_buffer.device_local_config(), input_buffer.device(), input_buffer.address());
 
     MeshTensor reinterpreted = mesh_tensor_from_buffer_with_topology(std::move(*new_mesh_buffer), new_spec, topology);
     DeviceStorage reinterpreted_storage(input_tensor.device_storage(), std::move(reinterpreted));

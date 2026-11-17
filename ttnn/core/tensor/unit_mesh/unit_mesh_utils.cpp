@@ -80,8 +80,8 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
 
     // Create a new mesh tensor for parent mesh.
     const auto& reference_buffer = tensors[0].mesh_buffer();
-    auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-        reference_buffer.global_config(), reference_buffer.device_local_config(), parent_mesh.get(), reference_address);
+    auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create_view(
+        reference_buffer, reference_buffer.device_local_config(), parent_mesh.get(), reference_address);
 
     // Explicitly enumerate all coordinates of the parent mesh so the DeviceStorage
     // spans every device.  The single-arg DeviceStorage(mesh_buffer) constructor
@@ -137,8 +137,8 @@ std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
         TT_FATAL(
             submesh->get_active_sub_device_manager_id() == submesh->get_default_sub_device_manager_id(),
             "Cannot disaggregate tensor when submesh has non-default sub-device manager");
-        auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-            input_mesh_buffer.global_config(), input_mesh_buffer.device_local_config(), submesh.get(), input_address);
+        auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create_view(
+            input_mesh_buffer, input_mesh_buffer.device_local_config(), submesh.get(), input_address);
 
         Tensor unit_tensor(tt::tt_metal::MeshTensor::from_buffer(std::move(*mesh_buffer), reference_spec));
         TT_FATAL(
