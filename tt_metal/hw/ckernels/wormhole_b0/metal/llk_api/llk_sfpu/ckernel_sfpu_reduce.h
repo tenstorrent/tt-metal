@@ -647,78 +647,103 @@ inline void set_manual_col_swap_direction() {
     set_sfpswap_direction<pool_type == PoolType::MAX>();
 }
 
-// The four SFPLOADMACRO sequences of the float / 16-bit MAX/MIN init (init_reduce_max_min). Sequence n runs
+// The three SFPLOADMACRO sequences of the float / 16-bit MAX/MIN init (init_reduce_max_min). Sequence n runs
 // InstructionTemplate[n], SFPSWAP(LREG_C, [VD]) with [VD] the register its load just wrote, on the Simple sub-unit.
-// The column window uses the first two; the row path (load_and_reduce_row_group_vertical) uses all four.
+// The column window uses the first two; the row path (load_and_reduce_row_group_loadmacro) uses LREG5 and LREG1.
 constexpr std::uint32_t MAX_MIN_MACRO_SWAP_LREG4 = 0;  // SFPSWAP(LREG4, [VD])
 constexpr std::uint32_t MAX_MIN_MACRO_SWAP_LREG5 = 1;  // SFPSWAP(LREG5, [VD])
-constexpr std::uint32_t MAX_MIN_MACRO_SWAP_LREG0 = 2;  // SFPSWAP(LREG0, [VD])
-constexpr std::uint32_t MAX_MIN_MACRO_SWAP_LREG1 = 3;  // SFPSWAP(LREG1, [VD])
+constexpr std::uint32_t MAX_MIN_MACRO_SWAP_LREG1 = 2;  // SFPSWAP(LREG1, [VD])
+
+/**
+ * @brief SFPLOADMACRO form of load_and_reduce_row_group_vertical (float and 16-bit rows): the same result,
+ *        LREG0 = extreme(rows r..r+3) and LREG4 = extreme(rows r+4..r+7) per SFPU column, with the previous
+ *        group's two result stores folded into the issue slots the scheduled swaps leave free.
+ *
+ * Each 4-row half accumulates in LREG1 / LREG5: three of its four values are loaded by SFPLOADMACRO, whose
+ * scheduled SFPSWAP(LREG1 / LREG5, [VD]) (macros 2 / 1) folds them in, and the fourth is plain-loaded into
+ * LREG0 / LREG4 last and folded by the one issued SFPSWAP per half. A macro's SFPSWAP runs on the Simple sub-unit
+ * the cycle after its SFPLOADMACRO, and the Simple and Round sub-units must be idle the cycle after that (tt-isa
+ * SFPLOADMACRO.md), so every SFPLOADMACRO is followed by a load or a store. MAX/MIN over SFPSWAP's total order
+ * does not depend on the pairing, so the result is bit-identical to the issued path.
+ *
+ * @tparam INSTRUCTION_MODE Load / store instruction mode (FP32, FP16B or LO16).
+ * @tparam store_previous Store the previous group's LREG0 / LREG4 (at @p previous_first_row and 4 rows further)
+ *         from inside this group. Without it, the slots take the last two loads and two SFPNOP pad the schedule.
+ * @param first_row Dest row of the first 4-row half (left face; the right face is ROWS_PER_FACE further). The
+ *        second half is 4 rows further.
+ */
+template <InstrModLoadStore INSTRUCTION_MODE, bool store_previous>
+inline void load_and_reduce_row_group_loadmacro(
+    std::uint32_t first_row, std::uint32_t previous_first_row, std::uint32_t result_store_mode) {
+    // SFPLOADMACRO takes VD[1:0] in its first operand and VD[2] in the (unused) low bit of the address. Every row
+    // address here is even, so adding the bit sets it; unlike an OR, the add folds into the constant row offset,
+    // which keeps the multi-tile loop (runtime tile offset, RISC-issue-bound) from paying an extra op per macro.
+    constexpr auto loadmacro_vd = [](std::uint32_t macro, std::uint32_t lreg) { return (macro << 2) | (lreg & 3); };
+    constexpr auto loadmacro_addr_bit = [](std::uint32_t lreg) { return lreg >> 2; };
+    const std::uint32_t second_row = first_row + 4;
+
+    TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, first_row);
+    TT_SFPLOADMACRO(
+        loadmacro_vd(MAX_MIN_MACRO_SWAP_LREG1, p_sfpu::LREG2),
+        INSTRUCTION_MODE,
+        ADDR_MOD_3,
+        (first_row + ROWS_PER_FACE) + loadmacro_addr_bit(p_sfpu::LREG2));
+    TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, second_row);
+    TT_SFPLOADMACRO(
+        loadmacro_vd(MAX_MIN_MACRO_SWAP_LREG5, p_sfpu::LREG6),
+        INSTRUCTION_MODE,
+        ADDR_MOD_3,
+        (second_row + ROWS_PER_FACE) + loadmacro_addr_bit(p_sfpu::LREG6));
+    if constexpr (store_previous) {
+        TT_SFPSTORE(p_sfpu::LREG0, result_store_mode, ADDR_MOD_3, previous_first_row);
+    } else {
+        TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, first_row + ROWS_PER_FACE + ODD_COLUMNS);
+    }
+    TT_SFPLOADMACRO(
+        loadmacro_vd(MAX_MIN_MACRO_SWAP_LREG1, p_sfpu::LREG3),
+        INSTRUCTION_MODE,
+        ADDR_MOD_3,
+        (first_row + ODD_COLUMNS) + loadmacro_addr_bit(p_sfpu::LREG3));
+    if constexpr (store_previous) {
+        TT_SFPSTORE(p_sfpu::LREG4, result_store_mode, ADDR_MOD_3, previous_first_row + 4);
+    } else {
+        TT_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, second_row + ROWS_PER_FACE + ODD_COLUMNS);
+    }
+    TT_SFPLOADMACRO(
+        loadmacro_vd(MAX_MIN_MACRO_SWAP_LREG5, p_sfpu::LREG7),
+        INSTRUCTION_MODE,
+        ADDR_MOD_3,
+        (second_row + ODD_COLUMNS) + loadmacro_addr_bit(p_sfpu::LREG7));
+    if constexpr (store_previous) {
+        TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, first_row + ROWS_PER_FACE + ODD_COLUMNS);
+        TT_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, second_row + ROWS_PER_FACE + ODD_COLUMNS);
+    } else {
+        TTI_SFPNOP;  // the last macro's SFPSWAP (LREG5, LREG7) executes here
+        TTI_SFPNOP;  // Simple/Round must be idle the cycle after a scheduled SFPSWAP
+    }
+
+    TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+}
 
 /**
  * @brief Loads one 8-row group of a tile into LREG0-7 and folds the left/right face columns of each 4-row half:
  *        LREG0 = extreme(rows r..r+3) and LREG4 = extreme(rows r+4..r+7), per SFPU column (8 columns each).
  *
- * The six compare-and-swaps are (0,2) (4,6) (1,3) (5,7) (0,1) (4,5), in that order, on every path.
- * Float and 16-bit rows (swap_order NONE, no UInt16 mask) use SFPLOADMACRO: the four first-level swaps are
- * scheduled from the loads of LREG2/6/3/7 (macros 2, 0, 3, 1, see init_reduce_max_min), so they cost no issue slot
- * and no stall; only the two second-level swaps are issued. A macro's SFPSWAP runs on the Simple sub-unit the cycle
- * after its SFPLOADMACRO, and the Simple and Round sub-units must be idle the cycle after that (tt-isa
- * SFPLOADMACRO.md), so every SFPLOADMACRO but the last is followed by a plain load, and the last one by two SFPNOP
- * before the next issued SFPSWAP.
+ * The six compare-and-swaps are (0,2) (4,6) (1,3) (5,7) (0,1) (4,5), in that order. Float and 16-bit rows use
+ * load_and_reduce_row_group_loadmacro instead, unless DISABLE_SFPLOADMACRO.
  * The Int32 / UInt32 rows (swap_order INT32 / UINT32) keep issued swaps: every operand must be mapped into SFPSWAP's
  * order (to_swap_order) after its load and before any swap reads it, which a load-scheduled swap cannot wait for.
  * Their init (init_reduce_max_min_int32_uint32) programs no LOADMACRO sequence. So does DISABLE_SFPLOADMACRO.
  *
  * @tparam INSTRUCTION_MODE Load instruction mode (FP32, FP16B or LO16; INT32 with a swap_order).
- * @tparam clear_high_bits Mask the garbage high bits of UInt16 in a 32-bit Dest on load; takes the issued path.
- * @tparam swap_order NONE takes the SFPLOADMACRO path (unless clear_high_bits or DISABLE_SFPLOADMACRO); INT32 / UINT32
- *         take the issued path and map every load with to_swap_order.
+ * @tparam clear_high_bits Mask the garbage high bits of UInt16 in a 32-bit Dest on load.
+ * @tparam swap_order INT32 / UINT32 map every load with to_swap_order.
  * @param first_row  Dest row of the first 4-row half (left face; the right face is ROWS_PER_FACE further).
  * @param second_row Dest row of the second 4-row half.
  */
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, SwapOrder swap_order>
 inline void load_and_reduce_row_group_vertical(std::uint32_t first_row, std::uint32_t second_row) {
-#ifndef DISABLE_SFPLOADMACRO
-    if constexpr (!clear_high_bits && swap_order == SwapOrder::NONE) {
-        // SFPLOADMACRO takes VD[1:0] in its first operand and VD[2] in the (unused) low bit of the address. Every row
-        // address here is even, so adding the bit sets it; unlike an OR, the add folds into the constant row offset,
-        // which keeps the multi-tile loop (runtime tile offset, RISC-issue-bound) from paying an extra op per macro.
-        constexpr auto loadmacro_vd = [](std::uint32_t macro, std::uint32_t lreg) { return (macro << 2) | (lreg & 3); };
-        constexpr auto loadmacro_addr_bit = [](std::uint32_t lreg) { return lreg >> 2; };
-
-        TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, first_row);
-        TT_SFPLOADMACRO(
-            loadmacro_vd(MAX_MIN_MACRO_SWAP_LREG0, p_sfpu::LREG2),
-            INSTRUCTION_MODE,
-            ADDR_MOD_3,
-            (first_row + ROWS_PER_FACE) + loadmacro_addr_bit(p_sfpu::LREG2));
-        TT_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, second_row);
-        TT_SFPLOADMACRO(
-            loadmacro_vd(MAX_MIN_MACRO_SWAP_LREG4, p_sfpu::LREG6),
-            INSTRUCTION_MODE,
-            ADDR_MOD_3,
-            (second_row + ROWS_PER_FACE) + loadmacro_addr_bit(p_sfpu::LREG6));
-        TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, first_row + ODD_COLUMNS);
-        TT_SFPLOADMACRO(
-            loadmacro_vd(MAX_MIN_MACRO_SWAP_LREG1, p_sfpu::LREG3),
-            INSTRUCTION_MODE,
-            ADDR_MOD_3,
-            (first_row + ROWS_PER_FACE + ODD_COLUMNS) + loadmacro_addr_bit(p_sfpu::LREG3));
-        TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, second_row + ODD_COLUMNS);
-        TT_SFPLOADMACRO(
-            loadmacro_vd(MAX_MIN_MACRO_SWAP_LREG5, p_sfpu::LREG7),
-            INSTRUCTION_MODE,
-            ADDR_MOD_3,
-            (second_row + ROWS_PER_FACE + ODD_COLUMNS) + loadmacro_addr_bit(p_sfpu::LREG7));
-        TTI_SFPNOP;  // the last macro's SFPSWAP (LREG5, LREG7) executes here
-        TTI_SFPNOP;  // Simple/Round must be idle the cycle after a scheduled SFPSWAP
-
-        TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-        TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-        return;
-    }
-#endif
     load_row_operand<p_sfpu::LREG0, INSTRUCTION_MODE, clear_high_bits, swap_order>(first_row);
     load_row_operand<p_sfpu::LREG1, INSTRUCTION_MODE, clear_high_bits, swap_order>(first_row + ODD_COLUMNS);
     load_row_operand<p_sfpu::LREG2, INSTRUCTION_MODE, clear_high_bits, swap_order>(first_row + ROWS_PER_FACE);
@@ -777,6 +802,25 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
     static_assert(
         swap_order == SwapOrder::NONE || INSTRUCTION_MODE == InstrModLoadStore::INT32,
         "swap_order maps raw words; INT32_2S_COMP would convert them on load");
+#ifndef DISABLE_SFPLOADMACRO
+    if constexpr (!clear_high_bits && swap_order == SwapOrder::NONE) {
+        // Dest rows of the four 8-row groups: two per face pair. Each group stores the previous group's results.
+        constexpr std::uint32_t GROUP_FIRST_ROW[4] = {0, 8, 2 * ROWS_PER_FACE, 2 * ROWS_PER_FACE + 8};
+        load_and_reduce_row_group_loadmacro<INSTRUCTION_MODE, false>(tile_row_offset, 0, result_store_mode);
+        horizontal_reduce_max();
+#pragma GCC unroll 3
+        for (std::uint32_t group = 1; group < 4; group++) {
+            load_and_reduce_row_group_loadmacro<INSTRUCTION_MODE, true>(
+                tile_row_offset + GROUP_FIRST_ROW[group],
+                tile_row_offset + GROUP_FIRST_ROW[group - 1],
+                result_store_mode);
+            horizontal_reduce_max();
+        }
+        TT_SFPSTORE(p_sfpu::LREG0, result_store_mode, ADDR_MOD_3, tile_row_offset + GROUP_FIRST_ROW[3]);
+        TT_SFPSTORE(p_sfpu::LREG4, result_store_mode, ADDR_MOD_3, tile_row_offset + GROUP_FIRST_ROW[3] + 4);
+        return;
+    }
+#endif
 #pragma GCC unroll 2
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
         std::uint32_t face_pair_base = face_pair * 2 * ROWS_PER_FACE;
@@ -1370,8 +1414,8 @@ inline void program_max_min_swap_macro() {
 
 /**
  * @brief Initialization for SFPU reduce MAX/MIN kernel.
- *        Sets up the four LOADMACRO sequences (two for the column window and the row path, two for the row path
- *        only), configures address modifiers, and records the column replay window.
+ *        Sets up the three LOADMACRO sequences (two for the column window, two for the row path, one shared),
+ *        configures address modifiers, and records the column replay window.
  *        For MIN operations, inverts the swap direction by configuring the SFPU control register.
  *
  * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
@@ -1392,12 +1436,11 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     // The LOADMACRO column path is the one path that trusts this init's direction.
     set_sfpswap_direction<pool_type == PoolType::MIN>();
 
-    // LOADMACRO sequences 0 and 1 serve the column window and the row path, 2 and 3 the float / 16-bit row path
-    // only (load_and_reduce_row_group_vertical). The Int32 / UInt32 init (init_reduce_max_min_int32_uint32) programs
-    // none of the four.
+    // LOADMACRO sequences 0 and 1 serve the column window, 1 and 2 the float / 16-bit row path
+    // (load_and_reduce_row_group_loadmacro). The Int32 / UInt32 init (init_reduce_max_min_int32_uint32) programs
+    // none of them.
     program_max_min_swap_macro<MAX_MIN_MACRO_SWAP_LREG4, p_sfpu::LREG4>();
     program_max_min_swap_macro<MAX_MIN_MACRO_SWAP_LREG5, p_sfpu::LREG5>();
-    program_max_min_swap_macro<MAX_MIN_MACRO_SWAP_LREG0, p_sfpu::LREG0>();
     program_max_min_swap_macro<MAX_MIN_MACRO_SWAP_LREG1, p_sfpu::LREG1>();
 
     configure_addrmod_max_min(num_cols);
