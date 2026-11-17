@@ -27,6 +27,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
 
 namespace {
@@ -67,7 +68,10 @@ void kernel_main() {
     constexpr uint32_t last_block_k_tiles = get_compile_time_arg_val(17);
     constexpr uint32_t a_page_bytes = get_compile_time_arg_val(18);
     constexpr bool act_resident = get_compile_time_arg_val(19) != 0;
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    // R1b injector stall-shadow: A K-blocks the injector keeps in flight (each its own read trid), so the
+    // DRAM read of K-block kb+1 overlaps the multicast of kb. 1 = read, barrier, send (no overlap).
+    constexpr uint32_t act_ahead = get_compile_time_arg_val(20);
+    constexpr auto out_args = TensorAccessorArgs<21>();
     // A's accessor (R1b's injector reads A); every other writer passes the output's args as a stand-in.
     [[maybe_unused]] constexpr auto a_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
@@ -101,12 +105,15 @@ void kernel_main() {
         McastArgs<get_named_compile_time_arg_val("act_ct_offset"), get_named_compile_time_arg_val("act_rt_offset")>();
     static_assert(mc_act.active == (act_mode != 0));
     static_assert(!act_stream || block_batches == 1);
+    static_assert(act_ahead >= 1 && (!act_stream || act_ahead <= act_cb_blocks));
     Noc noc;
     [[maybe_unused]] auto a_sender = mc_act.optional_sender(noc);
     [[maybe_unused]] auto a_receiver = mc_act.optional_receiver(noc);
     [[maybe_unused]] const genify_ds::ActKBlocks<block_m_tiles, block_k_tiles, k_blocks_per_round, a_tile_bytes>
         ds_blocks{a_addr};
     constexpr uint32_t act_block_tiles = block_m_tiles * block_k_tiles;
+    [[maybe_unused]] constexpr uint32_t act_block_bytes = act_block_tiles * a_tile_bytes;
+    [[maybe_unused]] uint32_t act_seq = 0;  // R1b: A K-blocks pushed so far (the write pointer's ring slot)
     if constexpr (ds_act && !ds_worker) {
         genify_ds::send_only(
             ds_blocks, mc_act, a_sender, get_write_ptr(cb_act_tiles), act_cb_blocks, nb_m, num_k_blocks);
@@ -137,25 +144,49 @@ void kernel_main() {
                     // Every core walks the same nominal sequence, so the cb_act_tiles write pointers are in
                     // lockstep and the injector multicasts its own freshly read slot to the same address.
                     if (!act_resident || nbk == 0) {
-                        for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-                            cb_reserve_back(cb_act_tiles, act_block_tiles);
-                            const uint32_t slot = get_write_ptr(cb_act_tiles);
-                            if (a_sender) {
-                                const uint32_t k_valid = (kb == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
+                        if (a_sender) {
+                            // Injector: K-block j lands (j - kb) slots past the write pointer (the CB is
+                            // exactly act_cb_blocks slots); its reads carry trid (j % act_ahead) + 1, freed by
+                            // retiring j - act_ahead, so retiring kb leaves kb+1 .. kb+ahead-1 on the wire.
+                            const uint32_t slot0 = get_write_ptr(cb_act_tiles);
+                            const uint32_t ring_base = slot0 - (act_seq % act_cb_blocks) * act_block_bytes;
+                            uint32_t issued_from = 0;  // K-block at the write pointer
+                            auto issue = [&](uint32_t j) {
+                                cb_reserve_back(cb_act_tiles, (j + 1 - issued_from) * act_block_tiles);
+                                const uint32_t l1_slot =
+                                    ring_base + ((act_seq + j - issued_from) % act_cb_blocks) * act_block_bytes;
+                                const uint32_t k_valid = (j == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
+                                dataflow_kernel_lib::set_read_trid(noc, j % act_ahead + 1);
                                 for (uint32_t r = 0; r < blk_rows; ++r) {
-                                    const uint32_t page = (row0 + blk_r0 + r) * tensor_k_tiles + kb * block_k_tiles;
-                                    uint32_t l1 = slot + r * block_k_tiles * a_tile_bytes;
+                                    const uint32_t page = (row0 + blk_r0 + r) * tensor_k_tiles + j * block_k_tiles;
+                                    uint32_t l1 = l1_slot + r * block_k_tiles * a_tile_bytes;
                                     for (uint32_t k = 0; k < k_valid; ++k) {
                                         noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
                                         l1 += a_tile_bytes;
                                     }
                                 }
-                                noc_async_read_barrier();
-                                a_sender->send(slot, slot, act_block_tiles * a_tile_bytes);
-                            } else {
-                                a_receiver->receive();
+                            };
+                            for (uint32_t j = 0; j + 1 < act_ahead && j < num_k_blocks; ++j) {
+                                issue(j);
                             }
-                            cb_push_back(cb_act_tiles, act_block_tiles);
+                            for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+                                if (kb + act_ahead - 1 < num_k_blocks) {
+                                    issue(kb + act_ahead - 1);
+                                }
+                                dataflow_kernel_lib::async_read_barrier_with_trid(noc, kb % act_ahead + 1);
+                                const uint32_t slot = get_write_ptr(cb_act_tiles);
+                                a_sender->send(slot, slot, act_block_bytes);
+                                cb_push_back(cb_act_tiles, act_block_tiles);
+                                ++issued_from;
+                                ++act_seq;
+                            }
+                            dataflow_kernel_lib::set_read_trid(noc, 0);  // restore untagged reads
+                        } else {
+                            for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+                                cb_reserve_back(cb_act_tiles, act_block_tiles);
+                                a_receiver->receive();
+                                cb_push_back(cb_act_tiles, act_block_tiles);
+                            }
                         }
                     }
                 }

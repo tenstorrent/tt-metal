@@ -1,0 +1,91 @@
+diff --git a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp
+index d7e998cff46..0aa2af05c87 100644
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp
+@@ -259,6 +259,24 @@ void kernel_main() {
+     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_tiles, cb_weight_tiles, cb_output_tiles);
+ 
+     CircularBuffer act_buf(cb_act_tiles), weight_buf(cb_weight_tiles), out_buf(cb_output_tiles), interm_buf(cb_interm);
++#ifdef ABLATE_COMPUTE
++    {
++        constexpr uint32_t out_n = is_swiglu ? half_n : block_n_tiles;
++        for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
++            for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
++                cb_wait_front(cb_act_tiles, block_m_tiles * block_k_tiles);
++                cb_wait_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
++                cb_pop_front(cb_act_tiles, block_m_tiles * block_k_tiles);
++                cb_pop_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
++            }
++            for (uint32_t g = 0; g < block_m_tiles / sb_h; ++g) {
++                cb_reserve_back(cb_output_tiles, sb_h * out_n);
++                cb_push_back(cb_output_tiles, sb_h * out_n);
++            }
++        }
++        return;
++    }
++#endif
+ 
+     if constexpr (!has_epilogue) {
+         const auto shape = ckl::MatmulBlockShape::of(
+diff --git a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp
+index 325dccb9fb9..7dbb13e9a93 100644
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp
+@@ -409,7 +409,21 @@ void kernel_main() {
+                             if (batch_valid && reads_act && load_act) {
+                                 read_act(act_l1, a_row_base, k0, blk_rows, k_valid);
+                             }
++#ifdef ABLATE_BCOAL
++                            if (load_weight) {
++                                // perf-only: same bytes, one same-bank coalesced run per K row
++                                const uint32_t j = col0 / block_n_tiles;
++                                for (uint32_t k = 0; k < k_valid; ++k) {
++                                    const uint32_t pg = (k0 + k) * tensor_n_tiles + 8 * ((j * block_n_tiles) / 8 / 8 * 8 / 8) + (j % 8);
++                                    noc_async_read(b_acc.get_noc_addr(pg), weight_l1 + k * block_n_tiles * b_tile_bytes, blk_cols * b_tile_bytes);
++                                }
++                            }
++                            if (false) {
++#elif defined(ABLATE_B)
++                            if (false) {
++#else
+                             if (batch_valid && reads_weight && load_weight) {
++#endif
+                                 read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
+                             }
+                             if constexpr (reads_act || reads_weight) {
+diff --git a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
+index 542f2f24980..6676e31ea0a 100644
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
+@@ -140,7 +140,11 @@ void kernel_main() {
+                         for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+                             cb_reserve_back(cb_act_tiles, act_block_tiles);
+                             const uint32_t slot = get_write_ptr(cb_act_tiles);
++#ifdef ABLATE_A
++                            if (false) {
++#else
+                             if (a_sender) {
++#endif
+                                 const uint32_t k_valid = (kb == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
+                                 for (uint32_t r = 0; r < blk_rows; ++r) {
+                                     const uint32_t page = (row0 + blk_r0 + r) * tensor_k_tiles + kb * block_k_tiles;
+@@ -153,7 +157,9 @@ void kernel_main() {
+                                 noc_async_read_barrier();
+                                 a_sender->send(slot, slot, act_block_tiles * a_tile_bytes);
+                             } else {
++#ifndef ABLATE_A
+                                 a_receiver->receive();
++#endif
+                             }
+                             cb_push_back(cb_act_tiles, act_block_tiles);
+                         }
+# Host hook (create_program_descriptor, before `descriptor.kernels = [...]`), GENIFY_ABLATE="compute,a,b,bcoal":
+#    import os as _os
+#    abl = _os.environ.get("GENIFY_ABLATE", "")
+#    for k, name in ((compute, "compute"), (writer, "a")):
+#        if name in abl:
+#            k.defines = [("ABLATE_" + name.upper(), "1")]
+#    if "b" in abl.split(","):
+#        for r in readers: r.defines = [("ABLATE_B", "1")]
+#    if "bcoal" in abl.split(","):
+#        for r in readers: r.defines = [("ABLATE_BCOAL", "1")]

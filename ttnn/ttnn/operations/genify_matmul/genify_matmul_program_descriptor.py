@@ -141,6 +141,20 @@ ACT_STREAM_MCAST = True
 # R1b gate: the A K-block the injector broadcasts per round must reach this many bytes (each round is
 # one handshake with every core of the split; below it a core reading its own A is cheaper).
 ACT_STREAM_MIN_KBLOCK_BYTES = 32 * 1024
+# R1b operand CB depth (K-blocks in flight, cb_act_tiles and cb_weight_tiles) of a K-walk (S2 / S3; the
+# solve shrinks block_k to fit). Every core waits for the A round of each K-block, so the slowest core's
+# B read of a K-block gates the next broadcast; deeper rings give that coupling slack and let the B stream
+# run ahead of compute. PERF FOCUS 4: depth 2 / 3 / 4 = 683 / 666 / 633 us (B-stream floor 578 us).
+ACT_STREAM_DEPTH = 4
+# R1b injector stall-shadow: A K-blocks the injector keeps in flight (read trids), so the DRAM read of
+# K-block kb+1 overlaps the multicast of kb (clamped to the act ring depth). 1 = read, barrier, send.
+ACT_STREAM_AHEAD = 2
+# R1b injector cost in the split ranking: one core reads every A byte and multicasts it (A read + multicast
+# measured ~23 GB/s on the writer RISC), while the interleaved B stream of the whole split runs at ~411
+# GB/s, so an A byte through the injector is worth this many streamed bytes. R1b ranks at
+# max(A + B, A * cost): text-encoder down 512x16384x5120 (A = 19% of B) measured 732 us under R1b against
+# 552 us under R1a and is refused; FLUX context_embedder 256x15360x3072 (8%) keeps R1b (350 us vs 2226).
+ACT_STREAM_INJECTOR_COST = 18
 # R1b injector: index of the broadcasting core in the split's row-wise core order.
 ACT_STREAM_INJECTOR = 0
 # R1b NoC: the writer RISC's (BRISC, WriterConfigDescriptor).
@@ -269,6 +283,10 @@ class Blocking:
     act_resident: bool = False
     # Output row groups the writer drains per wait / flush / pop (cb_output_tiles holds DEPTH_OUT batches).
     write_batch: int = 1
+    # Operand CB depths in K-blocks (cb_act_tiles, cb_weight_tiles): DEPTH_ACT / DEPTH_WEIGHT, or
+    # ACT_STREAM_DEPTH on an R1b K-walk. The L1 solve and the CB sizes both read them here.
+    depth_act: int = DEPTH_ACT
+    depth_weight: int = DEPTH_WEIGHT
 
     @property
     def use_partials(self):
@@ -392,9 +410,14 @@ def uses_operand_mcast(geom: Geometry, grid: GridChoice, blk: "Blocking"):
 def uses_act_stream(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     """Regime R1b predicate: a single-B, single-batch 1-D N split over more than one core (every core
     owns all rows, so every core needs every A K-block), with an A K-block large enough to amortize the
-    per-round handshake with every core (ACT_STREAM_MIN_KBLOCK_BYTES)."""
+    per-round handshake with every core (ACT_STREAM_MIN_KBLOCK_BYTES), on a weight-streaming shape (B
+    bytes >= output bytes): the A rounds share the writer RISC with the output, so on a write-bound shape
+    they would serialize behind the drains (x_embedder 2048x128x3072: 48.5 -> 62.8 us)."""
+    b_bytes = geom.tensor_k_tiles * geom.tensor_n_tiles * geom.b_tile_bytes
+    out_bytes = geom.tensor_m_tiles * geom.out_n_tiles * geom.o_tile_bytes
     return (
         ACT_STREAM_MCAST
+        and b_bytes >= out_bytes
         and geom.tensor_batches == 1
         and grid.grid_b == 1
         and grid.grid_m == 1
@@ -452,8 +475,8 @@ def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
         # R1a: one A read per grid row-line, one B read per column-line.
         return a_per_core * grid.grid_m + b_per_core * grid.grid_n
     if mode == 2:
-        # R1b: A read once (by the injector), B per core.
-        return a_per_core + b_per_core * grid.grid_n
+        # R1b: A read once (by the injector), B per core; the single injector's throughput caps it.
+        return max(a_per_core + b_per_core * grid.grid_n, a_per_core * ACT_STREAM_INJECTOR_COST)
     return (a_per_core + b_per_core) * grid.grid_b * grid.grid_m * grid.grid_n
 
 
@@ -529,15 +552,17 @@ def choose_subblock(block_m, block_n, dest_limit):
     return best
 
 
-def _footprint(geom, bm, bn, bk, partials, out_in_place=False, depth_weight=DEPTH_WEIGHT, act_cb=True):
+def _footprint(geom, bm, bn, bk, partials, out_in_place=False, depth_weight=None, act_cb=True, depth_act=None):
     """F(block_m, block_n, block_k) of l1_ledger.md, epilogue terms included (E_bias, E_addcmul).
     An epilogue always needs cb_partials (the matmul's last K-block lands there). `out_in_place`: the
     output CB is backed on the output tensor's own L1 shard (R4), so it adds no CB bytes. `act_cb` False:
     A is consumed straight from its resident shard (R2 / single-K-shard R3), no cb_act_tiles."""
+    depth_act = DEPTH_ACT if depth_act is None else depth_act
+    depth_weight = DEPTH_WEIGHT if depth_weight is None else depth_weight
     sb_h, _ = choose_subblock(bm, bn, geom.dest_limit)
     partials = partials or geom.epilogue != "none"
     return (
-        (DEPTH_ACT * bm * bk * geom.a_tile_bytes if act_cb else 0)
+        (depth_act * bm * bk * geom.a_tile_bytes if act_cb else 0)
         + depth_weight * bk * bn * geom.b_tile_bytes
         + (bm * bn * geom.p_tile_bytes if partials else 0)
         + (0 if out_in_place else DEPTH_OUT * sb_h * geom.out_block_n(bn) * geom.o_tile_bytes)
@@ -546,10 +571,11 @@ def _footprint(geom, bm, bn, bk, partials, out_in_place=False, depth_weight=DEPT
     )
 
 
-def _block_k_max(geom, bm, bn, budget):
+def _block_k_max(geom, bm, bn, budget, depths=None):
     """Largest block_k with F(bm, bn, block_k, partials=True) <= budget (F is affine in block_k)."""
+    da, dw = depths or (DEPTH_ACT, DEPTH_WEIGHT)
     fixed = _footprint(geom, bm, bn, 0, partials=True)
-    per_k = DEPTH_ACT * bm * geom.a_tile_bytes + DEPTH_WEIGHT * bn * geom.b_tile_bytes
+    per_k = da * bm * geom.a_tile_bytes + dw * bn * geom.b_tile_bytes
     if budget < fixed:
         return 0
     return (budget - fixed) // per_k
@@ -566,10 +592,11 @@ def _k_split(tk, bk_max):
     return block_k, num_k_blocks, last
 
 
-def _make_blocking(geom, block_b, bm, bn, bk_max):
+def _make_blocking(geom, block_b, bm, bn, bk_max, depths=None):
     block_k, nkb, last = _k_split(geom.tensor_k_tiles, min(bk_max, geom.block_k_cap))
     sb_h, sb_w = choose_subblock(bm, bn, geom.dest_limit)
-    return Blocking(block_b, bm, bn, block_k, nkb, last, sb_h, sb_w, geom.epilogue)
+    da, dw = depths or (DEPTH_ACT, DEPTH_WEIGHT)
+    return Blocking(block_b, bm, bn, block_k, nkb, last, sb_h, sb_w, geom.epilogue, depth_act=da, depth_weight=dw)
 
 
 def _resident_split(geom: Geometry, grid: GridChoice):
@@ -592,19 +619,41 @@ def _resident_split(geom: Geometry, grid: GridChoice):
     return None
 
 
+def _stream_depths(geom: Geometry, grid: GridChoice):
+    """ACT_STREAM_DEPTH for both operand rings when the split can run R1b (its K-walk), else None."""
+    probe = Blocking(1, grid.core_m_tiles, 1, geom.tensor_k_tiles, 1, geom.tensor_k_tiles, 1, 1)
+    if ACT_STREAM_DEPTH and uses_act_stream(geom, grid, replace(probe, block_k_tiles=geom.tensor_k_tiles)):
+        return (ACT_STREAM_DEPTH, ACT_STREAM_DEPTH)
+    return None
+
+
 def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
-    blk = _choose_blocking(geom, grid, budget)
+    depths = _stream_depths(geom, grid)
+    blk = _choose_blocking(geom, grid, budget, depths)
+    if depths is not None and operand_mode(geom, grid, blk) != 2:
+        blk = _choose_blocking(geom, grid, budget)  # the solved K-block missed the R1b gate: plain depths
     # Write batching: grows only the output CB term of F (DEPTH_OUT * batch row groups).
     groups = blk.block_m_tiles // blk.sb_h
     row_group_bytes = blk.sb_h * geom.out_block_n(blk.block_n_tiles) * geom.o_tile_bytes
-    base = _footprint(geom, blk.block_m_tiles, blk.block_n_tiles, blk.block_k_tiles, blk.use_partials)
+    base = _footprint(
+        geom,
+        blk.block_m_tiles,
+        blk.block_n_tiles,
+        blk.block_k_tiles,
+        blk.use_partials,
+        depth_weight=blk.depth_weight,
+        depth_act=blk.depth_act,
+    )
     for batch in sorted((d for d in _divisors(groups) if d <= OUT_WRITE_BATCH_ROW_GROUPS), reverse=True):
         if base + DEPTH_OUT * (batch - 1) * row_group_bytes <= budget:
             return replace(blk, write_batch=batch)
     return blk
 
 
-def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
+def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int, depths=None) -> Blocking:
+    """`depths`: (depth_act, depth_weight) of a K-walk (S2 / S3), default (DEPTH_ACT, DEPTH_WEIGHT). The
+    one-K-block S1 walk keeps the defaults (its depth-2 rings already hold its whole walk)."""
+    da, dw = depths or (DEPTH_ACT, DEPTH_WEIGHT)
     tk = geom.tensor_k_tiles
     block_b = grid.core_batches  # costs no L1 (the helper's batch loop reuses per-batch CBs)
     cm, cn = grid.core_m_tiles, grid.core_n_tiles
@@ -629,9 +678,9 @@ def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
         return whole
 
     # S2: whole region, K-walk with the accumulator.
-    bk_max = _block_k_max(geom, cm, cn, budget)
+    bk_max = _block_k_max(geom, cm, cn, budget, depths)
     if bk_max >= k_floor:
-        return _make_blocking(geom, block_b, cm, cn, bk_max)
+        return _make_blocking(geom, block_b, cm, cn, bk_max, depths)
 
     # S3: shrink the output block; minimize A/B re-reads, ties to the larger block.
     best_key, best = None, None
@@ -643,7 +692,7 @@ def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
             if (bm, bn) in seen:
                 continue
             seen.add((bm, bn))
-            if _footprint(geom, bm, bn, k_floor, partials=True) > budget:
+            if _footprint(geom, bm, bn, k_floor, partials=True, depth_weight=dw, depth_act=da) > budget:
                 continue
             eff_nb_m, eff_nb_n = _cdiv(cm, bm), _cdiv(cn, bn)
             reread = tk * (cm * geom.a_tile_bytes * (eff_nb_n - 1) + cn * geom.b_tile_bytes * (eff_nb_m - 1))
@@ -654,7 +703,7 @@ def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
         bm, bn = best
         if one_k_block and _footprint(geom, bm, bn, tk, partials=False) <= budget:
             return _make_blocking(geom, block_b, bm, bn, tk)
-        return _make_blocking(geom, block_b, bm, bn, _block_k_max(geom, bm, bn, budget))
+        return _make_blocking(geom, block_b, bm, bn, _block_k_max(geom, bm, bn, budget, depths), depths)
 
     # S4
     raise RuntimeError(f"genify_matmul: even the minimum block does not fit the L1 CB budget of {budget} bytes")
@@ -774,7 +823,7 @@ def _writer_ct(
     stream (CT 8 = 2 overrides the absent R4 role; A's accessor follows the output's)."""
     role = list(ds_act_role)
     if act_stream_a is not None:
-        role = [2, 1, CB_ACT_TILES, blk.block_k_tiles, blk.num_k_blocks, 1, geom.a_tile_bytes, DEPTH_ACT]
+        role = [2, 1, CB_ACT_TILES, blk.block_k_tiles, blk.num_k_blocks, 1, geom.a_tile_bytes, blk.depth_act]
     a_t = act_stream_a if act_stream_a is not None else out  # stand-in accessor (never dereferenced)
     return [
         cb_out,
@@ -790,6 +839,7 @@ def _writer_ct(
         blk.last_block_k_tiles,
         a_t.buffer_aligned_page_size(),
         int(blk.act_resident),
+        max(1, min(ACT_STREAM_AHEAD, blk.depth_act)) if act_stream_a is not None else 1,  # R1b act_ahead
         *ttnn.TensorAccessorArgs(out).get_compile_time_args(),
         *ttnn.TensorAccessorArgs(a_t).get_compile_time_args(),
     ]
@@ -851,12 +901,14 @@ def create_program_descriptor(
 
     # ---- CBs: every page count derives from the block / depth knobs ----
     cbs = [
-        _cb(CB_ACT_TILES, a.dtype, geom.a_tile_bytes, DEPTH_ACT * blk.block_m_tiles * blk.block_k_tiles, core_ranges),
+        _cb(
+            CB_ACT_TILES, a.dtype, geom.a_tile_bytes, blk.depth_act * blk.block_m_tiles * blk.block_k_tiles, core_ranges
+        ),
         _cb(
             CB_WEIGHT_TILES,
             b.dtype,
             geom.b_tile_bytes,
-            DEPTH_WEIGHT * blk.block_k_tiles * blk.block_n_tiles,
+            blk.depth_weight * blk.block_k_tiles * blk.block_n_tiles,
             core_ranges,
         ),
         _cb(
