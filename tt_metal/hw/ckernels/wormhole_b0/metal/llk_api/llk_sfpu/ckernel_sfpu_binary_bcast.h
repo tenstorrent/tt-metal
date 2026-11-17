@@ -130,9 +130,10 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects col
 //   Uses LREG0..LREG7 transiently during SFPTRANSP phases. LREG6 is NOT
 //   preserved as a persistent mask (SFPTRANSP clobbers LREG4..LREG7 window);
 //   BCAST_ROW does not need the col-0 lane mask. The band body is recorded
-//   into SFPU replay slots 0..15 per full-tile call; that overwrites any
-//   program another SFPU op recorded at init (COL bcast, reduce, fast exp,
-//   ...), which must re-run its init after a ROW call. The
+//   into SFPU replay slots 0..15 per full-tile call, and (without
+//   MM_THROTTLE) ADDR_MOD_6 is reprogrammed per call; that overwrites what
+//   another SFPU op set at init (COL bcast, reduce, fast exp, abs, i0, ...),
+//   which must re-run its init after a ROW call. The
 //   call leaves the dest base register pointed at the data tile (as the
 //   unary SFPU path leaves it at its tile) and RWC.Dst non-zero; the
 //   enclosing `_llk_math_eltwise_sfpu_done_` clears RWC.Dst and the next
@@ -171,8 +172,17 @@ constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM = 1;
 // also clobbers the LREG6 lane mask).
 constexpr std::uint32_t REPLAY_SLOT_BROADCAST = 0;  // col-0 -> all-cols broadcast
 constexpr std::uint32_t REPLAY_LEN_BROADCAST = 11;  // see _record_broadcast_replay_
-constexpr std::uint32_t REPLAY_SLOT_ROW_BAND = 0;   // BCAST_ROW band body
-constexpr std::uint32_t REPLAY_LEN_ROW_BAND = 16;   // see _record_row_bcast_band_replay_
+// Whether the ROW band body advances RWC.Dst from its last SFPSTORE through
+// ADDR_MOD_6 (programmed per call) instead of a trailing INCRWC. A throttled
+// matmul (MM_THROTTLE > 0) programs ADDR_MOD_6 for its own MOP only at init,
+// so in such a kernel the ROW path must not touch it.
+#if defined(MM_THROTTLE) && MM_THROTTLE > 0
+constexpr bool ROW_BAND_STORE_INCR = false;
+#else
+constexpr bool ROW_BAND_STORE_INCR = true;
+#endif
+constexpr std::uint32_t REPLAY_SLOT_ROW_BAND = 0;                             // BCAST_ROW band body
+constexpr std::uint32_t REPLAY_LEN_ROW_BAND = ROW_BAND_STORE_INCR ? 15 : 16;  // see _record_row_bcast_band_replay_
 static_assert(
     REPLAY_SLOT_BROADCAST + REPLAY_LEN_BROADCAST <= math::replay_buf_offset &&
         REPLAY_SLOT_ROW_BAND + REPLAY_LEN_ROW_BAND <= math::replay_buf_offset,
@@ -812,7 +822,8 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
 //   5. Store LREG0..3 to the 4 col-groups of the output band. The output
 //      tile's distance from the data tile is the only per-call input of the
 //      body; it is baked into the 4 store immediates when recording.
-//   6. INCRWC: RWC.Dst += ROW_BAND_STRIDE, so the next band uses the same
+//   6. RWC.Dst += ROW_BAND_STRIDE (the last store's ADDR_MOD_6, or an INCRWC
+//      under MM_THROTTLE), so the next band uses the same
 //      immediates. After 4 bands RWC.Dst sits at FACE1_BASE; the driver
 //      bumps it to FACE2_BASE (face 1 was the right half of the upper bands)
 //      before the lower 4 bands.
@@ -884,10 +895,14 @@ inline void _record_row_bcast_band_replay_(std::uint32_t out_rel) {
     TT_SFPSTORE(p_sfpu::LREG0, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[0]));
     TT_SFPSTORE(p_sfpu::LREG1, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[1]));
     TT_SFPSTORE(p_sfpu::LREG2, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[2]));
-    TT_SFPSTORE(p_sfpu::LREG3, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[3]));
-
-    // (6) Next band.
-    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ ROW_BAND_STRIDE, /*rwc_b*/ 0, /*rwc_a*/ 0);
+    // (6) Next band: the last store post-increments RWC.Dst through ADDR_MOD_6
+    //     (named ADDR_MOD_2 under the SFPU addr-mod base), or an INCRWC does.
+    if constexpr (ROW_BAND_STORE_INCR) {
+        TT_SFPSTORE(p_sfpu::LREG3, IM, ADDR_MOD_2, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[3]));
+    } else {
+        TT_SFPSTORE(p_sfpu::LREG3, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[3]));
+        TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ ROW_BAND_STRIDE, /*rwc_b*/ 0, /*rwc_a*/ 0);
+    }
 }
 
 template <BinaryOp BINOP>
@@ -899,6 +914,9 @@ inline void _calculate_sfpu_binary_bcast_row_full_tile_(
     // band-relative immediate (see the driver comment above).
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index_data);
     math::clear_dst_reg_addr();
+    if constexpr (ROW_BAND_STORE_INCR) {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ROW_BAND_STRIDE}}.set(ADDR_MOD_6);
+    }
 
     const std::uint32_t bcast_rel = dest_addr_wrap((dst_index_bcast - dst_index_data) * DEST_TILE_SIZE_RAW);
     const std::uint32_t out_rel = dest_addr_wrap((dst_index_out - dst_index_data) * DEST_TILE_SIZE_RAW);
@@ -972,9 +990,10 @@ inline void _sfpu_binary_bcast_init_() {
         _record_broadcast_replay_();
     }
     // BCAST_ROW: nothing persists from the init. Each full-tile call records
-    // its band body into SFPU replay slots 0..15 and clobbers LREG4..7, so
-    // any SFPU op that records at init (COL bcast, reduce, fast exp, ...)
-    // must re-run its init after a ROW call.
+    // its band body into SFPU replay slots 0..15, clobbers LREG4..7 and
+    // (without MM_THROTTLE) reprograms ADDR_MOD_6, so any SFPU op that sets
+    // that state at init (COL bcast, reduce, fast exp, abs, i0, ...) must
+    // re-run its init after a ROW call.
 }
 
 }  // namespace sfpu
