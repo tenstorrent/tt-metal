@@ -1405,6 +1405,7 @@ class BatchedVerify:
                     gate_bias=ttnn.slice(dw.gate_bias, [0, 0, 0, 0], [1, 1, 1, n_act]),
                     up_bias=ttnn.slice(dw.up_bias, [0, 0, 0, 0], [1, 1, 1, n_act]),
                     down_bias=dw.down_bias,
+                    tile_transposed=dw.tile_transposed,
                 )
             )
         self.lm_head = _even_lm_head(model)

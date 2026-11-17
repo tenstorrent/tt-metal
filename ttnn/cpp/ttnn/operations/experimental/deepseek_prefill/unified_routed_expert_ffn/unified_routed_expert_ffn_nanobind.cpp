@@ -76,6 +76,22 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             weights_tile_transposed (bool, optional): every weight tile is stored transposed within itself (the
                 tile grid is unchanged); the matmuls transpose it back as they unpack it. A block-float weight then
                 shares one exponent per 16 consecutive input rows of one output column instead of per 16 columns.
+            weight_pages (ttnn.Tensor, optional): table-addressed weights. UINT32 ROW_MAJOR DRAM tensor of shape
+                [experts, 2 * (2 * weights_n_gate_up + weights_n_down)], one row (page) per local expert: the gate
+                columns' entries, then the up columns', then the down columns', each entry two words
+                (dram_bank_id, byte_offset) of the column's tile k = 0. Tile k is at byte_offset + k * k_stride in the
+                same bank; byte_offset is relative to the source tensor's buffer address. gate_projs / up_projs /
+                down_projs must then be empty; the number of local experts is the table's row count.
+            gate_up_weight_source (ttnn.Tensor, optional): DRAM tensor whose buffer holds the gate and up tiles (with
+                weight_pages; only its address is used).
+            down_weight_source (ttnn.Tensor, optional): DRAM tensor whose buffer holds the down tiles.
+            gate_up_k_stride (int, optional): bytes between tile k and k + 1 of one gate / up column.
+            down_k_stride (int, optional): bytes between tile k and k + 1 of one down column.
+            weights_n_gate_up (int, optional): gate (= up) tile columns per expert.
+            weights_n_down (int, optional): down tile columns per expert (= emb / 32).
+            weights_k_gate_up (int, optional): gate / up K tiles (= emb / 32).
+            weights_k_down (int, optional): down K tiles (= weights_n_gate_up).
+            weights_dtype (ttnn.DataType, optional): the weight tiles' format (bfloat4_b, bfloat8_b or bfloat16).
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -105,7 +121,17 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("x_row_index") = nb::none(),
         nb::arg("output_row_major") = false,
         nb::arg("zero_output_row") = std::numeric_limits<uint32_t>::max(),
-        nb::arg("weights_tile_transposed") = false);
+        nb::arg("weights_tile_transposed") = false,
+        nb::arg("weight_pages") = nb::none(),
+        nb::arg("gate_up_weight_source") = nb::none(),
+        nb::arg("down_weight_source") = nb::none(),
+        nb::arg("gate_up_k_stride") = 0,
+        nb::arg("down_k_stride") = 0,
+        nb::arg("weights_n_gate_up") = 0,
+        nb::arg("weights_n_down") = 0,
+        nb::arg("weights_k_gate_up") = 0,
+        nb::arg("weights_k_down") = 0,
+        nb::arg("weights_dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

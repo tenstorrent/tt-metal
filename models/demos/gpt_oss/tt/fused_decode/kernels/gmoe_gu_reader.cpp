@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t NC = get_compile_time_arg_val(6);
     constexpr uint32_t GX = get_compile_time_arg_val(7);
     constexpr uint32_t KT = get_compile_time_arg_val(8);   // K tiles (hidden / 32)
-    constexpr uint32_t NT = get_compile_time_arg_val(9);   // gate / up width in tiles (E * 22.5)
+    constexpr uint32_t NT = get_compile_time_arg_val(9);   // gate / up width in tiles (E * 23)
     constexpr uint32_t NU = get_compile_time_arg_val(10);  // column tiles per expert (23)
     constexpr uint32_t WC = get_compile_time_arg_val(11);
     constexpr uint32_t CC = get_compile_time_arg_val(12);

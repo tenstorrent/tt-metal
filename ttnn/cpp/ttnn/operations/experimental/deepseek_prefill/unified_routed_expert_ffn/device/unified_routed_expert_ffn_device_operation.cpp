@@ -9,6 +9,8 @@
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -45,6 +47,86 @@ bool is_dram_nd_sharded_by_tile_rows(const ttnn::Tensor& t) {
     const auto& shard_shape = spec->shard_shape;
     return shard_shape[-2] >= tt::constants::TILE_HEIGHT && shard_shape[-2] % tt::constants::TILE_HEIGHT == 0 &&
            shard_shape[-1] % tt::constants::TILE_WIDTH == 0;
+}
+
+// Table-addressed weights (op.weights_from_pages): the table, the two byte sources and the shape / stride args.
+void validate_weight_pages(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t) {
+    TT_FATAL(
+        t.gate_projs.empty() && t.up_projs.empty() && t.down_projs.empty(),
+        "with weight_pages the gate/up/down projection lists must be empty (got {}, {}, {})",
+        t.gate_projs.size(),
+        t.up_projs.size(),
+        t.down_projs.size());
+    TT_FATAL(
+        t.weight_pages.has_value() && t.gate_up_weight_source.has_value() && t.down_weight_source.has_value(),
+        "op.weights_from_pages needs weight_pages, gate_up_weight_source and down_weight_source");
+    TT_FATAL(
+        op.weights_n_gate_up > 0 && op.weights_n_down > 0 && op.weights_k_gate_up > 0 && op.weights_k_down > 0,
+        "weight_pages needs weights_n_gate_up, weights_n_down, weights_k_gate_up and weights_k_down > 0 (got {}, {}, "
+        "{}, {})",
+        op.weights_n_gate_up,
+        op.weights_n_down,
+        op.weights_k_gate_up,
+        op.weights_k_down);
+    TT_FATAL(
+        op.weights_dtype == tt::tt_metal::DataType::BFLOAT4_B ||
+            op.weights_dtype == tt::tt_metal::DataType::BFLOAT8_B ||
+            op.weights_dtype == tt::tt_metal::DataType::BFLOAT16,
+        "weights_dtype must be BFLOAT4_B, BFLOAT8_B or BFLOAT16, got {}",
+        op.weights_dtype);
+
+    // The table: one page per local expert, read whole by the sender cores at the start of each expert.
+    const auto& pages = *t.weight_pages;
+    const uint32_t row_words = 2 * (2 * op.weights_n_gate_up + op.weights_n_down);
+    TT_FATAL(pages.storage_type() == ttnn::StorageType::DEVICE, "weight_pages must be on device");
+    TT_FATAL(pages.dtype() == tt::tt_metal::DataType::UINT32, "weight_pages must be UINT32, got {}", pages.dtype());
+    TT_FATAL(pages.layout() == tt::tt_metal::Layout::ROW_MAJOR, "weight_pages must be ROW_MAJOR");
+    TT_FATAL(pages.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM, "weight_pages must be in DRAM");
+    TT_FATAL(pages.buffer() != nullptr, "weight_pages buffer must be allocated on device");
+    const auto& pshape = pages.logical_shape();
+    TT_FATAL(
+        pshape.rank() >= 2 && static_cast<uint32_t>(pshape[-1]) == row_words &&
+            pshape.volume() == static_cast<uint64_t>(op.experts_per_chip) * row_words,
+        "weight_pages must be [experts_per_chip = {}, {}] (2 * (2 * weights_n_gate_up + weights_n_down) uint32 per "
+        "expert), got shape {}",
+        op.experts_per_chip,
+        row_words,
+        pshape);
+    TT_FATAL(
+        pages.buffer()->page_size() == row_words * sizeof(uint32_t),
+        "weight_pages must hold one expert row per page ({} B), got {} B pages (memory config {})",
+        row_words * sizeof(uint32_t),
+        pages.buffer()->page_size(),
+        pages.memory_config());
+
+    const uint32_t tile_bytes = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(op.weights_dtype));
+    const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
+    for (const auto& [name, src, k_stride, k_tiles] :
+         std::initializer_list<std::tuple<const char*, const ttnn::Tensor&, uint32_t, uint32_t>>{
+             {"gate_up_weight_source", *t.gate_up_weight_source, op.gate_up_k_stride, op.weights_k_gate_up},
+             {"down_weight_source", *t.down_weight_source, op.down_k_stride, op.weights_k_down}}) {
+        TT_FATAL(src.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
+        TT_FATAL(src.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM, "{} must be in DRAM", name);
+        TT_FATAL(src.buffer() != nullptr, "{} buffer must be allocated on device", name);
+        // Tiles land in L1 at whole-tile offsets, so every DRAM source address must keep the DRAM alignment; the
+        // table's byte offsets must be multiples of it too (they live on device and are not checked here).
+        TT_FATAL(
+            k_stride >= tile_bytes && k_stride % dram_align == 0,
+            "{}: k stride ({} B) must be >= the {} tile size ({} B) and a multiple of the DRAM alignment ({} B)",
+            name,
+            k_stride,
+            op.weights_dtype,
+            tile_bytes,
+            dram_align);
+        TT_FATAL(
+            static_cast<uint64_t>(k_tiles - 1) * k_stride + tile_bytes <= src.buffer()->size(),
+            "{}: one column spans {} B ({} tiles at a {} B stride), more than the whole source buffer ({} B)",
+            name,
+            static_cast<uint64_t>(k_tiles - 1) * k_stride + tile_bytes,
+            k_tiles,
+            k_stride,
+            src.buffer()->size());
+    }
 }
 }  // namespace
 
@@ -86,39 +168,7 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(t.x.logical_shape()[i] == 1, "x leading dim {} must be 1, got {}", i, t.x.logical_shape()[i]);
     }
 
-    // Per-local-expert weight lists: one entry per expert, all identical shape.
-    // The kernels loop over experts and index a per-expert address array, so the
-    // three lists must be non-empty, equal-length, and match experts_per_chip.
-    TT_FATAL(
-        !t.gate_projs.empty() && t.gate_projs.size() == t.up_projs.size() && t.gate_projs.size() == t.down_projs.size(),
-        "gate/up/down projection lists must be non-empty and equal length (got {}, {}, {})",
-        t.gate_projs.size(),
-        t.up_projs.size(),
-        t.down_projs.size());
-    TT_FATAL(
-        t.gate_projs.size() == op.experts_per_chip,
-        "weight-list length ({}) must equal experts_per_chip ({})",
-        t.gate_projs.size(),
-        op.experts_per_chip);
-
     const auto& x_shape = t.x.padded_shape();
-    const auto& gate_shape = t.gate_projs[0].padded_shape();
-    const auto& up_shape = t.up_projs[0].padded_shape();
-    const auto& down_shape = t.down_projs[0].padded_shape();
-
-    TT_FATAL(
-        x_shape[-1] == gate_shape[-2] && x_shape[-1] == up_shape[-2],
-        "x's last dim {} must match gate/up's K dim ({}, {})",
-        x_shape[-1],
-        gate_shape[-2],
-        up_shape[-2]);
-    TT_FATAL(
-        gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
-        "gate/up N ({}) must equal down K ({})",
-        gate_shape[-1],
-        down_shape[-2]);
-    TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
-
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
     // m_tiles is this expert's M (grid/chunk/CB sizing). x may be a shared
@@ -128,45 +178,94 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         op.m_tiles <= x_shape[-2] / TILE, "m_tiles ({}) must be <= x M in tiles ({})", op.m_tiles, x_shape[-2] / TILE);
 
-    // Every expert's gate/up/down tensor shares x's storage / layout / memory
-    // contract AND must be identical in shape/dtype to expert 0 (the program is
-    // built once for all experts, and the kernels reuse one accessor layout
-    // descriptor per role with only the base address varying per expert).
-    for (uint32_t e = 0; e < op.experts_per_chip; ++e) {
-        for (const auto& [name, w, ref] :
-             std::initializer_list<std::tuple<const char*, const ttnn::Tensor&, const ttnn::Tensor&>>{
-                 {"gate_proj", t.gate_projs[e], t.gate_projs[0]},
-                 {"up_proj", t.up_projs[e], t.up_projs[0]},
-                 {"down_proj", t.down_projs[e], t.down_projs[0]}}) {
-            TT_FATAL(w.storage_type() == ttnn::StorageType::DEVICE, "{}[{}] must be on device", name, e);
-            TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{}[{}] must be TILE layout", name, e);
-            TT_FATAL(
-                is_dram_interleaved(w) || is_dram_nd_sharded_by_tile_rows(w),
-                "{}[{}] must be DRAM-interleaved or DRAM ND-sharded with a tile-aligned shard, got {}",
-                name,
-                e,
-                w.memory_config());
-            TT_FATAL(
-                w.padded_shape() == ref.padded_shape() && w.dtype() == ref.dtype(),
-                "{}[{}] shape/dtype ({}, {}) must match expert 0 ({}, {}) — all experts share one program",
-                name,
-                e,
-                w.padded_shape(),
-                w.dtype(),
-                ref.padded_shape(),
-                ref.dtype());
-            // The page->bank map lives in the accessor layout descriptor, which is built once from
-            // expert 0; only the base address varies per expert. An expert placed differently would
-            // be read through expert 0's map and give silently wrong numbers rather than fail.
-            TT_FATAL(
-                w.memory_config() == ref.memory_config(),
-                "{}[{}] memory config ({}) must match expert 0 ({}) — all experts share one program",
-                name,
-                e,
-                w.memory_config(),
-                ref.memory_config());
+    // gate / up (K = emb, N = hidden) and down (K = hidden, N = emb) weight dims, in elements.
+    uint32_t gate_k = 0;
+    uint32_t gate_n = 0;
+    uint32_t down_k = 0;
+    uint32_t down_n = 0;
+    if (op.weights_from_pages) {
+        validate_weight_pages(op, t);
+        gate_k = op.weights_k_gate_up * TILE;
+        gate_n = op.weights_n_gate_up * TILE;
+        down_k = op.weights_k_down * TILE;
+        down_n = op.weights_n_down * TILE;
+    } else {
+        // Per-local-expert weight lists: one entry per expert, all identical shape.
+        // The kernels loop over experts and index a per-expert address array, so the
+        // three lists must be non-empty, equal-length, and match experts_per_chip.
+        TT_FATAL(
+            !t.weight_pages.has_value() && !t.gate_up_weight_source.has_value() && !t.down_weight_source.has_value(),
+            "weight_pages / weight sources given but op.weights_from_pages is false");
+        TT_FATAL(
+            !t.gate_projs.empty() && t.gate_projs.size() == t.up_projs.size() &&
+                t.gate_projs.size() == t.down_projs.size(),
+            "gate/up/down projection lists must be non-empty and equal length (got {}, {}, {})",
+            t.gate_projs.size(),
+            t.up_projs.size(),
+            t.down_projs.size());
+        TT_FATAL(
+            t.gate_projs.size() == op.experts_per_chip,
+            "weight-list length ({}) must equal experts_per_chip ({})",
+            t.gate_projs.size(),
+            op.experts_per_chip);
+
+        const auto& gate_shape = t.gate_projs[0].padded_shape();
+        const auto& up_shape = t.up_projs[0].padded_shape();
+        const auto& down_shape = t.down_projs[0].padded_shape();
+        TT_FATAL(
+            gate_shape[-2] == up_shape[-2] && gate_shape[-1] == up_shape[-1],
+            "gate_proj shape {} must equal up_proj shape {}",
+            gate_shape,
+            up_shape);
+        gate_k = gate_shape[-2];
+        gate_n = gate_shape[-1];
+        down_k = down_shape[-2];
+        down_n = down_shape[-1];
+
+        // Every expert's gate/up/down tensor shares x's storage / layout / memory
+        // contract AND must be identical in shape/dtype to expert 0 (the program is
+        // built once for all experts, and the kernels reuse one accessor layout
+        // descriptor per role with only the base address varying per expert).
+        for (uint32_t e = 0; e < op.experts_per_chip; ++e) {
+            for (const auto& [name, w, ref] :
+                 std::initializer_list<std::tuple<const char*, const ttnn::Tensor&, const ttnn::Tensor&>>{
+                     {"gate_proj", t.gate_projs[e], t.gate_projs[0]},
+                     {"up_proj", t.up_projs[e], t.up_projs[0]},
+                     {"down_proj", t.down_projs[e], t.down_projs[0]}}) {
+                TT_FATAL(w.storage_type() == ttnn::StorageType::DEVICE, "{}[{}] must be on device", name, e);
+                TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{}[{}] must be TILE layout", name, e);
+                TT_FATAL(
+                    is_dram_interleaved(w) || is_dram_nd_sharded_by_tile_rows(w),
+                    "{}[{}] must be DRAM-interleaved or DRAM ND-sharded with a tile-aligned shard, got {}",
+                    name,
+                    e,
+                    w.memory_config());
+                TT_FATAL(
+                    w.padded_shape() == ref.padded_shape() && w.dtype() == ref.dtype(),
+                    "{}[{}] shape/dtype ({}, {}) must match expert 0 ({}, {}) — all experts share one program",
+                    name,
+                    e,
+                    w.padded_shape(),
+                    w.dtype(),
+                    ref.padded_shape(),
+                    ref.dtype());
+                // The page->bank map lives in the accessor layout descriptor, which is built once from
+                // expert 0; only the base address varies per expert. An expert placed differently would
+                // be read through expert 0's map and give silently wrong numbers rather than fail.
+                TT_FATAL(
+                    w.memory_config() == ref.memory_config(),
+                    "{}[{}] memory config ({}) must match expert 0 ({}) — all experts share one program",
+                    name,
+                    e,
+                    w.memory_config(),
+                    ref.memory_config());
+            }
         }
     }
+
+    TT_FATAL(x_shape[-1] == gate_k, "x's last dim {} must match gate/up's K dim ({})", x_shape[-1], gate_k);
+    TT_FATAL(gate_n == down_k, "gate/up N ({}) must equal down K ({})", gate_n, down_k);
+    TT_FATAL(down_n == x_shape[-1], "down N ({}) must equal x K ({})", down_n, x_shape[-1]);
 
     // Aux tensors: counts / global_expert_idx_table are small UINT32 vectors
     // the reader fetches via DRAM accessor. The reader does a single
@@ -366,9 +465,9 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         for (uint32_t e = 0; e < op.experts_per_chip; ++e) {
             for (const auto& [name, b, expected_n] :
                  std::initializer_list<std::tuple<const char*, const ttnn::Tensor&, uint32_t>>{
-                     {"gate_bias", t.gate_biases[e], static_cast<uint32_t>(gate_shape[-1])},
-                     {"up_bias", t.up_biases[e], static_cast<uint32_t>(up_shape[-1])},
-                     {"down_bias", t.down_biases[e], static_cast<uint32_t>(down_shape[-1])}}) {
+                     {"gate_bias", t.gate_biases[e], gate_n},
+                     {"up_bias", t.up_biases[e], gate_n},
+                     {"down_bias", t.down_biases[e], down_n}}) {
                 TT_FATAL(b.storage_type() == ttnn::StorageType::DEVICE, "{}[{}] must be on device", name, e);
                 TT_FATAL(b.layout() == tt::tt_metal::Layout::TILE, "{}[{}] must be TILE layout", name, e);
                 TT_FATAL(is_dram_interleaved(b), "{}[{}] must be DRAM-interleaved", name, e);
@@ -449,9 +548,19 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t l1_end,
     const std::optional<ttnn::Tensor>& x_row_index,
     uint32_t zero_output_row,
-    bool weights_tile_transposed) {
-    using OperationType =
-        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
+    bool weights_tile_transposed,
+    const std::optional<ttnn::Tensor>& weight_pages,
+    const std::optional<ttnn::Tensor>& gate_up_weight_source,
+    const std::optional<ttnn::Tensor>& down_weight_source,
+    uint32_t gate_up_k_stride,
+    uint32_t down_k_stride,
+    uint32_t weights_n_gate_up,
+    uint32_t weights_n_down,
+    uint32_t weights_k_gate_up,
+    uint32_t weights_k_down,
+    tt::tt_metal::DataType weights_dtype) {
+    using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
+        UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .m_tiles = m_tiles,
@@ -466,7 +575,15 @@ ttnn::Tensor unified_routed_expert_moe(
             .x_indexed = x_row_index.has_value(),
             .output_row_major = output.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             .zero_output_row = zero_output_row,
-            .weights_tile_transposed = weights_tile_transposed},
+            .weights_tile_transposed = weights_tile_transposed,
+            .weights_from_pages = weight_pages.has_value(),
+            .gate_up_k_stride = gate_up_k_stride,
+            .down_k_stride = down_k_stride,
+            .weights_n_gate_up = weights_n_gate_up,
+            .weights_n_down = weights_n_down,
+            .weights_k_gate_up = weights_k_gate_up,
+            .weights_k_down = weights_k_down,
+            .weights_dtype = weights_dtype},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,
@@ -479,7 +596,10 @@ ttnn::Tensor unified_routed_expert_moe(
             .gate_biases = gate_biases,
             .up_biases = up_biases,
             .down_biases = down_biases,
-            .x_row_index = x_row_index});
+            .x_row_index = x_row_index,
+            .weight_pages = weight_pages,
+            .gate_up_weight_source = gate_up_weight_source,
+            .down_weight_source = down_weight_source});
 }
 
 }  // namespace ttnn::prim

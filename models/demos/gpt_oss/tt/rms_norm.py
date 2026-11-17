@@ -9,9 +9,9 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 
-# TEMP experiment: GPT_OSS_PREFILL_NORM_FP32=1 gives the (prefill) ttnn.rms_norm FP32 accumulation, HiFi4 and the
-# exact rsqrt; without a compute config the op sums the squares in a BF16 DST and uses approximate math, which
-# underestimates the variance (normed output ~4-5% too large, measured through the layer-PCC campaign).
+# GPT_OSS_PREFILL_NORM_FP32=1 (gpt-oss-20b release settings) gives the (prefill) ttnn.rms_norm FP32 accumulation, HiFi4
+# and the exact rsqrt; without a compute config the op sums the squares in a BF16 DST and uses approximate math, which
+# underestimates the variance (normed output ~4-5% too large, measured per layer against the reference).
 PREFILL_NORM_COMPUTE = (
     ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False

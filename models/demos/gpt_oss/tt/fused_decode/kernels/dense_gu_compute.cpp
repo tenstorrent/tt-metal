@@ -19,6 +19,14 @@
 #include "api/compute/tile_move_copy.h"
 #include "gmoe_swiglu.hpp"
 
+// GMOE_W_TRANSPOSED: the weight tiles are stored transposed within themselves (the batched dense decode experts in
+// K-GPTQ, experts/weights.py DenseDecodeExpertWeights.tile_transposed); the matmuls transpose them back on unpack.
+#ifdef GMOE_W_TRANSPOSED
+constexpr bool W_T = true;
+#else
+constexpr bool W_T = false;
+#endif
+
 void kernel_main() {
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
@@ -47,9 +55,9 @@ void kernel_main() {
         copy_tile(cb_b, 0, 0);
         copy_tile(cb_b, 1, 1);
         reconfig_data_format(cb_w, cb_x);  // matmul: SrcA <- in1 (BFP4 weights), SrcB <- in0 (BFP8 rows)
-        matmul_block_init(cb_x, cb_w, 0, 2, 1, KT);
+        matmul_block_init(cb_x, cb_w, W_T, 2, 1, KT);
         for (uint32_t k = 0; k < KT; ++k) {
-            matmul_block(cb_x, cb_w, k, 2 * k, 0, false, 2, 1, KT);
+            matmul_block(cb_x, cb_w, k, 2 * k, 0, W_T, 2, 1, KT);
         }
         reconfig_data_format(cb_e, cb_r);  // matmul: SrcA <- in1 (expand), SrcB <- in0 (routing weights)
         matmul_init(cb_r, cb_e, 0);

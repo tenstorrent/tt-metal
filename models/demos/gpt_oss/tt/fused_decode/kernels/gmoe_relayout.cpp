@@ -5,8 +5,8 @@
 // one contiguous DRAM page, so the grouped readers fetch a unit in one large read (tile by tile from the dense layout:
 // ~180 GB/s for the gate|up pass).
 //   gate|up (default): unit u = (e, j), e = u / NU, j = u % NU, column n = g0(e) + j: [k][gate (k, n), up (k, n)];
-//   down (GMOE_RELAYOUT_DOWN): unit u = (e, c), c = u % NU: [k] down (g0(e) + k, c), the shared K tile (e even: its
-//   last, e odd: its first) from `edge` (row tile e: the neighbour's rows zeroed).
+//   down (GMOE_RELAYOUT_DOWN): unit u = (e, c), c = u % NU: [k] down (g0(e) + k, c) from src0 (src1 unused: every
+//   expert is whole tiles, no K tile is shared with a neighbour).
 // GMOE_RELAYOUT_SPLIT: each unit's page stored as that many consecutive smaller pages (spread over the DRAM banks).
 // Core i of NC takes units i, i + NC, ...
 //
@@ -41,7 +41,7 @@ void kernel_main() {
 #endif
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const auto s0 = TensorAccessor(s0_args, src0_addr, w_tile);
-    const auto s1 = TensorAccessor(s1_args, src1_addr, w_tile);
+    [[maybe_unused]] const auto s1 = TensorAccessor(s1_args, src1_addr, w_tile);  // (gate|up only)
 #ifdef GMOE_RELAYOUT_SPLIT
     const auto d = TensorAccessor(d_args, dst_addr, page / GMOE_RELAYOUT_SPLIT);
 #else
@@ -53,11 +53,9 @@ void kernel_main() {
     for (uint32_t u = c; u < UNITS; u += NC) {
         const uint32_t e = u / NU, j = u % NU;
 #ifdef GMOE_RELAYOUT_DOWN
-        const uint32_t edge_k = (e % 2) ? 0 : KD - 1;
+        static_assert(KD == gmoe::NU_EXPERT);
         for (uint32_t k = 0; k < KD; ++k) {
-            const uint64_t src =
-                k == edge_k ? s1.get_noc_addr(e * NT + j) : s0.get_noc_addr((gmoe::g0(e) + k) * NT + j);
-            noc_async_read(src, buf + k * w_tile, w_tile);
+            noc_async_read(s0.get_noc_addr((gmoe::g0(e) + k) * NT + j), buf + k * w_tile, w_tile);
         }
 #else
         const uint32_t n = gmoe::g0(e) + j;

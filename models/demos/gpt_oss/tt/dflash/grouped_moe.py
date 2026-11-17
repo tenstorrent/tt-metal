@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Grouped (sparse) MoE for the batch-32 DFlash verify (256 rows per device, TP experts: every device holds all 32
-experts, 720 intermediate columns each, in the batched decode's dense layout [hidden, 32 x 720]).
+experts, 720 intermediate columns each zero padded to 736 (23 whole tiles), in the batched decode's dense layout
+[hidden, 32 x 736], experts/dense_layout.py).
 
 The dense verify MoE computes every expert for every row (8x the routed work: 256 rows x 32 experts vs 256 x 4). Here
 each expert's routed rows are grouped into 32-row slots and only those are computed:
@@ -15,11 +16,10 @@ each expert's routed rows are grouped into 32-row slots and only those are compu
           last slot;
   gather  X_g = P1T x  (a matmul; one-hot at HiFi2 is an exact copy), block sharded as the gate|up reader loads it;
   gate_up (gmoe_gu_*.cpp): per (expert, column tile) the expert's slots x its gate / up columns + bias + SwiGLU ->
-          A_g [72 x 32, 23 x 32] (the expert's 23 local column tiles; its 720 columns are 22.5 tiles of the dense
-          layout, so the tile it shares with a neighbour carries the neighbour's columns too);
+          A_g [72 x 32, 23 x 32] (the expert's 23 local column tiles; its 16 padded columns are 0: zero weights and
+          bias, and the SwiGLU of 0 is 0);
   down    (gmoe_down_*.cpp): per (expert, output column tile) A_g's slots x the expert's 23 down K tiles -> Y_g
-          [72 x 32, hidden] BFP8; the shared K tile has the neighbour's rows zeroed, so the neighbour columns of A_g
-          add nothing;
+          [72 x 32, hidden] BFP8 (the padded K rows are zero);
   combine out = Pw Y_g (each row's 4-5 expert outputs, weighted, plus the weighted down biases; a matmul).
 
 The grouped matmuls read the slot table and spread their (expert, column) units over the cores by cost (weight read +
@@ -73,8 +73,9 @@ def _pc2d(gx, gy, bw, pm, pn, sw=1):
 
 class GroupedMoE:
     def __init__(self, mesh, moe, hidden, rows=256, share=None):
-        """moe: per layer dict(gate, up [hidden, E x 720] BFP4, down [E x 720, hidden] BFP4, gate_bias / up_bias
-        [1, E x 720], down_bias [E, hidden]) on DRAM (BatchedVerify.moe); gate / up / down are only read here.
+        """moe: per layer dict(gate, up [hidden, E x 736] BFP4, down [E x 736, hidden] BFP4, gate_bias / up_bias
+        [1, E x 736], down_bias [E, hidden], optional tile_transposed: gate / up / down in transposed tiles,
+        DenseDecodeExpertWeights.tile_transposed) on DRAM (BatchedVerify.moe); gate / up / down are only read here.
         rows: the routed pass's rows (32 .. 256, a multiple of 32). share: another GroupedMoE whose relaid weights and
         rows-independent buffers (table, A_g, Y_g) this one uses (passes of different row counts, run one at a time)."""
         assert rows % TILE == 0 and TILE <= rows <= 1024
@@ -88,9 +89,14 @@ class GroupedMoE:
         )
         self.nc = grid.x * grid.y
         self.kt = hidden // TILE
-        self.nt = share.nt if share is not None else moe[0]["gate"].shape[-1] // TILE  # 720 column tiles
-        self.ku = 23  # local column tiles per expert
+        self.nt = share.nt if share is not None else moe[0]["gate"].shape[-1] // TILE  # E x 23 column tiles
+        assert self.nt % E == 0, f"dense layout of {self.nt} column tiles is not whole tiles per expert"
+        self.ku = self.nt // E  # local column tiles per expert (23: gmoe_common.hpp NU_EXPERT)
+        assert self.ku == 23, f"{self.ku} column tiles per expert; the gmoe kernels are built for 23"
         self.nu_down = hidden // TILE
+        # the weight tiles are stored transposed (K-GPTQ): the gate|up and down matmuls transpose them back
+        self.w_transposed = share.w_transposed if share is not None else bool(moe[0].get("tile_transposed", False))
+        self.w_defines = [("GMOE_W_TRANSPOSED", "1")] if self.w_transposed else []
         rep = ttnn.ReplicateTensorToMesh(mesh)
 
         def zeros(shape, dtype, mc):
@@ -120,13 +126,7 @@ class GroupedMoE:
                                      layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                                      mesh_mapper=rep)  # fmt: skip
         self._slot_buffers(zeros)
-        # per layer: 32-row bias tiles, and the down K tile each expert shares with a neighbour, the neighbour's rows
-        # zeroed (row tile e of edge)
-        keep = torch.zeros(E, 1, 1, TILE, 1)
-        keep[0::2, ..., :16, :] = 1  # e even: its columns are the first 16 of its last tile
-        keep[1::2, ..., 16:, :] = 1  # e odd: the last 16 of its first tile
-        keep_t = [ttnn.from_torch(keep[e], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
-                  for e in range(E)]  # fmt: skip
+        # per layer: 32-row bias tiles and the relaid weights
         self.layers = []
         for W in moe:
 
@@ -134,18 +134,8 @@ class GroupedMoE:
                 rm = ttnn.to_layout(ttnn.slice(b, [0, 0, 0, 0], [1, 1, 1, b.shape[-1]]), ttnn.ROW_MAJOR_LAYOUT)
                 return ttnn.to_layout(ttnn.repeat(rm, ttnn.Shape([1, 1, TILE, 1])), ttnn.TILE_LAYOUT)
 
-            edges = []
-            for e in range(E):
-                kt = self.g0(e) + (0 if e % 2 else self.ku - 1)
-                part = ttnn.slice(W["down"], [0, 0, kt * TILE, 0], [1, 1, kt * TILE + TILE, hidden])
-                edges.append(ttnn.multiply(part, keep_t[e], dtype=ttnn.bfloat4_b))
-                part.deallocate(True)
-            edge = ttnn.concat(edges, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            for t in edges:
-                t.deallocate(True)
             gu = self._relayout(W["gate"], W["up"], E * self.ku, 2 * self.kt * 576, down=False, split=GU_SPLIT)
-            dn = self._relayout(W["down"], edge, E * self.nu_down, self.ku * 576, down=True)
-            edge.deallocate(True)
+            dn = self._relayout(W["down"], W["down"], E * self.nu_down, self.ku * 576, down=True)
             assert W["down_bias"].shape[-2] == E
             self.layers.append(
                 dict(
@@ -156,8 +146,6 @@ class GroupedMoE:
                     down_bias8=ttnn.typecast(W["down_bias"], ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
                 )
             )
-        for t in keep_t:
-            t.deallocate(True)
         self.ck_hifi2 = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -206,7 +194,7 @@ class GroupedMoE:
 
     def _relayout(self, src0, src1, units, page, down, split=1):
         """Every unit's weight tiles into one contiguous page (fused_decode/kernels/gmoe_relayout.cpp): a [units, page]
-        row-major DRAM tensor (BFP4 bytes); split: as [units x split, page / split]."""
+        row-major DRAM tensor (BFP4 bytes); split: as [units x split, page / split]. down: src1 is not read."""
         dst = ttnn.empty([1, 1, units * split, page // 4 // split], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
                          device=self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
         cores = self.cores_all
@@ -221,12 +209,9 @@ class GroupedMoE:
             defines=([("GMOE_RELAYOUT_DOWN", "1")] if down else []) + ([("GMOE_RELAYOUT_SPLIT", str(split))] if split > 1 else []),
         )  # fmt: skip
         cbs = [self._cb(0, ttnn.uint32, page, 1, cores)]
-        ttnn.generic_op([src0, src1, dst], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=cbs))
+        io = [src0, dst] if src1 is src0 else [src0, src1, dst]  # (down: src1 is src0)
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=cbs))
         return dst
-
-    @staticmethod
-    def g0(e):
-        return (45 * e) // 2
 
     def _first_cores(self, n):
         """The first n cores of the grid in row-major order (x fastest: core index y * gx + x)."""
@@ -321,7 +306,7 @@ class GroupedMoE:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_gu_compute.cpp"), core_ranges=cores, compile_time_args=cct,
-                runtime_args=[], defines=gmajor,
+                runtime_args=[], defines=gmajor + self.w_defines,
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
                                                     math_approx_mode=False),
             ),
@@ -363,7 +348,7 @@ class GroupedMoE:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_down_compute.cpp"), core_ranges=cores, compile_time_args=cct,
-                runtime_args=[],
+                runtime_args=[], defines=self.w_defines,
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
                                                     math_approx_mode=False),
             ),

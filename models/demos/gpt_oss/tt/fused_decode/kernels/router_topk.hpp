@@ -89,13 +89,13 @@ inline void topk_softmax(volatile tt_l1_ptr uint16_t* logits, volatile tt_l1_ptr
 }  // namespace router_topk
 
 namespace router_topk {
-// TEMP experiment (fused_decode/config.py DECODE_ROUTER_FAST_TOPK): topk_softmax of the one-row decode router (top-4 of
-// 32 logits) with the same output bytes. The logits are read as 16 words (two BF16 values each, lower id in the low
-// half) and the top-4 kept in registers in one pass of strict-greater insertions in id order (a key equal to a kept one
-// stays behind it: ties to the lower id, as the 4 argmax passes above). The selected logit is the inverse of its key;
-// the softmax is the same Q16 code, and the stage is written as 8 words. Fewer than 4 keys above 0 (only possible with
-// at least 29 logits of bits 0xFFFF, whose key is the passes' "taken" mark 0): topk_softmax itself, whose passes can
-// then pick an already taken id.
+// DECODE_ROUTER_FAST_TOPK (fused_decode/config.py, on in the release settings): topk_softmax of the one-row decode
+// router (top-4 of 32 logits) with the same output bytes. The logits are read as 16 words (two BF16 values each, lower
+// id in the low half) and the top-4 kept in registers in one pass of strict-greater insertions in id order (a key equal
+// to a kept one stays behind it: ties to the lower id, as the 4 argmax passes above). The selected logit is the inverse
+// of its key; the softmax is the same Q16 code, and the stage is written as 8 words. Fewer than 4 keys above 0 (only
+// possible with at least 29 logits of bits 0xFFFF, whose key is the passes' "taken" mark 0): topk_softmax itself, whose
+// passes can then pick an already taken id.
 template <uint32_t topk, uint32_t n_logits>
 inline void topk_softmax_fast(volatile tt_l1_ptr uint16_t* logits, volatile tt_l1_ptr uint16_t* stage) {
     if constexpr (topk != 4 || n_logits != 32) {

@@ -347,8 +347,6 @@ class ModelArgs:
             cache_dir = Path(cache_dir)  # If we specify a TT_CACHE_PATH, use that for the cache
         else:
             cache_dir = Path(self.model_path)  # Use same directory as model
-        if os.getenv("GPT_OSS_DENSE_ROUNDED") and not cache_dir.name.endswith("_densegptq"):
-            cache_dir = cache_dir.parent / f"{cache_dir.name}_densegptq"  # TEMP experiment: rounded dense weights
         logger.info(f"Cache directory: {cache_dir}")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
         cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"
@@ -368,8 +366,16 @@ class ModelArgs:
     WEIGHT_CACHE_FORMAT_VERSION = 1
     # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
     FUSED_DECODE_WEIGHTS_VERSION = 4  # 4: QKV stream in K/V-first slot order (wqkv_kvfirst)
-    # Layout version of the batched dense decode MoE weights (experts dense_decode_*).
-    DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
+    # Layout version of the batched dense decode MoE weights (experts dense_decode_*). 2: each expert padded to whole
+    # tiles (dense_decode_p736_*, experts/dense_layout.py); the routed prefill reads them (no routed copy). 3: with
+    # GPT_OSS_DECODE_SPLIT_ROUND_DIR the K-GPTQ experts in transposed tiles (experts/weights.py dense_kgptq_dir); the
+    # marker records that directory (_dense_moe_decode_version).
+    DENSE_MOE_DECODE_WEIGHTS_VERSION = 3
+
+    def _dense_moe_decode_version(self):
+        """The marker's batched dense MoE weights entry: the layout version and the K-GPTQ source they were built from
+        (the raw GPT_OSS_DECODE_SPLIT_ROUND_DIR value, "" for the checkpoint values)."""
+        return f"{self.DENSE_MOE_DECODE_WEIGHTS_VERSION}:{os.environ.get('GPT_OSS_DECODE_SPLIT_ROUND_DIR', '')}"
 
     def weight_cache_is_complete(self, dtype, fused_decode=False, dense_moe=False):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
@@ -402,6 +408,11 @@ class ModelArgs:
             return False
         if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
             return False
+        from models.demos.gpt_oss.tt.weight_source import dense_rounded_tag
+
+        if meta.get("dense_rounded", "") != dense_rounded_tag():
+            # the dense weights' caches are named by their values (checkpoint or GPTQ-rounded, weight_source.py)
+            return False
         if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
             return False
         decode_bf8 = self._routed_decode_bf8_layers(fused_decode)
@@ -409,7 +420,7 @@ class ModelArgs:
         if decode_bf8 and decode_bf8 not in built and "all" not in built:  # "all" wrote every layer's bf8 streams
             # bf8 decode expert streams (fused_decode/config.py) are extra cache files: cold-load once to write them
             return False
-        if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
+        if dense_moe and meta.get("dense_moe_decode_weights") != self._dense_moe_decode_version():
             return False
         routed_version = self._routed_prefill_weights_version()
         if routed_version and meta.get("routed_prefill_weights") != routed_version:
@@ -453,6 +464,8 @@ class ModelArgs:
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
         built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete).
         The optional decode weight sets a previous build of the same cache recorded stay recorded."""
+        from models.demos.gpt_oss.tt.weight_source import dense_rounded_tag
+
         cache_path = self.weight_cache_path(dtype)
         marker = cache_path / self.WEIGHT_CACHE_MARKER
         previous = {}
@@ -473,13 +486,14 @@ class ModelArgs:
                         "model_name": self.model_name,
                         "n_layers": self.n_layers,
                         "dtype": str(dtype),
+                        "dense_rounded": dense_rounded_tag(),
                         "fused_decode_weights": (
                             self.FUSED_DECODE_WEIGHTS_VERSION
                             if fused_decode
                             else previous.get("fused_decode_weights", False)
                         ),
                         "dense_moe_decode_weights": (
-                            self.DENSE_MOE_DECODE_WEIGHTS_VERSION
+                            self._dense_moe_decode_version()
                             if dense_moe
                             else previous.get("dense_moe_decode_weights", False)
                         ),

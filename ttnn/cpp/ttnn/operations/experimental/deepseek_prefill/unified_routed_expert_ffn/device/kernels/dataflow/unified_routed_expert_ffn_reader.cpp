@@ -235,6 +235,30 @@ void kernel_main() {
     // common-runtime-arg blocks of experts_per_chip each: gate[0..N), up[0..N),
     // down[0..N). gate_addr(e) = arg[COMMON_WEIGHTS + e], etc.
     constexpr uint32_t COMMON_WEIGHTS = 4;
+#ifdef WEIGHT_PAGES
+    // Table-addressed weights: three common args instead of the per-expert blocks -- the gate/up source, the down
+    // source and the weight_pages table. The CT block (k strides, table scratch CB, table accessor) follows the
+    // `start` accessor; the optional blocks below follow it.
+    constexpr uint32_t COMMON_WEIGHT_ARGS = 3;
+    constexpr uint32_t pages_ct_offset = start_args.next_compile_time_args_offset();
+    constexpr uint32_t gu_k_stride = get_compile_time_arg_val(pages_ct_offset + 0);
+    constexpr uint32_t d_k_stride = get_compile_time_arg_val(pages_ct_offset + 1);
+    constexpr uint32_t cb_weight_pages = get_compile_time_arg_val(pages_ct_offset + 2);
+    constexpr auto pages_args = TensorAccessorArgs<pages_ct_offset + 3>();
+    constexpr uint32_t after_start_ct_offset = pages_args.next_compile_time_args_offset();
+    // The role accessors carry only each source's bank base address (BankView in weight_runs.hpp).
+    const auto gu_src_acc = TensorAccessor(gate_args, get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 0));
+    const auto d_src_acc = TensorAccessor(down_args, get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 1));
+    const auto pages_acc = TensorAccessor(pages_args, get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 2));
+    // This expert's table row: gate entries [0, N_gate_tiles_full), then up's, then down's; 2 words each.
+    CircularBuffer cb_weight_pages_obj(cb_weight_pages);
+    cb_weight_pages_obj.reserve_back(1);
+    const uint32_t pages_l1 = cb_weight_pages_obj.get_write_ptr();
+    constexpr uint32_t kEntryBytes = 2 * sizeof(uint32_t);
+#else
+    constexpr uint32_t COMMON_WEIGHT_ARGS = 3 * experts_per_chip;
+    constexpr uint32_t after_start_ct_offset = start_args.next_compile_time_args_offset();
+#endif
 
 #ifdef FUSE_BIAS
     // gpt-oss expert biases. CT bias CB ids + accessor descriptors follow the
@@ -242,8 +266,8 @@ void kernel_main() {
     // three further runtime-arg blocks (gate_bias[0..N), up_bias, down_bias)
     // starting at COMMON_BIAS. Read per expert in the loop, added by the compute
     // kernel (gate/up before the activation, down after the down matmul).
-    constexpr uint32_t COMMON_BIAS = COMMON_WEIGHTS + 3 * experts_per_chip;
-    constexpr uint32_t bias_cb_offset = start_args.next_compile_time_args_offset();
+    constexpr uint32_t COMMON_BIAS = COMMON_WEIGHTS + COMMON_WEIGHT_ARGS;
+    constexpr uint32_t bias_cb_offset = after_start_ct_offset;
     constexpr uint32_t cb_gate_bias = get_compile_time_arg_val(bias_cb_offset + 0);
     constexpr uint32_t cb_up_bias = get_compile_time_arg_val(bias_cb_offset + 1);
     constexpr uint32_t cb_down_bias = get_compile_time_arg_val(bias_cb_offset + 2);
@@ -259,8 +283,8 @@ void kernel_main() {
     constexpr uint32_t idx_rows_accessor_offset = down_bias_args.next_compile_time_args_offset();
     constexpr uint32_t COMMON_ROW_IDX = COMMON_BIAS + 3 * experts_per_chip;
 #else
-    constexpr uint32_t idx_rows_accessor_offset = start_args.next_compile_time_args_offset();
-    constexpr uint32_t COMMON_ROW_IDX = COMMON_WEIGHTS + 3 * experts_per_chip;
+    constexpr uint32_t idx_rows_accessor_offset = after_start_ct_offset;
+    constexpr uint32_t COMMON_ROW_IDX = COMMON_WEIGHTS + COMMON_WEIGHT_ARGS;
 #endif
     // x_row_index (x_indexed): one ROW_MAJOR page of UINT32 x-row ids, read in per-chunk slices.
     uint32_t row_idx_l1 = 0;
@@ -429,6 +453,24 @@ void kernel_main() {
     // (counts[global_id]), region offset (start[global_id]) and per-expert
     // weight base addresses, then drive the same chunked matmul pipeline.
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+#ifdef WEIGHT_PAGES
+        // This expert's table row. Only the weight senders read weights; every read below that uses the row is
+        // issued after this barrier, and the previous expert's reads were all barriered before it is overwritten.
+        if (is_in1_sender) {
+            noc_read.async_read(
+                pages_acc,
+                CoreLocalMem<uint32_t>(pages_l1),
+                pages_acc.get_aligned_page_size(),
+                {.page_id = local_expert_id},
+                {});
+            noc_read.async_read_barrier();
+        }
+        const auto gate_acc = unified_routed_expert_ffn::make_weight_table(gu_src_acc, pages_l1, gu_k_stride);
+        const auto up_acc = unified_routed_expert_ffn::make_weight_table(
+            gu_src_acc, pages_l1 + N_gate_tiles_full * kEntryBytes, gu_k_stride);
+        const auto down_acc = unified_routed_expert_ffn::make_weight_table(
+            d_src_acc, pages_l1 + 2 * N_gate_tiles_full * kEntryBytes, d_k_stride);
+#else
         // Per-expert weight accessors, built from the shared layout descriptors
         // and this expert's base addresses (runtime-arg arrays after start).
         const uint32_t gate_addr_e =
@@ -440,6 +482,7 @@ void kernel_main() {
         const auto gate_acc = TensorAccessor(gate_args, gate_addr_e, gate_tile_bytes);
         const auto up_acc = TensorAccessor(up_args, up_addr_e, up_tile_bytes);
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
+#endif
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert

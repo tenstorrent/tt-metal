@@ -20,12 +20,9 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/pack.h"
-#if defined(EXP_TAIL_SUBS) && defined(EXPERT_SPLIT)
-#error "EXP_TAIL_SUBS: the plain BFP4 / BFP8 streams only"
-#endif
 #ifdef EXPERT_SPLIT
-// TEMP experiment (GPT_OSS_DECODE_EXPERTS_SPLIT=1, fused_decode/mxfp4_split.py): exact MXFP4 split weights, two
-// compressed custom_mm calls per column (BFP4 small + bias from cb_w, BFP2 big from cb_w2) into the same DST tile.
+// GPT_OSS_DECODE_EXPERTS_SPLIT (fused_decode/mxfp4_split.py): exact MXFP4 split weights, two compressed custom_mm calls
+// per column (BFP4 small + bias from cb_w, BFP2 big from cb_w2) into the same DST tile.
 #include "api/compute/experimental/compressed_custom_mm.h"
 #include "split_meta.hpp"
 #endif
@@ -115,17 +112,7 @@ void kernel_main() {
     constexpr bool transpose = true;
     constexpr bool split_acc = false;
     constexpr bool dense_packing = false;
-#if defined(SPLIT_RANKS) && defined(SPLIT_REST_PKG)
-    // inexact ranks read the package's bfloat4_b tiles in their normal orientation (no transpose on unpack)
-    constexpr uint32_t split_ranks = SPLIT_RANKS;
-    if (split_ranks > 0) {
-        compressed_custom_mm_block_init<true, split_acc, dense_packing>(cb_x, cb_w, cb_act);
-    } else {
-        compressed_custom_mm_block_init<false, split_acc, dense_packing>(cb_x, cb_w, cb_act);
-    }
-#else
     compressed_custom_mm_block_init<transpose, split_acc, dense_packing>(cb_x, cb_w, cb_act);
-#endif
 #else
 #ifdef W_TRANSPOSED
     // transposed BFP4 tiles, 16-value groups along K (GPT_OSS_DECODE_SPLIT_NATIVE: a rank-0 split stream's rounded
@@ -134,11 +121,7 @@ void kernel_main() {
 #else
     constexpr bool transpose = false;
 #endif
-#ifdef W_NO_SPLIT_ACC
-    constexpr bool split_acc = false;
-#else
     constexpr bool split_acc = true;
-#endif
     constexpr bool dense_packing = false;
     custom_mm_block_init<transpose, split_acc, dense_packing>(cb_x, cb_w, cb_act);
 #endif
@@ -179,27 +162,9 @@ void kernel_main() {
             cb_wait_front(cb_w, kt);
             custom_mm_block<finalize>(cb_x, cb_w, 0, 0, 0, kt);
             cb_pop_front(cb_w, kt);
-#ifdef EXP_TAIL_SUBS
-            // TEMP experiment (fused_decode/config.py DECODE_EXPERT_TAIL_SPLIT): the last column, pushed by the reader
-            // in EXP_TAIL_SUBS sub-blocks, is multiplied sub-block by sub-block as they land. custom_mm accumulates
-            // every K tile into the same DST rows whatever the call split (each tile's two K faces always go to the
-            // same split accumulators), and only the last call finalizes: the same MVMUL / ELWADD sequence as one call.
-            if (e + 1 == num_sel && p + 1 == pairs) {
-                constexpr uint32_t tt = EXP_TAIL_TILES;
-                for (uint32_t t = 0; t + 1 < EXP_TAIL_SUBS; ++t) {
-                    cb_wait_front(cb_w, (t + 1) * tt);
-                    custom_mm_block<false>(cb_x, cb_w, t * tt, t * tt, 1, tt);
-                }
-                cb_wait_front(cb_w, kt);
-                custom_mm_block<finalize>(cb_x, cb_w, kt - tt, kt - tt, 1, tt);
-                cb_pop_front(cb_w, kt);
-            } else
-#endif
-            {
-                cb_wait_front(cb_w, kt);
-                custom_mm_block<finalize>(cb_x, cb_w, 0, 0, 1, kt);
-                cb_pop_front(cb_w, kt);
-            }
+            cb_wait_front(cb_w, kt);
+            custom_mm_block<finalize>(cb_x, cb_w, 0, 0, 1, kt);
+            cb_pop_front(cb_w, kt);
 #ifdef W_FP32_FOLD
             binop_with_scalar_tile_init();
             fold_rows(0);
@@ -229,16 +194,7 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(cb_act, 1);
 
-#if defined(EXPERT_SPLIT) && defined(SPLIT_RANKS) && defined(SPLIT_REST_PKG)
-            {
-                const uint32_t next_e = p + 1 == pairs ? e + 1 : e;  // the expert of the next column pair
-                if (next_e < split_ranks) {
-                    compressed_custom_mm_block_init_short<true, split_acc, dense_packing>(cb_x, cb_w, cb_act);
-                } else {
-                    compressed_custom_mm_block_init_short<false, split_acc, dense_packing>(cb_x, cb_w, cb_act);
-                }
-            }
-#elif defined(EXPERT_SPLIT)
+#ifdef EXPERT_SPLIT
             compressed_custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_x, cb_w, cb_act);
 #else
             custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_x, cb_w, cb_act);

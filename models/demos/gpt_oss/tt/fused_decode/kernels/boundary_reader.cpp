@@ -41,11 +41,11 @@ void kernel_main() {
     constexpr uint32_t page = 2048;
 
 #ifdef BND_EARLY_SUM
-    // TEMP experiment (fused_decode/config.py DECODE_BOUNDARY_EARLY_SUM): phase 1 of the compute (the slot sum +
-    // residual add) reads only cb_res and cb_recv, so they are published first and the RMSNorm inputs (first read in
-    // phase 2 / 3) once they have landed: the gamma DRAM read and the scaler's zero fill (NOC reads of the zero region
-    // instead of 256 stores) run during the semaphore wait and the sum instead of before them. Every CB holds the same
-    // bytes as below.
+    // DECODE_BOUNDARY_EARLY_SUM (fused_decode/config.py, on in the release settings): phase 1 of the compute (the slot
+    // sum + residual add) reads only cb_res and cb_recv, so they are published first and the RMSNorm inputs (first read
+    // in phase 2 / 3) once they have landed: the gamma DRAM read and the scaler's zero fill (NOC reads of the zero
+    // region instead of 256 stores) run during the semaphore wait and the sum instead of before them. Every CB holds
+    // the same bytes as below.
     static_assert(page % MEM_ZEROS_SIZE == 0, "the scaler page is whole zero-region reads");
     uint32_t scaler = 0;
     if constexpr (do_norm) {
