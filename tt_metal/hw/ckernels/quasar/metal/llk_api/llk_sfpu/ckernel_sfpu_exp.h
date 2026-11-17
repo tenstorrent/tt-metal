@@ -319,6 +319,9 @@ struct ExpFp32Accurate {
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
+// Whether BF16 DEST runs the generated exp kernel as one call over the whole tile.
+inline constexpr bool exp_bf16_whole_tile = false;
+
 /**
  * @brief EXP over a Dest span.
  *

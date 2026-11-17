@@ -511,6 +511,9 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(
     }
 }
 
+// Whether BF16 DEST runs the generated exp kernel as one call over the whole tile.
+inline constexpr bool exp_bf16_whole_tile = false;
+
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
