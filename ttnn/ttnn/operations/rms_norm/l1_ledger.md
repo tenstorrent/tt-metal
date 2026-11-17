@@ -9,10 +9,12 @@ Symbols: `Rb` ≤ 16 (G_CAP); `Wb ≤ Wt`; `Sb=min(Wb,16)`; `G=Rb*Sb ≤ 16`; `T
 | cb_scaler | 1 (constant) | 1 | none | bf16 | reader | compute | program | constant, trivially tiny |
 | cb_gamma | `gamma_resident ? Wt : 2*Sb` | same | Wt: spans (resident) / streams; Rb: not scaled (shared across rows) | gamma dtype tile | reader | compute | program / segment | no sharing candidate (reuse-shared operand) |
 | cb_sq | `G` | `G` | Rb: spans; Sb: spans; Wt: streams | fp32 | compute | compute | segment | Could alias cb_out_tiles (disjoint lifetimes: pass 1 vs pass 2) — rejected: costs ≤ 64 KB and DFB aliasing lockstep risk; revisit under L1 pressure |
-| cb_accum | `Rb` | `Rb` | Rb: spans; Wt: streams | fp32 | compute | compute | row block | Same lifetime as cb_stat reduce-out; kept separate because Accumulate reload reads one CB while reduce writes the other |
+| cb_accum | **removed** | – | – | – | – | – | – | Implementation: `Accumulate::at(cb_stat, seg)` uses cb_stat as both accumulator and reduce output (the reduce helper reloads/pops then re-pushes), so no separate CB |
 | cb_stat | `Rb` | `Rb` | Rb: spans; Wt: not scaled | fp32 | compute | compute | row block (through pass 2) | Σx² → inv_rms **in place** (Rule 3.2): no cb_inv_rms |
 | cb_out_tiles | `out_depth*G` | `G` | Rb: spans; Sb: spans; Wt: streams | output dtype | compute | writer (TILE) / compute untilize (RM) | segment | Scale result packs straight here (pack-into-destination); no cb_xn (fused DestReuse chain) |
-| cb_out_rm (RM only) | `2*32` pages of `Sb*32*es` | 32 | rows streams; Wt streams | output dtype sticks | compute | writer | segment | untilize output; cannot be in place (different page format) |
+| cb_xn (gamma only) | `G` | `G` | Rb/Sb: span | fp32 | compute | compute | segment | Added: DestReuseBinary cannot express the Row broadcast, so x*inv_rms goes to cb_xn then *gamma -> cb_out_tiles (the design's sanctioned fallback) |
+| cb_gamma_rm (gamma only) | 1 page of `Sb*32*es_g` | 1 | – | gamma dtype | reader | reader | per gamma segment | reader-private scratch for the stick segment before the row-0 scatter |
+| cb_out_rm (RM only) | `2*Sb` tile pages (output tile size; untilize helper is symmetric) | `Sb` | rows streams; Wt streams | output dtype tile-sized pages | compute | writer | segment | untilize output; cannot be in place (different page format) |
 
 Footprint (bytes): `x_depth*Rb*Wb*Tx + [RM] rm_depth*32*Sb*32*es + [gamma] (Wt or 2*Sb)*Tg + G*T32 + 2*Rb*T32 + out_depth*G*Tx + [RM] 64*Sb*32*es + 2*2048(scaler page)`.
 Scaling: cb_x with Rb·Wb (bounded by X_BUDGET); cb_gamma with Wt (bounded by GAMMA_BUDGET else Sb); all others with `G ≤ 16`, `Sb ≤ 16` constants.
