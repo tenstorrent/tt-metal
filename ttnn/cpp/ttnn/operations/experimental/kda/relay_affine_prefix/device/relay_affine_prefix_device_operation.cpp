@@ -103,12 +103,13 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         operation_name);
     const auto grid = mesh->compute_with_storage_grid_size();
     // Each correction kernel finds its head and share from its place in the grid.
+    const uint32_t first_core = attrs.cores[0].y * grid.x + attrs.cores[0].x;
     for (uint32_t i = 0; i < heads * cores_per_head; ++i) {
+        const uint32_t index = first_core + i;
         TT_FATAL(
-            attrs.cores[i] == CoreCoord(i % grid.x, i / grid.x),
-            "{}: the heads' cores must be the compute grid's first {} cores in row-major order",
-            operation_name,
-            heads * cores_per_head);
+            attrs.cores[i] == CoreCoord(index % grid.x, index / grid.x),
+            "{}: the heads' cores must be consecutive cores of the compute grid in row-major order",
+            operation_name);
     }
     for (const auto& core : attrs.cores) {
         TT_FATAL(

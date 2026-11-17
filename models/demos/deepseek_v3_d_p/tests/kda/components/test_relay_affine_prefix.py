@@ -422,10 +422,11 @@ def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us
 
 
 # Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY, each including
-# the final carry. Galaxy runs one program for all 32 chips, so they start a call together (129.8 and 130.6 us with the
-# carry; 119-124 us before it); LoudBox's span 108-129 us before the carry.
+# the final carry and the entry correction. Galaxy runs one program for all 32 chips, so they start a call together
+# (157.8 us; the relay alone took 130 us and the separate entry correction 29.5 us). LoudBox and QuietBox are still the
+# relay-alone references and need remeasuring.
 _PERF_CASES = [
-    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 130.0, 0.10),
+    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 158.0, 0.10),
     _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 118.0, 0.12),
     _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", 75.5, 0.05),
 ]

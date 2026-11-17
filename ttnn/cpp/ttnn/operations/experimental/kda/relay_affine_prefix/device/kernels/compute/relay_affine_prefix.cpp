@@ -37,9 +37,11 @@ constexpr uint32_t cb_diff = get_compile_time_arg_val(15);
 constexpr uint32_t cb_out = get_compile_time_arg_val(16);
 constexpr uint32_t core_chunks = get_compile_time_arg_val(17);
 constexpr bool streamed = get_compile_time_arg_val(18);
-// The cores are the compute grid's first heads x cores_per_head in row-major order, head by head.
+// The cores are heads x cores_per_head consecutive cores of the compute grid in row-major order, from first_core,
+// head by head.
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(19);
 constexpr uint32_t grid_x = get_compile_time_arg_val(20);
+constexpr uint32_t first_core = get_compile_time_arg_val(21);
 constexpr uint32_t state_tiles = kt * kt;
 constexpr uint32_t dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -218,7 +220,8 @@ void correct(uint32_t begin, uint32_t end, uint32_t seed) {
 // rank, the final carry between the chunks that start from the entry state and those of the separated tail, which
 // start from P.
 void kernel_main() {
-    const bool relay_head = (get_absolute_logical_y() * grid_x + get_absolute_logical_x()) % cores_per_head == 0;
+    const bool relay_head =
+        (get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core) % cores_per_head == 0;
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_terms, cb_seed, cb_out);
     cb_wait_front(cb_ctl, 1);
     const uint32_t holder = read_tile_value(cb_ctl, 0, 0);

@@ -106,8 +106,9 @@ class RelayAffinePrefix:
         self.axis = sequence_parallel_axis
         self.num_links = num_links
         self.local_rows = local_rows
-        # Each head's cores, then two senders per link (the relay's and the final carry's second), in the grid's
-        # row-major order. Up to max_cores correct chunks: their products count toward the Blackhole di/dt bound.
+        # Each head's cores, then two senders per link (the relay's and the final carry's second). The senders take
+        # the grid's first cores, nearest the Ethernet cores they hand the relay's packets to; the heads' cores follow
+        # in row-major order. Up to max_cores correct chunks: their products count toward the Blackhole di/dt bound.
         grid = mesh_device.compute_with_storage_grid_size()
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         senders = 2 * num_links
@@ -119,11 +120,18 @@ class RelayAffinePrefix:
         self.cores_per_head = cores_per_head = max(
             d for d in range(1, min(num_chunks, budget // batch_heads) + 1) if num_chunks % d == 0
         )
-        correction = cores[: batch_heads * cores_per_head]
-        self.cores = correction + cores[len(correction) : len(correction) + senders]
+        correction = cores[senders : senders + batch_heads * cores_per_head]
+        self.cores = correction + cores[:senders]
 
         def core_set(selected):
-            return ttnn.CoreRangeSet([]).merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in selected]))
+            # One range per row run, in the cores' order: a sharded tensor places shard i on the set's i-th core.
+            runs = []
+            for core in selected:
+                if runs and runs[-1][1].y == core.y and runs[-1][1].x + 1 == core.x:
+                    runs[-1][1] = core
+                else:
+                    runs.append([core, core])
+            return ttnn.CoreRangeSet([ttnn.CoreRange(first, last) for first, last in runs])
 
         self._landing_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

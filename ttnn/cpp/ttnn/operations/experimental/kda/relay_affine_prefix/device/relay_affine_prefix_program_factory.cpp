@@ -99,6 +99,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         relay_affine_prefix_cores_per_head(attrs.cores.size(), batch_heads, attrs.num_links);
     const uint32_t core_chunks = num_chunks / cores_per_head;
     const uint32_t grid_x = mesh->compute_with_storage_grid_size().x;
+    const uint32_t first_core = attrs.cores[0].y * grid_x + attrs.cores[0].x;
     // Sharded terms are read in place; interleaved ones stream a chunk row at a time.
     const bool streamed = !in.terms.memory_config().is_sharded();
 
@@ -193,7 +194,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         uint32_t(streamed),
         landed_semaphore_id,
         cores_per_head,
-        grid_x};
+        grid_x,
+        first_core};
     for (const auto* tensor :
          {&in.packed, &in.initial_state, &in.actual_start, &in.final_e, &in.final_b, &actual_end, &in.terms}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
@@ -208,7 +210,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         cores_per_head,
         grid_x,
         core_chunks,
-        attrs.num_links};
+        attrs.num_links,
+        first_core};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct);
     tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(writer_ct);
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout, sp_size, attrs.local_rows};
@@ -258,7 +261,8 @@ tt::tt_metal::ProgramDescriptor build_program(
              core_chunks,
              uint32_t(streamed),
              cores_per_head,
-             grid_x},
+             grid_x,
+             first_core},
         .config = std::move(compute_config),
     };
     tt::tt_metal::KernelDescriptor sender{

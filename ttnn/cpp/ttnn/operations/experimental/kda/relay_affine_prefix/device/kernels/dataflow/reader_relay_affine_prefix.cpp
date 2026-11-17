@@ -37,10 +37,12 @@ constexpr uint32_t core_chunks = get_compile_time_arg_val(18);
 // Interleaved terms, streamed a chunk row of F(0) and F(I) at a time; otherwise they are in place in the core's shard.
 constexpr bool streamed = get_compile_time_arg_val(19);
 constexpr uint32_t landed_semaphore_id = get_compile_time_arg_val(20);
-// The cores are the compute grid's first heads x cores_per_head in row-major order, head by head.
+// The cores are heads x cores_per_head consecutive cores of the compute grid in row-major order, from first_core,
+// head by head.
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(21);
 constexpr uint32_t grid_x = get_compile_time_arg_val(22);
-constexpr auto packed_args = TensorAccessorArgs<23>();
+constexpr uint32_t first_core = get_compile_time_arg_val(23);
+constexpr auto packed_args = TensorAccessorArgs<24>();
 constexpr auto init_args = TensorAccessorArgs<packed_args.next_compile_time_args_offset()>();
 constexpr auto start_args = TensorAccessorArgs<init_args.next_compile_time_args_offset()>();
 constexpr auto fe_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
@@ -57,7 +59,7 @@ constexpr uint32_t num_chunks = local_rows / tt::constants::TILE_HEIGHT;
 // well, which the final carry and a separated tail start from.
 void kernel_main() {
     // Every core takes the same args (common, per device): its head and share follow from its place in the grid.
-    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
+    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core;
     const uint32_t head = core / cores_per_head;
     const uint32_t first_chunk = core % cores_per_head * core_chunks;
     const bool relay_head = core % cores_per_head == 0;
