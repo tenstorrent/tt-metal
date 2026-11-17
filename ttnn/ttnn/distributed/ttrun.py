@@ -102,18 +102,25 @@ class LaunchedJob:
     def __enter__(self) -> "LaunchedJob":
         remove_stale_mpi_shm_segments()  # before launch: clear a prior killed job's /dev/shm leak
         self.proc = subprocess.Popen(self.cmd, cwd=self.cwd, start_new_session=True)
-        # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks even if
-        # it re-sessioned or was reaped before we look.
+        # Register the teardown NOW, right after Popen, so even if the setup below raises (os.getsid,
+        # signal.signal) the launcher is still torn down: on failure we close the stack before re-raising, and
+        # __exit__ closes it on the normal path. ExitStack runs callbacks LIFO, so registering in this order makes
+        # the teardown read: restore handlers, stop the launcher if it is still alive, end survivors, sweep shm.
         try:
-            self.sid, self.pgid = os.getsid(self.proc.pid), os.getpgid(self.proc.pid)
-        except (ProcessLookupError, OSError):
-            self.sid = self.pgid = self.proc.pid
-        self._previous_handlers = {s: signal.signal(s, self._relay) for s in (signal.SIGINT, signal.SIGTERM)}
-        # Register the teardown. ExitStack runs these LIFO in __exit__, so the order below reads as the teardown:
-        # restore handlers, then end survivors, then sweep this job's shm.
-        self._teardown.callback(remove_stale_mpi_shm_segments)
-        self._teardown.callback(self._end_survivors)
-        self._teardown.callback(self._restore_handlers)
+            self._teardown.callback(remove_stale_mpi_shm_segments)
+            self._teardown.callback(self._end_survivors)
+            self._teardown.callback(self._shutdown_launcher)
+            # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks
+            # even if it re-sessioned or was reaped before we look.
+            try:
+                self.sid, self.pgid = os.getsid(self.proc.pid), os.getpgid(self.proc.pid)
+            except (ProcessLookupError, OSError):
+                self.sid = self.pgid = self.proc.pid
+            self._previous_handlers = {s: signal.signal(s, self._relay) for s in (signal.SIGINT, signal.SIGTERM)}
+            self._teardown.callback(self._restore_handlers)
+        except BaseException:
+            self._teardown.close()  # the launcher is already running; do not leak it if __enter__ fails
+            raise
         return self
 
     def __exit__(self, *exc) -> None:
@@ -132,6 +139,28 @@ class LaunchedJob:
     def _restore_handlers(self) -> None:
         for s, h in self._previous_handlers.items():
             signal.signal(s, h)
+
+    def _shutdown_launcher(self, grace_s: float = 5.0) -> None:
+        """Teardown step: if the launcher is still running — we left ``wait()`` by an exception (a pytest timeout,
+        KeyboardInterrupt, ...) rather than a normal return — signal it and wait, bounded, so it tears its own job
+        down (its remote ranks included) before we sweep local survivors. A no-op on the normal path, where
+        ``wait()`` has already reaped the launcher."""
+        if self.proc is None or self.proc.poll() is not None:
+            return
+        logger.warning(
+            f"{TT_RUN_PREFIX} the launcher (pid {self.proc.pid}) is still running at teardown; "
+            "signalling it to end the job"
+        )
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                self.proc.send_signal(sig)
+            except ProcessLookupError:
+                return
+            try:
+                self.proc.wait(timeout=grace_s)
+                return
+            except subprocess.TimeoutExpired:
+                continue
 
     def wait(self) -> int:
         """Wait for the launcher; return its exit code, a death by signal normalized to the shell's 128 + signum."""
