@@ -323,7 +323,7 @@
 <p class="tt-api-param-row"><span class="tt-api-param-name">skip_cmdbuf_chk (template arg)  </span><span class="tt-api-param-desc">Skip the cmd buf ready poll on the first burst  </span></p>
 </div>
 
-<p>Only set skip_cmdbuf_chk on the first call after <em>noc_async_read_set_state</em> or <em>noc_async_read_set_pcie_state</em>. Those wait for read_cmd_buf and then write registers that do not make it busy again, so the poll here is guaranteed to pass. On any later call the previous one wrote NOC_CMD_CTRL and the poll is required, so skipping it corrupts the transaction already in flight. </p>
+<p>Set skip_cmdbuf_chk only when read_cmd_buf is known to be ready: on the first call after <em>noc_async_read_set_state</em> or <em>noc_async_read_set_pcie_state</em> (those wait for read_cmd_buf and then write registers that do not make it busy again), or after the caller’s own noc_cmd_buf_ready returned true with nothing issued on read_cmd_buf since. Otherwise the previous call wrote NOC_CMD_CTRL and the poll is required: skipping it corrupts the transaction already in flight. </p>
 </dd>
 </dl>
 

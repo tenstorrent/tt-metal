@@ -308,11 +308,12 @@
 <h1>softplus_tile<a class="headerlink" href="#softplus-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel18softplus_tile_initEv">
-<span class="target" id="namespaceckernel_1adb22655844fc4628c79ac6ce61bcf246"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">softplus_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel18softplus_tile_initEv" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel18softplus_tile_initEvv">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_fp32_dest_acc_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DST_ACCUM_MODE</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1aefce1a29dfc1a94858964175eb99e146"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">softplus_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel18softplus_tile_initEvv" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Please refer to documentation for any_init. </p>
+<p>Please refer to documentation for any_init.</p>
+<p>is_fp32_dest_acc_en must match the softplus_tile instantiation it precedes: on Quasar it selects whether the bf16 programmable constants are loaded, and the bf16 path of softplus_tile&lt;false&gt; reads them. </p>
 </dd>
 </dl>
 

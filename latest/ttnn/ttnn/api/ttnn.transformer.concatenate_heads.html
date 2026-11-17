@@ -353,7 +353,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.transformer.concatenate_heads">
-<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">concatenate_heads</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.transformer.concatenate_heads" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">concatenate_heads</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">runtime_rows</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.transformer.concatenate_heads" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Takes in a tensor of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">num_heads,</span> <span class="pre">sequence_size,</span> <span class="pre">head_size]</span></code>, concatenates heads back along the width dimension and returns the tensor of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">num_heads</span> <span class="pre">*</span> <span class="pre">head_size]</span></code></p>
@@ -366,7 +366,10 @@
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><span class="tt-api-param-name"><strong>memory_config</strong></span><span class="tt-api-param-desc">Memory Config of the output tensor, if <cite>None</cite> then it gets set to input_tensor.memory_config(). Defaults to <cite>None</cite>.</span></p>
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong></span><span class="tt-api-param-desc">Memory Config of the output tensor, if <cite>None</cite> then it gets set to input_tensor.memory_config(). Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>runtime_rows</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">interleaved input and output only: one program serves every sequence_size, so a change in sequence_size is a program cache hit. Defaults to <cite>False</cite>.</span></p></li>
+</ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>

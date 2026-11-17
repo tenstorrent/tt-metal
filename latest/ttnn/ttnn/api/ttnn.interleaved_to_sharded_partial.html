@@ -383,14 +383,16 @@
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: ttnn.Tensor
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">grid</span></code>: Grid of sharded tensor
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">grid</span></code>: ttnn.CoreGrid
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">shard_shape</span></code>: Shape [height, width] of each shard, in elements. Both must be greater than 0.
+:type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">shard_shape</span></code>: List[int]
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_slices</span></code>: Number of slices.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_slices</span></code>: int
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">slice_index</span></code>: Slice index.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">slice_index</span></code>: int
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">shard_scheme</span></code>: Sharding scheme(height, width or block).
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">shard_scheme</span></code>: ttl.tensor.TensorMemoryLayout
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">shard_orienttion</span></code>: Shard orientation (ROW or COL major).
-:type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">shard_orienttion</span></code>: ttl.tensor.ShardOrientation</p>
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">shard_orientation</span></code>: Shard orientation (ROW or COL major).
+:type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">shard_orientation</span></code>: ttl.tensor.ShardOrientation</p>
 <p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_dtype</span></code>: Output data type, defaults to same as input.
 :kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_dtype</span></code>: Optional[ttnn.DataType]</p>
 <div class="admonition-example admonition">
