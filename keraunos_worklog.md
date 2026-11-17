@@ -238,3 +238,5 @@ UMD: baremetal 543/543, `api_tests` 17 pass + 9 skipped (`EmuTTDevice.*` need th
 - **UMD:** baremetal 543/543, `api_tests` 17 pass + 9 skipped (emulator-only `EmuTTDevice.*`).
 - **Correction:** the commit message of `8f4753f5487` says `KeraunosPathsCce1.* 18/18`. The suite has 14 tests and all 14 passed.
 - **Emulator:** two runs hung in firmware load on ZeBu (once on mmk, once on mm) and had to be released and retried. They were not test failures; the retries passed.
+
+- **Cleanup check (2026-11-17):** after moving the KeraunosEmu tests to test_keraunos_emu.cpp, KeraunosEmu.* (4), KeraunosFromMimir.* (6), MimirEmu.* (3) and the Mimir CCE SRAM round trips (8) pass, 21/21. Commit 2d71a4b3ca7 was made before this run.
