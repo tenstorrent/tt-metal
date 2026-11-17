@@ -1777,17 +1777,20 @@ def test_linear_in0_column_offset_rejects_invalid_window(
         ((128, 64), (128, 96), True, False),
     ],
 )
-def test_linear_l1_transpose_with_bias(device, shape_a, shape_b, transpose_a, transpose_b):
+@pytest.mark.parametrize("use_bias", [True, False])
+@pytest.mark.parametrize("preallocated_output", [True, False])
+def test_linear_l1_host_transpose(device, shape_a, shape_b, transpose_a, transpose_b, use_bias, preallocated_output):
     """
     On L1 these shapes select a config that transposes on the host.
-    The output shape must still follow the requested transpose, or the bias add fails.
+    The output shape must still follow the requested transpose, or the bias add or the preallocated output check fails.
     """
     torch.manual_seed(0)
     torch_a = torch.randn(shape_a, dtype=torch.bfloat16)
     torch_b = torch.randn(shape_b, dtype=torch.bfloat16)
     torch_output = (torch_a.T if transpose_a else torch_a) @ (torch_b.T if transpose_b else torch_b)
     torch_bias = torch.randn((1, torch_output.shape[-1]), dtype=torch.bfloat16)
-    torch_output = torch_output + torch_bias
+    if use_bias:
+        torch_output = torch_output + torch_bias
 
     input_tensor_a = ttnn.from_torch(
         torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -1799,13 +1802,22 @@ def test_linear_l1_transpose_with_bias(device, shape_a, shape_b, transpose_a, tr
         torch_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
+    output = ttnn.from_torch(
+        torch.zeros(torch_output.shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
     output_tensor = ttnn.linear(
         input_tensor_a,
         input_tensor_b,
-        bias=bias,
+        bias=bias if use_bias else None,
         transpose_a=transpose_a,
         transpose_b=transpose_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        optional_output_tensor=output if preallocated_output else None,
     )
     output_tensor = ttnn.to_torch(output_tensor)
 
