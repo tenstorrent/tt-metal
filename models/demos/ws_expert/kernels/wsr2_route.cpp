@@ -275,32 +275,27 @@ void kernel_main() {
                 // half of the banks), the rest in order; w and the record carry the slot, so the lists' rows, the
                 // fold's rows and its weights stay t S + j / w (t, j))
                 constexpr uint32_t SR = get_compile_time_arg_val(2);  // (S: result rows a token)
-                uint32_t slot[K] = {}, used = 0;  // (bits 0 .. K - 1: slots taken, 16 + k: k placed)
-                for (uint32_t pass = 0; pass < 2; ++pass) {
-                    for (uint32_t k = 0; k < K; ++k) {
-                        if (pass == 1 && (used >> 16 >> k) & 1) {
-                            continue;
-                        }
-                        if (pass == 0) {
-                            const bool es = ((key[at(k, col)] & IDM) % WSR_SIDE) >= WSR_SIDE / 2;
-                            for (uint32_t j = 0; j < K; ++j) {
-                                const bool ss = ((t * SR + j) % WSR_SIDE_BANKS) >= WSR_SIDE_BANKS / 2;
-                                if (!((used >> j) & 1) && ss == es) {
-                                    slot[k] = j;
-                                    used |= (1u << j) | (1u << 16 << k);
-                                    break;
-                                }
-                            }
-                        } else {
-                            for (uint32_t j = 0; j < K; ++j) {
-                                if (!((used >> j) & 1)) {
-                                    slot[k] = j;
-                                    used |= (1u << j) | (1u << 16 << k);
-                                    break;
-                                }
-                            }
-                        }
+                uint32_t slot[K] = {};
+                uint32_t up = 0, freem = (1u << K) - 1, pend = 0;  // (slots in the upper banks, slots free, k unplaced)
+                const uint32_t base = (t * SR) % WSR_SIDE_BANKS;
+                for (uint32_t j = 0; j < K; ++j) {
+                    up |= (((base + j) % WSR_SIDE_BANKS) >= WSR_SIDE_BANKS / 2 ? 1u : 0u) << j;
+                }
+                for (uint32_t k = 0; k < K; ++k) {
+                    const bool es = ((key[at(k, col)] & IDM) % WSR_SIDE) >= WSR_SIDE / 2;
+                    const uint32_t cand = freem & (es ? up : ~up);
+                    if (cand) {
+                        slot[k] = __builtin_ctz(cand);
+                        freem &= ~(1u << slot[k]);
+                    } else {
+                        pend |= 1u << k;
                     }
+                }
+                while (pend) {  // (the rest in order of the free slots)
+                    const uint32_t k = __builtin_ctz(pend);
+                    pend &= pend - 1;
+                    slot[k] = __builtin_ctz(freem);
+                    freem &= freem - 1;
                 }
                 for (uint32_t k = K; k < 16; ++k) {
                     wr[k] = 0;

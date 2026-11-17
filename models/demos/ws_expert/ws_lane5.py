@@ -56,6 +56,7 @@ class L5Cfg:
     # row-major result rows (hmc 2; WL_Y_RM / WL5_Y_RM): every down row to its row of a row-major [rows, H] result buffer,
     # given by the expert's destination list (build_lane5's dest_t), posted, fenced at fence_row
     yrm: int = 0
+    remap_row: int = 0  # yrm: DEST's untilize remap only around each down row (WL5_REMAP_ROW), not for the whole kernel
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -327,7 +328,9 @@ def build_lane5(
                         core_ranges=cs,
                         compile_time_args=[ksl, KTD, dc, DB, cnt_base, K, NW, l5.FL, l5.TL, own, tab_base + 64],
                         named_compile_time_args=[("expert_activation", 0)],
-                        defines=act_defs + ([("WL_Y_RM", "1")] if l5.yrm else []),
+                        defines=act_defs
+                        + ([("WL_Y_RM", "1")] if l5.yrm else [])
+                        + ([("WL5_REMAP_ROW", "1")] if l5.yrm and l5.remap_row else []),
                         runtime_args=cp_rt[own],
                         config=ccfg,
                     )

@@ -15,7 +15,8 @@
 // == c are tilized here (the BRISC gathers them; CB 7 -> CB 8), up to TL rows ahead. RT: 0 stamps, 1 j, 2 g, 3 order
 // length. CT: 0 KSL, 1 KTD, 2 DCOLS, 3 DB, 4 counts L1, 5 K (slots), 6 NW, 7 FL, 8 TL, 9 OWN, 10 order table L1
 // WL_Y_RM: the down row tile is pack-untilized into CB 17 (32 rows x DCOLS * 32 columns, row after row) for the
-// reader's row writes (kl_compute.cpp's scheme; DEST's untilize remap enabled once at the start).
+// reader's row writes (kl_compute.cpp's scheme; DEST's untilize remap enabled once at the start, or with
+// WL5_REMAP_ROW only around each down row: the gate/up, fold and tilize run without it).
 #ifndef DN_LAG
 #define DN_LAG 1
 #endif
@@ -128,7 +129,10 @@ FORCE_INLINE void down_row() {
     to_dn();
     pack_reconfig_data_format(p_cb, y_cb);
     cb_reserve_back(y_cb, dcols);
-#ifdef WL_Y_RM
+#if defined(WL_Y_RM) && defined(WL5_REMAP_ROW)
+    // (the remap on for this row's down only: math writes DEST in the untilize order; off again after the commits)
+    pack_untilize_dest_init<DB, dcols, false, TILE_C_DIM, false, true /*configure_remap*/>(y_cb);
+#elif defined(WL_Y_RM)
     pack_untilize_dest_init<DB, dcols, false, TILE_C_DIM, false, false /*configure_remap*/>(y_cb);
 #endif
     for (uint32_t b = 0; b < dcols / DB; ++b) {
@@ -149,6 +153,9 @@ FORCE_INLINE void down_row() {
     }
 #ifdef WL_Y_RM
     pack_untilize_uninit(y_cb);
+#endif
+#if defined(WL_Y_RM) && defined(WL5_REMAP_ROW)
+    MATH((llk_math_reconfig_remap(false)));
 #endif
     pack_reconfig_data_format(y_cb, p_cb);
     cb_pop_front(hr_cb, ktd);
@@ -216,7 +223,7 @@ void kernel_main() {
     g_ = get_arg_val<uint32_t>(2);
     nexp_g = get_arg_val<uint32_t>(3);
     compute_kernel_hw_startup<SrcOrder::Reverse>(xr_cb, w_cb, p_cb);
-#ifdef WL_Y_RM
+#if defined(WL_Y_RM) && !defined(WL5_REMAP_ROW)
     MATH((llk_math_reconfig_remap(true)));  // (DEST's untilize remap on once: the down rows pack-untilize)
 #endif
     ws_glu::init<2>();
