@@ -98,6 +98,17 @@ class ttMLA:
         return tp_factor > 1
 
     @staticmethod
+    def push_matches_stripe_order(sp_axis: int) -> bool:
+        """Whether the shared-layer sparse KV push (sparse_kv_push.py) addresses the right chips. The push ops take
+        cache block ``b`` to live on chip ``b % chips`` in ROW-MAJOR mesh order, while the TP-deduped cache puts
+        stripe ``s * tp + t`` on the chip at SP position s, TP position t. The two agree only with SP on mesh axis 0;
+        with SP on axis 1 the chip at (t, s) has row-major rank ``t * sp + s``, so the push sends another stripe's
+        rows (same offsets, wrong tokens) and the attention degrades without failing (Hy4 at SP 4 x TP 8 on the 8x4
+        torus: PCC 0.9986 vs 0.9998, #65885). Until the ops take the stripe order, SP on axis 1 gathers the whole
+        prefix instead (``_gather_kvpe_prefix`` orders by ``full_mesh_outer_axis=sp_axis``)."""
+        return sp_axis == 0
+
+    @staticmethod
     def replicates_wkv_b1(config, tp_factor: int, has_indexer: bool) -> bool:
         """Layers on the early-Q path run wkv_b1 over every head, so they load it replicated."""
         return has_indexer and ttMLA.reshards_heads_to_seq(tp_factor)
@@ -861,8 +872,10 @@ class ttMLA:
         self._push = None
         # One chip's rows of a chunk: the cache's block-cyclic block.
         push_stripe_chunk = self.active_seq_len_local // self.tp_factor
-        if self._sparse_kv_gather_buffer is not None and sparse_kv_push_supported(
-            mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2]
+        if (
+            self._sparse_kv_gather_buffer is not None
+            and ttMLA.push_matches_stripe_order(self.sp_axis)
+            and sparse_kv_push_supported(mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2])
         ):
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)
