@@ -15,8 +15,9 @@ import os
 import socket
 import sys
 
+import numpy as np
 import pytest
-from dcp_driver import MESH_OPEN_FAILED
+from dcp_driver import LOGITS_TOLERANCE, MESH_OPEN_FAILED, RESUME, compare
 from dcp_harness import DRIVER, TT_RUN, output_lines, run_world, tt_run_command
 
 # Each child is one process opening a mesh, training or loading a tiny Llama: about a minute warm, a few cold (the
@@ -237,3 +238,17 @@ def test_a_checkpoint_two_ranks_wrote_on_one_mesh_loads_on_one_process(
     assert proc.returncode == 0 and os.path.isfile(tmp_path / "shards_1.npz"), f"the dual-rank save failed:\n{tail}"
     out = _run(["load-tp-block", "--dir", str(tmp_path), "--mesh", "1x1", "--axes", "dp,tp"], "load")
     assert "RESULT: OK" in out, out.splitlines()[-5:]
+
+
+def test_non_finite_values_fail_the_comparison_on_either_side():
+    """NaN compares false with everything, so a tolerance alone would pass a world whose logits or post-step moments
+    are NaN. The comparison names non-finite values instead, exact or not, in the loaded world or the reference."""
+    reference = {"logits": np.ones((2, 3), np.float32), RESUME + "state:m": np.ones(4, np.float32)}
+    assert compare(reference, {k: v.copy() for k, v in reference.items()}, LOGITS_TOLERANCE) == []
+    for key in reference:
+        for tolerance in (0.0, LOGITS_TOLERANCE):
+            for value in (np.nan, np.inf):
+                broken = {k: v.copy() for k, v in reference.items()}
+                broken[key].flat[0] = value
+                assert any("non-finite" in p for p in compare(broken, reference, tolerance)), (key, tolerance, value)
+                assert any("non-finite" in p for p in compare(reference, broken, tolerance)), (key, tolerance, value)
