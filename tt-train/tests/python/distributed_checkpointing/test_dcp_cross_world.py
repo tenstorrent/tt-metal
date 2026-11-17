@@ -16,8 +16,9 @@ import re
 import subprocess
 import sys
 
+import numpy as np
 import pytest
-from dcp_driver import MESH_OPEN_FAILED
+from dcp_driver import LOGITS_TOLERANCE, MESH_OPEN_FAILED, RESUME, compare
 
 # Each child is one process opening a mesh, training or loading a tiny Llama: about a minute warm, a few cold (the
 # whole module took 5 minutes warm and 13 cold on a loudbox). A hung child fails after 10 minutes, so one hang still
@@ -174,3 +175,17 @@ def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal
         ["load", "--dir", ckpt, "--steps", "2", *_world("1x1", "dp,tp", ("--scramble-qkv",), None)], "load", False
     )
     assert "MISMATCH: logits differ" in out, out.splitlines()[-8:]
+
+
+def test_non_finite_values_fail_the_comparison_on_either_side():
+    """NaN compares false with everything, so a tolerance alone would pass a world whose logits or post-step moments
+    are NaN. The comparison names non-finite values instead, exact or not, in the loaded world or the reference."""
+    reference = {"logits": np.ones((2, 3), np.float32), RESUME + "state:m": np.ones(4, np.float32)}
+    assert compare(reference, {k: v.copy() for k, v in reference.items()}, LOGITS_TOLERANCE) == []
+    for key in reference:
+        for tolerance in (0.0, LOGITS_TOLERANCE):
+            for value in (np.nan, np.inf):
+                broken = {k: v.copy() for k, v in reference.items()}
+                broken[key].flat[0] = value
+                assert any("non-finite" in p for p in compare(broken, reference, tolerance)), (key, tolerance, value)
+                assert any("non-finite" in p for p in compare(reference, broken, tolerance)), (key, tolerance, value)

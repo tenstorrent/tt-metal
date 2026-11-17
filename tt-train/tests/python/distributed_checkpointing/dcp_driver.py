@@ -336,6 +336,12 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
         if a.shape != e.shape:
             problems.append(f"{key}: shape {a.shape} vs reference {e.shape}")
             continue
+        if a.dtype.kind == "f" or e.dtype.kind == "f":
+            bad_a, bad_e = int(np.count_nonzero(~np.isfinite(a))), int(np.count_nonzero(~np.isfinite(e)))
+            if bad_a or bad_e:
+                # NaN compares false with everything, so the tolerance checks below would let it through.
+                problems.append(f"{key}: {bad_a} non-finite values in the loaded world, {bad_e} in the reference")
+                continue
         base = key[len(RESUME) :] if key.startswith(RESUME) else None
         if key == "logits" or base == "logits":
             scale = float(np.max(np.abs(e))) + 1e-6
