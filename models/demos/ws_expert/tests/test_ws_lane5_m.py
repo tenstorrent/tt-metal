@@ -172,12 +172,29 @@ def test_ws_lane5_glx_m(mesh_device):
     L5.run5(mesh_device, cfg, lc, l5, [M] * cfg.nexp, f"glx {nexp} experts M {M}")
 
 
+def aiclks():
+    """Every chip's AICLK from sysfs (MHz)."""
+    import glob
+
+    out = []
+    for f in sorted(glob.glob("/sys/class/tenstorrent/tenstorrent!*/tt_aiclk")):
+        try:
+            out.append(int(open(f).read().strip()))
+        except (OSError, ValueError):
+            pass
+    return out
+
+
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [TORUS], indirect=True)
 def test_ws_lane5_glx_soak(mesh_device):
+    """WS_SOAK_WARM launches (default 20), then launches for WS_SOAK_SECS; every WS_SOAK_CHECK launches and after the
+    last one: PCC on chips 0 and the last (every expert), the launch's end-to-end time (slowest of the two chips) and
+    every chip's AICLK."""
     M = int(os.environ.get("WSW_M", "586"))
     nexp, T_tok = int(os.environ.get("WSW_NEXP", "640")), int(os.environ.get("WSW_T", "31250"))
     secs, every = float(os.environ.get("WS_SOAK_SECS", "900")), int(os.environ.get("WS_SOAK_CHECK", "500"))
+    warm = int(os.environ.get("WS_SOAK_WARM", "20"))
     cfg, lc, l5 = L5.configs(nexp, 4, T_tok)
     lc.cycles = torus_cycles(*tuple(mesh_device.shape))
     N = mesh_device.get_num_devices()
@@ -188,9 +205,9 @@ def test_ws_lane5_glx_soak(mesh_device):
     dev, refs = make_inputs5_lean(mesh_device, cfg, lc, T, Ms, out_rows)
     tab_t = L5.tables_tensor(mesh_device, T["tabs"])
     clk = L5.aiclk_mhz(0)
-    logger.info(f"WL5S soak: {secs:.0f} s, {T['E']} experts a lane, M {M}, {lc}, {l5}, aiclk {clk} MHz")
-    t0, n, checks, e2es, worst = time.time(), 0, 0, [], 1.0
-    while time.time() - t0 < secs:
+    logger.info(f"WL5S soak: {warm} warm-up, then {secs:.0f} s, {T['E']} experts a lane, M {M}, {l5}, aiclk {clk} MHz")
+
+    def launch():
         mpd, io, st = L5.build_lane5(
             mesh_device, cfg, lc, l5, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], dev["out_t"], tab_t, T,
             out_rows,
@@ -198,28 +215,46 @@ def test_ws_lane5_glx_soak(mesh_device):
         ttnn.synchronize_device(mesh_device)
         ttnn.generic_op(io, mpd)
         ttnn.synchronize_device(mesh_device)
-        n += 1
-        if n % every == 0 or n == 1:
-            sts = ttnn.get_device_tensors(st)
-            e2e = max(L5.chip_time(cfg, Ms, T, ci, sts[ci])[3] for ci in (0, N - 1)) / clk
-            outs = ttnn.get_device_tensors(dev["out_t"])
-            pcs = {ci: pcc_chip(refs, ci, cfg.G, outs[ci]) for ci in (0, N - 1)}
-            del sts, outs
-            checks += 1
-            e2es.append(e2e)
-            worst = min(worst, *pcs.values())
-            mem("soak check")
-            logger.info(
-                f"WL5S launch {n} at {time.time() - t0:.0f} s: e2e (chips 0, {N - 1}) {e2e:.1f} us, pcc {pcs}, "
-                f"aiclk {L5.aiclk_mhz(0)} MHz"
-            )
-            assert min(pcs.values()) > 0.999, f"soak launch {n}: pcc {pcs}"
-        del mpd, io, st
-    logger.info(
-        f"WL5S SUMMARY: {n} launches in {time.time() - t0:.0f} s, {checks} checks (chips 0, {N - 1}, every expert), "
-        f"min pcc {worst:.5f}, e2e at the checks median {statistics.median(e2es):.1f} us"
-    )
+        return mpd, io, st
 
+    rows = []
+
+    def check(n, t, st):
+        sts = ttnn.get_device_tensors(st)
+        e2e = max(L5.chip_time(cfg, Ms, T, ci, sts[ci])[3] for ci in (0, N - 1)) / clk
+        outs = ttnn.get_device_tensors(dev["out_t"])
+        pcs = {ci: pcc_chip(refs, ci, cfg.G, outs[ci]) for ci in (0, N - 1)}
+        del sts, outs
+        a = aiclks()
+        rows.append((n, t, e2e, min(pcs.values()), statistics.median(a) if a else -1, min(a) if a else -1))
+        logger.info(
+            f"WL5S check launch {n} at {t:.0f} s: e2e (chips 0, {N - 1}) {e2e:.1f} us, pcc "
+            f"{ {k: round(v, 5) for k, v in pcs.items()} }, AICLK {len(a)} chips median "
+            f"{statistics.median(a) if a else -1:.0f} min {min(a) if a else -1} MHz"
+        )
+        assert min(pcs.values()) > 0.999, f"soak launch {n}: pcc {pcs}"
+
+    for _ in range(warm):
+        mpd, io, st = launch()
+        del mpd, io, st
+    t0, n = time.time(), 0
+    st = None
+    while time.time() - t0 < secs:
+        st = None  # (the previous launch's stamps freed before the next build: no L1 tensor outlives its launch)
+        mpd, io, st = launch()
+        n += 1
+        if n % every == 0:
+            check(n, time.time() - t0, st)
+        del mpd, io
+    if not rows or rows[-1][0] != n:
+        check(n, time.time() - t0, st)
+    e2es = [r[2] for r in rows]
+    logger.info(
+        f"WL5S SUMMARY: {warm} warm-up + {n} launches in {time.time() - t0:.0f} s, {len(rows)} checks (chips 0, "
+        f"{N - 1}, every expert), min pcc {min(r[3] for r in rows):.5f}, e2e at the checks first {e2es[0]:.1f} / last "
+        f"{e2es[-1]:.1f} / median {statistics.median(e2es):.1f} / max {max(e2es):.1f} us, AICLK at the checks median "
+        f"{statistics.median(r[4] for r in rows):.0f} min {min(r[5] for r in rows)} MHz"
+    )
 
 def group_report(cfg, st_chip, tag):
     """Per group of one chip (stamps of the last launch, K cycles): the latest compute end and NCRISC loop end from the
