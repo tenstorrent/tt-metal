@@ -41,7 +41,7 @@ enum class p_dim_stride_target
  * @param to_store: Value written to addr.
  * @return The value read back from addr after the store.
  */
-static inline __attribute__((always_inline)) std::uint32_t store_then_load(volatile std::uint32_t *addr, std::uint32_t to_store)
+inline __attribute__((always_inline)) std::uint32_t store_then_load(volatile std::uint32_t *addr, std::uint32_t to_store)
 {
     std::uint32_t result;
     __asm volatile("sw %2, %1; lw %0, %1" : "=r"(result) : "m"(*addr), "r"(to_store));

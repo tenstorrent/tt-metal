@@ -263,7 +263,7 @@ struct addr_mod_t
     // path (_llk_pack_dest_semaphore_section_done_) was writing into the math thread's slot. See tt-llk #1665.
     __attribute__((always_inline)) inline addr_mod_t const& set(const std::uint8_t mod_index, std::uint32_t thread_id = TRISC_ID) const
     {
-        auto cfg                                                                = (volatile std::uint32_t*)TENSIX_CFG_BASE;
+        auto cfg                                                                = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
         cfg[addr_mod_src_reg_addr[mod_index] + NUM_MATH_ADDR_MODS * thread_id]  = src_val();
         cfg[addr_mod_dest_reg_addr[mod_index] + NUM_MATH_ADDR_MODS * thread_id] = dest_val();
         return *this;
