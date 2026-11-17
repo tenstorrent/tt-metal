@@ -73,8 +73,6 @@ DB_SCHEMA = [
     Column("formats.sfpu_dst", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
-    Column("scale_bf16", "int64", True, "configuration"),
-    Column("sdpa_fw_op", "string", True, "configuration"),
     Column("speed_of_light", "bool", True, "flags"),
     Column("unpack_to_dest", "string", True, "flags"),
     # key
@@ -161,7 +159,9 @@ DB_SCHEMA = [
     Column("rmsnorm_num_faces", "int64", True, "configuration"),
     Column("rmsnorm_num_tiles", "int64", True, "configuration"),
     Column("rmsnorm_preserve_src_zero_flag", "bool", True, "configuration"),
+    Column("scale_bf16", "int64", True, "configuration"),
     Column("sdpa_bcast_num_tiles", "int64", True, "configuration"),
+    Column("sdpa_fw_op", "string", True, "configuration"),
     Column("sfpu_bcast_dim", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
