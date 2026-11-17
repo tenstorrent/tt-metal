@@ -5,7 +5,7 @@
 // Local invariants of KernelSpec::hw_config against the kernel's bindings and the DFBs they name (kernel_spec.hpp):
 // unpack_modes keys name bound DFBs; for each DFB a compute kernel consumes, UnpackToDest needs enable_32_bit_dest
 // (32-bit formats on every generation, every format on Gen1), and Float32 with enable_32_bit_dest needs an explicit
-// unpack_modes entry.
+// unpack_modes entry. On Quasar, a consumed Int16 DFB with enable_32_bit_dest requires UnpackToDest.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -278,6 +278,89 @@ TEST_F(ProgramSpecTestQuasar, CPU_ValidUnpackToDestModeSucceeds) {
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_Int16ConsumerWithFp32DestAndNoEntryFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    for (auto& dfb : spec.dataflow_buffers) {
+        if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
+            dfb.data_format_metadata = tt::DataFormat::Int16;
+        }
+    }
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            config.enable_32_bit_dest = true;
+        }
+    }
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cannot datacopy Int16 in a 32-bit Dest")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_Int16ConsumerWithFp32DestAndUnpackToSrcFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    for (auto& dfb : spec.dataflow_buffers) {
+        if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
+            dfb.data_format_metadata = tt::DataFormat::Int16;
+        }
+    }
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            config.enable_32_bit_dest = true;
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
+        }
+    }
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cannot datacopy Int16 in a 32-bit Dest")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_Int16ConsumerWithFp32DestAndUnpackToDestSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    for (auto& dfb : spec.dataflow_buffers) {
+        if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
+            dfb.data_format_metadata = tt::DataFormat::Int16;
+        }
+    }
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            config.enable_32_bit_dest = true;
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
+        }
+    }
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_Int16ProducerOnlyWithFp32DestSucceeds) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer_compute = MakeMinimalGen2ComputeKernel("producer_compute");
+    auto& producer_config = std::get<ComputeHardwareConfig>(producer_compute.hw_config);
+    producer_config.enable_32_bit_dest = true;
+
+    auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
+
+    auto dfb = MakeMinimalDFB("dfb_0");
+    dfb.data_format_metadata = tt::DataFormat::Int16;
+
+    producer_compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "out"));
+    consumer_dm.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in"));
+
+    spec.kernels = {producer_compute, consumer_dm};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "consumer_dm"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }

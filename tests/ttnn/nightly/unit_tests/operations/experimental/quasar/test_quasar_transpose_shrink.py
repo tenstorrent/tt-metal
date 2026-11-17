@@ -84,6 +84,8 @@ def test_quasar_transpose_wh_sharded_rm_l1_budget_counts_tiles(device):
     cb_limit = ttnn._ttnn.reports.get_device_info(device).cb_limit
 
     # Free L1 on a shard core is cb_limit minus the resident input shard, which is (H / num_cores) * W * elem_bytes.
+    # The promoted WIDTH_SHARDED output shard is the same size and is reserved by the budget too, so both bounds
+    # include it: output reservation alone must never trigger the fallback, only the tile-based CB estimate.
     # Both estimates are affine in W: bytes = slope * W + const, so each bound on W is solvable in closed form.
     shard_slope = (H // num_cores) * elem_bytes
     old_slope = (2 + H) * elem_bytes  # (2W + 2H + H*W) elements
@@ -91,16 +93,57 @@ def test_quasar_transpose_wh_sharded_rm_l1_budget_counts_tiles(device):
     real_slope = (2 + Ht) * tile_bytes // tile_dim  # (2Wt + 2Ht + Ht*Wt) tiles
     real_const = 2 * Ht * tile_bytes
     # Old estimate fits free L1 below w_old_fits; real allocation overflows it above w_real_overflows.
-    w_old_fits = (cb_limit - old_const) // (old_slope + shard_slope)
-    w_real_overflows = (cb_limit - real_const) // (real_slope + shard_slope)
+    w_old_fits = (cb_limit - old_const) // (old_slope + 2 * shard_slope)
+    w_real_overflows = (cb_limit - real_const) // (real_slope + 2 * shard_slope)
     W = (w_old_fits + w_real_overflows) // 2 // tile_dim * tile_dim
 
     Wt = W // tile_dim
     free_l1 = cb_limit - shard_slope * W
+    output_shard = shard_slope * W
     elementwise_estimate = old_slope * W + old_const
     allocated = (2 * Wt + 2 * Ht + Ht * Wt) * tile_bytes
-    if not elementwise_estimate < free_l1 < allocated:
+    if not elementwise_estimate + output_shard < free_l1 < allocated + output_shard:
         pytest.skip(f"No W separates the estimates on this device (cb_limit={cb_limit})")
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (H // num_cores, W), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, H, W), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_in = ttnn.to_memory_config(ttnn_in, in_mc)
+    result = ttnn.experimental.quasar.transpose(ttnn_in, 2, 3)
+    got = ttnn.to_torch(result.cpu())
+    assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=got, ulp_threshold=0)
+
+
+def test_quasar_transpose_wh_sharded_rm_l1_budget_reserves_l1_output(device):
+    """An L1-sharded output is allocated after the budget samples free L1, so it must be reserved up front.
+
+    W is sized so the CB estimate fits next to the resident input shard but not once the promoted
+    WIDTH_SHARDED output shard is placed too; the op must then fall back to permute.
+    """
+    tile_dim, tile_bytes, elem_bytes = 32, 2048, 2  # bfloat16
+    H, num_cores = 64, 2
+    Ht = H // tile_dim
+    cb_limit = ttnn._ttnn.reports.get_device_info(device).cb_limit
+
+    # Input shard (H / num_cores, W) and output shard (W, H / num_cores) take the same bytes per core.
+    shard_bytes_per_wt = (H // num_cores) * tile_dim * elem_bytes
+    cb_bytes_per_wt = (2 + Ht) * tile_bytes  # (2Wt + 2Ht + Ht*Wt) tiles
+    cb_const = 2 * Ht * tile_bytes
+    wt_lo = (cb_limit - cb_const) // (cb_bytes_per_wt + 2 * shard_bytes_per_wt) + 1
+    wt_hi = (cb_limit - cb_const) // (cb_bytes_per_wt + shard_bytes_per_wt)
+    Wt = (wt_lo + wt_hi) // 2
+    W = Wt * tile_dim
+
+    free_l1 = cb_limit - shard_bytes_per_wt * Wt
+    cbs = cb_bytes_per_wt * Wt + cb_const
+    if not cbs < free_l1 < cbs + shard_bytes_per_wt * Wt:
+        pytest.skip(f"No W separates the routes on this device (cb_limit={cb_limit})")
 
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
     in_mc = ttnn.MemoryConfig(

@@ -102,8 +102,23 @@ auto create_mesh_workload_from_workload_factory(
                       const typename device_operation_t::tensor_args_t& tensor_args,
                       typename device_operation_t::tensor_return_value_t& tensor_return_value) {
                       WorkloadFactory::create_mesh_workload(
-                          operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                          operation_attributes,
+                          tensor_coords,
+                          tensor_args,
+                          tensor_return_value,
+                          ttnn::MergePerDevicePrograms{});
                   }) {
+        // The factory runs the op itself, including its cache hits: it may merge per-device programs.
+        return WorkloadFactory::create_mesh_workload(
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value, ttnn::MergePerDevicePrograms{});
+    } else if constexpr (requires(
+                             const typename device_operation_t::operation_attributes_t& operation_attributes,
+                             const ttnn::MeshCoordinateRangeSet& tensor_coords,
+                             const typename device_operation_t::tensor_args_t& tensor_args,
+                             typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+                             WorkloadFactory::create_mesh_workload(
+                                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                         }) {
         return WorkloadFactory::create_mesh_workload(
             operation_attributes, tensor_coords, tensor_args, tensor_return_value);
     } else if constexpr (requires(
