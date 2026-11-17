@@ -24,7 +24,8 @@ chip's ready port / receiver / hub by that chip's placement:
 Knobs (single source of truth; every CB size / loop count / RT arg derives from them):
   BLOCK_W (None = the whole slice width), block_h (derived from the grid left after the ports), chunk_tiles (derived
   from the router payload), PORT_PLACEMENT, PORT_BATCH_CHUNKS, INC_EVERY, OUT_DEPTH_CHUNKS, num_links; the OVERLAP
-  knobs of Refinement 2: GAMMA_HUB_MCAST, XG_LATE_STREAM_CHUNKS, FUSE_LATE_CHUNKS, STATS_BULK_WINDOW.
+  knobs of Refinement 2: GAMMA_HUB_MCAST, XG_LATE_STREAM_CHUNKS, FUSE_LATE_CHUNKS, STATS_BULK_WINDOW; Refinement 3:
+  COMBINE_COL0, COMPUTE_STORE_NOC, OWN_STORE_GATE.
 """
 
 from __future__ import annotations
@@ -61,6 +62,16 @@ XG_LATE_STREAM_CHUNKS = 8
 # A chunk whose xg was not computed ahead runs x * gamma * rstd as ONE chain (x * gamma into DEST, then * rstd_full
 # with DEST reused as srcA): one unpack/pack pass on the landing tail instead of an fp32 round trip through cb_xg.
 FUSE_LATE_CHUNKS = False
+# combine_stats_block's SFPU tail (G-way fp32 sum, * 1/W, + eps, rsqrt) as ONE pass over the column-0 vectors of the
+# partial tile (8 vector ops) instead of G + 2 whole-tile passes (32 each); False = the whole-tile chain.  [R3]
+COMBINE_COL0 = True
+# NoC of the compute cores' writer (the DRAM output store + the partial export); the compute reader takes the other
+# one. The port senders and receivers write on NoC1, the port readers pull the landed chunks on NoC0.  [R3]
+COMPUTE_STORE_NOC = 1
+# An own-slice core starts its DRAM store only once every port that sends its block has issued the reads of the
+# block (1) or of its link's whole own entry (2); the ports increment the core's `landed`, which own cores do not
+# otherwise use. 0 = store as soon as normalized. Keeps the own-store burst off the bulk.  [R3]
+OWN_STORE_GATE = 2
 # gamma source: True = the hub reads the Wt sticks once per chip and multicasts them into every compute core's
 # stats-scratch tail (op_design.md regime R6); False = every compute core reads its block_w sticks from DRAM. The
 # per-core reads (20 cores per slice on the same 12 pages) took ~4.5 us and held up the stats chain.  [OVERLAP]
@@ -71,6 +82,7 @@ STATS_ROW_BYTES = 32 * 4  # 32 fp32 row sums per tile row (kernels/..._common.hp
 
 FWD, BWD = 0, 1
 _OPP = {FWD: BWD, BWD: FWD}
+_NOCS = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
 
 # ---- compute-core CB indices ----
 CB_X_BLOCK = 0  # backed on `landing` (zero-copy)
@@ -395,6 +407,17 @@ def port_stream(geo, p, l, d):
     return out
 
 
+def own_block_reads(geo, p):
+    """How many port streams read each own block of chip p (each such port increments the block's `landed` once);
+    the same for every own block (every link's own rows ride entry 0 of both directions)."""
+    counts = {
+        m: sum(m in ms for l in range(geo.L) for d in (FWD, BWD) for q, ms in port_stream(geo, p, l, d)[:1] if q == p)
+        for m in range(geo.nb)
+    }
+    assert len(set(counts.values())) == 1, counts
+    return counts[0]
+
+
 def stream_incs(geo, entries):
     """Per chunk of the stream (in order): the arrival-counter value that covers it; and the total increments.
     The sender increments on every INC_EVERY-th chunk and on each entry's last chunk."""
@@ -552,6 +575,9 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 GAMMA_HUB_MCAST,
                 XG_LATE_STREAM_CHUNKS,
                 FUSE_LATE_CHUNKS,
+                COMBINE_COL0,
+                COMPUTE_STORE_NOC,
+                OWN_STORE_GATE,
                 gamma_page,
             )
             program.semaphores = [
@@ -605,12 +631,13 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             reader_ct += list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
             reader_ct += list(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
             writer_common = [out_addr, stats_addr, p, _xy(hub_v)] + geo.row_base
-            writer_ct = geo_ct + [CB_PARTIAL, CB_OUT, SEM_OWN_PARTIALS, tile_bytes]
+            writer_ct = geo_ct + [CB_PARTIAL, CB_OUT, SEM_OWN_PARTIALS, tile_bytes, SEM_LANDED]
+            writer_ct += [own_block_reads(geo, p) if OWN_STORE_GATE else 0]
             writer_ct += list(ttnn.TensorAccessorArgs(output).get_compile_time_args())
             compute_common = [p] + geo.row_base + xg_ahead_table(geo, p)
             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
             compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_XG]
-            compute_ct += [CB_SCALER, CB_RSTD_FULL, int(FUSE_LATE_CHUNKS)]
+            compute_ct += [CB_SCALER, CB_RSTD_FULL, int(FUSE_LATE_CHUNKS), int(COMBINE_COL0)]
 
             ccfg = ttnn.ComputeConfigDescriptor()
             ccfg.math_fidelity = cfg.math_fidelity
@@ -626,7 +653,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                     runtime_args=ttnn.RuntimeArgs(),
                     common_runtime_args=reader_common,
                     config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0
+                        processor=ttnn.DataMovementProcessor.RISCV_1, noc=_NOCS[1 - COMPUTE_STORE_NOC]
                     ),
                 ),
                 ttnn.KernelDescriptor(
@@ -636,7 +663,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                     runtime_args=ttnn.RuntimeArgs(),
                     common_runtime_args=writer_common,
                     config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1
+                        processor=ttnn.DataMovementProcessor.RISCV_0, noc=_NOCS[COMPUTE_STORE_NOC]
                     ),
                 ),
                 ttnn.KernelDescriptor(
@@ -693,6 +720,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 geo.slot_bytes,
                 geo.max_payload,
                 STATS_BULK_WINDOW,
+                SEM_LANDED,
+                OWN_STORE_GATE,
             ]
             kernels += [
                 ttnn.KernelDescriptor(

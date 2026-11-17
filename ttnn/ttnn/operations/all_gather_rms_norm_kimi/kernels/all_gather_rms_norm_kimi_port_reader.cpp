@@ -19,6 +19,10 @@ constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
 constexpr uint32_t batch = get_compile_time_arg_val(3);
 constexpr uint32_t sem_own_loaded = get_compile_time_arg_val(5);
 constexpr uint32_t sem_relay_ready = get_compile_time_arg_val(6);
+constexpr uint32_t sem_landed = get_compile_time_arg_val(11);
+// own-store gate: 0 off, 1 release each own block once its reads are issued, 2 release every own block of the
+// link once the whole own entry's reads are issued
+constexpr uint32_t own_store_gate = get_compile_time_arg_val(12);
 constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
 
 void kernel_main() {
@@ -47,7 +51,8 @@ void kernel_main() {
         const uint32_t xy = get_arg_val<uint32_t>(a++);
         const uint32_t info = get_arg_val<uint32_t>(a++);
         const uint32_t n = info & 0xFFFF;
-        if ((info >> 16) & 1) {
+        const bool relay = (info >> 16) & 1;
+        if (relay) {
             ++relays;
             if (*relay_ready < relays) {
                 push_batch();
@@ -70,6 +75,23 @@ void kernel_main() {
                 push_batch();
             }
         }
+        // the own core may start its DRAM store once this port has issued the reads of its block (gate 1) or of the
+        // whole own entry (gate 2). No data hazard (the store reads cb_out); the gate only keeps the store burst
+        // off the bulk.
+        if constexpr (own_store_gate == 1) {
+            if (!relay) {
+                noc_semaphore_inc(get_noc_addr(xy >> 8, xy & 0xFF, get_semaphore(sem_landed)), 1);
+            }
+        } else if constexpr (own_store_gate == 2) {
+            const bool own_end = !relay && (i + 1 == n_blocks || ((get_arg_val<uint32_t>(a + 1) >> 16) & 1));
+            if (own_end) {
+                for (uint32_t j = 0, aa = 4; j <= i; ++j, aa += 2) {
+                    const uint32_t oxy = get_arg_val<uint32_t>(aa);
+                    noc_semaphore_inc(get_noc_addr(oxy >> 8, oxy & 0xFF, get_semaphore(sem_landed)), 1);
+                }
+            }
+        }
     }
     push_batch();
+    noc_async_atomic_barrier();
 }

@@ -31,6 +31,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "all_gather_rms_norm_kimi_common.hpp"
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_sqrt.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#endif
 
 using namespace compute_kernel_lib;
 using namespace agrn;
@@ -51,6 +55,7 @@ constexpr uint32_t cb_xg = get_compile_time_arg_val(C + 9);
 constexpr uint32_t cb_scaler = get_compile_time_arg_val(C + 10);
 constexpr uint32_t cb_rstd_full = get_compile_time_arg_val(C + 11);
 constexpr bool fuse_late = get_compile_time_arg_val(C + 12) != 0;  // x * gamma * rstd in one chain for late chunks
+constexpr bool combine_col0 = get_compile_time_arg_val(C + 13) != 0;  // combine scoped to column 0 (one SFPU pass)
 
 static_assert(block_w % chunk_tiles == 0 || chunk_tiles % block_w == 0, "a chunk is a run in one row or whole rows");
 
@@ -157,18 +162,61 @@ using PartialLoad = CopyTile<
 template <uint32_t Q>
 using PartialAdd = AddBinary<Dst::D0, static_cast<Dst>(Q), Dst::D0>;
 
-// Q = 0..G-2: load P_0..P_{G-1} into D0..D{G-1}, then D0 += D{Q+1} in increasing q (fixed order, every chip identical).
+// Column-0 tail of the combine: rstd = rsqrt(((P_0 + P_1) + ...) + P_{G-1}) * 1/W + eps) on the even-parity vectors
+// of the two left faces only (8 SFPU vector ops instead of 32 per pass, and one pass instead of G + 2): the partial
+// tiles carry their row sums in column 0 and every consumer of cb_rstd reads only column 0 (unary_bcast<Col>). The
+// sum keeps the fixed q order. VectorMode::C runs the body on face 0 then face 2; the body advances dst_reg by 8
+// (the stock ITERATIONS = 8), skipping the odd-parity vectors that never hold column 0 (examples/sfpu_tile_scope,
+// c_skip). Raw sfpi: no helper scopes an SFPU op to a column, and none fuses a G-way DEST sum with rsqrt.
+#ifdef TRISC_MATH
+sfpi_inline void combine_col0_body(uint32_t inv_w, uint32_t eps) {
+    constexpr uint32_t dst_tile_size_sfpi = 32;  // one DEST tile in sfpi rows (as ckernel_sfpu_binary.h)
+#pragma GCC unroll 4
+    for (uint32_t rg = 0; rg < 4; ++rg) {
+        sfpi::vFloat s = sfpi::dst_reg[0];
+#pragma GCC unroll 8
+        for (uint32_t q = 1; q < G; ++q) {
+            s = s + sfpi::dst_reg[q * dst_tile_size_sfpi];
+        }
+        s = s * ckernel::sfpu::Converter::as_float(inv_w);
+        s = s + ckernel::sfpu::Converter::as_float(eps);
+        sfpi::dst_reg[0] = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false>(s);
+        sfpi::dst_reg += 2;
+    }
+}
+#endif
+
+struct CombineCol0Rsqrt : UnaryOp<CombineCol0Rsqrt, Dst::D0> {
+    static constexpr uint32_t lane_width = G;  // reads D0..D{G-1}
+    static ALWI void init() { rsqrt_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            combine_col0_body, slot_offset, ckernel::VectorMode::C, inv_w_bits, eps_bits)));
+    }
+};
+
+// Q = 0..G-2: load P_0..P_{G-1} into D0..D{G-1}, then (combine_col0) one column-0 pass, or the whole-tile chain
+// D0 += D{Q+1} in increasing q (fixed order, every chip identical), * 1/W, + eps, rsqrt.
 template <uint32_t... Q>
 ALWI void combine_stats_block(uint32_t h, std::integer_sequence<uint32_t, Q...>) {
-    eltwise_chain(
-        IterationShape::tiles(h),
-        PartialLoad<Q>{Q * h}...,
-        PartialLoad<G - 1>{(G - 1) * h},
-        PartialAdd<Q + 1>{}...,
-        MulUnary<>{inv_w_bits},
-        AddUnary<>{eps_bits},
-        Rsqrt<>{},
-        PackTile<output(cb_rstd)>{});
+    if constexpr (combine_col0) {
+        eltwise_chain(
+            IterationShape::tiles(h),
+            PartialLoad<Q>{Q * h}...,
+            PartialLoad<G - 1>{(G - 1) * h},
+            CombineCol0Rsqrt{},
+            PackTile<output(cb_rstd)>{});
+    } else {
+        eltwise_chain(
+            IterationShape::tiles(h),
+            PartialLoad<Q>{Q * h}...,
+            PartialLoad<G - 1>{(G - 1) * h},
+            PartialAdd<Q + 1>{}...,
+            MulUnary<>{inv_w_bits},
+            AddUnary<>{eps_bits},
+            Rsqrt<>{},
+            PackTile<output(cb_rstd)>{});
+    }
 }
 
 void kernel_main() {

@@ -21,7 +21,10 @@ constexpr uint32_t cb_partial = get_compile_time_arg_val(C + 0);
 constexpr uint32_t cb_out = get_compile_time_arg_val(C + 1);
 constexpr uint32_t sem_own_partials = get_compile_time_arg_val(C + 2);
 constexpr uint32_t tile_bytes = get_compile_time_arg_val(C + 3);
-constexpr auto out_args = TensorAccessorArgs<C + 4>();
+constexpr uint32_t sem_landed = get_compile_time_arg_val(C + 4);
+constexpr uint32_t own_block_reads =
+    get_compile_time_arg_val(C + 5);  // OWN_STORE_GATE: ports that release this own block; 0 = off
+constexpr auto out_args = TensorAccessorArgs<C + 6>();
 
 void kernel_main() {
     // common args: out_addr, stats_addr, p, hub xy, row_base[grid_y]
@@ -47,7 +50,11 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(hub_xy >> 8, hub_xy & 0xFF, get_semaphore(sem_own_partials)), 1);
     }
 
-    // ---- store_block ----
+    // ---- store_block ---- (an own block waits until every port sending it has issued its reads)
+    if (own_block_reads > 0 && b.q == p) {
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed)), own_block_reads);
+    }
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
     const uint32_t n_chunks = b.h * block_w / chunk_tiles;
     uint32_t t = 0;
