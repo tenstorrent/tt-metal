@@ -14,7 +14,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config, get_ep_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import compare_exact, validate_composed
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
