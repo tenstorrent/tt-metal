@@ -1284,6 +1284,130 @@ def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device):
     )
 
 
+# The GLM-5.3 sparse MLA "long" KVPE gather (mla.py, _gather_sparse_kvpe), argument for argument: the fp8_e4m3
+# row-major 656-wide cache, ND-sharded in 32-row blocks round-robin over the DRAM banks, 16160 rows per chip, gathered
+# over all 32 chips (SP-major) into a 517120-row interleaved buffer, on the one-row sub-device the model overlaps with
+# the indexer top-k, with external semaphores. Run alone, so the time is the gather's own.
+# Ceiling: 2.35-2.40 ms over 5 runs on one 8x4 Galaxy, plus headroom (2.46-2.57 ms while separate local copy cores
+# converted the own shard). Override with TT_METAL_HIGH_BW_ALL_GATHER_GLM_KVPE_MAX_MS.
+_GLM_KVPE_ROWS_PER_DEVICE = 16160
+_GLM_KVPE_WIDTH = 656
+_GLM_KVPE_BLOCK_ROWS = 32
+_GLM_KVPE_MAX_MS = float(os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_GLM_KVPE_MAX_MS", "2.5"))
+
+
+@run_for_blackhole("Blackhole Galaxy GLM KVPE gather perf requires Blackhole")
+@pytest.mark.skipif(
+    os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy GLM KVPE gather perf requires MESH_DEVICE=TG"
+)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_galaxy_glm_kvpe_long_perf(mesh_device):
+    """Host-observed time of the GLM-5.3 sparse MLA long KVPE gather, alone: fastest of 10 after 10 warm-up runs.
+    Not the realtime profiler, which records no program on a sub-device."""
+    assert tuple(mesh_device.shape) == (8, 4)
+    num_devices = mesh_device.get_num_devices()
+    gathered_rows = _GLM_KVPE_ROWS_PER_DEVICE * num_devices
+
+    num_banks = mesh_device.dram_grid_size().x
+    banks = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(num_banks)])
+    kv_memory = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, _GLM_KVPE_BLOCK_ROWS, _GLM_KVPE_WIDTH],
+            grid=banks,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    torch.manual_seed(0)
+    host_input = torch.rand((1, 1, gathered_rows, _GLM_KVPE_WIDTH), dtype=torch.bfloat16)
+    staged = _make_tensor(
+        mesh_device, host_input, ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT, ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    )
+    device_input = ttnn.to_memory_config(staged, kv_memory)
+    # Reference, in rank order (row-major = SP-major for full_mesh_outer_axis=0). e4m3 -> bf16 is exact.
+    decoded_input = ttnn.typecast(staged, ttnn.bfloat16)
+    expected = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(decoded_input)], dim=2)
+    ttnn.deallocate(decoded_input)
+    ttnn.deallocate(staged)
+    output = _make_tensor(
+        mesh_device,
+        torch.zeros((1, 1, gathered_rows, _GLM_KVPE_WIDTH), dtype=torch.bfloat16),
+        ttnn.fp8_e4m3,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    page_size = ttnn.get_device_tensors(device_input)[0].buffer_aligned_page_size()
+    assert page_size == 704
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    gather_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0))])
+    rest_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([rest_grid]), ttnn.SubDevice([gather_grid])], 0)
+    ready, data_valid = (
+        ttnn.create_global_semaphore(mesh_device, gather_grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(2)
+    )
+    ttnn.synchronize_device(mesh_device)
+    mesh_device.load_sub_device_manager(manager)
+    sub_device = ttnn.SubDeviceId(1)
+
+    def run():
+        ttnn.experimental.high_bw_all_gather(
+            device_input,
+            dim=2,
+            output_tensor=output,
+            num_links=2,
+            cluster_axis=None,
+            full_mesh_outer_axis=0,
+            input_batch_index=0,
+            gathered_dim_size=gathered_rows,
+            subdevice_id=sub_device,
+            sub_core_grids=gather_grid,
+            ready_semaphore=ready,
+            data_valid_semaphore=data_valid,
+        )
+
+    def timed_ns():
+        ttnn.synchronize_device(mesh_device)
+        start = time.perf_counter_ns()
+        run()
+        ttnn.synchronize_device(mesh_device)
+        return time.perf_counter_ns() - start
+
+    try:
+        for _ in range(10):
+            timed_ns()
+        durations_ns = [timed_ns() for _ in range(10)]
+    finally:
+        ttnn.synchronize_device(mesh_device)
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager)
+
+    # Exact output on a few chips (all 32 would be ~22 GB on the host); the output started as zeros.
+    decoded_output = ttnn.typecast(output, ttnn.bfloat16)
+    output_shards = ttnn.get_device_tensors(decoded_output)
+    for chip in (0, 7, 13, num_devices - 1):
+        actual = ttnn.to_torch(output_shards[chip])
+        if not torch.equal(actual, expected):
+            mismatches = torch.nonzero(actual != expected, as_tuple=False)
+            first = tuple(mismatches[0].tolist())
+            pytest.fail(
+                f"chip {chip}: {len(mismatches)} mismatched elements, first at {first} "
+                f"(row {first[2]}, rank {first[2] // _GLM_KVPE_ROWS_PER_DEVICE}): "
+                f"{actual[first].item()} != {expected[first].item()}"
+            )
+    ttnn.deallocate(decoded_output)
+
+    best_ms = min(durations_ns) / 1e6
+    bandwidth_gbps = _GLM_KVPE_ROWS_PER_DEVICE * page_size * (num_devices - 1) / min(durations_ns)
+    print(
+        f"HIGH_BW_ALL_GATHER_GLM_KVPE_LONG best={best_ms:.3f}ms effective_receive_bw={bandwidth_gbps:.1f}GB/s "
+        f"samples_ms={[round(d / 1e6, 3) for d in durations_ns]}"
+    )
+    assert_perf_gate(best_ms <= _GLM_KVPE_MAX_MS, f"{best_ms:.3f} ms above the {_GLM_KVPE_MAX_MS:.3f} ms ceiling")
+
+
 @run_for_blackhole("32-rank whole-mesh ring coverage requires Blackhole")
 @pytest.mark.skipif(
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
