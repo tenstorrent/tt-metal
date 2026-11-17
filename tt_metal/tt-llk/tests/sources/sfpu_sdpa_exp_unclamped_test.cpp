@@ -54,6 +54,7 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
+static_assert(!unpack_to_dest, "sdpa_exp_unclamped test requires source-stream unpack");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -88,11 +89,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            if constexpr (!unpack_to_dest)
-            {
-                // unpack_A posts a zeroed SrcB dvalid with every SrcA face.
-                _perf_unpack_stream_set_valid<true /* src A */, true /* src B */, PERF_RUN_TYPE>(src_handshake_iters);
-            }
+            // unpack_A posts a zeroed SrcB dvalid with every SrcA face.
+            _perf_unpack_stream_set_valid<true /* src A */, true /* src B */, PERF_RUN_TYPE>(src_handshake_iters);
         }
         else
         {
@@ -160,21 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            if constexpr (unpack_to_dest)
-            {
-                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
-                {
-                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
-                    {
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                            0 /* dst_index */, formats.math, formats.math);
-                    }
-                }
-            }
-            else
-            {
-                _perf_math_stream_clear_valid<true /* src A */, true /* src B */, PERF_RUN_TYPE>(src_handshake_iters);
-            }
+            _perf_math_stream_clear_valid<true /* src A */, true /* src B */, PERF_RUN_TYPE>(src_handshake_iters);
         }
         else
         {
@@ -186,11 +170,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_wait_for_dest_available_<DST_SYNC>();
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || !unpack_to_dest)
-                    {
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                            0 /* dst_index */, formats.math, formats.math);
-                    }
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        0 /* dst_index */, formats.math, formats.math);
                     SFPU_UNARY_CALL(
                         DST_SYNC,
                         is_fp32_dest_acc_en,

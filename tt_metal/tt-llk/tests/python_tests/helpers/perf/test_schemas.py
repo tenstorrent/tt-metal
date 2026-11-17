@@ -870,8 +870,6 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_dst",
             "formats.sfpu_src",
-            "input_range_high",
-            "input_range_low",
             "loop_factor",
             "marker",
             "scale_en",

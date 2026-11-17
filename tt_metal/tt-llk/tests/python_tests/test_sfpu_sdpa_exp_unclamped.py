@@ -53,11 +53,10 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import DestAccumulation, format_dict
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    INPUT_RANGE,
     SFPU_SCALE_EN,
     SFPU_UNARY_SCALAR,
     TILE_COUNT,
@@ -84,10 +83,10 @@ INPUT_RANGES = [(-20.0, 0.0), (-88.0, 0.0), (-4.0, 4.0), (-400.0, 0.0)]
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
-    input_range=INPUT_RANGES,
+    input_range=runtime(INPUT_RANGES),
     scale_en=[False, True],
-    scale=[BF16_ONE, BF16_HALF],
-    num_tiles=[1, 2],
+    scale=lambda scale_en: [BF16_ONE] if not scale_en else [BF16_ONE, BF16_HALF],
+    num_tiles=runtime([1, 2]),
 )
 def test_sfpu_sdpa_exp_unclamped(
     formats,
@@ -130,7 +129,6 @@ def test_sfpu_sdpa_exp_unclamped(
             test_name="sources/sfpu_sdpa_exp_unclamped_test.cpp",
             formats=formats,
             templates=[
-                INPUT_RANGE(input_range_low=low, input_range_high=high),
                 SFPU_SCALE_EN(scale_en=scale_en),
                 SFPU_UNARY_SCALAR(value_bits=scale),
             ],

@@ -1515,20 +1515,6 @@ class SFPU_SCALE_EN(TemplateParameter):
 
 
 @dataclass
-class INPUT_RANGE(TemplateParameter):
-    """Stimulus-only input bounds recorded as perf report configuration columns.
-
-    The values distinguish otherwise identical perf rows without changing kernel code.
-    """
-
-    input_range_low: float
-    input_range_high: float
-
-    def convert_to_cpp(self) -> str:
-        return ""
-
-
-@dataclass
 class SOFTMAX_K(TemplateParameter):
     """Number of valid lanes ``k`` for the softmax_k SFPU entry (``_softmax_k_<k>``).
 
