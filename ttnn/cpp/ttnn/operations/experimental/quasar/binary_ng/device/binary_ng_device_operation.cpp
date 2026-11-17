@@ -47,7 +47,10 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case GT:
         case LT:
         case GE:
-        case LE: return a == b && (a == FLOAT32 || a == BFLOAT16 || a == INT32 || a == UINT16 || a == UINT32);
+        // Quasar has no float SFPU compare tile op (gt/lt/..._binary_tile are WH/BH-only), but it has the unary
+        // zero compares (gtz/ltz/gez/lez/eqz/nez_tile). So bf16 takes the FPU path: sub_tiles, then the zero compare
+        // as a post-activation, as the WH/BH kernels did. The binary SFPU compare stays for the others.
+        case LE: return a == b && (a == FLOAT32 || a == INT32 || a == UINT16 || a == UINT32);
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:
