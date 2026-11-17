@@ -1300,7 +1300,8 @@ ALWI void matmul_block_fe(
     (0 * sizeof(::ckernel::packer::llk_pack_shape_set<                                                \
              (MATMUL_FE_V(ct) == 0xFFu || MATMUL_FE_V(rt) == 0xFFu) ? 7                                \
              : (MATMUL_FE_V(rt) >= 4 && MATMUL_FE_V(ct) <= 2)       ? 6                                \
-                                                                    : 5>))
+                                                                    : 5>) +                            \
+     0 * sizeof(::ckernel::packer::llk_pack_shape_set<(MATMUL_FE_V(rt) == 1u && MATMUL_FE_V(ct) >= 2u && MATMUL_FE_V(ct) != 0xFFu) ? 9 : 10>))
 #else
 #define MATMUL_FE_PACK_SHAPE(ct, rt) 0
 #endif

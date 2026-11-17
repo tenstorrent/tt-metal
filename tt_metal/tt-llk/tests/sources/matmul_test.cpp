@@ -793,6 +793,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && defined(LLK_PACK_SHAPE_MARKS)
 // production's plain matmul_block_init with the constant block marks its shape for the pack (matmul.h MATMUL_FE_PACK_SHAPE)
 inline constexpr auto matmul_pack_shape_mark = sizeof(ckernel::packer::llk_pack_shape_set<(MATMUL_PK_RT >= 4 && MATMUL_PK_CT <= 2) ? 6 : 5>);
+inline constexpr auto matmul_pack_row_mark = sizeof(ckernel::packer::llk_pack_shape_set<(MATMUL_PK_RT == 1 && MATMUL_PK_CT >= 2) ? 9 : 10>);
 #endif
 #define MATMUL_PACK_SHIM 1
 #define MATMUL_PR_LLK    PACK_API_SHIM_PR
