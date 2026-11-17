@@ -194,9 +194,7 @@ TEST(PhysicalDescriptorBuilder, BuildFromFileReturnsCppDescriptor) {
     std::filesystem::remove(path);
 }
 
-// Chips are numbered as the mock cluster descriptors generated from the FSD number them: every ASIC on the host's
-// boards, linked or not, in (tray, ASIC location) order. hostA's ASIC 0 has no link here, so it is not in the
-// descriptor, but it still takes chip id 0 and hostA's ASIC 1 is chip 1.
+// hostA's unlinked ASIC 0 is not in the descriptor but still takes chip id 0.
 TEST(PhysicalDescriptorBuilder, BuildFromFileNumbersChipsAsGeneratedDescriptors) {
     FSD fsd = make_two_host_fsd();
     fsd.mutable_eth_connections()->clear_connection();
@@ -233,8 +231,6 @@ TEST(PhysicalDescriptorBuilder, BuildFromFileNumbersChipsAsGeneratedDescriptors)
     std::filesystem::remove(path);
 }
 
-// A board type with no board definition gets no generated descriptors, so the build still succeeds and leaves
-// its chips unnumbered.
 TEST(PhysicalDescriptorBuilder, BuildFromFileLeavesChipsOfUndefinedBoardsUnnumbered) {
     FSD fsd = make_two_host_fsd();
     for (auto& loc : *fsd.mutable_board_types()->mutable_board_locations()) {
@@ -257,7 +253,6 @@ TEST(PhysicalDescriptorBuilder, BuildFromFileLeavesChipsOfUndefinedBoardsUnnumbe
     std::filesystem::remove(path);
 }
 
-// Rev C comes from the first host's node_type, legacy torus-suffixed names included.
 TEST(PhysicalDescriptorBuilder, BuildFromFileTakesRevCFromNodeType) {
     const auto path = std::filesystem::temp_directory_path() / "pdb_rev_c_test.textproto";
     const std::vector<std::pair<std::string, bool>> cases = {

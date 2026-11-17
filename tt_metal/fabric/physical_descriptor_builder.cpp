@@ -230,9 +230,7 @@ std::vector<uint32_t> select_host_filter(
     return member_host_ids;
 }
 
-// Chip ids as the mock cluster descriptors generate_cluster_descriptor_from_fsd writes for `fsd` number them, keyed
-// by (host_id, tray_id, asic_location). Empty when a board type has no board definition: no descriptors are
-// generated for such an FSD, so there is no numbering to follow.
+// Empty when a board type has no board definition.
 std::map<::tt::scaleout_tools::FsdAsicKey, ::tt::ChipId> generated_descriptor_chip_ids(
     const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd) {
     try {

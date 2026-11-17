@@ -678,11 +678,8 @@ std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
 
 namespace {
 
-// The board revision an FSD Host.node_type names; UNSPECIFIED when it names none or doesn't parse (custom node
-// descriptors included).
 BoardRevision fsd_node_type_board_revision(std::string node_type) {
-    // FSDs written before torus node types were dropped name e.g. BH_GALAXY_REV_C_XY_TORUS; the revision is in
-    // the base name.
+    // Older FSDs use torus-suffixed names, e.g. BH_GALAXY_REV_C_XY_TORUS.
     for (std::string_view suffix : {"_XY_TORUS", "_X_TORUS", "_Y_TORUS"}) {
         if (node_type.ends_with(suffix)) {
             node_type.resize(node_type.size() - suffix.size());
@@ -693,8 +690,7 @@ BoardRevision fsd_node_type_board_revision(std::string node_type) {
     return parsed.has_value() ? get_node_type_board_revision(*parsed) : BoardRevision::UNSPECIFIED;
 }
 
-// Board id bits [35:32], as UMD reports them, for a host whose FSD node_type is `node_type`. Hosts with no
-// revision get 0, which discovery reads as BH Galaxy rev A/B.
+// Board id bits [35:32]; 0 reads as BH Galaxy rev A/B.
 uint64_t board_id_revision_bits(const std::string& node_type) {
     switch (fsd_node_type_board_revision(node_type)) {
         case BoardRevision::WH_GALAXY:

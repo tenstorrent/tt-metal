@@ -103,7 +103,7 @@ PhysicalSystemDescriptor run_psd_discovery() {
 /**
  * @brief Write one mock cluster descriptor per FSD host into `output_dir`/mock_cluster_desc.
  *
- * @return FSD host index -> descriptor path. Host i is PSD rank i in build_physical_descriptor_from_file.
+ * @return FSD host index -> descriptor path.
  */
 std::map<int, std::string> write_offline_mock_cluster_descriptors(
     const std::string& fsd_path, const std::filesystem::path& output_dir) {
@@ -620,7 +620,7 @@ int main(int argc, char** argv) {
     // Parse arguments first (before MPI initialization)
     ProgramArgs args = parse_arguments(argc, argv);
 
-    // --offline: FSD host index -> generated mock cluster descriptor, written before MetalContext starts.
+    // --offline: FSD host index -> generated mock cluster descriptor.
     std::map<int, std::string> offline_rank_to_desc;
     if (args.offline_fsd.has_value()) {
         try {

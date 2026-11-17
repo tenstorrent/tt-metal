@@ -366,8 +366,7 @@ TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
         cluster_descs.push_back(cluster_desc);
     }
 
-    // The descriptors number each host's chips as fsd_local_chip_ids says. UBB Wormhole tray t sits on bus
-    // {0xC0, 0x80, 0x00, 0x40}[t - 1], with the ASIC location in the low bits.
+    // UBB Wormhole tray t is on bus tray_bus_ids[t - 1], with the ASIC location in the low bits.
     const std::vector<uint32_t> tray_bus_ids = {0xC0, 0x80, 0x00, 0x40};
     std::map<uint32_t, size_t> chips_per_host;
     for (const auto& [asic, chip_id] : fsd_local_chip_ids(fsd)) {

@@ -62,11 +62,8 @@ struct FilterReport {
 // allocation (optional): after the host filter, keep only the ASICs at these addresses -- see
 // filter_factory_descriptor_to_allocation. Empty = keep every ASIC of the retained hosts.
 //
-// What discovery reads off the system is filled as discovery on the mock cluster descriptors
-// generate_cluster_descriptor_from_fsd writes for this FSD would fill it, run as the first retained host:
-// umd_unique_id as those descriptors number the chips, the first host as the local one at rank 0, and
-// is_bh_galaxy_rev_c from its node_type. With a live system, align_factory_descriptor_with_live replaces the
-// local host, rank and is_bh_galaxy_rev_c; umd_unique_id stays the generated descriptors' numbering.
+// umd_unique_id, the local host and is_bh_galaxy_rev_c are filled as discovery on the descriptors
+// generate_cluster_descriptor_from_fsd writes would fill them, run as the first host.
 ::tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(
     const std::string& fsd_path,
     const std::vector<std::string>& host_filter = {},
