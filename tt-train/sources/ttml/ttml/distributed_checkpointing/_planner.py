@@ -49,7 +49,6 @@ from ._topology import (
     Label,
     chunk_boxes,
     global_shape as label_global_shape,
-    owner as elect_owner,
     replica_groups,
 )
 
@@ -124,6 +123,8 @@ class SavePlan:
         to file ``file``."""
         entries: dict[str, Entry] = {}
         for key, info in self.infos.items():
+            if not self.items.get(key):
+                continue  # another rank writes every chunk of this key
             chunks = [
                 ChunkRecord(
                     box=item.chunk.box,
@@ -207,21 +208,32 @@ def _by_key(infos: Iterable[TensorInfo], verb: str) -> dict[str, TensorInfo]:
 def create_save_plan(
     infos: Iterable[TensorInfo],
     file_for_coord: Callable[[tuple[int, ...]], str],
+    owner_of: Callable[[str, list[Chunk]], Chunk | None],
     file_metadata: Callable[[tuple[int, ...]], dict] | None = None,
 ) -> SavePlan:
-    """One file per mesh coordinate any tensor lives on; each key's unique boxes assigned to their elected owners."""
+    """One file per mesh coordinate that writes something; each key's unique boxes assigned to their elected owners.
+
+    ``owner_of(key, replica group)`` returns the group's chunk this process writes, or ``None`` when another process
+    writes it, so the election of the writers is the caller's.
+    """
     infos = _by_key(infos, "saved")
-    coords = sorted({c for info in infos.values() for c in info.label.mesh_coords})
+    owned: dict[str, list[Chunk]] = {}
+    for key, info in infos.items():
+        info.canonical_shape  # validates the transform against the global shape (raises LayoutError)
+        chosen: list[Chunk] = []
+        for group in _checked_groups(info).values():
+            own = owner_of(key, group)
+            if own is not None:
+                chosen.append(own)
+        owned[key] = chosen
+    coords = sorted({own.mesh_coord for chunks in owned.values() for own in chunks})
     files = [FilePlan(i, c, file_for_coord(c)) for i, c in enumerate(coords)]
     file_of = {c: i for i, c in enumerate(coords)}
     items: dict[str, list[WriteItem]] = {}
-    for key, info in infos.items():
-        info.canonical_shape  # validates the transform against the global shape (raises LayoutError)
-        groups = _checked_groups(info)
+    for key, chunks in owned.items():
         per_key: list[WriteItem] = []
-        for group in groups.values():
-            own = elect_owner(key, group)
-            item = WriteItem(key=key, chunk=own, file=file_of[own.mesh_coord], nbytes=info.local_nbytes)
+        for own in chunks:
+            item = WriteItem(key=key, chunk=own, file=file_of[own.mesh_coord], nbytes=infos[key].local_nbytes)
             per_key.append(item)
             files[item.file].items.append(item)
         items[key] = per_key

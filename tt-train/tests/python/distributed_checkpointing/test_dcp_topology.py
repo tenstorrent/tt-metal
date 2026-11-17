@@ -4,6 +4,8 @@
 
 """From a topology label to chunk boxes, replica groups and owners, for N-D and collapsed labels alike."""
 
+import zlib
+
 import numpy as np
 from dcp_oracle import R, S, world
 
@@ -12,6 +14,7 @@ from ttml.distributed_checkpointing._errors import TopologyError
 from ttml.distributed_checkpointing._topology import (
     Label,
     chunk_boxes,
+    crc31,
     global_shape,
     owner,
     replica_groups,
@@ -68,11 +71,11 @@ def test_fully_replicated_label_is_one_group():
 def test_owner_is_deterministic_and_spread():
     label = world([R(), S(2)], (4, 8))
     groups = replica_groups(chunk_boxes(label, (1, 1, 32, 64)))
-    group = groups[(3,)]
-    assert owner("model/x", group) == owner("model/x", list(reversed(group)))
+    holders = [(0, c.mesh_coord) for c in groups[(3,)]]  # one process: rank 0 holds every coordinate
+    assert owner("model/x", holders) == owner("model/x", list(reversed(holders)))
     counts = {}
     for i in range(400):
-        c = owner(f"model/blocks/{i}/weight", group).mesh_coord
+        _, c = owner(f"model/blocks/{i}/weight", holders)
         counts[c] = counts.get(c, 0) + 1
     assert set(counts) == {(0, 3), (1, 3), (2, 3), (3, 3)}
     assert min(counts.values()) >= 60, counts
@@ -164,3 +167,12 @@ def test_tp_split_counts_every_mesh_axis_but_fsdps():
     stacked = world([S(2), S(2)], (4, 8))
     assert tp_split(stacked, None, 4) == (1, 1, 32, 1) and tp_split(stacked, 0, 4) == (1, 1, 8, 1)
     assert tp_split(world([R(), R()], (4, 8)), None, 4) == (1, 1, 1, 1)
+
+
+def test_crc31_is_crc32_without_its_top_bit_and_one_process_picks_as_bare_coordinates():
+    for text in ("", "model/x", "optimizer/exp_avg/model/blocks/0/weight"):
+        assert crc31(text) == zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF < 2**31
+    coords = [(1, 0), (0, 1), (0, 0), (1, 1)]
+    for key in ("model/x", "model/y", "model/z"):
+        # One process is rank 0 for every holder, so the pick is the coordinate a list of bare coordinates gives.
+        assert owner(key, [(0, c) for c in coords]) == (0, owner(key, coords))
