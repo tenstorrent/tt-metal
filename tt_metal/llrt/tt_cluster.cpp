@@ -303,7 +303,7 @@ void Cluster::detect_arch_and_target() {
         log_warning(tt::LogDevice, "Using chippy emu_axi device mode");
     }
     if (this->target_type_ == tt::TargetDevice::GrendelJtag) {
-        log_warning(tt::LogDevice, "Using chippy Grendel JTAG attach mode");
+        log_warning(tt::LogDevice, "Using Grendel JTAG attach mode");
     }
 
     TT_FATAL(

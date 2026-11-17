@@ -389,7 +389,9 @@ protected:
         args.insert(args.end(), {kWords, local_offset, read ? 1u : 0u, status_offset});
         SetRuntimeArgs(program, kernel, mimir_core, args);
         try {
-            LaunchProgram(*mesh_, program);
+            distributed::MeshWorkload workload;
+            workload.add_program(distributed::MeshCoordinateRange(mesh_->shape()), std::move(program));
+            distributed::EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/true);
         } catch (const std::exception& e) {
             std::vector<uint32_t> status(8, 0);
             read_mimir_cce_sram(device_, mimir_core, noc, status.data(), status.size() * sizeof(uint32_t));
