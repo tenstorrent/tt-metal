@@ -9,7 +9,7 @@
 //                       -> cb_rstd
 //   gamma_block         xg = x * gamma (row broadcast, fp32 DEST, exact bf16 x bf16 product) -> cb_xg, per landed
 //                       chunk; needs no stats, so it runs BEFORE the combine for the whole own block and for the first
-//                       xg_ahead landed chunks of a remote block (the stall shadow)
+//                       remote chunks the host look-ahead table expects landed by then (the stall shadow)
 //   expand_rstd_block   unary_bcast<Col> -> cb_rstd_full (one tile per block row)
 //   normalize_block     per chunk: out = xg * rstd_full -> cb_out; a chunk not done ahead runs x * gamma * rstd_full
 //                       as one chain (DEST reused as srcA, FUSE_LATE_CHUNKS)
@@ -49,9 +49,8 @@ constexpr uint32_t cb_rstd = get_compile_time_arg_val(C + 7);
 constexpr uint32_t cb_partial = get_compile_time_arg_val(C + 8);
 constexpr uint32_t cb_xg = get_compile_time_arg_val(C + 9);
 constexpr uint32_t cb_scaler = get_compile_time_arg_val(C + 10);
-constexpr uint32_t xg_ahead = get_compile_time_arg_val(C + 11);  // remote cores: xg chunks before the combine
-constexpr uint32_t cb_rstd_full = get_compile_time_arg_val(C + 12);
-constexpr bool fuse_late = get_compile_time_arg_val(C + 13) != 0;  // x * gamma * rstd in one chain for late chunks
+constexpr uint32_t cb_rstd_full = get_compile_time_arg_val(C + 11);
+constexpr bool fuse_late = get_compile_time_arg_val(C + 12) != 0;  // x * gamma * rstd in one chain for late chunks
 
 static_assert(block_w % chunk_tiles == 0 || chunk_tiles % block_w == 0, "a chunk is a run in one row or whole rows");
 
@@ -211,11 +210,14 @@ void kernel_main() {
             ReduceFp32Mode::Accurate>(ReduceInputBlockShape::of(h, 1));
     }
 
-    // ---- gamma_block ahead of the stats: the whole own block, the first xg_ahead landed chunks of a remote one ----
+    // ---- gamma_block ahead of the stats: the whole own block, the early-stream chunks of a remote one ----
     const uint32_t n_chunks = h * block_w / chunk_tiles;
     // Every member must produce bit-identical output for a slice, so all cores of a slice use one arithmetic: with
     // fuse_late no chunk goes through cb_xg (the fused chain keeps x * gamma in DEST, the cb_xg path rounds it via L1).
-    const uint32_t ahead = fuse_late ? 0 : (b.q == p ? n_chunks : (xg_ahead < n_chunks ? xg_ahead : n_chunks));
+    // ahead = this core's entry of the host look-ahead table (common args after row_base, 8 bits per core)
+    const uint32_t core_idx = b.q * nb + b.m;
+    const uint32_t ahead_tab = get_common_arg_val<uint32_t>(row_base_idx + grid_y + core_idx / 4);
+    const uint32_t ahead = fuse_late ? 0 : ((ahead_tab >> (8 * (core_idx % 4))) & 0xFF);
     cb_wait_front(cb_gamma, block_w);  // held for every chunk (Row-mapped, offset per chunk)
     for (uint32_t k = 0; k < ahead; ++k) {
         gamma_chunk(k);

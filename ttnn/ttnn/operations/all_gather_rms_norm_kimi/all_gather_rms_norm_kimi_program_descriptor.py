@@ -49,10 +49,14 @@ PORT_BATCH_CHUNKS_MAX = 8  # packet-header pool cap
 STATS_BULK_WINDOW = 2
 INC_EVERY = 8  # fused arrival increment every this many chunks (+ every entry end)  [TRANSPORT]
 OUT_DEPTH_CHUNKS = 2  # cb_out depth in chunks
-# Remote-slice cores compute xg = x * gamma for this many landed chunks before the stats combine (own cores: all of
-# their block). After the stats only out = xg * rstd is left per chunk, so the first stores start right after the
-# combine; a chunk that lands after the combine pays both multiplies on its tail.  [OVERLAP]
-XG_AHEAD_CHUNKS = 0
+# Look-ahead by stream position: a remote block computes xg = x * gamma BEFORE the stats combine for its chunks that
+# are not among the last XG_LATE_STREAM_CHUNKS chunks of their upstream port's static stream; those last ones (they
+# land at the very end) do it after the combine so the combine (~2 us of SFPU) never sits on the landing tail. Own
+# cores do their whole block ahead. After the stats only out = xg * rstd is left for the chunks done ahead. The
+# distance from the stream end is the combine time over the per-chunk landing interval (~6 chunks measured; the
+# PERF FOCUS sweep: 10 late -> 19.01 us, 6 -> 18.94, 4 -> 20.74 cliff), independent of the stream length.
+# None = no remote chunk ahead (every remote chunk after the combine).  [OVERLAP]
+XG_LATE_STREAM_CHUNKS = 8
 # A chunk whose xg was not computed ahead runs x * gamma * rstd as ONE chain (x * gamma into DEST, then * rstd_full
 # with DEST reused as srcA): one unpack/pack pass on the landing tail instead of an fp32 round trip through cb_xg.
 FUSE_LATE_CHUNKS = False
@@ -412,6 +416,33 @@ def stream_incs(geo, entries):
     return thresholds, incs
 
 
+def xg_ahead_table(geo, p):
+    """Per compute core (index q * nb + m) of chip p: chunks of its block that compute xg before the stats combine,
+    packed 4 per word (8 bits each). Own blocks: all. Remote blocks: the chunks before the last XG_LATE_STREAM_CHUNKS
+    of their upstream port's stream (each remote block arrives in exactly one upstream stream)."""
+    G = geo.G
+    ahead = [0] * (G * geo.nb)
+    for m in range(geo.nb):
+        ahead[p * geo.nb + m] = geo.nchunks(m)
+    for l in range(geo.L):
+        for d in (FWD, BWD):
+            up_p = (p - 1) % G if d == FWD else (p + 1) % G
+            entries = port_stream(geo, up_p, l, d)
+            total = sum(geo.nchunks(m) for _, ms in entries for m in ms)
+            thr = 0 if XG_LATE_STREAM_CHUNKS is None else total - XG_LATE_STREAM_CHUNKS
+            t = 0
+            for q, ms in entries:
+                for m in ms:
+                    n = geo.nchunks(m)
+                    ahead[q * geo.nb + m] = min(n, max(0, thr - t))
+                    t += n
+    assert max(ahead) < 256
+    words = [0] * (-(-len(ahead) // 4))
+    for i, a in enumerate(ahead):
+        words[i // 4] |= a << (8 * (i % 4))
+    return words
+
+
 def stats_slots(geo, p, d):
     """Stats slots the link-0 port of direction d sends: own first, then the relayed ones, as the bulk schedule."""
     G = geo.G
@@ -518,7 +549,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 STATS_BULK_WINDOW,
                 OUT_DEPTH_CHUNKS,
                 GAMMA_HUB_MCAST,
-                XG_AHEAD_CHUNKS,
+                XG_LATE_STREAM_CHUNKS,
                 FUSE_LATE_CHUNKS,
                 gamma_page,
             )
@@ -575,10 +606,10 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             writer_common = [out_addr, stats_addr, p, _xy(hub_v)] + geo.row_base
             writer_ct = geo_ct + [CB_PARTIAL, CB_OUT, SEM_OWN_PARTIALS, tile_bytes]
             writer_ct += list(ttnn.TensorAccessorArgs(output).get_compile_time_args())
-            compute_common = [p] + geo.row_base
+            compute_common = [p] + geo.row_base + xg_ahead_table(geo, p)
             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
             compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_XG]
-            compute_ct += [CB_SCALER, XG_AHEAD_CHUNKS, CB_RSTD_FULL, int(FUSE_LATE_CHUNKS)]
+            compute_ct += [CB_SCALER, CB_RSTD_FULL, int(FUSE_LATE_CHUNKS)]
 
             ccfg = ttnn.ComputeConfigDescriptor()
             ccfg.math_fidelity = cfg.math_fidelity
