@@ -115,12 +115,14 @@ def _ramp(lo: float, hi: float) -> torch.Tensor:
 
 # Most paths that pack into bf16 share one pair because packer rounding is the main source of error.
 # Correction is not limited by rounding precision because it accumulates across five tiles.
+# Softplus reaches beta*x = -12 (~6e-6). atol is capped at ~3e-8, so a 0 in the tail
+# fails on rtol rather than hiding under the floor. fp32 rtol is 2x the measured 1.61e-4.
 _TOLERANCES = {
     # op, approx (None where the body ignores it): bf16-packed, fp32 end-to-end
     (SdpaOp.Correction, None): ((1.5e-4, 2.5e-2), (1.0e-6, 2.5e-7)),
     (SdpaOp.ExpAccurate, None): ((4.0e-6, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.ExpPoly, None): ((4.0e-6, 1.2e-2), (4.0e-6, 8.0e-6)),
-    (SdpaOp.Softplus, None): ((1.0e-4, 1.0e-2), (1.0e-4, 4.0e-3)),
+    (SdpaOp.Softplus, None): ((3.0e-8, 1.0e-2), (3.0e-8, 3.2e-4)),
     (SdpaOp.RecipIter, False): ((2.5e-3, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.RecipIter, True): ((2.5e-3, 1.2e-2), (2.5e-3, 1.2e-2)),
 }
@@ -191,11 +193,9 @@ def _stimulus(variant: Variant) -> torch.Tensor:
         span = 8.0 / abs(scale)
         return _ramp(0.0, span) if scale < 0.0 else _ramp(-span, 0.0)
 
-    # Softplus. The bound keeps |beta*x| inside the residual polynomial's [0, 5] fit domain, so
-    # the test measures the polynomial rather than the clamp beyond it. Where beta*x clears the
-    # threshold the body writes nothing and the golden returns x, so a low threshold covers the
-    # pass-through arm without needing its own stimulus.
-    bound = 4.0 / variant.softplus.beta
+    # Softplus. |beta*x| passes 5 (the old flush). A low threshold still hits the
+    # pass-through arm, where the body writes nothing and the golden returns x.
+    bound = 12.0 / variant.softplus.beta
     return _ramp(-bound, bound)
 
 

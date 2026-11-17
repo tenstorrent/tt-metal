@@ -15,7 +15,7 @@ namespace ttnn::operations::experimental::copy::detail {
 
 void bind_typecast(nb::module_& mod) {
     const auto* doc = R"doc(
-        Returns a new tensor which is a typecast of input tensor with new datatype``{0}``.
+        Returns a new tensor which is a typecast of input tensor with new datatype ``dtype``.
 
         Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
 
@@ -26,9 +26,9 @@ void bind_typecast(nb::module_& mod) {
         .. csv-table::
             :header: "Argument", "Description", "Data type", "Required"
 
-            "input_tensors", "Input tensors to typecast", "List of Tensors", "Yes"
+            "input_tensor", "Input tensor to typecast", "Tensor", "Yes"
             "dtype", "datatype of typecast", "Datatype", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
+            "memory_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
     )doc";
 
     ttnn::bind_function<"typecast", "ttnn.experimental.">(

@@ -590,8 +590,7 @@ UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
     const auto& input_tensor = input;
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
-    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
-    uint32_t num_tiles = std::ceil((float)input_tensor.physical_volume() / (float)single_tile_size);
+    uint32_t num_tiles = static_cast<uint32_t>(input_tensor.physical_volume() / (tile_width * tile_height));
     int compute_cycles = 0;
     const int max_tiles_per_row = 8;
     const int latency_untilize = 390;      // measured latency for untilize_block
@@ -625,6 +624,16 @@ Tensor untilize_with_unpadding(
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids},
         input_tensor);
+}
+
+tt::DataFormat get_untilize_with_unpadding_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch) {
+    const tt::DataFormat format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    // Quasar rejects UInt16 as a DFB format. The untilize kernels only move the 16-bit values, so Int16 holds
+    // them bit for bit.
+    if (arch == tt::ARCH::QUASAR && format == tt::DataFormat::UInt16) {
+        return tt::DataFormat::Int16;
+    }
+    return format;
 }
 
 }  // namespace ttnn::prim

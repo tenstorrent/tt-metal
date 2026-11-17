@@ -8,6 +8,7 @@ import ttnn
 import pytest
 from typing import Dict, Any, List
 
+from models.experimental.bevformer.tt import tt_common
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import REBATCH_HEADROOM
 from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
@@ -289,3 +290,12 @@ def test_bevformer_encoder_over_a_rig_sequence(device, config_name, expected_max
         assert passed, f"frame {i}: {message}"
 
     assert reallocations == 2, "the sequence should outgrow the plan twice"
+
+
+def test_bevformer_encoder_glue_intermediates_in_dram(device, monkeypatch):
+    """One base layer at bs=2 with every group of intermediates around the fused ops in DRAM, as
+    ``tt_common.l1_if_fits`` places them when they do not fit L1. Only the encoder runs the FFN's
+    group; the attention tests force the others. Forced, since whether a grid outgrows the budget
+    depends on the device's L1."""
+    monkeypatch.setattr(tt_common, "L1_INTERMEDIATE_SHARE", 0.0)
+    test_bevformer_encoder_forward(device, "nuscenes_base", (100, 100), 1, 2, 0.997, 0.05, 0.8, 0.5, seed=0)

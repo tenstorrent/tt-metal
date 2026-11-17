@@ -6,8 +6,9 @@
 
 Every case runs on Quasar and on WH/BH. See
 QUASAR_PARITY_GAPS.md for the factory capability boundary. On Quasar, the
-no-broadcast tensor-tensor cases that the native gate admits run on the
-Quasar-native factory, unless TTNN_QSR_NATIVE=0.
+cases that the native gate admits run on the Quasar-native factory, unless
+TTNN_QSR_NATIVE=0: the no-broadcast tensor-tensor cases, and the bf16 ROW, COL,
+SCALAR and mixed shapes of _SHAPES.
 Passing on WH/BH does not validate Quasar-specific LLKs or packers.
 """
 

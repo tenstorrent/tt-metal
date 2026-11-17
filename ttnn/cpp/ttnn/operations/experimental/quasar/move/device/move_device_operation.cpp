@@ -119,13 +119,13 @@ ttnn::prim::qsr::MoveDeviceOperation::tensor_return_value_t move(
     using OperationType = ttnn::prim::qsr::MoveDeviceOperation;
     bool backwards = false;
     if (move_op_parallelization_strategy == ttnn::prim::qsr::MoveOpParallelizationStrategy::MULTI_CORE) {
-        Buffer* src_buffer = input_tensor.buffer();
-        Buffer* dst_buffer = output_tensor.buffer();
-        const bool src_and_dst_in_l1 = src_buffer->buffer_type() == tt::tt_metal::BufferType::L1 &&
-                                       dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1;
+        const auto* src_buffer = &input_tensor.mesh_buffer();
+        const auto* dst_buffer = &output_tensor.mesh_buffer();
+        const bool src_and_dst_in_l1 = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::L1 &&
+                                       dst_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::L1;
         const uint32_t src_base = src_buffer->address();
         const uint32_t dst_base = dst_buffer->address();
-        const uint32_t copy_size_bytes = dst_buffer->size();
+        const uint32_t copy_size_bytes = dst_buffer->device_local_size();
         const bool ranges_overlap = (src_base < dst_base + copy_size_bytes) && (dst_base < src_base + copy_size_bytes);
         backwards = src_and_dst_in_l1 && ranges_overlap && (dst_base > src_base);
     }

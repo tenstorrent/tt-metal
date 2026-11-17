@@ -80,7 +80,7 @@ export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4
 export HF_HUB_OFFLINE=1
 export PREFILL_DFLASH=1
 pytest \
-  'models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-ctx_256k-chunk8192-text-8x4]' \
+  'models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-ctx_256k-chunk4096-text-8x4]' \
   -sv --timeout=1800
 ```
 

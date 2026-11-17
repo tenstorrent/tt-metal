@@ -14,7 +14,7 @@
     wh_llmbox_civ2_viommu:
       timeout: 15
     bh_p150b_civ2_viommu:
-      timeout: 10
+      timeout: 5
   team: ttnn
   budget_type: merge_gate
   owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis

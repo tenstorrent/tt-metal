@@ -4,17 +4,14 @@
 
 #pragma once
 
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
 
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
-#include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // for FabricNodeId
 #include <hostdevcommon/fabric_common.h>
 #include <optional>
 #include <cstdint>
@@ -26,7 +23,6 @@
 #include <unordered_map>
 #include "builder/fabric_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
@@ -485,6 +481,9 @@ public:
 
     void set_firmware_context_switch_interval(size_t interval);
     void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
+    // Ethernet TX queue keepalive period in cycles (ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT), set by the router while it
+    // runs. 0 leaves the firmware's value.
+    void set_eth_txq_seq_update_timeout(uint32_t cycles);
     void set_wait_for_host_signal(bool wait_for_host_signal);
 
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
@@ -550,6 +549,7 @@ public:
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
+    uint32_t eth_txq_seq_update_timeout = 0;
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;
