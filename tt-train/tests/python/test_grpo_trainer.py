@@ -68,6 +68,7 @@ from ttml.trainers.grpo_trainer.remote_rollout import (
     mpi_rollout,
     rollout_queue,
     sync_remote_rollout_batch_source,
+    threaded_weight_bridge,
 )
 from ttml.trainers.grpo_trainer.remote_rollout.async_remote_rollout_batch_source import AsyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.rollout_queue import RolloutQueue
@@ -1504,6 +1505,52 @@ def test_rollout_queue_loopback(monkeypatch):
         np.testing.assert_array_equal(got.rewards, want.rewards)
         np.testing.assert_array_equal(got.reward_components["length"], want.reward_components["length"])
         assert (got.generation_time_s, got.reward_time_s) == (want.generation_time_s, want.reward_time_s)
+
+
+def test_trace_capture_lock_is_held_from_begin_to_end(monkeypatch):
+    lock = threaded_weight_bridge._capture_lock
+    seen = []
+    monkeypatch.setattr(
+        threaded_weight_bridge, "_begin_trace_capture", lambda *a, **k: seen.append(lock.locked()) or "tid"
+    )
+    monkeypatch.setattr(threaded_weight_bridge, "_end_trace_capture", lambda *a, **k: seen.append(lock.locked()))
+    assert threaded_weight_bridge._begin_trace_capture_locked("mesh", cq_id=0) == "tid"
+    assert lock.locked()
+    threaded_weight_bridge._end_trace_capture_locked("mesh", "tid", cq_id=0)
+    assert not lock.locked() and seen == [True, True]
+
+
+def test_trace_capture_lock_is_released_when_begin_raises(monkeypatch, expect_error):
+    def fail(*args, **kwargs):
+        raise RuntimeError("begin failed")
+
+    monkeypatch.setattr(threaded_weight_bridge, "_begin_trace_capture", fail)
+    with expect_error(RuntimeError, "begin failed"):
+        threaded_weight_bridge._begin_trace_capture_locked("mesh", cq_id=0)
+    assert not threaded_weight_bridge._capture_lock.locked()
+
+
+def test_threaded_weight_bridge_receiver_locks_trace_capture_until_close(monkeypatch):
+    monkeypatch.setattr(ttnn, "begin_trace_capture", threaded_weight_bridge._begin_trace_capture)
+    monkeypatch.setattr(ttnn, "end_trace_capture", threaded_weight_bridge._end_trace_capture)
+    monkeypatch.setattr(threaded_weight_bridge, "exit_on_error", contextlib.nullcontext)
+    queues = collections.defaultdict(queue.Queue)
+    contexts = iter([_LoopbackContext(TTML_RANK, queues), _LoopbackContext(TTT_RANK, queues)])
+    monkeypatch.setattr(threaded_weight_bridge, "duplicate_distributed_context", lambda: next(contexts))
+    bridge = threaded_weight_bridge.ThreadedWeightBridge
+
+    sender = bridge.sender(peer_rank=TTT_RANK, mesh_device=None)
+    sender.connect()
+    assert ttnn.begin_trace_capture is threaded_weight_bridge._begin_trace_capture
+    sender.close()  # sends the 0-length manifest that ends the receiver loop
+
+    receiver = bridge.receiver(peer_rank=TTML_RANK, mesh_device=None, submeshes=[None])
+    receiver.connect()
+    assert ttnn.begin_trace_capture is threaded_weight_bridge._begin_trace_capture_locked
+    assert ttnn.end_trace_capture is threaded_weight_bridge._end_trace_capture_locked
+    receiver.close()
+    assert ttnn.begin_trace_capture is threaded_weight_bridge._begin_trace_capture
+    assert ttnn.end_trace_capture is threaded_weight_bridge._end_trace_capture
 
 
 class _ScriptedBridge:
