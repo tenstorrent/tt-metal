@@ -192,7 +192,13 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         pcie_id_to_asic_location[pcie_id] = ASICLocation{ubb_id.asic_id};
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     }
-    auto tray_id = get_tray_id_for_chip(cluster_desc, chip_id, get_mobo_name(), using_mock_cluster_desc);
+    // A mock descriptor captured on this very host (its cluster id is this host's name) has this host's motherboard,
+    // so its trays follow the live rule; guessing the motherboard from bus ids can put chips in other trays than a
+    // live run does, and the mesh then maps onto the chips differently.
+    const auto& cluster_id = cluster_desc.get_cluster_id();
+    const bool describes_this_host = cluster_id.has_value() && *cluster_id == get_host_name();
+    auto tray_id =
+        get_tray_id_for_chip(cluster_desc, chip_id, get_mobo_name(), using_mock_cluster_desc && !describes_this_host);
     ASICLocation asic_location;
     tt::ARCH arch = cluster_desc.get_arch(chip_id);
     if (arch == tt::ARCH::WORMHOLE_B0) {
