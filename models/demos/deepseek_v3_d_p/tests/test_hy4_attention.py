@@ -14,9 +14,9 @@ identical copies of the embedding, so the iHC pre-mix is a positive per-token mu
 what the TT stack (no iHC yet, #65891) feeds layer 0, so this layer's attention is checked against HF's. Longer
 prompts (32K) use seeded random tokens through the same embedding + norm.
 
-Weights go to ttMLA in its RoPE frame: Hy4 ropes half-split, ttMLA interleaved, so the q/k RoPE columns (and the
-indexer's) are permuted here; scores are unchanged. This is done in the test, not via the checkpoint reader,
-so the check does not depend on where that permutation lands. Also logged (not asserted): the PCC against the
+Device weights come from the production Hy4 reader (``hy4_checkpoint.hy4_mla_weights``: RoPE frames reordered
+half-split -> interleaved, gate and sink remapped); the reference reads the raw HF tensors, so the reader is checked
+too. Also logged (not asserted): the PCC against the
 reference without the sink / without the gate, and the device top-k's agreement with the golden's.
 
 Env: ``HY4_HF_MODEL`` (default /mnt/tt-data/Hy4-Preview), ``HY4_GOLDEN_DIR`` (default the 4K v2 golden),
@@ -62,18 +62,6 @@ pytestmark = [
 
 
 # ---------------------------------------------------------------------------------------------- frames
-def half_split_to_interleaved_perm(d: int) -> torch.Tensor:
-    """``x[..., perm]``: half-split RoPE pairs ``(i, i + d/2)`` -> interleaved ``(2i, 2i + 1)``, same frequencies."""
-    h = d // 2
-    return torch.stack([torch.arange(h), torch.arange(h) + h], dim=-1).reshape(d)
-
-
-def index_k_device_perm(index_head_dim: int, rope_dim: int) -> torch.Tensor:
-    """Hy4 index key ``[nope | rope(half-split)]`` -> TtIndexer's ``[rope(interleaved) | nope]``."""
-    nope = index_head_dim - rope_dim
-    return torch.cat([nope + half_split_to_interleaved_perm(rope_dim), torch.arange(nope)])
-
-
 def hf_attention_weights(ckpt, layer: int, owns_indexer: bool) -> dict:
     """HF-named fp32 weights of one Hy4 attention layer (reference input)."""
     a = f"model.layers.{layer}.self_attn."
@@ -95,38 +83,14 @@ def hf_attention_weights(ckpt, layer: int, owns_indexer: bool) -> dict:
     return w
 
 
-def ttmla_weights(w: dict, config, owns_indexer: bool) -> dict:
-    """ttMLA canonical weight dict in ttMLA's RoPE frame (see module docstring)."""
-    H, N, R, L = config.num_attention_heads, config.qk_nope_head_dim, config.qk_rope_head_dim, config.kv_lora_rank
-    rp = half_split_to_interleaved_perm(R)
-    kv = w["kv_a_proj_with_mqa.weight"]
-    qb = w["q_b_proj.weight"].reshape(H, N + R, -1)
-    bf = lambda t: t.to(torch.bfloat16).contiguous()  # noqa: E731
-    out = {
-        "q_a_proj.weight": bf(w["q_a_proj.weight"]),
-        "q_a_layernorm.weight": w["q_a_layernorm.weight"],
-        "q_b_proj.weight": bf(torch.cat([qb[:, :N], qb[:, N:][:, rp]], dim=1).reshape(H * (N + R), -1)),
-        "kv_a_proj_with_mqa.weight": bf(torch.cat([kv[:L], kv[L:][rp]])),
-        "kv_a_layernorm.weight": w["kv_a_layernorm.weight"],
-        "kv_b_proj.weight": bf(w["kv_b_proj.weight"]),
-        "o_proj.weight": bf(w["o_proj.weight"]),
-        "g_proj.weight": bf(w["linear_gate.weight"]),
-        "attn_sink.weight": w["learnable_sink_param"],
-    }
-    if owns_indexer:
-        d = config.index_head_dim
-        p = index_k_device_perm(d, R)
-        wq = w["indexer.wq_b.weight"]
-        out.update(
-            {
-                "indexer.wq_b.weight": bf(wq.reshape(-1, d, wq.shape[-1])[:, p].reshape(wq.shape)),
-                "indexer.wk.weight": bf(w["indexer.wk.weight"][p]),
-                "indexer.k_norm.weight": w["indexer.k_norm.weight"][p].contiguous(),
-                "indexer.k_norm_bias.weight": w["indexer.k_norm.bias"][p].contiguous(),
-                "indexer.weights_proj.weight": w["indexer.weights_proj.weight"],
-            }
-        )
-    return out
+def ttmla_weights(ckpt, layer: int, config, owns_indexer: bool) -> dict:
+    """ttMLA's weight dict from the production Hy4 reader: canonical names, RoPE frames reordered half-split ->
+    interleaved, ``linear_gate`` -> ``g_proj``, ``learnable_sink_param`` -> ``attn_sink`` (fp32)."""
+    from models.demos.deepseek_v3_d_p.tt.runners.hy4_checkpoint import hy4_mla_weights
+
+    return hy4_mla_weights(
+        ckpt, f"model.layers.{layer}", owns_indexer=owns_indexer, gated=True, config=config, sink=True
+    )
 
 
 def layer0_hidden(ckpt, seq_len: int, eps: float) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -383,7 +347,14 @@ def test_hy4_attention_sublayer_vs_hf(mesh_device, device_params, sp_axis, seq_l
     # Full-indexer layer: the device indexer picks the top-k; the reference attends over the same rows.
     w0 = hf_attention_weights(ckpt, FULL_LAYER, owns_indexer=device_indexer)
     out0, idx_tt = run_device_attention(
-        run_cfg, ttmla_weights(w0, config, device_indexer), mesh_device, hn, FULL_LAYER, topology, sp_axis, inject0
+        run_cfg,
+        ttmla_weights(ckpt, FULL_LAYER, config, device_indexer),
+        mesh_device,
+        hn,
+        FULL_LAYER,
+        topology,
+        sp_axis,
+        inject0,
     )
     topk = idx_tt
     results["full"], kvpe0 = _check_layer(f"layer {FULL_LAYER} (full)", out0, hn, w0, topk, dims)
@@ -403,7 +374,14 @@ def test_hy4_attention_sublayer_vs_hf(mesh_device, device_params, sp_axis, seq_l
     # Shared layer: no indexer of its own; reuses the full layer's top-k, as in the model.
     w2 = hf_attention_weights(ckpt, SHARED_LAYER, owns_indexer=False)
     out2, _ = run_device_attention(
-        run_cfg, ttmla_weights(w2, config, False), mesh_device, hn, SHARED_LAYER, topology, sp_axis, inject=idx_tt
+        run_cfg,
+        ttmla_weights(ckpt, SHARED_LAYER, config, False),
+        mesh_device,
+        hn,
+        SHARED_LAYER,
+        topology,
+        sp_axis,
+        inject=idx_tt,
     )
     results["shared"], _ = _check_layer(f"layer {SHARED_LAYER} (shared)", out2, hn, w2, topk, dims)
 
