@@ -375,6 +375,7 @@ def select_global(ctx, qh, w32, key_view, fin_out=None):
             out=fin_out,
             perrow=ctx.perrow,
             own=own,
+            sel3=os.environ.get("HY4_B36_SEL3", "0") == "1",
             vpush=ctx.val_push(kloc) if os.environ.get("HY4_B35_VPUSH", "0") == "1" else None,
             push=ctx.id_push(kloc) if (os.environ.get("HY4_B35_IDPUSH", "0") == "1" and not own) else None,
         )

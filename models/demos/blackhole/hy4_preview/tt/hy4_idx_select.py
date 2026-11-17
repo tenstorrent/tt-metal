@@ -173,17 +173,30 @@ def select_v2(
         1,
         m,
         B,
-        split,
+        int(
+            os.environ.get("HY4_B36_CSPL_C", split)
+        ),  # B36: tunable work split of the candidate kernel (default = split)
         blocked_out=blocked,
     )
-    cvals = ttnn.reshape(bvals, [1, 1, S, B * kb])
-    pos = topk_ids(cvals, kloc)
-    lids, lvals = cs_gather(
-        ttnn.reshape(pos, [S, 1, 1, kloc]),
-        ttnn.reshape(bgids, [S, 1, 1, B * kb]),
-        ttnn.reshape(bvals, [S, 1, 1, B * kb]),
-        split,
-    )
+    if os.environ.get("HY4_B36_SEL2", "0") == "1" and fin is not None and B <= 16:
+        from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
+
+        # EXPERIMENT ONLY (dead end, see RESULT_B36): sel2 orders ties by (list, position), NOT by the LLK stamp of the stock top-k, so the selection differs from the stock chain at ties
+        assert (
+            os.environ.get("HY4_B36_SEL2_INEXACT", "0") == "1"
+        ), "HY4_B36_SEL2 is not bit-exact vs the stock chain (tie order); set HY4_B36_SEL2_INEXACT=1 to measure it anyway"
+
+        # B36: stage-2 top-kloc over the B sorted block lists + cs_gather as one program (sorted descending output)
+        lids, lvals = HP.sel2(bvals, bgids, S, B, kb, kloc, blocked)
+    else:
+        cvals = ttnn.reshape(bvals, [1, 1, S, B * kb])
+        pos = topk_ids(cvals, kloc)
+        lids, lvals = cs_gather(
+            ttnn.reshape(pos, [S, 1, 1, kloc]),
+            ttnn.reshape(bgids, [S, 1, 1, B * kb]),
+            ttnn.reshape(bvals, [S, 1, 1, B * kb]),
+            int(os.environ.get("HY4_B36_CSPL_G", split)),
+        )
     if (
         fin is not None
     ):  # B35: fin = dict(colinfo, out, perrow, push (hy4_qpush.Push of the local id rows or None)): cs_gather + id_filter as one program, returns idx8
@@ -197,6 +210,10 @@ def select_v2(
         ):  # B35: value gather = push + flag-wait assemble (3 us + ~5 us instead of the 21 us all-gather)
             vp = fin["vpush"]
             vp(lvals)
+            if fin.get("sel3") and fin.get(
+                "own"
+            ):  # B36: wait + stage-3 top-K + own filter in one program (lvals rows are sorted descending)
+                return HP.sel3_own(vp, lids, fin["colinfo"], S, fin["out"], fin["perrow"], K=K)
             av = HP.push_wait(vp, S)
         else:
             av = ag(lvals)

@@ -85,6 +85,10 @@ def main():
             out = eng.round([K] * R, False, plugin_block=blk)
             blk = {r: (out[r]["tok"], out[r]["pos"]) for r in range(R) if eng.live[r]}
         res(event="round_ms", ms=round((time.perf_counter() - t0) / 30 * 1e3, 2))
+        if os.environ.get("HY4_B36_DBG", "0") == "1":
+            from models.demos.blackhole.hy4_preview.tt import hy4_pool as _HP
+
+            res(event="sel3x_dbg", stats=_HP.dbg_dump(md))
         res(event="finished", all_equal=allok)
     finally:
         close_mesh(md)
