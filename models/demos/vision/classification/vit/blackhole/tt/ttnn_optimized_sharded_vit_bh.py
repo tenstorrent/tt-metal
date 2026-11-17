@@ -16,11 +16,13 @@ def largest_divisor_at_most(value, limit):
     return max(divisor for divisor in range(1, min(value, limit) + 1) if value % divisor == 0)
 
 
-def ff1_exceeds_l1_budget(device, rows_t, cols_t):
-    """Whether a core's ff1 output, a block of rows_t x (4 * cols_t) bfloat8_b tiles, is too big for its L1.
+def largest_activation_exceeds_l1(device, rows_t, cols_t):
+    """Whether a core's largest activation, the ff1 output, is too big for its L1.
 
-    ff1's output is 4x wider than the hidden block it comes from and is the largest activation a core holds,
-    alongside that block, the residual and the matmul buffers. The limit is a quarter of a core's L1.
+    The ff1 output is a block of rows_t x (4 * cols_t) bfloat8_b tiles: 4x wider than the hidden block it comes
+    from and larger than the qkv output or the attention scores, so when it fits, every other activation does.
+    The core also holds the hidden block, the residual and the matmul buffers, so the limit is a quarter of
+    its L1.
     """
     ff1_output_bytes = rows_t * cols_t * 4 * ttnn.tile_size(ttnn.bfloat8_b)
     l1_bytes_per_core = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
@@ -32,9 +34,9 @@ def update_model_config(config, batch_size, device):
 
     The grid width is the largest divisor of the hidden tiles, heads and padded classes that fits the device,
     and its height the largest divisor of the batch. Activations stay sharded in L1 with the program configs
-    below unless ff1 does not fit (ff1_exceeds_l1_budget); then the whole model runs from DRAM and the ops
-    pick their own program configs. Besides the Hugging Face fields the result carries core_grid, in_dram,
-    memory_configs, should_reallocate_in_attention and program_configs.
+    below unless the largest activation does not fit (largest_activation_exceeds_l1); then the whole model runs
+    from DRAM and the ops pick their own program configs. Besides the Hugging Face fields the result carries
+    core_grid, in_dram, memory_configs, should_reallocate_in_attention and program_configs.
     """
     TILE_HEIGHT = 32
     device_grid = device.compute_with_storage_grid_size()
@@ -66,7 +68,7 @@ def update_model_config(config, batch_size, device):
     # Placement by role: embeddings interleaved, encoder activations block-sharded over core_grid, attention
     # heads height-sharded. On a grid whose L1 cannot hold ff1, every role goes to DRAM.
     # The sharded head split takes one image per core row, so a row holding more runs from DRAM too.
-    in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x) or batch_per_y > 1
+    in_dram = largest_activation_exceeds_l1(device, seqL_t__y, dim_t__x) or batch_per_y > 1
     if in_dram:
         memory_configs = {
             "embeddings": ttnn.DRAM_MEMORY_CONFIG,

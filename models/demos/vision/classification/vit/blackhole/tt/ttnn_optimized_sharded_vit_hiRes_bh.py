@@ -10,7 +10,7 @@ from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_w
 
 import ttnn
 from models.demos.vision.classification.vit.blackhole.tt.ttnn_optimized_sharded_vit_bh import (
-    ff1_exceeds_l1_budget,
+    largest_activation_exceeds_l1,
     largest_divisor_at_most,
 )
 
@@ -63,10 +63,10 @@ def update_model_config(config, batch_size, sequence_size, device):
     # A layer norm or matmul output subblock holds at most eight tiles; a narrow grid's blocks are wider.
     subblock_w = largest_divisor_at_most(dim_t__x, 8)
 
-    # When ff1 does not fit, only the qkv, output and MLP projections go through DRAM; their outputs return
-    # to the block-sharded grid, and the rest of the layer stays in L1. Blocks wider than eight tiles go there
-    # too: their matmuls' buffers do not fit L1 beside the activations.
-    projections_in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x) or dim_t__x > 8
+    # When the largest activation does not fit, only the qkv, output and MLP projections go through DRAM; their
+    # outputs return to the block-sharded grid, and the rest of the layer stays in L1. Blocks wider than eight
+    # tiles go there too: their matmuls' buffers do not fit L1 beside the activations.
+    projections_in_dram = largest_activation_exceeds_l1(device, seqL_t__y, dim_t__x) or dim_t__x > 8
     # The head split reads the fused qkv from L1 when a quarter of the grid's L1 holds it, from DRAM otherwise.
     l1 = ttnn.get_memory_view(device, ttnn.BufferType.L1)
     qkv_bytes = batch_size * seqL_t * 3 * dim_t * ttnn.tile_size(ttnn.bfloat8_b)
