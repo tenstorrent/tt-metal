@@ -24,7 +24,6 @@ import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
@@ -1001,181 +1000,6 @@ def _fabric2d_torus_xy_8x4(model_cfg):
     ]
 
 
-# ---------------------------------------------------------------------------
-# GLM-5.3 MoE
-# ---------------------------------------------------------------------------
-
-# The packed-forward sweep rows are a local measurement; the CI leg selects test_glm_moe by mesh only.
-_NOT_IN_CI = pytest.mark.skipif(
-    os.environ.get("CI") == "true" or "TT_GH_CI_INFRA" in os.environ, reason="local packed-forward sweep"
-)
-
-
-#
-# 256 experts / top-8, emb 6144, moe_int 2048. Exercises the >64-expert unfused
-# extract->FFN->insert routed-expert path on GLM dims. Gate is generic here (op-level test);
-# GLM's noaux_tc knife-edge gate is validated at the transformer level.
-@pytest.mark.parametrize(
-    (
-        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
-    ),
-    [
-        # fmt: off
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
-        # Packed-forward sweep: 2 and 4 chunks' rows per chip in one MoE call. Expert weights are read once per
-        # call, so MoE time vs rows shows how much a packed forward amortizes them.
-        pytest.param(2 * PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), _NOT_IN_CI], id="perf-device-glm-256-x2"),
-        pytest.param(4 * PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), _NOT_IN_CI], id="perf-device-glm-256-x4"),
-        # fmt: on
-    ],
-)
-@pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, sp_axis",
-    [
-        pytest.param(
-            (8, 1),
-            torus_y_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
-            2 if is_blackhole() else 1,
-            0,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="torus-y-8x1",
-        ),
-        pytest.param(
-            (4, 2),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
-            2 if is_blackhole() else 1,
-            0,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="fabric2d-mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
-            2 if is_blackhole() else 1,
-            0,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
-            2 if is_blackhole() else 1,
-            0,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-        # SP on mesh axis 1: Galaxy with SP=4 on axis 1 and TP=8 on axis 0, then one 4x4 prefill stage (a
-        # Galaxy tray half, run_4x4_stage_tests.sh) with SP=4 on the axis-1 ring and TP=4 on the axis-0 line.
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
-            2,
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4-sp1",
-        ),
-        pytest.param(
-            (4, 4),
-            torus_x_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
-            2,
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="torus-x-4x4-sp1",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-# Deliberately the DSv3 variant, not glm_5_3: the GLM adapter bundles no upstream MoE reference,
-# so running under it would silently drop the CPU cross-check this test still gets. The MoE dims
-# all come from GLM53Config above; the variant only supplies the generic gate config and the
-# reference class.
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
-def test_glm_moe(
-    variant,
-    config_only,
-    mesh_device,
-    device_params,
-    seq_len_per_chip,
-    emb_dim,
-    hidden_dim,
-    num_routed_experts,
-    num_experts_per_tok,
-    dispatch_buffer_capacity_factor,
-    run_pcc_check,
-    is_balanced,
-    num_links,
-    sp_axis,
-    gate_fallback_mode,
-    request,
-    padded_percent,
-):
-    topology = per_axis_topology(device_params["fabric_config"])
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        seq_len_per_chip,
-        emb_dim,
-        hidden_dim,
-        num_routed_experts,
-        num_experts_per_tok,
-        dispatch_buffer_capacity_factor,
-        run_pcc_check,
-        num_links,
-        topology,
-        gate_fallback_mode,
-        request,
-        is_balanced=is_balanced,
-        padded_percent=padded_percent,
-        overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
-        dispatch_fwd_vc_pages=64,
-        combine_fwd_vc_pages=64,
-        sp_axis=sp_axis,
-        # The variant is DSv3 only for its CPU reference; the routed experts split as the GLM model's do,
-        # so moe_fused_swiglu runs (DeepSeekV3Config carries no threshold: single-op dispatch).
-        routed_expert_hybrid_token_threshold=GLM53Config.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD,
-    )
-
-
-# The pcc-device-glm-256 row with moe_transport="fabric2d", which the model picks on this mesh. "fabric2d" rather
-# than moe_transport_arg so the case fails instead of falling back to dispatch and combine. The PCC bars are the
-# direct path's own: the transport itself is checked byte for byte in the op tests; this is the end-to-end check
-# with the real routed-expert output.
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    _fabric2d_torus_xy_8x4(GLM53Config),
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
-@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
-@pytest.mark.timeout(900)
-def test_glm_moe_fabric2d(variant, config_only, mesh_device, device_params, num_links, request):
-    _run_moe_case(
-        variant=variant,
-        config_only=config_only,
-        mesh_device=mesh_device,
-        device_params=device_params,
-        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
-        emb_dim=GLM53Config.EMB_SIZE,
-        hidden_dim=GLM53Config.MOE_INTERMEDIATE_SIZE,
-        num_routed_experts=GLM53Config.NUM_ROUTED_EXPERTS,
-        num_experts_per_tok=GLM53Config.NUM_EXPERTS_PER_TOKEN,
-        dispatch_buffer_capacity_factor=8,
-        run_pcc_check=True,
-        num_links=num_links,
-        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
-        request=request,
-        overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
-        moe_transport="fabric2d",
-        dispatch_fwd_vc_pages=GLM53Config.MOE_FWD_VC_PAGES,
-        combine_fwd_vc_pages=GLM53Config.MOE_FWD_VC_PAGES,
-    )
-
-
 def _run_moe_case(
     *,
     variant,
@@ -1294,7 +1118,9 @@ def test_kimi_moe(
     )
 
 
-# The kimi-5k-pcc row with moe_transport="fabric2d"; see test_glm_moe_fabric2d.
+# The kimi-5k-pcc row with moe_transport="fabric2d". "fabric2d" rather than moe_transport_arg so the case fails
+# instead of falling back to dispatch and combine. The PCC bars are the direct path's own: the transport itself is
+# checked byte for byte in the op tests; this is the end-to-end check with the real routed-expert output.
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     _fabric2d_torus_xy_8x4(KimiK27Config),
