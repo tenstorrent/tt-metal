@@ -42,10 +42,6 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::ABS: return is_unsigned_int(dtype);
         case UnaryOpType::ABS_INT32:
         case UnaryOpType::CLAMP_TSS:
-        case UnaryOpType::GEZ:
-        case UnaryOpType::GTZ:
-        case UnaryOpType::LEZ:
-        case UnaryOpType::LTZ:
         case UnaryOpType::NEG:
         case UnaryOpType::SIGNBIT: return is_int32(dtype);
 
@@ -54,6 +50,10 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::LEAKY_RELU: return is_unsigned_int(dtype);
 
         case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::GEZ:
+        case UnaryOpType::GTZ:
+        case UnaryOpType::LEZ:
+        case UnaryOpType::LTZ:
         case UnaryOpType::MAXIMUM:
         case UnaryOpType::MINIMUM:
         case UnaryOpType::RSUB:
