@@ -585,8 +585,24 @@ ALWI void state_fold(uint32_t s_mm, bool p_half, uint32_t o_cb) {
     cb_reserve_back(cb_u_f32, Vb);
     if constexpr (ONE) {
         tile_regs_acquire();
-        fold_part(s_mm, 0, 0, Vb, 0, p_half);
-        fold_part(s_mm, 1, 0, Vb, Vb, p_half);
+        if constexpr (GDN_FOLD_ORDER != 0) {
+            // Both parts' v products, then both parts' state products: one operand switch instead of three.
+            reconfig_data_format(cb_in_v, cb_in_mat);
+            matmul_init(cb_in_mat, cb_in_v);
+            for (uint32_t i = 0; !p_half && i < 2 * Vb; ++i) {
+                matmul_tiles(cb_in_mat, cb_in_v, i < Vb ? IN_MAT_M : IN_MAT_QD, i % Vb, i);
+            }
+            reconfig_data_format(s_mm, cb_in_kq);
+            matmul_init(cb_in_kq, s_mm);
+            for (uint32_t i = 0; i < 2 * Vb; ++i) {
+                for (uint32_t kt = 0; kt < Kt; ++kt) {
+                    matmul_tiles(cb_in_kq, s_mm, (i / Vb) * Kt + kt, kt * Vb + i % Vb, i);
+                }
+            }
+        } else {
+            fold_part(s_mm, 0, 0, Vb, 0, p_half);
+            fold_part(s_mm, 1, 0, Vb, Vb, p_half);
+        }
         tile_regs_commit();
         tile_regs_wait();
         pack_first(0, cb_u, 0);

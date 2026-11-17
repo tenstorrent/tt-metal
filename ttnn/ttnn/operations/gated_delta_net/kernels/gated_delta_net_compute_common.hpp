@@ -395,6 +395,12 @@ ALWI void silu_tile_bf16(uint32_t dst) {
 }
 
 // GDN_SILU_MID: x / (1 + exp(-x)) with the bf16 arm's exp, two reciprocal iterations, no rounding to bf16.
+#ifndef GDN_FOLD_ORDER
+#define GDN_FOLD_ORDER 0
+#endif
+#ifndef GDN_TAIL_FPU
+#define GDN_TAIL_FPU 0
+#endif
 #ifndef GDN_L2_FPU
 #define GDN_L2_FPU 0
 #define GDN_L2_UNBIAS_BITS 0x3f800000u
@@ -1390,6 +1396,28 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
         cb_pop_front(cb_rinv_o, HEADS);
         return;
     }
+    // Host PREP_NORM_FPU on a state core (STATE_NORM_TAIL): its piece's o^2 as FPU products.
+    constexpr bool TAIL_FPU = STATE && GDN_TAIL_FPU != 0;
+    if constexpr (TAIL_FPU) {
+        static_assert(2 * Vb <= ckl::DEST_AUTO_LIMIT);
+        cb_wait_front(o_cb, Vb);
+        cb_reserve_back(cb_sq_o, Vb);
+        tile_regs_acquire();
+        reconfig_data_format(o_cb, o_cb);
+        mul_init(o_cb, o_cb);
+        for (uint32_t i = 0; i < Vb; ++i) {
+            mul_tiles(o_cb, o_cb, i, i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_sq_o, 0);
+        for (uint32_t i = 1; i < Vb; ++i) {
+            pack_at(i, cb_sq_o, i);
+        }
+        tile_regs_release();
+        cb_push_back(cb_sq_o, Vb);
+        squared = true;
+    }
     if constexpr (PIECES == 1 || PREP) {
         if (!squared) {
             square_block<o_cb, cb_sq_o>(0, N, scope);
@@ -1449,6 +1477,60 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
         return;
     }
     cb_wait_front(cb_z, Vb);
+    if constexpr (TAIL_FPU) {
+        // The gate factor of the piece's tiles in one window, then (o (*)col rinv) (*) zw on the FPU.
+        cb_reserve_back(cb_zw, Vb);
+        tile_regs_acquire();
+        begin_loads(cb_z);
+        for (uint32_t i = 0; i < Vb; ++i) {
+            load(cb_z, i, i);
+            load(cb_norm_w, i, Vb + i);
+        }
+        silu_tile_init();
+        for (uint32_t i = 0; i < Vb; ++i) {
+            if constexpr ((GDN_SILU_BF16 & 1) != 0) {
+                silu_tile_bf16(i);
+            } else {
+                silu_tile(i);
+            }
+        }
+        sfpu_bcast_row_init();
+        for (uint32_t i = 0; i < Vb; ++i) {
+            sfpu_mul_bcast_row(i, Vb + i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_zw, 0);
+        for (uint32_t i = 1; i < Vb; ++i) {
+            pack_at(i, cb_zw, i);
+        }
+        tile_regs_release();
+        cb_push_back(cb_zw, Vb);
+        cb_wait_front(cb_zw, Vb);
+        tile_regs_acquire();
+        reconfig_data_format(o_cb, cb_rinv_o);
+        mul_bcast_cols_init(o_cb, cb_rinv_o);
+        for (uint32_t i = 0; i < Vb; ++i) {
+            mul_tiles_bcast_cols(o_cb, cb_rinv_o, i, 0, i);
+        }
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_zw);
+        for (uint32_t i = 0; i < Vb; ++i) {
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_zw, i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_out_rows, 0);
+        for (uint32_t i = 1; i < Vb; ++i) {
+            pack_at(i, cb_out_rows, i);
+        }
+        tile_regs_release();
+        cb_push_back(cb_out_rows, Vb);
+        cb_pop_front(o_cb, Vb);
+        cb_pop_front(cb_z, Vb);
+        cb_pop_front(cb_zw, Vb);
+        cb_pop_front(cb_rinv_o, HEADS);
+        return;
+    }
     for (uint32_t vt = 0; vt < Vb; ++vt) {
         tile_regs_acquire();
         begin_loads(o_cb);

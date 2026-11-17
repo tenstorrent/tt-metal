@@ -253,6 +253,8 @@ STATE_FOLD = "auto"
 # STATE_FOLD: the factor on -exp(c) in M~ = M (*) -exp(c)^T (fp32 bits), the unbias of the truncations of M~ and of
 # Mk as FPU operands (PREP_FPU_UNBIAS_BITS counted the vector, kn's product and rhs).
 STATE_FOLD_UNBIAS_BITS = 0x3F801800
+# STATE_FOLD, U and O in one window: the v products of both first, then the state products of both.
+STATE_FOLD_ORDER = True
 # STATE_FOLD: PREP_M_BETA_UNBIAS_Q of the folded step, where v passes the FPU as well (M x V). The smallest setting of
 # the scan at which no gate case's state error is above the unfolded step's.
 STATE_FOLD_M_UNBIAS_Q = 4
@@ -268,7 +270,9 @@ SEQ_SPLIT = 1
 # norm_weight read by their readers, output rows stored by their writers), so the prep cores' norm backlog after the
 # chain is shorter. A row costs a state core 6.4 us after the chain. T=4096 (128 tile rows): 0 rows 672.4 us, 8 661.8,
 # 12 654.7, 16 660.9, 24 711.0; T=2048: 4 rows 343.9 against 338.3, T=1024: 1 row 210.4 against 209.3 (the chain binds
-# there). "auto": 3 rows per 32 from 128 tile rows on, else none.
+# there). With the norms on the FPU (PREP_NORM_FPU, also the tail's) and the cheaper prep rows of refinements 47 to
+# 49 the chain binds T=4096 as well: 0 rows 559.5, 2 557.4, 3 555.2, 4 555.8, 5 555.3, 6 555.0, 8 562.3, 12 584.5.
+# "auto": 1 row per 32 from 128 tile rows on, else none.
 STATE_NORM_TAIL = "auto"
 SEG_ROW_DEPTH = 2  # SEQ_SPLIT: tile rows of Oh_P in flight from the P cores to a segment's state core
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
@@ -747,7 +751,7 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_
     state[CB_V] = 0  # the state core reads v from its inbox
     if tail:  # STATE_NORM_TAIL: the held rows' o, then the RMS norm's buffers of one piece
         state.update({CB_READS: tail * Vb, CB_Z: Vb * ROW_DEPTH, CB_NORM_W: Vb, CB_OUT_ROWS: Vb * ROW_DEPTH})
-        state.update({CB_SQ_O: Vb, CB_RINV_O: 1, CB_OSUM_PART: 1, CB_OSUM_GATHER: 2 * pieces})
+        state.update({CB_SQ_O: Vb, CB_RINV_O: 1, CB_OSUM_PART: 1, CB_OSUM_GATHER: 2 * pieces, CB_ZW: Vb})
     if hold:  # SEQ_SPLIT: Oh of every tile row of a segment, P and the entering state, Oh_P rows in flight
         state.update({CB_READS: hold * Vb, CB_SEG_IN: Kt * Kt + Kt * Vb, CB_SEG_ROW: SEG_ROW_DEPTH * Kt})
     qk = {}
@@ -1341,7 +1345,7 @@ def create_program_descriptor(
     tail = STATE_NORM_TAIL if norm_tail is None else norm_tail
     seq_rows_min = min(_seq_tile_rows(seq, tokens) for seq in range(batch))
     if tail == "auto":
-        tail = seq_rows_min * 3 // 32 if seq_rows_min >= 128 else 0
+        tail = seq_rows_min // 32 if seq_rows_min >= 128 else 0
     tail = 0 if split else max(0, min(int(tail), seq_rows_min - 1))
     key_heads = (channels - value_heads * value_dim) // (2 * key_dim)
     Ct = channels // TILE
@@ -2098,6 +2102,8 @@ def create_program_descriptor(
         roles[ROLE_QK] = ([core for core, _, _ in qk_cores], *rts)
 
     l2_fpu = prep is not None and not shared and conv_on_fpu and bool(PREP_L2_FPU)
+    # PREP_NORM_FPU for the tail rows too (cb_reads then holds only them: the folded or fused step reads no cb_reads).
+    tail_fpu = bool(tail) and bool(PREP_NORM_FPU) and bool(STATE_FUSED_RHS) and v_block_tiles * 2 <= 4
     compute_kernel_config = _copy_compute_config(compute_kernel_config)  # never mutate the caller's
     modes = list(getattr(compute_kernel_config, "unpack_to_dest_mode", []) or [])
     if len(modes) < NUM_CB_SLOTS:
@@ -2105,6 +2111,8 @@ def create_program_descriptor(
     for idx in U2D_CBS:
         if idx == CB_IN_V and fold:
             continue  # v is a matmul operand of the folded step
+        if idx == CB_READS and tail_fpu:
+            continue  # the held o: FPU operands of the state cores' tail norm
         if idx in (CB_Y_QK, CB_RINV) and l2_fpu:
             continue  # FPU operands of the prep cores' L2 norm
         if idx in (CB_O_IN, CB_ZW, CB_RINV_O) and prep is not None and PREP_NORM_FPU:
@@ -2149,6 +2157,8 @@ def create_program_descriptor(
             ("GDN_VEC_COL0", str(int(PREP_VEC_COL0))),
             ("GDN_NORM_FPU", str(int(prep is not None and PREP_NORM_FPU))),
             ("GDN_L2_FPU", str(int(l2_fpu))),
+            ("GDN_FOLD_ORDER", str(int(STATE_FOLD_ORDER))),
+            ("GDN_TAIL_FPU", str(int(tail_fpu))),
             ("GDN_L2_UNBIAS_BITS", f"{_float_bits(PREP_L2_UNBIAS):#x}u"),
             ("GDN_L2_Q_SCALE_BITS", f"{_float_bits(key_dim**-0.5 * PREP_L2_UNBIAS):#x}u"),
             ("GDN_SILU_BF16", str(int(PREP_SILU_BF16) if prep is not None and conv_on_fpu else 0)),

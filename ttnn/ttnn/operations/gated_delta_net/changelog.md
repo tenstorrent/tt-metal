@@ -524,3 +524,11 @@
 - Kernel us (one chip, median of launches 2..12, 2 interleaved pairs, off / on): T=1024 197.40, 197.34 / 193.47, 193.72; T=2048 305.66, 305.42 / 300.05, 299.95; T=4096 591.19, 590.63 / 587.49, 587.73; T=128 50.38 / 50.54 (shared plan, same program).
 - Tests changed: test_prep_shared_qk pins PREP_L2_FPU off (it compares the q / k cores' plan with the prep cores' own to the bit).
 - Golden test progress: full suite 121 passed (27 loose); unit files 124 / 82 / 52 / 176, packed tests 34.
+
+## Refinement 50 - Prefill: the tail norm on the FPU and shorter, the U / O window's operands grouped
+- Date: 2026-11-17
+- After refinements 47 to 49 a prep row costs 69.4 us (conv 26.7, heads 42.7; 77.3 before) and a norm unit 6.8 (9.9), so at T=4096 the chain binds again (zones, 4 tail rows: first step at 68 us, pitch 3.33, state cores end at 531 / 544, prep cores at 550 / 560).
+- Kept: the state cores' tail norm takes PREP_NORM_FPU as well (GDN_TAIL_FPU: the piece's o^2 as FPU products, its gate factor in one window of Vb tiles, (o (*)col rinv) (*) zw on the FPU; cb_reads is then not unpacked to DEST), and `STATE_NORM_TAIL` "auto" is 1 row per 32 from 128 tile rows on (4 at T=4096). Rows scan at T=4096 with all of the above (kernel us): 0 rows 559.5, 2 557.4, 3 555.2, 4 555.8, 5 555.3, 6 555.0, 8 562.3, 12 584.5, 16 604.5, 20 627.1, 24 643.9 (a tail row still costs a state core about 5 us: the partial sums' round trip between the pieces); T=2048 0 / 2 / 4 rows 300.0 / 311.1 / 322.2, T=1024 0 / 1 / 2 rows 193.7 / 196.1 / 201.9.
+- Kept, `STATE_FOLD_ORDER`: in the folded step's window the v products of U and O first, then the state products of both: one operand switch (data format and matmul setup) instead of three. 2 interleaved pairs, off / on: T=1024 193.89, 193.76 / 190.60, 190.44; T=2048 300.08, 299.85 / 293.56, 293.49; T=4096 555.80, 555.65 / 554.29, 554.27. Same sums in the same order (results equal).
+- Rejected, code removed: the matmul setup dropped where the same setup was issued before (the state products after the v products, the held update batch after the window): the kernels hang (every launch timed out; the chips were reset one by one by the run wrapper).
+- Golden test progress: full suite 121 passed (27 loose); unit files 124 / 82 / 52 / 176, packed tests 34; state relative RMS equal to refinement 49.
