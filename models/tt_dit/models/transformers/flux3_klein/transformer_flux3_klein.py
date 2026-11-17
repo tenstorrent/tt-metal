@@ -634,11 +634,11 @@ class Flux3KleinTransformer(Module):
             rope = parts.cond_rope if mode == "image_cond" else plan.early_rope[mode]
             x[mode] = self.early(mode, x[mode], rope=rope, mod=mod, logical_length=length)
 
-        parts = [x[m] for m in layout.modes]
-        local = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=1)
+        stacks = [x[m] for m in layout.modes]
+        local = stacks[0] if len(stacks) == 1 else ttnn.concat(stacks, dim=1)
         h = gather_rows_over_sp(local, parts.assembly, ccl_manager=self._ccl_manager, sp_axis=self._sp_axis)
-        for part in parts:
-            ttnn.deallocate(part)
+        for stack in stacks:
+            ttnn.deallocate(stack)
 
         mod = tuple(gather_rows(table, idx) for idx in parts.single_mod)
 
