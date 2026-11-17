@@ -151,6 +151,7 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
+    TT_METAL_PROFILE_DRAM_COUNTERS,                // Measure DRAM traffic per program from the DRAM tile counters
     TT_METAL_PROFILE_RISCV_PMC,                    // Enable RISC-V baby-core HPM counters
     TT_METAL_PROFILE_RISCV_PMC_DM,                 // Event selects of the Quasar data-movement cores
     TT_METAL_PROFILE_NOC_COUNTERS,                 // Per-launch NoC interface event counters
@@ -1245,6 +1246,23 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->profiler_enabled = true;
             }
             break;
+
+        // TT_METAL_PROFILE_DRAM_COUNTERS
+        // Snapshots the NIU slave counters of every DRAM tile around each slow-dispatch program and writes the
+        // deltas to dram_traffic.csv. "1" also measures the idle drift of other agents' traffic once per device, "raw"
+        // skips that. Does not need the device profiler. Default: disabled.
+        // See tt_metal/tt-llk/docs/performance_counters/dram_counters.md.
+        // Usage: export TT_METAL_PROFILE_DRAM_COUNTERS=1
+        case EnvVarID::TT_METAL_PROFILE_DRAM_COUNTERS: {
+            if (std::string_view(value) == "raw") {
+                this->profiler_dram_counters_enabled = true;
+                this->profiler_dram_counters_calibrate = false;
+            } else if (is_env_enabled(value)) {
+                this->profiler_dram_counters_enabled = true;
+                this->profiler_dram_counters_calibrate = true;
+            }
+            break;
+        }
 
         // TT_METAL_PROFILE_RISCV_PMC
         // RISC-V performance monitor of the Tensix baby cores: BRISC, NCRISC and TRISC0/1/2 on Blackhole,

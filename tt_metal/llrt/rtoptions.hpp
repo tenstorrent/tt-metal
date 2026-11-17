@@ -253,6 +253,8 @@ class RunTimeOptions {
     // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
     bool streaming_profiler_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
+    bool profiler_dram_counters_enabled = false;
+    bool profiler_dram_counters_calibrate = true;
     bool profiler_riscv_pmc_enabled = false;
     uint32_t profiler_riscv_pmc_event3 = 0;
     uint32_t profiler_riscv_pmc_event4 = 0;
@@ -781,6 +783,8 @@ public:
     bool get_streaming_profiler_inline_enabled() const { return streaming_profiler_inline_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
+    bool get_profiler_dram_counters_enabled() const { return profiler_dram_counters_enabled; }
+    bool get_profiler_dram_counters_calibrate() const { return profiler_dram_counters_calibrate; }
     bool get_profiler_riscv_pmc_enabled() const { return profiler_riscv_pmc_enabled; }
     uint32_t get_profiler_riscv_pmc_event3() const { return profiler_riscv_pmc_event3; }
     uint32_t get_profiler_riscv_pmc_event4() const { return profiler_riscv_pmc_event4; }

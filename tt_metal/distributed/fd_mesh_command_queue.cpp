@@ -403,6 +403,15 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     ZoneScopedN("EnqueueProgram");
+    if (mesh_device_->impl().metal_env().get_rtoptions().get_profiler_dram_counters_enabled()) {
+        static std::once_flag warned;
+        std::call_once(warned, [] {
+            log_warning(
+                tt::LogMetal,
+                "TT_METAL_PROFILE_DRAM_COUNTERS measures slow dispatch only: programs enqueued through fast dispatch "
+                "are not captured.");
+        });
+    }
     auto lock = lock_api_function_();
     in_use_ = true;
     // The active sub-device manager id doubles as the key for per-program cached command sequences.
