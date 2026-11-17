@@ -421,10 +421,16 @@ namespace ckernel {
 // the matmul_fe_hifi3_wide class keeps the row form (minimal_matmul 424/444/888 bf16 HiFi3 -2.5 to -3.2 %)
 template <bool row_mop_on, std::uint32_t kt_key, DataFormat form_out>
 constexpr bool matmul_fe_tile_mop() {
+    using K = std::integral_constant<std::uint32_t, kt_key>;
     if constexpr (
         !row_mop_on && kt_key == 0 &&
         matmul_hifi2_half_wide(MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncHalf, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb()) &&
-        matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, kt_key>>(0)) {
+        matmul_fe_mark::is_used_d<8, K>(0)) {
+        return false;
+    } else if constexpr (
+        !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf &&
+        matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<7, K>(0) && !matmul_fe_mark::is_used_d<13, K>(0)) {
+        // LoFi half sync: the row form where every plain block is constant and none is one tile, whose call it slows
         return false;
     } else {
         return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>();

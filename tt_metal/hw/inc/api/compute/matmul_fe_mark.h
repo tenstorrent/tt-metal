@@ -12,7 +12,7 @@
 // is_used<N>(0) reads true from that point on. tag 0: a plain matmul call runs the ttsync unpack, read by the TRISC
 // wrapper after the kernel's include; tag 3: the kernel names a fast tilize init; tag 4: a plain matmul call polls; tag 5: a plain
 // call of constant block keys runs the ttsync unpack on its cell in a kernel the class rule keeps polling; tags 7 and 8: a plain
-// matmul call whose ct and rt are (8) or are not (7) constant expressions.
+// matmul call whose ct and rt are (8) or are not (7) constant expressions; tag 13: a call or init of a constant one-tile block (14 unread).
 namespace ckernel::matmul_fe_mark {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnon-template-friend"
@@ -94,7 +94,8 @@ constexpr bool is_used_dl(...) {
                 (__builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_dim(ct))) && \
                  __builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_dim(rt))))   \
                     ? 8                                                                         \
-                    : 7>))
+                    : 7>) +                                                                     \
+     0 * sizeof(::ckernel::matmul_fe_mark::set<(MATMUL_FE_CK(ct) == 1 && MATMUL_FE_CK(rt) == 1) ? 13 : 14>))
 // The forms key decision of a plain call (1 keyed, 0 not): the kernel's first call or init decides, keyed only where it is an init
 // that can key (want: matmul_fe_keyable), and every later one follows it, so the inits and calls of a kernel run one form whatever
 // the order the compiler reads them in. x: the call's in0 cb argument.
