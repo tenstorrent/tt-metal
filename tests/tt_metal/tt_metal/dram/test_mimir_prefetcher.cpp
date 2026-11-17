@@ -2060,14 +2060,15 @@ INSTANTIATE_TEST_SUITE_P(
 inline constexpr uint32_t kGcbSwitchFirstTensorId = 59;
 inline constexpr uint32_t kGcbSwitchSecondTensorId = 60;
 inline constexpr uint32_t kGcbSwitchThirdTensorId = 65;
-// Two pages of one tile, so GCB1's first request leaves wr_ptr mid-FIFO for its second to resume from.
-inline constexpr uint32_t kGcbSwitchFifoBytes = 8 * kKiB;
+// Three pages of one tile. GCB1's first request leaves wr_ptr at 4 KiB for its second to resume from, and the second
+// ends at 8 KiB, not at the FIFO start, so a sender that never stores wr_ptr back fails the wr_ptr check.
+inline constexpr uint32_t kGcbSwitchFifoBytes = 12 * kKiB;
 inline constexpr uint32_t kFenceTensorId = 61;
 
 // GCB1, then GCB2, then GCB1 again, each with its own tensor, from kSenderCce. GCB1 delivers to `receiver_cce` and
 // GCB2 to `second_receiver_cce`; on one CCE the two validators run on two of its harts. GCB1's first request leaves
-// wr_ptr halfway through its FIFO, and the second resumes there from GCB1's state block. Stop's one DRAIN page names
-// both GCBs: three PREFETCH pages, the DRAIN and STOP.
+// wr_ptr a third of the way through its FIFO, and the second resumes there from GCB1's state block. Stop's one DRAIN
+// page names both GCBs: three PREFETCH pages, the DRAIN and STOP.
 void run_gcb_switch(uint32_t receiver_cce, uint32_t second_receiver_cce) {
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
