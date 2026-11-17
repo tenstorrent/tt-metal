@@ -65,9 +65,11 @@ def logits_debug_tensor(mesh, lc):
     )
 
 
-def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None):
+def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0):
     """generic_op mesh program of the head; returns (mesh program, io tensors, stamps). x_rm: [TX, H] bf16 row-major
-    (rows >= T zero); outs: ws_head.head_outputs; logd: the debug logits^T tensor (written when given)."""
+    (rows >= T zero); outs: ws_head.head_outputs; logd: the debug logits^T tensor (written when given); side: the
+    routed stream's lane groups G (> 0: each (t, k)'s result row t S + slot in a DRAM bank of the side of its expert's
+    group, e % G >= G / 2 the upper half of the banks - WSR_SIDE)."""
     K, NE, S, T, H = lc.K, lc.nexp, lc.S, lc.T, lc.H
     NET, KT = NE // 32, H // 32
     NB = KT // BK
@@ -149,6 +151,12 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None):
     ccfg.unpack_to_dest_mode = utd
     ta = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     defs = [("WSR_DEBUG_LOGITS", "1")] if debug else []
+    if side:
+        banks = mesh.dram_grid_size().x
+        assert banks % 2 == 0 and side % 2 == 0
+        rdefs = defs + [("WSR_SIDE", str(side)), ("WSR_SIDE_BANKS", str(banks))]
+    else:
+        rdefs = defs
     exch_ct = (
         [K, NE, S, EPO, NOWN, NC, CAP, lc.RS]
         + [bufs[k].buffer_address() for k in ("wst", "rec", "srt", "cnt_in", "off_in")]
@@ -189,7 +197,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None):
             + [gring.buffer_address(), idm, RTX, NR, relay.buffer_address()]
             + [bufs[k].buffer_address() for k in ("rflags", "rgrant")]
             + ta(logd),
-            defines=defs,
+            defines=rdefs,
             runtime_args=rt_rt,
             config=dm(1),
         ),

@@ -20,6 +20,9 @@
 //      n + 1 into my word of every group core's GCRED; arrivals: GARR at GS (n + 1) -> push the slot (CB 5);
 //   QA (owner) per owned row tile: the top-K keys (CB 7) and exp of their logits (CB 8), a token a column: w (t, k) =
 //      e_k / sum_k e_k (soft float), each token's w row ([16] fp32) to w page t (posted); records t | k << 16 | e << 20.
+//      WSR_SIDE (lane groups G): k's result row is t S + slot, the slot chosen so the row's DRAM bank lies on the side
+//      of the expert's lane group (e % G >= G / 2: the upper WSR_SIDE_BANKS / 2 banks), the rest in order; w and the
+//      record carry the slot instead of k.
 //      QA_TOK tokens a pass, so the soft float does not hold up the other queues;
 //   (WSR_DEBUG_LOGITS) QL my logits tiles (CB 9) to the logits^T tensor (posted).
 // A launch starts with this core's state words zeroed (flags, credits, the exchange's counts and offsets: their L1 is
@@ -266,12 +269,57 @@ void kernel_main() {
                 }
                 const float inv = 1.0f / sum;
                 volatile tt_l1_ptr uint32_t* wr = p<uint32_t>(wst + col * 64);
+#if defined(WSR_SIDE)
+                // (bank side: pick k's slot j among the token's result rows t S + j so that the row's DRAM bank, (t S + j)
+                // % WSR_SIDE_BANKS, is on the side of k's expert's lane group (e % WSR_SIDE >= WSR_SIDE / 2: the upper
+                // half of the banks), the rest in order; w and the record carry the slot, so the lists' rows, the
+                // fold's rows and its weights stay t S + j / w (t, j))
+                constexpr uint32_t SR = get_compile_time_arg_val(2);  // (S: result rows a token)
+                uint32_t slot[K] = {}, used = 0;  // (bits 0 .. K - 1: slots taken, 16 + k: k placed)
+                for (uint32_t pass = 0; pass < 2; ++pass) {
+                    for (uint32_t k = 0; k < K; ++k) {
+                        if (pass == 1 && (used >> 16 >> k) & 1) {
+                            continue;
+                        }
+                        if (pass == 0) {
+                            const bool es = ((key[at(k, col)] & IDM) % WSR_SIDE) >= WSR_SIDE / 2;
+                            for (uint32_t j = 0; j < K; ++j) {
+                                const bool ss = ((t * SR + j) % WSR_SIDE_BANKS) >= WSR_SIDE_BANKS / 2;
+                                if (!((used >> j) & 1) && ss == es) {
+                                    slot[k] = j;
+                                    used |= (1u << j) | (1u << 16 << k);
+                                    break;
+                                }
+                            }
+                        } else {
+                            for (uint32_t j = 0; j < K; ++j) {
+                                if (!((used >> j) & 1)) {
+                                    slot[k] = j;
+                                    used |= (1u << j) | (1u << 16 << k);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                for (uint32_t k = K; k < 16; ++k) {
+                    wr[k] = 0;
+                }
+                for (uint32_t k = 0; k < K; ++k) {
+                    wr[slot[k]] = __builtin_bit_cast(uint32_t, v[k] * inv);
+                }
+#else
                 for (uint32_t k = 0; k < 16; ++k) {
                     wr[k] = k < K ? __builtin_bit_cast(uint32_t, v[k] * inv) : 0;
                 }
+#endif
                 noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(wst + col * 64, ws.get_noc_addr(t), 64);
                 for (uint32_t k = 0; k < K; ++k) {
+#if defined(WSR_SIDE)
+                    p<uint32_t>(rec)[nrec++] = t | slot[k] << 16 | (key[at(k, col)] & IDM) << 20;
+#else
                     p<uint32_t>(rec)[nrec++] = t | k << 16 | (key[at(k, col)] & IDM) << 20;
+#endif
                 }
             }
             a_col = col_end;

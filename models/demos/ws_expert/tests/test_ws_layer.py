@@ -63,6 +63,13 @@ KS = os.environ.get("WSY_KS", "0") == "1"  # (the routed stream as the K-split l
 # WSY_L5=1: the routed stream as the 5 x 5 K-split lane with the corner-hub h multicast (ws_lane5: hmc 2, muxes on
 # NOC0, row-major result rows); WSY_L5CFG "k=v;..." overrides L5Cfg fields
 L5 = os.environ.get("WSY_L5", "0") == "1"
+# WSY_SIDE=1 (with WSY_L5): the head places each routed row in a DRAM bank on the side of its expert's lane group
+# (ws_router side=G), so the 5 x 5 groups' row writes stay on their half of the chip
+SIDE = os.environ.get("WSY_SIDE", "0") == "1"
+
+
+def router_side(lc):
+    return lc.G if (L5 and SIDE) else 0
 
 
 def l5_cfgs(lc):
@@ -234,7 +241,7 @@ def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=F
         sync()
     if HEAD == "router":
         rmpd, rio, rst = build_router(
-            mesh, lc, st["x_rm"], st["wrT_t"], st["ids_t"], st["hout"], st["logd_t"]
+            mesh, lc, st["x_rm"], st["wrT_t"], st["ids_t"], st["hout"], st["logd_t"], side=router_side(lc)
         )
         sync()
     t0 = time.perf_counter()
@@ -665,7 +672,9 @@ def layer_programs(mesh, lc: LayerCfg, st, phases=None, diag=None, clk=None, clo
     # (the head, shared expert and end pass clear their own state words; the routed stream's are zeroed before it)
     if "head" in phases:
         with bench_util.self_zeroing():
-            built = build_router(mesh, lc, st["x_rm"], st["wrT_t"], st["ids_t"], st["hout"], st["logd_t"])
+            built = build_router(
+                mesh, lc, st["x_rm"], st["wrT_t"], st["ids_t"], st["hout"], st["logd_t"], side=router_side(lc)
+            )
         run("head", *built)
     if "shared" in phases:
         with bench_util.self_zeroing():
