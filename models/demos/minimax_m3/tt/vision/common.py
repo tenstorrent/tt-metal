@@ -453,6 +453,9 @@ def l1_free_for_activations(mesh_device) -> tuple[bool, str]:
     """
     if os.environ.get(HYBRID_ALLOCATOR_ENV, "").startswith("1"):
         return False, f"{HYBRID_ALLOCATOR_ENV} is set, and the L1 memory view does not show per-core tensors"
+    # TODO(#66065): read only the lowest allocated L1 address, which tt-metal's lowest_occupied_compute_l1_address
+    # gives once it has a Python binding. Until then each L1 forward builds the whole view. A cached view would miss
+    # the tensors that the caller allocates between images, which this check is for.
     view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
     grid = mesh_device.compute_with_storage_grid_size()
     if view.num_banks != grid.x * grid.y:
