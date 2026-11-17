@@ -1,0 +1,42 @@
+import csv, sys, collections, statistics as st
+path = sys.argv[1] if len(sys.argv) > 1 else "generated/profiler/.logs/profile_log_device.csv"
+F = 1350.0
+rows = []
+with open(path) as f:
+    next(f)
+    r = csv.reader(f)
+    hdr = next(r)
+    for x in r:
+        rows.append(x)
+# group by (chip, run id)
+prog = collections.defaultdict(list)
+for x in rows:
+    chip, cx, cy, risc, tid, t, data, run = x[0], int(x[1]), int(x[2]), x[3], x[4], int(x[5]), x[6], x[7]
+    name, typ = x[10], x[11]
+    prog[(chip, run)].append((cx, cy, risc, t, name, typ))
+custom = {"C_XG","C_NC","H_MCB","H_F1","H_HAND0","S_STX","R_GAMMA","R_LOAD","R_STATSW","R_LANDW","W_EXP","W_STORE","C_PART","C_STATSW","C_SCALE","C_NORM","H_OWN","H_ALLIN","H_MC","S_FENCE","S_BULK","S_TAILSTATS","V_ALL"}
+res = collections.defaultdict(lambda: collections.defaultdict(list))
+ends = collections.defaultdict(list)
+for (chip, run), ev in sorted(prog.items(), key=lambda k: (k[0][0], int(k[0][1]))):
+    names = {e[4] for e in ev}
+    if "S_FENCE" not in names:
+        continue
+    t0 = min(e[3] for e in ev if e[4].endswith("-KERNEL") and e[5] == "ZONE_START")
+    tend = max(e[3] for e in ev if e[4].endswith("-KERNEL") and e[5] == "ZONE_END")
+    ends[chip].append((tend - t0) / F * 1000 / 1000)
+    own = {(e[0], e[1]) for e in ev if e[4] == "R_LOAD"}
+    open_ = {}
+    for cx, cy, risc, t, name, typ in sorted(ev, key=lambda e: e[3]):
+        if name not in custom: continue
+        k = (cx, cy, risc, name)
+        if typ == "ZONE_START": open_[k] = t
+        elif k in open_:
+            s = open_.pop(k)
+            role = ""
+            if name[0] in "RWC": role = "own" if (cx, cy) in own else "rem"
+            res[chip][(name, role, risc)].append(((s - t0) / F, (t - t0) / F))
+for chip in sorted(res):
+    print(f"== chip {chip}: op span per call (us): {[round(v,2) for v in ends[chip]]}")
+    for (name, role, risc), v in sorted(res[chip].items(), key=lambda kv: st.median([e for _, e in kv[1]])):
+        ss = [s for s, _ in v]; ee = [e for _, e in v]
+        print(f"  {name:12s} {role:4s} {risc:7s} n={len(v):4d} start med {st.median(ss):6.2f}  end min {min(ee):6.2f} med {st.median(ee):6.2f} max {max(ee):6.2f}")

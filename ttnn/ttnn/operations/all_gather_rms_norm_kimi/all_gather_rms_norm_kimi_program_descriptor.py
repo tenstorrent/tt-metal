@@ -23,7 +23,8 @@ chip's ready port / receiver / hub by that chip's placement:
 
 Knobs (single source of truth; every CB size / loop count / RT arg derives from them):
   BLOCK_W (None = the whole slice width), block_h (derived from the grid left after the ports), chunk_tiles (derived
-  from the router payload), PORT_PLACEMENT, PORT_BATCH_CHUNKS, INC_EVERY, OUT_DEPTH_CHUNKS, num_links.
+  from the router payload), PORT_PLACEMENT, PORT_BATCH_CHUNKS, INC_EVERY, OUT_DEPTH_CHUNKS, num_links; the OVERLAP
+  knobs of Refinement 2: GAMMA_HUB_MCAST, XG_LATE_STREAM_CHUNKS, FUSE_LATE_CHUNKS, STATS_BULK_WINDOW.
 """
 
 from __future__ import annotations

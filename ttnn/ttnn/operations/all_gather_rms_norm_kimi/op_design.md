@@ -359,3 +359,20 @@ Paths are relative to `ttnn/cpp/ttnn/kernel_lib/`.
 ### Structural impossibilities
 
 None beyond `feature_spec.py`'s empty INVALID.
+
+## Refinement 2 realization (OVERLAP: stats-critical chain and tail)
+
+The schedule above is as planned for Phase 0. Refinement 2 changed it as follows (measured on the PERF FOCUS cell,
+fastest chip 24.72 → 18.95 µs; see `changelog.md`):
+
+| Change | Replaces | Why |
+|--------|----------|-----|
+| Own x is loaded before γ (`load_own_block` first) | γ first | the own partial heads the stats chain; γ is needed only after the stats |
+| γ read once per chip by the hub and multicast into the stats-scratch tail, then `gamma_go` (regime R6, `GAMMA_HUB_MCAST`) | per-core γ reads | 20 cores per slice read the same 12 pages: ~4.5 µs of small DRAM reads that also slowed the own loads |
+| Hub publishes each stats slot as it arrives: linked multicast of the slot + multicast set of `stats_ready` = cumulative slot mask, no barrier between (same NoC, same static VC); readers copy each slot as its bit appears | one multicast of all slots + barrier + flag after the last slot | only the last slot is left on the chain |
+| `gamma_block`: xg = x ⊙ γ (row broadcast, fp32) per chunk, before the combine for the own block and for the remote chunks the host's look-ahead table puts ahead (`XG_LATE_STREAM_CHUNKS`: all but the last 8 chunks of each upstream stream); `normalize_block`: out = xg ⊙ rstd_full per chunk | `scale_block` (S = rstd ⊗ γ over the whole block after the stats) + out = x ⊙ S | after the stats only the combine and one multiply per tile remain, so the DRAM stores (≈ 3.8 µs SOL for the output) start right after the combine and spread over the landings instead of bunching at the end |
+| `STATS_BULK_WINDOW = 2`: a port that still owes a stats slot keeps at most 2 bulk packets queued in its router channel | stats inserted between batches only | the relayed slot no longer waits behind a full channel of bulk packets |
+
+Every member computes a slice with the same arithmetic (xg through `cb_xg`, then ⊙ rstd_full), so replicas stay
+bit-identical. `FUSE_LATE_CHUNKS` (x ⊙ γ ⊙ rstd_full in one DEST-reuse chain) is a parked knob: its DEST-reuse
+rounding differs from the `cb_xg` path, so it must apply to every core of a slice at once, and it measured slower.

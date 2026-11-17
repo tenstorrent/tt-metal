@@ -72,3 +72,63 @@
     - 7-tile packets: a 12-tile slice block still needs 2 packets, so this needs a `block_h`/`block_w` restructure (Refinement 3's knobs).
     - stats on link 1: Refinement 2's overlap item.
 - Tests added: none (the acceptance + determinism tests cover the changed path). Probe `probes/probe_001.py` printed the per-chip Ethernet channels and the nearest workers.
+
+## Refinement 2 — OVERLAP: shrink the exposed tail and the stats-critical chain
+- Date: 2026-11-17
+- What was done (each lever measured with the harness, 5 experiments, PERF FOCUS cell, fastest / slowest chip µs):
+  - Baseline at the start: 24.72 / 27.67 (`perf/r2_baseline.json`).
+  - Before choosing levers, a per-stage zone timeline (`perf/zone_probe.patch`, `zone_probe_driver.py.txt`, `zone_analyze.py.txt`; never committed into the kernels) showed the chain:
+    - the γ prep (~4 µs) ran before the own x load, so the own partial waited on it;
+    - the stats round queued behind the bulk;
+    - the hub's 10 KiB multicast + barrier and the stats→tile copy (volatile loads) followed;
+    - expand + scale_block (2.4 µs of HiFi4) ran after the stats;
+    - then everything was stored at once: the store was DRAM-bound (`nostore` −4.4 µs; output SOL 3.8 µs at 512 GB/s).
+  - **Own x before γ** (reader reorder): 24.72 → 21.55 / 23.95.
+  - **Stats row ↔ col-0 copies batched** (non-volatile, unrolled, between compiler barriers; `kernels/..._common.hpp`): → 21.06 / 23.24.
+  - **γ off the stats chain**:
+    - remote γ reads gated on the hub's own-partial count: → 20.62 / 21.90;
+    - then **regime R6 built** (`GAMMA_HUB_MCAST`): the hub reads the 48 sticks once per chip and multicasts them into the stats-scratch tail, then `gamma_go`. 20.59 / 22.01: neutral on the headline, but the remote cores reach the stats wait ~5 µs earlier, which the later levers needed.
+  - **xg = x ⊙ γ ahead of the stats, out = xg ⊙ rstd per chunk** (replaces scale_block's S):
+    - it removes expand + scale from the post-stats chain;
+    - with a uniform remote look-ahead it measured 0 / 1 / 2 chunks = 19.66 / 21.03 / 20.84 (a remote chunk planned ahead that lands late holds the 2 µs combine back);
+    - kept at 0 → 19.66 / 21.23.
+  - **Per-slot stats publish**: the hub multicasts each slot as it arrives, then a multicast set of a cumulative slot mask (no barrier: same NoC, same static VC); readers copy each slot as its bit appears. → 19.34 / 21.06.
+    - The first version hung: the mask words sat at a 4 B stride, and the watcher flagged the source / destination 16 B alignment mismatch. Fixed with one 16 B slot per word.
+  - **`FUSE_LATE_CHUNKS`** (x ⊙ γ ⊙ rstd_full in one DEST-reuse chain), parked False:
+    - its rounding differs from the `cb_xg` path, so it must cover every core of a slice (replication test);
+    - fused everywhere measured 19.50 / 21.57 vs 19.32 / 21.12 unfused.
+    - rstd is now expanded once to `rstd_full` (neutral).
+  - **`STATS_BULK_WINDOW = 2`**: a port that still owes a stats slot keeps ≤ 2 bulk packets queued in its router channel.
+    - Windows 2 / 3 / 4: fastest 19.35 / 19.30 / 19.33 (null vs 19.32), slowest 20.61 / 20.83 / 20.98 vs 21.12. Kept at 2 for the slowest chip.
+  - **Look-ahead by stream position** (`XG_LATE_STREAM_CHUNKS = 8`): the host packs a per-core table into the compute common args; remote chunks not among the last 8 of their upstream stream compute xg before the combine.
+    - Sweep as absolute thresholds 0 / 8 / 12 / 16 / 20 / 24 / 26 / 28 / 32 / all: 19.32 / 19.25 / 19.11 / 19.02 / 19.01 / 18.94 / 20.74 / 20.85 / 20.93 / 20.94.
+    - The cliff is where the last ~6 chunks would put the combine on the landing tail, so the knob is expressed as a distance from the stream end.
+    - → **18.95 / 20.26** (`perf/r2_final.json`).
+  - Not done:
+    - `INC_EVERY = 4`: 19.29 / 20.57 vs 19.35 / 20.61, within noise; stays 8.
+    - Stats on link 1's forward port: it needs a third hub counter (two senders on `stats_fwd` would break the ordered-sender rule), and the link-1 channel carries the same bulk. The queueing it targets is handled by `STATS_BULK_WINDOW` instead.
+    - `out_depth_chunks`: `cb_out` already holds a whole block (2 chunks), so the store of chunk k already overlaps the normalize of chunk k+1.
+- Breakdown now (fastest chip, µs; R1 in brackets; `perf/r2_abl_*.json`, hooks regenerated in `perf/ablation_hooks.patch`):
+
+  | Variant | µs (R1) |
+  |---|---|
+  | skeleton | 6.91 (8.19) |
+  | `nobulk,nostore` | 11.01 (17.92) |
+  | local-only (`nobulk`) | 16.96 (23.71) |
+  | transport-only | 15.71 (19.57) |
+  | `nostore` | 17.82 (20.40) |
+  | `nocompute` | 18.43 (20.78) |
+  | full | 18.96 (24.70) |
+
+  **full − transport-only: 5.13 → 3.25 µs.**
+- Tall regime `(1,1,2048,384)`: 57.99 / 60.63 → 55.89 / 58.84 (`perf/r2_tall_*.json`).
+- Accuracy achieved: PCC = 0.999998, relative RMS ≤ 0.00241 (max ULP 1.09) on shapes [(1,1,32,32), (1,1,128,256), (1,1,640,384), (1,1,2048,384)].
+- Golden test progress: 7/7 (test_golden 1 + test_regression 6); acceptance 8/8 (incl. tall and bit-identical repeat/replication); precision baseline 4/4.
+- Issues encountered:
+  - A NoC alignment hang (mask-word stride; found with `--dev` watcher, fixed).
+  - A replication mismatch with `FUSE_LATE_CHUNKS` on remote cores only (fixed by applying the knob to every core of a slice; parked).
+  - Compute-core L1: 132 → 159 KiB (γ / out alias split, scratch tail).
+- Remaining headroom (finding):
+  - The tail after the last landing is now mostly the DRAM store (`nocompute` within 0.5 µs of full).
+  - The stats-critical chain's largest piece is the 1-tile combine: ~2.2 µs of SFPU (4 copies, 3 fp32 adds, rsqrt over the whole tile on the math thread). The `sfpu_tile_scope` item (column-0 faces only) of Refinement 3 is the next lever on it.
+- Tests added: none (the acceptance + determinism + precision tests cover the changed paths). Perf tooling: `perf/zone_probe.patch`, `perf/zone_probe_driver.py.txt`, `perf/zone_analyze.py.txt`, `perf/r2_*.json`.

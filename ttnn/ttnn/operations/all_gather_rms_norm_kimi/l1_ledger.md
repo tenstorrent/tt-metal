@@ -14,13 +14,14 @@ Tile = 2048 B (bf16) / 4096 B (fp32). Phase 0 values: `block_h = 1`, `block_w = 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_x_block` (backed on the `landing` scratch shard) | `block_h·block_w` | `block_h·block_w`: the whole block stays resident (partial phase, port own-sends / relays and the final multiply all read it) | {rows: spans → block_h, width: spans → block_w, slices: one slice, chunks: streams → waited in chunk_tiles quanta} | Float16_b | reader (own: DRAM load; remote: zero-copy push after landing) | compute | whole call | No CB allocation of its own: it **is** the `landing` scratch (zero-copy). Cannot host `cb_out` in place, because the ports read x from it concurrently with compute. |
-| `cb_gamma` / `cb_out` (one allocation, two indices) | `max(block_w, out_depth_chunks·chunk_tiles)` | γ: `block_w` (row 0 of each). out: `2·chunk_tiles` | γ {rows: streams (shared by all rows) → 1, width: spans → block_w, slices: one, chunks: n/a}. out {rows: streams, width: streams → 2·chunk_tiles window, slices: one, chunks: spans → 2} | Float16_b | reader (γ) / compute (out) | compute (γ) / writer (out) | γ: t0 → end of `scale_block`. out: `normalize_block` → end | **Shared**: disjoint lifetimes, same format. γ is dead once S is computed, and `normalize_block` cannot start before `scale_block` ends because it needs `cb_scale`. |
+| `cb_gamma` (Refinement 2: own allocation) | `block_w` | `block_w` (row 0 of each) | {rows: streams (shared by all rows) → 1, width: spans → block_w, slices: one, chunks: n/a} | Float16_b | reader (copied from the hub's γ multicast in the scratch tail) | compute | t0 → the last chunk's xg | No share since Refinement 2: γ is now read per chunk (xg = x ⊙ γ) right up to the last chunk, so it is live together with `cb_out`. |
+| `cb_out` (Refinement 2: own allocation) | `out_depth_chunks·chunk_tiles` | `2·chunk_tiles` | {rows: streams, width: streams → 2·chunk_tiles window, slices: one, chunks: spans → 2} | Float16_b | compute | writer | first normalized chunk → end | No share: live with `cb_gamma` (above), `cb_xg` and `cb_x_block`. |
 | `cb_partials` | `G·block_h` | `G·block_h` (the combine sums all G in fixed order) | {rows: spans → block_h, width: n/a (col 0), slices: spans → G, chunks: n/a} | Float32 (`UnpackToDestFp32`) | reader | compute | `wait_stats` → `combine_stats_block` | No share. It is live at the same time as `cb_scale`'s producer inputs (`cb_rstd`) on the critical path, and the 1-tile fp32 CBs it could take are already paired below. Disjoint from `cb_xsq_sum`, but different page count and UnpackToDest mode, and sharing would serialize the own-core partial phase against the stats receive. |
 | `cb_xsq_sum` / `cb_rstd` (one allocation) | `block_h` | `block_h` | {rows: spans → block_h, width: collapsed, slices: one, chunks: n/a} | Float32 | compute | compute | xsq: `partial_block`. rstd: `combine` → `expand` | **Shared**: on own cores the partial phase (xsq) ends before the hub multicast that `combine` waits on. Same format and size. |
-| `cb_partial` / `cb_rstd_full` (one allocation) | `block_h` | `block_h` | {rows: spans → block_h, width: collapsed (partial) / spans one tile (rstd_full), slices: one, chunks: n/a} | Float32 | compute | writer (partial) / compute (rstd_full) | partial: until `export_partial` pops it, which precedes the hub multicast. rstd_full: `expand` → `scale_block` | **Shared**: same reasoning; disjoint across the hub multicast |
-| `cb_scale` | `block_h·block_w` | `block_h·block_w` (precomputed before x lands, consumed tile by tile, popped at the end) | {rows: spans → block_h, width: spans → block_w, slices: one, chunks: streams (read in chunk quanta)} | Float32 | compute | compute | `scale_block` → end | No share. It is live together with `cb_x_block` and `cb_out` through `normalize_block`, and its fp32 format differs from the bf16 CBs. |
+| `cb_partial` / `cb_rstd_full` (one allocation) | `block_h` | `block_h` | {rows: spans → block_h, width: collapsed (partial) / spans one tile (rstd_full), slices: one, chunks: n/a} | Float32 | compute | writer (partial) / compute (rstd_full) | partial: until `export_partial` pops it, which precedes the hub's publish of slot p. rstd_full: `expand` → the last chunk's normalize | **Shared**: same reasoning; the combine needs every slot, including the own slot p, which the hub publishes only after every own core exported |
+| `cb_xg` (Refinement 2, replaces `cb_scale`) | `block_h·block_w` | own cores: the whole block (xg computed before the stats); remote cores: the chunks the host's look-ahead table puts before the combine (≤ the block), then one chunk at a time | {rows: spans → block_h, width: spans → block_w, slices: one, chunks: streams (pushed and popped in chunk quanta)} | Float32 | compute | compute | first xg chunk → its normalize | No share: live with `cb_x_block`, `cb_gamma` and `cb_out` through the normalize, and fp32 vs the bf16 CBs. Same size as the `cb_scale` it replaces. |
 | `cb_scaler` | 1 (constant) | 1 | {rows: n/a, width: n/a, slices: n/a, chunks: n/a}: a constant | Float16_b | reader | compute | own cores: whole call | No share: 2 KiB, live with everything in the partial phase |
-| `stats_scratch` (sharded scratch, not a CB) | `G·Mt·128 B` | the whole vector once multicast; each core reads its rows | {rows: spans → all Mt rows (multicast convenience), width: n/a, slices: spans → G, chunks: n/a} | uint32 (fp32 bits) | hub multicast (+ own writer for its own row) | reader | whole call | No share: the hub multicasts into it at a fixed address, and it must exist on every op core. The bound is set by a predicate (symbol table). |
+| `stats_scratch` (sharded scratch, not a CB) | `G·Mt·128 B` + 64 B align + `Wt·64 B` (γ sticks) + `16·G B` (hub mask words) | the stats slots as the hub publishes them; each core reads its rows. The γ tail holds all Wt sticks; each core copies its block_w | {rows: spans → all Mt rows (multicast convenience), width: γ spans → Wt sticks, slices: spans → G, chunks: n/a} | uint32 (fp32 bits / bf16 sticks) | hub multicast (per slot; γ once) + own writer for its own row | reader | whole call | No share: the hub multicasts into it at a fixed address, and it must exist on every op core. The bound is set by a predicate (symbol table). |
 
 ## Port cores (2L = 4)
 
@@ -50,16 +51,16 @@ Tile = 2048 B (bf16) / 4096 B (fp32). Phase 0 values: `block_h = 1`, `block_w = 
 
 ## Footprint per core
 
-Compute core:
+Compute core (as built after Refinement 2):
 `2048·block_h·block_w` (landing)
-`+ 2048·max(block_w, 2·chunk_tiles)` (γ / out)
+`+ 2048·block_w` (γ) `+ 2048·out_depth_chunks·chunk_tiles` (out)
 `+ 4096·G·block_h` (partials)
 `+ 2·4096·block_h` (the two shared 1-tile fp32 pairs)
-`+ 4096·block_h·block_w` (scale)
+`+ 4096·block_h·block_w` (xg)
 `+ 2048` (scaler)
-`+ G·Mt·128` (stats)
+`+ G·Mt·128 + 64 + Wt·64 + 16·G` (stats scratch with the γ tail and the hub mask words)
 
-At Phase 0: 24 + 24 + 16 + 8 + 48 + 2 + 10 = **132 KiB**, of ~1.5 MB L1. The `block_h·block_w` terms scale with the block knobs. `G·Mt·128` scales with the op dimension M and is bounded by the predicate above. Nothing scales with W beyond `block_w ≤ Wl_t`.
+At the PERF FOCUS cell: 24 + 24 + 24 + 16 + 8 + 48 + 2 + 13 = **159 KiB** (Phase 0: 132 KiB), of ~1.5 MB L1. The `block_h·block_w` terms scale with the block knobs. `G·Mt·128` scales with the op dimension M and is bounded by the predicate above. Nothing scales with W beyond `block_w ≤ Wl_t`.
 
 Port core: `2·port_batch_chunks·chunk_tiles·2048 + G·Mt·128` = 96 + 10 = **106 KiB** (scales with `port_batch_chunks`, `chunk_tiles`).
 
@@ -73,12 +74,12 @@ No budget solve, safety fraction or blocking search was introduced: the inventor
 |--------|----------------|---------------|--------------------------|
 | input x (own slice, 240 tiles, 480 KiB) | 1 read | Own cores load it into `landing` once. Ports read it from there (L1), not from DRAM (regime R8 rejected). | NoC: L1 → the 4 port cores, 1 slice in total. Fabric out: 2 directions × 1 slice over 2L ports. |
 | remote slices (720 tiles, 1.44 MiB) | **0** | They land straight in compute-core `landing` (L1) and are normalized there (regime R2 rejected). | Fabric in: 3 slices. The busiest link direction carries 1.5 slices / L. Relays: 0.5 slice of NoC L1 → port reads. |
-| γ (3 KiB) | 20 reads of 768 B per slice group = 60 KiB in total | each compute core reads its 12 sticks (deferred broadcast, regime R6) | — |
+| γ (3 KiB) | 1 read (Refinement 2: regime R6 built, `GAMMA_HUB_MCAST`) | the hub reads the Wt = 48 sticks once per chip; Phase 0 had every compute core read its 12 (960 small reads on the same pages, ~4.5 µs) | NoC: one 3 KiB hub multicast to the compute rectangles + a `gamma_go` multicast set |
 | output (960 tiles, 1.875 MiB) | 1 write | every tile is written once by the core that normalized it | — |
-| partials / stats (G × 2.5 KiB) | 0 | fp32, L1 → fabric → L1 | Fabric: 5 KiB on link-0 forward, 2.5 KiB on link-0 backward. NoC: 20 × 128 B to the hub, the hub → 2 ports (7.5 KiB), and a hub multicast of 10 KiB to 80 cores. |
+| partials / stats (G × 2.5 KiB) | 0 | fp32, L1 → fabric → L1 | Fabric: 5 KiB on link-0 forward, 2.5 KiB on link-0 backward. NoC: 20 × 128 B to the hub, the hub → 2 ports (7.5 KiB), and per slot (Refinement 2) a 2.5 KiB hub multicast to 80 cores + a mask-flag multicast set: 10 KiB in total as before. |
 
 Totals per device:
-- DRAM: 0.48 MiB read + 0.06 MiB γ + 1.875 MiB write ≈ **2.42 MiB** (roofline 2.40 MiB).
+- DRAM: 0.48 MiB read + 3 KiB γ + 1.875 MiB write ≈ **2.36 MiB** (roofline 2.40 MiB; Phase 0 2.42 MiB with the per-core γ reads).
 - Fabric: busiest link direction 0.72 MiB / 2 links (+5 KiB stats).
 - On-chip NoC: ~1.5 MiB of L1 → port reads + 10 KiB multicast + 1.875 MiB of DRAM writes.
 
@@ -108,3 +109,14 @@ compute cores fill rows 1.. in row-major order (rectangles: full rows + one part
 Ethernet-probe placement, because the example's probe is a second device dispatch on the first call, which the
 one-dispatch-per-invocation rule forbids. Placing the ports by link without a probe is perf Refinement 1. The
 data-movement budget above is unchanged: placement moves no bytes, only NoC hop counts.
+
+## Refinement 2 changes (OVERLAP)
+
+| Change | L1 effect | Why |
+|--------|-----------|-----|
+| `cb_scale` → `cb_xg` (same size, fp32) | 0 | x ⊙ γ is computed before the stats; after them only xg ⊙ rstd_full is left per chunk |
+| `cb_gamma` / `cb_out` alias split into two allocations | +24 KiB | γ is read per chunk until the last one, so it is live with `cb_out` |
+| `cb_rstd_full` alias kept with `cb_partial` | 0 | `expand` runs after the combine, which needs the own slot, published only after every export |
+| `stats_scratch` + γ tail (`Wt·64 B` + 64 B align) + hub mask words (`16·G B`, one 16 B L1 slot each: a NoC write source must share the destination's 16 B alignment) | +3.1 KiB on every op core | regime R6 (γ read once per chip) and the per-slot stats publish |
+
+Compute-core footprint: 132 → 159 KiB at the PERF FOCUS cell; tall regime (block 3 × 12): 346 → 373 KiB.

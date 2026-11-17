@@ -1,0 +1,231 @@
+diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
+index 1ed0a9a7061..8ae532ebe93 100644
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
+@@ -31,6 +31,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+ #include "all_gather_rms_norm_kimi_common.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
+ 
+ using namespace compute_kernel_lib;
+ using namespace agrn;
+@@ -182,6 +183,7 @@ void kernel_main() {
+     compute_kernel_hw_startup(cb_x_block, cb_x_block, cb_out);
+ 
+     if (b.q == p) {
++        DeviceZoneScopedN("C_PART");
+         // ---- partial_block (a): sum_w x^2 per tile row, accumulated in fp32 DEST ----
+         eltwise_chain(
+             IterationShape::grid(h, block_w),
+@@ -219,12 +221,12 @@ void kernel_main() {
+     const uint32_t ahead_tab = get_common_arg_val<uint32_t>(row_base_idx + grid_y + core_idx / 4);
+     const uint32_t ahead = fuse_late ? 0 : ((ahead_tab >> (8 * (core_idx % 4))) & 0xFF);
+     cb_wait_front(cb_gamma, block_w);  // held for every chunk (Row-mapped, offset per chunk)
+-    for (uint32_t k = 0; k < ahead; ++k) {
++    { DeviceZoneScopedN("C_XG"); for (uint32_t k = 0; k < ahead; ++k) {
+         gamma_chunk(k);
+-    }
++    } }
+ 
+     // ---- combine_stats_block: ss = ((P_0 + P_1) + P_2) + ... ; rstd = rsqrt(ss / W + eps) ----
+-    cb_wait_front(cb_partials, G * h);  // caller-managed window (None, None) of the G loads
++    { DeviceZoneScopedN("C_STATSW"); cb_wait_front(cb_partials, G * h); }  // caller-managed window (None, None) of the G loads
+     combine_stats_block(h, std::make_integer_sequence<uint32_t, G - 1>{});
+     cb_pop_front(cb_partials, G * h);
+ 
+@@ -232,6 +234,7 @@ void kernel_main() {
+     unary_bcast<BroadcastDim::Col, input(cb_rstd), output(cb_rstd_full)>(IterationShape::tiles(h));
+ 
+     // ---- normalize_block: per chunk, out = xg * rstd (x * gamma * rstd for the chunks not done ahead) ----
++    DeviceZoneScopedN("C_NORM");
+     cb_wait_front(cb_rstd_full, h);  // held for every chunk (Col-mapped, offset per chunk)
+     for (uint32_t k = 0; k < n_chunks; ++k) {
+         if (k < ahead) {
+@@ -239,8 +242,8 @@ void kernel_main() {
+         } else if constexpr (fuse_late) {
+             fused_chunk(k);
+         } else {
+-            gamma_chunk(k);
+-            normalize_chunk(k);
++            { DeviceZoneScopedN("C_NC"); gamma_chunk(k);
++            normalize_chunk(k); }
+         }
+     }
+     cb_pop_front(cb_rstd_full, h);
+diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_hub.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_hub.cpp
+index 507976dfd96..0bbb0af270e 100644
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_hub.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_hub.cpp
+@@ -16,6 +16,7 @@
+ #include <cstdint>
+ 
+ #include "api/dataflow/dataflow_api.h"
++#include "tools/profiler/kernel_profiler.hpp"
+ 
+ constexpr uint32_t G = get_compile_time_arg_val(0);
+ constexpr uint32_t slot_bytes = get_compile_time_arg_val(1);
+@@ -111,8 +112,9 @@ void kernel_main() {
+             noc_semaphore_set_multicast(word, rect(r, ready_addr), rect_cores(r));
+         }
+     };
+-    noc_semaphore_wait_min(own_partials, own_count);
++    { DeviceZoneScopedN("H_OWN"); noc_semaphore_wait_min(own_partials, own_count); }
+     if (kf > 0) {
++        DeviceZoneScopedN("H_HAND0");
+         hand_over(p, fwd_xy);
+     }
+     if (kb > 0) {
+@@ -141,6 +143,7 @@ void kernel_main() {
+             publish(q);
+         }
+     }
++    { DeviceZoneScopedN("H_ALLIN"); }
+     noc_async_write_barrier();
+ 
+     // ---- drain_stats ----
+diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_port_sender.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_port_sender.cpp
+index fc3ede296e1..5fa74066831 100644
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_port_sender.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_port_sender.cpp
+@@ -15,6 +15,7 @@
+ #include <cstdint>
+ 
+ #include "api/dataflow/dataflow_api.h"
++#include "tools/profiler/kernel_profiler.hpp"
+ #include "fabric/fabric_edm_packet_header.hpp"
+ #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+ #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+@@ -80,6 +81,7 @@ void kernel_main() {
+     conn.open();
+ 
+     // ---- fence ----
++    {DeviceZoneScopedN("S_FENCE");
+     ctl_hdr->to_noc_unicast_atomic_inc(
+         NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_xy >> 8, ready_xy & 0xFF, ready_addr), 1, true});
+     conn.wait_for_empty_write_slot();
+@@ -89,7 +91,7 @@ void kernel_main() {
+         noc_semaphore_wait_min(ready, 1);
+         noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+         noc_async_atomic_barrier();
+-    }
++    }}
+ 
+     // ---- stats: send every slot the hub has handed over so far ----
+     volatile tt_l1_ptr uint32_t* stats_tx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_tx));
+@@ -97,6 +99,7 @@ void kernel_main() {
+     uint32_t stats_sent = 0;
+     auto try_stats = [&]() {
+         while (stats_sent < n_stats && *stats_tx > stats_sent) {
++            DeviceZoneScopedN("S_STX");
+             const uint32_t q = get_arg_val<uint32_t>(stats_idx + stats_sent);
+             const uint32_t off = q * slot_bytes;
+             for (uint32_t s = 0; s < slot_bytes; s += max_payload) {
+@@ -117,6 +120,7 @@ void kernel_main() {
+     };
+ 
+     // ---- bulk ----
++    {DeviceZoneScopedN("S_BULK");
+     const uint64_t arrival_noc = get_noc_addr(recv_xy >> 8, recv_xy & 0xFF, arrival_addr);
+     uint32_t h = 0, unflushed = 0, sent = 0;
+     for (uint32_t i = 0; i < n_blocks; ++i) {
+@@ -158,7 +162,9 @@ void kernel_main() {
+             }
+         }
+     }
++    }
+     // ---- the stats that became ready only after the bulk ----
++    DeviceZoneScopedN("S_TAILSTATS");
+     while (stats_sent < n_stats) {
+         try_stats();
+     }
+diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
+index 86aa64d5cca..7eab307ea15 100644
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
+@@ -18,6 +18,7 @@
+ #include <cstdint>
+ 
+ #include "api/dataflow/dataflow_api.h"
++#include "tools/profiler/kernel_profiler.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+ #include "all_gather_rms_norm_kimi_common.hpp"
+ 
+@@ -57,6 +58,7 @@ void kernel_main() {
+     cb_reserve_back(cb_x_block, n_tiles);
+     if (own) {
+         // ---- load_own_block: DRAM -> landing ----
++        DeviceZoneScopedN("R_LOAD");
+         const auto in = TensorAccessor(in_args, in_addr, tile_bytes);
+         const uint32_t dst = get_write_ptr(cb_x_block);
+         for (uint32_t r = 0; r < b.h; ++r) {
+@@ -80,6 +82,7 @@ void kernel_main() {
+ 
+     // ---- prepare_gamma_block: stick n -> row 0 of tile j (face 0 row 0 = elements 0..15, face 1 row 0 = 16..31) ----
+     {
++        DeviceZoneScopedN("R_GAMMA");
+         cb_reserve_back(cb_gamma, block_w);
+         const uint32_t base = get_write_ptr(cb_gamma);
+         // stick j's 64 B source: the hub's multicast in my stats-scratch tail (GAMMA_HUB_MCAST), or my own DRAM read
+@@ -129,11 +132,13 @@ void kernel_main() {
+                 }
+             }
+         }
++        { DeviceZoneScopedN("R_STATSW"); }
+         cb_push_back(cb_partials, G * b.h);
+     }
+ 
+     // ---- remote block: push each chunk once its receiver says it landed ----
+     if (!own) {
++        DeviceZoneScopedN("R_LANDW");
+         volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed));
+         const uint32_t n_chunks = n_tiles / chunk_tiles;
+         for (uint32_t k = 0; k < n_chunks; ++k) {
+diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_receiver.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_receiver.cpp
+index abef8a896cf..25770b4482b 100644
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_receiver.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_receiver.cpp
+@@ -11,6 +11,7 @@
+ #include <cstdint>
+ 
+ #include "api/dataflow/dataflow_api.h"
++#include "tools/profiler/kernel_profiler.hpp"
+ 
+ constexpr uint32_t sem_landed = get_compile_time_arg_val(0);
+ constexpr uint32_t sem_relay_ready = get_compile_time_arg_val(1);
+@@ -25,6 +26,7 @@ void kernel_main() {
+     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
+     const uint32_t landed_addr = get_semaphore(sem_landed);
+     const uint64_t relay_noc = get_noc_addr(port_xy >> 8, port_xy & 0xFF, get_semaphore(sem_relay_ready));
++    DeviceZoneScopedN("V_ALL");
+     for (uint32_t e = 0; e < n_events; ++e) {
+         const uint32_t threshold = get_arg_val<uint32_t>(a++);
+         const uint32_t info = get_arg_val<uint32_t>(a++);
+diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
+index 7b0c2d6f0fa..1488c6dc4c1 100644
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
+@@ -12,6 +12,7 @@
+ #include <cstdint>
+ 
+ #include "api/dataflow/dataflow_api.h"
++#include "tools/profiler/kernel_profiler.hpp"
+ #include "all_gather_rms_norm_kimi_common.hpp"
+ 
+ using namespace agrn;
+@@ -35,6 +36,7 @@ void kernel_main() {
+     });
+ 
+     if (b.q == p) {
++        DeviceZoneScopedN("W_EXP");
+         cb_wait_front(cb_partial, b.h);
+         const uint32_t src_base = get_read_ptr(cb_partial);
+         const uint32_t slot = stats_addr + (p * Mt + b.m * block_h) * STATS_ROW_BYTES;
+@@ -48,6 +50,7 @@ void kernel_main() {
+     }
+ 
+     // ---- store_block ----
++    DeviceZoneScopedN("W_STORE");
+     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
+     const uint32_t n_chunks = b.h * block_w / chunk_tiles;
+     uint32_t t = 0;

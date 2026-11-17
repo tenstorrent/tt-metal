@@ -1,8 +1,8 @@
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
-index a2cbb5954e2..7d90f0cd1e7 100644
+index 9079be05066..8a74b354551 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
-@@ -26,6 +26,7 @@ Knobs (single source of truth; every CB size / loop count / RT arg derives from
+@@ -29,6 +29,7 @@ Knobs (single source of truth; every CB size / loop count / RT arg derives from
  from __future__ import annotations
  
  import hashlib
@@ -10,47 +10,47 @@ index a2cbb5954e2..7d90f0cd1e7 100644
  import math
  import struct
  from dataclasses import dataclass, field
-@@ -427,6 +428,7 @@ def op_core_crs(geo):
+@@ -490,6 +491,7 @@ def op_core_crs(geo):
  
  
  def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilon, cfg):
-+    ABL = set(x for x in os.environ.get('AGRN_ABLATE','').split(',') if x)
++    ABL = set(x for x in os.environ.get("AGRN_ABLATE", "").split(",") if x)
      mesh = geo.mesh_device
      G, L = geo.G, geo.L
      virt = lambda c: mesh.worker_core_from_logical_core(c)
-@@ -481,6 +483,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
-                 INC_EVERY,
-                 OUT_DEPTH_CHUNKS,
-                 gamma_page,
+@@ -536,6 +538,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+             hub_crs = _crs([pl.hub])
+             program = ttnn.ProgramDescriptor()
+             program.custom_program_hash = _hash(
 +                sorted(ABL),
-             )
-             program.semaphores = [
-                 ttnn.SemaphoreDescriptor(id=s, core_ranges=op_crs, initial_value=0) for s in range(NUM_LOCAL_SEMS)
-@@ -551,6 +554,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+                 "all_gather_rms_norm_kimi",
+                 geo.key[1:],
+                 coord,
+@@ -624,6 +627,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      compile_time_args=reader_ct,
                      runtime_args=ttnn.RuntimeArgs(),
                      common_runtime_args=reader_common,
-+                    defines=[("AGRN_NOBULK","1")] if "nobulk" in ABL else [],
++                    defines=[("AGRN_NOBULK", "1")] if "nobulk" in ABL else [],
                      config=ttnn.DataMovementConfigDescriptor(
                          processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0
                      ),
-@@ -561,6 +565,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -634,6 +638,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      compile_time_args=writer_ct,
                      runtime_args=ttnn.RuntimeArgs(),
                      common_runtime_args=writer_common,
-+                    defines=[("AGRN_NOSTORE","1")] if "nostore" in ABL else [],
++                    defines=[("AGRN_NOSTORE", "1")] if "nostore" in ABL else [],
                      config=ttnn.DataMovementConfigDescriptor(
                          processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1
                      ),
-@@ -571,6 +576,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -644,6 +649,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      compile_time_args=compute_ct,
                      runtime_args=ttnn.RuntimeArgs(),
                      common_runtime_args=compute_common,
-+                    defines=[("AGRN_NOCOMPUTE","1")] if "nocompute" in ABL else [],
++                    defines=[("AGRN_NOCOMPUTE", "1")] if "nocompute" in ABL else [],
                      config=ccfg,
                  ),
              ]
-@@ -582,6 +588,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -655,6 +661,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      core = pl.ports[(l, d)]
                      peer = next_c if d == FWD else prev_c
                      entries = port_stream(geo, p, l, d)
@@ -59,7 +59,7 @@ index a2cbb5954e2..7d90f0cd1e7 100644
                      blocks = []  # (q, m, relay, entry_end)
                      for k, (q, ms) in enumerate(entries):
                          for i, m in enumerate(ms):
-@@ -648,6 +656,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -722,6 +730,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      up_p = (p - 1) % G if d == FWD else (p + 1) % G
                      up_entries = port_stream(geo, up_p, l, d)
                      local_entries = port_stream(geo, p, l, d)
@@ -69,10 +69,10 @@ index a2cbb5954e2..7d90f0cd1e7 100644
                      events = []
                      t = 0
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
-index 519e66a8085..fc1fe64c2c7 100644
+index 1ed0a9a7061..58055f56916 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
-@@ -86,6 +86,17 @@ void kernel_main() {
+@@ -180,6 +180,17 @@ void kernel_main() {
      const uint32_t h = b.h;
  
      compute_kernel_hw_startup(cb_x_block, cb_x_block, cb_out);
@@ -91,10 +91,10 @@ index 519e66a8085..fc1fe64c2c7 100644
      if (b.q == p) {
          // ---- partial_block (a): sum_w x^2 per tile row, accumulated in fp32 DEST ----
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
-index 0b2fa9c36e7..4e6913dd320 100644
+index 86aa64d5cca..608a9ef074f 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
-@@ -126,7 +126,9 @@ void kernel_main() {
+@@ -137,7 +137,9 @@ void kernel_main() {
          volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed));
          const uint32_t n_chunks = n_tiles / chunk_tiles;
          for (uint32_t k = 0; k < n_chunks; ++k) {
@@ -105,10 +105,10 @@ index 0b2fa9c36e7..4e6913dd320 100644
          }
      }
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
-index 4659a35ebed..748a1ae4575 100644
+index 7b0c2d6f0fa..0ab03a746d8 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
-@@ -65,7 +65,9 @@ void kernel_main() {
+@@ -58,7 +58,9 @@ void kernel_main() {
              const uint32_t r = t / block_w;
              const uint32_t j = t - r * block_w;
              const uint32_t page = (b.m * block_h + r) * Wt + b.q * Wl_t + j;
