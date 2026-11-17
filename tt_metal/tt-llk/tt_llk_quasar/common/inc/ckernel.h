@@ -28,10 +28,10 @@ constexpr std::uint32_t KERNEL_IN_PROGRESS = 15;
 constexpr std::uint32_t KERNEL_COMPLETE    = 0xFF;
 
 // MM Oct 13 2021: Now only 1024 rows in dest
-static int const DEST_MAX_ADDR_HALF_16B = 512;
-static int const DEST_MAX_ADDR_HALF_32B = 256;
-static int const DEST_MAX_ADDR_16B      = 1024;
-static int const DEST_MAX_ADDR_32B      = 512;
+constexpr int DEST_MAX_ADDR_HALF_16B = 512;
+constexpr int DEST_MAX_ADDR_HALF_32B = 256;
+constexpr int DEST_MAX_ADDR_16B      = 1024;
+constexpr int DEST_MAX_ADDR_32B      = 512;
 
 constexpr std::uint8_t TENSIX_MATH_SEMAPHORE = p_stall::SEMAPHORE_1;
 constexpr std::uint8_t TENSIX_PERF_SEMAPHORE = p_stall::SEMAPHORE_2;
@@ -43,16 +43,16 @@ constexpr std::uint8_t PARAM_ITERATIONS             = 0;
 constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE = p_stall::SEMAPHORE_6;
 constexpr std::uint8_t PACK_STREAM_SEMAPHORE        = 6;
 
-volatile std::uint32_t *const reg_base        = (volatile std::uint32_t *)0xFFB10000;
-volatile std::uint32_t *const pc_buf_base     = (volatile std::uint32_t *)PC_BUF_BASE;
-volatile std::uint32_t *const regfile         = (volatile std::uint32_t *)REGFILE_BASE;
-volatile std::uint32_t *const instrn_buffer   = (volatile std::uint32_t *)INSTRN_BUF_BASE;
+volatile std::uint32_t *const reg_base        = reinterpret_cast<volatile std::uint32_t *>(0xFFB10000);
+volatile std::uint32_t *const pc_buf_base     = reinterpret_cast<volatile std::uint32_t *>(PC_BUF_BASE);
+volatile std::uint32_t *const regfile         = reinterpret_cast<volatile std::uint32_t *>(REGFILE_BASE);
+volatile std::uint32_t *const instrn_buffer   = reinterpret_cast<volatile std::uint32_t *>(INSTRN_BUF_BASE);
 volatile std::uint32_t *const mailbox_base[4] = {
-    (volatile std::uint32_t *)TENSIX_MAILBOX0_BASE,
-    (volatile std::uint32_t *)TENSIX_MAILBOX1_BASE,
-    (volatile std::uint32_t *)TENSIX_MAILBOX2_BASE,
-    (volatile std::uint32_t *)TENSIX_MAILBOX3_BASE};
-volatile std::uint32_t *const replay_mmap = (std::uint32_t volatile *)(INSTRN_BUF_BASE + (1 << 10));
+    reinterpret_cast<volatile std::uint32_t *>(TENSIX_MAILBOX0_BASE),
+    reinterpret_cast<volatile std::uint32_t *>(TENSIX_MAILBOX1_BASE),
+    reinterpret_cast<volatile std::uint32_t *>(TENSIX_MAILBOX2_BASE),
+    reinterpret_cast<volatile std::uint32_t *>(TENSIX_MAILBOX3_BASE)};
+volatile std::uint32_t *const replay_mmap = reinterpret_cast<std::uint32_t volatile *>(INSTRN_BUF_BASE + (1 << 10));
 
 inline void mmio_register_write(register_space_e space, std::uint32_t addr, std::uint32_t data)
 {
@@ -278,12 +278,12 @@ inline void cfg_rmw(std::uint32_t cfg_addr32, std::uint32_t cfg_shamt, std::uint
 // example, a TRISC access to an unpacker 1 register and an UNPACR
 // instruction that targets unpacker 0).
 //
-constexpr static std::uint32_t TRACK_GLOBAL_CFG             = 1 << 0;
-constexpr static std::uint32_t EN_SUBDIVIDED_CFG_FOR_UNPACR = 1 << 1;
-constexpr static std::uint32_t TRACK_GPR                    = 1 << 2;
-constexpr static std::uint32_t TRACK_TDMA                   = 1 << 3;
-constexpr static std::uint32_t TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
-constexpr static std::uint32_t TRACK_ALL                    = 0x1F;
+constexpr std::uint32_t TRACK_GLOBAL_CFG             = 1 << 0;
+constexpr std::uint32_t EN_SUBDIVIDED_CFG_FOR_UNPACR = 1 << 1;
+constexpr std::uint32_t TRACK_GPR                    = 1 << 2;
+constexpr std::uint32_t TRACK_TDMA                   = 1 << 3;
+constexpr std::uint32_t TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
+constexpr std::uint32_t TRACK_ALL                    = 0x1F;
 
 // HACK: I inverted this signal in RTL, should probably clean this up at some point
 template <std::uint32_t bitmask>
@@ -694,11 +694,10 @@ inline void wait_bstatus_low(std::uint32_t val)
 }
 
 // Little utility function to help with certain single-core-io-custom-kernel tests.
-// Marked static as a dumb way to avoid multiple definition error
 [[maybe_unused]]
-static void time_waster(int num_iters)
+inline void time_waster(int num_iters)
 {
-    std::uint32_t volatile *some_random_l1_address = (std::uint32_t volatile *)0x14FFE;
+    std::uint32_t volatile *some_random_l1_address = reinterpret_cast<std::uint32_t volatile *>(0x14FFE);
     std::uint32_t dont_optimize_me_away;
 
     for (int i = 0; i < num_iters; i++)
@@ -771,7 +770,7 @@ void set_up_dest_dvalid_per_thread(dest_dvalid_client const (&clients)[N])
     static_assert(N > 1, "Doesn't make sense to set dvalid control if you only have one client");
     static_assert(N <= 4, "We only support up to 3 producer-consumer pairs");
 
-    auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+    auto cfg = reinterpret_cast<std::uint32_t volatile *>(TENSIX_CFG_BASE);
 
     if (CURR_CLIENT == clients[0])
     {
@@ -800,7 +799,7 @@ inline void init_prng_seed(const std::uint32_t seed)
     constexpr std::uint32_t PRNG_SFPU_NUM_CIDS  = 64;
     // All ones is the XNOR-LFSR lock-up state.
     constexpr std::uint32_t PRNG_LFSR_LOCKUP_SEED = 0xFFFFFFFF;
-    auto cfg                                      = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+    auto cfg                                      = reinterpret_cast<std::uint32_t volatile *>(TENSIX_CFG_BASE);
     for (std::uint32_t i = 0; i < PRNG_SFPU_NUM_CIDS; i++)
     {
         // murmur3 fmix32 of seed + i * golden ratio, so neighbouring lanes get unrelated seeds.
@@ -836,12 +835,12 @@ __attribute__((always_inline)) inline void rv_wrcfg(
 // Refer to the comments about the Ports for RISC memory-mapped access near
 // to the top of tt_replay_unit.sv
 // The division by 4 is because the comment uses byte addresses.
-static const std::uint32_t replay_live_mutex = 256 >> 2;
-static const std::uint32_t mutex_0_unbanked  = 264 >> 2;
-static const std::uint32_t mutex_1_unbanked  = 268 >> 2;
-static const std::uint32_t replay_write_id   = 272 >> 2; // replay_instr_bank_write_id in the RTL
-static const std::uint32_t replay_read_id    = 276 >> 2; // replay_instr_bank_read_id in the RTL
-static const std::uint32_t mmio_write_id     = 280 >> 2; // mm_bank_write_id in the RTL
+constexpr std::uint32_t replay_live_mutex = 256 >> 2;
+constexpr std::uint32_t mutex_0_unbanked  = 264 >> 2;
+constexpr std::uint32_t mutex_1_unbanked  = 268 >> 2;
+constexpr std::uint32_t replay_write_id   = 272 >> 2; // replay_instr_bank_write_id in the RTL
+constexpr std::uint32_t replay_read_id    = 276 >> 2; // replay_instr_bank_read_id in the RTL
+constexpr std::uint32_t mmio_write_id     = 280 >> 2; // mm_bank_write_id in the RTL
 
 inline void start_using_replay_mmio_load(std::uint32_t double_banked = true)
 {
@@ -961,8 +960,8 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
     // - memory clobber
     //     - prevents the COMPILER from reordering memory accesses across this boundary
 
-    volatile char *dstc       = reinterpret_cast<volatile char *>(dst);
-    const volatile char *srcc = reinterpret_cast<const volatile char *>(src);
+    volatile char *dstc       = static_cast<volatile char *>(dst);
+    const volatile char *srcc = static_cast<const volatile char *>(src);
 
     for (std::size_t i = 0; i < len; i++)
     {

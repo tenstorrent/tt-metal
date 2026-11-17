@@ -46,6 +46,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # holds the TRIMMED upstream MLA reference, not a loadable full-model checkpoint.
     hf_model_default = "models/demos/deepseek_v3_d_p/reference/kimi_k3"
     default_gate_mode = "DEVICE_FP32"  # single expert group, as Kimi-K2.7
+    builds_missing_weight_cache = False  # LatentMoE: the checkpoint reader has no latent-projection tensors
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL. Inherited
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
