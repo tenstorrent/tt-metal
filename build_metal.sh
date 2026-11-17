@@ -45,7 +45,6 @@ show_help() {
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
     echo "  --disable-pch                    Disable precompiled headers"
     echo "  --disable-unity-builds           Disable Unity builds"
-    echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
     echo "  --c-compiler-path                Set path to C++ compiler."
     echo "  --cpm-source-cache               Set path to CPM Source Cache."
@@ -88,7 +87,6 @@ build_tt_train="OFF"
 build_static_libs="OFF"
 pch="ON"
 unity_builds="ON"
-light_metal_trace="ON"
 build_packages="OFF"
 build_all="OFF"
 cxx_compiler_path=""
@@ -131,7 +129,6 @@ build-packages
 build-static-libs
 disable-pch
 disable-unity-builds
-disable-light-metal-trace
 release
 development
 debug
@@ -223,8 +220,6 @@ while true; do
 	    pch="OFF";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
-        --disable-light-metal-trace)
-            light_metal_trace="OFF";;
         --cxx-compiler-path)
             cxx_compiler_path="$2";shift;;
         --cpm-source-cache)
@@ -320,7 +315,6 @@ echo "INFO: Build tests: $build_tests"
 echo "INFO: Enable PCH: $pch"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
-echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
@@ -430,23 +424,11 @@ else
     cmake_args+=("-DTT_UNITY_BUILDS=OFF")
 fi
 
-if [ "$light_metal_trace" = "ON" ]; then
-    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=ON")
-else
-    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=OFF")
-fi
-
 if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
-fi
-
-if [ "$light_metal_trace" = "ON" ]; then
-    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=ON")
-else
-    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=OFF")
 fi
 
 if [ "$with_python_bindings" = "ON" ]; then

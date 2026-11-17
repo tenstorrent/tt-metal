@@ -70,10 +70,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
     api/tt-metalium/experimental/operation_timeout.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
     api/tt-metalium/experimental/blaze/named_kernel_args.hpp
     api/tt-metalium/experimental/command_list.hpp

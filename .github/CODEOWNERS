@@ -212,7 +212,6 @@ tt_metal/impl/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation in
 tt_metal/impl/internal/service/ @tt-asaigal @tenstorrent/metalium-runtime-performance
 tt_metal/impl/jit_server/ @ruizhangTT @tenstorrent/metalium-runtime
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT
-tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT
 tt_metal/impl/memory_tracking/ @aperezvicente-TT
 tt_metal/impl/metal2_host_api/ @tenstorrent/metalium-api-owners
 tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu
@@ -246,7 +245,6 @@ tt_metal/tools/dispatch_telemetry_dump/ @tenstorrent/metalium-runtime-performanc
 tt_metal/tools/dispatch_telemetry_dump/**/CMakeLists.txt @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-developers-infra
 tt_metal/tools/jit_compile_server @ruizhangTT @tenstorrent/metalium-runtime
 tt_metal/tools/jit_compile_server/**/CMakeLists.txt @abhullar-tt @ruizhangTT @tenstorrent/metalium-developers-infra
-tt_metal/tools/lightmetal_runner @kmabeeTT
 tt_metal/tools/mem_bench @abhullar-tt # should be moved to tests micro benchmark?
 tt_metal/tools/precompile_fw @abhullar-tt @ruizhangTT
 tt_metal/tools/precompile_fw/**/CMakeLists.txt @abhullar-tt @ruizhangTT @tenstorrent/metalium-developers-infra

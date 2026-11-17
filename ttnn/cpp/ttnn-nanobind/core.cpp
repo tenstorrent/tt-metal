@@ -22,9 +22,6 @@
 #include "ttnn/core.hpp"
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
-#include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
-#include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tile.hpp>
 #include <enchantum/enchantum.hpp>
@@ -61,8 +58,6 @@ namespace ttnn::core {
 void py_module_types(nb::module_& mod) { nb::class_<ttnn::Config>(mod, "Config"); }
 
 void py_module(nb::module_& mod) {
-    namespace lightmetal = tt::tt_metal::experimental::lightmetal;
-
     auto py_config = static_cast<nb::class_<ttnn::Config>>(mod.attr("Config"));
     py_config.def(nb::init<>()).def(nb::init<const ttnn::Config&>()).def("__repr__", [](const ttnn::Config& config) {
         return fmt::format("{}", config);
@@ -84,29 +79,7 @@ void py_module(nb::module_& mod) {
     py_config.def("load_from_file", &ttnn::Config::load_from_file, nb::arg("path"));
     py_config.def("save_to_file", &ttnn::Config::save_to_file, nb::arg("path"));
 
-    nb::class_<lightmetal::LightMetalBinary>(mod, "LightMetalBinary")
-        .def(nb::init<>())
-        .def(nb::init<std::vector<uint8_t>>())
-        .def("get_data", &lightmetal::LightMetalBinary::get_data)
-        .def("set_data", &lightmetal::LightMetalBinary::set_data)
-        .def("size", &lightmetal::LightMetalBinary::size)
-        .def("is_empty", &lightmetal::LightMetalBinary::is_empty)
-        .def("save_to_file", &lightmetal::LightMetalBinary::save_to_file)
-        .def_static("load_from_file", &lightmetal::LightMetalBinary::load_from_file);
-
-    nb::class_<lightmetal::LightMetalReplay>(mod, "LightMetalReplay")
-        .def_static(
-            "create",
-            [](lightmetal::LightMetalBinary binary, distributed::MeshDevice* device = nullptr) {
-                return nbh::make_unique<lightmetal::LightMetalReplay>(std::move(binary), device);
-            },
-            nb::arg("binary"),
-            nb::arg("device") = nullptr)
-        .def("run", &lightmetal::LightMetalReplay::run);
-
     mod.def("get_memory_config", &ttnn::get_memory_config);
-    mod.def("light_metal_begin_capture", &lightmetal::LightMetalBeginCapture);
-    mod.def("light_metal_end_capture", &lightmetal::LightMetalEndCapture);
 
     mod.def(
         "set_printoptions",

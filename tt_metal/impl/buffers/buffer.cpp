@@ -20,7 +20,6 @@
 #include <utility>
 #include "context/context_types.hpp"
 #include "fmt/base.h"
-#include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator.hpp"
@@ -575,8 +574,6 @@ std::shared_ptr<Buffer> BufferImpl::create_owning(
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
     const std::optional<size_t> unique_id) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-
     auto buffer = std::make_shared<Buffer>(BufferImpl(
         device,
         size,
@@ -595,18 +592,6 @@ std::shared_ptr<Buffer> BufferImpl::create_owning(
 
     buffer->impl().allocate_impl(*buffer);
 
-    LIGHT_METAL_TRACE_FUNCTION_CALL(
-        CaptureBufferCreate,
-        buffer,
-        device,
-        std::nullopt,
-        size,
-        page_size,
-        buffer_type,
-        sharding_args,
-        bottom_up,
-        sub_device_id);
-
     return buffer;
 }
 
@@ -619,7 +604,6 @@ std::shared_ptr<Buffer> BufferImpl::create(
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     auto buffer = std::make_shared<Buffer>(BufferImpl(
         device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, false /* owns data */));
 
@@ -644,18 +628,6 @@ std::shared_ptr<Buffer> BufferImpl::create(
                 buffer->impl().unique_id_);
         }
     }
-
-    LIGHT_METAL_TRACE_FUNCTION_CALL(
-        CaptureBufferCreate,
-        buffer,
-        device,
-        address,
-        size,
-        page_size,
-        buffer_type,
-        sharding_args,
-        bottom_up,
-        sub_device_id);
 
     return buffer;
 }
@@ -793,18 +765,12 @@ void BufferImpl::deallocate_impl(Buffer& self) {
             }
             allocator_->deallocate_buffer(&self);
         }
-
-        // Capture deallocates here instead of higher levels.
-        LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-        LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDeallocate, self);
     }
 
     allocation_status_ = AllocationStatus::DEALLOCATED;
 }
 
 Buffer::~Buffer() {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
     if (impl_ && impl_->allocation_status_ != BufferImpl::AllocationStatus::DEALLOCATED) {
         impl_->deallocate(*this);
     }

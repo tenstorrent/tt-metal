@@ -64,8 +64,6 @@
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
 #include "kernel_types.hpp"
-#include "lightmetal/host_api_capture_helpers.hpp"
-#include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
@@ -503,19 +501,11 @@ detail::ProgramImpl::~ProgramImpl() noexcept {
     Inspector::program_destroyed(this);
 }
 
-Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
-}
+Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {}
 
-Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::move(impl)) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
-}
+Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::move(impl)) {}
 
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
     ScopedBusyClock build_busy(kProgramBuildBusy);
 
     if (descriptor.reload_table.has_value()) {

@@ -177,17 +177,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/event/dispatch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types_from_flatbuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types_to_flatbuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/buffer_types_from_flatbuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/buffer_types_to_flatbuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types_from_flatbuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types_to_flatbuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_replay.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_replay_impl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/host_api_capture_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/tensor_spec.cpp

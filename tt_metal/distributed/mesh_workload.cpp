@@ -43,7 +43,6 @@
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "impl/lightmetal/host_api_capture_helpers.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "llrt/tt_cluster.hpp"
@@ -225,14 +224,6 @@ void per_device_runtime_args_patches(
     }
 }
 
-namespace {
-void validate_per_device_runtime_args_mode() {
-    TT_FATAL(
-        !LightMetalCaptureContext::get().is_tracing(),
-        "Per-device runtime args are not supported during light-metal capture");
-}
-}  // namespace
-
 PerDeviceRuntimeArgsField* MeshWorkloadImpl::find_per_device_runtime_args_field(
     const MeshCoordinateRange& program_range,
     KernelHandle kernel_handle,
@@ -240,7 +231,6 @@ PerDeviceRuntimeArgsField* MeshWorkloadImpl::find_per_device_runtime_args_field(
     uint32_t first_word,
     uint32_t num_words,
     bool metal2) {
-    validate_per_device_runtime_args_mode();
     const auto program_it = programs_.find(program_range);
     TT_FATAL(
         program_it != programs_.end(),
@@ -492,7 +482,6 @@ const PerDeviceRuntimeArgs* MeshWorkloadImpl::per_device_runtime_args(const Mesh
     if (it == per_device_runtime_args_.end()) {
         return nullptr;
     }
-    validate_per_device_runtime_args_mode();
     const auto program_it = programs_.find(program_range);
     TT_FATAL(
         program_it != programs_.end() && holds_program(it->second, program_it->second),
@@ -948,7 +937,7 @@ void SetRuntimeArgsPerDevice(
 }
 
 bool ArePerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range) {
-    return !program_range.wraparound_shape().has_value() && !LightMetalCaptureContext::get().is_tracing() &&
+    return !program_range.wraparound_shape().has_value() &&
            mesh_device.impl().metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
 }
 

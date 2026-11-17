@@ -19,7 +19,6 @@
 #include "mesh_device_view_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/debug/inspector/inspector.hpp"
-#include "impl/lightmetal/host_api_capture_helpers.hpp"
 #include <tt-metalium/distributed_context.hpp>
 
 #include <algorithm>
@@ -178,11 +177,10 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
 }
 
 // Device buffers are built lazily, except where creating one does more than wrap the address: Emule registers each
-// device's live ranges, and light-metal capture records buffers in allocation order. Per-core allocations never get
-// here: create() builds all their device buffers, each at its own addresses.
+// device's live ranges. Per-core allocations never get here: create() builds all their device buffers, each at its own
+// addresses.
 bool build_all_device_buffers_at_allocation(MeshDevice& mesh_device) {
-    return mesh_device.impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule ||
-           LightMetalCaptureContext::get().is_tracing();
+    return mesh_device.impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 }
 
 // Builds the non-owning Buffer for one device of `mesh_buffer`, at the mesh buffer's lockstep address.
@@ -525,8 +523,6 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
         device->is_initialized(), "MeshBuffer::get_device_buffer({}): device {} is closed", device_coord, device->id());
 
     if (device_buffer == nullptr) {
-        // Keep lazily built buffers out of a light-metal capture that started after this allocation.
-        LIGHT_METAL_TRACE_FUNCTION_ENTRY();
         device_buffer = create_device_buffer_at_lockstep_address(*this, device);
     }
     if (built_device_buffers_) {

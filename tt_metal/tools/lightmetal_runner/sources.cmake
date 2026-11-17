@@ -1,1 +1,0 @@
-set(LIGHTMETAL_RUNNER_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal_runner.cpp)

@@ -48,7 +48,6 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
-#include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"

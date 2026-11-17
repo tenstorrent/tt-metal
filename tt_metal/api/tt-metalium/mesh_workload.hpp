@@ -92,8 +92,8 @@ void SetRuntimeArgsPerDevice(
     uint32_t num_words,
     ttsl::Span<const uint32_t> values_in_range_order);
 // Whether per-device args can be used for a program on `program_range` of `mesh_device`, for legacy and Metal 2.0
-// programs alike. Currently false for a wraparound range, during light-metal capture and on emulated devices; service
-// workloads are rejected at enqueue. Callers that can fall back (one program per device) check it first; setting or
+// programs alike. Currently false for a wraparound range and on emulated devices; service workloads are rejected at
+// enqueue. Callers that can fall back (one program per device) check it first; setting or
 // enqueue fails otherwise.
 bool ArePerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range);
 }  // namespace tt::tt_metal::distributed

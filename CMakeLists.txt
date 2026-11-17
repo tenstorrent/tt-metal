@@ -145,7 +145,6 @@ message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with LTO: ${TT_LTO_ENABLED}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
-message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
 message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
 
 ############################################################################################################################
@@ -222,13 +221,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-dangling-reference>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-overloaded-virtual>"
 )
-
-# Planned to be temporary, remove later.
-if(TT_ENABLE_LIGHT_METAL_TRACE)
-    add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=1)
-else()
-    add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=0)
-endif()
 
 # Control compile time logging for TT_METAL - needs to be set before PCH compilation
 if(NOT DEFINED TT_METAL_ENABLE_LOGGING)

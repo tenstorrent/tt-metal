@@ -44,10 +44,6 @@
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
-#include "lightmetal/host_api_capture_helpers.hpp"
-#include "lightmetal/lightmetal_capture.hpp"
-#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
-#include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
 #include <fmt/format.h>
 #include "llrt.hpp"
@@ -780,7 +776,6 @@ KernelHandle CreateKernel(
     const std::variant<DataMovementConfig, ComputeConfig>& config) {
     std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
 
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src = KernelSource::from_path(program.impl().get_context_id(), file_name);
     KernelHandle kernel = std::visit(
@@ -793,11 +788,6 @@ KernelHandle CreateKernel(
             }
         },
         config);
-
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> cfg_variant = std::visit(
-        [&](const auto& cfg) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> { return cfg; },
-        config);
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateKernel, kernel, program, file_name, core_spec, cfg_variant);
 
     return kernel;
 }
@@ -882,10 +872,8 @@ CBHandle CreateCircularBuffer(
     Program& program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const CircularBufferConfig& config) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     auto cb_handle = program.impl().add_circular_buffer(core_ranges, config);
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateCircularBuffer, cb_handle, program, core_spec, config);
     return cb_handle;
 }
 
@@ -980,8 +968,6 @@ void SetRuntimeArgs(
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     ttsl::Span<const uint32_t> runtime_args) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     ValidateLegacyRuntimeArgsAPI(program, "SetRuntimeArgs");
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
@@ -991,8 +977,6 @@ void SetRuntimeArgs(
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     std::initializer_list<uint32_t> runtime_args) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
     ValidateLegacyRuntimeArgsAPI(program, "SetRuntimeArgs");
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
@@ -1004,8 +988,6 @@ void SetRuntimeArgs(
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args) {
     ZoneScoped;
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32VecPerCore, program, kernel, core_spec, runtime_args);
     ValidateLegacyRuntimeArgsAPI(program, "SetRuntimeArgs");
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
@@ -1049,36 +1031,6 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
     ValidateLegacyRuntimeArgsAPI(program, "GetCommonRuntimeArgs");
     return program.impl().get_kernel(kernel_id)->common_runtime_args_data();
 }
-
-namespace experimental::lightmetal {
-
-// This is nop if compile time define not set.
-void LightMetalBeginCapture() {
-#if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
-    log_debug(tt::LogMetalTrace, "Begin LightMetalBinary Capture");
-    auto& lm_capture_ctx = LightMetalCaptureContext::get();
-    lm_capture_ctx.reset();            // Clear previous traces if any, ensure tracing disabled
-    lm_capture_ctx.set_tracing(true);  // Enable tracing
-#else
-    log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalBeginCapture()");
-#endif
-}
-
-// This is nop if compile time define not set, return empty vector.
-LightMetalBinary LightMetalEndCapture() {
-#if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
-    log_debug(tt::LogMetalTrace, "End LightMetalBinary Capture");
-    auto& lm_capture_ctx = LightMetalCaptureContext::get();
-    TT_ASSERT(lm_capture_ctx.is_tracing(), "Light Metal Capture was not enabled.");
-    lm_capture_ctx.set_tracing(false);  // Disable tracing
-    return lm_capture_ctx.create_light_metal_binary();
-#else
-    log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalEndCapture()");
-    return {};
-#endif
-}
-
-}  // namespace experimental::lightmetal
 
 void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {
     auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();

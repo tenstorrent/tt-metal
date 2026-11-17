@@ -4,25 +4,6 @@ if(TT_UMD_BUILD_SIMULATION)
     list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/buffers/simulator_direct_write.cpp)
 endif()
 
-# Include helper functions and generate headers from flatbuffer schemas
-include(flatbuffers)
-
-set(FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/light_metal_binary.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/command.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/buffer_types.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types.fbs
-)
-
-set(GENERATED_HEADERS)
-foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE})
-    list(APPEND GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
-endforeach()
-
-list(APPEND IMPL_SRC ${GENERATED_HEADERS})
-
 # Generate Inspector Cap'n Proto headers and RPC server implementation
 set(INSPECTOR_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc.capnp)
 set(JIT_COMPILE_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/rpc.capnp)
@@ -111,7 +92,6 @@ target_link_libraries(
         common
         Tracy::TracyClient
     PRIVATE
-        FlatBuffers::FlatBuffers
         TT::Metalium::Common
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
@@ -135,7 +115,6 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tools/include
         ${CMAKE_CURRENT_BINARY_DIR}
 )
-target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/internal/disaggregation)
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.

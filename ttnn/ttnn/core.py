@@ -44,11 +44,6 @@ def is_sharded(tensor) -> bool:
 
 
 get_memory_config = ttnn._ttnn.core.get_memory_config
-light_metal_begin_capture = ttnn._ttnn.core.light_metal_begin_capture
-light_metal_end_capture = ttnn._ttnn.core.light_metal_end_capture
-
-# Add LightMetalReplay binding
-LightMetalReplay = ttnn._ttnn.core.LightMetalReplay
 
 
 def num_cores_to_corerangeset(

@@ -15,7 +15,7 @@ namespace tt::tt_metal::internal {
  * can have that recording overwritten by the compiler's own (tenstorrent/tt-metal#58433).
  *
  * Set it through ComputeConfig::defines or KernelDescriptor::defines. Defines are already part of the kernel's
- * JIT cache key and of LightMetal capture. Kernels without it build exactly as before.
+ * JIT cache key. Kernels without it build exactly as before.
  *
  * @note Internal-only, temporary workaround for tenstorrent/tt-metal#58433, removed once the compiler respects
  *       recordings made outside the function it compiles. Not part of the public API; do not depend on it.
