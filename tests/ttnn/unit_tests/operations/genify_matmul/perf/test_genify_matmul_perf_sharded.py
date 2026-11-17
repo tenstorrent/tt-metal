@@ -80,10 +80,14 @@ def run_pdl_case(case, device):
     return A, B, bias, out
 
 
-@pytest.mark.parametrize("b_mcast", ["on", "off"])
+@pytest.mark.parametrize("b_mcast", ["on", "off"], ids=["mc1", "mc0"])
 @pytest.mark.parametrize("case", PDL_CASES, ids=[c[0] for c in PDL_CASES])
 def test_perf_pdl_sharded(case, b_mcast, device, monkeypatch):
     from ttnn.operations.genify_matmul import genify_matmul_program_descriptor as pd
 
     monkeypatch.setattr(pd, "SHARDED_B_MCAST", b_mcast == "on", raising=False)
+    # GM_KNOBS="NAME=value,..." overrides program-descriptor knobs for a sweep (ints only).
+    for kv in filter(None, os.environ.get("GM_KNOBS", "").split(",")):
+        name, value = kv.split("=")
+        monkeypatch.setattr(pd, name, int(value))
     run_pdl_case(case, device)

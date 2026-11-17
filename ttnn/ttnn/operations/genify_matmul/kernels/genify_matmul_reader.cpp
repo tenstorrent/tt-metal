@@ -219,11 +219,13 @@ void kernel_main() {
     constexpr bool bs_mcast = get_compile_time_arg_val(34) != 0;           // R3a: rotating row multicast
     constexpr uint32_t cb_act_shard = get_compile_time_arg_val(35);        // R3: A's resident shard (zero-copy)
     // R2a / R3a weight multicast (Refinement 10): one injector per B-sharing group (R3: a grid column; R2: all
-    // shard cores) reads each B K-block once and multicasts it in `b_chunks` K-row chunks of `b_chunk_k` rows.
+    // shard cores) reads B once and multicasts it, one B round per `b_round_kblocks` K-blocks (their slots are
+    // contiguous K rows), each round in `b_chunks` K-row chunks of `b_chunk_k` rows.
     constexpr bool bs_b_mcast = get_compile_time_arg_val(36) != 0;
     constexpr uint32_t b_chunks = get_compile_time_arg_val(37);
     constexpr uint32_t b_chunk_k = get_compile_time_arg_val(38);
-    constexpr auto a_args = TensorAccessorArgs<39>();
+    constexpr uint32_t b_round_kblocks = get_compile_time_arg_val(39);
+    constexpr auto a_args = TensorAccessorArgs<40>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto row_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto res_args = TensorAccessorArgs<row_args.next_compile_time_args_offset()>();
@@ -257,7 +259,10 @@ void kernel_main() {
         mc_act.active == (operand_mcast || (dram_sharded && ds_reader_act) || bs_mcast) &&
         mc_weight.active == (operand_mcast || bs_b_mcast));
     static_assert(
-        !bs_b_mcast || (block_sharded && b_chunks >= 1 && b_chunks <= 8 && b_chunks * b_chunk_k >= block_k_tiles));
+        !bs_b_mcast ||
+        (block_sharded && b_chunks >= 1 && b_chunks <= 8 && b_round_kblocks >= 1 &&
+         num_k_blocks % b_round_kblocks == 0 && b_chunks * b_chunk_k >= b_round_kblocks * block_k_tiles));
+    static_assert(bs_b_mcast || b_round_kblocks == 1);
     static_assert(operand_mode <= 2 && int(operand_mode != 0) + int(dram_sharded) + int(block_sharded) <= 1);
     static_assert(!bs_mcast || block_sharded);
     static_assert(ds_b_ahead >= 1 && ds_b_ahead <= ds_weight_depth);
@@ -475,6 +480,23 @@ void kernel_main() {
                     const uint32_t batch = b0 + blk_b0 + bi;
                     const uint32_t a_row_base = batch * tensor_m_tiles + row0 + blk_r0;
                     const uint32_t b_base = batch * weight_batch_stride + col0 + blk_c0;
+                    // R2a / R3a (Refinement 10): the walk's first bias / gate row is the same on every core of the
+                    // B group too (a DRAM hotspot when each core reads it: ~2.5 us bank-serialized on PDL's 86-103
+                    // core HS sets), so the injector reads it beside B (own transaction id) and multicasts it in
+                    // one row round right after the first B round, while compute runs the matmul. It is pushed
+                    // after the walk as usual. Later blocks (cb_row holds one row) keep the per-core read.
+                    const bool row_mcast = bs_b_mcast && has_row && bb == 0 && mb == 0 && nbk == 0 && bi == 0;
+                    constexpr uint32_t row_trid = 15;
+                    static_assert(!bs_b_mcast || b_chunks < row_trid);
+                    auto issue_row = [&]() {
+                        cb_reserve_back(cb_row, block_n_tiles);
+                        uint32_t l1 = get_write_ptr(cb_row);
+                        const uint32_t page = col0 + blk_c0;
+                        for (uint32_t n = 0; n < blk_cols; ++n) {
+                            noc_async_read(row_acc.get_noc_addr(page + n), l1, row_tile_bytes);
+                            l1 += row_tile_bytes;
+                        }
+                    };
                     for (uint32_t kb = 0; kb < KS::n; ++kb) {
                         const uint32_t k_valid = KS::kv(kb);
                         const uint32_t k0 = KS::k0(kb);
@@ -509,22 +531,37 @@ void kernel_main() {
                             }
                         } else if constexpr (block_sharded) {
                             MaybeDeviceZoneScope("rd_bs_kblock");
-                            cb_reserve_back(cb_weight_tiles, weight_block_tiles);
+                            // A B round starts here (always without the multicast: one K-block per round). Its
+                            // b_round_kblocks K-block slots are reserved together; they are contiguous K rows
+                            // (the CB holds a whole number of rounds and rounds start on a multiple of it).
+                            const bool b_round = (kb % b_round_kblocks) == 0;
+                            if (b_round) {
+                                cb_reserve_back(cb_weight_tiles, b_round_kblocks * weight_block_tiles);
+                            }
                             const uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
                             constexpr uint32_t chunk_row_bytes = block_n_tiles * b_tile_bytes;
+                            constexpr uint32_t round_rows = b_round_kblocks * block_k_tiles;
                             if constexpr (bs_b_mcast) {
                                 // R2a / R3a: only the injector reads B, chunk c tagged with trid c + 1 so each
                                 // chunk goes on the wire as soon as its own reads land (stall-shadow: issued
                                 // before the A round, which does not depend on B).
-                                if (b_injector) {
+                                if (b_injector && b_round) {
+                                    MaybeDeviceZoneScope("rd_b_issue");
+                                    const uint32_t round_valid =
+                                        (tensor_k_tiles - k0) < round_rows ? (tensor_k_tiles - k0) : round_rows;
                                     for (uint32_t c = 0; c < b_chunks; ++c) {
                                         const uint32_t r0 = c * b_chunk_k;
-                                        if (r0 >= k_valid) {
+                                        if (r0 >= round_valid) {
                                             break;
                                         }
-                                        const uint32_t rows = (k_valid - r0) < b_chunk_k ? (k_valid - r0) : b_chunk_k;
+                                        const uint32_t rows =
+                                            (round_valid - r0) < b_chunk_k ? (round_valid - r0) : b_chunk_k;
                                         dataflow_kernel_lib::set_read_trid(noc, c + 1);
                                         read_weight(weight_l1 + r0 * chunk_row_bytes, b_base, k0 + r0, rows, blk_cols);
+                                    }
+                                    if (row_mcast && kb == 0) {
+                                        dataflow_kernel_lib::set_read_trid(noc, row_trid);
+                                        issue_row();  // after B: the row round follows the B round
                                     }
                                     dataflow_kernel_lib::set_read_trid(noc, 0);  // the A round's reads stay untagged
                                 }
@@ -552,12 +589,12 @@ void kernel_main() {
                                         get_write_ptr(cb_act_tiles), a_row_base, k0, blk_rows, k_valid, block_k_tiles);
                                 }
                             }
-                            if constexpr (bs_b_mcast) {
-                                // B round(s) after the A round on every core (fixed order: no channel deadlock).
+                            if (bs_b_mcast && b_round) {
+                                MaybeDeviceZoneScope("rd_b_round");
+                                // B round after the A round on every core (fixed order: no channel deadlock).
                                 for (uint32_t c = 0; c < b_chunks; ++c) {
                                     const uint32_t r0 = c * b_chunk_k;
-                                    const uint32_t rows =
-                                        (block_k_tiles - r0) < b_chunk_k ? (block_k_tiles - r0) : b_chunk_k;
+                                    const uint32_t rows = (round_rows - r0) < b_chunk_k ? (round_rows - r0) : b_chunk_k;
                                     if (b_injector) {
                                         dataflow_kernel_lib::async_read_barrier_with_trid(noc, c + 1);
                                     }
@@ -569,7 +606,11 @@ void kernel_main() {
                                         rows * chunk_row_bytes);
                                 }
                             }
-                            noc_async_read_barrier();  // one barrier per K-block, both operands
+                            // One barrier per K-block, both operands. Under the B multicast B's reads are retired
+                            // by their transaction ids, so only the unicast A stepping stone still needs it.
+                            if (!bs_b_mcast || (!bs_mcast && !own)) {
+                                noc_async_read_barrier();
+                            }
                             if (own) {
                                 cb_push_back(cb_act_shard, act_block_tiles);
                             }
@@ -577,6 +618,22 @@ void kernel_main() {
                                 cb_push_back(cb_act_tiles, act_block_tiles);
                             }
                             cb_push_back(cb_weight_tiles, weight_block_tiles);
+                            if (row_mcast && kb == 0) {
+                                // Row round (same channel, same order on every core): lands at the injector's
+                                // cb_row slot address on every receiver (lockstep pointers).
+                                MaybeDeviceZoneScope("rd_row_round");
+                                if (b_injector) {
+                                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, row_trid);
+                                } else {
+                                    cb_reserve_back(cb_row, block_n_tiles);
+                                }
+                                bs_b_deliver<bs_b_mcast>(
+                                    b_injector,
+                                    b_sender,
+                                    b_receiver,
+                                    get_write_ptr(cb_row),
+                                    block_n_tiles * row_tile_bytes);
+                            }
                         } else {
                             // B residency: the core's one B block (one K-block, its whole column range)
                             // is read on the first M-block only; compute keeps it fronted for the rest.
@@ -646,14 +703,10 @@ void kernel_main() {
                         // bias / gate row of this N-block: once per block, after the first K-walk.
                         if (bi == 0) {
                             MaybeDeviceZoneScope("rd_row");
-                            cb_reserve_back(cb_row, block_n_tiles);
-                            uint32_t l1 = get_write_ptr(cb_row);
-                            const uint32_t page = col0 + blk_c0;
-                            for (uint32_t n = 0; n < blk_cols; ++n) {
-                                noc_async_read(row_acc.get_noc_addr(page + n), l1, row_tile_bytes);
-                                l1 += row_tile_bytes;
+                            if (!row_mcast) {  // (the multicast row already landed in the row round)
+                                issue_row();
+                                noc_async_read_barrier();
                             }
-                            noc_async_read_barrier();
                             cb_push_back(cb_row, block_n_tiles);
                         }
                     }

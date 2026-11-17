@@ -211,10 +211,16 @@ BS_ROW_MCAST = True
 SHARDED_B_MCAST = True
 # The injector's in-group index; staggered by group so R3's column injectors sit on different grid rows.
 SHARDED_B_INJECTOR = 0
-# A K-block's B multicast goes out in K-row chunks of >= this many bytes (at most SHARDED_B_MAX_CHUNKS,
+# A B round's multicast goes out in K-row chunks of >= this many bytes (at most SHARDED_B_MAX_CHUNKS,
 # each read under its own transaction id), so chunk c is on the wire while chunk c + 1 is still landing.
+# Parked at one chunk: each chunk is a full handshake + write-ack round (~1.2 us on PDL's 86-core HS group),
+# measured 6.9 / 10.3 / 15.1 us for 1 / 4 / 8 chunks on res3 reduce (8192x512x128).
 SHARDED_B_CHUNK_BYTES = 16 * 1024
-SHARDED_B_MAX_CHUNKS = 8
+SHARDED_B_MAX_CHUNKS = 1
+# One B round carries g K-blocks (g | num_k_blocks, the smallest with >= this many bytes, cb_weight_tiles
+# deepened to 2g K-blocks when L1 allows): a round costs a handshake on the reader's serial chain beside the
+# A round, so thin K-blocks (R3's 1-2 output tiles per grid column) amortize it over several K-blocks.
+SHARDED_B_ROUND_BYTES = 32 * 1024
 # own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
 NO_OWN_KB = 0xFFFFFFFF
 
@@ -827,9 +833,9 @@ _DS_ROLE_ABSENT = (0, 0, 1, DEPTH_ACT, 0, DEPTH_WEIGHT, 1, 1)
 # Writer CT args [8, 16): the R4 A-round role when it runs on the writer (ds_act, worker, cb_act_tiles,
 # block_k, num_k_blocks, K-blocks per round, A tile bytes, act CB depth). Every other writer: absent.
 _DS_WRITER_ACT_ABSENT = (0, 0, CB_ACT_TILES, 1, 1, 1, 0, DEPTH_ACT)
-# Reader CT args [33, 39): regime R3 / R2 role (block_sharded, row multicast, cb_act_shard id) and the
-# R2a / R3a weight multicast (on, chunks per K-block, K rows per chunk).
-_BS_ROLE_ABSENT = (0, 0, CB_ACT_SHARD, 0, 1, 1)
+# Reader CT args [33, 40): regime R3 / R2 role (block_sharded, row multicast, cb_act_shard id) and the
+# R2a / R3a weight multicast (on, chunks per B round, K rows per chunk, K-blocks per B round).
+_BS_ROLE_ABSENT = (0, 0, CB_ACT_SHARD, 0, 1, 1, 1)
 
 
 def _reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t):
@@ -1820,13 +1826,41 @@ def choose_block_sharded_blocking(geom: Geometry, topo: BlockShardedTopology, bu
     raise RuntimeError(f"genify_matmul: even the minimum block_sharded block does not fit the L1 CB budget of {budget}")
 
 
-def sharded_b_chunks(geom: Geometry, blk: Blocking):
-    """R2a / R3a: (chunks, K rows per chunk) of one K-block's B multicast."""
-    bk = blk.block_k_tiles
-    kblock_bytes = bk * blk.block_n_tiles * geom.b_tile_bytes
-    chunks = max(1, min(SHARDED_B_MAX_CHUNKS, bk, kblock_bytes // SHARDED_B_CHUNK_BYTES))
-    chunk_k = _cdiv(bk, chunks)
-    return _cdiv(bk, chunk_k), chunk_k
+def sharded_b_chunks(geom: Geometry, blk: Blocking, round_kblocks=1):
+    """R2a / R3a: (chunks, K rows per chunk) of one B round (`round_kblocks` K-blocks of contiguous K rows)."""
+    rows = round_kblocks * blk.block_k_tiles
+    round_bytes = rows * blk.block_n_tiles * geom.b_tile_bytes
+    chunks = max(1, min(SHARDED_B_MAX_CHUNKS, rows, round_bytes // SHARDED_B_CHUNK_BYTES))
+    chunk_k = _cdiv(rows, chunks)
+    return _cdiv(rows, chunk_k), chunk_k
+
+
+def _sharded_b_depth(round_kblocks, walk_k_blocks):
+    """cb_weight_tiles depth (K-blocks) for B rounds of `round_kblocks`: two rounds in flight, or one when the
+    core's whole walk is a single round (round_kblocks == 1 is `_weight_depth`)."""
+    return round_kblocks if walk_k_blocks <= round_kblocks else DEPTH_WEIGHT * round_kblocks
+
+
+def sharded_b_round(geom: Geometry, blk: Blocking, walk_k_blocks, budget, in_place, act_cb):
+    """R2a / R3a: K-blocks per B round -- the smallest divisor g of num_k_blocks whose round carries
+    SHARDED_B_ROUND_BYTES (else all of them), shrunk while its 2g-deep weight CB does not fit the budget."""
+    kblock_bytes = blk.block_k_tiles * blk.block_n_tiles * geom.b_tile_bytes
+    divs = sorted(_divisors(blk.num_k_blocks))
+    g = next((d for d in divs if d * kblock_bytes >= SHARDED_B_ROUND_BYTES), divs[-1])
+    for d in reversed([d for d in divs if d <= g]):
+        f = _footprint(
+            geom,
+            blk.block_m_tiles,
+            blk.block_n_tiles,
+            blk.block_k_tiles,
+            partials=blk.use_partials,
+            out_in_place=in_place,
+            depth_weight=_sharded_b_depth(d, walk_k_blocks),
+            act_cb=act_cb,
+        )
+        if d == 1 or f <= budget:
+            return d
+    return 1
 
 
 def _sharded_b_channel(device, geom: Geometry, topo: BlockShardedTopology):
@@ -1889,7 +1923,6 @@ def create_block_sharded_program_descriptor(
     cb_out = CB_OUTPUT_SHARD if in_place else CB_OUTPUT_TILES
     row_mcast = BS_ROW_MCAST and topo.cols > 1
     mc_weight = _sharded_b_channel(device, geom, topo)
-    b_chunks, b_chunk_k = sharded_b_chunks(geom, blk) if mc_weight is not None else (1, 1)
     out_div = 2 if geom.swiglu else 1
     bn_full = topo.out_w_tiles * out_div  # B columns per grid column
     # Every core of a row walks the same nominal block sequence (lockstep CB pointers for the multicast).
@@ -1897,7 +1930,13 @@ def create_block_sharded_program_descriptor(
     nb_n = _cdiv(bn_full, blk.block_n_tiles)
     # A single K shard (R2): compute consumes the resident shard directly; no cb_act_tiles exists.
     cb_act_compute = CB_ACT_SHARD if topo.act_resident else CB_ACT_TILES
-    depth_weight = _weight_depth(nb_m * nb_n * blk.num_k_blocks * blk.block_batches)
+    walk_k_blocks = nb_m * nb_n * blk.num_k_blocks * blk.block_batches
+    b_round, b_chunks, b_chunk_k = 1, 1, 1
+    if mc_weight is not None:
+        budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
+        b_round = sharded_b_round(geom, blk, walk_k_blocks, budget, in_place, act_cb=not topo.act_resident)
+        b_chunks, b_chunk_k = sharded_b_chunks(geom, blk, b_round)
+    depth_weight = _sharded_b_depth(b_round, walk_k_blocks)
 
     # ---- CBs ----
     # The own K-slice: backed on A's resident shard (zero-copy).
@@ -1947,6 +1986,7 @@ def create_block_sharded_program_descriptor(
         int(mc_weight is not None),
         b_chunks,
         b_chunk_k,
+        b_round,
         *_reader_accessor_ct(a, b, row_t, res_t),
     ]
     writer_ct = _writer_ct(cb_out, blk, out_block_n_tiles, geom, out, out_in_place=in_place)
