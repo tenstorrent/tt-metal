@@ -82,6 +82,7 @@ from ttnn._ttnn.multi_device import (
     MeshComposerConfig,
     TensorTopology,
     get_device_tensors,
+    cpu_shards,
     from_host_shards,
     from_local_host_shards,
     combine_device_tensors,
