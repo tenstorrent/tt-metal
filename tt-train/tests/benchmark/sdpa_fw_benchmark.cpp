@@ -23,16 +23,29 @@
 //   llama8b_s2048_arbitrary          not timed                         6638.3         2083.7
 //   tinyllama_s2048_causal_gate        1704.1                         1669.0          717.5
 //
-// Historical chunk-only branch measurements (4a9383108cf), before the scheduler:
-// Per-chip rows on p150b with a 120-core compute grid (warmup 3, measured 20):
-//   scenario                    main's chunking   default pick   picked Q/K/H
-//   qwen3_8_tp4_s1024_causal              402.3          400.5       32/128/1
-//   qwen3_8_tp4_s8192_causal            17537.2         6120.3      128/128/1
-//   llama70b_tp8_s2048_causal             876.1          647.9       64/128/1
-//   llama70b_tp8_s8192_causal           11811.1         4463.9      128/128/1
-// All four outputs equal the pinned-main-chunk output. These are single-chip attention timings,
-// not distributed training. At 130 cores the Llama-70B 2k row stays at q32/k128/h1 too: its 128
-// two-row causal pairs cannot fill the grid. PR #62646 replaces that balance rule.
+// The per-chip tensor-parallel scenarios at this head, p150b with a 110-core compute grid (warmup 3,
+// measured 20). "main pairs" is the program main ran; "default pairs" is the pick's chunking at main's
+// placement, never cut, which is what the chunk-only branch (PR #61884) ran; "picked" is this PR. So the
+// last two columns separate what #61884 already had from what this PR's placement and cut add:
+//
+//   scenario                     main pairs   default pairs   picked   picked units   this PR
+//   qwen3_8_tp4_s1024_causal          375.7           375.7    248.6        60S/60M     1.51x
+//   qwen3_8_tp4_s8192_causal        16786.1          5676.8   5872.2          0S/0M     0.97x
+//   llama70b_tp8_s2048_causal         832.1           740.2    402.2        48S/48M     1.84x
+//   llama70b_tp8_s8192_causal       11470.5          4509.9   3646.5          0S/0M     1.24x
+//   llama8b_tp8_s4096_causal         1590.9          1454.9    697.5        52S/52M     2.09x
+//   llama8b_tp4_s2048_causal          831.3           738.0    405.2        48S/48M     1.82x
+//   llama8b_tp8_s8192_causal         5706.8          3023.7   1993.6          0S/0M     1.52x
+//   tinyllama_tp8_s4096_causal        905.3           943.2    446.3        56S/56M     2.11x
+//   llama3_8b_tp4_h8kv2d128_s8k     11465.8          4505.6   3643.0          0S/0M     1.24x
+//   llama3_8b_tp4_h8kv2d128_s16k    44879.3         14638.3  13846.4          0S/0M     1.06x
+//   llama70b_tp8_h8kv1d128_s16k     44849.4         14657.9  13852.8          0S/0M     1.06x
+//
+// Every row's output matches main's program's. The shapes that cut are the short ones, where the items
+// are too few to fill 110 cores; the long ones gain from longest-first placement alone. One row is a
+// loss: qwen3_8_tp4_s8192 runs 3% slower placed longest first than in main's pairs at the same chunking
+// (5872.2 against 5676.8), its 384 items spreading over the cores where the pairs sit in runs. These are
+// single-chip attention timings, not distributed training.
 //
 // Long-context training on the same device: NanoLlama3 char, B=1, S=8192, six blocks, Hq/Hkv=6/3,
 // D=64, AdamW, seed 5489. nano_gpt's reported median for steps 4..23: 135.8 ms with sdpa_fw pinned
@@ -42,9 +55,10 @@
 // and nanollama3_char.yaml: max_sequence_length=8192. No other model/optimizer settings changed.
 //
 // Usage: sdpa_fw_benchmark [scenario-name-substring] [shape=B,Hq,Hkv,S,D[,causal|none|arbitrary[,gate]] ...]
-//        [q_chunk_size,k_chunk_size,heads_per_item[,max_pieces[,num_cores]] ...] [pairs] [default_pairs]
-//        pairs = main's chunking placed as main did (heavy/light pairs); default_pairs = the default chunking
-//        so placed.
+//        [q_chunk_size,k_chunk_size,heads_per_item[,max_pieces[,num_cores]] ...]
+//        Every scenario measures three rows by default (kDefaultRows): the pick, main's program, and the
+//        pick's chunking at main's placement without cuts (PR #61884's program). Configs given on the
+//        command line are measured after them.
 // Env:   TTML_SDPA_BENCH_WARMUP (default 2), TTML_SDPA_BENCH_MEASURE (default 10)
 
 #include <fmt/format.h>
@@ -139,9 +153,28 @@ std::string reason_of(const std::exception& e) {
     return std::string(what.substr(from, what.find('\n', from) - from));
 }
 
-// The chunking main ran: one query tile-row per item, four K/V tiles per step, no head stacking, no cuts.
+// The program main ran: its chunking (one query tile-row per item, four K/V tiles per step, no head
+// stacking, no cuts) at its placement (heavy/light causal pairs). The baseline every row is measured
+// against, so the speedups are against what main actually ran, not against main's chunking placed some
+// other way.
 const ttml::metal::SDPAForwardProgramConfig kMainConfig{
-    .q_chunk_size = 32U, .k_chunk_size = 128U, .heads_per_item = 1U, .max_pieces = 1U};
+    .q_chunk_size = 32U,
+    .k_chunk_size = 128U,
+    .heads_per_item = 1U,
+    .max_pieces = 1U,
+    .num_cores = 0U,
+    .causal_pairs = true};
+
+// The rows every scenario measures, in order. "default (picked)" is this PR: the pick's chunking, placed
+// longest first, cut where the model rates the cut faster. The next two take that apart -- "main pairs" is
+// main's program, "default pairs" is the pick's chunking at main's placement and never cut, which is what
+// PR #61884 (the chunk-only branch) ran. So the gap between the last two is this PR's placement and cut,
+// and the gap between "default pairs" and "main pairs" is the chunking #61884 already had.
+const std::vector<std::pair<const char*, ttml::metal::SDPAForwardProgramConfig>> kDefaultRows = {
+    {"default (picked)", {}},
+    {"main pairs", kMainConfig},
+    {"default pairs", {.max_pieces = 1U, .causal_pairs = true}},
+};
 
 struct Row {
     std::string label;
@@ -230,7 +263,7 @@ void run_scenario(
         return benchmark_utils::time_device_avg_us(device, num_warmup, num_measure, [&]() { (void)run(cfg); });
     };
 
-    const double main_chunking_us = time_cfg(kMainConfig);  // this kernel at main's chunking, not main's kernel
+    const double main_us = time_cfg(kMainConfig);  // this kernel at main's program, not main's kernel
     const xt::xarray<float> main_out = core::to_xtensor(run(kMainConfig));
 
     auto measure = [&](const std::string& label, const metal::SDPAForwardProgramConfig& cfg) {
@@ -242,16 +275,18 @@ void run_scenario(
             static_cast<double>(benchmark_utils::capture_dram_peak(sc.name + "_" + label, [&]() { (void)run(cfg); })) /
             (1024.0 * 1024.0);
         row.device_us = time_cfg(cfg);
-        row.speedup = benchmark_utils::speedup_x(main_chunking_us, row.device_us);
+        row.speedup = benchmark_utils::speedup_x(main_us, row.device_us);
         const xt::xarray<float> out = core::to_xtensor(run(cfg));
         row.max_abs_diff = static_cast<float>(xt::amax(xt::abs(out - main_out))());
         return row;
     };
 
-    // The default pick is what the model runs, so its failure fails the benchmark; the command-line
-    // configs are optional and a config the shape cannot take is reported as skipped.
+    // The default rows are what the comparison is about, so a failure there fails the benchmark; the
+    // command-line configs are optional and a config the shape cannot take is reported as skipped.
     std::vector<Row> rows;
-    rows.push_back(measure("default (picked)", {}));
+    for (const auto& [label, cfg] : kDefaultRows) {
+        rows.push_back(measure(label, cfg));
+    }
     for (const auto& cfg : extra_configs) {
         const std::string label = fmt::format(
             "q{} k{} h{} p{} c{}{}",
@@ -291,7 +326,7 @@ void run_scenario(
         picked.Sk_chunk_t * tt::constants::TILE_HEIGHT,
         picked.heads_per_item,
         grid.x * grid.y);
-    fmt::print("this kernel at main's chunking (q=32, k=128, h=1, no cuts): {:.1f} us\n", main_chunking_us);
+    fmt::print("this kernel at main's program (q=32, k=128, h=1, pairs, no cuts): {:.1f} us\n", main_us);
     // predicted_us is what the pick compares its candidates on; pred/meas next to it is the model's drift,
     // so a schedule the model rates well and the device does not shows up here (the cost model's constants
     // are calibrated on p150b and sum the reader's DRAM time and the compute passes, which assumes the two
@@ -378,16 +413,6 @@ int main(int argc, char** argv) {
         ttml::metal::SDPAForwardProgramConfig cfg{};
         if (const auto sc = scenario_of(argv[i])) {
             scenarios.push_back(*sc);
-        } else if (std::string_view(argv[i]) == "pairs") {
-            // main's chunking and main's placement (heavy/light pairs): the baseline main actually ran.
-            cfg = kMainConfig;
-            cfg.causal_pairs = true;
-            extra_configs.push_back(cfg);
-        } else if (std::string_view(argv[i]) == "default_pairs") {
-            // the default chunking placed as main did, never cut.
-            cfg.max_pieces = 1U;
-            cfg.causal_pairs = true;
-            extra_configs.push_back(cfg);
         } else if (
             std::sscanf(
                 argv[i],
