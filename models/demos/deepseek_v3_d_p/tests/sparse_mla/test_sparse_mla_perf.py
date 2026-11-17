@@ -34,6 +34,9 @@ import pytest
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import model_fabric_payload
+from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, band_failure, gate
+from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.perf_cases import (
     BOX,
     GATE_CASES,
@@ -44,9 +47,6 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.perf_cases import (
     detect_box,
     gate_params,
 )
-from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, band_failure, gate
-from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced
-from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
@@ -57,14 +57,14 @@ from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
-# process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox: CI hosts. Galaxy (3 runs) and
-# Galaxy 4x4 (2 runs): one local Galaxy, unscaled, as their CI leg has no recent run; recheck once it runs. Galaxy 4x4
-# subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
+# process per model). LoudBox: CI hosts. Galaxy: the mean of 3 runs on one Galaxy, after #65125, unscaled. Galaxy 4x4
+# (2 runs): one local Galaxy, unscaled, as its CI leg has no recent run; recheck once it runs. Galaxy 4x4 subtorus has
+# no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (4.08, 3.23, 7.50, 6.91),
-        "glm_5_3": (3.79, 2.82, 7.12, 6.43),
-        "glm_5_3-no_indexer": (2.80, 2.21, 2.88, 2.28),
+        "kimi_k3_1": (3.53, 3.18, 7.64, 7.28),
+        "glm_5_3": (3.28, 2.82, 7.20, 6.79),
+        "glm_5_3-no_indexer": (2.54, 2.22, 2.59, 2.28),
     },
     "Galaxy 4x4": {
         "kimi_k3_1": (3.87, 3.56, 7.98, 7.58),

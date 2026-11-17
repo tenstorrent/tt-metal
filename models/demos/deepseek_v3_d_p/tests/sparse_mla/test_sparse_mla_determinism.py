@@ -6,9 +6,9 @@
 slot of 24), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer.
 
 The check stays on device, as in tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py (tests/measure/determinism.py):
-run 0's output is the reference, every later output folds max(ne(reference, output))
-into one marker, and the markers are read back once at the end. Nothing syncs inside the loops, so a fast chip can get
-ahead of a slow one, which is what exposes a race. Only a failure reads outputs back, to say which chips differ.
+run 0's output is the reference, every later output folds max(ne(reference, output)) into one marker, and the markers
+are read back once at the end. Nothing syncs inside the loops, so a fast chip can get ahead of a slow one, which is
+what exposes a race. Only a failure reads outputs back, to say which chips differ.
 ttnn.ne compares values, not bits: a NaN never equals itself (so a NaN fails the check) and -0 equals +0.
 
   * eager: RUNS forwards back to back; run 0's and the latest output are kept, each one in between is freed once the
