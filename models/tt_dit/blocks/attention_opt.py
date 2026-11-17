@@ -96,6 +96,8 @@ class Attention(Module):
         per_head_norm: bool = False,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
+        qkv_dtype: ttnn.DataType = ttnn.bfloat16,
+        mm_compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -154,7 +156,7 @@ class Attention(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
-        self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        self.mm_compute_kernel_config = mm_compute_kernel_config or ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
@@ -164,7 +166,7 @@ class Attention(Module):
 
         # chunks=3 splits QKV inside minimal_matmul_split (faster than matmul + ttnn.chunk).
         self.to_qkv = ColParallelLinear(
-            query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
+            query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, dtype=qkv_dtype, **common_args
         )
 
         # Fuses head-split + RMSNorm + RoPE. Weight is tiled per-head → [padded_inner_dim] in
@@ -498,7 +500,7 @@ class Attention(Module):
         self,
         *,
         sequence_1: ttnn.Tensor,
-        sequence_1_length: int,
+        sequence_1_length: int | ttnn.Tensor,
         sequence_2: ttnn.Tensor | None = None,
         sequence_2_length: int = 0,
         sequence_1_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
@@ -621,6 +623,11 @@ class Attention(Module):
             and int(add_q.shape[2]) == 0
         )
         if self.parallel_config.sequence_parallel.factor > 1:
+            config_length = (
+                sequence_1.shape[1] * self.parallel_config.sequence_parallel.factor
+                if isinstance(sequence_1_length, ttnn.Tensor)
+                else sequence_1_length
+            )
             spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -637,7 +644,7 @@ class Attention(Module):
                 joint_strategy="rear",
                 logical_n=sequence_1_length,
                 logical_l=sequence_2_length,
-                program_config=self.get_ring_sdpa_program_config(sequence_1_length),
+                program_config=self.get_ring_sdpa_program_config(config_length),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -648,14 +655,14 @@ class Attention(Module):
                 mesh_device=self.mesh_device,
                 topology=self.ccl_manager.topology,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                ccl_core_grid_offset=(0, self.get_ring_sdpa_core_grid(sequence_1_length)[1]),
+                ccl_core_grid_offset=(0, self.get_ring_sdpa_core_grid(config_length)[1]),
                 persistent_output_buffer_joint_k=persistent_joint_k,
                 persistent_output_buffer_joint_v=persistent_joint_v,
                 output_concat_heads=concat_out,
             )
         else:
             assert (
-                sequence_1_length == spatial.shape[1]
+                not isinstance(sequence_1_length, ttnn.Tensor) and sequence_1_length == spatial.shape[1]
             ), "spatial sequence must not be padded without sequence parallelism"
 
             spatial, sequence_2 = ttnn.transformer.joint_scaled_dot_product_attention(

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
@@ -73,12 +74,43 @@ RING_SDPA_CHUNKS_SP32_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
 }
 
 
+@dataclass(frozen=True)
+class Flux3KleinPrecision:
+    """Weight dtype and matmul fidelity of every DiT block and modulation linear; ``name`` keys the weight cache.
+    ``mm_fidelity`` None keeps each layer's own matmul config."""
+
+    name: str
+    weight_dtype: ttnn.DataType = ttnn.bfloat16
+    mm_fidelity: ttnn.MathFidelity | None = None
+
+    def matmul_config(self, arch: ttnn.Arch) -> ttnn.WormholeComputeKernelConfig | None:
+        if self.mm_fidelity is None:
+            return None
+        return ttnn.init_device_compute_kernel_config(
+            arch, math_fidelity=self.mm_fidelity, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+
+
+PRECISION_BF16 = Flux3KleinPrecision("bf16")
+# opt-in fast mode: bfloat8_b weights, LoFi matmuls (activations stay bf16)
+PRECISION_FAST = Flux3KleinPrecision("bf8_lofi", ttnn.bfloat8_b, ttnn.MathFidelity.LoFi)
+
+
 class Flux3KleinAttention(Attention):
     ring_sdpa_concat_heads = True
 
     def forward(self, *, sequence_1: ttnn.Tensor, **kwargs):
         self._local_rows = int(sequence_1.shape[-2])
+        self._length_on_device = isinstance(kwargs.get("sequence_1_length"), ttnn.Tensor)
         return super().forward(sequence_1=sequence_1, **kwargs)
+
+    def get_ring_sdpa_core_grid(self, resolved_seq_len: int) -> tuple[int, int]:
+        # a device-tensor length resolves to the padded length: keep the grid of every attended length, not the base
+        # table's 4096-row entry (the 4096-row text bucket)
+        if getattr(self, "_length_on_device", False):
+            full = self.mesh_device.compute_with_storage_grid_size()
+            return (full.x, full.y - 1)
+        return super().get_ring_sdpa_core_grid(resolved_seq_len)
 
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
         rows = getattr(self, "_local_rows", None)
@@ -115,12 +147,14 @@ class Flux3KleinTransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        precision: Flux3KleinPrecision = PRECISION_BF16,
     ) -> None:
         super().__init__()
 
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         mlp_hidden_dim = MLP_RATIO * HIDDEN
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+        mm_config = precision.matmul_config(device.arch())
 
         self.attn = Flux3KleinAttention(
             query_dim=HIDDEN,
@@ -139,6 +173,8 @@ class Flux3KleinTransformerBlock(Module):
             per_head_norm=True,
             is_fsdp=is_fsdp,
             shard_prompt=False,
+            qkv_dtype=precision.weight_dtype,
+            mm_compute_kernel_config=mm_config,
         )
         self.attn.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -170,6 +206,8 @@ class Flux3KleinTransformerBlock(Module):
             mlp_hidden_dim,
             bias=False,
             activation_fn="swiglu",
+            dtype=precision.weight_dtype,
+            compute_kernel_config=mm_config,
             mesh_device=device,
             mesh_axis=tp_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
@@ -179,6 +217,8 @@ class Flux3KleinTransformerBlock(Module):
             HIDDEN + mlp_hidden_dim,
             HIDDEN,
             bias=False,
+            dtype=precision.weight_dtype,
+            compute_kernel_config=mm_config,
             mesh_device=device,
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
@@ -347,7 +387,7 @@ class Flux3KleinTransformerBlock(Module):
         *,
         rope: tuple[ttnn.Tensor, ttnn.Tensor],
         mod: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
-        logical_length: int,
+        logical_length: int | ttnn.Tensor,
     ) -> ttnn.Tensor:
         shift, scale_plus_one, gate = mod
         x_norm = ttnn.squeeze(self.norm(ttnn.unsqueeze(x, 0), dynamic_weight=scale_plus_one, dynamic_bias=shift), 0)

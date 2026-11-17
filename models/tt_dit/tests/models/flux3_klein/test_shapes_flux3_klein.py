@@ -28,7 +28,7 @@ from ....pipelines.flux3_klein.packing import (
     latent_shape,
     output_shape,
 )
-from ....pipelines.flux3_klein.pipeline_flux3_klein import MAX_REFERENCES, REFERENCE_SIZE, SHAPES, SIZES
+from ....pipelines.flux3_klein.pipeline_flux3_klein import REFERENCE_TOKEN_BUCKETS, SHAPES, SIZES
 from ....utils import matmul
 
 TP = 4
@@ -38,8 +38,6 @@ AGMM_N = (2304, 4608)
 HEURISTIC_M_BLOCK_FITS = 8
 SDPA_CORES = 12 * 9
 SDPA_K_MAX = 736  # the largest k chunk the L1 model fits at q 128
-REFERENCE_ROWS = REFERENCE_SIZE**2 // 256
-REFERENCE_ROWS_4MP = 2048**2 // 256  # the benches' 4 MP reference (REFERENCE_SIZE 2048), on the non-square shapes
 
 NON_SQUARE = tuple(shape for shape in SHAPES if shape[0] != shape[1])
 
@@ -63,17 +61,12 @@ def test_image_ids_are_row_major(width: int, height: int) -> None:
 def _layouts(sp: int, shapes=SHAPES):
     for width, height in shapes:
         grid = latent_shape(height, width)
-        for references in range(MAX_REFERENCES + 1):
-            for text in TEXT_BUCKETS_BY_LAYOUT.get(((width, height), references), TEXT_BUCKETS):
-                lengths = {"image": grid[0] * grid[1], "image_cond": references * REFERENCE_ROWS, "text": text}
+        # every shape takes a reference of either token bucket
+        for cond in (0, *REFERENCE_TOKEN_BUCKETS):
+            for text in TEXT_BUCKETS_BY_LAYOUT.get(((width, height), int(cond > 0)), TEXT_BUCKETS):
+                lengths = {"image": grid[0] * grid[1], "image_cond": cond, "text": text}
                 yield pytest.param(
-                    Flux3KleinSequenceLayout(sp, lengths, text), id=f"sp{sp}_{width}x{height}_r{references}_t{text}"
-                )
-        if width != height:
-            for text in TEXT_BUCKETS:
-                lengths = {"image": grid[0] * grid[1], "image_cond": REFERENCE_ROWS_4MP, "text": text}
-                yield pytest.param(
-                    Flux3KleinSequenceLayout(sp, lengths, text), id=f"sp{sp}_{width}x{height}_r4mp_t{text}"
+                    Flux3KleinSequenceLayout(sp, lengths, text), id=f"sp{sp}_{width}x{height}_r{cond}_t{text}"
                 )
 
 
@@ -107,6 +100,8 @@ def test_quad_ring_sdpa_chunks_cover_every_row_count(layout: Flux3KleinSequenceL
     for rows in _row_counts(layout):
         if rows < 1152:
             continue  # the 1024 and 2048 squares and the short early stacks: the small entries or the shared rule
+        if rows in (2624, 2688):
+            continue  # 4096x4096 + a 4 MP reference: more q units than one round; the base config (c80's quad demo)
         q, k = RING_SDPA_CHUNKS_SP32_BY_LOCAL_ROWS[rows]
         assert q == 128 and k % 32 == 0 and k <= SDPA_K_MAX
         assert (HEADS // TP) * -(-rows // q) <= SDPA_CORES  # one round of (head, q chunk) units

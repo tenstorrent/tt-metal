@@ -191,6 +191,7 @@ class ColParallelLinear(Module):
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
         pin_output_bf16=False,
+        bias_dtype=None,
     ):
         super().__init__()
 
@@ -248,7 +249,12 @@ class ColParallelLinear(Module):
             dtype=dtype,
         )
         self.bias = (
-            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device, dtype=dtype)
+            Parameter(
+                total_shape=[1, self.out_features],
+                mesh_axes=[None, mesh_axis],
+                device=mesh_device,
+                dtype=dtype if bias_dtype is None else bias_dtype,
+            )
             if bias
             else None
         )

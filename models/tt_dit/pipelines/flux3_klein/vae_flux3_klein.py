@@ -16,12 +16,12 @@ import torch
 import ttnn
 
 from ...layers.conv2d import Conv2d
-from ...models.vae.encoder_flux2 import Flux2VaeEncoder
 from ...models.vae.vae import VaeAttention
 from ...models.vae.vae_flux2 import Flux2VaeDecoder
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
+from .canvas_flux3_klein import CanvasMasks, CanvasVaeEncoder, canvas_for
 from .packing import latent_shape, output_shape
 from .weights_flux3_klein import checkpoint_id
 
@@ -192,7 +192,7 @@ class Flux3KleinVae:
         self._model_name = f"flux3_klein_vae_{checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
         # a conv prepares its weights for the first input shape it sees, so every shape gets its own instance
         self._decoders: dict[tuple[int, int], Flux2VaeDecoder] = {}
-        self._encoders: dict[int, Flux2VaeEncoder] = {}
+        self._canvas_encoders: dict[tuple[int, int], CanvasVaeEncoder] = {}
 
     def _load(self, module, parallel_config, subfolder: str):
         from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
@@ -225,17 +225,51 @@ class Flux3KleinVae:
             self._decoders[size] = self._load(decoder, parallel_config, SUBFOLDER)
         return self._decoders[size]
 
-    def encoder(self, size: int) -> Flux2VaeEncoder:
-        if size not in self._encoders:
+    def canvas_encoder(self, canvas: tuple[int, int]) -> CanvasVaeEncoder:
+        if canvas not in self._canvas_encoders:
             parallel_config = Flux2VaeParallelConfig.from_axes(
-                self._device,
-                tp_axis=self._tp_axis,
-                h_axis=self.h_axis,
-                w_axis=None,
+                self._device, tp_axis=self._tp_axis, h_axis=self.h_axis, w_axis=None
             )
-            encoder = Flux2VaeEncoder(**_vae_kwargs(self._device, parallel_config, self._ccl))
-            self._encoders[size] = self._load(encoder, parallel_config, "vae_encoder")
-        return self._encoders[size]
+            encoder = CanvasVaeEncoder(**_vae_kwargs(self._device, parallel_config, self._ccl))
+            self._canvas_encoders[canvas] = self._load(encoder, parallel_config, "vae_encoder_canvas")
+        return self._canvas_encoders[canvas]
+
+    def encode_canvas(self, image) -> torch.Tensor:
+        """`[h * w, 128]` bf16 latent tokens of a prepared reference (sides multiples of 16), encoded in the top-left
+        corner of the smallest canvas that holds it."""
+        width, height = image.size
+        canvas = canvas_for(width, height)
+        cw, ch = canvas
+        mesh_key = tuple(self._device.shape)
+        register_conv_slices(mesh_key, ch, cw)
+        x = torch.zeros(1, ch, cw, 3)
+        x[0, :height, :width] = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
+        x = tensor.from_torch(
+            x,
+            device=self._device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_axes=[None, self.h_axis, None, None],
+        )
+        encoder = self.canvas_encoder(canvas)
+        masks = CanvasMasks(self._device, canvas=canvas, image=(width, height), h_axis=self.h_axis)
+        # the per-device shapes of the H-sharded convs are not in the slice table: let ttnn pick (DRAM, auto)
+        table = Conv2d.slice_params.get(mesh_key, Conv2d.slice_default)
+        Conv2d.slice_params[mesh_key] = _AutoSliceTable(table)
+        try:
+            rows = encoder.forward_canvas(x, masks)
+        finally:
+            Conv2d.slice_params[mesh_key] = table
+        masks.deallocate()
+        full = self._ccl.all_gather(rows, dim=1, mesh_axis=self.h_axis, use_hyperparams=True)
+        ttnn.deallocate(rows)
+        out = encoder.normalize_and_patchify(full, height=ch, width=cw)
+        ttnn.deallocate(full)
+        tokens = tensor.to_torch(out)[0]
+        ttnn.deallocate(out)
+        ttnn.deallocate(x)
+        tokens = tokens.reshape(ch // 16, cw // 16, -1)[: height // 16, : width // 16]
+        return tokens.reshape(-1, tokens.shape[-1]).contiguous()
 
     def decode(self, state: ttnn.Tensor, *, size: int | tuple[int, int]) -> ttnn.Tensor:
         """Decode the SP-sharded fp32 latent state of an image of ``size`` (a square side or (width, height)) to a
@@ -285,39 +319,6 @@ class Flux3KleinVae:
             out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         return self._ccl.all_gather(out, dim=2, mesh_axis=self._tp_axis, use_hyperparams=True)
 
-    def encode(self, image) -> torch.Tensor:
-        """`[h * w, 128]` bf16 latent tokens of a PIL image."""
-        width, height = image.size
-        mesh_key = tuple(self._device.shape)
-        # H / h_factor rows per device must stay even through the three stride-2 downsamplers
-        if height != width or height % (SCALE * self._device.shape[self.h_axis]):
-            raise ValueError(f"a {width}x{height} reference does not split over the VAE's h axis")
-        register_conv_slices(mesh_key, height, width)
-        x = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
-        x = tensor.from_torch(
-            x[None].contiguous(),
-            device=self._device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_axes=[None, self.h_axis, None, None],
-        )
-        encoder = self.encoder(width)
-        # the per-device shapes of the H-sharded convs are not in the slice table: let ttnn pick (DRAM, auto)
-        table = Conv2d.slice_params.get(mesh_key, Conv2d.slice_default)
-        Conv2d.slice_params[mesh_key] = _AutoSliceTable(table)
-        try:
-            rows = encoder.forward(x, traced=False)
-        finally:
-            Conv2d.slice_params[mesh_key] = table
-        full = self._ccl.all_gather(rows, dim=1, mesh_axis=self.h_axis, use_hyperparams=True)
-        ttnn.deallocate(rows)
-        out = encoder.normalize_and_patchify(full, height=height, width=width)
-        ttnn.deallocate(full)
-        tokens = tensor.to_torch(out)[0]
-        ttnn.deallocate(out)
-        ttnn.deallocate(x)
-        return tokens.contiguous()
-
     def deallocate_weights(self) -> None:
-        for module in (*self._decoders.values(), *self._encoders.values()):
+        for module in (*self._decoders.values(), *self._canvas_encoders.values()):
             module.deallocate_weights()

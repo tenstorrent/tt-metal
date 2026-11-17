@@ -111,6 +111,18 @@ def _partition_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
     return x
 
 
+def sdpa_config_for_rows(config: ttnn.SDPAProgramConfig, rows: int) -> ttnn.SDPAProgramConfig:
+    """``config`` with its q chunk lowered to the largest tile multiple that divides ``rows`` when it does not."""
+    if rows % config.q_chunk_size == 0:
+        return config
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
+        q_chunk_size=max(d for d in range(32, config.q_chunk_size + 1, 32) if rows % d == 0),
+        k_chunk_size=config.k_chunk_size,
+        exp_approx_mode=config.exp_approx_mode,
+    )
+
+
 def _get_neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, dim: int) -> int:
     """Cap links at the product of dimensions above ``dim`` (kernel constraint)."""
     upper_dims = 1
@@ -872,13 +884,7 @@ class VaeAttention(Module):
         ttnn.deallocate(local)
         program_config = self._sdpa_program_config
         rows = int(q.shape[2])
-        if rows % program_config.q_chunk_size:
-            program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
-                q_chunk_size=max(d for d in range(32, program_config.q_chunk_size + 1, 32) if rows % d == 0),
-                k_chunk_size=program_config.k_chunk_size,
-                exp_approx_mode=program_config.exp_approx_mode,
-            )
+        program_config = sdpa_config_for_rows(program_config, rows)
         o = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -935,14 +941,7 @@ class VaeAttention(Module):
                 q = ttnn.mesh_partition(q, dim=2, cluster_axis=self._ctx.h_mesh_axis, memory_config=q.memory_config())
             q = ttnn.mesh_partition(q, dim=2, cluster_axis=self._tp_axis, memory_config=q.memory_config())
             q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
-            rows = q.shape[2]
-            if rows % program_config.q_chunk_size:
-                program_config = ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
-                    q_chunk_size=max(d for d in range(32, program_config.q_chunk_size + 1, 32) if rows % d == 0),
-                    k_chunk_size=program_config.k_chunk_size,
-                    exp_approx_mode=program_config.exp_approx_mode,
-                )
+            program_config = sdpa_config_for_rows(program_config, int(q.shape[2]))
 
         x = ttnn.transformer.scaled_dot_product_attention(
             q,

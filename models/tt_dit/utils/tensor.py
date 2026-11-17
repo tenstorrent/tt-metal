@@ -266,15 +266,11 @@ def _concat_shards(x: ttnn.Tensor, *, mesh_axes: Sequence[int | None]) -> torch.
         return None
 
     mesh_shape = tuple(device.shape)
-    view = device.get_view()
 
     # The mesh coordinates are device coordinates, in the order get_device_tensors returns the
     # shards. They are the part of the topology every op preserves. Placements go stale, so the
     # layout comes from mesh_axes instead.
-    shards = zip(x.tensor_topology().mesh_coords(), ttnn.get_device_tensors(x), strict=True)
-
-    # A map from local coordinates to the corresponding tensor.
-    local_shards = {tuple(coord): shard for coord, shard in shards if view.is_local(coord)}
+    local_shards = _device_shards(x)
 
     # Anchor the replica on the lowest local coordinate.
     anchor = min(local_shards, default=None)
@@ -302,7 +298,10 @@ def _concat_shards(x: ttnn.Tensor, *, mesh_axes: Sequence[int | None]) -> torch.
         dim = placements[mesh_axis]
         return parts[0] if dim is None else torch.cat(parts, dim=dim)
 
-    return read_block(())
+    try:
+        return read_block(())
+    finally:
+        del read_block  # it refers to itself: the cycle would hold every host shard until the next gc pass
 
 
 def _compose(
@@ -418,21 +417,31 @@ def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
     In a distributed environment, iterates over the mesh coordinates to find the
     tensor shard that belongs to the local device before calling ``ttnn.to_torch``.
     """
-    mesh_device = tt_tensor.device()
-    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
-    coords = list(tt_tensor.tensor_topology().mesh_coords())
-    device_tensors = ttnn.get_device_tensors(tt_tensor)
-
-    torch_tensor = None
-    for coord, device_tensor in zip(coords, device_tensors):
-        if view is None or view.is_local(coord):
-            torch_tensor = ttnn.to_torch(device_tensor)
-            break
-
-    if torch_tensor is None:
+    shards = _device_shards(tt_tensor)
+    if not shards:
         msg = "Failed to find local device tensor"
         raise RuntimeError(msg)
-    return torch_tensor
+    return ttnn.to_torch(next(iter(shards.values())))
+
+
+def local_mesh_coords(device: ttnn.MeshDevice) -> list[tuple[int, ...]]:
+    """This host's coordinates of a (multi-host) mesh."""
+    view = device.get_view()
+    return [c for c in itertools.product(*map(range, device.shape)) if view.is_local(ttnn.MeshCoordinate(*c))]
+
+
+def _device_shards(x: ttnn.Tensor) -> dict[tuple[int, ...], ttnn.Tensor]:
+    """This host's shards of a device tensor by mesh coordinate.
+
+    On a multi-host mesh get_device_tensors holds only this host's shards, in the order of the local
+    coordinates, so the coordinates are filtered to the local ones before they are paired.
+    """
+    local = set(local_mesh_coords(x.device()))
+    coords = [tuple(coord) for coord in x.tensor_topology().mesh_coords()]
+    device_tensors = ttnn.get_device_tensors(x)
+    if len(device_tensors) != len(coords):
+        coords = [coord for coord in coords if coord in local]
+    return {coord: shard for coord, shard in zip(coords, device_tensors, strict=True) if coord in local}
 
 
 _to_torch_zero_copy_warned = False
