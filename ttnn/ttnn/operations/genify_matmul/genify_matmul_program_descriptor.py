@@ -37,7 +37,7 @@ into the core's own output shard.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import ttnn
@@ -84,6 +84,22 @@ DEST16_BLOCK_K_MAX = 8
 # the depth-2 operand CBs is dead L1. 2 measured 0.79x on 384x1536x1024, 0.92x on 32x1024x2048, neutral
 # elsewhere. 1 = unsplit.
 SINGLE_WALK_K_BLOCKS = 2
+# Operand residency knob (Refinement 8). A per-core walk that is ONE block with ONE K-block that K cannot
+# split (S1, K < SINGLE_WALK_K_BLOCKS * BLOCK_K_FLOOR: short-K shapes, whose output is many times their
+# inputs, so the output write stream binds) reads its whole A and B before compute starts, and the
+# output stream only starts after that. Split the region into this many blocks along ONE axis instead:
+# the smaller per-core operand (bytes) is read once and held fronted across the blocks (matmul_block
+# WaitAndRetainOnLastBlock on it, the caller pops it after its last block), the other one streams one
+# block at a time, so compute and the first writes start after the resident operand + one block.
+# A resident -> N-blocks (`act_resident`), B resident -> M-blocks (`weight_resident`). PERF FOCUS 3
+# (32 x 512x128x1024, bf8b): 4 measured best (8-column B blocks: 2 / 4 / 8 blocks 74.9 / 65.0 /
+# 68.5 us on the 32x2x1 split). 1 = off (the whole region as one block).
+RESIDENT_SPLIT_BLOCKS = 4
+# Output write batching knob (Refinement 8, R1): row groups the writer drains per wait / flush / pop
+# (the largest divisor of the block's row groups <= this; cb_output_tiles holds DEPTH_OUT batches).
+# Measured flat to +1.6% on PERF FOCUS 3 at 4 / 8 (the writer never stalled on its per-row-group flush:
+# the DRAM write stream itself binds), so it is parked at 1 = one row group (the Refinement 7 shape).
+OUT_WRITE_BATCH_ROW_GROUPS = 1
 # Subblock tie-break knob (same DEST area): True prefers the square-most subblock (fewest operand
 # unpacks per K step). Measured on PERF FOCUS 1 (LoFi, block 6x28): 2x2 477.8 us vs 1x4 463.7 us, so
 # the wide subblock stays the default.
@@ -96,6 +112,12 @@ Q_N_MAX = 4  # subblock quantum on core_n_tiles (a 4-tile subblock always exists
 # made every core read all of A (10.5 GB instead of 1.3 GB, 4.5x slower).
 GRID_W_SLACK = 0.25
 L1_RESERVE_BYTES = 0  # L1 held back for foreign tensors
+# Split-ranking cost of an operand byte read from L1 (interleaved L1 tensor) relative to one read from
+# DRAM (Refinement 8). DRAM bandwidth is what R1 runs out of -- including on write-bound shapes, where
+# DRAM operand reads compete with the output stream -- while L1-sourced reads only load the NoC.
+# PERF FOCUS 3 (B in L1): ranked at 1.0 the split re-read A (DRAM) 3x to save L1 B reads (32x1x3,
+# 6.6 MB of DRAM reads); discounted it reads A once (32x3x1, B re-read from L1). 1.0 = bytes are bytes.
+L1_READ_COST = 0.25
 # Regime knob: sub-select R1a `interleaved_2d_mcast` (row / column operand multicast) whenever the split
 # is a 2-D physical rectangle. False keeps every core reading its own operands from DRAM (plain R1).
 OPERAND_MCAST = True
@@ -182,6 +204,8 @@ class Geometry:
     epilogue: str = "none"
     row_tile_bytes: int = 0  # bias (bias / bias_relu) or gate (addcmul) tile bytes, else 0
     r_tile_bytes: int = 0  # residual tile bytes (addcmul), else 0
+    a_in_l1: bool = False  # operand A / B is an L1 tensor (split ranking: L1_READ_COST)
+    b_in_l1: bool = False
 
     @property
     def swiglu(self):
@@ -219,6 +243,14 @@ class Blocking:
     sb_h: int
     sb_w: int
     epilogue: str = "none"
+    # B read once per core and retained across its M-blocks (RESIDENT_SPLIT_BLOCKS); needs one K-block,
+    # block_batches == 1 and the core's whole column range in one N-block.
+    weight_resident: bool = False
+    # A read once per core M-block and retained across its N-blocks (the twin: B streams in N-blocks);
+    # needs one K-block and block_batches == 1.
+    act_resident: bool = False
+    # Output row groups the writer drains per wait / flush / pop (cb_output_tiles holds DEPTH_OUT batches).
+    write_batch: int = 1
 
     @property
     def use_partials(self):
@@ -271,6 +303,8 @@ def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=N
         epilogue=epilogue,
         row_tile_bytes=ttnn.tile_size(row.dtype) if row is not None else 0,
         r_tile_bytes=ttnn.tile_size(residual.dtype) if residual is not None else 0,
+        a_in_l1=a.memory_config().buffer_type == ttnn.BufferType.L1,
+        b_in_l1=b.memory_config().buffer_type == ttnn.BufferType.L1,
     )
 
 
@@ -351,11 +385,14 @@ def grid_work(grid: GridChoice):
 
 def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     """Aggregate A + B bytes read over the used cores, including the re-reads the block split adds
-    (A once per N-block, B once per M-block of each core's region)."""
-    nb_m = _cdiv(grid.core_m_tiles, blk.block_m_tiles)
-    nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
-    a_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_m_tiles * geom.a_tile_bytes * nb_n
-    b_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_n_tiles * geom.b_tile_bytes * nb_m
+    (A once per N-block, B once per M-block of each core's region; a resident operand is read once),
+    L1-sourced bytes weighted by L1_READ_COST."""
+    nb_m = 1 if blk.weight_resident else _cdiv(grid.core_m_tiles, blk.block_m_tiles)  # B re-reads per M-block
+    nb_n = 1 if blk.act_resident else _cdiv(grid.core_n_tiles, blk.block_n_tiles)  # A re-reads per N-block
+    a_cost = L1_READ_COST if geom.a_in_l1 else 1.0
+    b_cost = L1_READ_COST if geom.b_in_l1 else 1.0
+    a_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_m_tiles * geom.a_tile_bytes * nb_n * a_cost
+    b_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_n_tiles * geom.b_tile_bytes * nb_m * b_cost
     if uses_operand_mcast(geom, grid, blk):
         # R1a: one A read per grid row-line, one B read per column-line.
         return a_per_core * grid.grid_m + b_per_core * grid.grid_n
@@ -477,7 +514,39 @@ def _make_blocking(geom, block_b, bm, bn, bk_max):
     return Blocking(block_b, bm, bn, block_k, nkb, last, sb_h, sb_w, geom.epilogue)
 
 
+def _resident_split(geom: Geometry, grid: GridChoice):
+    """RESIDENT_SPLIT_BLOCKS: the one-block, one-K-block walk of S1 split along one axis with the smaller
+    per-core operand resident (it fits: every CB term shrinks with the split extent). None when off or
+    the axis is too short to split. B resident: M-blocks, multiples of the whole region's subblock height
+    (the subblock, i.e. SRC operand reuse, holds). A resident: N-blocks, multiples of the N quantum."""
+    cm, cn, tk = grid.core_m_tiles, grid.core_n_tiles, geom.tensor_k_tiles
+    if RESIDENT_SPLIT_BLOCKS <= 1 or grid.core_batches != 1:
+        return None
+    if cm * geom.a_tile_bytes <= cn * geom.b_tile_bytes:
+        bn = min(cn, _round_up(_cdiv(cn, RESIDENT_SPLIT_BLOCKS), grid.q_n))
+        if bn < cn:
+            return replace(_make_blocking(geom, 1, cm, bn, tk), act_resident=True)
+    else:
+        sb_h, _ = choose_subblock(cm, cn, geom.dest_limit)
+        bm = min(cm, _round_up(_cdiv(cm, RESIDENT_SPLIT_BLOCKS), sb_h))
+        if bm < cm:
+            return replace(_make_blocking(geom, 1, bm, cn, tk), weight_resident=True)
+    return None
+
+
 def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
+    blk = _choose_blocking(geom, grid, budget)
+    # Write batching: grows only the output CB term of F (DEPTH_OUT * batch row groups).
+    groups = blk.block_m_tiles // blk.sb_h
+    row_group_bytes = blk.sb_h * geom.out_block_n(blk.block_n_tiles) * geom.o_tile_bytes
+    base = _footprint(geom, blk.block_m_tiles, blk.block_n_tiles, blk.block_k_tiles, blk.use_partials)
+    for batch in sorted((d for d in _divisors(groups) if d <= OUT_WRITE_BATCH_ROW_GROUPS), reverse=True):
+        if base + DEPTH_OUT * (batch - 1) * row_group_bytes <= budget:
+            return replace(blk, write_batch=batch)
+    return blk
+
+
+def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
     tk = geom.tensor_k_tiles
     block_b = grid.core_batches  # costs no L1 (the helper's batch loop reuses per-batch CBs)
     cm, cn = grid.core_m_tiles, grid.core_n_tiles
@@ -493,7 +562,13 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
             bk = _cdiv(tk, SINGLE_WALK_K_BLOCKS)
             if _footprint(geom, cm, cn, bk, partials=True) <= budget:
                 return _make_blocking(geom, block_b, cm, cn, bk)
-        return _make_blocking(geom, block_b, cm, cn, tk)
+        whole = _make_blocking(geom, block_b, cm, cn, tk)
+        resident = _resident_split(geom, grid)
+        # The split must not cost the R1a operand multicast: a smaller K-block can drop under
+        # MCAST_MIN_KBLOCK_BYTES (2048x256x512 bf8b, 16-bit DEST: 52 -> 26 KB A rounds, +11% as plain R1).
+        if resident is not None and uses_operand_mcast(geom, grid, resident) == uses_operand_mcast(geom, grid, whole):
+            return resident
+        return whole
 
     # S2: whole region, K-walk with the accumulator.
     bk_max = _block_k_max(geom, cm, cn, budget)
@@ -588,19 +663,19 @@ def _cb(index, dtype, page_size, num_pages, core_ranges):
     )
 
 
-# Reader CT args [23, 31): regime R4 role (dram_sharded, worker, K-blocks per A round, act CB depth in
+# Reader CT args [24, 32): regime R4 role (dram_sharded, worker, K-blocks per A round, act CB depth in
 # K-blocks, per-row B slice reads, weight CB depth in K-blocks, B K-blocks in flight, A rounds on the
 # reader). Every non-R4 reader passes these defaults.
 _DS_ROLE_ABSENT = (0, 0, 1, DEPTH_ACT, 0, DEPTH_WEIGHT, 1, 1)
 # Writer CT args [8, 16): the R4 A-round role when it runs on the writer (ds_act, worker, cb_act_tiles,
 # block_k, num_k_blocks, K-blocks per round, A tile bytes, act CB depth). Every other writer: absent.
 _DS_WRITER_ACT_ABSENT = (0, 0, CB_ACT_TILES, 1, 1, 1, 0, DEPTH_ACT)
-# Reader CT args [31, 34): regime R3 role (block_sharded, row multicast, cb_act_shard id).
+# Reader CT args [32, 35): regime R3 role (block_sharded, row multicast, cb_act_shard id).
 _BS_ROLE_ABSENT = (0, 0, CB_ACT_SHARD)
 
 
 def _reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t):
-    """Reader CT args [0, 20): CB ids, block knobs, page sizes, epilogue operands."""
+    """Reader CT args [0, 22): CB ids, block knobs, page sizes, epilogue operands, operand residency."""
     return [
         CB_ACT_TILES,
         CB_WEIGHT_TILES,
@@ -622,6 +697,8 @@ def _reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t):
         row_t.buffer_aligned_page_size(),
         ttnn.tile_size(res_t.dtype),
         res_t.buffer_aligned_page_size(),
+        int(blk.weight_resident),
+        int(blk.act_resident),
     ]
 
 
@@ -643,6 +720,7 @@ def _writer_ct(cb_out, blk, out_block_n_tiles, geom, out, out_in_place, ds_act_r
         out.buffer_aligned_page_size(),
         int(out_in_place),  # the output CB is the output's own L1 shard: retire only, no NoC write
         *ds_act_role,
+        blk.write_batch,  # row groups per writer wait / flush / pop
         *ttnn.TensorAccessorArgs(out).get_compile_time_args(),
     ]
 
@@ -674,6 +752,8 @@ def _compute_ct(cb_out, blk, epilogue, cb_row, out, swiglu_natural_pairs, own_ro
         CB_ACT_SHARD,
         # R3a: the reader pushes a lockstep cb_act_tiles slot on the core's own K turn; compute retires it.
         int(own_round_slot),
+        int(blk.weight_resident),  # B fronted once, retained across the core's blocks, popped after them
+        int(blk.act_resident),  # A fronted once per M-block, retained across its N-blocks
     ]
 
 
@@ -709,7 +789,13 @@ def create_program_descriptor(
             DEPTH_WEIGHT * blk.block_k_tiles * blk.block_n_tiles,
             core_ranges,
         ),
-        _cb(CB_OUTPUT_TILES, out.dtype, geom.o_tile_bytes, DEPTH_OUT * blk.sb_h * out_block_n_tiles, core_ranges),
+        _cb(
+            CB_OUTPUT_TILES,
+            out.dtype,
+            geom.o_tile_bytes,
+            DEPTH_OUT * blk.write_batch * blk.sb_h * out_block_n_tiles,
+            core_ranges,
+        ),
     ]
     if blk.use_partials:
         # Exactly one block (mechanism cap: in-place packer L1 accumulation).
@@ -789,7 +875,7 @@ def create_program_descriptor(
         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
         writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
-        compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB]
+        compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
 
     # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
     # specialized, so every core hosts exactly one reader. Plain R1 is a single group (0, 0).

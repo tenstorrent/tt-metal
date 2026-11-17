@@ -20,6 +20,13 @@
 //   - residual (addcmul): row groups of sb_h x block_n tiles after each batch's K-walk, in the
 //     epilogue's consumption order; depth 2 row groups.
 //
+// Operand residency (Refinement 8, R1 / R1a, one K-block): `weight_resident` -- the core's rows are split
+// into M-blocks over its whole column range; B is read (or line-delivered) and pushed on the first M-block
+// only and compute keeps it fronted across the rest, so only A streams. `act_resident` (the twin) -- the
+// columns are split into N-blocks; each M-block's A is read / delivered and pushed on its first N-block
+// only, so only B streams. Every core of an R1a line walks the same nominal sequence, so the skipped
+// deliveries match on injector and receivers.
+//
 // Regime R1a `interleaved_2d_mcast` (Refinement 3, `operand_mcast` = 1): same region, CBs and walk,
 // only the operand SOURCE changes. A K-block depends only on the core's row region, B only on its
 // column region, so one injector per line reads it from DRAM and multicasts it into the line's
@@ -132,21 +139,23 @@ void kernel_main() {
     constexpr uint32_t row_page_bytes = get_compile_time_arg_val(17);
     constexpr uint32_t res_tile_bytes = get_compile_time_arg_val(18);
     constexpr uint32_t res_page_bytes = get_compile_time_arg_val(19);
-    constexpr bool operand_mcast = get_compile_time_arg_val(20) != 0;  // regime R1a
-    constexpr bool a_sends = get_compile_time_arg_val(21) != 0;        // A-line injector (R1a)
-    constexpr bool b_sends = get_compile_time_arg_val(22) != 0;        // B-line injector (R1a)
-    constexpr bool dram_sharded = get_compile_time_arg_val(23) != 0;   // regime R4
-    constexpr bool ds_worker = get_compile_time_arg_val(24) != 0;      // R4 bank worker (else sender / lander)
-    constexpr uint32_t k_blocks_per_round = get_compile_time_arg_val(25);  // R4: K-blocks per A shard
-    constexpr uint32_t act_cb_blocks = get_compile_time_arg_val(26);       // cb_act_tiles depth in K-blocks
-    constexpr bool ds_row_reads = get_compile_time_arg_val(27) != 0;       // R4: column slice, one read per K row
-    constexpr uint32_t ds_weight_depth = get_compile_time_arg_val(28);     // R4: cb_weight_tiles depth in K-blocks
-    constexpr uint32_t ds_b_ahead = get_compile_time_arg_val(29);          // R4: B K-blocks in flight (trids)
-    constexpr bool ds_reader_act = get_compile_time_arg_val(30) != 0;      // R4: A rounds here (else the writer)
-    constexpr bool block_sharded = get_compile_time_arg_val(31) != 0;      // regime R3
-    constexpr bool bs_mcast = get_compile_time_arg_val(32) != 0;           // R3a: rotating row multicast
-    constexpr uint32_t cb_act_shard = get_compile_time_arg_val(33);        // R3: A's resident shard (zero-copy)
-    constexpr auto a_args = TensorAccessorArgs<34>();
+    constexpr bool weight_resident = get_compile_time_arg_val(20) != 0;    // B read once per core (R1)
+    constexpr bool act_resident = get_compile_time_arg_val(21) != 0;       // A read once per M-block (R1)
+    constexpr bool operand_mcast = get_compile_time_arg_val(22) != 0;      // regime R1a
+    constexpr bool a_sends = get_compile_time_arg_val(23) != 0;            // A-line injector (R1a)
+    constexpr bool b_sends = get_compile_time_arg_val(24) != 0;            // B-line injector (R1a)
+    constexpr bool dram_sharded = get_compile_time_arg_val(25) != 0;       // regime R4
+    constexpr bool ds_worker = get_compile_time_arg_val(26) != 0;          // R4 bank worker (else sender / lander)
+    constexpr uint32_t k_blocks_per_round = get_compile_time_arg_val(27);  // R4: K-blocks per A shard
+    constexpr uint32_t act_cb_blocks = get_compile_time_arg_val(28);       // cb_act_tiles depth in K-blocks
+    constexpr bool ds_row_reads = get_compile_time_arg_val(29) != 0;       // R4: column slice, one read per K row
+    constexpr uint32_t ds_weight_depth = get_compile_time_arg_val(30);     // R4: cb_weight_tiles depth in K-blocks
+    constexpr uint32_t ds_b_ahead = get_compile_time_arg_val(31);          // R4: B K-blocks in flight (trids)
+    constexpr bool ds_reader_act = get_compile_time_arg_val(32) != 0;      // R4: A rounds here (else the writer)
+    constexpr bool block_sharded = get_compile_time_arg_val(33) != 0;      // regime R3
+    constexpr bool bs_mcast = get_compile_time_arg_val(34) != 0;           // R3a: rotating row multicast
+    constexpr uint32_t cb_act_shard = get_compile_time_arg_val(35);        // R3: A's resident shard (zero-copy)
+    constexpr auto a_args = TensorAccessorArgs<36>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto row_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto res_args = TensorAccessorArgs<row_args.next_compile_time_args_offset()>();
@@ -176,6 +185,9 @@ void kernel_main() {
     static_assert(int(operand_mcast) + int(dram_sharded) + int(block_sharded) <= 1);
     static_assert(!bs_mcast || block_sharded);
     static_assert(ds_b_ahead >= 1 && ds_b_ahead <= ds_weight_depth);
+    static_assert(
+        !(weight_resident || act_resident) || (num_k_blocks == 1 && block_batches == 1 && !dram_sharded &&
+                                               !block_sharded && !(weight_resident && act_resident)));
 
     uint32_t arg = 0;
     const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
@@ -370,25 +382,42 @@ void kernel_main() {
                             }
                             cb_push_back(cb_weight_tiles, weight_block_tiles);
                         } else {
-                            cb_reserve_back(cb_act_tiles, act_block_tiles);
-                            cb_reserve_back(cb_weight_tiles, weight_block_tiles);
+                            // B residency: the core's one B block (one K-block, its whole column range)
+                            // is read on the first M-block only; compute keeps it fronted for the rest.
+                            const bool load_weight = !weight_resident || mb == 0;
+                            // A residency (the twin): the M-block's A is read on its first N-block only.
+                            const bool load_act = !act_resident || nbk == 0;
+                            if (load_act) {
+                                cb_reserve_back(cb_act_tiles, act_block_tiles);
+                            }
+                            if (load_weight) {
+                                cb_reserve_back(cb_weight_tiles, weight_block_tiles);
+                            }
                             const uint32_t act_l1 = get_write_ptr(cb_act_tiles);
                             const uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
-                            if (batch_valid && reads_act) {
+                            if (batch_valid && reads_act && load_act) {
                                 read_act(act_l1, a_row_base, k0, blk_rows, k_valid);
                             }
-                            if (batch_valid && reads_weight) {
+                            if (batch_valid && reads_weight && load_weight) {
                                 read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
                             }
                             if constexpr (reads_act || reads_weight) {
                                 noc_async_read_barrier();  // one barrier per K-block, both operands
                             }
                             // R1a: A over its line, then B over its line (fixed order on every core).
-                            line_deliver<operand_mcast, a_sends>(act_pipe, act_l1, act_block_tiles * a_tile_bytes);
-                            line_deliver<operand_mcast, b_sends>(
-                                weight_pipe, weight_l1, weight_block_tiles * b_tile_bytes);
-                            cb_push_back(cb_act_tiles, act_block_tiles);
-                            cb_push_back(cb_weight_tiles, weight_block_tiles);
+                            if (load_act) {
+                                line_deliver<operand_mcast, a_sends>(act_pipe, act_l1, act_block_tiles * a_tile_bytes);
+                            }
+                            if (load_weight) {
+                                line_deliver<operand_mcast, b_sends>(
+                                    weight_pipe, weight_l1, weight_block_tiles * b_tile_bytes);
+                            }
+                            if (load_act) {
+                                cb_push_back(cb_act_tiles, act_block_tiles);
+                            }
+                            if (load_weight) {
+                                cb_push_back(cb_weight_tiles, weight_block_tiles);
+                            }
                         }
                     }
 

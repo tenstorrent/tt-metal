@@ -6,8 +6,8 @@
 // Drains the output CB in row groups of sb_h x out_block_n tiles (TileRowMajor, matching the
 // matmul_block helper's per-row-group push) and writes the valid tiles to the interleaved output
 // (DRAM or L1) through TensorAccessor. Padded rows / columns of ragged edge blocks are skipped.
-// One flush per row group (the CB slot may be reused once the writes have left L1), one barrier at
-// the end.
+// One flush per `write_batch` row groups (the CB slot may be reused once the writes have left L1), one
+// barrier at the end.
 //
 // Regime R4 (`out_in_place` = 1): the output CB is backed on this core's own L1 output shard and the
 // compute packs straight into it, so the writer only retires the row groups (wait / pop, no NoC).
@@ -52,10 +52,16 @@ void kernel_main() {
     constexpr uint32_t k_blocks_per_round = get_compile_time_arg_val(13);
     constexpr uint32_t a_tile_bytes = get_compile_time_arg_val(14);
     constexpr uint32_t act_cb_blocks = get_compile_time_arg_val(15);
-    constexpr auto out_args = TensorAccessorArgs<16>();
+    // Write batching (Refinement 8): row groups drained per wait / flush / pop. The output CB holds
+    // DEPTH_OUT batches, so compute fills one while the writer's NoC writes of the other are in flight.
+    constexpr uint32_t write_batch = get_compile_time_arg_val(16);
+    constexpr auto out_args = TensorAccessorArgs<17>();
 
     constexpr uint32_t row_group_tiles = sb_h * out_block_n_tiles;
     constexpr uint32_t num_row_groups = block_m_tiles / sb_h;
+    constexpr uint32_t batch_tiles = write_batch * row_group_tiles;
+    constexpr uint32_t batch_rows = write_batch * sb_h;
+    static_assert(write_batch >= 1 && num_row_groups % write_batch == 0);
 
     uint32_t arg = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
@@ -111,11 +117,11 @@ void kernel_main() {
                 for (uint32_t bi = 0; bi < block_batches; ++bi) {
                     const bool batch_valid = bi < blk_b_valid;
                     const uint32_t batch = b0 + blk_b0 + bi;
-                    for (uint32_t g = 0; g < num_row_groups; ++g) {
-                        cb_wait_front(cb_output_tiles, row_group_tiles);
+                    for (uint32_t g = 0; g < num_row_groups; g += write_batch) {
+                        cb_wait_front(cb_output_tiles, batch_tiles);
                         if (!out_in_place && batch_valid) {
                             const uint32_t l1_base = get_read_ptr(cb_output_tiles);
-                            for (uint32_t r = 0; r < sb_h; ++r) {
+                            for (uint32_t r = 0; r < batch_rows; ++r) {
                                 const uint32_t blk_row = g * sb_h + r;
                                 if (blk_row >= blk_rows) {
                                     break;
@@ -130,7 +136,7 @@ void kernel_main() {
                             }
                             noc_async_writes_flushed();  // slot is free once the writes left L1
                         }
-                        cb_pop_front(cb_output_tiles, row_group_tiles);
+                        cb_pop_front(cb_output_tiles, batch_tiles);
                     }
                 }
             }

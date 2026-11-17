@@ -34,6 +34,13 @@
 // In0SourceFn selects that CB for the block (same data format as cb_act_tiles: both are A). Under the
 // rotating row multicast (`own_round_slot`) the reader also pushes the own round's lockstep slot of
 // cb_act_tiles; a PostKBlockFn retires it unread. Every other regime passes own_kb = NO_OWN_KB.
+//
+// Operand residency (Refinement 8, R1 / R1a one-K-block walks). `weight_resident`: the core's single B
+// block (its whole column range) is pushed once and reused by every M-block of the walk -- matmul_block's
+// in1 policy WaitAndRetainOnLastBlock (wait, never pop with one K-block) -- and popped here after the
+// last block. `act_resident` (the twin): each M-block's A is pushed once and reused by its nb_n N-blocks
+// (in0 WaitAndRetainOnLastBlock), popped here after the last one. The header hands those pops to the
+// caller under this policy.
 
 #include <cstdint>
 #include "api/compute/matmul.h"
@@ -73,6 +80,10 @@ constexpr bool silu_fp32_precision = get_compile_time_arg_val(18) != 0;
 constexpr bool swiglu_natural_pairs = get_compile_time_arg_val(19) != 0;
 constexpr uint32_t cb_act_shard = get_compile_time_arg_val(20);     // R3: A's resident shard (zero-copy)
 constexpr bool own_round_slot = get_compile_time_arg_val(21) != 0;  // R3a: retire the own round's slot
+constexpr bool weight_resident = get_compile_time_arg_val(22) != 0;  // B fronted once, reused per block
+constexpr bool act_resident = get_compile_time_arg_val(23) != 0;     // A fronted once per M-block
+static_assert(!(weight_resident || act_resident) || (num_k_blocks == 1 && block_batches == 1));
+static_assert(!(weight_resident && act_resident));
 constexpr uint32_t NO_OWN_KB = 0xFFFFFFFFu;
 
 constexpr bool has_epilogue = epilogue != 0;
@@ -150,8 +161,8 @@ ALWI void run_matmul(
         target,
         ckl::OutputCBLayout::TileRowMajor,
         ckl::matmul_config::InitMode::Short,
-        ckl::InputPolicy::WaitAndPopPerKBlock,
-        ckl::InputPolicy::WaitAndPopPerKBlock,
+        act_resident ? ckl::InputPolicy::WaitAndRetainOnLastBlock : ckl::InputPolicy::WaitAndPopPerKBlock,
+        weight_resident ? ckl::InputPolicy::WaitAndRetainOnLastBlock : ckl::InputPolicy::WaitAndPopPerKBlock,
         ckl::NoPostCompute,
         ckl::NoPreKBlock,
         RetireOwnRoundSlot,
@@ -241,6 +252,8 @@ ALWI void run_epilogue(
 void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t own_kb = get_arg_val<uint32_t>(1);  // R3: this core's K shard; NO_OWN_KB elsewhere
+    // A residency: blocks per M-block (N-blocks, n fastest); A is popped after each group. R1 only.
+    [[maybe_unused]] const uint32_t nb_n = act_resident ? get_arg_val<uint32_t>(2) : 1;
 
     // matmul maps in0 -> SrcB, in1 -> SrcA: Reverse is mandatory.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_tiles, cb_weight_tiles, cb_output_tiles);
@@ -251,7 +264,13 @@ void kernel_main() {
         const auto shape = ckl::MatmulBlockShape::of(
             in0_num_subblocks, in1_num_subblocks, sb_h, sb_w, block_k_tiles, num_k_blocks, block_batches);
         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            const bool act_last_use = !act_resident || (block_idx + 1) % nb_n == 0;
             run_matmul<ckl::LastBlockTarget::Out>(act_buf, weight_buf, out_buf, interm_buf, shape, own_kb);
+            if constexpr (act_resident) {
+                if (act_last_use) {
+                    act_buf.pop_front(block_m_tiles * block_k_tiles);  // the M-block's A, after its last N-block
+                }
+            }
         }
     } else {
         // One batch slice per matmul call: cb_partials holds exactly one block, and the epilogue
@@ -277,6 +296,16 @@ void kernel_main() {
             if constexpr (has_row) {
                 row_buf.pop_front(block_n_tiles);
             }
+            if constexpr (act_resident) {
+                if ((block_idx + 1) % nb_n == 0) {
+                    act_buf.pop_front(block_m_tiles * block_k_tiles);  // the M-block's A, after its last N-block
+                }
+            }
+        }
+    }
+    if constexpr (weight_resident) {
+        if (num_blocks != 0) {
+            weight_buf.pop_front(block_k_tiles * block_n_tiles);  // the retained B block, after its last use
         }
     }
 }

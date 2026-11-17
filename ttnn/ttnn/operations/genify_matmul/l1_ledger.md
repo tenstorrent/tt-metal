@@ -60,6 +60,14 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
 - **Batched B on R2 / R3** (`ShardRows`): a shard either lies inside one image (`img_m % shard_m == 0`: `block_batches = 1`, b0 / row0 per shard) or holds whole images (`shard_m % img_m == 0`: `block_batches = shard_m / img_m`, `block_m = img_m`, `nb_m = 1`, so the pushes walk the shard image by image = sequentially). No CB changes: the batch slices reuse the per-batch CBs (the matmul helper's batch loop; the epilogue path calls it per slice). Any other shard height is refused (no block may straddle two batches).
 - **R1d (batched B, interleaved A)**: no CB change; `block_batches = core_batches` as the S1 row already says (`grid_b > 1`, flat placement).
 
+**Refinement 8 (operand residency, L1-discounted split ranking, write batching) as built.** R1 / R1a only; no new CB.
+- **Operand residency** (`RESIDENT_SPLIT_BLOCKS = 4`): a one-block, one-K-block S1 walk that K cannot split (`tensor_k_tiles < SINGLE_WALK_K_BLOCKS · block_k_floor`, `core_batches == 1`) is split along ONE axis instead of running as one block. The smaller per-core operand stays fronted in its CB across the blocks (matmul_block `WaitAndRetainOnLastBlock` on it; compute pops it after its last use):
+  - `act_resident` (A smaller): N-blocks. `cb_act_tiles` holds the M-block's A (`block_m · K`) from its first N-block to its last; its second slot prefetches the next M-block's A. `cb_weight_tiles` streams `K · block_n` B blocks (double-buffered). Axis accounting: `{n: streams (A NOT re-read per N-block), m: spans}`.
+  - `weight_resident` (B smaller): M-blocks (multiples of the whole region's `sb_h`). `cb_weight_tiles` holds the core's only B block (`K · block_n`, `nb_n = 1`) for the whole walk; its second slot is unused (there is no next B block — `core_batches == 1`). Axis accounting: `{m: streams (B NOT re-read per M-block), n: spans}`.
+  - Capacities are the R1 formulas at the smaller split extent, so F only shrinks. Shares with / why not: unchanged — the resident operand is still in0 / in1 of the same matmul.
+  - Gate: the split is taken only if it keeps the R1a multicast decision (a smaller K-block can fall under `MCAST_MIN_KBLOCK_BYTES`).
+- **`cb_output_tiles` capacity** is `depth_out · write_batch · sb_h · out_block_n` (`OUT_WRITE_BATCH_ROW_GROUPS`, parked at 1 = the Refinement 7 size; a larger batch is granted only if it fits the budget). The writer waits / flushes / pops `write_batch` row groups at a time; the ring is a whole number of batches, so a batch never wraps.
+
 ## Symbol table (non-block parameters and their bounds)
 
 | Symbol | Bound | Predicate establishing it |
@@ -170,3 +178,13 @@ PDL res5 expand (2048×512 @ 512×2048 bf8b, grid 8×10): DRAM = B ×10 ≈ 11 M
 PDL res3 reduce (8192×512 @ 512×128 bf8b, 86 cores): DRAM = B × 86 ≈ 6.0 MB (≈ 13 µs at 460 GB/s — the bound: 20.2 µs measured vs stock 6.9 µs). The next lever is the deferred R2a `height_sharded_mcast_b`: B once from DRAM, multicast to the shard cores.
 
 **R1d batched (Refinement 7)**: DRAM crossings as R1 per batch (A and B of batch b never cross batches); PERF FOCUS 3 (32 × 512×128 @ 128×1024 bf8b, B in L1): 96 cores, 70.8 µs (stock 123.0 µs).
+
+**Refinement 8 delta (residency + `L1_READ_COST = 0.25`)** — the split ranking weighs an L1-sourced operand byte at 0.25 of a DRAM byte (R1 runs out of DRAM bandwidth; on write-bound shapes DRAM operand reads compete with the output stream, L1 reads only load the NoC), and a resident operand counts once per core:
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A (`act_resident`) | `grid_n' · 1` | each core reads each of its M-blocks' A once, held across its N-blocks | none |
+| B (`weight_resident`) | `grid_m' · 1` | each core reads its B block once, held across its M-blocks | none |
+| output | 1 | unchanged | none |
+
+PERF FOCUS 3 (32 × 512×128 @ 128×1024 bf8b, B in L1): split 32×1×3 → **32×3×1** (96 cores, `act_resident`, 8-column B blocks). DRAM: A ×3 (6.6 MB) → **A ×1 (2.2 MB)** + out 17.8 MB = 20.0 MB (the roofline's traffic). L1 → NoC: B re-read ×3 (13.2 MB, NoC0, overlapped with the write stream). 70.3 → 65.2 µs; the DRAM write stream binds (write-only 59–61 µs at any core count from 32 to 96, ≈ 300 GB/s for 1088 B interleaved tile writes).

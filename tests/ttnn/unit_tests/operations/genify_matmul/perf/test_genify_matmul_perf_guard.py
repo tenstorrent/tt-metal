@@ -314,3 +314,21 @@ def test_perf_batched(device):
     )
     out = genify_matmul(ta, tb, compute_kernel_config=cfg)
     ttnn.synchronize_device(device)
+
+
+# Refinement 8: operand residency on a one-K-block R1a walk (B resident across M-blocks): the PDL
+# bilinear upsample W pass, A (1, 32, 128, 256) and the output in L1 interleaved, B DRAM, bf8b, LoFi,
+# 16-bit DEST. (PERF FOCUS 3 above is the A-resident twin on the L1-discounted 32x3x1 split.)
+def test_perf_upsample_w_pass(device):
+    torch.manual_seed(0)
+    A = torch.randn(1, 32, 128, 256)
+    B = torch.randn(256, 1024) / math.sqrt(256)
+    ta = create_ttnn_input_tensor(
+        A, device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    tb = create_ttnn_input_tensor(B, device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, math_approx_mode=False
+    )
+    out = genify_matmul(ta, tb, compute_kernel_config=cfg, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.synchronize_device(device)

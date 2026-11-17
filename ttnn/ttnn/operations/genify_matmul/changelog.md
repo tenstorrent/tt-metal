@@ -430,3 +430,84 @@
     - the N-split fallback under a forced L1 budget;
     - the shard → batch mapping rules.
   - Perf guard: `test_perf_height_sharded` (4 PDL shapes) and `test_perf_batched` (PERF FOCUS 3).
+
+## Refinement 8 — Speed up PERF FOCUS 3 (PDL bilinear upsample, H pass: batched weight)
+- Date: 2026-11-17
+- What was done:
+  - **Bottleneck first.** Ablation of the Refinement 7 build on PERF FOCUS 3 (32 × 512×128 @ 128×1024 bf8b, B in L1, LoFi, 16-bit DEST; split 32×1×3, one 16×12 block per core, one K-block):
+
+    | run | time |
+    |---|---|
+    | full | 70.5 µs |
+    | compute stubbed | 66.8 µs |
+    | reads stubbed | 62.7 µs |
+    | writes stubbed | 30.8 µs |
+    | write-only | 59.9 µs |
+    | read-only | 20.3 µs |
+    | compute-only | 10.9 µs |
+    | all stubbed | 0.7 µs |
+
+    So the output DRAM write stream (17.8 MB) binds. The reads (A re-read 3× from DRAM, 6.6 MB, plus B 4.4 MB from L1) sit before compute as a whole-region prologue and contend with the writes for DRAM. Write-only time does not move with core count (32 / 64 / 96 cores: 62 / 58 / 59–60 µs): it is a DRAM-side limit of ≈ 300 GB/s for 1088 B interleaved tile writes.
+  - **Lever 1 — operand residency** (`RESIDENT_SPLIT_BLOCKS = 4`, `_resident_split`). A one-block, one-K-block S1 walk that K cannot split is split along ONE axis. The smaller per-core operand stays fronted in its CB across the blocks: matmul_block `WaitAndRetainOnLastBlock` on it, and the compute kernel pops it after its last use, the lifecycle that policy hands the caller.
+    - `act_resident`: A held per M-block across its N-blocks; B streams.
+    - `weight_resident`: B held across the M-blocks; A streams.
+
+    The reader reads and pushes, or line-delivers under R1a, the resident operand only on its first block. Every core of an R1a line walks the same nominal sequence, so the skipped deliveries match. The split is refused when it would drop the R1a multicast (a smaller K-block under `MCAST_MIN_KBLOCK_BYTES`: 2048×256×512 bf8b had measured +11%). N-block width sweep on PERF FOCUS 3 (32×2×1): 16 / 8 / 4 columns = 74.9 / 65.0 / 68.5 µs, so 4 blocks.
+  - **Lever 2 — L1-discounted split ranking** (`L1_READ_COST = 0.25`, `Geometry.a_in_l1` / `b_in_l1`). The ranking used to count L1-sourced bytes like DRAM bytes, so PERF FOCUS 3 re-read A from DRAM 3× to save L1 B reads. Discounted, it picks 32×3×1 with A resident: A crosses DRAM once, and B is re-read from L1 over NoC0, overlapped with the write stream.
+
+    | split / residency | time |
+    |---|---|
+    | 32×1×3 none (old) | 69.7 µs |
+    | 32×1×3 weight | 70.2 µs |
+    | 32×1×3 act | 72.5 µs |
+    | 32×3×1 none | 107 µs |
+    | 32×3×1 weight | 103 µs |
+    | 32×3×1 act | 65.2–65.9 µs |
+    | 32×2×1 act | 65.0 µs |
+    | 32×1×1 act | 68.7 µs |
+
+    Residency is also counted in `read_traffic` (a resident operand is read once per core).
+  - **Lever 3 — output write batching** (`OUT_WRITE_BATCH_ROW_GROUPS`, `Blocking.write_batch`, writer CT arg 16). The writer drains several row groups per wait / flush / pop, and `cb_output_tiles` holds `DEPTH_OUT` batches. Measured 65.0 / 65.7 / 66.0 µs at 1 / 4 / 8: the writer never stalled on its flushes. It is parked at 1 (byte-identical CB size) as a live knob, unit-tested at 4.
+  - **Measured and not kept:**
+    - two batches per core (`block_batches` co-tune; 16×3×1 / 16×2×1 / 16×1×3): 81.6 / 77.9 / 71.6 µs;
+    - writer on NoC0: 107 µs;
+    - output bank-stagger (write-only −3.5%, full within noise), N-block start rotation per core, posted writes: all within noise;
+    - deeper A (whole region) and B CBs: within noise.
+  - **Reused**: R1's blocking solve (S1 branch), `read_traffic`, the reader's R1 / R1a K-block path, compute `run_matmul` (its input policies are now CT-selected), the writer's row-group loop. **Added**: `Blocking.weight_resident` / `act_resident` / `write_batch`, `_resident_split`, `choose_blocking` (write-batch wrapper around `_choose_blocking`), `Geometry.a_in_l1` / `b_in_l1`; reader CT args 20–21 (later args shifted by 2), compute CT args 22–23 and R1 RT arg 2 (`nb_n`), writer CT arg 16 (accessors shifted by 1).
+- Accuracy achieved (PCC / rel-RMS):
+  - PERF FOCUS 3: 0.99892 / 0.0172 on 32×3×1 with A resident (gate 0.997 / 0.15).
+  - 2048×128×3072 bf16 fp32 DEST: 0.99989 / 0.026.
+  - Ragged 300×96×320: 0.99990 / 0.026.
+- Golden test progress: `test_golden.py -k "(loose and interleaved) or (not loose and interleaved and (A1x1x2048x256 or batched))"`: 204 passed, 30 xfailed (the expected EXCLUSIONs). Unit net: `test_genify_matmul`, `_mcast`, `_extended`, `_epilogue` 73/73; `_height_sharded`, `_block_sharded`, `_dram_sharded` 42/42; new `_residency` 14/14.
+- Perf (device ns; median of 5 for the first two rows, median of 3 for the rest):
+
+  | case | before | after |
+  |---|---|---|
+  | PERF FOCUS 3 (batched upsample H pass) | 70.3 µs | **65.2 µs** |
+  | PDL upsample W pass (A / out in L1) | 15.6 µs | **12.7 µs** |
+  | 2048×256×512 bf16 HiFi4 / HiFi2 | 15.3 / 14.7 µs | 13.6 / 12.6 µs |
+  | 2048×128×3072 bf16 HiFi4 / HiFi2 | 55.0 / 51.0 µs | 52.0 / 49.0 µs |
+  | 2048×256×512 bf8b LoFi 16-bit DEST (multicast gate) | 8.89 µs | 8.82 µs |
+
+  The rest of the guard set is unchanged in plan; one run each:
+  - PERF FOCUS 1: 465.5 µs.
+  - PERF FOCUS 2: 29.7 µs.
+  - Block-sharded res5 expand: 45.8 µs.
+  - 1×6144×6144: 316.3 vs 321.0 µs.
+  - 4096³: 1293 vs 1294 µs.
+  - L1 384×1536×1024: 31.1 vs 30.8 µs.
+  - HS res3 expand: 18.7 vs 18.9 µs.
+  - 32×1024×2048: 24.4 vs 23.9 µs (+2.1%, noise band).
+  - Bottleneck now: the interleaved DRAM write stream. Write-only is 59–61 µs; full is 65 µs, which is that floor plus ~5 µs of read prologue (each core reads its resident A and first B block before its first write). A next lever would be a B multicast inside each batch's 3-core group (B is re-read 3× from L1, 13 MB on NoC0) or a staggered start. Not done: it is a scheme change, and the gap is ~8% above a measured write floor.
+- Issues encountered:
+  - The R1a multicast gate interacts with any block-shrinking lever. A split that drops the line multicast must be refused; added as an explicit check.
+  - Device-time noise on this write-bound shape is ±5% run to run, with occasional +10% outliers, so every decision here used medians of 3–5 runs.
+- Tests added:
+  - `test_genify_matmul_residency.py`, 14 cases:
+    - the PERF FOCUS 3 split under both `L1_READ_COST` settings;
+    - weight / act residency on R1a, with every epilogue family and bf8b swiglu;
+    - the L1 W pass;
+    - ragged M;
+    - residency off;
+    - the write-batch knob at 4 (with none and swiglu epilogues).
+  - Perf guard `test_perf_upsample_w_pass`.
