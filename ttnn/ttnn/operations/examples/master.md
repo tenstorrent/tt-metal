@@ -4,17 +4,33 @@ Short, self-contained, **runnable** ops that each isolate one kernel-level perfo
 **measure** it on device. Every entry says when the lever helps **and when it does not**, with
 real device-kernel ns for both, on **both** Wormhole B0 and Blackhole where measured.
 
-**How to use this catalog.** Read this index (it ends at `END OF INDEX`). Find your board below and
-note how it differs from the other. Measure your op first: stage breakdown (stub reads / writes /
-compute and time what is left), achieved GB/s vs the DRAM/NoC ceiling, active Tensix cores vs the
-grid. The row depends on the cell, not only on the op: a cell of a few µs sits near the ~1.0 µs (BH) /
-~1.8 µs (WH B0) launch floor and a large cell is bound by bytes, so the two usually land in different
-rows. Run the breakdown on your smallest typical cell **and** on the largest shape the op is used with —
-not only the largest shape in your own test set: production shapes can be 10–50× larger. Find your
-row below, then search the rest: `grep -n "^## " master.md` lists every entry with its
-problem type; `grep -n -A12 "<example>"` returns one whole entry; its **Code** line names the file and
-functions where the lever lives. Details, the full regime × board table and CLI:
-`examples/<example>/README.md`.
+**How to use this catalog.** Measure first, then look up. An entry fixes the one stage it isolates;
+it cannot tell you which stage is your op's largest, and that stage may be one no entry covers. So do
+not pick an entry because its *Situation* resembles your op — first find where the time goes:
+
+1. **Per-stage timeline.** Put device zones around every stage of every kernel (reader, each compute
+   step, writer; waits split from work — a helper that blocks hides its wait) and read the per-core
+   timeline. Stubbing the payload of a whole RISC-V (reads, writes, compute) says which RISC-V binds;
+   only the timeline says which stage inside it does, and whether a core sits idle waiting on another.
+2. **On every regime the op supports**, not one shape: each placement (interleaved, height / width /
+   block sharded), Layout, and size class. A cell of a few µs sits near the launch floor (Wormhole
+   vs Blackhole table below) and a large cell is bound by bytes, so the two land in different rows; a
+   placement that forces a cross-core combine (width / block sharded) has a stage the others lack. Run it
+   on your smallest typical cell **and** on the largest shape the op is used with — not only the
+   largest shape in your own test set: production shapes can be 10–50× larger.
+3. **Rank the stages by ns**, compare achieved GB/s with the board's DRAM spec and active Tensix cores
+   with the grid, then find the row below for the **top** stage.
+
+**Every number in an entry is the example's own** — measured on its kernels, its combine, its shapes,
+on the boards it names. A crossover, a threshold or a "k ≤ 8" is where that example's lever paid, not
+a rule for your op: re-measure it on your op before it becomes a default, a predicate or a host rule.
+Each entry gives the mechanism and both boards' numbers, so the boundary's dependence on the board is
+visible; your op's boundary depends on its own costs the same way. After a lever lands, re-measure the
+timeline: the top stage moves.
+
+Search: `grep -n "^## " master.md` lists every entry with its problem type; `grep -n -A12 "<example>"`
+returns one whole entry; its **Code** line names the file and functions where the lever lives.
+Details, the full regime × board table and CLI: `examples/<example>/README.md`.
 
 | If you measure… | Problem type | Examples |
 |---|---|---|
@@ -30,6 +46,7 @@ functions where the lever lives. Details, the full regime × board table and CLI
 | …SFPU work on lanes whose results are never read | **Compute-bound: wasted SFPU work** | [`sfpu_tile_scope`](sfpu_tile_scope/) |
 | …matmul reloading SRC operands per output tile | **Compute-bound: SRC operand reload** | [`matmul_output_subblock`](matmul_output_subblock/) |
 | Tensix cores wait on each other (gather, reduce, ring), or a combine's time grows with the number of Tensix cores at fixed work per core | **Cross-core communication** | [`tensix_all_reduce`](tensix_all_reduce/), [`tensix_all_reduce_row_vector`](tensix_all_reduce_row_vector/), [`tensix_all_reduce_wave_pipeline`](tensix_all_reduce_wave_pipeline/) |
+| …a combine's time grows with **tile-rows per Tensix core** (a split the placement forces: WIDTH_SHARDED or BLOCK_SHARDED with many rows): one owner / root works through every tile-row while the rest of its group waits, or each tile-row is its own exchange round | **Cross-core communication: combine per tile-row** | [`tensix_all_reduce`](tensix_all_reduce/) (spread the reducing over owners), [`tensix_all_reduce_compute`](tensix_all_reduce_compute/) (reducer cost per contributor × tile), [`tensix_all_reduce_wave_pipeline`](tensix_all_reduce_wave_pipeline/) (hide the exchange behind compute across tile-rows). The payload entries ([`tensix_all_reduce_row_vector`](tensix_all_reduce_row_vector/)) measure 1–4 tile-rows per member; at many tile-rows the combine's **compute** and its serialization usually dominate the bytes — time both before choosing. |
 | Input and output already L1-sharded, but the work split ignores the shard spec: Tensix cores gather sticks from each other, and time grows with Tensix cores, not bytes | **Cross-core communication: resident shards** | [`resident_shard_locality`](resident_shard_locality/) |
 
 ## Wormhole vs Blackhole — read before trusting a number
@@ -107,7 +124,7 @@ per-board verdicts live here and in the README. The measurement sweeps behind th
 `resident_shard_locality`, `tensix_all_reduce` flush / boundary, `tensix_all_reduce_row_vector`,
 `tensix_all_reduce_wave_pipeline`, `compute_fusion` per-call) are opt-in: `EXAMPLES_SWEEPS=1`, or the
 example's CLI, which sets its own switch; the older `*_device_perf` tests still run by default. Sweep
-points come from the README. `trid_double_issue`, `bank_stagger` and `read_coalescing` have no regimes test and no WH measurement; the `width_split` reduce-with-combine regimes have no WH measurement.
+points come from the README. `trid_double_issue`, `bank_stagger` and `read_coalescing` have no regimes test and no WH measurement.
 **Not covered yet** (no example — measure it yourself): fixed launch cost of kernels with nothing to
 move.
 
@@ -119,10 +136,10 @@ move.
 
 ## width_split — grid not filled
 **Situation:** a short tensor split by tile-rows, so only R_t Tensix cores work (1 for a single tile-row), each over all Wt tile-columns; for a per-row reduce + apply (norm, softmax, centering) a width split also needs a per-row combine between the k Tensix cores sharing a row, and on `Layout::ROW_MAJOR` sticks it also cuts every stick into k smaller DRAM transfers.
-**How to recognize it:** active Tensix cores = tile-rows R_t ≪ grid; time grows ~240 ns per tile above a ~1.8 µs launch floor (WH B0), ~160 ns (eltwise) / ~230 ns (reduce + apply) per tile above ~1.0 µs (BH). Reduce case: also check the baseline's DRAM rate, (in + out bytes) ÷ time. ROW_MAJOR: also count DRAM transfers per launch (2 · sticks · pieces per stick) × ~1 ns (BH) against bytes ÷ ~400 GB/s — pieces below ~400 B are count-bound.
-**Helps when:** elementwise (no combine): WH B0 Wt ≥ 3 tile-columns, BH Wt ≥ 2. `[32,2048]` (Wt=64, 64 Tensix cores): WH B0 16 832 → 2 720 ns = **6.19×** · BH 11 092 → 1 536 ns = **7.22×**. Wt=3: WH 1.30× · BH 1.36×; Wt=8: WH 2.2× · BH 2.19×; BH Wt=256 on 120 Tensix cores 13.68×. Reduce + combine (BH p150b, 130 Tensix cores): R_t ≤ ~1/8 of the grid, k ≤ 8, ≥ 4 tiles per slice. R_t=1, Wt=32, k=8 (1 → 8 Tensix cores, 4 tiles per slice): 8 713 → 3 808 ns = **2.29×**; Wt=64, k=8: 3.45×; Wt=16, k=4: 1.71×; Wt=8, k=2: 1.17×. Few wide rows: R_t=4, Wt=128, k=8 (4 → 32 Tensix cores, 16-tile slices): 30 700 → 9 010 ns = **3.41×**; Wt=256, k=8: 3.95×. R_t=16 (16 of 130 Tensix cores): only 1.11–1.28×. ROW_MAJOR sticks (BH p150b): same R_t condition plus ≥ 1 KB sticks at R_t ≤ 4, ≥ 2 KB at R_t = 16, pieces ≥ 512 B (≥ 256 B at R_t ≤ 4). R_t=1, W=2048 (4 KB sticks), k=4 (1 KB pieces): 12 774 → 6 960 ns = **1.84×**; R_t=1, W=512, k=4: 1.15×; R_t=16, W=1024: 1.16–1.22×.
-**Does not help when:** elementwise: WH B0 Wt ≤ 2: `[32,64]` 2 076 → 2 105 ns = **0.99×** (0.89–0.99×) — the single Tensix core is already at the launch floor. BH: only Wt = 1 (nothing to split, 1.00–1.02×); at Wt = 2 BH already gains 1 217 → 1 031 ns = **1.18×**. Reduce + combine (BH): tile-rows already on ~half the grid — R_t=64 on 64 of 130 Tensix cores, k=2 (8 tiles per slice): 13 581 → 13 759 ns = **0.98×** (baseline already at ~310 GB/s, ~75% of the DRAM ceiling; R_t=64–128: 0.86–1.09×); Wt=4 at any R_t, k: 0.69–0.95×; 1-tile slices: 0.52–0.97×; k ≥ 16 (the all-gather combine grows with k: ~0.5 µs at k=2, 1.5 µs at k=8, 4 µs at k=16), even on wide rows: R_t=4, Wt=128 k=16 2.92×, k=32 2.11× vs k=8 3.41× (Wt=256: 3.61×, 2.74× vs 3.95×). ROW_MAJOR (BH): `2048 × 256` (R_t=64, 512 B sticks → 256 B pieces, 64 → 128 Tensix cores): 8 566 → 13 032 ns = **0.66×** (2× the transfers at ~1 ns each); R_t=47: 0.69×; R_t ≥ 47 with pieces ≤ 1 KB: 0.38–1.02× (2 KB pieces 1.07–1.08×); sticks ≤ 512 B at any R_t: 0.38–1.02×.
-**Gist:** give each Tensix core a contiguous tile-column range over min(Wt, grid) Tensix cores; for a row reduction split each row over k neighbouring Tensix cores only while R_t·k ≤ grid and Wt/k ≥ 4 tiles, exchange 1-tile partials (faces 0 and 2 only), and check per-core time saved (~(Wt − Wt/k) × ~230 ns on BH) beats your combine, measured as T(k, Wt) − T(1, Wt/k). The best k is set by the combine, not the split: with this example's one-round all-gather it is k ≤ 8 at every width measured (up to Wt=256); a root reduce or reduce-scatter with one multicast return costs 1.4–2.5× less at K=8 (`tensix_all_reduce`), so with those, sweep k past 8 instead of reusing the bound. On ROW_MAJOR sticks a Tensix core still issues 32 reads + 32 writes per tile-row at any k, so the split only saves tilize/reduce/untilize work (~150 ns per tile on BH) while adding k-fold transfers to the grid: keep whole sticks unless R_t is small and the pieces stay ≥ 512 B. Fence the partials with a write barrier before the semaphore increments: signalling after a flush returned wrong row sums in ~7% of sweep runs (README); the barrier costs ~0.13 µs per tile-row at k = 4–8, and the reduce cells quoted above other than the two bold headline cells predate it.
+**How to recognize it:** active Tensix cores = tile-rows R_t ≪ grid; time grows by a fixed cost per tile above the launch floor — WH B0 ~240 ns (eltwise) / ~360 ns (reduce + apply) above ~1.8 µs, BH ~160 / ~230 ns above ~1.0 µs. Reduce case: also check the baseline's DRAM rate, (in + out bytes) ÷ time, against the board's DRAM spec. ROW_MAJOR: also count DRAM transfers per launch (2 · sticks · pieces per stick) — pieces below a few hundred bytes are count-bound (~1 ns per transfer across the grid on BH).
+**Helps when:** elementwise (no combine): the single Tensix core's work sits above the launch floor — WH B0 from Wt = 3 tile-columns, BH from Wt = 2. `[32,2048]` (Wt=64, 64 Tensix cores): WH B0 16 832 → 2 720 ns = **6.19×** · BH 11 092 → 1 536 ns = **7.22×**. Wt=3: WH 1.30× · BH 1.36×; Wt=8: WH 2.2× · BH 2.19×; BH Wt=256 on 120 Tensix cores 13.68×. Reduce + combine: the tile-rows leave most of the grid idle and the work each Tensix core sheds beats the combine. R_t=1, Wt=32: WH B0 14 262 → 6 799 ns = **2.10×** at k=4 (k=8 2.01×) · BH 8 713 → 3 808 ns = **2.29×** at k=8. Wt=64: WH 2.96× · BH 3.45× (k=8 on both); Wt=128: WH 4.19× (k=8); Wt=16: WH 1.58× (k=4) · BH 1.71× (k=4); Wt=8: WH 1.17× (k=4) · BH 1.17× (k=2). Few wide rows, R_t=4, Wt=128, k=8 (4 → 32 Tensix cores, 16-tile slices): WH 50 120 → 17 631 ns = **2.84×** · BH 30 700 → 9 010 ns = **3.41×**. Tile-rows on ~1/8–1/4 of the grid gain little: WH R_t=16 of 64 1.04–1.23× (wide rows only) · BH R_t=16 of 130 1.11–1.28×. ROW_MAJOR sticks: same R_t condition plus long sticks and pieces ≥ ~512 B. R_t=1, W=2048 (4 KB sticks), k=4 (1 KB pieces): WH 31 616 → 13 222 ns = **2.39×** · BH 12 774 → 6 960 ns = **1.84×**; R_t=1, W=512 (1 KB sticks), k=4: WH 1.27× · BH 1.15×; R_t=16, 2–4 KB sticks: WH 1.38–1.56× (k=4) · BH 1.16–1.22× (2 KB).
+**Does not help when:** elementwise: the single Tensix core is already at the launch floor — WH B0 Wt ≤ 2 (`[32,64]` 2 076 → 2 105 ns = **0.99×**, 0.89–0.99×), BH Wt = 1 only (1.00–1.02×; BH already gains **1.18×** at Wt = 2). Reduce + combine: the tile-rows already cover a large part of the grid — WH R_t=64 on all 64 Tensix cores 1.00–1.06× · BH R_t=64 of 130, k=2 13 581 → 13 759 ns = **0.98×** (the baseline already moves most of what DRAM delivers; BH R_t=64–128: 0.86–1.09×); Wt=4 at any R_t, k: WH 0.89–0.96× · BH 0.69–0.95×; 1-tile slices (k = Wt): WH 0.42–0.90× · BH 0.52–0.97×; k past the best, because this example's all-gather combine grows with k (WH ≈ 0.9 / 1.3 / 3.0 / 7 µs at k = 2 / 4 / 8 / 16 · BH ≈ 0.5 / – / 1.5 / 4 µs): R_t=1, Wt=128 WH k=16 3.85× vs k=8 4.19×; BH R_t=4, Wt=128 k=16 2.92×, k=32 2.11× vs k=8 3.41×. ROW_MAJOR: short sticks or small pieces with the tile-rows on a large part of the grid — WH R_t=47, 128–512 B sticks: 0.65–0.88× · BH `2048 × 256` (R_t=64, 512 B sticks → 256 B pieces, 64 → 128 Tensix cores): 8 566 → 13 032 ns = **0.66×**; BH R_t ≥ 47 with pieces ≤ 1 KB: 0.38–1.02×; short sticks at any R_t: WH ≤ 256 B 0.93–0.98× (512 B: 1.05–1.08× at R_t ≤ 16) · BH ≤ 512 B 0.38–1.02×.
+**Gist:** give each Tensix core a contiguous tile-column range over min(Wt, grid) Tensix cores. For a row reduction, split each row over k neighbouring Tensix cores while R_t·k fits the grid and the per-core time saved, (Wt − Wt/k) × t_tile, beats the combine C(k) — measure both on your op: t_tile from T(1, Wt) at two widths, C(k) as T(k, Wt) − T(1, Wt/k). This example's values (t_tile ≈ 360 ns WH B0 / 230 ns BH; C(k) above) put the best k where each slice keeps ~8–16 tiles on WH B0 and ~4–32 on BH; a cheaper combine than this example's one-round all-gather (a reduce-scatter or a row payload, `tensix_all_reduce`, `tensix_all_reduce_row_vector`) moves the best k up, so sweep k rather than reuse this example's. On ROW_MAJOR sticks a Tensix core still issues 32 reads + 32 writes per tile-row at any k, so the split only saves tilize / reduce / untilize work while adding k-fold transfers to the grid: keep whole sticks unless R_t is small and the pieces stay ≥ ~512 B. Fence the partials with a write barrier before the semaphore increments: signalling after a flush returned wrong row sums in ~7% of sweep runs (README); the barrier costs ~0.13 µs per tile-row at k = 4–8. The WH B0 numbers include it; the BH sweep cells other than the two bold BH headline cells predate it.
 **Code:** `examples/width_split/width_split.py` — `_num_cores_for()`, `_assign_pages()` (eltwise, host only); `reduce_layout()`, `create_reduce_program_descriptor()` + `kernels/ws_reduce_writer.cpp` (combine); `WS_ROW_MAJOR` paths in `kernels/ws_reduce_*.cpp` (stick pieces, tilize / untilize).
 **See also:** `double_buffer` (per-core efficiency once the grid is full), `tensix_all_reduce` (combine topologies across many Tensix cores).
 
