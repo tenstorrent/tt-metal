@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""``Tensor.cpu_shards(coords)`` reads a subset of a mesh tensor's shards, one single-device host tensor each.
+"""``Tensor.cpu_shards(coords)``, or ``ttnn.cpu_shards(tensor, coords)``, reads a subset of a mesh tensor's shards,
+one single-device host tensor each.
 
 A checkpoint writer that deduplicates replicas wants one shard per replica group off the device, not the whole
 mesh. Building that subset through ``combine_device_tensors`` relabels the mesh tensor the live parameter shares
@@ -59,6 +60,7 @@ def test_cpu_shards_returns_one_host_tensor_per_requested_coordinate_in_order(me
     shards = tensor.cpu_shards(owned)
 
     assert len(shards) == len(owned)
+    assert [_bytes(s) for s in ttnn.cpu_shards(tensor, owned)] == [_bytes(s) for s in shards], "the function form"
     for shard, coord in zip(shards, owned):
         assert _bytes(shard) == _bytes(reference, coord), f"the result for {coord} holds that coordinate's shard"
         assert len(shard.tensor_topology().mesh_coords()) == 1, "a single-device tensor, labelled as one device"
@@ -101,6 +103,8 @@ def test_cpu_shards_rejects_what_the_tensor_does_not_hold(mesh_device, expect_er
         tensor.cpu_shards([])
     with expect_error(RuntimeError, "listed twice"):
         tensor.cpu_shards([first, first])
+    with expect_error(RuntimeError, "listed twice"):
+        ttnn.cpu_shards(tensor, [first, first])
     with expect_error(RuntimeError, "holds no shard"):
         tensor.cpu_shards([ttnn.MeshCoordinate(99, 99)])
     with expect_error(RuntimeError, "needs a device tensor"):
