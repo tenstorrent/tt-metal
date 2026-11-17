@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -35,13 +38,16 @@ void kernel_main() {
     size_t conn_arg_idx = 9;
 
     Noc noc;
+    CircularBuffer packet_header_cb(packet_header_cb_id);
+    CircularBuffer packet_cb(packet_cb_id);
+    CircularBuffer receiver_cb(receiver_cb_id);
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
 
-    cb_reserve_back(packet_header_cb_id, 1);
-    const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
-    cb_push_back(packet_header_cb_id, 1);
+    packet_header_cb.reserve_back(1);
+    const uint32_t sem_header_addr = packet_header_cb.get_write_ptr();
+    packet_header_cb.push_back(1);
 
     const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
 
@@ -62,8 +68,8 @@ void kernel_main() {
     // program cache hits.
     const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
 
-    cb_reserve_back(packet_cb_id, 1);
-    const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
+    packet_cb.reserve_back(1);
+    const uint64_t packet_l1_addr = packet_cb.get_write_ptr();
 
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
@@ -73,14 +79,14 @@ void kernel_main() {
     uint32_t packet_idx = page_idx_start / max_pages_per_packet;
 
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
-        cb_reserve_back(receiver_cb_id, 1);
-        const uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id);
+        receiver_cb.reserve_back(1);
+        const uint32_t dest_page_base_addr = receiver_cb.get_write_ptr();
 
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             if (page_idx == page_idx_start || packet_page_idx == curr_pages_per_packet) {
-                const uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
-                noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
-                noc_async_read_barrier();
+                noc.async_read(
+                    packet_buffer, packet_cb, packet_size_bytes, {.page_id = packet_idx}, {.offset_bytes = 0});
+                noc.async_read_barrier();
 
                 packet_page_idx = 0;
                 curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);
@@ -95,9 +101,9 @@ void kernel_main() {
             tt_memmove<false, false, false, 0>(noc, dest_addr, packet_l1_page_addr, transfer_size_bytes);
             ++packet_page_idx;
         }
-        cb_push_back(receiver_cb_id, 1);
+        receiver_cb.push_back(1);
     }
-    cb_push_back(packet_cb_id, 1);
+    packet_cb.push_back(1);
 
     // clean up semaphore in case it is reused
     noc_semaphore_set(local_semaphore_ptr, 0);

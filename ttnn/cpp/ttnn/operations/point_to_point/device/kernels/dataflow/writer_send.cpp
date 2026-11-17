@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "../common.hpp"
@@ -41,10 +42,14 @@ void kernel_main() {
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
 
+    CircularBuffer sender_cb(sender_cb_id);
+    CircularBuffer packet_header_cb(packet_header_cb_id);
+    CircularBuffer packet_cb(packet_cb_id);
+
     // set up packet header buffer
-    cb_reserve_back(packet_header_cb_id, 1);
-    uint32_t packet_header_addr = get_write_ptr(packet_header_cb_id);
-    cb_push_back(packet_header_cb_id, 1);
+    packet_header_cb.reserve_back(1);
+    uint32_t packet_header_addr = packet_header_cb.get_write_ptr();
+    packet_header_cb.push_back(1);
 
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
@@ -54,9 +59,9 @@ void kernel_main() {
     const auto dst_buffer = TensorAccessor(dst_buffer_args, receiver_base_address, payload_size_bytes);
 
     // working memory to hold coalesced packet
-    cb_reserve_back(packet_cb_id, 1);
-    const uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
-    cb_push_back(packet_cb_id, 1);
+    packet_cb.reserve_back(1);
+    const uint32_t packet_base_addr = packet_cb.get_write_ptr();
+    packet_cb.push_back(1);
 
     // initial packet size
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
@@ -74,8 +79,8 @@ void kernel_main() {
         tt::point_to_point::common::connection_direction_collection(dst_is_forward, fabric_connection);
 
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
-        cb_wait_front(sender_cb_id, 1);
-        const uint32_t src_page_base_addr = get_read_ptr(sender_cb_id);
+        sender_cb.wait_front(1);
+        const uint32_t src_page_base_addr = sender_cb.get_read_ptr();
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             const uint32_t page_offset = page_segment_idx * payload_size_bytes;
             const uint32_t src_addr = src_page_base_addr + page_offset;
@@ -101,12 +106,12 @@ void kernel_main() {
                 ++packet_idx;
             }
         }
-        cb_pop_front(sender_cb_id, 1);
+        sender_cb.pop_front(1);
     }
 
-    cb_reserve_back(packet_header_cb_id, 1);
-    const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
-    cb_push_back(packet_header_cb_id, 1);
+    packet_header_cb.reserve_back(1);
+    const uint32_t sem_header_addr = packet_header_cb.get_write_ptr();
+    packet_header_cb.push_back(1);
 
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
 
