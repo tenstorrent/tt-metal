@@ -19,8 +19,9 @@ What the separation buys:
   - Nothing the dry run does to Python state (stand-ins, memoized results, environment) reaches the real run: it
     happens in another process.
   - The dry run cannot touch the hardware: its devices are mocks.
-  - While a body runs, the child refuses file writes outside the temp directories (a Python audit hook), so results
-    computed from stand-in values never reach a golden or weight cache on disk.
+  - While a body runs, the child refuses Python file writes outside its own directory, which holds a private temp
+    directory it gets as TMPDIR (a Python audit hook). Results computed from fake or stand-in values never reach a
+    golden, reference or weight cache on disk that the real run would read, the shared /tmp included.
 The kernel cache is the only thing passed from child to parent. A kernel the child misses or builds wrong is compiled
 by the real run when it needs it, as without precompile.
 
@@ -607,7 +608,7 @@ _WRITE_ALLOWED_ROOTS = ()
 
 
 class _DryRunWriteRefused(Exception):
-    """A dry-run body tried to write a file outside the temp directories."""
+    """A dry-run body tried to write a file outside the child's own directory."""
 
 
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
@@ -629,7 +630,7 @@ def _is_write(event, args):
 
 
 def _audit_hook(event, args):
-    """Refuse writes outside the temp directories while a dry-run body runs. Audit hooks cannot be removed, which is
+    """Refuse writes outside the child's own directory (its private TMPDIR included) while a dry-run body runs. Audit hooks cannot be removed, which is
     fine here: this process exists only for the dry run."""
     if not _BODY_ACTIVE:
         return
@@ -639,11 +640,36 @@ def _audit_hook(event, args):
         return
     if path is None:
         return
+    _refuse_write(path, event)
+
+
+def _refuse_write(path, what):
+    """Raise _DryRunWriteRefused when a body is running and path is outside the roots the child may write."""
+    if not _BODY_ACTIVE:
+        return
     real = os.path.realpath(os.fsdecode(path))
     if any(real == root or real.startswith(root + os.sep) for root in _WRITE_ALLOWED_ROOTS):
         return
     _WRITES_REFUSED[real] += 1
-    raise _DryRunWriteRefused(f"precompile dry run: refused {event} on {real}")
+    raise _DryRunWriteRefused(f"precompile dry run: refused {what} on {real}")
+
+
+def _guard_native_writers(owner, names):
+    """Writers that open their file in native code, out of the audit hook's sight (torch.save to a path, ttnn's
+    flatbuffer dumps, safetensors), go through the same check. Each takes the file name as its first file argument."""
+    for name, file_arg in names:
+        real = getattr(owner, name, None)
+        if real is None or hasattr(real, "_precompile_original"):
+            continue
+
+        def guarded(*args, _real=real, _name=name, _i=file_arg, **kwargs):
+            target = args[_i] if len(args) > _i else None
+            if isinstance(target, (str, bytes, os.PathLike)):
+                _refuse_write(target, _name)
+            return _real(*args, **kwargs)
+
+        guarded._precompile_original = real
+        setattr(owner, name, guarded)
 
 
 def _stop_site(excinfo):
@@ -748,13 +774,27 @@ def _child_configure(config):
     # the child's failures mean nothing.
     config.option.tbstyle = "no"
     sys.dont_write_bytecode = True
-    roots = {tempfile.gettempdir(), "/dev", "/proc"}
-    for env in ("TT_METAL_CACHE", "PRECOMPILE_CHILD_DIR"):
-        if os.environ.get(env):
-            roots.add(os.environ[env])
+    # Only places the real run never reads: the child's directory and the private temp directory the parent made it
+    # (TMPDIR, so tempfile works as usual). Not the shared /tmp or the kernel cache: a test that caches a reference
+    # there would hand the real run results computed from fake data. Kernel builds are written by C++, which this
+    # hook does not see.
+    roots = {tempfile.gettempdir(), "/dev/null", "/proc"}
+    if os.environ.get("PRECOMPILE_CHILD_DIR"):
+        roots.add(os.environ["PRECOMPILE_CHILD_DIR"])
     _WRITE_ALLOWED_ROOTS = tuple(sorted(os.path.realpath(r) for r in roots))
     if _READONLY_DISK:
         sys.addaudithook(_audit_hook)
+        import torch
+        import torch.serialization
+
+        _guard_native_writers(torch, [("save", 1)])
+        _guard_native_writers(torch.serialization, [("save", 1)])
+        try:
+            import safetensors.torch
+
+            _guard_native_writers(safetensors.torch, [("save_file", 1)])
+        except ImportError:
+            pass
 
 
 def _child_collection_modifyitems(config, collected, items):
@@ -779,6 +819,10 @@ def _child_collection_finish(session):
 def _child_runtestloop_before(session):
     global _SESSION
     import ttnn
+
+    if _READONLY_DISK:
+        # ttnn.dump_tensor and ttnn.as_tensor's weight cache write through these.
+        _guard_native_writers(ttnn._ttnn.tensor, [("dump_tensor_flatbuffer", 0), ("dump_overlapped_tensors", 0)])
 
     _SESSION = ttnn.graph.CompileSession(
         workers=_WORKERS, remote_endpoints=_JIT_SERVER, remote_min_kernels=_REMOTE_MIN_KERNELS
@@ -1276,6 +1320,9 @@ class _Child:
         for path in (self.progress, self.progress + ".safe"):
             with open(path, "w"):
                 pass
+        # The child's temp files stay out of the shared temp directory the real run uses (see _child_configure).
+        private_tmp = os.path.join(self.dir, "tmp")
+        os.makedirs(private_tmp, exist_ok=True)
         env = dict(os.environ)
         env.update(
             {
@@ -1283,6 +1330,9 @@ class _Child:
                 _RESULT_ENV: result,
                 _PROGRESS_ENV: self.progress,
                 _IDS_ENV: ids_path,
+                "TMPDIR": private_tmp,
+                "TMP": private_tmp,
+                "TEMP": private_tmp,
                 "PRECOMPILE_CHILD_DIR": self.dir,
                 "TT_METAL_MOCK_CLUSTER_DESC_PATH": self.descriptor,
                 "PYTHONDONTWRITEBYTECODE": "1",
