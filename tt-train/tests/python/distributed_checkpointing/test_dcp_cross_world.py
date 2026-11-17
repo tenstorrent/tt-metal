@@ -72,7 +72,7 @@ CASES = {
     ),
     "2x2_dp_tp->1x4_fsdp": (
         _world("2x2", "dp,tp", ("--tp",), "bh_2_2_line_line.textproto"),
-        _world("1x4", "dp,fsdp", ("--fsdp",), "bh_qb_1_4_ring_ring.textproto"),
+        _world("1x4", "dp,fsdp", ("--fsdp",), "bh_1_4_line_line.textproto"),
         4,
     ),
     # Two-device cases, which a 2-chip CI host can run. TP1 -> TP2: the fused rows spread over the shards and the vocab
