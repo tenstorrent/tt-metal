@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// MM43: Mimir test plan section 4.3 (transaction IDs). Plain hart loads and stores carry no software-visible ID; the
-// only ID point is the per-hart RoCC command buffer driving iDMA, with a 4-bit TR_ID. Every case runs cce_idma_copy
-// with an explicit MIM-407 backend VC, sets the trid per command and waits on each trid's pending count, then on the
-// data. DuplicateId and BarrierThenDependentWriteAfterRead's read instead check the data once when their trids read 0
+// Transaction IDs (trids) on CCE iDMA. Plain hart loads and stores carry no software-visible ID; the only ID point is
+// the per-hart RoCC command buffer driving iDMA, with a 4-bit TR_ID. Every case runs cce_idma_copy with an explicit
+// iDMA backend (request VC), sets the trid per command and waits on each trid's pending count, then on the data.
+// DuplicateId and BarrierThenDependentWriteAfterRead's read instead check the data once when their trids read 0
 // (kArgCheckAtAck), so an early ack fails. Remote targets are host-verified.
 
 #include <gtest/gtest.h>
@@ -62,12 +62,13 @@ namespace tt::tt_metal::mimir_test::trid {
 
 namespace abi = cce_idma_copy_abi;
 
-// The MM4x modes share one poll budget across every wait of a launch, so one budget plus launch.
+// cce_idma_copy's per-trid modes share one poll budget across every wait of a launch, so one budget plus launch.
 inline constexpr std::chrono::seconds kHostDeadline{300};
-// Offsets of a CCE's GDDR target in its local DRAM view, above DRAM UNRESERVED, clear of MM-8's 0x10000.
+// Offsets of a CCE's GDDR target in its local DRAM view, above DRAM UNRESERVED, clear of the 0x10000 GDDR offset
+// that test_mimir_dm_idma.cpp and test_mimir_dm_dram_unary.cpp use.
 inline constexpr uint64_t kGddrTargetOffset = 0x100000;
 
-// Hart data area (tl1_data) layout of the MM43 cases.
+// Hart data area (tl1_data) layout of the transaction-ID cases.
 inline constexpr uint64_t kOwnDestinationOffsetFromData = 0x10000;
 inline constexpr uint64_t kTableOffsetFromData = 0x22000;
 inline constexpr uint64_t kTraceOffsetFromData = 0x23000;
@@ -89,7 +90,7 @@ inline constexpr uint32_t kRegionLeadingGuardTag = 0x800;
 // The hart of every single-hart case.
 inline constexpr uint32_t kTridHart = kCceKernelHart;
 
-// A timeout code may leave a command in flight, so the next run needs a fresh session (MIM-601).
+// A timeout code may leave a command in flight, so the next run needs a fresh session.
 std::string code_note(uint32_t code) { return idma_code_leaves_command_in_flight(code) ? kFreshSessionNote : ""; }
 
 uint64_t gddr_view_offset() { return dram_unreserved_base() + kGddrTargetOffset; }
@@ -122,8 +123,8 @@ CceStatuses run_on_cce(
     return run_kernels(device, launches);
 }
 
-// Where an MM43 command reads or writes, relative to the issuing CCE and hart. Remote targets are on the other Mimir
-// at the issuing CCE's location; Gddr0 and Gddr1 are the issuing Mimir's two GDDR tiles.
+// Where a command in these cases reads or writes, relative to the issuing CCE and hart. Remote targets are on the other
+// Mimir at the issuing CCE's location; Gddr0 and Gddr1 are the issuing Mimir's two GDDR tiles.
 enum class Target : uint32_t { OwnSource, OwnDestination, SiblingTl1, Gddr0, Gddr1, RemoteTl1, RemoteGddr };
 
 std::string target_name(Target target) {
@@ -141,7 +142,7 @@ std::string target_name(Target target) {
 
 bool is_remote_target(Target target) { return target == Target::RemoteTl1 || target == Target::RemoteGddr; }
 
-// MIM-407: a copy from the hart's own TL1 uses the destination's backend, any other copy kBackendFromRemote.
+// A copy from the hart's own TL1 uses the destination's backend, any other copy kBackendFromRemote.
 uint32_t backend_for(Target source, Target destination) {
     if (source != Target::OwnSource) {
         return abi::kBackendFromRemote;
@@ -158,7 +159,7 @@ uint32_t backend_for(Target source, Target destination) {
     return abi::kBackendFromRemote;
 }
 
-// The view of `mimir_index`'s GDDR tile that MIM-407 serves on `backend` (kBackendGddr0 or kBackendGddr1).
+// The view of `mimir_index`'s GDDR tile that iDMA backend `backend` writes (kBackendGddr0 or kBackendGddr1).
 uint32_t gddr_view_for_backend(const metal_SocDescriptor& soc, uint32_t mimir_index, uint32_t backend) {
     for (const uint32_t view : dram_views_for_channel(soc, mimir_index)) {
         if (gddr_backend_for(chiplet_offset_of(soc, view, gddr_view_offset())) == backend) {
@@ -532,7 +533,7 @@ public:
         distributed::MeshDevice& unit_mesh, IDevice* device, Target target, const std::string& label) const {
         const Region& region = regions_.at(target);
         EXPECT_TRUE(compare_with_recheck(
-            fmt::format("MM43 {} {}", label, target_name(target)),
+            fmt::format("trid {} {}", label, target_name(target)),
             name_ + "_" + target_name(target),
             final_model().at(target),
             [&unit_mesh, device, &region](uint64_t byte_offset, uint32_t bytes) {
@@ -666,7 +667,7 @@ void expect_status(
     uint32_t used_trids,
     const std::string& label) {
     const std::string detail = idma_status_detail(status);
-    log_info(tt::LogTest, "MM43 {}: {}", label, detail);
+    log_info(tt::LogTest, "trid {}: {}", label, detail);
     record_leg(scenario.name(), "status", detail);
     EXPECT_EQ(status[abi::kStatusCode], success_code)
         << label << ": " << detail << code_note(status[abi::kStatusCode]) << " seed 0x" << std::hex << scenario.seed();
@@ -676,10 +677,10 @@ void expect_status(
 }
 
 // Runs one launch of `scenario` that was already written. Returns its status, or nullopt when the host deadline passed;
-// nothing else may then run in this session (MIM-601).
+// nothing else may then run in this session.
 std::optional<std::vector<uint32_t>> run_launch(
     IDevice* device, const TridScenario& scenario, std::vector<uint32_t> args, const std::string& label) {
-    log_info(tt::LogTest, "MM43 {}", label);
+    log_info(tt::LogTest, "trid {}", label);
     const CceStatuses statuses = run_kernels(device, {scenario_launch(scenario, std::move(args))});
     if (!statuses.has_value()) {
         record_leg(scenario.name(), "status", fmt::format("no status after {} s", kHostDeadline.count()));
@@ -778,7 +779,7 @@ bool run_unique_id_legs(
     return true;
 }
 
-// Per-command trids 0-15 from the hart's own TL1 into its own TL1 (MIM-407 backend 5).
+// Per-command trids 0-15 from the hart's own TL1 into its own TL1 (iDMA backend 5).
 TEST_P(MimirTridIdma, UniqueIdsOwnTl1) {
     IDevice* device = open_device();
     run_unique_id_legs(
@@ -822,7 +823,7 @@ inline constexpr uint32_t kTableCommandBytes = 512;
 
 // One kModeTridTable batch across every local target, both directions, and on 2x writes to the remote TL1 and GDDR
 // (host-verified). Each entry has its own trid. Remote reads stay in MimirTridRemote: a table entry into the hart's own
-// TL1 that is host-verified gets no data poll, so the status store could overlap its landing (MIM-560).
+// TL1 that is host-verified gets no data poll, so the status store could overlap its landing.
 TEST_P(MimirTridIdma, MixedTargets) {
     skip_unless_mimir_local_package();
     if (has_remote_mimir()) {
@@ -957,7 +958,7 @@ TEST_P(MimirTridIdma, NominalDepth) {
 inline constexpr uint32_t kSaturateCommands = 32;
 inline constexpr uint32_t kSaturateCombinedRounds = 8;
 
-// The write backends of the descriptor (MIM-407): 0 GDDR0, 1 GDDR1, 2 sibling TL1, 5 own TL1 and, on 2x, 3 D2D.
+// The iDMA write backends of the descriptor: 0 GDDR0, 1 GDDR1, 2 sibling TL1, 5 own TL1 and, on 2x, 3 D2D.
 std::vector<Target> saturate_destinations(bool remote) {
     std::vector<Target> destinations = {Target::Gddr0, Target::Gddr1, Target::SiblingTl1, Target::OwnDestination};
     if (remote) {
@@ -1023,8 +1024,8 @@ TEST_P(MimirTridIdma, Saturate) {
     const std::optional<std::vector<uint32_t>> status =
         run_scenario_table(device_closer_->mesh(), device, combined, "Saturate combined");
     if (status.has_value()) {
-        // A trid's previous entry is a whole round back, so the per-trid high water was 1 (rv-zebu-08, 2026-10-22);
-        // combined saturation is the total pending over every backend's trid.
+        // A trid's previous entry is a whole round back, so the per-trid high water was 1 (on the emulator,
+        // 2026-10-22); combined saturation is the total pending over every backend's trid.
         record_depth("combined", *status, false);
         const uint32_t total_high_water = (*status)[abi::kStatusProbeSecond];
         const uint32_t largest_issue_gap = (*status)[abi::kStatusProbeFirst];
@@ -1078,7 +1079,7 @@ TEST_P(MimirTridIdma, BarrierThenDependentReadAfterWrite) {
     }
     const uint32_t read_code = (*read_status)[abi::kStatusCode];
     const std::string read_detail = idma_status_detail(*read_status);
-    log_info(tt::LogTest, "MM43 {} dependent read: {}{}", label, read_detail, code_note(read_code));
+    log_info(tt::LogTest, "trid {} dependent read: {}{}", label, read_detail, code_note(read_code));
     record_leg("dependent_read", "status", read_detail);
     EXPECT_EQ(read_code, abi::kCodeAcked) << label << ": " << read_detail;
     EXPECT_EQ((*read_status)[abi::kStatusFlags] & abi::kFlagAcked, abi::kFlagAcked) << label << ": " << read_detail;
@@ -1138,7 +1139,7 @@ TEST_P(MimirTridIdma, BarrierThenDependentWriteAfterRead) {
 inline constexpr uint32_t kMultiHartCommands = 16;
 
 // All harts of one CCE issue at once, each its own GDDR region (even harts GDDR0, odd GDDR1), so no TL1 is written
-// while any hart may store its status (MIM-560). Each hart gets its own trid, because the pending counters may be
+// while any hart may store its status. Each hart gets its own trid, because the pending counters may be
 // shared by every hart of the CCE.
 TEST_P(MimirTridIdma, MultiHart) {
     IDevice* device = open_device();
@@ -1160,7 +1161,7 @@ TEST_P(MimirTridIdma, MultiHart) {
         launches.push_back(scenario_launch(scenario, scenario.batch_args(0)));
     }
     const std::string label = fmt::format("MultiHart on CCE{}", GetParam());
-    log_info(tt::LogTest, "MM43 {}", label);
+    log_info(tt::LogTest, "trid {}", label);
     const CceStatuses statuses = run_kernels(device, launches);
     ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
@@ -1246,7 +1247,7 @@ TEST_P(MimirTridIdma, Fairness) {
     }
 
     const std::string label = fmt::format("Fairness with CCE{} at depth 16", heavy_cce);
-    log_info(tt::LogTest, "MM43 {}", label);
+    log_info(tt::LogTest, "trid {}", label);
     const CceStatuses statuses = run_kernels(device, launches);
     ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     for (size_t source = 0; source < scenarios.size(); ++source) {
@@ -1333,7 +1334,8 @@ TEST_P(MimirTridIdma, Soak) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM43, MimirTridIdma, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    IdmaTransactionId, MimirTridIdma, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 // One remote route from a source CCE to the CCE at its location on the other Mimir.
 std::string remote_route_name(const ::testing::TestParamInfo<uint32_t>& info) {
@@ -1374,10 +1376,11 @@ TEST_P(MimirTridRemote, RemoteTl1) { run_remote(Target::RemoteTl1, "RemoteTl1", 
 
 TEST_P(MimirTridRemote, RemoteGddr) { run_remote(Target::RemoteGddr, "RemoteGddr", 0xC0 + GetParam() * 2); }
 
-INSTANTIATE_TEST_SUITE_P(MM43, MimirTridRemote, ::testing::ValuesIn(mimir_contract::cce_indices()), remote_route_name);
+INSTANTIATE_TEST_SUITE_P(
+    IdmaTransactionId, MimirTridRemote, ::testing::ValuesIn(mimir_contract::cce_indices()), remote_route_name);
 
-// Hart reset and reload with TT_METAL_FORCE_REINIT=1 (as MM2 MimirFwReinit), quiesced first: no trid counter reads
-// pending after the reopen, and every trid 0-15 completes a command again.
+// Hart reset and reload with TT_METAL_FORCE_REINIT=1 (as MimirFwReinit.ReloadsOnEveryOpen in test_mimir_fw_load.cpp),
+// quiesced first: no trid counter reads pending after the reopen, and every trid 0-15 completes a command again.
 class MimirTridReset : public MimirCceTest<uint32_t> {
 protected:
     void SetUp() override {
@@ -1419,7 +1422,7 @@ TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
     for (uint32_t trid = 0; trid < abi::kNumTrids; ++trid) {
         const std::string label =
             fmt::format("NoStaleIdAfterReinit on CCE{}: pending count of trid {}", cce_index, trid);
-        log_info(tt::LogTest, "MM43 {}", label);
+        log_info(tt::LogTest, "trid {}", label);
         const CceStatuses statuses = run_on_cce(device, cce_index, {{kTridHart, observer_args(kTridHart, trid)}});
         ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
         const std::vector<uint32_t>& status = statuses->front();
@@ -1443,7 +1446,8 @@ TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
         fmt::format("NoStaleIdAfterReinit after reopen on CCE{}", cce_index));
 }
 
-INSTANTIATE_TEST_SUITE_P(MM43, MimirTridReset, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    IdmaTransactionId, MimirTridReset, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 namespace gcb_abi = cce_gcb_receiver_abi;
 
@@ -1453,8 +1457,9 @@ inline constexpr uint32_t kUint32TileWords = tt::constants::TILE_HW;
 inline constexpr uint32_t kUint32TilePageBytes = kUint32TileWords * sizeof(uint32_t);
 // The prefetched tensor: one-tile pages through a one-tile FIFO, so every page waits for the receiver's credit.
 inline constexpr uint32_t kPrefetchTiles = 16;
-// rdcycle budgets of the prefetcher, the receiver and the trid stream; ~400 s of host polling each (MM-7 S5). The
-// stream's covers its first round, the queue and the whole prefetch.
+// rdcycle budgets of the prefetcher, the receiver and the trid stream; ~400 s of host polling each, at the ~85,000
+// cycles/s the emulated clock runs while the host polls (measured for the prefetcher tests). The stream's covers its
+// first round, the queue and the whole prefetch.
 inline constexpr uint64_t kConcurrentBudgetCycles = 1ull << 25;
 // The trid stream's host deadline: one shared budget, plus launch.
 inline constexpr std::chrono::seconds kStreamHostDeadline{500};
@@ -1539,9 +1544,9 @@ private:
 
 // 2x only, no AMOs and no accumulate: the stream CCE runs kModeTridStream rounds into its local GDDR while the
 // prefetcher streams a tensor from the sender CCE's bank to a discard receiver on the other Mimir. The stream CCE is
-// outside the prefetcher's sender and receiver set, so no ITN write lands in its TL1 while it stores progress
-// (MIM-560). The prefetch is queued once the stream completed a round, and the stream must complete another round
-// between the sender's first page and its last.
+// outside the prefetcher's sender and receiver set, so no ITN write lands in its TL1 while it stores progress. The
+// prefetch is queued once the stream completed a round, and the stream must complete another round between the sender's
+// first page and its last.
 class MimirTridConcurrent : public ::testing::TestWithParam<ConcurrentRoute> {
 protected:
     void SetUp() override {
@@ -1575,7 +1580,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
         *sender_bank,
         route.receiver_cce,
         route.stream_cce);
-    log_info(tt::LogTest, "MM43 {}", label);
+    log_info(tt::LogTest, "trid {}", label);
 
     const MeshTensor tensor = write_prefetch_tensor(*mesh, *sender_bank);
     const experimental::GlobalCircularBuffer gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
@@ -1671,7 +1676,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
         rounds_at_last_page,
         units_sent,
         prefetch_units);
-    log_info(tt::LogTest, "MM43 {}: {}", label, overlap);
+    log_info(tt::LogTest, "trid {}: {}", label, overlap);
     RecordProperty("overlap", overlap);
     EXPECT_GT(rounds_at_last_page, rounds_at_first_page)
         << label << ": no stream round completed while the prefetch ran inside " << kOverlapWindow.count()
@@ -1712,7 +1717,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    MM43,
+    IdmaTransactionId,
     MimirTridConcurrent,
     ::testing::Values(ConcurrentRoute{.sender_cce = 0, .receiver_cce = 2, .stream_cce = 1}),
     concurrent_route_name);

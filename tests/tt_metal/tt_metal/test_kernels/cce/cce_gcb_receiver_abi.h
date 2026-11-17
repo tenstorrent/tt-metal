@@ -8,7 +8,7 @@
 
 #include "cce_test_status_abi.h"
 
-// Kernel ABI for the MM-7 GlobalCircularBuffer test kernels: the smoke sender and the discard and validator
+// Kernel ABI for the GlobalCircularBuffer test kernels: the smoke sender and the discard and validator
 // receivers. The kernels, dram/mimir_prefetcher_common.hpp, dram/test_mimir_prefetcher.cpp and dram/test_mimir_trid.cpp
 // include it.
 namespace cce_gcb_receiver_abi {

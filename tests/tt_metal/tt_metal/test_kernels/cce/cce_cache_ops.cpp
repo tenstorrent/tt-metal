@@ -166,7 +166,8 @@ static bool all_new(const volatile uint32_t* words, uint32_t num_words, uint32_t
     return check_words(words, num_words, value).matches == num_words;
 }
 
-// Every value of the status line. The MM-8 modes fill the fields they describe; the MM41 modes add kStatusPasses.
+// Every value of the status line. The store modes fill the fields they describe; the extended modes (kModeDiscardFull
+// and later) add kStatusPasses.
 struct Report {
     uint32_t code = abi::kCodeDone;
     uint32_t cached_before = 0;
@@ -396,8 +397,8 @@ static WipeResult clean_and_wipe(
     return {static_cast<uint32_t>(warm_old), static_cast<uint32_t>(stale_before), wiped != 0};
 }
 
-// FLUSH64 has no completion register. The helper reads once (chippy spins) and fences; by RTL the fence after FLUSH64
-// already waits for completion, so the read is kept only until K3 settles it.
+// FLUSH64 has no completion register. The helper reads once (chippy spins) and fences; in hardware the fence after
+// FLUSH64 should already wait for completion, so the read is kept only until a hardware check confirms that.
 static void drain_flushed_range(uint32_t data_offset, uint32_t num_bytes) {
     (void)*own_tl1_words<uint32_t>(data_offset + num_bytes - sizeof(uint32_t));
     asm volatile("fence" ::: "memory");
@@ -985,7 +986,7 @@ static bool strided_lines_in_test_area(uint64_t offset, uint64_t count, uint64_t
            (offset % abi::kLineBytes == 0 && in_test_area(offset, (count - 1) * stride_bytes + abi::kLineBytes));
 }
 
-static bool mm41_args_valid(const Args& args) {
+static bool extended_args_valid(const Args& args) {
     const uint64_t data_bytes = static_cast<uint64_t>(args.num_words) * sizeof(uint32_t);
     const bool words = args.data_offset % sizeof(uint32_t) == 0 && args.num_words != 0 &&
                        args.num_words <= abi::kMaxWords && in_test_area(args.data_offset, data_bytes);
@@ -1054,7 +1055,7 @@ static bool mm41_args_valid(const Args& args) {
     }
 }
 
-static void run_mm41_mode(const Args& args, Report& report) {
+static void run_extended_mode(const Args& args, Report& report) {
     switch (args.mode) {
         case abi::kModeDiscardFull: run_discard_full(args, report); break;
         case abi::kModeWipeFull: run_wipe_full(args, report); break;
@@ -1076,18 +1077,18 @@ static void run_mm41_mode(const Args& args, Report& report) {
     }
 }
 
-// The MM41 modes (kModeDiscardFull and later): reads every arg, runs the mode and writes the status line.
-// Out of line so that kernel_main's frame, and the stack traffic of the MM-8 store modes between their stores and
-// their cache operation, stay as they were before the MM41 modes: extra stack lines in the 4 KiB L1 D$ can evict the
-// dirty data lines that kModeL1InvalidateLine expects the discard to drop.
-static __attribute__((noinline)) void run_mm41_kernel() {
+// The extended modes (kModeDiscardFull and later): reads every arg, runs the mode and writes the status line. Out of
+// line so that kernel_main's frame, and the stack traffic of the store modes between their stores and their cache
+// operation, stay as they were before the extended modes: extra stack lines in the 4 KiB L1 D$ can evict the dirty data
+// lines that kModeL1InvalidateLine expects the discard to drop.
+static __attribute__((noinline)) void run_extended_kernel() {
     const Args args = read_args();
     Report report;
-    if (!mm41_args_valid(args)) {
+    if (!extended_args_valid(args)) {
         report.code = abi::kCodeBadArgs;
     } else {
         const uint64_t start = get_timestamp();
-        run_mm41_mode(args, report);
+        run_extended_mode(args, report);
         report.cycles = static_cast<uint32_t>(get_timestamp() - start);
     }
 
@@ -1129,7 +1130,7 @@ static bool args_valid(uint32_t mode, uint32_t data_offset, uint32_t num_words, 
 void kernel_main() {
     const uint32_t mode = get_arg_val<uint32_t>(abi::kArgMode);
     if (mode >= abi::kModeDiscardFull) {
-        run_mm41_kernel();
+        run_extended_kernel();
         return;
     }
     const uint32_t status_offset = get_arg_val<uint32_t>(abi::kArgStatusOffset);

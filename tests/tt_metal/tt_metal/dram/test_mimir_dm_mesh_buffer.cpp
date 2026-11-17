@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// MM-8 host DRAM MeshBuffer port (test_quasar_mesh_buffers DRAM cases, plan D3). InterleavedPlacement writes one page
-// per bank through the MeshBuffer host API and checks each page with a raw view read at
-// get_address_offset(view) + address, which does not use the buffer's page mapping, then reads the buffer back.
+// Port of the DRAM cases of test_quasar_mesh_buffers.cpp: host-side MeshBuffer writes and reads, no kernels.
+// InterleavedPlacement writes one page per bank through the MeshBuffer host API and checks each page with a raw view
+// read at get_address_offset(view) + address, which does not use the buffer's page mapping, then reads the buffer back.
 // WriteRead and MultipleWriteReadRounds port MeshBufferWriteReadDRAM and MeshBufferMultipleWriteReadRoundsDRAM.
 
 #include <gtest/gtest.h>
@@ -68,7 +68,8 @@ std::vector<std::optional<uint32_t>> view_of_each_bank(
     return bank_views;
 }
 
-// MM0-style raw view read at get_address_offset(view) + view_offset, guarded against leaving the view.
+// Reads the DRAM view directly through mimir_contract::read_gddr_view at view_offset, bypassing the MeshBuffer page
+// mapping, after checking that the read stays inside the view.
 ::testing::AssertionResult raw_view_page_matches(
     distributed::MeshDevice& unit_mesh,
     const metal_SocDescriptor& soc,
@@ -198,6 +199,6 @@ TEST_P(MimirDmMeshBufferDram, MultipleWriteReadRounds) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    MM8, MimirDmMeshBufferDram, ::testing::Values(configured_descriptor_name()), descriptor_param_name);
+    DmSuitePort, MimirDmMeshBufferDram, ::testing::Values(configured_descriptor_name()), descriptor_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::dm_mesh_buffer

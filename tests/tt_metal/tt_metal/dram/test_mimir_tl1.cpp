@@ -30,9 +30,10 @@
 
 namespace tt::tt_metal::mimir_test::tl1 {
 
-// The Glean MM-5 plan names the DM-suite tests (one_to_one, core_bidirectional, ...) for reuse. Their host side is
-// bound to worker cores and fast dispatch, and their kernels use the NoC dataflow API, which no Quasar CCE kernel
-// has run. So these tests reach TL1 from CCE kernels through experimental::cce_sram_address loads and stores.
+// These tests cover the intent of upstream one_to_one, one_from_one, core_bidirectional, one_packet, direct_write,
+// loopback and fan-out/fan-in. Those host sides are bound to worker cores and fast dispatch, and their kernels use the
+// NoC dataflow API, which a CCE cannot issue because it has no NoC interface. So these tests reach TL1 from CCE kernels
+// through experimental::cce_sram_address loads and stores.
 
 // Read-back destination: 32 KiB into the hart's data area, so it never overlaps the source data.
 inline constexpr uint64_t kReadbackOffset = 0x8000;
@@ -113,6 +114,8 @@ std::vector<LocalPair> same_chiplet_pairs() {
     return pairs;
 }
 
+// Direct pairs are the two CCEs at the ends of the D2D link (no intermediate hop). Routed pairs cross one or two
+// intermediate hops.
 std::vector<RemotePair> direct_remote_pairs() { return {{0, 1, 1, 0}, {1, 0, 0, 1}}; }
 
 std::vector<RemotePair> routed_remote_pairs() {
@@ -241,7 +244,7 @@ void run_local_copy(IDevice* device, const LocalPair& pair) {
     const uint32_t num_cces = num_cces_from_soc(soc);
     const uint32_t source = pair.source_cce;
     const uint32_t destination = pair.destination_cce;
-    const std::string label = fmt::format("Cce{}To{} SameChipletControl", source, destination);
+    const std::string label = fmt::format("Cce{}To{} SameMimirCopy", source, destination);
     const uint32_t words = kLocalBytesPerHart / 4;
     const uint32_t source_mimir = mimir_index_for_cce(source);
 
@@ -597,7 +600,7 @@ void run_remote_size_alignment(IDevice* device, const RemotePair& pair) {
 
 class MimirLocalTl1 : public ::testing::TestWithParam<LocalPair> {};
 
-TEST_P(MimirLocalTl1, SameChipletControl) {
+TEST_P(MimirLocalTl1, SameMimirCopy) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
     const LocalPair pair = GetParam();
@@ -609,7 +612,7 @@ TEST_P(MimirLocalTl1, SameChipletControl) {
     run_local_copy(device, pair);
 }
 
-INSTANTIATE_TEST_SUITE_P(MM5, MimirLocalTl1, ::testing::ValuesIn(same_chiplet_pairs()), local_pair_name);
+INSTANTIATE_TEST_SUITE_P(LocalTl1, MimirLocalTl1, ::testing::ValuesIn(same_chiplet_pairs()), local_pair_name);
 
 class MimirRemoteTl1 : public MimirRemoteParamTest<RemotePair> {};
 
@@ -643,9 +646,9 @@ TEST_P(MimirRemoteTl1, SizeAlignment) {
     run_remote_size_alignment(device, pair);
 }
 
-INSTANTIATE_TEST_SUITE_P(MM5Direct, MimirRemoteTl1, ::testing::ValuesIn(direct_remote_pairs()), remote_pair_name);
+INSTANTIATE_TEST_SUITE_P(D2dDirect, MimirRemoteTl1, ::testing::ValuesIn(direct_remote_pairs()), remote_pair_name);
 
-INSTANTIATE_TEST_SUITE_P(MM5Routed, MimirRemoteTl1, ::testing::ValuesIn(routed_remote_pairs()), remote_pair_name);
+INSTANTIATE_TEST_SUITE_P(D2dRouted, MimirRemoteTl1, ::testing::ValuesIn(routed_remote_pairs()), remote_pair_name);
 
 class MimirRemoteTl1Bidir : public MimirRemoteTest {};
 

@@ -300,7 +300,7 @@ TEST_P(MimirHostDramView, BoundaryAndAlias) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    MM0, MimirHostDramView, ::testing::ValuesIn(mimir_contract::dram_view_indices()), view_param_name);
+    HostDram, MimirHostDramView, ::testing::ValuesIn(mimir_contract::dram_view_indices()), view_param_name);
 
 TEST(MimirHostDram, ReconnectPersists) {
     skip_unless_programmable_dram_package();

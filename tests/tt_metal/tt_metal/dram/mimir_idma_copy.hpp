@@ -134,7 +134,7 @@ inline std::string idma_poll_name(uint32_t poll) {
     return fmt::format("unknown_poll_{}", poll);
 }
 
-// A timeout code may leave a command in flight, so the next run needs a fresh session (MIM-601).
+// A timeout code may leave a command in flight, so the next run needs a fresh session.
 inline bool idma_code_leaves_command_in_flight(uint32_t code) {
     namespace abi = cce_idma_copy_abi;
     return code == abi::kCodeVcSpaceTimeout || code == abi::kCodeAckTimeout || code == abi::kCodeDataTimeout;
@@ -166,7 +166,7 @@ inline std::string idma_status_detail(const std::vector<uint32_t>& status) {
         status[abi::kStatusExpected]);
 }
 
-// MIM-407 backend of a write into GDDR: GDDR0 is the low 4 GiB tile of a Mimir, GDDR1 the high one.
+// iDMA backend of a write into GDDR: GDDR0 is the low 4 GiB tile of a Mimir, GDDR1 the high one.
 inline uint32_t gddr_backend_for(uint64_t chiplet_offset) {
     return mimir_channel_location(chiplet_offset).tile == 0 ? cce_idma_copy_abi::kBackendGddr0
                                                             : cce_idma_copy_abi::kBackendGddr1;

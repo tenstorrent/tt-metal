@@ -316,7 +316,8 @@ TEST_P(MimirKernelLoad, FirmwareKeepsRunningAcrossReopen) {
     EXPECT_TRUE(launch_single_hart_echo(device, cce_index, logical_core, hart, arguments));
 }
 
-INSTANTIATE_TEST_SUITE_P(MM3, MimirKernelLoad, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    KernelLoad, MimirKernelLoad, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 TEST(MimirKernelLoad, SameBinaryAllCcesUnicast) {
     skip_unless_programmable_dram_package();
@@ -369,8 +370,8 @@ uint32_t dram_runtime_args_ceiling() {
            watcher_reserved_count_words;
 }
 
-// MM-8 runtime-arg host validation on a CCE kernel (MM3 analogues of api/test_runtime_args.cpp
-// TensixIllegalTooManyRuntimeArgs and TensixIllegallyModifyRTArgs).
+// Host-side runtime-arg validation for a CCE kernel: ports of api/test_runtime_args.cpp TensixIllegalTooManyRuntimeArgs
+// and TensixIllegallyModifyRTArgs, using the cce_args_echo kernel of the MimirKernelLoad tests.
 class MimirDmRuntimeArgs : public ::testing::TestWithParam<uint32_t> {
 protected:
     void SetUp() override { skip_unless_programmable_dram_package(); }
@@ -470,7 +471,7 @@ TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
         << "a rejected SetCommonRuntimeArgs changed the stored common args";
 }
 
-INSTANTIATE_TEST_SUITE_P(MM8, MimirDmRuntimeArgs, ::testing::Values(0u), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(DmSuitePort, MimirDmRuntimeArgs, ::testing::Values(0u), cce_param_name);
 
 namespace {
 

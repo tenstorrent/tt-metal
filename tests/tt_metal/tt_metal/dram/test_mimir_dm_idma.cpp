@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// MM-8 port of quasar_idma: iDMA copies from a CCE through command buffer 0, one cce_idma_copy launch per leg, each
+// Port of quasar_idma: iDMA copies from a CCE through command buffer 0, one cce_idma_copy launch per leg, each
 // with a host wall-clock deadline. Every leg must ack and land the right data, with the guards before and after the
 // destination intact. Remote operands are host-verified, so the kernel never loads a remote address. The
 // Strided1D cases port IDMA_1D_Strided with 64 B elements; the Strided1DSubLine cases use upstream's 8 B elements.
-// RemoteTl1KernelVerified is RemoteTl1 kernel-verified; its first run hung with no status (MM-8 probe).
+// RemoteTl1KernelVerified is RemoteTl1 kernel-verified; an early run of this pattern hung with no status.
 
 #include <gtest/gtest.h>
 
@@ -205,7 +205,7 @@ std::vector<uint32_t> gathered_elements(const IdmaLeg& leg, const std::vector<ui
     return words;
 }
 
-// A write leg (own TL1 -> target, MIM-407 backend for the target) and a read leg (target -> own TL1, the remote-source
+// A write leg (own TL1 -> target, the target's iDMA backend) and a read leg (target -> own TL1, the remote-source
 // backend). Each leg seeds its own source, so the read leg does not depend on the write leg.
 std::vector<IdmaLeg> write_and_read_legs(
     uint32_t cce_index, const Endpoint& target, uint32_t write_backend, bool host_verified) {
@@ -360,7 +360,7 @@ std::string mode_name(const IdmaLeg& leg) {
 
 // Runs one leg and checks it: the kernel reports success, the host reads the expected data (re-reading the first
 // mismatch after kRecheckDelay before calling it wrong), and the guards before and after it are intact. Returns false
-// when the host deadline passed, after which nothing else may run in this session (MIM-601).
+// when the host deadline passed, after which nothing else may run in this session.
 bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg& leg, uint32_t tag) {
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t num_words = leg.num_elements * leg.len_bytes / sizeof(uint32_t);
@@ -436,7 +436,7 @@ bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg&
     const std::vector<uint32_t>& status = statuses->front();
     const std::string detail = idma_status_detail(status);
     record_leg(leg.name, "status", detail);
-    log_info(tt::LogTest, "MM8 iDMA {}: {}", label, detail);
+    log_info(tt::LogTest, "iDMA {}: {}", label, detail);
     const uint32_t success_code = leg.host_verified ? abi::kCodeAcked : abi::kCodeLanded;
     EXPECT_EQ(status[abi::kStatusCode], success_code) << label << ": " << detail;
     EXPECT_EQ(status[abi::kStatusElementsIssued], leg.num_elements) << label << ": " << detail;
@@ -486,6 +486,6 @@ TEST_P(MimirDmIdma, Copy) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM8, MimirDmIdma, ::testing::ValuesIn(all_idma_cases()), idma_case_name);
+INSTANTIATE_TEST_SUITE_P(DmSuitePort, MimirDmIdma, ::testing::ValuesIn(all_idma_cases()), idma_case_name);
 
 }  // namespace tt::tt_metal::mimir_test::dm_idma

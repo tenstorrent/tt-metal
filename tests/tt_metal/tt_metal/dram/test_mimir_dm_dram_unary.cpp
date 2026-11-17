@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// MM-8 port of data_movement/dram_unary (D2): a reader hart copies GDDR into a TL1 staging ring and a writer hart on
+// Port of data_movement/dram_unary: a reader hart copies GDDR into a TL1 staging ring and a writer hart on
 // the same CCE copies it back out to GDDR, both with SPA loads and stores, in one Program. Chunks pass between the
 // harts through two DRAM-core semaphores read and written through the uncached alias. The host seeds the source and
 // fills both semaphore words with a nonzero value, waits for both status lines with a wall-clock deadline, and checks
@@ -352,7 +352,7 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     const std::string writer_detail = status_detail(writer_status);
     record_leg("reader", "status", reader_detail);
     record_leg("writer", "status", writer_detail);
-    log_info(tt::LogTest, "MM8 dram_unary {}: reader {}; writer {}", label, reader_detail, writer_detail);
+    log_info(tt::LogTest, "dram_unary {}: reader {}; writer {}", label, reader_detail, writer_detail);
 
     EXPECT_EQ(reader_status[abi::kStatusCode], abi::kCodeDone) << label << ": reader " << reader_detail;
     EXPECT_EQ(writer_status[abi::kStatusCode], abi::kCodeDone) << label << ": writer " << writer_detail;
@@ -396,6 +396,7 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
         << label << ": guard before the staging ring was overwritten";
 }
 
-INSTANTIATE_TEST_SUITE_P(MM8, MimirDmDramUnary, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    DmSuitePort, MimirDmDramUnary, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::dm_dram_unary
