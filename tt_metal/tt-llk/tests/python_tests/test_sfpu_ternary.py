@@ -415,7 +415,7 @@ def _skip_where_config(formats, dest_acc):
         same=True,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=MathOperation.TTNNWhere,
+    mathop=MathOperation.SfpuWhere,
     test_case=["mixed", "all_ones", "all_zeros"],
     input_dimensions=_INPUT_DIMENSIONS,
 )
@@ -521,7 +521,7 @@ def test_ttnn_where(
         same=True,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=MathOperation.TTNNWhere,
+    mathop=MathOperation.SfpuWhere,
     input_dimensions=_INPUT_DIMENSIONS,
 )
 def test_ttnn_where_mcw(

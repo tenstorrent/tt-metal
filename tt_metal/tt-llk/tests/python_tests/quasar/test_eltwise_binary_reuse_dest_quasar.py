@@ -5,7 +5,11 @@
 # Test for eltwise binary operations with reuse_dest on Quasar.
 import pytest
 import torch
-from helpers.constraints import get_perf_math_operations, get_valid_math_fidelities
+from helpers.constraints import (
+    REUSE_DEST_MATH_OPS,
+    get_perf_math_operations,
+    get_valid_math_fidelities,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -70,11 +74,7 @@ TILE_DIMENSIONS = [32, 32]
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
-    supported_mathops = [
-        MathOperation.Elwadd,
-        MathOperation.Elwsub,
-        MathOperation.Elwmul,
-    ]
+    supported_mathops = REUSE_DEST_MATH_OPS
     if is_perf:
         return [
             mathop

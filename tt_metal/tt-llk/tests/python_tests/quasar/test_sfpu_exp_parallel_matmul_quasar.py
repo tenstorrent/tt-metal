@@ -33,6 +33,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
+    flat_axes,
     generate_parallel_matmul_dest_depth_profiles,
     generate_quasar_srcs_format_dest_acc_combinations,
     max_dest_tiles,
@@ -155,6 +156,17 @@ def generate_parallel_matmul_exp_combinations(
 
 # Regular run: SFPI only. The SFPLOADMACRO variant is nightly-marked; no repo CI job runs it on
 # Quasar yet (ttsim has no SFPLOADMACRO), so it runs only in manual hardware/emulator sessions.
+# Column names of the tuples ``generate_parallel_matmul_exp_combinations`` returns.
+PARALLEL_MATMUL_EXP_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "sfpu_impl",
+    "approx_mode",
+    "exp_input_dimensions",
+    "input_A_dimensions",
+    "input_B_dimensions",
+)
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
     SFPU_UNARY_FORMATS, impls=(SfpuImpl.Sfpi,)
 )
@@ -165,26 +177,22 @@ PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS = generate_parallel_matmul_exp_combin
 
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync=PARALLEL_MATMUL_EXP_COMBINATIONS,
+    **flat_axes(PARALLEL_MATMUL_EXP_FLAT_NAMES, PARALLEL_MATMUL_EXP_COMBINATIONS),
 )
 def test_sfpu_exp_parallel_matmul_quasar(
-    format_dest_acc_sync,
+    formats,
+    dest_acc,
+    dest_sync,
+    sfpu_impl,
+    approx_mode,
+    exp_input_dimensions,
+    input_A_dimensions,
+    input_B_dimensions,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync,
-        sfpu_impl,
-        approx_mode,
-        exp_input_dimensions,
-        input_A_dimensions,
-        input_B_dimensions,
-    ) = format_dest_acc_sync[0]
-
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -337,7 +345,27 @@ def test_sfpu_exp_parallel_matmul_quasar(
     reason="ttsim has no SFPLOADMACRO; only the SFPI implementation is built",
 )
 @parametrize(
-    format_dest_acc_sync=PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS,
+    **flat_axes(
+        PARALLEL_MATMUL_EXP_FLAT_NAMES, PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS
+    ),
 )
-def test_sfpu_exp_parallel_matmul_loadmacro_quasar(format_dest_acc_sync):
-    test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync)
+def test_sfpu_exp_parallel_matmul_loadmacro_quasar(
+    formats,
+    dest_acc,
+    dest_sync,
+    sfpu_impl,
+    approx_mode,
+    exp_input_dimensions,
+    input_A_dimensions,
+    input_B_dimensions,
+):
+    test_sfpu_exp_parallel_matmul_quasar(
+        formats,
+        dest_acc,
+        dest_sync,
+        sfpu_impl,
+        approx_mode,
+        exp_input_dimensions,
+        input_A_dimensions,
+        input_B_dimensions,
+    )

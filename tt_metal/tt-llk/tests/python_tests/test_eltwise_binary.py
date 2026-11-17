@@ -4,6 +4,7 @@
 import pytest
 import torch
 from helpers.constraints import (
+    REUSE_DEST_MATH_OPS,
     get_valid_dest_accumulation_modes,
     get_valid_math_fidelities,
 )
@@ -74,11 +75,7 @@ BASE_PERF_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwmul]
 BFP4_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
 # Elwadd is already in the base BFP4 perf sweep, so this list stays Elwsub-only.
 BFP4_PERF_MATH_OPS = [MathOperation.Elwsub]
-DEST_REUSE_MATH_OPS = [
-    MathOperation.Elwadd,
-    MathOperation.Elwsub,
-    MathOperation.Elwmul,
-]
+DEST_REUSE_MATH_OPS = REUSE_DEST_MATH_OPS
 INT8_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
 # BH/WH covers Int8 -> Int8; Quasar separately exercises its Int8 -> Int32 path.
 INT8_FORMAT = InputOutputFormat(DataFormat.Int8, DataFormat.Int8)
