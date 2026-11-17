@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// block_pool reader.
+// block_pool reader, the pool phase of the block_topk_route reader (included there).
 //
 // Unit = (tensor t, head h, output tile row g), see block_pool_units.hpp. For every tile row k of the group the reader
 // streams the DT data tiles into cb_x (batches of 4 rows = 4*DT pages, always full) and one pooling tile P[k] into
@@ -11,13 +11,23 @@
 // block, zero for pad blocks), so the same program runs on every device. Tile rows without a real row get a zero P
 // tile and zero-filled data pages (never read from DRAM).
 //
+// Pool core ci starts on unit ci (UNITS if there is none) and claims the rest one at a time from the queue on the
+// first sender core (block_pool_queue.cpp): the reader writes (request number << 16) | (noc y << 8) | noc x to its
+// request word there and the queue writes back (request number << 16) | unit into CLAIM_SEM. The request words live in
+// the queue core's sender page; that core multicasts the page's address to FLAGS_ADDR_SEM once the page is zeroed, so
+// the address arriving means requests may be sent. The next claim goes out with the current unit's second-to-last
+// batch, so its round trip hides behind the last reads while a core never holds a unit it has not started (a starved
+// core would sit on it). Each unit is published as a page of CB_UNITS (popped by compute; read by index by the writer
+// once CLAIMS_SEM counts it), and a page holding UNITS ends the stream.
+//
 // The 32 tiles of full (64-row) blocks are built once per core in cb_ptab and copied from there; the tiles of ragged
 // blocks are built in place. Two batches are in flight on the NoC (transaction ids 1 and 2) while compute consumes a
 // third: a batch is pushed only after its own barrier, and a new batch is placed one batch past the write pointer
 // while one is pending.
 //
-// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS, then TensorAccessorArgs of x0 (q), x1 (k), x2 (v)
-// and counts. Common runtime args: 0..2 addresses of x0..x2, 3 counts address.
+// Compile-time args from CT: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS, 7 NCORES (the pool cores, the first NCORES
+// in row-major order), 8 NBGT, then TensorAccessorArgs of x0 (q), x1 (k), x2 (v) and counts.
+// Common runtime args from ARG: 0..2 addresses of x0..x2, 3 counts address, 4..5 queue core noc x, y.
 
 #include <cstdint>
 
@@ -29,12 +39,13 @@
 #include "api/tensor/noc_traits.h"
 #include "block_pool_units.hpp"
 
-namespace {
-constexpr uint32_t cb_x = 0, cb_ps = 2, cb_zero = 3, cb_counts = 4, cb_ptab = 5;
+namespace block_pool {
+namespace reader {
+constexpr uint32_t cb_x = 3, cb_ps = 4, cb_zero = 5, cb_counts = 23, cb_ptab = 27;
 constexpr uint32_t TILE_BYTES = 2048;
-constexpr uint32_t BLOCK = block_pool::BLOCK;
 constexpr uint32_t ROWS_PER_BATCH = 4;
 constexpr uint32_t BATCHES_IN_CB = 3;
+constexpr uint32_t CLAIM_LEAD_ROWS = 2 * ROWS_PER_BATCH;
 
 // bf16(1/len) for len = 0..64 (len 0 unused).
 constexpr uint16_t RECIP_BF16[65] = {
@@ -65,17 +76,19 @@ inline void write_row(uint32_t addr, uint32_t r, uint32_t ncols, uint16_t v) {
 }
 
 inline uint32_t min_u(uint32_t a, uint32_t b) { return a < b ? a : b; }
-}  // namespace
+}  // namespace reader
 
-void kernel_main() {
-    constexpr uint32_t H = get_compile_time_arg_val(0);
-    constexpr uint32_t RT = get_compile_time_arg_val(1);
-    constexpr uint32_t DT = get_compile_time_arg_val(2);
-    constexpr uint32_t NBPT = get_compile_time_arg_val(3);
-    constexpr uint32_t NX = get_compile_time_arg_val(4);
-    constexpr uint32_t NY = get_compile_time_arg_val(5);
-    constexpr uint32_t UNITS = get_compile_time_arg_val(6);
-    constexpr auto x0_args = TensorAccessorArgs<7>();
+template <uint32_t CT>
+void read(uint32_t ARG) {
+    using namespace reader;
+    constexpr uint32_t H = get_compile_time_arg_val(CT + 0);
+    constexpr uint32_t RT = get_compile_time_arg_val(CT + 1);
+    constexpr uint32_t DT = get_compile_time_arg_val(CT + 2);
+    constexpr uint32_t NBPT = get_compile_time_arg_val(CT + 3);
+    constexpr uint32_t NX = get_compile_time_arg_val(CT + 4);
+    constexpr uint32_t UNITS = get_compile_time_arg_val(CT + 6);
+    constexpr uint32_t NCORES = get_compile_time_arg_val(CT + 7);
+    constexpr auto x0_args = TensorAccessorArgs<CT + 9>();
     constexpr auto x1_args = TensorAccessorArgs<x0_args.next_compile_time_args_offset()>();
     constexpr auto x2_args = TensorAccessorArgs<x1_args.next_compile_time_args_offset()>();
     constexpr auto counts_args = TensorAccessorArgs<x2_args.next_compile_time_args_offset()>();
@@ -83,20 +96,50 @@ void kernel_main() {
 
     using Layout = block_pool::Layout<H, RT, NBPT>;
     static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
-    const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
-    uint32_t unit_start, unit_count;
-    Layout::range(ci, NX * NY, unit_start, unit_count);
-    if (unit_count == 0) {
-        return;
-    }
-    const auto x0 = TensorAccessor(x0_args, get_common_arg_val<uint32_t>(0));
-    const auto x1 = TensorAccessor(x1_args, get_common_arg_val<uint32_t>(1));
-    const auto x2 = TensorAccessor(x2_args, get_common_arg_val<uint32_t>(2));
-    const auto counts_acc = TensorAccessor(counts_args, get_common_arg_val<uint32_t>(3));
+    const auto x0 = TensorAccessor(x0_args, get_common_arg_val<uint32_t>(ARG + 0));
+    const auto x1 = TensorAccessor(x1_args, get_common_arg_val<uint32_t>(ARG + 1));
+    const auto x2 = TensorAccessor(x2_args, get_common_arg_val<uint32_t>(ARG + 2));
+    const auto counts_acc = TensorAccessor(counts_args, get_common_arg_val<uint32_t>(ARG + 3));
 
     Noc noc;
-    CircularBuffer cbx(cb_x), cbps(cb_ps), cbz(cb_zero), cbc(cb_counts), cbt(cb_ptab);
+    CircularBuffer cbx(cb_x), cbps(cb_ps), cbz(cb_zero), cbc(cb_counts), cbt(cb_ptab), cbu(CB_UNITS);
     const PrecomposedUnicastEndpoint local;
+
+    using Page = SenderPage<Layout::KV_UNITS, NCORES>;
+    const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
+    volatile tt_l1_ptr uint32_t* reply = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CLAIM_SEM));
+    volatile tt_l1_ptr uint32_t* claims = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CLAIMS_SEM));
+    const uint32_t me = (static_cast<uint32_t>(my_y[noc_index]) << 8) | my_x[noc_index];
+    uint64_t request = 0;
+    uint32_t n_requests = 0;
+    auto issue_claim = [&]() {
+        if (n_requests == 0) {
+            volatile tt_l1_ptr uint32_t* page_addr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FLAGS_ADDR_SEM));
+            noc_semaphore_wait_min(page_addr, 1);
+            request = get_noc_addr(
+                get_common_arg_val<uint32_t>(ARG + 4),
+                get_common_arg_val<uint32_t>(ARG + 5),
+                *page_addr + (Page::REQ_WORD + ci) * 4);
+        }
+        noc_inline_dw_write(request, (++n_requests << 16) | me);
+    };
+    uint32_t n_pages = 0;
+    auto publish = [&](uint32_t u) -> uint32_t {
+        cbu.reserve_back(1);
+        CoreLocalMem<volatile uint32_t>(cbu.get_write_ptr())[0] = u;
+        cbu.push_back(1);
+        *claims = ++n_pages;
+        return u;
+    };
+    auto take_claim = [&]() -> uint32_t {
+        uint32_t r;
+        do {
+            invalidate_l1_cache();
+            r = *reply;
+        } while (r >> 16 != n_requests);
+        return publish(r & 0xFFFF);
+    };
 
     cbc.reserve_back(1);
     noc.async_read(counts_acc, cbc, COUNTS_BYTES, {.page_id = 0}, {.offset_bytes = 0});
@@ -104,7 +147,8 @@ void kernel_main() {
     CoreLocalMem<volatile uint32_t> counts(cbc.get_write_ptr());
 
     // Zero tile (compute's output for empty groups; P and data of rows without real tokens) and the 32 pooling tiles
-    // of full blocks (tile r: 1/64 in row r, all columns). Built after the first batch's DRAM reads are issued.
+    // of full blocks (tile r: 1/64 in row r, all columns). Built after the first batch's DRAM reads are issued, or at
+    // the first empty unit.
     cbz.reserve_back(1);
     const uint32_t zero_addr = cbz.get_write_ptr();
     cbt.reserve_back(32);
@@ -150,11 +194,14 @@ void kernel_main() {
             local, CoreLocalMem<uint32_t>(dst), TILE_BYTES, {.noc_addr = get_noc_addr(src)}, {}, {.trid = trid});
     };
 
-    for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
-        const block_pool::Unit un = Layout::decode(u);
+    for (uint32_t u = publish(ci < UNITS ? ci : UNITS); u < UNITS; u = take_claim()) {
+        const Unit un = Layout::decode(u);
         const uint32_t t = un.t, h = un.h, g = un.g;
         const uint32_t k_begin = g * BLOCK;
         const uint32_t k_end = min_u(k_begin + BLOCK, RT);
+        if (k_begin >= k_end && !table_built) {
+            build_table();
+        }
 
         auto read_page = [&](uint32_t page, uint32_t dst, uint32_t trid) {
             if (t == 0) {
@@ -169,7 +216,12 @@ void kernel_main() {
             }
         };
 
+        bool claimed = false;
         for (uint32_t k0 = k_begin; k0 < k_end; k0 += ROWS_PER_BATCH) {
+            if (!claimed && k0 + CLAIM_LEAD_ROWS >= k_end) {
+                issue_claim();
+                claimed = true;
+            }
             const uint32_t nk = min_u(ROWS_PER_BATCH, k_end - k0);
             // Place this batch one batch past the pending one (the CBs hold three batches).
             cbx.reserve_back(2 * NT);
@@ -243,10 +295,15 @@ void kernel_main() {
             pending = true;
             pend_trid = trid;
         }
+        if (!claimed) {
+            issue_claim();
+        }
     }
     if (pending) {
         finish_pending();
     }
-    // The NoC packet tag is sticky per command buffer: leave it at 0 for whatever kernel runs next on this core.
+    // The NoC packet tag is sticky per command buffer: leave it at 0 for the route phase.
     noc_async_read_set_trid(0, noc.get_noc_id());
 }
+
+}  // namespace block_pool
