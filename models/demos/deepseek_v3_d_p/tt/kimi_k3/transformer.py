@@ -129,6 +129,8 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError(
                 f"Kimi-K3 uses a dense MLA KV cache; got sparse_kv_cache_format={sparse_kv_cache_format!r}"
             )
+        if self.has_indexer and sparse_kv_cache_format is None:
+            raise ValueError("Kimi-K3.1's sparse MLA needs its KV cache format (sparse_kv_cache_format)")
         self.padding_side = padding_side
         self.mesh_device = mesh_device
         # Resolve once, here, rather than letting `None` reach a collective. The MoE's
