@@ -111,7 +111,7 @@ TEST_F(SfpuReplayOptOutMockBlackholeFixture, ProgramDescriptorCarriesTheDefine) 
         .defines = {{kNoReplayDefine, "1"}},
         .config = ComputeConfigDescriptor{},
     });
-    Program program(descriptor);
+    Program program(*devices_.at(0), descriptor);
     program.impl().compile(devices_.at(0).get());
     auto kernel = program.impl().get_kernel(0);
     EXPECT_NE(recipe_cflags(kernel, 1).find(kNoReplayFlag), std::string::npos);

@@ -24,6 +24,26 @@ namespace ttnn::device_operation::mesh_device_operation_utils {
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
 
+template <typename OperationAttributes, typename TensorArgs>
+ttnn::MeshDevice* get_mesh_device(const OperationAttributes& operation_attributes, const TensorArgs& tensor_args) {
+    ttnn::MeshDevice* mesh_device;
+    auto first_tensor = ttsl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    // Try to get the mesh device from the first tensor
+    if (first_tensor.has_value()) [[likely]] {
+        mesh_device = first_tensor.value().device();
+    } else {
+        // If no tensor is found, try to get the mesh device from the operation attributes
+        auto mesh_device_opt = ttsl::reflection::get_first_object_of_type<ttnn::MeshDevice*>(operation_attributes);
+        if (mesh_device_opt.has_value()) [[likely]] {
+            mesh_device = mesh_device_opt.value();
+        } else {
+            TT_THROW("No mesh device found in operation attributes or tensor args");
+        }
+    }
+
+    return mesh_device;
+}
+
 // Returns true if all tensors have uniform storage, false otherwise.
 template <typename TensorArgs>
 bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {

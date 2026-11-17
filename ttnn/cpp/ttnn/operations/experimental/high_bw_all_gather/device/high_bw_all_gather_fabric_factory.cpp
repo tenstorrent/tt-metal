@@ -1000,7 +1000,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& program_range : program_ranges) {
-        tt::tt_metal::Program program{};
+        tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
         // the link worker cores of any chip of the range (sorted), and the local copy cores (the same on every chip)
         std::set<tt::tt_metal::CoreCoord> link_worker_core_set;
         for (const auto& chip : program_range) {
