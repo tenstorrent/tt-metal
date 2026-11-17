@@ -73,11 +73,11 @@ constexpr uint32_t local_dst_offset(uint32_t hart) { return src_offset(hart) + k
 // Keraunos addresses of an HSIO tile's CCE0 SRAM.
 // ---------------------------------------------------------------------------------------------------------------
 
-// Chiplet-local view, which the iDMA takes on both ends (eth_cce_send.h's sram_local_addr()).
+// Chiplet-local view, which the iDMA takes for its own tile's SRAM (eth_cce_send.h's sram_local_addr()).
 constexpr uint64_t kHsioLocalBase = 0x20000000ULL;
 constexpr uint64_t kHsioCceSramOffset = 0x2800000ULL;
-// Global (package) view, which a CPU load or store to another tile uses (remap entries 6-9, as in
-// KeraunosEmu.EthernetKernelWritesOtherTileSram).
+// Global (package) view, which a CPU load or store or an iDMA copy to another tile uses (remap entries 6-9, as in
+// KeraunosEmu.EthernetKernelWritesOtherTileSram and quasar_cce_noc_routes()).
 constexpr uint64_t kHsioGlobalSramBase = 0x1206800000ULL;
 
 constexpr uint64_t hsio_local_addr(uint32_t hsio, uint64_t tile_stride, uint32_t offset) {

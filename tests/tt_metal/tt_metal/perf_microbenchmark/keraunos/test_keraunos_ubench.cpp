@@ -166,9 +166,10 @@ class UbenchSession : public Session {
 public:
     UbenchSession() : Session(kRegionBytes) {}
 
-    // Addresses of flat offset @p off in @p core's SRAM.
-    uint64_t idma_addr(const KeraunosCore& core, uint32_t off) const {
-        return hsio_local_addr(core.hsio, tile_stride(), off);
+    // The iDMA address a copy issued on @p from uses for @p off on @p to: the chiplet-local view on the same tile, the
+    // system address on another tile (as metal's CCE NOC routes, quasar_cce_noc_routes()).
+    uint64_t idma_addr(const KeraunosCore& from, const KeraunosCore& to, uint32_t off) const {
+        return from.hsio == to.hsio ? hsio_local_addr(to.hsio, tile_stride(), off) : global_addr(to, off);
     }
     uint64_t global_addr(const KeraunosCore& core, uint32_t off) const {
         return hsio_global_addr(core.hsio, tile_stride(), off);
@@ -345,8 +346,8 @@ void run_latency(UbenchSession& s, const Watched& a, const Watched& b, const Lat
         const KernelHandle k = create(program, "latency.cpp", me.core, me.hart);
         const uint32_t peer_mailbox = base + mailbox_offset(peer.hart);
         const auto [cpu_lo, cpu_hi] = split(s.cpu_addr(me.core, peer.core, peer_mailbox));
-        const auto [dma_lo, dma_hi] = split(s.idma_addr(peer.core, peer_mailbox));
-        const auto [stg_lo, stg_hi] = split(s.idma_addr(me.core, base + staging_offset(me.hart)));
+        const auto [dma_lo, dma_hi] = split(s.idma_addr(me.core, peer.core, peer_mailbox));
+        const auto [stg_lo, stg_hi] = split(s.idma_addr(me.core, me.core, base + staging_offset(me.hart)));
         SetRuntimeArgs(
             program,
             k,
@@ -516,8 +517,8 @@ TEST_P(KeraunosUbenchTransportBw, Run) {
         }
         s().write(dst_core, dst_off, std::vector<uint32_t>(size / 4, 0));
         const KernelHandle k = create(program, "transport_bw.cpp", own, h);
-        const auto [src_lo, src_hi] = split(s().idma_addr(own, base + src_offset(h)));
-        const auto [dst_lo, dst_hi] = split(s().idma_addr(dst_core, dst_off));
+        const auto [src_lo, src_hi] = split(s().idma_addr(own, own, base + src_offset(h)));
+        const auto [dst_lo, dst_hi] = split(s().idma_addr(own, dst_core, dst_off));
         const auto [cpu_lo, cpu_hi] = split(s().cpu_addr(own, dst_core, dst_off));
         SetRuntimeArgs(
             program,
