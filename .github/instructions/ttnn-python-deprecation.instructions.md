@@ -116,9 +116,7 @@ The C++ wrapper has no dedicated test. Its logic is a GIL acquire and one call; 
 - [ ] Only binding code calls the C++ wrapper; no code in `TTNN::CPP` emits a Python warning
 - [ ] Every in-repo caller is migrated; the remaining callers are compatibility tests using `pytest.warns(FutureWarning)`
 - [ ] No new uses of an already-deprecated interface, except a forwarding binding
-- [ ] A deprecation moved to the helper keeps or starts its grace period per "Moving an existing deprecation to the helper"
 - [ ] The docstring has `.. deprecated:: <minor version>` with the version from the latest `-dev` tag on `main`
 - [ ] `.github/deprecations.json` has one entry with the existing fields and a grace of at least `4w`
 - [ ] A removal is in its own PR, at least four weeks after the deprecation merged to `main`
-- [ ] If this PR changes the helper, it keeps the contract above and `test_deprecation.py` still makes its four checks
 - [ ] `pytest.ini` doesn't turn `FutureWarning` into errors
