@@ -206,6 +206,8 @@ class Hy4Engine:
         """row-match admission: prompts = list of token lists (one new request each), cur_rows = the mesh row the plugin's slot currently maps to. Returns the mesh row per request: a free (not live) row holding the
         longest matching retained prefix; with no match the free row with nothing retained / least recently used (so retained prefixes of other sessions survive). Never a live row, never twice.
         """
+        if not self._pfx_on():  # live switch off: the plugin's own slot -> row mapping, exactly as without the cache
+            return list(cur_rows)
         taken, out = set(), [None] * len(prompts)
         arrs = [torch.as_tensor(p, dtype=torch.int32).numpy() for p in prompts]
         cand = lambda: [r for r in range(ROWS) if not self.live[r] and r not in taken]
