@@ -715,7 +715,7 @@ FORCE_INLINE void pass(
 
 // Before the Ethernet handshake and the ERISCs' first sync, so before the remote sender can increment them: every
 // receiver channel's packets-received register at 0, serviced or not.
-__attribute__((noinline)) void init_channel_streams() {
+ROUTER_INIT_ONLY void init_channel_streams() {
     for_each_index<NUM_RECEIVER_CHANNELS>(
         [](auto rx) { init_stream_if_used<to_receiver_packets_sent_streams[decltype(rx)::value]>(0); });
 }
@@ -788,7 +788,7 @@ FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) {
 
 // The receiver loop: rounds of passes until termination. A function of its own so its code depends only on this body;
 // once-per-round work is out of line (router_round.hpp).
-__attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+ROUTER_LOOP void run(DownstreamConnections& downstreams) {
     const auto& routing_table = l1_routing_table();
     const ChipCoordinates my_chip{
         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};

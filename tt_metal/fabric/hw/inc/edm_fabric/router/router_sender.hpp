@@ -276,8 +276,7 @@ struct SenderChannelInterfaces {
     // Builds every position's interface, serviced or not (once, at init, on an ERISC that serves sender channels): its
     // connection info and semaphore, its starting credits (0 for a worker channel, whose credits are counts; the slot
     // count for a forwarding channel) and a worker channel's credit source word (its read counter).
-    __attribute__((noinline)) static void start(
-        const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
+    ROUTER_INIT_ONLY static void start(const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
         new (storage) All{};
         for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
             constexpr size_t CH = decltype(i)::value;
@@ -991,7 +990,7 @@ FORCE_INLINE void start_forwarding_channels(SenderChannelStates& states) {
 
 // The sender loop: rounds of passes over the sender channels, with router commands between runs of rounds. A function
 // of its own: its code depends only on this body, and once-per-round work is out of line (router_round.hpp).
-__attribute__((noinline)) void run() {
+ROUTER_LOOP void run() {
     SenderChannelStates states;
     start_forwarding_channels(states);
     auto loop_copy = states.loop_local_progress();  // carried through the loop (SenderChannelStates)
@@ -1084,7 +1083,7 @@ __attribute__((noinline, cold)) void wait_for_connect_request(volatile tt_l1_ptr
 
 // Waits for each forwarding channel's upstream router to connect where the host has it wait, and caches that router's
 // free-slots register address in the channel's interface (after SenderChannelInterfaces::start).
-__attribute__((noinline)) void wait_for_upstream_routers() {
+ROUTER_INIT_ONLY void wait_for_upstream_routers() {
     for_each_index<NUM_SENDER_CHANNELS>([](auto i) {
         constexpr size_t CH = decltype(i)::value;
         if constexpr (((SenderChannels::forwarding_channels >> CH) & 1u) != 0) {

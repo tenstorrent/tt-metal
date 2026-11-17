@@ -198,6 +198,20 @@ FORCE_INLINE void run_loop(Downstreams& downstreams) {
 
 }  // namespace fabric_router
 
+#if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
+// The router zeroes two blocks, once, at init (the telemetry block and the loop's sender state). libc's memset would
+// take 420 B of the IRAM for that; this one takes 32 B. The attribute keeps the compiler from turning the loop back
+// into a call to memset.
+extern "C" __attribute__((noinline, used, optimize("no-tree-loop-distribute-patterns"))) void* memset(
+    void* dst, int value, size_t size) {
+    auto* bytes = static_cast<volatile uint8_t*>(dst);
+    for (size_t i = 0; i < size; i++) {
+        bytes[i] = static_cast<uint8_t>(value);
+    }
+    return dst;
+}
+#endif
+
 void kernel_main() {
     using namespace fabric_router;
     init_router();

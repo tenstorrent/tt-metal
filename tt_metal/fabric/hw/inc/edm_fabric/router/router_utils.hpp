@@ -119,4 +119,17 @@ FORCE_INLINE void keep_in_memory(T& obj) {
 FORCE_INLINE void begin_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
 FORCE_INLINE void end_read_group() { std::atomic_signal_fence(std::memory_order_seq_cst); }
 
+// Code size, where the router runs from Wormhole's 16 KB ERISC IRAM: a 2D router with VC1 and every downstream does not
+// fit at the kernel's optimization level. ROUTER_INIT_ONLY marks code that runs once, before the loop: the compiler
+// optimizes it for size. GCC then takes everything reached only from such code as cold too, the loop included (its one
+// caller is kernel_main), so ROUTER_LOOP pins the loop hot: its code is the same as without either. Elsewhere (no IRAM
+// limit) both are plain noinline and nothing changes.
+#if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
+#define ROUTER_INIT_ONLY __attribute__((noinline, cold))
+#define ROUTER_LOOP __attribute__((noinline, hot))
+#else
+#define ROUTER_INIT_ONLY __attribute__((noinline))
+#define ROUTER_LOOP __attribute__((noinline))
+#endif
+
 }  // namespace fabric_router

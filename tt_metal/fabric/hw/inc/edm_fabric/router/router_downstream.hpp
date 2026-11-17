@@ -505,7 +505,7 @@ struct DownstreamConnections {
 // Before the Ethernet handshake: zero the teardown semaphores, set the local credit copies to the ring size, fill the
 // links and the progress.
 template <size_t VC>
-__attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, const DownstreamArgs& args) {
+ROUTER_INIT_ONLY void init_downstreams(Downstreams<VC>& downstreams, const DownstreamArgs& args) {
     using Traits = DownstreamTraits<VC>;
     auto& links = downstreams.links;
     uint32_t dense = 0;
@@ -530,7 +530,7 @@ __attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, co
 // Opens the connection at dense index `dense` of `args`: registers this router with the downstream as its producer,
 // its credits to go to `credit_register` (this router's local copy of the downstream's free slots). One body for every
 // connection.
-__attribute__((noinline)) void open_downstream(const DownstreamArgs& args, uint32_t dense, uint32_t credit_register) {
+ROUTER_INIT_ONLY void open_downstream(const DownstreamArgs& args, uint32_t dense, uint32_t credit_register) {
     // Blackhole opens router-to-router connections with non-posted writes.
     constexpr bool posted = !is_blackhole_arch;
     const uint32_t x = dense_noc_x(args, dense);
@@ -543,7 +543,7 @@ __attribute__((noinline)) void open_downstream(const DownstreamArgs& args, uint3
 
 // After the handshake: open each connection.
 template <size_t VC>
-__attribute__((noinline)) void open_downstreams(const DownstreamArgs& args) {
+ROUTER_INIT_ONLY void open_downstreams(const DownstreamArgs& args) {
     using Traits = DownstreamTraits<VC>;
     uint32_t dense = 0;
     for_each_index<Traits::count>([&](auto entry_constant) {

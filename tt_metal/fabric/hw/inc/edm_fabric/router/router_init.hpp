@@ -147,7 +147,7 @@ FORCE_INLINE void zero_credit_counters(size_t block_addr) {
     }
 }
 
-__attribute__((noinline)) void init_txqs() {
+ROUTER_INIT_ONLY void init_txqs() {
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     set_keepalive();
     if constexpr (receiver_txq_id != sender_txq_id) {
@@ -178,7 +178,7 @@ __attribute__((noinline)) void init_txqs() {
 // Telemetry block
 // ---------------------------------------------------------------------------------------------------------------------
 
-__attribute__((noinline)) void init_telemetry_block() {
+ROUTER_INIT_ONLY void init_telemetry_block() {
     volatile tt_l1_ptr FabricTelemetry* telemetry = telemetry_block();
     const auto& routing_table = l1_routing_table();
     memset(const_cast<FabricTelemetry*>(telemetry), 0, sizeof(FabricTelemetry));
@@ -293,7 +293,7 @@ FORCE_INLINE void read_relay_args(R& r, size_t& i) {
     }
 }
 
-__attribute__((noinline)) void read_runtime_args(RuntimeArgs& a) {
+ROUTER_INIT_ONLY void read_runtime_args(RuntimeArgs& a) {
     size_t i = 0;
     for (auto& v : a.connection_semaphores) {
         v = get_arg_val<uint32_t>(i++);

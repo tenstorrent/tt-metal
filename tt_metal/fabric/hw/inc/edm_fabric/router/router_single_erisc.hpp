@@ -42,7 +42,7 @@ FORCE_INLINE void receiver_pass(
     receiver::pass(loop_copy, r.credit_frame_due, r.states, r.credits, downstreams, my_chip);
 }
 
-__attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+ROUTER_LOOP void run(DownstreamConnections& downstreams) {
     const auto& routing_table = l1_routing_table();
     const ChipCoordinates my_chip{
         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
