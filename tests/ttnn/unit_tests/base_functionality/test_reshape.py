@@ -1088,6 +1088,8 @@ def test_quasar_reshape_rm_unit_last_dim(device):
 
 
 def test_quasar_reshape_rm_nonclean_dest_slots_track_l1_pressure(device):
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("This regression covers the WH/BH legacy RM staging ring, not the Quasar Metal-2 factory")
     # dest page 10004 B (not 16 B aligned): 8 staging slots plus source scratch take ~89 KiB per core.
     input_shape, output_shape = (64, 2501), (32, 5002)
     torch.manual_seed(7)
