@@ -37,7 +37,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     populate_kv_chunk_address_table_dflash,
     striped_cache_to_host,
 )
-from tests.ttnn.utils_for_testing import assert_equal
+from tt_py_test_utils_common.utils_for_testing import assert_equal
 
 
 # sp x tp

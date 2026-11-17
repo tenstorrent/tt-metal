@@ -1098,6 +1098,61 @@ def test_unary_rejects_unsupported_integer_dtype(ttnn_op, ttnn_dtype, extra_kwar
         ttnn_op(input_tensor, **extra_kwargs)
 
 
+def test_unary_chain_checks_ops_before_typecast(device, expect_error):
+    # FMOD has no integer kernel. Placed before the TYPECAST it would run on the raw int32 tile
+    # bits, so the chain must be rejected; placed after the cast it sees bfloat16 and is accepted.
+    input_tensor = ttnn.from_torch(
+        torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    fmod = ttnn.UnaryWithParam(ttnn.UnaryOpType.FMOD, 2.0)
+    to_bfloat16 = ttnn.UnaryWithParam(
+        ttnn.UnaryOpType.TYPECAST, ttnn.DataType.INT32.value, ttnn.DataType.BFLOAT16.value
+    )
+
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn.unary_chain(input_tensor, [fmod, to_bfloat16])
+
+    # Only the position matters: the same ops with the cast first pass validation.
+    ttnn.unary_chain(input_tensor, [to_bfloat16, fmod])
+
+
+@pytest.mark.parametrize(
+    "typecast_param",
+    [
+        # UnaryWithParam holds float parameters; EltwiseUnaryWithParam given Python ints holds int32 parameters.
+        # The cast's target dtype must be read from whichever type backs the TYPECAST.
+        pytest.param(ttnn.UnaryWithParam, id="float_params"),
+        pytest.param(ttnn._ttnn.activation.EltwiseUnaryWithParam, id="int_params"),
+    ],
+)
+@pytest.mark.parametrize(
+    "op_type, scalar, torch_op",
+    [
+        (ttnn.UnaryOpType.UNARY_GT, 2.0, torch.gt),
+        (ttnn.UnaryOpType.UNARY_GT, 0.5, torch.gt),
+        (ttnn.UnaryOpType.UNARY_GT, -3.0, torch.gt),
+        (ttnn.UnaryOpType.UNARY_EQ, 2.0, torch.eq),
+    ],
+)
+def test_unary_chain_ops_after_typecast_use_cast_dtype(device, typecast_param, op_type, scalar, torch_op):
+    # After TYPECAST(INT32->FLOAT32) the tile holds float32, so a relational op placed after the cast
+    # must be generated for FLOAT32 (the float compare against the scalar) and not for the tensor's
+    # INT32 (the int32 compare, which reads the float bits as integers). The trailing cast back to
+    # INT32 gives the chain a well-defined output dtype so the result can be checked exactly.
+    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    to_float32 = typecast_param(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.INT32.value, ttnn.DataType.FLOAT32.value)
+    to_int32 = typecast_param(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.FLOAT32.value, ttnn.DataType.INT32.value)
+
+    output = ttnn.unary_chain(input_tensor, [to_float32, ttnn.UnaryWithParam(op_type, scalar), to_int32])
+
+    expected = torch_op(torch_input.to(torch.float32), scalar).to(torch.int32)
+    assert_equal(expected, ttnn.to_torch(output))
+
+
 @pytest.mark.parametrize(
     "ttnn_op, extra_kwargs",
     [

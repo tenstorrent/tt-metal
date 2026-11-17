@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     kda_state_dict_sha256,
     load_kda_layer_state_dict,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, decode_tail
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
@@ -43,8 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, decode_tail
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 
 def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
@@ -143,27 +143,16 @@ def assert_device_time(median_us: float, reference_us: float, margin: float, lab
     )
 
 
-@dataclass(frozen=True)
-class AffineTransform:
-    """State-space affine map ``state -> a @ state + b``."""
-
-    a: ttnn.Tensor
-    b: ttnn.Tensor
-
-
-def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
-    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [A | B] that the relay carries."""
-    batch_heads, key_dim = tuple(transform.a.shape)[0], tuple(transform.a.shape)[1]
-    value_dim = transform.b.shape[-1]
-    packed = ttnn.concat(
-        [
-            ttnn.reshape(transform.a, (1, batch_heads, key_dim, key_dim)),
-            ttnn.reshape(transform.b, (1, batch_heads, key_dim, value_dim)),
-        ],
-        dim=3,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+def pack_complement(a: torch.Tensor, b: torch.Tensor, mesh_device, mesh_mapper) -> ttnn.Tensor:
+    """Host transforms (A, B) as the packed summary publishes them: BF16 TILE rows of the complement form [E | B],
+    E = A - I."""
+    return ttnn.from_torch(
+        torch.cat([a - torch.eye(a.shape[-1]), b], dim=-1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=mesh_mapper,
     )
-    return ttnn.typecast(packed, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def distributed_prefix(
@@ -176,7 +165,8 @@ def distributed_prefix(
     local_rows: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """The gathered SP prefix the relay replaces, as a reference: all-gather every rank's BF16 [1, BH, K, K+V]
-    transform and chain them in chronological order. Return the local entry state and the replicated final state."""
+    complement-form [E | B] transform and chain them in chronological order. Return the local entry state and the
+    replicated final state."""
     gathered = ttnn.all_gather(
         packed, dim=0, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -655,9 +645,14 @@ def mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> tor
     return torch.tensor([position - actual_start for chip in positions for position in chip])
 
 
-def to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int) -> ttnn.Tensor:
+def to_sp_input(
+    hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int | None = None
+) -> ttnn.Tensor:
+    """Shard [B, T, H] over SP along T, and with ``tp_axis`` also over TP along H (the model's residual layout)."""
     mesh_dims = [None, None]
     mesh_dims[sp_axis] = 1
+    if tp_axis is not None:
+        mesh_dims[tp_axis] = 2
     return ttnn.from_torch(
         hidden,
         dtype=ttnn.bfloat16,

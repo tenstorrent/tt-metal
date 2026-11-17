@@ -15,6 +15,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KIMI_K3_CONVOLUTION_NRMSE,
@@ -31,7 +32,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 
@@ -163,7 +163,8 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     padded = case.hidden.clone()
     padded[:, length:] = float("nan")
     ttnn.deallocate(hidden_tt)
-    hidden_tt = to_sp_input(padded[:, permutation, :], mesh_device, sequence_parallel_axis)
+    # TP-sharded, as the model's residual hands it over: the layer gathers it (inside the input projection on Galaxy).
+    hidden_tt = to_sp_input(padded[:, permutation, :], mesh_device, sequence_parallel_axis, tensor_parallel_axis)
     valid_rows = to_sp_input(
         (permutation < length).to(torch.bfloat16).reshape(1, -1, 1), mesh_device, sequence_parallel_axis
     )
