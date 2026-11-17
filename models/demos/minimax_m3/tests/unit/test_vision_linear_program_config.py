@@ -169,9 +169,9 @@ def test_vision_linear(monkeypatch, expect_error):
     """linear() gives ttnn.linear the helper's config for the padded shapes, then runs the activation as its own op.
 
     ttnn.linear also gets the bias, the compute config and its memory_config, DRAM by default. The activation writes
-    activation_memory_config, and ttnn.gelu gets no memory_config when that is None. With x or the output in L1 block
-    shards, linear() passes the helper's config for them, and raises where the helper leaves the config to ttnn. A
-    fused activation writes activation_memory_config, here block shards.
+    activation_memory_config, and ttnn.gelu gets memory_config None, for its input's, when that is None. With x or the
+    output in L1 block shards, linear() passes the helper's config for them, and raises where the helper leaves the
+    config to ttnn. A fused activation writes activation_memory_config, here block shards.
     """
     calls = []
 
@@ -190,7 +190,7 @@ def test_vision_linear(monkeypatch, expect_error):
     w = SimpleNamespace(padded_shape=(in_features, out_features))
     # (linear's memory keywords, ttnn.linear's memory_config, ttnn.gelu's keywords)
     placements = (
-        ({}, ttnn.DRAM_MEMORY_CONFIG, {"fast_and_approximate_mode": False}),
+        ({}, ttnn.DRAM_MEMORY_CONFIG, {"fast_and_approximate_mode": False, "memory_config": None}),
         (
             dict(memory_config=ttnn.L1_MEMORY_CONFIG, activation_memory_config=ttnn.DRAM_MEMORY_CONFIG),
             ttnn.L1_MEMORY_CONFIG,
@@ -280,7 +280,7 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
         return calls[-1]
 
     def record_gelu(x, **kwargs):
-        output = kwargs.get("memory_config", x.memory_config())
+        output = x.memory_config() if kwargs.get("memory_config") is None else kwargs["memory_config"]
         calls.append(
             SimpleNamespace(
                 op="gelu",
@@ -346,8 +346,8 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
                     assert fc1.config is None or repr(fc1.config) == repr(want), case
                     assert [c.op for c in between] == ["gelu"] and between[0].x is fc1 and fc2.x is between[0], calls
                     assert fc1.memory_config() == placement.fc1_out, case
-                    output = {} if placement.gelu_out is None else {"memory_config": placement.gelu_out}
-                    assert between[0].kwargs == {"fast_and_approximate_mode": False, **output}, case
+                    gelu_kwargs = {"fast_and_approximate_mode": False, "memory_config": placement.gelu_out}
+                    assert between[0].kwargs == gelu_kwargs, case
         assert fused == {256, 2160, 2304}, (grid, fused)
     with expect_error(AssertionError, "fused_activation needs activation"):
         linear(None, None, None, linear_compute_config(), fused_activation=mlp.ACCURATE_GELU_FUSED)

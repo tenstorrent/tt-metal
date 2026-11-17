@@ -12,7 +12,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import hifi4_compute_config, memory_config_kwargs, to_device
+from models.demos.minimax_m3.tt.vision.common import hifi4_compute_config, to_device
 
 
 class M3VLLayerNorm(LightweightModule):
@@ -77,5 +77,5 @@ class M3VLLayerNorm(LightweightModule):
             bias=self.bias,
             epsilon=self.eps,
             compute_kernel_config=self.compute_kernel_config,
-            **memory_config_kwargs(memory_config),
+            memory_config=memory_config,
         )

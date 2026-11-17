@@ -23,13 +23,12 @@ from models.demos.minimax_m3.tt.vision.common import (
     as_linear_weight,
     linear,
     linear_compute_config,
-    memory_config_kwargs,
 )
 
 
 def accurate_gelu(x: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
     """Run the accurate (erf) GELU of HF's `gelu` into memory_config, or where x is when that is None."""
-    return ttnn.gelu(x, fast_and_approximate_mode=False, **memory_config_kwargs(memory_config))
+    return ttnn.gelu(x, fast_and_approximate_mode=False, memory_config=memory_config)
 
 
 # The same GELU as a matmul's fused_activation: ttnn.gelu with fast_and_approximate_mode=False runs this unary.

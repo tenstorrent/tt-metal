@@ -113,11 +113,12 @@ OPS = {**PRE_BLOCK_OPS, **BLOCK_OPS}
 TOWER_ROLES = [(role, None) for role in PRE_BLOCK_OPS] + [
     (role, block) for block in range(NUM_LAYERS) for role in BLOCK_OPS
 ]
-# Each op's keywords besides memory_config, and how many of its first arguments are activations (the others are
-# weights, the RoPE tables and memory configs).
+# Each op's keywords besides a memory_config that it gets only where its field is not None, and how many of its first
+# arguments are activations (the others are weights, the RoPE tables and memory configs). LayerNorm and GELU always get
+# memory_config, None where the field is.
 CALL_KEYWORDS = {
     "linear": {"bias", "compute_kernel_config", "program_config"},
-    "layer_norm": {"weight", "bias", "epsilon", "compute_kernel_config"},
+    "layer_norm": {"weight", "bias", "epsilon", "compute_kernel_config", "memory_config"},
     "nlp_create_qkv_heads": {"num_heads", "num_kv_heads", "transpose_k_heads"},
     "rotary_embedding_llama": {"is_decode_mode", "compute_kernel_config"},
     "scaled_dot_product_attention": {
@@ -128,7 +129,7 @@ CALL_KEYWORDS = {
         "output_concat_heads",
     },
     "add": set(),
-    "gelu": {"fast_and_approximate_mode"},
+    "gelu": {"fast_and_approximate_mode", "memory_config"},
     "to_memory_config": set(),
 }
 ACTIVATION_ARGS = dict(
@@ -431,8 +432,10 @@ class _Recorder:
         return self._call("linear", (x, w), kwargs, out)
 
     def _layer_norm(self, x, **kwargs):
-        # Default: the input's memory config (layernorm.cpp).
-        out = self._tensor(x.shape, kwargs.get("memory_config", x.memory_config()), x.device(), x.padded_shape)
+        # No memory_config, or None: the input's memory config (layernorm.cpp).
+        memory_config = kwargs.get("memory_config")
+        memory_config = x.memory_config() if memory_config is None else memory_config
+        out = self._tensor(x.shape, memory_config, x.device(), x.padded_shape)
         return self._call("layer_norm", (x,), kwargs, out)
 
     def _heads(self, x, **kwargs):
@@ -461,8 +464,10 @@ class _Recorder:
         return self._call("add", (a, b), kwargs, out)
 
     def _gelu(self, x, **kwargs):
-        # Default: the input's memory config (unary.cpp).
-        out = self._tensor(x.shape, kwargs.get("memory_config", x.memory_config()), x.device(), x.padded_shape)
+        # No memory_config, or None: the input's memory config (unary.cpp).
+        memory_config = kwargs.get("memory_config")
+        memory_config = x.memory_config() if memory_config is None else memory_config
+        out = self._tensor(x.shape, memory_config, x.device(), x.padded_shape)
         return self._call("gelu", (x,), kwargs, out)
 
     def _to_memory_config(self, x, memory_config):
@@ -822,9 +827,9 @@ def test_vision_block_placement_l1_max_rows(monkeypatch):
 def test_vision_block_placement_calls(monkeypatch, patches):
     """Each op of a 4-block forward on 12x10 gets its keywords and its placement's memory_config.
 
-    This holds with "dram", "l1_interleaved" and "l1". An op gets no memory_config where its field is None, and each
-    matmul gets linear_program_config's config for where its operands are. With the L1 placements out_proj reads DRAM,
-    fc2 reads DRAM or fc1's shards, and the tower's output goes to DRAM.
+    This holds with "dram", "l1_interleaved" and "l1". An op gets memory_config None, or none, where its field is
+    None, and each matmul gets linear_program_config's config for where its operands are. With the L1 placements
+    out_proj reads DRAM, fc2 reads DRAM or fc1's shards, and the tower's output goes to DRAM.
     """
     recorder = _Recorder(monkeypatch)
     model = _model(recorder, (12, 10))
@@ -863,7 +868,7 @@ def test_vision_block_placement_calls(monkeypatch, patches):
             if role == "add2" and block == NUM_LAYERS - 1:
                 memory_config = ttnn.DRAM_MEMORY_CONFIG
             assert set(kwargs) == CALL_KEYWORDS[op] | ({"memory_config"} if memory_config is not None else set()), case
-            if memory_config is not None:
+            if "memory_config" in kwargs:
                 assert kwargs["memory_config"] == memory_config, case
             if op == "to_memory_config":
                 assert args[1] == ttnn.L1_MEMORY_CONFIG and not args[0].l1, case

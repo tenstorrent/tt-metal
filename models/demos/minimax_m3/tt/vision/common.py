@@ -73,11 +73,6 @@ def linear_compute_config():
     return hifi4_compute_config(packer_l1_acc=True)
 
 
-def memory_config_kwargs(memory_config: Optional[ttnn.MemoryConfig]) -> dict:
-    """Return {"memory_config": memory_config}, or {} for None so that the op writes where its default puts it."""
-    return {} if memory_config is None else {"memory_config": memory_config}
-
-
 def linear(
     x: ttnn.Tensor,
     w: ttnn.Tensor,
@@ -292,8 +287,8 @@ def _sdpa_q_chunk_size(seq_len: int, num_heads: int, cores: int) -> int:
 class BlockPlacement:
     """Where an encoder block's ops write their outputs, as the memory_config each passes to ttnn.
 
-    None means that the op gets no memory_config and writes where its input is. The blocks' LayerNorms and RoPE ops
-    never get one, and neither does SDPA, whose output stays in DRAM. block_placement picks one per image size and grid.
+    None means that the op writes where its input is, as ttnn does for memory_config None. The blocks' LayerNorms and
+    RoPE ops always write there, and SDPA's output stays in DRAM. block_placement picks one per image size and grid.
 
     Attributes:
         name: the placement's name, for logs.
@@ -312,7 +307,7 @@ class BlockPlacement:
     gelu_out: Optional[ttnn.MemoryConfig]
 
 
-# Every activation in DRAM: pre_layrnorm and GELU get no memory config and write where their input is.
+# Every activation in DRAM: pre_layrnorm and GELU write where their input is.
 DRAM_PLACEMENT = BlockPlacement(
     name="dram",
     block_input=None,
