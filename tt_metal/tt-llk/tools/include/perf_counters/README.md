@@ -28,6 +28,15 @@ NoC interface (NIU) event counters, namespace `llk::perf::noc`:
 
 Reference: `docs/performance_counters/noc_counters.md`.
 
+DRAM channel tile counters (read by the host, not by a core), namespace `llk::perf::dram`:
+
+- `dram_counters_types.h`: `DramCounter` (names), `Arch`, `Entry` = `{counter, offset}`, `Layout`.
+- `dram_counters_blackhole.h`, `dram_counters_wormhole.h`, `dram_counters_quasar.h`: `layout`, `niu_counters`;
+  Quasar's are empty because its register map is not known.
+- `dram_counters_inventory.h`: `niu_table(arch)`, `layout_for(arch)`, `niu_address(arch, noc, offset)`.
+
+Reference: `docs/performance_counters/dram_counters.md`.
+
 A profiler record carries the raw mhpmevent select, not an ordinal, so `PmcEvent` is only for names: append new
 names, the host decodes a select by looking it up in the arch table. Reference: `docs/performance_counters/riscv_pmc.md`.
 

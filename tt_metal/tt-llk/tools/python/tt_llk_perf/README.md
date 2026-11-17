@@ -34,3 +34,6 @@ NoC interface counters: `headers.noc_counter_table(arch)` and `noc_selected_coun
 `noc_counters_*.h` tables (capture order, NoC count, data word bytes); `noc_counters.py` decodes the profiler markers
 9100 to 9116 into per-NoC counts; `noc_metrics.py` derives byte and request totals. Adding a counter needs no Python
 change.
+- `dram_counters.py` decodes `dram_traffic.csv` and `dram_idle.csv` of `TT_METAL_PROFILE_DRAM_COUNTERS` into bytes per DRAM tile
+  and per program (`per_program`), subtracting the idle drift model; `headers.dram_counter_table(arch)` and
+  `headers.dram_layout(arch)` parse `dram_counters_*.h`. Reference: `docs/performance_counters/dram_counters.md`.
