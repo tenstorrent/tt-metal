@@ -170,10 +170,11 @@ def boundary_links(a, b, counts):
 
 
 def ring_orders(galaxies, num_stages):
-    """Host orders (galaxies permuted, the first fixed, mirror images dropped) whose stages all hold a torus.
+    """Host orders whose stages all hold a torus: [(min torus edge links, order)], best first.
 
-    Returns [(min torus edge links, order)], best first. The order sets which host pairs form seam stages,
-    and only the cabling ring order has a torus across every pair."""
+    The order sets which host pairs form seam stages, and the cabling is directional: host i's slice 3 is
+    cabled to host i+1's slice 0. A full ring (2 stages per host) is the same under rotation, so its first
+    host stays fixed; a chain tries every order."""
     cache = {}
 
     def torus_links(chips):
@@ -185,10 +186,13 @@ def ring_orders(galaxies, num_stages):
     counts = link_counts(galaxies)
     host_index = {g.name: i for i, g in enumerate(galaxies)}
     found = []
-    for rest in itertools.permutations(range(1, len(galaxies))):
-        if len(rest) > 1 and rest[0] > rest[-1]:
-            continue
-        order = [galaxies[0]] + [galaxies[i] for i in rest]
+    full_ring = num_stages == 2 * len(galaxies)
+    indices = range(len(galaxies))
+    orders = (
+        [(0, *rest) for rest in itertools.permutations(indices[1:])] if full_ring else itertools.permutations(indices)
+    )
+    for permutation in orders:
+        order = [galaxies[i] for i in permutation]
         table = grb.build_split_ring_rank_table([g.name for g in order], num_stages)
         links = min(torus_links(chips) for chips in stage_chips(order, table, host_index).values())
         if links:
