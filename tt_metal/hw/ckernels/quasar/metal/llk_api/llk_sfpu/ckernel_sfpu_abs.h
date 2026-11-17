@@ -42,17 +42,14 @@ constexpr std::uint32_t ABS_INT32_REPLAY_LEN = 3;
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_abs_int32() {
     static_assert(ITERATIONS >= 1, "the recorded row body is replayed once per row");
-    // Raw TTI on purpose: SFPABS computes int32 abs in a single SFPU op. The sfpi form was the same
-    // three Tensix instructions plus a TTINCRWC per row (an eight-instruction two-row body recorded and
-    // replayed by sfpi). Quasar's REPLAY cannot execute while loading, so the three-instruction row body
-    // is recorded without executing and then replayed once per row: one RISC issue per row. The store
-    // advances Dest by one sfpi row (SFP_ROWS Dest counter rows) through ADDR_MOD_6.
-    // sfpmem::INT32 (mode 4) is the raw 32-bit Dest access the sfpi I32/M32 layouts used, so the bytes
-    // moved are unchanged; SFPABS mod 0 is the two's-complement abs sfpi::abs(vInt) lowered to.
+    // sfpi emits the row body (SFPLOAD, SFPABS, SFPSTORE: sfpi::abs(vInt) is the dedicated integer
+    // SFPABS) straight into the replay buffer. Quasar's REPLAY cannot execute while loading, so the
+    // body is recorded without executing and then replayed once per row: one RISC issue per row.
+    // The store advances Dest by one sfpi row (SFP_ROWS Dest counter rows) through ADDR_MOD_6, in
+    // place of a TTINCRWC, which would be a fourth instruction in the window.
     lltt::record<lltt::NoExec>(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN);
-    TTI_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /*done*/, 0 /*dest_reg_addr*/);
-    TTI_SFPABS(p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);
-    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_6, 0 /*done*/, 0 /*dest_reg_addr*/);
+    const sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+    sfpi::dst_reg[0].mode<sfpi::DataLayout::M32>(ADDR_MOD_6) = sfpi::abs(v);
     for (int d = 0; d < ITERATIONS; d++) {
         lltt::replay(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN);
     }
