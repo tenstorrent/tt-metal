@@ -316,6 +316,7 @@ TEST(RMSNormPlannerTest, RowGroupsInOneColumn) {
     const auto groups_in_one_column = [](const uint32_t num_slices, const uint32_t num_groups) {
         const RowSlicePlan p{.num_slices = num_slices, .num_cores_y = 10U};
         std::vector<bool> in_one_column;
+        in_one_column.reserve(num_groups);
         for (uint32_t group = 0; group < num_groups; ++group) {
             in_one_column.push_back(row_group_in_one_column(p, group));
         }
