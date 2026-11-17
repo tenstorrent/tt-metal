@@ -12,6 +12,7 @@
 #include "llk_assert.h"
 #ifdef ARCH_BLACKHOLE
 #include "llk_size_mode.h"
+#include "api/compute/matmul_fe_mark.h"
 #endif
 
 #ifdef TRISC_MATH
@@ -132,9 +133,13 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
     LLK_SAN_FUNCTION();
 #endif
 #if defined(ARCH_BLACKHOLE)
-    // The context semaphore is read before the address writes, so the per-tile chain overlaps its latency; a size-mode
-    // kernel keeps main's smaller call
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, !LLK_SIZE_MODE>(
+    // The context semaphore is read before the address writes, so the per-tile chain overlaps its latency. A size-mode
+    // kernel keeps main's smaller call, and so does a kernel with a plain matmul call: its output copy runs one tile
+    // per DEST acquire, where the early poll measured slower (minimal_matmul LoFi 888 2x2 +0.23 %, 224 2x1 +0.13 %)
+    constexpr bool early_poll = !LLK_SIZE_MODE &&
+                                !matmul_fe_mark::is_used_d<7, std::integral_constant<bool, is_fp32_dest_acc_en>>(0) &&
+                                !matmul_fe_mark::is_used_d<8, std::integral_constant<bool, is_fp32_dest_acc_en>>(0);
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, early_poll>(
         in_cb_id, in_tile_index, dst_tile_index)));
 #else
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
