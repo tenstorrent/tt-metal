@@ -219,6 +219,7 @@ def check_second_call_through_cache(device, build, run):
     second_inputs, golden = build(1, second_call=True)
 
     entries_before = device.num_program_cache_entries()
+    assert entries_before > 0, "first call did not populate the program cache"
     output = run(second_inputs)
     assert device.num_program_cache_entries() == entries_before, "second call missed the program cache"
 

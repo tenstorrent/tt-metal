@@ -64,8 +64,8 @@ def run_norm_model_width(device, op, w, h):
         tt_output = ttnn.rms_norm(tt_input, epsilon=EPS, weight=tt_weight, compute_kernel_config=compute_config)
     output = ttnn.to_torch(tt_output).float()
 
-    # Compare a sample of rows that spans all cores, so the reference stays cheap.
-    rows = torch.arange(0, h, 17)
+    # Small heights compare every row; large heights sample rows to keep the reference cheap.
+    rows = torch.arange(h) if h <= 64 else torch.arange(0, h, 17)
     golden = norm_reference(op, torch_input[:, rows], torch_weight, torch_bias)
     assert_numeric_metrics(
         golden, output[:, rows], pcc_threshold=0.999, frobenius_threshold=FROBENIUS, check_allclose=False
@@ -74,6 +74,8 @@ def run_norm_model_width(device, op, w, h):
 
 @pytest.mark.parametrize("op", ["layer_norm", "rms_norm"])
 # Where the large-tensor factory starts depends on L1, so all three widths run.
+# W >= 5120 uses the large-tensor kernels today (#53419); recheck if the L1 rule in
+# layernorm_op_multi_core.cpp changes.
 @pytest.mark.parametrize("w", [4096, 5120, 8192])
 def test_norm_model_width_hifi2_fp32_acc(device, op, w):
     run_norm_model_width(device, op, w, h=32 * TILE_ROWS)
