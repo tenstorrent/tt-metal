@@ -2,55 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prompt templates, character for character those of tt-blacksmith's datasets.
-
-The same prompts tokenize to the same examples, so a run here and the same run on tt-blacksmith train on
-identical data.
-"""
+"""Custom datasets (``dataset.custom_options``): the templates an example is rendered with, and the dataset columns
+each template reads."""
 
 from __future__ import annotations
 
 from string import Template
 from typing import Mapping, Optional
-
-# ------------------------------------------------------------------ SST-2
-
-SST2_PROMPT_TEMPLATE = Template("""Review: $input\nOutput:""")
-SST2_RESPONSE_TEMPLATE = Template('{"label": "$label"}')
-SST2_LABELS = {0: "negative", 1: "positive"}
-
-# ------------------------------------------------------------------ Alpaca (tatsu-lab/alpaca)
-
-ALPACA_PROMPT_INTRO = (
-    "Below is an instruction that describes a task. Write a response that appropriately completes the request."
-)
-
-ALPACA_PROMPT_TEMPLATE = Template(
-    f"""
-{ALPACA_PROMPT_INTRO}
-
-### Instruction:
-$instruction
-
-### Input:
-$input
-
-### Response:
-"""
-)
-
-ALPACA_PROMPT_TEMPLATE_NO_INPUT = Template(
-    f"""
-{ALPACA_PROMPT_INTRO}
-
-### Instruction:
-$instruction
-
-### Response:
-"""
-)
-
-# ------------------------------------------------------------------ custom datasets
 
 CUSTOM_ALPACA_PROMPT_INTRO = (
     "Below is an instruction that describes a task, paired with an optional input that provides further context. "

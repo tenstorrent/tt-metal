@@ -2,22 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dataset providers: the batches a run trains and validates on, by ``dataset.id``.
-
-A provider serves one split of a dataset as host batches for ``ttml.unified_trainer``, which asks it for the next
-batch and never sees examples, prompts or tokenization. Adding a dataset means subclassing ``DatasetProvider`` in
-``ttml/datasets/<dataset>.py`` and adding it to ``providers``; the trainer and its hosts don't change.
-"""
-
 from __future__ import annotations
 
-from functools import cache, partial
+from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Iterator, Optional
 
 import numpy as np
 
-from .collate import IGNORED_INDEX, collate_causal_lm
-from .hf_dataloader import InMemoryDataloader
+from ..hf_dataloader import InMemoryDataloader
+from ..utils.collate import IGNORED_INDEX, collate_causal_lm
 
 if TYPE_CHECKING:
     from ttml.unified_trainer.configs import SFTTrainerConfig
@@ -153,47 +146,6 @@ class DatasetProvider:
         return (type(self), self.config.model.name, self.config.max_length, self.config.seed)
 
 
-@cache
-def providers() -> dict[str, type[DatasetProvider]]:
-    """The provider of each dataset, keyed by its ``dataset.id``."""
-    # Imported here, not with the module: every provider subclasses this module's ``DatasetProvider``.
-    from .alpaca import AlpacaProvider
-    from .custom import CustomProvider
-    from .sst2 import SST2Provider
-
-    return {"sst2": SST2Provider, "alpaca": AlpacaProvider, "custom": CustomProvider}
-
-
-def get_provider(config: SFTTrainerConfig, split: str, tokenizer: Any) -> Optional[DatasetProvider]:
-    """The provider of ``split`` of the dataset ``config.dataset.id`` names; None if the dataset has no such split
-    (a custom dataset without validation files)."""
-    provider = providers().get(config.dataset.id.lower())
-    if provider is None:
-        raise ValueError(f"dataset.id: {config.dataset.id!r} is not one of {sorted(providers())}")
-    return provider(config, split, tokenizer) if provider.has_split(config, split) else None
-
-
-def load_tokenizer(model_name: str) -> Any:
-    """The model's HF tokenizer, padding on the right; EOS pads when the model has no pad token."""
-    from transformers import AutoTokenizer
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="right", use_fast=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    return tokenizer
-
-
 def clear_cache() -> None:
     """Drop the tokenized sources cached for a run (call when the run is cleaned up)."""
     DatasetProvider._shared_datasets.clear()
-
-
-__all__ = [
-    "IGNORED_INDEX",
-    "DatasetProvider",
-    "clear_cache",
-    "collate_causal_lm",
-    "get_provider",
-    "load_tokenizer",
-    "providers",
-]

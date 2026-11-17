@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .provider import DatasetProvider
-from .templates import ALPACA_PROMPT_TEMPLATE, ALPACA_PROMPT_TEMPLATE_NO_INPUT
+from ..utils.templates.alpaca import ALPACA_PROMPT_TEMPLATE, ALPACA_PROMPT_TEMPLATE_NO_INPUT
+from .base import DatasetProvider
 
 
 class AlpacaProvider(DatasetProvider):

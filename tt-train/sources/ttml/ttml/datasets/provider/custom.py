@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .provider import DatasetProvider
-from .templates import custom_prompt_and_response, resolve_column_mapping
+from ..utils.templates.custom import custom_prompt_and_response, resolve_column_mapping
+from .base import DatasetProvider
 
 if TYPE_CHECKING:
     from ttml.unified_trainer.configs import SFTTrainerConfig

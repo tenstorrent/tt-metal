@@ -334,9 +334,9 @@ Write it in `ttml/models/<model>/provider.py` and add it to `providers()` in `tt
 ## Adding a dataset
 
 A dataset provider serves one split of a dataset as batches: the trainer builds one for training and one for
-validation, and asks each for its next batch. It subclasses `DatasetProvider` in `ttml/datasets/provider.py`, which
-tokenizes the examples, masks the prompt, drops the examples longer than `max_length`, and batches them. The subclass
-adds what is the dataset's own:
+validation, and asks each for its next batch. It subclasses `DatasetProvider` in `ttml/datasets/provider/base.py`,
+which tokenizes the examples, masks the prompt, drops the examples longer than `max_length`, and batches them. The
+subclass adds what is the dataset's own:
 
 - `_load_raw_dataset()`: the HF dataset of `self.split`.
 - `_prompt_and_response(example)`: the prompt and the response of one example.
@@ -344,8 +344,9 @@ adds what is the dataset's own:
   for validation.
 - `has_split(config, split)`, for a source that may lack a split: the trainer then runs without it.
 
-Write it in `ttml/datasets/<dataset>.py` and add it to `providers()` in `ttml/datasets/provider.py`, keyed by its
-`dataset.id`. `SST2Provider` in `ttml/datasets/sst2.py` is the reference.
+Write it in `ttml/datasets/provider/<dataset>.py`, with its prompt templates in
+`ttml/datasets/utils/templates/<dataset>.py`, and add it to `providers()` in `ttml/datasets/provider/__init__.py`,
+keyed by its `dataset.id`. `SST2Provider` in `ttml/datasets/provider/sst2.py` is the reference.
 
 What a trainer uses of a provider: `next_batch()`, the next batch of the epoch as host arrays, or `None` once the
 epoch is over; iterating it, which takes the batches left in the epoch; `len()`, the batches of an epoch; and

@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .provider import DatasetProvider
-from .templates import SST2_LABELS, SST2_PROMPT_TEMPLATE, SST2_RESPONSE_TEMPLATE
+from ..utils.templates.sst2 import SST2_LABELS, SST2_PROMPT_TEMPLATE, SST2_RESPONSE_TEMPLATE
+from .base import DatasetProvider
 
 
 class SST2Provider(DatasetProvider):

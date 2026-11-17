@@ -17,7 +17,7 @@ class CustomDatasetConfig(BaseModel):
     train_dataset_path: Optional[str] = None
     # No validation when unset.
     val_dataset_path: Optional[str] = None
-    # How an example becomes a prompt and a response (see ``ttml.datasets.templates``).
+    # How an example becomes a prompt and a response (see ``ttml.datasets.utils.templates.custom``).
     template: str = "alpaca"
     # Template field -> dataset column, for columns not named like the template's fields.
     column_mapping: Optional[dict[str, str]] = None
