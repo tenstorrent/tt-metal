@@ -26,13 +26,22 @@ namespace sfpu {
 // reason to avoid TTI. CC is already on: MATH TRISC firmware (`trisc.cc` `enable_cc_stack`) and the
 // LLK `boot.h` setup both issue `TTI_SFPENCC(3, 10)`. Same assumption as BH rounding.
 
+// _trunc_body_ reads the constant 23 from LReg3 and never writes it. The per-pass loops in this
+// file load it once per call (_load_trunc_k23_) and instantiate the bodies with LOAD_K23 = false;
+// sfpi does not allocate LReg3 inside those loops (checked on the math ELF). Callers that wrap the
+// bodies in their own sfpi code (rdiv, fmod, remainder) keep the default and load it per element.
+sfpi_inline void _load_trunc_k23_() { TTI_SFPLOADI(p_sfpu::LREG3, p_sfploadi::MOD0_INT16, 23); }
+
 // Truncate toward zero by CC-overlapped mantissa masks (same lane outcomes as Blackhole):
 //   exp < 0  (|x| < 1, including ±0 and subnormals): keep sign bit only → ±0
 //   0 ≤ exp ≤ 23: shift 0xffffffff left by (23 − exp) to drop fractional mantissa bits
 //   exp > 23 (already integral, inf, nan): keep all bits
+template <bool LOAD_K23 = true>
 sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val) {
     sfpi::l_reg[sfpi::LRegs::LReg0] = val;
-    TTI_SFPLOADI(p_sfpu::LREG3, p_sfploadi::MOD0_INT16, 23);
+    if constexpr (LOAD_K23) {
+        _load_trunc_k23_();
+    }
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);  // 0x80000000
     TTI_SFPEXEXP(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpexexp::MOD1_SET_CC_GE0);
     TTI_SFPLOADI(p_sfpu::LREG1, p_sfploadi::MOD0_INT16, 0xffff);  // 0xffffffff on remaining lanes
@@ -48,8 +57,9 @@ sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val) {
 }
 
 // Floor: trunc, then trunc−1 on lanes where val < trunc (negative non-integers).
+template <bool LOAD_K23 = true>
 sfpi_inline sfpi::vFloat _floor_body_(sfpi::vFloat val) {
-    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(val);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_<LOAD_K23>(val);
     TTI_SFPGT(p_sfpgt::IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpgt::MOD1_SET_CC);
     TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
     TTI_SFPENCC(0, 0);
@@ -57,8 +67,9 @@ sfpi_inline sfpi::vFloat _floor_body_(sfpi::vFloat val) {
 }
 
 // Ceil: trunc, then trunc+1 on lanes where val > trunc (positive non-integers).
+template <bool LOAD_K23 = true>
 sfpi_inline sfpi::vFloat _ceil_body_(sfpi::vFloat val) {
-    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(val);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_<LOAD_K23>(val);
     TTI_SFPGT(p_sfpgt::IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpgt::MOD1_SET_CC);
     TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
     TTI_SFPENCC(0, 0);
@@ -88,37 +99,41 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void _calculate_floor_() {
+    _load_trunc_k23_();
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::dst_reg[0] = _floor_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[0] = _floor_body_<false>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void _calculate_ceil_() {
+    _load_trunc_k23_();
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::dst_reg[0] = _ceil_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[0] = _ceil_body_<false>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void _calculate_trunc_() {
+    _load_trunc_k23_();
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::dst_reg[0] = _trunc_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[0] = _trunc_body_<false>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void _calculate_frac_() {
+    _load_trunc_k23_();
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         const sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = x - _trunc_body_(x);
+        sfpi::dst_reg[0] = x - _trunc_body_<false>(x);
         sfpi::dst_reg++;
     }
 }

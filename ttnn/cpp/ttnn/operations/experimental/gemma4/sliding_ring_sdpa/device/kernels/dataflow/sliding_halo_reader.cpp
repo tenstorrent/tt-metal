@@ -42,10 +42,10 @@ constexpr uint32_t input_page_size = get_compile_time_arg_val(kInputPageSize);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(kNumInputs);
 constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
 constexpr uint32_t meta_cb_id = get_compile_time_arg_val(kMetaCbId);
-// Only one exchange per halo waits for arrivals and signals the SDPA: every hop's writer increments
-// the same rendezvous core, so this one reader can gate on the whole halo. One signaller means one
-// incrementer per semaphore, which is what Semaphore::up requires to not drop updates.
+// Only one exchange per halo waits for arrivals and signals the SDPA: every predecessor signals its own
+// semaphore on the same rendezvous core, so this one reader can gate on the whole halo.
 constexpr bool collects_arrivals = get_compile_time_arg_val(kCollectsArrivals) == 1;
+// One arrival semaphore per predecessor (collector only).
 constexpr uint32_t arrivals_expected = get_compile_time_arg_val(kArrivalsExpected);
 // A multicast exchange reads one payload per run of hops that ship the same source slab.
 constexpr bool multicast = get_compile_time_arg_val(kMulticast) == 1;
@@ -72,7 +72,6 @@ void kernel_main() {
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
 
     uint32_t arg_idx = 0;
-    const size_t incoming_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_link = get_arg_val<uint32_t>(arg_idx++);
 
     std::array<uint32_t, num_inputs> input_stride_pages;
@@ -197,6 +196,13 @@ void kernel_main() {
     auto input_accessors = make_abstract_tensor_accessor_wrappers(input_accessors_tuple);
 
     OpSignaler op_signaler(arg_idx);
+    // Collector args end with one arrival semaphore per predecessor.
+    std::array<uint32_t, collects_arrivals ? arrivals_expected : 1> arrival_sems{};
+    if constexpr (collects_arrivals) {
+        for (uint32_t i = 0; i < arrivals_expected; ++i) {
+            arrival_sems[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
 
     Noc noc;
     CircularBuffer cb_output(cb_output_id);
@@ -236,14 +242,17 @@ void kernel_main() {
     }
 
     if constexpr (collects_arrivals) {
-        // Wait for every hop of this halo, not just one: with a multi-hop halo the SDPA must not
-        // start its K loop until the whole compact buffer has landed.
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(incoming_ready_sem), arrivals_expected);
+        // Wait for one arrival from every predecessor before the SDPA reads the halo. A predecessor
+        // already on the next sliding layer can only advance its own semaphore.
+        for (uint32_t i = 0; i < arrivals_expected; ++i) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_sems[i]), 1);
+        }
         constexpr uint32_t predecessor_ring_id = my_ring_id == 0 ? ring_size - 1 : my_ring_id - 1;
         op_signaler.synchronize_workers_and_signal_op(predecessor_ring_id);
-        // Consume exactly the arrivals gated on. The wrapping atomic decrement preserves a
-        // concurrent remote increment for the next exchange; a read-modify-write could lose it.
-        noc_semaphore_inc(get_noc_addr(incoming_ready_sem), static_cast<uint32_t>(0u - arrivals_expected));
+        // Consume one arrival each. An atomic decrement keeps a concurrent increment for the next layer.
+        for (uint32_t i = 0; i < arrivals_expected; ++i) {
+            noc_semaphore_inc(get_noc_addr(arrival_sems[i]), 0xFFFFFFFFu);  // -1
+        }
         noc_async_atomic_barrier();
     }
 }
