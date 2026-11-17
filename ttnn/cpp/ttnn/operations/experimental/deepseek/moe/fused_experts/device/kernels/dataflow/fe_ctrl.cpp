@@ -143,6 +143,7 @@ void kernel_main() {
         for (uint32_t w = 0; w < kFeGoWords; ++w) {
             go_words[w] = value;
         }
+        fe_store_fence();
     };
     auto send_route_go = [&](uint32_t value) {
         set_go_words(value);
@@ -223,15 +224,16 @@ void kernel_main() {
                 const uint32_t layer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrLayer];
                 // The senders' entry: the requester, and in bits 8+ the request's rows (kFeHdrRows).
                 source[e % kFeSourceRing] = k | (rows_word << 8);
+                // The grid's header takes this request's rows: the layer's row may have routed a later request since
+                // (and the grid's kernels pick the CBs' one-row aliases by it, FE_NATIVE_ONE_ROW).
+                headers[layer * kFeHdrWords + kFeHdrRows] = rows_word;
+                fe_store_fence();
                 for (uint32_t s = 0; s < num_senders; ++s) {
                     noc_async_write(
                         reinterpret_cast<uint32_t>(&source[e % kFeSourceRing]),
                         get_noc_addr(sender_x[s], sender_y[s], sender_ring_addr + (e % kFeSourceRing) * 4u),
                         4u);
                 }
-                // The grid's header takes this request's rows: the layer's row may have routed a later request since
-                // (and the grid's kernels pick the CBs' one-row aliases by it, FE_NATIVE_ONE_ROW).
-                headers[layer * kFeHdrWords + kFeHdrRows] = rows_word;
                 noc_async_write_multicast(headers_l1 + layer * kHdrBytes, hdr_mcast, kHdrBytes, mcast_cores);
                 noc_async_write_multicast(page + kHdrBytes, row_mcast, page_row_bytes(page), mcast_cores);
                 noc_async_write_barrier();
@@ -273,6 +275,7 @@ void kernel_main() {
                     headers[layer * kFeHdrWords + kFeHdrRequester] = k;
                     headers[layer * kFeHdrWords + kFeHdrRows] =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrRows];
+                    fe_store_fence();
                     const uint32_t entry = merge_ring_addr + (r % kFeSourceRing) * kHdrBytes;
                     noc_async_write(hdr_l1, get_noc_addr(merge_x, merge_y, entry), kHdrBytes);
                     noc_async_write_multicast(hdr_l1, route_hdr_mcast, kHdrBytes, route_cores);
@@ -305,6 +308,7 @@ void kernel_main() {
             }
             // The merge's stop: a ring entry whose layer word is the stop.
             go_words[0] = kFeStopLayerWord;
+            fe_store_fence();
             noc_async_write(
                 go_l1, get_noc_addr(merge_x, merge_y, merge_ring_addr + (r % kFeSourceRing) * kHdrBytes), 4u);
             noc_async_write_barrier();

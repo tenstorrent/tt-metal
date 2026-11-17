@@ -298,6 +298,16 @@ impl PyDecodeHost {
         self.inner.write_step(tokens, pos, slot).map_err(err)
     }
 
+    /// Queue trace `tids[k]` on stage `k` (say, a verify block's), in order with the decode steps.
+    fn dispatch_traces(&self, tids: Vec<u32>) -> PyResult<()> {
+        self.inner.dispatch_traces(&tids).map_err(err)
+    }
+
+    /// Queue a packet Python built (`page`, INT32 words) and the Engram rows of `tokens` at `pos ..` in `slot`.
+    fn write_block(&self, page: Vec<i32>, tokens: Vec<i64>, pos: i64, slot: i64) -> PyResult<()> {
+        self.inner.write_block(page, tokens, pos, slot).map_err(err)
+    }
+
     fn drain(&self, py: Python<'_>) -> PyResult<()> {
         let inner = &self.inner;
         py.allow_threads(|| inner.drain()).map_err(err)

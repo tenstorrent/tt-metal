@@ -134,13 +134,11 @@ void kernel_main() {
         if ((v & kFeStopBit) != 0u) {
             break;
         }
+        invalidate_l1_cache();
         const uint32_t words_l1 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_ADDR));
-        topk_rows(
-            words_l1,
-            cand_addr + (fe_header(kFeHdrRequester) * num_slots + my_chip) * cand_slot_bytes,
-            rows / 2u,
-            rows,
-            rows);
+        const uint32_t slot_l1 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_SLOT));
+        topk_rows(words_l1, slot_l1, rows / 2u, rows, rows);
+        fe_store_fence();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_DONE)) = it + 1u;
     }
     return;
@@ -207,6 +205,8 @@ void kernel_main() {
             if (rows > 1u && !one_row) {
                 ++helper_iters;
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_ADDR)) = words_l1;
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_SLOT)) = slot_l1;
+                fe_store_fence();
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_GO)) = helper_iters;
                 topk_rows(words_l1, slot_l1, 0u, rows / 2u, rows);
                 noc_semaphore_wait_min(
@@ -217,6 +217,7 @@ void kernel_main() {
 #else
             topk_rows(words_l1, slot_l1, 0u, tile_rows, tile_rows);
 #endif
+            fe_store_fence();
         }
         cb_pop_front(cb_rout, 2);
 

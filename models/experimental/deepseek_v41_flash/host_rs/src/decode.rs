@@ -14,6 +14,10 @@
 //! packet and Engram sockets or read the output socket, except with nothing in flight here (see `wait_idle`).
 //! It queues work of its own on a stage only once `drain` says the stage threads have issued every replay
 //! (speculative decode's ring fixups); a DSpark drafter's row is no stage, and its queue stays Python's.
+//!
+//! Besides the decode variants, a step may be any trace (`dispatch_traces`) fed a packet Python built
+//! (`write_block`): DSpark's verify block, whose packet carries several rows' tokens and positions and whose
+//! tokens each get their Engram rows, in order, like that many steps' rows.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -30,6 +34,8 @@ use crate::ffi::{MeshDevice, D2H, H2D};
 /// How long the output thread spins on an empty socket before it starts sleeping between polls.
 const SPIN_BEFORE_SLEEP: Duration = Duration::from_millis(2);
 const POLL_SLEEP: Duration = Duration::from_micros(20);
+/// Engram rows written to every rank in turn per round (`engram.py`'s `ENGRAM_WRITE_CHUNK`): within the smallest FIFO.
+const ENGRAM_WRITE_CHUNK: usize = 2;
 
 pub struct EngramSockets {
     /// Index of the layer's table in the [`Engram`] (table order).
@@ -62,9 +68,13 @@ pub struct DecodeConfig {
 }
 
 struct Step {
+    /// The step's tokens, batch-major: `batch` of them for a decode step, `batch * len` for a block of `len` rows
+    /// at `pos ..`. Each gets its Engram rows, in this order.
     tokens: Vec<i64>,
     pos: i64,
     slot: i64,
+    /// A packet built by the caller (a verify block's), written as is; `None`: the decode step's packet.
+    page: Option<Vec<i32>>,
 }
 
 struct Hashed {
@@ -101,6 +111,7 @@ impl Shared {
 pub struct DecodeHost {
     shared: Arc<Shared>,
     variants: Vec<Vec<u32>>,
+    pkt_ints: usize,
     stage_tx: Vec<Sender<Option<u32>>>,
     packet_tx: Sender<Option<Step>>,
     output_rx: Receiver<Vec<u8>>,
@@ -257,11 +268,21 @@ impl DecodeHost {
                 Box::new(move || {
                     let kin = engram.kin();
                     let per_token = engram.n_layout_layers() * engram.n_cols();
+                    let ranks = layer.ranks.len();
                     let mut rows = vec![0u16; batch * kin];
-                    let mut rolled = vec![0u16; batch * kin];
+                    // Each rank's copy of the rows, rolled left by rank * local_kin.
+                    let mut ranked = vec![vec![0u16; batch * kin]; ranks];
                     while let Ok(Some(step)) = rx.recv() {
                         let t0 = Instant::now();
-                        for b in 0..batch {
+                        // A block's tokens are several rows each: as many rows as tokens, in their order.
+                        let n = step.tokens.len();
+                        if rows.len() != n * kin {
+                            rows.resize(n * kin, 0);
+                            for r in ranked.iter_mut() {
+                                r.resize(n * kin, 0);
+                            }
+                        }
+                        for b in 0..n {
                             let hashes = &step.hashes[b * per_token..(b + 1) * per_token];
                             if let Err(e) =
                                 engram.token_rows(layer.table, step.tokens[b], hashes, &mut rows[b * kin..(b + 1) * kin])
@@ -269,20 +290,23 @@ impl DecodeHost {
                                 return shared.fail("Engram rows", e);
                             }
                         }
-                        for (rank, socket) in layer.ranks.iter().enumerate() {
+                        for (rank, dst_rows) in ranked.iter_mut().enumerate() {
                             let shift = (rank * layer.local_kin) % kin;
-                            let data = if shift == 0 {
-                                &rows
-                            } else {
-                                for b in 0..batch {
-                                    let (src, dst) = (&rows[b * kin..(b + 1) * kin], &mut rolled[b * kin..(b + 1) * kin]);
-                                    dst[..kin - shift].copy_from_slice(&src[shift..]);
-                                    dst[kin - shift..].copy_from_slice(&src[..shift]);
+                            for b in 0..n {
+                                let (src, dst) = (&rows[b * kin..(b + 1) * kin], &mut dst_rows[b * kin..(b + 1) * kin]);
+                                dst[..kin - shift].copy_from_slice(&src[shift..]);
+                                dst[kin - shift..].copy_from_slice(&src[..shift]);
+                            }
+                        }
+                        // ENGRAM_WRITE_CHUNK rows at a time to every rank in turn, each write at most a FIFO's pages and
+                        // waiting for space (as engram.py's write_rows): a verify block's rows can outnumber a socket's
+                        // pages, and a rank's step drains its FIFO only once every rank has its first rows.
+                        for start in (0..n).step_by(ENGRAM_WRITE_CHUNK) {
+                            let end = (start + ENGRAM_WRITE_CHUNK).min(n);
+                            for (socket, data) in layer.ranks.iter().zip(&ranked) {
+                                if let Err(e) = socket.write(as_bytes(&data[start * kin..end * kin])) {
+                                    return shared.fail("Engram socket write", e);
                                 }
-                                &rolled
-                            };
-                            if let Err(e) = socket.write(as_bytes(data)) {
-                                return shared.fail("Engram socket write", e);
                             }
                         }
                         shared.c.engram.add(t0);
@@ -307,9 +331,13 @@ impl DecodeHost {
                         let t0 = Instant::now();
                         page.fill(0);
                         let (pos, slot) = (step.pos, step.slot);
-                        let fields = packet_fields(pos, slot, w, win_rows, drafter_rows);
-                        for (dst, v) in page.iter_mut().zip(step.tokens.iter().chain(fields.iter())) {
-                            *dst = *v as i32;
+                        if let Some(raw) = &step.page {
+                            page[..raw.len()].copy_from_slice(raw);
+                        } else {
+                            let fields = packet_fields(pos, slot, w, win_rows, drafter_rows);
+                            for (dst, v) in page.iter_mut().zip(step.tokens.iter().chain(fields.iter())) {
+                                *dst = *v as i32;
+                            }
                         }
                         let bytes = unsafe { std::slice::from_raw_parts(page.as_ptr().cast::<u8>(), pkt_ints * 4) };
                         if let Err(e) = packet.write(bytes) {
@@ -361,6 +389,7 @@ impl DecodeHost {
         Ok(Self {
             shared,
             variants: config.variants,
+            pkt_ints,
             stage_tx,
             packet_tx,
             output_rx,
@@ -371,13 +400,37 @@ impl DecodeHost {
 
     /// Queue variant `variant`'s trace on every stage. Returns at once.
     pub fn dispatch(&self, variant: usize) -> Result<(), String> {
+        let tids = self.variants.get(variant).ok_or_else(|| format!("no trace variant {variant}"))?.clone();
+        self.dispatch_traces(&tids)
+    }
+
+    /// Queue trace `tids[k]` on stage `k` (one per stage), in posting order with every other step. Returns at once.
+    pub fn dispatch_traces(&self, tids: &[u32]) -> Result<(), String> {
         self.shared.check()?;
-        let tids = self.variants.get(variant).ok_or_else(|| format!("no trace variant {variant}"))?;
+        if tids.len() != self.stage_tx.len() {
+            return Err(format!("{} trace ids for {} stages", tids.len(), self.stage_tx.len()));
+        }
         self.shared.c.posted.fetch_add(1, Ordering::AcqRel);
         for (tx, &tid) in self.stage_tx.iter().zip(tids) {
             tx.send(Some(tid)).map_err(|_| "a stage dispatcher has stopped".to_string())?;
         }
         Ok(())
+    }
+
+    /// Queue a step's packet as built by the caller, `page` (at most a packet's words, the rest zeros), and the
+    /// Engram rows of its `tokens` (`batch * len`, batch-major: a block of `len` rows at `pos ..`) in slot `slot`.
+    pub fn write_block(&self, page: Vec<i32>, tokens: Vec<i64>, pos: i64, slot: i64) -> Result<(), String> {
+        self.shared.check()?;
+        if page.len() > self.pkt_ints {
+            return Err(format!("a {}-word packet is past the socket's {}-word page", page.len(), self.pkt_ints));
+        }
+        if tokens.is_empty() || tokens.len() % self.batch != 0 {
+            return Err(format!("{} tokens are not whole rows of batch {}", tokens.len(), self.batch));
+        }
+        self.shared.c.queued.fetch_add(1, Ordering::AcqRel);
+        self.packet_tx
+            .send(Some(Step { tokens, pos, slot, page: Some(page) }))
+            .map_err(|_| "the packet writer has stopped".to_string())
     }
 
     /// Queue one step's packet (and Engram rows): `tokens` (`batch` of them) at `pos` in session slot `slot`.
@@ -387,7 +440,9 @@ impl DecodeHost {
             return Err(format!("expected {} tokens, got {}", self.batch, tokens.len()));
         }
         self.shared.c.queued.fetch_add(1, Ordering::AcqRel);
-        self.packet_tx.send(Some(Step { tokens, pos, slot })).map_err(|_| "the packet writer has stopped".to_string())
+        self.packet_tx
+            .send(Some(Step { tokens, pos, slot, page: None }))
+            .map_err(|_| "the packet writer has stopped".to_string())
     }
 
     fn wait_until(&self, done: impl Fn(&Shared) -> bool) -> Result<(), String> {

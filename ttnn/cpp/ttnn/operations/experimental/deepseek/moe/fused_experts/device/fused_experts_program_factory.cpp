@@ -2268,12 +2268,15 @@ ProgramDescriptor build_program_descriptor(
         reducer_compute.config =
             ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true};
         // Several rows: the reducer's RISCV_1 (FE_TOPK_HELPER) takes the second half of the rows' top-k, handed
-        // over through three semaphores of the reducer core (ids the control core's, elsewhere).
+        // over through four semaphores of the reducer core. 11-13 are the control core's elsewhere; 14 is the route
+        // merge's expert-go, unused on the reducer. The slot semaphore is the address the reader will copy, so the
+        // helper writes that slot instead of recomputing it from the header.
         if (batch > 1u) {
             constexpr uint32_t sem_topk_go_id = 11;
             constexpr uint32_t sem_topk_addr_id = 12;
             constexpr uint32_t sem_topk_done_id = 13;
-            for (uint32_t id : {sem_topk_go_id, sem_topk_addr_id, sem_topk_done_id}) {
+            constexpr uint32_t sem_topk_slot_id = 14;
+            for (uint32_t id : {sem_topk_go_id, sem_topk_addr_id, sem_topk_done_id, sem_topk_slot_id}) {
                 desc.semaphores.push_back(SemaphoreDescriptor{
                     .id = id,
                     .core_type = CoreType::WORKER,
@@ -2289,6 +2292,7 @@ ProgramDescriptor build_program_descriptor(
                 k->defines.emplace_back("FE_TOPK_SEM_GO", std::to_string(sem_topk_go_id));
                 k->defines.emplace_back("FE_TOPK_SEM_ADDR", std::to_string(sem_topk_addr_id));
                 k->defines.emplace_back("FE_TOPK_SEM_DONE", std::to_string(sem_topk_done_id));
+                k->defines.emplace_back("FE_TOPK_SEM_SLOT", std::to_string(sem_topk_slot_id));
             }
             desc.kernels.push_back(std::move(helper));
         }

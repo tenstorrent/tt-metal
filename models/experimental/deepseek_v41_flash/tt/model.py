@@ -250,6 +250,11 @@ def _l1_report(device) -> str:
 ENGRAM_BEFORE_DISPATCH = os.environ.get("DEEPSEEK_V41_VERIFY_ENGRAM_EARLY", "1") not in ("0", "", "false", "False")
 
 
+# Once a model's traces are captured, leave a mixed persistent MoE's default request rows alone
+# (DEEPSEEK_V41_FREEZE_SERVER_ROWS=0 switches them per step again, as before several instances shared the server).
+_FREEZE_SERVER_ROWS = os.environ.get("DEEPSEEK_V41_FREEZE_SERVER_ROWS", "1") not in ("0", "", "false", "False")
+
+
 class DeepSeekV41Model(DeepSeekV4Model):
     """V4.1 decode stack on V4's traced pipeline.
 
@@ -286,14 +291,22 @@ class DeepSeekV41Model(DeepSeekV4Model):
     final norm and ``lm_head`` -- on one TP4 stage, the 1x4 submesh at row 4 right above it (unless ``submeshes``
     gives that stage), which is the server's only requester. Each layer's FFN step is one
     ``persistent_moe_request`` in the stage's trace (:class:`~.decode.decoder_layer.DeepSeekV41PersistentMoeDecoderLayer`).
-    The server takes requests from its requesters in strict turn, so the layers must all be on that one stage
-    (``num_stages=1``). One decode row per step: no ``verify_rows`` (so DSpark verifies its rounds as pipelined
-    single-row steps, its drafter on row 3), prefill model, image tokens or vision. :meth:`shutdown` stops the server's kernels, which must happen before the mesh closes.
+    The layers must all be on that one stage (``num_stages=1``). Steps are one decode row, or with ``verify_rows=4``
+    DSpark's 4-row verify blocks (:meth:`decode_verify_block`, the drafter on row 3); no prefill model, image tokens
+    or vision. :meth:`shutdown` stops the server's kernels, which must happen before the mesh closes.
 
     ``moe_server`` (implies ``persistent_moe``) shares an already launched server among several models instead: this
     model is its requester ``moe_requester``, on that requester's mesh unless ``submeshes`` gives it, and the server
-    must serve layers ``0 .. num_layers - 1``. Its requesters take strict turns, so every model on it has to step
-    together, and :meth:`shutdown` leaves it running: whoever launched it stops it once every model is done.
+    must serve layers ``0 .. num_layers - 1``. The server takes its requesters in any order (each model steps on its
+    own), and :meth:`shutdown` leaves it running: whoever launched it stops it once every model is done
+    (:func:`~.decode.persistent_moe.launch_instances_server` launches one for several instances).
+
+    ``drafter_on_stage`` puts the DSpark drafter (:meth:`prepare_spec_decode`) on the model's own stage instead of a
+    row of its own, so a model on one mesh row is a whole instance: the decode and verify steps write their taps into
+    the drafter's rings inside their own traces (no D2D link, no drafter-side receive traces), the drafter reads its
+    weights from DRAM (no prefetcher rings of its own beside the stage's), shares the stage's ``lm_head`` and sends its
+    block FFNs to ``moe_server`` as this model's own requester (its requests and the stage's never overlap: a draft
+    follows the verify whose output the host has read). It drafts greedily only (no on-row routed experts).
 
     Do not call :meth:`DeepSeekV4Model.__init__`. It builds V4 layers, reads ``compress_rates`` and
     ``mlp_layer_types``, and constructs ``hc_head``, none of which exist on this checkpoint.
@@ -328,8 +341,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
         persistent_moe: bool = False,
         moe_server: Optional[pmoe.PersistentMoE] = None,
         moe_requester: int = 0,
+        drafter_on_stage: bool = False,
     ):
         self.config = config
+        self.drafter_on_stage = drafter_on_stage
+        if drafter_on_stage and not (persistent_moe or moe_server is not None):
+            raise ValueError("drafter_on_stage sends the drafter's FFNs to the persistent MoE: needs persistent_moe")
         if moe_server is not None:
             persistent_moe = True
         self.persistent_moe = persistent_moe
@@ -564,7 +581,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         def build_stage(layer_ids: list[int], prefill_layer_ids: list[int]) -> None:
             for li in layer_ids:
                 current_device = self.layer_devices[li]
-                logger.info(f"Layer {li} is on device {self.layer_submesh_ids[li]}")
+                logger.debug(f"Layer {li} is on device {self.layer_submesh_ids[li]}")
                 layer_cache = cache.sub(f"layers.{li}")
                 prefetch_buffers = (
                     self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages)
@@ -1874,11 +1891,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if self._eager_decode:
             self._run_eager_step(variant)
             return
-        if self.dspark is not None and not held and "write_step" not in self._spec_tids:
+        # A drafter on its own row receives each step's row in a trace of its own; one on the stage needs none.
+        receives = self.dspark is not None and self.dspark.link is not None and not held
+        if receives and "write_step" not in self._spec_tids:
             raise RuntimeError("the decode step sends the drafter its row: call capture_spec_traces() first")
         if self._host is not None:
             self._host.dispatch(self._host_variants[variant])
-            if self.dspark is not None and not held:
+            if receives:
                 # The drafter's row is no stage's: its queue is this thread's, as for spec_release_writes.
                 with self._cq_lock:
                     ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
@@ -1886,7 +1905,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         with self._cq_lock:
             for sm in self.submeshes_io:
                 ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
-            if self.dspark is not None and not held:
+            if receives:
                 ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
 
     def _step_context(
@@ -3236,34 +3255,54 @@ class DeepSeekV41Model(DeepSeekV4Model):
             return
         if self._lm_head_traced is None:
             raise ValueError("the drafter copies the decode lm_head: pass lm_head to prepare_static_decode()")
-        # Under persistent_moe the stage is row 4 and the MoE rows 5-7, so the drafter takes the row above the stage.
-        drafter_row = pmoe.REQUESTER_ROW - 1 if self.moe_server is not None else self.num_submeshes
-        if drafter_row >= self.mesh_devices // self.tp_size:
-            raise ValueError(
-                f"the drafter runs on the row after the pipeline's {self.num_submeshes}, but the mesh has "
-                f"{self.mesh_devices // self.tp_size}: build with fewer num_stages"
-            )
         out_sm = self.submeshes_io[self._output_sm_index]
-        server_mesh = getattr(self, "_drafter_mesh", None)
-        device = (
-            server_mesh
-            if server_mesh is not None
-            else self.device.create_submesh(ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(drafter_row, 0))
-        )
-        link = self._create_socket_pair(out_sm["device"], device)
-        logger.info(f"DSpark drafter on idle row {drafter_row}, its stash on output stage {out_sm['index']}")
-        lm_head = DeepSeekV41LMHead(
-            dequantized(self.loader, "lm_head.weight", translate=True),
-            device,
-            self.cache.file("lm_head"),
-            dtype=self._lm_head_traced.weight.dtype,
-        )
         # The block verify reads verify_rows - 1 proposals: the greedy draft computes only those.
         greedy_drafts = self.verify_rows - 1 if self._block_verify and DSPARK_BLOCK else None
         drafter_kwargs = {"use_prefetcher": self.use_prefetcher, "greedy_drafts": greedy_drafts, **drafter_kwargs}
-        if server_mesh is not None:
-            # The greedy block draft's FFNs go to the persistent server as its on-demand requester 1.
-            drafter_kwargs.update(moe_server=self.moe_server, moe_requester=1)
+        if self.drafter_on_stage:
+            if device_accept:
+                raise NotImplementedError("drafter_on_stage accepts on the host (the block verify's greedy accept)")
+            # On the stage itself (see the class docstring): no link, the stage's lm_head, no rings of its own, and
+            # its block FFNs on the persistent server as this model's requester.
+            if len(self.submeshes_io) != 1 or self.moe_server is None:
+                raise NotImplementedError("drafter_on_stage runs on the persistent layout's one stage")
+            if not (self._block_verify and DSPARK_BLOCK and DSPARK_SERVER_MOE):
+                raise NotImplementedError(
+                    "drafter_on_stage drafts 4-row blocks on the persistent server: verify_rows=4, DSpark block mode "
+                    "and its server MoE on"
+                )
+            device = out_sm["device"]
+            link = None
+            lm_head = self._lm_head_traced
+            drafter_kwargs.update(
+                use_prefetcher=False, moe_server=self.moe_server, moe_requester=self.moe_requester, server_only=True
+            )
+            logger.info(f"DSpark drafter on the stage's own row (requester {self.moe_requester} of the persistent MoE)")
+        else:
+            # Under persistent_moe the stage is row 4 and the MoE rows 5-7, so the drafter takes the row above it.
+            drafter_row = pmoe.REQUESTER_ROW - 1 if self.moe_server is not None else self.num_submeshes
+            if drafter_row >= self.mesh_devices // self.tp_size:
+                raise ValueError(
+                    f"the drafter runs on the row after the pipeline's {self.num_submeshes}, but the mesh has "
+                    f"{self.mesh_devices // self.tp_size}: build with fewer num_stages"
+                )
+            server_mesh = getattr(self, "_drafter_mesh", None)
+            device = (
+                server_mesh
+                if server_mesh is not None
+                else self.device.create_submesh(ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(drafter_row, 0))
+            )
+            link = self._create_socket_pair(out_sm["device"], device)
+            logger.info(f"DSpark drafter on idle row {drafter_row}, its stash on output stage {out_sm['index']}")
+            lm_head = DeepSeekV41LMHead(
+                dequantized(self.loader, "lm_head.weight", translate=True),
+                device,
+                self.cache.file("lm_head"),
+                dtype=self._lm_head_traced.weight.dtype,
+            )
+            if server_mesh is not None:
+                # The greedy block draft's FFNs go to the persistent server as its on-demand requester 1.
+                drafter_kwargs.update(moe_server=self.moe_server, moe_requester=1)
         self.dspark = DeepSeekV41DSpark(
             cfg,
             self.loader,
@@ -3272,7 +3311,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             rope_main,
             cache=self.cache,
             tp_size=self.tp_size,
-            stash_device=out_sm["device"],
+            stash_device=None if link is None else out_sm["device"],
             link=link,
             sessions=self._max_sessions,
             **drafter_kwargs,
@@ -3288,6 +3327,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
             layout=ttnn.TILE_LAYOUT,
             device=out_sm["device"],
         )
+        if link is None:
+            # The steps write their taps into the drafter's rings themselves (_write_drafter_step and
+            # _write_drafter_block): nothing lands.
+            return
         # Where a decode step's taps, packet and logits land on the drafter (_spec_write_step).
         vocab = cfg.vocab_size
         if vocab % _LOGIT_PAGE:
@@ -3359,10 +3402,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if "fix_slot" in sm:
                 self._spec_fixup(sm, masked=True)
         if self.dspark is not None:
-            self.dspark.send_main()
+            if self.dspark.link is not None:
+                self.dspark.send_main()
             self.dspark.write_main()
             self.dspark.refresh_uniforms(1, accept=self.spec_device_accept)
-            self.dspark.draft()
+            if not self.dspark.server_only:
+                self.dspark.draft()
             self._use_server_rows_for_draft(quiesce=True)
             self.dspark.draft(greedy=True)
             if self.spec_device_accept:
@@ -3388,23 +3433,25 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
                 sm["fix_sel_tid"] = tid
         if self.dspark is not None:
-            stash_device = self.dspark.stash_device
-            tid = ttnn.begin_trace_capture(stash_device, cq_id=0)
-            with _trace_capture_guard():
-                self.dspark.send_main()
-            ttnn.end_trace_capture(stash_device, tid, cq_id=0)
-            self._spec_tids["send_main"] = tid
+            if self.dspark.link is not None:
+                stash_device = self.dspark.stash_device
+                tid = ttnn.begin_trace_capture(stash_device, cq_id=0)
+                with _trace_capture_guard():
+                    self.dspark.send_main()
+                ttnn.end_trace_capture(stash_device, tid, cq_id=0)
+                self._spec_tids["send_main"] = tid
             device = self.dspark.device
             tid = ttnn.begin_trace_capture(device, cq_id=0)
             with _trace_capture_guard():
                 self.dspark.write_main()
             ttnn.end_trace_capture(device, tid, cq_id=0)
             self._spec_tids["write_main"] = tid
-            tid = ttnn.begin_trace_capture(device, cq_id=0)
-            with _trace_capture_guard():
-                self.dspark.draft()
-            ttnn.end_trace_capture(device, tid, cq_id=0)
-            self._spec_tids["draft"] = tid
+            if not self.dspark.server_only:
+                tid = ttnn.begin_trace_capture(device, cq_id=0)
+                with _trace_capture_guard():
+                    self.dspark.draft()
+                ttnn.end_trace_capture(device, tid, cq_id=0)
+                self._spec_tids["draft"] = tid
             if self.dspark.block_mode:
                 # Its requests to the persistent server are 4-row ones (the server's sockets differ per mode).
                 self._use_server_rows_for_draft(quiesce=True)
@@ -3427,12 +3474,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     self.dspark.accept_draft(sampled)
                 ttnn.end_trace_capture(device, tid, cq_id=0)
                 self._spec_tids["accept_sampled" if sampled else "accept_greedy"] = tid
-            tid = ttnn.begin_trace_capture(device, cq_id=0)
-            with _trace_capture_guard():
-                self._spec_write_step()
-            ttnn.end_trace_capture(device, tid, cq_id=0)
-            self._spec_tids["write_step"] = tid
-            if verify_variants or self._block_verify:
+            # On the stage (no link) the decode and verify steps write the drafter's rings themselves.
+            if self.dspark.link is not None:
+                tid = ttnn.begin_trace_capture(device, cq_id=0)
+                with _trace_capture_guard():
+                    self._spec_write_step()
+                ttnn.end_trace_capture(device, tid, cq_id=0)
+                self._spec_tids["write_step"] = tid
+            if self.dspark.link is not None and (verify_variants or self._block_verify):
                 tid = ttnn.begin_trace_capture(device, cq_id=0)
                 with _trace_capture_guard():
                     self._spec_write_verified()
@@ -3441,6 +3490,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._capture_verify_traces(verify_variants)
         if self._block_verify:
             self._capture_block_verify()
+        self._spec_captured = True
 
     def spec_fixup(self, rejected) -> None:
         """Queue every stage's fixup ahead of a verify round: restore the ring slots of the resident session's
@@ -3480,7 +3530,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         stash, which every session's steps write."""
         self._wait_replays_dispatched()
         self.dspark.set_main_rows(positions, self._resident_slot())
-        ttnn.execute_trace(self.dspark.stash_device, self._spec_tids["send_main"], cq_id=0, blocking=False)
+        if self.dspark.link is not None:
+            ttnn.execute_trace(self.dspark.stash_device, self._spec_tids["send_main"], cq_id=0, blocking=False)
         ttnn.execute_trace(self.dspark.device, self._spec_tids["write_main"], cq_id=0, blocking=False)
 
     def spec_verify_async(self, tokens, start: int) -> None:
@@ -3537,7 +3588,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._spec_reader.start()
 
     def spec_release_writes(self, steps: int = 1) -> None:
-        """Queue the drafter's receive of the next ``steps`` held rows (:meth:`spec_verify_async`)."""
+        """Queue the drafter's receive of the next ``steps`` held rows (:meth:`spec_verify_async`). A drafter on the
+        stage (``drafter_on_stage``) receives nothing: the steps wrote its rings."""
+        if self.dspark.link is None:
+            return
         with self._cq_lock:
             for _ in range(steps):
                 ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
@@ -3603,12 +3657,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
         With a DSpark drafter (capture its traces first) the packets carry its ring row, and this thread keeps the
         drafter's queue: each step's receive of its row (:meth:`_execute_traces`, or :meth:`spec_release_writes`
         for a held one) and the draft. A round's stage work beyond the steps (:meth:`spec_fixup`,
-        :meth:`spec_write_main`) is queued here too, once the stage threads have issued every posted replay."""
+        :meth:`spec_write_main`) is queued here too, once the stage threads have issued every posted replay.
+
+        The persistent stage's verify blocks (:meth:`decode_verify_block`) run on it too: the runtime's stage thread
+        replays the block's trace in order with the decode steps, its packet thread writes the block's packet and
+        hashes its tokens, and its Engram threads write every row's Engram rows; the block's output is a decode
+        step's page."""
         if self._host is not None:
             return
         if self._eager_decode or not self._traced_captured:
             raise RuntimeError("the host runtime replays the decode traces: capture them first")
-        if self.verify_rows > 1:
+        if self.verify_rows > 1 and not self._block_verify:
             raise NotImplementedError("the parallel verify reads its block's logits off the socket: use verify_rows=1")
         if not isinstance(self._engram_lookup, (host_rs.RustEngramLookup, type(None))):
             raise RuntimeError("the host runtime needs the Rust Engram lookup, which DEEPSEEK_V41_RUST_HOST turned off")
@@ -3716,6 +3775,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
         the rest of the step once its queue fills. A capture records only the sends.
         """
         rows = ttnn.concat([tapped[target] for target in taps], dim=-1)
+        if self.dspark.link is None:
+            # The drafter is on this stage (drafter_on_stage): the step writes its rings itself.
+            self._write_drafter_step(rows, pkt)
+            rows.deallocate(True)
+            for part in tapped.values():
+                part.deallocate(True)
+            return
         sender = self.dspark.link[0]
         ttnn.experimental.send_direct_async(rows, sender)
         ttnn.experimental.send_direct_async(pkt, sender)
@@ -3732,6 +3798,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         Reshaped before the untilize, as in :meth:`_send_output`: untilizing one vocab-wide row needs circular
         buffers past the L1 the stage's prefetcher rings leave."""
+        if self.dspark.link is None:
+            raise NotImplementedError("drafter_on_stage has no device accept")
         pages = ttnn.to_layout(ttnn.reshape(logits, [1, 1, -1, _LOGIT_PAGE]), ttnn.ROW_MAJOR_LAYOUT)
         ttnn.experimental.send_direct_async(pages, self.dspark.link[0])
         pages.deallocate(True)
@@ -3744,12 +3812,19 @@ class DeepSeekV41Model(DeepSeekV4Model):
         receiver = self.dspark.link[1]
         ttnn.experimental.recv_direct_async(rows, receiver)
         ttnn.experimental.recv_direct_async(pkt, receiver)
-        positions = ttnn.typecast(ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1, 1]), ttnn.uint32)
-        ring_row = ttnn.slice(pkt, [0, 0, 0, 6], [1, 1, 1, 7])
-        self.dspark.write_rows(rows, positions, ttnn.reshape(ring_row, [1]))
+        ring_row = self._write_drafter_step(rows, pkt)
         if self.spec_device_accept:
             ttnn.experimental.recv_direct_async(logits, receiver)
             self.dspark.write_logits(ttnn.reshape(logits, [1, 1, 1, self.config.vocab_size]), ring_row)
+
+    def _write_drafter_step(self, rows: ttnn.Tensor, pkt: ttnn.Tensor) -> ttnn.Tensor:
+        """Write one decode step's target-layer means ``rows`` ``[1, 1, 1, targets * D]`` into the drafter's rings at
+        its packet's position and drafter ring row (:meth:`_build_packet`), on the drafter's device; returns the
+        ring row ``[1, 1, 1, 1]``."""
+        positions = ttnn.typecast(ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1, 1]), ttnn.uint32)
+        ring_row = ttnn.slice(pkt, [0, 0, 0, 6], [1, 1, 1, 7])
+        self.dspark.write_rows(rows, positions, ttnn.reshape(ring_row, [1]))
+        return ring_row
 
     def _spec_write_verified(self) -> None:
         """On the drafter: receive what the output stage's verify step sends after its last tap (the block's
@@ -3759,6 +3834,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
         receiver = self.dspark.link[1]
         ttnn.experimental.recv_direct_async(rows, receiver)
         ttnn.experimental.recv_direct_async(pkt, receiver)
+        self._write_drafter_block(rows, pkt)
+
+    def _write_drafter_block(self, rows: ttnn.Tensor, pkt: ttnn.Tensor) -> None:
+        """Write a verify step's block of target-layer means ``rows`` ``[1, 1, T, targets * D]`` into the drafter's
+        rings at the verify packet's positions and drafter ring rows, rejected rows included, on the drafter's
+        device."""
         t = self.verify_rows
         (pos_at, _), (slot_at, _) = self._verify_fields["pos"], self._verify_fields["dspark_slot"]
         positions = ttnn.typecast(
@@ -3785,10 +3866,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
         server = self.moe_server
         if server is None or server.rows == rows:
             return
+        if server.mixed and getattr(self, "_spec_captured", False) and _FREEZE_SERVER_ROWS:
+            # One launch serves both and every request is in a captured trace: the server's default request rows only
+            # matter to compiles and captures, so serving steps leave them be (several instances share them).
+            return
         self._wait_replays_dispatched()
         t0 = time.perf_counter()
         server.use_rows(rows)
-        logger.info(f"persistent MoE now serves {rows}-row requests ({1000 * (time.perf_counter() - t0):.1f} ms)")
+        logger.debug(f"persistent MoE now serves {rows}-row requests ({1000 * (time.perf_counter() - t0):.1f} ms)")
 
     def _prepare_block_verify(self) -> None:
         """What the block verify step reads besides the layers' own buffers: the staging tensor of the block's new kv
@@ -3987,8 +4072,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
                         self._block_debug_tap_rows.append(
                             ttnn.to_torch(ttnn.get_device_tensors(rows)[0]).float().reshape(t, -1)
                         )
-                    ttnn.experimental.send_direct_async(rows, self.dspark.link[0])
-                    ttnn.experimental.send_direct_async(pkt, self.dspark.link[0])
+                    if self.dspark.link is None:
+                        # The drafter is on this stage (drafter_on_stage): the step writes its rings itself.
+                        self._write_drafter_block(rows, pkt)
+                    else:
+                        ttnn.experimental.send_direct_async(rows, self.dspark.link[0])
+                        ttnn.experimental.send_direct_async(pkt, self.dspark.link[0])
                     rows.deallocate(True)
                     for part in tapped.values():
                         part.deallocate(True)
@@ -4040,7 +4129,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             outs = []
 
             def dispatch() -> None:
-                if self.dspark is not None:
+                if self.dspark is not None and self.dspark.link is not None:
                     self._spec_write_verified()
                 outs.append(self._block_verify_stage(sm, pos % 2 == 1))
 
@@ -4117,7 +4206,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 # The drafter's receive goes first: the stage's tap send stalls its queue until the receiver runs, and
                 # an op later in the stage may block the host on a first call (a CCL's setup), which would deadlock
                 # with a receive dispatched after the stage.
-                if self.dspark is not None:
+                if self.dspark is not None and self.dspark.link is not None:
                     self._spec_write_verified()
                 outs.append(self._block_verify_stage(sm, odd))
 
@@ -4162,6 +4251,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
             self._session_pos[sid] = pos + t
             self._spec_dirty.add(self._resident_slot())
             slot = self._slot_of.get(sid, 0)
+            tid = sm["block_tids"][pos % 2 == 1]
+            if self._host is not None:
+                # On the host runtime: its threads replay the block, write its packet and hash its tokens (the Engram
+                # history is theirs) and write every row's Engram rows.
+                self._host.dispatch_traces([int(tid)])
+                if self.dspark is not None and self.dspark.link is not None:
+                    # A drafter on its own row is no stage: its receive stays this thread's queue.
+                    ttnn.execute_trace(self.dspark.device, self._spec_tids["write_verified"], cq_id=0, blocking=False)
+                packet = self._block_verify_packet(ids, pos)
+                self._host.write_block(packet.reshape(-1).tolist(), ids, pos, slot)
+                out = self._read_socket_output().reshape(-1)[:t]
+                return [int(x) for x in out]
 
             def engram_rows():
                 """Each Engram layer's rows, looked up on the feed thread after the dispatch (layer order)."""
@@ -4176,13 +4277,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if ENGRAM_BEFORE_DISPATCH:
                 # The step reaches layer 1's Engram rows ~0.2 ms in; looked up after the dispatch they arrive late.
                 engram_rows = dict(engram_rows())
-            tid = sm["block_tids"][pos % 2 == 1]
             if getattr(self, "_verify_timing", None) is not None:
                 self._verify_timing.append({"pre_lock": t_lock - t_start, "engram": time.perf_counter() - t_lock})
 
             def replay() -> None:
                 ttnn.execute_trace(sm["device"], tid, cq_id=0, blocking=False)
-                if self.dspark is not None:
+                if self.dspark is not None and self.dspark.link is not None:
                     ttnn.execute_trace(self.dspark.device, self._spec_tids["write_verified"], cq_id=0, blocking=False)
 
             return self._run_block_verify(replay, ids, pos, engram_rows)
@@ -4221,6 +4321,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         device with ``seed`` first (``None`` keeps the last draw, which a greedy draft ignores)."""
         self._wait_replays_dispatched()
         d = self.dspark
+        if d.server_only and d.temperature != 0:
+            raise NotImplementedError("a drafter without routed experts of its own drafts greedily only")
         if d.temperature == 0:
             self._use_server_rows_for_draft()
         d.set_block(token, frontier, self._resident_slot())

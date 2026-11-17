@@ -131,11 +131,9 @@ void kernel_main() {
     const uint32_t staging_addr = get_write_ptr(cb_scratch_id);
 
     // The candidate exchange: one header per route, built once (route, sem_router increment, payload size), so a
-    // forward is one fused write + increment packet per route, every route's in flight at once. The merge core's
-    // router issues the increment after the write, in order (no flush: with one per chip arriving at each merge core,
-    // flushes held its router for each write's ack and serialized them), so the slot has landed when sem_router
-    // counts it. Only the slot
-    // address (the iteration's half) changes from one forward to the next.
+    // forward is one fused write + increment packet per route. Flush at the destination router: local writes and
+    // atomics leave the router on separate command buffers, and route_merge's tagged == counted loop requires the
+    // slot write to have landed when sem_router counts it.
     namespace fabric_api = tt::tt_fabric::mesh::experimental;
     using tt::tt_fabric::common::experimental::UnicastFusedAtomicIncUpdateMask;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* exchange_header[kMaxExchangeRoutes];
@@ -151,7 +149,7 @@ void kernel_main() {
                 safe_get_noc_addr(merge_x, merge_y, cand_addr, 0),
                 safe_get_noc_addr(merge_x, merge_y, get_semaphore(sem_router_id), 0),
                 1,
-                false},
+                true /*flush*/},
             cand_slot_bytes);
     }
 
@@ -162,6 +160,7 @@ void kernel_main() {
         for (uint32_t k = 0; k < num_requesters; ++k) {
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_slot(k)) = 0u;
         }
+        asm volatile("fence" ::: "memory");
     }
     // Forwards every candidate slot the reducer has left here and this kernel has not yet forwarded.
     uint32_t num_forwarded = 0;
@@ -193,17 +192,24 @@ void kernel_main() {
                 // The headers are rewritten in place, so the previous forward's (and the partials') must have left.
                 noc_async_writes_flushed();
                 for (uint32_t r = 0; r < num_exchange_routes; ++r) {
-                    fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
+                    tt::tt_fabric::common::experimental::populate_unicast_fused_atomic_inc_fields<
                         UnicastFusedAtomicIncUpdateMask::WriteDstAddr>(
-                        &fabric_connection.get(exchange_connection[r]).sender,
                         exchange_header[r],
-                        slot,
+                        cand_slot_bytes,
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            safe_get_noc_addr(merge_x, merge_y, slot, 0), 0, 0, false});
+                            safe_get_noc_addr(merge_x, merge_y, slot, 0), 0, 0, true /*flush*/});
+                    // Order header L1 stores and the EDM slot's L1 writes before the EDM stream-register credit on
+                    // write_at_cmd_buf.
+                    asm volatile("fence" ::: "memory");
+                    auto* sender = &fabric_connection.get(exchange_connection[r]).sender;
+                    sender->wait_for_empty_write_slot();
+                    sender->send_payload_without_header_non_blocking_from_address(slot, cand_slot_bytes);
+                    sender->send_payload_blocking_from_address(
+                        reinterpret_cast<uint32_t>(exchange_header[r]), sizeof(PACKET_HEADER_TYPE));
                 }
-                // The slot's bytes have left; untagged here, it waits for the requester's next row.
-                noc_async_writes_flushed();
+                // The slot's bytes have landed in the EDMs; untagged here, it waits for the requester's next row.
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot) = 0u;
+                asm volatile("fence" ::: "memory");
                 ++num_forwarded;
                 noc_semaphore_inc(get_noc_addr(reducer_x, reducer_y, forwarded_addr), 1);
                 noc_async_atomic_barrier();

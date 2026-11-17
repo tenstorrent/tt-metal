@@ -986,9 +986,6 @@ class LinearDecode(DeepSeekV4Module):
         A no-op for a layer whose weight the op cannot pair with this layout, so a caller
         can build it unconditionally and every projection still gets an A it accepts.
         """
-        print(
-            f"Replicating input to LinearDecode, with shape {x.shape}, memory_config {x.memory_config()}, layout {x.layout}"
-        )
         if not self._can_matmul_decode_rm_hs():
             return x
         grid = self.b_core_grid()

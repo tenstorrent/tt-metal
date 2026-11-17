@@ -50,18 +50,26 @@ What V4.1 imposes on the serving side:
   A user decoding alone keeps ``--decode-ahead`` (32) steps posted, as the decode demo does; a reply that stops
   early feeds the steps still posted a rerun of its last one (:meth:`V41ChatEngine.repeat_traced`).
 * Persistent MoE (``--persistent-moe``, on by default; ``--no-persistent-moe`` or ``DEEPSEEK_V41_PERSISTENT_MOE=0``
-  serves the stage pipeline described below instead). Decode runs on one ``1 x 4`` stage (mesh row 4) holding every
-  layer's attention, Engram, hyper-connections and norms; every layer's MoE runs on the persistent TP12
-  ``fused_experts`` server on rows 5-7 (``tt/decode/persistent_moe.py``), and the DSpark drafter on row 3, its MoE
-  served by the same server. With ``--dspark`` a reply decodes in verify rounds of 3 drafts + 1 checked in ONE traced
-  4-row step (``DeepSeekV41Model.decode_verify_block``; ~216 tok/s/user on GSM8K, ~145 on chat text against ~149 a
-  step at a time, ``tests/decode/test_dspark_spec.py``). What that path takes: one session (``--num-users 1``, one
-  running turn), greedy decoding with the sampler on device (``--temperature 0``; a request's ``temperature`` and
-  ``top_p`` are ignored), no traced prefill model (prompts are replayed through decode, ``--no-prefill``), no
-  ``--vision`` and no Rust host runtime. The 4-row verify attends the compressed groups densely, so it covers
+  serves the stage pipeline described below instead). Every layer's MoE runs on the persistent TP12 ``fused_experts``
+  server on rows 5-7 (``tt/decode/persistent_moe.py``), which ``--instances`` (default 5) independent model instances
+  share: instance j is a whole ``1 x 4`` model on mesh row 4 - j -- every layer's attention, Engram, hyper-connections
+  and norms, the ``lm_head`` and its DSpark drafter (``DeepSeekV41Model(drafter_on_stage=True)``) -- and the server's
+  requester j, which it serves in whatever order the instances send. Each instance has its own session, scheduler and
+  Rust host runtime; a request goes to the instance holding its conversation, else to the idlest one
+  (:class:`_Instances`). With ``--dspark`` each round of a reply is either a 4-row verify step (3 drafts + 1 checked in
+  ONE traced step, ``DeepSeekV41Model.decode_verify_block``; the draft's FFNs on the server as 4-row requests too) or a
+  one-row step: ``--dspark-drafts`` (entries 3 or 0) picks by how many users decode on all the instances, default
+  :data:`_INSTANCE_DSPARK_DRAFTS` (4-row rounds while at most three decode), since every 4-row request loads the shared
+  MoE ~2.6x a one-row one. The server is launched once for 4-row blocks and runs one-row requests natively on the same
+  launch, so the switch costs nothing. One instance alone measured ~216 tok/s/user on GSM8K and ~145 on chat text
+  against ~149 a step at a time (``tests/decode/test_dspark_spec.py``). What that path takes: one session per
+  instance (``--num-users 1``), greedy decoding with the sampler on device (``--temperature 0``; a request's
+  ``temperature`` and ``top_p`` are ignored), no traced prefill model (prompts are replayed through decode,
+  ``--no-prefill``) and no ``--vision``. The 4-row verify attends the compressed groups densely, so it covers
   positions below ~508; past them the reply decodes a step at a time. ``--max-context`` defaults to
-  :data:`_PERSISTENT_MAX_CONTEXT` here (one-level select; longer contexts are untested on this layout). The rest
-  of this docstring describes the stage pipeline.
+  :data:`_PERSISTENT_MAX_CONTEXT` here (one-level select; longer contexts are untested on this layout).
+  ``--instances 1`` serves the single stage on row 4 with the drafter on row 3. The rest of this docstring describes
+  the stage pipeline.
 * Speculative decode (``--dspark``, on by default; ``--no-dspark`` or ``DEEPSEEK_V41_DSPARK=0`` turns it off). The DSpark drafter takes the
   mesh's last row, so decode runs on the first seven, and a reply decodes in verify rounds
   (:class:`_SpecScheduler`, :class:`~..tt.spec.DSparkSpeculator`): ~81 tok/s at three drafts against ~56 a step at a
@@ -206,6 +214,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     stage_engram_tables,
 )
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
+from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v41_flash.tt.vision import (
     DELIMITER_ROWS,
@@ -276,6 +285,14 @@ _PERSISTENT_L1_SMALL_SIZE = 16384
 _PERSISTENT_MAX_CONTEXT = 16384
 # Default --num-users with --persistent-moe and no --dspark (one stage holds every user's pools).
 _NUM_USERS_PERSISTENT = 8
+# Default --instances with --persistent-moe: one whole TP4 model (and its drafter) on each of mesh rows 4, 3, 2, 1, 0,
+# all sharing the TP12 MoE on rows 5-7 (pmoe.INSTANCE_ROWS).
+_INSTANCES = 5
+# Default --dspark-drafts with several instances, by the users decoding on all of them: 4-row verify rounds (3 drafts)
+# while at most three decode, one-row steps beyond. A 4-row request costs the shared MoE ~2.6x a one-row one (122.7 vs
+# 47.3 us a layer with three requesters) for ~2.1-3.2 tokens a round, so with every instance busy the MoE does about as
+# much either way and one-row steps leave it room. Not tuned on the served load yet.
+_INSTANCE_DSPARK_DRAFTS = (3, 3, 3, 0)
 # Fewer seated users raise the drafts only once they have stayed fewer this long, so a reply ending just before the
 # next one is seated does not switch speculation on and off.
 _DSPARK_RAISE_SECONDS = 2.0
@@ -1704,18 +1721,27 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
             return []
         return super()._plan(turn)
 
+    def decoding_users(self) -> int:
+        """This scheduler's seated decoding users (read from other instances' threads too, unlocked, as the live
+        console reads it)."""
+        return sum(
+            1
+            for turn in list(self._active)
+            if turn.phase == _Turn.DECODE and not turn.cancelled.is_set() and self._holds_decode_seat(turn)
+        )
+
     def _pick_drafts(self) -> None:
         """Set this scheduler round's drafts per verify round from ``--dspark-drafts`` by the seated decoding users:
         fewer as soon as more users decode, more only once fewer have for :data:`_DSPARK_RAISE_SECONDS` (at once
-        with none decoding, when there is nothing to switch)."""
+        with none decoding, when there is nothing to switch). With several instances on one persistent MoE the
+        count is every instance's (they share the MoE, which a 4-row round loads more than a one-row step), and an
+        entry is 0 (one-row steps) or 3 (4-row verify rounds)."""
         schedule = self.engine.dspark_drafts
-        users = sum(
-            1
-            for turn in self._active
-            if turn.phase == _Turn.DECODE and not turn.cancelled.is_set() and self._holds_decode_seat(turn)
-        )
+        mine = self.decoding_users()
+        peers = [p.scheduler for p in getattr(self.server, "peers", ()) if p is not self.server]
+        users = mine + sum(p.decoding_users() for p in peers if isinstance(p, _SpecScheduler))
         target = schedule[min(max(users, 1), len(schedule)) - 1]
-        if target > self._drafts and users:
+        if target > self._drafts and mine:
             now = time.monotonic()
             if self._raise_since is None:
                 self._raise_since = now
@@ -1904,8 +1930,13 @@ class V41GenerationServer(GenerationServer):
     or inline base64 parts, at most :data:`_MAX_IMAGES` per request, each expanded into its span of image rows when
     rendered."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, monitor_feed: bool = True, files: "_FileStore | None" = None, cpus=None, **kwargs):
+        """``monitor_feed`` publishes this server's state for the web monitor (one instance's when there are several);
+        ``files`` shares another server's upload store; ``cpus`` pins the host runtime's threads (default
+        :func:`_host_cpus`)."""
         super().__init__(*args, **kwargs)
+        # Every instance's server, this one included (set by _Instances): the DSpark schedule counts their users.
+        self.peers = [self]
         pool = self.pool
         self.pool = _V41SlotPool(self.engine, pool.host_users, pool.host_bytes, pool.max_running, pool.idle_timeout)
         scheduler = _SpecScheduler if self.engine.dspark else _V41Scheduler
@@ -1919,14 +1950,18 @@ class V41GenerationServer(GenerationServer):
             # After every capture: from here the decode step's replays, packets, Engram rows and outputs run on the
             # Rust host runtime's threads, which keep their counters where the web monitor reads them.
             prefix = monitor.default_prefix()
-            self.engine.model.start_host_runtime(_host_cpus(), counters_path=monitor.counters_path(prefix))
-            self.monitor_feed = monitor.MonitorFeed(
-                self.monitor_snapshot,
-                monitor.snapshot_path(prefix),
-                period=float(os.environ.get("DEEPSEEK_V41_MONITOR_PERIOD", "1.0")),
+            self.engine.model.start_host_runtime(
+                _host_cpus() if cpus is None else cpus,
+                counters_path=monitor.counters_path(prefix) if monitor_feed else None,
             )
+            if monitor_feed:
+                self.monitor_feed = monitor.MonitorFeed(
+                    self.monitor_snapshot,
+                    monitor.snapshot_path(prefix),
+                    period=float(os.environ.get("DEEPSEEK_V41_MONITOR_PERIOD", "1.0")),
+                )
         cache = self.engine.weight_cache
-        self.files = _FileStore(os.path.join(cache.path, "files") if cache else None)
+        self.files = files if files is not None else _FileStore(os.path.join(cache.path, "files") if cache else None)
 
     def _await_seat(self, turn, lease, client_gone) -> bool:
         """Admit the turn now. ``--max-running`` limits decode, not prefill: the scheduler prefills every pending
@@ -2141,6 +2176,228 @@ class V41GenerationServer(GenerationServer):
         return out + ids[prev:]
 
 
+class _PoolsView:
+    """The handler's view of every instance's slot pool at once (``/health``)."""
+
+    def __init__(self, servers: list):
+        self._servers = servers
+
+    def counts(self) -> dict:
+        total: dict = {}
+        for server in self._servers:
+            for key, value in server.pool.counts().items():
+                total[key] = total.get(key, 0) + value
+        return total
+
+    def host_usage(self) -> tuple[int, int]:
+        usages = [server.pool.host_usage() for server in self._servers]
+        return sum(u[0] for u in usages), sum(u[1] for u in usages)
+
+    def rows(self) -> list[dict]:
+        return [{**row, "instance": j} for j, server in enumerate(self._servers) for row in server.pool.rows()]
+
+
+class _TurnsView:
+    """The handler's view of every instance's scheduler at once (``/health``'s ``active_turns``)."""
+
+    def __init__(self, servers: list):
+        self._servers = servers
+
+    @property
+    def active_turns(self) -> int:
+        return sum(server.scheduler.active_turns for server in self._servers)
+
+
+class _Instances:
+    """Several :class:`V41GenerationServer` s -- one per model instance on the shared persistent MoE
+    (:func:`_serve_instances`) -- behind the one HTTP server, as the handler's ``api``.
+
+    A request goes to the instance holding its conversation (a slot ``user_key`` owns, or whose stored messages the
+    request continues), else to the idlest instance (an empty slot, then a parked one, then the fewest running and
+    queued turns). An instance that turns it away with a 429 before replying passes it to the next. Each instance
+    keeps its own sessions, scheduler and Rust host runtime; the DSpark schedule counts every instance's decoding users
+    (``peers``)."""
+
+    def __init__(self, servers: list):
+        self.servers = list(servers)
+        first = self.servers[0]
+        for server in self.servers:
+            server.peers = self.servers
+        self.model_id = first.model_id
+        self.max_body_bytes = first.max_body_bytes
+        self._created = first._created
+        self.files = first.files
+        self.pool = _PoolsView(self.servers)
+        self.engine = SimpleNamespace(
+            users=[user for server in self.servers for user in server.engine.users],
+            images=first.engine.images,
+            max_seq=first.engine.max_seq,
+        )
+        self.scheduler = _TurnsView(self.servers)
+        self._lock = threading.Lock()
+
+    def __getattr__(self, name):
+        # Request parsing, uploads and the like are the same on every instance: the first one's.
+        return getattr(self.servers[0], name)
+
+    def start(self) -> None:
+        for server in self.servers:
+            server.start()
+
+    def stop(self) -> None:
+        for server in self.servers:
+            server.stop()
+
+    def _order(self, user_key: str, messages: list[dict]) -> list:
+        def rank(j: int):
+            server = self.servers[j]
+            pool = server.pool
+            holds = bool(pool.slots_of(user_key)) or any(
+                user.messages and _continues(messages, user.messages) for user in server.engine.users
+            )
+            counts = pool.counts()
+            return (
+                not holds,
+                counts.get("empty", 0) == 0,
+                counts.get("empty", 0) + counts.get("parked", 0) == 0,
+                counts.get("running", 0) + counts.get("queued", 0),
+                j,
+            )
+
+        with self._lock:
+            return [self.servers[j] for j in sorted(range(len(self.servers)), key=rank)]
+
+    def generate(self, user_key: str, body: dict, on_chunk, request_id: str | None = None, client_gone=None) -> dict:
+        messages = self.servers[0].normalized_messages(body)
+        replied = [False]
+
+        def relay(reasoning, content):
+            replied[0] = True
+            on_chunk(reasoning, content)
+
+        error = None
+        for server in self._order(user_key, messages):
+            try:
+                return server.generate(user_key, body, relay, request_id, client_gone)
+            except RequestError as e:
+                if e.status != 429 or replied[0]:
+                    raise
+                error = e
+        raise error
+
+    def stats(self) -> dict:
+        stats = self.servers[0].stats()
+        stats["instances"] = [server.stats() for server in self.servers]
+        return stats
+
+    def session_rows(self) -> list[dict]:
+        return self.pool.rows()
+
+    def reset_user(self, user_key: str) -> None:
+        for server in self.servers:
+            server.reset_user(user_key)
+
+    def cancel(self, request_id: str) -> bool:
+        return any([server.cancel(request_id) for server in self.servers])
+
+    def cancel_user(self, user_key: str) -> int:
+        return sum(server.cancel_user(user_key) for server in self.servers)
+
+    def cancel_all(self) -> int:
+        return sum(server.cancel_all() for server in self.servers)
+
+
+@torch.no_grad()
+def _serve_instances(args) -> int:
+    """:func:`serve` for ``--instances`` > 1: open the 8x4 mesh, launch one persistent MoE for every instance
+    (:func:`~..tt.decode.persistent_moe.launch_instances_server`), build, warm up and serve each instance -- a whole
+    TP4 model and its DSpark drafter on mesh row 4 - j -- behind one HTTP server (:class:`_Instances`)."""
+    from models.experimental.deepseek_v4_flash.demo import server as v4_server
+
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    logger.remove()
+    logger.add(sys.stderr, level="WARNING" if args.quiet else "DEBUG" if args.debug else "INFO")
+    torch.manual_seed(0)
+    v4_server._LOG_FULL_PROMPT[0] = not args.prompt_snippet
+    n = args.instances
+    logger.info(
+        f"{n} instances on mesh rows {list(pmoe.INSTANCE_ROWS[:n])}, sharing the persistent MoE on rows 5-7: "
+        f"{args.num_users} session(s) x {args.max_context} tokens each"
+        + (f", DSpark drafts {','.join(map(str, args.dspark_drafts))} by users decoding" if args.dspark else "")
+    )
+    loader = DeepseekV4WeightLoader(args.model_dir)
+    config = load_config(loader.snapshot_dir)
+    num_layers = min(args.num_layers or config.num_hidden_layers, config.num_hidden_layers)
+    model_name = os.path.basename(os.path.normpath(str(args.model_dir)))
+    cache = WeightCache(os.path.join(args.cache_dir, model_name)) if args.cache_dir else None
+    args.tp_size, args.num_stages = _TP_SIZE, 1
+    with v4_server.open_mesh_device(
+        args.trace_region_size,
+        system_config=args.system_config,
+        mesh_shape=pmoe.GALAXY_MESH,
+        l1_small_size=args.l1_small_size,
+    ) as mesh_device:
+        with contextlib.ExitStack() as stack:
+            # The server first, before any model allocates on the requester rows; stopped last (the stack unwinds
+            # LIFO), after every instance's replay threads and prefetcher sessions.
+            t0 = time.perf_counter()
+            server = pmoe.launch_instances_server(mesh_device, config, loader, cache, num_layers, n, dspark=args.dspark)
+            stack.callback(server.stop)
+            logger.info(f"persistent MoE up in {time.perf_counter() - t0:.0f}s")
+            engines = []
+            for j in range(n):
+                t0 = time.perf_counter()
+                engine = V41ChatEngine(mesh_device, args, stack, moe_server=server, instance=j)
+                # Compiled and captured one instance at a time: a capture picks the server's request mode, which the
+                # instances share (see DeepSeekV41Model._use_server_rows).
+                engine.warmup()
+                engines.append(engine)
+                logger.info(f"instance {j} (mesh row {pmoe.INSTANCE_ROWS[j]}) ready in {time.perf_counter() - t0:.0f}s")
+            cpus = _host_cpus()
+            per = len(cpus) // n if cpus else 0
+            servers = []
+            for j, engine in enumerate(engines):
+                servers.append(
+                    V41GenerationServer(
+                        engine,
+                        args.model_id,
+                        args.max_body_bytes,
+                        args.prefill_chunk,
+                        prefiller=None,
+                        decode_ahead=args.decode_ahead,
+                        temperature=args.temperature,
+                        host_users=args.host_users,
+                        host_bytes=int(args.host_cache_gb * 2**30),
+                        max_running=args.max_running,
+                        slot_idle_timeout=args.slot_idle_timeout,
+                        think=args.think,
+                        reasoning_effort=args.reasoning_effort,
+                        monitor_feed=j == 0,
+                        files=servers[0].files if servers else None,
+                        # DEEPSEEK_V41_HOST_CPUS split evenly over the instances' host runtimes.
+                        cpus=cpus[j * per : (j + 1) * per] if per else [],
+                    )
+                )
+            api = _Instances(servers)
+            sys.setswitchinterval(v4_server._GIL_SWITCH_SECONDS)
+            api.start()
+            httpd = v4_server._ModelHTTPServer((args.host, args.port), _V41Handler, api)
+            logger.info(
+                f"serving {args.model_id!r} on http://{args.host}:{args.port} ({n} instances x "
+                f"{args.num_users} session(s), context {engines[0].max_seq}/user, prompts replayed through decode)"
+            )
+            try:
+                httpd.serve_forever()
+            except KeyboardInterrupt:
+                logger.info("interrupted, shutting down")
+            finally:
+                httpd.server_close()
+                api.stop()
+    return 0
+
+
 class V41ChatEngine(ChatEngine):
     """:class:`ChatEngine` on :class:`DeepSeekV41Model`: the same users, decode and warmup over V4.1's model.
 
@@ -2162,7 +2419,9 @@ class V41ChatEngine(ChatEngine):
     # Every posted step keeps the session it was posted for, so decoding turns can each keep one posted.
     interleave_ahead = True
 
-    def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack):
+    def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack, moe_server=None, instance: int = 0):
+        """``moe_server`` (a persistent MoE launched for several instances, :func:`_serve_instances`) makes this engine
+        instance ``instance``: a whole model on that requester's mesh row, its DSpark drafter on the same row."""
         from transformers import AutoTokenizer
 
         loader = DeepseekV4WeightLoader(args.model_dir)
@@ -2195,8 +2454,10 @@ class V41ChatEngine(ChatEngine):
         self.image_token_id = load_vision_config(loader.snapshot_dir).image_token_id
         prefill_placement = None
         # --persistent-moe: one stage, every MoE on the persistent server; with DSpark, 4-row verify steps.
-        self.persistent_moe = bool(getattr(args, "persistent_moe", False))
+        self.persistent_moe = bool(getattr(args, "persistent_moe", False)) or moe_server is not None
         self.dspark = bool(getattr(args, "dspark", False))
+        self.instance = instance
+        self.instances = 1 if moe_server is None else len(moe_server.request_meshes)
         persistent = {}
         if self.persistent_moe:
             persistent = dict(
@@ -2205,6 +2466,9 @@ class V41ChatEngine(ChatEngine):
                 balance_dram_banks=os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "1")
                 not in ("0", "", "false", "False"),
             )
+        if moe_server is not None:
+            # One of several instances: requester `instance` of the shared server, on its row, drafter included.
+            persistent.update(moe_server=moe_server, moe_requester=instance, drafter_on_stage=self.dspark)
         if getattr(args, "prefill_all_stages", False):
             kv_layers = max(i for i in config.kv_source_layer_ids if i < num_layers) + 1
             prefill_placement = plan_layer_placement(kv_layers, num_stages, 1)
@@ -2261,10 +2525,12 @@ class V41ChatEngine(ChatEngine):
                 f"{len(self.images.free)} image rows on stage 0"
             )
         if self.persistent_moe:
+            row = pmoe.INSTANCE_ROWS[instance] if moe_server is not None else pmoe.REQUESTER_ROW
             logger.info(
-                f"built DeepSeekV41Model with {self.model.num_layers}/{config.num_hidden_layers} layers: attention "
-                f"on one TP{self.model.tp_size} stage (mesh row 4), every MoE on the persistent TP12 server (rows "
-                f"5-7), verify rows {self.model.verify_rows}, context {self.max_seq} tokens"
+                f"built DeepSeekV41Model{f' instance {instance}' if moe_server is not None else ''} with "
+                f"{self.model.num_layers}/{config.num_hidden_layers} layers: attention on one TP{self.model.tp_size} "
+                f"stage (mesh row {row}), every MoE on the persistent TP12 server (rows 5-7), verify rows "
+                f"{self.model.verify_rows}, context {self.max_seq} tokens"
             )
         else:
             logger.info(
@@ -2315,15 +2581,20 @@ class V41ChatEngine(ChatEngine):
                 self.max_seq,
             )
         if self.dspark:
-            # Before anything is compiled; the drafter's prefetcher rings are on its own row.
+            # Before anything is compiled; the drafter's prefetcher rings are on its own row (none on the stage's).
             self.model.prepare_spec_decode(self.rope["main"])
-            if self.model.use_prefetcher:
+            if self.model.use_prefetcher and not self.model.drafter_on_stage:
                 prefetcher.enter_context(tensor_prefetcher_session(self.model.dspark.device))
             if self.block_verify:
+                where = (
+                    f"the drafter on the instance's own row {pmoe.INSTANCE_ROWS[instance]}"
+                    if self.model.drafter_on_stage
+                    else "the drafter on mesh row 3"
+                )
                 logger.info(
                     f"DSpark speculative decode: {self.model.verify_rows - 1} drafts + 1 verified in one "
-                    f"{self.model.verify_rows}-row step, greedy, the drafter on mesh row 3 (its MoE on the "
-                    f"persistent server); 4-row verify rounds below position {self.block_end}, then plain decode"
+                    f"{self.model.verify_rows}-row step, greedy, {where} (its MoE on the persistent server); 4-row "
+                    f"verify rounds below position {self.block_end}, then plain decode"
                 )
             else:
                 logger.info(
@@ -2676,11 +2947,21 @@ def parse_args(argv: list[str] | None = None):
         "--persistent-moe",
         action=argparse.BooleanOptionalAction,
         default=os.environ.get("DEEPSEEK_V41_PERSISTENT_MOE", "1") not in ("0", "", "false", "False"),
-        help="decode on one TP4 stage (mesh row 4) with every MoE on the persistent TP12 server (rows 5-7) and, with "
-        "--dspark, verify rounds of 3 drafts + 1 in one 4-row step (drafter on row 3); then one session, greedy "
-        "on-device sampling, prompts replayed through decode, no --vision and no Rust host runtime "
-        f"(default: on, --max-context {_PERSISTENT_MAX_CONTEXT}; --no-persistent-moe or "
+        help="decode on TP4 stages above the persistent TP12 MoE server (rows 5-7), --instances of them, and, with "
+        "--dspark, each reply in 4-row verify rounds (3 drafts + 1, one step) or one-row steps as --dspark-drafts "
+        "picks by load; then one session per instance, greedy on-device sampling, prompts replayed through decode "
+        f"and no --vision (default: on, --max-context {_PERSISTENT_MAX_CONTEXT}; --no-persistent-moe or "
         "DEEPSEEK_V41_PERSISTENT_MOE=0 serves the stage pipeline)",
+    )
+    p.add_argument(
+        "--instances",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V41_INSTANCES", _INSTANCES)),
+        help="with --persistent-moe, independent model instances sharing the TP12 MoE (rows 5-7): instance j is a whole "
+        "TP4 model on mesh row 4 - j (rows 4, 3, 2, 1, 0), its DSpark drafter on the same row, with --num-users "
+        "sessions each (1 with --dspark); a request goes to the instance holding its conversation, else to the least "
+        "busy one. 1 serves the single stage on row 4 with the drafter on row 3 (default: DEEPSEEK_V41_INSTANCES, else "
+        f"{_INSTANCES})",
     )
     p.add_argument(
         "--rust-host",
@@ -2750,19 +3031,34 @@ def parse_args(argv: list[str] | None = None):
         args.device_sampling = True
         if args.max_context == p.get_default("max_context"):
             args.max_context = _PERSISTENT_MAX_CONTEXT
+        if not 1 <= args.instances <= len(pmoe.INSTANCE_ROWS):
+            p.error(f"--instances takes 1 to {len(pmoe.INSTANCE_ROWS)} (the mesh rows above the MoE)")
         if args.dspark:
-            # The 4-row verify: one session, greedy, a fixed 3 drafts, and the Python host path.
+            # The 4-row verify: one session per instance, greedy, and each round either a 4-row verify (3 drafts)
+            # or a one-row step.
             if args.num_users not in (None, 1):
-                logger.warning(f"--persistent-moe --dspark serves one session: --num-users 1, not {args.num_users}")
+                logger.warning(
+                    f"--persistent-moe --dspark serves one session per instance: --num-users 1, not {args.num_users}"
+                )
             if args.temperature and args.temperature != p.get_default("temperature"):
                 logger.warning(f"--persistent-moe --dspark decodes greedily: --temperature 0, not {args.temperature}")
             args.num_users = 1
             args.max_running = 1
             args.temperature = 0.0
-            args.rust_host = False
-            args.dspark_drafts = (_PERSISTENT_VERIFY_ROWS - 1,)
+            drafts = _PERSISTENT_VERIFY_ROWS - 1
+            if "DEEPSEEK_V41_DSPARK_DRAFTS" not in os.environ and not any(
+                a.startswith("--dspark-drafts") for a in (argv if argv is not None else sys.argv)
+            ):
+                args.dspark_drafts = _INSTANCE_DSPARK_DRAFTS if args.instances > 1 else (drafts,)
+            if not all(k in (0, drafts) for k in args.dspark_drafts):
+                p.error(
+                    f"--persistent-moe --dspark verifies 4-row blocks: --dspark-drafts entries are 0 (one-row steps) "
+                    f"or {drafts}, got {args.dspark_drafts}"
+                )
         elif args.num_users is None:
             args.num_users = _NUM_USERS_PERSISTENT
+    else:
+        args.instances = 1
     # host_rs.enabled(), which the model reads too, follows the flag.
     os.environ["DEEPSEEK_V41_RUST_HOST"] = "1" if args.rust_host else "0"
     if args.rust_host:
@@ -2805,6 +3101,8 @@ def main(argv: list[str] | None = None) -> int:
             _launch_monitor(args.monitor_port)
     if not _stage_engram_tables(args):
         return 1
+    if args.persistent_moe and args.instances > 1:
+        return _serve_instances(args)
     return serve(
         args,
         engine_cls=V41ChatEngine,

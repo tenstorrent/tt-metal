@@ -355,3 +355,112 @@ def test_moe_persistent_mixed_rows_perf(mesh_device):
         gc.collect()
         ttnn.synchronize_device(moe_mesh)
     logger.info(f"MoE TP12 mixed server ({block}-row launch), layers interleaved {STEPS}:\n" + "\n".join(results))
+
+
+# test_moe_persistent_lockstep: rounds of every requester sending at once (MOE_LOCKSTEP_ROUNDS, default 120 = 40 per
+# layer of the three), the shape of several model instances decoding the same prompt in step.
+LOCKSTEP_ROUNDS = int(os.environ.get("MOE_LOCKSTEP_ROUNDS", "120"))
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash config not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@pytest.mark.parametrize("rows", [1, 4], ids=["rows1", "rows4"])
+@pytest.mark.parametrize("same_layer", [True, False], ids=["same_layer", "other_layers"])
+@pytest.mark.parametrize("identical", [True, False], ids=["identical_data", "own_data"])
+@pytest.mark.parametrize("post", [False, True], ids=["plain_out", "hc_post"])
+@torch.no_grad()
+def test_moe_persistent_lockstep(mesh_device, rows, same_layer, identical, post):
+    """Every requester sends at the same instant, round after round, as several model instances decoding one prompt in
+        step do -- the case the model-level test (test_instances_dspark.py) hangs on unless the users' starts are staggered.
+        Each round enqueues one request from every requester -- the same layer (``same_layer``) or each its own, with the
+        same block (``identical``) or each its own -- and then reads them all, so the next round's pages land on the MoE
+        chips together again and the chips may take them in different orders. On the mixed-rows server the model runs on
+        (``rows=1, block_rows=4``). Every output must match the same request alone bit for bit. A hang here (the timeout) is
+        the bug; the parametrizations say what it needs. ``post`` has every request run the hyper-connection post step fused
+    (streams, post and comb, as every model request does), its output the new streams."""
+    if os.environ.get("TT_FE_FIXED_ORDER") == "1":
+        pytest.skip("TT_FE_FIXED_ORDER=1 takes the requesters in strict turn, not at once")
+    moe_mesh, request_meshes, config, socket_core, single_senders = _setup(mesh_device)
+    layers, moes = _load_layers(moe_mesh, config)
+    num_requesters, num_layers = len(request_meshes), len(layers)
+    g = torch.Generator().manual_seed(0)
+
+    def block():
+        b = torch.randn(rows, config.hidden_size, generator=g)
+        return (b / b.norm(dim=-1, keepdim=True) * config.hidden_size**0.5).to(torch.bfloat16).float()
+
+    shared = block()
+    blocks = [shared if identical else block() for _ in range(num_requesters)]
+    layer_of = lambda round_, j: round_ % num_layers if same_layer else (round_ + j) % num_layers  # noqa: E731
+
+    moe_op = PersistentMoE(
+        moe_mesh, request_meshes, moes, socket_core, socket_core, single_senders, rows=1, block_rows=4
+    )
+    moe_op.use_rows(rows)
+    if post and not moe_op.fuse_hc:
+        pytest.skip("the HC post step is not fused (DEEPSEEK_V41_MOE_FUSE_HC=0)")
+    hc = config.hc_mult
+    inputs, hc_args = [], []
+    for j in range(num_requesters):
+        tensor = moe_op.request_input(j)
+        moe_op.upload(j, blocks[j], tensor)
+        inputs.append(tensor)
+        if post:
+            mesh = request_meshes[j]
+            streams = (
+                torch.randn(hc, config.hidden_size, generator=g)
+                if rows == 1
+                else torch.randn(hc, rows, config.hidden_size, generator=g)
+            )
+
+            def tile(t):
+                return ttnn.from_torch(
+                    t,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                )
+
+            hc_args.append(
+                {
+                    "streams": moe_op.block_streams(mesh, streams.to(torch.bfloat16).float()),
+                    "post": tile(torch.rand(1, rows, hc, 1, generator=g)),
+                    "comb": tile(torch.rand(1, rows, hc, hc, generator=g) / hc),
+                }
+            )
+        else:
+            hc_args.append({})
+
+    def result(out):
+        got = PersistentMoE.row_of(out).float() if post else _output(out, rows)
+        ttnn.deallocate(out)
+        return got
+
+    solo = {}
+    try:
+        # The references: each (requester, layer) alone.
+        for j in range(num_requesters):
+            for layer in range(num_layers):
+                solo[j, layer] = result(moe_op.request(j, layer, inputs[j], **hc_args[j]))
+        logger.info(
+            f"{num_requesters} requesters (rows {REQUEST_ROWS}), {rows}-row requests, "
+            f"{'the same layer' if same_layer else 'different layers'}, "
+            f"{'identical' if identical else 'their own'} blocks, {'HC post fused' if post else 'plain outputs'}: "
+            f"{LOCKSTEP_ROUNDS} rounds all at once"
+        )
+        t0 = time.perf_counter()
+        for round_ in range(LOCKSTEP_ROUNDS):
+            outs = [moe_op.request(j, layer_of(round_, j), inputs[j], **hc_args[j]) for j in range(num_requesters)]
+            for j, out in enumerate(outs):
+                got = result(out)
+                assert torch.equal(
+                    got, solo[j, layer_of(round_, j)]
+                ), f"round {round_}: requester {j} layer {layer_of(round_, j)} differs from the same request alone"
+        logger.info(
+            f"{LOCKSTEP_ROUNDS} lockstep rounds ok ({1e6 * (time.perf_counter() - t0) / LOCKSTEP_ROUNDS:.0f} us each)"
+        )
+    finally:
+        moe_op.stop()

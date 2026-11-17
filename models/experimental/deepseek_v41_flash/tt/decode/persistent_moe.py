@@ -24,6 +24,7 @@ import gc
 import json
 import os
 import random
+import threading
 import time
 from typing import Mapping, Sequence
 
@@ -44,6 +45,10 @@ GALAXY_MESH = (8, 4)
 MOE_MESH_SHAPE = (3, 4)
 MOE_MESH_OFFSET = (5, 0)
 REQUESTER_ROW = 4
+# Several model instances on one server (launch_instances_server): instance j is one whole TP4 model -- attention,
+# norms, lm_head and its DSpark drafter -- on mesh row INSTANCE_ROWS[j], the rows nearest the MoE first, and the
+# server's requester j. The five rows above the MoE hold five.
+INSTANCE_ROWS = (4, 3, 2, 1, 0)
 STOP_LAYER = 0xFFFFFFFF
 HEADER_BYTES = 64
 # The worker grid and router row the op multicasts each row over: 12 x (8 + 1).
@@ -455,6 +460,54 @@ def build_dspark_server_layers(config, loader, moe_mesh, cache) -> dict:
     }
 
 
+def launch_instances_server(
+    full_device, config, loader, cache, num_layers: int, num_instances: int, dspark: bool = True, log=None
+) -> "PersistentMoE":
+    """Launch one persistent MoE for ``num_instances`` independent model instances: layers ``0 .. num_layers - 1``
+    (plus, with ``dspark``, the drafter's stages as layers :data:`DSPARK_LAYER_BASE` + s) at TP12 on the 3x4 MoE
+    submesh, requester j the 1x4 submesh of mesh row :data:`INSTANCE_ROWS` [j].
+
+    Build it on a freshly opened 8x4 ``full_device``, before any model: the request sockets and partials buffers take
+    L1 on every requester row before the models allocate there. Each instance is then
+    ``DeepSeekV41Model(..., moe_server=server, moe_requester=j, drafter_on_stage=dspark)``, on
+    ``server.request_meshes[j]``. The server takes the requesters in any order, so each instance decodes on its own.
+    With ``dspark`` it is launched for 4-row blocks and takes one-row requests on the same launch (:data:`MIXED_ROWS`,
+    which must be on): every instance chooses per step between a one-row decode step and a 4-row verify block (or
+    draft). The caller stops it (:meth:`PersistentMoE.stop`) once every instance has shut down."""
+    if tuple(full_device.shape) != GALAXY_MESH:
+        raise ValueError(f"the instances' layout needs the {GALAXY_MESH} mesh, got {tuple(full_device.shape)}")
+    if not 1 <= num_instances <= len(INSTANCE_ROWS):
+        raise ValueError(
+            f"{len(INSTANCE_ROWS)} mesh rows hold at most {len(INSTANCE_ROWS)} instances, not {num_instances}"
+        )
+    if dspark and not MIXED_ROWS:
+        raise ValueError(
+            "independent instances mix one-row and block requests on one launch: DEEPSEEK_V41_MOE_MIXED_ROWS=1"
+        )
+    rows = list(INSTANCE_ROWS[:num_instances])
+    cols = MOE_MESH_SHAPE[1]
+    moe_mesh = full_device.create_submesh(ttnn.MeshShape(*MOE_MESH_SHAPE), ttnn.MeshCoordinate(*MOE_MESH_OFFSET))
+    request_meshes = [full_device.create_submesh(ttnn.MeshShape(1, cols), ttnn.MeshCoordinate(r, 0)) for r in rows]
+    start = time.perf_counter()
+    moes = build_moe_layers(config, loader, moe_mesh, cache, range(num_layers), log=log)
+    if dspark:
+        moes.update(build_dspark_server_layers(config, loader, moe_mesh, cache))
+    server = PersistentMoE(
+        moe_mesh,
+        request_meshes,
+        moes,
+        single_senders=single_senders(rows),
+        rows=1,
+        block_rows=4 if dspark else 0,
+    )
+    logger.info(
+        f"persistent MoE for {num_instances} instance(s) on mesh rows {rows}: layers 0..{num_layers - 1}"
+        f"{' + the DSpark drafter stages' if dspark else ''}, request modes {server.modes} "
+        f"({time.perf_counter() - start:.0f}s)"
+    )
+    return server
+
+
 def tile_rows(block: torch.Tensor) -> torch.Tensor:
     """``block`` ``[rows, D]`` laid out as the op's ``(rows x 32)`` tiles, flat: tile t is columns
     ``[32t, 32t + 32)``, face f its 16-column half, each face row-major (rows x 16). A several-row request's row is
@@ -594,6 +647,8 @@ class PersistentMoE:
         self._mode_state = {
             r: self._build_mode(r, inputs_only=self.mixed and r != self.server_rows) for r in self.modes
         }
+        # Several models on one server switch the default request rows from their own threads (use_rows).
+        self._lock = threading.RLock()
         self._set_mode(active_rows)
         self.scratch = self._launch()
         self.stopped = False
@@ -773,8 +828,10 @@ class PersistentMoE:
         if rows not in self._mode_state:
             raise ValueError(f"the server was built for {self.modes}-row requests, not {rows}")
         if self.mixed:
-            # One launch takes both: only the requester side's request rows change.
-            self._set_mode(rows)
+            # One launch takes both: only the requester side's request rows change (the default request rows and
+            # streams configs; requests that pass their own tensor carry their rows).
+            with self._lock:
+                self._set_mode(rows)
             return False
         if rows == self.rows and not self.stopped:
             return False
@@ -920,9 +977,11 @@ class PersistentMoE:
             raise ValueError(
                 f"layer {layer} (a DSpark drafter stage) needs a block mode; the server is in one-row mode"
             )
-        if tensor is not None and tensor.shape[-1] != self.hidden * self.rows:
+        # A tensor's width says its rows: on a mixed server either mode's (requesters pick their own), else the mode's.
+        allowed = self.modes if self.mixed else [self.rows]
+        if tensor is not None and not any(tensor.shape[-1] == self.hidden * r for r in allowed):
             raise ValueError(
-                f"a {self.rows}-row request takes [1, 1, 1, {self.hidden * self.rows}], got {list(tensor.shape)}"
+                f"a request takes [1, 1, 1, rows * {self.hidden}] for rows in {allowed}, got {list(tensor.shape)}"
             )
         return self._send(requester, self.row_of_layer(layer), tensor, streams=streams, post=post, comb=comb)
 
