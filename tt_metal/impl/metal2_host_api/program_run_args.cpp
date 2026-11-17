@@ -1032,6 +1032,19 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         }
     };
 
+    // Append every CRTA section that the framework (not the user) fills, in layout order: the
+    // TensorBinding section, then the scratchpad section. These sections sit between the user-named
+    // CRTAs and the CRTA varargs. Shared by the main kernel_run_args loop and the binding-only second pass.
+    auto append_framework_crta_sections = [&](const Kernel& kernel, std::vector<uint32_t>& out) {
+        append_binding_crtas(kernel.tensor_binding_handles(), out);
+        append_scratchpad_crtas(kernel.scratchpad_binding_handles(), out);
+    };
+
+    // True if the kernel has a framework-filled section in its CRTA or RTA buffers.
+    auto has_framework_arg_sections = [](const Kernel& kernel) {
+        return !kernel.tensor_binding_handles().empty() || !kernel.scratchpad_binding_handles().empty();
+    };
+
     // Install a kernel's assembled CRTA buffer. set_common_runtime_args allocates storage but fatals
     // if called twice, so it can only be used the first time; on subsequent SetProgramRunArgs calls
     // (e.g. re-enqueue with new args) the already-allocated buffer is patched in place. Shared by the
@@ -1232,7 +1245,6 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         //   3. Scratchpad section, in binding order, one word each (the allocated L1 base address,
         //      0 here until allocate_scratchpads patches it at program-compile time).
         //   4. Common runtime varargs, in caller-supplied order.
-        const auto& binding_handles = kernel->tensor_binding_handles();
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(
             kernel->get_crta_layout().vararg_section_offset + kernel_common_runtime_varargs(kernel_params).size());
@@ -1252,8 +1264,7 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
             TT_FATAL(value.has_value(), "Internal error: CRTA array '{}' missing for kernel '{}'.", name, kernel_name);
             WriteArrayArgValue(combined_crtas.data(), slots, *value, kernel_name.get(), name);
         }
-        append_binding_crtas(binding_handles, combined_crtas);
-        append_scratchpad_crtas(kernel->scratchpad_binding_handles(), combined_crtas);
+        append_framework_crta_sections(*kernel, combined_crtas);
         combined_crtas.insert(
             combined_crtas.end(),
             kernel_common_runtime_varargs(kernel_params).begin(),
@@ -1278,9 +1289,7 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
             continue;  // Already filled (and its CRTA buffer allocated) by the loop above.
         }
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
-        const auto& binding_handles = kernel->tensor_binding_handles();
-        const auto& scratchpad_handles = kernel->scratchpad_binding_handles();
-        if (binding_handles.empty() && scratchpad_handles.empty()) {
+        if (!has_framework_arg_sections(*kernel)) {
             continue;  // No bindings => nothing to supply; no CRTA dispatch buffer needed.
         }
         // Binding-only kernel: its CRTA buffer is exactly the TensorBinding + scratchpad sections (it has
@@ -1298,8 +1307,7 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
             PatchPerNodeBindingRtas(*kernel, tensor_by_param, kernel_name, /*require_all=*/true);
         }
         std::vector<uint32_t> combined_crtas;
-        append_binding_crtas(binding_handles, combined_crtas);
-        append_scratchpad_crtas(scratchpad_handles, combined_crtas);
+        append_framework_crta_sections(*kernel, combined_crtas);
         install_crtas(kernel, combined_crtas, kernel_name);
     }
 
