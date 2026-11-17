@@ -20,6 +20,20 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.common.sampling.generator import SamplingGenerator
 
 
+def prefill_rot_slice_parts(table_len, seq_len):
+    """
+    num_devices for the device-tensor ttnn.slice of the prefill rot mats.
+
+    That slice returns table_len // num_devices rows starting at chunk_start_idx (its `ends`
+    tensor does not set the size). Return the largest part count whose tile-aligned part still
+    holds seq_len rows, so RoPE gets a cos/sin row for every position of the chunk.
+    """
+    for parts in range(max(table_len // seq_len, 1), 1, -1):
+        if table_len % parts == 0 and (table_len // parts) % 32 == 0:
+            return parts
+    return 1
+
+
 class TtTransformer(LightweightModule):
     def __init__(
         self,
@@ -1030,7 +1044,9 @@ class TtTransformer(LightweightModule):
         # ops that can hang on some builds; trace capture for prefix-cached runs uses start_pos > 0.
         if mode == "prefill" and start_pos > 0:
             full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
-            num_devices = self.args.cluster_shape[0] * self.args.cluster_shape[1]
+            # Not the mesh size: with 32 parts the slice held max_seq_len // 32 rows (1152 at
+            # max_seq_len 36864), so a 2048+ token chunk read RoPE rows past the slice.
+            num_devices = prefill_rot_slice_parts(int(full_rot_cos.shape[-2]), int(x.shape[-2]))
             z = self._tt_slice_start_zeros_4
             tt_slice_starts = ttnn.concat(
                 [z[0:2], chunk_start_idx, z[3:4]],
