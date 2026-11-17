@@ -303,8 +303,21 @@ def chip_time(cfg, Ms, T, X, st_chip):
         for e in T["meta"][(X, g)]["order"][1:]:
             ops += (Ms[e] + 31) // 32 * (2 * cfg.PAIRS * cfg.KT + cfg.HT * cfg.PAIRS)
     done = cfg.G * (E - 1)
-    e2e = int(rel[:, 63].max()) - int(min(rel[:, 0].min(), rel[:, 485].min(), rel[:, 496].min()))
-    return span / done, ops * 16 / (NC * span), (s[:, 40:45].double().mean(dim=0) / 1000).round().tolist(), e2e
+    t0 = int(min(rel[:, 0].min(), rel[:, 485].min(), rel[:, 496].min()))
+    e2e = int(rel[:, 63].max()) - t0
+    # per group: the end of its last NCRISC loop (every weight packet landed, forwarded, every slot released); the
+    # weights-only time when the experts have no rows
+    nc_end = [
+        int((rel[g * cfg.GC : (g + 1) * cfg.GC, 485] + s[g * cfg.GC : (g + 1) * cfg.GC, 484]).max()) - t0
+        for g in range(cfg.G)
+    ]
+    return (
+        span / done,
+        ops * 16 / (NC * span),
+        (s[:, 40:45].double().mean(dim=0) / 1000).round().tolist(),
+        e2e,
+        nc_end,
+    )
 
 
 def timeline(cfg, Ms, T, X, st_chip):
@@ -431,7 +444,9 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
         f"WSL {tag} SUMMARY: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz, util tile over chips and "
         f"launches median {statistics.median(allu):.1f}% (min {min(allu):.1f}, max {max(allu):.1f}), "
         f"min pcc {min(pcs.values()):.5f}, end to end (slowest chip) median "
-        f"{statistics.median(max(r[ci][3] for ci in chips) for r in rows) / clk:.1f} us"
+        f"{statistics.median(max(r[ci][3] for ci in chips) for r in rows) / clk:.1f} us, NCRISC end per group "
+        f"(slowest chip) median "
+        f"{[round(statistics.median(max(r[ci][4][g] for ci in chips) for r in rows) / clk, 1) for g in range(cfg.G)]} us"
     )
     return rows, pcs
 

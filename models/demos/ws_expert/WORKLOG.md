@@ -803,3 +803,42 @@ PCC 0.99987-0.99988 (bfp8 h) / 0.99993-0.99994 (bf16 h). Up to M ~128 a launch t
 bound (32 x 4.15 MB of bfp4 weights into a chip, ~100 GB/s; ~40 us a lane-expert). The knee is M ~500-600; above it
 util creeps to ~71%, the compute-bound ceiling of the K split (5.76 / 7.6 K a row ~76%, single-chip 75.5%). End to
 end is 1-4 points below the steady state (first expert + tail skew), less at large M.
+
+## Weights only: where the lane's weight delivery goes (tray, 2026-11-17)
+bh-lb-19's links train at 400G (eth_status train_speed, all 8 chips; 50 GB/s a direction raw), not 200G.
+Per lane and launch (16 experts x 7 hops x 4.147 MB over the cycle's 16 link directions) each link direction carries
+29.0 MB. Weights-only lane time = the group's last NCRISC loop end at M 0 (chip_time nc_end; compute has no rows):
+| lane config (M 0) | lane 0 (link 0) | lane 1 (link 1) |
+|---|---|---|
+| 4 slots, arr_nf | 1,118 us = 26.0 GB/s a link direction | 1,055 us = 27.5 GB/s |
+| 5 slots (smaller rings), arr_nf | 1,073 us = 27.0 GB/s | 1,011 us = 28.7 GB/s |
+| 4 slots, flushed incs (arr_nf 0) | 1,623 us = 17.9 GB/s | 1,636 us = 17.7 GB/s |
+Fabric alone on the same pattern (tests/test_lane_fab_bench.py, kernels lane_fab_client / lane_fab_recv: the lane's
+group cores, mux cores, cycle and links, every chip, both lanes and directions, each core streaming 300 packets a
+direction with the lane's non-blocking send; no schedule, slots, credits or cut-through), 5 + 5 launches:
+| pattern | GB/s a link direction median (min) |
+|---|---|
+| one link one way (test_mux_bench) | 43.6 (26.2 with the router's ack wait) |
+| one lane, direction 0 only | 43.7 (41.7) |
+| two lanes, direction 0 only | 43.7 (33.2) |
+| one lane, both directions | 40.0 (37.2) |
+| two lanes, both directions (the lane's load) | 39.6 (32.2); 155 GB/s into a chip |
+| the same with the router's ack wait (flush) | 22.9 (21.4) |
+- Link 0 of the two vertical edges (chips 0-4, 3-7) runs at 32-33 GB/s in both directions under load; link 1 of the
+  same edges and every other link 37-40. Lane 0 contains both, so it is paced at ~32.
+- Packet size / mux buffering / atomics (test_lane_fab_sweep, lane load, same bytes; router payload = packet):
+| packet | mux buffers a channel | inc every | median | lane 0 / lane 1 slowest link |
+|---|---|---|---|---|
+| 13,824 B (payload 15,232) | 2 / 4 | 1 | 39.6 / 39.5 | 32.1 / 37.4 |
+| 13,824 B | 2 / 4 | 15 (one a slice) | 41.4 / 41.3 | 33.6 / 39.6 |
+| 6,912 B | 2 / 4 / 8 | 1 | 32.2 / 32.2 / 32.4 | 29.8 / 32.1 |
+| 6,912 B | 8 | 30 | 34.0 | 31.5 / 33.9 |
+| 4,608 B | 4 / 8 / 12 | 1 | 25.0 / 25.1 / 24.8 | 24.3 / 24.9 |
+| 4,608 B | 12 | 45 | 26.1 | 25.4 / 26.1 |
+  Mux buffers change nothing; smaller packets lose: time a packet ~100 ns + bytes / ~56 GB/s (fit over the three
+  sizes), so 13.8 KB packets reach ~80% of the wire and bigger ones would help. A per-packet atomic inc costs ~4.5%.
+- Lane model (ws_lane_sched, lock-step, weights only C 0): 4 slots 118 packet steps against the 105-step link floor
+  (87% busy), 5 slots 104 (98%), 3 slots 181 (57%). Measured 5 vs 4 slots: +4% only.
+- Budget, lane 0 at 4 slots: 50 raw -> 39.6 (both directions, 13.8 KB packets, per-packet incs) -> 32 (its slow
+  link) -> x 0.87 schedule = 27.9 predicted vs 26.0 measured; lane 1: 37.4 x 0.87 = 32.5 vs 27.5. The rest (7-15%) is
+  protocol latency the lock-step model does not see (cut-through hops, credit round trips).
