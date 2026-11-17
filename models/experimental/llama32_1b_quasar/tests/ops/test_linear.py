@@ -29,7 +29,7 @@ import pytest
 
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
-from tests.ttnn.utils_for_testing import assert_allclose
+from tt_py_test_utils_common.utils_for_testing import assert_allclose
 
 # (name, in_dim/K, out_dim/N, pcc). Large-K matmuls (W2 down, K=8192) accumulate more
 # bf16 rounding error over the reduction, so allow a slightly looser 0.98.
