@@ -231,11 +231,14 @@ void kernel_main() {
     constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_out = gguf_matmul::cb_out;
     const uint32_t segments = get_arg_val<uint32_t>(0);
     // DEST tiles of the two sets: decoded tile, its page in the next tile, scratch past the page. Block-float codes
-    // (MXFP4, NVFP4, IQ4_NL, IQ4_XS): decoded tiles 3 and 5, pages 4 and 6; the codes go to the 16-bit rows that the
-    // decoded tile's rows address (dest_srca_mm_page_unpack_codes), in tiles 1 and 2.
+    // (MXFP4, NVFP4, IQ4_NL, IQ4_XS): the codes go to the 16-bit rows that the decoded tile's rows address
+    // (dest_srca_mm_page_unpack_codes). Set 0 decodes at tile 2 (codes in tile 1), set 1 at index 11, whose 32-bit
+    // rows are tile 7 and its codes' 16-bit rows lie in tile 5 (Dst32b row bit 9 is kept, ISA Dst.md Adj32), so that
+    // the next page's codes unpack and the current decode are in different halves of DEST, which one client uses at a
+    // time.
     constexpr bool bfp = gguf::bfp_codes<fmt>;
-    auto out_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 5 : 3) : (set ? 4 : 1); };
-    auto page_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 6 : 4) : (set ? 5 : 2); };
+    auto out_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 11 : 2) : (set ? 4 : 1); };
+    auto page_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 12 : 3) : (set ? 5 : 2); };
 
     compute_kernel_hw_startup(cb_page, cb_in0, cb_out);
     gguf_decode_init<fmt, pack>();
