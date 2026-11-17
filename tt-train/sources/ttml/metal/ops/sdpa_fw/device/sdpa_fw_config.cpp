@@ -751,10 +751,23 @@ SDPAForwardPlan resolve_plan(
         constexpr double kSmallerChunkMustWinBy = 0.9;
         SDPAForwardChunks best = chunks;
         double best_us = std::numeric_limits<double>::infinity();
-        for (SDPAForwardChunks candidate = chunks; candidate.Sq_chunk_t >= 1U; candidate.Sq_chunk_t /= 2U) {
-            if (shape.St % candidate.Sq_chunk_t != 0U ||
-                l1_bytes(cb_tiles(shape, candidate, cuts(candidate))) > l1_budget_bytes) {
-                continue;  // the L1 shrink below only makes chunks smaller: one that does not fit is out
+        for (uint32_t Sq_chunk_t = chunks.Sq_chunk_t; Sq_chunk_t >= 1U; Sq_chunk_t /= 2U) {
+            if (shape.St % Sq_chunk_t != 0U) {
+                continue;
+            }
+            // The L1 shrink below halves the picked K/V step before the rows, so a row count that does not
+            // fit at the step picked above can still fit at a smaller one. Shrink the candidate's step here
+            // too, or a wide head is rejected at every row count but the smallest and loses its rows: at
+            // D=512 that left the default rated 1.2 to 1.7x slower than the same shape at max_pieces = 1.
+            // Each candidate starts from the picked step again, since a smaller one only costs L1.
+            SDPAForwardChunks candidate = chunks;
+            candidate.Sq_chunk_t = Sq_chunk_t;
+            while (l1_bytes(cb_tiles(shape, candidate, cuts(candidate))) > l1_budget_bytes &&
+                   user.Sk_chunk_t == 0U && candidate.Sk_chunk_t > 1U) {
+                candidate.Sk_chunk_t /= 2U;
+            }
+            if (l1_bytes(cb_tiles(shape, candidate, cuts(candidate))) > l1_budget_bytes) {
+                continue;  // not even at one K/V tile per step
             }
             const double us = schedule_of(candidate).predicted_us;
             if (us < best_us * kSmallerChunkMustWinBy) {
