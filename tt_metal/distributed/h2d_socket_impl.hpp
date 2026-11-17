@@ -103,7 +103,7 @@ public:
     void notify_receiver_unfenced();
     void barrier(std::optional<uint32_t> timeout_ms);
     // True when pages go through the socket's own receiver window rather than the cluster.write_core fallback.
-    bool writes_through_window() const { return receiver_core_window_ != nullptr; }
+    bool writes_through_window() const;
 
 private:
     H2DSocketImpl() = default;

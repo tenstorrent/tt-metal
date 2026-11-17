@@ -1035,6 +1035,11 @@ std::string H2DSocketImpl::export_descriptor(const std::string& socket_id) {
     return descriptor_path_;
 }
 
+bool H2DSocketImpl::writes_through_window() const {
+    return receiver_core_window_ != nullptr ||
+           (pcie_writer_instance_ != nullptr && pcie_writer_instance_->writes_through_window());
+}
+
 std::unique_ptr<H2DSocketImpl> H2DSocketImpl::connect_from_descriptor(const HDSocketDescriptor& desc) {
     auto socket = std::unique_ptr<H2DSocketImpl>(new H2DSocketImpl());
     socket->is_owner_ = false;
@@ -1062,7 +1067,15 @@ std::unique_ptr<H2DSocketImpl> H2DSocketImpl::connect_from_descriptor(const HDSo
 
     socket->pcie_writer_instance_ =
         std::make_unique<PCIeCoreWriter>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
-    socket->pcie_writer = socket->pcie_writer_instance_->get_pcie_writer();
+    // A HOST_PUSH page and its bytes_sent update go to the receiver's L1 through one posted window, as the owner's
+    // do (init_receiver_tlb); DEVICE_PULL writes only bytes_sent, through the driver as before.
+    if (socket->h2d_mode_ == H2DMode::HOST_PUSH) {
+        const uint64_t fifo_end = static_cast<uint64_t>(desc.aligned_data_buf_start) + desc.fifo_size;
+        const uint64_t config_end = static_cast<uint64_t>(desc.config_buffer_address) + sizeof(receiver_socket_md);
+        socket->pcie_writer = socket->pcie_writer_instance_->get_posted_pcie_writer(std::max(fifo_end, config_end));
+    } else {
+        socket->pcie_writer = socket->pcie_writer_instance_->get_pcie_writer();
+    }
 
     // Restore connector-mutable state left behind by any prior driver process.
     // First connector after owner-init sees an all-zero struct (version stamped
