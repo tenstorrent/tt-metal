@@ -55,7 +55,22 @@ done
 # carries the pattern in its cmdline — a bare pattern self-matches and would count/kill itself.
 probe_pat="${probe%e}[e]"
 
-launcher="$(command -v 'mpirun-ulfm' || command -v 'mpirun')"
+# Select the SAME launcher tt-run uses: the PLAIN mpirun of the ULFM-capable install, never the mpirun-ulfm
+# wrapper itself. mpirun-ulfm can inject --with-ft ulfm, which makes PRRTE treat the job as recoverable — a rank
+# killed by a signal no longer aborts the job — so with that wrapper cases 2-4 would silently exercise the wrong
+# mode. This mirrors get_mpi_launcher()/_plain_mpirun_beside() in ttnn/ttnn/distributed/ttrun.py: resolve
+# mpirun-ulfm, take the mpirun beside it, and fall back to it (then to a bare mpirun) only when there is no sibling.
+select_launcher() {
+  local ulfm plain
+  ulfm="$(command -v mpirun-ulfm 2>/dev/null || true)"
+  if [ -n "$ulfm" ]; then
+    plain="$(dirname "$(readlink -f "$ulfm")")/mpirun"
+    if [ -x "$plain" ]; then printf '%s\n' "$plain"; return 0; fi
+    printf '%s\n' "$ulfm"; return 0  # no sibling plain mpirun; use it directly (it may enable ULFM)
+  fi
+  command -v mpirun 2>/dev/null || return 1
+}
+launcher="$(select_launcher)" || { echo "::error::no mpirun-ulfm / mpirun on PATH"; exit 1; }
 
 # the production launch line: one rank per host, tcp transport only (no shared-memory layer), tagged output
 launch=(--host "$hosts" -np "$num_hosts" --map-by node --oversubscribe --bind-to none --mca btl self,tcp --tag-output)
