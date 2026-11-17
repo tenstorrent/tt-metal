@@ -16,6 +16,9 @@ struct EmbeddingParams {
     bool tilized = false;
     EmbeddingsType embeddings_type = EmbeddingsType::GENERIC;
     std::optional<uint32_t> pad_token;
+    // Fused tilized gather with an interleaved output: derive the per-core rows on device so one
+    // program serves every index length and table row count. Default: main's host split.
+    bool runtime_rows = false;
 };
 
 struct EmbeddingInputs {

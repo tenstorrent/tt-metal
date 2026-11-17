@@ -54,7 +54,7 @@ static vector<uint32_t> run_mxint_typecast(
          .output = {.format = output_fmt, .num_tiles = num_tiles, .accessor = "out", .num_entries = 2},
          .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
          .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
-         .hw_config = experimental::ComputeHardwareConfig{.enable_32_bit_dest = fp32_dest_acc_en}});
+         .hw_config = ComputeHardwareConfig{.enable_32_bit_dest = fp32_dest_acc_en}});
 }
 
 // --- Format-aware pack / unpack dispatch ---

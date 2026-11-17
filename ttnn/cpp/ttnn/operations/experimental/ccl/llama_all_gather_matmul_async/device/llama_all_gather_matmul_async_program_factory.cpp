@@ -175,14 +175,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         ar_choose_worker_cores(args.num_links, num_workers_per_link, available_cores);
 
     // Tensor Info
-    const auto input_tensor_num_pages = input0.buffer()->num_pages();
+    const auto input_tensor_num_pages = input0.mesh_buffer().num_pages();
     const auto input_tensor_cores = input0.memory_config().shard_spec()->grid;
     const auto input_tensor_shard_shape = input0.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
     const auto intermediate_tensor_shard_shape = intermediate_tensor.memory_config().shard_spec()->shape;
     const auto intermediate_tensor_shard_num_pages =
         intermediate_tensor_shard_shape[0] * intermediate_tensor_shard_shape[1] / TILE_HW;
-    const auto intermediate_tensor_page_size = intermediate_tensor.buffer()->page_size();
+    const auto intermediate_tensor_page_size = intermediate_tensor.mesh_buffer().page_size();
 
     log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
@@ -441,13 +441,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         if (forward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device, sender_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
         }
         writer_rt_args.push_back(backward_fabric_node_id.has_value());
         if (backward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device, sender_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
         }
 
         ttnn::experimental::ccl::emplace_runtime_args_with_buffers(

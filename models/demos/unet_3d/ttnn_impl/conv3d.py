@@ -26,15 +26,15 @@ def pad_dimension_t(x: ttnn.Tensor, padding_z) -> ttnn.Tensor:
 def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
     config_to_blocking = {
         # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
-        (32, 32, 3): (32, 32, 1, 1, 16),
+        (32, 32, 3): (32, 32, 1, 4, 16),
         (32, 64, 3): (32, 32, 2, 2, 16),
-        (64, 64, 3): (32, 32, 1, 1, 16),
+        (64, 64, 3): (32, 64, 1, 1, 16),
         (64, 128, 3): (32, 64, 1, 1, 16),
         (128, 128, 3): (64, 64, 1, 1, 16),
         (128, 256, 3): (64, 64, 1, 1, 8),
         (384, 128, 3): (128, 64, 1, 1, 4),
-        (192, 64, 3): (64, 32, 4, 4, 8),
-        (96, 32, 3): (32, 32, 2, 2, 8),
+        (192, 64, 3): (64, 64, 4, 4, 8),
+        (96, 32, 3): (32, 32, 2, 4, 8),
         (32, 32, 1): (32, 32, 4, 4, 16),
         # does not occur in model run for testing
         (64, 32, 3): (32, 32, 2, 8, 8),

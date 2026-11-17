@@ -4,6 +4,7 @@
 from itertools import chain, product
 
 import pytest
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
@@ -11,7 +12,6 @@ from helpers.llk_params import (
     DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
-    PerfRunType,
     StochasticRounding,
 )
 from helpers.matmul_sweep import (
@@ -24,7 +24,7 @@ from helpers.matmul_sweep import (
     sweep_tiny_tiles_matmul,
 )
 from helpers.param_config import input_output_formats, max_dest_tiles
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -33,6 +33,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_ROW_MOP,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -162,21 +163,26 @@ TINY_TILES_MATMUL_COMBINATIONS = [
 ALL_TEST_PARAMS = list(
     chain(
         (
-            (fidelity, cfg, throttle, 1)
+            (fidelity, cfg, throttle, 1, False)
             for fidelity, cfg, throttle in product(
                 ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
             )
         ),
         (
-            (fidelity, cfg, 0, 1)
+            (fidelity, cfg, 0, 1, False)
             for fidelity, cfg in product(
                 ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
         ),
         (
-            (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS)
+            (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS, False)
             for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
             if cfg.tile_dimensions.kt_dim == 1
+        ),
+        # Blackhole row MOP at throttle 0: A/B against the first slice's throttle-0 per-tile rows.
+        (
+            pytest.param(fidelity, cfg, 0, 1, True, marks=skip_for_wormhole)
+            for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
         ),
     )
 )
@@ -184,13 +190,14 @@ ALL_TEST_PARAMS = list(
 
 @pytest.mark.perf
 @pytest.mark.parametrize(
-    "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
+    "math_fidelity,matmul_config,throttle,num_blocks,row_mop", ALL_TEST_PARAMS
 )
 def test_perf_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
     num_blocks,
+    row_mop,
     perf_report,
 ):
     """
@@ -214,14 +221,6 @@ def test_perf_math_matmul(
     if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")
 
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
-
     variant_tile_count = (
         matmul_config.tile_dimensions.rt_dim
         * matmul_config.tile_dimensions.ct_dim
@@ -231,11 +230,12 @@ def test_perf_math_matmul(
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+            MATMUL_ROW_MOP(row_mop),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),
@@ -267,7 +267,11 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
-            LOOP_FACTOR(1024),
+            # 128 is 8× faster than the original 1024 and within 0.2% of its
+            # TILE_LOOP mean/median/max on a WH card (counters off).  Every
+            # variant still exceeds MOP_LOOP_MAX (127) so the mop_loops()
+            # factoring path remains exercised.
+            LOOP_FACTOR(128),
         ],
         variant_stimuli=StimuliConfig(
             None,

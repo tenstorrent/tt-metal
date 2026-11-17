@@ -220,7 +220,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr ((PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION) && unpack_to_dest)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && unpack_to_dest)
         {
             // Stand in for math's half of the unpack-to-dest handshake without copying: send the unpacker
             // each tile's Dest index through the mailbox and take the tile back through UNPACK_TO_DEST.
@@ -247,7 +247,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             fake_src_valids<false /*set_valids*/>(LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK /*tiles*/, num_faces);
         }
@@ -319,7 +319,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // Only L1_TO_L1 pairs pack with math through the Dest section handshake.
+            // L1_TO_L1 pairs pack with math through the Dest section handshake;
+            // Wormhole PACK_ISOLATE also releases every section to drain the packers.
             constexpr bool dest_sync_en = (PERF_RUN_TYPE == PerfRunType::L1_TO_L1);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -337,7 +338,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             tile_in_block, L1_ADDRESS(buffer_Res[(block * NUM_TILES_IN_BLOCK) + tile_in_block]) /*address*/);
                     }
-                    if constexpr (dest_sync_en)
+                    if constexpr (dest_sync_en || PERF_PACK_SECTION_RELEASE)
                     {
                         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }

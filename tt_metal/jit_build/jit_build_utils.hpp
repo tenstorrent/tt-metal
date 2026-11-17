@@ -34,7 +34,7 @@ std::string compiler_version(const std::string& gpp);
 // What a gpp invocation should do with its source.
 enum class GppAction {
     Compile,     // -c -o <out_obj> <src> -MF <dep>   (produces an object + .d depfile)
-    Preprocess,  // -E -o <out>        <src>          (self-contained .ii; keeps line markers)
+    Preprocess,  // -E -o <out>        <src> [-MF <dep>] (self-contained .ii; keeps line markers)
 };
 // Build the argv for a single gpp invocation from recipe fields. The argv is for
 // exec_command() (posix_spawn, NO shell), so defines/flags containing shell metacharacters

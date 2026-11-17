@@ -9,10 +9,10 @@
 #include <utility>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
@@ -26,12 +26,12 @@ namespace ttnn::operations::moreh::moreh_softmax_backward::metal2 {
 // because ttnn_op_moreh is a unity build: the anonymous namespaces of the five factory .cpp files
 // merge into one scope, where same-named constants would collide.
 
-using tt::tt_metal::experimental::ComputeHardwareConfig;
-using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::KernelSpec;
-using tt::tt_metal::experimental::KernelSpecName;
-using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::ComputeHardwareConfig;
+using tt::tt_metal::DataflowBufferSpec;
+using tt::tt_metal::DFBSpecName;
+using tt::tt_metal::KernelSpec;
+using tt::tt_metal::KernelSpecName;
+using tt::tt_metal::TensorParamName;
 
 // ---------------------------------------------------------------------------------------------
 // Dataflow buffers, named for the value each one carries

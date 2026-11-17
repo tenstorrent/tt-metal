@@ -162,3 +162,14 @@
   budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: streaming-profiler-torus-routers-fit
+  name: streaming profiler torus routers fit (mock BH Galaxy)
+  cmd: pytest tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_torus_routers_fit
+  skus:
+    cpu_medium:
+      timeout: 3
+  team: runtime
+  budget_type: profiler
+  arch: wormhole_b0
+  owner_id: U03BJ1L3LUQ # Mo Memarian

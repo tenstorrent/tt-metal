@@ -19,6 +19,10 @@ struct OutboundSocketServiceSyncParams {
     // device).
     uint32_t page_size = 0;
     uint32_t num_pages = 0;
+    // Page size / count of each extra D2D segment, in segment order (empty for D2H and
+    // single-tensor D2D).
+    std::vector<uint32_t> extra_page_sizes;
+    std::vector<uint32_t> extra_num_pages;
     uint32_t scratch_cb_index = 0;
     uint32_t metadata_size_bytes = 0;  // 0 disables the metadata path
     bool metadata_only = false;        // true skip tensor copy
@@ -49,6 +53,10 @@ struct OutboundSocketServiceSyncInputs {
     Tensor input;
     Tensor backing;
     std::optional<Tensor> metadata;
+    // Extra D2D segments: extra_inputs[i] is copied into extra_backings[i] page-for-page,
+    // exactly like input -> backing.
+    std::vector<Tensor> extra_inputs;
+    std::vector<Tensor> extra_backings;
 };
 
 }  // namespace ttnn::experimental::prim

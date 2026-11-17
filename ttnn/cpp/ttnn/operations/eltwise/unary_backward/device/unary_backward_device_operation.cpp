@@ -4,18 +4,50 @@
 
 #include "unary_backward_device_operation.hpp"
 
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "unary_backward_op_utils.hpp"
 #include "unary_backward_program_factory.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary_backward {
 
 namespace {
+
+// Rejects a sharded tensor whose buffer cores or shard shape differ from its TensorSpec's (eg: view).
+void validate_sharded_placement(std::string_view op_name, const Tensor& tensor, std::string_view name) {
+    if (!tensor.memory_config().is_sharded()) {
+        return;
+    }
+    const auto& buffer_distribution = tensor.buffer()->buffer_distribution_spec();
+    const auto sharding_args = tensor.tensor_spec().compute_buffer_sharding_args();
+    const auto& spec_distribution = sharding_args.buffer_distribution_spec();
+    const auto describe = [](const std::optional<BufferDistributionSpec>& distribution) -> std::string {
+        if (!distribution.has_value()) {
+            return "none";
+        }
+        std::string cores;
+        for (const auto& core : distribution->cores()) {
+            cores += (cores.empty() ? "" : ", ") + fmt::format("{}", core);
+        }
+        return fmt::format("shard shape in pages {}, cores [{}]", distribution->shard_shape_in_pages(), cores);
+    };
+    TT_FATAL(
+        buffer_distribution.has_value() && spec_distribution.has_value() &&
+            buffer_distribution->shard_shape_in_pages() == spec_distribution->shard_shape_in_pages() &&
+            buffer_distribution->cores() == spec_distribution->cores(),
+        "{}: {} is sharded, but its buffer distribution ({}) differs from its TensorSpec distribution ({}). "
+        "Use a tensor whose buffer was allocated for its own spec.",
+        op_name,
+        name,
+        describe(buffer_distribution),
+        describe(spec_distribution));
+}
 
 // Unary gradients are floating-point math; the integer dtypes have no meaningful derivative.
 bool is_supported_dtype(DataType dtype) {
@@ -54,6 +86,8 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
         op_name,
         name,
         tensor.layout());
+
+    validate_sharded_placement(op_name, tensor, name);
 
     // Row-major operands are processed by element (see the factory), so neither the tile shape
     // nor the shard shape constrains them. Block-float formats have no row-major element size:
@@ -219,7 +253,7 @@ UnaryBackwardDeviceOperation::spec_return_value_t UnaryBackwardDeviceOperation::
     // than the page count written into it, and the writer would run past its end.
     return TensorSpec(
         tensor_args.input.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype,
             PageConfig(tensor_args.input.layout()),
             args.output_memory_config,

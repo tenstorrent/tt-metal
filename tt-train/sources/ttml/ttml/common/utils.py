@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import os, random
+from contextlib import contextmanager
+
 import numpy as np
 import ttnn
 import ttml
@@ -196,7 +198,9 @@ def create_optimizer(model, yaml_config: dict):
 
     Accepts either a top-level YAML config dict (with training_config.optimizer)
     or the optimizer dict directly (detected by the presence of a "type" key).
-    Passes the dict straight to the C++ optimizer factory.
+    Passes the dict straight to the C++ optimizer factory. With a top-level
+    config, training_config.precision.master_dtype first stores the model's
+    trainable parameters in that dtype, so the optimizer state follows it.
 
     Args:
         model: Model to optimize
@@ -216,6 +220,9 @@ def create_optimizer(model, yaml_config: dict):
         # fc only on the last), so a param group can match nothing on some stages.
         if _is_pipeline_parallel(yaml_config):
             optimizer_cfg = {**optimizer_cfg, "allow_empty_param_groups": True}
+        params = model.parameters()
+        ttml.core.apply_precision_config(tc, params)
+        return ttml.optimizers.create_optimizer(optimizer_cfg, params)
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 
 
@@ -224,6 +231,17 @@ def _is_pipeline_parallel(yaml_config: dict) -> bool:
     from .config import resolve_multihost_config
 
     return resolve_multihost_config(yaml_config).pipeline_parallel_config is not None
+
+
+def validate_clip_grad_norm(model) -> None:
+    """clip_grad_norm computes a per-device norm with no cross-mesh reduction, so it is only correct
+    when every parameter is replicated. Reject sharded (FSDP/TP) params up front rather than silently
+    clipping by a wrong per-shard norm."""
+    if any(not ttml.Sharding.from_tensor(p).is_fully_replicated for p in model.parameters().values()):
+        raise ValueError(
+            "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
+            "only a shard, so the per-shard norm is wrong"
+        )
 
 
 def get_loss_over_devices(loss):
@@ -259,6 +277,73 @@ def build_causal_mask(T: int, device: bool = False):
     if not device:
         return m
     return ttml.autograd.Tensor.from_numpy(m, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+
+
+def scaled_dot_product_attention_auto(query, key, value, mask=None):
+    """Fused SDPA when q_seq == k_seq and the mask is None or [1, 1, q_seq, q_seq], composite otherwise."""
+    # TODO: #39558
+    q_seq = query.shape()[2]
+    fused = q_seq == key.shape()[2] and (mask is None or list(mask.shape()) == [1, 1, q_seq, q_seq])
+    sdpa = (
+        ttml.ops.attention.scaled_dot_product_attention
+        if fused
+        else ttml.ops.attention.scaled_dot_product_attention_composite
+    )
+    return sdpa(query, key, value, mask)
+
+
+def build_rope_params_from_config(config, head_dim: int) -> "ttml.ops.rope.RotaryEmbeddingParams":
+    """RoPE tables for a Llama or Qwen3 config."""
+    scaling = ttml.ops.rope.RopeScalingParams()
+    rs = config.rope_scaling
+    if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
+        scaling.scaling_factor = rs.scaling_factor
+        scaling.high_freq_factor = rs.high_freq_factor
+        scaling.low_freq_factor = rs.low_freq_factor
+        scaling.original_context_length = rs.original_context_length
+    return ttml.ops.rope.build_rope_params(config.max_position_embeddings, head_dim, config.rope_theta, scaling)
+
+
+def deallocate_tensors(tensors) -> None:
+    if tensors is None:
+        return
+    if not isinstance(tensors, (list, tuple)):
+        tensors = [tensors]
+    for t in tensors:
+        if t is None:
+            continue
+        if isinstance(t, ttml.autograd.Tensor):
+            ttnn.deallocate(t.get_value(), force=True)
+        elif isinstance(t, ttnn.Tensor):
+            ttnn.deallocate(t, force=True)
+
+
+def resolve_pad_token_id(tokenizer) -> int:
+    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    if pad is None:
+        raise ValueError("tokenizer has neither pad_token_id nor eos_token_id")
+    return int(pad)
+
+
+def resolve_stop_token_ids(tokenizer) -> set:
+    """Union of the tokenizer's EOS/PAD ids plus any chat-template stop
+    tokens present in the vocab (across llama-3 and qwen3 templates).
+    """
+    stop_ids: set = set()
+    if tokenizer.eos_token_id is not None:
+        stop_ids.add(int(tokenizer.eos_token_id))
+    if tokenizer.pad_token_id is not None:
+        stop_ids.add(int(tokenizer.pad_token_id))
+    for tok in ("<|eot_id|>", "<|end_of_text|>", "<|eom_id|>", "<|im_end|>", "<|endoftext|>"):
+        tid = tokenizer.convert_tokens_to_ids(tok)
+        if tid is not None and tid >= 0 and tid != tokenizer.unk_token_id:
+            stop_ids.add(int(tid))
+    return stop_ids
+
+
+def repeat_interleave(items, n: int) -> list:
+    """Repeat each item ``n`` times in place: ``[a, b]`` -> ``[a, a, b, b]``."""
+    return [item for item in items for _ in range(n)]
 
 
 def summary(model) -> None:
@@ -361,3 +446,21 @@ class no_grad:
                 return func(*args, **kwargs)
 
         return wrapper
+
+
+@contextmanager
+def run_mode(module, mode: "ttml.modules.RunMode"):
+    """Temporarily set ``module`` (and all its submodules) to ``mode``, restoring each one's previous mode on exit.
+
+    Usage:
+        with run_mode(model, RunMode.EVAL), no_grad():
+            # dropout off, no graph building; previous mode restored afterwards
+    """
+    prev = [(m, m.get_run_mode()) for m in module.modules()]
+    module.set_run_mode(mode)
+    try:
+        yield module
+    finally:
+        # modules() yields parents first, so each child's restore overrides its parent's recursive one.
+        for m, m_mode in prev:
+            m.set_run_mode(m_mode)

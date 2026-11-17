@@ -95,7 +95,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const uint32_t out_block_bytes = block_w * out_elem_bytes;         // one 128-element row of output
     const uint32_t input_e4m3_tile_bytes = tile_h * tile_w;            // cb_input_e4m3 page = one e4m3 tile
     const uint32_t out_tile_bytes = tile_h * tile_w * out_elem_bytes;  // cb_out page = one output tile
-    const uint32_t scale_aligned_page_bytes = input_scale.buffer()->aligned_page_size();
+    const uint32_t scale_aligned_page_bytes = input_scale.mesh_buffer().aligned_page_size();
 
     // Token-count-aware-only metadata tensors (unset on the plain path).
     const Tensor* expert_region_offsets = token_count_aware ? &tensor_args.expert_region_offsets.value() : nullptr;
@@ -121,9 +121,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat output_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
 
-    auto* src_e4m3_buffer = input_e4m3.buffer();
-    auto* src_scale_buffer = input_scale.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto* src_e4m3_buffer = &input_e4m3.mesh_buffer();
+    const auto* src_scale_buffer = &input_scale.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     auto* region_buffer = token_count_aware ? expert_region_offsets->buffer() : nullptr;
     auto* counts_buffer = token_count_aware ? expert_token_counts->buffer() : nullptr;
     auto* table_buffer = token_count_aware ? global_expert_idx_table->buffer() : nullptr;
@@ -438,15 +438,15 @@ void PerTokenCastBackProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& shared = cached_program.shared_variables;
 
-    uint32_t src_e4m3_addr = tensor_args.input_e4m3.buffer()->address();
-    uint32_t src_scale_addr = tensor_args.input_scale.buffer()->address();
-    uint32_t dst_addr = tensor_return_value.buffer()->address();
+    uint32_t src_e4m3_addr = tensor_args.input_e4m3.mesh_buffer().address();
+    uint32_t src_scale_addr = tensor_args.input_scale.mesh_buffer().address();
+    uint32_t dst_addr = tensor_return_value.mesh_buffer().address();
     const bool token_count_aware = operation_attributes.token_count_aware;
 
     if (token_count_aware) {
-        const uint32_t region_addr = tensor_args.expert_region_offsets->buffer()->address();
-        const uint32_t counts_addr = tensor_args.expert_token_counts->buffer()->address();
-        const uint32_t table_addr = tensor_args.global_expert_idx_table->buffer()->address();
+        const uint32_t region_addr = tensor_args.expert_region_offsets->mesh_buffer().address();
+        const uint32_t counts_addr = tensor_args.expert_token_counts->mesh_buffer().address();
+        const uint32_t table_addr = tensor_args.global_expert_idx_table->mesh_buffer().address();
         for (const auto& core : shared.all_cores_vec) {
             auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, shared.reader_kernel_id, core);
             reader_args[0] = src_e4m3_addr;

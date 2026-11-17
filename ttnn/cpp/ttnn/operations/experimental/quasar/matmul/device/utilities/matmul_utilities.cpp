@@ -8,6 +8,8 @@
 #include <set>
 
 #include "tt-metalium/allocator.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -75,6 +77,35 @@ uint32_t estimate_interm_tile_size(
     uint32_t output_tile_size = tt::tile_size(output_data_format);
     result = std::max(output_tile_size, result);
     return result;
+}
+
+tt::DataFormat get_interm_data_format(bool packer_l1_acc_en, bool fp32_dest_acc_en, tt::DataFormat output_data_format) {
+    if (fp32_dest_acc_en) {
+        return tt::DataFormat::Float32;
+    }
+    if (packer_l1_acc_en) {
+        return tt::DataFormat::Float16_b;
+    }
+    switch (output_data_format) {
+        case tt::DataFormat::MxFp8R:
+        case tt::DataFormat::MxFp8P:
+        case tt::DataFormat::MxFp6R:
+        case tt::DataFormat::MxFp6P:
+        case tt::DataFormat::MxFp4:
+        case tt::DataFormat::MxInt8:
+        case tt::DataFormat::MxInt4:
+        case tt::DataFormat::MxInt2: return tt::DataFormat::Float16_b;
+        default: return output_data_format;
+    }
+}
+
+uint32_t get_interleaved_tile_stride(uint32_t tile_size) {
+    // NOC_DRAM_READ_ALIGNMENT_BYTES (noc_parameters.h), which the readers use. Hal::get_read_alignment is not
+    // reachable from TTNN (all_gather / concat note the same gap); Quasar is the one architecture whose NOC reads
+    // at a finer grain than its DRAM allocation alignment.
+    const uint32_t noc_dram_read_alignment =
+        tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR ? 1 : tt::tt_metal::hal::get_dram_alignment();
+    return tt::align(tile_size, noc_dram_read_alignment);
 }
 
 uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a) {
@@ -367,7 +398,10 @@ void get_max_page_size_and_num_pages(
     num_pages = total_size / page_size;
 }
 
-void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<tt::tt_metal::CoreCoord>& v2, std::vector<tt::tt_metal::CoreCoord>& commons) {
+void move_common_entries(
+    std::vector<tt::tt_metal::CoreCoord>& v1,
+    std::vector<tt::tt_metal::CoreCoord>& v2,
+    std::vector<tt::tt_metal::CoreCoord>& commons) {
     for (const tt::tt_metal::CoreCoord& item : v2) {
         if (std::find(v1.begin(), v1.end(), item) != v1.end()) {
             commons.push_back(item);
