@@ -2,7 +2,7 @@
 
 **Problem type:** grid not filled  ·  **Concept(s):** work distribution — splitting along width vs. height; for a per-row reduction, the cross-core combine that split costs (and, on `Layout::ROW_MAJOR` sticks, the k-fold DRAM transfer count of splitting each stick)
 **First profiled on:** `bgd-lab-16-special-dstoiljkovic-for-reservation-44175` · WH B0 · 8×8=64 grid · 2026-07-24 · `6f13238bd69`
-**Measured on:** WH B0 n150 (`bgd-lab-16-special-dstoiljkovic-for-reservation-44175`, 2026-07-24; regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19) · reduce case: BH p150b 13×10 (`bh-50-special-adamjanovic-for-reservation-143315`, 2026-10-29; `Layout::ROW_MAJOR` reduce case 2026-10-30)
+**Measured on:** WH B0 n150 (`bgd-lab-16-special-dstoiljkovic-for-reservation-44175`, 2026-07-24; regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19) · reduce case: BH p150b 13×10 (`bh-50-special-adamjanovic-for-reservation-143315`, 2026-10-29; `Layout::ROW_MAJOR` reduce case 2026-10-30) · reduce regimes and sweeps: WH B0 n150 (`bgd-lab-22-special-adamjanovic-for-reservation-169096`, 2026-11-16/17)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -221,11 +221,18 @@ reaches ~10 µs at `k = 32` and ~19 µs at `k = 64`: every member receives `k` p
 
 ### When it helps / when it does not (reduce case)
 
-**Rule:** split a row-reduction across `k` Tensix cores only when (a) the tile-rows leave most of the grid
-idle (`R_t` ≤ ~1/8 of the grid; the baseline's DRAM rate well below the ceiling), (b) each slice keeps
-**≥ 4 tiles** (2 tiles is break-even-to-small-win, 1 tile always loses), and (c) **`k` ≤ 8** — so `Wt` ≥ 8 for
-`k = 2`, `Wt` ≥ 16 for a real gain, best at `Wt` ≥ 32. The saved per-core work, ~(Wt − Wt/k) × ~230 ns per
-tile on BH p150b, must beat the combine (~0.5 µs at `k = 2`, ~1.5 µs at `k = 8`).
+**Rule:** split a row-reduction across `k` Tensix cores when (a) the tile-rows leave most of the grid idle
+(the baseline's DRAM rate well below the board's spec; here `R_t` ≤ ~1/16–1/8 of the grid) and (b) the work each
+Tensix core sheds, (Wt − Wt/k) × t_tile, beats the combine C(k) = T(k, Wt) − T(1, Wt/k). Both terms depend on the
+board and on your combine, so measure them on your op and sweep k. This example's values:
+
+| | t_tile (reduce + apply + DRAM round trip) | C(k) at k = 2 / 4 / 8 / 16 | best k at R_t = 1 | tiles per slice at the best k |
+|---|---|---|---|---|
+| WH B0 n150 | ≈ 360 ns | ≈ 0.9 / 1.3 / 3.0 / 7 µs | 4 up to Wt = 32, 8 from Wt = 64 | 8–16 |
+| BH p150b | ≈ 230 ns | ≈ 0.5 / – / 1.5 / 4 µs | 8 from Wt = 32 to 256 | 4–32 |
+
+On both boards a 1-tile slice always loses and Wt = 4 never pays. A cheaper combine than this example's one-round
+all-gather moves the best k up.
 
 | Regime (BH p150b, 130 Tensix cores) | row_split_reduce → width_split_reduce | speedup |
 |---|---|--:|
@@ -236,6 +243,14 @@ tile on BH p150b, must beat the combine (~0.5 µs at `k = 2`, ~1.5 µs at `k = 8
 | Edge: `R_t = 64, Wt = 8, k = 2` (4 tiles per slice) | 7 157 → 6 913 ns | 1.03–1.04× |
 | Does not help: `Wt = 4`, any `R_t`, any `k` | e.g. `R_t = 1, k = 2` 2 083 → 2 299 ns | 0.69–0.95× |
 | Does not help: 1-tile slices (`k = Wt`) | e.g. `R_t = 1, Wt = 32, k = 32` 8 567 → 10 091 ns | 0.52–0.97× |
+
+**WH B0 n150 (8×8 = 64 Tensix cores):** `R_t = 1, Wt = 32, k = 8` 14 186 → 7 055 ns **1.99–2.03×** (with the
+barrier; regime test). The WH sweep ([`report_wh_n150.md`](report_wh_n150.md)) has the same shape with the
+boundaries moved: at `R_t = 1` the best k is 4 up to Wt = 32 (2.10× at Wt = 32) and 8 from Wt = 64 (2.96×; Wt = 128
+4.19×); `R_t = 4, Wt = 128, k = 8` 2.84×; `R_t = 16` (¼ of this grid) 0.90–1.23×; `R_t = 64` 1.00–1.06×; Wt = 4
+0.89–0.96×; 1-tile slices 0.42–0.90×. The combine, T(k, Wt) − T(1, Wt/k), costs ≈ 0.9 / 1.3 / 3.0 / 7 µs at
+k = 2 / 4 / 8 / 16 (BH ≈ 0.5 / – / 1.5 / 4 µs), against ≈ 360 ns per tile of work saved (BH ≈ 230 ns), which is
+why WH's best k keeps more tiles per slice (8–16) than BH's (4–32).
 
 - **Why it helps at `R_t = 1`:** one Tensix core streams the whole row at ~230 ns per tile (reduce + apply +
   DRAM round trip); `k` Tensix cores each stream `Wt/k` tiles and add one ~0.5–1.5 µs combine.
@@ -255,6 +270,8 @@ tile on BH p150b, must beat the combine (~0.5 µs at `k = 2`, ~1.5 µs at `k = 8
 per cell after 5 warmup launches. Regimes: `test_width_split_regimes` (12 trials per variant interleaved, a
 trial = mean of 5 launches, medians; ranges over 2–5 runs). `bh-50-special-adamjanovic-for-reservation-143315`,
 BH p150b, AICLK max 1350 MHz, 2026-10-29, base commit `8104cced9bc`. Full table in [`report.md`](report.md).
+WH B0 n150 row: 20 passes of `test_width_split_regimes` (min–max of the per-pass medians), `bgd-lab-22-special-adamjanovic-for-reservation-169096`,
+2026-11-16, commit `c2079cdc7ed`.
 
 Reproduce:
 `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_width_split.py::test_width_split_regimes`
@@ -297,17 +314,26 @@ constant, `W = 64, k = 1`, R_t = 64 → 128 → 6 493 → 10 600 ns (+1.0 ns per
 
 ### When it helps / when it does not (ROW_MAJOR)
 
-**Rule:** split a stick only where the TILE rule already allows a split (tile-rows on ≤ ~1/8 of the grid)
-**and** the sticks are long: from **1 KB sticks** (W ≥ 512) when the tile-rows fill ≤ ~4 Tensix cores, from
-**2 KB sticks** (W ≥ 1 024) at R_t = 16 of 130, and keep each piece **≥ 512 B** (≥ 256 B only at R_t ≤ 4).
-With the tile-rows on ≥ ~1/3 of the grid (R_t ≥ 47 of 130), do not split a stick: pieces ≤ 1 KB give 0.38–1.02×,
-2 KB pieces (4 KB sticks, k = 2) 1.07–1.08×.
+**Rule:** split a stick only where the TILE rule already allows a split (the tile-rows leave most of the grid
+idle) **and** the sticks are long enough that the tilize / reduce / untilize work each Tensix core sheds beats the
+k-fold transfer count plus the combine. Measured boundaries, same direction on both boards:
+
+| | pays from | loses |
+|---|---|---|
+| WH B0 n150 (64 Tensix cores) | 1 KB sticks at R_t ≤ 4 (1.15–1.27×; 4 KB 2.08–2.39×); 1 KB at R_t = 16 (1.14–1.18×), 4 KB 1.56× | sticks ≤ 256 B at any R_t (0.93–0.98×); R_t = 47 (¾ of the grid) with ≤ 512 B sticks (0.65–0.88×) |
+| BH p150b (130 Tensix cores) | 1 KB sticks at R_t ≤ 4; 2 KB at R_t = 16; pieces ≥ 512 B (≥ 256 B only at R_t ≤ 4) | R_t ≥ 47 (~⅓ of the grid) with pieces ≤ 1 KB (0.38–1.02×; 2 KB pieces 1.07–1.08×) |
 
 | Regime (BH p150b, 130 Tensix cores) | row_split_reduce → width_split_reduce | speedup |
 |---|---|--:|
 | **Helps:** `R_t = 1, W = 2 048, k = 4` (4 KB sticks, 1 KB pieces, 1 → 4 Tensix cores) | 12 774 → 6 960 ns | **1.83–1.84×** |
 | **Does not help:** `R_t = 64, W = 256, k = 2` (512 B sticks, 256 B pieces, 64 → 128 Tensix cores) | 8 566 → 13 032 ns | **0.65–0.66×** |
 | Edge: `R_t = 64, W = 2 048, k = 2` (2 KB pieces) | 50 471 → 46 953 ns | 1.07× |
+
+**WH B0 n150 (8×8 = 64 Tensix cores):** `R_t = 1, W = 2 048, k = 4` 31 682 → 13 196 ns **2.39–2.41×** (with the
+barrier), more than on BH p150b: the WH baseline is 2.5× the BH one (31.7 vs 12.8 µs), the split variant 1.9×
+(13.2 vs 7.0 µs). The WH sweep ([`report_wh_n150.md`](report_wh_n150.md)): `R_t ≤ 4` pays from 1 KB sticks
+(1.27× at 1 KB, 2.39× at 4 KB, k = 4); `R_t = 16` 1.38–1.56× with 2–4 KB sticks; `R_t = 47` loses with 128–512 B
+sticks (0.65–0.88×). At `R_t ≥ 64` a k = 2 split cannot add Tensix cores on this grid, so the `R_t = 64` regimes skip.
 
 - **Why it loses where the TILE path is flat:** with the tile-rows on half the grid the TILE split already
   buys nothing (DRAM near its ceiling); on sticks it also doubles the transfers at ~1 ns each, so
@@ -323,7 +349,8 @@ With the tile-rows on ≥ ~1/3 of the grid (R_t ≥ 47 of 130), do not split a s
 per cell after 5 warmup launches (R_t = 1, 4 from a second run whose R_t = 16, 64 cells matched within 1%).
 Regimes: `test_width_split_regimes` (12 trials per variant interleaved, a trial = mean of 5 launches, medians).
 `bh-50-special-adamjanovic-for-reservation-143315`, BH p150b, 2026-10-30, base commit `30351ce33f5`. Full
-table in [`report.md`](report.md).
+table in [`report.md`](report.md). WH B0 n150 row: 20 passes of `test_width_split_regimes`, `bgd-lab-22-special-adamjanovic-for-reservation-169096`,
+2026-11-16, commit `c2079cdc7ed`.
 
 Reproduce:
 `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_width_split.py::test_width_split_regimes`
