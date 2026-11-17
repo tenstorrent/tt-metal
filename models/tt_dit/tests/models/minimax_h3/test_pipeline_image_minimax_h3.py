@@ -506,6 +506,7 @@ def test_defer_finish_overlap(mesh_device, guide_examples):
 def test_prompt_encode_scaling(mesh_device, guide_examples):
     """Warm prompt-encode time at the presentation rungs (text only): flat across rungs means per-op dispatch, not
     compute or weight bandwidth, dominates -- the case for tracing the encoder."""
+    import torch
     import ttnn as _ttnn
 
     t2i, _, _ = guide_examples
@@ -533,3 +534,60 @@ def test_print_device_map(mesh_device):
     rows, cols = tuple(mesh_device.shape)
     for r in range(rows):
         logger.info(f"RESULT device_map row {r}: " + " ".join(f"{ids[r * cols + c]:2d}" for c in range(cols)))
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_ccl_link_probe(mesh_device):
+    """Isolated ring all-gathers on each mesh axis, every group starting together (device sync before each), so
+    per-chip durations under `--profile` expose per-group link speed with no cross-group waiting mixed in.
+    Axis 0 = the 4-chip TP groups (one per column), axis 1 = the 8-chip SP rings (one per row)."""
+    import torch
+    import ttnn as _ttnn
+
+    x = _ttnn.from_torch(
+        torch.randn(1, 1, 4096, 2048), dtype=_ttnn.bfloat16, layout=_ttnn.TILE_LAYOUT, device=mesh_device,
+        mesh_mapper=_ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    for axis in (0, 1):
+        times = []
+        for _ in range(8):
+            _ttnn.synchronize_device(mesh_device)
+            mark = time.perf_counter()
+            out = _ttnn.all_gather(x, 3, cluster_axis=axis, topology=_ttnn.Topology.Ring)
+            _ttnn.synchronize_device(mesh_device)
+            times.append(time.perf_counter() - mark)
+            _ttnn.deallocate(out)
+        times = sorted(times[1:])
+        logger.info(f"RESULT ccl_probe axis {axis}: wall min {times[0] * 1e3:.2f} ms, median {times[len(times) // 2] * 1e3:.2f} ms "
+                    f"(16 MB per chip in, x{tuple(mesh_device.shape)[axis]} out)")
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_step_profile_text_tokens(mesh_device, guide_examples):
+    """A 4K t2i whose prompt is exactly H3_PROFILE_TEXT_TOKENS tokens, so the packed length (16384 image rows + the
+    text) has a chosen amount of SP padding; with H3_IMAGE_PROFILE_STEP=k under `--profile`, step k is profiled.
+    For checking whether the per-chip SDPA skew follows the padding."""
+    t2i, _, _ = guide_examples
+    n = int(os.environ.get("H3_PROFILE_TEXT_TOKENS", "512"))
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    tok = pipe.tokenizer
+    source = (t2i["prompt"] + " ") * 20
+    ids = tok(source, add_special_tokens=False)["input_ids"]
+    prompt = tok.decode(ids[:n])
+    for _ in range(8):  # re-tokenization can merge/split at the cut: nudge until it is exactly n
+        got = len(tok(prompt, add_special_tokens=False)["input_ids"])
+        if got == n:
+            break
+        ids = ids[: len(ids) - 1] if got > n else ids
+        prompt = tok.decode(ids[: n + (n - got)])
+    pipe(prompt, width=4096, height=4096, seed=0)
+    profile_step = os.environ.pop("H3_IMAGE_PROFILE_STEP", None)
+    pipe(prompt, width=4096, height=4096, seed=1)
+    if profile_step is not None:
+        os.environ["H3_IMAGE_PROFILE_STEP"] = profile_step
+    result = pipe(prompt, width=4096, height=4096, seed=2)
+    pad = result.rung - result.packed_length
+    logger.info(f"RESULT text_tokens {len(tok(prompt, add_special_tokens=False)['input_ids'])}: packed "
+                f"{result.packed_length} -> rung {result.rung}, padding rows {pad}")
+    _log_result(f"text_tokens_{n}", result)
