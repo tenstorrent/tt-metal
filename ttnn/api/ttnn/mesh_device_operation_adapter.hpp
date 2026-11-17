@@ -1409,6 +1409,9 @@ public:
 
         static consteval bool uses_per_device_run_args() {
             if constexpr (requires { WorkloadSpecFactory::uses_per_device_run_args; }) {
+                static_assert(
+                    std::same_as<std::remove_cvref_t<decltype(WorkloadSpecFactory::uses_per_device_run_args)>, bool>,
+                    "`uses_per_device_run_args` must be a `static constexpr bool`.");
                 return WorkloadSpecFactory::uses_per_device_run_args;
             } else {
                 return false;
@@ -1417,6 +1420,9 @@ public:
         // Per-device values set once, at the cache miss: the factory opts in with `fixed_per_device_run_args = true`.
         static consteval bool fixed_per_device_run_args() {
             if constexpr (requires { WorkloadSpecFactory::fixed_per_device_run_args; }) {
+                static_assert(
+                    std::same_as<std::remove_cvref_t<decltype(WorkloadSpecFactory::fixed_per_device_run_args)>, bool>,
+                    "`fixed_per_device_run_args` must be a `static constexpr bool`.");
                 return WorkloadSpecFactory::fixed_per_device_run_args;
             } else {
                 return false;
@@ -1425,8 +1431,10 @@ public:
         static_assert(
             !fixed_per_device_run_args() || uses_per_device_run_args(),
             "`fixed_per_device_run_args = true` needs `uses_per_device_run_args = true`.");
+        // The call check also catches an overloaded or templated override, whose address is ill-formed.
         static_assert(
-            !fixed_per_device_run_args() || !requires { &WorkloadSpecFactory::override_runtime_arguments; },
+            !fixed_per_device_run_args() ||
+                (!requires { &WorkloadSpecFactory::override_runtime_arguments; } && !has_override_runtime_arguments()),
             "A factory with `fixed_per_device_run_args = true` keeps the cache miss's per-device values and must not "
             "declare override_runtime_arguments.");
         // Off by default: a per-device factory that forgets its override must not keep the miss's values on every hit.
