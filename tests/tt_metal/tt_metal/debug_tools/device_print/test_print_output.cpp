@@ -978,13 +978,17 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
     }
 }
 
-// Known issue: DPRINT expands to a bare { } block, and DPRINT_DATA0 and DPRINT_DATA1 to a bare if, so today this
-// kernel doesn't compile. Disabled until that is fixed.
+// Known issue: DPRINT, and DPRINT_UNPACK, DPRINT_MATH and DPRINT_PACK on their TRISC, expand to a bare { } block, and
+// DPRINT_DATA0 and DPRINT_DATA1 to a bare if, so today this kernel doesn't compile. Disabled until that is fixed.
 TEST_F(DevicePrintOutputFixture, DISABLED_PrintInUnbracedIfElse) {
     std::vector<std::string> messages = {
         "if",
+        "else after DPRINT",
         "else after DPRINT_DATA0",
         "else after DPRINT_DATA1",
+        "else after DPRINT_UNPACK",
+        "else after DPRINT_MATH",
+        "else after DPRINT_PACK",
     };
 
     TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_unbraced_if_else.cpp", messages);

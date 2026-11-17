@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <sstream>
+#include <string>
+
 #include "debug_tools_fixture.hpp"
 
 using namespace tt;
@@ -16,10 +19,14 @@ public:
         try {
             CompileKernel(kernel_path, runtime_args);
         } catch (std::runtime_error& e) {
-            std::string error_msg = e.what();
-            if (error_msg.find(expected_error_message) != std::string::npos) {
-                // Expected error found
-                return;
+            // The build log also echoes the source of the print macro, every check's message included, so the
+            // message counts only on a line that reports an error.
+            std::istringstream build_log(e.what());
+            for (std::string line; std::getline(build_log, line);) {
+                if (line.find("error:") != std::string::npos &&
+                    line.find(expected_error_message) != std::string::npos) {
+                    return;
+                }
             }
             throw;
         }
@@ -67,4 +74,37 @@ TEST_F(DevicePrintFailuresFixture, OldStyleDprint) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/old_style_dprint.cpp",
         "Old style DPRINT is deprecated. Use DPRINT(format, ...) instead.");
+}
+
+// Known issue: a spec isn't checked against its argument when the kernel compiles, so today this compiles. Disabled
+// until that is fixed.
+TEST_F(DevicePrintFailuresFixture, DISABLED_SpecNotSuitingArgument) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_not_suiting_argument.cpp",
+        "invalid format specifier");
+}
+
+// Known issue: a spec isn't checked against its argument when the kernel compiles, and a char is sent as uint8_t, so
+// today this compiles and prints "097". Disabled until that is fixed.
+TEST_F(DevicePrintFailuresFixture, DISABLED_SpecNotSuitingChar) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_not_suiting_char.cpp",
+        "invalid format specifier");
+}
+
+// Known issue: a print's size isn't checked against the print buffer. Today this print fails only because its size
+// overflows a 10-bit field of the message header ("changes value from '4100' to '4'"), and a print of up to 1020 bytes
+// compiles even where it doesn't fit. Disabled until that is fixed.
+TEST_F(DevicePrintFailuresFixture, DISABLED_PrintTooBigForBuffer) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/print_too_big_for_buffer.cpp",
+        "does not fit in the print buffer");
+}
+
+// Known issue: today a format that isn't a string literal fails with an unrelated message ("'format' is not
+// captured"). Disabled until that is fixed.
+TEST_F(DevicePrintFailuresFixture, DISABLED_FormatNotStringLiteral) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/format_not_string_literal.cpp",
+        "format must be a string literal");
 }
