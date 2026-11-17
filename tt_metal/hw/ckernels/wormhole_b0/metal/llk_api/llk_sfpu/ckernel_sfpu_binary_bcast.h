@@ -10,6 +10,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
@@ -500,19 +501,12 @@ static_assert(
 static_assert(
     REPLAY_LEN_NORM_BROADCAST >= REPLAY_LEN_BROADCAST, "the normalize block must cover the COL broadcast program");
 
-// SFPU dest addresses are 10 bits; offsets relative to the data tile wrap.
-constexpr std::uint32_t SFPU_DEST_ADDR_MASK = 0x3FF;
-
-// Band-relative slot immediates: RWC.Dst points at the band's col-0 slot of
-// the left face, the right face is +16. The same immediates serve the lower
-// half because RWC.Dst is moved to the face 2/3 pair there.
-constexpr std::uint32_t NORM_SLOT0 = 0;
-constexpr std::uint32_t NORM_SLOT1 = ODD_COLS_OFFSET;
-constexpr std::uint32_t NORM_SLOT2 = FACE1_BASE;
-constexpr std::uint32_t NORM_SLOT3 = FACE1_BASE + ODD_COLS_OFFSET;
-
+// The band body addresses the band's 4 col groups with the COL_GROUP_OFFSETS
+// immediates relative to RWC.Dst (the left face's band row); the same
+// immediates serve the lower half because RWC.Dst is moved to the face 2/3
+// pair there.
 inline std::uint32_t _norm_rel_tile_offset_(std::uint32_t dst_index, std::uint32_t dst_index_data) {
-    return ((dst_index - dst_index_data) * DEST_TILE_SIZE_RAW) & SFPU_DEST_ADDR_MASK;
+    return dest_addr_wrap((dst_index - dst_index_data) * DEST_TILE_SIZE_RAW);
 }
 
 // Record the interleaved broadcast block (16 ops). Precondition at replay:
@@ -590,19 +584,19 @@ sfpi_inline void _norm_centre_scale_store_band_() {
     TTI_SFPMUL(LREG_DATA1, LREG_NORM_INV_STD, p_sfpu::LCONST_0, LREG_DATA1, 0);
     TTI_SFPMUL(LREG_DATA2, LREG_NORM_INV_STD, p_sfpu::LCONST_0, LREG_DATA2, 0);
     TTI_SFPMUL(LREG_DATA3, LREG_NORM_INV_STD, p_sfpu::LCONST_0, LREG_DATA3, 0);
-    TTI_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, NORM_SLOT0);
-    TTI_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, NORM_SLOT1);
-    TTI_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, NORM_SLOT2);
-    TTI_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, NORM_SLOT3);
+    TTI_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, COL_GROUP_OFFSETS[0]);
+    TTI_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, COL_GROUP_OFFSETS[1]);
+    TTI_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, COL_GROUP_OFFSETS[2]);
+    TTI_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, COL_GROUP_OFFSETS[3]);
 }
 
 // Same for a second in-place tile at a wrapped offset from the data tile.
 sfpi_inline void _norm_centre_scale_store_band_rel_(std::uint32_t tile_rel) {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
-    const std::uint32_t slot0 = (tile_rel + NORM_SLOT0) & SFPU_DEST_ADDR_MASK;
-    const std::uint32_t slot1 = (tile_rel + NORM_SLOT1) & SFPU_DEST_ADDR_MASK;
-    const std::uint32_t slot2 = (tile_rel + NORM_SLOT2) & SFPU_DEST_ADDR_MASK;
-    const std::uint32_t slot3 = (tile_rel + NORM_SLOT3) & SFPU_DEST_ADDR_MASK;
+    const std::uint32_t slot0 = dest_addr_wrap(tile_rel + COL_GROUP_OFFSETS[0]);
+    const std::uint32_t slot1 = dest_addr_wrap(tile_rel + COL_GROUP_OFFSETS[1]);
+    const std::uint32_t slot2 = dest_addr_wrap(tile_rel + COL_GROUP_OFFSETS[2]);
+    const std::uint32_t slot3 = dest_addr_wrap(tile_rel + COL_GROUP_OFFSETS[3]);
     TT_SFPLOAD(LREG_DATA0, IM, ADDR_MOD_3, slot0);
     TT_SFPLOAD(LREG_DATA1, IM, ADDR_MOD_3, slot1);
     TT_SFPLOAD(LREG_DATA2, IM, ADDR_MOD_3, slot2);
@@ -623,10 +617,10 @@ sfpi_inline void _norm_centre_scale_store_band_rel_(std::uint32_t tile_rel) {
 
 sfpi_inline void _norm_load_data_band_() {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
-    TTI_SFPLOAD(LREG_DATA0, IM, ADDR_MOD_3, NORM_SLOT0);
-    TTI_SFPLOAD(LREG_DATA1, IM, ADDR_MOD_3, NORM_SLOT1);
-    TTI_SFPLOAD(LREG_DATA2, IM, ADDR_MOD_3, NORM_SLOT2);
-    TTI_SFPLOAD(LREG_DATA3, IM, ADDR_MOD_3, NORM_SLOT3);
+    TTI_SFPLOAD(LREG_DATA0, IM, ADDR_MOD_3, COL_GROUP_OFFSETS[0]);
+    TTI_SFPLOAD(LREG_DATA1, IM, ADDR_MOD_3, COL_GROUP_OFFSETS[1]);
+    TTI_SFPLOAD(LREG_DATA2, IM, ADDR_MOD_3, COL_GROUP_OFFSETS[2]);
+    TTI_SFPLOAD(LREG_DATA3, IM, ADDR_MOD_3, COL_GROUP_OFFSETS[3]);
 }
 
 // Point the math dest offset at the data tile and record the broadcast block.
@@ -645,15 +639,20 @@ inline void _norm_col_tile_end_() {
 
 // Advance RWC.Dst from the end of the face 0/1 band run (16) to face 2/3 (32).
 inline void _norm_col_next_face_pair_() {
-    TTI_INCRWC(0, 8, 0, 0);
-    TTI_INCRWC(0, 8, 0, 0);
+    static_assert(FACE2_BASE - FACE1_BASE == 2 * INCRWC_FACE_HALF_STEP, "two INCRWCs span one face");
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
 }
 
 inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
     std::uint32_t dst_index_data,
     std::uint32_t dst_index_mean,
-    std::uint32_t /*dst_index_out*/,
+    std::uint32_t dst_index_out,
     std::uint32_t dst_index_inv_std) {
+    // The result is written in place (the compute API always passes the data tile as out).
+    LLK_ASSERT(
+        dst_index_out == dst_index_data,
+        "_calculate_sfpu_normalize_bcast_col_full_tile_: dst_index_out must equal dst_index_data");
     const std::uint32_t mean_rel = _norm_rel_tile_offset_(dst_index_mean, dst_index_data);
     const std::uint32_t inv_std_rel = _norm_rel_tile_offset_(dst_index_inv_std, dst_index_data);
 
@@ -701,17 +700,21 @@ inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
 inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
     std::uint32_t dst_index_data,
     std::uint32_t dst_index_residual,
-    std::uint32_t /*dst_index_out*/,
+    std::uint32_t dst_index_out,
     std::uint32_t dst_index_mean,
     std::uint32_t dst_index_inv_std) {
+    // The result is written in place (the compute API always passes the data tile as out).
+    LLK_ASSERT(
+        dst_index_out == dst_index_data,
+        "_calculate_sfpu_residual_normalize_bcast_col_full_tile_: dst_index_out must equal dst_index_data");
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
     const std::uint32_t residual_rel = _norm_rel_tile_offset_(dst_index_residual, dst_index_data);
     const std::uint32_t mean_rel = _norm_rel_tile_offset_(dst_index_mean, dst_index_data);
     const std::uint32_t inv_std_rel = _norm_rel_tile_offset_(dst_index_inv_std, dst_index_data);
-    const std::uint32_t res_slot0 = (residual_rel + NORM_SLOT0) & SFPU_DEST_ADDR_MASK;
-    const std::uint32_t res_slot1 = (residual_rel + NORM_SLOT1) & SFPU_DEST_ADDR_MASK;
-    const std::uint32_t res_slot2 = (residual_rel + NORM_SLOT2) & SFPU_DEST_ADDR_MASK;
-    const std::uint32_t res_slot3 = (residual_rel + NORM_SLOT3) & SFPU_DEST_ADDR_MASK;
+    const std::uint32_t res_slot0 = dest_addr_wrap(residual_rel + COL_GROUP_OFFSETS[0]);
+    const std::uint32_t res_slot1 = dest_addr_wrap(residual_rel + COL_GROUP_OFFSETS[1]);
+    const std::uint32_t res_slot2 = dest_addr_wrap(residual_rel + COL_GROUP_OFFSETS[2]);
+    const std::uint32_t res_slot3 = dest_addr_wrap(residual_rel + COL_GROUP_OFFSETS[3]);
 
     _norm_col_tile_begin_(dst_index_data);
     for (std::uint32_t half = 0; half < 2; half++) {
