@@ -74,7 +74,7 @@
   "perf_rope": 192.3,
   "perf_sdpa_bcast_col_srca_srcb_reuse": 10.1,
   "perf_sdpa_bcast_col_srcb_reuse": 16.5,
-  "perf_sdpa_custom_mm": 23.4,
+  "perf_sdpa_custom_mm": 19.7,
   "perf_sdpa_custom_mm_reuse_dest_srcb": 9.4,
   "perf_sdpa_weighted_reduce": 7.9,
   "perf_sfpu_binop_scalar": 8.5,

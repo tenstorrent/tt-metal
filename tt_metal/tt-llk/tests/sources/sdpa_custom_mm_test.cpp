@@ -148,9 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Same MOP as custom_mm: one SrcA+SrcB, then CT_DIM-1 SrcA, per K.
-            // A mask chunk posts one extra SrcB before the first pass. Bulk
-            // all-A-then-all-B fills the depth-2 SrcA bank before math sees SrcB.
+            // Mirror custom_mm's interleaved SrcA/SrcB MOP; bulk posting can fill SrcA before math sees SrcB.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
@@ -346,9 +344,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Math still emits the production FPU->SFPU notifications. Drain
-            // them without touching DEST/L1 so the 4-bit semaphore cannot
-            // saturate across repeated isolated calls.
+            // Drain math's FPU->SFPU notifications so the 4-bit semaphore cannot saturate.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)

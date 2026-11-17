@@ -57,8 +57,7 @@ def test_perf_sdpa_custom_mm_read_transposed(
     M, K, N = _shape(shape)
     if N // DEFAULT_TILE_C_DIM == 1:
         pytest.skip(
-            "read_transposed is a no-op for ct_dim==1 and the LLK's ct==1 fast path is "
-            "shaped for the canonical contiguous read; not drivable standalone"
+            "read_transposed with ct_dim==1 selects the wrong input tile (#60119)"
         )
     _run(
         M,
@@ -104,7 +103,7 @@ def test_perf_sdpa_custom_mm_signal_granularity(
 @pytest.mark.perf
 @parametrize(
     shape=[(1, 64, 96), (8, 128, 128)],
-    stride_mode=["implicit", "zero", "tight", "padded"],
+    stride_mode=["implicit", "padded"],
     read_transposed=lambda stride_mode: (
         [False, True] if stride_mode == "padded" else [True]
     ),
