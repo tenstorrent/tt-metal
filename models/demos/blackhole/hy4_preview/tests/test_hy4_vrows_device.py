@@ -73,6 +73,113 @@ def cmp_run(md, blk, c, S):
     return heads.reshape(64, S, 512)
 
 
+_QPU = {}
+
+
+def qp_obj(md, S):
+    from hy4_qpush import QPush
+
+    if S not in _QPU:
+        _QPU[S] = QPush(md, S)
+    return _QPU[S]
+
+
+def qpp_run(md, blk, c, S):
+    """B29: compact path with the q push program + flag-gated q read in the split reader (a2a + A1 merge as in cmp_run) -> host heads [64,S,512]"""
+    import hy4_merge
+
+    TR = (S + 3) // 4
+    qp = qp_obj(md, S)
+    land = qp(c.q_dev)
+    idx8 = blk.idx_rows(c.idx_dev)
+    out = blk.mod.sparse_sdpa_split(
+        land,
+        c.kv_dev,
+        idx8,
+        512,
+        DM.SCALE,
+        blk.kc,
+        blk.G,
+        blk.ckc,
+        None,
+        emit_stats=3,
+        owner_s=S,
+        compact=True,
+        qland=(qp, S),
+    )
+    x = ttnn.experimental.all_to_all_async_generic(
+        out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+    )
+    sk = torch.zeros(8, TR, 32, 1)
+    for cc in range(8):
+        for b in range(4):
+            sk[cc, :, 8 * b : 8 * b + 8, 0] = c.sl[8 * cc : 8 * cc + 8][None, :]
+    skd = DM.to_mesh(md, sk, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    res = hy4_merge.merge_fused(x, skd, TR, full=S > 2)
+    r = DM.from_mesh(md, res).float().reshape(8, TR, 32, 512)
+    heads = torch.zeros(8, 8, S, 512)
+    for s in range(S):
+        u, b = s // 4, s % 4
+        heads[:, :, s] = r[:, u, 8 * b : 8 * b + 8]
+    return heads.reshape(64, S, 512)
+
+
+def run_qplat(md):
+    """B29: traced latency: gather_q + split vs q push + split (the chain with a2a + A1 merge too)"""
+    import hy4_merge
+
+    for S in [int(x) for x in os.environ.get("SS", "4").split(",")]:
+        c = DM.Case(md, "random", 65536, S, "scaled", seed=5)
+        blk = DM.mk_block(md, S, fuse=True, xchg=False)
+        TR = (S + 3) // 4
+        qp = qp_obj(md, S)
+        idx8 = blk.idx_rows(c.idx_dev)
+        sk = torch.zeros(8, TR, 32, 1)
+        for cc in range(8):
+            for b in range(4):
+                sk[cc, :, 8 * b : 8 * b + 8, 0] = c.sl[8 * cc : 8 * cc + 8][None, :]
+        skd = DM.to_mesh(md, sk, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+
+        def split(push):
+            if push:
+                q = qp(c.q_dev)
+                kw = dict(qland=(qp, S))
+            else:
+                q = blk.gather_q(c.q_dev)
+                kw = {}
+            return blk.mod.sparse_sdpa_split(
+                q,
+                c.kv_dev,
+                idx8,
+                512,
+                DM.SCALE,
+                blk.kc,
+                blk.G,
+                blk.ckc,
+                None,
+                emit_stats=3,
+                owner_s=S,
+                compact=True,
+                **kw,
+            )
+
+        def chain(push):
+            out = split(push)
+            x = ttnn.experimental.all_to_all_async_generic(
+                out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+            )
+            return hy4_merge.merge_fused(x, skd, TR, full=S > 2, hm_users=S)
+
+        res = {"test": "qp_lat", "S": S}
+        for rep in range(2):
+            res[f"gs_us_{rep}"] = timed_traced(md, lambda: split(False))
+            res[f"ps_us_{rep}"] = timed_traced(md, lambda: split(True))
+            res[f"gchain_us_{rep}"] = timed_traced(md, lambda: chain(False))
+            res[f"pchain_us_{rep}"] = timed_traced(md, lambda: chain(True))
+        emit(res)
+        c.free()
+
+
 _XMC = {}
 
 
@@ -179,9 +286,9 @@ def run_pcc(md):
             name = f"{tag}_S{S}_{var}"
             try:
                 c = DM.Case(md, kind, ctx, S, "scaled", seed=3, skew=skew)
-                if var in ("cmp", "xmc"):
+                if var in ("cmp", "xmc", "qpp"):
                     blk = DM.mk_block(md, S, fuse=True, xchg=False)
-                    got = [(cmp_run if var == "cmp" else xmc_run)(md, blk, c, S) for _ in range(reps)]
+                    got = [{"cmp": cmp_run, "xmc": xmc_run, "qpp": qpp_run}[var](md, blk, c, S) for _ in range(reps)]
                     ps = [round(pcc(g, c.ref), 6) for g in got]
                     rows = [round(min(pcc(g[:, s], c.ref[:, s]) for s in range(S)), 6) for g in got]
                     emit(
@@ -296,7 +403,7 @@ def run_lat(md):
 if __name__ == "__main__":
     full, md = open_row()
     try:
-        for name, fn in [("pcc", run_pcc), ("lat", run_lat), ("xmclat", run_xmclat)]:
+        for name, fn in [("pcc", run_pcc), ("lat", run_lat), ("xmclat", run_xmclat), ("qplat", run_qplat)]:
             if os.environ.get("TEST", "pcc") in (name, "all"):
                 fn(md)
     finally:

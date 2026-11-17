@@ -40,6 +40,10 @@ def _core_set(n, gx, r0=0):
     return ttnn.CoreRangeSet(rngs)
 
 
+def QMODE_ENV_OK(env):
+    return True
+
+
 def pick_split(S, grid_cores=120):
     """(G, k_chunk) of the owner-layout decode split kernel for S verify rows per user (R = 8 S query rows of the gathered q, R*G <= grid_cores).
     Measured (verify-rows gk1, 64k/1M, SCALED_FP8, balanced and one-column-skew keys): kc=128 beats kc=256 by 12-15 us whenever G >= 3 (a column holds ~2048/8 selected keys = 2 chunks of 128, run on 2 cores in parallel);
@@ -81,6 +85,7 @@ def sparse_sdpa_split(
     build_only=False,
     out=None,
     compact=False,
+    qland=None,
 ):
     """q: bf16 ROW_MAJOR [1,H=32,S,D]; kv: fp8_e4m3 / bf16 ROW_MAJOR [1,1,R,D]; idx: uint32 ROW_MAJOR [1,1,S,TOPK]; sink: bf16 ROW_MAJOR [1,1,1,H].
     ``ckc``: the device compute kernel config (fidelity / approx / fp32 acc are read from it). -> bf16 ROW_MAJOR [1,H,S,v_dim].
@@ -90,7 +95,9 @@ def sparse_sdpa_split(
         q.layout == ttnn.TILE_LAYOUT
     )  # q [1,S,32,512] TILE (qk_heads output): read as tile pages, no RM regroup / tilize
     QLAY = int(os.environ.get("SS_QLAY", "0"))  # 1: q is [1,S,H,D] row-major (token-major pages)
-    if qt:
+    if qland is not None:  # B29: q = the push landing tensor (hy4_qpush.QPush); qland = (QPush, S_user)
+        H, S, D = 8, 8 * qland[1], 576
+    elif qt:
         H, S, D = 32, int(q.shape[1]), int(q.shape[3])
     elif QLAY:
         H, S, D = int(q.shape[2]), int(q.shape[1]), int(q.shape[3])
@@ -100,6 +107,7 @@ def sparse_sdpa_split(
     q_heads = H  # q tensor head rows: 32 (padded) or 8 (real heads only; the other 24 rows are zero-filled in L1 by the kernel, QROWS = 8)
     if q_heads == 8 and not qt:
         H = 32
+    assert qland is None or (owner_s == qland[1] and not qt and QMODE_ENV_OK(os.environ))
     assert H == 32 and v_dim == 512 and D in (512, 576)
     assert q.dtype == ttnn.bfloat16 and idx.dtype == ttnn.uint32 and kv.dtype in (ttnn.bfloat16, ttnn.fp8_e4m3)
     # SCALED_FP8 KV (the stock sparse_sdpa packed format): fp8 bytes, row = 512 fp8 latent + 4 fp32 scales + 64 bf16 rope = 656 B, stored at the 64 B aligned stride 704
@@ -118,6 +126,9 @@ def sparse_sdpa_split(
     )  # q head rows loaded (rest zero-filled); Hy4 pads 8 real heads to 32
     if qt:
         QMODE = 2
+    if qland is not None:
+        QMODE = 1
+        QROWS = 8
     assert n_cores <= grid.x * grid.y
     n_chunks_row = -(-topk // k_chunk)
     # vrows: no limit on the chunks per sender (the sender parity is my_cnt & 1 in the writer; the flash loop is the stock one). HY4_SPLIT_MAX2=1 restores the old assert.
@@ -319,8 +330,11 @@ def sparse_sdpa_split(
             (Q_IN if qt else QROWS),
             QLAY,
             int(os.environ.get("SS_KSPLIT", "0")),
-            owner_s
-            if os.environ.get("SS_IDXMOD", "0") == "1"
+            owner_s if os.environ.get("SS_IDXMOD", "0") == "1" else 0,
+            int(qland is not None),
+            qland[1] if qland is not None else 0,
+            qland[0].rp
+            if qland is not None
             else 0,  # idx rows shared by the owner blocks: measured SLOWER (8 rows hit one DRAM page: +8-9 us), default off: the caller repeats the idx rows once per index layer
         ]
         + _acc(q)
@@ -426,7 +440,7 @@ def sparse_sdpa_split(
         t, g = i // G, i % G
         lx, ly = cores[t * G]
         ln = md.worker_core_from_logical_core(ttnn.CoreCoord(lx, ly))
-        rt_r[cx][cy] = [t, g]
+        rt_r[cx][cy] = [t, g] + (qland[0].split_args() if qland is not None else [])
         rt_w[cx][cy] = [t, g, ln.x, ln.y] + (xchg(t, g) if xchg is not None else [0] * 10)
         rt_c[cx][cy] = [t, g]
     reader = ttnn.KernelDescriptor(
@@ -521,6 +535,8 @@ def sparse_sdpa_split(
                 _bits(scale),
                 int(compact),
                 roff,
+                int(qland is not None),
+                qland[0].rp if qland is not None else 0,
                 tuple(_acc(q)),
                 tuple(_acc(kv)),
                 tuple(_acc(idx)),
