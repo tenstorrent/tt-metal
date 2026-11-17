@@ -114,8 +114,8 @@ PREP_SEND_NOC = "auto"
 # qwen36 prefill chunk: 48 ranges, 69 us). False: one blob per group (PREP_CLUSTER).
 PREP_RECT = True
 # Tile rows per sequence up to which PREP_RECT places (T=1024 233.0 us against 234.2 in blobs, T=2048 368.5 / 368.4,
-# T=4096 810.5 / 809.5: the blobs stay there).
-PREP_RECT_MAX_ROWS = 64
+# T=4096 808.4 / 808.0: 0.4 us of kernel against 59 us of start gap per layer in the QB2 4096-token prefill trace).
+PREP_RECT_MAX_ROWS = 128
 NOC_GRID = (17, 12)  # Blackhole NoC torus (x, y), in NOC 0 coordinates (R-PREP is Blackhole-only)
 # Pieces per pair under R-PREP, at most; _prep_estimate picks among them. Fewer pieces leave more prep cores and halve
 # the fan-out of a prepped row, more shorten the state step: T=128 4 pieces 87 us, 2 pieces 92; T=512 255 vs 199;
