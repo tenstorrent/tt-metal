@@ -9,6 +9,7 @@ dataloader state round-trip through header.json and must be JSON; what was asked
 """
 
 import json
+import os
 import random
 import sys
 
@@ -20,7 +21,7 @@ from dcp_oracle import Loader, advance_generators
 
 import ttml
 from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler, StepScheduler
-from ttml.distributed_checkpointing._errors import CheckpointError, VersionError
+from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError, VersionError
 from ttml.distributed_checkpointing._index import read_header_json, write_header
 from ttml.distributed_checkpointing._train_state import (
     TRAIN_STATE_KEY,
@@ -28,6 +29,7 @@ from ttml.distributed_checkpointing._train_state import (
     capture_train_state,
     check_train_state,
     missing_train_state,
+    read_train_state,
     restore_rng,
     restore_train_state,
     this_world_rank,
@@ -146,6 +148,18 @@ def test_scheduler_and_dataloader_round_trip_through_the_header(tmp_path):
     assert loader2.get_state_dict() == loader.get_state_dict()
     assert missing_train_state({}, scheduler=sched2) == ["train_state/scheduler"]
     assert restore_train_state({}, scheduler=sched2, dataloader=loader2, rng=True) == []
+
+
+def test_a_header_without_a_train_state_object_is_refused(tmp_path, expect_error):
+    ckpt = str(tmp_path / "step_0000001")
+    os.makedirs(ckpt)
+    envelope = {"format": "ttml-dcp", "version": 1, "user": {}}
+    write_header(ckpt, {**envelope, TRAIN_STATE_KEY: {}})
+    assert read_train_state(ckpt) == {}
+    for header, found in ((envelope, "NoneType"), ({**envelope, TRAIN_STATE_KEY: ["rng"]}, "list")):
+        write_header(ckpt, header)
+        with expect_error(IncompleteCheckpointError, rf"has no train_state object \(found {found}\)"):
+            read_train_state(ckpt)
 
 
 @pytest.mark.parametrize("steps", [2, 7], ids=["mid_warmup", "into_cosine"])
