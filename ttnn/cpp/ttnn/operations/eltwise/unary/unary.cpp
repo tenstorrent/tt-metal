@@ -9,7 +9,6 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <algorithm>
 
