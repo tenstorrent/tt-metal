@@ -293,6 +293,46 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                                 program_config.block_w,
                                 program_config.block_h,
                                 num_cores_r * num_cores_c);
+                            if (attributes.is_causal_mask) {
+                                // 1. Reject row-major causal masks (only TILE layout supported)
+                                TT_FATAL(
+                                    mask.layout() == Layout::TILE,
+                                    "Causal mask currently only supports TILE layout to prevent kernel hangs; got ROW_MAJOR layout with shape {}.",
+                                    mask.padded_shape());
+
+                                // 2. Enforce batch size consistency
+                                TT_FATAL(
+                                    tensors_args.input_tensor.padded_shape()[0] == mask.padded_shape()[0],
+                                    "Input and mask batch sizes must match for causal mask, got input: {} vs mask: {}",
+                                    tensors_args.input_tensor.padded_shape(),
+                                    mask.padded_shape());
+
+                                const uint32_t mask_Ht = mask.padded_shape()[-2] /
+                                                         tensors_args.input_tensor.tensor_spec().tile().get_height();
+                                TT_FATAL(
+                                    mask_Ht > 0 && program_config.block_h % mask_Ht == 0,
+                                    "block_h ({}) must be a positive multiple of the causal mask height in tiles "
+                                    "({}). Mask shape is {}.",
+                                    program_config.block_h,
+                                    mask_Ht,
+                                    mask.padded_shape());
+
+                                // 3. Validate sharded mask specifications against input shard layout
+                                if (mask.is_sharded()) {
+                                    TT_FATAL(
+                                        tensors_args.input_tensor.is_sharded(),
+                                        "If mask is sharded, input tensor must also be sharded.");
+                                    TT_FATAL(
+                                        mask.shard_spec().has_value() && tensors_args.input_tensor.shard_spec().has_value(),
+                                        "Both input and mask must have valid shard specifications.");
+                                    TT_FATAL(
+                                        mask.shard_spec()->orientation == tensors_args.input_tensor.shard_spec()->orientation,
+                                        "Mask shard orientation must match input tensor shard orientation to avoid cross-core read desync.");
+                                    TT_FATAL(
+                                        mask.shard_spec()->grid == tensors_args.input_tensor.shard_spec()->grid,
+                                        "Mask shard core grid must align with input core grid.");
+                                }
+                            }
                         } else {
                             TT_FATAL(
                                 attributes.is_causal_mask,
