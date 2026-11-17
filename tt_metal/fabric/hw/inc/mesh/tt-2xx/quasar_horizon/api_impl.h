@@ -8,6 +8,10 @@
 
 #pragma once
 
+#ifndef NOC_ATT_ENABLED
+#error "quasar_horizon/api_impl.h requires ATT-enabled builds (TT_METAL_NOC_ATT must be set)"
+#endif
+
 #include <cstdint>
 #include <type_traits>
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
