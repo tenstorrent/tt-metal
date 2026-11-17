@@ -16,10 +16,10 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/riscv_pmc.hpp"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
-
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
@@ -185,7 +185,9 @@ int main() {
                 set_eth_fw_stage(ETH_FW_STAGE_KERNEL);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                RiscvPmcBegin();
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+                RiscvPmcEnd();
                 record_stack_usage(stack_free);
                 set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
                 WAYPOINT("D");

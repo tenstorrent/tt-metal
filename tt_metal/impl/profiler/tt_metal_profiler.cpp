@@ -1072,6 +1072,14 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(
             const CoreCoord curr_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
             virtual_cores.push_back(curr_core);
         }
+        // The idle ethernet firmware flushes its ERISC0 buffer like the active one, but its zones are only read
+        // when the RISC-V counter capture asks for them.
+        if (env.get_rtoptions().get_profiler_riscv_pmc_enabled()) {
+            for (const CoreCoord& core : device->get_inactive_ethernet_cores()) {
+                const CoreCoord curr_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
+                virtual_cores.push_back(curr_core);
+            }
+        }
     }
 
     if (env.get_rtoptions().get_profiler_do_dispatch_cores()) {
