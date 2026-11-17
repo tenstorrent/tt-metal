@@ -803,7 +803,7 @@
       export DS_PREFILL_REUSE_MODEL=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
     '
-  test_type: glm_chunked_perf_suite
+  test_type: glm_chunked_perf_suite_parked
   test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf, sparse_mla, glm_sparse_mla_perf]
   test_group: module
   skus:
@@ -2199,7 +2199,7 @@
     fi
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1
-  test_type: prefill_runner_kv_pcc
+  test_type: glm_chunked_perf_suite
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
   test_group: disagg_prefill
   skus:
