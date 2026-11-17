@@ -16,8 +16,7 @@ from pathlib import Path
 
 import pytest
 import requests
-
-from emb_batcher import collect_batch, right_pad
+from emb_batcher import collect_batch, pick_chip, right_pad
 
 HERE = Path(__file__).resolve().parent
 
@@ -72,6 +71,22 @@ def test_collect_waits_for_late_tasks():
     assert len(tasks) == 2
 
 
+def test_pick_chip_spreads_before_stacking():
+    load, ready = [0, 0, 0, 0], {0, 1, 2, 3}
+    picked = []
+    for _ in range(8):
+        c = pick_chip(load, ready, 2, (picked[-1] + 1) if picked else 0)
+        load[c] += 1
+        picked.append(c)
+    assert picked == [0, 1, 2, 3, 0, 1, 2, 3]
+    assert pick_chip(load, ready, 2) is None  # every chip at cap
+
+
+def test_pick_chip_least_loaded_and_ready_only():
+    assert pick_chip([3, 1, 0, 2], {0, 1, 3}, 8) == 1  # chip 2 is not ready
+    assert pick_chip([0, 0], set(), 8) is None
+
+
 def test_right_pad():
     ids, mask = right_pad([[5, 6, 7], [8]])
     assert ids == [[5, 6, 7], [8, 0, 0]] and mask == [[1, 1, 1], [1, 0, 0]]
@@ -82,7 +97,6 @@ def test_backend_encode_shared_across_threads_is_safe():
     """The template's path (backend_tokenizer.encode on one shared tokenizer) under 16 threads gives the same ids as
     a single thread and never raises; the server now uses one tokenizer per thread anyway."""
     from emb_common import load_tokenizer, make_texts
-
     from emb_serve_fastapi import MAX_SEQ_LEN, _fast_encode
 
     tok = load_tokenizer()
@@ -133,7 +147,15 @@ class Server:
         self.port = _free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         env = {**os.environ, "EMB_STUB_WORKER": stub}
-        cmd = [sys.executable, str(HERE / "emb_serve_fastapi.py"), "--port", str(self.port), "--server-phys", "0", *extra]
+        cmd = [
+            sys.executable,
+            str(HERE / "emb_serve_fastapi.py"),
+            "--port",
+            str(self.port),
+            "--server-phys",
+            "0",
+            *extra,
+        ]
         self.log = open(f"/tmp/test_emb_serve_{self.port}.log", "w")
         self.proc = subprocess.Popen(cmd, cwd=HERE, env=env, stdout=self.log, stderr=subprocess.STDOUT)
 
@@ -202,6 +224,25 @@ def test_starting_then_ok_and_ordering(server_factory):
     assert s.embed("x", encoding_format="bogus").status_code == 422
     m = requests.get(s.url + "/metrics", timeout=5).json()
     assert m["texts_per_forward"], m
+
+
+def test_dp_spreads_rows_over_every_chip(server_factory):
+    """DP=4, max-batch 8: a 4-text request lands one text per chip (not 4 on chip 0); 64 texts queue beyond the
+    32 slots and still all return, in order; warm-first brings chip 0 up before the rest."""
+    s = server_factory("slow_start:1", "--dp", "4", "--max-batch", "8", "--debug-chip")
+    s.wait_listening()
+    h = s.wait_status("ok").json()
+    assert h["chips_ready"] == 4
+    r = s.embed(["a", "bb cc", "dd ee ff", "gg"])
+    assert sorted(d["chip"] for d in r.json()["data"]) == [0, 1, 2, 3]
+    texts = [" ".join(["w"] * (1 + i % 7)) for i in range(64)]
+    r = s.embed(texts)
+    assert r.status_code == 200
+    counts = [d["embedding"][0] for d in r.json()["data"]]
+    ref = [d["embedding"][0] for d in s.embed(texts[:7]).json()["data"]]
+    assert counts == [ref[i % 7] for i in range(64)]
+    m = requests.get(s.url + "/metrics", timeout=5).json()
+    assert all(n > 0 for n in m["texts_per_chip"]) and sum(m["texts_per_chip"]) == 4 + 64 + 7
 
 
 def test_worker_death_fails_pending_and_health(server_factory):

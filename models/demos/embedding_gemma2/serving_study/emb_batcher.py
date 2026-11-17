@@ -30,6 +30,22 @@ def collect_batch(get, max_wait_s, max_texts, clock=time.monotonic):
     return tasks, False
 
 
+def pick_chip(load, ready, cap, start=0):
+    """Least-loaded ready chip with load < cap, ties broken round-robin from `start`; None when every chip is full.
+
+    With DP, spreading texts over idle chips (batch 1 each) beats stacking them on one chip as a batch: a chip only
+    gets a second text once every ready chip holds one."""
+    n = len(load)
+    best = None
+    for k in range(n):
+        c = (start + k) % n
+        if c in ready and load[c] < cap and (best is None or load[c] < load[best]):
+            best = c
+            if load[c] == 0:
+                break
+    return best
+
+
 def right_pad(id_lists, pad_id=0):
     """B lists of token ids -> (input_ids, attention_mask) as nested lists [B, L], right-padded to the longest."""
     width = max(len(ids) for ids in id_lists)
