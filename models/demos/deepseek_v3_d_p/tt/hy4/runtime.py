@@ -15,6 +15,10 @@ on Hy4's full/shared layer map, and the prefill MoE. Everything Hy4 changes ther
 * there is no MTP predictor yet: the shared build would start GLM-5.3's, which reads the DeepSeek
   ``model.layers.78`` keys; Hy4 stores its MTP layer as ``model.mtp_layers.0`` (#65925).
 
+The mesh layout is checked by the adapter, not here: ``Hy4Adapter`` resolves it (``tt/hy4/layout.py``) when the
+runner asks for the weight-cache path, before the mesh opens, so the TP32 / DP1 layout fails there with its
+blocking issues until the shared stack supports it; the GLM-5.3 dev / numerics layout builds this runtime.
+
 Hooks for the sibling issues:
 
 * iHC (#65891) changes the residual stream between blocks, so it lands as a Hy4 transformer here via

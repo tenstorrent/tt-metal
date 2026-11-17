@@ -13,8 +13,10 @@ from its explicit ``indexer_types`` by ``full_indexer_rank``. What it changes:
     readable it is validated against the constants and supplies the per-layer maps.
   * weights: ``TtHy4Runtime`` rebuilds a missing weight cache through the Hy4 checkpoint reader
     (``tt/runners/hy4_checkpoint.py``: fused experts, MXFP8 scales, ``linear_gate`` -> ``g_proj``).
-  * mesh layout: SP x TP is an open decision (prefill 16 heads per chip vs decode's 8); see
-    ``tt/hy4/layout.py``. Default is GLM-5.3's SP 8 x TP 4.
+  * mesh layout: TP32 / DP1 (``tp32``, the SC1 placement of #65884), selected by default. The shared prefill
+    stack cannot run it yet, so it fails at runner start naming the blocking issues; GLM-5.3's SP 8 x TP 4
+    stays as the explicitly selected DEV / NUMERICS layout (``PREFILL_HY4_LAYOUT=glm_prefill_sp8_tp4``). See
+    ``tt/hy4/layout.py``. The weight cache is keyed by mesh and layout.
   * deltas the stack does not implement yet are refused unless a bring-up override is set (below).
 """
 
@@ -22,12 +24,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from loguru import logger
 
+import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4Config, hy4_hf_config, load_hy4_config_json
+from models.demos.deepseek_v3_d_p.tt.hy4.layout import resolve_layout
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
 
 # Bring-up override: run with the deltas below MISSING (GLM-5.3 numerics for those parts). For smoke runs
 # and for checks that do not depend on them; KV PCC past the first layer will not match HF hy_v4.
@@ -92,18 +98,33 @@ class Hy4Adapter(GLM53Adapter):
     def config_builder(self) -> Callable:
         return hy4_hf_config
 
-    # --- mesh layout (open decision; tt/hy4/layout.py) ---
-    def _check_layout(self, params) -> None:
-        from models.demos.deepseek_v3_d_p.tt.hy4.layout import resolve_layout
+    # --- mesh layout (TP32 / DP1 by default; tt/hy4/layout.py) ---
+    def _resolve_layout(self, sp: int, tp: int, sp_axis: int):
+        return resolve_layout(sp, tp, sp_axis, Hy4Config.NUM_ATTENTION_HEADS)
 
-        layout = resolve_layout(params.sp_factor, params.tp_factor, params.sp_axis, Hy4Config.NUM_ATTENTION_HEADS)
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
+        """``$PREFILL_TTNN_CACHE/{name}_{arch}_{N}dev/{rows}x{cols}[_sp1]{layout suffix}``. The runner calls this
+        before it opens the mesh, so an unrunnable layout (``tp32`` today) fails here, at startup."""
+        layout = self._resolve_layout(mesh_shape[sp_axis], mesh_shape[1 - sp_axis], sp_axis)
+        root = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
+        if not root:
+            return None
+        key = mesh_cache_key(mesh_shape, sp_axis)
+        if layout is not None:
+            key = layout.cache_key(key)
+        path = Path(root) / f"{self.name}_{'bh' if is_blackhole() else 'wh'}_{ttnn.get_num_devices()}dev" / key
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _check_layout(self, params) -> None:
+        layout = self._resolve_layout(params.sp_factor, params.tp_factor, params.sp_axis)
         heads = Hy4Config.NUM_ATTENTION_HEADS // params.tp_factor
         if layout is None:
             logger.info(
-                f"Hy4: mesh SP={params.sp_factor} x TP={params.tp_factor} ({heads} heads per chip), no named layout"
+                f"Hy4: test mesh SP={params.sp_factor} x TP={params.tp_factor} ({heads} heads per chip), no layout"
             )
-        elif not layout.validated:
-            logger.warning(f"Hy4: layout {layout.name} ({layout.note}) has not run in prefill")
+        elif layout.role == "dev":
+            logger.warning(f"Hy4: layout {layout.name} ({layout.note}); the Hy4 layout is TP32 / DP1 (#65884)")
         else:
             logger.info(f"Hy4: layout {layout.name} ({layout.note})")
 

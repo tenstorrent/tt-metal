@@ -17,7 +17,8 @@ Deltas that are plain configuration (handled here, consumed by the existing TT p
     ``shared`` layers (config.json; the 20 / 58 in the tracking issue is wrong).
   * one dense layer (layer 0) with an 18432 FFN, instead of GLM's three 12288 dense layers.
   * vocab 120,832; ``routed_scaling_factor`` 2.827; ``swiglu_limit`` 10 (clamped SiLU-GLU on the
-    routed and shared experts); plain RoPE with theta 1e7 (no YaRN).
+    routed experts only; the shared expert and dense layer 0 are HF ``HYV4MLP``, plain SiLU-GLU);
+    plain RoPE with theta 1e7 (no YaRN).
 
 Deltas wired to an existing TT path but owned by a sibling issue for numerical sign-off:
 
@@ -64,14 +65,14 @@ class Hy4Config(GLM53Config):
 
     # --- MoE deltas ----------------------------------------------------------------------------
     ROUTE_SCALE = 2.827  # routed_scaling_factor  (GLM-5.3: 2.5)
-    # swiglu_limit 10 on routed and shared experts. The routed-expert kernel bakes the clamp at compile
-    # time (ClampedSiluGluConfigDsV4, limit 10) while the shared expert reads SWIGLU_LIMIT at runtime, so
-    # the two must stay equal; test_hy4_config pins it.
+    # swiglu_limit 10 clamps the ROUTED experts only: HF HYV4MoE computes silu(min(gate, 10)) *
+    # clamp(up, -10, 10) per expert, while the shared expert and the dense layer-0 FFN are HYV4MLP with no
+    # clamp (reference/hy4/model.py on hy4-preview/prefill-golden-refs). The routed-expert kernel bakes the
+    # limit at compile time (ClampedSiluGluConfigDsV4, limit 10), so SWIGLU_LIMIT must stay 10; the shared
+    # expert and TtFfn would read it only under "clamped_silu_glu", which Hy4 does not name for them.
     SWIGLU_LIMIT = 10.0
     ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
-    SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
-    # Whether the dense layer-0 FFN clamps too is not settled from config.json alone; GLM's plain SiLU
-    # until #65923 checks it against HF hy_v4 (TtFfn only clamps when this names "clamped_silu_glu").
+    SHARED_EXPERT_ACTIVATION = "silu"
     DENSE_FFN_ACTIVATION = "silu"
     # moe_fused_swiglu has no ClampedSiluGlu, so the routed-expert hybrid split (GLM: 320) must stay off:
     # every expert runs through unified_routed_expert_moe.

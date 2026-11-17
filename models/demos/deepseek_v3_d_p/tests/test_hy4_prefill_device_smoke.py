@@ -16,6 +16,10 @@ and their RoPE frames (``hy4_checkpoint.mla_rope_to_device_frame`` / ``indexer_t
 reorders it scored pe -0.04, index-K -0.06. Deeper layers are recorded only: the learnable sink (#65921) and
 iHC residual (#65891) are not implemented, so their inputs already differ from HF.
 
+It runs the DEV / NUMERICS layout (``glm_prefill_sp8_tp4``, the 8x4 mesh): the Hy4 layout is TP32 / DP1 (#65884),
+which the shared prefill stack cannot run yet. ``PREFILL_HY4_LAYOUT`` defaults to the dev layout here; naming
+``tp32`` fails with its blockers (``tt/hy4/layout.py``).
+
 Needs (each missing one skips): the Hy4 checkpoint, the golden trace (``PREFILL_TRACE_DIR``), a Hy4 weight
 cache built at the current ``HY4_MLA_CACHE_FORMAT`` (build it with the prefill runner, which writes the
 missing / stale categories), an 8x4 Blackhole Galaxy, and ``PREFILL_CHUNK_SIZE=4096``. A cache whose MLA
@@ -183,9 +187,15 @@ class _PccRecorder:
 def test_hy4_prefill_layer0_kv_and_index_k_pcc(
     variant, config_only, mesh_device, device_params, num_links, sp_axis, monkeypatch
 ):
+    from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4Config
+    from models.demos.deepseek_v3_d_p.tt.hy4 import layout as hy4_layout
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
     from models.demos.deepseek_v3_d_p.tt.runners import hy4_checkpoint as hc
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+
+    # The adapter's layout gate, which this driver (TtPrefillTransformer directly) does not pass through.
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, os.environ.get(hy4_layout.LAYOUT_ENV) or hy4_layout.DEV_LAYOUT)
+    hy4_layout.resolve_layout(MESH[sp_axis], MESH[1 - sp_axis], sp_axis, Hy4Config.NUM_ATTENTION_HEADS)
 
     num_devices = mesh_device.get_num_devices()
     cache = _mesh_cache_dir(num_devices)

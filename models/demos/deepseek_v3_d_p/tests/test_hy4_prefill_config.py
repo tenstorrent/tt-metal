@@ -118,13 +118,38 @@ def test_hy4_deltas_from_glm53(name, glm, hy4):
 
 
 def test_clamped_swiglu_plumbing():
-    # The routed kernel bakes limit 10 (ClampedSiluGluConfigDsV4); the shared expert reads SWIGLU_LIMIT.
+    # The routed kernel bakes limit 10 (ClampedSiluGluConfigDsV4), so SWIGLU_LIMIT must stay 10.
     assert Hy4Config.SWIGLU_LIMIT == 10.0
     assert Hy4Config.ROUTED_EXPERT_ACTIVATION == "clamped_silu_glu"
-    assert Hy4Config.SHARED_EXPERT_ACTIVATION == "clamped_silu_glu"
+    # HF hy_v4: the shared expert and dense layer 0 are HYV4MLP, which does not clamp.
+    assert Hy4Config.SHARED_EXPERT_ACTIVATION == "silu"
+    assert Hy4Config.DENSE_FFN_ACTIVATION == "silu"
     # moe_fused_swiglu cannot run ClampedSiluGlu, so the hybrid split must be off.
     assert Hy4Config.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD is None
     assert not hasattr(GLM53Config, "SWIGLU_LIMIT")
+
+
+def _glu_by_name(name: str, limit: float):
+    """What the TT FFN paths compute for an activation name (TtSharedExpert / TtFfn / the routed kernel)."""
+    if name == "silu":
+        return lambda g, u: torch.nn.functional.silu(g) * u
+    if name == "clamped_silu_glu":
+        return lambda g, u: torch.nn.functional.silu(g.clamp(max=limit)) * u.clamp(min=-limit, max=limit)
+    raise AssertionError(f"unexpected activation {name!r}")
+
+
+def test_swiglu_clamp_matches_hf_per_ffn_kind():
+    """Pins Hy4's clamp to the routed experts, against the HF hy_v4 formulas (reference/hy4/model.py): HYV4MoE
+    clamps gate above and up both sides at swiglu_limit; HYV4MLP (shared expert, dense layer 0) does not."""
+    lim = Hy4Config.SWIGLU_LIMIT
+    g = torch.tensor([-30.0, -5.0, 0.5, 9.0, 12.0, 40.0])
+    u = torch.tensor([-25.0, 11.0, -3.0, 2.0, 15.0, -40.0])
+    hf_routed = torch.nn.functional.silu(g.clamp(max=lim)) * u.clamp(min=-lim, max=lim)
+    hf_mlp = torch.nn.functional.silu(g) * u
+    assert not torch.allclose(hf_routed, hf_mlp)  # the inputs exercise the limit
+    torch.testing.assert_close(_glu_by_name(Hy4Config.ROUTED_EXPERT_ACTIVATION, lim)(g, u), hf_routed)
+    torch.testing.assert_close(_glu_by_name(Hy4Config.SHARED_EXPERT_ACTIVATION, lim)(g, u), hf_mlp)
+    torch.testing.assert_close(_glu_by_name(Hy4Config.DENSE_FFN_ACTIVATION, lim)(g, u), hf_mlp)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -305,44 +330,61 @@ def test_real_config_json_matches_constants():
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Mesh layout (open decision)
+# Mesh layout: TP32 / DP1 is the Hy4 layout (#65884); glm_prefill_sp8_tp4 is dev / numerics only
 # ---------------------------------------------------------------------------------------------------------------
 
 
 def test_layouts_and_heads_per_chip():
-    glm = hy4_layout.HY4_PREFILL_LAYOUTS["glm_prefill_sp8_tp4"]
-    dec = hy4_layout.HY4_PREFILL_LAYOUTS["decode_aligned_sp4_tp8"]
-    assert hy4_layout.DEFAULT_LAYOUT == glm.name and glm.validated and not dec.validated
-    assert glm.sp * glm.tp == dec.sp * dec.tp == 32
-    assert glm.heads_per_chip(64) == 16
-    assert dec.heads_per_chip(64) == 8
+    tp32 = hy4_layout.HY4_PREFILL_LAYOUTS["tp32"]
+    dev = hy4_layout.HY4_PREFILL_LAYOUTS["glm_prefill_sp8_tp4"]
+    assert set(hy4_layout.HY4_PREFILL_LAYOUTS) == {"tp32", "glm_prefill_sp8_tp4"}
+    assert hy4_layout.DEFAULT_LAYOUT == tp32.name and tp32.role == "production"
+    assert dev.role == "dev" and "DEV / NUMERICS" in dev.note and dev.runnable
+    assert tp32.sp * tp32.tp == dev.sp * dev.tp == 32
+    assert tp32.heads_per_chip(64) == 8  # heads over the 8 columns of the 4x8 mesh
+    assert dev.heads_per_chip(64) == 16
+    # TP32 is blocked until the shared stack has its placement; every blocker names its owning issue.
+    assert not tp32.runnable
+    assert {issue for _, issue in tp32.blockers} == {"#65885", "#65887", "#65890", "#65892"}
+
+
+def test_layout_cache_keys_differ():
+    tp32 = hy4_layout.HY4_PREFILL_LAYOUTS["tp32"]
+    dev = hy4_layout.HY4_PREFILL_LAYOUTS["glm_prefill_sp8_tp4"]
+    assert dev.cache_key("8x4") == "8x4"  # existing dev caches stay valid
+    assert tp32.cache_key("4x8") == "4x8_tp32"  # 2D-TP shards never share an SP x TP 4x8 cache
 
 
 def test_resolve_layout(monkeypatch, expect_error):
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV, raising=False)
-    assert hy4_layout.resolve_layout(8, 4, 0, 64).name == "glm_prefill_sp8_tp4"
+    # Unset on a full Galaxy means tp32, which fails fast naming its blockers and the dev override.
+    for mesh in ((4, 8, 0), (8, 4, 0)):
+        with expect_error(NotImplementedError, "tp32 .*#65885, #65887, #65890, #65892.*glm_prefill_sp8_tp4"):
+            hy4_layout.resolve_layout(*mesh, 64)
     assert hy4_layout.resolve_layout(2, 4, 0, 64) is None  # small test mesh, nothing requested
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "tp32")
+    with expect_error(NotImplementedError, "cannot run on the shared prefill stack yet"):
+        hy4_layout.resolve_layout(4, 8, 0, 64)
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "glm_prefill_sp8_tp4")
+    assert hy4_layout.resolve_layout(8, 4, 0, 64).name == "glm_prefill_sp8_tp4"
     with expect_error(ValueError, "needs PREFILL_SP=8"):
         hy4_layout.resolve_layout(4, 8, 0, 64)
-    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "decode_aligned_sp4_tp8")
-    assert hy4_layout.resolve_layout(4, 8, 0, 64).heads_per_chip(64) == 8
-    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "nope")
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "decode_aligned_sp4_tp8")  # removed: TP32 supersedes it
     with expect_error(ValueError, "not a Hy4 prefill layout"):
-        hy4_layout.resolve_layout(8, 4, 0, 64)
+        hy4_layout.resolve_layout(4, 8, 0, 64)
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV)
     with expect_error(ValueError, "do not split"):
         hy4_layout.resolve_layout(4, 6, 0, 64)
 
 
-def test_manifest_matches_default_layout():
+def test_manifest_selects_tp32():
     env = json.loads(MANIFEST.read_text())["env"]
     assert env["PREFILL_MODEL"] == "hy4_preview"
     lay = hy4_layout.HY4_PREFILL_LAYOUTS[env["PREFILL_HY4_LAYOUT"]]
-    assert lay.name == hy4_layout.DEFAULT_LAYOUT
+    assert lay.name == hy4_layout.DEFAULT_LAYOUT == "tp32"
     assert lay.matches(int(env["PREFILL_SP"]), int(env["PREFILL_TP"]), int(env["PREFILL_SP_AXIS"]))
     max_seq = int(env["PREFILL_MAX_SEQ_LEN"])
-    # Bank-aligned KV: a multiple of stripes (SP*TP with TP-dedup) x 32 rows x 8 DRAM banks.
+    # Bank-aligned KV: a multiple of stripes (all 32 chips) x 32 rows x 8 DRAM banks.
     assert max_seq % (lay.sp * lay.tp * 32 * 8) == 0
     assert max_seq >= Hy4Config.MAX_POSITION_EMBEDDINGS
     from models.demos.deepseek_v3_d_p.utils.chunk_config import DEFAULT_PREFILL_CHUNK_TOKENS
@@ -377,6 +419,43 @@ def test_adapter_identity(adapter):
     # Must not inherit GLM-5.3's golden trace or checkpoint.
     assert "GLM" not in adapter.prefill_trace_default and "GLM" not in adapter.test_prefill_trace_default
     assert "GLM" not in adapter.hf_model_default and "GLM" not in adapter.ttnn_cache_default
+
+
+def test_adapter_layout_gate_and_cache_key(adapter, tmp_path, monkeypatch, expect_error):
+    """The runner resolves weight_cache_path before it opens the mesh, so TP32 fails there, at startup."""
+    import ttnn
+    from models.common.utility_functions import is_blackhole
+    from models.demos.common.prefill.adapter import PrefillRunParams
+
+    monkeypatch.setenv("PREFILL_TTNN_CACHE", str(tmp_path))
+    monkeypatch.setattr(ttnn, "get_num_devices", lambda: 32)
+    monkeypatch.delenv(hy4_layout.LAYOUT_ENV, raising=False)
+    with expect_error(NotImplementedError, "#65885"):
+        adapter.weight_cache_path((4, 8), sp_axis=0)
+    with expect_error(NotImplementedError, "#65885"):
+        adapter.weight_cache_path((8, 4), sp_axis=0)
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "glm_prefill_sp8_tp4")
+    arch = "bh" if is_blackhole() else "wh"
+    assert adapter.weight_cache_path((8, 4), sp_axis=0) == tmp_path / f"hy4_preview_{arch}_32dev" / "8x4"
+    params = PrefillRunParams(
+        mesh_shape=(8, 4),
+        num_layers=1,
+        first_layer_idx=0,
+        is_first_rank=True,
+        is_last_rank=True,
+        max_seq_len=8192,
+        chunk_size=4096,
+        num_users=1,
+        capacity_factor=1,
+        num_links=2,
+        gate_mode_name="DEVICE_FP32",
+        kv_only_last_layer=False,
+        weight_cache_path=None,
+    )
+    adapter._check_layout(params)
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "tp32")
+    with expect_error(NotImplementedError, "glm_prefill_sp8_tp4"):
+        adapter._check_layout(params)
 
 
 def test_adapter_loads_and_validates_config_json(adapter, tmp_path, monkeypatch, expect_error):
