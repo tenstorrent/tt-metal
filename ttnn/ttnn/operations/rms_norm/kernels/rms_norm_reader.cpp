@@ -55,6 +55,7 @@ void kernel_main() {
     const uint32_t g_addr = get_arg_val<uint32_t>(1);
     const uint32_t first_tile_row = get_arg_val<uint32_t>(2);
     const uint32_t rows_core = get_arg_val<uint32_t>(3);
+    const uint32_t scaler_bits = get_arg_val<uint32_t>(4);
 
     constexpr bool IS_RM = get_compile_time_arg_val(0) != 0;
     constexpr uint32_t ES_X = get_compile_time_arg_val(1);
@@ -73,7 +74,8 @@ void kernel_main() {
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(14);
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(15);
     constexpr uint32_t cb_gamma_rm = get_compile_time_arg_val(16);
-    constexpr auto x_args = TensorAccessorArgs<17>();
+    constexpr bool GAMMA_TILE = get_compile_time_arg_val(17) != 0;
+    constexpr auto x_args = TensorAccessorArgs<18>();
     constexpr auto g_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t num_seg = Wt / Sb;
@@ -90,7 +92,8 @@ void kernel_main() {
 
     const uint32_t x_tile_bytes = IS_RM ? 0 : dfb_x.get_tile_size();
     const auto x_acc = TensorAccessor(x_args, x_addr, IS_RM ? W * ES_X : x_tile_bytes);
-    const auto g_acc = TensorAccessor(g_args, g_addr, W * ES_G);
+    const uint32_t g_page_bytes = (HAS_GAMMA && GAMMA_TILE) ? dfb_gamma.get_tile_size() : W * ES_G;
+    const auto g_acc = TensorAccessor(g_args, g_addr, g_page_bytes);
 
     // ---- one x segment: rb tile-rows x Sb tiles, pushed to cb_x (TILE) / cb_x_rm (RM) ----
     auto load_x_segment = [&](uint32_t tr0, uint32_t rb, uint32_t seg) {
@@ -155,6 +158,18 @@ void kernel_main() {
 
     // ---- one gamma segment: Sb tiles, stick elements scattered into row 0 of each tile ----
     auto load_gamma_segment = [&](uint32_t seg) {
+        if constexpr (GAMMA_TILE) {
+            // TILE gamma: tile column t holds the gamma slice in row 0; read tiles directly, no scatter.
+            dfb_gamma.reserve_back(Sb);
+            const uint32_t gbase = dfb_gamma.get_write_ptr();
+            const uint32_t gtb = dfb_gamma.get_tile_size();
+            for (uint32_t c = 0; c < Sb; ++c) {
+                noc_async_read_tile(seg * Sb + c, g_acc, gbase + c * gtb);
+            }
+            noc_async_read_barrier();
+            dfb_gamma.push_back(Sb);
+            return;
+        }
         const uint32_t g_tile_bytes = dfb_gamma.get_tile_size();
         const uint32_t scratch = dfb_gamma_rm.get_write_ptr();
         noc.async_write_zeros(dfb_gamma_rm, SEG_BYTES_G);
@@ -188,10 +203,13 @@ void kernel_main() {
     };
 
     // ---- schedule ----
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+        __builtin_bit_cast(float, scaler_bits));
 
     if constexpr (HAS_GAMMA) {
-        dfb_gamma_rm.reserve_back(1);  // private scratch, never pushed
+        if constexpr (!GAMMA_TILE) {
+            dfb_gamma_rm.reserve_back(1);  // private scratch, never pushed
+        }
         if constexpr (GAMMA_RESIDENT) {
             for (uint32_t seg = 0; seg < num_seg; ++seg) {
                 load_gamma_segment(seg);

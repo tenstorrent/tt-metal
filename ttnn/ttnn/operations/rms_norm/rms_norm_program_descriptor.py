@@ -90,13 +90,16 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     has_gamma = gamma is not None
     in_dtype = input_tensor.dtype
     out_dtype = output_tensor.dtype
-    es_x = input_tensor.element_size()
+    es_x = 2 if in_dtype == ttnn.bfloat8_b else input_tensor.element_size()
     in_tile = ttnn.tile_size(in_dtype)
     out_tile = ttnn.tile_size(out_dtype)
-    fp32_tile = ttnn.tile_size(ttnn.float32)
     bf16_tile = ttnn.tile_size(ttnn.bfloat16)
+    # Intermediates follow the DEST width: fp32 only when fp32 DEST accumulation is on.
+    im_dtype = ttnn.float32 if compute_kernel_config.fp32_dest_acc_en else ttnn.bfloat16
+    im_tile = ttnn.tile_size(im_dtype)
     g_dtype = gamma.dtype if has_gamma else ttnn.bfloat16
-    es_g = gamma.element_size() if has_gamma else 2
+    g_is_tile = has_gamma and gamma.layout == ttnn.TILE_LAYOUT
+    es_g = 2 if (not has_gamma or g_dtype == ttnn.bfloat8_b) else gamma.element_size()
     g_tile = ttnn.tile_size(g_dtype)
 
     device = input_tensor.device()
@@ -118,10 +121,11 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     if has_gamma:
         g_pages = Wt if blk.gamma_resident else 2 * Sb
         cbs.append(_cb(CB_GAMMA, g_dtype, g_tile, g_pages, all_cores))
-        cbs.append(_cb(CB_GAMMA_RM, g_dtype, Sb * TILE * es_g, 1, all_cores))
-        cbs.append(_cb(CB_XN, ttnn.float32, fp32_tile, G, all_cores))
-    cbs.append(_cb(CB_SQ, ttnn.float32, fp32_tile, G, all_cores))
-    cbs.append(_cb(CB_STAT, ttnn.float32, fp32_tile, Rb, all_cores))
+        if not g_is_tile:
+            cbs.append(_cb(CB_GAMMA_RM, g_dtype, Sb * TILE * es_g, 1, all_cores))
+        cbs.append(_cb(CB_XN, im_dtype, im_tile, G, all_cores))
+    cbs.append(_cb(CB_SQ, im_dtype, im_tile, G, all_cores))
+    cbs.append(_cb(CB_STAT, im_dtype, im_tile, Rb, all_cores))
     cbs.append(_cb(CB_OUT_TILES, out_dtype, out_tile, OUT_DEPTH * G, all_cores))
     if is_rm:
         cbs.append(_cb(CB_OUT_RM, out_dtype, out_tile, OUT_DEPTH * Sb, all_cores))
@@ -129,7 +133,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     # ------------------------------------------------------------ CT args
     reader_ct = [
         int(is_rm), es_x, Wt, Sb, Rb, int(blk.resident), int(has_gamma), es_g, int(blk.gamma_resident),
-        W, H, Ht_img, CB_X_RM, CB_X, CB_SCALER, CB_GAMMA, CB_GAMMA_RM,
+        W, H, Ht_img, CB_X_RM, CB_X, CB_SCALER, CB_GAMMA, CB_GAMMA_RM, int(g_is_tile),
     ]  # fmt: skip
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -153,13 +157,18 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     x_addr = input_tensor.buffer_address()
     o_addr = output_tensor.buffer_address()
     g_addr = gamma.buffer_address() if has_gamma else 0
-    inv_w_bits = _fp32_bits(1.0 / W)
+    # With a 16-bit DEST the running sum of squares loses accuracy once it grows large (measured: >4096
+    # gives up to 20% error), so fold 1/W into the reduce scaler (partials are then O(mean)) and leave
+    # nothing to multiply in compute. With fp32 DEST the scaler stays 1.0 and compute applies 1/W.
+    prescale = not compute_kernel_config.fp32_dest_acc_en
+    scaler_bits = _fp32_bits(1.0 / W if prescale else 1.0)
+    inv_w_bits = _fp32_bits(1.0 if prescale else 1.0 / W)
     eps_bits = _fp32_bits(epsilon)
 
     first = 0
     for group, rows in ((group1, rows_g1), (group2, rows_g2)):
         for core in ttnn.corerange_to_cores(group, row_wise=True):
-            reader_rt[core.x][core.y] = [x_addr, g_addr, first, rows]
+            reader_rt[core.x][core.y] = [x_addr, g_addr, first, rows, scaler_bits]
             writer_rt[core.x][core.y] = [o_addr, first, rows]
             compute_rt[core.x][core.y] = [rows, inv_w_bits, eps_bits]
             first += rows

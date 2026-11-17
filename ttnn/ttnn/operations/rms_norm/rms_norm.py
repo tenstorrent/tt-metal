@@ -53,14 +53,14 @@ INPUT_TAGGERS = {
 # 2. SUPPORTED
 # ---------------------------------------------------------------------------
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
-    "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, "none"],
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
+    "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }
 
@@ -68,7 +68,16 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
-EXCLUSIONS = []
+EXCLUSIONS = [
+    # fp32 input requires fp32 accumulation (no intermediate bf16 downcast).
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # bfloat8_b is TILE-only and tile-aligned only (block-float + partial tiles / RM untilize).
+    {"dtype": ttnn.bfloat8_b, "layout": ttnn.ROW_MAJOR_LAYOUT},
+    {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
+    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
+    # bfloat8_b gamma cannot be an RM stick tensor.
+    {"gamma_dtype": ttnn.bfloat8_b, "gamma_layout": ttnn.ROW_MAJOR_LAYOUT},
+]
 
 
 PROPERTIES = {
@@ -86,9 +95,7 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_con
     if len(shape) < 2:
         raise ValueError(f"rms_norm: input must have rank >= 2, got shape {shape}")
     if gamma is not None and list(gamma.shape)[-1] != shape[-1]:
-        raise ValueError(
-            f"rms_norm: gamma last dim {list(gamma.shape)[-1]} does not match input last dim {shape[-1]}"
-        )
+        raise ValueError(f"rms_norm: gamma last dim {list(gamma.shape)[-1]} does not match input last dim {shape[-1]}")
 
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     has_gamma = gamma is not None
@@ -109,10 +116,6 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_con
         raise UnsupportedAxisValue(
             f"rms_norm: output memory_layout={memory_config.memory_layout!r} not in SUPPORTED {SUPPORTED['memory_layout']}"
         )
-
-    # fp32 input requires fp32 accumulation (no intermediate bf16 downcast).
-    if axes["dtype"] == ttnn.float32 and not axes["fp32_dest_acc_en"]:
-        raise ExcludedCell("rms_norm: float32 input with fp32_dest_acc_en=False is not supported")
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
@@ -146,9 +149,7 @@ def rms_norm(
         memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    program_descriptor = create_program_descriptor(
-        input_tensor, output_tensor, gamma, epsilon, compute_kernel_config
-    )
+    program_descriptor = create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compute_kernel_config)
 
     io_tensors = [input_tensor]
     if gamma is not None:
