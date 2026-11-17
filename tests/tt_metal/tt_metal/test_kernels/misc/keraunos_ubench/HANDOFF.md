@@ -1,6 +1,6 @@
 # Keraunos CCE microbenchmarks: handoff
 
-**Status:** the code is written and pushed, but has never been built or run. It needs a first build and a run on the `mmk` emulator.
+**Status:** built and run on the `mmk` emulator (run s1, 2026-11-17, at `2d6552fb1ea`): 43 of 47 cases pass, every data check included. The four `CpuStore64_*_65536B` cases were not run; each needs about 2 h of emulator time (see Results of run s1).
 **Branch:** `kzhao/keraunos-ubench`, on top of `kzhao/keraunos-three-device`.
 **Owner:** Kevin Zhao (`kzhaoTT`). Keraunos/Mimir runtime support comes from Kevin Stevens.
 
@@ -60,13 +60,11 @@ The `KeraunosUbenchEth*` suites have no loopback check: without the loopback the
 
 ## How to build and run
 
-The environment follows `mimir_setup.md` and Kevin Stevens's Keraunos instructions:
-- `grendelemulation`: `kstevens/metal_bringup`, using `test_metal_server.py`
-- `chippy`: `kstevens/metal_bringup`
-- `tt-umd`: `kstevens/grendel-emu-additions`
-- Build with `-DTT_UMD_BUILD_GRENDEL_JTAG=ON` and the `CHIPPY_*` dirs.
-
-Bring-up must also open the HSIO fabric firewalls (`disable_ker_hsio_filters` per tile). Without that, cross-tile stores fail with DECERR. Kevin Zhao's `bringup_mmk.py` / `firewall.py` patch was sent to Kevin Stevens on 11-04.
+Run s1 used the cce-metal Phase 0a setup (`cce-metal/runs/RUNS.md` rows p0a-400g and s64-v3 in the docs repo):
+- **Model:** `mmk` `26ww45.eth-pcs-output-inter`, which has the SerDes cross-tile loopbacks HSIO0↔HSIO1 and HSIO2↔HSIO3. Server `test_metal_server.py +prod_rom_disabled=1 +serdes_data_rate=400` from `grendelemulation-eth-bringup` (`kstevens/metal_bringup` `057ad21` plus the 26ww45 model-selection patch).
+- **Bring-up:** `bringup_mmk.py` from chippy `c498fe024` with `MMK_ETH_RATE=400g MMK_ETH_LPBK=none`. It brings both links up at 400G and opens the HSIO fabric firewalls (`disable_ker_hsio_filters` per tile); without the firewalls, cross-tile stores fail with DECERR.
+- **Build:** `build_Release` with `-DTT_UMD_BUILD_GRENDEL_JTAG=ON` and the `CHIPPY_*` dirs, in the `metal-emu-dev` container, targets `test_keraunos_ubench` and `unit_tests_context`.
+- **Scripts** (soc-l-10): `/localdev/kzhao/ubench/emu-session.sh <tag>` starts the server and runs bring-up; `/localdev/kzhao/ubench/run.sh <tag> <host> <binary> <filter>` runs one gtest invocation with the variables below. Release the emulator afterwards with `emu kill -d <zrun-dir>`.
 
 ```
 export TT_METAL_EMU_SERVER=<host>:<port>
@@ -78,28 +76,69 @@ $B --gtest_filter='-*KeraunosUbenchEth*'          # every on-chip case
 $B --gtest_filter='*KeraunosUbenchEth*'           # Ethernet, once the loopback is up
 ```
 
-If the host times out, a kernel is hung. The test prints every result block and exits, and the emulator job needs a reset before the next run.
+If the host times out, a kernel is hung. The test prints every result block and exits. In run s1 the next device open reloaded the cores and recovered without restarting the server.
 
-## Verification so far
+## Results of run s1
 
-- The kernels pass a riscv64 clang `-fsyntax-only -Wall -Wextra` check, but against **stub** headers. The real SFPI build has not been run, so the signatures of the overlay, cce_noc and cce_eth calls are not checked.
-- `keraunos_ubench.h` compiles in host mode.
-- `test_keraunos_ubench.cpp` was reviewed by hand only. It has never been compiled.
+Server soc-zebu-02 (zrun.31), 2026-11-17. Values are emulator cycles of the measuring CCE hart; rates are bytes per CCE cycle. Logs: `/localdev/kzhao/ubench/runs/*.log` on soc-l-10. `KeraunosEmu.*` and `KeraunosEthSend/*` (`unit_tests_context`) also passed 6/6 on the same server, after the shared `Session` change.
+
+**TimerCheck:** bracket 3..27 cycles; 4.08 cycles per add-loop iteration; dependent uncached loads 33.8 cycles (own SRAM) and 175.5 (HSIO1 global address); 0 of 1024 reads backwards, 0 zero deltas.
+
+| Latency (p50 / p99) | RTT | TURN |
+|---|---|---|
+| SameCore CpuStore (harts 0↔1) | 182 / 210 | 25 / 25 |
+| SameCore Idma | 411 / 442 | 108 / 113 |
+| CrossTile CpuStore (HSIO0↔1) | 344 / 382 | 24 / 24 |
+| CrossTile Idma | 551 / 576 | 108 / 109 |
+| Eth, token only | 1507 / 1547 | 145 / 149 |
+| Eth, 64 B payload | 1800 / 1838 | 296 / 301 |
+| Eth, 1024 B | 1803 / 1831 | 294 / 301 |
+| Eth, 4096 B | 1983 / 1996 | 297 / 298 |
+
+TransportBw run rate over the slowest hart, B/cyc, INJECTION / DRAINED (CpuStore64: RETIRED):
+
+| Case | 256 B | 4096 B | 65536 B |
+|---|---|---|---|
+| IdmaMetal Local, 1 hart | 4.05 / 3.97 | 65.0 / 63.2 | 122.9 / 105.2 |
+| IdmaMetal Local, 8 harts | 31.9 / 31.3 | 117.0 / 112.2 | 115.8 / 113.7 |
+| IdmaMetal Tile, 1 hart | 4.05 / 3.94 | 64.8 / 62.1 | 90.2 / 77.0 |
+| IdmaMetal Tile, 8 harts | 28.6 / 25.4 | 76.4 / 72.6 | 78.8 / 77.2 |
+| IdmaLean Local, 1 hart | 5.20 / 5.08 | 83.4 / 80.6 | — |
+| IdmaLean Local, 8 harts | 41.3 / 39.4 | 117.3 / 112.2 | — |
+| IdmaLean Tile, 1 hart | 5.21 / 5.04 | 83.3 / 69.4 | — |
+| IdmaLean Tile, 8 harts | 29.1 / 25.4 | 76.4 / 72.6 | — |
+| CpuStore64 Local, 1 hart | 0.561 | 0.612 | not run |
+| CpuStore64 Local, 8 harts | 4.00 | 4.00 | not run |
+| CpuStore64 Tile, 1 hart | 0.561 | 0.612 | not run |
+| CpuStore64 Tile, 8 harts | 0.834 | 0.833 | not run |
+
+| EthBandwidth | INJECTION | ACKED | DELIVERED | Idle RTT | Busy-queue polls |
+|---|---|---|---|---|---|
+| 256 B, 1 TX queue | 1.56 | 1.56 | 1.44 | 978 | 0 |
+| 256 B, 4 | 1.54 | 1.54 | 1.43 | 966 | 0 |
+| 4096 B, 1 | 24.8 | 24.7 | 22.7 | 962 | 0 |
+| 4096 B, 4 | 24.9 | 24.8 | 22.8 | 981 | 0 |
+| 65536 B, 1 | 31.3 | 30.6 | 30.2 | 1906 | 502 |
+| 65536 B, 4 | 31.7 | 30.6 | 30.3 | 1601 | 0 |
+
+**Emulator time.** The chip advances only while the server serves a host access (CM-107), so a case's wall time follows the host's polling and SRAM traffic, not the cycles it measures. The 8-hart 65536 B iDMA cases took about 30 min each; the CpuStore64 4096 B cases 5 to 30 min. At 0.1 to 0.6 B/cyc, a CpuStore64 65536 B case would need about 2 h, so run s1 skipped all four.
+
+**Two bugs found and fixed in s1:** an iDMA copy to another tile used the chiplet-local view (`CrossTileIdma` hung, assumption 3), and the Ethernet bandwidth flag was sent to the bare `kEthFlagOffset` instead of `base + kEthFlagOffset` (`EthBandwidth` hung at its handshake).
 
 ## Assumptions to check first
 
-1. **rdcycle** keeps counting through uncached load and iDMA stalls, and is a real cycle count. `TimerCheck` tests both: the add chain should come out at about 1 cycle per add, and the load chains should be much slower than that.
-2. **`IdmaLean`** assumes command buffer 0 keeps its VC, TRID and copy-mode settings across issues, so that only src, dst and len need setting per transfer. No existing test confirms this. If it misbehaves, compare it against `IdmaMetal`.
+1. **rdcycle** keeps counting through uncached load and iDMA stalls. Run s1 confirmed this: dependent uncached loads cost 33.8 and 175.5 cycles, against 4.08 per add-loop iteration. That iteration is the `addi` plus the loop's own counter and branch, so it is not 1 cycle per add; whether rdcycle runs at the core clock is still open (see the clock question below).
+2. **`IdmaLean`** assumes command buffer 0 keeps its VC, TRID and copy-mode settings across issues, so that only src, dst and len need setting per transfer. Run s1 confirmed this: every IdmaLean case moved the right data, at 5.2 B/cyc against IdmaMetal's 4.05 at 256 B.
 3. **On-chip iDMA addressing** uses the chiplet-local view `0x2000_0000 + hsio*tile_stride + 0x280_0000 + off` for the copying core's own tile, the same as `eth_cce_send.h`'s `sram_local_addr()`, and the system address `0x12_0680_0000 + hsio*tile_stride + off` for another tile, as metal's `quasar_cce_noc_routes()` does. Run s1 on the emulator (2026-11-17) confirmed this: with the local view for another tile, `CrossTileIdma` hung at its first exchange. **CPU addressing** uses the global window `0x12_0680_0000 + hsio*tile_stride + off` for another tile, and the uncached alias (`+0x80_0000`) on the same core.
 4. **Ethernet.** RX writes are not snooped, so mailboxes and flags are read through the uncached alias. Payloads land at the same flat offset on the link peer. The closing flag in `EthBandwidth` goes out on TX queue 0 only after every send is acked, so DELIVERED is an upper bound and includes one return path.
 5. **SRAM region:** `base = MEM_IERISC_ROUTER_UNRESERVED_BASE` (rounded up to 64) plus `kRegionBytes = 0x110000`, which must fit in 4 MiB. The shared `Session` constructor checks this with `TT_FATAL`.
 
 ## Next steps
 
-1. Build, run `TimerCheck`, then run everything. Fix compile errors against the real headers.
-2. Record the CCE clock under `test_metal_server.py`, so cycles can be converted.
-3. Rebase onto Kevin Stevens's next branch. Then add CCE1 and CCE0↔CCE1 pairs (same tile, sibling-CCE view at +4 MiB).
-4. Add Keraunos→Mimir destinations (M1 CCE SRAM, M1 GDDR, and M0 GDDR, which is multi-hop) to TransportBandwidth and Latency, using the `bringup_mmk_fw.py` hybrid bring-up.
+1. Record the CCE clock under `test_metal_server.py`, so cycles can be converted.
+2. Rebase onto Kevin Stevens's next branch. Then add CCE1 and CCE0↔CCE1 pairs (same tile, sibling-CCE view at +4 MiB).
+3. Add Keraunos→Mimir destinations (M1 CCE SRAM, M1 GDDR, and M0 GDDR, which is multi-hop) to TransportBandwidth and Latency, using the `bringup_mmk_fw.py` hybrid bring-up.
+4. The CpuStore64 65536 B cases: run them only on a server of their own, or drop them; 4096 B already shows the steady rate.
 5. Later: atomic_bench, core_sync and pipeline_stage ports. A packet_injection variant with CCE producers. eth_credit once fabric on Keraunos is stable. Quasar Tensix peers when `qsr.s1` support lands.
 
 ## Open questions for Kevin Stevens
