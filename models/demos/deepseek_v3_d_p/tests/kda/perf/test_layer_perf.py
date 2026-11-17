@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import pytest
+import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
@@ -21,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     kda_device_params,
     make_kimi_k3_device_case,
     make_synthetic_kimi_k3_test_case,
+    upload_slab,
 )
 from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, gate
 from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, measure_host
@@ -93,7 +95,7 @@ _SLAB_LAYER_IDX = 1
 
 @dataclass
 class _Slots:
-    """A one-slot, one-layer KDA state slab: what ttKDA.forward_slot imports from and exports to, as in the model."""
+    """A one-slot, one-layer KDA state slab: what ttKDA.forward reads and writes in place, as in the model."""
 
     states: KdaStates
     slot: ttnn.Tensor
@@ -108,11 +110,9 @@ class _Slots:
         )
         states = KdaStates.allocate(mesh_device, geometry, layer_ids=(_SLAB_LAYER_IDX,), num_slots=1)
         slot = device_scalar(mesh_device, 0)
-        # The slabs come uninitialized and the gated chunk starts mid-request, so it imports the slot: store a zero
-        # carry there first.
-        zero = _allocate_state(layer)
-        states.export_layer(zero, slot, _SLAB_LAYER_IDX)
-        deallocate_state(zero)
+        # The slabs come uninitialized and the gated chunk starts mid-request, so it reads the slot: zero it first.
+        for slab in (states.recurrent, states.convolution):
+            upload_slab(slab, [torch.zeros(tuple(slab.shape))] * mesh_device.get_num_devices())
         return cls(states=states, slot=slot)
 
     def deallocate(self) -> None:
@@ -128,13 +128,11 @@ def _layer_call(
     actual_end: ttnn.Tensor | None,
     slots: _Slots | None,
 ) -> tuple[ttnn.Tensor, KdaState | None]:
-    """One layer call: the functional forward, or with ``slots`` the model's per-chunk forward_slot on ``state`` as
-    the scratch carry (no carry returned: it went to the slab)."""
+    """One layer call: forward on ``state``, or with ``slots`` on the slab entry, as the model runs it (no carry
+    returned: it was replaced in the slab)."""
     if slots is None:
         return layer.forward(hidden, state, actual_start, actual_end)
-    output = layer.forward_slot(
-        hidden, state, slots.states, slots.slot, _SLAB_LAYER_IDX, actual_start=actual_start, actual_end=actual_end
-    )
+    output, _ = layer.forward(hidden, slots.states.entry(slots.slot, _SLAB_LAYER_IDX), actual_start, actual_end)
     return output, None
 
 
@@ -231,8 +229,8 @@ def test_synthetic_kimi_k3_perf(
 ) -> None:
     """Gate checkpoint-free production K3 latency, untraced and traced (Galaxy; LoudBox and QuietBox report).
 
-    The gated call is the model's whole per-chunk KDA layer, ttKDA.forward_slot on the TP-sharded residual: import
-    the slot's carry from the state slab, TP all-gather, KDA, output projection + reduce-scatter, export.
+    The gated call is the model's whole per-chunk KDA layer, ttKDA.forward on its slab entry and the TP-sharded
+    residual: TP all-gather, KDA replacing the slot's carry in the slabs, output projection + reduce-scatter.
     """
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
@@ -266,9 +264,9 @@ def test_synthetic_kimi_k3_perf(
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
     try:
-        # Each forward_slot imports the slot's carry and exports the next one, so the last eager call and the replay
-        # start from different carries; at a 5k chunk the carry has converged, so their outputs still agree.
-        untraced, traced, trace_pcc = measure_host(mesh_device, lambda: step()[0])  # forward_slot returns no carry
+        # Each call replaces the slot's carry in the slabs, so the last eager call and the replay start from
+        # different carries; at a 5k chunk the carry has converged, so their outputs still agree.
+        untraced, traced, trace_pcc = measure_host(mesh_device, lambda: step()[0])  # the carry stays in the slab
     finally:
         deallocate_state(state)
         slots.deallocate()

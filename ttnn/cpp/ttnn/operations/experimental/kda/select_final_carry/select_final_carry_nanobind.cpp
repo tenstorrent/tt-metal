@@ -43,6 +43,11 @@ void bind_select_final_carry(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory. Defaults to DRAM.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence, of at least two
                 ranks.
+            slab (ttnn.Tensor, optional): ``[entries, B*H, K, V]`` DRAM slab written in place at entry
+                ``slab_index * slab_index_scale + slab_index_offset``, and returned.
+            slab_index (ttnn.Tensor, optional): Replicated UINT32 scalar, read on device.
+            slab_index_scale (int, optional): Defaults to 1.
+            slab_index_offset (int, optional): Defaults to 0.
 
         Returns:
             ttnn.Tensor: FLOAT32 TILE-layout ``[B*H, K, V]`` final state, replicated along the line.
@@ -58,7 +63,11 @@ void bind_select_final_carry(nb::module_& mod) {
         nb::arg("semaphores"),
         nb::arg("actual_end") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("slab") = nb::none(),
+        nb::arg("slab_index") = nb::none(),
+        nb::arg("slab_index_scale") = 1,
+        nb::arg("slab_index_offset") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::select_final_carry::detail

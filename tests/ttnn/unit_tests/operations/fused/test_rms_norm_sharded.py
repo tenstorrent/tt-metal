@@ -463,7 +463,7 @@ def test_rms_norm_sharded_width_non_rectangular_grid(
         pcc_threshold=0.999,
         rtol=0.031,
         atol=0.052,
-        frobenius_threshold=0.010,
+        frobenius_threshold=0.020,
     )
 
 

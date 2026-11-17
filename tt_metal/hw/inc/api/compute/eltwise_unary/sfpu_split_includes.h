@@ -20,6 +20,10 @@
 #include "api/compute/eltwise_unary/exp.h"
 #endif
 
+#ifdef SFPU_OP_GEGLU_TANH_INCLUDE
+#include "api/compute/geglu_tanh.h"
+#endif
+
 #ifdef SFPU_OP_GELU_INCLUDE
 #include "api/compute/eltwise_unary/gelu.h"
 #endif
