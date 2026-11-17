@@ -868,7 +868,9 @@ Tensor sigmoid_accurate_with_deprecation_warning(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::warn_deprecated("ttnn.sigmoid_accurate", "ttnn.sigmoid");
+    ttnn::warn_deprecated(
+        "ttnn.sigmoid_accurate",
+        "ttnn.sigmoid (with mode=ttnn.SigmoidMode.AccurateWithFastExp for fast_and_approximate_mode=True)");
     return ttnn::sigmoid_accurate(
         input, fast_and_approximate_mode, memory_config, optional_output_tensor, sub_core_grids);
 }

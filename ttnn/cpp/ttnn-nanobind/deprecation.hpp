@@ -10,6 +10,7 @@
 
 namespace ttnn {
 
+// See .github/instructions/ttnn-python-deprecation.instructions.md ("Shared helper").
 inline void warn_deprecated(std::string_view what, std::string_view instead) {
     namespace nb = nanobind;
     // Bindings registered through ttnn::bind_function run with the GIL released.

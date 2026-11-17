@@ -15,7 +15,7 @@ import warnings
 _PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
 
 
-def _is_inside_package(frame) -> bool:
+def _is_inside_ttnn_package(frame) -> bool:
     filename = frame.f_code.co_filename
     # Pseudo-filenames such as "<string>" or "<frozen ...>" have no source file, so they are never TTNN's code.
     return not filename.startswith("<") and os.path.abspath(filename).startswith(_PACKAGE_DIR)
@@ -47,7 +47,7 @@ def warn_deprecated(what: str, instead: str) -> None:
     while frame is not None:
         if not _is_skipped_by_warnings(frame):
             stacklevel += 1
-            if not _is_inside_package(frame):
+            if not _is_inside_ttnn_package(frame):
                 break
         frame = frame.f_back
     warnings.warn(
