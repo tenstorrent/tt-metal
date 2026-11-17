@@ -10,7 +10,7 @@ Illustrative, not a CI bound. Every number is from one box and one fabric config
 | code | `316bf3de8c4` + uncommitted changes |
 | metric | `DEVICE KERNEL DURATION [ns]` (in-process device profiler), slowest chip, median of 5 calls, not traced |
 | correctness | every cell: each chip's output within 0.25 (max abs) of the fp32 sum of the group's bf16 partials; the worst cell was 0.0625 |
-| data | all 132 cells: [`report_data.csv`](report_data.csv) (matched by the repo's `*.csv` gitignore rule; `git add -f` it) |
+| data | 132 cells; the tables below are taken from them; the sweep commands below regenerate them |
 
 **What is measured.** A 4-chip reduce-scatter. Each chip holds a full-size partial result split into 4 blocks, and
 chip p ends with block p summed over all chips. The busiest link direction carries 1.5 blocks on a balanced ring, 2

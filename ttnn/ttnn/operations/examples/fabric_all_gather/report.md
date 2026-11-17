@@ -10,7 +10,7 @@ Illustrative, not a CI bound. Every number is from one box and one fabric config
 | code | `316bf3de8c4` + uncommitted changes |
 | metric | `DEVICE KERNEL DURATION [ns]` (in-process device profiler), slowest chip, median of 5 calls, not traced |
 | correctness | every cell bit-exact: each chip's output == the group's shards concatenated in chip order |
-| data | all 90 cells: [`report_data.csv`](report_data.csv) (matched by the repo's `*.csv` gitignore rule; `git add -f` it) |
+| data | 90 cells; the tables below are taken from them; the sweep commands below regenerate them |
 
 **What is measured.** A 4-chip all-gather: each chip contributes one shard and ends with all four. The busiest link
 direction carries 1.5 shards on a balanced ring, 2 on an unbalanced ring and 3 on a line. Rates below:
