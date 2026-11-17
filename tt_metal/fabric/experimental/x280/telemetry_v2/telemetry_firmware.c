@@ -31,6 +31,7 @@ static volatile Heartbeat* g_heartbeat = (volatile Heartbeat*)X280_STANDALONE_HE
 
 const uint64_t g_ticks_per_ms = X280_MTIME_HZ / 1000;
 const uint64_t g_ticks_per_2s = g_ticks_per_ms * 2000;
+uint64_t g_next_heartbeat;
 
 const char* TT_FIRMWARE_VERSION_STR = "tt_firmware_version";
 const char* FIRMWARE_VERSION_STR = "0.0.1-alpha";
@@ -47,17 +48,12 @@ const char* TT_ARC_UNKNOWN_TAG_STR = "TT_ARC_UNKNOWN";
 const char* TT_ARC_INVALID_VALUE_STR = "TT_ARC_INVALID_VALUE";
 
 
-// Sends out 1 heart beat, will loop until we hit 1 ms out from current time.
 void heart_beat() {
-    for(;;) {
-        uint64_t next = x280_mtime() + g_ticks_per_ms;
-        if (x280_mtime() >= next) {
-            next += g_ticks_per_ms;
-            g_heartbeat->counter = g_heartbeat->counter + 1;
-            if (g_heartbeat->counter >= UINT32_MAX-1) {
-                g_heartbeat->counter = 1;
-            }
-            break;
+    if (x280_mtime() >= g_next_heartbeat) {
+        g_next_heartbeat += g_ticks_per_ms;
+        g_heartbeat->counter = g_heartbeat->counter + 1;
+        if (g_heartbeat->counter >= UINT32_MAX-1) {
+            g_heartbeat->counter = 1;
         }
     }
 }
@@ -238,6 +234,7 @@ int main(uint64_t hartid) {
         x280_fence_ow();
         g_heartbeat->magic = X280_STANDALONE_HEARTBEAT_MAGIC;  // Last, so the host never sees the magic with a stale counter.
 
+        g_next_heartbeat = x280_mtime() + g_ticks_per_ms;
 
         auto result = read_arc();
         if (!result) {

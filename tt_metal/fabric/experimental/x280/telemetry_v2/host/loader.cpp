@@ -105,7 +105,6 @@ int start_firmware(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&
             }
         }
     }
-
     std::cout << "Firmware is running. It keeps running until the chip is reset (tt-smi -r).\n";
     return 0;
 }
