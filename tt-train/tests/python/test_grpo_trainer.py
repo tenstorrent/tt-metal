@@ -648,7 +648,8 @@ def test_capitals_one_by_one_equals_single_batch():
     Loads the real Llama-3.2-1B-Instruct weights (no monkey-patch) and runs
     the same four prompts through ``TTMLRolloutSampler.generate`` twice:
     once one prompt at a time, once as a single batch. With temperature=0
-    and ``completions_per_prompt=1`` the outputs must match exactly; any drift
+    and ``completions_per_prompt=1`` the per-token log p must match up to the
+    first different token (a bf16 near tie can flip the greedy pick); any drift
     indicates a batching / padding / mask bug in the generation path.
     """
     model, tokenizer = grpo_ttml_model.setup_ttml_model(LLAMA_1B_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
@@ -662,24 +663,26 @@ def test_capitals_one_by_one_equals_single_batch():
     ]
     prompts = [tokenizer.encode(_to_capitals_chat_prompt(tokenizer, p), add_special_tokens=False) for p in user_prompts]
 
-    def decode(batch):
-        return [tokenizer.decode(c, skip_special_tokens=False) for c in batch.completions]
+    singles = [sampler.generate([prompt]) for prompt in prompts]
+    batched = sampler.generate(prompts)
+    assert len(batched.completions) == len(prompts)
 
-    single_outputs = []
-    for prompt in prompts:
-        completions = decode(sampler.generate([prompt]))
-        assert len(completions) == 1
-        single_outputs.append(completions[0])
-
-    batched_outputs = decode(sampler.generate(prompts))
-    assert len(batched_outputs) == len(prompts)
-
-    assert batched_outputs == single_outputs, (
-        "Mismatch between one-by-one and batched outputs.\n" f"single={single_outputs}\n" f"batch={batched_outputs}"
-    )
+    for b, single in enumerate(singles):
+        assert len(single.completions) == 1
+        one, many = single.completions[0], batched.completions[b]
+        first_diff = next((i for i, (x, y) in enumerate(zip(one, many)) if x != y), min(len(one), len(many)))
+        n = min(first_diff + 1, batched.logprobs.shape[1])
+        np.testing.assert_allclose(
+            batched.logprobs[b][:n],
+            single.logprobs[0][:n],
+            atol=0.1,
+            err_msg=f"row {b}: single={tokenizer.decode(one)!r} batch={tokenizer.decode(many)!r}",
+        )
     # Agreeing outputs also pass on a wrong but deterministic load; the right answers don't.
-    for capital, completion in zip(["Paris", "Lisbon", "London", "Prague"], single_outputs):
-        assert capital in completion, f"expected {capital!r} in {completion!r}"
+    for capital, single, many in zip(["Paris", "Lisbon", "London", "Prague"], singles, batched.completions):
+        for completion in (single.completions[0], many):
+            text = tokenizer.decode(completion, skip_special_tokens=False)
+            assert capital in text, f"expected {capital!r} in {text!r}"
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
