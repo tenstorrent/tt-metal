@@ -36,53 +36,25 @@ bool fits_runtime_args(const std::vector<CoreUnits>& per_core_units) {
     return true;
 }
 
-// Appends a whole item, folding it into the previous unit when it is the next consecutive item.
-void append_item(CoreUnits& units, uint32_t item) {
-    if (!units.empty() && units.back().role == UnitRole::Whole && units.back().item + units.back().num_items == item) {
-        ++units.back().num_items;
-    } else {
-        units.push_back(WorkUnit{.item = item, .role = UnitRole::Whole, .num_items = 1U});
+// The runs metal/common/sdpa_work_split.hpp hands out, as whole work units. The forward's fallbacks and
+// its whole-item folding are that header's split_items_contiguous, split_items_paired and append_item on
+// ItemRun; only the WorkUnit wrapping lives here.
+CoreUnits whole_units_of(const ttml::metal::CoreItemRuns& runs) {
+    CoreUnits units;
+    units.reserve(runs.size());
+    for (const ttml::metal::ItemRun& run : runs) {
+        units.push_back(WorkUnit{.item = run.first_item, .role = UnitRole::Whole, .num_items = run.num_items});
     }
+    return units;
 }
 
-// One contiguous block of items per core; the first (total_items % num_cores) cores get one more.
-std::vector<CoreUnits> split_items_contiguous(uint32_t total_items, uint32_t num_cores) {
-    std::vector<CoreUnits> per_core(num_cores);
-    const uint32_t items_per_core = total_items / num_cores;
-    const uint32_t remainder = total_items % num_cores;
-    uint32_t item = 0;
-    for (uint32_t core = 0; core < num_cores; ++core) {
-        const uint32_t num_items = items_per_core + (core < remainder ? 1U : 0U);
-        per_core[core].push_back(WorkUnit{.item = item, .role = UnitRole::Whole, .num_items = num_items});
-        item += num_items;
+std::vector<CoreUnits> whole_units_of(const std::vector<ttml::metal::CoreItemRuns>& per_core) {
+    std::vector<CoreUnits> per_core_units;
+    per_core_units.reserve(per_core.size());
+    for (const ttml::metal::CoreItemRuns& runs : per_core) {
+        per_core_units.push_back(whole_units_of(runs));
     }
-    return per_core;
-}
-
-// Causal: Q chunk i of a stack attends ~(i+1) K/V steps, so pairing chunk i with chunk
-// (q_num_chunks - 1 - i) gives every pair the same work. The pairs are handed out contiguously like
-// items above and each core's items are sorted, which folds them into few runs (a fully covered stack is
-// one run). The fallback when the longest-first lists do not fit the runtime args.
-std::vector<CoreUnits> split_items_paired(uint32_t num_stacks, uint32_t q_num_chunks, uint32_t num_cores) {
-    const uint32_t pairs_per_stack = q_num_chunks / 2U;
-    const auto pair_runs = split_items_contiguous(num_stacks * pairs_per_stack, num_cores);
-    std::vector<CoreUnits> per_core(num_cores);
-    std::vector<uint32_t> items;
-    for (uint32_t core = 0; core < num_cores; ++core) {
-        const WorkUnit& pairs = pair_runs[core].front();
-        items.clear();
-        for (uint32_t p = pairs.item; p < pairs.item + pairs.num_items; ++p) {
-            const uint32_t stack = p / pairs_per_stack;
-            const uint32_t light = p % pairs_per_stack;
-            items.push_back(sdpa_items::item_of(stack, light, q_num_chunks));
-            items.push_back(sdpa_items::item_of(stack, q_num_chunks - 1U - light, q_num_chunks));
-        }
-        std::sort(items.begin(), items.end());
-        for (const uint32_t item : items) {
-            append_item(per_core[core], item);
-        }
-    }
-    return per_core;
+    return per_core_units;
 }
 
 // Chunk knob in elements -> tiles. 0 = unset; otherwise it must be a tile multiple that divides S.
@@ -494,8 +466,12 @@ SDPAForwardSchedule schedule_pieces(
             schedule.per_core[core].push_back(pieces[p].unit);
         }
         std::sort(whole_items[core].begin(), whole_items[core].end());
+        ttml::metal::CoreItemRuns runs;
         for (const uint32_t item : whole_items[core]) {
-            append_item(schedule.per_core[core], item);
+            ttml::metal::append_item(runs, item);
+        }
+        for (const WorkUnit& unit : whole_units_of(runs)) {
+            schedule.per_core[core].push_back(unit);
         }
         std::sort(merger_pieces[core].begin(), merger_pieces[core].end(), by_seq);
         for (const uint32_t p : merger_pieces[core]) {
@@ -560,14 +536,15 @@ SDPAForwardSchedule make_schedule(
         const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
         const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
         if (q_num_chunks % 2U == 0U && num_stacks * (q_num_chunks / 2U) >= num_cores) {
-            schedule.per_core = split_items_paired(num_stacks, q_num_chunks, num_cores);
+            schedule.per_core = whole_units_of(ttml::metal::split_items_paired(num_stacks, q_num_chunks, num_cores));
             if (!fits_runtime_args(schedule.per_core)) {
                 schedule.per_core.clear();
             }
         }
     }
     if (schedule.per_core.empty()) {
-        schedule.per_core = split_items_contiguous(total_items, std::min(num_cores, total_items));
+        schedule.per_core =
+            whole_units_of(ttml::metal::split_items_contiguous(total_items, std::min(num_cores, total_items)));
     }
     // Longest first fills the cores from the first, so the cores without work are the last ones. The
     // prediction stays the one made on num_cores (the model's DRAM share is per core count), so the pick
