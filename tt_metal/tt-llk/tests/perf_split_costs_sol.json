@@ -17,6 +17,7 @@
   "perf_matmul_in1_column_stride": 9.1,
   "perf_pack": 468.4,
   "perf_pack_l1_acc": 4.2,
+  "perf_pack_rows_to_addr": 400.6,
   "perf_pack_untilize": 182.9,
   "perf_reduce": 71.5,
   "perf_sfpu_binop_scalar": 17.3,

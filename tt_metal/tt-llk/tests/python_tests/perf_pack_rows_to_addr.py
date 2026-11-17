@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from conftest import blackhole_only
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
 from test_pack_rows_to_addr import PACK_ROWS_TO_ADDR_SWEEP
 from test_pack_rows_to_addr import test_pack_rows_to_addr as _test_pack_rows_to_addr
 
 
-@blackhole_only
 @pytest.mark.perf
 @parametrize(
     **PACK_ROWS_TO_ADDR_SWEEP,
