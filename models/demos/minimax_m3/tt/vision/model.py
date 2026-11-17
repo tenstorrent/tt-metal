@@ -366,7 +366,7 @@ class M3VLVisionModel(LightweightModule):
     def _run_tower(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor, placement: BlockPlacement) -> ttnn.Tensor:
         """Run patch_embed, pre_layrnorm and the blocks with placement; the last block writes to DRAM."""
         x_tt = self.patch_embed(x_tt)
-        x_tt = self.pre_layrnorm(x_tt, memory_config=placement.block_input)
+        x_tt = self.pre_layrnorm(x_tt, memory_config=placement.residual)
         cos_tt, sin_tt = self._rope_to_l1(*self._cached_rope(image_grid_thw))
         try:
             for i, blk in enumerate(self.blocks):

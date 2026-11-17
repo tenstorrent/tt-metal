@@ -292,25 +292,23 @@ class BlockPlacement:
 
     Attributes:
         name: the placement's name, for logs.
-        block_input: pre_layrnorm's output, the first block's input.
-        residual: the residual stream: both adds' outputs, and the out_proj and fc2 outputs they add.
+        residual: the residual stream: pre_layrnorm's output, both adds' outputs, and the out_proj and fc2 outputs
+            they add.
         qkv: QKV's output and the q, k and v heads split from it.
         fc1_out: fc1's output.
         gelu_out: GELU's output, which fc2 reads.
     """
 
     name: str
-    block_input: Optional[ttnn.MemoryConfig]
     residual: ttnn.MemoryConfig
     qkv: ttnn.MemoryConfig
     fc1_out: ttnn.MemoryConfig
     gelu_out: Optional[ttnn.MemoryConfig]
 
 
-# Every activation in DRAM: pre_layrnorm and GELU write where their input is.
+# Every activation in DRAM: GELU writes where its input is.
 DRAM_PLACEMENT = BlockPlacement(
     name="dram",
-    block_input=None,
     residual=ttnn.DRAM_MEMORY_CONFIG,
     qkv=ttnn.DRAM_MEMORY_CONFIG,
     fc1_out=ttnn.DRAM_MEMORY_CONFIG,
@@ -320,7 +318,6 @@ DRAM_PLACEMENT = BlockPlacement(
 # DRAM (block_placement).
 L1_INTERLEAVED_PLACEMENT = BlockPlacement(
     name="l1_interleaved",
-    block_input=ttnn.L1_MEMORY_CONFIG,
     residual=ttnn.L1_MEMORY_CONFIG,
     qkv=ttnn.L1_MEMORY_CONFIG,
     fc1_out=ttnn.L1_MEMORY_CONFIG,

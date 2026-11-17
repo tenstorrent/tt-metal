@@ -835,9 +835,7 @@ def test_vision_block_placement_calls(monkeypatch, patches):
     model = _model(recorder, (12, 10))
     _empty_l1(monkeypatch, (12, 10))
     dram = ttnn.DRAM_MEMORY_CONFIG
-    assert DRAM_PLACEMENT == BlockPlacement(
-        "dram", block_input=None, residual=dram, qkv=dram, fc1_out=dram, gelu_out=None
-    )
+    assert DRAM_PLACEMENT == BlockPlacement("dram", residual=dram, qkv=dram, fc1_out=dram, gelu_out=None)
     modes = (
         ("dram", DRAM_PLACEMENT),
         ("l1_interleaved", L1_INTERLEAVED_PLACEMENT),
@@ -849,7 +847,7 @@ def test_vision_block_placement_calls(monkeypatch, patches):
         events = recorder.forward(model, patches)
         memory_configs = dict(
             patch_embed=ttnn.DRAM_MEMORY_CONFIG,
-            pre_layrnorm=placement.block_input,
+            pre_layrnorm=placement.residual,
             qkv=placement.qkv,
             heads=placement.qkv,
             out_proj=placement.residual,
