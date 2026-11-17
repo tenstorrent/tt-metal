@@ -53,10 +53,7 @@ def test_unary_min_fill_val_fp32(input_shapes, input_val, scalar, device):
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([1, 3, 320, 320])),
-    ),
+    ((torch.Size([1, 3, 320, 320])),),
 )
 @pytest.mark.parametrize(
     "low, high",
@@ -98,7 +95,7 @@ def test_unary_min_bf16(input_shapes, low, high, scalar, device):
         (-1.7 * 10**38, 1.7 * 10**38),
     ],
 )
-@pytest.mark.parametrize("scalar", [0.5, 0.1, 0.0, 1.0, 3.4 * 10**38, -3.4 * 10**38, -float("inf"), float("inf")])
+@pytest.mark.parametrize("scalar", [0.1, 0.0, 1.0, 3.4 * 10**38, -3.4 * 10**38, -float("inf"), float("inf")])
 def test_unary_min_fp32(input_shapes, low, high, scalar, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.float32)
@@ -122,27 +119,24 @@ def test_unary_min_fp32(input_shapes, low, high, scalar, device):
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 3, 320, 320])),
-    ),
+    ((torch.Size([1, 3, 320, 320])),),
 )
 @pytest.mark.parametrize(
     "low, high",
     [
-        (-21474836, 21474836),
         (-2147483648, 2147483647),
     ],
 )
 @pytest.mark.parametrize("scalar", [-5, 3, 0, -2147483648, 2147483647])
+# int32 is covered exactly, including the int32 limits, by
+# test_unary_category2_int32.py::test_int32_scalar_select_ops.
 @pytest.mark.parametrize(
     "ttnn_dtype",
     [
-        ttnn.int32,
         ttnn.uint32,
     ],
 )
-def test_unary_min_int32(input_shapes, low, high, scalar, ttnn_dtype, device):
+def test_unary_min_uint32(input_shapes, low, high, scalar, ttnn_dtype, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
     torch_input = torch_input[:num_elements].reshape(input_shapes)

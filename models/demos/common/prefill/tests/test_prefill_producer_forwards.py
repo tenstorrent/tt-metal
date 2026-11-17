@@ -332,12 +332,13 @@ def test_slot_lengths_from_env(monkeypatch, expect_error):
         monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", bad)
         with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
             producer._slot_lengths_from_env(4, 16)
-    # The last chunk is padded: with 5120-token chunks a 262144-token cache holds 51 whole chunks (261120 tokens).
-    monkeypatch.setattr(producer, "CHUNK_SIZE", 5120)
-    monkeypatch.setattr(producer, "MAX_SEQ_LEN", 262144)
-    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "261120")
-    assert producer._slot_lengths_from_env(1, 51) == {0: 261120}
-    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "261121")
+    # The last chunk is padded: the cache holds only whole chunks, so the longest slot is a whole-chunk multiple.
+    chunk, cache = 5 * C, 51 * 5 * C + 1  # 51 whole chunks plus a remainder the padded last chunk cannot use
+    monkeypatch.setattr(producer, "CHUNK_SIZE", chunk)
+    monkeypatch.setattr(producer, "MAX_SEQ_LEN", cache)
+    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", str(51 * chunk))
+    assert producer._slot_lengths_from_env(1, 51) == {0: 51 * chunk}
+    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", str(51 * chunk + 1))
     with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
         producer._slot_lengths_from_env(1, 51)
 
