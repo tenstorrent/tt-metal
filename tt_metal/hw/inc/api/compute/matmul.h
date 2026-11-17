@@ -1090,11 +1090,71 @@ constexpr bool matmul_fe_ttsync_cell() {
     return false;
 }
 
-// MATMUL_FE_CELL_MARK's value: 3 and tag 5 where the call's cell runs the ttsync unpack, else 1 (tag 6, unread)
+// matmul_fe_ttsync_cell of a one-tile block for a kt given as an argument (constant cbs)
+template <std::uint32_t in0_cb, std::uint32_t in1_cb>
+constexpr bool matmul_fe_ttsync_cell_k(const std::uint32_t kt) {
+#if defined(UCK_CHLKC_UNPACK)
+    if constexpr (in0_cb < sizeof(unpack_src_format) && in1_cb < sizeof(unpack_src_format)) {
+#ifdef PACKER_L1_ACC
+        constexpr bool l1_acc = true;
+#else
+        constexpr bool l1_acc = false;
+#endif
+        return matmul_kernel_ttsync_block(
+            MATH_FIDELITY,
+            DST_SYNC_MODE == DstSync::SyncFull,
+            DST_ACCUM_MODE,
+            unpack_src_format,
+            static_cast<DataFormat>(unpack_src_format[in0_cb]),
+            static_cast<DataFormat>(unpack_src_format[in1_cb]),
+            1,
+            1,
+            kt,
+            MM_THROTTLE,
+            l1_acc);
+    }
+#endif
+    return false;
+}
+
+// A call of constant cbs and run-time ct or rt: the least kt from which a one-tile block of every kt up to 64 (or of
+// the constant kt) is a ttsync cell (matmul_fe_ttsync_cell), so the call can pick the ttsync unpack on such a block at
+// run time; 0 for none. Not in a kernel bound by the kernel config buffer (both unpack bodies), nor where the polling
+// call holds its operand by run time (reuse_dir 3, which the ttsync call does not run).
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t kt>
+constexpr std::uint32_t matmul_fe_rt_ttsync_kt() {
+#if defined(UCK_CHLKC_UNPACK)
+    if constexpr (
+        !LLK_SIZE_MODE && in0_cb < sizeof(unpack_src_format) && in1_cb < sizeof(unpack_src_format) &&
+        (MATH_FIDELITY != MathFidelity::LoFi ||
+         (DST_SYNC_MODE == DstSync::SyncHalf ? !matmul_kernel_lofi_mix(unpack_src_format)
+                                             : !llk_matmul_kernel_mixes_32bit<MM_THROTTLE != 0>()))) {
+        if constexpr (kt != 0xFFu) {
+            return matmul_fe_ttsync_cell<in0_cb, in1_cb, 1, 1, kt>() ? kt : 0;
+        } else {
+            std::uint32_t least = 0;
+            for (std::uint32_t k = 64; k >= 2; k--) {
+                if (!matmul_fe_ttsync_cell_k<in0_cb, in1_cb>(k)) {
+                    break;
+                }
+                least = k;
+            }
+            return least;
+        }
+    }
+#endif
+    return 0;
+}
+
+// MATMUL_FE_CELL_MARK's value: 3 and tag 5 where the call's cell runs the ttsync unpack, 4 and tag 5 where a call of
+// run-time ct or rt may run it on a one-tile block (matmul_fe_rt_ttsync_kt), else 1 (tag 6, unread)
 template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::uint32_t kt, bool ok>
 struct matmul_fe_cell_mark {
     static constexpr bool cell = ok && matmul_fe_ttsync_cell<in0_cb, in1_cb, ct, rt, kt>();
-    static constexpr std::size_t value = sizeof(matmul_fe_mark::set<cell ? 5 : 6>) + (cell ? 2 : 0);
+    static constexpr bool rt_cell =
+        ok && !cell && (ct == 0xFFu || rt == 0xFFu) && matmul_fe_rt_ttsync_kt<in0_cb, in1_cb, kt>() != 0;
+    static constexpr std::size_t value =
+        sizeof(matmul_fe_mark::set < (cell || rt_cell) ? 5 : 6 >) + (cell ? 2 : (rt_cell ? 3 : 0));
 };
 
 // the unpack_auto_ttsync of a plain call: the kernel's class rule (MATMUL_FE_MARK 1 or 2, one value per kernel, and tag 8 read at the
@@ -1177,7 +1237,14 @@ ALWI void matmul_block_init_fe(
         matmul_fe_out_key<fkey>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
 }
 
-template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0, bool fkey = false>
+template <
+    std::uint32_t in0_cb,
+    std::uint32_t in1_cb,
+    std::uint32_t ct,
+    std::uint32_t rt,
+    std::size_t mark = 0,
+    bool fkey = false,
+    std::uint32_t kt = 0xFFu>
 ALWI void matmul_block_fe(
     const std::uint32_t call_line,
     std::uint32_t in0_cb_id,
@@ -1192,6 +1259,38 @@ ALWI void matmul_block_fe(
     // a kernel bound by the kernel config buffer runs main's direction and math
     constexpr DataFormat f = LLK_SIZE_MODE ? DataFormat::Invalid : matmul_fe_phase_format<in0_cb, in1_cb>();
     constexpr std::uint32_t AUTO = LLK_SIZE_MODE ? 0 : MATMUL_REUSE_DIR_AUTO;
+#if defined(UCK_CHLKC_UNPACK)
+    if constexpr (mark == 4) {
+        if (ct_dim == 1 && rt_dim == 1 && kt_dim >= matmul_fe_rt_ttsync_kt<in0_cb, in1_cb, kt>()) {
+            matmul_block<
+                false,
+                3,
+                matmul_fe_kt_key<fkey>(),
+                DataFormat::Invalid,
+                0,
+                f,
+                f,
+                AUTO,
+                false,
+                0,
+                matmul_fe_key<ct, rt>(rt),
+                matmul_fe_key<ct, rt>(ct),
+                0,
+                matmul_fe_out_key<fkey>()>(
+                in0_cb_id,
+                in1_cb_id,
+                in0_tile_index,
+                in1_tile_index,
+                idst,
+                transpose,
+                ct_dim,
+                rt_dim,
+                kt_dim,
+                call_line);
+            return;
+        }
+    }
+#endif
     matmul_block<
         false,
         matmul_fe_unpack_ttsync<mark>(),
@@ -1332,7 +1431,8 @@ ALWI void matmul_block_fe(
         0xFFu,                                                                                    \
         0xFFu,                                                                                    \
         MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_KT1(kt), \
-        MATMUL_FE_KDEC(a, false)>
+        MATMUL_FE_KDEC(a, false),                                                                 \
+        MATMUL_FE_CK(kt)>
 // the experimental 2_0 call (no transpose argument)
 #define MATMUL_FE_UBLOCK_8(a, b, i0, i1, d, ct, rt, kt)                      \
     matmul_block_fe<                                                         \

@@ -74,14 +74,26 @@ constexpr bool is_used_dl(...) {
 // 1: the plain call may run the ttsync unpack; 2: it polls
 #define MATMUL_FE_MARK() \
     (sizeof(::ckernel::matmul_fe_mark::set<MATMUL_FE_TTSYNC_OK() ? 0 : 4>) + (MATMUL_FE_TTSYNC_OK() ? 0 : 1))
-// 3: a call of constant cbs, ct, rt and kt whose cell keeps the ttsync unpack (matmul_fe_ttsync_cell) where the class rule polls;
-// otherwise MATMUL_FE_MARK(). The keys are direct template arguments of matmul_fe_cell_mark: nested in a constant-evaluated call,
-// a dim that folds to one value without being a constant expression (a tail equal to the full width) does not compile.
-#define MATMUL_FE_CELL_MARK(a, b, ct, rt, kt)                                                                       \
-    (::ckernel::matmul_fe_cell_mark<                                                                                \
-         MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_CK(ct), MATMUL_FE_CK(rt), MATMUL_FE_CK(kt), MATMUL_FE_TTSYNC_OK()>:: \
-                 value == 3                                                                                         \
-         ? 3                                                                                                        \
+// 3: a call of constant cbs, ct, rt and kt whose cell keeps the ttsync unpack (matmul_fe_ttsync_cell) where the class
+// rule polls; 4: a call of constant cbs and run-time ct or rt that runs it on a one-tile block
+// (matmul_fe_rt_ttsync_kt); otherwise MATMUL_FE_MARK(). The keys are direct template arguments of matmul_fe_cell_mark:
+// nested in a constant-evaluated call, a dim that folds to one value without being a constant expression (a tail equal
+// to the full width) does not compile.
+#define MATMUL_FE_CELL_MARK(a, b, ct, rt, kt)   \
+    (::ckernel::matmul_fe_cell_mark<            \
+             MATMUL_FE_C(a),                    \
+             MATMUL_FE_C(b),                    \
+             MATMUL_FE_CK(ct),                  \
+             MATMUL_FE_CK(rt),                  \
+             MATMUL_FE_CK(kt),                  \
+             MATMUL_FE_TTSYNC_OK()>::value >= 3 \
+         ? ::ckernel::matmul_fe_cell_mark<      \
+               MATMUL_FE_C(a),                  \
+               MATMUL_FE_C(b),                  \
+               MATMUL_FE_CK(ct),                \
+               MATMUL_FE_CK(rt),                \
+               MATMUL_FE_CK(kt),                \
+               MATMUL_FE_TTSYNC_OK()>::value    \
          : MATMUL_FE_MARK())
 // a block key: the constant itself, 0xFF where the argument is not a constant expression; taken by value, since a reference to a
 // run-time dim moved its register allocation (minimal_matmul)
