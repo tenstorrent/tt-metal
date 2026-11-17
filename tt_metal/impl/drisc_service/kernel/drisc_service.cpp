@@ -152,6 +152,13 @@ struct DmaInFlight {
     uint32_t writes = 0;
 };
 
+// A load of a stream's outstanding count can reach the engine before an earlier issue's store and miss its request. A
+// consumed read-back of the issuing register orders every earlier issue on the stream before the count.
+FORCE_INLINE void order_dma_issues(uint8_t stream) {
+    const uint32_t readback = READ_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET);
+    asm volatile("mv zero, %0" ::"r"(readback));
+}
+
 uint32_t window_entry_addr(uint32_t slot, uint32_t entry) {
     return l1::BATCH_WINDOWS_START + slot * l1::WINDOW_SIZE +
            entry % (2 * l1::WINDOW_HALF_COMMANDS) * sizeof(abi::KernelCommand);
@@ -346,6 +353,7 @@ FORCE_INLINE uint32_t retire_transactions(TransactionRing& txn_ring, BounceArena
         // A DMA stream completes in order, so the oldest of its requests is done
         // once fewer than all of them are outstanding.
         if (t.dma_write) {
+            order_dma_issues(dma_write_stream);
             if (experimental::dma_get_writes_outstanding(dma_write_stream) >= dma.writes) {
                 break;
             }
@@ -372,6 +380,7 @@ FORCE_INLINE void issue_writes(TransactionRing& txn_ring, DmaInFlight& dma, uint
         const uint32_t trid = txn_ring.oldest_reading_trid();
         Transaction& t = transactions[trid];
         if (t.dma_read_pending) {
+            order_dma_issues(dma_read_stream);
             if (experimental::dma_get_reads_outstanding(dma_read_stream) >= dma.reads) {
                 break;
             }
