@@ -78,6 +78,7 @@ void kernel_main() {
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
     const uint32_t actual_m_tiles = get_arg_val<uint32_t>(2);
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(3);
+    const uint32_t read_rotation = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     constexpr int32_t num_in_px = input_height * input_width;
@@ -99,6 +100,18 @@ void kernel_main() {
             reads.read(zeros_noc, dst_l1, chunk);
             dst_l1 += chunk;
             bytes -= chunk;
+        }
+    };
+
+    // Slab pixels [x_from, x_to) are flat input pixels x + v_minus_x.
+    auto read_slab_pixels = [&](int32_t x_from, int32_t x_to, int32_t v_minus_x) {
+        const uint32_t end_page = x_to + v_minus_x;
+        for (int32_t x = x_from; x < x_to;) {
+            const uint32_t page = x + v_minus_x;
+            // Interleaved runs step by the bank count, not by 1; only unit-stride runs are contiguous here.
+            const uint32_t run = input.contiguous_page_stride() == 1 ? input.num_contiguous_pages(page, end_page) : 1;
+            reads.read(input.get_noc_addr(page), slab_l1 + x * pixel_bytes, run * pixel_bytes);
+            x += run;
         }
     };
 
@@ -129,14 +142,11 @@ void kernel_main() {
             const int32_t x_lo = seg_lo > -v_minus_x ? seg_lo : -v_minus_x;
             const int32_t x_hi = seg_hi < num_in_px - v_minus_x ? seg_hi : num_in_px - v_minus_x;
             reads.begin(kh + 1);
-            for (int32_t x = x_lo; x < x_hi;) {
-                const uint32_t page = x + v_minus_x;
-                const uint32_t end_page = x_hi + v_minus_x;
-                // Interleaved runs step by the bank count, not by 1; only unit-stride runs are contiguous here.
-                const uint32_t run =
-                    input.contiguous_page_stride() == 1 ? input.num_contiguous_pages(page, end_page) : 1;
-                reads.read(input.get_noc_addr(page), slab_l1 + x * pixel_bytes, run * pixel_bytes);
-                x += run;
+            if (x_lo < x_hi) {
+                // Each core starts its band at a different pixel so the cores do not all open on one bank.
+                const int32_t x_split = x_lo + static_cast<int32_t>(read_rotation % static_cast<uint32_t>(x_hi - x_lo));
+                read_slab_pixels(x_split, x_hi, v_minus_x);
+                read_slab_pixels(x_lo, x_split, v_minus_x);
             }
         }
 

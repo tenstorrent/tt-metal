@@ -43,6 +43,10 @@ IM2COL_RM_DEPTH_ROWS = 2
 WEIGHT_DEPTH = 2
 OUT_DEPTH_ROW_GROUPS = 2
 
+# Slab-fill start offset per core index (op_design lamp P9): consecutive pixels rotate over DRAM banks,
+# so offsetting each core's first read spreads the cores over the banks. 0 disables the stagger.
+SLAB_READ_STAGGER_PX_PER_CORE = 0
+
 
 def l1_cb_budget_bytes():
     return ttnn.get_max_worker_l1_unreserved_size() - L1_TENSOR_HEADROOM_BYTES
@@ -349,11 +353,17 @@ def create_program_descriptor(
     bias_addr = bias_tensor.buffer_address() if has_bias else 0
     output_addr = output_tensor.buffer_address()
     n_tile_start = 0
-    for core, (m_tile_start, actual_m_tiles) in zip(
-        _core_coords(num_cores, b.grid_x), _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles)
+    for core_idx, (core, (m_tile_start, actual_m_tiles)) in enumerate(
+        zip(_core_coords(num_cores, b.grid_x), _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles))
     ):
         num_m_blocks_this_core = _div_up(actual_m_tiles, bm)
-        reader_rt[core.x][core.y] = [input_addr, m_tile_start, actual_m_tiles, num_m_blocks_this_core]
+        reader_rt[core.x][core.y] = [
+            input_addr,
+            m_tile_start,
+            actual_m_tiles,
+            num_m_blocks_this_core,
+            core_idx * SLAB_READ_STAGGER_PX_PER_CORE,
+        ]
         compute_rt[core.x][core.y] = [num_m_blocks_this_core]
         writer_rt[core.x][core.y] = [
             weight_addr,
