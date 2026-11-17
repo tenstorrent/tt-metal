@@ -14,7 +14,7 @@ import ttnn
 from dcp_oracle import tp_split_of
 
 from ttml.distributed_checkpointing._boxes import Box
-from ttml.distributed_checkpointing import _coordinator
+from ttml.distributed_checkpointing import _coordinator, _state_dict
 from ttml.distributed_checkpointing._coordinator import (
     Election,
     Group,
@@ -59,6 +59,27 @@ def _big_mesh_parts():
         PlanPart(_record(0, [(0, 0), (0, 1)]), infos),
         PlanPart(_record(1, [(0, 2), (0, 3)]), infos),
     ]
+
+
+def test_local_coords_keeps_only_this_hosts_devices_when_they_do_not_form_a_box(monkeypatch):
+    """get_local_mesh_coord_range is the bounding box of this host's devices. An L-shaped set of them spans another
+    host's device too, which a save would otherwise be elected to write and a load would hand to
+    from_local_host_shards."""
+    mine = {(0, 0), (0, 1), (1, 0)}
+
+    class View:
+        def get_local_mesh_coord_range(self):
+            return [(r, c) for r in range(2) for c in range(2)]  # the box, with (1, 1) on another host
+
+        def is_local(self, coord):
+            return tuple(coord) in mine
+
+    class Device:
+        def get_view(self):
+            return View()
+
+    monkeypatch.setattr(_state_dict, "mesh_device", lambda: Device())
+    assert _state_dict.local_coords() == [(0, 0), (0, 1), (1, 0)]
 
 
 def test_the_election_gives_every_box_one_owner_that_holds_it():
