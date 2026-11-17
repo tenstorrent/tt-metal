@@ -51,7 +51,7 @@ One limitation with `tt-run-triage`: its host-side argument check only knows the
 
 **Finding the scripts.** Triage discovers every script in `tools/triage`, plus those in any `--additional-scripts-directory` (see [Script discovery](#script-discovery)).
 
-**Running them.** Scripts are ordered by their `depends` lists, so a script runs after everything it depends on. Among scripts that are ready at the same time, a higher `priority` runs first (`ScriptPriority.HIGH`, `MEDIUM`, `LOW`), and the script's path breaks ties. Depending on a disabled script is an error.
+**Running them.** Scripts are ordered by their `depends` lists, so a script runs after everything it depends on. Among scripts that are ready at the same time, a higher `priority` runs first (`ScriptPriority.HIGH`, `MEDIUM`, `LOW`), and the script's path breaks ties. Depending on a disabled script is an error that stops the whole run.
 
 A run can start in two ways, and they take different code paths:
 
@@ -170,7 +170,7 @@ if __name__ == "__main__":
 - A normal triage run can leave cores halted. These reads through a RISC's debug interface halt the core: `get_pc()` when the core has no debug-bus PC signal, `--full-callstack` and `--gdb-callstack`, and ELF variable reads through `create_memory_access(risc_debug)` (`check_noc_status`).
 - Continuing a core after a halt and a read or write can break it on Wormhole and Blackhole (tt-exalens#908). So `_patch_risc_debug` (`triage.py`) turns `cont()` and `continue_without_debug()` into no-ops on affected devices, and `ensure_halted()` only halts.
 - The patched `halt()` records each core it halts in the triage session and does nothing for a core already recorded. A recorded core can still stop reporting halted on Blackhole. `check_broken_components` reports those cores at the end. So `halt()` returning doesn't mean the core is halted; check `is_halted()`.
-- So a script that wants to see cores in the state the hang left them must run before anything that halts. A script that halts cores or otherwise changes the device should run after every other script: give it `ScriptPriority.LOW`, so it runs after every MEDIUM and HIGH script. Among LOW scripts the path decides, so check where it lands against `check_arc` and `check_broken_components`. Say in its Description what it changes and that it runs last.
+- So a script that wants to see cores in the state the hang left them must run before anything that halts. A script that halts cores or otherwise changes the device should run after every other script: give it `ScriptPriority.LOW`. Priority only orders scripts that are ready to run, so a LOW script runs after every MEDIUM and HIGH script except one that depends on a LOW script, as `dump_risc_debug_signals` depends on `check_broken_components`. Among LOW scripts the path decides, so check where it lands against `check_arc` and `check_broken_components`. Say in its Description what it changes and that it runs last.
 - Ethernet cores carry the traffic to remote chips, so debug access to them needs care: halting one can cut off the chip behind it.
 
 ## Checks and messages
@@ -310,7 +310,7 @@ class ScriptConfig:
 ```
 If you set `data_provider` to `True`, your script is treated as a data provider script.
 
-If you set `disabled` to `True`, a full run skips your script, and every script that depends on it fails. `--run=<script>` and running the script file directly still run it. To keep a script out of full runs unless asked for, derive `disabled` from an environment variable, as `dump_aggregated_callstacks` does.
+If you set `disabled` to `True`, a full run skips your script. No enabled script may depend on it: triage checks the whole dependency graph before it runs anything, so one such dependency stops every run started through `tt-triage.py`, with or without `--run`. `--run=<script>` and running the script file directly still run a disabled script. To keep a script out of full runs unless asked for, derive `disabled` from an environment variable, as `dump_aggregated_callstacks` does.
 
 `depends` is a list of scripts that your script depends on. Scripts that iterate devices, blocks or cores depend on `run_checks`. Scripts that depend on checking operations, kernels, or firmware depend on the `dispatcher_data` script.
 
