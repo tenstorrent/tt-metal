@@ -18,10 +18,9 @@ class MediaPartials:
     table [h, hidden/tp] per chip (row 0 zeros) and lookup per chip (0 = not this SP row's). An embedding that
     looks up all s_total gathered positions before a reduce-scatter (vocab sharded over SP) has lookup [1,1,s_total]
     and is_img [1,1,s_total,1] replicated. One that looks up only the chip's own s_local positions (by_position:
-    full vocab per SP row, no collective) has both SP-sharded. lookup and is_img are chunk-shaped and allocated once; only the
-    table tracks the image count, and build_media_partials snaps its height to a few buckets, so a
-    deployment keeps a handful. All are refilled with copy_host_to_device_tensor, so a forward pays no
-    host tilize.
+    full vocab per SP row, no collective) has both SP-sharded. lookup and is_img are chunk-shaped and allocated
+    once; only the table tracks the image count, and build_media_partials snaps its height to a few buckets, so a
+    deployment keeps a handful. All are refilled with copy_host_to_device_tensor, so a forward pays no host tilize.
 
     Each table height also keeps its host tensor, laid out [sp, tp*h, hidden/tp] so every chip's shard is
     one contiguous host buffer. refill copies the media rows straight into those buffers, so a forward

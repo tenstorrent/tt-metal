@@ -396,7 +396,7 @@ class TtPrefillRuntime:
             return None
         cfg = self.config
         by_position = not self.model.embedding.shard_vocab_on_sp
-        packed = build_media_partials(
+        height, lookup, is_img, runs = build_media_partials(
             media_refs,
             chunks,
             _media_rows_of(self.media_embedding_reader, self.hf_config.hidden_size, media_refs),
@@ -404,9 +404,6 @@ class TtPrefillRuntime:
             cfg.chunk_size // cfg.sp_factor,
             by_position,
         )
-        if packed is None:
-            return None
-        height, lookup, is_img, runs = packed
         buffers = self._media_partials_cache
         if buffers is None:
             buffers = self._media_partials_cache = MediaPartials(
