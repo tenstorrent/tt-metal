@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import json
 import os
 import time
+from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -24,7 +27,7 @@ from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import (
 )
 from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import KimiK3VisionModel, load_vision_config
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
-from models.experimental.kimi_k3_moonvit_v2.tt.ccl import ParallelFactor, TT_CCL
+from models.experimental.kimi_k3_moonvit_v2.tt.ccl import RING_FABRIC_CONFIG, RING_NUM_LINKS, ParallelFactor, TT_CCL
 from models.experimental.kimi_k3_moonvit_v2.tt.device_input import sp_mesh_mapper
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import (
     RING_SIZE,
@@ -34,6 +37,8 @@ from models.experimental.kimi_k3_moonvit_v2.tt.model_config import (
     resolve_parallel,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.rope import TT_Rope
+from models.experimental.kimi_k3_moonvit_v2.tt.trace import TRACE_REGION_SIZE
+from models.experimental.kimi_k3_moonvit_v2.tt.trace import Trace as _Trace
 
 # Weights. A test that builds `reference` carries one or both of these marks,
 # and conftest.py runs it once per mark: SYNTHETIC with random weights, REAL with the checkpoint at
@@ -164,15 +169,11 @@ def assert_quality_parts(
     assert not failed, f"{label}: {failed}"
 
 
-# The ring: 4 Blackhole chips along mesh axis 1, 2 links between neighbours. On a LoudBox (8 chips,
-# 2x4 mesh, torus links along the 4-long axis) it is the first row: `mesh_device` in conftest.py
-# opens all 8 chips and hands the test that row. On a Galaxy (8x4) it opens all 32 and does the same. `FABRIC_2D_TORUS_X` because `FABRIC_1D_RING` cannot
-# route the ring's wraparound link there.
+# The ring (`tt/ccl.py`: fabric and links) along mesh axis 1. On a LoudBox (8 chips, 2x4 mesh, torus
+# links along the 4-long axis) it is the first row: `mesh_device` in conftest.py opens all 8 chips and
+# hands the test that row. On a Galaxy (8x4) it opens all 32 and does the same.
 LOUDBOX_SHAPE = (2, RING_SIZE)
-RING_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}
-RING_NUM_LINKS = 2
-# Traced tests (`Trace`) set aside this much DRAM for the captured commands.
-TRACE_REGION_SIZE = 100_000_000
+RING_FABRIC = {"fabric_config": RING_FABRIC_CONFIG}
 
 
 def mesh_params(shape: tuple[int, int], sp_axis: int | None, num_links: int, device_params: dict, id: str):
@@ -452,41 +453,8 @@ class MeshRows:
         return out if out.ndim == 2 else out.transpose(0, 1)
 
 
-class Trace:
-    """One captured trace of `forward()`, replayed on command queue 0.
-
-    `forward` must read only inputs that keep their address (tensors kept alive, or `DeviceInput`s),
-    and must have run once untraced first: that compiles its programs and allocates the ring attention
-    semaphores and buffers, which cannot happen inside a capture. Every replay writes `output`. Use it
-    as a context manager, so the trace is released when a check fails.
-    """
-
-    def __init__(self, mesh_device, forward) -> None:
-        self.mesh_device = mesh_device
-        self.trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        try:
-            self.output = forward()
-        except BaseException:
-            ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
-            ttnn.release_trace(mesh_device, self.trace_id)
-            raise
-        ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device)
-
-    def __enter__(self) -> "Trace":
-        return self
-
-    def __exit__(self, *exc) -> None:
-        ttnn.release_trace(self.mesh_device, self.trace_id)
-
-    def _execute(self) -> None:
-        ttnn.execute_trace(self.mesh_device, self.trace_id, cq_id=0, blocking=False)
-
-    def replay(self) -> ttnn.Tensor:
-        """Run once on the current inputs and wait for it; returns `output`."""
-        self._execute()
-        ttnn.synchronize_device(self.mesh_device)
-        return self.output
+class Trace(_Trace):
+    """`tt/trace.py`'s `Trace`, plus timing."""
 
     def time_replays(self, label: str, iterations: int = TRACE_ITERATIONS, warmup: int = TRACE_WARMUP) -> float:
         """Seconds per replay on the current inputs: `warmup` untimed replays, then `iterations` back to
@@ -573,3 +541,17 @@ def assert_same_as_untraced(untraced: torch.Tensor, traced: torch.Tensor, label:
     assert torch.equal(
         untraced, traced
     ), f"{label}: traced output differs from the untraced run ({format_quality(quality(untraced, traced))})"
+
+
+# The media module (`service/media.py`): the checkpoint's config.json as the encoder service passes it, that is the
+# vision config plus the placeholder token.
+MEDIA_PAD = 163605
+MEDIA_CONFIG = {
+    **json.loads((Path(__file__).parents[1] / "reference" / "config.json").read_text()),
+    "media_placeholder_token_id": MEDIA_PAD,
+}
+
+
+def random_array(height: int, width: int, seed: int = 0) -> np.ndarray:
+    """A random uint8 RGB image, [height, width, 3], as the service hands it to the media module."""
+    return np.random.default_rng(seed).integers(0, 256, (height, width, 3), dtype=np.uint8)
