@@ -4,7 +4,8 @@
 // Compute-core writer (RISCV_0, NoC1).
 //   export_partial  (q == p) col 0 of each cb_partial tile (32 fp32 row sums, bit-exact) -> my stats[p][rows] -> the
 //                   hub's stats[p][rows] (one NoC write per block), then own_partials++ on the hub
-//   store_block     cb_out in chunk_tiles quanta -> output tiles (m*block_h + r, q*Wl_t + j); one barrier per chunk
+//   store_block     cb_out in chunk_tiles quanta -> output tiles (m*block_h + r, q*Wl_t + j); one flush per chunk, one
+//   barrier at the end
 //
 // Raw dataflow: no helper moves a tile column (export), and TensorAccessor is the store helper.
 
@@ -22,8 +23,6 @@ constexpr uint32_t sem_own_partials = get_compile_time_arg_val(C + 2);
 constexpr uint32_t tile_bytes = get_compile_time_arg_val(C + 3);
 constexpr auto out_args = TensorAccessorArgs<C + 4>();
 
-constexpr uint32_t fp32_tile_bytes = 4096;
-
 void kernel_main() {
     // common args: out_addr, stats_addr, p, hub xy, row_base[grid_y]
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
@@ -38,18 +37,19 @@ void kernel_main() {
     if (b.q == p) {
         cb_wait_front(cb_partial, b.h);
         const uint32_t src_base = get_read_ptr(cb_partial);
-        const uint32_t slot = stats_addr + (p * Mt + b.m * block_h) * 128;
+        const uint32_t slot = stats_addr + (p * Mt + b.m * block_h) * STATS_ROW_BYTES;
         for (uint32_t r = 0; r < b.h; ++r) {
             volatile tt_l1_ptr uint32_t* src =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_base + r * fp32_tile_bytes);
-            volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + r * 128);
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_base + r * FP32_TILE_BYTES);
+            volatile tt_l1_ptr uint32_t* dst =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + r * STATS_ROW_BYTES);
             for (uint32_t i = 0; i < 16; ++i) {
                 dst[i] = src[i * 16];             // face 0, row i, col 0
                 dst[16 + i] = src[512 + i * 16];  // face 2, row 16 + i, col 0
             }
         }
         cb_pop_front(cb_partial, b.h);
-        noc_async_write(slot, get_noc_addr(hub_xy >> 8, hub_xy & 0xFF, slot), b.h * 128);
+        noc_async_write(slot, get_noc_addr(hub_xy >> 8, hub_xy & 0xFF, slot), b.h * STATS_ROW_BYTES);
         noc_async_write_barrier();
         noc_semaphore_inc(get_noc_addr(hub_xy >> 8, hub_xy & 0xFF, get_semaphore(sem_own_partials)), 1);
     }
@@ -68,8 +68,9 @@ void kernel_main() {
             noc_async_write(src, out.get_noc_addr(page), tile_bytes);
             src += tile_bytes;
         }
-        noc_async_write_barrier();
+        noc_async_writes_flushed();  // the chunk's bytes have left L1: its cb_out pages can be reused
         cb_pop_front(cb_out, chunk_tiles);
     }
+    noc_async_write_barrier();
     noc_async_atomic_barrier();
 }

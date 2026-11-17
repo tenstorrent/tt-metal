@@ -1,0 +1,33 @@
+# Changelog: all_gather_rms_norm_kimi
+
+## Phase 0 — Core Implementation
+- **Date**: 2026-11-17
+- **What was done**: Initial implementation via the incremental pipeline (planner → implementer → verifier).
+  - Regime R1: a Fabric ring all-gather that lands remote slices directly in compute-core L1, with fp32 per-row partials sent ahead of the bulk.
+  - `S = rstd ⊗ γ` is precomputed before the data lands, then each landed chunk is normalized.
+  - Everything runs in one `ttnn.generic_op` (one program per chip).
+- **SUPPORTED at Phase 0**: dtype=[bfloat16], fp32_dest_acc_en=[True], layout=[TILE], alignment=[tile_aligned], rank=[4], gamma_dtype=[bfloat16], gamma_layout=[ROW_MAJOR], memory_layout=[INTERLEAVED], cluster_axis=[1], topology=[Ring], num_links=[2]. This equals TARGET (single-cell suite).
+- **Accuracy achieved**: worst device and shape over 4 shapes (`test_all_gather_rms_norm_kimi_precision_baseline.py`):
+  - PCC = 0.999998
+  - max_abs_err = 0.029
+  - mean_abs_err = 0.0013
+  - rel_rms_err = 0.0025
+  - max ULP = 1.19 (bf16), mean ULP = 0.30
+  - median got/true ratio = 0.9989 (tf32 truncation of S; not a scale bug)
+- **Golden suite at Phase 0**: 7 / 7 (1 `supported_pass` + 6 regression checks; 0 `supported_fail` / `xpass_drift` / `xfail_wrong_mode`, per `verifier_report.json`)
+- **Perf at Phase 0 (harness, PERF FOCUS cell)**: roofline 7.6 µs, target 10.1 µs.
+  - Fastest chip: 29.92 µs as handed over, 29.82 µs after the verifier fixes.
+  - Slowest chip: 32.71 µs as handed over, 32.29 µs after the verifier fixes.
+  - Not dispatch-bound.
+  - Per-chip ablation breakdown: skeleton 8.8 / local-only 24.0 / transport-only 26.3 µs (`verification_report.md`).
+- **Issues encountered / verifier fixes**:
+  - Built the three CB aliases the L1 ledger planned (`cb_gamma`/`cb_out`, `cb_xsq_sum`/`cb_rstd`, `cb_partial`/`cb_rstd_full`); compute-core L1 dropped from 164 to 132 KiB.
+  - The writer now flushes each chunk instead of a full barrier per chunk, with one barrier at the end. Measured win: −0.10 µs fastest chip, −0.42 µs slowest.
+  - DRY:
+    - the compute kernel's CB indices now come from the host;
+    - `FP32_TILE_BYTES` / `STATS_ROW_BYTES` are defined once (kernels and host);
+    - the γ stick read length comes from the `gamma_page` CT arg.
+  - Ledger implementation notes rewritten to match the code.
+  - Known infra artifact: running two test modules that each open the fabric mesh in one pytest session can fail the second one at mesh open. Run each file on its own.
+- **Tests added**: `test_all_gather_rms_norm_kimi.py` (planner; acceptance), `test_all_gather_rms_norm_kimi_precision_baseline.py` (verifier).
+- **Perf tooling added**: `perf/ablation_hooks.patch`, `perf/perf_ablate_nocheck.py.txt`, `perf/ablate_*.json`, `perf/verifier_baseline.json`, `perf/verifier_final.json`.

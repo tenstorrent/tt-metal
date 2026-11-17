@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Device time of all_gather_rms_norm_kimi's perf case, by the eval/ccl_perf.py protocol (spin + 5 calls, traced).
+
+Not a golden test: the name keeps it out of every golden-suite run (pytest only collects test_*.py from a
+directory), so it runs only when named:
+
+    CCL_PERF_EXPERIMENTS=5 scripts/run_safe_pytest.sh --no-precompile \\
+        eval/golden_tests/all_gather_rms_norm_kimi/perf_measure.py -s
+
+  CCL_PERF_EXPERIMENTS  5 (default, the check while iterating) or 100 (the final numbers)
+  CCL_PERF_OUT          result directory (default .eval/ccl_perf): <case>.json, read with
+                        `python -m eval.ccl_perf show|compare`
+  CCL_PERF_LABEL        tag stored in the result (default: the case id)
+
+The suite has one perf case (LOOSE_CASES[0], the PERF FOCUS). It is checked against the golden reference once
+before it is timed. The optimization target is the fastest-chip mean; the slowest chip, chip average, spread,
+per-chip means and the dispatch check are recorded with it.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from eval import ccl_perf
+
+for _k, _v in ccl_perf.PROFILER_ENV.items():  # before the mesh opens
+    os.environ.setdefault(_k, _v)
+
+import pytest  # noqa: E402
+
+from eval.golden_tests.all_gather_rms_norm_kimi.conftest import focus_mesh_or_skip  # noqa: E402
+from eval.golden_tests.all_gather_rms_norm_kimi.feature_spec import LOOSE_CASES  # noqa: E402
+from eval.golden_tests.all_gather_rms_norm_kimi.helpers import prepare_all_gather_rms_norm_kimi  # noqa: E402
+from eval.golden_tests.all_gather_rms_norm_kimi.test_golden import _loose_cases  # noqa: E402
+from ttnn.operations.all_gather_rms_norm_kimi import all_gather_rms_norm_kimi  # type: ignore  # noqa: E402
+
+EXPERIMENTS = int(os.environ.get("CCL_PERF_EXPERIMENTS", str(ccl_perf.CHECK_EXPERIMENTS)))
+OUT = Path(os.environ.get("CCL_PERF_OUT", ".eval/ccl_perf"))
+
+
+@pytest.fixture
+def perf_mesh(_fabric_mesh_cache):
+    return _fabric_mesh_cache.get(focus_mesh_or_skip(), trace_region_size=ccl_perf.TRACE_REGION_SIZE)
+
+
+@pytest.mark.timeout(7200)  # ~2.5 s per experiment
+@pytest.mark.parametrize("inputs,axes,extras", _loose_cases())
+def test_perf_measure(inputs, axes, extras, perf_mesh, request):
+    case = request.node.callspec.id
+    call, check = prepare_all_gather_rms_norm_kimi(inputs, mesh_device=perf_mesh, extras=extras,
+                                                    op=all_gather_rms_norm_kimi, **axes)
+    pass
+    meta = {
+        "op": "all_gather_rms_norm_kimi",
+        "case": case,
+        "focus": True,
+        "roofline_us": extras.get("roofline_us"),
+        "target_us": extras.get("target_us"),
+        "experiments": EXPERIMENTS,
+        "loose_cases": len(LOOSE_CASES),
+    }
+    ccl_perf.run(perf_mesh, call, experiments=EXPERIMENTS, out_path=OUT / f"{case}.json",
+                 label=os.environ.get("CCL_PERF_LABEL", case), meta=meta)

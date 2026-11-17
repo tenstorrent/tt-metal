@@ -43,6 +43,7 @@ PORT_BATCH_CHUNKS_MAX = 8  # packet-header pool cap
 INC_EVERY = 8  # fused arrival increment every this many chunks (+ every entry end)  [TRANSPORT]
 OUT_DEPTH_CHUNKS = 2  # cb_out depth in chunks
 STATS_SCRATCH_CAP_BYTES = 64 * 1024
+STATS_ROW_BYTES = 32 * 4  # 32 fp32 row sums per tile row (kernels/..._common.hpp mirrors it)
 
 FWD, BWD = 0, 1
 _OPP = {FWD: BWD, BWD: FWD}
@@ -148,8 +149,8 @@ class Geometry:
         return list(self.ports.values()) + list(self.receivers.values()) + [self.hub] + self.compute
 
     @property
-    def slot_bytes(self):  # one slice's fp32 partial vector: Mt rows x 32 values
-        return self.Mt * 128
+    def slot_bytes(self):  # one slice's fp32 partial vector: Mt rows x 32 values (kernels: STATS_ROW_BYTES)
+        return self.Mt * STATS_ROW_BYTES
 
 
 def build_geometry(mesh_device, padded_shape, cluster_axis, num_links):
@@ -171,7 +172,7 @@ def build_geometry(mesh_device, padded_shape, cluster_axis, num_links):
     if Wl_t % block_w != 0 or block_w != Wl_t:
         # Phase 0: block_w is the whole slice width (a narrower block needs same-slice partial combining).
         raise ValueError(f"all_gather_rms_norm_kimi: block_w {block_w} must equal the slice width {Wl_t} tiles")
-    if G * Mt * 128 > STATS_SCRATCH_CAP_BYTES:
+    if G * Mt * STATS_ROW_BYTES > STATS_SCRATCH_CAP_BYTES:
         raise ValueError(f"all_gather_rms_norm_kimi: M = {M} too tall for the stats scratch (G*M*4 B > 64 KiB)")
 
     # ---- placement: ports + receivers + hub on logical row 0 (next to the Ethernet row), compute on the rest ----
@@ -431,24 +432,28 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             ]
 
             # ---------------- CBs ----------------
-            def cb(idx, dtype, pages, cores):
+            def cb(idxs, dtype, pages, cores):
+                """One allocation of `pages` tiles; several indices on it = an alias (disjoint lifetimes, see
+                l1_ledger.md). Each index keeps its own FIFO pointers, all starting at the allocation base."""
                 page = ttnn.tile_size(dtype)
+                idxs = idxs if isinstance(idxs, (list, tuple)) else [idxs]
                 return ttnn.CBDescriptor(
                     total_size=pages * page,
                     core_ranges=cores,
-                    format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dtype, page_size=page)],
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(buffer_index=i, data_format=dtype, page_size=page) for i in idxs
+                    ],
                 )
 
             bh, bw = geo.block_h, geo.block_w
+            # cb_out's capacity must stay a multiple of its push quantum (chunk) when the gamma side is wider
+            gamma_out_pages = -(-max(bw, OUT_DEPTH_CHUNKS * chunk) // chunk) * chunk
             program.cbs = [
                 ttnn.cb_descriptor_from_sharded_tensor(CB_X_BLOCK, res.landing),
-                cb(CB_GAMMA, ttnn.bfloat16, bw, comp_crs),
-                cb(CB_OUT, ttnn.bfloat16, OUT_DEPTH_CHUNKS * chunk, comp_crs),
+                cb([CB_GAMMA, CB_OUT], ttnn.bfloat16, gamma_out_pages, comp_crs),  # gamma dead before normalize
                 cb(CB_PARTIALS, ttnn.float32, G * bh, comp_crs),
-                cb(CB_XSQ_SUM, ttnn.float32, bh, comp_crs),
-                cb(CB_RSTD, ttnn.float32, bh, comp_crs),
-                cb(CB_PARTIAL, ttnn.float32, bh, comp_crs),
-                cb(CB_RSTD_FULL, ttnn.float32, bh, comp_crs),
+                cb([CB_XSQ_SUM, CB_RSTD], ttnn.float32, bh, comp_crs),  # xsq popped by the reduce before combine
+                cb([CB_PARTIAL, CB_RSTD_FULL], ttnn.float32, bh, comp_crs),  # partial exported before the stats land
                 cb(CB_SCALE, ttnn.float32, bh * bw, comp_crs),
                 cb(CB_SCALER, ttnn.bfloat16, 1, comp_crs),
                 cb(CB_PORT_CHUNKS, ttnn.bfloat16, 2 * batch * chunk, port_crs),
@@ -475,6 +480,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             writer_ct += list(ttnn.TensorAccessorArgs(output).get_compile_time_args())
             compute_common = [p] + geo.row_base
             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
+            compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_RSTD_FULL]
+            compute_ct += [CB_SCALE, CB_SCALER]
 
             ccfg = ttnn.ComputeConfigDescriptor()
             ccfg.math_fidelity = cfg.math_fidelity

@@ -24,6 +24,10 @@ constexpr uint32_t num_links = get_compile_time_arg_val(9);
 constexpr uint32_t NUM_GEO_CT = 10;
 
 constexpr uint32_t Wt = G * Wl_t;
+// One fp32 tile (the partial / stats CBs) and one stats row: the 32 fp32 row sums of one tile row. The host's
+// slot_bytes = Mt * STATS_ROW_BYTES (all_gather_rms_norm_kimi_program_descriptor.py) uses the same layout.
+constexpr uint32_t FP32_TILE_BYTES = 32 * 32 * sizeof(float);
+constexpr uint32_t STATS_ROW_BYTES = 32 * sizeof(float);
 constexpr uint32_t block_tiles = block_h * block_w;
 
 struct BlockId {

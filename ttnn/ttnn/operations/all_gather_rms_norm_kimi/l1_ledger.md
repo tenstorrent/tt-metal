@@ -84,23 +84,27 @@ Totals per device:
 
 > Cheapest-traffic split considered: W-split by slice × rows with L1 landing and fp32 stats (R1). It is tied on bytes with the rows-only split (R5): same DRAM and fabric bytes, minus nothing. Implemented: R1. It **is** the cheapest-traffic split. The tie with R5 is broken by occupancy (80 vs 20 cores) and the per-core tail, as `op_design.md` states.
 
-## Implementation notes (ttnn-implementer, Phase 0)
+## Implementation notes (Phase 0, after verification)
 
-The Phase 0 kernels allocate the compute-core CBs **without** the three planned shares. Every CB still has
-exactly one producer and one consumer; only the "Shares with" column changes:
+The three planned shares are now built (verifier, Phase 0). Each pair is one `CBDescriptor` with two
+`CBFormatDescriptor`s (one allocation, two indices with independent FIFO pointers), so the table above matches
+the code:
 
-| Planned share | As built | Why not (yet) |
-|---------------|----------|---------------|
-| `cb_gamma` / `cb_out` (one allocation, two indices) | two allocations: `cb_gamma` `block_w` pages, `cb_out` `OUT_DEPTH_CHUNKS·chunk_tiles` pages | Two CB indices on one allocation keep independent FIFO pointers. The alias is legal by the lifetimes above, but it was not needed to fit: Phase 0 compute cores use ~170 KiB of ~1.5 MB. Candidate for a later L1 refinement. |
-| `cb_xsq_sum` / `cb_rstd` | two allocations of `block_h` fp32 pages | as above (+`4096·block_h` B) |
-| `cb_partial` / `cb_rstd_full` | two allocations of `block_h` fp32 pages | as above (+`4096·block_h` B) |
+| Share | Allocation | Why the alias is safe in the built schedule |
+|-------|------------|---------------------------------------------|
+| `cb_gamma` / `cb_out` | `ceil(max(block_w, out_depth_chunks·chunk_tiles) / chunk_tiles)·chunk_tiles` bf16 pages (= 12 at Phase 0). The round-up keeps `cb_out`'s capacity a multiple of its push quantum. | The unpacker finishes reading γ in `scale_block` before it unpacks anything of `normalize_block`, and the packer can only write `cb_out` after that math. The reader writes γ at t0, before any `cb_out` reservation. |
+| `cb_xsq_sum` / `cb_rstd` | `block_h` fp32 pages | The reduce pops `cb_xsq_sum` before `combine_stats_block` packs `cb_rstd` (both on the one compute thread, in order). |
+| `cb_partial` / `cb_rstd_full` | `block_h` fp32 pages | The writer pops `cb_partial` before it increments the hub's `own_partials`. The hub multicasts the stats only after every own core did that, and `expand_rstd_block` runs only after those stats arrive. |
 
-Footprint as built, compute core: 132 KiB (planned) + `2048·max(0, 2·chunk_tiles)` + `2·4096·block_h` ≈ **164 KiB**
-at Phase 0 (block 1 × 12, chunk 6); tall regime (block 3 × 12, chunk 6) ≈ **330 KiB**. Port core unchanged (106 KiB).
-`cb_xsq_sum` and `cb_partials` are tagged `UnpackToDestFp32` (lossless fp32 reload through `copy_tile`; neither is
-ever an FPU operand).
+Footprint as built, compute core: **132 KiB** at Phase 0 (block 1 × 12, chunk 6), equal to the planned figure above.
+In the tall regime (block 3 × 12, chunk 6) it is 72 + 24 + 48 + 24 + 144 + 2 + 32 = **346 KiB**. Port core: 106 KiB.
 
-Placement as built: the 2L ports, 2L receivers and the hub sit on logical row 0 (ports centred), compute cores fill
-rows 1.. in row-major order (rectangles: full rows + one partial row). No Ethernet-probe placement: the probe is a
-second device dispatch on the first call, which the one-dispatch-per-invocation rule forbids. The data-movement
-budget above is unchanged (placement moves no bytes, only NoC hop counts).
+`cb_xsq_sum` and `cb_partials` are tagged `UnpackToDestFp32`: they are reloaded losslessly through `copy_tile` and
+are never an FPU operand. Every fp32 page sits under `fp32_dest_acc_en=True` (page format vs DEST width: no
+finding).
+
+Placement as built: the 2L ports, 2L receivers and the hub sit on logical row 0, with the ports centred. The
+compute cores fill rows 1.. in row-major order (rectangles: full rows + one partial row). There is no
+Ethernet-probe placement, because the example's probe is a second device dispatch on the first call, which the
+one-dispatch-per-invocation rule forbids. Placing the ports by link without a probe is perf Refinement 1. The
+data-movement budget above is unchanged: placement moves no bytes, only NoC hop counts.

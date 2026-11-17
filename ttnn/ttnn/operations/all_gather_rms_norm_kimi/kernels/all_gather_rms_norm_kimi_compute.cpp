@@ -35,16 +35,17 @@ constexpr uint32_t C = NUM_GEO_CT;
 constexpr uint32_t inv_w_bits = get_compile_time_arg_val(C + 0);
 constexpr uint32_t eps_bits = get_compile_time_arg_val(C + 1);
 
-constexpr uint32_t cb_x_block = 0;
-constexpr uint32_t cb_gamma = 1;
-constexpr uint32_t cb_out = 2;
-constexpr uint32_t cb_partials = 3;
-constexpr uint32_t cb_xsq_sum = 4;
-constexpr uint32_t cb_rstd = 5;
-constexpr uint32_t cb_partial = 6;
-constexpr uint32_t cb_rstd_full = 7;
-constexpr uint32_t cb_scale = 8;
-constexpr uint32_t cb_scaler = 9;
+// CB indices: defined once on the host (CB_* in the program descriptor), passed in this order
+constexpr uint32_t cb_x_block = get_compile_time_arg_val(C + 2);
+constexpr uint32_t cb_gamma = get_compile_time_arg_val(C + 3);
+constexpr uint32_t cb_out = get_compile_time_arg_val(C + 4);
+constexpr uint32_t cb_partials = get_compile_time_arg_val(C + 5);
+constexpr uint32_t cb_xsq_sum = get_compile_time_arg_val(C + 6);
+constexpr uint32_t cb_rstd = get_compile_time_arg_val(C + 7);
+constexpr uint32_t cb_partial = get_compile_time_arg_val(C + 8);
+constexpr uint32_t cb_rstd_full = get_compile_time_arg_val(C + 9);
+constexpr uint32_t cb_scale = get_compile_time_arg_val(C + 10);
+constexpr uint32_t cb_scaler = get_compile_time_arg_val(C + 11);
 
 static_assert(G <= DEST_AUTO_LIMIT, "combine_stats_block holds all G partials in DEST at once");
 

@@ -34,8 +34,6 @@ constexpr uint32_t gamma_page = get_compile_time_arg_val(C + 8);
 constexpr auto in_args = TensorAccessorArgs<C + 9>();
 constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
-constexpr uint32_t fp32_tile_bytes = 4096;
-
 void kernel_main() {
     // common args: in_addr, gamma_addr, stats_addr, p, row_base[grid_y], fwd port xy[L], bwd port xy[L]
     const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
@@ -58,7 +56,7 @@ void kernel_main() {
         // DRAM reads want a 64 B aligned L1 destination: land each stick at the first 64 B boundary in its tile
         const uint32_t pad = (64 - (base & 63)) & 63;
         for (uint32_t j = 0; j < block_w; ++j) {
-            noc_async_read(gamma.get_noc_addr(b.q * Wl_t + j), base + j * tile_bytes + pad, 64);
+            noc_async_read(gamma.get_noc_addr(b.q * Wl_t + j), base + j * tile_bytes + pad, gamma_page);
         }
         noc_async_read_barrier();
         for (uint32_t j = 0; j < block_w; ++j) {
@@ -110,10 +108,10 @@ void kernel_main() {
         const uint32_t base = get_write_ptr(cb_partials);
         for (uint32_t q = 0; q < G; ++q) {
             for (uint32_t r = 0; r < b.h; ++r) {
-                volatile tt_l1_ptr uint32_t* src =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr + (q * Mt + b.m * block_h + r) * 128);
+                volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    stats_addr + (q * Mt + b.m * block_h + r) * STATS_ROW_BYTES);
                 volatile tt_l1_ptr uint32_t* dst =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + (q * b.h + r) * fp32_tile_bytes);
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + (q * b.h + r) * FP32_TILE_BYTES);
                 for (uint32_t i = 0; i < 16; ++i) {
                     dst[i * 16] = src[i];             // face 0, row i, col 0
                     dst[512 + i * 16] = src[16 + i];  // face 2, row 16 + i, col 0
