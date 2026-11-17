@@ -194,10 +194,10 @@ TEST(PhysicalDescriptorBuilder, BuildFromFileReturnsCppDescriptor) {
     std::filesystem::remove(path);
 }
 
-// The offline build numbers chips as the mock cluster descriptors generated from the FSD do: every ASIC on the
-// host's boards, linked or not, in (tray, ASIC location) order. hostA's ASIC 0 has no link here, so it is not in
-// the descriptor, but it still takes chip id 0 and hostA's ASIC 1 is chip 1.
-TEST(PhysicalDescriptorBuilder, OfflineBuildNumbersChipsAsGeneratedDescriptors) {
+// Chips are numbered as the mock cluster descriptors generated from the FSD number them: every ASIC on the host's
+// boards, linked or not, in (tray, ASIC location) order. hostA's ASIC 0 has no link here, so it is not in the
+// descriptor, but it still takes chip id 0 and hostA's ASIC 1 is chip 1.
+TEST(PhysicalDescriptorBuilder, BuildFromFileNumbersChipsAsGeneratedDescriptors) {
     FSD fsd = make_two_host_fsd();
     fsd.mutable_eth_connections()->clear_connection();
     auto* conn = fsd.mutable_eth_connections()->add_connection();
@@ -219,7 +219,7 @@ TEST(PhysicalDescriptorBuilder, OfflineBuildNumbersChipsAsGeneratedDescriptors) 
         out << text;
     }
 
-    auto psd = build_offline_physical_descriptor_from_file(path.string());
+    auto psd = build_physical_descriptor_from_file(path.string());
     std::map<std::pair<std::string, uint32_t>, ChipId> chip_ids;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
         chip_ids[{descriptor.host_name, *descriptor.asic_location}] = descriptor.umd_unique_id;
@@ -229,6 +229,30 @@ TEST(PhysicalDescriptorBuilder, OfflineBuildNumbersChipsAsGeneratedDescriptors) 
     EXPECT_EQ(psd.my_host_name(), "hostA");
     EXPECT_EQ(psd.get_local_mpi_rank(), 0u);
     EXPECT_TRUE(psd.is_bh_galaxy_rev_c());
+
+    std::filesystem::remove(path);
+}
+
+// A board type with no board definition gets no generated descriptors, so the build still succeeds and leaves
+// its chips unnumbered.
+TEST(PhysicalDescriptorBuilder, BuildFromFileLeavesChipsOfUndefinedBoardsUnnumbered) {
+    FSD fsd = make_two_host_fsd();
+    for (auto& loc : *fsd.mutable_board_types()->mutable_board_locations()) {
+        loc.set_board_type("GALAXY");
+    }
+    std::string text;
+    ASSERT_TRUE(google::protobuf::TextFormat::PrintToString(fsd, &text));
+    const auto path = std::filesystem::temp_directory_path() / "pdb_undefined_board_test.textproto";
+    {
+        std::ofstream out(path);
+        out << text;
+    }
+
+    auto psd = build_physical_descriptor_from_file(path.string());
+    EXPECT_EQ(psd.get_asic_descriptors().size(), 3u);
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        EXPECT_EQ(descriptor.umd_unique_id, -1) << *asic_id;
+    }
 
     std::filesystem::remove(path);
 }

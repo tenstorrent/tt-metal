@@ -103,7 +103,7 @@ PhysicalSystemDescriptor run_psd_discovery() {
 /**
  * @brief Write one mock cluster descriptor per FSD host into `output_dir`/mock_cluster_desc.
  *
- * @return FSD host index -> descriptor path. Host i is PSD rank i in build_offline_physical_descriptor_from_file.
+ * @return FSD host index -> descriptor path. Host i is PSD rank i in build_physical_descriptor_from_file.
  */
 std::map<int, std::string> write_offline_mock_cluster_descriptors(
     const std::string& fsd_path, const std::filesystem::path& output_dir) {
@@ -662,9 +662,8 @@ int main(int argc, char** argv) {
 
         // Stage: Run PSD discovery
         log_info(tt::LogFabric, "Stage: Running Physical System Descriptor discovery...");
-        PhysicalSystemDescriptor psd = args.offline_fsd.has_value()
-                                           ? build_offline_physical_descriptor_from_file(*args.offline_fsd)
-                                           : run_psd_discovery();
+        PhysicalSystemDescriptor psd =
+            args.offline_fsd.has_value() ? build_physical_descriptor_from_file(*args.offline_fsd) : run_psd_discovery();
         log_info(tt::LogFabric, "PSD discovery complete");
 
         // Gather mock cluster descriptor paths from all ranks (when TT_METAL_MOCK_CLUSTER_DESC_PATH is set)
