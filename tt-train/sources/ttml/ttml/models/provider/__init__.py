@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Model providers: build one family of HF models in ttml, and load and export its weights.
+"""Model providers: build HF models in ttml, and load and export their weights.
 
-Bringing up a family means subclassing ``ModelProvider`` (``base.py``) in ``ttml/models/provider/<family>.py`` and
-adding it to ``providers``, keyed by the ``model_type`` of the HF ``config.json``.
+Bringing up a model means subclassing ``ModelProvider`` (``base.py``) in ``ttml/models/provider/<family>.py``, or
+reusing its family's, and adding the model to ``providers``, keyed by its HF hub id.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..utils.errors import UnsupportedTrainingConfig
-from ..utils.hub import load_hf_config
+from ..utils.hub import same_model
 from .base import ModelProvider
 from .llama import LlamaProvider
 
@@ -22,19 +22,21 @@ if TYPE_CHECKING:
 
 
 def providers() -> dict[str, type[ModelProvider]]:
-    """The provider of each model family, keyed by the ``model_type`` of the HF ``config.json``."""
-    return {"llama": LlamaProvider}
+    """The provider of each supported model, keyed by its HF hub id."""
+    return {
+        "meta-llama/Llama-3.2-1B": LlamaProvider,
+        "meta-llama/Llama-3.2-1B-Instruct": LlamaProvider,
+        "meta-llama/Llama-3.1-8B": LlamaProvider,
+        "meta-llama/Llama-3.1-8B-Instruct": LlamaProvider,
+    }
 
 
 def get_provider(config: TrainerConfig) -> ModelProvider:
-    """The provider of the family of ``config.model.name``, for the run ``config`` describes."""
-    model_type = load_hf_config(config.model.name).get("model_type")
-    provider = providers().get(model_type)
+    """The provider of ``config.model.name``: a hub id, or a local copy of a hub model, named as its directory."""
+    name = config.model.name
+    provider = next((provider for model, provider in providers().items() if same_model(model, name)), None)
     if provider is None:
-        raise UnsupportedTrainingConfig(
-            f"model.name: no provider for model_type {model_type!r} ({config.model.name}); "
-            f"available: {sorted(providers())}"
-        )
+        raise UnsupportedTrainingConfig(f"model.name: {name!r} is not one of {sorted(providers())}")
     return provider(config)
 
 

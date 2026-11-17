@@ -40,10 +40,12 @@ finally:
 
 ## What it trains
 
-**Models.** HuggingFace Llama checkpoints (`model_type: llama`), as a hub id or a local model directory, in bf16.
-Checkpoints the ttml Llama can't represent are rejected before the device opens: quantized weights, attention or MLP
-biases, an activation other than SiLU, and RoPE scaling other than `llama3` or the default. Other architectures plug in
-as model providers (see [Adding a model](#adding-a-model)).
+**Models.** The models `providers()` in `ttml/models/provider/__init__.py` lists, by HF hub id: Llama 3.2 1B and Llama
+3.1 8B, base and Instruct, in bf16. `model.name` is the hub id, or a local copy of the model in a directory
+named as the model, for example `/models/Llama-3.2-1B-Instruct`. Checkpoints the ttml Llama can't represent are
+rejected before the device opens: quantized weights, attention or MLP biases, an activation other than SiLU, and RoPE
+scaling other than `llama3` or the default. Other models plug in as model providers (see
+[Adding a model](#adding-a-model)).
 
 **LoRA only.** A run trains the LoRA adapters its `model.lora` section describes, and nothing else. Full fine-tuning
 (every weight) is not supported yet: a config without `model.lora` is rejected. `target_modules` uses HF projection
@@ -307,7 +309,7 @@ finally:
 
 ## Adding a model
 
-A model provider builds the ttml model for an HF `model_type`, and loads and exports its weights. It subclasses
+A model provider builds the ttml model for HF models, and loads and exports its weights. It subclasses
 `ModelProvider` in `ttml/models/provider/base.py`, which takes the config, as `self.config`, and implements its four
 methods:
 
@@ -321,8 +323,9 @@ What a checkpoint holds and how it is laid out is the provider's: `LlamaProvider
 [Checkpoints](#checkpoints). Anything else a provider needs it reads itself: `LlamaProvider` reads the model's HF
 `config.json` from `model.name`. `ttml/models/utils/` has shared helpers for HF hub models and PEFT adapters.
 
-Write it in `ttml/models/provider/<model>.py` and add it to `providers()` in `ttml/models/provider/__init__.py`, keyed
-by the `model_type`. `LlamaProvider` in `ttml/models/provider/llama.py` is the reference.
+Write it in `ttml/models/provider/<family>.py` and add each model it supports to `providers()` in
+`ttml/models/provider/__init__.py`, keyed by its HF hub id; a model of a family that already has a provider only needs
+the entry. `LlamaProvider` in `ttml/models/provider/llama.py` is the reference.
 
 ---
 
