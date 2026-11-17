@@ -2,7 +2,7 @@
 
 **Problem type:** compute-bound: reduction  ·  **Concept(s):** an accumulate (FPU `add_tiles`) + within-tile SFPU-finalize reduce, applied per output tile over a full 2-D tile block (many output tiles), vs the matmul-reduce library — with a per-dim, per-width dispatch
 **First profiled on:** `bh-50-special-mstaletovic-for-reservation-44580` · BH · single core · 2026-07-14 · `d52e6bc64b8` (working tree, `mstaletovic/agent_eval`)
-**Measured on:** WH B0 n150 (regimes, 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
+**Measured on:** WH B0 n150 (regimes, 2026-10-12; re-measured `bgd-lab-22-special-adamjanovic-for-reservation-169096`, 2026-11-16) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -125,9 +125,9 @@ WH B0 n150: row 8, col 8, scalar ~4–8 (flat at 4); on BH p150b: **col 4, scala
 | 8 reduced tiles, col `(8, 2, 1)` | 1 792 → 1 499 ns **1.20×** (probe) | 1 232 → 726 ns **1.70×** (sweep) |
 | **Does not help:** 8 reduced tiles, row `(2, 8, 1)` (8 / 2) | 2 060 → 1 775 ns **1.16× — helps on WH** (probe) | 825 → 876 ns **0.94×** |
 | **Helps (BH):** 4 reduced tiles, col `(4, 2, 1)` (4 / 2) | 1 111 → 1 233 ns **0.90× — loses on WH** | 738 → 663 ns **1.11×** |
-| **Does not help:** 4 reduced tiles, scalar `(2, 2, 1)` (4 / 1) | 1 021 → 1 003 ns **1.02×** | 593 → 550 ns **1.08× — small gain on BH** (`measure` regime: verdict differs by arch) |
-| **Does not help:** 4 reduced tiles, row `(2, 4, 1)` (4 / 2) | 1 240 → 1 523 ns **0.81×** | 535 → 814 ns **0.66×** |
-| **Does not help:** 2 reduced tiles, many outputs, row `(4, 2, 1)` (2 / 4) | 1 307 → 2 569 ns **0.51×** | 549 → 1 398 ns **0.39×** |
+| **Does not help:** 4 reduced tiles, scalar `(2, 2, 1)` (4 / 1) | 1 021 → 1 003 ns **1.02×**; 2026-11-16: 1 002 → 846 ns **1.18×** | 593 → 550 ns **1.08× — small gain on BH** (`measure` regime: verdict differs by arch) |
+| **Does not help:** 4 reduced tiles, row `(2, 4, 1)` (4 / 2) | 1 240 → 1 523 ns **0.81×**; 2026-11-16: 1 209 → 1 240 ns **0.98×** | 535 → 814 ns **0.66×** |
+| **Does not help:** 2 reduced tiles, many outputs, row `(4, 2, 1)` (2 / 4) | 1 307 → 2 569 ns **0.51×**; 2026-11-16: 1 287 → 1 868 ns **0.69×** | 549 → 1 398 ns **0.39×** |
 | **Does not help:** 2 reduced tiles, col `(2, 2, 1)` (2 / 2) | not measured | 487 → 623 ns **0.78×** |
 | **Does not help:** 2 reduced tiles, scalar `(2, 1, 1)` (2 / 1) | not measured | 396 → 524 ns **0.76×** |
 | **Boundary** (reduced tiles per output tile) | row 8 · col 8 · scalar ~4–8 | **row > 8** (≤ 32) · **col 4** · **scalar 4** |
@@ -149,6 +149,10 @@ baseline = `reduce_tile`, lever = `accumulate_via_add` (the library opt-in); spe
 `(probe)` rows are single exploratory runs. BH p150b rows — the same regimes test and
 the device_perf sweep on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`).
 Other boards: bh-50 (older library) — the *Measured result* table above.
+WH B0 n150 re-measure: 20 passes of `test_reduce_block_regimes`, `bgd-lab-22-special-adamjanovic-for-reservation-169096`, 2026-11-16, commit `c2079cdc7ed`.
+The three small-block rows moved by more than 10%, mostly through a faster `accumulate_via_add` (e.g. `(4, 2, 1)`
+lever 2 569 → 1 868 ns); verdicts are unchanged (row at 2 and 4 reduced tiles still loses, scalar at 4 is a
+`measure` regime). The test carries both numbers as a range; rows within 10% kept their 2026-10-12 values.
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_reduce_block.py::test_reduce_block_regimes`
 (same regimes on any board; each regime asserts against a bound derived from the speedup measured on the running
 arch by `perf_test_utils.regime_bound`, with one confirmation pass; an arch with no measured number and `measure`

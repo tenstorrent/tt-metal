@@ -1321,10 +1321,12 @@ _REGIMES = [
     ("helps_col_32t", "col", (32, 2, 1), "helps", {"wh": 1.88, "bh": 3.64}),
     ("helps_scalar_32t", "scalar", (4, 8, 1), "helps", {"wh": 3.04, "bh": 4.12}),
     # BH ranges: the README's numbers (0.39x, 0.66x) and bh-50 (BH p150b, 13x10 grid), 20 passes, 2026-11-14 (0.46x, 0.75x).
-    ("not_row_2t", "row", (4, 2, 1), "does_not_help", {"wh": 0.51, "bh": (0.39, 0.46)}),
-    ("not_row_4t", "row", (2, 4, 1), "does_not_help", {"wh": 0.81, "bh": (0.66, 0.75)}),
+    # WH ranges: the README's numbers (0.51x, 0.81x, scalar 1.02x) and bgd-lab-22 (WH B0 n150, 8x8 grid), 20 passes,
+    # 2026-11-16 (0.69x, 0.98x, scalar 1.18x).
+    ("not_row_2t", "row", (4, 2, 1), "does_not_help", {"wh": (0.51, 0.69), "bh": (0.39, 0.46)}),
+    ("not_row_4t", "row", (2, 4, 1), "does_not_help", {"wh": (0.81, 0.98), "bh": (0.66, 0.75)}),
     ("measure_col_4t", "col", (4, 2, 1), "measure", {"wh": 0.90, "bh": 1.11}),  # verdict differs by arch
-    ("measure_scalar_4t", "scalar", (2, 2, 1), "measure", {"wh": 1.02, "bh": 1.08}),  # verdict differs by arch
+    ("measure_scalar_4t", "scalar", (2, 2, 1), "measure", {"wh": (1.02, 1.19), "bh": 1.08}),  # edge on both boards
 ]
 
 
