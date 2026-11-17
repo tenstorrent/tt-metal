@@ -402,10 +402,10 @@
         set -eo pipefail
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_golden.py
-        # K3.1 real checkpoint: the indexer lands under the names TtIndexer loads. The test skips when the
-        # checkpoint is not mounted, so the section fails unless both tests passed.
+        # K3.1 real checkpoint: the indexer lands under the names TtIndexer loads. Its tests share one fixture and
+        # skip together when the checkpoint is not mounted, so the section fails unless they passed.
         python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_weights.py | tee /tmp/k31_weights.out
-        grep -qE "\b2 passed" /tmp/k31_weights.out || { echo "::error::test_k31_weights.py did not pass (skipped?): is the K3.1 checkpoint mounted?"; exit 1; }
+        grep -qE "[0-9]+ passed" /tmp/k31_weights.out || { echo "::error::test_k31_weights.py did not pass (skipped?): is the K3.1 checkpoint mounted?"; exit 1; }
         export DS_PREFILL_REUSE_MODEL=1  # one mesh open for all cases
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "kimi_k3_1 and shape-8x4" -vvv --tb=short
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k kimi_k3_1 -vvv --tb=short

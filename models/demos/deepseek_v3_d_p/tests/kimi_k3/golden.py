@@ -28,7 +28,7 @@ Two traces exist, and they are not interchangeable:
 Both are causal, so a prefix of the token stream is a valid shorter run and every stream may be
 sliced to the length under test.
 
-K3.1 (retrained weights, so none of the above applies to it) has one, ``TRACE_K31``: Miguel's
+K3.1 (retrained weights, so none of the above applies to it) has one, ``TRACE_K31``: the
 ``kimi_k31_pro_10k_v2`` vLLM trace — an 8192-token prompt through the full 93-layer K3.1 model, then
 2047 sampled decode steps — with ``decoder_output_layer_{0..92}``, ``attn_output``, AttnRes block
 streams, KV and the DSA indexer streams (``indexer/indexer_k_layer_N``, ``dsa/dsa_topk_indices_layer_N``)

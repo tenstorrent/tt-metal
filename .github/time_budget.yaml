@@ -440,20 +440,8 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    # K3.1 mirrors K3's CI coverage (user decision 2026-11-07). Allocated 2354 -> 2561 (+207): the K3.1 synthetic
-    # suite (+35 min), the K3.1 sparse MLA section of the K3 accuracy suite (+12 min) and the K3.1 depth L24 /
-    # L24-128k sections of the K3 transformer suite (+70 +90 min, K3's own L24 depth / chunked bounds). Budget
-    # 2375 -> 2561 (+186): the other 21 min were unallocated headroom before these legs.
-    # 2561 -> 2575 (+14) for K3 / K3.1 contract tests the legs did not run: the traced DSA replay section of the
-    # K3.1 synthetic suite (+12; 6.6 min measured with three windows, 3.2 min with the two kept) and in the KV
-    # cache table leg the K3 / K3.1 merged-table rows (+2, 50 s measured), both on bh-glx-120-b08u02 2026-11-13.
-    # Within existing bounds of the K3 accuracy suite: the K3.1 golden and checkpoint checks open its K3.1 section
-    # [5/5]; the other K3.1 contract tests, the cache footprint test included, joined [1/5].
-    # 2575 -> 2460 (-115): the K3.1 depth L24 / L24-128k sections, one test since, have a 45 min bound from
-    # measured time (see the K3 transformer suite), not K3's L24 depth / chunked bounds (70 + 90).
-    # 2460 -> 2458 on merging main (+10 -12): main's MoonViT leg (+10, #64694), and the K3.1 sparse MLA section
-    # is main's k31_sparse_mla (#64666), which fits the K3 accuracy suite's 54 min bound, so its +12 above is gone.
-    # bh_sc1_high_power 500 is main's (#64666, +2).
+    # 2385 -> 2458 (+73, PR #64830): K3.1 synthetic suite 47 (traced DSA replay 12 of it), K3.1 L24 / L24-128k
+    # depth 45, K3 / K3.1 KV table rows 2 (94 min, 21 of it from existing headroom).
     bh_sc1: 2458
     bh_sc1_high_power: 500
     bh_sc4: 60
