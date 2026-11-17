@@ -49,6 +49,8 @@ struct ProgramSpec {
     //   parameter in ProgramAdvancedOptions::sram_arena_parameters.
     // - Each KernelAdvancedOptions::GlobalSemaphoreBinding::global_semaphore_parameter_name names a
     //   parameter in ProgramAdvancedOptions::global_semaphore_parameters.
+    // - Each KernelAdvancedOptions::FabricConnectionBinding::fabric_connection_spec_name names a spec in
+    //   ProgramAdvancedOptions::fabric_connections.
     //
     // Every declaration is used:
     // - Each kernel is listed by at least one WorkUnitSpec.
@@ -57,6 +59,7 @@ struct ProgramSpec {
     // - Each tensor parameter is bound by a kernel, or by a dataflow buffer's borrowed_from.
     // - Each SRAM arena parameter is used by a DFB or scratchpad allocation override.
     // - Each GlobalSemaphore parameter is bound by at least one kernel.
+    // - Each FabricConnectionSpec is bound by at least one kernel.
     // - (Semaphores are exempt here)
     //
     // Data-movement core assignment:
@@ -76,6 +79,10 @@ struct ProgramSpec {
     // - With P the PRODUCER kernels' num_threads and C the CONSUMER kernels' num_threads:
     //   - STRIDED consumers: num_entries % max(P, C) == 0 and num_entries / max(P, C) <= 65535.
     //   - ALL consumers: num_entries % P == 0 and num_entries / P <= 65535.
+    //
+    // Fabric connections:
+    // - Each node in a FabricConnectionSpec's targets runs exactly one kernel instance that binds it.
+    // - Each (src_fabric_node_id, dst_fabric_node_id, link_idx) appears at most once in the program.
     //
     // Semaphores:
     // - A SemaphoreSpec bound by a compute kernel is not also bound by a data-movement kernel.

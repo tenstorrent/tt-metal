@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -218,6 +219,19 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateGlobalSemaphoreParameterNameFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Duplicate GlobalSemaphoreParameter name 'sem'")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_DuplicateFabricConnectionSpecNameFails) {
+    // Two FabricConnectionSpecs cannot share a name.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    const FabricConnectionSpec connection{
+        .unique_id = FabricConnectionSpecName{"fwd"},
+        .src_fabric_node_id = tt_fabric::FabricNodeId{tt_fabric::MeshId{0}, 0}};
+    spec.advanced_options.fabric_connections = {connection, connection};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Duplicate FabricConnectionSpec name 'fwd'")));
 }
 
 }  // namespace

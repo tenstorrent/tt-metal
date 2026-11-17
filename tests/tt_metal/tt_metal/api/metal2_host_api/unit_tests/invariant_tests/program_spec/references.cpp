@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -124,6 +125,17 @@ TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreBindingUnknownParameterFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("references unknown GlobalSemaphore parameter 'missing_sem'")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_FabricConnectionBindingUnknownSpecFails) {
+    // A fabric connection binding must name a declared FabricConnectionSpec.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].advanced_options.fabric_connection_bindings = {
+        {.fabric_connection_spec_name = FabricConnectionSpecName{"missing"}, .accessor_name = "fwd"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("references unknown FabricConnectionSpec 'missing'")));
 }
 
 }  // namespace

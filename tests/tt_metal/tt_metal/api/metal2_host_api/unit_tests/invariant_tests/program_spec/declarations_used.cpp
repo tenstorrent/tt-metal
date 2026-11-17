@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -127,6 +128,18 @@ TEST_F(ProgramSpecTestGen1, CPU_UnboundGlobalSemaphoreParameterFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("GlobalSemaphore parameter 'orphan_sem' is defined but not bound by any kernel")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_UnboundFabricConnectionSpecFails) {
+    // A declared FabricConnectionSpec must be bound by at least one kernel.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.advanced_options.fabric_connections = {FabricConnectionSpec{
+        .unique_id = FabricConnectionSpecName{"orphan"},
+        .src_fabric_node_id = tt_fabric::FabricNodeId{tt_fabric::MeshId{0}, 0}}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("FabricConnectionSpec 'orphan' is defined but not bound by any kernel")));
 }
 
 }  // namespace

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/fabric_connection_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/global_semaphore_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp>
@@ -103,6 +104,22 @@ struct ProgramAdvancedOptions {
     // Invariant: each parameter is bound by at least one kernel
     //            (KernelAdvancedOptions::global_semaphore_bindings).
     Group<GlobalSemaphoreParameter> global_semaphore_parameters;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Fabric connections (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A fabric connection is the exclusive right of a kernel instance to put packets into one
+    // fabric router of its device (see fabric_connection_spec.hpp). It is a Program-scope resource
+    // with no run args.
+    //
+    // Invariants:
+    // - Each FabricConnectionSpec is bound by at least one kernel
+    //   (KernelAdvancedOptions::fabric_connection_bindings).
+    // - Each node in a FabricConnectionSpec's targets runs exactly one kernel instance that binds it.
+    // - Each (src_fabric_node_id, dst_fabric_node_id, link_idx) appears at most once in the program:
+    //   a router accepts one connected worker at a time.
+    Group<FabricConnectionSpec> fabric_connections;
 };
 
 struct KernelAdvancedOptions {
@@ -283,6 +300,26 @@ struct KernelAdvancedOptions {
         std::string accessor_name;  // GlobalSemaphore accessor name (used in the kernel source code)
     };
     Group<GlobalSemaphoreBinding> global_semaphore_bindings;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Fabric connection bindings (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Declares that this data-movement kernel opens a fabric connection
+    // (declared in ProgramAdvancedOptions::fabric_connections) on its nodes that have a target.
+    // The kernel builds a fabric sender from the binding token:
+    //   if (tt::tt_fabric::has_fabric_connection(fabric::<accessor_name>)) {
+    //       auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_binding(fabric::<accessor_name>);
+    //   }
+    //
+    // Only single-threaded data-movement kernels can bind a fabric connection.
+    struct FabricConnectionBinding {
+        // Invariant: names a spec declared in ProgramAdvancedOptions::fabric_connections.
+        FabricConnectionSpecName fabric_connection_spec_name;
+        // Invariant: unique among this kernel's fabric connection bindings.
+        std::string accessor_name;  // fabric connection accessor name (used in the kernel source code)
+    };
+    Group<FabricConnectionBinding> fabric_connection_bindings;
 };
 
 // Describes a resource allocation within a program's SRAM arena parameter.
@@ -584,6 +621,7 @@ struct SemaphoreAdvancedOptions {
 
 using PrefetcherPipeBinding = KernelAdvancedOptions::PrefetcherPipeBinding;
 using GlobalSemaphoreBinding = KernelAdvancedOptions::GlobalSemaphoreBinding;
+using FabricConnectionBinding = KernelAdvancedOptions::FabricConnectionBinding;
 using GlobalSemaphoreArgument = AdvancedProgramRunArgs::GlobalSemaphoreArgument;
 using PrefetcherPipeArgument = AdvancedProgramRunArgs::PrefetcherPipeArgument;
 using SRAMArenaArgument = AdvancedProgramRunArgs::SRAMArenaArgument;

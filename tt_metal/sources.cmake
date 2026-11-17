@@ -84,6 +84,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/workload/specification/dataflow_buffer_spec.hpp
     api/tt-metalium/workload/specification/kernel_spec.hpp
     api/tt-metalium/vocabulary/node_coord.hpp
+    api/tt-metalium/experimental/metal2_host_api/fabric_connection_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/global_semaphore_parameter.hpp
     api/tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp
     api/tt-metalium/experimental/metal2_host_api/program.hpp
