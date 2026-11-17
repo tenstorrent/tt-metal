@@ -549,7 +549,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
         _sfpu_exp_21f_bf16_tti_pair_body_();
         _sfpu_exp_21f_bf16_tti_pair_tail_<is_fp32_dest_acc_en>();
 
-#pragma GCC unroll 16
+#pragma GCC unroll 0
         for (int i = 1; i < PAIRS; i++) {
             _sfpu_exp_21f_bf16_tti_pair_head_<SCALE_EN, CLAMP_NEGATIVE, BASE_TWO>(exp_base_scale_factor);
             TTI_REPLAY(0, EXP_21F_TTI_PAIR_BODY_LEN, 0, 0);
