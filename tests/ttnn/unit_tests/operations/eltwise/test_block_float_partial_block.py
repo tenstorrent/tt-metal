@@ -73,3 +73,81 @@ def test_unary_block_float_partial_block_preallocated_output(device, width):
     result = ttnn.to_torch(output_tensor).float()
     expected = torch.reciprocal(ttnn.to_torch(input_tensor).float())
     _assert_real_lanes_kept(result, expected, ttnn.bfloat8_b)
+
+
+@pytest.mark.parametrize("exponent", [-1, -2, -1.0], ids=["int-1", "int-2", "float-1"])
+@pytest.mark.parametrize("width", [33, 50], ids=lambda w: f"W={w}")
+def test_pow_negative_exponent_block_float_partial_block(device, width, exponent):
+    torch.manual_seed(0)
+    input_tensor = _to_device(torch.empty(2, 32, width).uniform_(2.0, 4.0), ttnn.bfloat8_b, device)
+
+    result = ttnn.to_torch(ttnn.pow(input_tensor, exponent)).float()
+    expected = torch.pow(ttnn.to_torch(input_tensor).float(), exponent)
+
+    _assert_real_lanes_kept(result, expected, ttnn.bfloat8_b)
+
+
+@pytest.mark.parametrize("eps", [None, 0.0], ids=["eps=None", "eps=0"])
+@pytest.mark.parametrize("width", [33, 50, 64], ids=lambda w: f"W={w}")
+def test_logit_block_float_partial_block(device, width, eps):
+    torch.manual_seed(0)
+    input_tensor = _to_device(torch.empty(2, 32, width).uniform_(0.2, 0.8), ttnn.bfloat8_b, device)
+
+    result = ttnn.to_torch(ttnn.logit(input_tensor, eps=eps)).float()
+    expected = torch.logit(ttnn.to_torch(input_tensor).float())
+
+    _assert_real_lanes_kept(result, expected, ttnn.bfloat8_b)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["out_bfloat8_b", "out_bfloat16"])
+@pytest.mark.parametrize("width", [1, 33, 50, 64], ids=lambda w: f"W={w}")
+def test_fast_div_block_float_partial_block_input(device, width, output_dtype):
+    """Fast DIV multiplies by a reciprocal of b packed in b's format, so b's padding must not reach that pack."""
+    torch.manual_seed(0)
+    a = _to_device(torch.empty(2, 32, width).uniform_(2.0, 4.0), ttnn.bfloat8_b, device)
+    b = _to_device(torch.empty(2, 32, width).uniform_(2.0, 4.0), ttnn.bfloat8_b, device)
+
+    result = ttnn.to_torch(ttnn.div(a, b, fast_and_approximate_mode=True, dtype=output_dtype)).float()
+    expected = ttnn.to_torch(a).float() / ttnn.to_torch(b).float()
+
+    _assert_real_lanes_kept(result, expected, ttnn.bfloat8_b)
+
+
+@pytest.mark.parametrize("side", ["lhs", "rhs"])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["out_bfloat8_b", "out_bfloat16"])
+@pytest.mark.parametrize("width", [33, 50, 64], ids=lambda w: f"W={w}")
+def test_binary_input_activation_block_float_partial_block(device, width, output_dtype, side):
+    torch.manual_seed(0)
+    a = _to_device(torch.empty(2, 32, width).uniform_(2.0, 4.0), ttnn.bfloat8_b, device)
+    b = _to_device(torch.empty(2, 32, width).uniform_(2.0, 4.0), ttnn.bfloat8_b, device)
+    activation = {f"input_tensor_{'a' if side == 'lhs' else 'b'}_activations": [ttnn.UnaryOpType.RECIP]}
+
+    result = ttnn.to_torch(ttnn.multiply(a, b, dtype=output_dtype, **activation)).float()
+    torch_a, torch_b = ttnn.to_torch(a).float(), ttnn.to_torch(b).float()
+    expected = (1.0 / torch_a) * torch_b if side == "lhs" else torch_a / torch_b
+
+    _assert_real_lanes_kept(result, expected, ttnn.bfloat8_b)
+
+
+def test_div_block_float_partial_block_sharded_preallocated_output(device):
+    """Interleaved inputs into a preallocated sharded output: the BFLOAT16 intermediate takes the output's layout."""
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 50)
+    sharded = ttnn.create_sharded_memory_config(
+        shape=(32, 64),
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    a = _to_device(torch.ones(shape), ttnn.bfloat8_b, device)
+    b = _to_device(torch.empty(shape).uniform_(2.0, 4.0), ttnn.bfloat8_b, device)
+    output_tensor = ttnn.from_torch(
+        torch.zeros(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded
+    )
+
+    ttnn.div(a, b, output_tensor=output_tensor)
+
+    assert output_tensor.memory_config() == sharded
+    result = ttnn.to_torch(output_tensor).float()
+    _assert_real_lanes_kept(result, 1.0 / ttnn.to_torch(b).float(), ttnn.bfloat8_b)

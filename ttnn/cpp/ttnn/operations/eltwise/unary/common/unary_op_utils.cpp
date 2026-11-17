@@ -1424,7 +1424,13 @@ bool is_non_finite_at_zero(const EltwiseUnaryWithParam& op) {
         case UnaryOpType::DIGAMMA:
         case UnaryOpType::POLYGAMMA:
         case UnaryOpType::RDIV: return true;
-        case UnaryOpType::POWER: return op.get_param_if<float>(0).value_or(0.0f) < 0.0f;
+        case UnaryOpType::POWER:
+            return op.get_param_if<float>(0).value_or(0.0f) < 0.0f || op.get_param_if<std::int32_t>(0).value_or(0) < 0;
+        case UnaryOpType::LOGIT: {
+            // eps < 0 (None) skips the clamp, and a clamp range reaching 0 keeps it: log(0 / (1 - 0)) is -inf.
+            const float eps = op.get_param_if<float>(0).value_or(-1.0f);
+            return std::min(eps, 1.0f - eps) <= 0.0f;
+        }
         default: return false;
     }
 }

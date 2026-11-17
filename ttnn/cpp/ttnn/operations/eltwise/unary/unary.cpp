@@ -85,8 +85,14 @@ Tensor unary_impl(
     if (is_block_float(output_dtype) && input_tensor.layout() == Layout::TILE &&
         input_tensor.logical_shape()[-1] % tt::constants::FACE_WIDTH != 0 &&
         std::ranges::any_of(op_chain, unary::utils::is_non_finite_at_zero)) {
+        // The LOGIT kernel packs its temporary in the input format with the packer set up for the output, so a
+        // block-float input must be widened to match the BFLOAT16 output.
+        const Tensor widened_input =
+            op_chain.front().type() == unary::UnaryOpType::LOGIT && is_block_float(input_dtype)
+                ? ttnn::typecast(input_tensor, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grids)
+                : input_tensor;
         Tensor result = prim::unary(
-            input_tensor,
+            widened_input,
             op_chain,
             DataType::BFLOAT16,
             output_memory_config,

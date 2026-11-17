@@ -809,14 +809,18 @@ inline auto invoke_binary_ng_impl(
     // ends with isclose's rtol/atol/equal_nan, the scalar one with scalar_is_lhs. No single call
     // can satisfy both, and while these were two separate call sites the flag was passed on one and
     // forgotten on the other. This lambda is the only place either overload is invoked.
-    auto dispatch = [&](const auto& a, const auto& b, DataType dispatch_dtype, const std::optional<Tensor>& out) {
+    auto dispatch = [&](const auto& a,
+                        const auto& b,
+                        DataType dispatch_dtype,
+                        const std::optional<Tensor>& out,
+                        const std::optional<MemoryConfig>& dispatch_memory_config) {
         if constexpr (requires { b.dtype(); }) {
             return ttnn::prim::binary_ng(
                 a,
                 b,
                 binary_op_type,
                 dispatch_dtype,
-                memory_config,
+                dispatch_memory_config,
                 out,
                 fast_and_approximate_mode,
                 lhs_activations,
@@ -831,7 +835,7 @@ inline auto invoke_binary_ng_impl(
                 b,
                 binary_op_type,
                 dispatch_dtype,
-                memory_config,
+                dispatch_memory_config,
                 out,
                 fast_and_approximate_mode,
                 lhs_activations,
@@ -846,18 +850,40 @@ inline auto invoke_binary_ng_impl(
 
     if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
         // is_layout_or_scalar reports a scalar as row-major, so a scalar first operand reaches here too.
-        return dispatch(lhs_eff, rhs_eff, out_dtype, output);
+        return dispatch(lhs_eff, rhs_eff, out_dtype, output, memory_config);
     }
-    // Either one or both are tiles
-    const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE, sub_core_grids);
-    const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE, sub_core_grids);
+    // A BFLOAT8_B / BFLOAT4_B pack shares one exponent per 16-lane block of a row, padding included. When a logical
+    // width is not a multiple of 16 and the op is inf or nan at the zero padding (a division by it, or an activation
+    // such as reciprocal), that value sets the exponent of the last block and its real lanes are packed as 0.
+    // Input activations (and the reciprocal fast DIV applies to b) are packed into intermediates in the input's
+    // format, so such an input is widened to BFLOAT16 first.
+    const auto tiled_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE, sub_core_grids);
+    auto cast_sub_core_grids = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        cast_sub_core_grids =
+            tiled_a.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *sub_device_id);
+    }
+    const bool is_div = binary_op_type == operations::binary::BinaryOpType::DIV;
+    const auto widen_if_non_finite_at_padding = [&](const auto& t, bool non_finite) {
+        if constexpr (requires { t.dtype(); }) {
+            if (non_finite && t.layout() == Layout::TILE && is_block_float(t.dtype()) &&
+                t.logical_shape()[-1] % tt::constants::FACE_WIDTH != 0) {
+                return ttnn::typecast(t, DataType::BFLOAT16, std::nullopt, std::nullopt, cast_sub_core_grids);
+            }
+        }
+        return t;
+    };
+    const auto input_a = widen_if_non_finite_at_padding(
+        tiled_a,
+        (is_div && fast_and_approximate_mode && scalar_is_lhs) ||
+            std::ranges::any_of(lhs_activations, operations::unary::utils::is_non_finite_at_zero));
+    const auto input_b = widen_if_non_finite_at_padding(
+        operations::binary::detail::to_layout(rhs_eff, Layout::TILE, sub_core_grids),
+        (is_div && fast_and_approximate_mode && !scalar_is_lhs) ||
+            std::ranges::any_of(rhs_activations, operations::unary::utils::is_non_finite_at_zero));
 
-    // A BFLOAT8_B / BFLOAT4_B pack shares one exponent per 16-lane block of a row, padding included. When the output's
-    // logical width is not a multiple of 16 and the op is inf or nan at the zero padding (a division by it, or an
-    // activation such as reciprocal), that value sets the exponent of the last block and its real lanes are packed as
-    // 0. Produce BFLOAT16 and let the typecast zero the padding before packing.
-    const bool divides_by_padding = binary_op_type == operations::binary::BinaryOpType::DIV &&
-                                    ((requires { input_b.logical_shape(); }) || scalar_is_lhs);
+    // The output is packed the same way, so it is produced as BFLOAT16 and the typecast zeroes the padding first.
+    const bool divides_by_padding = is_div && ((requires { input_b.logical_shape(); }) || scalar_is_lhs);
     const bool non_finite_at_padding =
         divides_by_padding || std::ranges::any_of(lhs_activations, operations::unary::utils::is_non_finite_at_zero) ||
         std::ranges::any_of(rhs_activations, operations::unary::utils::is_non_finite_at_zero) ||
@@ -871,11 +897,13 @@ inline auto invoke_binary_ng_impl(
         }
     }();
     if (non_finite_at_padding && is_block_float(out_dtype) && out_width % tt::constants::FACE_WIDTH != 0) {
-        auto result = dispatch(input_a, input_b, DataType::BFLOAT16, std::nullopt);
-        return ttnn::typecast(result, out_dtype, memory_config, output, sub_core_grids);
+        const auto intermediate_memory_config =
+            output.has_value() ? std::optional<MemoryConfig>{output->memory_config()} : memory_config;
+        auto result = dispatch(input_a, input_b, DataType::BFLOAT16, std::nullopt, intermediate_memory_config);
+        return ttnn::typecast(result, out_dtype, memory_config, output, cast_sub_core_grids);
     }
 
-    auto result = dispatch(input_a, input_b, out_dtype, output);
+    auto result = dispatch(input_a, input_b, out_dtype, output, memory_config);
 
     // if both inputs are in row major, convert the output to row major
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
