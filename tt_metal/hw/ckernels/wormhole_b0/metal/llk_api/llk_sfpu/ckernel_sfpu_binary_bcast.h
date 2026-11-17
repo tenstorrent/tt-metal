@@ -699,9 +699,18 @@ inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
     }
 }
 
-inline void _broadcast_scalar_from_dest_(std::uint32_t scalar_addr) {
+// Broadcast element zero of the mean and inv_std tiles to all 32 lanes:
+// LREG_SCALAR_NEG_MEAN := -mean[0][0], LREG_SCALAR_INV_STD := inv_std[0][0].
+// The two rotate-and-add chains are interleaved, so each instruction's
+// consumer is two slots later and no SFPNOP is needed (SFPADD and SFPSHFT2
+// SUBVEC_SHFLROR1 only forbid reading their result on the next cycle, and
+// neither is on SFPSHFT2's next-cycle exclusion list).
+inline void _broadcast_scalars_from_dest_(std::uint32_t mean_addr, std::uint32_t inv_std_addr) {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
-    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, scalar_addr);
+    constexpr std::uint32_t M = p_sfpu::LREG4, M_TMP = p_sfpu::LREG2;
+    constexpr std::uint32_t I = LREG_SCALAR_INV_STD, I_TMP = p_sfpu::LREG3;
+    TT_SFPLOAD(p_sfpu::LREG0, IM, ADDR_MOD_3, mean_addr);
+    TT_SFPLOAD(p_sfpu::LREG1, IM, ADDR_MOD_3, inv_std_addr);
     // The unused statistic-tile lanes can contain infinities after rsqrt.
     // Predicated assignment is required here: multiplying those lanes by a
     // zero mask would produce NaNs rather than zeros.
@@ -710,25 +719,40 @@ inline void _broadcast_scalar_from_dest_(std::uint32_t scalar_addr) {
     TTI_SFPMOV(0, p_sfpu::LTILEID, LREG_TMP, 0);
     TTI_SFPSHFT(28, 0, LREG_TMP, SFPSHFT_MOD1_ARG_IMM);
     TTI_SFPSETCC(0, LREG_TMP, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-    TTI_SFPLOADI(LREG_BCAST, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0);
     TTI_SFPENCC(0, 0, 0, 0);
-    // SFPCONFIG vertically broadcasts the first eight lanes. Moving the
-    // result back to LREG0 makes scalar lane zero available in every 8-lane
-    // sub-vector; the inline rotate-and-add sequence fills each one.
+    // SFPCONFIG vertically broadcasts the first eight lanes of LREG0 into
+    // LREG14, which puts scalar lane zero in every 8-lane sub-vector; the
+    // rotate-and-add chains below fill each one.
     // ttsim v1.10.5 permits non-uniform source lanes only for LREG14.
     TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG14, LREG_BCAST, 0);
-    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
-    TTI_SFPNOP;
-    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
-    TTI_SFPNOP;
-    _broadcast_stage3_preserve_data_();
+    TTI_SFPMOV(0, p_sfpu::LREG14, M, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG14, I, 0);
+    // Rotate by 1, 2, 4 and add: lane 0 reaches all 8 lanes of each sub-vector.
+    TTI_SFPSHFT2(0, M, M_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, I, I_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(M, p_sfpu::LCONST_1, M_TMP, M, 0);
+    TTI_SFPADD(I, p_sfpu::LCONST_1, I_TMP, I, 0);
+    TTI_SFPSHFT2(0, M, M_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, I, I_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, M_TMP, M_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, I_TMP, I_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(M, p_sfpu::LCONST_1, M_TMP, M, 0);
+    TTI_SFPADD(I, p_sfpu::LCONST_1, I_TMP, I, 0);
+    TTI_SFPSHFT2(0, M, M_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, I, I_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    for (int k = 0; k < 3; k++) {
+        TTI_SFPSHFT2(0, M_TMP, M_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, I_TMP, I_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    }
+    TTI_SFPADD(M, p_sfpu::LCONST_1, M_TMP, M, 0);
+    TTI_SFPADD(I, p_sfpu::LCONST_1, I_TMP, I, 0);
+    // Negate after the sums (not before) so that -0.0 / +0.0 match the
+    // reference (x - mean) exactly.
+    TTI_SFPMOV(0, M, LREG_SCALAR_NEG_MEAN, 1 /* SFPMOV_MOD1_NEGATE */);
 }
 
 // One row band of the scalar normalize: 4 loads, 4 adds, 4 muls, 4 stores,
@@ -787,10 +811,7 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
     // The statistics are scalar and invariant across all eight row bands.
     // Broadcast each once and retain -mean/inv_std in LREG6/LREG7 for the
     // complete tile traversal. LREG6 deliberately borrows the BCAST_COL mask.
-    _broadcast_scalar_from_dest_(mean_rel);
-    TTI_SFPMOV(0, LREG_BCAST, LREG_SCALAR_NEG_MEAN, 1 /* SFPMOV_MOD1_NEGATE */);
-    _broadcast_scalar_from_dest_(inv_std_rel);
-    TTI_SFPMOV(0, LREG_BCAST, LREG_SCALAR_INV_STD, 0);
+    _broadcast_scalars_from_dest_(mean_rel, inv_std_rel);
 
     // Upper half (faces 0/1): band 0 records + executes, bands 1..3 replay.
     _record_scalar_normalize_band_replay_(out_rel);
