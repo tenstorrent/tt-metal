@@ -156,6 +156,7 @@ def select_v2(
     max_id=None,
     valid_local=None,
     blocked=False,
+    fin=None,
 ):
     """rows bf16 RM [1,1,S,n] local score rows -> ids u32 [S,1,1,K] global. Local stage = blockwise top-k (B blocks, kb each) + local merge to kloc; then AG + merge to K."""
     # blocked=True (HY4_IDX_BLK=1): ``rows`` is already [1,1,S*B,m] (written so by idx_score(blocks=B)) and cs_cand2 writes its outputs as [S,1,1,B*kb]: the 5 non-view reshapes of the stock chain disappear
@@ -183,6 +184,30 @@ def select_v2(
         ttnn.reshape(bvals, [S, 1, 1, B * kb]),
         split,
     )
+    if (
+        fin is not None
+    ):  # B35: fin = dict(colinfo, out, perrow, push (hy4_qpush.Push of the local id rows or None)): cs_gather + id_filter as one program, returns idx8
+        from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
+
+        land = (
+            fin["push"](lids) if fin.get("push") is not None else None
+        )  # push first: overlaps the value gather + top-k
+        if (
+            fin.get("vpush") is not None
+        ):  # B35: value gather = push + flag-wait assemble (3 us + ~5 us instead of the 21 us all-gather)
+            vp = fin["vpush"]
+            vp(lvals)
+            av = HP.push_wait(vp, S)
+        else:
+            av = ag(lvals)
+        W = int(av.shape[-1])
+        pos2 = ttnn.reshape(topk_ids(ttnn.reshape(av, [1, 1, S, W]), K), [S, 1, 1, K])
+        if fin.get("own"):  # no id gather: the column filter only keeps this chip's own candidate block
+            if os.environ.get("HY4_B35_NQ", "8") != "1":
+                return HP.gather_filter_own(pos2, lids, fin["colinfo"], S, fin["out"], fin["perrow"])
+            return HP.gather_filter(pos2, lids, fin["colinfo"], S, fin["out"], fin["perrow"], own=True)
+        ai = land if land is not None else ag(lids)
+        return HP.gather_filter(pos2, ai, fin["colinfo"], S, fin["out"], fin["perrow"], push=fin.get("push"))
     av = ag(lvals)
     ai = ag(lids)
     W = int(av.shape[-1])
