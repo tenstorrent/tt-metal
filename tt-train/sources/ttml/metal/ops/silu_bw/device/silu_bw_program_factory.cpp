@@ -91,23 +91,20 @@ tt::tt_metal::ProgramDescriptor SiLUBackwardProgramFactory::create_descriptor(
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
-    // CreateCircularBuffer merged CB core ranges (kernels keep the unmerged set); merge here to match.
-    const tt::tt_metal::CoreRangeSet cb_cores = all_cores.merge_ranges();
-
     program.cbs.push_back(
-        make_cb_descriptor(cb_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        make_cb_descriptor(all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(
-        make_cb_descriptor(cb_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        make_cb_descriptor(all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(
-        make_cb_descriptor(cb_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        make_cb_descriptor(all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(
-        make_cb_descriptor(cb_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        make_cb_descriptor(all_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(make_cb_descriptor(
-        cb_cores, kOneMinusSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        all_cores, kOneMinusSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(make_cb_descriptor(
-        cb_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        all_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     program.cbs.push_back(make_cb_descriptor(
-        cb_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+        all_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

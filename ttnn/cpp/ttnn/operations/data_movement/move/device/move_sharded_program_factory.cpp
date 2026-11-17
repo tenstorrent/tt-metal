@@ -41,8 +41,8 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;
 
-    const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
-    const uint32_t page_size_bytes = input.buffer()->aligned_page_size();
+    const uint32_t total_size_bytes = input.mesh_buffer().aligned_size_per_bank();
+    const uint32_t page_size_bytes = input.mesh_buffer().aligned_page_size();
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();

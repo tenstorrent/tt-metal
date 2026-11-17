@@ -1,0 +1,35 @@
+name: Skip non-retryable
+description: >-
+  On a re-run attempt started by nightly auto-retry, fail at once if this same job's previous attempt
+  carried a `ci-no-retry` annotation (see ../classify-failure/README.md), instead of spending the runner
+  on a result that cannot change. Re-running failed jobs always re-runs every failed job of a run, so a job that failed
+  deterministically next to ones that did not is re-run too; this step makes that cost seconds.
+  A re-run started by hand always runs the job, so a perf miss can be measured again.
+  Put it first in the job, before any expensive setup. Fails open: any problem lets the job run.
+  Needs `actions: read` and `checks: read`.
+
+inputs:
+  job-id:
+    description: "This job's id: pass job.check_run_id from the workflow."
+    required: true
+  github-token:
+    description: "Token that can read this run's jobs and check-run annotations."
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        JOB_ID: ${{ inputs.job-id }}
+        SCRIPT: ${{ github.action_path }}/ci_no_retry.py
+      run: |
+        [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ] || exit 0
+        command -v python3 >/dev/null || { echo "python3 not found; not checking the previous attempt"; exit 0; }
+        rc=0
+        python3 "$SCRIPT" job-check --job-id "$JOB_ID" --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" \
+          --attempt "${GITHUB_RUN_ATTEMPT:-1}" --triggering-actor "${GITHUB_TRIGGERING_ACTOR:-}" || rc=$?
+        [ "$rc" -eq 3 ] && exit 1
+        exit 0

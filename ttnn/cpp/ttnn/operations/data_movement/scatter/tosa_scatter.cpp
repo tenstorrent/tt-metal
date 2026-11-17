@@ -38,11 +38,6 @@ Tensor pre_tosa_scatter_transform_tensor(
     if (input_tensor_type == InputTensorType::INDEX) {
         processed_tensor =
             ttnn::expand(ttnn::unsqueeze(tensor, -1), ttsl::SmallVector<int32_t>{N, W, C}, tensor.memory_config());
-        // WARNING: the rest of this if statement is to be removed after fixing the int32 transpose issue (PR: #23415)
-        auto* device = processed_tensor.device();
-        processed_tensor = processed_tensor.cpu();
-        processed_tensor = ttnn::to_dtype(processed_tensor, DataType::UINT16);
-        processed_tensor = processed_tensor.to_device(device);
     }
 
     // processed_tensor = expand_tensor(processed_tensor, N, K, W, C, input_tensor_type);
@@ -134,9 +129,7 @@ Tensor tosa_scatter(
     // checked - validate_tensors pins it to (N, W, C), so an empty source implies an empty input or
     // index. See #56881.
     if (input_tensor.logical_volume() == 0 || index_tensor.logical_volume() == 0) {
-        // validate_tensors checks shapes only, so run the device operation's validation too. The
-        // index dtype rule applies to the original index here, while the non-empty path converts to
-        // UINT16 first; TOSA indices are integral either way.
+        // validate_tensors checks shapes only, so run the device operation's validation too.
         ttnn::prim::ScatterDeviceOperation::validate_on_program_cache_miss(
             ttnn::prim::ScatterParams{
                 operations::data_movement::LAST_DIMENSION,
