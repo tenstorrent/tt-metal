@@ -21,6 +21,9 @@ RED_AG = os.environ.get("HY4_TP32_RED", "") == "ag"
 ROUTE_LOCAL = (
     os.environ.get("HY4_TP32_ROUTE", "") == "local"
 )  # router on the gathered x (every chip routes all Tt tokens, writes the route words itself): no pack, no route all-gather
+ROUTE_ROW = (
+    os.environ.get("HY4_B29_ROUTE_ROW", "0") == "1"
+)  # B29 (default OFF): per-mesh-row router (T <= 8) writes the packed route words itself (skinny select merge ROUTE mode): no router_select program, no pack ops; the row all-gather stays
 
 
 class Hy4MoeTp32Block:
@@ -133,9 +136,15 @@ class Hy4MoeTp32Block:
                 x_all
             )  # [1,1,1,16 Tt] int32 RM, tokens in mesh-row order (same bytes as pack + row all-gather)
         if route_all is None:
-            w, idx = forced_routing if forced_routing is not None else self.gate.forward(tt_x_gate)
-            self.last_routing = (w, idx)
-            route = self._pack_route(w, idx)
+            route = None
+            if ROUTE_ROW and forced_routing is None and hasattr(self.gate, "route_words"):
+                route = self.gate.route_words(tt_x_gate)  # [1,1,1,16 T] int32 RM = the packed words of this mesh row
+            if route is not None:
+                self.last_routing = None
+            else:
+                w, idx = forced_routing if forced_routing is not None else self.gate.forward(tt_x_gate)
+                self.last_routing = (w, idx)
+                route = self._pack_route(w, idx)
             route_all = self._ag_rows(route, 3)  # [1,1,1,16 Tt] int32 RM, rows in mesh-row order
             ttnn.deallocate(route)
             x_all = ttnn.to_layout(

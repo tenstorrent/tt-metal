@@ -344,15 +344,38 @@ NF_Q_ORIGIN = (
 )  # logical (x, y) of core 0 of the q group; q: 4 x 4 cores, kv group: the 4 cores of the row below
 
 
-def fused_norms(qa_g, kv, qw, kvw, eps, mc_q=None):
+_QAP = {}
+
+
+def qa_push(md):
+    """B29: one Push object (8 tiles of 2 KiB per source column, 2 tiles per packet) for the q_a shards, per mesh"""
+    if id(md) not in _QAP:
+        from models.demos.blackhole.hy4_preview.tt import hy4_qpush
+
+        _QAP[id(md)] = hy4_qpush.Push(md, 8, 2048, 2)
+    return _QAP[id(md)]
+
+
+def fused_norms(qa_g, kv, qw, kvw, eps, mc_q=None, push=None, qa_src=None):
     """qa_g [1,1,S,2048] bf16 TILE, kv [1,1,S,576] bf16 TILE, qw [1,1,64,32] / kvw [1,1,16,32] bf16 ROW_MAJOR (the rms weights, one 64 B page per 32 values), S <= 8
     -> (qa [1,1,S,2048], lat [1,1,S,512], k_pe [1,1,S,64]) bf16 TILE: qa = rms(qa_g) * qw, lat = rms(kv[..., :512]) * kvw, k_pe = kv[..., 512:] (replaces 6 ops).
     """
-    md = qa_g.device()
-    S = int(qa_g.shape[2])
-    assert 1 <= S <= 8 and int(qa_g.shape[3]) == 2048 and int(kv.shape[3]) == 576 and int(kv.shape[2]) == S
+    # B29: push is not None -> qa_src [1,1,S,256] TILE (this column's q_a shard) is pushed to the 8 chips (hy4_qpush.Push) instead of all-gathered; qa_g is then None and the q-group readers wait for the flag of their source column
+    qa_g = qa_g if push is None else push.land
+    shard = qa_src if push is not None else None
+    md = kv.device()
+    S = int(kv.shape[2]) if push is not None else int(qa_g.shape[2])
+    assert 1 <= S <= 8 and int(kv.shape[3]) == 576 and int(kv.shape[2]) == S
+    assert push is not None or int(qa_g.shape[3]) == 2048
     bf, f32 = ttnn.bfloat16, ttnn.float32
     mq = mc_q or ttnn.DRAM_MEMORY_CONFIG
+    if push is not None:
+        assert (
+            int(shard.shape[3]) * 8 == 2048
+            and (int(shard.shape[3]) // 32) % 4 == 0
+            and push.nr == int(shard.shape[3]) // 32
+        )
+        push(shard)  # the push program (returns without waiting for the peers)
     qa = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 2048]), bf, ttnn.TILE_LAYOUT, md, mq)
     lat = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 512]), bf, ttnn.TILE_LAYOUT, md, mq)
     kpe = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 64]), bf, ttnn.TILE_LAYOUT, md, mq)
@@ -403,7 +426,9 @@ def fused_norms(qa_g, kv, qw, kvw, eps, mc_q=None):
         ]
         rt = ttnn.RuntimeArgs()
         for k in range(n_g):
-            rt[x0 + (k % NW)][(y0 if gi == 0 else y0 + 4) + k // NW] = [k]
+            rt[x0 + (k % NW)][(y0 if gi == 0 else y0 + 4) + k // NW] = [k] + (
+                push.split_args() if (gi == 0 and push is not None) else []
+            )
         rd = ttnn.KernelDescriptor(
             kernel_source=f"{KDIR}/nf_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -424,6 +449,10 @@ def fused_norms(qa_g, kv, qw, kvw, eps, mc_q=None):
                 NW,
                 _bits(1.0 / w_el),
                 kpe_on,
+                int(gi == 0 and push is not None),
+                (int(shard.shape[3]) // 32) if (gi == 0 and push is not None) else 0,
+                push.np if (gi == 0 and push is not None) else 0,
+                push.rp if (gi == 0 and push is not None) else 0,
             ]
             + _acc(xin)
             + _acc(wgt)
@@ -453,7 +482,8 @@ def fused_norms(qa_g, kv, qw, kvw, eps, mc_q=None):
         kernels += [rd, wr, cp]
     prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
     prog.custom_program_hash = (0x3B4 << 40) | (
-        hash((S, x0, y0, tuple(tuple(_acc(t)) for t in (qa_g, kv, qw, kvw, qa, lat, kpe)))) & ((1 << 40) - 1)
+        hash((S, x0, y0, push is not None, tuple(tuple(_acc(t)) for t in (qa_g, kv, qw, kvw, qa, lat, kpe))))
+        & ((1 << 40) - 1)
     )
     ttnn.generic_op([qa_g, kv, qw, kvw, qa, lat, kpe], prog)
     return qa, lat, kpe

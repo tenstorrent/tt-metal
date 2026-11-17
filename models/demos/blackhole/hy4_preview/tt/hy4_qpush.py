@@ -26,14 +26,15 @@ def _cores(lst):
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for (x, y) in lst])
 
 
-class QPush:
-    def __init__(self, md, S, links=2, lanes=None):
-        assert tuple(md.shape)[1] == RING
-        self.md, self.S, self.links = md, S, links
+class Push:
+    """push-gather of ``nr`` pages of ``pb`` bytes per source column over the 8-chip ring axis (see module doc); ``rp`` pages per fabric packet (rp * pb <= 4352)"""
+
+    def __init__(self, md, nr, pb, rp, links=2, lanes=None):
+        assert tuple(md.shape)[1] == RING and rp * pb <= 4352
+        self.md, self.nr, self.pb, self.links = md, nr, pb, links
         self.lanes = lanes or int(os.environ.get("HY4_B29_QLANES", str(links)))
-        self.rp = int(os.environ.get("HY4_B29_QRP", "3"))  # q rows per fabric packet (2 or 3)
-        assert self.rp in (2, 3)
-        self.np = -(-8 * S // self.rp)  # packets (landing pages) per source
+        self.rp = rp
+        self.np = -(-nr // self.rp)  # packets (landing pages) per source
         self.nh = min(8, int(os.environ.get("HY4_B29_NH", "8")))
         grid = md.compute_with_storage_grid_size()
         self.grid = grid
@@ -47,7 +48,7 @@ class QPush:
         self.cnt_addr = ttnn.get_global_semaphore_address(self.cnt)
         # landing tensor [NC * 4S pages of 2304 B]: page c*4S + p holds source column c's q rows 2p, 2p+1 (row r = h*S + s)
         self.land = ttnn.from_torch(
-            torch.zeros(1, 1, NC * self.np, self.rp * 576, dtype=torch.bfloat16),
+            torch.zeros(1, 1, NC * self.np, self.rp * self.pb // 2, dtype=torch.bfloat16),
             device=md,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -68,8 +69,8 @@ class QPush:
         )  # (packets per source / rows per packet go in as compile-time args: see sparse_sdpa_split)
 
     def __call__(self, q_rm):
-        md, S = self.md, self.S
-        PKT = self.rp * 1152
+        md = self.md
+        PKT = self.rp * self.pb
         NP = self.np
         gper = max(len(range(ln, NP, self.lanes)) for ln in range(self.lanes))
         fx, fy = self._phys(*self.fcore)
@@ -102,7 +103,18 @@ class QPush:
                                 kernel_source=f"{KDIR}/qp_comm.cpp",
                                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                                 core_ranges=_cores([(cx, cy)]),
-                                compile_time_args=[dr, ndist, S, lk, self.lanes, 0, 3 + NC, self.nh, self.rp]
+                                compile_time_args=[
+                                    dr,
+                                    ndist,
+                                    self.nr,
+                                    lk,
+                                    self.lanes,
+                                    0,
+                                    3 + NC,
+                                    self.nh,
+                                    self.rp,
+                                    self.pb,
+                                ]
                                 + _acc(q_rm)
                                 + _acc(self.land),
                                 runtime_args=rt,
@@ -120,9 +132,29 @@ class QPush:
                     )
                     prog.kernels[ki].runtime_args[cx][cy].extend(fargs)
                 prog.custom_program_hash = (0x7B9 << 40) | (
-                    hash((S, self.links, self.lanes, self.nh, self.rp, col, tuple(_acc(q_rm)), tuple(_acc(self.land))))
+                    hash(
+                        (
+                            self.nr,
+                            self.pb,
+                            self.links,
+                            self.lanes,
+                            self.nh,
+                            self.rp,
+                            col,
+                            tuple(_acc(q_rm)),
+                            tuple(_acc(self.land)),
+                        )
+                    )
                     & ((1 << 40) - 1)
                 )
                 mpd[ttnn.MeshCoordinateRange(coord, coord)] = prog
         ttnn.generic_op([q_rm, self.land], mpd)
         return self.land
+
+
+class QPush(Push):
+    """q push of the split SDPA: q_rm [1,8,S,576] RM bf16 (page r = h*S + s, 1152 B), 3 rows per packet"""
+
+    def __init__(self, md, S, links=2, lanes=None):
+        self.S = S
+        super().__init__(md, 8 * S, 1152, int(os.environ.get("HY4_B29_QRP", "3")), links, lanes)

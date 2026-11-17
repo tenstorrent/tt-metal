@@ -36,7 +36,12 @@ void kernel_main() {
     constexpr uint32_t MW = get_compile_time_arg_val(12);
     constexpr uint32_t INVW = get_compile_time_arg_val(13);
     constexpr uint32_t KPE = get_compile_time_arg_val(14);
-    constexpr auto x_args = TensorAccessorArgs<15>();
+    constexpr uint32_t QLAND = get_compile_time_arg_val(
+        15);  // B29: x comes from the push landing tensor (flag-gated), not from the all-gathered tensor
+    constexpr uint32_t TS = get_compile_time_arg_val(16);   // tiles per source column
+    constexpr uint32_t QNP = get_compile_time_arg_val(17);  // landing pages (packets) per source
+    constexpr uint32_t QRP = get_compile_time_arg_val(18);  // tiles per landing page
+    constexpr auto x_args = TensorAccessorArgs<19>();
     constexpr auto g_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto o_args = TensorAccessorArgs<g_args.next_compile_time_args_offset()>();
     constexpr uint32_t SW = 16;  // slot words: T data words, flag at word 15
@@ -44,7 +49,7 @@ void kernel_main() {
     static_assert(NG <= 16 && T <= 8);
 
     const uint32_t k = get_arg_val<uint32_t>(0);
-    const auto x_acc = TensorAccessor(x_args, get_common_arg_val<uint32_t>(0), 2048);
+    const auto x_acc = TensorAccessor(x_args, get_common_arg_val<uint32_t>(0), QLAND ? QRP * 2048 : 2048);
     const auto g_acc = TensorAccessor(g_args, get_common_arg_val<uint32_t>(1), 64);
     Noc noc;
     CircularBuffer cbx(cb_x), cbg(cb_g), cbo(cb_ones), cbp2(cb_p2), cbs(cb_slot), cbt(cb_tot), cbk(cb_kpe);
@@ -55,9 +60,40 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_base + 2048);
 
     cbx.reserve_back(TPC);
-    for (uint32_t i = 0; i < TPC; ++i) {
-        noc.async_read(x_acc, cbx, 2048, {.page_id = k * TPC + i, .offset_bytes = 0}, {.offset_bytes = i * 2048});
-        noc.async_read(g_acc, cbs, 64, {.page_id = k * TPC + i, .offset_bytes = 0}, {.offset_bytes = 2048 + 64 * i});
+    if constexpr (QLAND) {
+        // gamma reads first, then the flag wait of this core's source column, then the x tiles from the landing tensor
+        for (uint32_t i = 0; i < TPC; ++i) {
+            noc.async_read(
+                g_acc, cbs, 64, {.page_id = k * TPC + i, .offset_bytes = 0}, {.offset_bytes = 2048 + 64 * i});
+        }
+        const uint32_t src = (k * TPC) / TS;
+        const uint32_t fx = get_arg_val<uint32_t>(1), fy = get_arg_val<uint32_t>(2);
+        const uint32_t flag_addr = get_arg_val<uint32_t>(3 + src);
+        volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(11));
+        const uint32_t target = *cnt + QNP;
+        *cnt = target;
+        const uint32_t scr = slot_base + 3072;
+        volatile tt_l1_ptr uint32_t* scr_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr);
+        const uint64_t flag_noc = get_noc_addr(fx, fy, flag_addr);
+        do {
+            noc_async_read(flag_noc, scr, 4);
+            noc_async_read_barrier();
+        } while ((int32_t)(scr_p[0] - target) < 0);
+        for (uint32_t i = 0; i < TPC; ++i) {
+            const uint32_t t = (k * TPC + i) % TS;
+            noc.async_read(
+                x_acc,
+                cbx,
+                2048,
+                {.page_id = src * QNP + t / QRP, .offset_bytes = (t % QRP) * 2048},
+                {.offset_bytes = i * 2048});
+        }
+    } else {
+        for (uint32_t i = 0; i < TPC; ++i) {
+            noc.async_read(x_acc, cbx, 2048, {.page_id = k * TPC + i, .offset_bytes = 0}, {.offset_bytes = i * 2048});
+            noc.async_read(
+                g_acc, cbs, 64, {.page_id = k * TPC + i, .offset_bytes = 0}, {.offset_bytes = 2048 + 64 * i});
+        }
     }
     if constexpr (KPE) {
         if (k < 2) {

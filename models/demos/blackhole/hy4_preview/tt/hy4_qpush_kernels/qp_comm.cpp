@@ -17,17 +17,18 @@ using namespace tt::tt_fabric::linear::experimental;
 void kernel_main() {
     constexpr uint32_t DIR = get_compile_time_arg_val(0);
     constexpr uint32_t ND = get_compile_time_arg_val(1);  // peers in this direction (4 fwd, 3 bwd)
-    constexpr uint32_t S = get_compile_time_arg_val(2);   // user rows per step
+    constexpr uint32_t NR = get_compile_time_arg_val(2);  // pages (q rows / tiles) per source
     constexpr uint32_t LANE = get_compile_time_arg_val(3);
     constexpr uint32_t LANES = get_compile_time_arg_val(4);
     constexpr uint32_t CB_PKT = get_compile_time_arg_val(5);
     constexpr uint32_t ARGBASE = get_compile_time_arg_val(6);
     constexpr uint32_t NH = get_compile_time_arg_val(7);
     constexpr uint32_t RP = get_compile_time_arg_val(8);  // q rows per packet (2 or 3; max fabric payload 4352 B)
-    constexpr auto q_args = TensorAccessorArgs<9, 0>();
+    constexpr uint32_t ROWB = get_compile_time_arg_val(9);  // page bytes
+    constexpr auto q_args = TensorAccessorArgs<10, 0>();
     constexpr auto l_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
-    constexpr uint32_t ROWB = 1152, PKT = RP * ROWB, NR = 8 * S, NP = (NR + RP - 1) / RP, RING = 8;
+    constexpr uint32_t PKT = RP * ROWB, NP = (NR + RP - 1) / RP, RING = 8;
     const uint32_t q_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t land_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t c = get_arg_val<uint32_t>(0);   // ring position of this chip
