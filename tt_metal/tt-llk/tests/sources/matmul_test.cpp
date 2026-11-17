@@ -546,8 +546,10 @@ constexpr bool matmul_prod_bias_write =
     !matmul_prod_keyed || (matmul_prod_fidelity == ckernel::MathFidelity::HiFi2 && dest_sync == ckernel::DstSync::SyncHalf && is_fp32_dest_acc_en &&
                            (matmul_prod_key_ct == 1 || matmul_prod_key_rt == 1));
 #define MATMUL_PROD_KEYS         matmul_prod_key_ct, matmul_prod_key_rt, matmul_prod_bias_write
-// llk_math_matmul's half_base: LoFi half sync, not a run-time direction call (no size mode in the harness)
-constexpr bool matmul_prod_half_base = matmul_prod_fidelity == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf && !MATMUL_PROD_RUNTIME_DIR;
+// llk_math_matmul's half_base: LoFi half sync, not a run-time direction call (no size mode in the harness); minimal_matmul's default
+// cells run main's math (matmul_fe_main_math), which has none
+constexpr bool matmul_prod_half_base = matmul_prod_fidelity == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf &&
+                                       !MATMUL_PROD_RUNTIME_DIR && !matmul_prod_dims_unseen;
 #define MATMUL_MATH_DEFAULT_ARGS matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, false, matmul_prod_half_base
 #define MATMUL_MATH_DEFAULT_INIT_ARGS \
     matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, 0, MATMUL_PROD_TINY_16_ROWS, matmul_prod_end_fold, matmul_reuse_dir_k, false, MATMUL_PROD_KEYS
