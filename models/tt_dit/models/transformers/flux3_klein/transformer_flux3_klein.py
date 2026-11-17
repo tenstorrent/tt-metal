@@ -87,6 +87,32 @@ register_matmul_configs(
 )
 
 
+# TP2 x SP4 on a 4x2 submesh (Linear CCLs), swept with sweep_mm_block_sizes.py on bh_4x2_sp0_tp1_linear.
+# The QKV entries share (M, K, N) with the TP4 MLP entries above, so the table is only registered when a
+# transformer is built with a TP factor of 2.
+TP2_MATMUL_CONFIGS = {
+    "12x9": {
+        (1024, 3072, 4608): (3, 4, 8, (1, 4)),
+        (2048, 3072, 4608): (10, 4, 10, (2, 2)),
+        (3072, 3072, 4608): (4, 4, 16, (2, 2)),
+        (5120, 3072, 4608): (6, 6, 16, (2, 2)),
+        (9216, 3072, 4608): (6, 6, 16, (2, 2)),
+        (1024, 3072, 9216): (3, 6, 8, (1, 4)),
+        (2048, 3072, 9216): (6, 3, 16, (2, 2)),
+        (4096, 3072, 9216): (11, 3, 12, (1, 4)),
+        (5120, 3072, 9216): (7, 4, 16, (1, 4)),
+        (9216, 3072, 9216): (6, 4, 16, (2, 2)),
+    },
+    "12x10": {
+        (1024, 6144, 3072): (10, 3, 8, (2, 2)),
+        (2048, 6144, 3072): (4, 4, 12, (2, 2)),
+        (4096, 6144, 3072): (11, 8, 5, (1, 1)),
+        (5120, 6144, 3072): (14, 8, 6, (2, 2)),
+        (9216, 6144, 3072): (12, 12, 5, (4, 1)),
+    },
+}
+
+
 @dataclass(frozen=True)
 class Flux3KleinSequenceLayout:
     """Row layout of one sample on the SP axis.
@@ -290,7 +316,7 @@ class Flux3KleinEarlyStacks(Module):
         self, *, device: ttnn.MeshDevice, ccl_manager: CCLManager, parallel_config: DiTParallelConfig, is_fsdp: bool
     ) -> None:
         super().__init__()
-        self._ring = ccl_manager.topology == ttnn.Topology.Ring
+        self._ring = ccl_manager.fused_tp_ops(parallel_config.tensor_parallel.mesh_axis)
         for mode in MODES:
             setattr(
                 self,
@@ -367,6 +393,8 @@ class Flux3KleinTransformer(Module):
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
+        if parallel_config.tensor_parallel.factor == 2:
+            register_matmul_configs(TP2_MATMUL_CONFIGS)
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         self.flow_map = flow_map
         self.sp_factor = parallel_config.sequence_parallel.factor

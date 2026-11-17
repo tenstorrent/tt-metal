@@ -665,6 +665,12 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
     return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
 
 
+def has_matmul_config(M, K, N, core_grid) -> bool:
+    """Whether a swept table entry covers (M, K, N) on ``core_grid`` (exactly or at the same M per core)."""
+    table = _grid_config_lookup.get((core_grid.x, core_grid.y), {})
+    return (M, K, N) in table or _same_m_per_core_match(table, M, K, N, core_grid.x) is not None
+
+
 def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
     """Get the matmul config for the given shape and core grid.
 

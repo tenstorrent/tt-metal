@@ -16,6 +16,7 @@ from ..utils.matmul import (
     get_fused_mmrs_config,
     get_matmul_config,
     get_matmul_core_grid,
+    has_matmul_config,
 )
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
@@ -417,7 +418,11 @@ class ColParallelLinear(Module):
 
         parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
         needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
-        if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
+        if (
+            parallel_config_tp > 1
+            and self.ccl_manager.fused_tp_ops(parallel_config.tensor_parallel.mesh_axis)
+            and needs_gather
+        ):
             if not use_persistent_buffer:
                 ttnn.synchronize_device(self.mesh_device)
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
@@ -449,6 +454,14 @@ class ColParallelLinear(Module):
             # get_agmm_config resolves grid, blocking and workers together: an explicit core_grid /
             # default_block_size and swept (M, K, N) table entries keep the legacy derivation,
             # unswept shapes go through the v3 rule engine (see utils/agmm_rules.py).
+            # Off a Ring this path serves a 2-device TP axis, whose shapes the callers' grids were not
+            # swept for; their heuristic blocking can exceed L1 there, so unswept shapes take the rules.
+            if (
+                self.ccl_manager.topology != ttnn.Topology.Ring
+                and core_grid is not None
+                and not has_matmul_config(M, K, N, core_grid)
+            ):
+                core_grid, use_heuristic_mmcfg = None, False
             if matmul_config is None:
                 core_grid, matmul_config, num_workers_per_link = get_agmm_config(
                     M,

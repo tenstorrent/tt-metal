@@ -62,6 +62,21 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # 8-chip 4x2 submesh run as TP2 (axis 1) x SP4 (axis 0) with Linear CCLs: the op runs on one 1x2
+    # line of the parent Galaxy, with each device holding its own M rows (no SP gather in the op).
+    "bh_4x2_sp0_tp1_linear": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 8192,
+        "topology": "Linear",
+        "num_links": 2,
+        "num_workers_per_link": 6,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
+        "cluster_size": 2,
+        "sp_size": 1,
+    },
     "bh_4x8_sp0_tp1": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D_RING",
@@ -115,6 +130,8 @@ def resolve_config(name):
         "sp_axis": cfg["sp_axis"],
         "tp_axis": cfg["tp_axis"],
         "cluster_axis": cfg["cluster_axis"],
+        "cluster_size": cfg.get("cluster_size", cfg["mesh_shape"][cfg["cluster_axis"]]),
+        "sp_size": cfg.get("sp_size", cfg["mesh_shape"][cfg["sp_axis"]]),
     }
 
 
@@ -485,6 +502,28 @@ SHAPES = [
     (1152, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # SNG proj_mlp / xc-merged
     (1024, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff spatial
     (128, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff_context (prompt)
+    # FLUX 3 Klein on a 4x2 submesh, TP2 x SP4 (device config bh_4x2_sp0_tp1_linear).
+    (1024, 3072, 4608, 12, 9, True, "qkv"),
+    (1024, 3072, 9216, 12, 9, True, "ff1_swiglu"),
+    (1024, 6144, 3072, 12, 10, False, "ff2"),
+    (2048, 3072, 4608, 12, 9, True, "qkv"),
+    (2048, 3072, 9216, 12, 9, True, "ff1_swiglu"),
+    (2048, 6144, 3072, 12, 10, False, "ff2"),
+    (3072, 3072, 4608, 12, 9, True, "qkv"),
+    (3072, 3072, 9216, 12, 9, True, "ff1_swiglu"),
+    (3072, 6144, 3072, 12, 10, False, "ff2"),
+    (4096, 3072, 4608, 12, 9, True, "qkv"),
+    (4096, 3072, 9216, 12, 9, True, "ff1_swiglu"),
+    (4096, 6144, 3072, 12, 10, False, "ff2"),
+    (5120, 3072, 4608, 12, 9, True, "qkv"),
+    (5120, 3072, 9216, 12, 9, True, "ff1_swiglu"),
+    (5120, 6144, 3072, 12, 10, False, "ff2"),
+    (6144, 3072, 4608, 12, 9, True, "qkv"),
+    (6144, 3072, 9216, 12, 9, True, "ff1_swiglu"),
+    (6144, 6144, 3072, 12, 10, False, "ff2"),
+    (9216, 3072, 4608, 12, 9, True, "qkv"),
+    (9216, 3072, 9216, 12, 9, True, "ff1_swiglu"),
+    (9216, 6144, 3072, 12, 10, False, "ff2"),
 ]
 
 
@@ -839,7 +878,7 @@ def open_mesh(cfg, trace_region_size=None):
 
     cluster_axis = cfg["cluster_axis"]
     submesh_shape = [1, 1]
-    submesh_shape[cluster_axis] = cfg["mesh_shape"][cluster_axis]
+    submesh_shape[cluster_axis] = cfg["cluster_size"]
     cluster_submesh = parent_mesh.create_submesh(ttnn.MeshShape(tuple(submesh_shape)))
 
     return parent_mesh, cluster_submesh
@@ -965,7 +1004,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
 
     if uc_cfg.get("is_mmrs", False):
         cluster_axis = cfg["cluster_axis"]
-        cluster_size = cfg["mesh_shape"][cluster_axis]
+        cluster_size = cfg["cluster_size"]
         full_grid = mesh_device.compute_with_storage_grid_size()
 
         # Mirrors FusedMMRSConfig.get_params: the RS zone is whatever rows the matmul leaves free.
@@ -1144,7 +1183,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     if is_agmm:
         sp_axis = cfg["sp_axis"]
         tp_axis = cfg["tp_axis"]
-        sp_size = cfg["mesh_shape"][sp_axis]
+        sp_size = cfg["sp_size"]
         full_M = M * sp_size
 
         tt_input = ttnn.from_torch(
@@ -1384,7 +1423,7 @@ def test_mm_sweep_worker(device_config, shape):
     M, K, N, cgx, cgy, is_agmm, use_case, op_kind = unpack_shape(shape)
     uc_cfg = USE_CASE_CONFIGS[use_case]
 
-    cluster_size = cfg["mesh_shape"][cfg["cluster_axis"]]
+    cluster_size = cfg["cluster_size"]
     M_per_core, K_per_device, N_per_core = get_per_core_dims(shape, cluster_size)
 
     explicit_combos_str = os.environ.get("MM_SWEEP_EXPLICIT_COMBOS")

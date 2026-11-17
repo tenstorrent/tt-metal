@@ -29,6 +29,7 @@ class CCLManager:
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        self._usable_topology_cache = {}
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
@@ -140,6 +141,24 @@ class CCLManager:
             dim += len(shape)
         return dim
 
+    def usable_topology(self, mesh_axis):
+        """The topology the CCL ops actually run on ``mesh_axis``: Ring falls back to Linear on an axis
+        whose wrap link is not wired (always so for an axis of 2 or fewer devices)."""
+        if self.topology != ttnn.Topology.Ring:
+            return self.topology
+        if mesh_axis not in self._usable_topology_cache:
+            probe = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            )
+            self._usable_topology_cache[mesh_axis] = ttnn.get_usable_topology(probe, self.topology, mesh_axis)
+            ttnn.deallocate(probe)
+        return self._usable_topology_cache[mesh_axis]
+
+    def fused_tp_ops(self, mesh_axis):
+        """Whether the fused collective+matmul paths may run on ``mesh_axis``: on a Ring, or on an axis of 2
+        devices, which every CCL op runs as a line whatever topology is requested."""
+        return self.topology == ttnn.Topology.Ring or self.mesh_device.shape[mesh_axis] == 2
+
     def get_rs_ping_pong_buffer(
         self,
         shape,
@@ -180,7 +199,7 @@ class CCLManager:
             # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
             # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            if self.topology == ttnn.Topology.Linear:
+            if self.usable_topology(mesh_axis) == ttnn.Topology.Linear:
                 intermediate_buffer_shape[0] *= 2
             for _ in range(2):
                 # Device-native, uninitialized allocation: these scratch ping-pong
