@@ -1,0 +1,38 @@
+FUSED_DECODE fixture step=0 pcc=0.999227 top1 hf=167 tt=17 expert_flips=[]
+FUSED_DECODE fixture step=1 pcc=0.999192 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE fixture step=2 pcc=0.999112 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE fixture step=3 pcc=0.953197 top1 hf=1 tt=1 expert_flips=['L0 hf-only [15] tt-only [89]']
+FUSED_DECODE fixture step=4 pcc=0.942411 top1 hf=1 tt=1 expert_flips=['L0 hf-only [15] tt-only [25]']
+FUSED_DECODE fixture step=5 pcc=0.998505 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE fixture step=6 pcc=0.998824 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE fixture step=7 pcc=0.998635 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE fixture min_pcc=0.942411 top1=7/8
+FUSED_DECODE chat0 step=0 pcc=0.999155 top1 hf=1 tt=0 expert_flips=[]
+FUSED_DECODE chat0 step=1 pcc=0.997936 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat0 step=2 pcc=0.998071 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat0 step=3 pcc=0.997617 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat0 step=4 pcc=0.998307 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat0 step=5 pcc=0.995855 top1 hf=1 tt=1 expert_flips=['L5 hf-only [5] tt-only [67]']
+FUSED_DECODE chat0 step=6 pcc=0.998584 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat0 step=7 pcc=0.998571 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat0 min_pcc=0.995855 top1=7/8
+FUSED_DECODE chat1 step=0 pcc=0.993562 top1 hf=1 tt=0 expert_flips=['L5 hf-only [59] tt-only [79]']
+FUSED_DECODE chat1 step=1 pcc=0.997860 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat1 step=2 pcc=0.989404 top1 hf=1 tt=1 expert_flips=['L5 hf-only [58] tt-only [74]']
+FUSED_DECODE chat1 step=3 pcc=0.996069 top1 hf=1 tt=1 expert_flips=['L5 hf-only [63] tt-only [56]']
+FUSED_DECODE chat1 step=4 pcc=0.946746 top1 hf=1 tt=1 expert_flips=['L0 hf-only [58] tt-only [16]']
+FUSED_DECODE chat1 step=5 pcc=0.998406 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat1 step=6 pcc=0.995162 top1 hf=1 tt=1 expert_flips=['L5 hf-only [67] tt-only [74]']
+FUSED_DECODE chat1 step=7 pcc=0.998544 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat1 min_pcc=0.946746 top1=7/8
+FUSED_DECODE chat2 step=0 pcc=0.999070 top1 hf=185 tt=1 expert_flips=[]
+FUSED_DECODE chat2 step=1 pcc=0.999137 top1 hf=36 tt=1 expert_flips=[]
+FUSED_DECODE chat2 step=2 pcc=0.998932 top1 hf=36 tt=0 expert_flips=[]
+FUSED_DECODE chat2 step=3 pcc=0.998982 top1 hf=98 tt=2 expert_flips=[]
+FUSED_DECODE chat2 step=4 pcc=0.999114 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat2 step=5 pcc=0.997677 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat2 step=6 pcc=0.998180 top1 hf=1 tt=1 expert_flips=[]
+FUSED_DECODE chat2 step=7 pcc=0.956635 top1 hf=1 tt=1 expert_flips=['L0 hf-only [44] tt-only [16]', 'L5 hf-only [104] tt-only [125]']
+FUSED_DECODE chat2 min_pcc=0.956635 top1=4/8
+FUSED_DECODE_SUMMARY {'fixture': 0.942411, 'chat0': 0.995855, 'chat1': 0.946746, 'chat2': 0.956635} median=0.998406 at_or_above_0.995=26/32
+======================== 1 passed, 3 warnings in 36.18s ========================

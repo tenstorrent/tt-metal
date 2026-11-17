@@ -1,0 +1,45 @@
+Device 0 programs of one untraced batch-1 decode step, 2-layer model (layers 0, 5), head_profile.py (WS5 gate).
+Kernel duration in us; greedy request (LmHeadGreedyB1). The first 5 rows are the previous step's tail (pick + the
+generator's slice / copy / position increments); the step starts at the token entry (6.24 us, 1 core).
+
+Layer 0 (sliding): QKV matmul 19.35, HeadsB1 6.77, cache 4.12, SDPA 8.76, concat 3.33, o_proj 11.45,
+attn boundary + RouterB1 (one program, 34 cores) 22.93, merged MoE gate|up 30.08, down 15.29, moe boundary 12.81
+= 134.9 us in 10 programs (WS4: 32 programs, 224.4 us).
+Head: token entry 6.24, LmHeadGreedyB1 394.0 (vocab projection + argmax, 33 cores), all-gather 18.9, pick 0.8.
+
+  GenericOpDeviceOperation                         0.79  cores=1
+  SliceDeviceOperation                             0.92  cores=1
+  CopyDeviceOperation                              0.78  cores=1
+  PlusOneDeviceOperation                           0.92  cores=1
+  PlusOneDeviceOperation                           0.63  cores=1
+  GenericOpDeviceOperation                         6.24  cores=1
+  MatmulDeviceOperation                           19.35  cores=32
+  GenericOpDeviceOperation                         6.77  cores=8
+  PagedFusedUpdateCacheDeviceOperation             4.12  cores=2
+  SdpaDecodeDeviceOperation                        8.76  cores=64
+  GenericOpDeviceOperation                         3.33  cores=32
+  MatmulDeviceOperation                           11.45  cores=88
+  GenericOpDeviceOperation                        22.93  cores=34
+  GenericOpDeviceOperation                        30.08  cores=90
+  GenericOpDeviceOperation                        15.29  cores=88
+  GenericOpDeviceOperation                        12.81  cores=1
+  MatmulDeviceOperation                           27.78  cores=48
+  GenericOpDeviceOperation                        10.08  cores=6
+  PagedFusedUpdateCacheDeviceOperation             4.04  cores=2
+  SdpaDecodeDeviceOperation                        9.02  cores=64
+  GenericOpDeviceOperation                         3.47  cores=64
+  MatmulDeviceOperation                           17.86  cores=88
+  GenericOpDeviceOperation                        24.08  cores=34
+  GenericOpDeviceOperation                        29.68  cores=90
+  GenericOpDeviceOperation                        15.19  cores=88
+  GenericOpDeviceOperation                        13.88  cores=1
+  GenericOpDeviceOperation                       394.02  cores=33
+  AllGatherDeviceOperation                        18.94  cores=2
+  GenericOpDeviceOperation                         0.79  cores=1
+  SliceDeviceOperation                             0.89  cores=1
+  CopyDeviceOperation                              0.76  cores=1
+  PlusOneDeviceOperation                           0.92  cores=1
+  PlusOneDeviceOperation                           0.62  cores=1
+  TypecastDeviceOperation                          0.92  cores=1
+
+34 programs, 718.1 us kernel time
