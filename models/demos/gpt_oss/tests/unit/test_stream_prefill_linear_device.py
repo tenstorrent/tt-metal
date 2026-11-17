@@ -109,6 +109,7 @@ def test_stream_prefill_linear(mesh_device, device_params, k, n, kind, rows, x_d
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     op = StreamPrefillLinear(mesh_device, k, n, order)
+    before = _per_device(stream)  # the stream as stored: as_stream_tensor packs bf8 differently from from_torch
     saved_cap = spl.L1_CAP
     if budget is not None:
         spl.L1_CAP = budget
@@ -130,9 +131,8 @@ def test_stream_prefill_linear(mesh_device, device_params, k, n, kind, rows, x_d
             assert _column_order_ok(got[:, :n], want, n // TILE), f"device {d}: output columns out of order"
         assert not got[:, n:].any(), f"device {d}: zero columns not zero"
     # the stream is untouched
-    for d, got in enumerate(_per_device(stream)):
-        ref = ttnn.to_torch(ttnn.from_torch(layouts[d], dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).float()
-        assert torch.equal(got.reshape(srows, -1), ref), f"device {d}: stream changed"
+    for d, (got, was) in enumerate(zip(_per_device(stream), before)):
+        assert torch.equal(got, was), f"device {d}: stream changed"
 
 
 @parametrize_mesh_with_fabric([(1, 4)])
