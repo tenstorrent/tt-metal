@@ -12,6 +12,7 @@
 #include "common/moe_block_config.hpp"
 #include "common/moe_block_resources.hpp"
 #include "moe_head/moe_head_nanobind.hpp"
+#include "sparse_dispatch_2d/sparse_dispatch_2d_nanobind.hpp"
 
 namespace ttnn::operations::experimental::moe_block {
 
@@ -20,6 +21,7 @@ void bind_moe_block(nb::module_& experimental) {
         "moe_block", "The MoE block's ops (prefill): head, dispatch, experts, combine, tail");
     bind_common(mod);
     moe_head::bind_moe_head(mod);
+    sparse_dispatch_2d::bind_sparse_dispatch_2d(mod);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block
