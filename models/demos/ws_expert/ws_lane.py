@@ -313,9 +313,14 @@ def build_lane(
     warr, cred, freew, arr_stage = w16(K), w16(2 * K), w16(K), w16(2)
     hring = sharded_l1(mesh, C, [NS * KTD * 32, 32], cfg.h_dt, ttnn.TILE_LAYOUT)
     hflags = w16(NS * 2)
-    harrw = w16(GC // 2)  # h arrivals at a row leader, a word a producer row of its column (WL_HARRW)
-    hcred = w16(GC // 2 + 1)  # h ring credits: consumed h rows of the column's cores, then the partner (WL_HCRED)
-    ha2a_w, ha2a_f = w16(2), w16(NS * KTD)  # (WL_HA2A: BRISC rows forwarded + flag scratch; a flag a tile of a slot)
+    # (each only with its feature: the NoC-split lane's L1 tensors sit close above its circular buffers)
+    hchain_on = lc.ucast and lc.hchain and not lc.ha2a
+    # h arrivals at a row leader, a word a producer row of its column (WL_HARRW)
+    harrw = w16(GC // 2) if lc.ucast and lc.harrw else None
+    # h ring credits: consumed h rows of the column's cores, then the partner (WL_HCRED)
+    hcred = w16(GC // 2 + 1) if lc.hcred and (hchain_on or lc.ha2a) else None
+    # (WL_HA2A: BRISC rows forwarded + flag scratch; a flag a tile of a slot)
+    ha2a_w, ha2a_f = (w16(2), w16(NS * KTD)) if lc.ha2a else (None, None)
     if lc.ks:
         assert lc.ucast and lc.hchain and not lc.bcast, "the K split runs with the unicast h chain"
         KSL = KT // 10
@@ -652,4 +657,5 @@ def build_lane(
     io += [idx_l1, table_l1, warr, cred, freew, arr_stage] + ([hcnt, xin, xinf] if lc.bcast else [])
     io += [xcred, lflags, lcred, kscr, land, pring] if lc.ks else []
     io += ([ysh, dest_t] if lc.y_rm else []) + [st, out_t]
+    io = [t for t in io if t is not None]
     return mpd, io, st

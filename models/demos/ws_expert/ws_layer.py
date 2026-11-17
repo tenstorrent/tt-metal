@@ -41,22 +41,51 @@ class LayerCfg:
     S = property(lambda s: s.K if s.fold else s.K + 1)  # result rows a token
 
 
-def gcfg(nexp, G, T):
-    return GCfg(nexp=nexp, G=G, T=T, MMAX=T, BK=20, NX=9, LOOK=18)
+# The K-split lane (LCfg.ks): the unicast chains with the K-split gate/up, in its final tray configuration (bfp8 h, every
+# output written; M 586 63.8%), with row-major result rows
+KS_LANE = dict(
+    ucast=True,
+    ks=True,
+    wpoll=1,
+    ks_ovl=True,
+    sched_c=7,
+    ks_bal=5,
+    ydep=1,
+    ks_xdirect=True,
+    arr_nf=True,
+    ks_fl=2,
+    ks_pd=1,
+    ks_d=4,
+    ks_nxr=8,
+    ks_tl=7,
+    y_rm=True,
+)
+KS_GCFG = dict(NX=16, h_dt=ttnn.bfloat8_b, XRM=4, dn_lag=3, NS=4)
 
 
-def proxy_lcfg(G, **kw):
-    """The one-chip lane configuration (no fabric, every expert the chip's own), no-hang layout, row-major outputs."""
-    return LCfg(
-        cycles=[[(0, 0)]] * ((G + 1) // 2),
-        nofab=True,
-        slots="any,any,any,any",
-        keep=0,
-        bcast=True,
-        noc_split=True,
-        y_rm=True,
-        **kw,
-    )
+def gcfg(nexp, G, T, ks=False):
+    kw = dict(BK=20, NX=9, LOOK=18)
+    if ks:
+        kw.update(KS_GCFG)
+    return GCfg(nexp=nexp, G=G, T=T, MMAX=T, **kw)
+
+
+def proxy_lcfg(G, ks=False, **kw):
+    """The one-chip lane configuration (no fabric, every expert the chip's own), row-major outputs: the NoC split with
+    the corner multicaster (no-hang layout), or (ks) the K split."""
+    base = dict(cycles=[[(0, 0)]] * ((G + 1) // 2), nofab=True, slots="any,any,any,any", keep=0)
+    if ks:
+        return LCfg(**base, **{**KS_LANE, **kw})
+    return LCfg(**base, ucast=False, bcast=True, noc_split=True, y_rm=True, **kw)
+
+
+def glx_lcfg(cycles, ks=False, **kw):
+    """The torus lane configuration (cycles: ws_sf.torus_cycles), row-major outputs: the NoC split with the corner
+    multicaster, or (ks) the K split."""
+    base = dict(cycles=cycles, slots="d0,d1,d0d1,any", keep=2)
+    if ks:
+        return LCfg(**base, **{**KS_LANE, **kw})
+    return LCfg(**base, ucast=False, bcast=True, noc_split=True, y_rm=True, **kw)
 
 
 FENCE_ROWS = 16  # spare rows past the result buffer's T S: the posted row writes' fence (one a DRAM bank)

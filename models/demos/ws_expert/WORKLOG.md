@@ -1274,3 +1274,51 @@ Final configs (WS_LANE / WS_GCFG), every output written, bf16 partials:
 | bfp8 | dn_lag=3;NS=4;XRM=4 | 63.8% | 68.9% | 0.99988 | 0.99983 |
 | bf16 | dn_lag=3;NS=4;XRM=4;h_dt=bf16 | 61.3% | 67.3% | 0.99994 | 0.99993 |
   M 0 / M 5 pass for both. (Part 1's best: 57.8% / 55.5%.)
+
+## Stage 19: the K-split lane in the layer (branch ws-sf-ks: origin's 1efbae75faf merged; hold 217516, bh-glx-120-b08u08)
+- Merge: origin's K-split lane (LCfg.ks, kl_compute.cpp, the unicast chains, h credits, arr_nf) and this branch's
+  NoC split / corner multicaster, one-chip proxy (nofab), row-major result rows (y_rm) and the layer, every feature
+  behind its own switch. The K split's x queue takes precedence over the NoC split's in the reader.
+- Row-major result rows on the K split: kl_compute.cpp's down row is pack-untilized into CB 17 (WL_Y_RM; the DEST
+  untilize remap on once after the hardware startup, as wl_compute and conv3d's compute: the tilize, gate/up, fold
+  and SwiGLU run with it on); y_rm allowed with the unicast chains (no group multicast on NOC1, QY's NoC); in K-split
+  mode QY's destination scratch sits past the BRISC's 8 rows of gathered token ids (idx_l1 + 1024).
+- ws_layer: KS_LANE / KS_GCFG (the pushed commit's final tray config, bfp8 h) for proxy_lcfg / glx_lcfg(ks=True)
+  (tests: WSY_KS=1); the NoC-split lane pinned to ucast=False. ws_lane allocates the chains' / all-to-all's small
+  state tensors only with their features (unconditional, ~1.6 KB a core pushed the NoC-split lane's L1 tensors into
+  its circular buffers on one chip).
+- The stream alone on the Galaxy (test_ws_lane_glx, 640 experts, M 586, 20 warm-up + 5 measured, every expert written;
+  WS_REF_LAST / WS_PCC_CHIPS against host memory on b08u08):
+| lane | cyc / chip-expert (chip 0) | util tile median | min PCC |
+|---|---|---|---|
+| NoC split + corner multicaster (stage 7 config, c10u20) | ~100,800 | 27.4% | 0.99994 |
+| origin chains, no K split | 81,542 | 33.2% | 0.99988 |
+| origin K split, final config | 57,515 | 46.6% | 0.99988 |
+| the same after the merge | 57,973 | 46.8% | 0.99988 (every expert, chips 0 / 13 / 31) |
+- One chip, the layer with the K split, T 2048, every token against torch: counts / lists / destinations exact,
+  routed rows PCC 0.99988, y 0.99988 (the bfp8 h floor).
+- The Galaxy, the folded layer traced with the device barrier, 20 warm-up + 5 measured replays:
+| | NoC-split lane | K split |
+|---|---|---|
+| traced layer back to back (ms) | 62.5 | 41.9 |
+| inside a replay: head / stream / fold | 2.70 / 49.72 / 9.44 | 2.69 / 28.63 / 9.44 |
+| eager device sum | 61.5 | 40.9 |
+  Trace bit-identical to eager (y, counts, token lists, destinations, w); 64-token checks on chips 0 and 31: y PCC
+  0.99988, routed rows 0.99988.
+- One chip (T 31250, traced, 20 back to back bracketed): head 2.80, stream 29.60, fold 9.03, layer 41.36 ms (old lane
+  37.56 stream, 49.26 layer). The one-chip stream (weights from its own DRAM) now matches the Galaxy's (28.6): the
+  fabric delivery is no longer the stream's limit. Chip power under the stream 125 W median (139 max), AICLK 1318-1350
+  at the 130 W limit: on a 75 W system this version throttles harder than the old one.
+- A latent fault in the barrier layer (stage 15), found on the K split: the device barrier's all-gathers create their
+  global semaphores in L1 when their programs are first built (kept with the cached programs). The first barrier
+  of a run came between "stream:zero" and "stream:run", so that one rebuilt stream sat 256 B lower than the words its
+  zeros cleared (every state word, both lanes) and ran on stale state: the old lane survived it, the K split hung once
+  (triage: compute waiting on landing rows, two cores' firmware noc_index read back corrupt). Fixed: make_layer runs
+  the barrier once (tests/test_ws_layer.py device_barrier), so the semaphores exist before any stream is built;
+  layer_programs asserts that the rebuilt stream's state words are exactly the zeroed ones.
+- After the fix (b08u08, 20 warm-up + 5 measured replays): the K-split Galaxy traced layer 41.96 / 41.82 ms (twice),
+  the old lane 62.75; both bit-identical to eager. 3000 traced K-split layers with the barrier: all 6 checks (every
+  500) bit-identical to the first layer on chips 0 and 31, no hang; wall per layer 42.06 -> 43.37 ms over the run
+  (the chips' clock settling under the 130 W limit at the stream's ~125 W).
+- Open: the stream 28.6 ms against the 14.8 target; the fold 9.4 against 7.5; the head 2.7; a soak of 10K+ layers on
+  the K split; power on 75 W systems.

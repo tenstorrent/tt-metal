@@ -25,7 +25,16 @@ from models.demos.ws_expert.tests.test_ws_lane import first_visible
 from models.demos.ws_expert.ws_end import build_end, end_span_us
 from models.demos.ws_expert.ws_fab import slice_layout
 from models.demos.ws_expert.ws_lane import LCfg, build_lane, make_tables, tables_tensor
-from models.demos.ws_expert.ws_layer import LayerCfg, gcfg, head, head_consts, proxy_lcfg, result_buffer, router_weights
+from models.demos.ws_expert.ws_layer import (
+    LayerCfg,
+    gcfg,
+    glx_lcfg,
+    head,
+    head_consts,
+    proxy_lcfg,
+    result_buffer,
+    router_weights,
+)
 from models.demos.ws_expert.ws_sf import torus_cycles
 from models.demos.ws_expert.ws_shared import SCfg, build_shared, shared_span_us, shared_weights
 
@@ -48,6 +57,7 @@ from models.demos.ws_expert.ws_fold import build_fold, fold_span_us
 
 LOGITS = os.environ.get("WSY_LOGITS", "0") == "1"  # (router head: its logits written for the checks)
 FOLD = os.environ.get("WSY_FOLD", "0") == "1"  # (the shared expert folded into the end pass: ws_fold)
+KS = os.environ.get("WSY_KS", "0") == "1"  # (the routed stream as the K-split lane: ws_layer.KS_LANE)
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
@@ -85,9 +95,12 @@ def make_layer(mesh, lc: LayerCfg, routed_lc: LCfg, seed=0):
         x[:, : lc.T, 0] = 1.0
         wr[0, :] = shift
         wr[0, :skew] = shift + 50.0
-    rcfg = gcfg(E, lc.G, lc.T)
+    rcfg = gcfg(E, lc.G, lc.T, ks=routed_lc.ks)
     rtb = make_tables(shape, rcfg, routed_lc)
-    per_chip = [slice_layout(rcfg, routed_lc.CHT, wg[o].float(), wu[o].float(), wd[o].float()) for o in rtb["own"]]
+    per_chip = [
+        slice_layout(rcfg, routed_lc.CHT, wg[o].float(), wu[o].float(), wd[o].float(), ks=routed_lc.ks)
+        for o in rtb["own"]
+    ]
     shard = ttnn.ShardTensorToMesh(mesh, dim=0)
     dram = ttnn.DRAM_MEMORY_CONFIG
     st = dict(
@@ -123,6 +136,7 @@ def make_layer(mesh, lc: LayerCfg, routed_lc: LCfg, seed=0):
         st["bar_t"] = ttnn.from_torch(
             torch.zeros(N, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=shard
         )
+        device_barrier(st)  # (its semaphores in place before any stream is built)
     if HEAD == "router":  # (x arrives row-major, as the previous layer's end pass writes it)
         st["hout"] = head_outputs(mesh, lc)
         st["x_rm"] = ttnn.from_torch(
@@ -476,6 +490,7 @@ def test_ws_layer_chip(mesh_device, nexp, T):
     ntok = int(os.environ.get("WSY_TOKENS", 0 if small else 256))
     rlc = proxy_lcfg(
         lc.G,
+        ks=KS,
         y_nowrite=os.environ.get("WSY_NOWRITE", "0") == "1",
         y_posted=os.environ.get("WSY_POSTED", "1") == "1",
     )
@@ -491,14 +506,7 @@ def test_ws_layer_chip(mesh_device, nexp, T):
 def test_ws_layer_glx(mesh_device):
     """The whole Galaxy torus: T 31250 tokens a chip, 640 experts streamed over 2 cycles x 2 links (G 4)."""
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    rlc = LCfg(
-        cycles=torus_cycles(*tuple(mesh_device.shape)),
-        slots="d0,d1,d0d1,any",
-        keep=2,
-        bcast=True,
-        noc_split=True,
-        y_rm=True,
-    )
+    rlc = glx_lcfg(torus_cycles(*tuple(mesh_device.shape)), ks=KS)
     chips = [int(c) for c in os.environ.get("WSY_CHIPS", "0,31").split(",")]
     res = run_layer(
         mesh_device,
@@ -523,7 +531,7 @@ def test_ws_head_overflow(mesh_device, monkeypatch):
         pytest.skip("WSY_HEAD=custom or router only")
     monkeypatch.setenv("WSY_SKEW", "6")
     lc = LayerCfg(T=8192, nexp=640)
-    st, _ = make_layer(mesh_device, lc, proxy_lcfg(lc.G))
+    st, _ = make_layer(mesh_device, lc, proxy_lcfg(lc.G, ks=KS))
     with pytest.raises(RuntimeError, match="overflowed"):
         layer_step(mesh_device, lc, st, aiclk_mhz(first_visible()))
     logger.info("WSY head overflow: caught on the host before the stream")
@@ -534,6 +542,16 @@ TRACE_REGION = 64 << 20
 
 PHASES = ("head", "shared", "stream", "end")
 FOLD_PHASES = ("head", "stream", "fold")
+
+
+def device_barrier(st):
+    """Every chip past this point: two all-gathers of a tiny DRAM tensor, one a torus axis, the second on the first's
+    output. Their first build allocates their global semaphores in L1 (kept with the cached programs): make_layer runs
+    it once, so no stream is built before and after that allocation."""
+    g0 = ttnn.all_gather(st["bar_t"], 3, cluster_axis=0, num_links=1, topology=ttnn.Topology.Ring)
+    g1 = ttnn.all_gather(g0, 3, cluster_axis=1, num_links=1, topology=ttnn.Topology.Ring)
+    ttnn.deallocate(g0)
+    ttnn.deallocate(g1)
 
 
 def layer_programs(mesh, lc: LayerCfg, st, phases=None, diag=None, clk=None, clocks=None):
@@ -553,8 +571,13 @@ def layer_programs(mesh, lc: LayerCfg, st, phases=None, diag=None, clk=None, clo
     spans.update(fold=lambda t: fold_span_us(t, 0, clk))
 
     held = []  # (the stream's state tensors, kept across the barrier)
+    zeroed = []  # (their addresses: the rebuilt stream's state words must be exactly these)
+    is_state = lambda t: t.memory_config().buffer_type == ttnn.BufferType.L1 and t.dtype == ttnn.uint32
 
     def run(name, mpd, io, stamps, zero=True, launch=True):
+        if name == "stream" and not zero and zeroed:  # ("stream:run" after "stream:zero")
+            addrs = [t.buffer_address() for t in io if is_state(t)]
+            assert addrs == zeroed, f"the rebuilt stream's state words moved: zeroed at {zeroed}, built at {addrs}"
         bench_util.l1_log(f"run {name} (traced layer)")
         if diag is not None:
             ttnn.synchronize_device(mesh)
@@ -574,6 +597,7 @@ def layer_programs(mesh, lc: LayerCfg, st, phases=None, diag=None, clk=None, clo
         for t in io:
             if not launch and t.memory_config().buffer_type == ttnn.BufferType.L1 and t.dtype == ttnn.uint32:
                 held.append(t)  # (the zeroed state words stay allocated until after the barrier)
+                zeroed.append(t.buffer_address())
                 continue
             if t.memory_config().buffer_type == ttnn.BufferType.L1:
                 bench_util.l1_log(f"free {t.buffer_address()}")
@@ -596,10 +620,7 @@ def layer_programs(mesh, lc: LayerCfg, st, phases=None, diag=None, clk=None, clo
     # zeros)
     for sp in [p for p in phases if p.startswith("stream") or p == "barrier"]:
         if sp == "barrier":
-            g0 = ttnn.all_gather(st["bar_t"], 3, cluster_axis=0, num_links=1, topology=ttnn.Topology.Ring)
-            g1 = ttnn.all_gather(g0, 3, cluster_axis=1, num_links=1, topology=ttnn.Topology.Ring)
-            ttnn.deallocate(g0)
-            ttnn.deallocate(g1)
+            device_barrier(st)
             for t in held:
                 ttnn.deallocate(t)
             held.clear()
@@ -990,7 +1011,7 @@ def run_trace_bisect(mesh, lc: LayerCfg, routed_lc: LCfg, tag):
 def test_ws_layer_trace_bisect_chip(mesh_device):
     """run_trace_bisect on one chip (the routed stream as the one-chip proxy), T 31250, 640 experts."""
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    run_trace_bisect(mesh_device, lc, proxy_lcfg(lc.G), "trace bisect chip e640 T 31250")
+    run_trace_bisect(mesh_device, lc, proxy_lcfg(lc.G, ks=KS), "trace bisect chip e640 T 31250")
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
@@ -998,14 +1019,7 @@ def test_ws_layer_trace_bisect_chip(mesh_device):
 def test_ws_layer_trace_bisect_glx(mesh_device):
     """run_trace_bisect on the Galaxy torus (the layer with the device barrier; WSY_BISECT clocks, layer)."""
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    rlc = LCfg(
-        cycles=torus_cycles(*tuple(mesh_device.shape)),
-        slots="d0,d1,d0d1,any",
-        keep=2,
-        bcast=True,
-        noc_split=True,
-        y_rm=True,
-    )
+    rlc = glx_lcfg(torus_cycles(*tuple(mesh_device.shape)), ks=KS)
     run_trace_bisect(mesh_device, lc, rlc, "trace bisect glx e640 T 31250")
 
 
@@ -1014,7 +1028,7 @@ def test_ws_layer_trace_bisect_glx(mesh_device):
 def test_ws_layer_trace_chip(mesh_device):
     """The traced layer on one chip (the routed stream as the one-chip proxy), T 31250, 640 experts."""
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    rlc = proxy_lcfg(lc.G)
+    rlc = proxy_lcfg(lc.G, ks=KS)
     run_trace(mesh_device, lc, rlc, "trace chip e640 T 31250", [0], int(os.environ.get("WSY_TOKENS", 256)))
 
 
@@ -1023,14 +1037,7 @@ def test_ws_layer_trace_chip(mesh_device):
 def test_ws_layer_trace_glx(mesh_device):
     """The traced layer on the Galaxy torus, as test_ws_layer_glx."""
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    rlc = LCfg(
-        cycles=torus_cycles(*tuple(mesh_device.shape)),
-        slots="d0,d1,d0d1,any",
-        keep=2,
-        bcast=True,
-        noc_split=True,
-        y_rm=True,
-    )
+    rlc = glx_lcfg(torus_cycles(*tuple(mesh_device.shape)), ks=KS)
     chips = [int(c) for c in os.environ.get("WSY_CHIPS", "0,31").split(",")]
     run_trace(mesh_device, lc, rlc, "trace glx e640 T 31250", chips, int(os.environ.get("WSY_TOKENS", 64)))
 
@@ -1124,19 +1131,12 @@ def run_soak(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips):
 @pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
 def test_ws_layer_soak_chip(mesh_device):
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    run_soak(mesh_device, lc, proxy_lcfg(lc.G), "soak chip", [0])
+    run_soak(mesh_device, lc, proxy_lcfg(lc.G, ks=KS), "soak chip", [0])
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [dict(TORUS, trace_region_size=TRACE_REGION)], indirect=True)
 def test_ws_layer_soak_glx(mesh_device):
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    rlc = LCfg(
-        cycles=torus_cycles(*tuple(mesh_device.shape)),
-        slots="d0,d1,d0d1,any",
-        keep=2,
-        bcast=True,
-        noc_split=True,
-        y_rm=True,
-    )
+    rlc = glx_lcfg(torus_cycles(*tuple(mesh_device.shape)), ks=KS)
     run_soak(mesh_device, lc, rlc, "soak glx", [0, 31])
