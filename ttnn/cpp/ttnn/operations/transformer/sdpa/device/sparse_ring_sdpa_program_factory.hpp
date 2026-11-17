@@ -49,6 +49,15 @@ inline std::string sparse_ring_kv_pages_request() {
     return s == nullptr ? std::string() : std::string(s);
 }
 
+// TT_SPARSE_RING_L1_RESERVE (bytes, default 16384): L1 the op leaves free below its CB budget. The program's CBs start
+// above the cores' persistent L1 (global semaphores: the Sol pre-pass keeps ~10 KB), which the allocator base does not
+// include, so a budget filled to the lowest L1 buffer (TT_SPARSE_RING_KV_PAGES=max) can overrun into it.
+inline uint32_t sparse_ring_l1_reserve() {
+    const char* s = std::getenv("TT_SPARSE_RING_L1_RESERVE");
+    const int v = s == nullptr ? 16384 : std::atoi(s);
+    return v <= 0 ? 0u : static_cast<uint32_t>(v);
+}
+
 // TT_SPARSE_RING_MEMBER_RESCALE=1: the lazy-rescale test runs per resident Q block. A step rescales only the blocks whose
 // own row max grew past the threshold; the others keep their stored max (as every block does on a step that does not
 // rescale). Changes the order of the online-softmax updates, not the mask or the routed set. Default off.

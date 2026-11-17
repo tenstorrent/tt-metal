@@ -888,12 +888,15 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                                         : std::numeric_limits<uint32_t>::max();
         return l;
     };
+    // The program places each CB at the allocator's DRAM alignment, so a CB whose size is not a multiple of it (the
+    // sparse plan and counts pages, sized by the sequence length) takes its padding too.
+    const uint32_t cb_alignment = mesh_device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
     const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, bool pairs) -> uint64_t {
         uint64_t bytes = 0;
         uint32_t index = 0;
         lay_out_cbs(
             slots, kv_pages, pairs, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
-                bytes += static_cast<uint64_t>(page_size_bytes) * num_pages;
+                bytes += tt::align(static_cast<uint64_t>(page_size_bytes) * num_pages, cb_alignment);
                 return index++;
             });
         return bytes;
@@ -902,8 +905,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
     const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
                                                                : mesh_device->l1_size_per_core();
-    const uint32_t usable_l1 =
-        cb_space_top - mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t cb_space_bottom =
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1) + sparse_ring_l1_reserve();
+    const uint32_t usable_l1 = cb_space_top > cb_space_bottom ? cb_space_top - cb_space_bottom : 0u;
     const uint32_t dyn_mode_req = tensor_args.head_weights.has_value() ? sparse_ring_dyn_split() : 0u;
     uint32_t dyn_max_q = 0;
     uint32_t dyn_min_q = 0;
