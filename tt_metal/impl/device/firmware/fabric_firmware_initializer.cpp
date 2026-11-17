@@ -326,10 +326,11 @@ void FabricFirmwareInitializer::init(
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         // Reject fabric launch on a single-host mesh with fewer than 2 opened chips.
         // Multi-host meshes with 1 local chip per rank are unaffected: peers live on other ranks.
+        // So is a 1-chip inter-domain fabric: its peers are other domains'.
         const auto local_mesh_ids = control_plane_.get_local_mesh_id_bindings();
         const size_t num_hosts = control_plane_.get_mesh_graph().get_host_ranks(local_mesh_ids.front()).size();
         TT_FATAL(
-            devices_.size() > 1 || num_hosts > 1,
+            devices_.size() > 1 || num_hosts > 1 || rtoptions_.get_fabric_inter_domain(),
             "Fabric config {} requires at least 2 participating chips, but the opened mesh has {} "
             "local device(s) on a single host. Either open a larger mesh (e.g. a MeshShape with >= 2 "
             "devices) or call SetFabricConfig(FabricConfig::DISABLED) before opening a 1-chip mesh.",

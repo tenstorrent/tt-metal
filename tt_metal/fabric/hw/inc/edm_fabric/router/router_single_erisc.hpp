@@ -42,20 +42,19 @@ FORCE_INLINE void receiver_pass(
     receiver::pass(loop_copy, r.credit_frame_due, r.states, r.credits, downstreams, my_chip);
 }
 
-__attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+// The loop, on the sender's state `s` (forwarding channels started).
+FORCE_INLINE void run_with(SenderState& s, DownstreamConnections& downstreams) {
     const auto& routing_table = l1_routing_table();
     const ChipCoordinates my_chip{
         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};
 
-    SenderState s;
-    sender::start_forwarding_channels(s.states);
     ReceiverState r;
     // The receiver's loop-local progress: a copy carried through the loop.
     auto rx_loop_copy = r.states.loop_local_progress();
     local_write_init();
 
     sender::SenderRound round;
-    while (!terminating()) {
+    while (keep_running()) {
         if (!start_running()) {
             continue;
         }
@@ -70,6 +69,20 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
                 round, s.states.loop_local_progress(), s.states, [] { return receiver::vc0_register_empty(); });
         }
     }
+}
+
+__attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+    SenderState s;
+    sender::start_forwarding_channels(s.states);
+    run_with(s, downstreams);
+}
+
+// An inter-domain router's loop for one connect. Its forwarding channels face this chip, so their state carries over
+// connects; the link-facing state (the remote receiver's progress, the worker channels) starts over with each peer.
+__attribute__((noinline)) void run_connected(SenderState& s, DownstreamConnections& downstreams) {
+    s.states.vcs = {};
+    s.channels_in_flight = 0;
+    run_with(s, downstreams);
 }
 
 }  // namespace fabric_router::single_erisc

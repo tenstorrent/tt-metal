@@ -148,10 +148,11 @@ struct SenderChannels {
         "a static upstream connection is a forwarding channel's");
 };
 
-// The remote router's receiver channel of VC: its slots and its packets-received register.
+// The remote router's receiver channel of VC: its slots and its packets-received register. An inter-domain router
+// sends into its peer's VC2 receiver on every VC (it only sends on VC0).
 template <size_t VC>
 struct RemoteReceiverChannel {
-    static constexpr size_t rx = receiver_channel_by_vc[VC];  // the host's index of the channel
+    static constexpr size_t rx = receiver_channel_by_vc[is_inter_domain_router ? 2 : VC];  // the host's index
     static constexpr uint32_t num_slots = REMOTE_RECEIVER_NUM_BUFFERS_ARRAY[rx];
     static constexpr uint32_t first_slot_addr =
         eth_remote_channel_allocs::Entry<REMOTE_RECEIVER_TO_ENTRY_IDX[rx]>::base_address;
@@ -279,24 +280,25 @@ struct SenderChannelInterfaces {
     __attribute__((noinline)) static void start(
         const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
         new (storage) All{};
-        for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
-            constexpr size_t CH = decltype(i)::value;
-            constexpr bool worker = is_sender_channel_worker[CH];  // the host's role, serviced or not
-            auto* info = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-                sender_connection_info_addrs[CH]);
-            info->edm_read_counter = 0;
-            ASSERT(
-                !worker || connection_semaphores[CH] == worker_connection_semaphore_addrs[vc_of_sender_channel(CH)]);
-            new (&of<CH>()) tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<
-                tt::tt_fabric::worker_handshake_noc,
-                SENDER_NUM_BUFFERS_ARRAY[CH]>(
+        for_each_index<NUM_SENDER_CHANNELS>([&](auto i) { start_one<decltype(i)::value>(connection_semaphores); });
+    }
+
+    // Channel CH's interface, from its start: no producer, no credits returned.
+    template <size_t CH>
+    static FORCE_INLINE void start_one(const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
+        constexpr bool worker = is_sender_channel_worker[CH];  // the host's role, serviced or not
+        auto* info =
+            reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(sender_connection_info_addrs[CH]);
+        info->edm_read_counter = 0;
+        ASSERT(!worker || connection_semaphores[CH] == worker_connection_semaphore_addrs[vc_of_sender_channel(CH)]);
+        new (&of<CH>()) tt::tt_fabric::
+            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[CH]>(
                 info,
                 /*remote_producer_write_counter (unused)=*/0,
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_semaphores[CH]),
                 CommandBuffers::worker_credits[CH],
                 worker ? 0 : SENDER_NUM_BUFFERS_ARRAY[CH],
                 worker ? read_counter_addr(CH) : notify_worker_of_read_counter_update_src_address);
-        });
     }
 
     // Channel CH's interface (after start).
@@ -1045,6 +1047,25 @@ FORCE_INLINE void reset_connections(
             for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
                 cursor[w] = 0;
             }
+        }
+    });
+}
+
+// Inter-domain disconnect: the worker channels back to their start (connection, producer cursor, free slots,
+// interface) for the next peer's traffic. Forwarding channels face this chip and keep theirs.
+__attribute__((noinline)) void restart_worker_channels(
+    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
+    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
+    for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
+        constexpr size_t CH = decltype(i)::value;
+        if constexpr (is_sender_channel_serviced[CH] && is_sender_channel_worker[CH]) {
+            *reinterpret_cast<volatile uint32_t*>(connection_semaphores[CH]) = 0;
+            auto* cursor = reinterpret_cast<volatile uint32_t*>(producer_cursors[CH]);
+            for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
+                cursor[w] = 0;
+            }
+            init_ptr_val<SenderChannel<CH>::free_slots_stream>(SENDER_NUM_BUFFERS_ARRAY[CH]);
+            SenderChannelInterfaces::start_one<CH>(connection_semaphores);
         }
     });
 }

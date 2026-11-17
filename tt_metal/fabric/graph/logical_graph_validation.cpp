@@ -31,19 +31,29 @@ std::vector<std::string> find_problems(
             continue;
         }
         ++senders;
-        size_t eth = 0;
+        // a link sender has one eth edge to its peer's receiver; a perimeter sender one dynamic edge, to its own
+        const bool perimeter = router.port.capability == EdgeCapability::INTERDOMAIN;
+        const Transport link = perimeter ? Transport::Dynamic : Transport::Eth;
+        size_t links = 0;
         for (const auto* e : g.edges_from(c)) {
-            if (e->transport != Transport::Eth) {
+            if (e->transport == Transport::Noc) {
                 continue;
             }
-            ++eth;
+            if (e->transport != link) {
+                problems.push_back(
+                    where(c) +
+                    (perimeter ? ": perimeter sender with an eth edge" : ": dynamic edge off the perimeter"));
+                continue;
+            }
+            ++links;
             const auto& to = g.channels[e->to];
-            if (to.kind != ChannelKind::Receiver || to.vc != ch.vc || !router.peer || to.router != *router.peer) {
-                problems.push_back(where(c) + ": eth edge does not reach the peer's receiver on its VC");
+            const auto far = perimeter ? std::optional<RouterIndex>{ch.router} : router.peer;
+            if (to.kind != ChannelKind::Receiver || to.vc != ch.vc || !far || to.router != *far) {
+                problems.push_back(where(c) + ": link edge does not reach the far receiver on its VC");
             }
         }
-        if (eth != 1) {
-            problems.push_back(where(c) + ": expected one eth edge, found " + std::to_string(eth));
+        if (links != 1) {
+            problems.push_back(where(c) + ": expected one link edge, found " + std::to_string(links));
         }
         if (!ch.injection) {
             bool fed = false;

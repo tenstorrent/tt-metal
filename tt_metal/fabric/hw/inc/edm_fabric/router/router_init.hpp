@@ -222,8 +222,9 @@ FORCE_INLINE void init_router() {
 // ---------------------------------------------------------------------------------------------------------------------
 
 // The router's runtime args (erisc_datamover_builder.cpp get_runtime_args): sender-channel connection semaphores and
-// producer-cursor blocks, then per VC the downstream connections (see DownstreamArgs; VC1's only on VC1 routers), then
-// the downstream teardown semaphores (VC0's connections, then VC1's), then the UDM relay block.
+// producer-cursor blocks, then per VC the downstream connections (see DownstreamArgs; VC1's only on VC1 routers, VC2's
+// only where it forwards), then the downstream teardown semaphores (VC0's connections, then VC1's, then VC2's), then
+// the UDM relay block.
 template <size_t N>
 struct VcDownstreamArgs {
     uint32_t mask;
@@ -239,11 +240,23 @@ struct RuntimeArgs {
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> producer_cursors;
     VcDownstreamArgs<NUM_DOWNSTREAM_SENDERS_VC0> vc0_args;
     VcDownstreamArgs<NUM_DOWNSTREAM_SENDERS_VC1> vc1_args;
+    VcDownstreamArgs<NUM_DOWNSTREAM_SENDERS_VC2> vc2_args;
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> teardown_sems;
     [[no_unique_address]] std::conditional_t<udm_mode, RelayArgs, NoRelayArgs> relay;
 
     DownstreamArgs vc0() const { return of(vc0_args, 0); }
     DownstreamArgs vc1() const { return of(vc1_args, NUM_DOWNSTREAM_SENDERS_VC0); }
+    DownstreamArgs vc2() const { return of(vc2_args, NUM_DOWNSTREAM_SENDERS_VC0 + NUM_DOWNSTREAM_SENDERS_VC1); }
+    template <size_t VC>
+    DownstreamArgs of_vc() const {
+        if constexpr (VC == 0) {
+            return vc0();
+        } else if constexpr (VC == 1) {
+            return vc1();
+        } else {
+            return vc2();
+        }
+    }
 
 private:
     template <size_t N>
@@ -305,6 +318,9 @@ __attribute__((noinline)) void read_runtime_args(RuntimeArgs& a) {
     if constexpr (has_vc1) {
         read_vc_downstream_args(a.vc1_args, i);
     }
+    if constexpr (vc2_forwards) {
+        read_vc_downstream_args(a.vc2_args, i);
+    }
     for (auto& v : a.teardown_sems) {
         v = get_arg_val<uint32_t>(i++);
     }
@@ -318,30 +334,34 @@ __attribute__((noinline)) void read_runtime_args(RuntimeArgs& a) {
 // The Ethernet handshake with the remote router, then (with the host's start signal) the handshake among this chip's
 // routers: the local master collects every router's arrival, releases them, and passes on READY_FOR_TRAFFIC.
 // Compiled for size: it runs once, and at -O3 it takes 0.6-0.8 KB more code space in every image that sends it.
+// An inter-domain router has no peer yet: it skips the Ethernet handshake (its connect does it) and only joins the
+// chip's.
 __attribute__((noinline, optimize("Os"))) void run_handshakes() {
     if constexpr (enable_ethernet_handshake) {
         const auto& routing_table = l1_routing_table();
         auto* termination = termination_signal();
-        if constexpr (is_handshake_sender) {
-            erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
-                handshake_addr,
-                routing_table.my_mesh_id,
-                routing_table.my_device_id,
-                termination,
-                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-        } else {
-            erisc::datamover::handshake::fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
-                handshake_addr,
-                routing_table.my_mesh_id,
-                routing_table.my_device_id,
-                termination,
-                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+        if constexpr (!is_inter_domain_router) {
+            if constexpr (is_handshake_sender) {
+                erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                    handshake_addr,
+                    routing_table.my_mesh_id,
+                    routing_table.my_device_id,
+                    termination,
+                    DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            } else {
+                erisc::datamover::handshake::fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                    handshake_addr,
+                    routing_table.my_mesh_id,
+                    routing_table.my_device_id,
+                    termination,
+                    DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            }
+            auto* info =
+                reinterpret_cast<volatile tt_l1_ptr erisc::datamover::handshake::handshake_info_t*>(handshake_addr);
+            auto* telemetry = telemetry_block();
+            telemetry->static_info.neighbor_mesh_id = info->neighbor_mesh_id;
+            telemetry->static_info.neighbor_device_id = info->neighbor_device_id;
         }
-        auto* info =
-            reinterpret_cast<volatile tt_l1_ptr erisc::datamover::handshake::handshake_info_t*>(handshake_addr);
-        auto* telemetry = telemetry_block();
-        telemetry->static_info.neighbor_mesh_id = info->neighbor_mesh_id;
-        telemetry->static_info.neighbor_device_id = info->neighbor_device_id;
         *edm_status() = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
         if constexpr (wait_for_host_signal) {
