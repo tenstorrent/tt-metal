@@ -4,7 +4,7 @@
 
 from helpers.llk_params import PerfRunType
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
-from helpers.test_variant_parameters import LOOP_FACTOR, PERF_RUN_TYPE
+from helpers.test_variant_parameters import LOOP_FACTOR, PERF_RUN_TYPE, TemplateParameter
 
 PERF_LOOP_FACTOR = 32
 
@@ -24,6 +24,12 @@ PERF_MEASUREMENT_AXES_WITHOUT_MATH_ISOLATE = {
         ]
     ],
 }
+
+
+def compile_only(param: TemplateParameter) -> TemplateParameter:
+    """Keep a template in generated C++ without adding its constant field to perf reports."""
+    param.perf_report_compile_only = True
+    return param
 
 
 def with_functional_defaults(test_config_kwargs):

@@ -29,7 +29,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
 )
-from helpers.perf.blaze import execute_llk
+from helpers.perf.blaze import compile_only, execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
@@ -220,7 +220,7 @@ def _run_unpack_A_sdpa(
             test_name=testname,
             formats=formats,
             templates=[
-                STOCHASTIC_ROUNDING(StochasticRounding.No),
+                compile_only(STOCHASTIC_ROUNDING(StochasticRounding.No)),
                 BROADCAST_TYPE(BroadcastType.None_),
                 ACC_TO_DEST(False),
                 REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),

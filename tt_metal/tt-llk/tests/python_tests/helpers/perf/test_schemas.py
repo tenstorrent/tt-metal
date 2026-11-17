@@ -1669,7 +1669,6 @@ PERF_TEST_SCHEMAS = {
             "partial_face_math",
             "partial_face_pack",
             "reuse_dest_type",
-            "stochastic_rounding",
             "tile_cnt",
             "unpack_to_dest",
             "unpack_transpose_faces",
