@@ -326,6 +326,14 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
  * Requires a prior call to the matching `sfpu_*_bcast_row_init` (or the
  * shared `sfpu_bcast_row_init`).
  *
+ * This operation clobbers LREG4..7, which invalidates the persistent
+ * column-broadcast mask. On Wormhole it also records its body into the SFPU
+ * half of the replay buffer (slots 0..15) on every call. A later
+ * column-broadcast operation, or any SFPU operation that records a replay
+ * program in its init and only replays it per tile (e.g. `sfpu_reduce`,
+ * fast-approximation `exp`, `where`, `binary_max_min`, `cumsum`), must run
+ * its init again after this call.
+ *
  * Return value: None
  *
  * | Argument         | Description                                                         | Type     | Valid Range                                           | Required |

@@ -130,7 +130,9 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects col
 //   Uses LREG0..LREG7 transiently during SFPTRANSP phases. LREG6 is NOT
 //   preserved as a persistent mask (SFPTRANSP clobbers LREG4..LREG7 window);
 //   BCAST_ROW does not need the col-0 lane mask. The band body is recorded
-//   into SFPU replay slots 0..15 per full-tile call, and the
+//   into SFPU replay slots 0..15 per full-tile call; that overwrites any
+//   program another SFPU op recorded at init (COL bcast, reduce, fast exp,
+//   ...), which must re-run its init after a ROW call. The
 //   call leaves the dest base register pointed at the data tile (as the
 //   unary SFPU path leaves it at its tile) and RWC.Dst non-zero; both are
 //   reset by the next `_llk_math_eltwise_sfpu_start_` / `_done_` bracket.
@@ -962,8 +964,10 @@ inline void _sfpu_binary_bcast_init_() {
         // Record the broadcast helper (mask + ROR1 + ROR2) into replay slot 0.
         _record_broadcast_replay_();
     }
-    // BCAST_ROW: no persistent state needed - the kernel operates purely
-    // on per-tile LREG contents via SFPTRANSP + SFPLOAD/SFPSTORE.
+    // BCAST_ROW: nothing persists from the init. Each full-tile call records
+    // its band body into SFPU replay slots 0..15 and clobbers LREG4..7, so
+    // any SFPU op that records at init (COL bcast, reduce, fast exp, ...)
+    // must re-run its init after a ROW call.
 }
 
 }  // namespace sfpu
