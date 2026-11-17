@@ -210,6 +210,50 @@ void kernel_main() { static_assert(cb_compatibility::token_tile_size() == 2048);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
+struct CbIdOverloadCase {
+    const char* name;
+    const char* cb_id_overload;
+    const char* query;
+};
+
+class BindingTokenQualifiedDfbGetter : public test_helpers::ProgramSpecTestBlackhole,
+                                       public ::testing::WithParamInterface<CbIdOverloadCase> {
+protected:
+    distributed::MeshDevice& fixture_device() { return *mesh_device_; }
+};
+
+// A qualified global metadata query on a DFB token reads the token, not a global getter that takes a CB ID.
+TEST_P(BindingTokenQualifiedDfbGetter, CPU_IgnoresCbIdOverload) {
+    const CbIdOverloadCase overload = GetParam();
+    const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
+    const std::string source =
+        fmt::format("{}\nvoid kernel_main() {{ static_assert({}); }}\n", overload.cb_id_overload, overload.query);
+    ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, source);
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    CbIdOverloads,
+    BindingTokenQualifiedDfbGetter,
+    ::testing::Values(
+        CbIdOverloadCase{
+            "TileSize",
+            "constexpr uint32_t get_tile_size(uint32_t) { return 0; }",
+            "::get_tile_size(dfb::input_dfb) == 2048"},
+        CbIdOverloadCase{
+            "TileHw",
+            "constexpr uint32_t get_tile_hw(uint32_t) { return 0; }",
+            "::get_tile_hw(dfb::input_dfb) == 1024"},
+        CbIdOverloadCase{
+            "TileNumFaces",
+            "constexpr uint32_t get_tile_num_faces(uint32_t) { return 0; }",
+            "::get_tile_num_faces(dfb::input_dfb) == 4"},
+        CbIdOverloadCase{
+            "DataFormat",
+            "constexpr DataFormat get_dataformat(uint32_t) { return DataFormat::Invalid; }",
+            "::get_dataformat(dfb::input_dfb) == DataFormat::Float16_b"}),
+    [](const ::testing::TestParamInfo<CbIdOverloadCase>& info) { return info.param.name; });
+
 // A kernel's cache key includes the resolved byte count emitted into its resource token.
 TEST_F(BindingTokenTileSizeMetadata, CPU_StorageBytesAffectKernelHash) {
     const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
