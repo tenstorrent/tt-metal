@@ -196,6 +196,9 @@ PREP_GATES_LEFT = True
 # R-PREP prep core with STATE_FOLD: the chunk vectors exp(c), exp(c_last - c) and -exp(c) only in column 0 of their
 # tiles; the products that read them broadcast it (FPU by column / by row, the M~ product by row).
 PREP_VEC_COL0 = True
+# R-PREP prep core's RMS norm: o^2 and (o (*)col rinv) (*) (norm_weight silu(z)) as FPU products, four tiles per window
+# and no loads, instead of fp32 SFPU products one tile per window. The output is bf16; o passes the FPU's operands.
+PREP_NORM_FPU = True
 # PREP_NORM_SPLIT: a prep core whose stride position is past the inbox depth sends a row only when the state cores
 # have freed its slot, and its next row's head blocks wait for that send. It normalizes this many of its norm units
 # between the conv and the heads of each later row (the time it would wait), where their o precedes its own rows.
@@ -2094,6 +2097,8 @@ def create_program_descriptor(
     for idx in U2D_CBS:
         if idx == CB_IN_V and fold:
             continue  # v is a matmul operand of the folded step
+        if idx in (CB_O_IN, CB_ZW, CB_RINV_O) and prep is not None and PREP_NORM_FPU:
+            continue  # FPU operands of the prep cores' norm
         fp32_cb = idx not in TOKEN_CBS or token_dtype == ttnn.float32
         modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32 if fp32_cb else ttnn.UnpackToDestMode.Default
     compute_kernel_config.unpack_to_dest_mode = modes
@@ -2132,6 +2137,7 @@ def create_program_descriptor(
             ("GDN_RSQRT_COL0", str(int(NORM_RSQRT_COL0))),
             ("GDN_GATES_LEFT", str(int(PREP_GATES_LEFT and value_heads <= 16))),
             ("GDN_VEC_COL0", str(int(PREP_VEC_COL0))),
+            ("GDN_NORM_FPU", str(int(prep is not None and PREP_NORM_FPU))),
             ("GDN_SILU_BF16", str(int(PREP_SILU_BF16) if prep is not None and conv_on_fpu else 0)),
             ("GDN_SILU_MID", str(int(PREP_SILU_MID) if prep is not None and conv_on_fpu else 0)),
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),

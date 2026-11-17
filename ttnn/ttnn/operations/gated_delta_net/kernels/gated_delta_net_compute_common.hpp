@@ -395,6 +395,9 @@ ALWI void silu_tile_bf16(uint32_t dst) {
 }
 
 // GDN_SILU_MID: x / (1 + exp(-x)) with the bf16 arm's exp, two reciprocal iterations, no rounding to bf16.
+#ifndef GDN_NORM_FPU
+#define GDN_NORM_FPU 0
+#endif
 #ifndef GDN_VEC_COL0
 #define GDN_VEC_COL0 0
 #endif
@@ -1273,6 +1276,62 @@ template <uint32_t o_cb, uint32_t HEADS, bool PARTIAL_DONE = false, uint32_t N =
 ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope, bool squared = false) {
     constexpr uint32_t W = N / HEADS;  // columns of one head in o_cb (N: its tiles, the R-PREP norm unit's)
     const RsqrtPost rsqrt_post{v_eps_bits, SQRT_V_BITS, scope};
+    if constexpr (PREP && GDN_NORM_FPU != 0) {
+        // Host PREP_NORM_FPU: o^2 and (o (*)col rinv) (*) zw as FPU products, DEST_AUTO_LIMIT tiles per window and
+        // no loads (the output is bf16; o passes the FPU's operands).
+        constexpr uint32_t B = ckl::DEST_AUTO_LIMIT;
+        cb_wait_front(o_cb, N);
+        cb_reserve_back(cb_sq_o, N);
+        for (uint32_t first = 0; first < N; first += B) {
+            const uint32_t n = (N - first) < B ? (N - first) : B;
+            tile_regs_acquire();
+            reconfig_data_format(o_cb, o_cb);
+            mul_init(o_cb, o_cb);
+            for (uint32_t i = 0; i < n; ++i) {
+                mul_tiles(o_cb, o_cb, first + i, first + i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_first(0, cb_sq_o, first);
+            for (uint32_t i = 1; i < n; ++i) {
+                pack_at(i, cb_sq_o, first + i);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_sq_o, N);
+#pragma GCC unroll 1
+        for (uint32_t head = 0; head < HEADS; ++head) {
+            row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, W, rsqrt_post);
+        }
+        cb_wait_front(cb_rinv_o, HEADS);
+        cb_wait_front(cb_zw, N);
+        cb_reserve_back(cb_out_rows, N);
+        for (uint32_t first = 0; first < N; first += B) {
+            const uint32_t n = (N - first) < B ? (N - first) : B;
+            tile_regs_acquire();
+            reconfig_data_format(o_cb, cb_rinv_o);
+            mul_bcast_cols_init(o_cb, cb_rinv_o);
+            for (uint32_t i = 0; i < n; ++i) {
+                mul_tiles_bcast_cols(o_cb, cb_rinv_o, first + i, (first + i) / W, i);
+            }
+            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_zw);
+            for (uint32_t i = 0; i < n; ++i) {
+                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_zw, first + i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_first(0, cb_out_rows, first);
+            for (uint32_t i = 1; i < n; ++i) {
+                pack_at(i, cb_out_rows, first + i);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_out_rows, N);
+        cb_pop_front(o_cb, N);
+        cb_pop_front(cb_zw, N);
+        cb_pop_front(cb_rinv_o, HEADS);
+        return;
+    }
     if constexpr (PIECES == 1 || PREP) {
         if (!squared) {
             square_block<o_cb, cb_sq_o>(0, N, scope);
