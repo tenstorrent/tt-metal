@@ -19,6 +19,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -44,48 +45,72 @@ INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRTE_TIMEOUT_EXIT_CODE = 241
 
 
-def remove_stale_mpi_shm_segments() -> int:
-    """Remove this user's Open MPI shared-memory segments that no live process maps (teardown plan P11): what a
-    killed job leaves in /dev/shm, 16 MB each, until reboot. Segments of running jobs are mapped and kept. A
-    ``LaunchedJob`` runs this before it launches (clear a prior job's leak) and again in its teardown (its own)."""
-    host = socket.gethostname()
-    mine = glob.glob(f"/dev/shm/sm_segment.{host}.{os.getuid()}.*")
-    if not mine:
-        return 0
-    mapped = set()
-    for d in os.listdir("/proc"):
-        if not d.isdigit():
+def remove_stale_launcher_leftovers() -> int:
+    """Remove this user's leftovers from a killed job that no live owner claims (teardown plan P11, P25). The
+    launcher's normal exit clears both of these; a launcher killed by a signal (``kill -9``, an OOM kill, a runner
+    reaping the tree) never runs that exit path and leaves them behind until reboot:
+
+    - Open MPI shared-memory segments in /dev/shm (``sm_segment.*``, 16 MB each) that no live process maps.
+    - PRRTE launcher session directories (``<tmpdir>/prterun.<host>.<pid>.<uid>``) whose launcher pid is dead.
+
+    A segment a running job still maps, or a directory whose launcher pid is alive, is kept, so a concurrent job
+    is never touched. A ``LaunchedJob`` runs this before it launches (clear a prior killed job's leak) and again
+    in its teardown (its own, once the launcher it owned is gone). It is a fail-safe on the launch host only, so
+    remote hosts are cleaned by each rank's own context.
+    """
+    host, uid, removed = socket.gethostname(), os.getuid(), 0
+    # Open MPI /dev/shm segments that no live process maps.
+    mine = glob.glob(f"/dev/shm/sm_segment.{host}.{uid}.*")
+    if mine:
+        mapped = set()
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                with open(f"/proc/{d}/maps") as fh:
+                    for line in fh:
+                        if "sm_segment." in line:
+                            mapped.add(line.rsplit(" ", 1)[1].strip())
+            except OSError:
+                continue
+        for seg in mine:
+            if seg in mapped:
+                continue
+            try:
+                os.unlink(seg)
+                removed += 1
+            except OSError:
+                pass
+    # PRRTE session directories whose launcher pid is dead (prterun.<host>.<pid>.<uid>).
+    for d in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{uid}"):
+        if not os.path.isdir(d):
             continue
         try:
-            with open(f"/proc/{d}/maps") as fh:
-                for line in fh:
-                    if "sm_segment." in line:
-                        mapped.add(line.rsplit(" ", 1)[1].strip())
-        except OSError:
+            pid = int(d.rsplit(".", 2)[-2])
+        except (ValueError, IndexError):
             continue
-    removed = 0
-    for seg in mine:
-        if seg in mapped:
-            continue
-        try:
-            os.unlink(seg)
+        if os.path.exists(f"/proc/{pid}"):
+            continue  # the launcher is still alive: a live job owns this directory
+        shutil.rmtree(d, ignore_errors=True)
+        if not os.path.exists(d):
             removed += 1
-        except OSError:
-            pass
     if removed:
-        logger.info(f"{TT_RUN_PREFIX} removed {removed} stale shared-memory segment(s) of this user from /dev/shm")
+        logger.info(
+            f"{TT_RUN_PREFIX} removed {removed} stale launcher leftover(s) of this user (shm segments / PRRTE session dirs)"
+        )
     return removed
 
 
 class LaunchedJob:
-    """Owns one MPI launcher for the life of a job and cleans up after it (teardown plan P6, P7, P19, P11).
+    """Owns one MPI launcher for the life of a job and cleans up after it (teardown plan P6, P7, P19, P11, P25).
 
-    A context manager. ``__enter__`` clears a prior killed job's /dev/shm leak, starts the launcher in its own
-    session, forwards SIGINT/SIGTERM to it (PRRTE then ends every rank on every host), and REGISTERS the teardown
-    as it goes. ``__exit__`` runs that teardown, always — on the normal path and when the body raises — in reverse
-    of registration: restore the signal handlers, end any rank the launcher left on this host (SIGTERM then
-    SIGKILL), then clear this job's /dev/shm leak. The launcher itself is never SIGKILLed; PRRTE tears the ranks
-    down, and the process-end step is only the last resort for ranks it failed to reap.
+    A context manager. ``__enter__`` clears a prior killed job's leftovers (/dev/shm segments and the launcher's
+    /tmp session dir), starts the launcher in its own session, forwards SIGINT/SIGTERM to it (PRRTE then ends every
+    rank on every host), and REGISTERS the teardown as it goes. ``__exit__`` runs that teardown, always — on the
+    normal path and when the body raises — in reverse of registration: restore the signal handlers, end any rank
+    the launcher left on this host (SIGTERM then SIGKILL), then clear this job's leftovers. The launcher itself is
+    never SIGKILLed; PRRTE tears the ranks down, and the process-end step is only the last resort for ranks it
+    failed to reap.
     """
 
     def __init__(self, cmd: List[str], cwd: Path):
@@ -100,14 +125,15 @@ class LaunchedJob:
         self._teardown = contextlib.ExitStack()
 
     def __enter__(self) -> "LaunchedJob":
-        remove_stale_mpi_shm_segments()  # before launch: clear a prior killed job's /dev/shm leak
+        remove_stale_launcher_leftovers()  # before launch: clear a prior killed job's /dev/shm + session-dir leak
         self.proc = subprocess.Popen(self.cmd, cwd=self.cwd, start_new_session=True)
         # Register the teardown NOW, right after Popen, so even if the setup below raises (os.getsid,
         # signal.signal) the launcher is still torn down: on failure we close the stack before re-raising, and
         # __exit__ closes it on the normal path. ExitStack runs callbacks LIFO, so registering in this order makes
-        # the teardown read: restore handlers, stop the launcher if it is still alive, end survivors, sweep shm.
+        # the teardown read: restore handlers, stop the launcher if it is still alive, end survivors, then sweep
+        # this job's leftovers (its launcher is gone by now, so its session dir is swept too).
         try:
-            self._teardown.callback(remove_stale_mpi_shm_segments)
+            self._teardown.callback(remove_stale_launcher_leftovers)
             self._teardown.callback(self._end_survivors)
             self._teardown.callback(self._shutdown_launcher)
             # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks

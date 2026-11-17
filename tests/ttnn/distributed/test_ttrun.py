@@ -1449,7 +1449,7 @@ class TestJobOwnership:
         import mmap
         import socket
 
-        from ttnn.distributed.ttrun import remove_stale_mpi_shm_segments
+        from ttnn.distributed.ttrun import remove_stale_launcher_leftovers
 
         # The third piece of P11: before launching, tt-run removes this user's Open MPI shared-memory segments
         # that no live process maps (what a killed job leaves behind), and keeps the ones a running job still maps.
@@ -1463,7 +1463,7 @@ class TestJobOwnership:
             os.ftruncate(fd, 4096)
             mm = mmap.mmap(fd, 4096)
 
-            remove_stale_mpi_shm_segments()
+            remove_stale_launcher_leftovers()
 
             assert not stale.exists(), "the stale segment was not removed"
             assert live.exists(), "a segment a live process maps must be kept"
@@ -1477,3 +1477,28 @@ class TestJobOwnership:
                     p.unlink()
                 except OSError:
                     pass
+
+    def test_sweep_removes_a_stale_prterun_session_dir_but_keeps_a_live_one(self):
+        import tempfile
+
+        from ttnn.distributed.ttrun import remove_stale_launcher_leftovers
+
+        # P25: a killed launcher never runs prterun's exit path, so its <tmp>/prterun.<host>.<pid>.<uid> directory
+        # stays. The same sweep removes the ones whose launcher pid is dead and keeps a live job's directory.
+        uid = os.getuid()
+        tmp = Path(tempfile.gettempdir())
+        dead = tmp / f"prterun.ttrun-pytest.2147483646.{uid}"  # a pid past pid_max: never alive
+        live = tmp / f"prterun.ttrun-pytest.{os.getpid()}.{uid}"  # this process: alive
+        try:
+            dead.mkdir()
+            (dead / "hwloc.sm").write_bytes(b"\0")
+            live.mkdir()
+            (live / "hwloc.sm").write_bytes(b"\0")
+
+            remove_stale_launcher_leftovers()
+
+            assert not dead.exists(), "a session dir whose launcher pid is dead was not removed"
+            assert live.exists(), "a session dir whose launcher pid is alive must be kept"
+        finally:
+            for p in (dead, live):
+                shutil.rmtree(p, ignore_errors=True)
