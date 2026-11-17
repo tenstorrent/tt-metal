@@ -31,3 +31,4 @@
 {"event":"test_run","result":"pass","details":"final: unit net 152/152, golden sharded slice 323 pass/60 xfail + 173/30 after gate; PDL HS 0.38-0.81x before, BS res5 0.39-0.77x; guard flat","ts":"2026-11-17T14:59:10+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-17T15:19:53+00:00"}
 {"event":"test_run","refinement":11,"result":"pass","detail":"split cost model + MIN_K_BLOCKS=8 (R1a helper walks): proj_out 160->67, te_qkv 233->128, s_out 1978->1493, s_ff1 2588->2152; unit 588 pass; guard no regression","ts":"2026-11-17T15:54:18+00:00"}
+{"event":"test_run","refinement":11,"result":"pass","detail":"final: 13/15 model cases at/under stock (q4096 +0.2% noise), te_o/te_down DM floor 82.3/509.5 us; guard 140 cells geomean 0.93 worst +2.9%; golden interleaved 429/75xf; unit 650+52","ts":"2026-11-17T16:42:54+00:00"}

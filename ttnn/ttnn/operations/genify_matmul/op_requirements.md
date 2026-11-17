@@ -364,7 +364,7 @@ Make them the path for every height- and block-sharded call where they are corre
   - res4 reduce: 16.0 µs remains with the matmul and the A bytes both stubbed. The cause is thin 2-tile K-blocks that each pay a full partials pack.
 - **Next.** Move the B channel onto the writer RISC so B rounds overlap the A rounds (this also lifts the R3 gate), then pipeline the A exchange two rounds deep. Not done here: each is a separate structural change to the writer / A exchange, outside this heading's B-multicast scope.
 
-### [ ] Refinement 11 — Interleaved split for narrow N and mid M (FLUX.2 proj_out, text-encoder projections, single-block projections, mid-M prefill)
+### [x] Refinement 11 — Interleaved split for narrow N and mid M (FLUX.2 proj_out, text-encoder projections, single-block projections, mid-M prefill)
 
 *Filed by the run operator after Perf 1, from the shape-set review of every model case against stock.*
 
@@ -396,3 +396,10 @@ Likely levers:
 - Each listed case is at or under its clock-scaled `achievable_ns`, or its remaining gap is explained by a measured floor.
 - Golden stays fully green.
 - The guard set shows no regression beyond ±3%, PERF FOCUS 1–4 included.
+
+**Outcome**: device ns (one fresh run each, 1350 MHz, stock `achievable_ns` in brackets):
+- **At or under stock**: proj_out 160.5 → **57.2** µs (61.0); text-encoder qkv 232.7 → **111.4** (139.2); FLUX single QKV 1382 → **1117** (1245), out 1978 → **1426** (1689), FF1 + SwiGLU 2588 → **2155** (2398); Qwen in_proj M = 1024 147.1 → **137.2** (139.0); Qwen M = 512 rows in 100.2 (108.8), out 52.1 (52.1), gate_up 194.3 (214.4), down 101.2 (111.7), qkvg 94.8 (101.3); qkvg M = 4096 409.4 → **372.5** (371.9, +0.2%: noise).
+- **Above stock, gap = a measured floor**: text-encoder o_proj 96.1 → 85.2 (79.4) and down 541.6 → 524.7 (508.6). Ablation: DM-only (compute skipped) 82.3 / 509.5 µs, compute-only 60.3 / 405.2 µs, sync floor 14.7 / 37.9 µs. Both are bound by the R1a line injectors' serial read → multicast chain (B lines of 1.1 MB / 8.4 MB per injector on an 8-row grid; M = 16 tiles caps the split at 80–88 cores).
+- **Levers** (all host knobs, one source of truth each): (1) `SPLIT_COST_MODEL` — `choose_split` blocks every candidate and ranks by `split_cost` = max(padded K-walk × fidelity tile-K cost, DRAM stream, busiest core's reads, busiest core's writes), with `q_n_min` candidates and a padding-aware S3 block search; (2) `MIN_K_BLOCKS = 8` — R1a helper walks re-split into ≥ 8 K-blocks (shorter pipeline fill; Qwen M = 512 −4..−12%); (3) `R1A_INJECTOR_AHEAD = 2` — R1a injector reads K-block kb+1 under its own trid while multicasting kb, depth-3 rings, gated to injector-bound walks (proj_out 66.6 → 58.5; it loses 4–8% where the K-walk is as long as the injector stream, so it is path-gated there); (4) `NONE_RAW_WALK` — the Perf 1 raw K-walk + an identity copy for epilogue-none multi-K-block walks, gated to compute-bound splits (−4..−5% on FLUX single QKV / out and Qwen M = 4096; +2–4% on DM-bound ones, so gated).
+- **Guard set** (140 cells, every perf file incl. PERF FOCUS 1–4, sharded): geomean 0.93×, no cell slower beyond +2.9% (R1b / M = 1 cells with identical plans, noise band); PERF FOCUS 1 391.1 → 391.4, 2 29.8 → 29.9, 3 66.6 → 66.0, 4 617.5 → 616.8. Golden interleaved slice 429 passed / 75 xfailed; translated + regression unchanged (212 passed, the 14 pre-existing cache-count failures).
+- **Next** (not done): move the R1a B-line injection onto the writer RISC (BRISC / NoC1, as R1b does for A) so B reads overlap the A-line rounds — the only lever that moves the te_o / te_down DM floor; the in-RISC prefetch cannot, because its read issue blocks the same RISC that multicasts. Not done here: it is a reader / writer topology restructure of its own, and both remaining gaps are within 9% of stock with a measured floor.

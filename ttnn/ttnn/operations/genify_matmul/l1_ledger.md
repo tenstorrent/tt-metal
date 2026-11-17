@@ -113,6 +113,13 @@ Worked values, 11×10 grid, budget ≈ 1.4 MB (illustrative; the host computes t
 | 1×6144 @ 6144×6144 (bf16, 1-D grid) | `grid_n' = 96`, block 1×2 | partials 8 KB; out 8 KB; per `bk` 2·(2 KB + 4 KB) | `num_k_blocks = 2`, `block_k = 96` |
 | (1,1,2048,256) @ 256×512 (bf16) | grid 11×8, block 6×2 | S1 fits: A 2·6·8·2 KB + B 2·8·2·2 KB + out 2·2·2 KB ≈ 264 KB | `num_k_blocks = 1`, no `cb_partials` |
 
+**Refinement 11 (split cost model, R1a re-split / injector prefetch, epilogue-none raw walk) as built.** R1 / R1a; no new CB.
+- **`cb_act_tiles` / `cb_weight_tiles` depth 3** (`R1A_PREFETCH_DEPTH`, carried in `Blocking.depth_act` / `depth_weight`) on a plain R1a helper walk whose line injector binds (`R1A_INJECTOR_AHEAD = 2`, gated by `split_cost_terms`: busiest-core reads ≥ `R1A_PREFETCH_MIN_RATIO = 2` × the K-walk). The injector keeps K-block kb+1's reads in flight (trid `(seq % 2) + 1`, slot `ring base + (seq % 3) · slot bytes`, the CB is exactly 3 slots) while kb is multicast; compute holds kb−1. The solve shrinks `block_k` (`_block_k_max` at depth 3) when the third slot does not fit, and drops the prefetch if the walk would leave R1a. Shares with / why not: unchanged — both rings are in0 / in1 of the same matmul, concurrently live. Every other walk keeps depth 2.
+- **`MIN_K_BLOCKS = 8`**: a plain R1a helper walk (no head ramp) of fewer K-blocks is re-split into ≥ 8 K-blocks of ≥ `BLOCK_K_FLOOR` (only while the K-block stays above `MCAST_MIN_KBLOCK_BYTES`). Every CB term only shrinks (smaller `block_k`).
+- **Epilogue-none raw walk** (`NONE_RAW_WALK`, compute-bound splits only): `cb_partials` (already allocated for every multi-K-block walk, one block) is now the raw walk's Interm target and an identity copy drains it to `cb_output_tiles` row by row — the same lifecycle as under an epilogue. No size change.
+- **Split ranking** (`SPLIT_COST_MODEL`): the chosen grid / blocking per shape changes (every candidate ranked by `split_cost`), not the CB formulas; the S3 block search prices padded blocks and may step `block_n` by `q_n_min`, so subblocks 1×2 / 1×3 / 3×1 occur where the 4-tile quantum would pad (FLUX single out: 7×10 blocks, 1×2 subblock).
+- **Data-movement budget**: unchanged per regime (the tables below). What changed is which regime / split a shape lands in: FLUX proj_out moves from R1 64×1 (B ×64 = 50 MB) to R1a 11×4 (A ×1, B ×1 = 13.4 MB); text-encoder qkv from R1b (A through one injector) to R1a 8×11 (A ×1, B ×1).
+
 ## Data-movement budget (chosen split R1, interleaved)
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
