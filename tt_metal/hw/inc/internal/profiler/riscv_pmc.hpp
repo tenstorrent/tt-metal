@@ -85,7 +85,18 @@ static thread_local uint32_t cycle_begin, instret_begin;
 static uint32_t cycle_begin, instret_begin;
 #endif
 
+#if defined(RISCV_PMC_UPPER)
+constexpr uint32_t marker_count = 5;
+#else
+constexpr uint32_t marker_count = 3;
+#endif
+constexpr uint32_t marker_words = PROFILER_L1_MARKER_UINT32_SIZE + 2;
+constexpr uint32_t reserved_words = marker_count * marker_words + DISPATCH_HEADROOM_SIZE;
+
+// The markers are written after the kernel, so their room (and the room check's headroom) is held back from the
+// kernel's own zones; a kernel that fills the buffer would otherwise drop them.
 inline __attribute__((always_inline)) void begin() {
+    stackSize += reserved_words;
     llk::perf::riscv::select(RISCV_PMC_SEL3, RISCV_PMC_SEL4);
     llk::perf::riscv::zero_counters();
 #if defined(RISCV_PMC_UPPER)
@@ -110,12 +121,7 @@ inline __attribute__((always_inline)) void end() {
     const uint32_t mcycle = llk::perf::riscv::read_mcycle();
     const uint32_t minstret = llk::perf::riscv::read_minstret();
 
-    constexpr uint32_t marker_words = PROFILER_L1_MARKER_UINT32_SIZE + 2;
-#if defined(RISCV_PMC_UPPER)
-    constexpr uint32_t marker_count = 5;
-#else
-    constexpr uint32_t marker_count = 3;
-#endif
+    stackSize -= reserved_words;
     if (!bufferHasRoom<DoingDispatch::DISPATCH>(marker_count * marker_words - 1)) {
         return;
     }
