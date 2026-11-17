@@ -7,8 +7,8 @@
 //   forward_stats    own_partials == nb (every own core exported its rows): slot p -> both link-0 ports'
 //                    stats scratch, stats_tx++ on each; as the relayed slots arrive (stats_fwd >= i / stats_bwd >= i)
 //                    hand them to the forward / backward port the same way
-//   broadcast_stats  all G slots in: multicast the whole stats scratch (G * Mt * 128 B) to the compute-core
-//                    rectangles, then a multicast set of their stats_ready
+//   broadcast_stats  per slot, as soon as the hub has it: multicast the slot (Mt * 128 B) to the compute-core
+//                    rectangles, then a multicast set of their stats_ready to the cumulative slot mask
 //   drain_stats      stats_fwd -= kf, stats_bwd -= kb (re-arm by what was consumed)
 // Raw multicast: the compute cores form one or two rectangles (full rows + a partial row) of unequal size, which the
 // McastArgs helper's equal-group pipe does not describe.
@@ -89,7 +89,28 @@ void kernel_main() {
         }
     }
 
-    // ---- forward_stats ----
+    // ---- forward_stats + broadcast_stats, per slot ----
+    // Each slot goes out the moment the hub has it: relays first to the port (the next chip waits on them), then a
+    // linked multicast of the slot to the compute rectangles followed by a multicast set of stats_ready = the
+    // cumulative slot mask. No barrier between the two: same NoC, same static multicast VC, so the flag cannot pass
+    // its data. Every mask value is published from its own L1 word (the set reads its source asynchronously), so a
+    // later update can never ride an earlier flag. The readers copy each slot as its bit appears; only the last slot
+    // is left on the stats chain.
+    const uint32_t ready_addr = get_semaphore(sem_stats_ready);
+    // G mask words, one 16 B L1 slot each: a NoC write's source must share its destination's 16 B alignment
+    constexpr uint32_t MASK_WORD_STRIDE = 16;
+    const uint32_t mask_base = ((stats_addr + G * slot_bytes + 63) & ~63u) + Wt * gamma_page;
+    uint32_t mask = 0, n_pub = 0;
+    auto publish = [&](uint32_t q) {
+        const uint32_t off = stats_addr + q * slot_bytes;
+        mask |= 1u << q;
+        const uint32_t word = mask_base + MASK_WORD_STRIDE * n_pub++;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word) = mask;
+        for (uint32_t r = 0; r < n_rects; ++r) {
+            noc_async_write_multicast(off, rect(r, off), slot_bytes, rect_cores(r), /*linked=*/true);
+            noc_semaphore_set_multicast(word, rect(r, ready_addr), rect_cores(r));
+        }
+    };
     noc_semaphore_wait_min(own_partials, own_count);
     if (kf > 0) {
         hand_over(p, fwd_xy);
@@ -97,36 +118,28 @@ void kernel_main() {
     if (kb > 0) {
         hand_over(p, bwd_xy);
     }
-    for (uint32_t i = 1; i < kf; ++i) {  // the forward port relays P_{p-1}, ..., P_{p-kf+1}
-        noc_semaphore_wait_min(sfwd, i);
-        hand_over((p + G - i) % G, fwd_xy);
-    }
-    for (uint32_t i = 1; i < kb; ++i) {
-        noc_semaphore_wait_min(sbwd, i);
-        hand_over((p + i) % G, bwd_xy);
-    }
-    noc_semaphore_wait_min(sfwd, kf);
-    noc_semaphore_wait_min(sbwd, kb);
-
-    // ---- broadcast_stats ----
-    const uint32_t ready_addr = get_semaphore(sem_stats_ready);
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr) = 1;
-    for (uint32_t r = 0; r < n_rects; ++r) {
-        const uint32_t x0 = get_arg_val<uint32_t>(rects_idx + 5 * r + 0);
-        const uint32_t y0 = get_arg_val<uint32_t>(rects_idx + 5 * r + 1);
-        const uint32_t x1 = get_arg_val<uint32_t>(rects_idx + 5 * r + 2);
-        const uint32_t y1 = get_arg_val<uint32_t>(rects_idx + 5 * r + 3);
-        const uint32_t n = get_arg_val<uint32_t>(rects_idx + 5 * r + 4);
-        noc_async_write_multicast(stats_addr, get_noc_multicast_addr(x0, y0, x1, y1, stats_addr), G * slot_bytes, n);
-    }
-    noc_async_write_barrier();
-    for (uint32_t r = 0; r < n_rects; ++r) {
-        const uint32_t x0 = get_arg_val<uint32_t>(rects_idx + 5 * r + 0);
-        const uint32_t y0 = get_arg_val<uint32_t>(rects_idx + 5 * r + 1);
-        const uint32_t x1 = get_arg_val<uint32_t>(rects_idx + 5 * r + 2);
-        const uint32_t y1 = get_arg_val<uint32_t>(rects_idx + 5 * r + 3);
-        const uint32_t n = get_arg_val<uint32_t>(rects_idx + 5 * r + 4);
-        noc_semaphore_set_multicast(ready_addr, get_noc_multicast_addr(x0, y0, x1, y1, ready_addr), n);
+    publish(p);
+    // the i-th slot from the forward side is P_{p-i}, from the backward side P_{p+i}; the port of that side relays
+    // every one but its last (kf - 1 / kb - 1 relays)
+    uint32_t nf = 0, nbk = 0;
+    while (nf < kf || nbk < kb) {
+        invalidate_l1_cache();
+        if (nf < kf && *sfwd > nf) {
+            ++nf;
+            const uint32_t q = (p + G - nf) % G;
+            if (nf < kf) {
+                hand_over(q, fwd_xy);
+            }
+            publish(q);
+        }
+        if (nbk < kb && *sbwd > nbk) {
+            ++nbk;
+            const uint32_t q = (p + nbk) % G;
+            if (nbk < kb) {
+                hand_over(q, bwd_xy);
+            }
+            publish(q);
+        }
     }
     noc_async_write_barrier();
 

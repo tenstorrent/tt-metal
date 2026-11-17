@@ -164,8 +164,9 @@ class Geometry:
         return self.row0 + self.compute
 
     @property
-    def scratch_bytes(self):  # G stats slots, then (64 B aligned on device) the Wt gamma sticks
-        return self.G * self.slot_bytes + 64 + self.Wt * GAMMA_STICK_BYTES
+    def scratch_bytes(self):  # G stats slots, then (64 B aligned on device) the Wt gamma sticks, then the hub's G
+        # stats_ready mask words (one 16 B L1-aligned slot per published slot)
+        return self.G * self.slot_bytes + 64 + self.Wt * GAMMA_STICK_BYTES + 16 * self.G
 
     @property
     def slot_bytes(self):  # one slice's fp32 partial vector: Mt rows x 32 values (kernels: STATS_ROW_BYTES)
@@ -250,6 +251,8 @@ def build_geometry(mesh_device, padded_shape, cluster_axis, num_links):
     if Wl_t % block_w != 0 or block_w != Wl_t:
         # Phase 0: block_w is the whole slice width (a narrower block needs same-slice partial combining).
         raise ValueError(f"all_gather_rms_norm_kimi: block_w {block_w} must equal the slice width {Wl_t} tiles")
+    if G > 32:  # the compute cores' stats_ready is a mask of the G slots
+        raise ValueError(f"all_gather_rms_norm_kimi: group of {G} devices exceeds the 32-slot stats mask")
     if G * Mt * STATS_ROW_BYTES > STATS_SCRATCH_CAP_BYTES:
         raise ValueError(f"all_gather_rms_norm_kimi: M = {M} too tall for the stats scratch (G*M*4 B > 64 KiB)")
 

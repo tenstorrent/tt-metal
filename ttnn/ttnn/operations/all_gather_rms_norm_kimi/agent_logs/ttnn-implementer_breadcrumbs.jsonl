@@ -3,3 +3,6 @@
 {"event":"perf_measure","case":"640x384 G=4 L=2 traced","fastest_us":29.995,"slowest_us":32.746,"spread_us":2.751,"dispatch_bound":false,"roofline_us":7.6,"target_us":10.1,"ts":"2026-11-17T17:24:04+00:00"}
 {"event":"test_run","status":"pass","what":"R1 port placement eth_nearest; acceptance 8/8; perf fastest 29.834->25.783 slowest 32.315->29.079","ts":"2026-11-17T18:54:46+00:00"}
 {"event":"test_run","refinement":2,"lever":"load_own_before_gamma","status":"pass","fastest_us":21.548,"slowest_us":23.951,"base_fastest":24.717,"base_slowest":27.67,"ts":"2026-11-17T19:33:46+00:00"}
+{"event":"test_run","lever":"per_slot_stats_mcast","status":"fail","classification":"numerical mismatch rel_rms=1.0 (out ~2x: missing partials) + hang in perf run","hypothesis":"flag overtakes data (no barrier) or mask/poll logic","ts":"2026-11-17T20:25:18+00:00"}
+{"event":"hypothesis","lever":"per_slot_stats_mcast","finding":"watcher: semaphore_set_multicast source mask word at 4 B stride not 16 B aligned like the destination semaphore -> NOC alignment error -> hang","fix":"16 B stride mask words","ts":"2026-11-17T20:36:49+00:00"}
+{"event":"test_run","lever":"per_slot_stats_mcast","status":"pass","fastest_us":19.338,"slowest_us":21.058,"dev_mode":"pass 3 tests","ts":"2026-11-17T20:45:15+00:00"}

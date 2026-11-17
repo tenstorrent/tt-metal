@@ -6,7 +6,8 @@
 //                         from the hub's multicast (GAMMA_HUB_MCAST: wait gamma_go) or from a per-core DRAM read
 //   load_own_block        (q == p) DRAM x -> cb_x_block (the landing shard), one barrier, then own_loaded++ on both
 //                         ports of the block's link (they read the own slice from here, L1 -> fabric)
-//   stats -> tiles        wait the hub's multicast (stats_ready), then col 0 of tile q'*h + r of cb_partials =
+//   stats -> tiles        as each slot's bit appears in stats_ready (the hub's per-slot multicast), col 0 of tile q'*h
+//   + r of cb_partials =
 //                         stats[q'][m*block_h + r] (32 fp32), for every slice q'
 //   landed x              (q != p) per chunk k: wait landed >= k + 1, push chunk_tiles. Zero-copy: the fabric already
 //                         wrote the bytes into the landing shard.
@@ -108,14 +109,24 @@ void kernel_main() {
     {
         volatile tt_l1_ptr uint32_t* ready =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready));
-        noc_semaphore_wait_min(ready, 1);
         cb_reserve_back(cb_partials, G * b.h);
         const uint32_t base = get_write_ptr(cb_partials);
-        for (uint32_t q = 0; q < G; ++q) {
-            for (uint32_t r = 0; r < b.h; ++r) {
-                stats_row_to_col0(
-                    stats_addr + (q * Mt + b.m * block_h + r) * STATS_ROW_BYTES,
-                    base + (q * b.h + r) * FP32_TILE_BYTES);
+        // stats_ready = mask of the slots the hub has multicast so far; copy each one as its bit appears
+        constexpr uint32_t all = (1u << G) - 1;
+        uint32_t seen = 0;
+        while (seen != all) {
+            invalidate_l1_cache();
+            const uint32_t fresh = *ready & ~seen;
+            seen |= fresh;
+            for (uint32_t q = 0; q < G; ++q) {
+                if (!(fresh & (1u << q))) {
+                    continue;
+                }
+                for (uint32_t r = 0; r < b.h; ++r) {
+                    stats_row_to_col0(
+                        stats_addr + (q * Mt + b.m * block_h + r) * STATS_ROW_BYTES,
+                        base + (q * b.h + r) * FP32_TILE_BYTES);
+                }
             }
         }
         cb_push_back(cb_partials, G * b.h);
