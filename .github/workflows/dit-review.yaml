@@ -3,23 +3,25 @@ name: DiT review
 # For PRs touching models/tt_dit/:
 #   - assign-reviewers requests 1-2 DiT team members chosen by recent commit history
 #     in the touched directories (always at least one), then withdraws the
-#     metalium-dit team-wide CODEOWNERS request. The cse-developer-ttnn request is
-#     withdrawn only when the PR only changes models/tt_dit/, since that team also
-#     owns other paths.
-#   - check-approval posts a "DiT approval" commit status that is pending until a
-#     member of tenstorrent/metalium-dit approves. Other PRs get success immediately,
-#     so the status can be made required repo-wide.
-#   - The same job reports whether the PR would qualify for auto-merge, as a
-#     "DiT auto-merge (report only)" status and the dit-auto-merge-eligible label.
-#     Nothing is approved or merged; this is a trial to tune the criteria.
-# Logic lives in .github/scripts/dit_review.py.
+#     metalium-dit team-wide CODEOWNERS request so the PR leaves the other members'
+#     review queues. It cannot undo the notification CODEOWNERS already sent; the
+#     team's auto-assignment setting is what prevents that.
+#   - automerge approves and enables auto-merge for small DiT PRs whose author added
+#     the dit-auto-merge label and that have a passing All Model Tests run covering
+#     DiT on the latest commit. It re-evaluates on every push, label change, review
+#     and finished test run, and dismisses its approval / turns auto-merge off when
+#     a PR stops qualifying. A "DiT auto-merge" status (never blocking) says why.
+# Logic and criteria live in .github/scripts/dit_review.py.
 #
-# Reviews do not trigger pull_request_target, and pull_request_review runs without
-# secrets on fork PRs, so dit-review-trigger.yaml records the PR number and this
-# workflow re-checks via workflow_run.
+# Reviews can add unresolved threads, which affect eligibility. Reviews do not
+# trigger pull_request_target, and pull_request_review runs without secrets on fork
+# PRs, so dit-review-trigger.yaml records the PR number and this workflow re-checks
+# via workflow_run. A finished All Model Tests run only knows its commit, so the
+# script looks up the open PRs at that commit.
 #
 # Team membership needs read:org, so this reuses the codeowners-group-analysis PAT
-# (same one auto-approve.yaml uses).
+# (same one auto-approve.yaml uses). That account also approves PRs, so it must be
+# a code owner of models/tt_dit/ for its approval to count.
 #
 # Security note: pull_request_target and workflow_run run with write access and
 # secrets, even for fork PRs. This is safe because:
@@ -31,9 +33,9 @@ name: DiT review
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize, labeled, unlabeled]
   workflow_run:
-    workflows: [DiT review trigger]
+    workflows: [DiT review trigger, All Model Tests]
     types: [completed]
 
 permissions:
@@ -48,7 +50,7 @@ jobs:
     runs-on: ubuntu-slim
     if: |
       github.event_name == 'pull_request_target' &&
-      github.event.action != 'synchronize' &&
+      contains(fromJSON('["opened", "reopened", "ready_for_review"]'), github.event.action) &&
       !github.event.pull_request.draft &&
       github.event.pull_request.user.type != 'Bot'
     steps:
@@ -65,27 +67,32 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python3 .github/scripts/dit_review.py assign
 
-  check-approval:
-    name: Check DiT approval
+  automerge:
+    name: DiT auto-merge
     runs-on: ubuntu-slim
     if: |
       github.event_name == 'pull_request_target' ||
       github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Download PR number from trigger run
-        if: github.event_name == 'workflow_run'
+        if: github.event.workflow_run.name == 'DiT review trigger'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dit-review-pr
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-      - name: Resolve PR number
+      - name: Resolve PR number or commit
         id: pr
         env:
           EVENT_PR: ${{ github.event.pull_request.number }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           if [[ -n "$EVENT_PR" ]]; then
             n="$EVENT_PR"
+          elif [[ "$RUN_NAME" == "All Model Tests" ]]; then
+            echo "head-sha=$RUN_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
           else
             n=$(cat pr_number)
           fi
@@ -94,23 +101,20 @@ jobs:
             exit 1
           fi
           echo "number=$n" >> "$GITHUB_OUTPUT"
-      - name: Checkout script from base branch
+      - name: Checkout script and test lists from base branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          sparse-checkout: .github/scripts/dit_review.py
+          sparse-checkout: |
+            .github/scripts/dit_review.py
+            tests/pipeline_reorg/models_unit_tests.yaml
+            tests/pipeline_reorg/models_e2e_tests.yaml
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - name: Post DiT approval status
+      - name: Approve and enable auto-merge, or undo
         env:
           GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           STATUS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
-        run: python3 .github/scripts/dit_review.py check
-      - name: Report auto-merge eligibility (report only)
-        env:
-          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
-          STATUS_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
-        run: python3 .github/scripts/dit_review.py eligibility
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
+        run: python3 .github/scripts/dit_review.py automerge

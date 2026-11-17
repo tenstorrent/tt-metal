@@ -1,12 +1,8 @@
 from collections import Counter
 
-from dit_review import dir_weights, dit_approvers, ineligibility_reasons, pick_reviewers
+from dit_review import dir_weights, dit_test_models, ineligibility_reasons, pick_reviewers, run_covers_dit
 
 MEMBERS = {"alice", "bob", "carol", "dave"}
-
-
-def review(login, state):
-    return {"user": {"login": login}, "state": state}
 
 
 def changed(filename, status="modified", lines=10):
@@ -15,7 +11,7 @@ def changed(filename, status="modified", lines=10):
 
 def test_small_fix_is_eligible():
     files = [changed("models/tt_dit/pipelines/wan/pipeline_wan.py", lines=12)]
-    assert ineligibility_reasons(files, "alice", MEMBERS, 0) == []
+    assert ineligibility_reasons(files, "alice", MEMBERS, 0, True, True) == []
 
 
 def test_new_tests_allowed_and_not_counted_toward_size():
@@ -23,7 +19,7 @@ def test_new_tests_allowed_and_not_counted_toward_size():
         changed("models/tt_dit/pipelines/wan/pipeline_wan.py", lines=30),
         changed("models/tt_dit/tests/models/wan/test_new.py", status="added", lines=500),
     ]
-    assert ineligibility_reasons(files, "alice", MEMBERS, 0) == []
+    assert ineligibility_reasons(files, "alice", MEMBERS, 0, True, True) == []
 
 
 def test_ineligibility_reasons():
@@ -35,7 +31,8 @@ def test_ineligibility_reasons():
         changed("models/tt_dit/pipelines/c.py"),
         changed("ttnn/foo.py"),
     ]
-    assert ineligibility_reasons(files, "outsider", MEMBERS, 2) == [
+    assert ineligibility_reasons(files, "outsider", MEMBERS, 2, False, False) == [
+        "author has not added the dit-auto-merge label",
         "author not on DiT team",
         "changes files outside models/tt_dit/",
         "changes existing tests",
@@ -43,7 +40,35 @@ def test_ineligibility_reasons():
         "5 non-test files (max 3)",
         "70 non-test lines (max 40)",
         "2 unresolved review threads",
+        "no passing All Model Tests run covering DiT on the latest commit",
     ]
+
+
+def test_unchecked_tests_are_not_a_reason():
+    files = [changed("models/tt_dit/pipelines/wan/pipeline_wan.py")]
+    assert ineligibility_reasons(files, "alice", MEMBERS, 0, False, None) == [
+        "author has not added the dit-auto-merge label"
+    ]
+
+
+def test_dit_test_models(tmp_path):
+    yaml = tmp_path / "tests.yaml"
+    yaml.write_text(
+        "- name: DiT\n  cmd: pytest models/tt_dit/tests/unit/\n  model: dit-common\n"
+        "- name: Llama\n  cmd: pytest models/tt_transformers/\n  model: llama3\n"
+        "- name: Wan\n  cmd: |\n    pytest models/tt_dit/tests/models/wan/\n  model: wan-2.2-t2v\n"
+    )
+    assert dit_test_models([str(yaml)]) == {"dit-common", "wan-2.2-t2v"}
+
+
+def test_run_covers_dit():
+    models = {"dit-common", "wan-2.2-t2v"}
+    title = "All Model Tests — Tiers[1,2] Tests[unit,e2e] Model[{}] SKUs[all]"
+    assert run_covers_dit(title.format("dit-common"), models)
+    assert run_covers_dit(title.format("wan"), models)
+    assert run_covers_dit(title.format("all"), models)
+    assert not run_covers_dit(title.format("llama"), models)
+    assert not run_covers_dit(title.format(""), models)
 
 
 def test_dir_weights_ignores_non_dit_files():
@@ -81,16 +106,3 @@ def test_non_member_requests_do_not_count_toward_guarantee():
     picks = pick_reviewers(Counter(), MEMBERS, "alice", {"outsider"}, 2, seed=7)
     assert len(picks) == 1 and picks[0] in MEMBERS
 
-
-def test_approvers_uses_latest_decisive_review():
-    reviews = [
-        review("alice", "APPROVED"),
-        review("alice", "COMMENTED"),
-        review("bob", "APPROVED"),
-        review("bob", "CHANGES_REQUESTED"),
-        review("carol", "APPROVED"),
-        review("carol", "DISMISSED"),
-        review("outsider", "APPROVED"),
-        {"user": None, "state": "APPROVED"},
-    ]
-    assert dit_approvers(reviews, MEMBERS) == ["alice"]

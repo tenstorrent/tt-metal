@@ -1,7 +1,7 @@
 name: DiT review trigger
 
 # Records the PR number when a review is submitted or dismissed, so dit-review.yaml
-# can re-check the "DiT approval" status via workflow_run. This runs without secrets
+# can re-evaluate auto-merge via workflow_run. This runs without secrets
 # (fork PRs get none on pull_request_review), so it does nothing else.
 
 on:
