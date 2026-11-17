@@ -233,7 +233,6 @@ int main(uint64_t hartid) {
         g_heartbeat->counter = 0;
         x280_fence_ow();
         g_heartbeat->magic = X280_STANDALONE_HEARTBEAT_MAGIC;  // Last, so the host never sees the magic with a stale counter.
-
         g_next_heartbeat = x280_mtime() + g_ticks_per_ms;
 
         auto result = read_arc();
