@@ -1,0 +1,5 @@
+{"event":"test_run","result":"pass","detail":"acceptance 19/19 --dev and non-dev on first implementation","ts":"2026-11-17T02:16:45+00:00"}
+{"event":"hypothesis","detail":"loose cases CB overflow by 14 KB: budget from get_max_worker_l1_unreserved_size includes kernel-config ring buffer below l1_unreserved_base","ts":"2026-11-17T02:16:45+00:00"}
+{"event":"fix_applied","detail":"budget = memory_view(L1).total_bytes_per_bank - max(own L1 tensors, allocated per bank) - reserve","ts":"2026-11-17T02:16:45+00:00"}
+{"event":"fix_applied","detail":"SUPPORTED alignment += m_non_aligned (geometry already ceil-per-image); B leading-dim contract left-pads with 1s (broadcast)","ts":"2026-11-17T02:16:45+00:00"}
+{"event":"test_run","result":"pass","detail":"golden+regression 27 passed/1870 xfailed; translated 78 passed/218 xfailed; no XPASS","ts":"2026-11-17T02:16:45+00:00"}

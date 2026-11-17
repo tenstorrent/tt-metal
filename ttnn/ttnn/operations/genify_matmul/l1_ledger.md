@@ -34,7 +34,7 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
 | `block_n_tiles` | ≤ `core_n_tiles` (multiple of `q_n`) | the L1 solve |
 | `block_k_tiles` | `min(tensor_k_tiles, 8) ≤ block_k_tiles ≤ tensor_k_tiles` | the L1 solve (S2 floor `block_k_floor`) |
 | `tensor_k_tiles`, `tensor_m_tiles`, `tensor_n_tiles` | **not** in any capacity expression | — (the op dimensions enter only through the bounded block extents) |
-| `l1_cb_budget` | `ttnn.get_max_worker_l1_unreserved_size() − l1_tensor_bytes_per_core − l1_reserve_bytes` | host; `l1_reserve_bytes = 0` in Phase 0 |
+| `l1_cb_budget` | `ttnn.get_memory_view(device, L1).total_bytes_per_bank − max(l1_tensor_bytes_per_core, total_bytes_allocated_per_bank) − l1_reserve_bytes` (implementer: `get_max_worker_l1_unreserved_size()` counts from the kernel-config ring buffer, below the CB base `l1_unreserved_base`, and over-stated the budget by ~70 KB on BH → CB overflow on the large loose cases; 1460288 B on p300c) | host `l1_cb_budget()`; `l1_reserve_bytes = 0` in Phase 0 |
 
 ## Total per-core footprint (closed form)
 
