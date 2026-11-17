@@ -30,26 +30,18 @@ namespace tt::tt_metal::experimental {
 // Kernel config layout and capacity are validated when the Program is
 // finalized as part of a MeshWorkload.
 //
-// PRE-CONDITION: If skip_validation is true, the caller guarantees that
-// the ProgramSpec satisfies all semantic validation requirements.
-//
 // Runtime arguments for Programs created from a ProgramSpec must be configured
 // through SetProgramRunArgs or UpdateProgramRunArgs, not the legacy host APIs.
-Program MakeProgramFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
+Program MakeProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec);
 
 // Create a MeshWorkload object from a set of region-mapped ProgramSpecs
 // (This will become a constructor for the MeshWorkload class)
 //
 // INVARIANT: A successfully constructed MeshWorkload is always valid.
 //
-// PRE-CONDITION: If skip_validation is true, the caller guarantees that
-// the ProgramSpecs satisfy all semantic validation requirements.
-//
 distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
     distributed::MeshDevice& mesh_device,
-    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
-    bool skip_validation = false);
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs);
 
 // Create a MeshWorkload object from single ProgramSpec,
 // to be applied mesh-wide (SPMD)
@@ -57,11 +49,8 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
 //
 // INVARIANT: A successfully constructed MeshWorkload is always valid.
 //
-// PRE-CONDITION: If skip_validation is true, the caller guarantees that
-// the ProgramSpec satisfies all semantic validation requirements.
-//
 distributed::MeshWorkload MakeMeshWorkloadFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation = false);
+    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec);
 
 // Configure the arguments (mutable parameters) of an existing Program
 // (This will become a member function for the Program class)
