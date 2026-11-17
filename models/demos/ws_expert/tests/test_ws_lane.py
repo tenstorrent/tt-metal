@@ -290,8 +290,9 @@ def chip_pcc(refs, X, G, out_chip):
 
 
 def chip_time(cfg, Ms, T, X, st_chip):
-    """(cycles per expert in the steady state, tile utilization, mean UNPACK waits in K cycles) of one chip: from the
-    latest end of any core's first expert to the latest end of its last."""
+    """(cycles per expert in the steady state, tile utilization, mean UNPACK waits in K cycles, end-to-end cycles) of
+    one chip: steady state from the latest end of any core's first expert to the latest end of its last; end to end
+    from the earliest loop start of any group core's RISC (compute, BRISC, NCRISC) to the latest compute end."""
     NC, E = cfg.G * cfg.GC, T["E"]
     s = (ttnn.to_torch(st_chip).to(torch.int64) & 0xFFFFFFFF).reshape(NC, -1)
     rel = ((s - int(s[0, 0]) + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
@@ -302,7 +303,8 @@ def chip_time(cfg, Ms, T, X, st_chip):
         for e in T["meta"][(X, g)]["order"][1:]:
             ops += (Ms[e] + 31) // 32 * (2 * cfg.PAIRS * cfg.KT + cfg.HT * cfg.PAIRS)
     done = cfg.G * (E - 1)
-    return span / done, ops * 16 / (NC * span), (s[:, 40:45].double().mean(dim=0) / 1000).round().tolist()
+    e2e = int(rel[:, 63].max()) - int(min(rel[:, 0].min(), rel[:, 485].min(), rel[:, 496].min()))
+    return span / done, ops * 16 / (NC * span), (s[:, 40:45].double().mean(dim=0) / 1000).round().tolist(), e2e
 
 
 def timeline(cfg, Ms, T, X, st_chip):
@@ -382,7 +384,8 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
             del sts
             logger.info(
                 f"WSL {tag} launch {i - warm + 1}/{meas}: util tile per chip "
-                f"{[round(100 * row[ci][1], 1) for ci in chips]}"
+                f"{[round(100 * row[ci][1], 1) for ci in chips]}, end-to-end us per chip "
+                f"{[round(row[ci][3] / clk, 1) for ci in chips]}"
             )
         if i == warm + meas - 1:
             outs = ttnn.get_device_tensors(dev["out_t"])
@@ -419,14 +422,16 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
         ut = [100 * r[ci][1] for r in rows]
         logger.info(
             f"WSL {tag} chip {ci}: median {cyc:.0f} cyc/expert ({cyc / clk:.2f} us), util tile median "
-            f"{statistics.median(ut):.1f}% (min {min(ut):.1f}, max {max(ut):.1f}), weights in "
+            f"{statistics.median(ut):.1f}% (min {min(ut):.1f}, max {max(ut):.1f}), end to end "
+            f"{statistics.median(r[ci][3] for r in rows) / clk:.1f} us, weights in "
             f"{we / (cyc / clk * 1e3):.0f} GB/s; waits (K) tilize/x/weight/h/h-drain {rows[-1][ci][2]}; pcc {pcs[ci]:.5f}"
         )
     allu = [100 * r[ci][1] for r in rows for ci in chips]
     logger.info(
         f"WSL {tag} SUMMARY: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz, util tile over chips and "
         f"launches median {statistics.median(allu):.1f}% (min {min(allu):.1f}, max {max(allu):.1f}), "
-        f"min pcc {min(pcs.values()):.5f}"
+        f"min pcc {min(pcs.values()):.5f}, end to end (slowest chip) median "
+        f"{statistics.median(max(r[ci][3] for ci in chips) for r in rows) / clk:.1f} us"
     )
     return rows, pcs
 
@@ -493,6 +498,17 @@ def test_ws_lane_tray(mesh_device, M):
     warm = int(os.environ.get("WS_LANE_WARM", WARM))
     rows, pcs = run(mesh_device, cfg, lc, Ms, f"tray M {M}", warm=warm)
     assert min(pcs.values()) > 0.999
+
+
+MSWEEP = [32, 64, 128, 256, 384, 512, 586, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192]
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+@pytest.mark.parametrize("M", MSWEEP, ids=[f"m{m}" for m in MSWEEP])
+def test_ws_lane_tray_msweep(mesh_device, M):
+    """test_ws_lane_tray over constant M per expert from 1 row tile to T (32 experts, T 8192)."""
+    test_ws_lane_tray(mesh_device, M)
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)

@@ -774,3 +774,32 @@ Final configs (WS_LANE / WS_GCFG), every output written, bf16 partials:
 | bfp8 | dn_lag=3;NS=4;XRM=4 | 63.8% | 68.9% | 0.99988 | 0.99983 |
 | bf16 | dn_lag=3;NS=4;XRM=4;h_dt=bf16 | 61.3% | 67.3% | 0.99994 | 0.99993 |
   M 0 / M 5 pass for both. (Part 1's best: 57.8% / 55.5%.)
+
+## M sweep of the final K-split lane configs (tray, 2026-11-17)
+Reproduced first on bh-lb-19 (2 x 4 p150b, 200G eth firmware 19.12.0+eth200, aiclk 1350): M 586 / 2048 bfp8 h 63.7% /
+69.0%, bf16 h 60.8% / 67.1%; M 0 / 5 and dynamic M (min PCC 0.99983) pass. test_ws_lane_tray_msweep runs the tray test
+over constant M; chip_time now also returns the end-to-end device time of a launch (earliest group-core loop start,
+compute / BRISC / NCRISC, to the latest compute end, per chip; the summary takes the slowest chip). 32 experts a chip
+(16 a lane), T 8192, every expert's output written and checked, 20 warm-up + 5 measured. util = steady-state tile
+util (40 group cores); e2e util = 32 x R x 7200 tile products x 16 cycles / 40 cores over the end-to-end time.
+| M | bfp8 h util (min-max) | e2e us | e2e util | us a lane-expert (steady) | bf16 h util (min-max) | e2e us | e2e util |
+|---|---|---|---|---|---|---|---|
+| 32 | 5.4% (5.2-5.7) | 1,268 | 5.4% | 39.4 | 5.3% (5.1-5.7) | 1,292 | 5.3% |
+| 64 | 10.0% (9.4-10.6) | 1,380 | 9.9% | 42.7 | 10.1% (9.5-10.4) | 1,377 | 9.9% |
+| 128 | 20.3% (19.0-21.2) | 1,398 | 19.5% | 42.2 | 20.1% (18.9-21.1) | 1,410 | 19.4% |
+| 256 | 37.7% (34.8-40.0) | 1,549 | 35.3% | 45.4 | 37.2% (33.8-40.3) | 1,599 | 34.2% |
+| 384 | 51.5% (47.0-56.6) | 1,726 | 47.5% | 49.9 | 49.7% (45.4-54.1) | 1,808 | 45.3% |
+| 512 | 58.9% (55.0-62.2) | 1,991 | 54.9% | 57.7 | 57.7% (52.7-59.6) | 2,071 | 52.7% |
+| 586 | 63.7% (59.9-65.1) | 2,168 | 59.8% | 63.8 | 60.9% (57.0-62.2) | 2,293 | 56.6% |
+| 768 | 64.3% (62.4-65.8) | 2,675 | 61.3% | 79.3 | 62.0% (58.9-63.3) | 2,789 | 58.7% |
+| 1024 | 66.1% (64.2-67.6) | 3,435 | 63.6% | 103.4 | 64.0% (61.7-65.5) | 3,553 | 61.5% |
+| 1536 | 67.9% (66.6-69.4) | 4,944 | 66.3% | 150.7 | 66.0% (64.5-67.2) | 5,131 | 63.9% |
+| 2048 | 68.9% (67.9-69.8) | 6,479 | 67.4% | 198.1 | 67.1% (65.9-67.9) | 6,663 | 65.6% |
+| 3072 | 69.9% (69.1-70.6) | 9,526 | 68.8% | 293.0 | 68.3% (67.2-68.8) | 9,777 | 67.0% |
+| 4096 | 70.3% (69.4-70.9) | 12,569 | 69.5% | 388.5 | 68.8% (68.0-69.4) | 12,840 | 68.1% |
+| 6144 | 70.8% (70.2-71.2) | 18,647 | 70.3% | 578.7 | 69.3% (68.9-69.9) | 19,065 | 68.8% |
+| 8192 | 71.0% (70.8-71.4) | 24,759 | 70.6% | 768.9 | 69.7% (69.4-70.1) | 25,250 | 69.2% |
+PCC 0.99987-0.99988 (bfp8 h) / 0.99993-0.99994 (bf16 h). Up to M ~128 a launch takes ~1.3-1.4 ms whatever M: weight
+bound (32 x 4.15 MB of bfp4 weights into a chip, ~100 GB/s; ~40 us a lane-expert). The knee is M ~500-600; above it
+util creeps to ~71%, the compute-bound ceiling of the K split (5.76 / 7.6 K a row ~76%, single-chip 75.5%). End to
+end is 1-4 points below the steady state (first expert + tail skew), less at large M.
