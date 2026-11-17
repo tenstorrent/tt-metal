@@ -26,6 +26,15 @@ from models.demos.ws_expert.ws_sf import torus_cycles
 from loguru import logger
 
 
+def oaff_mask():
+    """L5Cfg.oaff from WS_L5 (the output bank affinity's group mask; 0 off)."""
+    for item in filter(None, os.environ.get("WS_L5", "").split(";")):
+        k, v = item.split("=")
+        if k == "oaff":
+            return int(v)
+    return 0
+
+
 def mem(tag):
     """This process's RSS and the node's MemAvailable, GB."""
     rss = avail = 0
@@ -40,6 +49,7 @@ def mem(tag):
 
 def make_inputs5_lean(mesh, cfg, lc, T, Ms, out_rows, seed=0):
     N = mesh.get_num_devices()
+    assert not oaff_mask() or mesh.dram_grid_size().x == 8, "output bank affinity assumes 8 DRAM banks (4 a side)"
     torch.manual_seed(seed)
     x = torch.randn(cfg.T + 1, cfg.H)
     x[cfg.T] = 0
@@ -72,7 +82,11 @@ def make_inputs5_lean(mesh, cfg, lc, T, Ms, out_rows, seed=0):
             mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
         ),
         out_t=ttnn.allocate_tensor_on_device(
-            ttnn.Shape([cfg.G * out_rows * 32, cfg.H]), cfg.out_dt, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape([(2 if oaff_mask() else 1) * cfg.G * out_rows * 32, cfg.H]),
+            cfg.out_dt,
+            ttnn.TILE_LAYOUT,
+            mesh,
+            ttnn.DRAM_MEMORY_CONFIG,
         ),
     )
     del ws_host
@@ -106,11 +120,34 @@ def make_inputs5_lean(mesh, cfg, lc, T, Ms, out_rows, seed=0):
 _chip_pcc = L5.chip_pcc
 
 
+def pcc_chip(refs, ci, G, out_chip):
+    """test_ws_lane.chip_pcc, or with the output bank affinity (WS_L5 oaff) the min PCC over the chip's expert rows
+    after un-permuting the tiles (group g's logical tile q at page 8 (q / 4) + q % 4 + 4 ((oaff >> g) & 1))."""
+    mask = oaff_mask()
+    if not mask:
+        return _chip_pcc(refs, ci, G, out_chip)
+    import torch
+    from models.demos.ws_expert.bench_util import pcc
+
+    phys = ttnn.to_torch(out_chip).float()
+    H = phys.shape[-1]
+    HT, rows2 = H // 32, phys.shape[0] // 32
+    ormax = rows2 // (2 * G)
+    tiles = phys.reshape(rows2, 32, HT, 32).permute(0, 2, 1, 3).reshape(-1, 32, 32)
+    del phys
+    q = torch.arange(G * ormax * HT)
+    h = (mask >> (q // HT // ormax)) & 1
+    lt = tiles[8 * (q // 4) + q % 4 + 4 * h].reshape(G * ormax, HT, 32, 32).permute(0, 2, 1, 3).reshape(-1, H)
+    del tiles
+    vals = [pcc(lt[row * 32 : row * 32 + r.shape[0]], r) for g in range(G) for row, e, r in refs[(ci, g)]]
+    return min(vals) if vals else 1.0
+
+
 def chip_pcc_some(refs, ci, G, out_chip):
     chips = os.environ.get("WSW_PCC_CHIPS", "")
     if chips and ci not in [int(c) for c in chips.split(",")]:
         return 1.0
-    return _chip_pcc(refs, ci, G, out_chip)
+    return pcc_chip(refs, ci, G, out_chip)
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
@@ -166,7 +203,7 @@ def test_ws_lane5_glx_soak(mesh_device):
             sts = ttnn.get_device_tensors(st)
             e2e = max(L5.chip_time(cfg, Ms, T, ci, sts[ci])[3] for ci in (0, N - 1)) / clk
             outs = ttnn.get_device_tensors(dev["out_t"])
-            pcs = {ci: _chip_pcc(refs, ci, cfg.G, outs[ci]) for ci in (0, N - 1)}
+            pcs = {ci: pcc_chip(refs, ci, cfg.G, outs[ci]) for ci in (0, N - 1)}
             del sts, outs
             checks += 1
             e2es.append(e2e)

@@ -50,6 +50,9 @@ class L5Cfg:
     mux_noc: int = -1  # the mux kernels' NoC: -1 NOC1 with hmc, else NOC0; 0 / 1 force it (diagnostics)
     mux_mask: int = -1  # >= 0: group g's muxes on NOC1 iff bit g (overrides mux_noc; diagnostics)
     gather0: int = 0  # hmc 2: the x gather from the BRISC on NOC0 (WL5_GATHER0; outside the NoC rule, diagnostics)
+    # output bank affinity (WL5_OAFF, a group mask): group g's output tiles only in the DRAM banks at NoC x 9 (bit g
+    # set) or x 0 (bit clear), so no output write crosses the chip; the output tensor holds 2x the pages (half unused)
+    oaff: int = 0
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -272,6 +275,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             + hmc_ct,
                             runtime_args=rd_rt,
                             defines=FAB_DEFS
+                            + ([("WL5_OAFF", str(l5.oaff))] if l5.oaff else [])
                             + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
                             + ([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else []),
                             config=dm(1),

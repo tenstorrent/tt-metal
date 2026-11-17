@@ -478,7 +478,14 @@ void kernel_main() {
         const uint32_t row = g * ORMAX + drained;
         uint32_t l1 = get_read_ptr(y_cb);
         for (uint32_t t = 0; t < DCOLS; ++t, l1 += obytes) {
+#if defined(WL5_OAFF)
+            // (bank affinity: the group's tiles only in the 4 DRAM banks of its side - channels 0-3 at NoC x 0,
+            // 4-7 at x 9 - so that its output writes do not cross the chip: logical tile q -> page 8 (q / 4) + q % 4 + 4 h)
+            const uint32_t q = row * HT + DS + t;
+            noc_async_write_page(8 * (q >> 2) + (q & 3) + 4 * ((WL5_OAFF >> g) & 1), os, l1);
+#else
             noc_async_write_page(row * HT + DS + t, os, l1);
+#endif
         }
         noc_async_writes_flushed();
         cb_pop_front(y_cb, DCOLS);
