@@ -6,9 +6,10 @@
 // own source and destination slice, released at once by the start gate.
 //
 // Per hart: W warm-up transfers (then drain), the gate, then the timed phase:
-//   t0; N transfers of SIZE bytes; t_inj; wait until every transfer is acked (CPU: fence); t_drain.
-//   INJECTION = t_inj - t0, DRAINED = t_drain - t0. Bandwidth = N * SIZE / interval, per hart; the host reports the run
-//   rate over the slowest hart's interval, never by subtracting timestamps of different harts.
+//   t0; N transfers of SIZE bytes; t_inj; wait until every transfer is acked (iDMA only); t_drain.
+//   INJECTION = t_inj - t0 (for CPU stores, their retirement), DRAINED = t_drain - t0. Bandwidth = N * SIZE / interval,
+//   per hart; the host reports the run rate over the slowest hart's interval, never by subtracting timestamps of
+//   different harts.
 //
 // Mechanisms (TransportMech):
 //   IdmaMetal   cce_noc::copy() per transfer: reset and program the whole command buffer, issue, wait for space.
@@ -18,10 +19,11 @@
 // Every transfer of a run goes to the same destination slice; the host checks the slice afterwards.
 //
 // Runtime args:
-//   0 base, 1 hart, 2 harts in the run, 3 mechanism, 4 size, 5 transfers N, 6 warm-up W, 7 polls per wait, 8 epoch,
-//   9-10 source iDMA address, 11-12 destination iDMA address, 13-14 destination CPU address.
+//   0 base, 1 hart, 2 harts in the run (<= kMaxHarts), 3 mechanism, 4 size (multiple of 64, <= kMaxTransferBytes),
+//   5 transfers N, 6 warm-up W, 7 polls per wait, 8-9 source iDMA address, 10-11 destination iDMA address,
+//   12-13 destination CPU address.
 //
-// Result: cycles[kInjection], cycles[kDrained], cycles[kGateWait].
+// Result: cycles[kInjection], and cycles[kDrained] for the iDMA mechanisms.
 
 #include <cstdint>
 
@@ -85,31 +87,12 @@ void kernel_main() {
     const uint32_t n = get_arg_val<uint32_t>(5);
     const uint32_t warmup = get_arg_val<uint32_t>(6);
     const uint32_t polls = get_arg_val<uint32_t>(7);
-    const uint32_t epoch = get_arg_val<uint32_t>(8);
-    const uint64_t src_idma = arg_u64(9);
-    const uint64_t dst_idma = arg_u64(11);
-    const uint64_t dst_cpu = arg_u64(13);
+    const uint64_t src_idma = arg_u64(8);
+    const uint64_t dst_idma = arg_u64(10);
+    const uint64_t dst_cpu = arg_u64(12);
 
     volatile Result* r = result_block(base, hart);
-    r->kernel = static_cast<uint32_t>(KernelId::TransportBw);
-    r->hart = hart;
     r->status = kStatusRunning;
-
-    uint32_t bad = 0;
-    if (hart >= num_harts || num_harts > kMaxHarts) {
-        bad = 1;
-    } else if (size == 0 || size > kMaxTransferBytes || size % 64 != 0) {
-        bad = 2;
-    } else if (n == 0) {
-        bad = 3;
-    } else if (static_cast<uint32_t>(mech) > static_cast<uint32_t>(TransportMech::CpuStore64)) {
-        bad = 4;
-    }
-    if (bad != 0) {
-        r->detail = bad;
-        finish(r, kStatusBadArgs);
-        return;
-    }
 
     volatile uint64_t* cpu_dst = reinterpret_cast<volatile uint64_t*>(static_cast<uintptr_t>(dst_cpu));
     const uint32_t words64 = size / sizeof(uint64_t);
@@ -137,29 +120,25 @@ void kernel_main() {
         return;
     }
 
-    const uint64_t g0 = now();
-    if (!gate(base, hart, num_harts, epoch, polls)) {
+    if (!gate(base, hart, num_harts, polls)) {
         r->detail = 2;  // gate
         finish(r, kStatusTimeout);
         return;
     }
     const uint64_t t0 = now();
-    r->cycles[tp::kGateWait] = t0 - g0;
 
     for (uint32_t i = 0; i < n; i++) {
         one();
     }
     // CPU stores: the timestamp's own leading fence waits for the stores, so t_inj is their retirement.
-    const uint64_t t_inj = now();
-    if (mech != TransportMech::CpuStore64 && !drain(polls)) {
-        r->detail = 3;  // timed drain
-        finish(r, kStatusTimeout);
-        return;
+    r->cycles[tp::kInjection] = now() - t0;
+    if (mech != TransportMech::CpuStore64) {
+        if (!drain(polls)) {
+            r->detail = 3;  // timed drain
+            finish(r, kStatusTimeout);
+            return;
+        }
+        r->cycles[tp::kDrained] = now() - t0;
     }
-    const uint64_t t_drain = now();
-
-    r->cycles[tp::kInjection] = t_inj - t0;
-    r->cycles[tp::kDrained] = t_drain - t0;
-    r->iterations_done = n;
     finish(r, kStatusDone);
 }

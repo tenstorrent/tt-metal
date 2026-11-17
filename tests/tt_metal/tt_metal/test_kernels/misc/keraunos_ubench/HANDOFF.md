@@ -1,7 +1,7 @@
 # Keraunos CCE microbenchmarks: handoff
 
 **Status:** the code is written and pushed, but has never been built or run. It needs a first build and a run on the `mmk` emulator.
-**Branch:** `claude/glean-access-ggmie0`, one commit on top of `kzhao/keraunos-three-device`.
+**Branch:** `kzhao/keraunos-ubench`, on top of `kzhao/keraunos-three-device`.
 **Owner:** Kevin Zhao (`kzhaoTT`). Keraunos/Mimir runtime support comes from Kevin Stevens.
 
 ## Goal
@@ -19,7 +19,7 @@ Port the X280 bandwidth and latency microbenchmarks (tt-metal PR #60692, `kzhao/
 - **Planned rebase:** onto Kevin Stevens's *next* branch once he publishes it. His 11-13 message said it would have CCE1 and the Keraunos→Mimir path working.
   - His current tip, `kstevens/enable_keraunos` at `a0038c7521`, is WIP: it splits each CCE into its own core with a 0 or 4 MiB base, and is not verified on the emulator.
   - Expect conflicts around `ETH_CCE_LOCAL_BASE`, `MEM_L1_UNCACHED_BASE` (8 MiB on CCE0, 12 MiB on CCE1 after the split) and hart indexing.
-  - The benchmark code keeps every address in `keraunos_ubench.h` helpers, and the host-side `Session` builds them, so a rebase should only touch those.
+  - The benchmark code keeps every address in `keraunos_ubench.h` helpers, and the host-side `UbenchSession` builds them, so a rebase should only touch those.
 
 ## Files
 
@@ -31,7 +31,7 @@ Port the X280 bandwidth and latency microbenchmarks (tt-metal PR #60692, `kzhao/
 | `.../keraunos_ubench/transport_bw.cpp` | Per-hart bandwidth: IdmaMetal, IdmaLean or CpuStore64; start gate across harts |
 | `.../keraunos_ubench/eth_bw_sender.cpp`, `eth_bw_receiver.cpp` | Streamed Ethernet sends with a handshake and a closing flag |
 | `tests/tt_metal/tt_metal/context/keraunos_session.hpp` | `Session`, shared with `KeraunosEthSend`: device open, CCE0 lookup per HSIO tile, SRAM read and write, the Ethernet-link slot, and launch with a hang watchdog. Fails if the descriptor has no Keraunos `tile_stride` |
-| `tests/tt_metal/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench.cpp` | Host side: `UbenchSession` (the shared `Session` plus result blocks and address helpers; one device open for the whole binary), one parameterized test per sweep point, statistics, data checks and the result log. Its header comment lists the run filters and the environment variables |
+| `tests/tt_metal/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench.cpp` | Host side: `UbenchSession` (the shared `Session` plus result blocks and address helpers; one device open for the whole binary), one parameterized test per sweep point, statistics, data checks and the result log. Its header comment lists the run filters |
 | `tests/tt_metal/tt_metal/perf_microbenchmark/sources.cmake`, `CMakeLists.txt` | Builds the `test_keraunos_ubench` executable under `TT_UMD_BUILD_GRENDEL_JTAG`, with the quasar include dir for `dev_mem_map.h` |
 
 ## Tests
@@ -41,8 +41,8 @@ The tests build into their own executable, `build/test/tt_metal/perf_microbenchm
 | Suite | Cases | Measures | Needs |
 |---|---|---|---|
 | `KeraunosUbench.TimerCheck` | 1 | rdcycle monotonicity, bracket min and max, cycles per add, cycles per dependent uncached load (own SRAM and another tile) | CCE0 on HSIO 0 (1 for the remote chain) |
-| `KeraunosUbenchLatency.PingPong` | `{SameCore,CrossTile}{CpuStore,Idma}` | RTT and TURN at p50/p90/p99, plus the rendezvous exchange | Cross-tile needs the HSIO firewalls open (see below) |
-| `KeraunosUbenchTransportBw.Run` | `{IdmaMetal,IdmaLean,CpuStore64}_{Local,Tile}_{1,8}Harts_{256,4096,65536}B` | INJECTION and DRAINED per hart, and the run rate over the slowest hart | Same as above for `Tile` |
+| `KeraunosUbenchLatency.PingPong` | `{SameCore,CrossTile}{CpuStore,Idma}` | RTT and TURN at p50/p90/p99 | Cross-tile needs the HSIO firewalls open (see below) |
+| `KeraunosUbenchTransportBw.Run` | `{IdmaMetal,CpuStore64}_{Local,Tile}_{1,8}Harts_{256,4096,65536}B`, `IdmaLean_{Local,Tile}_{1,8}Harts_{256,4096}B` | INJECTION and DRAINED per hart (RETIRED for CpuStore64), and the run rate over the slowest hart | Same as above for `Tile` |
 | `KeraunosUbenchEthLatency.PingPong` | `{0,64,1024,4096}B` | RTT and TURN over HSIO0.eth0↔HSIO1.eth0 | Loopback up in packet mode |
 | `KeraunosUbenchEthBandwidth.Run` | `{256,4096,65536}B_{1,4}Txq` | INJECTION, ACKED and DELIVERED, the idle handshake RTT, and TX-queue busy polls | Same as above |
 
@@ -57,7 +57,6 @@ The `KeraunosUbenchEth*` suites have no loopback check: without the loopback the
 **Results:**
 - Logged with `log_info`, one line per case: p50/p90/p99 for latency, rates for bandwidth. Raw samples are not written out.
 - Values are emulator RTL cycles. Clock ratios between domains on the emulator (CCE, NoC, D2D, Ethernet) need not match silicon.
-- Set `KERAUNOS_UBENCH_CCE_MHZ` to also log ns and GB/s.
 
 ## How to build and run
 

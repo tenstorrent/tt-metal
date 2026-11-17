@@ -88,16 +88,8 @@ constexpr uint64_t hsio_global_addr(uint32_t hsio, uint64_t tile_stride, uint32_
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Kernel ids, modes and status words.
+// Modes and status words.
 // ---------------------------------------------------------------------------------------------------------------
-
-enum class KernelId : uint32_t {
-    TimerCheck = 1,
-    Latency = 2,
-    TransportBw = 3,
-    EthBwSender = 4,
-    EthBwReceiver = 5,
-};
 
 // How a latency participant puts its token into the peer's mailbox.
 enum class LatencyTransport : uint32_t {
@@ -127,21 +119,15 @@ enum class TransportMech : uint32_t {
 constexpr uint32_t kStatusRunning = 0x5254'0001u;
 constexpr uint32_t kStatusDone = 0x444F'4E45u;
 constexpr uint32_t kStatusTimeout = 0x544D'4F55u;
-constexpr uint32_t kStatusBadArgs = 0xBAD0'A465u;
 
 // ---------------------------------------------------------------------------------------------------------------
-// The result block. What cycles[] and aux[] hold is per kernel (see each kernel's header comment and the host's
-// record writer).
+// The result block. What cycles[] and aux[] hold is per kernel (see each kernel's header comment).
 // ---------------------------------------------------------------------------------------------------------------
 
 struct Result {
     uint32_t status;
-    uint32_t kernel;  // KernelId
-    uint32_t hart;
-    uint32_t detail;  // bad-args reason, or the wait that timed out
+    uint32_t detail;  // on kStatusTimeout, which wait timed out
     uint32_t iterations_done;
-    uint32_t timeout_iteration;
-    uint32_t reserved[2];
     uint64_t cycles[8];
     uint64_t aux[8];
 };
@@ -151,25 +137,17 @@ static_assert(sizeof(Result) <= kResultStride);
 namespace timer_check {
 constexpr uint32_t kEmptyMin = 0;
 constexpr uint32_t kEmptyMax = 1;
-constexpr uint32_t kAddLoop = 2;         // aux[0] dependent adds
-constexpr uint32_t kLocalLoadChase = 3;  // aux[1] dependent loads, own SRAM uncached
-constexpr uint32_t kRemoteLoadChase = 4; // aux[2] dependent loads, peer tile global address (0 loads = skipped)
-constexpr uint32_t kMonotonicReads = 3;  // aux index: back-to-back reads taken
-constexpr uint32_t kMonotonicBackwards = 4;  // aux index: reads that went backwards
-constexpr uint32_t kMonotonicZeroDelta = 5;  // aux index: reads equal to the previous one
+constexpr uint32_t kAddLoop = 2;                // dependent adds
+constexpr uint32_t kLocalLoadChase = 3;         // dependent loads, own SRAM uncached
+constexpr uint32_t kRemoteLoadChase = 4;        // dependent loads, peer tile global address (when the host passes one)
+constexpr uint32_t kMonotonicBackwards = 0;     // aux index: reads that went backwards
+constexpr uint32_t kMonotonicZeroDelta = 1;     // aux index: reads equal to the previous one
+constexpr uint32_t kMonotonicReadCount = 1024;  // back-to-back reads in the monotonic check
 }  // namespace timer_check
-
-namespace latency {
-constexpr uint32_t kMin = 0;
-constexpr uint32_t kMax = 1;
-constexpr uint32_t kSum = 2;
-constexpr uint32_t kRendezvous = 3;  // the first warm-up exchange, which waits for the peer to start
-}  // namespace latency
 
 namespace transport {
 constexpr uint32_t kInjection = 0;  // first issue to last issue returned (CPU: last store retired)
-constexpr uint32_t kDrained = 1;    // first issue to every transfer acked (CPU: fence after the last store)
-constexpr uint32_t kGateWait = 2;   // arrival to release at the start gate
+constexpr uint32_t kDrained = 1;    // first issue to every transfer acked (iDMA only)
 }  // namespace transport
 
 namespace eth_bw {
@@ -224,25 +202,25 @@ inline void finish(volatile Result* r, uint32_t status) {
     asm volatile("fence iorw, iorw" ::: "memory");
 }
 
-// Star barrier over harts [0, num_harts) of this core: each hart publishes @p epoch in its arrive word; hart 0 waits
-// for all of them, then releases everyone through the go word. The host zeroes the gate before launch. Returns false
-// on a timeout.
-inline bool gate(uint32_t base, uint32_t hart, uint32_t num_harts, uint32_t epoch, uint32_t polls) {
+// Star barrier over harts [0, num_harts) of this core: each hart sets its arrive word to 1; hart 0 waits for all of
+// them, then releases everyone through the go word. The host zeroes the gate before every launch. Returns false on a
+// timeout.
+inline bool gate(uint32_t base, uint32_t hart, uint32_t num_harts, uint32_t polls) {
     volatile uint32_t* arrive = uncached(base + kGateOffset);
     volatile uint32_t* go = uncached(base + kGateGoOffset);
-    arrive[hart] = epoch;
+    arrive[hart] = 1;
     asm volatile("fence iorw, iorw" ::: "memory");
     if (hart == 0) {
         for (uint32_t h = 1; h < num_harts; h++) {
-            if (!wait_eq<uint32_t>(&arrive[h], epoch, polls)) {
+            if (!wait_eq<uint32_t>(&arrive[h], 1, polls)) {
                 return false;
             }
         }
-        *go = epoch;
+        *go = 1;
         asm volatile("fence iorw, iorw" ::: "memory");
         return true;
     }
-    return wait_eq<uint32_t>(go, epoch, polls);
+    return wait_eq<uint32_t>(go, 1, polls);
 }
 
 #endif  // KERNEL_BUILD

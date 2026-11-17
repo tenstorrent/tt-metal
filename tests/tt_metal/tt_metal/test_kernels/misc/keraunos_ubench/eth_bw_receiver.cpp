@@ -23,8 +23,6 @@ void kernel_main() {
     const uint64_t ack_global = arg_u64(2);
 
     volatile Result* r = result_block(base, 0);
-    r->kernel = static_cast<uint32_t>(KernelId::EthBwReceiver);
-    r->hart = 0;
     r->status = kStatusRunning;
 
     const volatile uint32_t* flag = uncached(base + kEthFlagOffset);

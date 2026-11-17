@@ -18,7 +18,8 @@
 //                    and its ack (a CPU store back across tiles) arrived: includes one return path, so it is a bound,
 //                    not a one-way time. The host reports kHandshakeRtt next to it.
 //
-// Runtime args: 0 base, 1 size, 2 sends N, 3 warm-up W, 4 TX queues Q (1..4), 5 polls per wait.
+// Runtime args: 0 base, 1 size (multiple of 16, <= kMaxTransferBytes), 2 sends N, 3 warm-up W,
+// 4 TX queues Q (1..cce_eth::kNumTxqs), 5 polls per wait.
 // The Ethernet-link slot must hold the peer's HSIO tile and the valid word before launch.
 //
 // Result (hart 0 slot): cycles[kInjection/kAcked/kDelivered/kHandshakeRtt], aux[kTxqBusySpins].
@@ -62,23 +63,7 @@ void kernel_main() {
     const uint32_t polls = get_arg_val<uint32_t>(5);
 
     volatile Result* r = result_block(base, kHart);
-    r->kernel = static_cast<uint32_t>(KernelId::EthBwSender);
-    r->hart = kHart;
     r->status = kStatusRunning;
-
-    uint32_t bad = 0;
-    if (size == 0 || size % 16 != 0 || size > kMaxTransferBytes) {
-        bad = 1;
-    } else if (n == 0) {
-        bad = 2;
-    } else if (txqs == 0 || txqs > cce_eth::kNumTxqs) {
-        bad = 3;
-    }
-    if (bad != 0) {
-        r->detail = bad;
-        finish(r, kStatusBadArgs);
-        return;
-    }
     cce_eth::check_on_cce0();
 
     const uint32_t data = base + src_offset(kHart);
@@ -138,6 +123,5 @@ void kernel_main() {
     r->cycles[eb::kAcked] = t_acked - t0;
     r->cycles[eb::kDelivered] = t_delivered - t0;
     r->aux[eb::kTxqBusySpins] = busy_spins;
-    r->iterations_done = n;
     finish(r, kStatusDone);
 }

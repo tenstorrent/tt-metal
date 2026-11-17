@@ -29,11 +29,6 @@
 //   $B --gtest_filter='-*KeraunosUbenchEth*'   # on-chip
 //   $B --gtest_filter='*KeraunosUbenchEth*'    # Ethernet
 //
-// Environment (topology and display only; every case is its own test):
-//   KERAUNOS_UBENCH_HSIO          tile of the measuring core (0)
-//   KERAUNOS_UBENCH_PEER_HSIO     tile of the cross-tile peer (1)
-//   KERAUNOS_UBENCH_CCE_MHZ       if set, the log also shows ns and GB/s at this CCE clock (records stay cycles)
-//
 // A host timeout means a kernel is stuck in an unbounded wait: the test prints the result blocks and exits the
 // process, and the emulator job needs a reset before the next run.
 
@@ -44,14 +39,15 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <tuple>
 #include <stdexcept>
 #include <string>
@@ -91,17 +87,29 @@ constexpr uint32_t kTimerAdds = 1000;
 constexpr uint32_t kTimerLoads = 256;
 constexpr uint32_t kLatencyWarmup = 4;
 constexpr uint32_t kLatencySamples = 64;
-constexpr uint32_t kEthLatencyTxq = 0;
 constexpr uint32_t kTransfers = 64;  // per bandwidth case, after the warm-up
 constexpr uint32_t kBwWarmup = 4;
+// Measuring core and cross-tile peer: CCE0 of these HSIO tiles. The Ethernet loopback joins the same two.
+constexpr uint32_t kOwnHsio = 0;
+constexpr uint32_t kPeerHsio = 1;
 
-std::optional<double> cce_mhz() {
-    const char* raw = std::getenv("KERAUNOS_UBENCH_CCE_MHZ");
-    if (raw == nullptr) {
-        return std::nullopt;
-    }
-    return std::stod(raw);
-}
+// Sweep points. The kernels trust these bounds.
+constexpr std::array<uint32_t, 2> kBwHarts{1, 8};
+constexpr std::array<uint32_t, 3> kBwSizes{256, 4096, 65536};
+// IdmaLean differs from IdmaMetal only in per-transfer command-buffer programming, visible at small sizes.
+constexpr std::array<uint32_t, 2> kLeanSizes{256, 4096};
+constexpr std::array<uint32_t, 4> kEthLatencyPayloads{0, 64, 1024, 4096};  // 0 = the 8-byte token alone
+constexpr std::array<uint32_t, 2> kEthTxqs{1, 4};
+static_assert(kLatencyWarmup >= 1 && kLatencySamples >= 1 && kLatencySamples <= kMaxSamples);
+static_assert(std::ranges::all_of(kBwHarts, [](uint32_t h) { return h >= 1 && h <= kMaxHarts; }));
+static_assert(std::ranges::all_of(kBwSizes, [](uint32_t b) { return b > 0 && b % 64 == 0 && b <= kMaxTransferBytes; }));
+static_assert(std::ranges::all_of(kLeanSizes, [](uint32_t b) {
+    return b > 0 && b % 64 == 0 && b <= kMaxTransferBytes;
+}));
+static_assert(std::ranges::all_of(kEthLatencyPayloads, [](uint32_t b) {
+    return b % 16 == 0 && b <= kMaxTransferBytes;
+}));
+static_assert(std::ranges::all_of(kEthTxqs, [](uint32_t q) { return q >= 1 && q <= 4; }));
 
 std::pair<uint32_t, uint32_t> split(uint64_t v) { return {static_cast<uint32_t>(v), static_cast<uint32_t>(v >> 32)}; }
 
@@ -114,22 +122,10 @@ uint64_t percentile(const std::vector<uint32_t>& sorted, uint32_t p) {
     return sorted.empty() ? 0 : sorted[(static_cast<uint64_t>(p) * (sorted.size() - 1)) / 100];
 }
 
-std::string cycles_str(double cycles) {
-    if (const auto mhz = cce_mhz()) {
-        return fmt::format("{:.0f} cyc ({:.1f} ns)", cycles, cycles * 1000.0 / *mhz);
-    }
-    return fmt::format("{:.0f} cyc", cycles);
-}
+std::string cycles_str(double cycles) { return fmt::format("{:.0f} cyc", cycles); }
 
 std::string rate_str(double bytes, double cycles) {
-    if (cycles == 0) {
-        return "n/a";
-    }
-    const double bpc = bytes / cycles;
-    if (const auto mhz = cce_mhz()) {
-        return fmt::format("{:.3f} B/cyc ({:.3f} GB/s)", bpc, bpc * *mhz / 1000.0);
-    }
-    return fmt::format("{:.3f} B/cyc", bpc);
+    return cycles == 0 ? std::string("n/a") : fmt::format("{:.3f} B/cyc", bytes / cycles);
 }
 
 const char* status_name(uint32_t s) {
@@ -137,7 +133,6 @@ const char* status_name(uint32_t s) {
         case kStatusDone: return "done";
         case kStatusRunning: return "running";
         case kStatusTimeout: return "timeout";
-        case kStatusBadArgs: return "bad-args";
         case 0: return "not-started";
         default: return "unknown";
     }
@@ -145,14 +140,11 @@ const char* status_name(uint32_t s) {
 
 std::string format_result(const Result& r) {
     return fmt::format(
-        "kernel {} hart {} status {} (0x{:08x}) detail {} iterations {} timeout_iteration {} cycles [{}] aux [{}]",
-        r.kernel,
-        r.hart,
+        "status {} (0x{:08x}) detail {} iterations {} cycles [{}] aux [{}]",
         status_name(r.status),
         r.status,
         r.detail,
         r.iterations_done,
-        r.timeout_iteration,
         fmt::join(r.cycles, ","),
         fmt::join(r.aux, ","));
 }
@@ -161,7 +153,7 @@ std::string format_result(const Result& r) {
 // Session
 // ---------------------------------------------------------------------------------------------------------------
 
-// A hart whose result block the host watches.
+// One hart of a CCE core.
 struct Watched {
     KeraunosCore core;
     uint32_t hart = 0;
@@ -262,14 +254,7 @@ protected:
         return *c;
     }
 
-    uint32_t own_hsio() const { return tt::parse_env<uint32_t>("KERAUNOS_UBENCH_HSIO", 0); }
-    uint32_t peer_hsio() const { return tt::parse_env<uint32_t>("KERAUNOS_UBENCH_PEER_HSIO", 1); }
-
-    // A start-gate value no earlier launch of this process used (gate() in keraunos_ubench.h).
-    static uint32_t next_epoch() { return ++epoch_; }
-
     static inline std::unique_ptr<UbenchSession> session_;
-    static inline uint32_t epoch_ = 0;
 };
 
 class SessionEnvironment : public ::testing::Environment {
@@ -284,8 +269,8 @@ public:
 // ---------------------------------------------------------------------------------------------------------------
 
 TEST_F(KeraunosUbench, TimerCheck) {
-    const KeraunosCore own = require_core(own_hsio());
-    const auto peer = s().core(peer_hsio());
+    const KeraunosCore own = require_core(kOwnHsio);
+    const auto peer = s().core(kPeerHsio);
     const uint32_t base = s().base();
     const uint32_t adds = kTimerAdds;
     const uint32_t loads = kTimerLoads;
@@ -308,15 +293,15 @@ TEST_F(KeraunosUbench, TimerCheck) {
         "reads, {} zero deltas",
         r.cycles[tc::kEmptyMin],
         r.cycles[tc::kEmptyMax],
-        adds ? static_cast<double>(r.cycles[tc::kAddLoop]) / adds : 0.0,
-        loads ? static_cast<double>(r.cycles[tc::kLocalLoadChase]) / loads : 0.0,
-        r.aux[2] ? fmt::format(
-                       "{:.1f} cyc/remote load (hsio {})",
-                       static_cast<double>(r.cycles[tc::kRemoteLoadChase]) / r.aux[2],
-                       peer->hsio)
-                 : std::string("remote load skipped"),
+        static_cast<double>(r.cycles[tc::kAddLoop]) / adds,
+        static_cast<double>(r.cycles[tc::kLocalLoadChase]) / loads,
+        peer ? fmt::format(
+                   "{:.1f} cyc/remote load (hsio {})",
+                   static_cast<double>(r.cycles[tc::kRemoteLoadChase]) / loads,
+                   peer->hsio)
+             : std::string("remote load skipped"),
         r.aux[tc::kMonotonicBackwards],
-        r.aux[tc::kMonotonicReads],
+        tc::kMonotonicReadCount,
         r.aux[tc::kMonotonicZeroDelta]);
 
     // A counter that goes backwards cannot bracket anything.
@@ -329,25 +314,15 @@ TEST_F(KeraunosUbench, TimerCheck) {
 // Latency
 // ---------------------------------------------------------------------------------------------------------------
 
-struct LatencyEnd {
-    KeraunosCore core;
-    uint32_t hart = 0;
-};
-
 struct LatencyRun {
     std::string name;
     LatencyTransport transport;
     uint32_t payload_bytes = 0;
-    uint32_t txq = 0;
 };
 
-// Runs one ping-pong between @p a (initiator) and @p b (responder), logs it and writes its record.
-void run_latency(UbenchSession& s, const LatencyEnd& a, const LatencyEnd& b, const LatencyRun& run) {
+// Runs one ping-pong between @p a (initiator) and @p b (responder) and logs it.
+void run_latency(UbenchSession& s, const Watched& a, const Watched& b, const LatencyRun& run) {
     const uint32_t base = s.base();
-    const uint32_t warmup = kLatencyWarmup;
-    const uint32_t samples = kLatencySamples;
-    static_assert(kLatencyWarmup >= 1 && kLatencySamples >= 1 && kLatencySamples <= kMaxSamples);
-    const uint32_t nonce = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
 
     s.clear_control(a.core);
     if (b.core.hsio != a.core.hsio) {
@@ -365,7 +340,7 @@ void run_latency(UbenchSession& s, const LatencyEnd& a, const LatencyEnd& b, con
     }
 
     Program program = CreateProgram();
-    auto add = [&](const LatencyEnd& me, const LatencyEnd& peer, LatencyRole role) {
+    auto add = [&](const Watched& me, const Watched& peer, LatencyRole role) {
         const KernelHandle k = create(program, "latency.cpp", me.core, me.hart);
         const uint32_t peer_mailbox = base + mailbox_offset(peer.hart);
         const auto [cpu_lo, cpu_hi] = split(s.cpu_addr(me.core, peer.core, peer_mailbox));
@@ -379,10 +354,9 @@ void run_latency(UbenchSession& s, const LatencyEnd& a, const LatencyEnd& b, con
              me.hart,
              static_cast<uint32_t>(role),
              static_cast<uint32_t>(run.transport),
-             warmup,
-             samples,
+             kLatencyWarmup,
+             kLatencySamples,
              kPolls,
-             nonce,
              cpu_lo,
              cpu_hi,
              dma_lo,
@@ -390,8 +364,7 @@ void run_latency(UbenchSession& s, const LatencyEnd& a, const LatencyEnd& b, con
              peer_mailbox,
              stg_lo,
              stg_hi,
-             run.payload_bytes,
-             run.txq});
+             run.payload_bytes});
     };
     add(a, b, LatencyRole::Initiator);
     add(b, a, LatencyRole::Responder);
@@ -403,22 +376,21 @@ void run_latency(UbenchSession& s, const LatencyEnd& a, const LatencyEnd& b, con
     ASSERT_EQ(ra.status, kStatusDone) << run.name << "\n" << trace;
     ASSERT_EQ(rb.status, kStatusDone) << run.name << "\n" << trace;
 
-    auto rtt_sorted = s.read(a.core, base + samples_offset(a.hart), samples);
-    auto turn_sorted = s.read(b.core, base + samples_offset(b.hart), samples);
+    auto rtt_sorted = s.read(a.core, base + samples_offset(a.hart), kLatencySamples);
+    auto turn_sorted = s.read(b.core, base + samples_offset(b.hart), kLatencySamples);
     std::sort(rtt_sorted.begin(), rtt_sorted.end());
     std::sort(turn_sorted.begin(), turn_sorted.end());
 
     log_info(
         tt::LogTest,
-        "Latency {:<28} RTT p50 {} p90 {} p99 {} | TURN p50 {} p90 {} p99 {} | rendezvous {}",
+        "Latency {:<28} RTT p50 {} p90 {} p99 {} | TURN p50 {} p90 {} p99 {}",
         run.name,
         cycles_str(percentile(rtt_sorted, 50)),
         cycles_str(percentile(rtt_sorted, 90)),
         cycles_str(percentile(rtt_sorted, 99)),
         cycles_str(percentile(turn_sorted, 50)),
         cycles_str(percentile(turn_sorted, 90)),
-        cycles_str(percentile(turn_sorted, 99)),
-        cycles_str(ra.cycles[latency::kRendezvous]));
+        cycles_str(percentile(turn_sorted, 99)));
 
     if (run.transport == LatencyTransport::Eth && run.payload_bytes != 0) {
         // The initiator's payload landed at the same offset on the responder.
@@ -440,13 +412,13 @@ class KeraunosUbenchLatency : public KeraunosUbench, public ::testing::WithParam
 
 TEST_P(KeraunosUbenchLatency, PingPong) {
     const OnChipLatencyCase& c = GetParam();
-    const KeraunosCore own = require_core(own_hsio());
-    LatencyEnd a{own, 0};
-    LatencyEnd b{own, 1};
+    const KeraunosCore own = require_core(kOwnHsio);
+    Watched a{own, 0};
+    Watched b{own, 1};
     if (!c.same_core) {
-        const auto peer = s().core(peer_hsio());
+        const auto peer = s().core(kPeerHsio);
         if (!peer) {
-            GTEST_SKIP() << "Descriptor does not list CCE0 of HSIO tile " << peer_hsio();
+            GTEST_SKIP() << "Descriptor does not list CCE0 of HSIO tile " << kPeerHsio;
         }
         b = {*peer, 0};
     }
@@ -463,26 +435,20 @@ INSTANTIATE_TEST_SUITE_P(
         OnChipLatencyCase{"CrossTileIdma", false, LatencyTransport::Idma}),
     [](const ::testing::TestParamInfo<OnChipLatencyCase>& info) { return std::string(info.param.name); });
 
-// The loopback's ends (KeraunosEthSend): HSIO0.eth0 <-> HSIO1.eth0.
+// The loopback's ends (KeraunosEthSend): HSIO0.eth0 <-> HSIO1.eth0, on TX queue 0.
 class KeraunosUbenchEthLatency : public KeraunosUbench, public ::testing::WithParamInterface<uint32_t> {};
 
 TEST_P(KeraunosUbenchEthLatency, PingPong) {
     const uint32_t payload = GetParam();
-    ASSERT_TRUE(payload % 16 == 0 && payload <= kMaxTransferBytes) << "payload " << payload;
-    const KeraunosCore tx = require_core(0);
-    const KeraunosCore rx = require_core(1);
-    run_latency(
-        s(),
-        {tx, 0},
-        {rx, 0},
-        {fmt::format("Eth_p{}_q{}", payload, kEthLatencyTxq), LatencyTransport::Eth, payload, kEthLatencyTxq});
+    const KeraunosCore tx = require_core(kOwnHsio);
+    const KeraunosCore rx = require_core(kPeerHsio);
+    run_latency(s(), {tx, 0}, {rx, 0}, {fmt::format("Eth_p{}", payload), LatencyTransport::Eth, payload});
 }
 
-// Payload bytes; 0 is the 8-byte token alone.
 INSTANTIATE_TEST_SUITE_P(
     KeraunosUbench,
     KeraunosUbenchEthLatency,
-    ::testing::Values(0u, 64u, 1024u, 4096u),
+    ::testing::ValuesIn(kEthLatencyPayloads),
     [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("{}B", info.param); });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -506,24 +472,37 @@ std::string transport_bw_name(const TransportBwCase& c) {
     return fmt::format("{}_{}_{}Harts_{}B", mech_name(mech), local ? "Local" : "Tile", harts, size);
 }
 
+std::vector<TransportBwCase> transport_bw_cases() {
+    std::vector<TransportBwCase> cases;
+    for (const TransportMech mech : {TransportMech::IdmaMetal, TransportMech::IdmaLean, TransportMech::CpuStore64}) {
+        for (const bool local : {true, false}) {
+            for (const uint32_t harts : kBwHarts) {
+                for (const uint32_t size : mech == TransportMech::IdmaLean ? std::span<const uint32_t>(kLeanSizes)
+                                                                           : std::span<const uint32_t>(kBwSizes)) {
+                    cases.emplace_back(mech, local, harts, size);
+                }
+            }
+        }
+    }
+    return cases;
+}
+
 class KeraunosUbenchTransportBw : public KeraunosUbench, public ::testing::WithParamInterface<TransportBwCase> {};
 
 TEST_P(KeraunosUbenchTransportBw, Run) {
     const auto [mech, local, harts, size] = GetParam();
-    ASSERT_TRUE(harts >= 1 && harts <= kMaxHarts) << "harts " << harts;
-    ASSERT_TRUE(size > 0 && size % 64 == 0 && size <= kMaxTransferBytes) << "size " << size;
+    const bool cpu = mech == TransportMech::CpuStore64;
     const std::string name = transport_bw_name(GetParam());
-    const KeraunosCore own = require_core(own_hsio());
+    const KeraunosCore own = require_core(kOwnHsio);
     std::optional<KeraunosCore> peer;
     if (!local) {
-        peer = s().core(peer_hsio());
+        peer = s().core(kPeerHsio);
         if (!peer) {
-            GTEST_SKIP() << "Descriptor does not list CCE0 of HSIO tile " << peer_hsio();
+            GTEST_SKIP() << "Descriptor does not list CCE0 of HSIO tile " << kPeerHsio;
         }
     }
     const KeraunosCore dst_core = local ? own : *peer;
     const uint32_t base = s().base();
-    const uint32_t epoch = next_epoch();
 
     s().clear_control(own);
     Program program = CreateProgram();
@@ -531,7 +510,9 @@ TEST_P(KeraunosUbenchTransportBw, Run) {
     for (uint32_t h = 0; h < harts; h++) {
         // Destination slice: on a local copy kDstOffset above the source; on another tile the same slice there.
         const uint32_t dst_off = base + local_dst_offset(h);
-        s().write(own, base + src_offset(h), pattern(h, size));
+        if (!cpu) {  // CPU stores build the pattern in registers
+            s().write(own, base + src_offset(h), pattern(h, size));
+        }
         s().write(dst_core, dst_off, std::vector<uint32_t>(size / 4, 0));
         const KernelHandle k = create(program, "transport_bw.cpp", own, h);
         const auto [src_lo, src_hi] = split(s().idma_addr(own, base + src_offset(h)));
@@ -549,7 +530,6 @@ TEST_P(KeraunosUbenchTransportBw, Run) {
              kTransfers,
              kBwWarmup,
              kPolls,
-             epoch,
              src_lo,
              src_hi,
              dst_lo,
@@ -572,26 +552,34 @@ TEST_P(KeraunosUbenchTransportBw, Run) {
     const double bytes_per_hart = static_cast<double>(kTransfers) * size;
     const uint64_t span_inj = *std::max_element(inj.begin(), inj.end());
     const uint64_t span_drained = *std::max_element(drained.begin(), drained.end());
-    log_info(
-        tt::LogTest,
-        "TransportBw {:<34} per hart (hart 0) INJ {} DRAINED {} | run ({} B over slowest hart) INJ {} DRAINED {}",
-        name,
-        rate_str(bytes_per_hart, inj[0]),
-        rate_str(bytes_per_hart, drained[0]),
-        static_cast<uint64_t>(bytes_per_hart * harts),
-        rate_str(bytes_per_hart * harts, span_inj),
-        rate_str(bytes_per_hart * harts, span_drained));
+    const double run_bytes = bytes_per_hart * harts;
+    if (cpu) {
+        // INJECTION is the stores' retirement; there is no separate drain.
+        log_info(
+            tt::LogTest,
+            "TransportBw {:<34} per hart (hart 0) RETIRED {} | run ({} B over slowest hart) RETIRED {}",
+            name,
+            rate_str(bytes_per_hart, inj[0]),
+            static_cast<uint64_t>(run_bytes),
+            rate_str(run_bytes, span_inj));
+    } else {
+        log_info(
+            tt::LogTest,
+            "TransportBw {:<34} per hart (hart 0) INJ {} DRAINED {} | run ({} B over slowest hart) INJ {} DRAINED {}",
+            name,
+            rate_str(bytes_per_hart, inj[0]),
+            rate_str(bytes_per_hart, drained[0]),
+            static_cast<uint64_t>(run_bytes),
+            rate_str(run_bytes, span_inj),
+            rate_str(run_bytes, span_drained));
+    }
     EXPECT_EQ(data_errors, 0u) << name << ": destination is not the source pattern";
 }
 
 INSTANTIATE_TEST_SUITE_P(
     KeraunosUbench,
     KeraunosUbenchTransportBw,
-    ::testing::Combine(
-        ::testing::Values(TransportMech::IdmaMetal, TransportMech::IdmaLean, TransportMech::CpuStore64),
-        ::testing::Bool(),
-        ::testing::Values(1u, 8u),
-        ::testing::Values(256u, 4096u, 65536u)),
+    ::testing::ValuesIn(transport_bw_cases()),
     [](const ::testing::TestParamInfo<TransportBwCase>& info) { return transport_bw_name(info.param); });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -605,11 +593,9 @@ class KeraunosUbenchEthBandwidth : public KeraunosUbench, public ::testing::With
 
 TEST_P(KeraunosUbenchEthBandwidth, Run) {
     const auto [size, txqs] = GetParam();
-    ASSERT_TRUE(size > 0 && size % 16 == 0 && size <= kMaxTransferBytes) << "size " << size;
-    ASSERT_TRUE(txqs >= 1 && txqs <= 4) << "txqs " << txqs;
     const std::string name = fmt::format("Eth_S{}_Q{}", size, txqs);
-    const KeraunosCore tx = require_core(0);
-    const KeraunosCore rx = require_core(1);
+    const KeraunosCore tx = require_core(kOwnHsio);
+    const KeraunosCore rx = require_core(kPeerHsio);
     const uint32_t base = s().base();
     const auto [ack_lo, ack_hi] = split(s().global_addr(tx, base + kEthAckOffset));
 
@@ -650,7 +636,7 @@ TEST_P(KeraunosUbenchEthBandwidth, Run) {
 INSTANTIATE_TEST_SUITE_P(
     KeraunosUbench,
     KeraunosUbenchEthBandwidth,
-    ::testing::Combine(::testing::Values(256u, 4096u, 65536u), ::testing::Values(1u, 4u)),
+    ::testing::Combine(::testing::ValuesIn(kBwSizes), ::testing::ValuesIn(kEthTxqs)),
     [](const ::testing::TestParamInfo<EthBwCase>& info) {
         return fmt::format("{}B_{}Txq", std::get<0>(info.param), std::get<1>(info.param));
     });

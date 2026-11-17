@@ -24,7 +24,6 @@ namespace tc = keraunos_ubench::timer_check;
 namespace {
 
 constexpr uint32_t kEmptyBrackets = 64;
-constexpr uint32_t kMonotonicReads = 1024;
 
 uint64_t chase(volatile uint64_t* start, uint32_t loads) {
     uintptr_t p = reinterpret_cast<uintptr_t>(start);
@@ -48,25 +47,17 @@ void kernel_main() {
     const uint64_t remote = arg_u64(4);
 
     volatile Result* r = result_block(base, hart);
-    r->kernel = static_cast<uint32_t>(KernelId::TimerCheck);
-    r->hart = hart;
     r->status = kStatusRunning;
-    if (hart >= kMaxHarts) {
-        r->detail = 1;
-        finish(r, kStatusBadArgs);
-        return;
-    }
 
     // Monotonic.
     uint64_t backwards = 0, zero = 0;
     uint64_t prev = now();
-    for (uint32_t i = 0; i < kMonotonicReads; i++) {
+    for (uint32_t i = 0; i < tc::kMonotonicReadCount; i++) {
         const uint64_t c = now();
         backwards += c < prev;
         zero += c == prev;
         prev = c;
     }
-    r->aux[tc::kMonotonicReads] = kMonotonicReads;
     r->aux[tc::kMonotonicBackwards] = backwards;
     r->aux[tc::kMonotonicZeroDelta] = zero;
 
@@ -92,7 +83,6 @@ void kernel_main() {
         const uint64_t t1 = now();
         asm volatile("" : : "r"(x));
         r->cycles[tc::kAddLoop] = t1 - t0;
-        r->aux[0] = adds;
     }
 
     // Dependent uncached loads from own SRAM: the staging slot holds its own uncached address.
@@ -101,7 +91,6 @@ void kernel_main() {
         *word = reinterpret_cast<uintptr_t>(word);
         asm volatile("fence iorw, iorw" ::: "memory");
         r->cycles[tc::kLocalLoadChase] = chase(word, loads);
-        r->aux[1] = loads;
     }
 
     // Dependent loads from another tile's SRAM through its global address.
@@ -110,9 +99,7 @@ void kernel_main() {
         *word = remote;
         asm volatile("fence iorw, iorw" ::: "memory");
         r->cycles[tc::kRemoteLoadChase] = chase(word, loads);
-        r->aux[2] = loads;
     }
 
-    r->iterations_done = 1;
     finish(r, kStatusDone);
 }
