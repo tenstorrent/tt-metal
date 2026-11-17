@@ -1282,3 +1282,116 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
 
     assert entries == 1, "tilize should build exactly one program for a fixed config"
     device.disable_and_clear_program_cache()
+
+
+def _retile_input(tensor_shape, dtype):
+    torch.manual_seed(0)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31 - 1, tensor_shape, dtype=torch.int32)
+    return torch.randn(tensor_shape, dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16)
+
+
+_RETILE_GRIDS = {
+    "default": None,
+    "one_core": [((0, 0), (0, 0))],
+    "two_ranges": [((0, 0), (3, 0)), ((0, 1), (3, 1))],
+}
+
+
+# Each outer slice (N * C) of a tiled tensor is padded to its own tile height, on the input side to the input tile
+# height and on the output side to the output tile height. When the height is not a multiple of both, the slices'
+# rows on the two sides don't line up as one flattened matrix, so the retile work has to be split per slice.
+@pytest.mark.parametrize(
+    "input_tile_height, output_tile_height", [(32, 16), (16, 32), (32, 8), (8, 32)], ids=lambda h: str(h)
+)
+@pytest.mark.parametrize("tensor_shape", [[2, 1, 16, 128], [3, 2, 40, 64], [2, 1, 8, 32], [5, 1, 72, 96]], ids=str)
+@pytest.mark.parametrize("grid_name", list(_RETILE_GRIDS))
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.uint32], ids=str)
+def test_tilize_retile_outer_slices(device, input_tile_height, output_tile_height, tensor_shape, grid_name, dtype):
+    torch_input = _retile_input(tensor_shape, dtype)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([input_tile_height, 32])
+    )
+    grid_ranges = _RETILE_GRIDS[grid_name]
+    grid = (
+        None
+        if grid_ranges is None
+        else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*lo), ttnn.CoreCoord(*hi)) for (lo, hi) in grid_ranges})
+    )
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile([output_tile_height, 32]), sub_core_grids=grid)
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert tt_output.tile.tile_shape == [output_tile_height, 32]
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+def test_tilize_retile_outer_slices_program_cache(device):
+    """A cache hit reuses the per-slice split, so a second call with new data in the same shape is still exact."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    tensor_shape = [3, 2, 40, 64]
+    for seed in range(2):
+        torch.manual_seed(seed)
+        torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([32, 32])
+        )
+        tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile([16, 32]))
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+        if seed == 0:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "retile must reuse the cached program on a hit"
+    device.disable_and_clear_program_cache()
+
+
+def _height_sharded_retile_input(device, tensor_shape, input_tile_height, shard_height):
+    torch.manual_seed(0)
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    padded_height = -(-tensor_shape[-2] // input_tile_height) * input_tile_height
+    num_cores = padded_height * math.prod(tensor_shape[:-2]) // shard_height
+    grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [shard_height, tensor_shape[-1]], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        tile=ttnn.Tile([input_tile_height, 32]),
+        memory_config=memory_config,
+    )
+    return torch_input, tt_input, memory_config
+
+
+# The sharded retile works shard by shard on one flattened matrix, so it can't move rows across outer slices whose
+# padded height changes with the tile. Those inputs raise instead of returning one slice's padding in the next.
+@pytest.mark.parametrize(
+    "tensor_shape, input_tile_height, output_tile_height, shard_height",
+    [
+        ([2, 1, 16, 128], 32, 16, 32),
+        ([4, 1, 40, 64], 32, 16, 64),
+        ([2, 1, 48, 64], 16, 32, 32),
+    ],
+    ids=str,
+)
+@pytest.mark.parametrize("output_sharded", [False, True], ids=["to_interleaved", "to_sharded"])
+def test_tilize_retile_sharded_outer_slices_rejected(
+    device, tensor_shape, input_tile_height, output_tile_height, shard_height, output_sharded, expect_error
+):
+    if output_sharded and input_tile_height < output_tile_height:
+        pytest.skip("The grown output's padded height does not fit the input's shard spec")
+    _, tt_input, memory_config = _height_sharded_retile_input(device, tensor_shape, input_tile_height, shard_height)
+    output_memory_config = memory_config if output_sharded else ttnn.L1_MEMORY_CONFIG
+    with expect_error(RuntimeError, "Retile of a sharded tensor with more than one outer slice"):
+        ttnn.tilize(tt_input, tile=ttnn.Tile([output_tile_height, 32]), memory_config=output_memory_config)
+
+
+def test_tilize_retile_sharded_outer_slices_same_padded_height(device):
+    """Outer slices whose height is a multiple of both tile heights still retile shard by shard."""
+    torch_input, tt_input, _ = _height_sharded_retile_input(device, [2, 1, 32, 64], 32, 32)
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile([16, 32]), memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert_equal(torch_input, ttnn.to_torch(tt_output))

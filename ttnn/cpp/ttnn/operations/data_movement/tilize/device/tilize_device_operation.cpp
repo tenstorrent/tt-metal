@@ -37,6 +37,21 @@ bool is_retile(
     return input_tile.get_width() != output_tile.get_width() || input_tile.get_height() != output_tile.get_height();
 }
 
+// A retile with more than one outer slice (the product of the dims above the last two) whose padded height differs
+// between the input tile and the output tile: each slice is padded to its own tile height on each side, so the rows
+// don't line up as one flattened matrix.
+bool retile_changes_slice_height(const Tensor& input, const Tile& output_tile) {
+    if (input.layout() != Layout::TILE || input.logical_shape().rank() < 2) {
+        return false;
+    }
+    const auto& padded_shape = input.padded_shape();
+    const uint64_t slice_volume = static_cast<uint64_t>(padded_shape[-2]) * padded_shape[-1];
+    if (slice_volume == 0 || input.physical_volume() / slice_volume <= 1) {
+        return false;
+    }
+    return padded_shape[-2] != tt::round_up(input.logical_shape()[-2], output_tile.get_height());
+}
+
 bool can_use_sharded_optimized_factories(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
@@ -158,6 +173,15 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     const bool retile = is_retile(operation_attributes, tensor_args);
     if (retile) {
         TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Retile tilize (changing tile shape) requires a tiled input");
+        // The sharded retile works shard by shard on one flattened matrix and can't move rows across slices; the
+        // interleaved retile splits its work per slice.
+        TT_FATAL(
+            !(input_tensor_a.is_sharded() && retile_changes_slice_height(input_tensor_a, operation_attributes.tile)),
+            "Retile of a sharded tensor with more than one outer slice needs a height ({}) that pads to the same "
+            "height for the input tile ({}) and the output tile ({}); retile it from interleaved memory instead",
+            input_tensor_a.logical_shape()[-2],
+            input_tensor_a.tensor_spec().tile().get_height(),
+            operation_attributes.tile.get_height());
     } else {
         TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     }

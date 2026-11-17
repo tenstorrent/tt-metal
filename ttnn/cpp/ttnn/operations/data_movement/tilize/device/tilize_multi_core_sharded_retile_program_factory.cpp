@@ -98,6 +98,9 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     const uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
     // One output block occupies `ratio` input tile-rows of RM in the grow case, one otherwise.
     const uint32_t mid_pages_per_out_block = (shrink ? 1u : ratio) * tiles_per_block;
+    // The compute kernel walks units of the taller tile's rows. A shard is one slice to it: every input tile-row of
+    // the shard is real, and only the output tile-rows it writes can be capped.
+    const uint32_t num_units_per_shard = shrink ? num_input_tile_rows : num_output_tile_rows;
 
     auto* device = a.device();
 
@@ -281,7 +284,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
              {"out_tile_size", out_tile_size_input_fmt},
              {"mid_page_size", mid_page_size}},
         .runtime_arg_schema =
-            {.runtime_arg_names = {"num_input_blocks", "num_real_input_rows", "num_real_output_rows"}},
+            {.runtime_arg_names =
+                 {"num_units", "first_unit_in_slice", "units_per_slice", "slice_in_rows", "slice_out_rows"}},
         .hw_config = std::move(compute_hw),
     };
 
@@ -302,6 +306,16 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     KernelRunArgs reader_ra{.kernel = READER};
     KernelRunArgs writer_ra{.kernel = WRITER};
     KernelRunArgs compute_ra{.kernel = COMPUTE};
+    auto add_compute_args = [&](const CoreCoord& core, uint32_t num_output_rows) {
+        AddRuntimeArgsForNode(
+            compute_ra.runtime_arg_values,
+            core,
+            {{"num_units", num_units_per_shard},
+             {"first_unit_in_slice", 0u},
+             {"units_per_slice", num_units_per_shard},
+             {"slice_in_rows", num_input_tile_rows},
+             {"slice_out_rows", num_output_rows}});
+    };
 
     if (output_is_interleaved) {
         // HEIGHT_SHARDED with ROW_MAJOR orientation: each core's shard maps to a contiguous output
@@ -310,7 +324,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
         // its total tile count is smaller than num_tiles_per_shard_out * num_cores. Clamp each core's
         // output pages (writer) and output tile-rows (compute cap) to the real output so the writer
         // does not run past the interleaved buffer -- the clamp the interleaved retile factory applies
-        // via num_real_output_tile_rows. (num_input_blocks / num_real_input_rows stay full: the input
+        // per slice. (The input tile-rows stay full: the input
         // shard is stored as whole tiles, so this is a shrink-only concern on the output side.)
         const uint32_t real_output_tiles_total = output.physical_volume() / (out_tile_height * out_tile_width);
         const auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
@@ -323,12 +337,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
             AddRuntimeArgsForNode(reader_ra.runtime_arg_values, core, {{"num_tiles_per_core", num_tiles_per_shard_in}});
             AddRuntimeArgsForNode(
                 writer_ra.runtime_arg_values, core, {{"num_pages", real_pages}, {"start_id", tile_start_id}});
-            AddRuntimeArgsForNode(
-                compute_ra.runtime_arg_values,
-                core,
-                {{"num_input_blocks", num_input_tile_rows},
-                 {"num_real_input_rows", num_input_tile_rows},
-                 {"num_real_output_rows", real_pages / tiles_per_block}});
+            add_compute_args(core, real_pages / tiles_per_block);
             tile_start_id += num_tiles_per_shard_out;
         }
     } else {
@@ -337,12 +346,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
         for (const auto& core : corerange_to_cores(all_cores)) {
             AddRuntimeArgsForNode(reader_ra.runtime_arg_values, core, {{"num_tiles_per_core", num_tiles_per_shard_in}});
             AddRuntimeArgsForNode(writer_ra.runtime_arg_values, core, {{"num_units", num_tiles_per_shard_out}});
-            AddRuntimeArgsForNode(
-                compute_ra.runtime_arg_values,
-                core,
-                {{"num_input_blocks", num_input_tile_rows},
-                 {"num_real_input_rows", num_input_tile_rows},
-                 {"num_real_output_rows", num_output_tile_rows}});
+            add_compute_args(core, num_output_tile_rows);
         }
     }
 

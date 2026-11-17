@@ -67,30 +67,60 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
     TT_FATAL(a.is_allocated(), "Input buffer should be allocated on device!");
     TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
-    const auto& padded_shape = a.padded_shape();
-    const uint32_t tensor_width = padded_shape[-1];
-    const uint32_t tensor_height = std::max(output.physical_volume(), a.physical_volume()) / tensor_width;
-
+    // Each outer slice (the product of the dims above the last two) is padded to its own tile height on each
+    // side: the input to a multiple of in_tile_height, the output to a multiple of out_tile_height. So the work
+    // is split per slice, never over one flattened matrix, whose rows line up with the output's only when there
+    // is a single slice or the height is a multiple of both tile heights.
+    const auto& input_padded_shape = a.padded_shape();
+    const auto& output_padded_shape = output.padded_shape();
+    const uint32_t tensor_width = input_padded_shape[-1];
+    TT_FATAL(
+        output_padded_shape[-1] == tensor_width,
+        "Retile keeps the padded width; got input {} and output {}",
+        tensor_width,
+        output_padded_shape[-1]);
     TT_FATAL(tensor_width % in_tile_width == 0, "Tensor width must be divisible by input tile width");
-    TT_FATAL(tensor_height % in_tile_height == 0, "Tensor height must be divisible by input tile height");
-    TT_FATAL(tensor_height % out_tile_height == 0, "Tensor height must be divisible by output tile height");
+    const uint32_t input_slice_height = input_padded_shape.rank() >= 2 ? input_padded_shape[-2] : 1;
+    const uint32_t output_slice_height = output_padded_shape.rank() >= 2 ? output_padded_shape[-2] : 1;
+    TT_FATAL(input_slice_height % in_tile_height == 0, "Tensor height must be divisible by input tile height");
+    TT_FATAL(output_slice_height % out_tile_height == 0, "Tensor height must be divisible by output tile height");
+    const uint32_t num_slices = a.physical_volume() / (input_slice_height * tensor_width);
+    TT_FATAL(
+        output.physical_volume() / (output_slice_height * tensor_width) == num_slices,
+        "Retile input and output must have the same number of outer slices");
 
     const uint32_t tiles_per_block = tensor_width / in_tile_width;
-    const uint32_t num_input_tile_rows = tensor_height / in_tile_height;
-    const uint32_t num_output_tile_rows = tensor_height / out_tile_height;
-
-    // In the grow case the padded output can be taller than the real input, so some trailing input
-    // tile-rows don't exist in DRAM. Only these real rows are read; the compute kernel zero-fills
-    // the rest rather than reading invalid input.
-    const uint32_t num_real_input_tile_rows = a.physical_volume() / tensor_width / in_tile_height;
-    // Shrink-case dual of the reader clamp: bounds the writer so surplus rows don't OOB past `output`.
-    const uint32_t num_real_output_tile_rows = output.physical_volume() / tensor_width / out_tile_height;
+    // Tile-rows of one slice on each side.
+    const uint32_t slice_in_rows = input_slice_height / in_tile_height;
+    const uint32_t slice_out_rows = output_slice_height / out_tile_height;
 
     const uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
 
-    // Split by whole tile-rows of the taller tile so each core's work maps to whole tile-rows on
-    // both sides.
-    const uint32_t num_split_units = shrink ? num_input_tile_rows : num_output_tile_rows;
+    // A unit is one tile-row of the taller tile: an input tile-row when shrinking, an output tile-row when
+    // growing, so each unit maps to whole tile-rows on both sides. Within a slice, unit p reads
+    // min(ratio, slice_in_rows - p * ratio) input tile-rows when growing (the rest is height padding the compute
+    // kernel zero-fills) and writes min(ratio, slice_out_rows - p * ratio) output tile-rows when shrinking (the
+    // rest is the input's own height padding, dropped); either count stops at 0. When growing, an input padded
+    // past the output's height gets units that read its trailing rows and write nothing. The compute kernel
+    // derives the same counts from the unit's position in its slice.
+    TT_FATAL(
+        !shrink || slice_out_rows <= slice_in_rows * ratio,
+        "Retile output must not need more rows than the input holds; got {} input and {} output tile-rows per slice",
+        slice_in_rows,
+        slice_out_rows);
+    const uint32_t units_per_slice =
+        shrink ? slice_in_rows : std::max(slice_out_rows, tt::div_up(slice_in_rows, ratio));
+    const uint32_t num_split_units = num_slices * units_per_slice;
+
+    // Tile-rows read (input) and written (output) by the units before global unit `unit`.
+    auto input_rows_before = [&](uint32_t unit) {
+        const uint32_t pos = unit % units_per_slice;
+        return (unit / units_per_slice) * slice_in_rows + (shrink ? pos : std::min(slice_in_rows, pos * ratio));
+    };
+    auto output_rows_before = [&](uint32_t unit) {
+        const uint32_t pos = unit % units_per_slice;
+        return (unit / units_per_slice) * slice_out_rows + (shrink ? std::min(slice_out_rows, pos * ratio) : std::min(slice_out_rows, pos));
+    };
 
     auto* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
@@ -274,7 +304,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
                  {"out_tile_size", out_tile_size_input_fmt},
                  {"mid_page_size", mid_page_size}},
             .runtime_arg_schema =
-                {.runtime_arg_names = {"num_input_blocks", "num_real_input_rows", "num_real_output_rows"}},
+                {.runtime_arg_names =
+                     {"num_units", "first_unit_in_slice", "units_per_slice", "slice_in_rows", "slice_out_rows"}},
             .hw_config = std::move(compute_hw),
         };
     };
@@ -324,76 +355,46 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
     KernelRunArgs compute_cliff_ra{.kernel = COMPUTE_CLIFF};
 
     const uint32_t ncores_full = ncores - (has_cliff ? 1 : 0);
-    uint32_t input_tile_start_id = 0;
-    uint32_t output_tile_start_id = 0;
     // Walk the grid in the order split_blocks_for_tilize used (it picks the full/cliff cores by
     // walking available_grid), so cores[0..ncores_full) are the full cores and cores[ncores_full] is
     // the cliff core it chose. Iterating all_cores (a sorted set) instead would permute per-core args
     // relative to the split whenever sub_core_grids spans more than one range and a cliff exists.
     const auto& cores = corerange_to_cores(available_grid);
 
-    auto derive_per_core_counts = [&](uint32_t input_rows, uint32_t output_rows) {
-        const uint32_t core_input_row_start = input_tile_start_id / tiles_per_block;
-        const uint32_t real_input_rows = core_input_row_start >= num_real_input_tile_rows
-                                             ? 0u
-                                             : std::min(num_real_input_tile_rows - core_input_row_start, input_rows);
-        const uint32_t core_output_row_start = output_tile_start_id / tiles_per_block;
-        const uint32_t real_output_rows =
-            core_output_row_start >= num_real_output_tile_rows
-                ? 0u
-                : std::min(num_real_output_tile_rows - core_output_row_start, output_rows);
-        // Hang-free invariant: both clamps zero together (both derive from same H via ceil(H/tile_h)).
-        TT_FATAL(
-            (real_input_rows == 0) == (real_output_rows == 0),
-            "tilize retile clamps out of sync: real_in={}, real_out={} (would hang reader)",
-            real_input_rows,
-            real_output_rows);
-        return std::make_pair(real_input_rows, real_output_rows);
+    // A core's units are contiguous across slice boundaries, and so are the tile-rows they read and write,
+    // because slices are stored one after another on both sides.
+    uint32_t first_unit = 0;
+    auto add_core_args = [&](const CoreCoord& core, uint32_t num_units, KernelRunArgs& compute_ra) {
+        const uint32_t end_unit = first_unit + num_units;
+        const uint32_t input_row_start = input_rows_before(first_unit);
+        const uint32_t output_row_start = output_rows_before(first_unit);
+        const uint32_t num_input_tiles = (input_rows_before(end_unit) - input_row_start) * tiles_per_block;
+        const uint32_t num_output_tiles = (output_rows_before(end_unit) - output_row_start) * tiles_per_block;
+
+        AddRuntimeArgsForNode(
+            reader_ra.runtime_arg_values,
+            core,
+            {{"num_tiles", num_input_tiles}, {"start_id", input_row_start * tiles_per_block}});
+        AddRuntimeArgsForNode(
+            writer_ra.runtime_arg_values,
+            core,
+            {{"num_pages", num_output_tiles}, {"start_id", output_row_start * tiles_per_block}});
+        AddRuntimeArgsForNode(
+            compute_ra.runtime_arg_values,
+            core,
+            {{"num_units", num_units},
+             {"first_unit_in_slice", first_unit % units_per_slice},
+             {"units_per_slice", units_per_slice},
+             {"slice_in_rows", slice_in_rows},
+             {"slice_out_rows", slice_out_rows}});
+        first_unit = end_unit;
     };
 
     for (uint32_t i = 0; i < ncores_full; ++i) {
-        const CoreCoord& core = cores[i];
-        const uint32_t input_rows = shrink ? nblocks_per_core : nblocks_per_core * ratio;
-        const uint32_t output_rows = shrink ? nblocks_per_core * ratio : nblocks_per_core;
-        const uint32_t num_input_blocks = input_rows;
-        auto [real_rows, real_output_rows] = derive_per_core_counts(input_rows, output_rows);
-        const uint32_t num_input_tiles = real_rows * tiles_per_block;
-        const uint32_t num_output_tiles = real_output_rows * tiles_per_block;
-
-        AddRuntimeArgsForNode(
-            reader_ra.runtime_arg_values, core, {{"num_tiles", num_input_tiles}, {"start_id", input_tile_start_id}});
-        AddRuntimeArgsForNode(
-            writer_ra.runtime_arg_values, core, {{"num_pages", num_output_tiles}, {"start_id", output_tile_start_id}});
-        AddRuntimeArgsForNode(
-            compute_full_ra.runtime_arg_values,
-            core,
-            {{"num_input_blocks", num_input_blocks},
-             {"num_real_input_rows", real_rows},
-             {"num_real_output_rows", real_output_rows}});
-
-        input_tile_start_id += input_rows * tiles_per_block;
-        output_tile_start_id += output_rows * tiles_per_block;
+        add_core_args(cores[i], nblocks_per_core, compute_full_ra);
     }
-
     if (has_cliff) {
-        const CoreCoord& core = cores[ncores_full];
-        const uint32_t input_rows = shrink ? nblocks_per_core_cliff : nblocks_per_core_cliff * ratio;
-        const uint32_t output_rows = shrink ? nblocks_per_core_cliff * ratio : nblocks_per_core_cliff;
-        const uint32_t num_input_blocks = input_rows;
-        auto [real_rows, real_output_rows] = derive_per_core_counts(input_rows, output_rows);
-        const uint32_t num_input_tiles = real_rows * tiles_per_block;
-        const uint32_t num_output_tiles = real_output_rows * tiles_per_block;
-
-        AddRuntimeArgsForNode(
-            reader_ra.runtime_arg_values, core, {{"num_tiles", num_input_tiles}, {"start_id", input_tile_start_id}});
-        AddRuntimeArgsForNode(
-            writer_ra.runtime_arg_values, core, {{"num_pages", num_output_tiles}, {"start_id", output_tile_start_id}});
-        AddRuntimeArgsForNode(
-            compute_cliff_ra.runtime_arg_values,
-            core,
-            {{"num_input_blocks", num_input_blocks},
-             {"num_real_input_rows", real_rows},
-             {"num_real_output_rows", real_output_rows}});
+        add_core_args(cores[ncores_full], nblocks_per_core_cliff, compute_cliff_ra);
     }
 
     run_args.kernel_run_args.push_back(std::move(reader_ra));
