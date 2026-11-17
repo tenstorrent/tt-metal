@@ -56,6 +56,12 @@ constexpr uint32_t cb_scaler = get_compile_time_arg_val(C + 10);
 constexpr uint32_t cb_rstd_full = get_compile_time_arg_val(C + 11);
 constexpr bool fuse_late = get_compile_time_arg_val(C + 12) != 0;  // x * gamma * rstd in one chain for late chunks
 constexpr bool combine_col0 = get_compile_time_arg_val(C + 13) != 0;  // combine scoped to column 0 (one SFPU pass)
+// normalize mode: false = xg (x * gamma ahead of the stats, out = xg * rstd per chunk); true = scale (S = rstd * gamma
+// right after the combine, out = x * S per chunk: ONE pass per landed chunk)
+constexpr bool scale_mode = get_compile_time_arg_val(C + 14) != 0;
+// xg mode, a block with no chunk ahead (all of it lands late): one gamma pass + one normalize pass over the whole
+// block (cumulative waits, pushed per chunk) instead of a gamma + normalize pass per chunk
+constexpr bool late_block = get_compile_time_arg_val(C + 15) != 0;
 
 static_assert(block_w % chunk_tiles == 0 || chunk_tiles % block_w == 0, "a chunk is a run in one row or whole rows");
 
@@ -265,7 +271,7 @@ void kernel_main() {
     // ahead = this core's entry of the host look-ahead table (common args after row_base, 8 bits per core)
     const uint32_t core_idx = b.q * nb + b.m;
     const uint32_t ahead_tab = get_common_arg_val<uint32_t>(row_base_idx + grid_y + core_idx / 4);
-    const uint32_t ahead = fuse_late ? 0 : ((ahead_tab >> (8 * (core_idx % 4))) & 0xFF);
+    const uint32_t ahead = (fuse_late || scale_mode) ? 0 : ((ahead_tab >> (8 * (core_idx % 4))) & 0xFF);
     cb_wait_front(cb_gamma, block_w);  // held for every chunk (Row-mapped, offset per chunk)
     for (uint32_t k = 0; k < ahead; ++k) {
         gamma_chunk(k);
@@ -279,9 +285,31 @@ void kernel_main() {
     // ---- expand_rstd_block: column-broadcast rstd over the tile (one tile per block row) ----
     unary_bcast<BroadcastDim::Col, input(cb_rstd), output(cb_rstd_full)>(IterationShape::tiles(h));
 
+    if constexpr (scale_mode) {
+        // ---- scale_block: S = rstd (per row, Col mapping) * gamma (per column, row broadcast) -> cb_xg (fp32) ----
+        mul<input(cb_rstd_full, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+            input(cb_gamma, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Row),
+            output(cb_xg)>(IterationShape::grid(h, block_w));
+        // ---- normalize_block: out = x * S, x waited cumulatively as the chunks land, pushed per chunk ----
+        mul<input(cb_x_block, WaitPolicy::Cumulative, PopPolicy::AtEnd, InputTileMapping::Block),
+            input(cb_xg, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+            output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(
+            IterationShape::grid(h, block_w).block_size(chunk_tiles));
+        return;
+    }
+
     // ---- normalize_block: per chunk, out = xg * rstd (x * gamma * rstd for the chunks not done ahead) ----
     cb_wait_front(cb_rstd_full, h);  // held for every chunk (Col-mapped, offset per chunk)
-    for (uint32_t k = 0; k < n_chunks; ++k) {
+    if (late_block && !fuse_late && ahead == 0) {
+        const IterationShape block = IterationShape::grid(h, block_w).block_size(chunk_tiles);
+        mul<input(cb_x_block, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),
+            input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row),
+            output(cb_xg, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
+        mul<input(cb_xg, WaitPolicy::Cumulative, PopPolicy::AtEnd, InputTileMapping::Block),
+            input(cb_rstd_full, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
+            output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
+    }
+    for (uint32_t k = (late_block && !fuse_late && ahead == 0) ? n_chunks : 0; k < n_chunks; ++k) {
         if (k < ahead) {
             normalize_chunk(k);
         } else if constexpr (fuse_late) {

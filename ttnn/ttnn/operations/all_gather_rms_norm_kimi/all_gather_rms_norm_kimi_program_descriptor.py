@@ -65,6 +65,13 @@ FUSE_LATE_CHUNKS = False
 # combine_stats_block's SFPU tail (G-way fp32 sum, * 1/W, + eps, rsqrt) as ONE pass over the column-0 vectors of the
 # partial tile (8 vector ops) instead of G + 2 whole-tile passes (32 each); False = the whole-tile chain.  [R3]
 COMBINE_COL0 = True
+# Normalize mode. "xg": x * gamma ahead of the stats (XG_LATE_STREAM_CHUNKS look-ahead), out = xg * rstd per chunk
+# after the combine: two passes for a chunk that lands after the combine. "scale": S = rstd * gamma (one block pass
+# right after the combine), out = x * S: one pass per landed chunk, so the landing tail is one multiply.  [R3]
+NORMALIZE_MODE = "xg"
+# xg mode: a block with no chunk ahead runs one gamma + one normalize pass over the whole block (pushed per chunk)
+# instead of two passes per chunk: half the per-pass init / format reconfig on the landing tail.  [R3]
+LATE_BLOCK = True
 # NoC of the compute cores' writer (the DRAM output store + the partial export); the compute reader takes the other
 # one. The port senders and receivers write on NoC1, the port readers pull the landed chunks on NoC0.  [R3]
 COMPUTE_STORE_NOC = 1
@@ -576,6 +583,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 XG_LATE_STREAM_CHUNKS,
                 FUSE_LATE_CHUNKS,
                 COMBINE_COL0,
+                NORMALIZE_MODE,
+                LATE_BLOCK,
                 COMPUTE_STORE_NOC,
                 OWN_STORE_GATE,
                 gamma_page,
@@ -638,6 +647,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
             compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_XG]
             compute_ct += [CB_SCALER, CB_RSTD_FULL, int(FUSE_LATE_CHUNKS), int(COMBINE_COL0)]
+            compute_ct += [int(NORMALIZE_MODE == "scale"), int(LATE_BLOCK)]
 
             ccfg = ttnn.ComputeConfigDescriptor()
             ccfg.math_fidelity = cfg.math_fidelity
