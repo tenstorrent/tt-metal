@@ -71,9 +71,7 @@ class SharedBufferStore(Store):
         return views
 
 
-def runtime_with(
-    store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_sharded=True, hidden=HIDDEN, shard_vocab_on_sp=True
-):
+def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, hidden=HIDDEN, shard_vocab_on_sp=True):
     return SimpleNamespace(
         config=SimpleNamespace(
             sp_factor=sp,
@@ -81,7 +79,6 @@ def runtime_with(
             mesh_shape=mesh_shape,
             sp_axis=0,
             tp_axis=1,
-            pipeline_activation_emb_tp_sharded=emb_tp_sharded,
         ),
         hf_config=SimpleNamespace(hidden_size=hidden),
         media_embedding_reader=store,
@@ -116,9 +113,7 @@ def device_tokens(mesh_device, tokens):
     )
 
 
-def splice_chunks(
-    mesh_device, table, tokens, images, store, first_chunk_start, emb_tp_sharded=True, shard_vocab_on_sp=False
-):
+def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, shard_vocab_on_sp=False):
     """Embeddings of tokens[first_chunk_start:] after splicing, prefilled CHUNK tokens at a time.
     images: (start, num_tokens, key) per image."""
     mesh_shape = tuple(mesh_device.shape)
@@ -129,7 +124,6 @@ def splice_chunks(
         chunk_size=CHUNK,
         mesh_shape=mesh_shape,
         mesh_device=mesh_device,
-        emb_tp_sharded=emb_tp_sharded,
         shard_vocab_on_sp=shard_vocab_on_sp,
     )
     out = []
@@ -194,9 +188,7 @@ def test_post_splice_embeddings(
     for s, n, key in images:
         want[s : s + n] = embs[key]
 
-    got = splice_chunks(
-        mesh_device, table, tokens, images, Store(embs), first_chunk_start, sharded_residual == "1", shard_vocab_on_sp
-    )
+    got = splice_chunks(mesh_device, table, tokens, images, Store(embs), first_chunk_start, shard_vocab_on_sp)
     check(got, want[first_chunk_start:], images, first_chunk_start, seq_len)
 
 
@@ -347,7 +339,8 @@ def test_warm_media_reaches_packed_forwards(monkeypatch, shard_vocab_on_sp):
     assert heights[-1] == table_height(n_chunks * chunk // sp + 1)
 
 
-def test_one_batched_fetch_per_forward():
+@pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["partials_2d", "by_position_1d"])
+def test_one_batched_fetch_per_forward(shard_vocab_on_sp):
     """A packed forward naming one image in two chunks reads every value in one fetch, before the next fetch could
     overwrite it."""
     sp, chunk = 2, 128
@@ -356,7 +349,7 @@ def test_one_batched_fetch_per_forward():
     chunks = [PrefillChunk(0, 0, chunk), PrefillChunk(0, chunk, 2 * chunk)]
     refs = [MediaRef(0, 100, 200, a), MediaRef(1, 100, 200, a), MediaRef(1, 220, 240, b)]
     store = SharedBufferStore(embs)
-    runtime = runtime_with(store, sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
+    runtime = runtime_with(store, sp=sp, chunk_size=chunk, mesh_shape=(sp, 1), shard_vocab_on_sp=shard_vocab_on_sp)
     got = []
     runtime._media_partials_cache = SimpleNamespace(
         refill=lambda height, runs, lookup, is_img: got.extend(rows.copy() for _, _, rows in runs)
@@ -365,7 +358,7 @@ def test_one_batched_fetch_per_forward():
     TtPrefillRuntime._media_partials(runtime, chunks, refs)
 
     u16 = lambda r: embs[r.media_key].view(torch.int16).numpy().view(np.uint16)
-    want = [rows for _, _, rows in build_media_partials(refs, chunks, u16, sp, chunk // sp)[3]]
+    want = [rows for _, _, rows in build_media_partials(refs, chunks, u16, sp, chunk // sp, not shard_vocab_on_sp)[3]]
     assert store.calls == 1
     assert len(got) == len(want) and all(np.array_equal(g, w) for g, w in zip(got, want))
 

@@ -56,7 +56,7 @@ def test_positions_match_the_chunk_layout(sp, chunk_local):
     "chunks,refs",
     [
         pytest.param([PrefillChunk(0, 0, C)], [ref(0, 10, 40, 1)], id="inside_one_chunk"),
-        pytest.param([PrefillChunk(0, 0, C)], [ref(0, 3, 20, 1), ref(0, 40, 30, 2)], id="several"),
+        pytest.param([PrefillChunk(0, 0, C)], [ref(0, 3, 20, 1), ref(0, 40, 30, 2), ref(0, 100, 12, 3)], id="several"),
         pytest.param([PrefillChunk(0, 0, C)], [ref(0, 100, 300, 1)], id="image_head"),
         pytest.param([PrefillChunk(0, C, 2 * C)], [ref(0, 100, 300, 1)], id="image_middle"),
         pytest.param([PrefillChunk(0, 2 * C, 2 * C + 50)], [ref(0, 2 * C + 20, 100, 1)], id="partial_chunk"),
@@ -88,12 +88,13 @@ def test_partials_deliver_the_image_rows(chunks, refs, by_position):
     assert (lookup > 0).sum() == is_img.sum(), "every image position is assigned exactly once"
 
 
-def test_partials_are_contiguous_blocks_per_sp_row():
-    """Each SP row's slots are 1..k with no holes, so filling it is one copy. A row taking a full block
-    bounds the table height; rows past the last block take none."""
+@pytest.mark.parametrize("by_position", [False, True], ids=["2d", "1d"])
+def test_partials_are_contiguous_blocks_per_sp_row(by_position):
+    """Each SP row's slots are 1..k with no holes, so filling it is one copy, and the table holds the
+    fullest row."""
     chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 0, SP * 4, 1)]
     embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
-    height, lookup, _, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
+    height, lookup, _, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL, by_position)
     for r in range(SP):
         slots = sorted(lookup[r][lookup[r] > 0].tolist())
         assert slots == list(range(1, len(slots) + 1)), (r, slots)
@@ -111,12 +112,15 @@ def test_table_height_snaps_to_the_ladder(rows, want):
     assert table_height(rows) == want
 
 
-def test_table_is_bucketed_and_row_zero_is_never_written():
+@pytest.mark.parametrize("by_position", [False, True], ids=["2d", "1d"])
+def test_table_is_bucketed_and_row_zero_is_never_written(by_position):
     """Row 0 is the "not this row's" sentinel and is read, so no run may write it. Rows above the slots in
     use are not read — lookup never points at them — so the persistent host table may leave them stale."""
     chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 10, 40, 1)]
     embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
-    height, lookup, _, runs = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
+    height, lookup, _, runs = build_media_partials(
+        refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL, by_position
+    )
     assert height == table_height(int(lookup.max()) + 1)
     assert min(slot for _, slot, _ in runs) == 1, "the sentinel row must not be written"
 

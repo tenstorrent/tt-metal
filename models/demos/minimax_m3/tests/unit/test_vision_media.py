@@ -106,16 +106,18 @@ def test_image_pickles_out_of_band():
 
 
 def test_stub_reader_serves_stub_keys(expect_error):
-    reader = StubEmbeddingReader(64)
+    reader = StubEmbeddingReader(64, max_bytes=3 * media_format.stored_nbytes(6, 64))
     key = stub_media_key(6, 0)
     value = reader.fetch(key)
     assert media_format.embeddings(value, 64).shape == (6, 64)
     assert bytes(value) == bytes(reader.fetch(key)) != bytes(reader.fetch(stub_media_key(6, 1)))
     head, rest = reader.fetch_batch([FetchRequest(key, 0, 16), FetchRequest(key, 16)])
     assert bytes(head) + bytes(rest) == bytes(value)
-    for t in range(2, reader.MAX_VALUES + 2):
-        reader.fetch(stub_media_key(6, t))
-    assert len(reader._values) == reader.MAX_VALUES and bytes(reader.fetch(key)) == bytes(value)
+    reader.fetch(stub_media_key(6, 2))
+    reader.fetch(stub_media_key(6, 3))
+    assert list(reader._values) == [key, stub_media_key(6, 2), stub_media_key(6, 3)], "least recently used goes first"
+    reader.fetch(stub_media_key(6, 4))
+    assert key not in reader._values and bytes(reader.fetch(key)) == bytes(value)
     for key in (bytes(32), b"\0"):
         with expect_error(Missing, key.hex()):
             reader.fetch(key)

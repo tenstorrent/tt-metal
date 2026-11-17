@@ -16,14 +16,14 @@ from models.demos.minimax_m3.vision import format
 
 
 class StubEmbeddingReader:
-    """The last MAX_VALUES values are kept, so a repeated fetch costs a lookup rather than a fresh randn of
-    the whole value — the store it stands in for returns a view of what it already holds."""
+    """Values are kept, least recently used dropped first beyond max_bytes, so a repeated fetch costs a lookup
+    rather than a fresh randn of the whole value — the store it stands in for returns a view of what it holds."""
 
-    MAX_VALUES = 16
-
-    def __init__(self, hidden: int):
+    def __init__(self, hidden: int, max_bytes: int = 1 << 30):
         self.hidden = hidden
+        self.max_bytes = max_bytes
         self._values: OrderedDict[bytes, memoryview] = OrderedDict()
+        self._bytes = 0
 
     def fetch(self, media_key: bytes) -> memoryview:
         return self.fetch_batch([FetchRequest(media_key)])[0]
@@ -50,6 +50,7 @@ class StubEmbeddingReader:
         rows = (torch.randn(n, self.hidden, generator=gen) * 0.02).to(torch.bfloat16)
         format.embeddings(buf, self.hidden)[:] = rows.view(torch.int16).numpy()
         self._values[media_key] = buf
-        if len(self._values) > self.MAX_VALUES:
-            self._values.popitem(last=False)
+        self._bytes += len(buf)
+        while self._bytes > self.max_bytes and len(self._values) > 1:
+            self._bytes -= len(self._values.popitem(last=False)[1])
         return buf

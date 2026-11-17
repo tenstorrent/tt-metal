@@ -113,7 +113,9 @@ def _media_rows_of(reader, hidden: int, media_refs: list):
     bufs = reader.fetch_batch([FetchRequest(k) for k in keys])
     values = {}
     for key, buf in zip(keys, bufs, strict=True):
-        media_format.Header.read(buf)
+        kind = media_format.Header.read(buf).kind
+        if kind != "image":
+            raise ValueError(f"media key {key.hex()} holds {kind!r}, not image rows")
         values[key] = media_format.embeddings(buf, hidden)
 
     def rows_of(ref):
@@ -390,6 +392,8 @@ class TtPrefillRuntime:
 
     def _media_partials(self, chunks: list, media_refs: list):
         """The forward's image rows per SP row, refilled into buffers kept per table height."""
+        if not media_refs:
+            return None
         cfg = self.config
         by_position = not self.model.embedding.shard_vocab_on_sp
         packed = build_media_partials(
