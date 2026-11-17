@@ -462,7 +462,7 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
 // their mask + rotate-add chains are interleaved A/B/A/B: every dependent
 // pair is separated by exactly one instruction of the other chain, which
 // covers the 2-cycle SFPU latency without a single SFPNOP. The per-lane
-// arithmetic (mask multiply, three rotate-adds, negate, add, multiply) and
+// arithmetic (mask AND, three rotate-adds, negate, add, multiply) and
 // its order are unchanged, so results are bit-identical to the serial form.
 //
 // Dest addressing is RWC-relative so that the per-band body is a sequence of
@@ -475,11 +475,9 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
 // The mask + stage 1 + stage 2 + first half of stage 3 of the interleaved
 // chains (16 ops, no addresses) are recorded into replay slots [0, 16) once
 // per call. This stays inside the SFPU half of the replay buffer (FPU kernels
-// own [replay_buf_offset, 32)). The first 12 slots overlap REPLAY_SLOT_BROADCAST:
-// the mean chain is exactly the recorded single-chain sequence with its NOP
-// slots filled by the inv_std chain (writing LREG7 and LREG1 = LREG_DATA0,
-// both dead at that point of the add/sub/mul path), so a subsequent
-// BCAST_COL add/sub/mul still works without re-running its init.
+// own [replay_buf_offset, 32)). It overwrites the COL init's broadcast program
+// in [REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST), so a BCAST_COL add/sub/mul
+// after a COL normalize call must re-run sfpu_bcast_col_init().
 
 constexpr std::uint32_t LREG_NORM_MEAN = p_sfpu::LREG0;      // = LREG_BCAST
 constexpr std::uint32_t LREG_NORM_MEAN_TMP = p_sfpu::LREG2;  // = LREG_TMP
@@ -510,8 +508,8 @@ inline std::uint32_t _norm_rel_tile_offset_(std::uint32_t dst_index, std::uint32
 // Record the interleaved broadcast block (16 ops). Precondition at replay:
 // LREG_NORM_MEAN / LREG_NORM_INV_STD hold the freshly loaded col-0 slots.
 //
-//    1  SFPMUL    MEAN    *= MASK
-//    2  SFPMUL    INV_STD *= MASK
+//    1  SFPAND    MEAN    &= MASK
+//    2  SFPAND    INV_STD &= MASK
 //    3  SFPSHFT2  MEAN_TMP    = ROR1(MEAN)           stage 1
 //    4  SFPSHFT2  INV_STD_TMP = ROR1(INV_STD)
 //    5  SFPADD    MEAN    += MEAN_TMP
@@ -529,8 +527,8 @@ inline std::uint32_t _norm_rel_tile_offset_(std::uint32_t dst_index, std::uint32
 inline void _record_norm_dual_broadcast_replay_() {
     lltt::record(REPLAY_SLOT_NORM_BROADCAST, REPLAY_LEN_NORM_BROADCAST);
 
-    TTI_SFPMUL(LREG_NORM_MEAN, LREG_MASK, p_sfpu::LCONST_0, LREG_NORM_MEAN, 0);
-    TTI_SFPMUL(LREG_NORM_INV_STD, LREG_MASK, p_sfpu::LCONST_0, LREG_NORM_INV_STD, 0);
+    TTI_SFPAND(0, LREG_MASK, LREG_NORM_MEAN, 0);
+    TTI_SFPAND(0, LREG_MASK, LREG_NORM_INV_STD, 0);
 
     TTI_SFPSHFT2(0, LREG_NORM_MEAN, LREG_NORM_MEAN_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, LREG_NORM_INV_STD, LREG_NORM_INV_STD_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
