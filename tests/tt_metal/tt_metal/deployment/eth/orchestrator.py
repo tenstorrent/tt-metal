@@ -10,7 +10,7 @@ import result_parser
 
 from pathlib import Path
 from time import time, sleep
-from threading import Thread
+from threading import Thread, Lock
 from argparse import ArgumentParser
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,6 +30,8 @@ from typed_configparser import ConfigParser
 
 from result_parser import process_logs
 from testenums import TestCase, DistTestCase, prepare_filter
+
+from exceptiongroup import ExceptionGroup
 
 result_parser.print_logs = False
 
@@ -394,6 +396,8 @@ def prepare_test_runner(dbpath: str, mergeid: str, runid: str) -> Iterator[int]:
     make_nonblocking(wfd)
 
     q = Queue()
+    lock: Lock = Lock()
+    errors: list[Exception] = []
 
     async def runner():
         print("running in asyncio thread")
@@ -405,13 +409,20 @@ def prepare_test_runner(dbpath: str, mergeid: str, runid: str) -> Iterator[int]:
 
         try:
             runs = await process_logs(reader, None, q)
+        except Exception as e:
+            with lock:
+                errors.append(e)
         finally:  # TODO error handling
             q.put("DONE")
             transport.close()
 
     def dbcontext():
         with closing(sqlite3.connect(f"file:{dbpath}?mode=rw")) as conn:
-            batch_worker(conn, mergeid, runid, q)
+            try:
+                batch_worker(conn, mergeid, runid, q)
+            except Exception as e:
+                with lock:
+                    errors.append(e)
 
     threads = (
         Thread(target=lambda: asyncio.run(runner())),
@@ -427,6 +438,9 @@ def prepare_test_runner(dbpath: str, mergeid: str, runid: str) -> Iterator[int]:
         os.close(wfd)
         for t in threads:
             t.join(2)  # TODO
+
+        if len(errors) > 0:
+            raise ExceptionGroup("Errors happened when processing logs", errors)
 
 
 def qiter(q: Queue[dict | str]):
@@ -533,6 +547,9 @@ def prepare_dist_test_runner(dbpath: str, mergeid: str, runid: str, linkspec: st
 
     q1, q2 = Queue(), Queue()
 
+    lock: Lock = Lock()
+    errors: list[Exception] = []
+
     async def runner(rfd: int, q: Queue):
         print("running in asyncio thread")
         pipe = os.fdopen(rfd, "rb", buffering=0)
@@ -543,13 +560,20 @@ def prepare_dist_test_runner(dbpath: str, mergeid: str, runid: str, linkspec: st
 
         try:
             runs = await process_logs(reader, None, q)
+        except Exception as e:
+            with lock:
+                errors.append(e)
         finally:  # TODO error handling
             q.put("DONE")
             transport.close()
 
     def dbcontext():
         with closing(sqlite3.connect(f"file:{dbpath}?mode=rw")) as conn:
-            dist_batch_worker(conn, mergeid, runid, linkspec, q1, q2)
+            try:
+                dist_batch_worker(conn, mergeid, runid, linkspec, q1, q2)
+            except Exception as e:
+                with lock:
+                    errors.append(e)
 
     threads = (
         Thread(target=lambda rfd, q: asyncio.run(runner(rfd, q)), args=[rfd1, q1]),
@@ -567,6 +591,9 @@ def prepare_dist_test_runner(dbpath: str, mergeid: str, runid: str, linkspec: st
         os.close(wfd2)
         for t in threads:
             t.join(2)  # TODO
+
+        if len(errors) > 0:
+            raise ExceptionGroup("Errors happened when processing logs", errors)
 
 
 def main() -> int:

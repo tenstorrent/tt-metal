@@ -94,6 +94,7 @@ open_clip_torch==2.26.1 # Required for SDXL accuracy evaluation
 parallel-ssh>=2.16.0.post1
 typed_configparser>=1.1.0
 asyncio-gevent>=0.2.5
+exceptiongroup>=1.3.1
 
 # Suff that used to be in pyproject.toml
 # Needed for various tests
