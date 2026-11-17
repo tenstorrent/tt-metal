@@ -4,8 +4,9 @@
 
 // Weight reader of the GGUF matmul: this core's records in compute order into c_0 as the decoder's L1 pages
 // (experimental/gguf_page.h). One-page groups store codes then scale rows, the page's own order: each lands in its page
-// with one read, a unit of them per transaction id, one or two units in flight. Larger groups land whole in a staging
-// ring (c_2), one read each, one or two in flight, and go into their pages from local L1, each codes part with the
+// with one read, a unit of them per transaction id, one or two units in flight. MXFP4 records (codes, scale row,
+// codes) land whole in two pages, one read each, one or two in flight. Larger groups land whole in a staging ring
+// (c_2), one read each, one or two in flight, and go into their pages from local L1, each codes part with the
 // group's scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to
 // the other pages. Codebook formats then fill in the pages' grid levels (lookup_grid) in GGUF_LOOKUP_PARTS parts of
 // their index words: this kernel the first GGUF_READER_PARTS, the writer of this core the next GGUF_WRITER_PARTS
@@ -180,6 +181,39 @@ void kernel_main() {
             pushed += n;
             pending -= n;
             units_done++;
+            if (issued < total) {
+                issue();
+            }
+        }
+    } else if constexpr (FMT == Format::MXFP4) {
+        // A record is [codes of K tile 2g][the group's scale row][codes of K tile 2g + 1] (gguf_host_packing.cpp), read
+        // whole into two c_0 pages of `page` = 576 bytes: the first is the decoder's page of K tile 2g, the second
+        // holds K tile 2g + 1's codes, whose scale row the compute kernel unpacks from the first (paired_words_shift).
+        static_assert(
+            FMT != Format::MXFP4 || (P == 2 && L.code_offset == 0 && L.scale_offset == L.code_bytes &&
+                                     page == L.scale_offset + scale_bytes && 2 * page >= record));
+        uint32_t pushed = 0, issued = 0, done = 0;
+        auto offset = [&](uint32_t idx) { return (((pushed + idx) % ring) - (pushed % ring)) * page; };
+        auto issue = [&]() {
+            const uint32_t at = 2 * (issued - done);
+            pages.reserve_back(at + 2);
+            noc.async_read<NocOptions::TXN_ID>(
+                weights,
+                pages,
+                record,
+                {.page_id = page_of(next_record())},
+                {.offset_bytes = offset(at)},
+                {.trid = 1 + issued % in_flight});
+            issued++;
+        };
+        while (issued < in_flight && issued < total) {
+            issue();
+        }
+        while (done < issued) {
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1 + done % in_flight});
+            pages.push_back(2);
+            pushed += 2;
+            done++;
             if (issued < total) {
                 issue();
             }

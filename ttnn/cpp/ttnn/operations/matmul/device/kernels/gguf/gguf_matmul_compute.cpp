@@ -284,7 +284,9 @@ void kernel_main() {
                 gguf::BFP_CODES,
                 gguf::BFP_CODE_EXP,
                 L.scale_offset,
-                gguf::bfp_scale_words<fmt>());
+                gguf::bfp_scale_words<fmt>(),
+                experimental::gguf::paired_words_shift<static_cast<experimental::gguf::Format>(fmt)>(
+                    k0 % L.group_tiles));
         } else {
             dest_srca_mm_page_to_dest(cb_page, 0, page_of(0));
         }
@@ -337,7 +339,14 @@ void kernel_main() {
                 }
                 if constexpr (bfp) {
                     dest_srca_mm_page_unpack_codes(
-                        cb_page, 0, gguf::BFP_CODES, gguf::BFP_CODE_EXP, L.scale_offset, gguf::bfp_scale_words<fmt>());
+                        cb_page,
+                        0,
+                        gguf::BFP_CODES,
+                        gguf::BFP_CODE_EXP,
+                        L.scale_offset,
+                        gguf::bfp_scale_words<fmt>(),
+                        experimental::gguf::paired_words_shift<static_cast<experimental::gguf::Format>(fmt)>(
+                            (kt + 1) % L.group_tiles));
                 } else {
                     dest_srca_mm_page_unpack(cb_page, 0);
                 }

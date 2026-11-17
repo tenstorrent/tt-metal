@@ -30,6 +30,7 @@
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/ckernel_gguf_page.h"
+#include "experimental/gguf_page.h"
 #if GGUF_PF_PIPE
 #include "api/compute/eltwise_binary.h"
 
@@ -87,7 +88,13 @@ ALWI void decode_block(const uint32_t nc, const uint32_t nca, const uint32_t gro
         cb_wait_front(cb_page, 1);
         if constexpr (bfp) {
             dest_srca_mm_page_unpack_codes(
-                cb_page, 0, gguf::BFP_CODES, gguf::BFP_CODE_EXP, L.scale_offset, gguf::bfp_scale_words<fmt>());
+                cb_page,
+                0,
+                gguf::BFP_CODES,
+                gguf::BFP_CODE_EXP,
+                L.scale_offset,
+                gguf::bfp_scale_words<fmt>(),
+                experimental::gguf::paired_words_shift<static_cast<experimental::gguf::Format>(fmt)>(t));
         } else {
             dest_srca_mm_page_unpack(cb_page, 0);
         }

@@ -244,7 +244,8 @@ void pack_codes_bfp(const GgufTraits& f, const CodePlanes& p, const TileRows& t,
 }
 
 // Group g of a plane format: its scale rows and its group_tiles / page_tiles codes parts. A group with one codes part
-// stores it first, so that one read fills an L1 page in the decoder's order.
+// stores it first, so that one read fills an L1 page in the decoder's order; MXFP4 stores its scale row between its two
+// codes parts, so that one read fills its first page and its second page's codes are one more read.
 uint8_t* group_planes(
     DataType type, const GgufTraits& f, const CodePlanes& p, const TileRows& t, int64_t g, uint8_t* out) {
     uint32_t S[10][16] = {};
@@ -318,19 +319,20 @@ uint8_t* group_planes(
     }
     const int parts = int(f.group_tiles / f.page_tiles);
     std::array<uint32_t, 320> words{};  // the largest codes part, Q5_K's
-    if (parts > 1) {
-        out = put(out, S[0], 16 * int(f.scale_rows));
-    }
-    for (int i = 0; i < parts; ++i) {
+    const int scale_at = parts == 1 || type == GGUF_MXFP4 ? 1 : 0;  // the codes parts before the scale rows
+    for (int i = 0; i <= parts; ++i) {
+        if (i == scale_at) {
+            out = put(out, S[0], 16 * int(f.scale_rows));
+        }
+        if (i == parts) {
+            break;
+        }
         if (has_bfp_codes(type)) {
             pack_codes_bfp(f, p, t, parts * g + i, reinterpret_cast<uint8_t*>(words.data()));
         } else {
             pack_codes(f, p, t, parts * g + i, words.data());
         }
         out = put(out, words.data(), int(f.code_bytes / 4));
-    }
-    if (parts == 1) {
-        out = put(out, S[0], 16 * int(f.scale_rows));
     }
     return out;
 }

@@ -56,10 +56,19 @@ inline uint32_t reader_unit(const GgufTraits& f) {
     return pages_per_group > 1 ? pages_per_group : kGroupsPerRead;
 }
 
+// MXFP4: c_0 takes each record whole as two pages of a codes part and the scale row (the decoder's page of its first K
+// tile, then the second K tile's codes, which take their scale row from the first page): no staging ring.
+inline bool paired_pages(const GgufTraits& f) { return f.format_id == gguf_traits(DataType::GGUF_MXFP4).format_id; }
+
+// Bytes of a c_0 page: a record (packed), a codes part and the scale rows (paired) or the decoder's L1 page.
+inline uint32_t c0_page_bytes(const GgufTraits& f, bool packed) {
+    return packed ? f.page_bytes() : paired_pages(f) ? f.code_bytes + 64 * f.scale_rows : f.l1_page_bytes();
+}
+
 // L1 bytes of the weight reader's circular buffers (add_weight_reader_cbs).
 inline uint32_t weight_reader_l1_bytes(const GgufTraits& f) {
-    return kPageUnits * reader_unit(f) * f.l1_page_bytes() +
-           (f.group_tiles / f.page_tiles > 1 ? kRecordSlots * f.page_bytes() : 0);
+    return kPageUnits * reader_unit(f) * c0_page_bytes(f, false) +
+           (f.group_tiles / f.page_tiles > 1 && !paired_pages(f) ? kRecordSlots * f.page_bytes() : 0);
 }
 
 // Whether c_0 packs one-page-group records back to back (page = record) so that a read of several consecutive records
@@ -71,7 +80,8 @@ inline bool packed_pages(const Tensor& weight) {
 }
 
 // The weight reader's circular buffers on `cores`: c_0, the decoder's L1 pages (UInt32 tiles of the page's size;
-// packed: pages of one record), and for multi-page groups c_2, the staging ring.
+// packed: pages of one record; paired: two pages per record), and for the other multi-page groups c_2, the staging
+// ring.
 inline void add_weight_reader_cbs(
     Program& program, const CoreRangeSet& cores, const GgufTraits& f, bool packed = false) {
     const uint32_t l1_page = f.l1_page_bytes();
@@ -84,10 +94,10 @@ inline void add_weight_reader_cbs(
         cores,
         tt::CBIndex::c_0,
         tt::DataFormat::UInt32,
-        packed ? f.page_bytes() : l1_page,
+        c0_page_bytes(f, packed),
         kPageUnits * reader_unit(f),
         page_tile);
-    if (f.group_tiles / f.page_tiles > 1) {
+    if (f.group_tiles / f.page_tiles > 1 && !paired_pages(f)) {
         add_cb(program, cores, tt::CBIndex::c_2, tt::DataFormat::UInt32, kRecordSlots * f.page_bytes(), 1);
     }
 }
@@ -113,7 +123,7 @@ inline std::vector<uint32_t> weight_reader_args(
         address_sem,
         two_in_flight ? 2u : 1u,
         gguf_records_per_page(dtype, weight.logical_shape()[0]),
-        packed ? f.page_bytes() : f.l1_page_bytes()};
+        c0_page_bytes(f, packed)};
     TensorAccessorArgs(*weight.buffer()).append_to(args);
     return args;
 }

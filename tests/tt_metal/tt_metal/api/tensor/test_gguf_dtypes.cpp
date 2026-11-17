@@ -211,6 +211,30 @@ TEST(GgufDtypesTest, GroupedPagesHoldConsecutiveKGroups) {
     }
 }
 
+// An MXFP4 record is [codes of K tile 2g][the scale row][codes of K tile 2g + 1]: its first 576 bytes are the
+// decoder's first page. Scale row word w: bytes 0, 1 K tile 2g's scales, bytes 2, 3 K tile 2g + 1's.
+TEST(GgufDtypesTest, Mxfp4ScaleRowFollowsFirstCodes) {
+    const DataType dtype = DataType::GGUF_MXFP4;  // 17-byte blocks: an E8M0 scale, then 16 code bytes
+    const uint32_t k = 64, n = 32, row_blocks = k / 32;
+    std::vector<std::byte> blocks(gguf_bytes(dtype, k, n));
+    for (uint32_t col = 0; col < n; ++col) {
+        blocks[(col * row_blocks + 0) * 17] = std::byte(0x7F);
+        blocks[(col * row_blocks + 1) * 17] = std::byte(0x11);
+    }
+    const HostTensor tensor = from_gguf(blocks, gguf_spec(dtype, k, n));
+    const auto pages = host_buffer::get_host_buffer(tensor);
+    const auto bytes = pages.view_bytes();
+    ASSERT_EQ(bytes.size(), gguf_traits(dtype).page_bytes());
+    for (uint32_t w = 0; w < 16; ++w) {
+        SCOPED_TRACE(w);
+        EXPECT_EQ(bytes[512 + 4 * w + 0], std::byte(0x7F));
+        EXPECT_EQ(bytes[512 + 4 * w + 1], std::byte(0x7F));
+        EXPECT_EQ(bytes[512 + 4 * w + 2], std::byte(0x11));
+        EXPECT_EQ(bytes[512 + 4 * w + 3], std::byte(0x11));
+    }
+    EXPECT_EQ(to_gguf(tensor), blocks);
+}
+
 TEST(GgufDtypesTest, Tq2_0RefusesCode3) {
     const DataType dtype = DataType::GGUF_TQ2_0;
     auto blocks = random_blocks(gguf_bytes(dtype, 512, 32), 2);
