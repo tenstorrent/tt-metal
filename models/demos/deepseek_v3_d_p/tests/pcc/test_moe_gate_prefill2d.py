@@ -21,7 +21,6 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
@@ -32,7 +31,6 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     GATE_KEY_PREFIX_DEEPSEEK,
-    GATE_KEY_PREFIX_KIMI_K3,
     create_fabric_router_config,
     create_gate_weights,
     get_max_payload_size,
@@ -65,7 +63,6 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBO
 GATE_MODELS = {
     "dsv3": DeepSeekV3Config,
     "kimi_k2_7": KimiK27Config,
-    "kimi_k3": KimiK3Config,
     "glm_5_3": GLM53Config,
     "minimax_m2_7": MiniMaxM27Config,
     "gpt_oss_120b": GptOss120BConfig,
@@ -141,13 +138,6 @@ _REAL_GATE_SOURCES = {
         ),
         hf_repo="deepseek-ai/DeepSeek-V3",
         key_prefix_template=GATE_KEY_PREFIX_DEEPSEEK,
-    ),
-    # K3's router is the one MoE tensor group the checkpoint leaves unquantized.
-    "kimi_k3": _RealGateSource(
-        env_var="KIMI_K3_HF_MODEL",
-        fallbacks=("/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e",),
-        hf_repo="moonshotai/Kimi-K3",
-        key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
     ),
 }
 
@@ -294,8 +284,6 @@ REGULAR_GATE_CASES = [
     pytest.param("dsv3", GateComputeMode.DEVICE_FP32, id="dsv3-device_fp32"),
     pytest.param("kimi_k2_7", GateComputeMode.HOST_ALL, id="kimi_k2_7-host_all"),
     pytest.param("kimi_k2_7", GateComputeMode.DEVICE_FP32, id="kimi_k2_7-device_fp32"),
-    pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
-    pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
     pytest.param("glm_5_3", GateComputeMode.HOST_ALL, id="glm_5_3-host_all"),
     pytest.param("glm_5_3", GateComputeMode.DEVICE_FP32, id="glm_5_3-device_fp32"),
     pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
@@ -569,10 +557,8 @@ def test_forward_pass(
     adjust_shapes_for_testing(config, mesh_device)
 
     # DeepSeek-V3's weights can't be reshaped to other expert counts or activations, so that path
-    # stays pinned to 256 experts + sigmoid; K3 loads its own 896-expert router.
-    use_real_weights = (
-        gate_model == "dsv3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
-    ) or gate_model == "kimi_k3"
+    # stays pinned to 256 experts + sigmoid.
+    use_real_weights = gate_model == "dsv3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
     gate_w = _try_load_real_gate_weights(gate_model, config.n_routed_experts, config.dim) if use_real_weights else None
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)

@@ -73,6 +73,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_device_params
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -109,6 +110,22 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
 # sync with the glm_5_3 runner adapter.
 GLM_L1_SMALL_SIZE = 1536
+
+
+def _k3_device_params():
+    """K3's mesh: the XY torus (K3's MoE, the MoE block, hangs at its first call on the 2D mesh fabric) with a fabric
+    payload of one combine row (tt/moe_impl.py)."""
+    return moe_block_device_params(
+        KimiK3Config,
+        fabric2d_device_params(
+            fabric_payload_size=moe_fabric_payload(KimiK3Config),
+            l1_small_size=KimiK3Config.L1_SMALL_SIZE,
+            trace_region_size=256 * 1024 * 1024,
+            fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ),
+    )
+
+
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
@@ -1708,6 +1725,29 @@ def _llama4_scale_buffer(transformer, chunk_size_global):
     return rope_setup.make_llama4_scale_buffer(chunk_size_global) if rope_setup is not None else None
 
 
+def _kv_divergence_by_iteration(det_copies, chips):
+    """Where a non-deterministic KV cache came apart, for the failure message: per iteration, on the first and the
+    last failing chip, the elements that differ from iteration 0 by cache slab (dim 0: user slot x MLA layer) and the
+    sequence rows (dim -2) they span."""
+    lines = []
+    for chip in sorted({chips[0], chips[-1]}):
+        want = ttnn.to_torch(ttnn.get_device_tensors(ttnn.from_device(det_copies[0]))[chip])
+        for it, copy in enumerate(det_copies[1:], start=1):
+            got = ttnn.to_torch(ttnn.get_device_tensors(ttnn.from_device(copy))[chip])
+            differs = want != got
+            if not differs.any():
+                lines.append(f"  chip {chip} iteration {it}: identical")
+                continue
+            per_slab = differs.flatten(1).sum(dim=1)
+            slabs = {int(i): int(per_slab[i]) for i in torch.nonzero(per_slab).flatten()}
+            rows = torch.nonzero(differs.transpose(0, -2).flatten(1).any(dim=1)).flatten()
+            lines.append(
+                f"  chip {chip} iteration {it}: {int(differs.sum())} differ; slabs {slabs}; "
+                f"rows {int(rows[0])}..{int(rows[-1])} ({len(rows)} rows)"
+            )
+    return "KV divergence by iteration (shape " + str(tuple(want.shape)) + "):\n" + "\n".join(lines)
+
+
 def run_chunked_transformer_updated(
     variant,
     config,
@@ -2423,6 +2463,8 @@ def run_chunked_transformer_updated(
                 ttnn.deallocate(mismatch)
             chips = marker_chips(det_marker)
             detail = mismatch_report(["KV cache, last iteration"], [det_copies[0]], [det_copies[-1]]) if chips else ""
+            if chips:
+                detail += "\n" + _kv_divergence_by_iteration(det_copies, chips)
         finally:
             for t in [det_marker, *det_copies]:
                 if t is not None:
@@ -2936,14 +2978,10 @@ def test_kimi_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(KimiK3Config),
-                l1_small_size=KimiK3Config.L1_SMALL_SIZE,
-                trace_region_size=256 * 1024 * 1024,
-            ),
+            _k3_device_params(),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
