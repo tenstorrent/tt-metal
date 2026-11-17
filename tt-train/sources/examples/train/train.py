@@ -586,11 +586,7 @@ def run_training(
     )
 
     def _causal_lm_loss(logits, batch):
-        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
-            return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                logits, batch.labels, cluster_axis=mesh.axis_index("tp"), reduce=ttml.ops.ReduceType.MEAN
-            )
-        return ttml.ops.loss.cross_entropy_loss(logits, batch.labels, ttml.ops.ReduceType.MEAN)
+        return ttml.parallel.cross_entropy_loss(logits, batch.labels, ttml.ops.ReduceType.MEAN)
 
     trainer = SFTTrainer(
         model=model,

@@ -2,13 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tensor-parallel strategy for TTML models, and the marker for parameters with partial gradients."""
+"""Tensor-parallel strategy for TTML models, the marker for parameters with partial gradients, and the cross-entropy
+loss for logits that tensor parallelism may leave sharded along the vocab."""
 
 from __future__ import annotations
 
 from enum import Enum
 from typing import Any
 
+import ttml
 from ttml.modules.module_base import AbstractModuleBase
 from ttml.modules.parameter import Parameter
 
@@ -81,3 +83,23 @@ def partial_axes(param_tensor: Any) -> frozenset[str]:
 
 def _add_partial_axis(param_tensor: Any, axis_name: str) -> None:
     param_tensor._partial_axes = partial_axes(param_tensor) | {axis_name}
+
+
+def cross_entropy_loss(
+    logits: ttml.autograd.Tensor, targets: ttml.autograd.Tensor, reduce: ttml.ops.ReduceType, *, axis_name: str = "tp"
+) -> ttml.autograd.Tensor:
+    """Cross-entropy of LM logits, however the LM head laid them out across mesh axis ``axis_name``.
+
+    Vocab-sharded logits (from a column-parallel head that does not gather its output) go to
+    ``ttml.ops.distributed.vocab_parallel_cross_entropy_loss``. Logits that hold the whole vocab on every device go to
+    ``ttml.ops.loss.cross_entropy_loss``. The layout is read from the logits' label. Logits sharded along any other dim
+    are refused by the vocab-parallel loss.
+    """
+    mesh = ttml.mesh()
+    if mesh.has_axis(axis_name) and mesh.axis_size(axis_name) > 1:
+        axis = mesh.axis_index(axis_name)
+        if ttml.sharding.shard_dim(logits, axis) is not None:
+            return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                logits, targets, cluster_axis=axis, reduce=reduce
+            )
+    return ttml.ops.loss.cross_entropy_loss(logits, targets, reduce)
