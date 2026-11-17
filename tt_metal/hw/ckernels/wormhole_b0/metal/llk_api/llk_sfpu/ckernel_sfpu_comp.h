@@ -272,26 +272,30 @@ inline void calculate_comp_unary_int(int scalar) {
     // by a software sign-magnitude conversion cancelled on every word except INT_MIN, which
     // it turned into 0 (eq(INT_MIN, INT_MIN) read 0, eq(INT_MIN, 0) read 1).
     //
-    // Per row: load, store the default result, SFPIADD + SFPSETCC for the equality, store the
-    // other result into the enabled lanes, SFPENCC, TTINCRWC. (A store-side increment would
-    // save the TTINCRWC, but it needs physical ADDR_MOD_6 programmed by this op's init, and
-    // unary_eq/ne share their init with the float kernels across architectures.)
+    // No lane predication: v == s iff lz(v - s) == 32 (SFPLZ returns 32 only for 0), so
+    // eq = lz >> 5 and ne = (lz - 32) >> 31, both logical shifts giving exactly 0 or 1.
+    // Two rows share one TTINCRWC; its immediate cannot advance more than three rows. (A
+    // store-side increment would save the TTINCRWC, but it needs physical ADDR_MOD_6 programmed
+    // by this op's init, and unary_eq/ne share their init with the float kernels across
+    // architectures.)
     const vInt s = scalar;
-    const vInt one = 1;
 
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
+    auto row = [&](const int r) __attribute__((always_inline)) {
+        vInt v = dst_reg[r].mode<sfpi::DataLayout::I32>();
+        vUInt z = lz(v - s);
         if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            dst_reg[0].mode<sfpi::DataLayout::I32>() = vInt(0);
-            v_if(s == v) { dst_reg[0].mode<sfpi::DataLayout::I32>() = one; }
-            v_endif;
+            dst_reg[r].mode<sfpi::DataLayout::I32>() = sfpi::as<vInt>(z >> 5);
         } else {
-            dst_reg[0].mode<sfpi::DataLayout::I32>() = one;
-            v_if(s == v) { dst_reg[0].mode<sfpi::DataLayout::I32>() = vInt(0); }
-            v_endif;
+            dst_reg[r].mode<sfpi::DataLayout::I32>() = sfpi::as<vInt>((z - 32) >> 31);
         }
-        dst_reg++;
+    };
+
+    static_assert(ITERATIONS % 2 == 0, "calculate_comp_unary_int processes two rows per iteration");
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        row(0);
+        row(1);
+        dst_reg += 2;
     }
 }
 
