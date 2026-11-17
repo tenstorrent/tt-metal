@@ -277,6 +277,44 @@ def test_rng_state_of_the_wrong_length_changes_no_generator(damage, expect_error
     assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
 
 
+def _set_ttml_token(own: dict, index: int, value: str) -> None:
+    tokens = own["ttml"].split()
+    tokens[index] = value
+    own["ttml"] = " ".join(tokens)
+
+
+# Valid JSON of the right length that a setter would misread: the ttml text the C++ stream stops partway through
+# (non-ASCII digits, a word past 64 bits) or reads into a state no mt19937 has (a word past 32 bits, a position past
+# 624), and a cached Gaussian Python's setstate keeps but the next random.gauss cannot use.
+MISREAD = [
+    pytest.param(lambda own: _set_ttml_token(own, 5, "\u00b2"), id="ttml_superscript_digit"),
+    pytest.param(lambda own: _set_ttml_token(own, 5, "\u0663"), id="ttml_arabic_indic_digit"),
+    pytest.param(lambda own: _set_ttml_token(own, 5, str(2**32)), id="ttml_word_past_32_bits"),
+    pytest.param(lambda own: _set_ttml_token(own, 5, str(2**64)), id="ttml_word_past_64_bits"),
+    pytest.param(lambda own: _set_ttml_token(own, -1, "625"), id="ttml_position_past_624"),
+    pytest.param(lambda own: own["python"].update(gauss_next="corrupt"), id="python_gauss_next_text"),
+    pytest.param(lambda own: own["python"].update(gauss_next=[0.5]), id="python_gauss_next_list"),
+    pytest.param(lambda own: own["python"].update(gauss_next=True), id="python_gauss_next_bool"),
+]
+
+
+@pytest.mark.parametrize("damage", MISREAD)
+def test_rng_state_a_setter_would_misread_is_refused_and_changes_no_generator(damage, expect_error):
+    ctx = ttml.autograd.AutoContext.get_instance()
+    block = capture_rng(world_rank=0)
+    broken = json.loads(json.dumps(block))
+    damage(broken["ranks"]["0"])
+    before = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1].copy(), torch.get_rng_state())
+    with expect_error(CheckpointError, "the stored RNG state is malformed .*pass rng=False to load"):
+        check_train_state({"rng": broken}, rng=True, world_rank=0)
+    with expect_error(CheckpointError, "the stored RNG state is malformed"):
+        restore_rng(broken, world_rank=0)
+    after = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1], torch.get_rng_state())
+    assert after[0] == before[0] and after[1] == before[1], "ttml and python untouched"
+    assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
+    check_train_state({"rng": broken}, rng=False)  # not asked for: not decoded, so a load without rng goes ahead
+
+
 class _TupleLoader(Loader):
     """Stores a tuple, as random.Random().getstate() returns, and wants it back as one."""
 
