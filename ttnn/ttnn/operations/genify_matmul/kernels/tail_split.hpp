@@ -3,6 +3,10 @@
 
 // Tail write split (Perf, tail_writes_both_nocs): split the LAST block's output write stream between the writer
 // (BRISC / NoC1) and the reader (NCRISC / NoC0), which is idle once its K-walk is done.
+// Scope: the LAST block-batch of the core's last block (Refinement 12). Its output is produced only after the
+// reader's final K-block push, so the reader can always serve it; holding an EARLIER batch of a multi-batch
+// block (block_batches > 1) for the reader deadlocks (output CB full -> compute stalls -> reader's input
+// reserve never returns).
 //
 // The output CB keeps ONE consumer (the writer: cb_wait_front / cb_pop_front). Per batch of the tail the
 // writer posts the batch's L1 address (mailbox) and a sequence number, issues its own share, flushes, then

@@ -32,3 +32,8 @@
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-17T15:19:53+00:00"}
 {"event":"test_run","refinement":11,"result":"pass","detail":"split cost model + MIN_K_BLOCKS=8 (R1a helper walks): proj_out 160->67, te_qkv 233->128, s_out 1978->1493, s_ff1 2588->2152; unit 588 pass; guard no regression","ts":"2026-11-17T15:54:18+00:00"}
 {"event":"test_run","refinement":11,"result":"pass","detail":"final: 13/15 model cases at/under stock (q4096 +0.2% noise), te_o/te_down DM floor 82.3/509.5 us; guard 140 cells geomean 0.93 worst +2.9%; golden interleaved 429/75xf; unit 650+52","ts":"2026-11-17T16:42:54+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"debug-ttnn-op","args":"","ts":"2026-11-17T23:22:15+00:00"}
+{"event":"hypothesis","text":"bf16 1x32x512x128 @ batched 128x1024 plans R1a with block_batches=32 (one block per core). Tail split covers the whole last block: writer posts batch 0 and holds pop until reader serves, but reader only serves after its full 32-batch walk; output CB (DEPTH_OUT=2 row groups) fills, compute stalls, reader blocks in cb_reserve_back -> deadlock. bfp8 picks block_batches=1 so the tail starts after the walk.","ts":"2026-11-17T23:22:15+00:00"}
+{"event":"test_run","result":"hang reproduced","detail":"64 BRISC in tail_split::wait_at_least, 64 NCRISC in cb_reserve_back","ts":"2026-11-17T23:32:38+00:00"}
+{"event":"fix_applied","detail":"tail split scoped to the last block-batch of the last block (writer bi+1==block_batches; reader t_bi)","ts":"2026-11-17T23:32:38+00:00"}
+{"event":"test_run","result":"pass","detail":"tail_split 10/10, golden targets plain+dev 3/3, golden batched interleaved 78p/15xf, unit 105/105; bfp8 H pass 66.6->67.6us median (noise)","ts":"2026-11-17T23:32:38+00:00"}

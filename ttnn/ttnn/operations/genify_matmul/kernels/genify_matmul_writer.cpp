@@ -213,13 +213,17 @@ void kernel_main() {
                         }
                     }
                 }
-                // tail_writes_both_nocs: the core's LAST block (its reader has finished every read by the time
-                // this block's output arrives) is split with the reader.
-                const bool tail =
-                    tail_split::active && !out_in_place && bb + 1 == nb_b && mb + 1 == nb_m && nbk + 1 == nb_n;
+                const bool last_block = bb + 1 == nb_b && mb + 1 == nb_m && nbk + 1 == nb_n;
                 for (uint32_t bi = 0; bi < block_batches; ++bi) {
                     const bool batch_valid = bi < blk_b_valid;
                     const uint32_t batch = b0 + blk_b0 + bi;
+                    // tail_writes_both_nocs: the LAST batch of the core's LAST block is split with the reader.
+                    // Its output exists only once the reader has pushed its final K-block, so the reader is
+                    // free to serve it. An earlier batch of a multi-batch block (R1d) must NOT be held for the
+                    // reader: the reader is still walking the block's later batches, the held output CB stalls
+                    // compute, compute stops freeing the input CBs, and the reader never gets there (Refinement
+                    // 12: bf16 PDL H pass, block_batches = 32, deadlock).
+                    const bool tail = tail_split::active && !out_in_place && last_block && bi + 1 == block_batches;
                     for (uint32_t g = 0; g < num_row_groups; g += write_batch) {
                         {
                             MaybeDeviceZoneScope("wr_wait_out");

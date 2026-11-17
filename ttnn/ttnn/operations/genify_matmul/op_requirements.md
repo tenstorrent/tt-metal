@@ -404,7 +404,7 @@ Likely levers:
 - **Guard set** (140 cells, every perf file incl. PERF FOCUS 1–4, sharded): geomean 0.93×, no cell slower beyond +2.9% (R1b / M = 1 cells with identical plans, noise band); PERF FOCUS 1 391.1 → 391.4, 2 29.8 → 29.9, 3 66.6 → 66.0, 4 617.5 → 616.8. Golden interleaved slice 429 passed / 75 xfailed; translated + regression unchanged (212 passed, the 14 pre-existing cache-count failures).
 - **Next** (not done): move the R1a B-line injection onto the writer RISC (BRISC / NoC1, as R1b does for A) so B reads overlap the A-line rounds — the only lever that moves the te_o / te_down DM floor; the in-RISC prefetch cannot, because its read issue blocks the same RISC that multicasts. Not done here: it is a reader / writer topology restructure of its own, and both remaining gaps are within 9% of stock with a measured floor.
 
-### [ ] Refinement 12 — Hang: bf16 batched-weight matmul (PDL upsample H pass in bf16)
+### [x] Refinement 12 — Hang: bf16 batched-weight matmul (PDL upsample H pass in bf16)
 
 *Filed by the run operator for the #65150 follow-up (the model integration on tt-metal branch `avelickov/65150-matmul-integration`). Refinements 12–18 aim the op at the roofline: `extras.roofline_ns` is now set on every golden model case. Device times below are from run 1137's last golden run, with the roofline in brackets.*
 
@@ -423,6 +423,8 @@ Find the root cause and fix it for every shape and dtype it can reach. A guard o
 - Both golden cases pass, with and without `--dev`.
 - A focused test in `tests/ttnn/unit_tests/operations/genify_matmul/` pins it: bf16 and bfp8, B in DRAM and in L1.
 - Golden is otherwise green, and PERF FOCUS 4 (the bfp8 H pass) is no slower.
+
+**Outcome**: root cause = the tail write split (`tail_split.hpp`) held the WHOLE last block's output for the reader, but on a multi-batch block (block_batches > 1; bf16 plans R1a with block_batches = 32, bfp8 plans block_batches = 1) the reader only serves after its walk over the block's later batches -> output CB full -> compute stalls -> reader stuck in `cb_reserve_back` (triage: 64 writers in `wait_at_least`, 64 readers in `cb_reserve_back`). Fix: the split covers only the tail block's LAST batch, whose output exists only after the reader's final K-block push, so the handshake has no cycle for any block_batches / K-block / depth / dtype. Both golden cases pass with and without `--dev`; bf16 H pass now runs in 136.0 us (it hung before). bfp8 H pass: 66.6 -> 67.6 us (medians of 4 A/B runs on the same box, +1.5%: inside the noise band; bfp8's block_batches = 1 goes through the same handshake). Not done here: the bf16 H pass is 2x the bfp8 one. Its plan (R1a, 32-batch blocks of 2x4 tiles, 8x8 grid) has not been profiled; that is perf work for a later round.
 
 ### [ ] Refinement 13 — Split output: `chunks` (FLUX.2 QKV ×3, time_mod ×17)
 

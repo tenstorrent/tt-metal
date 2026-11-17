@@ -352,12 +352,15 @@ void kernel_main() {
     const uint32_t t_blk_rows = block_extent(t_rows_valid, t_blk_r0, block_m_tiles);
     const uint32_t t_blk_c0 = (t_nb_n - 1) * t_out_block_n;
     const uint32_t t_blk_cols = block_extent(t_cols_valid, t_blk_c0, t_out_block_n);
+    // The tail is the LAST block-batch of that block only (see the writer): its output follows the reader's final
+    // K-block push, so serving it after the walk can never hold the writer while this reader still has reads.
+    constexpr uint32_t t_bi = block_batches - 1;
     uint32_t tail_served = 0;  // writer batches of the tail this reader has served
-    // Serve the reader's share of tail batch s (0-based, writer order: bi major, row-group batch minor).
+    // Serve the reader's share of tail batch s (0-based, writer order: row-group batches of batch t_bi).
     auto serve_one = [&]() {
         const uint32_t s = tail_served;
-        const uint32_t bi = s / t_groups_per_batch;
-        const uint32_t g = (s % t_groups_per_batch) * t_write_batch;
+        constexpr uint32_t bi = t_bi;
+        const uint32_t g = s * t_write_batch;
         tail_split::wait_at_least(tail_post, s + 1);
         const uint32_t l1_base = tail_split::read(tail_mbox);
         if (bi < t_blk_b_valid) {
@@ -384,10 +387,9 @@ void kernel_main() {
     };
     // Serve every tail batch whose last row group (global over the block's batches) is < `rg_end`.
     [[maybe_unused]] auto serve_before = [&](uint32_t rg_end) {
-        while (tail_served < block_batches * t_groups_per_batch) {
+        while (tail_served < t_groups_per_batch) {
             const uint32_t s = tail_served;
-            const uint32_t last_rg = (s / t_groups_per_batch) * num_row_groups +
-                                     (s % t_groups_per_batch) * t_write_batch + t_write_batch - 1;
+            const uint32_t last_rg = t_bi * num_row_groups + s * t_write_batch + t_write_batch - 1;
             if (last_rg >= rg_end) {
                 break;
             }
