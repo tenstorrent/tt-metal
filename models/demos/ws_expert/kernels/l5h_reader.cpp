@@ -81,7 +81,9 @@ void kernel_main() {
     constexpr auto cargs = TensorAccessorArgs<iargs.next_compile_time_args_offset()>();
     constexpr auto targs = TensorAccessorArgs<cargs.next_compile_time_args_offset()>();
     constexpr auto wargs = TensorAccessorArgs<targs.next_compile_time_args_offset()>();
-    [[maybe_unused]] constexpr auto dargs = TensorAccessorArgs<wargs.next_compile_time_args_offset()>();
+#if defined(WL5_Y_RM)
+    constexpr auto dargs = TensorAccessorArgs<wargs.next_compile_time_args_offset()>();
+#endif
     static_assert(RD >= 1 && RD <= 8);
 #if defined(WL5_GATHER0)
     constexpr bool GATHER0 = true;  // (the BRISC gathers x on NOC0: diagnostic)
