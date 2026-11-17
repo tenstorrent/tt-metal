@@ -77,6 +77,29 @@ kill_stragglers() {
   for host in $(host_names); do ssh -o BatchMode=yes "$host" "pkill -9 -f '$probe_pat'" 2>/dev/null || true; done
 }
 
+# Kill ONLY this job's prted on $1. The rank on that host runs under this job's prted, so we find this run's rank
+# by its unique probe path (pgrep -f "$probe_pat") and walk up the process ancestry (ps -o ppid=) to the first
+# prted — that is our daemon, killed by its one PID. This scopes the fault to this job (a concurrent job's prted
+# on a shared host is never touched) and fails loudly if there is no rank or no prted ancestor to kill, so a
+# no-op injection cannot masquerade as a teardown. $probe_pat is expanded here and handed to the remote shell as
+# PROBE_PAT, which keeps the remote script free of nested quoting.
+kill_this_jobs_prted() {
+  local host="$1"
+  ssh -o BatchMode=yes "$host" "PROBE_PAT='$probe_pat' bash -s" <<'REMOTE'
+    rank=$(pgrep -f "$PROBE_PAT" | head -1)
+    [ -n "$rank" ] || { echo "no rank matching the probe on this host"; exit 2; }
+    pid=$rank
+    while [ "${pid:-1}" -gt 1 ]; do
+      if [ "$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')" = prted ]; then
+        kill -9 "$pid" && { echo "killed this job's prted (pid $pid, ancestor of rank $rank)"; exit 0; }
+        echo "found prted $pid but could not kill it"; exit 4
+      fi
+      pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    done
+    echo "rank $rank has no prted ancestor"; exit 3
+REMOTE
+}
+
 failures=0
 # assert a teardown shape. usage: expect <clean|torn_down> <name> <exit-code> [exact-code]
 #   clean      -> the job must exit 0
@@ -129,13 +152,21 @@ PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" \
   timeout 120 "$launcher" --timeout 30 --report-state-on-timeout "${launch[@]}" "$probe"
 expect torn_down "multihost_remote_hang_timeout" $? 241  # PRRTE --timeout 30 must end it with 241, not a hang
 
-echo "--- 4. the daemon on the remote host is killed (P19): with the plain launcher PRRTE aborts the job instead of"
-echo "       exiting 0 and orphaning the launch-host rank. We kill the remote prted while the ranks wait; the job"
-echo "       must end non-zero with nothing left. (--timeout is only a backstop so the case cannot hang CI.)"
-( sleep 10; ssh -o BatchMode=yes "$last_host" "pkill -9 -x prted || pkill -9 -f '[p]rted'" 2>/dev/null || true ) &
+echo "--- 4. the daemon on the remote host is killed (P19): with the plain launcher PRRTE must abort the job itself"
+echo "       instead of exiting 0 and orphaning the launch-host rank. We wait for this job's rank to come up on the"
+echo "       remote host, kill ONLY this job's prted there, and require PRRTE's own abort (a fast non-zero). There"
+echo "       is no --timeout backstop on purpose: if PRRTE does not abort, the rank hangs, the outer 'timeout 120'"
+echo "       ends it with 124, and expect rejects that as the failure — so the case tests the abort, not the clock."
+( for _ in $(seq 1 30); do
+    ssh -o BatchMode=yes "$last_host" "pgrep -f '$probe_pat' >/dev/null 2>&1" && break; sleep 1
+  done
+  kill_this_jobs_prted "$last_host" || echo "::error::daemon-death fault was not injected on $last_host" ) &
+inject_pid=$!
 PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" \
-  timeout 120 "$launcher" --timeout 60 --report-state-on-timeout "${launch[@]}" "$probe"
-expect torn_down "multihost_remote_daemon_death" $?
+  timeout 120 "$launcher" "${launch[@]}" "$probe"
+rc=$?
+wait "$inject_pid"  # require the injector to finish and report what it did before we judge the teardown
+expect torn_down "multihost_remote_daemon_death" $rc
 
 # --------------------------------------------------------------------------------------------------------------
 kill_stragglers
