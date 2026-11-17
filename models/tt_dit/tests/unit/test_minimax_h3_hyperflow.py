@@ -165,7 +165,7 @@ def test_an_omitted_step_count_defers_to_the_adapter(monkeypatch, contract, pass
     """A HyperFlow request may leave the step count out; a mismatch still reaches `_build_schedulers`,
     which refuses it."""
     seen = {}
-    monkeypatch.setattr(MiniMaxH3Pipeline, "__call__", lambda self, prompt, **kwargs: seen.update(kwargs))
+    monkeypatch.setattr(MiniMaxH3Pipeline, "_run", lambda self, prompt, **kwargs: seen.update(kwargs))
     pipeline = _pipeline(warming=False, contract=contract)
     pipeline("a prompt", num_inference_steps=passed, seed=3)
     assert seen.get("num_inference_steps", "default") == forwarded
