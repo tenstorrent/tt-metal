@@ -361,7 +361,15 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
               {uint32_t(v0.x), uint32_t(v0.y), uint32_t(v1.x), uint32_t(v1.y)}}});
     }
 
-    const std::map<std::string, std::string> defines = lookup_defines(weight);
+    uint32_t most_records = 0;  // a plan core's records (K groups of N tiles), the largest
+    for (const auto& segments : plan) {
+        uint32_t records = 0;
+        for (const Segment& s : segments) {
+            records += s.role == kFinish ? 0 : s.g1 - s.g0;
+        }
+        most_records = std::max(most_records, records);
+    }
+    const std::map<std::string, std::string> defines = lookup_defines(weight, most_records);
     if (lookup_counts) {
         // The page counts of the compute kernel's lookups (gguf_matmul_compute.cpp).
         add_cb(program, compute, tt::CBIndex::c_3, tt::DataFormat::UInt32, 64, 1, tt::tt_metal::Tile());

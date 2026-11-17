@@ -119,13 +119,17 @@ inline std::vector<uint32_t> weight_reader_args(
 }
 
 // Codebook formats: each page's index words in GGUF_LOOKUP_PARTS equal parts, looked up by the reader, the writer, and
-// the compute kernel's math and unpack threads; the pack thread takes the rest. IQ2_XXS and IQ2_XS: eighths, three of
-// them on the writer, which then gets each record before the reader's scale work (measured, decode). An expanded
-// codebook layout holds the level codes: no lookups.
-inline std::map<std::string, std::string> lookup_defines(const Tensor& weight) {
+// the compute kernel's math and unpack threads; the pack thread takes the rest. IQ2_XXS and IQ2_XS, and IQ2_S on cores
+// of at least kIq2sEighthsRecords records (`most_records`: a core's records, the most of any core; 0 if unknown):
+// eighths, three of them on the writer, which then gets each record before the reader's scale work (measured, decode).
+// An expanded codebook layout holds the level codes: no lookups.
+inline std::map<std::string, std::string> lookup_defines(const Tensor& weight, uint32_t most_records = 0) {
+    // IQ2_S cores of fewer records lose to the eighths (measured at 2.3 to 4.7 records per core).
+    constexpr uint32_t kIq2sEighthsRecords = 8;
     const GgufTraits& f = gguf_traits(weight.dtype());
     const bool expanded = is_gguf_expanded(weight.dtype()) && f.code_offset > 0;
-    const bool eighths = weight.dtype() == DataType::GGUF_IQ2_XXS || weight.dtype() == DataType::GGUF_IQ2_XS;
+    const bool eighths = weight.dtype() == DataType::GGUF_IQ2_XXS || weight.dtype() == DataType::GGUF_IQ2_XS ||
+                         (weight.dtype() == DataType::GGUF_IQ2_S && most_records >= kIq2sEighthsRecords);
     struct LookupSplit {
         uint32_t parts, reader, writer, math, unpack;
     };
