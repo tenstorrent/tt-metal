@@ -2850,6 +2850,11 @@ constexpr bool matmul_kernel_ttsync_block(
     const std::uint32_t throttle = 0,
     const bool l1_acc            = false)
 {
+    // a LoFi block of two rows and two columns polls: its ttsync unpack read 6 to 7 cy/block slower than main (census 65c1c, six keys)
+    if (fidelity == MathFidelity::LoFi && rt >= 2 && ct >= 2)
+    {
+        return false;
+    }
     // one k step, and the Bfp8_b 3x1 block of two, measured slower than the polling production block (G2 census, 10 of 10 points)
     // the LoFi class rule serves one-tile blocks only (llk_matmul_unpack_ttsync), so a larger LoFi block keeps its cell pick
     const bool class_serves = matmul_kernel_ttsync(fidelity, full_sync, fp32_dest, formats) && !(fidelity == MathFidelity::LoFi && !(rt == 1 && ct == 1));
