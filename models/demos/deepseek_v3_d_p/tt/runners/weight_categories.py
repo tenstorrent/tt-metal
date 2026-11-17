@@ -72,7 +72,10 @@ def _mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, model_cfg
     sparse = hf_config is not None and resolve_has_indexer(hf_config)
     owns_indexer = sparse and not indexer_layer_is_reused(hf_config, layer_idx)
     replicated = sparse and ttMLA.replicates_wkv_b1(hf_config, tp_factor, sparse)
-    for name in ttMLA.weight_names(bool(getattr(model_cfg, "USE_OUTPUT_GATE", False))):
+    names = ttMLA.weight_names(
+        bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)), bool(getattr(model_cfg, "USE_LEARNABLE_SINK", False))
+    )
+    for name in names:
         stem = f"{prefix}.mla_repl.{name}" if replicated and name == "wkv_b1" else f"{prefix}.mla.{name}"
         if not pattern_exists(f"{stem}*.tensorbin", "MLA"):
             return False

@@ -51,11 +51,37 @@ class ttMLA:
     ]
 
     @staticmethod
-    def weight_names(has_output_gate: bool = False) -> list[str]:
-        """Cache-file stems for this MLA flavour. ``g_proj`` is appended only for gated MLA (Kimi-K3):
-        adding it to ``MLA_WEIGHT_NAMES`` unconditionally would make every existing non-gated cache
-        report itself incomplete via ``check_cache_complete`` and get rebuilt."""
-        return ttMLA.MLA_WEIGHT_NAMES + (["g_proj"] if has_output_gate else [])
+    def weight_names(has_output_gate: bool = False, has_sink: bool = False) -> list[str]:
+        """Cache-file stems for this MLA flavour. ``g_proj`` is appended only for gated MLA (Kimi-K3,
+        Hy4-preview) and ``attn_sink`` only for the learnable per-head sink (Hy4-preview): adding either
+        to ``MLA_WEIGHT_NAMES`` unconditionally would make every existing cache without it report itself
+        incomplete via ``check_cache_complete`` and get rebuilt."""
+        return ttMLA.MLA_WEIGHT_NAMES + (["g_proj"] if has_output_gate else []) + (["attn_sink"] if has_sink else [])
+
+    @staticmethod
+    def softmax_scale(config) -> float:
+        """The attention softmax scale: ``qk_head_dim ** -0.5``, times DeepSeek's YaRN ``mscale ** 2`` when
+        ``rope_scaling`` carries a ``factor`` > 1 (and the model does not opt out, see __init__)."""
+        scale = (config.qk_nope_head_dim + config.qk_rope_head_dim) ** -0.5
+        rope_scaling = getattr(config, "rope_scaling", None) or {}
+        rope_factor = rope_scaling.get("factor")
+        if rope_factor is not None and rope_factor > 1.0 and not getattr(config, "mla_disable_yarn_mscale", False):
+            mscale = 0.1 * rope_scaling["mscale"] * math.log(rope_factor) + 1.0
+            scale = scale * mscale * mscale
+        return scale
+
+    @staticmethod
+    def sink_for_sparse_sdpa(sink: torch.Tensor, scale: float) -> torch.Tensor:
+        """The learnable per-head sink ``[H]`` (one extra softmax logit per head, HF ``hy_v4``) in the form
+        ``sparse_sdpa``'s ``attention_sink`` takes: ``[1, 1, 1, H]``, divided by the softmax scale.
+
+        The op multiplies the sink by ``scale`` together with QK and adds ``exp`` of it to each head's
+        softmax denominator only; the model's sink is already a logit (it is not scaled with QK), so
+        dividing here cancels the op's multiply -- the same convention DeepSeek-V4's sinks use
+        (``v4_attention_base.py``)."""
+        if scale == 0:
+            raise ValueError("softmax scale must be non-zero to pre-divide the attention sink")
+        return (sink.detach().float().reshape(1, 1, 1, -1) / scale).to(torch.bfloat16)
 
     @staticmethod
     def reshards_heads_to_seq(tp_factor: int) -> bool:
@@ -94,7 +120,11 @@ class ttMLA:
 
     @staticmethod
     def check_cache_complete(
-        cache_path: Path, cache_name_prefix: str, has_indexer: bool = False, has_output_gate: bool = False
+        cache_path: Path,
+        cache_name_prefix: str,
+        has_indexer: bool = False,
+        has_output_gate: bool = False,
+        has_sink: bool = False,
     ) -> bool:
         """Check that the dense MLA weight cache files exist, plus the indexer tensorbins when sparse.
 
@@ -102,10 +132,10 @@ class ttMLA:
         (``{prefix}.indexer_*``) must also be complete — a disjoint prefix space from the dense MLA
         names, so the dense loop here never matches indexer files and vice versa
         (see ``TtIndexer.check_cache_complete``). ``has_output_gate=True`` additionally requires
-        ``g_proj`` (Kimi-K3)."""
+        ``g_proj`` (Kimi-K3, Hy4-preview); ``has_sink=True`` requires ``attn_sink`` (Hy4-preview)."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
-        for name in ttMLA.weight_names(has_output_gate):
+        for name in ttMLA.weight_names(has_output_gate, has_sink):
             if not pattern_exists(f"{cache_name_prefix}.{name}*.tensorbin", "MLA"):
                 logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}")
                 return False
@@ -155,6 +185,7 @@ class ttMLA:
         hidden_size = config.hidden_size
         qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
         use_gate = bool(getattr(config, "mla_use_output_gate", False))
+        use_sink = bool(getattr(config, "mla_learnable_sink", False))
 
         def _cache_name(name, prefix="mla"):
             return str(cache_path / f"layer_{layer_idx}.{prefix}.{name}") if cache_path else None
@@ -172,6 +203,12 @@ class ttMLA:
             o_proj = state_dict["o_proj.weight"].transpose(-2, -1)
             # Kimi-K3 output gate: [hidden, num_heads * v_head_dim], same size as o_proj transposed.
             g_proj = state_dict["g_proj.weight"].transpose(-2, -1) if use_gate else None
+            # Hy4-preview learnable sink: [num_heads] logits, cached pre-divided by the softmax scale.
+            attn_sink = (
+                ttMLA.sink_for_sparse_sdpa(state_dict["attn_sink.weight"], ttMLA.softmax_scale(config))
+                if use_sink
+                else None
+            )
         else:
             q_a_ln = torch.empty(1, 1, q_lora_rank // ttnn.TILE_SIZE, ttnn.TILE_SIZE)
             kv_a_ln = torch.empty(1, 1, kv_lora_rank // ttnn.TILE_SIZE, ttnn.TILE_SIZE)
@@ -182,6 +219,7 @@ class ttMLA:
             wkv_b2 = torch.empty(1, num_heads, kv_lora_rank, v_head_dim)
             o_proj = torch.empty(num_heads * v_head_dim, hidden_size)
             g_proj = torch.empty(hidden_size, num_heads * v_head_dim) if use_gate else None
+            attn_sink = torch.empty(1, 1, 1, num_heads, dtype=torch.bfloat16) if use_sink else None
 
         # Mesh mappers
         shard_dims_tp0 = [None, None]
@@ -350,6 +388,22 @@ class ttMLA:
                     cache_file_name=_cache_name("g_proj"),
                     cache_dump_mode=weight_cache_dump_mode(),
                 )
+            if use_sink:
+                # Hy4-preview learnable sink, in sparse_sdpa's attention_sink form ([1, 1, 1, H] bf16
+                # ROW_MAJOR, unpadded, DRAM). REPLICATED, not TP-sharded: the sparse path moves the TP split
+                # from heads to sequence for the attention (reshards_heads_to_seq: every TP > 1, and sparse
+                # requires TP > 1), so each chip runs sparse_sdpa over all heads. This holds for any head
+                # split of the projections (SP 8 x TP 4 or SP 4 x TP 8), so the sink does not depend on it.
+                result["attn_sink"] = ttnn.as_tensor(
+                    attn_sink,
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=mem,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    cache_file_name=_cache_name("attn_sink"),
+                    cache_dump_mode=weight_cache_dump_mode(),
+                )
             if tp_shard_q_a_norm:
                 result["q_a_layernorm_tp"] = _q_a_layernorm_tp(result["q_a_layernorm"])
 
@@ -478,6 +532,12 @@ class ttMLA:
             weight_cache_path=self.weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.mla",
         )
+        if getattr(config, "mla_learnable_sink", False) and not self._has_indexer and not kv_only:
+            # The sink is wired into sparse_sdpa only. The dense paths (ring_joint_sdpa / ring_mla) would
+            # silently drop it, so refuse rather than run a model's attention without its sink.
+            raise NotImplementedError(
+                f"mla_learnable_sink is implemented on the sparse (DSA) MLA path only; layer {layer_idx} resolved dense"
+            )
 
         # The RoPE op is fixed by the configured mode. It is bound AFTER self._has_indexer is resolved
         # (below), because sparse always runs the block-cyclic path (single-shot is one full-seq chunk at
@@ -515,6 +575,9 @@ class ttMLA:
         # Kimi-K3 flags; both absent (-> False) on every other variant, so those paths stay identical.
         self._use_nope = bool(getattr(config, "mla_use_nope", False))
         self._use_gate = bool(getattr(config, "mla_use_output_gate", False))
+        # Hy4-preview learnable per-head sink: passed to sparse_sdpa as attention_sink (sparse path only).
+        self._use_sink = bool(getattr(config, "mla_learnable_sink", False))
+        self.attn_sink = None
 
         # YaRN mscale, keyed on the PRESENCE of "factor", not on `rope_scaling is not None`:
         # transformers >= 5 synthesizes a factor-less rope_scaling dict for configs that omit it (K3's
@@ -529,11 +592,7 @@ class ttMLA:
         # Applying DeepSeek's correction anyway multiplies the attention logits by mscale^2 (2.2058
         # at factor=128): no crash, just a wrong softmax temperature. Absent (-> False) on every
         # other variant, so those paths are byte-identical.
-        self.scale = self.qk_head_dim**-0.5
-        if rope_factor is not None and rope_factor > 1.0 and not getattr(config, "mla_disable_yarn_mscale", False):
-            mscale = rope_scaling["mscale"]
-            mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
-            self.scale = self.scale * mscale * mscale
+        self.scale = ttMLA.softmax_scale(config)
         assert not (self._use_nope and self.scale != self.qk_head_dim**-0.5), (
             f"mla_use_nope=True but rope_scaling carries a YaRN factor ({rope_factor}) that scaled "
             f"softmax to {self.scale}; a NoPE model has no positional scaling to compensate for"
@@ -729,6 +788,8 @@ class ttMLA:
             self.o_proj_weight = weights["o_proj"]
             if self._use_gate:
                 self.g_proj_weight = weights["g_proj"]
+            if self._use_sink:
+                self.attn_sink = weights["attn_sink"]
             if self._q_distnorm:
                 self._q_a_norm_weight_tp = weights["q_a_layernorm_tp"]
                 self.tt_ccl.preallocate_fused_rmsnorm_resources(
@@ -2908,6 +2969,7 @@ class ttMLA:
             scale=self.scale,
             k_chunk_size=k_chunk,
             cache_batch_idx=cache_batch_idx,
+            attention_sink=self.attn_sink,  # Hy4-preview learnable sink; None elsewhere
             **block_cyclic,
         )
         out = attention() if prefetch is None else self._beside_prefetch(prefetch, attention)

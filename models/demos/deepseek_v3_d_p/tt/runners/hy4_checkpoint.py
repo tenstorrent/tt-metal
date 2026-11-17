@@ -16,7 +16,8 @@ cache writers) is shared with GLM-5.3 unchanged:
     (``<name>.weight_scale`` / ``experts.gate_up_proj_scale``), instead of DeepSeek's 128 x 128
     ``weight_scale_inv``. The BF16 release has no scales; both go through ``bf16()``.
   * attention: the output gate is ``self_attn.linear_gate`` (cached as ttMLA's ``g_proj``), and each
-    layer carries a ``learnable_sink_param`` ``[heads]`` no TT module consumes yet (#65921).
+    layer's learnable per-head sink ``self_attn.learnable_sink_param`` ``[heads]`` is ttMLA's
+    ``attn_sink.weight`` (#65921; passed to ``sparse_sdpa`` as ``attention_sink``).
   * iHC: ``hc_attn_layer.hc_pre.*`` / ``hc_mlp_layer.hc_pre.*`` per layer plus ``model.hc_head.*``,
     not consumed by the prefill stack yet (#65891). ``pending_layer_tensors`` returns them, so those
     issues can add their cache category without re-deriving the key names.
@@ -59,9 +60,11 @@ _INDEXER_KEYS = {
     "indexer.weights_proj.weight": "indexer.weights_proj.weight",
 }
 _GATE_KEYS = {"linear_gate.weight": "g_proj.weight"}
+# Learnable per-head sink: [num_heads] logits, kept fp32 (ttMLA divides by the softmax scale, then bf16) -- #65921.
+_SINK_KEYS = {"learnable_sink_param": "attn_sink.weight"}
+SINK_KEY = "self_attn.learnable_sink_param"
 
 # Tensors in the checkpoint that no prefill module consumes yet, by owning issue.
-SINK_KEY = "self_attn.learnable_sink_param"  # [num_heads] fp32 -- #65921
 IHC_LAYER_KEYS = tuple(
     f"{sub}.hc_pre.{field}" for sub in ("hc_attn_layer", "hc_mlp_layer") for field in ("hc_base", "hc_fn", "hc_scale")
 )  # #65891
@@ -276,9 +279,11 @@ def stamp_mla_cache(cache_path, layers) -> list[int]:
     return done
 
 
-def hy4_mla_weights(ckpt: Hy4Checkpoint, layer_prefix: str, *, owns_indexer: bool, gated: bool, config) -> dict:
-    """One layer's ttMLA weight dict in canonical names (norms and ``weights_proj`` fp32, the rest bf16, as
-    ``load_attention_state_dict`` produces for GLM), in the device RoPE frames (module docstring). A ``shared``
+def hy4_mla_weights(
+    ckpt: Hy4Checkpoint, layer_prefix: str, *, owns_indexer: bool, gated: bool, config, sink: bool = False
+) -> dict:
+    """One layer's ttMLA weight dict in canonical names (norms, ``weights_proj`` and the sink fp32, the rest bf16,
+    as ``load_attention_state_dict`` produces for GLM), in the device RoPE frames (module docstring). A ``shared``
     indexer layer has no indexer tensors. ``config`` supplies the head dims (the hy_v4 HF config)."""
     names = dict(_MLA_KEYS)
     if owns_indexer:
@@ -303,6 +308,8 @@ def hy4_mla_weights(ckpt: Hy4Checkpoint, layer_prefix: str, *, owns_indexer: boo
             if not getattr(config, "index_rope_interleave", True):
                 raise ValueError("indexer_to_device_frame targets TtIndexer's interleaved rope (index_rope_interleave)")
             out = indexer_to_device_frame(out, index_head_dim=int(config.index_head_dim), rope_dim=rope_dim)
+    if sink:  # stored fp32 and never quantized: read as is, not through _read's bf16 cast
+        out[_SINK_KEYS["learnable_sink_param"]] = ckpt.get(f"{layer_prefix}.{SINK_KEY}").float()
     return out
 
 
@@ -321,6 +328,7 @@ def hy4_layer_state_dict(ckpt: Hy4Checkpoint, config, model_cfg, layer_idx: int,
             owns_indexer=not indexer_layer_is_reused(config, layer_idx),
             gated=bool(getattr(config, "mla_use_output_gate", False)),
             config=config,
+            sink=bool(getattr(config, "mla_learnable_sink", False)),
         )
     if wc.ROUTED_EXPERTS in categories:
         intermediate = model_cfg.MOE_INTERMEDIATE_SIZE
@@ -333,13 +341,10 @@ def hy4_layer_state_dict(ckpt: Hy4Checkpoint, config, model_cfg, layer_idx: int,
 
 def pending_layer_tensors(ckpt: Hy4Checkpoint, layer_idx: int) -> dict:
     """The per-layer tensors only Hy4 has and no prefill module consumes yet:
-    ``{"learnable_sink": [heads] fp32, "ihc": {"hc_attn_layer.hc_pre.hc_fn": ..., ...}}``.
-    For #65921 (sink) and #65891 (iHC) to build their cache categories from."""
+    ``{"ihc": {"hc_attn_layer.hc_pre.hc_fn": ..., ...}}``, for #65891 (iHC) to build its cache category from.
+    (The learnable sink is consumed by ttMLA now: ``hy4_mla_weights(..., sink=True)``.)"""
     prefix = f"model.layers.{layer_idx}."
-    return {
-        "learnable_sink": ckpt.get(prefix + SINK_KEY).float(),
-        "ihc": {k: ckpt.get(prefix + k).float() for k in IHC_LAYER_KEYS},
-    }
+    return {"ihc": {k: ckpt.get(prefix + k).float() for k in IHC_LAYER_KEYS}}
 
 
 def load_hy4_trunk_state_dict(

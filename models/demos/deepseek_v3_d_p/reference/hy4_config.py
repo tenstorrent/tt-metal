@@ -20,16 +20,17 @@ Deltas that are plain configuration (handled here, consumed by the existing TT p
     routed experts only; the shared expert and dense layer 0 are HF ``HYV4MLP``, plain SiLU-GLU);
     plain RoPE with theta 1e7 (no YaRN).
 
-Deltas wired to an existing TT path but owned by a sibling issue for numerical sign-off:
+Attention deltas (#65921), both on ttMLA's sparse path:
 
-  * ``gated_mla`` (elementwise sigmoid output gate, ``linear_gate`` 6144 -> 16384): routed through
-    ttMLA's existing sigmoid output gate (``mla_use_output_gate`` / ``g_proj``, built for Kimi-K3).
-    Equivalence with HF ``hy_v4`` is #65921's acceptance test.
+  * ``gated_mla`` (elementwise sigmoid output gate, ``linear_gate`` 6144 -> 16384): ttMLA's sigmoid
+    output gate (``mla_use_output_gate`` / ``g_proj``, built for Kimi-K3). Same function as HF
+    ``hy_v4``: ``sigmoid(hn @ linear_gate^T)`` on the head-major ``[H * v_head_dim]`` attention output.
+  * ``learnable_sink``: one learnable logit per head joins the softmax denominator; passed to
+    ``sparse_sdpa`` as ``attention_sink`` (``mla_learnable_sink`` / ``attn_sink``).
 
 Deltas the TT prefill stack does not implement yet (the adapter refuses to serve them unless the
 bring-up override is set; see ``Hy4Adapter``):
 
-  * ``learnable_sink``: a learnable per-head attention sink (#65921).
   * iHC hyper-connections, ``hc_mult`` 4, fp32 residual streams (#65891).
   * the MTP layer (#65925): the checkpoint stores it as ``model.mtp_layers.0.*``, not the
     DeepSeek ``model.layers.78.*`` the GLM MTP path reads.
@@ -91,7 +92,7 @@ class Hy4Config(GLM53Config):
     # --- Attention deltas ----------------------------------------------------------------------
     # gated_mla, gating_type "elementwise": sigmoid(x @ linear_gate^T) * attn_out before o_proj.
     USE_OUTPUT_GATE = True
-    # learnable_sink: one learnable logit per head joins the softmax. Not implemented in sparse MLA yet.
+    # learnable_sink: one learnable logit per head joins the softmax denominator (sparse_sdpa attention_sink).
     USE_LEARNABLE_SINK = True
 
     # --- iHC hyper-connections (not implemented in the prefill stack yet; #65891) --------------
@@ -294,7 +295,7 @@ def hy4_hf_config(
         # --- Hy4 attention deltas ---
         # Read by ttMLA (output gate) -- the Kimi-K3 gate path, weights cached as g_proj.
         mla_use_output_gate=bool(model_cfg.USE_OUTPUT_GATE),
-        # Not read by any TT module yet (#65921); carried so the sparse MLA can key on it when it lands.
+        # Read by ttMLA: the per-head sink goes to sparse_sdpa as attention_sink, cached as attn_sink (#65921).
         mla_learnable_sink=bool(model_cfg.USE_LEARNABLE_SINK),
         # --- iHC (#65891); not read by the prefill stack yet ---
         enable_ihc=bool(model_cfg.ENABLE_IHC),

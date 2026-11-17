@@ -120,6 +120,8 @@ class TtPrefillBlock(LightweightModule):
             # loaded a `torch.empty` placeholder as the weights. Reading the flag off `model_cfg` keeps
             # every non-gated model's existing cache valid, since only Kimi-K3 sets USE_OUTPUT_GATE.
             has_output_gate=bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)),
+            # Same reasoning for Hy4-preview's learnable sink: only a model_cfg with USE_LEARNABLE_SINK asks for it.
+            has_sink=bool(getattr(model_cfg, "USE_LEARNABLE_SINK", False)),
         ):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm"):

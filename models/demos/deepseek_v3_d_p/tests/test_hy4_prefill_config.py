@@ -481,13 +481,13 @@ def test_pending_deltas_guard(adapter, monkeypatch, expect_error):
 
     cfg = hy4_hf_config()
     pending = hy4_preview.pending_deltas(cfg)
-    assert any("#65921" in p for p in pending) and any("#65891" in p for p in pending)
+    assert not any("#65921" in p for p in pending)  # sink + gate are implemented in ttMLA
+    assert any("#65891" in p for p in pending)
     monkeypatch.delenv(hy4_preview.ALLOW_PENDING_DELTAS_ENV, raising=False)
     with expect_error(NotImplementedError, "#65891"):
         adapter._check_pending_deltas(cfg)
     monkeypatch.setenv(hy4_preview.ALLOW_PENDING_DELTAS_ENV, "1")
     adapter._check_pending_deltas(cfg)  # bring-up override: warns, does not raise
-    cfg.mla_learnable_sink = False
     cfg.enable_ihc = False
     assert hy4_preview.pending_deltas(cfg) == []
 
@@ -652,7 +652,8 @@ def test_checkpoint_reads_fused_experts_and_remaps_attention(tmp_path, mxfp8):
     assert mla0["indexer.weights_proj.weight"].dtype == torch.float32
     assert mla0["q_b_proj.weight"].dtype == torch.bfloat16
     assert _close(mla0["kv_b_proj.weight"], ref["model.layers.0.self_attn.kv_b_proj.weight"], mxfp8)
-    assert not any("sink" in k or "linear_gate" in k for k in mla0)
+    assert not any("linear_gate" in k for k in mla0)
+    assert "attn_sink.weight" not in mla0  # Cfg below turns the sink on only where asked
     assert set(sd0["ffn_weights"]) == set(wc._PROJ)
     assert _close(sd0["ffn_weights"]["gate_proj"], ref["model.layers.0.mlp.gate_proj.weight"], mxfp8)
 
@@ -671,8 +672,13 @@ def test_checkpoint_reads_fused_experts_and_remaps_attention(tmp_path, mxfp8):
     Cfg.mla_use_output_gate = False
     assert "g_proj.weight" not in hc.hy4_layer_state_dict(ckpt, Cfg, MCfg, 1, {wc.MLA})["mla_weights"]
 
+    Cfg.mla_learnable_sink = True
+    sink = hc.hy4_layer_state_dict(ckpt, Cfg, MCfg, 1, {wc.MLA})["mla_weights"]["attn_sink.weight"]
+    assert sink.dtype == torch.float32 and sink.shape == (HEADS,)
+    assert torch.equal(sink, ref["model.layers.1.self_attn.learnable_sink_param"].float())
+
     pending = hc.pending_layer_tensors(ckpt, 1)
-    assert pending["learnable_sink"].shape == (HEADS,)
+    assert set(pending) == {"ihc"}
     assert set(pending["ihc"]) == set(hc.IHC_LAYER_KEYS)
 
     # The shared lazy loader drives the Hy4 per-layer reader.
