@@ -81,7 +81,8 @@ ALWI void dest_srca_mm_page_to_dest(
  * The page_* calls for a page whose first codes are 4-bit block-float datums (BFP4, sign in bit 3) to be read with a
  * fixed exponent, e.g. GGUF MXFP4 / NVFP4 / IQ4_NL / IQ4_XS (gguf_decode.h): the codes go, as FP16, to the 16-bit rows of DEST that the rows of
  * tile codes_idst address (where the SFPU reads them in that tile's order), and `words` 32-bit words of the page from
- * byte words_offset (e.g. its scale fields) to DEST tile idst, as many rows in as they are in the page.
+ * byte words_offset (e.g. its scale fields) to DEST tile idst, as many rows in as they are in the page; words_shift
+ * moves where the words are read from (not where they go), e.g. to a page's scale fields held in the page before it.
  *
  * | Argument     | Description                                              | Type     | Valid Range          | Required |
  * |--------------|----------------------------------------------------------|----------|----------------------|----------|
@@ -90,6 +91,7 @@ ALWI void dest_srca_mm_page_to_dest(
  * | exp          | Exponent of every code (FP16 bias)                       | uint32_t | 0 to 30              | True     |
  * | words_offset | Byte offset of the words in the page                     | uint32_t | multiple of 64       | True     |
  * | words        | 32-bit words copied                                      | uint32_t | 16 to 256, x 16      | True     |
+ * | words_shift  | Bytes added to the words' L1 address                     | int32_t  | multiple of 16       | False    |
  */
 // clang-format on
 ALWI void dest_srca_mm_page_post_codes(const std::uint32_t idst, const std::uint32_t codes_idst) {
@@ -102,8 +104,9 @@ ALWI void dest_srca_mm_page_unpack_codes(
     const std::uint32_t codes,
     const std::uint32_t exp,
     const std::uint32_t words_offset,
-    const std::uint32_t words) {
-    UNPACK((llk_unpack_dest_srca_mm_codes_page(page_cb, tile_index, codes, exp, words_offset, words)));
+    const std::uint32_t words,
+    const std::int32_t words_shift = 0) {
+    UNPACK((llk_unpack_dest_srca_mm_codes_page(page_cb, tile_index, codes, exp, words_offset, words, words_shift)));
 }
 
 ALWI void dest_srca_mm_page_to_dest_codes(
@@ -114,9 +117,10 @@ ALWI void dest_srca_mm_page_to_dest_codes(
     const std::uint32_t codes,
     const std::uint32_t exp,
     const std::uint32_t words_offset,
-    const std::uint32_t words) {
+    const std::uint32_t words,
+    const std::int32_t words_shift = 0) {
     dest_srca_mm_page_post_codes(idst, codes_idst);
-    dest_srca_mm_page_unpack_codes(page_cb, tile_index, codes, exp, words_offset, words);
+    dest_srca_mm_page_unpack_codes(page_cb, tile_index, codes, exp, words_offset, words, words_shift);
     dest_srca_mm_page_wait(page_cb, idst);
 }
 

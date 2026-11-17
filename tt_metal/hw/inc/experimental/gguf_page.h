@@ -137,6 +137,14 @@ constexpr const std::uint16_t* level_table() {
 }
 
 // Index words of a codebook page, four grid indices each.
+// MXFP4: c_0 holds a record whole as two pages of scale_offset + 64 bytes (gguf_matmul_reader.cpp): K tile 2g's codes
+// with the group's scale row, then K tile 2g + 1's codes. The second page's scale row is the first page's, 64 bytes
+// before the second page: K tile t's words_shift (dest_srca_mm_page_unpack_codes).
+template <Format FMT>
+constexpr std::int32_t paired_words_shift(const std::uint32_t t) {
+    return FMT == Format::MXFP4 && t % 2 == 1 ? -static_cast<std::int32_t>(page_layout<FMT>().scale_offset + 64) : 0;
+}
+
 template <Format FMT>
 constexpr std::uint32_t index_words() {
     return FMT == Format::IQ3_S || FMT == Format::IQ3_XXS ? 64 : 32;
