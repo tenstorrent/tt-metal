@@ -26,7 +26,8 @@ void kernel_main() {
     constexpr uint32_t n = k + extra;
     const auto s_o = TensorAccessor(o_args, out_addr, 4 * n);
 
-    const uint32_t scr = get_write_ptr(cb_scr);  // E FP32 logits, E bf16 scales, the 2 k bf16 output row
+    // E FP32 logits, E bf16 scales (read from DRAM: 64 B aligned), the 2 k bf16 output row
+    const uint32_t scr = (get_write_ptr(cb_scr) + 63) & ~63u;
     const uint32_t pes_l1 = scr + E * 4;
     noc_async_read(s_p.get_noc_addr(0), pes_l1, E * 2);
     cb_wait_front(cb_logits, E / 32);

@@ -51,6 +51,10 @@ constexpr uint32_t inv_n = get_compile_time_arg_val(15);       // float bits of 
 constexpr uint32_t eps = get_compile_time_arg_val(16);         // float bits
 constexpr uint32_t out2_gamma = get_compile_time_arg_val(17);  // attn: out2 = n * g2 (else n)
 constexpr uint32_t cb_n = get_compile_time_arg_val(18);  // attn: n (FP32, or BF16 = rounded as a ttnn RMSNorm output)
+constexpr uint32_t me = get_compile_time_arg_val(19);    // this device's ring index
+constexpr uint32_t own_base = get_compile_time_arg_val(20);  // the own partial's first tile in cb_part
+constexpr uint32_t cb_part = get_compile_time_arg_val(21);
+constexpr uint32_t ring = slots + 1;  // slots: the other devices' partials (slot j: device j if j < me, else j + 1)
 static_assert(T <= 3, "a vector plus one operand fit the 4 FP32 DST tiles");
 
 // FAST_RECONFIG: the elementwise phases only reconfigure the unpacker / packer data formats; the scalar reduce keeps
@@ -97,18 +101,33 @@ ALWI void pack_vec(uint32_t cb) {
     cb_push_back(cb, T);
 }
 
-// cb_out <- sum over the slots of part p (slot order, identical on every device).
+// cb_out <- sum over the devices' partials of part p in device order (identical on every device): the own partial
+// from the partial buffer, the others from their receive slots.
+ALWI void src_of(uint32_t g, uint32_t p, uint32_t t, uint32_t& cb, uint32_t& tile) {
+    if (g == me) {
+        cb = cb_part;
+        tile = own_base + p * T + t;
+    } else {
+        const uint32_t j = g < me ? g : g - 1;  // bnd_sender.cpp: forward multicasts into slot g, backward into g - 1
+        cb = cb_recv;
+        tile = (j * parts + p) * T + t;
+    }
+}
+
 ALWI void sum_slots(uint32_t p, uint32_t cb_out) {
     STARTUP(cb_recv, cb_recv, cb_out);
     tile_regs_acquire();
     for (uint32_t t = 0; t < T; ++t) {
-        add_init(cb_recv, cb_recv);
-        add_tiles(cb_recv, cb_recv, p * T + t, (parts + p) * T + t, t);
-        if constexpr (slots > 2) {
-            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_recv);
-            for (uint32_t s = 2; s < slots; ++s) {
-                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_recv, (s * parts + p) * T + t, t);
-            }
+        uint32_t cb0, i0, cb1, i1;
+        src_of(0, p, t, cb0, i0);
+        src_of(1, p, t, cb1, i1);
+        add_init(cb0, cb1);
+        add_tiles(cb0, cb1, i0, i1, t);
+        for (uint32_t g = 2; g < ring; ++g) {
+            uint32_t cb, i;
+            src_of(g, p, t, cb, i);
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb);
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, i, t);
         }
     }
     pack_vec(cb_out);
@@ -196,7 +215,7 @@ void kernel_main() {
 #ifdef FAST_RECONFIG
     compute_kernel_hw_startup(cb_res, cb_res, cb_res_out);
 #endif
-    static_assert(mode == 0 || mode == 3 || slots >= 2, "the all-reduce sums at least two slots");
+    static_assert(mode == 0 || mode == 3 || slots >= 1, "the all-reduce sums at least two devices");
     if constexpr (mode == 3) {
         // token entry: res = embedding row * embed_scale (BF16, in place), x = norm(res, g0)
         const uint32_t scale = get_arg_val<uint32_t>(0);
@@ -238,6 +257,7 @@ void kernel_main() {
         return;
     }
     cb_wait_front(cb_recv, slots * parts * T);
+    cb_wait_front(cb_part, own_base + parts * T);
     cb_wait_front(cb_res, T);
     if constexpr (mode == 1) {
         const uint32_t G = out2_gamma ? 3 : 2;
@@ -334,4 +354,5 @@ void kernel_main() {
         pack_vec(cb_o0);
     }
     cb_pop_front(cb_recv, slots * parts * T);
+    cb_pop_front(cb_part, own_base + parts * T);
 }

@@ -6,7 +6,9 @@
 //
 // 0. (slots > 0, not pregathered) Gathers row 0 of tiles [0, htiles / 2) of the producer outputs into the flat partial
 //    (bnd_reader.cpp gathers the rest and pushes cb_sync).
-// 1. (slots > 0) Publishes this device's flat partial (`payload` bytes at part_addr) into
+// 1. (slots > 0) Multicasts this device's flat partial (`payload` bytes at part_addr) to the other devices: forward
+//    into slot me, backward into slot me - 1 (three slots per site; the own partial stays in the partial buffer).
+//    Formerly published into
 //    slot `ring index` of the receive buffer on every device of the 1-D line: locally by a NOC copy + one increment
 //    of the local receive semaphore, remotely by a multicast of `fwd_hops` chips forward and `bwd_hops` chips
 //    backward, `chunk` bytes per packet; the last packet of each direction is a fused write + semaphore increment
@@ -54,60 +56,30 @@ void kernel_main() {
     constexpr uint32_t cb_sync = get_compile_time_arg_val(o2_args.next_compile_time_args_offset());
     constexpr uint32_t pregathered = get_compile_time_arg_val(o2_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t parts = get_compile_time_arg_val(o2_args.next_compile_time_args_offset() + 2);
-    constexpr auto p0_args = TensorAccessorArgs<o2_args.next_compile_time_args_offset() + 3>();
+    constexpr uint32_t me = get_compile_time_arg_val(o2_args.next_compile_time_args_offset() + 3);  // ring index
+    constexpr uint32_t ring = get_compile_time_arg_val(o2_args.next_compile_time_args_offset() + 4);
+    constexpr auto p0_args = TensorAccessorArgs<o2_args.next_compile_time_args_offset() + 5>();
     constexpr auto p1_args = TensorAccessorArgs<p0_args.next_compile_time_args_offset()>();
     constexpr uint32_t chunks = (payload + chunk - 1) / chunk;
     constexpr uint32_t half = htiles / 2;
 
     if constexpr (slots > 0) {
-        DeviceZoneScopedN("BND_SEND");
         size_t arg_idx = 10;
         auto fabric = FabricConnectionManager::build_from_args<
             FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(arg_idx);
         PacketHeaderPool::reset();
-        constexpr uint32_t ring_hdrs = chunks <= 4 ? chunks : 4;
-        volatile PACKET_HEADER_TYPE* fwd_hdr[ring_hdrs];
-        volatile PACKET_HEADER_TYPE* bwd_hdr[ring_hdrs];
-        const uint64_t sem_noc = safe_get_noc_addr(recv_noc_x, recv_noc_y, sem_addr, 0);
-        auto prepare = [&](uint32_t c, uint32_t h) {
-            const uint32_t bytes = c + 1 < chunks ? chunk : payload - c * chunk;
-            const uint64_t dst = safe_get_noc_addr(recv_noc_x, recv_noc_y, slot_addr + c * chunk, 0);
-            if constexpr (fwd_hops > 0) {
-                fwd_hdr[h]->to_chip_multicast(
-                    tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(fwd_hops)});
-                if (c + 1 == chunks) {
-                    fwd_hdr[h]->to_noc_fused_unicast_write_atomic_inc(
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst, sem_noc, 1, true}, bytes);
-                } else {
-                    fwd_hdr[h]->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst}, bytes);
-                }
-            }
-            if constexpr (bwd_hops > 0) {
-                bwd_hdr[h]->to_chip_multicast(
-                    tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(bwd_hops)});
-                if (c + 1 == chunks) {
-                    bwd_hdr[h]->to_noc_fused_unicast_write_atomic_inc(
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst, sem_noc, 1, true}, bytes);
-                } else {
-                    bwd_hdr[h]->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst}, bytes);
-                }
-            }
-        };
-        for (uint32_t h = 0; h < ring_hdrs; ++h) {
+        volatile PACKET_HEADER_TYPE* fwd_hdr[2];
+        volatile PACKET_HEADER_TYPE* bwd_hdr[2];
+        for (uint32_t h = 0; h < 2; ++h) {
             if constexpr (fwd_hops > 0) {
                 fwd_hdr[h] = PacketHeaderPool::allocate_header();
             }
             if constexpr (bwd_hops > 0) {
                 bwd_hdr[h] = PacketHeaderPool::allocate_header();
             }
-            prepare(h, h);
         }
-        {
-            DeviceZoneScopedN("BND_OPEN");
-            fabric.open_finish();
-        }
+        fabric.open_finish();
         if constexpr (!pregathered) {
-            DeviceZoneScopedN("BND_WAIT_PART");
             gather_rows(TensorAccessor(p0_args, get_arg_val<uint32_t>(8), 2048), part_addr, 0, half);
             if constexpr (parts > 1) {
                 gather_rows(TensorAccessor(p1_args, get_arg_val<uint32_t>(9), 2048), part_addr + tiles * 2048, 0, half);
@@ -115,32 +87,45 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_wait_front(cb_sync, 1);
         }
-        noc_async_write(part_addr, get_noc_addr(slot_addr), payload);
-        for (uint32_t c = 0; c < chunks; ++c) {
-            const uint32_t bytes = c + 1 < chunks ? chunk : payload - c * chunk;
-            const uint32_t src = part_addr + c * chunk;
-            const uint32_t h = c % ring_hdrs;
-            if (c >= ring_hdrs) {
-                noc_async_writes_flushed();
-                prepare(c, h);
-            }
-            if constexpr (fwd_hops > 0) {
-                auto& conn = fabric.get_forward_connection();
+        // the own partial is complete: the compute reads it straight from the partial buffer
+        cb_reserve_back(cb_part, part_pages);
+        cb_push_back(cb_part, part_pages);
+        // Multicast forward (to the ring - 1 - me devices after this one) into slot me, and backward (to the me devices
+        // before it) into slot me - 1: receiver r then holds device g's partial in slot g (g < r) or g - 1 (g > r),
+        // three slots, no two senders on one slot. The last packet of each direction increments the semaphores.
+        const uint64_t sem_noc = safe_get_noc_addr(recv_noc_x, recv_noc_y, sem_addr, 0);
+        auto send = [&](auto& conn, volatile PACKET_HEADER_TYPE** hdr, uint32_t hops, uint32_t slot) {
+            for (uint32_t c = 0; c < chunks; ++c) {
+                const uint32_t bytes = c + 1 < chunks ? chunk : payload - c * chunk;
+                volatile PACKET_HEADER_TYPE* h = hdr[c & 1];
+                if (c >= 2) {
+                    noc_async_writes_flushed();  // the header's previous packet has left L1
+                }
+                h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(hops)});
+                const uint64_t dst =
+                    safe_get_noc_addr(recv_noc_x, recv_noc_y, slot_addr + slot * payload + c * chunk, 0);
+                if (c + 1 == chunks) {
+                    h->to_noc_fused_unicast_write_atomic_inc(
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst, sem_noc, 1, true}, bytes);
+                } else {
+                    h->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst}, bytes);
+                }
                 conn.wait_for_empty_write_slot();
-                conn.send_payload_without_header_non_blocking_from_address(src, bytes);
-                conn.send_payload_flush_non_blocking_from_address((uint32_t)fwd_hdr[h], sizeof(PACKET_HEADER_TYPE));
+                conn.send_payload_without_header_non_blocking_from_address(part_addr + c * chunk, bytes);
+                conn.send_payload_flush_non_blocking_from_address((uint32_t)h, sizeof(PACKET_HEADER_TYPE));
             }
-            if constexpr (bwd_hops > 0) {
-                auto& conn = fabric.get_backward_connection();
-                conn.wait_for_empty_write_slot();
-                conn.send_payload_without_header_non_blocking_from_address(src, bytes);
-                conn.send_payload_flush_non_blocking_from_address((uint32_t)bwd_hdr[h], sizeof(PACKET_HEADER_TYPE));
-            }
+        };
+        if constexpr (fwd_hops > 0) {
+            send(fabric.get_forward_connection(), fwd_hdr, fwd_hops, me);
         }
-        noc_async_write_barrier();
-        noc_semaphore_inc(get_noc_addr(sem_addr), 1);
+        if constexpr (bwd_hops > 0) {
+            send(fabric.get_backward_connection(), bwd_hdr, bwd_hops, me - 1);
+        }
+        noc_async_writes_flushed();
         fabric.close();
         noc_async_atomic_barrier();
+    } else if constexpr (!pregathered) {
+        (void)cb_part;
     }
 
     // Outputs: flat -> row 0 of the consumer's tiles [0, half) (bnd_reader.cpp writes the rest).

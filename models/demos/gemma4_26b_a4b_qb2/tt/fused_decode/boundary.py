@@ -59,6 +59,7 @@ class GemmaBoundary:
         round_n=True,
         flat_moe=False,
         flat_router=False,
+        alias_inputs=False,
     ):
         """round_n: the attn boundary rounds its normed vector to BF16 before the router / expert / shared scales (as
         the ttnn RMSNorm output of the unfused path); False keeps it FP32. flat_moe: expert_in and shared_in are flat
@@ -68,6 +69,7 @@ class GemmaBoundary:
         self.flat_router = flat_router  # router_in flat FP32 on the boundary core (fused_decode/router.py)
         assert not flat_moe or shared_dtype == ttnn.bfloat16
         assert not flat_router or flat_moe
+        assert not alias_inputs or flat_router
         self.mesh = mesh
         self.hidden, self.eps = hidden, eps
         self.ring = mesh.shape[1]
@@ -81,48 +83,68 @@ class GemmaBoundary:
         self.coords = [ttnn.MeshCoordinate(0, c) for c in range(self.ring)]
         rep = ttnn.ReplicateTensorToMesh(mesh)
 
+        # Persistent L1 (lockstep: reserved on every core). Every buffer is allocated first, without host staging, so
+        # they sit contiguously at the top of L1; then each is zero-filled through a temporary that lands below them
+        # and is freed (a from_torch straight into the sharded layout stages a same-size temporary between them:
+        # holes that pushed the lowest buffer under the prefill programs' static CB region).
+        all_cores = mesh.compute_with_storage_grid_size()
+        all_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(all_cores.x - 1, all_cores.y - 1))]
+        )
+        semaphores = {name: ttnn.create_global_semaphore(mesh, all_cores, 0) for name in SITES}
+        persistent = []
+
         def flat(pages, dtype=ttnn.bfloat16):
             config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(self.cores, (TILE, pages * TILE), ttnn.ShardOrientation.ROW_MAJOR),
             )
-            return ttnn.from_torch(
-                torch.zeros(1, 1, TILE, pages * TILE),
+            t = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, TILE, pages * TILE]), dtype, ttnn.TILE_LAYOUT, mesh, config
+            )
+            persistent.append((t, [1, 1, TILE, pages * TILE], dtype, config))
+            return t
+
+        def rows(dtype):
+            # logical one row, tile padded; rows 1..31 zero
+            t = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, 1, hidden]), dtype, ttnn.TILE_LAYOUT, mesh, ttnn.L1_MEMORY_CONFIG
+            )
+            persistent.append((t, [1, 1, 1, hidden], dtype, ttnn.L1_MEMORY_CONFIG))
+            return t
+
+        # receive slots for the other devices' partials only (each device's own partial stays in self.part)
+        self.sites = {
+            "moe": (flat((self.ring - 1) * 2 * self.T), semaphores["moe"]),
+            "attn": (flat((self.ring - 1) * self.T), semaphores["attn"]),
+        }
+        # one residual buffer: every phase has all T residual tiles in DST before it packs the new residual
+        residual = flat(self.T)
+        self.res = [residual, residual]
+        self.part = flat(2 * self.T)
+        # Consumer inputs: row 0 rewritten by every boundary, rows 1..31 zero.
+        self.qkv_in = rows(ttnn.bfloat16)
+        self.router_in = flat(self.T, ttnn.float32) if flat_router else rows(ttnn.float32)
+        # shared_in: the plain normed vector (shared-MLP gamma folded into its weights)
+        if alias_inputs:
+            # merged MoE: expert_in = shared_in = the plain normed vector, in pages [0, T) of the partial buffer (free
+            # from the attn boundary until the MoE down program writes the shared partial there, after gate|up read it)
+            self.expert_in = self.shared_in = self.part
+        else:
+            self.expert_in = flat(self.T) if flat_moe else rows(ttnn.bfloat16)
+            self.shared_in = flat(self.T) if flat_moe else rows(shared_dtype)
+        for t, shape, dtype, config in persistent:
+            zeros = ttnn.from_torch(
+                torch.zeros(shape),
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh,
                 memory_config=config,
                 mesh_mapper=rep,
             )
-
-        self.res = [flat(self.T), flat(self.T)]
-        self.part = flat(2 * self.T)
-        all_cores = mesh.compute_with_storage_grid_size()
-        all_cores = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(all_cores.x - 1, all_cores.y - 1))]
-        )
-        self.sites = {
-            "attn": (flat(self.ring * self.T), ttnn.create_global_semaphore(mesh, all_cores, 0)),
-            "moe": (flat(self.ring * 2 * self.T), ttnn.create_global_semaphore(mesh, all_cores, 0)),
-        }
-
-        def rows(dtype):
-            return ttnn.from_torch(
-                torch.zeros(1, 1, 1, hidden),  # logical one row, tile padded (zeros)
-                dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                mesh_mapper=rep,
-            )
-
-        # Consumer inputs: row 0 rewritten by every boundary, rows 1..31 zero.
-        self.qkv_in = rows(ttnn.bfloat16)
-        self.router_in = flat(self.T, ttnn.float32) if flat_router else rows(ttnn.float32)
-        # shared_in: the plain normed vector (shared-MLP gamma folded into its weights)
-        self.expert_in = flat(self.T) if flat_moe else rows(ttnn.bfloat16)
-        self.shared_in = flat(self.T) if flat_moe else rows(shared_dtype)
+            ttnn.copy(zeros, t)
+            ttnn.deallocate(zeros)
         max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
         self.max_chunk = max_payload // PAGE * PAGE
 
@@ -192,7 +214,7 @@ class GemmaBoundary:
             assert part.memory_config().buffer_type == ttnn.BufferType.L1, "boundary inputs must be in L1"
             assert part.dtype == ttnn.bfloat16 and part.layout == ttnn.TILE_LAYOUT and part.padded_shape[-2] == TILE
         site = {0: None, 1: "attn", 2: "moe", 3: None}[mode]
-        slots = self.ring if site else 0
+        slots = self.ring - 1 if site else 0  # receive slots: the other devices' partials
         npart = len(parts)
         recv, sem = self.sites[site] if site else (None, None)
         sem_addr = ttnn.get_global_semaphore_address(sem) if site else 0
@@ -212,7 +234,7 @@ class GemmaBoundary:
             cbs.append(self._cb(self.CB_RES_OUT, T, tensor=res_out))
         if mode in (1, 2):
             cbs += [
-                self._cb(self.CB_PART, npart * T, tensor=self.part),
+                self._cb(self.CB_PART, 2 * T, tensor=self.part),
                 self._cb(self.CB_RECV, slots * npart * T, tensor=recv),
                 self._cb(self.CB_RES_OUT, T, tensor=res_out),
             ]
@@ -233,7 +255,9 @@ class GemmaBoundary:
         p1 = parts[1] if npart > 1 else p0
         vft = vf if vf is not None else gamma
         reader_ct = [self.CB_PART, self.CB_RES, self.CB_RECV, self.CB_G, self.CB_SCALER, self.CB_VF, T, npart]
-        reader_ct += [slots, self.ring, 1 if mode == 0 else 0, self.htiles, gcount, 1 if vf is not None else 0]
+        # own partial in the partial buffer: attn at pages [T, 2 T) ([0, T) holds expert_in when aliased), moe at [0, 2 T)
+        own_off = T * PAGE if mode == 1 else 0
+        reader_ct += [slots, slots, 1 if mode == 0 else 0, self.htiles, gcount, 1 if vf is not None else 0]
         o = list(outs) + [outs[0] if outs else self.qkv_in] * (3 - len(outs))
         reader_ct += [self.CB_SYNC, 1 if pregathered else 0, len(outs), self.CB_O0, fp32_mask]
         reader_ct += acc(p0) + acc(p1) + acc(gamma) + acc(vft) + acc(o[0]) + acc(o[1]) + acc(o[2])
@@ -249,10 +273,12 @@ class GemmaBoundary:
             ]
             + [t.buffer_address() for t in o]
             + ([tokens.buffer_address(), table.buffer_address()] if mode == 3 else [0, 0])
+            + [own_off]
         )
         compute_ct = [self.CB_RECV, self.CB_RES, self.CB_G, self.CB_SCALER, self.CB_VF, self.CB_A, self.CB_B]
         compute_ct += [self.CB_SS, self.CB_RS, self.CB_RES_OUT, self.CB_O0, T, slots, max(npart, 1), mode]
         compute_ct += [_f32_bits(1.0 / self.hidden), _f32_bits(self.eps), 1 if out2_gamma else 0, self.CB_NB]
+        own_base = own_off // PAGE
         compute_rt = ttnn.RuntimeArgs()
         compute_rt[self.core.x][self.core.y] = [_f32_bits(scalar)]
         payload = npart * T * PAGE
@@ -266,14 +292,14 @@ class GemmaBoundary:
         for coord in self.coords:
             c = coord[1]
             fwd, bwd = (self.ring - 1 - c, c) if site else (0, 0)
-            sender_ct = [payload, chunk, fwd, bwd, slots, self.CB_PART, npart * T, T, self.htiles, len(outs)]
+            sender_ct = [payload, chunk, fwd, bwd, slots, self.CB_PART, 2 * T, T, self.htiles, len(outs)]
             sender_ct += [self.CB_O0, fp32_mask] + acc(o[0]) + acc(o[1]) + acc(o[2])
-            sender_ct += [self.CB_SYNC, 1 if pregathered else 0, npart] + acc(p0) + acc(p1)
+            sender_ct += [self.CB_SYNC, 1 if pregathered else 0, npart, c, self.ring] + acc(p0) + acc(p1)
             sender_rt = ttnn.RuntimeArgs()
             sender_rt[self.core.x][self.core.y] = (
                 [
-                    self.part.buffer_address(),
-                    (recv.buffer_address() + c * payload) if site else 0,
+                    self.part.buffer_address() + own_off,
+                    recv.buffer_address() if site else 0,
                     self.noc_xy[0],
                     self.noc_xy[1],
                     sem_addr,
@@ -294,7 +320,7 @@ class GemmaBoundary:
                 ttnn.KernelDescriptor(
                     kernel_source=str(KERNELS / "bnd_compute.cpp"),
                     core_ranges=self.cores,
-                    compile_time_args=compute_ct,
+                    compile_time_args=compute_ct + [c, own_base, self.CB_PART],
                     runtime_args=compute_rt,
                     defines=[("FAST_RECONFIG", "1")] if FAST_RECONFIG else [],
                     config=ttnn.ComputeConfigDescriptor(
@@ -385,6 +411,14 @@ class GemmaBoundary:
         """
         self._run(2, [shared, routed], gamma, 4, self.res[1], self.res[0], [self.qkv_in], scalar=layer_scalar)
         return self.qkv_in
+
+    def deallocate(self):
+        for t in {
+            id(t): t for t in (self.res[0], self.part, self.qkv_in, self.router_in, self.expert_in, self.shared_in)
+        }.values():
+            ttnn.deallocate(t)
+        for recv, _ in self.sites.values():
+            ttnn.deallocate(recv)
 
     def residual(self):
         """Host copy of the residual (res[0]) of device 0, [hidden] float (tests)."""

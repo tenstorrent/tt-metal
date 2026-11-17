@@ -17,7 +17,7 @@
 // of the replicated row-major embedding table, read into an aligned stage and copied into the residual (cb_res).
 //
 // runtime args: [part0_addr, part1_addr, gamma_addr, vf_addr, sem_addr, out0_addr, out1_addr, out2_addr, tokens_addr,
-//                table_addr]
+//                table_addr, own_offset]
 
 #include <stdint.h>
 
@@ -69,8 +69,8 @@ void kernel_main() {
     if constexpr (parts > 0 && !pregathered) {
         DeviceZoneScopedN("BND_GATHER");
         constexpr uint32_t j0 = entry ? 0 : half;  // entry: no sender, all tiles here
-        const uint32_t cb = entry ? cb_res : cb_part;
-        const uint32_t dst = get_write_ptr(cb);
+        // non-entry: the own partial's place in the partial buffer (runtime arg 10: byte offset)
+        const uint32_t dst = entry ? get_write_ptr(cb_res) : get_write_ptr(cb_part) + get_arg_val<uint32_t>(10);
         gather_rows(TensorAccessor(p0_args, part0_addr, page), dst, j0, htiles);
         if constexpr (parts > 1) {
             gather_rows(TensorAccessor(p1_args, part1_addr, page), dst + tiles * page, j0, htiles);
