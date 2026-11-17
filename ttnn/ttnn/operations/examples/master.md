@@ -427,9 +427,8 @@ the immutable input. Pull is faster wherever it behaves, but goes erratic above 
 payload (no DRAM, unlike `fabric_all_gather`); direct multi-hop sends vs store-and-forward.
 **Situation:** a fused CCL op all-gathers a few KiB per chip around a 4-chip ring inside one program, and
 its perf rounds stubbed the payloads and treated what was left as a fixed floor.
-**Measured result:** on a Blackhole QuietBox 2 (1×4 ring, `FABRIC_2D_TORUS_XY`), traced, slowest chip: an
-empty program of the op's size costs **0.19 µs** of kernel time, the minimal correct exchange (ready fence +
-header-only items) **~5.0 µs**, and the 128 B relay exchange **5.38 µs**, 3× the roofline's 1.6 µs. Direct
-multi-hop sends are **1.1–1.6 µs slower** than relay at every size (128 B–32 KiB, 1 or 2 links), entirely
+**Measured result:** on a Blackhole QuietBox 2 (1×4 ring, `FABRIC_2D_TORUS_XY`), traced, slowest chip: the
+minimal correct exchange (ready fence + header-only items) costs **~5.0 µs**, and the 128 B relay exchange
+**5.38 µs**, 3× the roofline's 1.6 µs. Direct multi-hop sends are **1.1–1.7 µs slower** than relay at every size (128 B–32 KiB, 1 or 2 links), entirely
 because their fence waits for a ready from the 2-hop destination (`fence_direct` 6.35 vs `fence` 5.09 µs);
 the data path costs the same either way. A second link does not help payloads this small.

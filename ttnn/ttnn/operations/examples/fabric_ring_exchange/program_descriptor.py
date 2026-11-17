@@ -6,8 +6,6 @@
 Each chip p owns one slot of `seg_bytes` per link and wave; after one call every chip holds every peer's slot.
 Variants (one program per chip, one generic_op dispatch for the mesh):
 
-  empty    idle kernels on `idle_cores` compute cores plus the port cores: the fixed cost of a program of that
-           size (launch, runtime args, teardown) with no fabric traffic.
   fence    the ports open their fabric connections, run the ready fence and send header-only items (seg_bytes is
            ignored), on the relay schedule: the minimal synchronization a correct exchange needs.
   fence_direct  the same on the direct schedule: its fence waits for a ready from every destination, including
@@ -30,7 +28,7 @@ from pathlib import Path
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-VARIANTS = ("empty", "fence", "fence_direct", "relay", "direct")
+VARIANTS = ("fence", "fence_direct", "relay", "direct")
 FWD, BWD = 0, 1
 _OPP = {FWD: BWD, BWD: FWD}
 MAX_HEADERS = 8  # packet headers per port (one per destination chip)
@@ -134,14 +132,6 @@ def port_cores(grid, links):
     return {(d, l): cores[2 * l + d] for l in range(links) for d in (FWD, BWD)}
 
 
-def idle_cores(grid, ports, n):
-    """The first n grid cores in row-major order that are not port cores."""
-    busy = {(c.x, c.y) for c in ports.values()}
-    free = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in busy]
-    assert n <= len(free), f"{n} idle cores requested, {len(free)} free"
-    return free[:n]
-
-
 def _crs(cores):
     return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
@@ -208,15 +198,14 @@ class Resources:
         return int(self.scratch.buffer_address())
 
 
-def create_mesh_program_descriptor(res: Resources, variant: str, idle: list, payload: int):
+def create_mesh_program_descriptor(res: Resources, variant: str, payload: int):
     """One program per ring chip for `variant` (see the module docstring)."""
     assert variant in VARIANTS, variant
     mesh, ports = res.mesh, res.ports
     virt = lambda c: mesh.worker_core_from_logical_core(c)
     port_crs = _crs(list(ports.values()))
-    send = variant != "empty"
     chips = exchange_plan(mesh, direct=variant in ("direct", "fence_direct"))
-    seg = 0 if variant in ("empty", "fence", "fence_direct") else res.seg_bytes
+    seg = 0 if variant in ("fence", "fence_direct") else res.seg_bytes
     port_ct = [res.G, res.num_waves, payload, MAX_HEADERS, SEM_OWN_STATS, SEM_LANDED, SEM_OWN_COUNTED]
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ch in chips.items():
@@ -225,102 +214,75 @@ def create_mesh_program_descriptor(res: Resources, variant: str, idle: list, pay
         # OUTER size of its runtime-arg grid, not on how many args each core gets: relay and direct (same kernel,
         # different per-core arg layout) would share a cached program and the second would read the first's
         # layout. Key each program on everything that changes its layout.
-        key = f"fabric_ring_exchange|{variant}|{res.links}|{res.seg_bytes}|{res.num_waves}|{len(idle)}|{coord}"
+        key = f"fabric_ring_exchange|{variant}|{res.links}|{res.seg_bytes}|{res.num_waves}|{coord}"
         program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
         program.semaphores = [
             ttnn.SemaphoreDescriptor(id=s, core_ranges=port_crs, initial_value=0)
             for s in (SEM_OWN_STATS, SEM_LANDED, SEM_OWN_COUNTED)
         ]
-        kernels = []
-        if idle:
-            kernels.append(
-                ttnn.KernelDescriptor(
-                    kernel_source=str(KERNEL_DIR / "idle.cpp"),
-                    core_ranges=_crs(idle),
-                    compile_time_args=[],
-                    runtime_args=ttnn.RuntimeArgs(),
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1
-                    ),
-                )
+        port_rt = ttnn.RuntimeArgs()
+        peer_of = {FWD: ch["next"], BWD: ch["prev"]}
+        for l in range(res.links):
+            for d in (FWD, BWD):
+                core = ports[(d, l)]
+                sends, ready_out, entries = ch["sends"][d], ch["ready_out"][d], ch["entries"][d]
+                has_conn = len(sends) > 0 or len(ready_out) > 0
+                pc = virt(core)
+                dests = sorted({(dst, hops) for _, dst, _, hops, _ in sends} | {(t, h) for t, _, h in ready_out})
+                assert len(dests) <= MAX_HEADERS
+                args = [
+                    res.landing_addr,
+                    res.seg_stride,
+                    res.ready_addr,
+                    len(dests),
+                    len(sends),
+                    len(entries),
+                    0,  # n_roots: the own segment is in the landing already
+                    len(ready_out),
+                    len({it[1] for it in sends}),  # readies to wait for: one per destination chip
+                    pc.x,
+                    pc.y,
+                    0,  # n_notify
+                    int(has_conn),
+                    0,  # n_counted
+                    1,  # notify quantum
+                    SEM_LANDED,
+                ]
+                args += res.arrival_addrs[: len(entries)]
+                for dst, hops in dests:
+                    dn = _node(mesh, dst)
+                    args += [int(dn.chip_id), int(dn.mesh_id), hops]
+                for q, dst, idx, hops, wait in sends:
+                    args += [q, dests.index((dst, hops)), res.arrival_addrs[idx], wait]
+                for tgt, td, hops in ready_out:
+                    rc = virt(ports[(td, l)])
+                    args += [dests.index((tgt, hops)), rc.x, rc.y]
+                args += [seg] * res.num_waves
+                if has_conn:
+                    pn = _node(mesh, peer_of[d])
+                    link_ids = ttnn.get_forwarding_link_indices(_node(mesh, coord), pn)
+                    args += list(ttnn.setup_fabric_connection(_node(mesh, coord), pn, link_ids[l], program, core))
+                port_rt[core.x][core.y] = args
+        program.kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "port.cpp"),
+                core_ranges=port_crs,
+                compile_time_args=port_ct,
+                runtime_args=port_rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1
+                ),
             )
-        if not send:
-            kernels.append(
-                ttnn.KernelDescriptor(
-                    kernel_source=str(KERNEL_DIR / "idle.cpp"),
-                    core_ranges=port_crs,
-                    compile_time_args=[],
-                    runtime_args=ttnn.RuntimeArgs(),
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1
-                    ),
-                )
-            )
-        else:
-            port_rt = ttnn.RuntimeArgs()
-            peer_of = {FWD: ch["next"], BWD: ch["prev"]}
-            for l in range(res.links):
-                for d in (FWD, BWD):
-                    core = ports[(d, l)]
-                    sends, ready_out, entries = ch["sends"][d], ch["ready_out"][d], ch["entries"][d]
-                    has_conn = len(sends) > 0 or len(ready_out) > 0
-                    pc = virt(core)
-                    dests = sorted({(dst, hops) for _, dst, _, hops, _ in sends} | {(t, h) for t, _, h in ready_out})
-                    assert len(dests) <= MAX_HEADERS
-                    args = [
-                        res.landing_addr,
-                        res.seg_stride,
-                        res.ready_addr,
-                        len(dests),
-                        len(sends),
-                        len(entries),
-                        0,  # n_roots: the own segment is in the landing already
-                        len(ready_out),
-                        len({it[1] for it in sends}),  # readies to wait for: one per destination chip
-                        pc.x,
-                        pc.y,
-                        0,  # n_notify
-                        int(has_conn),
-                        0,  # n_counted
-                        1,  # notify quantum
-                        SEM_LANDED,
-                    ]
-                    args += res.arrival_addrs[: len(entries)]
-                    for dst, hops in dests:
-                        dn = _node(mesh, dst)
-                        args += [int(dn.chip_id), int(dn.mesh_id), hops]
-                    for q, dst, idx, hops, wait in sends:
-                        args += [q, dests.index((dst, hops)), res.arrival_addrs[idx], wait]
-                    for tgt, td, hops in ready_out:
-                        rc = virt(ports[(td, l)])
-                        args += [dests.index((tgt, hops)), rc.x, rc.y]
-                    args += [seg] * res.num_waves
-                    if has_conn:
-                        pn = _node(mesh, peer_of[d])
-                        link_ids = ttnn.get_forwarding_link_indices(_node(mesh, coord), pn)
-                        args += list(ttnn.setup_fabric_connection(_node(mesh, coord), pn, link_ids[l], program, core))
-                    port_rt[core.x][core.y] = args
-            kernels.append(
-                ttnn.KernelDescriptor(
-                    kernel_source=str(KERNEL_DIR / "port.cpp"),
-                    core_ranges=port_crs,
-                    compile_time_args=port_ct,
-                    runtime_args=port_rt,
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1
-                    ),
-                )
-            )
-        program.kernels = kernels
+        ]
         r, c = coord
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     return mesh_desc
 
 
-def ring_exchange(res: Resources, variant: str, idle: list, payload: int | None = None):
+def ring_exchange(res: Resources, variant: str, payload: int | None = None):
     """One call: dispatch `variant` on every ring chip (one generic_op)."""
     payload = int(payload or ttnn.get_tt_fabric_max_payload_size_bytes())
-    return ttnn.generic_op([res.scratch], create_mesh_program_descriptor(res, variant, idle, payload))
+    return ttnn.generic_op([res.scratch], create_mesh_program_descriptor(res, variant, payload))
 
 
 def expected_landing(res: Resources, variant: str):

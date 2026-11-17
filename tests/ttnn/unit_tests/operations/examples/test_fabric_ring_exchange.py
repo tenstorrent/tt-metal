@@ -9,8 +9,8 @@ slowest chip) and traced (T calls back to back: the slowest chip per call). Each
 
     scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_fabric_ring_exchange.py -s
 
-Overrides: RX_VARIANTS (empty,fence,fence_direct,relay,direct), RX_BYTES (slot bytes per link and wave, comma list),
-RX_LINKS (1,2), RX_IDLE (idle compute cores, comma list), RX_UNTRACED, RX_TRACED (calls per case).
+Overrides: RX_VARIANTS (fence,fence_direct,relay,direct), RX_BYTES (slot bytes per link and wave, comma list),
+RX_LINKS (1,2), RX_UNTRACED, RX_TRACED (calls per case).
 See ttnn/ttnn/operations/examples/fabric_ring_exchange/README.md.
 """
 
@@ -31,17 +31,15 @@ import ttnn
 from ttnn.operations.examples.fabric_ring_exchange import (
     Resources,
     expected_landing,
-    idle_cores,
     port_cores,
     ring_exchange,
 )
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 _list = lambda name, default: [x for x in os.environ.get(name, default).split(",") if x]
-VARIANTS = _list("RX_VARIANTS", "empty,fence,fence_direct,relay,direct")
+VARIANTS = _list("RX_VARIANTS", "fence,fence_direct,relay,direct")
 BYTES = [int(x) for x in _list("RX_BYTES", "128,2560,8192,32768")]
 LINKS = [int(x) for x in _list("RX_LINKS", "1,2")]
-IDLE = [int(x) for x in _list("RX_IDLE", "100")]
 UNTRACED = int(os.environ.get("RX_UNTRACED", "7"))
 TRACED = int(os.environ.get("RX_TRACED", "8"))
 PAYLOAD = 14 * 1024 + 64  # the production router payload on Blackhole (conftest.production_router_config)
@@ -80,8 +78,8 @@ def _check(res, variant):
     assert not bad.any(), f"{variant}: landing mismatch on {bad.nonzero()[:8].tolist()}"
 
 
-def _measure(mesh, res, variant, idle):
-    run = lambda: ring_exchange(res, variant, idle, PAYLOAD)
+def _measure(mesh, res, variant):
+    run = lambda: ring_exchange(res, variant, PAYLOAD)
     run()  # compile + first call
     ttnn.synchronize_device(mesh)
     _check(res, variant)
@@ -132,15 +130,13 @@ def test_fabric_ring_exchange(mesh_device):
         ports = port_cores(grid, links)
         for nbytes in BYTES:
             res = Resources(mesh, ports, nbytes, num_waves=1)
-            for n_idle in IDLE:
-                idle = idle_cores(grid, ports, n_idle)
-                for variant in VARIANTS:
-                    if variant in ("empty", "fence", "fence_direct") and nbytes != BYTES[0]:
-                        continue  # no payload: one row per (links, idle) is enough
-                    last, slow, traced, (lo, hi) = _measure(mesh, res, variant, idle)
-                    size = "-" if variant in ("empty", "fence", "fence_direct") else f"{nbytes}B"
-                    print(
-                        f"FABRIC_RING_EXCHANGE links={links} idle={n_idle:3d} {variant:12s} slot={size:>7s}  "
-                        f"{last:7.2f} / {slow:7.2f} / {traced:7.2f} [{lo:.2f}-{hi:.2f}]",
-                        flush=True,
-                    )
+            for variant in VARIANTS:
+                if variant in ("fence", "fence_direct") and nbytes != BYTES[0]:
+                    continue  # no payload: one row per link count is enough
+                last, slow, traced, (lo, hi) = _measure(mesh, res, variant)
+                size = "-" if variant in ("fence", "fence_direct") else f"{nbytes}B"
+                print(
+                    f"FABRIC_RING_EXCHANGE links={links} {variant:12s} slot={size:>7s}  "
+                    f"{last:7.2f} / {slow:7.2f} / {traced:7.2f} [{lo:.2f}-{hi:.2f}]",
+                    flush=True,
+                )

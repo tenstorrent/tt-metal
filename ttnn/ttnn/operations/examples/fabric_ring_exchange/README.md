@@ -44,7 +44,6 @@ payload 14 KiB + 64 B. Each chip owns one slot per link; after one call every ch
 
 | Variant | What runs |
 |---|---|
-| `empty` | an idle kernel on `idle` compute cores and on the port cores: a program of the op's size, no fabric |
 | `fence` | the ports open their fabric connections, run the ready fence and send header-only items, relay schedule |
 | `fence_direct` | the same on the direct schedule (a ready from every destination, including the 2-hop one) |
 | `relay` | forward port: own slot to p+1, then relays p−1's on to p+2; backward port: own slot to p−1 |
@@ -60,44 +59,43 @@ last-launched chip (it does not wait for its peers at the fence).
 
 ## Result (qb2-120-p02t03, Blackhole QuietBox 2, 4× p300c; see `report.md`)
 
-Traced, slowest chip, median of 8 calls, 100 idle cores (the op's compute-core count), µs:
+Traced, slowest chip, median of 8 calls, µs:
 
 | Slot per link | `relay`, 1 link | `direct`, 1 link | `relay`, 2 links | `direct`, 2 links |
 |---|---|---|---|---|
-| 128 B | 5.38 | 6.48 | 5.39 | 6.78 |
-| 2.5 KiB | 5.52 | 6.74 | 5.90 | 6.86 |
-| 8 KiB | 6.06 | 7.34 | 6.52 | 7.39 |
-| 32 KiB | 7.60 | 8.71 | 8.54 | 9.85 |
+| 128 B | 5.38 | 6.65 | 5.48 | 6.67 |
+| 2.5 KiB | 5.64 | 6.80 | 5.74 | 7.00 |
+| 8 KiB | 5.98 | 7.25 | 6.32 | 7.46 |
+| 32 KiB | 7.33 | 9.00 | 8.42 | 9.71 |
 
-No-payload floor, same metric: `empty` 0.19, `fence` 5.04 (1 link) / 4.98 (2 links).
+No-payload floor, same metric: `fence` 5.16 (1 link) / 5.02 (2 links).
 
-**1. The floor is the fence, about 5 µs, not the program.** An empty program of the op's size costs 0.19 µs
-of device kernel time: the kernel-duration metric does not include launch, so a program's fixed start-up cost
-is not where the time goes. The minimal correct exchange (connections opened, ready fence, header-only items)
-costs about 5 µs, nearly all of it synchronization rather than data movement. Moving the data adds little on top: +0.3 µs
-at 128 B, +1 µs at 8 KiB, +2.5 µs at 32 KiB (1 link, relay).
+**1. The fixed cost is the fence, about 5 µs.** The minimal correct exchange (connections opened, ready
+fence, header-only items) costs about 5 µs, nearly all of it synchronization rather than data movement. Moving
+the data adds little on top: +0.2 µs at 128 B, +0.8 µs at 8 KiB, +2.2 µs at 32 KiB (1 link, relay). The
+kernel-duration metric starts when the first kernel starts, so none of this is dispatch.
 
-**2. Direct sends are slower than relay here, by 1.1–1.6 µs, and the fence is why.** On the same schedule
-with header-only items, `fence_direct` costs 6.35 µs against `fence`'s 5.09 (+1.26). The data on top costs the
+**2. Direct sends are slower than relay here, by 1.1–1.7 µs, and the fence is why.** On the same schedule
+with header-only items, `fence_direct` costs 6.35 µs against `fence`'s 5.09 (+1.26; see `report.md`). The data on top costs the
 same either way (+0.27 relay, +0.23 direct). The direct schedule's forward port waits for a ready from its
 2-hop destination before its first send; the relay's waits for one from its neighbour. The store-and-forward
 turnaround the direct sends remove is cheaper than the extra fence hop they add.
 
 **3. A second link does not help this payload.** At 128 B to 8 KiB, 2 links are equal or slower than 1
-(each link carries half the bytes but pays its own fence); at 32 KiB, 2 links are slower by about 1 µs.
+(each link carries half the bytes but pays its own fence); at 32 KiB, 2 links are slower by about 1.1 µs.
 
-**Untraced, one call at a time:** the last-launched chip sees 4.3–4.7 µs (`fence` / `relay`, 128 B) while the
-slowest chip sees 7–18 µs: the chips launch microseconds apart, and every chip but the last waits at the fence
+**Untraced, one call at a time:** the last-launched chip sees 4.3–4.5 µs (`fence` / `relay`, 128 B) while the
+slowest chip sees 6.5–10 µs: the chips launch microseconds apart, and every chip but the last waits at the fence
 for its peers. Traced calls launch together, which is why the traced slowest-chip number is the one to use.
 
 ## Reproduce
 
 ```
-python -m ttnn.operations.examples.fabric_ring_exchange --bytes 128,2560 --links 1 --idle 0,100
+python -m ttnn.operations.examples.fabric_ring_exchange --bytes 128,2560 --links 1
 ```
 
 Needs a 4-chip ring. The test is `tests/ttnn/unit_tests/operations/examples/test_fabric_ring_exchange.py`
-(env overrides: `RX_VARIANTS`, `RX_BYTES`, `RX_LINKS`, `RX_IDLE`, `RX_UNTRACED`, `RX_TRACED`).
+(env overrides: `RX_VARIANTS`, `RX_BYTES`, `RX_LINKS`, `RX_UNTRACED`, `RX_TRACED`).
 
 ## Gotcha found while building it
 
