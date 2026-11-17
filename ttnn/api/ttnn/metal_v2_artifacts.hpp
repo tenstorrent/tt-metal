@@ -6,6 +6,7 @@
 
 #include <vector>
 
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -39,7 +40,9 @@ struct ProgramArtifacts {
 // factory allocates, plus the per-coordinate programs that reference them. Splits the same way
 // tt::tt_metal::WorkloadDescriptor does, for the same reasons.
 struct MeshWorkloadArtifacts {
-    // Semaphores for cross-device sync belong here once Metal 2.0 has its own semaphore object.
+    // GlobalSemaphores the factory allocates for cross-device sync. The adapter keeps them alive for
+    // the lifetime of the cached workload, so every program's run args may bind them.
+    std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores;
     // No op-owned tensors: a MeshTensor spans the mesh, so op-allocated scratch stays SPMD-only.
 
     // Range-keyed: a program uniform over part of the mesh is one entry covering that range.

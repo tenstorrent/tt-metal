@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
@@ -465,6 +466,49 @@ TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterMapsProgramsPerCoordinate)
     EXPECT_GT(expected, 0u);
     EXPECT_EQ(cached.workload.get_programs().size(), expected);
     EXPECT_EQ(cached.shared_variables.size(), expected);
+}
+
+// Emits one program per coordinate, and allocates one GlobalSemaphore for the whole workload.
+struct PerCoordProdAllFactoryWithGlobalSemaphore {
+    using Op = ttnn::prim::ProdAllDeviceOperation;
+    // The address of the GlobalSemaphore that the last call allocated.
+    static inline tt::tt_metal::DeviceAddr allocated_semaphore_address = 0;
+
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const Op::operation_attributes_t& attrs,
+        const Op::tensor_args_t& tensor_args,
+        Op::tensor_return_value_t& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+        ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+        artifacts.global_semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(
+            tensor_args.input.device(), CoreRangeSet(CoreRange({0, 0})), 0));
+        allocated_semaphore_address = artifacts.global_semaphores.back().address();
+        for (const auto& range : tensor_coords.ranges()) {
+            auto program = Op::ProdAllProgramFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+            artifacts.programs.push_back(
+                {.range = range, .spec = std::move(program.spec), .run_params = std::move(program.run_params)});
+        }
+        return artifacts;
+    }
+};
+
+using LaunchOperation1x1Test = tt::tt_metal::MeshDevice1x1Fixture;
+
+TEST_F(LaunchOperation1x1Test, MeshWorkloadSpecAdapterKeepsFactoryGlobalSemaphoresAlive) {
+    // A GlobalSemaphore that a factory allocates stays allocated while its cached workload lives.
+    using Op = ttnn::prim::ProdAllDeviceOperation;
+    using Adapter = device_operation::MeshDeviceOperationAdapter<Op>::MeshWorkloadSpecFactoryAdapter<
+        PerCoordProdAllFactoryWithGlobalSemaphore>;
+    Op::operation_attributes_t attrs{.output_mem_config = MemoryConfig{}};
+    Op::tensor_args_t tensor_args{.input = make_tensor_with_num_shards(1, mesh_device_.get())};
+    auto output = Op::create_output_tensors(attrs, tensor_args);
+    ttnn::MeshCoordinateRangeSet tensor_coords(ttnn::MeshCoordinateRange(mesh_device_->shape()));
+
+    auto cached = Adapter::create_mesh_workload(attrs, tensor_coords, tensor_args, output);
+    auto later =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device_.get(), CoreRangeSet(CoreRange({0, 0})), 0);
+
+    EXPECT_NE(later.address(), PerCoordProdAllFactoryWithGlobalSemaphore::allocated_semaphore_address);
 }
 
 // Same per-coordinate mapping, but with an override so the cache-hit path takes the
