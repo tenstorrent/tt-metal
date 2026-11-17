@@ -44,11 +44,11 @@ inline uint32_t relay_affine_prefix_sender_slots(uint32_t key_tiles, tt::ARCH ar
 // two more of the core's 16 (tt::tt_metal::NUM_SEMAPHORES, which no public header exposes).
 inline constexpr uint32_t relay_affine_prefix_max_heads_per_link = 16 - 2;
 
-// Legacy program descriptors, as select_final_carry's: the metal2 ProgramSpec cannot yet open fabric connections.
+// Legacy program descriptors: the metal2 ProgramSpec cannot yet open fabric connections.
 struct RelayAffinePrefixProgramFactory {
     // One program per coordinate: each sends to its own successor along the sequence-parallel axis. They differ only
-    // in runtime args (sp_rank, the successor, its route and fabric connection), so a range runs them as one program
-    // with per-device runtime args.
+    // in runtime args (sp_rank, the successor, its route, the carry's ranges and fabric connections), so a range runs
+    // them as one program with per-device runtime args.
     static constexpr bool merge_per_device_programs = true;
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const RelayAffinePrefixParams&,
