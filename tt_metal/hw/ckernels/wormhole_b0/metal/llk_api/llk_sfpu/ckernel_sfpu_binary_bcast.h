@@ -431,8 +431,8 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
 // their mask + rotate-add chains are interleaved A/B/A/B: every dependent
 // pair is separated by exactly one instruction of the other chain, which
 // covers the 2-cycle SFPU latency without a single SFPNOP. The per-lane
-// arithmetic (mask AND, three rotate-adds, negate, add, multiply) and
-// its order are unchanged, so results are bit-identical to the serial form.
+// arithmetic (mask AND, three rotate-adds, subtract, multiply) and its
+// order are unchanged, so results are bit-identical to the serial form.
 //
 // Dest addressing is RWC-relative so that the per-band body is a sequence of
 // immediates: DEST_TARGET_REG_CFG_MATH_Offset is pointed at the data tile for
@@ -524,8 +524,9 @@ inline void _record_norm_dual_broadcast_replay_() {
 }
 
 // Load both col-0 slots of the current band, mask inv_std, run the recorded
-// block and the rest of stage 3, and leave -mean in LREG_NORM_MEAN and
-// inv_std in LREG_NORM_INV_STD, both ready to be read by the next instruction.
+// block and the rest of stage 3, and leave mean in LREG_NORM_MEAN and
+// inv_std in LREG_NORM_INV_STD. The inv_std SFPADD is last, so mean can be
+// read by the next instruction and inv_std one later.
 sfpi_inline void _norm_dual_broadcast_band_(std::uint32_t mean_rel, std::uint32_t inv_std_rel) {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
     TT_SFPLOAD(LREG_NORM_MEAN, IM, ADDR_MOD_3, mean_rel);
@@ -537,18 +538,18 @@ sfpi_inline void _norm_dual_broadcast_band_(std::uint32_t mean_rel, std::uint32_
     TTI_SFPSHFT2(0, LREG_NORM_INV_STD_TMP, LREG_NORM_INV_STD_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPADD(LREG_NORM_MEAN, p_sfpu::LCONST_1, LREG_NORM_MEAN_TMP, LREG_NORM_MEAN, 0);
     TTI_SFPADD(LREG_NORM_INV_STD, p_sfpu::LCONST_1, LREG_NORM_INV_STD_TMP, LREG_NORM_INV_STD, 0);
-    TTI_SFPMOV(0, LREG_NORM_MEAN, LREG_NORM_MEAN, 1 /* SFPMOV_MOD1_NEGATE */);
 }
 
-// LREG_DATA0..3 hold the band's data; centre, scale and store them to the
-// same slots. The adds / muls / stores each read a value written 4
-// instructions earlier, past the 2-cycle latency.
+// LREG_DATA0..3 hold the band's data; centre (mean * -1 + data, one rounding
+// as data - mean), scale and store them to the same slots. The centring /
+// muls / stores each read a value written 4 instructions earlier, past the
+// 2-cycle latency.
 sfpi_inline void _norm_centre_scale_store_band_() {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
-    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, LREG_NORM_MEAN, LREG_DATA0, 0);
-    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, LREG_NORM_MEAN, LREG_DATA1, 0);
-    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, LREG_NORM_MEAN, LREG_DATA2, 0);
-    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_NORM_MEAN, LREG_DATA3, 0);
+    TTI_SFPMAD(LREG_NORM_MEAN, p_sfpu::LCONST_neg1, LREG_DATA0, LREG_DATA0, 0);
+    TTI_SFPMAD(LREG_NORM_MEAN, p_sfpu::LCONST_neg1, LREG_DATA1, LREG_DATA1, 0);
+    TTI_SFPMAD(LREG_NORM_MEAN, p_sfpu::LCONST_neg1, LREG_DATA2, LREG_DATA2, 0);
+    TTI_SFPMAD(LREG_NORM_MEAN, p_sfpu::LCONST_neg1, LREG_DATA3, LREG_DATA3, 0);
     TTI_SFPMUL(LREG_DATA0, LREG_NORM_INV_STD, p_sfpu::LCONST_0, LREG_DATA0, 0);
     TTI_SFPMUL(LREG_DATA1, LREG_NORM_INV_STD, p_sfpu::LCONST_0, LREG_DATA1, 0);
     TTI_SFPMUL(LREG_DATA2, LREG_NORM_INV_STD, p_sfpu::LCONST_0, LREG_DATA2, 0);
@@ -570,10 +571,10 @@ sfpi_inline void _norm_centre_scale_store_band_rel_(std::uint32_t tile_rel) {
     TT_SFPLOAD(LREG_DATA1, IM, ADDR_MOD_3, slot1);
     TT_SFPLOAD(LREG_DATA2, IM, ADDR_MOD_3, slot2);
     TT_SFPLOAD(LREG_DATA3, IM, ADDR_MOD_3, slot3);
-    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, LREG_NORM_MEAN, LREG_DATA0, 0);
-    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, LREG_NORM_MEAN, LREG_DATA1, 0);
-    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, LREG_NORM_MEAN, LREG_DATA2, 0);
-    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_NORM_MEAN, LREG_DATA3, 0);
+    TTI_SFPMAD(LREG_NORM_MEAN, p_sfpu::LCONST_neg1, LREG_DATA0, LREG_DATA0, 0);
+    TTI_SFPMAD(LREG_NORM_MEAN, p_sfpu::LCONST_neg1, LREG_DATA1, LREG_DATA1, 0);
+    TTI_SFPMAD(LREG_NORM_MEAN, p_sfpu::LCONST_neg1, LREG_DATA2, LREG_DATA2, 0);
+    TTI_SFPMAD(LREG_NORM_MEAN, p_sfpu::LCONST_neg1, LREG_DATA3, LREG_DATA3, 0);
     TTI_SFPMUL(LREG_DATA0, LREG_NORM_INV_STD, p_sfpu::LCONST_0, LREG_DATA0, 0);
     TTI_SFPMUL(LREG_DATA1, LREG_NORM_INV_STD, p_sfpu::LCONST_0, LREG_DATA1, 0);
     TTI_SFPMUL(LREG_DATA2, LREG_NORM_INV_STD, p_sfpu::LCONST_0, LREG_DATA2, 0);
