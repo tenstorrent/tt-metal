@@ -9,7 +9,9 @@ credits (no multicasts). Kernels: l5_writer.cpp (BRISC), l5_reader.cpp (NCRISC),
 L5Cfg.hmc: h by one multicast a row from the group's hub (core 0, the rectangle's NOC0 multicast start corner): the
 owners send their tiles to the hub, whose BRISC (l5h_hub.cpp) multicasts the 20-tile row to the group; every other
 transfer of the group's cores (and the muxes) runs on NOC1 from the NCRISC (l5h_reader.cpp), so that inside a group's
-rectangle NOC0 carries only its hub's multicasts.
+rectangle NOC0 carries only its hub's multicasts. hmc 2: the BRISC (l5h_writer.cpp) also keeps the transfers that
+stay inside the rectangle on NOC0 (x rows east, partials and landing credits south) and multicasts from the hub; so
+nothing enters a group's rectangle on NOC0 from outside.
 
 Layout (L5Cfg): groups in logical columns 1-5 (and 7-11 on a 12 x 10 Galaxy chip; each block NoC contiguous), rows
 0-4 / 5-9; each group's two mux cores in the column just west of it (0 / 6: the cores reach them on NOC1). The 11 x 10
@@ -42,7 +44,9 @@ class L5Cfg:
     FL: int = 2  # fold lag
     TL: int = 9  # tilize look-ahead (rows; own rows are 1 in 5)
     RD: int = 4  # own-expert chunk reads in flight
-    hmc: int = 0  # h by the group hub's multicast (l5h_reader.cpp / l5h_hub.cpp; NOC0 only for the multicasts)
+    # h by the group hub's multicast: 1 (l5h_reader.cpp / l5h_hub.cpp) NOC0 only for the hub's multicasts; 2
+    # (l5h_writer.cpp / l5h_reader.cpp WL5_HMC2) NOC0 also for the transfers that stay inside the group's rectangle
+    hmc: int = 0
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -132,7 +136,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
     land = sharded_l1(mesh, C, [l5.D * LT * 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT)
     lflags, lcred = w16(l5.D * NR), w16(NR)
     pring = sharded_l1(mesh, C, [l5.PD * NW * 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT)
-    scr = w16(8)
+    scr = w16(16 if l5.hmc else 8)
     counts_l1 = sharded_l1(mesh, C, [1, 32 + max(4, cfg.nexp)], U, RM, torch.int32)
     idx_l1 = sharded_l1(mesh, C, [4, 32], U, RM, torch.int32)
     table_l1 = sharded_l1(mesh, C, [1, TLW + 16], U, RM, torch.int32)
@@ -216,10 +220,15 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             hmc_rt[(x, y)] = [x_t.buffer_address(), idx_t.buffer_address()]
                             hmc_rt[(x, y)] += [counts_t.buffer_address(), k0, tab_t.buffer_address()]
                             hmc_rt[(x, y)] += [ws_t.buffer_address(), ch0[j]]
-                    if not l5.hmc:
+                    if l5.hmc == 2:
+                        for j, (x, y) in sub:
+                            (hx0, hy0), (hx1, hy1) = noc(mesh, *gr[0]), noc(mesh, *gr[-1])
+                            assert (hx1 - hx0, hy1 - hy0) == (NCOL - 1, NR - 1), "a group rectangle NoC contiguous"
+                            wr_rt[x][y].extend([hx0, hy0, hx1, hy1])
+                    if l5.hmc != 1:
                       kernels.append(
                         ttnn.KernelDescriptor(
-                            kernel_source=kpath("l5_writer.cpp"),
+                            kernel_source=kpath("l5h_writer.cpp" if l5.hmc == 2 else "l5_writer.cpp"),
                             core_ranges=cs,
                             compile_time_args=[ksl, dc, own, l5.NXR, xring.buffer_address(), xflags.buffer_address()]
                             + [xcred.buffer_address(), xtile, l5.D, land.buffer_address(), lflags.buffer_address()]
@@ -231,7 +240,8 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             + list(ttnn.TensorAccessorArgs(idx_t).get_compile_time_args())
                             + list(ttnn.TensorAccessorArgs(counts_t).get_compile_time_args())
                             + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
-                            + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args()),
+                            + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args())
+                            + ([hcons.buffer_address(), hcolf.buffer_address()] if l5.hmc == 2 else []),
                             runtime_args=wr_rt,
                             config=dm(0),
                         )
@@ -257,11 +267,11 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args())
                             + hmc_ct,
                             runtime_args=rd_rt,
-                            defines=FAB_DEFS,
+                            defines=FAB_DEFS + ([("WL5_HMC2", "1")] if l5.hmc == 2 else []),
                             config=dm(1),
                         )
                     )
-            if l5.hmc:  # the hubs' multicasters (core 0 of each group)
+            if l5.hmc == 1:  # the hubs' multicasters (core 0 of each group)
                 hub_rt = ttnn.RuntimeArgs()
                 for g, gr in enumerate(groups):
                     (hx0, hy0), (hx1, hy1) = noc(mesh, *gr[0]), noc(mesh, *gr[-1])

@@ -15,6 +15,10 @@
 //      compute pops h rows, the count into HCONS word j at the hub.
 //   QZ (hub, j 0): rows freed = min(own consumed, multicasts sent (scratch word 3, by the hub's BRISC)) -> HCRED word 0
 //      of the 20 owners.
+// WL5_HMC2 (L5Cfg.hmc 2): the BRISC (l5h_writer.cpp) keeps the transfers that stay inside the rectangle on NOC0 (x rows
+// east, partials and landing credits south, the hub's multicasts); this RISC sends the x rows west (from the row the
+// BRISC publishes, XAVAIL / XADDR, then XDONE), the partials to the owners above (PAVAIL / PDONE) and the landing
+// credits to the rows above.
 // CT: as l5_reader.cpp (0-36, TensorAccessorArgs(out)), then x ring, x tile, table page bytes, RMAX, x row bytes,
 //     idx L1, NEXP, PKE, RD, HCONS, then TensorAccessorArgs(x), (idx), (counts), (table), (own slices).
 // RT: as l5_reader.cpp (0-19, the mux client args 20-53), then 54 x addr, 55 idx addr, 56 counts addr, 57 K0,
@@ -374,16 +378,55 @@ void kernel_main() {
         if (l_pages / LT > l_cons) {
             l_cons = l_pages / LT;
             *W(lcred + Y * 16) = l_cons;
+#if defined(WL5_HMC2)
+            for (uint32_t o = 0; o < Y; ++o) {  // (the rows below: the BRISC, NOC0)
+#else
             for (uint32_t o = 0; o < NR; ++o) {
-                if (o != Y) {
-                    noc_inline_dw_write(get_noc_addr(cx[C], ry[o], lcred + Y * 16), l_cons);
+                if (o == Y) {
+                    continue;
                 }
+#endif
+                noc_inline_dw_write(get_noc_addr(cx[C], ry[o], lcred + Y * 16), l_cons);
             }
             did = true;
         }
         return did;
     };
 
+#if defined(WL5_HMC2)
+    // ---- QP: partials to the owners above this row (the BRISC sends to those at and below)
+    const uint32_t nup = Y < NOWN ? Y : NOWN;
+    uint32_t pq = 0, po = 0;
+    auto qp = [&]() -> bool {
+        if (pq >= total_rows) {
+            return false;
+        }
+        invalidate_l1_cache();
+        if (*W(scr + 4 * 16) < pq + 1) {  // PAVAIL
+            return false;
+        }
+        if (po == 0) {
+            *W(scr + 7 * 16) = pq + 1;
+        }
+        const uint32_t src = pring + (pq % PD) * NW * ptile, s = pq % D;
+        bool did = false;
+        while (po < nup) {
+            if (pq >= D && *W(lcred + po * 16) < pq - D + 1) {
+                return did;
+            }
+            noc_async_write(
+                src + 2 * po * ptile, get_noc_addr(cx[C], ry[po], land + (s * LT + 2 * Y) * ptile), 2 * ptile);
+            noc_async_write(scr + 7 * 16, get_noc_addr(cx[C], ry[po], lflags + (s * NR + Y) * 16), 4);
+            ++po;
+            did = true;
+        }
+        noc_async_writes_flushed();
+        *W(scr + 5 * 16) = pq + 1;  // PDONE
+        ++pq;
+        po = 0;
+        return true;
+    };
+#else
     // ---- QP: partials to the 4 owners of the column (this core included when it is one)
     uint32_t pq = 0, po = 0;
     auto qp = [&]() -> bool {
@@ -415,6 +458,7 @@ void kernel_main() {
         return true;
     };
 
+#endif
     // ---- QA (owners): h tile of row q -> the hub's ring slot q % NS, then its flag
     uint32_t a_q = 0;
     const uint32_t hidx = PC * C + Y;
@@ -564,6 +608,37 @@ void kernel_main() {
         g_state = 1;
         return true;
     };
+#if defined(WL5_HMC2)
+    // ---- QX: own rows to the cores of the row west of this column (the BRISC sends the rest, NOC0 east)
+    uint32_t xq = C;
+    auto qx = [&]() -> bool {
+        if (xq >= total_rows) {
+            return false;
+        }
+        invalidate_l1_cache();
+        if (*W(scr + 8 * 16) < xq + 1) {  // XAVAIL
+            return false;
+        }
+        if (xq >= NXR) {
+            for (uint32_t t = 0; t < C; ++t) {
+                if (*W(xcred + t * 16) < xq - NXR + 1) {
+                    return false;
+                }
+            }
+        }
+        const uint32_t dst = xring + (xq % NXR) * KSL * xtile, fl = xflags + (xq % NXR) * 16;
+        const uint32_t src = *W(scr + 9 * 16);  // XADDR
+        *W(scr + 11 * 16) = xq + 1;
+        for (uint32_t tc = C; tc-- > 0;) {
+            noc_async_write(src, get_noc_addr(cx[tc], ry[Y], dst), KSL * xtile);
+            noc_async_write(scr + 11 * 16, get_noc_addr(cx[tc], ry[Y], fl), 4);
+        }
+        noc_async_writes_flushed();
+        *W(scr + 10 * 16) = xq + 1;  // XDONE
+        xq += NCOL;
+        return true;
+    };
+#else
     // ---- QX: own rows to the 5 cores of the row
     uint32_t xq = C;
     auto qx = [&]() -> bool {
@@ -591,6 +666,7 @@ void kernel_main() {
         xq += NCOL;
         return true;
     };
+#endif
     // ---- QO: own experts' weights from DRAM into their slots (l5_writer.cpp's)
     auto entry = [&](uint32_t s, uint32_t k) { return tab + tab[1 + K + s] + 4 * k; };
     uint32_t o_s = 0, o_k[K] = {}, o_issued = 0, o_landed = 0, n_own = 0;
@@ -725,14 +801,22 @@ void kernel_main() {
     for (uint32_t i = 0; i < 7; ++i) {
         st[470 + i] = tq[i];
     }
+#if defined(WL5_HMC2)
+    for (uint32_t i = 0; i < 6; ++i) {  // (the BRISC has its own: this RISC's x / gather / h out / own at 64-69)
+        st[64 + i] = tb[i];
+    }
+#else
     for (uint32_t i = 0; i < 6; ++i) {  // (the queues l5_writer.cpp's BRISC runs on the other path, its stamp words)
         st[50 + i] = tb[i];
     }
+#endif
     st[56] = n_own;
     st[484] = wall() - t_start;
     st[485] = t_start;
+#if !defined(WL5_HMC2)
     if (J != 0) {  // (no BRISC kernel on this core: its loop-start words as this RISC's)
         st[495] = st[484];
         st[496] = t_start;
     }
+#endif
 }
