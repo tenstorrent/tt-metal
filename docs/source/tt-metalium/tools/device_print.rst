@@ -332,10 +332,10 @@ replaces the data when the tile's address is outside the L1 range that circular 
 data formats are ``Float32``, ``Float16_b``, ``Bfp8_b``, ``Bfp4_b``, ``Int8``, ``UInt8``, ``UInt16``, ``Int32``
 and ``UInt32``; any other format prints a warning.
 
-A tile's data format is known only at run time, so the host checks the spec against it then. A spec that doesn't
-suit the elements, such as ``{:x}`` on a ``Float16_b`` tile, prints a warning instead of the data:
-``<invalid format specifier {:x} for Float16_b data>``. A spec that suits no number, such as ``{:s}``, doesn't
-compile. The same holds for ``dp_typed_array_t``.
+A tile's data format is known only at run time, so the host checks the spec against it then. When the spec doesn't
+suit the elements, such as ``{:x}`` on a ``Float16_b`` tile, the elements print as ``{}`` would, and a warning line
+comes before the print's text: ``Warning: invalid format specifier {:x} for Float16_b data, printed with {}``. A spec
+that suits no number, such as ``{:s}``, doesn't compile. The same holds for ``dp_typed_array_t``.
 
 Sampling happens relative to the CB's current read or write pointer. To print a tile from the front of a CB, print
 between ``cb_wait_front`` and ``cb_pop_front``. To print a tile from the back, print between ``cb_reserve_back``

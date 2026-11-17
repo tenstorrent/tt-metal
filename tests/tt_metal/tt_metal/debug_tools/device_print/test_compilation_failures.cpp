@@ -101,6 +101,30 @@ TEST_F(DevicePrintFailuresFixture, DISABLED_PrintTooBigForBuffer) {
         "does not fit in the print buffer");
 }
 
+// Known issue: a spec isn't checked against a tile when the kernel compiles, so today this compiles. Disabled until
+// that is fixed.
+TEST_F(DevicePrintFailuresFixture, DISABLED_SpecSuitingNoNumberOnTile) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_suiting_no_number_on_tile.cpp",
+        "invalid format specifier");
+}
+
+// Known issue: a spec isn't checked against a tile when the kernel compiles, so today this compiles. Disabled until
+// that is fixed.
+TEST_F(DevicePrintFailuresFixture, DISABLED_SpecSuitingNoNumberCombinedOnTile) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_suiting_no_number_combined_on_tile.cpp",
+        "invalid format specifier");
+}
+
+// Known issue: a spec isn't checked against a typed array when the kernel compiles, so today this compiles. Disabled
+// until that is fixed.
+TEST_F(DevicePrintFailuresFixture, DISABLED_SpecSuitingNoNumberOnTypedArray) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_suiting_no_number_on_typed_array.cpp",
+        "invalid format specifier");
+}
+
 // Known issue: today a format that isn't a string literal fails with an unrelated message ("'format' is not
 // captured"). Disabled until that is fixed.
 TEST_F(DevicePrintFailuresFixture, DISABLED_FormatNotStringLiteral) {
