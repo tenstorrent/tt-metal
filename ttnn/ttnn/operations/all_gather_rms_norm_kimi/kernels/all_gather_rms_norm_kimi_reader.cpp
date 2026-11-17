@@ -48,6 +48,32 @@ void kernel_main() {
     const uint32_t n_tiles = b.h * block_w;
     const bool own = b.q == p;
 
+    // The own block goes first: the own partial (the head of the stats-critical chain) needs only x and the
+    // scaler; gamma is needed only by scale_block, after the stats round.
+    cb_reserve_back(cb_x_block, n_tiles);
+    if (own) {
+        // ---- load_own_block: DRAM -> landing ----
+        const auto in = TensorAccessor(in_args, in_addr, tile_bytes);
+        const uint32_t dst = get_write_ptr(cb_x_block);
+        for (uint32_t r = 0; r < b.h; ++r) {
+            const uint32_t row_page = (b.m * block_h + r) * Wl_t;
+            for (uint32_t j = 0; j < block_w; ++j) {
+                noc_async_read(in.get_noc_addr(row_page + j), dst + (r * block_w + j) * tile_bytes, tile_bytes);
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_x_block, n_tiles);
+        // the ports of my link read my slice from L1 from here on
+        const uint32_t l = b.m / cpl;
+        const uint32_t own_loaded_addr = get_semaphore(sem_own_loaded);
+        for (uint32_t d = 0; d < 2; ++d) {
+            const uint32_t xy = get_common_arg_val<uint32_t>(ports_idx + d * num_links + l);
+            noc_semaphore_inc(get_noc_addr(xy >> 8, xy & 0xFF, own_loaded_addr), 1);
+        }
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    }
+
     // ---- prepare_gamma_block: stick n -> row 0 of tile j (face 0 row 0 = elements 0..15, face 1 row 0 = 16..31) ----
     {
         const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_page);
@@ -73,30 +99,6 @@ void kernel_main() {
             }
         }
         cb_push_back(cb_gamma, block_w);
-    }
-
-    cb_reserve_back(cb_x_block, n_tiles);
-    if (own) {
-        dataflow_kernel_lib::
-            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-        // ---- load_own_block: DRAM -> landing ----
-        const auto in = TensorAccessor(in_args, in_addr, tile_bytes);
-        const uint32_t dst = get_write_ptr(cb_x_block);
-        for (uint32_t r = 0; r < b.h; ++r) {
-            const uint32_t row_page = (b.m * block_h + r) * Wl_t;
-            for (uint32_t j = 0; j < block_w; ++j) {
-                noc_async_read(in.get_noc_addr(row_page + j), dst + (r * block_w + j) * tile_bytes, tile_bytes);
-            }
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_x_block, n_tiles);
-        // the ports of my link read my slice from L1 from here on
-        const uint32_t l = b.m / cpl;
-        const uint32_t own_loaded_addr = get_semaphore(sem_own_loaded);
-        for (uint32_t d = 0; d < 2; ++d) {
-            const uint32_t xy = get_common_arg_val<uint32_t>(ports_idx + d * num_links + l);
-            noc_semaphore_inc(get_noc_addr(xy >> 8, xy & 0xFF, own_loaded_addr), 1);
-        }
     }
 
     // ---- stats -> cb_partials: col 0 of tile (q' * h + r) = stats[q'][m * block_h + r] ----
