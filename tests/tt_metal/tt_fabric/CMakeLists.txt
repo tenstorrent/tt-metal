@@ -100,6 +100,27 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
+add_executable(test_inter_domain ${UNIT_TESTS_FABRIC_INTER_DOMAIN_SRC})
+target_link_libraries(
+    test_inter_domain
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+target_include_directories(
+    test_inter_domain
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+)
+set_target_properties(
+    test_inter_domain
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
 add_library(test_system_health_smoke OBJECT)
 add_library(TT::SystemHealth::Smoke ALIAS test_system_health_smoke)
 
@@ -342,6 +363,7 @@ foreach(
         fabric_unit_tests
         test_physical_discovery
         test_fabric_graph
+        test_inter_domain
         test_system_health_smoke
         test_fabric_smoke
         test_tt_fabric
