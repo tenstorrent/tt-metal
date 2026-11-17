@@ -753,6 +753,16 @@ SDPAForwardPlan resolve_plan(
         // cut schedule against an uncut one by about a tenth (p150b calibration), so a smaller chunk,
         // whose schedule cuts less, must win by that much; the larger chunk also reads K/V fewer times,
         // which the model only approximates.
+        //
+        // At wide heads the factor is doing all the work, so it is measured there too. p150b, 110 cores,
+        // warmup 3 and 20 launches, the default against the same shape at max_pieces = 1:
+        //   B=1 Hq=6 Hkv=1 S=2048 D=256: cut 550.9 us (16.9 MiB), uncut 681.1 us (7.6 MiB) -- 24% faster
+        //                                for 9.3 MiB, where the model rates them 750.9 and 742.2, 1.2% apart
+        //   qwen3_8_tp4_s1024 (D=256):   cut 250.2 us (8.5 MiB), uncut 320.9 us (3.8 MiB) -- 28% faster
+        //                                for 4.7 MiB, rated 303.0 and 351.3
+        // So the cut is worth its scratch at this head width, and the ratings landing within 1% at S=2048
+        // is the model's own cut over-prediction (pred/meas 1.36 cut against 1.09 uncut in the benchmark),
+        // which is what this factor absorbs. Re-measure it if those two columns converge.
         constexpr double kSmallerChunkMustWinBy = 0.9;
         SDPAForwardChunks best = chunks;
         double best_us = std::numeric_limits<double>::infinity();
