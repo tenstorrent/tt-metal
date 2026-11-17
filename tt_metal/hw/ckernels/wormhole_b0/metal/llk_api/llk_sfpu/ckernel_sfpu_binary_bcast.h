@@ -145,10 +145,13 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects col
 //   subsequent BCAST_COL operation must call sfpu_bcast_col_init() again.
 //   LREG14 (programmable constant 2) is clobbered while extracting each scalar.
 //   A subsequent SFPU operation that uses this constant must run its init first.
-//   The band body is recorded into replay slots [0, 16) per call, over the
-//   BCAST_COL broadcast program (the sfpu_bcast_col_init() re-run that the
-//   LREG6 clobber already requires restores it). Like the ROW path, the call
-//   leaves the dest base register at the data tile and RWC.Dst non-zero.
+//   The band body is recorded into replay slots [0, 16) per call. That
+//   overwrites the BCAST_COL broadcast program (the sfpu_bcast_col_init()
+//   re-run that the LREG6 clobber already requires restores it) and any other
+//   SFPU replay program recorded at init (reduce, cumsum, fast exp, ...),
+//   whose op must re-run its init after a scalar normalize call. ADDR_MOD_6 is
+//   not touched. Like the ROW path, the call leaves the dest base register at
+//   the data tile and RWC.Dst non-zero.
 
 constexpr std::uint32_t LREG_BCAST = p_sfpu::LREG0;
 constexpr std::uint32_t LREG_TMP = p_sfpu::LREG2;

@@ -248,8 +248,12 @@ ALWI void sfpu_normalize_bcast_scalar_init() {
  * `sfpu_normalize_bcast_scalar_init()` must have been called.
  *
  * This operation invalidates the persistent column-broadcast mask and clobbers
- * programmable constant register 2. A later column-broadcast or SFPU operation
- * that consumes that constant must run its corresponding init first.
+ * programmable constant register 2. On Wormhole it also records its body into
+ * the SFPU half of the replay buffer (slots 0..15) on every call. A later
+ * column-broadcast operation, or any SFPU operation that consumes that constant
+ * or records a replay program in its init and relies on it per tile (e.g.
+ * `sfpu_reduce`, `cumsum`, fast-approximation `exp`), must run its init again
+ * after this call.
  *
  * Not supported on Quasar: a kernel that calls it fails to build.
  *
