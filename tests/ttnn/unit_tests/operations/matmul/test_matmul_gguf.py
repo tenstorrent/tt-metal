@@ -335,6 +335,12 @@ def test_refusals(device, expect_error):
         ttnn.matmul(x, w, transpose_b=True)
     with expect_error(RuntimeError, "is BFLOAT16"):
         ttnn.matmul(x, w, dtype=ttnn.float32)
+    with expect_error(RuntimeError, "no compute kernel config, core grid or sub-device ID"):
+        ttnn.matmul(x, w, compute_kernel_config=ttnn.init_device_compute_kernel_config(device.arch()))
+    with expect_error(RuntimeError, "no compute kernel config, core grid or sub-device ID"):
+        ttnn.matmul(x, w, core_grid=ttnn.CoreGrid(y=1, x=1))
+    with expect_error(RuntimeError, "no compute kernel config, core grid or sub-device ID"):
+        ttnn.matmul(x, w, sub_device_id=ttnn.SubDeviceId(0))
     w_l1 = ttnn.from_gguf(blocks, (512, 64), dtype, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     with expect_error(RuntimeError, "must be DRAM interleaved"):
         ttnn.matmul(x, w_l1)

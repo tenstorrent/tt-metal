@@ -108,6 +108,11 @@ Tensor gguf_matmul(
         "ttnn.matmul: a GGUF weight takes no program config, activation, global CB, prefetcher pipes, output tile, "
         "column offset or output tensor");
     TT_FATAL(
+        !parameters.compute_kernel_config.has_value() && !parameters.user_core_coord.has_value() &&
+            !parameters.sub_device_id.has_value(),
+        "ttnn.matmul: a GGUF weight takes no compute kernel config, core grid or sub-device ID (its programs choose "
+        "their fidelities and cores)");
+    TT_FATAL(
         parameters.output_dtype.value_or(DataType::BFLOAT16) == DataType::BFLOAT16,
         "ttnn.matmul: the output of a GGUF weight is BFLOAT16, got {}",
         parameters.output_dtype.value());
