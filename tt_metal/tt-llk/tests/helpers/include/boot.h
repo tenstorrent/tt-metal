@@ -195,19 +195,27 @@ TT_ALWAYS_INLINE void device_setup()
     ckernel::t6_semaphore_init(ckernel::semaphore::MATH_PACK, 0, 2);
 #if defined(LLK_BARRIER_ON_TRISC)
     // barrier.h is already in scope and has reserved the raw names, so go through its own.
-    ckernel::t6_semaphore_init(llk_barrier::ARRIVE_SEM, 0, 1);
+    // Every peer posts its arrival before the action thread takes any, so the count reaches NUM_THREADS - 1.
+    ckernel::t6_semaphore_init(llk_barrier::ARRIVE_SEM, 0, llk_barrier::NUM_THREADS - 1);
     ckernel::t6_semaphore_init(llk_barrier::RELEASE_SEM, 0, 1);
 #else
-    ckernel::t6_semaphore_init(ckernel::semaphore::PACK_DONE, 0, 1);
+    // barrier.h's ARRIVE_SEM, for a boot without barrier.h in scope, such as BRISC's.
+    ckernel::t6_semaphore_init(ckernel::semaphore::PACK_DONE, 0, 2);
     ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_OPERAND_SYNC, 0, 1);
 #endif
+    // The REG_RMW mutex keeps its last grantee across kernels (chip reset only) and the unpack and pack inits race for
+    // it, so take and release it here: every launch then starts with the same thread ahead in its round robin.
+    TTI_ATGETM(ckernel::mutex::REG_RMW);
+    TTI_ATRELM(ckernel::mutex::REG_RMW);
 #endif
 }
 
 #if defined(ARCH_QUASAR)
 constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000; // TRISC1..3 (TRISC0 is bit 11): what unpack releases
 #else
-constexpr std::uint32_t TRISC_SOFT_RESET_MASK = RISCV_SOFT_RESET_0_TRISCS;
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK  = RISCV_SOFT_RESET_0_TRISCS;
+constexpr std::uint32_t TRISC1_SOFT_RESET_MASK = 0x2000; // math: tensix.h has no per TRISC bit
+static_assert((TRISC1_SOFT_RESET_MASK & RISCV_SOFT_RESET_0_TRISCS) == TRISC1_SOFT_RESET_MASK);
 #endif
 
 #ifndef ARCH_QUASAR

@@ -161,6 +161,18 @@ private:
             std::array<size_t, tt::tt_fabric::builder_config::num_max_receiver_channels>,
             builder_config::MAX_NUM_VCS>& num_remote_receiver_buffer_slots_per_vc);
 
+    // Blackhole: the staged slot allocator's counts (fabric_slot_allocator.hpp), for the channels this router builds.
+    void configure_staged_buffer_slots(
+        Topology topology,
+        std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
+            num_sender_buffer_slots_per_vc,
+        std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
+            num_remote_sender_buffer_slots_per_vc,
+        std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
+            num_receiver_buffer_slots_per_vc,
+        std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
+            num_remote_receiver_buffer_slots_per_vc);
+
     // Configuration parameters
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {};
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {};

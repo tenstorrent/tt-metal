@@ -62,8 +62,8 @@ inline uint32_t round_up_to(uint32_t value, uint32_t alignment) {
 }
 
 inline void copy_bytes(uint32_t dst, uint32_t src, uint32_t bytes) {
-    auto* d = reinterpret_cast<volatile uint8_t*>(dst);
-    const auto* s = reinterpret_cast<const volatile uint8_t*>(src);
+    const CoreLocalMem<volatile uint8_t> d(dst);
+    const CoreLocalMem<const volatile uint8_t> s(src);
     for (uint32_t i = 0; i < bytes; ++i) {
         d[i] = s[i];
     }

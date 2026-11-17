@@ -13,8 +13,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>  // TensorSpec / TensorLayout / PageConfig / ...
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>  // TensorSpec / TensorLayout / PageConfig / ...
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 
 // Named rather than anonymous: these tests are part of a unity build, where two anonymous namespaces
 // merge into one and same-named helpers collide.

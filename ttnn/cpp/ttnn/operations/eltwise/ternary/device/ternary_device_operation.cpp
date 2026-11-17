@@ -132,7 +132,7 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
                 b_dim);
         }
 
-        uint32_t out_dim = std::max<uint32_t>(a_dim, b_dim);
+        uint32_t out_dim = (a_dim == 1) ? b_dim : a_dim;
         output_shape[i + largest_rank] = out_dim;
     }
     return ttnn::Shape(output_shape);
@@ -165,8 +165,7 @@ static ShardSpec generate_shard_spec_specless(
     const Shape& padded_out_shape,
     const TensorMemoryLayout& memory_layout,
     Layout output_layout) {
-    // Ternary TTT rejects zero dims (ternary_op_utils.cpp:840); TTS/TST use compute_broadcasted_output_binary
-    // (ternary_device_operation.cpp:109) which allows a_dim==b_dim==0, so the synthesizer's zero-vol guard fires.
+    // Output shapes with a zero dim reach here, so the synthesizer's zero-vol guard fires.
     return ttnn::operations::data_movement::common::synthesize_output_shard_spec(
         input_tensor_a.device()->compute_with_storage_grid_size(),
         padded_out_shape,
@@ -585,7 +584,8 @@ std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& t
         return std::nullopt;
     }
     if (tensor.is_allocated() && tensor.storage_type() == StorageType::DEVICE) {
-        const auto& distribution_spec = tensor.buffer()->buffer_distribution_spec();
+        const auto& distribution_spec =
+            tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
         if (distribution_spec.has_value()) {
             return distribution_spec->tensor_shape_in_pages();
         }
@@ -618,30 +618,32 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         input_c.has_value() ? std::optional{input_c->tensor_spec()} : std::nullopt,
         output_spec);
 
-    // logical (not padded) H,W drives SRC_BCAST_* / SRC_ROW_BCAST_* / SRC_SCALAR_* reader defines.
-    const auto hw = [](const Tensor& t) {
+    // Broadcast key of an input: its logical W, and whether its logical H is 1. A single row is broadcast along H;
+    // any other H runs the same program, so the row count itself stays out of the hash.
+    const auto broadcast_key = [](const Tensor& t) {
         const auto& s = t.logical_shape();
-        return std::pair<uint32_t, uint32_t>{s.rank() >= 2 ? s[-2] : 1u, s[-1]};
+        const uint32_t h = s.rank() >= 2 ? s[-2] : 1u;
+        return std::pair<uint32_t, uint32_t>{h == 1 ? 1u : 0u, s[-1]};
     };
 
-    // Same logical H/W can still differ in alignment or tile.
+    // Same broadcast key can still differ in alignment or tile.
     const auto alignment = [](const Tensor& t) { return t.tensor_spec().tensor_layout().get_alignment(); };
 
     return tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
         args,
         input_a.dtype(),
         input_a.memory_config(),
-        hw(input_a),
+        broadcast_key(input_a),
         alignment(input_a),
         input_a.tensor_spec().tile(),
         input_b.has_value() ? std::optional<DataType>{input_b->dtype()} : std::nullopt,
         input_b.has_value() ? std::optional<MemoryConfig>{input_b->memory_config()} : std::nullopt,
-        input_b.has_value() ? std::optional{hw(*input_b)} : std::nullopt,
+        input_b.has_value() ? std::optional{broadcast_key(*input_b)} : std::nullopt,
         input_b.has_value() ? std::optional{alignment(*input_b)} : std::nullopt,
         input_b.has_value() ? std::optional{input_b->tensor_spec().tile()} : std::nullopt,
         input_c.has_value() ? std::optional<DataType>{input_c->dtype()} : std::nullopt,
         input_c.has_value() ? std::optional<MemoryConfig>{input_c->memory_config()} : std::nullopt,
-        input_c.has_value() ? std::optional{hw(*input_c)} : std::nullopt,
+        input_c.has_value() ? std::optional{broadcast_key(*input_c)} : std::nullopt,
         input_c.has_value() ? std::optional{alignment(*input_c)} : std::nullopt,
         input_c.has_value() ? std::optional{input_c->tensor_spec().tile()} : std::nullopt,
         shard_volumes,

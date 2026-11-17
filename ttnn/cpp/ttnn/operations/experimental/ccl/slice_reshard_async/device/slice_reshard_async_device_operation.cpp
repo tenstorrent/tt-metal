@@ -44,6 +44,23 @@ Tensor SliceReshardAsyncDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
 }
 
+// final_semaphore and barrier_semaphore are caller-supplied and may differ between calls sharing a key;
+// they are excluded here and re-applied by SliceReshardAsyncProgramFactory::override_runtime_arguments.
+// `devices` holds raw IDevice* pointers derived from the mesh and is not structural.
+tt::tt_metal::operation::Hash SliceReshardAsyncDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return tt::tt_metal::operation::hash_operation<SliceReshardAsyncDeviceOperation>(
+        args.dim,
+        args.output_dim_offset,
+        args.output_dim_shape,
+        args.cluster_axis,
+        args.num_links,
+        args.output_mem_config,
+        args.topology,
+        args.ring_size,
+        tensor_args.tensor_spec());
+}
+
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

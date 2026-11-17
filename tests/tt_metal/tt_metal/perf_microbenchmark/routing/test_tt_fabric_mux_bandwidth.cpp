@@ -417,6 +417,7 @@ int main(int argc, char** argv) {
     test_params.buffer_size_bytes_header_only_channel = packet_header_size;
 
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         test_params.num_full_size_channels,
         test_params.num_header_only_channels,
         test_params.num_buffers_full_size_channel,
@@ -430,6 +431,7 @@ int main(int argc, char** argv) {
     };
 
     auto drainer_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         1,                         /* num_full_size_channels */
         0,                         /* num_header_only_channels */
         16,                        /* num_buffers_full_size_channel */

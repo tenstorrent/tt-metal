@@ -28,6 +28,16 @@ MESH_DEVICE_PARAMS = [
     for shape in [(2, 2), (2, 4), (4, 8)]
 ]
 
+# DBCache traces the leading block and the epilogue separately from the remaining blocks.
+DBCACHE_MESH_DEVICE_PARAMS = [
+    pytest.param(
+        shape,
+        {**line_params_req_exact_devices, "trace_region_size": int(_trace_region_size(shape) * 1.1)},
+        id=f"{shape[0]}x{shape[1]}",
+    )
+    for shape in [(2, 2), (2, 4), (4, 8)]
+]
+
 # The edit checkpoints trace one spatial bucket per number of input images (up to 3 for Edit-2509 and
 # 2511) instead of one per resolution. Measured on WH 2x4: Edit 95 MB, Edit-2509 187 MB. WH 4x8 is
 # not measured.

@@ -359,8 +359,7 @@ void MeshBuffer::initialize_device_buffers() {
     // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
     if (std::holds_alternative<OwnedBufferState>(state_) && device_local_config_.buffer_type == BufferType::L1 &&
         mesh_device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid()) {
-        auto* backing = get_backing_buffer();
-        auto alloc_size = backing->aligned_size_per_bank();
+        auto alloc_size = std::get<OwnedBufferState>(state_).backing_buffer->aligned_size_per_bank();
         for (const auto& [coord, device_buffer] : buffers_) {
             if (mesh_device->impl().is_local(coord)) {
                 auto* device = mesh_device->impl().get_device(coord);
@@ -390,7 +389,9 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
     unique_id_(std::exchange(other.unique_id_, std::nullopt)),
-    state_(std::move(other.state_)) {
+    state_(std::move(other.state_)),
+    built_device_buffers_(std::move(other.built_device_buffers_)),
+    cached_close_count_(other.cached_close_count_.load(std::memory_order_relaxed)) {
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
@@ -409,6 +410,8 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         buffers_ = std::move(other.buffers_);
         unique_id_ = std::exchange(other.unique_id_, std::nullopt);
         state_ = std::move(other.state_);
+        built_device_buffers_ = std::move(other.built_device_buffers_);
+        cached_close_count_.store(other.cached_close_count_.load(std::memory_order_relaxed), std::memory_order_relaxed);
 
         other.state_ = DeallocatedState{};
         other.address_ = 0;
@@ -435,6 +438,11 @@ void MeshBuffer::deallocate() {
         decltype(state_) old_state = DeallocatedState{};
         {
             std::lock_guard<std::mutex> lock(lazy_device_buffer_mutex(this));
+            if (built_device_buffers_) {
+                for (size_t i = 0; i < buffers_.shape().mesh_size(); i++) {
+                    built_device_buffers_[i].store(nullptr, std::memory_order_relaxed);
+                }
+            }
             state_.swap(old_state);
         }
     };
@@ -490,6 +498,16 @@ MeshDevice* MeshBuffer::device() const {
 }
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
+    // Built entries skip the lock and the MeshDevice reference while no MeshDevice has closed since they were cached.
+    // A close that overlaps the call is not caught: callers keep the MeshDevice open, as they must for the result.
+    const size_t index = device_coord.to_linear_index(buffers_.shape());
+    const uint64_t close_count = MeshDeviceImpl::close_count();
+    if (built_device_buffers_ && cached_close_count_.load(std::memory_order_acquire) == close_count) {
+        Buffer* built = built_device_buffers_[index].load(std::memory_order_acquire);
+        if (built != nullptr && built->device()->is_initialized()) {
+            return built;
+        }
+    }
     // Builds the entry on first use; see initialize_device_buffers(). The entries live in the container's heap storage,
     // not in the MeshBuffer object, so filling one in from this const method is well defined.
     auto& device_buffer = const_cast<std::shared_ptr<Buffer>&>(buffers_.at(device_coord).value());
@@ -510,6 +528,16 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
         // Keep lazily built buffers out of a light-metal capture that started after this allocation.
         LIGHT_METAL_TRACE_FUNCTION_ENTRY();
         device_buffer = create_device_buffer_at_lockstep_address(*this, device);
+    }
+    if (built_device_buffers_) {
+        // Entries checked before a close are dropped, not revalidated by this one's check.
+        if (cached_close_count_.load(std::memory_order_relaxed) != close_count) {
+            for (size_t i = 0; i < buffers_.shape().mesh_size(); ++i) {
+                built_device_buffers_[i].store(nullptr, std::memory_order_relaxed);
+            }
+        }
+        built_device_buffers_[index].store(device_buffer.get(), std::memory_order_release);
+        cached_close_count_.store(close_count, std::memory_order_release);
     }
     return device_buffer.get();
 }

@@ -98,7 +98,7 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
     }
     auto input_buffer_type = input_tensor.memory_config().buffer_type();
     auto output_buffer_type = out_mem_config.buffer_type();
-    auto input_page_size = input_tensor.buffer()->page_size();
+    auto input_page_size = input_tensor.mesh_buffer().page_size();
     auto output_page_size = output_tensor_spec.compute_page_size_bytes();
 
     TT_FATAL(
@@ -201,8 +201,8 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
         if (!has_unaligned_handling) {
             const uint32_t alignment = hal::get_l1_alignment();
 
-            uint32_t input_page_size = input_tensor.buffer()->page_size();
-            uint32_t input_aligned_page_size = input_tensor.buffer()->aligned_page_size();
+            uint32_t input_page_size = input_tensor.mesh_buffer().page_size();
+            uint32_t input_aligned_page_size = input_tensor.mesh_buffer().aligned_page_size();
             if (input_page_size != input_aligned_page_size) {
                 return {
                     false,
@@ -248,7 +248,8 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
         }
 
         auto out_distribution_spec = output_tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec();
-        auto input_distribution_spec = input_tensor.buffer()->buffer_distribution_spec();
+        auto input_distribution_spec =
+            input_tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
 
         auto n_logical_input_pages = input_distribution_spec->tensor_shape_in_pages().volume();
         auto n_logical_output_pages = out_distribution_spec->tensor_shape_in_pages().volume();
