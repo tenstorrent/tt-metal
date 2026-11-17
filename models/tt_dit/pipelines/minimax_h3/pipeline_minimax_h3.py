@@ -673,8 +673,8 @@ class MiniMaxH3Pipeline:
         length class (eager only). It is the 4x8 presets' default on both architectures; `_resolve_denoise_path` has
         the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path.
         `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks that path's
-        all-gather matmul pins. `adaln_once_per_denoise` projects every step's adaLN tables once at the start of an
-        untraced denoise instead of once a step.
+        all-gather matmul pins. `adaln_once_per_denoise` projects every step's adaLN tables once at the start of a
+        denoise instead of once a step; `trace_denoise` configs always project once a step.
 
         `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` where
         the mesh preset enables it (the Blackhole 4x8 and 4x32), for t2va/fl2va only."""
@@ -993,8 +993,8 @@ class MiniMaxH3Pipeline:
         padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path. `dit_fsdp`
         (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
         `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks the dynamic-length
-        path's all-gather matmul pins. `adaln_once_per_denoise` (default on) projects the adaLN tables once an
-        untraced denoise instead of once a step.
+        path's all-gather matmul pins. `adaln_once_per_denoise` (default on) projects the adaLN tables once a
+        denoise instead of once a step; `trace_denoise` configs always project once a step.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
@@ -3240,8 +3240,9 @@ class MiniMaxH3Pipeline:
         # Every step's adaLN tables in one projection a block (one FSDP gather of its weight a denoise, not a step);
         # each forward then picks its step's rows by an embedding lookup. The stacked rows are padded to a multiple
         # of ADALN_PREPARED_ROWS so the programs do not depend on the step count (the warmup compiles them). The
-        # prepared table lives for one request, so traced runs keep the per-step projection.
-        precompute_modulation = not traced and self.adaln_once_per_denoise
+        # prepared table is freed after every request, which a trace replay cannot follow, so a trace_denoise
+        # config projects once a step on every request, its untraced first one included.
+        precompute_modulation = not self.trace_denoise and self.adaln_once_per_denoise
         if precompute_modulation:
             levels = [step_levels(i) for i in range(len(timesteps))]
             num_slots = levels[0][0].numel()
