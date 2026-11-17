@@ -19,6 +19,7 @@ from helpers.llk_params import (
     MathOperation,
     PerfRunType,
     Transpose,
+    VectorMode,
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
@@ -56,6 +57,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    VECTOR_MODE,
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 
@@ -108,6 +110,8 @@ def _sfpu_ternary_compile_params(
         NUM_FACES(num_faces=faces_to_generate),
         UNPACK_TRANS_FACES(Transpose.No),
         UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        # The kernel runs the op over all rows and columns of the tile.
+        VECTOR_MODE(VectorMode.RC),
     ]
 
 
@@ -152,10 +156,10 @@ def _run_sfpu_ternary(
             NUM_FACES(num_faces=faces_to_generate),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            VECTOR_MODE(VectorMode.RC),
+            SFPU_CLOBBER_LREGS(clobber_lregs),
             DEST_SYNC(),
         ]
-        if clobber_lregs:
-            templates.append(SFPU_CLOBBER_LREGS())
         runtimes = []
         # C must exist so L1_TO_L1 builds the third Operand; values are unused.
         perf_c = torch.zeros(input_dimensions)

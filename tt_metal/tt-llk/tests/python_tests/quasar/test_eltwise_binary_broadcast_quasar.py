@@ -14,6 +14,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BroadcastType,
+    EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -47,6 +48,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
+    REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     generate_input_dim,
@@ -246,6 +248,8 @@ def test_eltwise_binary_broadcast_quasar(
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
+            # Broadcast never reuses Dest; recorded so the perf CSV matches the WH/BH column.
+            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
         ],
         "runtimes": [
             generate_input_dim(

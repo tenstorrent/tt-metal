@@ -56,25 +56,25 @@ using namespace ckernel;
 namespace ckernel::sfpu
 {
 
-static constexpr std::uint32_t FNV23_INIT  = 0x1C9DC5u;
-static constexpr std::uint32_t FNV23_PRIME = 0x000193u; // documents the multiply below
-static constexpr std::uint32_t MASK23      = 0x7FFFFFu;
+constexpr std::uint32_t FNV23_INIT  = 0x1C9DC5u;
+constexpr std::uint32_t FNV23_PRIME = 0x000193u; // documents the multiply below
+constexpr std::uint32_t MASK23      = 0x7FFFFFu;
 
 // SFPIADD Mod1: LREG_DST (reg+reg, Mod1=0) | CC_NONE (no flag update, Mod1=4) = 4
-static constexpr int SFPIADD_MOD_NOFLAG = 4;
+constexpr int SFPIADD_MOD_NOFLAG = 4;
 
 // A 32x32 INT32 tile is 32 SFPU rows (32 lanes each); ADDR_MOD_1 advances the
 // DEST row counter by DEST_ROW_STRIDE per SFPLOAD/SFPSTORE. See file header.
-static constexpr int DEST_ROWS       = 32;
-static constexpr int DEST_ROW_STRIDE = 2;
+constexpr int DEST_ROWS       = 32;
+constexpr int DEST_ROW_STRIDE = 2;
 
 // LReg assignments (working registers kept < 8 for SFPXOR/SFPAND/SFPIADD/SFPSHFT VD constraint).
-static constexpr int LREG_W    = 0; // word loaded from Dst
-static constexpr int LREG_H    = 1; // per-lane FNV23 accumulator (persists across tiles)
-static constexpr int LREG_TMP  = 2; // multiply product accumulator
-static constexpr int LREG_TMP2 = 3; // per-shift-term scratch
-static constexpr int LREG_MASK = 4; // 0x7FFFFF constant
-static constexpr int LREG_ZERO = 5; // 0 constant, for clearing dest rows
+constexpr int LREG_W    = 0; // word loaded from Dst
+constexpr int LREG_H    = 1; // per-lane FNV23 accumulator (persists across tiles)
+constexpr int LREG_TMP  = 2; // multiply product accumulator
+constexpr int LREG_TMP2 = 3; // per-shift-term scratch
+constexpr int LREG_MASK = 4; // 0x7FFFFF constant
+constexpr int LREG_ZERO = 5; // 0 constant, for clearing dest rows
 
 /**
  * @brief Seed the per-lane FNV23 accumulators and configure DEST addressing.
