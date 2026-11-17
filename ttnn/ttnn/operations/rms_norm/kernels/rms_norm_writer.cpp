@@ -37,7 +37,12 @@ void kernel_main() {
     constexpr uint32_t sem_id0 = get_compile_time_arg_val(14);
     constexpr uint32_t sem_id1 = get_compile_time_arg_val(15);
     constexpr bool OUT_SHARDED = get_compile_time_arg_val(16) != 0;  // compute packs straight into the out shard
-    constexpr auto o_args = TensorAccessorArgs<17>();
+    constexpr bool ROW_FLAT = get_compile_time_arg_val(17) != 0;     // RM shard: tile-row = 32 consecutive sticks
+    constexpr bool OUT_SHARD_RM = get_compile_time_arg_val(18) != 0;  // RM out sticks live in the local shard
+    constexpr uint32_t OUT_STRIDE = get_compile_time_arg_val(19);     // shard stick pitch in bytes
+    constexpr auto o_args = TensorAccessorArgs<20>();
+    const uint32_t first_stick = get_arg_val<uint32_t>(peers_base + 2 * (N_W > 1 ? N_W : 0));
+    const uint32_t core_sticks = get_arg_val<uint32_t>(peers_base + 2 * (N_W > 1 ? N_W : 0) + 1);
 
     constexpr uint32_t TILE_DIM = 32;
     constexpr uint32_t num_seg = Wt / Sb;
@@ -105,17 +110,31 @@ void kernel_main() {
             if constexpr (IS_RM) {
                 for (uint32_t rr = 0; rr < rb; ++rr) {
                     const uint32_t tr = tr0 + rr;
-                    const uint32_t img = tr / Ht_img;
-                    const uint32_t r = tr % Ht_img;
-                    const uint32_t valid_rows = (H - r * TILE_DIM) < TILE_DIM ? (H - r * TILE_DIM) : TILE_DIM;
-                    const uint32_t stick0 = img * H + r * TILE_DIM;
+                    uint32_t valid_rows, stick0;
+                    if constexpr (ROW_FLAT) {
+                        const uint32_t left = core_sticks - tr * TILE_DIM;
+                        valid_rows = left < TILE_DIM ? left : TILE_DIM;
+                        stick0 = first_stick + tr * TILE_DIM;
+                    } else {
+                        const uint32_t img = tr / Ht_img;
+                        const uint32_t r = tr % Ht_img;
+                        valid_rows = (H - r * TILE_DIM) < TILE_DIM ? (H - r * TILE_DIM) : TILE_DIM;
+                        stick0 = img * H + r * TILE_DIM;
+                    }
                     dfb_rm.wait_front(Sb);
                     const uint32_t base = dfb_rm.get_read_ptr();
                     const uint32_t off = slice_off + seg * SEG_BYTES;
                     const uint32_t avail = W * ES - off;
                     const uint32_t bytes = avail < SEG_BYTES ? avail : SEG_BYTES;
                     for (uint32_t k = 0; k < valid_rows; ++k) {
-                        noc_async_write(base + k * SEG_BYTES, acc.get_noc_addr(stick0 + k, off), bytes);
+                        if constexpr (OUT_SHARD_RM) {
+                            noc_async_write(
+                                base + k * SEG_BYTES,
+                                get_noc_addr(o_addr + (stick0 - first_stick + k) * OUT_STRIDE + off),
+                                bytes);
+                        } else {
+                            noc_async_write(base + k * SEG_BYTES, acc.get_noc_addr(stick0 + k, off), bytes);
+                        }
                     }
                     noc_async_write_barrier();
                     dfb_rm.pop_front(Sb);

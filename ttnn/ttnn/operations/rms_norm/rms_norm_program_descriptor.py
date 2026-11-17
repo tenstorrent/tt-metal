@@ -162,14 +162,26 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     Wt = Wt_full // n_w  # per-core slice width in tiles (every per-core CB / loop below is slice-sized)
     if shard_spec is not None:
         # Core i of the shard grid (shard order) owns tile-rows [i*sh, (i+1)*sh) of the flattened tensor.
-        sh = shard_spec.shape[0] // TILE
         core_plan = []
-        for i, core in enumerate(
-            ttnn.corerange_to_cores(shard_spec.grid, row_wise=shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR)
-        ):
-            first = min(i * sh, total_tile_rows)
-            core_plan.append((core, first, min(sh, total_tile_rows - first), 0))
-        rows_max = sh
+        shard_cores = ttnn.corerange_to_cores(
+            shard_spec.grid, row_wise=shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+        )
+        if is_rm:
+            # RM: rms_norm is per-stick, so tile-rows are 32 consecutive sticks of the core's shard,
+            # independent of image boundaries; the last tile-row of a shard may be ragged.
+            sh_sticks = shard_spec.shape[0]
+            total_sticks = images * H
+            for i, core in enumerate(shard_cores):
+                first_stick = i * sh_sticks
+                n_sticks = max(0, min(sh_sticks, total_sticks - first_stick))
+                core_plan.append((core, 0, _div_up(n_sticks, TILE), 0, first_stick, n_sticks))
+            rows_max = _div_up(sh_sticks, TILE)
+        else:
+            sh = shard_spec.shape[0] // TILE
+            for i, core in enumerate(shard_cores):
+                first = min(i * sh, total_tile_rows)
+                core_plan.append((core, first, min(sh, total_tile_rows - first), 0, 0, 0))
+            rows_max = sh
         all_cores = shard_spec.grid
     elif n_w == 1:
         num_cores, all_cores, group1, group2, rows_g1, rows_g2 = ttnn.split_work_to_cores(
@@ -179,7 +191,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         first = 0
         for group, rows in ((group1, rows_g1), (group2, rows_g2)):
             for core in ttnn.corerange_to_cores(group, row_wise=True):
-                core_plan.append((core, first, rows, 0))
+                core_plan.append((core, first, rows, 0, 0, 0))
                 first += rows
         rows_max = rows_g1
     else:
@@ -193,15 +205,18 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             rows = base_rows + (1 if g < extra else 0)
             for j in range(n_w):
                 lin = g * n_w + j
-                core_plan.append((ttnn.CoreCoord(lin % grid.x, lin // grid.x), first, rows, j))
+                core_plan.append((ttnn.CoreCoord(lin % grid.x, lin // grid.x), first, rows, j, 0, 0))
             first += rows
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c[0], c[0]) for c in core_plan])
+    row_flat = shard_spec is not None and is_rm  # RM shard: tile-rows are flat runs of shard sticks
     g_cap = G_CAP
-    if shard_spec is not None:
+    if shard_spec is not None and not is_rm:
         shard_bytes = (shard_spec.shape[0] // TILE) * Wt * (in_tile + out_tile)
         if shard_bytes > SHARD_TIGHT_BYTES:
             g_cap = SHARD_TIGHT_G_CAP  # the shards leave little L1: shrink the per-window intermediates
-    blk = pick_blocking(Wt, rows_max, in_tile, g_tile, has_gamma, force_resident=in_spec is not None, g_cap=g_cap)
+    blk = pick_blocking(
+        Wt, rows_max, in_tile, g_tile, has_gamma, force_resident=in_spec is not None and not is_rm, g_cap=g_cap
+    )
     Rb, Wb, Sb = blk.Rb, blk.Wb, blk.Sb
     G = Rb * Sb
     num_seg = Wt // Sb
@@ -210,7 +225,9 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     cbs = []
     if is_rm:
         cbs.append(_cb(CB_X_RM, in_dtype, Sb * TILE * es_x, RM_DEPTH * TILE, all_cores))
-    if in_spec is not None:
+    in_tile_sharded = in_spec is not None and not is_rm  # TILE shards back cb_x; RM shards are read by stick
+    out_tile_sharded = out_spec is not None and not is_rm
+    if in_tile_sharded:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X, input_tensor))  # zero-copy: the resident shard
     else:
         cbs.append(_cb(CB_X, in_dtype, in_tile, blk.x_depth * Rb * Wb, all_cores))
@@ -226,7 +243,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     if n_w > 1:
         cbs.append(_cb(CB_PSEND, im_dtype, im_tile, Rb, all_cores))
         cbs.append(_cb(CB_PART, im_dtype, im_tile, 2 * Rb * n_w, all_cores))
-    if out_spec is not None:
+    if out_tile_sharded:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUT_TILES, output_tensor))  # pack into the out shard
     else:
         cbs.append(_cb(CB_OUT_TILES, out_dtype, out_tile, OUT_DEPTH * G, all_cores))
@@ -237,10 +254,11 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     reader_ct = [
         int(is_rm), es_x, Wt, Sb, Rb, int(blk.resident), int(has_gamma), es_g, int(blk.gamma_resident),
         W, H, Ht_img, CB_X_RM, CB_X, CB_SCALER, CB_GAMMA, CB_GAMMA_RM, int(g_is_tile), Wt_full,
-        int(in_spec is not None),
+        int(in_tile_sharded), int(row_flat), int(in_spec is not None and is_rm),
+        (in_spec.shape[1] * es_x) if (in_spec is not None and is_rm) else 0,
     ]  # fmt: skip
     reader_ct.extend(
-        ttnn.TensorAccessorArgs().get_compile_time_args()  # sharded input: consumed in place, no accessor
+        ttnn.TensorAccessorArgs().get_compile_time_args()  # sharded input: local shard, no accessor
         if in_spec is not None
         else ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     )
@@ -252,7 +270,8 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
 
     writer_ct = [
         int(is_rm), es_x, Wt, Sb, Rb, W, H, Ht_img, CB_OUT_TILES, CB_OUT_RM, Wt_full, n_w, CB_PSEND, CB_PART,
-        SEM_PART[0], SEM_PART[1], int(out_spec is not None),
+        SEM_PART[0], SEM_PART[1], int(out_tile_sharded), int(row_flat), int(out_spec is not None and is_rm),
+        (out_spec.shape[1] * es_x) if (out_spec is not None and is_rm) else 0,
     ]  # fmt: skip
     writer_ct.extend(
         ttnn.TensorAccessorArgs().get_compile_time_args()
@@ -283,20 +302,32 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
 
     group_cores = {}  # row group -> its cores' physical coords, in slice order
     if n_w > 1:
-        for core, first_row, rows, j in core_plan:
+        for core, first_row, rows, j, _fs, _ns in core_plan:
             phys = device.worker_core_from_logical_core(core)
             group_cores.setdefault(first_row, []).append((phys.x, phys.y))
     covered = 0
-    for core, first_row, rows, j in core_plan:
+    for core, first_row, rows, j, first_stick, n_sticks in core_plan:
         slice_tile0 = j * Wt
         is_last_slice = int(j == n_w - 1)
-        reader_rt[core.x][core.y] = [x_addr, g_addr, first_row, rows, scaler_bits, slice_tile0, is_last_slice]
-        writer_rt[core.x][core.y] = [o_addr, first_row, rows, slice_tile0, j] + [
-            v for xy in group_cores.get(first_row, []) for v in xy
+        reader_rt[core.x][core.y] = [
+            x_addr,
+            g_addr,
+            first_row,
+            rows,
+            scaler_bits,
+            slice_tile0,
+            is_last_slice,
+            first_stick,
+            n_sticks,
         ]
+        writer_rt[core.x][core.y] = (
+            [o_addr, first_row, rows, slice_tile0, j]
+            + [v for xy in group_cores.get(first_row, []) for v in xy]
+            + [first_stick, n_sticks]
+        )
         compute_rt[core.x][core.y] = [rows, inv_w_bits, eps_bits]
         covered += rows if j == 0 else 0
-    assert covered == total_tile_rows
+    assert row_flat or covered == total_tile_rows
 
     semaphores = (
         [ttnn.SemaphoreDescriptor(id=sid, core_ranges=all_cores, initial_value=0) for sid in SEM_PART]

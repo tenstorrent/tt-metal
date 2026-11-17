@@ -77,9 +77,6 @@ EXCLUSIONS = [
     {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
     # bfloat8_b gamma cannot be an RM stick tensor.
     {"gamma_dtype": ttnn.bfloat8_b, "gamma_layout": ttnn.ROW_MAJOR_LAYOUT},
-    # ROW_MAJOR HEIGHT_SHARDED: shard sticks are not tile-row aligned (multi-image / ragged / W-padded sticks),
-    # so the shard cannot back the tilize/untilize CBs in place; only TILE shards are consumed natively.
-    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED},
 ]
 
 
@@ -122,8 +119,6 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_con
                 f"{SUPPORTED['memory_layout']}"
             )
         if memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
-                raise ExcludedCell("rms_norm: ROW_MAJOR with HEIGHT_SHARDED output is not supported yet")
             in_mc = input_tensor.memory_config()
             if (
                 in_mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED

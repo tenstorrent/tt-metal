@@ -70,7 +70,7 @@ Cells that fail out of the box go to `EXCLUSIONS`, not their own refinement.
 
 **Done when**: HEIGHT_SHARDED `xfail_expected` cells pass; dataflow check confirms no `TensorAccessor` read of the local shard.
 
-### [ ] Refinement 4a — ROW_MAJOR HEIGHT_SHARDED (in-place stick shards)
+### [x] Refinement 4a — ROW_MAJOR HEIGHT_SHARDED (in-place stick shards)
 
 **Goal**: lift the `{layout: ROW_MAJOR, memory_layout: HEIGHT_SHARDED}` EXCLUSION. Blockers measured: RM shard sticks are not tile-row aligned (flat `S = shard_h` sticks, ragged last tile-row), the shard page is `shard_w*es` (< `Wt*32*es` when W%32 != 0) so `tilize` over a shard-backed `cb_x_rm` would read the next stick into the pad columns, and `untilize` has no partial-row mode so a shard-backed `cb_out_rm` would be overrun past the shard end. Next lever: shard-flat tile-row grouping (32 sticks per tile-row regardless of image), tilize with `total_input_pages` for the partial tail, and a W-pad zeroing/untilize tail path.
 

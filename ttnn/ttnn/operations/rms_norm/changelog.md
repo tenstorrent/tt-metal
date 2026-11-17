@@ -41,3 +41,12 @@
 - Golden test progress: targeted slices only (64x128, ragged/non-aligned/wide resilience shapes) all PASSED; RM cells XFAIL (excluded).
 - Issues encountered: remote JIT precompile server fails to compile (env), ran with --no-precompile; wide shards (Wt=344) clashed CBs with the two resident shards until the window cap was reduced.
 - Tests added: tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_height_sharded.py
+
+## Refinement 4a — ROW_MAJOR HEIGHT_SHARDED (in-place stick shards)
+- Date: 2026-11-17
+- What was done: lifted the RM x HEIGHT_SHARDED EXCLUSION (and the RM sharded-output gate in validate()). RM rms_norm is per-stick, so for an RM shard the core plan groups tile-rows as 32 consecutive sticks of the core's shard (shard-flat, image-independent; ragged last tile-row via per-core `core_sticks` runtime arg -> existing H zero-fill / valid-row writes). Reader/writer RM paths gained `ROW_FLAT` (flat stick geometry) and `IN/OUT_SHARD_RM` (stick pitch = shard_w*es, addressed at the local shard base instead of via a TensorAccessor); W-padded sticks reuse the existing W-tail zero-fill / valid-byte writes. Reused: the whole RM tilize/untilize compute path, CB layout, blocking. Added: 3 CT args per DM kernel, 2 RT args, flat-stick branches.
+- Limitation / finding: RM shards are NOT backed zero-copy by a CB (the shard stick pitch shard_w*es differs from the tilize/untilize page width Wt*32*es when W%32 != 0, and tilize/untilize have no partial-row mode); the reader/writer move sticks between the shard and the tilize CBs with local-L1 NoC reads/writes. A zero-copy variant for W%32==0 and shard_h%32==0 is a possible perf follow-up.
+- Accuracy achieved: bf16/fp32, gamma/no-gamma, sharded/interleaved output, shapes (1,1,64,128) [1-stick shards], (2,1,96,160), (1,1,333,1000), (3,1,555,1025), (1,1,256,512), (4097,64) pass at rtol=0.05 atol=0.1.
+- Golden test progress: slice `HEIGHT_SHARDED and ROW_MAJOR and not bfloat8 and tile_aligned and rank`: 316 passed, 100 xfailed (golden-excluded cells), 0 failed. Unit regression test_rms_norm.py 86 passed, height_sharded TILE 24 passed.
+- Issues encountered: writer RT arg offset when N_W == 1 (no peer coords are passed) caused garbage output; fixed.
+- Tests added: tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_height_sharded_rm.py

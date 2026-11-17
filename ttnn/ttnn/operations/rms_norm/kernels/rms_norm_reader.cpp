@@ -58,6 +58,8 @@ void kernel_main() {
     const uint32_t scaler_bits = get_arg_val<uint32_t>(4);
     const uint32_t slice_tile0 = get_arg_val<uint32_t>(5);  // first W tile of this core's slice (W-split)
     const bool is_last_slice = get_arg_val<uint32_t>(6) != 0;
+    const uint32_t first_stick = get_arg_val<uint32_t>(7);  // RM shard: global index of the shard's first stick
+    const uint32_t core_sticks = get_arg_val<uint32_t>(8);  // RM shard: valid sticks in this core's shard
 
     constexpr bool IS_RM = get_compile_time_arg_val(0) != 0;
     constexpr uint32_t ES_X = get_compile_time_arg_val(1);
@@ -79,7 +81,10 @@ void kernel_main() {
     constexpr bool GAMMA_TILE = get_compile_time_arg_val(17) != 0;
     constexpr uint32_t Wt_full = get_compile_time_arg_val(18);  // Wt is the per-core slice width
     constexpr bool IN_SHARDED = get_compile_time_arg_val(19) != 0;  // x shard resident in cb_x (zero-copy)
-    constexpr auto x_args = TensorAccessorArgs<20>();
+    constexpr bool ROW_FLAT = get_compile_time_arg_val(20) != 0;    // RM shard: tile-row = 32 consecutive sticks
+    constexpr bool IN_SHARD_RM = get_compile_time_arg_val(21) != 0;  // RM x sticks live in the local shard
+    constexpr uint32_t IN_STRIDE = get_compile_time_arg_val(22);     // shard stick pitch in bytes
+    constexpr auto x_args = TensorAccessorArgs<23>();
     constexpr auto g_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t num_seg = Wt / Sb;
@@ -109,10 +114,17 @@ void kernel_main() {
         if constexpr (IS_RM) {
             for (uint32_t rr = 0; rr < rb; ++rr) {
                 const uint32_t tr = tr0 + rr;
-                const uint32_t img = tr / Ht_img;
-                const uint32_t r = tr % Ht_img;
-                const uint32_t valid_rows = (H - r * TILE_DIM) < TILE_DIM ? (H - r * TILE_DIM) : TILE_DIM;
-                const uint32_t stick0 = img * H + r * TILE_DIM;
+                uint32_t valid_rows, stick0;
+                if constexpr (ROW_FLAT) {
+                    const uint32_t left = core_sticks - tr * TILE_DIM;
+                    valid_rows = left < TILE_DIM ? left : TILE_DIM;
+                    stick0 = first_stick + tr * TILE_DIM;
+                } else {
+                    const uint32_t img = tr / Ht_img;
+                    const uint32_t r = tr % Ht_img;
+                    valid_rows = (H - r * TILE_DIM) < TILE_DIM ? (H - r * TILE_DIM) : TILE_DIM;
+                    stick0 = img * H + r * TILE_DIM;
+                }
                 dfb_x_rm.reserve_back(TILE_DIM);
                 const uint32_t base = dfb_x_rm.get_write_ptr();
                 for (uint32_t k = valid_rows; k < TILE_DIM; ++k) {
@@ -122,7 +134,14 @@ void kernel_main() {
                 const uint32_t avail = W * ES_X - off;
                 const uint32_t bytes = avail < SEG_BYTES_X ? avail : SEG_BYTES_X;
                 for (uint32_t k = 0; k < valid_rows; ++k) {
-                    noc_async_read(x_acc.get_noc_addr(stick0 + k, off), base + k * SEG_BYTES_X, bytes);
+                    if constexpr (IN_SHARD_RM) {  // local shard: stick (stick0 - first_stick + k) at pitch IN_STRIDE
+                        noc_async_read(
+                            get_noc_addr(x_addr + (stick0 - first_stick + k) * IN_STRIDE + off),
+                            base + k * SEG_BYTES_X,
+                            bytes);
+                    } else {
+                        noc_async_read(x_acc.get_noc_addr(stick0 + k, off), base + k * SEG_BYTES_X, bytes);
+                    }
                 }
                 if (valid_rows < TILE_DIM) {
                     noc.write_zeros_l1_barrier();
