@@ -572,6 +572,103 @@ def test_eltwise_binary_sfpu_float_quasar(
     )
 
 
+# ===========================================================================
+# logsigmoid(x), x in tile src0 and exp(-x) in tile src1.
+# ===========================================================================
+# The kernel has three regions: x <= -4 passes x through, -4 < x <= 4 evaluates a polynomial
+# whose top coefficients logsigmoid_init programs, x > 4 returns -exp(-x) from the second operand.
+_LOGSIGMOID_KNEE = 4.0
+_LOGSIGMOID_RANGE = 8.0
+# Absolute bounds, about twice the kernel's own error. Up to the upper knee that is the passthrough
+# (logsigmoid(-4) is -4.018, returned as -4) and the polynomial fit, both near 0.02; past it the
+# result is -exp(-x), within 2e-4 of the reference.
+_LOGSIGMOID_ATOL = 0.04
+_LOGSIGMOID_TAIL_ATOL = 0.0005
+
+
+def _logsigmoid_knee_points(data_format):
+    """+-4 and the representable values either side of each, in *data_format*."""
+    torch_format = format_dict[data_format]
+    knee = torch.tensor([_LOGSIGMOID_KNEE], dtype=torch.float32)
+    if data_format == DataFormat.Float32:
+        below = torch.nextafter(knee, torch.tensor([0.0]))
+        above = torch.nextafter(knee, torch.tensor([_LOGSIGMOID_RANGE]))
+    else:
+        # bfloat16 keeps 7 mantissa bits: one step is 2**-6 in [2, 4) and 2**-5 in [4, 8).
+        below, above = knee - 2.0**-6, knee + 2.0**-5
+    points = torch.cat([below, knee, above])
+    return torch.cat([points, -points]).to(torch_format)
+
+
+def _prepare_logsigmoid_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
+    """x sweeps [-8, 8] with the knee points planted in every face; the second operand is exp(-x)."""
+    torch_format = format_dict[formats.input_format]
+    x = torch.linspace(-_LOGSIGMOID_RANGE, _LOGSIGMOID_RANGE, MAX_TILE_ELEMENTS)
+    # The tile is laid out face by face, so striding by a prime spreads each region over all faces.
+    x = x[(torch.arange(MAX_TILE_ELEMENTS) * 389) % MAX_TILE_ELEMENTS].to(torch_format)
+    knees = _logsigmoid_knee_points(formats.input_format)
+    face_elems = MAX_TILE_ELEMENTS // MAX_NUM_FACES
+    for face in range(MAX_NUM_FACES):
+        start = face * face_elems + 5 * face
+        x[start : start + len(knees)] = knees
+    exp_neg_x = torch.exp(-x.to(torch.float32)).to(torch_format)
+    src_A, tile_cnt = _stage_binary_operands(
+        x, exp_neg_x, (src0_idx, src1_idx, 0), torch_format
+    )
+    return src_A, tile_cnt, torch.zeros_like(src_A)
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=[variant.formats for variant in _FLOAT_VARIANTS],
+    dest_acc=_dest_acc_for_float_formats,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
+def test_eltwise_binary_sfpu_logsigmoid_quasar(formats, dest_acc, tile_indices):
+    """Binary SFPU logsigmoid across its three regions and both knees."""
+    mathop = MathOperation.SfpuLogsigmoid
+    format_variant = resolve_quasar_sfpu_variant(
+        MathOperation.SfpuElwadd, formats, dest_acc
+    )
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
+    src0_idx, src1_idx, _ = tile_indices
+    x = _prepare_logsigmoid_stimuli(formats, None, src0_idx, src1_idx, mathop)[0][
+        src0_idx * MAX_TILE_ELEMENTS : (src0_idx + 1) * MAX_TILE_ELEMENTS
+    ].to(torch.float64)
+    for region in (
+        x <= -_LOGSIGMOID_KNEE,
+        (x > -_LOGSIGMOID_KNEE) & (x <= _LOGSIGMOID_KNEE),
+        x > _LOGSIGMOID_KNEE,
+    ):
+        assert bool(region.any()), "logsigmoid stimulus misses a kernel region"
+
+    def _check_every_region(res_tensor):
+        # The suite tolerance is 5% of the result plus 0.05, wider than the polynomial tail
+        # logsigmoid_init programs (0.2 at the knees); hold every lane to the kernel's own error.
+        error = (res_tensor.to(torch.float64) - torch.nn.functional.logsigmoid(x)).abs()
+        bound = torch.where(
+            x > _LOGSIGMOID_KNEE, _LOGSIGMOID_TAIL_ATOL, _LOGSIGMOID_ATOL
+        )
+        worst = int((error - bound).argmax())
+        assert error[worst] <= bound[worst], (
+            f"logsigmoid({x[worst].item()}) = {res_tensor[worst].item()}, "
+            f"{error[worst].item():.3e} from the reference"
+        )
+
+    _run_sfpu_binary_llk_golden(
+        formats,
+        dest_acc,
+        tile_indices,
+        mathop,
+        mathop.cpp_enum_value,
+        prepare_stimuli=_prepare_logsigmoid_stimuli,
+        post_check=_check_every_region,
+        format_variant=format_variant,
+    )
+
+
 # The float routes above plus the FPU datacopy routes their dedup drops for Unpack-to-Dest.
 _DEST_DEPTH_FLOAT_VARIANTS = _FLOAT_VARIANTS + quasar_sfpu_fpu_route_variants(
     input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
