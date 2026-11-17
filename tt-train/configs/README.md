@@ -19,7 +19,7 @@ Training hyperparameters and optimization settings.
 |-----------|------|---------|-------------|
 | `project_name` | str | "tt_train_nano_gpt" | Project name for tracking |
 | `seed` | int | 5489 | Random seed for reproducibility |
-| `model_save_interval` | int | 0 | Save model every N steps; 0 = never |
+| `model_save_interval` | int | 0 | Save model every N steps; 0 disables periodic saves. The C++ `nano_gpt` runner still saves once at the end of training when `model_path` is set and MPI is off |
 | `batch_size` | int | 64 | Batch size for training |
 | `num_epochs` | int | 0 | Epoch cap; 0 = uncapped. One epoch is one pass over the corpus tokens: `ceil(num_epochs * corpus_tokens / (batch_size * gradient_accumulation_steps * seq_len))` optimizer steps. A run stops at whichever of `num_epochs`/`max_steps` comes first |
 | `max_steps` | int | 5000 | Step cap; 0 = uncapped. At least one of `max_steps`/`num_epochs` must be set |
@@ -27,7 +27,7 @@ Training hyperparameters and optimization settings.
 | `model_config` | str | "" | Path to model configuration file |
 | `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
 | `scheduler_type` | str | "identity" | Learning rate scheduler ("identity", "warmup_linear") |
-| `tokenizer_type` | str | — | Ignored by `train.py` and the C++ `nano_gpt` runner, which pick the tokenizer from `data_path`: plain text uses the character tokenizer, YAML is pre-tokenized. Read by other runners (`ttml.common.config.TrainingConfig`, default "bpe"; the C++ `nano_gpt/3tier` example, default "char") |
+| `tokenizer_type` | str | — | Does not select the tokenizer in `train.py` or the C++ `nano_gpt` runner, which pick it from `data_path`: plain text uses the character tokenizer, YAML is pre-tokenized. `train.py` still validates it through `ttml.common.config.TrainingConfig`, so it must be "char" or "bpe" (default "bpe"); any other value raises `ValueError`. The C++ `nano_gpt/3tier` example reads it (default "char") |
 
 An epoch is one pass over the corpus's *tokens* — `corpus_tokens / (global_batch * seq_len)` steps.
 
