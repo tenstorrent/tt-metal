@@ -73,6 +73,9 @@ void kernel_main() {
 
 #if GGUF_MM
     // Per K tile, DEST tiles 1 / 4 hold the decoded tile, 2 / 5 its page, 3 / 6 scratch, alternating; tile 0 sums.
+    // Block-float codes: 2 / 11 and 3 / 12, so that a page's codes and the decode beside them use different DEST halves
+    // (gguf_matmul_compute.cpp).
+    auto out_of = [](uint32_t set) -> uint32_t { return codes ? (set ? 11 : 2) : (set ? 4 : 1); };
 #if GGUF_OVERLAP
     gguf_decode_overlap_init();
 #endif
@@ -82,19 +85,19 @@ void kernel_main() {
 #else
     gguf_zero_tile<thr>(0);
 #endif
-    page_to_dest(0, 2, 1);
+    page_to_dest(0, out_of(0) + 1, out_of(0));
 #if GGUF_OVERLAP
     gguf_decode_overlap_page_ready();
 #endif
     uint32_t set = 0;
     for (uint32_t kt = 0; kt < kt_count; kt++) {
-        const uint32_t out = set ? 4 : 1;
-        const uint32_t next_page = set ? 2 : 5;
+        const uint32_t out = out_of(set);
+        const uint32_t next_page = out_of(set ^ 1) + 1;
         const uint32_t t = kt % L.group_tiles;
         const bool next = kt + 1 < kt_count;
         auto post_next = [&]() {
             if constexpr (codes) {
-                dest_srca_mm_page_post_codes(next_page, set ? 1 : 4);
+                dest_srca_mm_page_post_codes(next_page, out_of(set ^ 1));
             } else {
                 dest_srca_mm_page_post(next_page);
             }
@@ -141,7 +144,7 @@ void kernel_main() {
                 }
                 dest_srca_mm_page_wait(cb_page, next_page);
             } else {
-                page_to_dest(kt + 1, next_page, set ? 1 : 4);
+                page_to_dest(kt + 1, next_page, out_of(set ^ 1));
             }
 #if GGUF_OVERLAP
             gguf_decode_overlap_page_ready();
