@@ -121,6 +121,11 @@ def test_scripts_tcp_only():
             code = line.split("#", 1)[0]
             if not re.search(r"(^|\s)mpirun(-ulfm)?\s", code):
                 continue
+            # Skip references that are not launches: resolver lookups that only locate the launcher binary
+            # (command -v / which / type mpirun) and mpirun named inside an echoed message. These carry no mca
+            # line by nature; the actual launches run through the resolved "$launcher", which is checked above.
+            if re.search(r"\b(command\s+-v|which|type)\b", code) or "echo" in code:
+                continue
             if "--mca btl self,tcp" in code or (has_rule and "mpirun_args" in code):
                 continue
             bad.append(f"{sh.name}:{n}: {code.strip()[:100]}")
