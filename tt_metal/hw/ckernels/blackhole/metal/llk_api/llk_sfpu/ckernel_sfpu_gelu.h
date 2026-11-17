@@ -153,7 +153,7 @@ constexpr float GELU_NEG_HALF_ONE_LN2 = -0.72134752044f;
 // The loop-invariant constants the caller hoists are passed in (sfpi (through 7.89.0) never lifts a literal out of a
 // loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row): exp_21f's c0 and c1 are
 // read from vConstFloatPrgm1/2 (programmed by gelu_init<false, false>); -0.5/ln2 and the two highest CDF
-// coefficients are ttpoly::gelu::vFloats the caller built once before its loop.
+// coefficients are sfpi::vFloats the caller built once before its loop.
 template <typename K, typename C13, typename C11>
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x, K neg_half_one_ln2, C13 cdf13, C11 cdf11) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
