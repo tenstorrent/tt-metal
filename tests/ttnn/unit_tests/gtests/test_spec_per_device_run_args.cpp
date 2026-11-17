@@ -281,9 +281,10 @@ struct PerDeviceRunArgsOp {
                 .per_device = per_device(attrs, range, tensor_args.input.device()->shape())};
         }
     };
-    // Without an override: the per-device values of the cache miss stay on every hit.
+    // Without an override (opted in): the per-device values of the cache miss stay on every hit.
     struct FixedFactory {
         static constexpr bool uses_per_device_run_args = true;
+        static constexpr bool fixed_per_device_run_args = true;
 
         static MeshWorkloadArtifacts create_mesh_workload_artifacts(
             const operation_attributes_t& attrs,
@@ -440,8 +441,8 @@ protected:
         expect_values(without_array);
     }
 
-    // A factory without an override: the miss sets the per-device values, and a hit (whose attributes would set
-    // others) keeps them.
+    // A factory with `fixed_per_device_run_args` (no override): the miss sets the per-device values, and a hit
+    // (whose attributes would set others) keeps them.
     void run_fixed(uint32_t ranges, size_t expected_programs) {
         using Attrs = PerDeviceRunArgsOp::operation_attributes_t;
         const Attrs miss{.call = 0, .bias_cores = {1}, .array_per_device = true, .with_extra = true, .ranges = ranges};
@@ -520,7 +521,7 @@ TEST_F(SpecPerDeviceRunArgsTest, BaseMustListWhatThePreviousCallSetPerDevice) {
     expect_values(next);
 }
 
-// Without an override, a hit keeps the cache miss's per-device values, merged or split.
+// With `fixed_per_device_run_args`, a hit keeps the cache miss's per-device values, merged or split.
 TEST_F(SpecPerDeviceRunArgsTest, WithoutOverrideHitKeepsMissValues) {
     run_fixed(/*ranges=*/2, /*expected_programs=*/3);
 }

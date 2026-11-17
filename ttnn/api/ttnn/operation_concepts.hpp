@@ -141,6 +141,8 @@ concept HasRangeRunArgsOverride = requires {
 //   static constexpr bool uses_per_device_run_args = true;
 // returns per-device values in PerCoordProgram::per_device_run_params, and overrides with
 //   static RangeRunArgs override_runtime_arguments(..., const ttnn::MeshCoordinateRange& range);
+// or, if its per-device values depend only on the coordinate and the hashed attributes, opts out of the override with
+//   static constexpr bool fixed_per_device_run_args = true;
 // (see MeshWorkloadSpecFactoryAdapter).
 template <typename T>
 concept MeshWorkloadSpecFactoryConcept = requires {

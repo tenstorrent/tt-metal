@@ -1365,14 +1365,17 @@ public:
     // arg you ever set per device also goes in the base run args, on every call (checked at the miss, and on every
     // hit against what the previous call set).
     //
-    // The cache-hit override is optional:
-    // - Without one, the per-device values are set once, at the cache miss, and a hit only refreshes the tensor
-    //   bindings (UpdateTensorArgs keeps per-device values). For values that depend only on the device's coordinate
-    //   and the op's hashed attributes (a rank, a fabric route).
-    // - With `static RangeRunArgs override_runtime_arguments(attrs, args, ret, range)`, each hit returns the base run
-    //   args plus the per-device values. For values that change between calls (a seed). Keep the base values under
-    //   per-device args constant across calls: a changed base word under a per-device arg rebuilds the per-device
-    //   commands at the next enqueue.
+    // On a cache hit, the factory declares exactly one of:
+    // - `static RangeRunArgs override_runtime_arguments(attrs, args, ret, range)` (the default): each hit returns the
+    //   base run args plus the per-device values. For values that change between calls (a seed). Keep the base values
+    //   under per-device args constant across calls: a changed base word under a per-device arg rebuilds the
+    //   per-device commands at the next enqueue.
+    // - `static constexpr bool fixed_per_device_run_args = true` (opt-in, no override): the per-device values are set
+    //   once, at the cache miss, and a hit only refreshes the tensor bindings (UpdateTensorArgs keeps per-device
+    //   values). Only for values that depend on nothing but the device's coordinate and the op's hashed attributes
+    //   (a rank, a fabric route): every hit keeps the miss's values.
+    // A per-device factory with neither does not compile, so a forgotten override cannot silently keep the miss's
+    // values.
     // -----------------------------------------------------------------------
     template <MeshWorkloadSpecFactoryConcept WorkloadSpecFactory>
     struct MeshWorkloadSpecFactoryAdapter : SpecBindingSupport {
@@ -1411,16 +1414,29 @@ public:
                 return false;
             }
         }
-        // Per-device values set once, at the cache miss: a per-device factory without an override.
+        // Per-device values set once, at the cache miss: the factory opts in with `fixed_per_device_run_args = true`.
         static consteval bool fixed_per_device_run_args() {
-            return uses_per_device_run_args() && !requires { &WorkloadSpecFactory::override_runtime_arguments; };
+            if constexpr (requires { WorkloadSpecFactory::fixed_per_device_run_args; }) {
+                return WorkloadSpecFactory::fixed_per_device_run_args;
+            } else {
+                return false;
+            }
         }
-        // Otherwise an override with a wrong signature would make the factory one without an override.
         static_assert(
-            !uses_per_device_run_args() || !requires { &WorkloadSpecFactory::override_runtime_arguments; } ||
+            !fixed_per_device_run_args() || uses_per_device_run_args(),
+            "`fixed_per_device_run_args = true` needs `uses_per_device_run_args = true`.");
+        static_assert(
+            !fixed_per_device_run_args() || !requires { &WorkloadSpecFactory::override_runtime_arguments; },
+            "A factory with `fixed_per_device_run_args = true` keeps the cache miss's per-device values and must not "
+            "declare override_runtime_arguments.");
+        // Off by default: a per-device factory that forgets its override must not keep the miss's values on every hit.
+        static_assert(
+            !uses_per_device_run_args() || fixed_per_device_run_args() ||
                 (detail::HasRangeRunArgsOverride<WorkloadSpecFactory> && has_override_runtime_arguments()),
-            "A factory with `uses_per_device_run_args = true` overrides, if at all, with "
-            "`static RangeRunArgs override_runtime_arguments(attrs, args, ret, const MeshCoordinateRange&)`.");
+            "A factory with `uses_per_device_run_args = true` declares "
+            "`static RangeRunArgs override_runtime_arguments(attrs, args, ret, const MeshCoordinateRange&)`, or, if "
+            "its per-device values depend only on the coordinate and the hashed attributes, "
+            "`static constexpr bool fixed_per_device_run_args = true`.");
         static_assert(
             !detail::HasRangeRunArgsOverride<WorkloadSpecFactory> || uses_per_device_run_args(),
             "Only a factory with `uses_per_device_run_args = true` overrides with "
@@ -1523,8 +1539,8 @@ public:
                 state.factory_range);
         }
 
-        // Per-device run args without an override, cache hit: the per-device values set at the miss stay; only the
-        // tensor bindings are refreshed (UpdateTensorArgs keeps per-device values).
+        // Per-device run args with `fixed_per_device_run_args`, cache hit: the per-device values set at the miss stay;
+        // only the tensor bindings are refreshed (UpdateTensorArgs keeps per-device values).
         static void apply_fixed_per_device_run_args(
             cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& attrs,
