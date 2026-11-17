@@ -150,6 +150,7 @@ class CCLManager:
         return_output_buffer: bool = True,
         return_intermediate: bool = True,
         device_synchronize: bool = True,
+        rows: int | None = None,
     ):
         """
         Get or create ping pong buffers for reduce scatter operations.
@@ -159,6 +160,10 @@ class CCLManager:
             shape: Tensor shape tuple
             dim: Dimension for the operation
             mesh_axis: Mesh axis for parallelization
+            rows: Rows to allocate the intermediate with along the row dim (-2) instead of `shape`'s,
+                so varying row counts up to it share one pair. Only the line topology's tiled
+                intermediate takes a larger buffer, and the output must match the input's rows, so
+                it needs `return_output_buffer=False`.
 
         Returns:
             Current ping pong buffer (alternates between two buffers)
@@ -166,7 +171,14 @@ class CCLManager:
         # Create cache key from the parameters
         shape = shape_tuple(shape)
         dim = self.get_dim(dim, shape)
-        cache_key = (shape, dim, mesh_axis)
+        if rows is not None:
+            row_dim = len(shape) - 2
+            assert self.topology == ttnn.Topology.Linear, "rows= needs the line topology's tiled intermediate"
+            assert not return_output_buffer, "rows= sizes the intermediate only; the output must match the input"
+            assert dim != row_dim, f"rows={rows} sizes the row dim, which is the scatter dim {dim} of {shape}"
+            assert shape[row_dim] <= rows, f"{shape} has more rows than the pair's capacity {rows}"
+            shape = (*shape[:row_dim], rows, *shape[row_dim + 1 :])
+        cache_key = (shape, dim, mesh_axis) if rows is None else ("rs_rows", shape, dim, mesh_axis)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
@@ -956,7 +968,11 @@ class CCLManager:
         dim: int,
         mesh_axis: int | None,
         use_persistent_buffer: bool = False,
+        rows: int | None = None,
     ) -> ttnn.Tensor:
+        """`rows`, with `use_persistent_buffer` on the line topology, gives the op one persistent
+        intermediate for every row count up to it and lets it allocate its output per call, so
+        varying row counts keep no buffers per shape. Elsewhere it is ignored."""
         if mesh_axis is None or self._mesh_axis_sizes[mesh_axis] == 1:
             return tensor
 
@@ -970,12 +986,20 @@ class CCLManager:
             tensor = ttnn.reshape(tensor, list(shape))
             dim += 4 - rank
 
+        if use_persistent_buffer and rows is not None and self.topology == ttnn.Topology.Linear:
+            intermediate, _ = self.get_rs_ping_pong_buffer(shape, dim, mesh_axis, return_output_buffer=False, rows=rows)
+            persistent_output_buffers = [intermediate]
+        elif use_persistent_buffer:
+            persistent_output_buffers = self.get_rs_ping_pong_buffer(shape, dim, mesh_axis)
+        else:
+            persistent_output_buffers = None
+        # The op allocates the buffers it is not given, which needs the start barrier.
+        allocates = persistent_output_buffers is None or len(persistent_output_buffers) < 2
+
         tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
-            persistent_output_buffers=(
-                self.get_rs_ping_pong_buffer(shape, dim, mesh_axis) if use_persistent_buffer else None
-            ),
-            barrier_semaphore=self.get_barrier_semaphore(mesh_axis) if not use_persistent_buffer else None,
+            persistent_output_buffers=persistent_output_buffers,
+            barrier_semaphore=self.get_barrier_semaphore(mesh_axis) if allocates else None,
             dim=dim,
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,

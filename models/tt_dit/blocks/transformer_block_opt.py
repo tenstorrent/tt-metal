@@ -64,6 +64,7 @@ class TransformerBlock(Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = head_dim
+        self.row_capacity = row_capacity
         self.add_attention_to_output = add_attention_to_output
 
         self.context_pre_only = context_pre_only
@@ -382,13 +383,24 @@ class TransformerBlock(Module):
                 core_grid=Attention.get_core_grid(
                     spatial_normed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
                 ),
+                persistent_buffer_rows=self.row_capacity,
             )
         else:
-            spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            # A persistent pair would be kept per row count, since the gather returns it as its output.
+            spatial_normed = self.ccl_manager.all_gather(
+                spatial_normed,
+                dim=2,
+                mesh_axis=tp_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=self.row_capacity is None,
             )
             spatial_ff = ttnn.squeeze(
-                self.ff(ttnn.unsqueeze(spatial_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
+                self.ff(
+                    ttnn.unsqueeze(spatial_normed, 0),
+                    compute_kernel_config=self.ff_compute_kernel_config,
+                    ff2_persistent_buffer_rows=self.row_capacity,
+                ),
+                0,
             )
             # Not addcmul, which compiles a program per row count.
             spatial = ttnn.add(spatial, ttnn.multiply(spatial_ff, spatial_gate_ff))

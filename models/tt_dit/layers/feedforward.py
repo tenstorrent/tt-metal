@@ -136,6 +136,7 @@ class ParallelFeedForward(Module):
         num_workers_per_link=None,
         transpose_core_grid: bool | None = None,
         persistent_buffer_rows: int | None = None,
+        ff2_persistent_buffer_rows: int | None = None,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
@@ -143,8 +144,8 @@ class ParallelFeedForward(Module):
 
         `default_block_size`, `force_transpose`, the frozen `matmul_config` / `num_workers_per_link` /
         `transpose_core_grid` and `persistent_buffer_rows` are forwarded to ff1 only, for callers that have
-        measured block sizes for their ff1 shape; ff2 keeps the generic path (and its exact-shape pairs: the
-        unfused reduce-scatter's intermediate must match the op's spec).
+        measured block sizes for their ff1 shape; ff2 keeps the generic path. `ff2_persistent_buffer_rows` is
+        ff2's `persistent_buffer_rows` (see `RowParallelLinear.forward`).
         """
         ff1_out = self.ff1(
             x,
@@ -159,7 +160,10 @@ class ParallelFeedForward(Module):
             persistent_buffer_rows=persistent_buffer_rows,
         )
         return self.ff2(
-            ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
+            ff1_out,
+            compute_kernel_config=compute_kernel_config,
+            use_persistent_buffer=use_persistent_buffer,
+            persistent_buffer_rows=ff2_persistent_buffer_rows,
         )
 
     def forward_fused_addcmul(

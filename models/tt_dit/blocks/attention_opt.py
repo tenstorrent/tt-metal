@@ -500,7 +500,7 @@ class Attention(Module):
             )
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
-                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype(), rows=self.row_capacity
             )
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
@@ -621,6 +621,7 @@ class Attention(Module):
             parallel_config=self.parallel_config,
             core_grid=self.get_core_grid(sequence_1.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
             use_heuristic_mmcfg=True,
+            persistent_buffer_rows=self.row_capacity,
         )
 
         # Combined RoPE: concat spatial and prompt tensors along the seq dim (dim=2).
@@ -778,6 +779,7 @@ class Attention(Module):
                 addcmul_b=addcmul_spatial_gate,
                 parallel_config=self.parallel_config,
                 core_grid=self.get_core_grid(spatial.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
+                persistent_buffer_rows=self.row_capacity,
             )
 
         if sequence_2 is not None and sequence_2.shape[2] > 0:

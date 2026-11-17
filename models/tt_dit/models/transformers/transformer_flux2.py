@@ -58,6 +58,7 @@ class Flux2SingleTransformerBlock(Module):
         """`row_capacity`: see `Flux2Transformer`."""
         super().__init__()
 
+        self._row_capacity = row_capacity
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         mlp_hidden_dim = 3 * dim
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
@@ -194,12 +195,14 @@ class Flux2SingleTransformerBlock(Module):
             parallel_config=self._parallel_config,
             use_heuristic_mmcfg=True,
             core_grid=Attention.get_core_grid(x_c.shape[-2], self._mesh_device.compute_with_storage_grid_size()),
+            persistent_buffer_rows=self._row_capacity,
         )
 
         if self._ccl_manager.topology == ttnn.Topology.Ring:
             return self.proj_out.forward_fused_addcmul([x_c_attn, x_c_mlp], spatial_prompt_concat, gate_msa, scalar=1.0)
         # Not addcmul, which compiles a program per row count.
-        return ttnn.add(spatial_prompt_concat, ttnn.multiply(self.proj_out([x_c_attn, x_c_mlp]), gate_msa))
+        projected = self.proj_out([x_c_attn, x_c_mlp], persistent_buffer_rows=self._row_capacity)
+        return ttnn.add(spatial_prompt_concat, ttnn.multiply(projected, gate_msa))
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
