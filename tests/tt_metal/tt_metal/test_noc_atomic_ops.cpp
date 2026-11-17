@@ -29,7 +29,7 @@ namespace tt::tt_metal {
 // compare-and-swap (noc_fast_atomic_cas4) that EXTERNAL down() builds on.
 class NocAtomicOpsFixture : public MeshDispatchFixture {
 protected:
-    static constexpr experimental::NodeCoord core = {0, 0};
+    static constexpr NodeCoord core = {0, 0};
     static constexpr uint32_t iterations{50};
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_atomic_ops_probe.cpp";
     uint32_t l1_unreserved_base{0};
@@ -69,42 +69,42 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        std::vector<experimental::KernelSpec> kernel_specs;
-        std::vector<experimental::KernelSpecName> kernel_names;
-        experimental::ProgramRunArgs params;
-        const auto make_run_params = [&](const experimental::KernelSpecName& name) {
-            return experimental::ProgramRunArgs::KernelRunArgs{
+        std::vector<KernelSpec> kernel_specs;
+        std::vector<KernelSpecName> kernel_names;
+        ProgramRunArgs params;
+        const auto make_run_params = [&](const KernelSpecName& name) {
+            return ProgramRunArgs::KernelRunArgs{
                 .kernel = name,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     core, {{"sem_addr", l1_unreserved_base}, {"increment_times", iterations}}),
             };
         };
 
         if (is_quasar) {
-            const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
-            kernel_specs.push_back(experimental::KernelSpec{
+            const KernelSpecName DM_KERNEL{"dm_kernel"};
+            kernel_specs.push_back(KernelSpec{
                 .unique_id = DM_KERNEL,
                 .source = kernel_path,
                 .num_threads = num_dms_,
                 .compiler_options = {.defines = {{mode_define, "1"}}},
                 .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
-                .hw_config = experimental::DataMovementHardwareConfig{},
+                .hw_config = DataMovementHardwareConfig{},
             });
             kernel_names.push_back(DM_KERNEL);
             params.kernel_run_args.push_back(make_run_params(DM_KERNEL));
         } else {
             for (uint32_t dm_id = 0; dm_id < num_dms_; dm_id++) {
-                const experimental::KernelSpecName name{"dm_kernel_" + std::to_string(dm_id)};
-                kernel_specs.push_back(experimental::KernelSpec{
+                const KernelSpecName name{"dm_kernel_" + std::to_string(dm_id)};
+                kernel_specs.push_back(KernelSpec{
                     .unique_id = name,
                     .source = kernel_path,
                     .num_threads = 1,
                     .compiler_options = {.defines = {{mode_define, "1"}}},
                     .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
                     .hw_config =
-                        experimental::DataMovementHardwareConfig{
+                        DataMovementHardwareConfig{
                             .config_1xx =
-                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                DataMovementHardwareConfig::DataMovement1XXConfig{
                                     .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
                                     .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
                                 },
@@ -115,8 +115,8 @@ protected:
             }
         }
 
-        experimental::WorkUnitSpec main_wu{.name = "main", .kernels = kernel_names, .target_nodes = core};
-        experimental::ProgramSpec spec{.name = "noc_atomic_ops", .kernels = kernel_specs, .work_units = {main_wu}};
+        WorkUnitSpec main_wu{.name = "main", .kernels = kernel_names, .target_nodes = core};
+        ProgramSpec spec{.name = "noc_atomic_ops", .kernels = kernel_specs, .work_units = {main_wu}};
         program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
         experimental::SetProgramRunArgs(program, params);
         workload.add_program(device_range, std::move(program));

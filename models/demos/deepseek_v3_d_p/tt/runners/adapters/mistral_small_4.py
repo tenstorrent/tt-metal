@@ -28,6 +28,7 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # Config is hand-built (see load_hf_config); point PREFILL_HF_MODEL / MISTRAL4_HF_MODEL at the
     # checkpoint for weights.
     hf_model_default = ""
+    builds_missing_weight_cache = False  # Mistral's checkpoint key layout is not verified against the reader
     # No shared prefill TTNN cache exists for Mistral yet; set PREFILL_TTNN_CACHE (serving) or
     # TT_MISTRAL4_PREFILL_TTNN_CACHE (tests) to a writable dir.
     ttnn_cache_default = ""

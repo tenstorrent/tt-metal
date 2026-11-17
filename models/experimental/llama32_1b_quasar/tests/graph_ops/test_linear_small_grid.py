@@ -29,7 +29,7 @@ import torch
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.graph_ops import graph_case as G
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
-from tests.ttnn.utils_for_testing import assert_allclose
+from tt_py_test_utils_common.utils_for_testing import assert_allclose
 
 qsr = ttnn._ttnn.operations.experimental.quasar
 
