@@ -2,24 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reads this core's own L1 past its populated end over the NoC, which makes the L1 ECC report false errors.
-// arg 0: source L1 address, arg 1: destination L1 address, arg 2: bytes.
+// Reads this core's own L1 past its populated end and sends it to another core's L1 over the NoC, which makes this
+// core's L1 ECC report false errors.
+// arg 0: source L1 address, arg 1: destination core NOC x, arg 2: destination core NOC y, arg 3: destination L1
+// address, arg 4: bytes.
 
 #include <cstdint>
 
-#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t src = get_arg_val<uint32_t>(0);
-    uint32_t dst = get_arg_val<uint32_t>(1);
-    uint32_t bytes = get_arg_val<uint32_t>(2);
+    uint32_t dst_x = get_arg_val<uint32_t>(1);
+    uint32_t dst_y = get_arg_val<uint32_t>(2);
+    uint32_t dst = get_arg_val<uint32_t>(3);
+    uint32_t bytes = get_arg_val<uint32_t>(4);
 
-    Noc noc;
-    UnicastEndpoint self;
-    CoreLocalMem<uint32_t> dst_mem(dst);
-    noc.async_read(
-        self, dst_mem, bytes, {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src}, {});
-    noc.async_read_barrier();
+    noc_async_write(src, get_noc_addr(dst_x, dst_y, dst), bytes);
+    noc_async_write_barrier();
 }

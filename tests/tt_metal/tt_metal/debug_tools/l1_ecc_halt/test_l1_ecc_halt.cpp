@@ -50,6 +50,9 @@ constexpr const char* hang_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l
 constexpr const char* overread_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_overread.cpp";
 constexpr const char* mret_btb_alias_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_mret_btb_alias.cpp";
 const CoreCoord test_core{0, 0};
+// Receives what test_core reads past the end of its L1. Writing it back into test_core's own L1 instead makes some
+// Blackhole boards (p150) report the false errors at the written, populated row.
+const CoreCoord overread_dst_core{1, 0};
 constexpr auto report_deadline = std::chrono::seconds(30);
 // Within the 10 s a wait stalls before it reads the halt records without an event.
 constexpr auto event_report_deadline = std::chrono::seconds(5);
@@ -163,7 +166,7 @@ TEST_F(L1EccHaltTest, EventSynchronizeReportsHalt) {
     expect_halt_reported_by([&] { distributed::EventSynchronize(event); });
 }
 
-// The ECC scrubber reports false errors from the L1 rows past the populated end. A NoC read of the core's own L1
+// The ECC scrubber reports false errors from the L1 rows past the populated end. A NoC write from the core's own L1
 // past the end raises the same errors on demand: they must be detected and must not halt the core.
 TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnored) {
     auto& ctx = MetalContext::instance();
@@ -174,7 +177,10 @@ TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnored) {
     constexpr uint32_t bytes = 1024;
     const uint32_t l1_end = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
     const uint32_t dst = devices_[0]->allocator()->get_base_allocator_addr(HalMemType::L1);
-    auto workload = single_core_workload(overread_kernel, {l1_end, dst, bytes});
+    const CoreCoord dst_core = devices_[0]->worker_core_from_logical_core(overread_dst_core);
+    const auto dst_x = static_cast<uint32_t>(dst_core.x);
+    const auto dst_y = static_cast<uint32_t>(dst_core.y);
+    auto workload = single_core_workload(overread_kernel, {l1_end, dst_x, dst_y, dst, bytes});
     this->RunProgram(devices_[0], workload);
 
     uint32_t ctrl = 0, int_no = 0, irq3 = 0;
@@ -204,15 +210,18 @@ TEST_F(L1EccHaltTest, MretWithAliasedBranchReturns) {
     constexpr uint32_t scratch_bytes = 128 * 1024;
     constexpr uint32_t iterations = 10000;
     const uint32_t l1_end = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-    // One L1 page holds the read destination, then the scratch, at the same address on every core.
+    // One L1 page holds the write destination, then the scratch, at the same address on every core.
     distributed::DeviceLocalBufferConfig local_config{
         .page_size = bytes + scratch_bytes, .buffer_type = BufferType::L1};
     distributed::ReplicatedBufferConfig buffer_config{.size = bytes + scratch_bytes};
     auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, devices_[0].get());
     const uint32_t dst = buffer->address();
     const uint32_t scratch = dst + bytes;
-    auto workload =
-        single_core_workload(mret_btb_alias_kernel, {l1_end, dst, bytes, scratch, scratch_bytes, iterations});
+    const CoreCoord dst_core = devices_[0]->worker_core_from_logical_core(overread_dst_core);
+    const auto dst_x = static_cast<uint32_t>(dst_core.x);
+    const auto dst_y = static_cast<uint32_t>(dst_core.y);
+    auto workload = single_core_workload(
+        mret_btb_alias_kernel, {l1_end, dst_x, dst_y, dst, bytes, scratch, scratch_bytes, iterations});
     this->RunProgram(devices_[0], workload);
 
     std::vector<uint32_t> results(2, 0);
@@ -341,6 +350,8 @@ TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
         &int_no, test_target_, ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO));
     EXPECT_EQ(int_no, 0u) << "BRISC still in the interrupt handler after reopening";
     const uint32_t l1 = devices_[0]->allocator()->get_base_allocator_addr(HalMemType::L1);
-    auto copy = single_core_workload(overread_kernel, {l1, l1 + 64, 64});
+    const auto target_x = static_cast<uint32_t>(test_target_.x);
+    const auto target_y = static_cast<uint32_t>(test_target_.y);
+    auto copy = single_core_workload(overread_kernel, {l1, target_x, target_y, l1 + 64, 64});
     this->RunProgram(devices_[0], copy);
 }

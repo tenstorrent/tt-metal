@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Raises false L1 ECC errors with a NoC read past the end of L1, each right after a taken jump whose branch predictor
-// entry also matches the L1 ECC handler's mret, so the predictor predicts that mret as taken.
-// arg 0: source L1 address past the end of L1, arg 1: destination L1 address, arg 2: bytes per read,
-// arg 3: scratch L1 address, arg 4: scratch bytes, arg 5: iterations.
+// Raises false L1 ECC errors by sending this core's L1 past its end to another core over the NoC, each right after a
+// taken jump whose branch predictor entry also matches the L1 ECC handler's mret, so the predictor predicts that mret
+// as taken.
+// arg 0: source L1 address past the end of L1, arg 1: destination core NOC x, arg 2: destination core NOC y,
+// arg 3: destination L1 address, arg 4: bytes per write, arg 5: scratch L1 address, arg 6: scratch bytes,
+// arg 7: iterations.
 // Writes the mret address and the jump address to the first two scratch words; 0 means not found, and the kernel
 // then returns without raising any error.
 
 #include <cstdint>
 
-#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/endpoints.h"
 #include "hostdev/l1_ecc_halt_constants.h"
 
 namespace {
@@ -30,11 +30,13 @@ uint32_t btb_tag(uint32_t pc) { return ((pc >> 24) ^ (pc >> 16) ^ (pc >> 8)) & 0
 
 void kernel_main() {
     uint32_t src = get_arg_val<uint32_t>(0);
-    uint32_t dst = get_arg_val<uint32_t>(1);
-    uint32_t bytes = get_arg_val<uint32_t>(2);
-    uint32_t scratch = get_arg_val<uint32_t>(3);
-    uint32_t scratch_bytes = get_arg_val<uint32_t>(4);
-    uint32_t iterations = get_arg_val<uint32_t>(5);
+    uint32_t dst_x = get_arg_val<uint32_t>(1);
+    uint32_t dst_y = get_arg_val<uint32_t>(2);
+    uint32_t dst = get_arg_val<uint32_t>(3);
+    uint32_t bytes = get_arg_val<uint32_t>(4);
+    uint32_t scratch = get_arg_val<uint32_t>(5);
+    uint32_t scratch_bytes = get_arg_val<uint32_t>(6);
+    uint32_t iterations = get_arg_val<uint32_t>(7);
 
     volatile tt_l1_ptr uint32_t* results = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     results[0] = 0;
@@ -74,13 +76,10 @@ void kernel_main() {
     asm volatile("addi zero, %0, 0" ::"r"(written));
     auto aliased_jump = reinterpret_cast<void (*)()>(alias);
 
-    Noc noc;
-    UnicastEndpoint self;
-    CoreLocalMem<uint32_t> dst_mem(dst);
+    const uint64_t dst_noc_addr = get_noc_addr(dst_x, dst_y, dst);
     for (uint32_t n = 0; n < iterations; n++) {
         aliased_jump();
-        noc.async_read(
-            self, dst_mem, bytes, {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src}, {});
-        noc.async_read_barrier();
+        noc_async_write(src, dst_noc_addr, bytes);
+        noc_async_write_barrier();
     }
 }
