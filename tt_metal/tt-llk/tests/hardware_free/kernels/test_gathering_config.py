@@ -580,33 +580,33 @@ GATHERING_BUILD_VARIANTS = [
     (
         "sfpu reduce max/min uint16 in a 32-bit Dest (manual swap chain)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:UInt16->UInt16-mathop:ReduceColumn-dest_acc:Yes-"
-        "input_bounds:(0, 1000)-reduce_pool:Max-dimension_combinations:[32, 32]-reduced_extent:15]",
+        "input_bounds:(0, 1000)-pool_type:Max-dimension_combinations:[32, 32]-reduced_extent:15]",
         "math",
     ),
     (
         "sfpu reduce max/min float (LOADMACRO swap chain)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:Float16_b->Float16_b-mathop:ReduceColumn-"
-        "dest_acc:No-input_bounds:(-1000, 1000)-reduce_pool:Max-dimension_combinations:[32, 32]-"
+        "dest_acc:No-input_bounds:(-1000, 1000)-pool_type:Max-dimension_combinations:[32, 32]-"
         "reduced_extent:15]",
         "math",
     ),
     (
         "sfpu reduce sum/avg float (tree reduce)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:Float16_b->Float16_b-mathop:ReduceColumn-"
-        "dest_acc:No-input_bounds:(-1000, 1000)-reduce_pool:Sum-dimension_combinations:[32, 32]-"
+        "dest_acc:No-input_bounds:(-1000, 1000)-pool_type:Sum-dimension_combinations:[32, 32]-"
         "reduced_extent:15]",
         "math",
     ),
     (
         "sfpu reduce sum/avg integer (tree reduce)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:Int32->Int32-mathop:ReduceColumn-dest_acc:Yes-"
-        "input_bounds:(-1000, 1000)-reduce_pool:Sum-dimension_combinations:[32, 32]-reduced_extent:1]",
+        "input_bounds:(-1000, 1000)-pool_type:Sum-dimension_combinations:[32, 32]-reduced_extent:1]",
         "math",
     ),
     (
         "sfpu reduce max/min signed int32 (swap chain)",
         "test_sfpu_reduce.py::test_sfpu_reduce[formats:Int32->Int32-mathop:ReduceColumn-dest_acc:Yes-"
-        "input_bounds:(-1000, 1000)-reduce_pool:Max-dimension_combinations:[32, 32]-reduced_extent:1]",
+        "input_bounds:(-1000, 1000)-pool_type:Max-dimension_combinations:[32, 32]-reduced_extent:1]",
         "math",
     ),
     (
@@ -653,7 +653,7 @@ GATHERING_BUILD_VARIANTS = [
     ),
     (
         "generalized moe gate eltwise binary reload",
-        "test_generalized_moe_gate.py::test_generalized_moe_gate_binary[math_op:Elwadd-reload:True]",
+        "test_generalized_moe_gate.py::test_generalized_moe_gate_binary[mathop:Elwadd-reload:True]",
         "math",
     ),
     (
