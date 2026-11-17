@@ -10,10 +10,10 @@
 
 // Compile-time marks a kernel's source sets as it is parsed: completing set<N> makes used(tag<N>) callable, so
 // is_used<N>(0) reads true from that point on. tag 0: a plain matmul call runs the ttsync unpack, read by the TRISC
-// wrapper after the kernel's include; tag 3: the kernel names a fast tilize init; tag 4: a plain matmul call polls; tag 5: a plain
-// call of constant block keys runs the ttsync unpack on its cell in a kernel the class rule keeps polling; tags 7 and 8: a plain
-// matmul call whose ct and rt are (8) or are not (7) constant expressions; tag 13: a call or init of a constant one-tile block (14 unread); tag 15: a math init or call of
-// constant kt 1 (16 unread).
+// wrapper after the kernel's include; tag 3: the kernel names a fast tilize init; tag 4: a plain matmul call polls; tag
+// 5: a plain call of constant block keys runs the ttsync unpack on its cell in a kernel the class rule keeps polling;
+// tags 7 and 8: a plain matmul call whose ct and rt are (8) or are not (7) constant expressions; tag 13: a call or init
+// of a constant one-tile block (14 unread); tag 15: a math init or call of constant kt 1 (16 unread).
 namespace ckernel::matmul_fe_mark {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnon-template-friend"
@@ -87,18 +87,19 @@ constexpr bool is_used_dl(...) {
 // run-time dim moved its register allocation (minimal_matmul)
 #define MATMUL_FE_CK(x) (__builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_mark::dim(x))) ? ::ckernel::matmul_fe_mark::dim(x) : 0xFFu)
 // 0, completing tag 15 for a math init or call whose kt is the constant 1 (16 unread)
-#define MATMUL_FE_KT1(kt) (0 * sizeof(::ckernel::matmul_fe_mark::set<(MATMUL_FE_CK(kt) == 1u) ? 15 : 16>))
+#define MATMUL_FE_KT1(kt) (0 * sizeof(::ckernel::matmul_fe_mark::set < (MATMUL_FE_CK(kt) == 1u) ? 15 : 16 >))
 #define FAST_TILIZE_MARK() sizeof(::ckernel::matmul_fe_mark::set<3>)
 // 0, completing tag 8 for a plain call whose ct and rt are constant expressions and tag 7 otherwise; the dims pass by value, so
 // the test takes no address of them (a reference moved the register allocation of run-time-dim kernels), and through matmul_fe_cb,
 // so a run-time dim the optimizer folds still reads as run time
-#define MATMUL_FE_SHAPE(ct, rt)                                                                 \
-    (0 * sizeof(::ckernel::matmul_fe_mark::set<                                                 \
-                (__builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_dim(ct))) && \
-                 __builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_dim(rt))))   \
-                    ? 8                                                                         \
-                    : 7>) +                                                                     \
-     0 * sizeof(::ckernel::matmul_fe_mark::set<(MATMUL_FE_CK(ct) == 1 && MATMUL_FE_CK(rt) == 1) ? 13 : 14>))
+#define MATMUL_FE_SHAPE(ct, rt)                                                                      \
+    (0 * sizeof(                                                                                     \
+             ::ckernel::matmul_fe_mark::set <                                                        \
+                     (__builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_dim(ct))) && \
+                      __builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_dim(rt))))   \
+                 ? 8                                                                                 \
+                 : 7 >) +                                                                            \
+     0 * sizeof(::ckernel::matmul_fe_mark::set < (MATMUL_FE_CK(ct) == 1 && MATMUL_FE_CK(rt) == 1) ? 13 : 14 >))
 // The forms key decision of a plain call (1 keyed, 0 not): the kernel's first call or init decides, keyed only where it is an init
 // that can key (want: matmul_fe_keyable), and every later one follows it, so the inits and calls of a kernel run one form whatever
 // the order the compiler reads them in. x: the call's in0 cb argument.

@@ -84,7 +84,6 @@ constexpr bool matmul_format_is_32bit(const DataFormat f)
     return f == DataFormat::Float32 || f == DataFormat::Tf32;
 }
 
-
 // A LoFi kernel with a 32-bit operand beside a 16-bit or block float one, read from CBs 0 and 1, the in0 and in1 CBs of the production
 // matmul kernels (other Float32 CBs of a kernel, as partials or flags, are not operands). Its plain calls at half sync take the run-time
 // direction (matmul_api_reuse_dir 3), which holds the wider operand.
@@ -237,7 +236,6 @@ constexpr bool matmul_plain_row_form(const bool may_pack_32bit)
 {
     return math_fidelity != MathFidelity::LoFi && !(math_fidelity == MathFidelity::HiFi2 && dst_sync == DstSync::SyncHalf && fp32_dest && may_pack_32bit);
 }
-
 
 // Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi4, and HiFi3 with a 16-bit DEST except Bfp8_b in0 against
 // Float16_b in1 into Float32, both when the operand formats and the k steps of a section are given (main's form, unknown k, takes no fold); HiFi2 with a 16-bit
@@ -2855,8 +2853,7 @@ constexpr bool matmul_kernel_ttsync_block(
     // one k step, and the Bfp8_b 3x1 block of two, measured slower than the polling production block (G2 census, 10 of 10 points)
     // the LoFi class rule serves one-tile blocks only (llk_matmul_unpack_ttsync), so a larger LoFi block keeps its cell pick
     const bool class_serves = matmul_kernel_ttsync(fidelity, full_sync, fp32_dest, formats) && !(fidelity == MathFidelity::LoFi && !(rt == 1 && ct == 1));
-    if (class_serves || rt == 0 || ct == 0 || kt < 2 ||
-        (in0 == DataFormat::Bfp8_b && in1 == DataFormat::Bfp8_b && rt == 3 && ct == 1 && kt == 2))
+    if (class_serves || rt == 0 || ct == 0 || kt < 2 || (in0 == DataFormat::Bfp8_b && in1 == DataFormat::Bfp8_b && rt == 3 && ct == 1 && kt == 2))
     {
         return false;
     }

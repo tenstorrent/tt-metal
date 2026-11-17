@@ -48,14 +48,20 @@
 // matmul_api_runtime_dir resolves it for the key's operands (in1 is unpacker A, in0 unpacker B)
 #include "llk_matmul_forms.h"
 // (a macro: a keyed form, MATMUL_FE_FORM_KT below, keeps direction 0)
-#define MATMUL_PROD_RUNTIME_DIR                                                                                                       \
-    (MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf &&                                       \
-     static_cast<DataFormat>(PACK_OUT) != DataFormat::Float32 && ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS) && \
-     MATMUL_FE_FORM_KT == 0)
+#define MATMUL_PROD_RUNTIME_DIR                                                                                                                             \
+    (MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf && static_cast<DataFormat>(PACK_OUT) != DataFormat::Float32 && \
+     ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS) && MATMUL_FE_FORM_KT == 0)
 #undef MATMUL_REUSE_DIR
-#define MATMUL_REUSE_DIR                                                                                                                        \
-    (MATMUL_PROD_RUNTIME_DIR ? ckernel::matmul_reuse_dir(ckernel::MathFidelity::LoFi, static_cast<DataFormat>(UNPACK_B_IN), static_cast<DataFormat>(UNPACK_A_IN), \
-                                                         MATMUL_PK_CT, MATMUL_PK_RT, false, true, THROTTLE_LEVEL != 0)                           \
+#define MATMUL_REUSE_DIR                                                 \
+    (MATMUL_PROD_RUNTIME_DIR ? ckernel::matmul_reuse_dir(                \
+                                   ckernel::MathFidelity::LoFi,          \
+                                   static_cast<DataFormat>(UNPACK_B_IN), \
+                                   static_cast<DataFormat>(UNPACK_A_IN), \
+                                   MATMUL_PK_CT,                         \
+                                   MATMUL_PK_RT,                         \
+                                   false,                                \
+                                   true,                                 \
+                                   THROTTLE_LEVEL != 0)                  \
                              : MATMUL_PROD_DIR)
 #else
 #define MATMUL_PROD_RUNTIME_DIR false
@@ -549,8 +555,8 @@ constexpr bool matmul_prod_bias_write =
 #define MATMUL_PROD_KEYS         matmul_prod_key_ct, matmul_prod_key_rt, matmul_prod_bias_write
 // llk_math_matmul's half_base: LoFi half sync, not a run-time direction call (no size mode in the harness); minimal_matmul's default
 // cells run main's math (matmul_fe_main_math), which has none
-constexpr bool matmul_prod_half_base = matmul_prod_fidelity == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf &&
-                                       !MATMUL_PROD_RUNTIME_DIR && !matmul_prod_dims_unseen;
+constexpr bool matmul_prod_half_base =
+    matmul_prod_fidelity == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf && !MATMUL_PROD_RUNTIME_DIR && !matmul_prod_dims_unseen;
 #define MATMUL_MATH_DEFAULT_ARGS matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, false, matmul_prod_half_base
 #define MATMUL_MATH_DEFAULT_INIT_ARGS \
     matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, 0, MATMUL_PROD_TINY_16_ROWS, matmul_prod_end_fold, matmul_reuse_dir_k, false, MATMUL_PROD_KEYS

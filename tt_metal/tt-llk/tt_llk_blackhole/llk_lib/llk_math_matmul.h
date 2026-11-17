@@ -1654,7 +1654,8 @@ inline void _llk_math_matmul_(
             if constexpr (half_base)
             {
                 // dest_offset_id is 0 or 1: the half base without a branch (the caller keys it to LoFi half sync outside size mode)
-                TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (tile << DstTileSizeLog2[DstTileShape::Tile32x32]) + dest_offset_id * DEST_REGISTER_HALF_SIZE);
+                TT_SETC16(
+                    DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (tile << DstTileSizeLog2[DstTileShape::Tile32x32]) + dest_offset_id * DEST_REGISTER_HALF_SIZE);
             }
             else
             {
