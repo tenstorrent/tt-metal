@@ -26,6 +26,20 @@
 
 namespace ckl = compute_kernel_lib;
 
+// The inv_rms chain runs on a reduce(ROW) output: only column 0 of each tile is meaningful, and that column
+// lives in faces 0 and 2. VectorMode::C runs the SFPU on exactly those two faces (half the SFPU work of the
+// default all-faces ops, which dominates the per-tile-row cost on short rows).
+struct AddEpsCol : ckl::UnaryOp<AddEpsCol, ckl::Dst::D0> {
+    uint32_t param0;
+    constexpr explicit AddEpsCol(uint32_t p) noexcept : param0(p) {}
+    static ALWI void init() { binop_with_scalar_tile_init(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { add_unary_tile(slot_offset, param0, VectorMode::C); }
+};
+struct RsqrtCol : ckl::UnaryOp<RsqrtCol, ckl::Dst::D0> {
+    static ALWI void init() { rsqrt_tile_init(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { rsqrt_tile(slot_offset, VectorMode::C); }
+};
+
 void kernel_main() {
     constexpr bool IS_RM = get_compile_time_arg_val(0) != 0;
     constexpr bool HAS_GAMMA = get_compile_time_arg_val(1) != 0;
@@ -47,6 +61,7 @@ void kernel_main() {
     constexpr uint32_t N_W = get_compile_time_arg_val(17);  // W-split row-group width; 1 = off
     constexpr uint32_t cb_psend = get_compile_time_arg_val(18);
     constexpr uint32_t cb_part = get_compile_time_arg_val(19);
+    constexpr bool PRESCALED = get_compile_time_arg_val(20) != 0;  // 1/W already folded into the reduce scaler
     constexpr bool SPLIT = N_W > 1;
 
     const uint32_t rows_core = get_arg_val<uint32_t>(0);
@@ -97,10 +112,6 @@ void kernel_main() {
                                                       ckl::PopPolicy::AtEnd,
                                                       ckl::InputTileMapping::Row);
     constexpr uint32_t cb_scale_out = HAS_GAMMA ? cb_xn : cb_out_tiles;
-
-    if constexpr (HAS_GAMMA && GAMMA_RESIDENT) {
-        dfb_gamma.wait_front(Wt);
-    }
 
     for (uint32_t b = 0; b < rows_core; b += Rb) {
         const uint32_t rb = (rows_core - b) < Rb ? (rows_core - b) : Rb;
@@ -156,15 +167,29 @@ void kernel_main() {
         }
 
         // ---------------- inv_rms (in place on cb_stat) ----------------
-        ckl::eltwise_chain(
-            ckl::IterationShape::tiles(rb),
-            ckl::CopyTile<ckl::input(cb_stat)>{dfb_stat},
-            ckl::MulUnary<>{inv_w_bits},
-            ckl::AddUnary<>{eps_bits},
-            ckl::Rsqrt<>{},
-            ckl::PackTile<ckl::output(cb_stat)>{dfb_stat});
+        if constexpr (PRESCALED) {
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(rb),
+                ckl::CopyTile<ckl::input(cb_stat)>{dfb_stat},
+                AddEpsCol{eps_bits},
+                RsqrtCol{},
+                ckl::PackTile<ckl::output(cb_stat)>{dfb_stat});
+        } else {
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(rb),
+                ckl::CopyTile<ckl::input(cb_stat)>{dfb_stat},
+                ckl::MulUnary<>{inv_w_bits},
+                AddEpsCol{eps_bits},
+                RsqrtCol{},
+                ckl::PackTile<ckl::output(cb_stat)>{dfb_stat});
+        }
 
         // ---------------- pass 2: normalize ----------------
+        if constexpr (HAS_GAMMA && GAMMA_RESIDENT) {
+            if (b == 0) {
+                dfb_gamma.wait_front(Wt);  // first use; the reader loads gamma while pass 1 runs
+            }
+        }
         for (uint32_t seg = 0; seg < num_seg; ++seg) {
             if constexpr (IS_RM && !RESIDENT) {
                 ckl::tilize<Sb, cb_x_rm, cb_x>(dfb_x_rm, dfb_x, rb, TILE_HEIGHT * rb);

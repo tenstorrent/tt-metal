@@ -84,13 +84,15 @@ Cells that fail out of the box go to `EXCLUSIONS`, not their own refinement.
 
 **Done when**: WIDTH/BLOCK_SHARDED `xfail_expected` cells (including the resilience shapes with ragged/prime tile counts) pass; the sharded perf loose cases pass at 0.9995.
 
-### [ ] Refinement 6 — Speed up the sharded perf cases
+### [x] Refinement 6 — Speed up the sharded perf cases
 
 **Type**: perf
 
 **Goal**: the sharded `_perf_case` entries (WIDTH_SHARDED decode, BLOCK_SHARDED prefill/640-token cases) against their `achievable_ns`. Levers from `master.md`: overlap of the combine with compute, mcast vs all-gather topology, subblock/inv-rms chain, fidelity HiFi2. No SUPPORTED change.
 
 **Done when**: measured device-ns improves on the sharded perf-case shapes, PCC gate 0.9995 holds, golden green, no regression on the config-spanning guard set.
+
+**Outcome**: device-ns (bf16, HiFi2, gamma TILE; before -> after): WIDTH 32x1024 6.0k->4.8k, 32x2304 9.2k->7.0k, 32x5120 22.5k->15.3k, 32x7168 19.5k->11.6k; BLOCK 640x6144 32.5k->23.4k, 640x7168 36.5k->28.5k, 7168x1024 88.9k->73.6k, 7168x2048 136.8k->108.1k, 8192x1024 122.6k->102.0k (achievable_ns 4.1k/4.6k/5.3k/5.5k/19.0k/21.7k/18.9k/25.9k/25.6k: still 1.2-4x off). Levers landed: gather-to-leader + multicast partial exchange (physically-contiguous sub-rects), column-only (VectorMode::C) add-eps+rsqrt in the inv_rms chain (skips MulUnary when 1/W is prescaled), shard published before the gamma load with a lazy gamma wait. Remaining bound (ablations): per-tile-row SFPU chain cost and per-tile FPU/pack cost (~0.2-0.4us/tile) in compute on block-sharded shards with many short rows (Wt=4); exchange no longer dominates. Next: batch the inv_rms SFPU over more rows per DEST window / pack several rows' stats into one tile, fuse the gamma multiply into the x*inv_rms chain; not done here (needs a new eltwise op for Row-bcast DestReuse).
 
 ## TARGET − SUPPORTED coverage
 | Axis value | Where |

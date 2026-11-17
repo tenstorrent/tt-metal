@@ -41,12 +41,20 @@ void kernel_main() {
     constexpr bool OUT_SHARD_RM = get_compile_time_arg_val(18) != 0;  // RM out sticks live in the local shard
     constexpr uint32_t OUT_STRIDE = get_compile_time_arg_val(19);     // shard stick pitch in bytes
     constexpr bool W_PAD = get_compile_time_arg_val(20) != 0;         // slices cover more W tiles/elements than W
-    constexpr auto o_args = TensorAccessorArgs<21>();
+    constexpr bool MCAST = get_compile_time_arg_val(21) != 0;         // row group is a rectangle: multicast partials
+    constexpr uint32_t sem_id2 = get_compile_time_arg_val(22);
+    constexpr uint32_t sem_id3 = get_compile_time_arg_val(23);
+    constexpr uint32_t MCAST_CHUNK = get_compile_time_arg_val(24);  // tiles per multicast write
+    constexpr uint32_t MCAST_MAX_RECTS = get_compile_time_arg_val(25);
+    constexpr auto o_args = TensorAccessorArgs<26>();
     constexpr uint32_t tail_base = peers_base + 2 * (N_W > 1 ? N_W : 0);
     const uint32_t first_stick = get_arg_val<uint32_t>(tail_base);
     const uint32_t core_sticks = get_arg_val<uint32_t>(tail_base + 1);
     const uint32_t slice_valid_elems = get_arg_val<uint32_t>(tail_base + 2);  // valid W elements in the slice
     const uint32_t slice_elem0 = get_arg_val<uint32_t>(tail_base + 3);        // global W element offset
+    // row group multicast rectangles (physical coords, physically contiguous): n, then (x0,y0,x1,y1,n_dests) each
+    const uint32_t n_rects = get_arg_val<uint32_t>(tail_base + 4);
+    const uint32_t rect_base = tail_base + 5;
 
     constexpr uint32_t TILE_DIM = 32;
     constexpr uint32_t num_seg = Wt / Sb;
@@ -70,6 +78,8 @@ void kernel_main() {
     Noc noc;
     Semaphore<> sem0(sem_id0);
     Semaphore<> sem1(sem_id1);
+    Semaphore<> sem2(sem_id2);  // leader -> group "block assembled" (MCAST only)
+    Semaphore<> sem3(sem_id3);
     const uint32_t part_base = N_W > 1 ? dfb_part.get_write_ptr() : 0;  // identical on every core of the group
     auto exchange_partials = [&](uint32_t bi, uint32_t rb) {
         const uint32_t ptile = dfb_psend.get_tile_size();
@@ -77,28 +87,86 @@ void kernel_main() {
         const uint32_t slot_base = part_base + parity * (Rb * N_W * ptile);
         dfb_psend.wait_front(rb);
         const uint32_t src = dfb_psend.get_read_ptr();
-        for (uint32_t p = 0; p < N_W; ++p) {
-            const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * p);
-            const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * p + 1);
+        if constexpr (MCAST) {
+            // Gather to the leader (peer 0), which multicasts the assembled block to the whole group. (Several
+            // overlapping all-to-all multicasts can deadlock the NoC; one sender per rectangle cannot.)
+            const uint32_t lx = get_arg_val<uint32_t>(peers_base);
+            const uint32_t ly = get_arg_val<uint32_t>(peers_base + 1);
             for (uint32_t rr = 0; rr < rb; ++rr) {
-                noc_async_write(src + rr * ptile, get_noc_addr(px, py, slot_base + (rr * N_W + my_j) * ptile), ptile);
+                noc_async_write(src + rr * ptile, get_noc_addr(lx, ly, slot_base + (rr * N_W + my_j) * ptile), ptile);
             }
-        }
-        noc_async_write_barrier();
-        for (uint32_t p = 0; p < N_W; ++p) {
-            const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * p);
-            const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * p + 1);
+            noc_async_write_barrier();
             if (parity == 0) {
-                sem0.up(noc, px, py, 1);
+                sem0.up(noc, lx, ly, 1);
             } else {
-                sem1.up(noc, px, py, 1);
+                sem1.up(noc, lx, ly, 1);
             }
-        }
-        const uint32_t target = ((bi >> 1) + 1) * N_W;
-        if (parity == 0) {
-            sem0.wait_min(target);
+            if (my_j == 0) {
+                const uint32_t target = ((bi >> 1) + 1) * N_W;
+                if (parity == 0) {
+                    sem0.wait_min(target);
+                } else {
+                    sem1.wait_min(target);
+                }
+                const uint32_t total = rb * N_W;
+                for (uint32_t r = 0; r < n_rects; ++r) {
+                    const uint32_t x0 = get_arg_val<uint32_t>(rect_base + 5 * r);
+                    const uint32_t y0 = get_arg_val<uint32_t>(rect_base + 5 * r + 1);
+                    const uint32_t x1 = get_arg_val<uint32_t>(rect_base + 5 * r + 2);
+                    const uint32_t y1 = get_arg_val<uint32_t>(rect_base + 5 * r + 3);
+                    const uint32_t nd = get_arg_val<uint32_t>(rect_base + 5 * r + 4);
+                    for (uint32_t t = 0; t < total; t += MCAST_CHUNK) {
+                        const uint32_t n = (total - t) < MCAST_CHUNK ? (total - t) : MCAST_CHUNK;
+                        // NOC1 numbers its coordinates in the opposite direction: start/end swap.
+                        noc_async_write_multicast(
+                            slot_base + t * ptile,
+                            noc_index == 0 ? get_noc_multicast_addr(x0, y0, x1, y1, slot_base + t * ptile)
+                                           : get_noc_multicast_addr(x1, y1, x0, y0, slot_base + t * ptile),
+                            n * ptile,
+                            nd);
+                    }
+                }
+                noc_async_write_barrier();
+                for (uint32_t p = 0; p < N_W; ++p) {
+                    const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * p);
+                    const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * p + 1);
+                    if (parity == 0) {
+                        sem2.up(noc, px, py, 1);
+                    } else {
+                        sem3.up(noc, px, py, 1);
+                    }
+                }
+            }
+            if (parity == 0) {
+                sem2.wait_min((bi >> 1) + 1);
+            } else {
+                sem3.wait_min((bi >> 1) + 1);
+            }
         } else {
-            sem1.wait_min(target);
+            for (uint32_t p = 0; p < N_W; ++p) {
+                const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * p);
+                const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * p + 1);
+                for (uint32_t rr = 0; rr < rb; ++rr) {
+                    noc_async_write(
+                        src + rr * ptile, get_noc_addr(px, py, slot_base + (rr * N_W + my_j) * ptile), ptile);
+                }
+            }
+            noc_async_write_barrier();
+            for (uint32_t p = 0; p < N_W; ++p) {
+                const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * p);
+                const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * p + 1);
+                if (parity == 0) {
+                    sem0.up(noc, px, py, 1);
+                } else {
+                    sem1.up(noc, px, py, 1);
+                }
+            }
+            const uint32_t target = ((bi >> 1) + 1) * N_W;
+            if (parity == 0) {
+                sem0.wait_min(target);
+            } else {
+                sem1.wait_min(target);
+            }
         }
         dfb_part.reserve_back(Rb * N_W);
         dfb_part.push_back(Rb * N_W);

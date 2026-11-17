@@ -59,3 +59,12 @@
 - Golden test progress: slice `(WIDTH or BLOCK) and loose`: 191 passed / 1 failed; slice `test_op ... BFLOAT16 and w_non_aligned`: 420 passed, 120 xfail, 0 failed. Unit regression (height sharded TILE/RM, wsplit, test_rms_norm) 219 passed.
 - Issues encountered: 13x777x1023 WIDTH_SHARDED (bf16, fp32_dest=False) fails with a static-CB/L1 clash: its input and output shards are 650KB each (325 tile-rows x 1 tile, 32 slices) leaving no room for the 2-parity partial buffer (32 peers x 2KB x 2). Finding / next lever: send only the valid column of each partial (or a single parity half with an ack) to shrink cb_part under L1 pressure. Remote JIT precompile server fails (env) so the precompile pass is best-effort.
 - Tests added: tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_width_block_sharded.py (56 cases: TILE/RM x WIDTH/BLOCK x ragged shapes x gamma)
+
+## Refinement 6 — Speed up the sharded perf cases
+- Date: 2026-11-17
+- What was done: (1) W-split/shard row-group exchange: when the group is a logical rectangle, cores unicast partials to the leader (peer 0) which multicasts the assembled block once per physically-contiguous sub-rectangle (Blackhole worker columns have NoC holes; all-to-all overlapping multicasts hang, so gather+single-sender mcast; NOC1 start/end swapped); 2 extra semaphores; non-rectangular groups keep the unicast all-gather. (2) inv_rms chain: custom `AddEpsCol`/`RsqrtCol` ops with `VectorMode::C` (faces 0/2 = the valid column of a reduce(ROW) tile), MulUnary skipped when 1/W is folded into the scaler (CT arg). (3) Reader publishes the resident shard before loading gamma; compute waits for gamma lazily before first pass 2. (4) `SHARD_G_CAP`, `MCAST_CHUNK_TILES`, `MCAST_MAX_RECTS`, `USE_MCAST` knobs.
+- Device ns (before -> after): WIDTH 32x1024 6.0k->4.8k, 32x2304 9.2k->7.0k, 32x5120 22.5k->15.3k, 32x7168 19.5k->11.6k; BLOCK 640x6144 32.5k->23.4k, 640x7168 36.5k->28.5k, 7168x1024 88.9k->73.6k, 7168x2048 136.8k->108.1k, 8192x1024 122.6k->102.0k.
+- Accuracy achieved: PCC>0.9995 asserted in the perf probe on all 9 cases.
+- Golden test progress: slice `(WIDTH or BLOCK) and loose and {sizes}`: 17 passed; unit: width/block 56, wsplit+height 85, test_rms_norm 86 passed.
+- Issues encountered: first mcast attempts hung (non-worker nodes inside the rectangle; NOC1 coordinate order; then all-to-all multicast). Finding: remaining gap is compute-side per-row SFPU + per-tile FPU cost; SHARD_G_CAP > 16 gave only ~3%.
+- Tests added: test_rms_norm_sharded_perf_r6.py (profile probe, RMS_SGCAP / RMS_NOGAMMA env).

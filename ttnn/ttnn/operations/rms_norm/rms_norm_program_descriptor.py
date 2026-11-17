@@ -18,6 +18,12 @@ X_BUDGET = 512 * 1024  # bytes of cb_x
 GAMMA_BUDGET = 128 * 1024  # bytes of resident gamma tiles
 RM_DEPTH = 2  # tile-rows of RM sticks buffered in cb_x_rm
 SHARD_TIGHT_BYTES = 900 * 1024  # in+out resident shards beyond this leave too little L1 for full-size windows
+MCAST_CHUNK_TILES = 4  # tiles per leader multicast write
+MCAST_MAX_RECTS = 4  # physically contiguous sub-rectangles per row group
+USE_MCAST = True  # row-group partial exchange: one NoC multicast per tile when the group is a rectangle of cores
+SHARD_G_CAP = (
+    16  # compute window cap (tiles) for sharded TILE inputs with L1 headroom (bigger Rb -> fewer exchange rounds)
+)
 SHARD_TIGHT_G_CAP = 2  # compute window cap (tiles) under that pressure
 GAMMA_ALIGN = 64  # extra bytes of gamma-stick scratch: reads start at an aligned-down address
 OUT_DEPTH = 2  # windows buffered in cb_out_tiles / cb_out_rm
@@ -35,7 +41,7 @@ CB_OUT_RM = 8
 CB_GAMMA_RM = 9  # reader-private scratch for the gamma stick segment
 CB_PSEND = 10  # W-split: this core's partial Sum x^2 tiles (compute -> writer, sent to every peer)
 CB_PART = 11  # W-split: gathered partials of a row group (writer <- peers' NoC writes, -> compute)
-SEM_PART = (0, 1)  # W-split: one arrival semaphore per row-block parity
+SEM_PART = (0, 1, 2, 3)  # W-split: one arrival semaphore per row-block parity
 W_SPLIT_MIN_GAIN = 0.75  # split only if the estimated per-core work drops below this fraction
 W_SPLIT_OVERHEAD = 2  # per peer exchange cost, in tile-equivalents of per-core work
 PART_BUDGET = 256 * 1024  # bytes of cb_part
@@ -270,6 +276,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     row_flat = shard_spec is not None and is_rm  # RM shard: tile-rows are flat runs of shard sticks
     g_cap = G_CAP
     if shard_spec is not None and not is_rm:
+        g_cap = SHARD_G_CAP
         shard_bytes = (shard_spec.shape[0] // TILE) * Wt * (in_tile + out_tile)
         if shard_bytes > SHARD_TIGHT_BYTES:
             g_cap = SHARD_TIGHT_G_CAP  # the shards leave little L1: shrink the per-window intermediates
@@ -334,10 +341,51 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
 
+    # Row-group rectangles (logical): when every group's cores fill their logical bounding box, the partial
+    # exchange is gather-to-leader + multicast of the assembled block. The multicast rectangle must not contain
+    # non-worker NoC nodes, so a logical rectangle is split into physically contiguous sub-rectangles.
+    group_rects = {}  # group -> flat RT args [n_rects, (x0, y0, x1, y1, n_dests) * MCAST_MAX_RECTS]
+    use_mcast = False
+    if n_w > 1 and USE_MCAST:
+        by_group = {}
+        for cp in core_plan:
+            by_group.setdefault(cp.group, []).append(cp.core)
+        use_mcast = True
+
+        def _runs(vals, phys):
+            runs = [[vals[0]]]
+            for v in vals[1:]:
+                if phys(v) == phys(runs[-1][-1]) + 1:
+                    runs[-1].append(v)
+                else:
+                    runs.append([v])
+            return runs
+
+        for g, cs in by_group.items():
+            xs, ys = sorted({c.x for c in cs}), sorted({c.y for c in cs})
+            if len(cs) != len(xs) * len(ys):
+                use_mcast = False
+                break
+            px = lambda v, y0=ys[0]: device.worker_core_from_logical_core(ttnn.CoreCoord(v, y0)).x
+            py = lambda v, x0=xs[0]: device.worker_core_from_logical_core(ttnn.CoreCoord(x0, v)).y
+            rects = []
+            for yr in _runs(ys, py):
+                for xr in _runs(xs, px):
+                    has_leader = xs[0] in xr and ys[0] in yr  # leader = group's first core (j == 0)
+                    n = len(xr) * len(yr) - (1 if has_leader else 0)
+                    if n > 0:
+                        rects += [px(xr[0]), py(yr[0]), px(xr[-1]), py(yr[-1]), n]
+            if len(rects) > 5 * MCAST_MAX_RECTS:
+                use_mcast = False
+                break
+            n_rects = len(rects) // 5
+            group_rects[g] = [n_rects] + rects + [0] * (5 * MCAST_MAX_RECTS - len(rects))
+
     writer_ct = [
         int(is_rm), es_x, Wt, Sb, Rb, W, H, Ht_img, CB_OUT_TILES, CB_OUT_RM, Wt_full, n_w, CB_PSEND, CB_PART,
         SEM_PART[0], SEM_PART[1], int(out_tile_sharded), int(row_flat), int(out_spec is not None and is_rm),
-        (out_spec.shape[1] * es_x) if (out_spec is not None and is_rm) else 0, int(w_pad),
+        (out_spec.shape[1] * es_x) if (out_spec is not None and is_rm) else 0, int(w_pad), int(use_mcast),
+        SEM_PART[2], SEM_PART[3], MCAST_CHUNK_TILES, MCAST_MAX_RECTS,
     ]  # fmt: skip
     writer_ct.extend(
         ttnn.TensorAccessorArgs().get_compile_time_args()
@@ -348,7 +396,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     compute_ct = [
         int(is_rm), int(has_gamma), int(blk.resident), int(blk.gamma_resident), Wt, Sb, Rb, num_seg,
         CB_X_RM, CB_X, CB_SCALER, CB_GAMMA, CB_SQ, CB_STAT, CB_XN, CB_OUT_TILES, CB_OUT_RM,
-        n_w, CB_PSEND, CB_PART,
+        n_w, CB_PSEND, CB_PART, int(not compute_kernel_config.fp32_dest_acc_en),
     ]  # fmt: skip
 
     # ------------------------------------------------------------ RT args
@@ -402,6 +450,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             [o_addr, first_row, rows, slice_tile0, j]
             + [v for xy in group_cores.get(cp.group, []) for v in xy]
             + [first_stick, n_sticks, slice_valid, slice_elem0]
+            + group_rects.get(cp.group, [0] * (1 + 5 * MCAST_MAX_RECTS))
         )
         compute_rt[core.x][core.y] = [rows, inv_w_bits, eps_bits]
         covered += rows if j == 0 else 0

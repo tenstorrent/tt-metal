@@ -286,17 +286,7 @@ void kernel_main() {
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
         __builtin_bit_cast(float, scaler_bits));
 
-    if constexpr (HAS_GAMMA) {
-        if constexpr (!GAMMA_TILE) {
-            dfb_gamma_rm.reserve_back(1);  // private scratch, never pushed
-        }
-        if constexpr (GAMMA_RESIDENT) {
-            for (uint32_t seg = 0; seg < num_seg; ++seg) {
-                load_gamma_segment(seg);
-            }
-        }
-    }
-
+    // The resident shard is published first so pass 1 can start while the gamma tiles are still in flight.
     if constexpr (IN_SHARDED) {
         // Native sharding: cb_x is backed by this core's input shard. Publish it in place (no NoC read);
         // zero the W pad of the last tile column in place so it cannot enter the reduction.
@@ -311,6 +301,17 @@ void kernel_main() {
                 noc.write_zeros_l1_barrier();
             }
             dfb_x.push_back(total);
+        }
+    }
+
+    if constexpr (HAS_GAMMA) {
+        if constexpr (!GAMMA_TILE) {
+            dfb_gamma_rm.reserve_back(1);  // private scratch, never pushed
+        }
+        if constexpr (GAMMA_RESIDENT) {
+            for (uint32_t seg = 0; seg < num_seg; ++seg) {
+                load_gamma_segment(seg);
+            }
         }
     }
 
