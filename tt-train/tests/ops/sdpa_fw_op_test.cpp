@@ -3443,8 +3443,14 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ScheduleFuzz) {
         if (s.num_slots > 0U) {
             ++cut_schedules;
             // The cut schedule was kept because the model rated it faster than the same items uncut on the
-            // same core count; it must also not be rated slower than the uncut schedule make_schedule builds
-            // with max_pieces = 1 (fewer cores when items are fewer: the model gives them more DRAM share).
+            // same core count. It may still be rated slower than the schedule make_schedule builds at
+            // max_pieces = 1, and that is not a bug: with max_pieces = 1 the uncut items run on
+            // min(cores, items) cores, so the model hands each of them a larger share of the DRAM
+            // bandwidth (dram_us divides by the core count) than the cut schedule's cores get. The two
+            // ratings are not on the same scale, which is why make_schedule compares the cut against an
+            // uncut schedule on its own core count instead of against this one. There is no assertion to
+            // make: on the shapes where it happens the comparison itself is meaningless. It is counted and
+            // printed instead, so a change in how often it happens shows up (33 of 216 on this seed).
             const SDPAForwardSchedule uncut = make_schedule(shape, chunks, cores, 1U, false);
             if (s.predicted_us > uncut.predicted_us) {
                 ++cut_rated_slower_than_fewer_cores;
@@ -3454,12 +3460,37 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ScheduleFuzz) {
                 most_mergers_case = trace;
             }
         }
-        // schedule_for from a config must agree with make_schedule on the config's cores.
-        ttml::metal::SDPAForwardProgramConfig config{
-            .max_pieces = max_pieces, .num_cores = cores, .causal_pairs = causal_pairs};
+        // What schedule_for adds over make_schedule is the translation of a config into its arguments, so
+        // that is what is checked here: passing the config's own max_pieces and cores straight to
+        // make_schedule reproduces the call schedule_for makes and could never disagree.
+        constexpr uint32_t kGrid = 130U;
+        const ttml::metal::SDPAForwardProgramConfig all_cores{
+            .max_pieces = max_pieces, .num_cores = 0U, .causal_pairs = causal_pairs};
         EXPECT_EQ(
-            schedule_signature(schedule_for(config, shape, chunks, 130U)),
-            schedule_signature(make_schedule(shape, chunks, std::min(cores, 130U), max_pieces, causal_pairs)));
+            schedule_signature(schedule_for(all_cores, shape, chunks, kGrid)),
+            schedule_signature(make_schedule(shape, chunks, kGrid, max_pieces, causal_pairs)))
+            << "num_cores 0 must mean the whole grid";
+        const ttml::metal::SDPAForwardProgramConfig over_grid{
+            .max_pieces = max_pieces, .num_cores = kGrid + 7U, .causal_pairs = causal_pairs};
+        EXPECT_EQ(
+            schedule_signature(schedule_for(over_grid, shape, chunks, kGrid)),
+            schedule_signature(schedule_for(all_cores, shape, chunks, kGrid)))
+            << "num_cores above the grid must cap at it";
+        if (!causal_pairs) {
+            const ttml::metal::SDPAForwardProgramConfig defaulted{.max_pieces = 0U, .num_cores = cores};
+            EXPECT_EQ(
+                schedule_signature(schedule_for(defaulted, shape, chunks, kGrid)),
+                schedule_signature(make_schedule(shape, chunks, std::min(cores, kGrid), kDefaultMaxPieces, false)))
+                << "max_pieces 0 must mean kDefaultMaxPieces";
+        }
+        const ttml::metal::SDPAForwardProgramConfig paired{
+            .max_pieces = 1U, .num_cores = cores, .causal_pairs = true};
+        EXPECT_EQ(schedule_for(paired, shape, chunks, kGrid).num_slots, 0U) << "causal_pairs must never cut";
+        SDPAForwardChunks no_split = chunks;
+        no_split.allow_split = false;
+        const ttml::metal::SDPAForwardProgramConfig greedy{.max_pieces = kMaxPieces, .num_cores = cores};
+        EXPECT_EQ(schedule_for(greedy, shape, no_split, kGrid).num_slots, 0U)
+            << "a chunking whose partials do not fit L1 must never cut, whatever max_pieces says";
     }
     fmt::print(
         "schedule fuzz: {} cut schedules; most mergers on a core {} ({}); cut rated slower than the fewer-core uncut "
