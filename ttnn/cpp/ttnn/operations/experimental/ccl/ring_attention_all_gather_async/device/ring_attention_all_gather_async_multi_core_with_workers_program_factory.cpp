@@ -1033,13 +1033,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         "ring_attention_all_gather_writer.cpp";
 
     const auto make_reader_compile_time_args = [&](uint32_t cb_index, bool worker_direction) {
+        // The per-chip slots (rank, targets) are 0: the kernel reads them from its common runtime args, so every chip
+        // compiles the same binary.
         std::vector<uint32_t> args = {
-            ring_index,                                         // kMyTransportRank
+            0,                                                  // kMyTransportRank (common arg 0)
             cb_index,                                           // kCbOutputId
             num_pages_per_packet,                               // kPacketSizeInPages
             op_config.get_page_size(),                          // kInputTensorPageSize
-            num_targets_forward,                                // kNumTargetsForwardDirection
-            num_targets_backward,                               // kNumTargetsBackwardDirection
+            0,                                                  // kNumTargetsForwardDirection (common arg 1)
+            0,                                                  // kNumTargetsBackwardDirection (common arg 2)
             static_cast<uint32_t>(topology),                    // kTopology
             kContiguousPagesAdvanced,                           // kContigPagesAdvanced
             num_inputs,                                         // kNumInputs
@@ -1085,23 +1087,22 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     const auto make_writer_compile_time_args = [&](uint32_t cb_index,
                                                    uint32_t packet_header_cb_index,
-                                                   bool worker_direction,
-                                                   uint32_t unicast_route_arg0,
-                                                   uint32_t unicast_route_arg1) {
+                                                   bool worker_direction) {
+        // The per-chip slots (rank, targets, route) are 0: the kernel reads them from its common runtime args.
         std::vector<uint32_t> args = {
-            ring_index,                                         // kMyTransportRank
+            0,                                                  // kMyTransportRank (common arg 0)
             packet_header_cb_index,                             // kReservedPacketHeaderCbId
             cb_index,                                           // kCbOutputId
             num_pages_per_packet,                               // kPacketSizeInPages
             op_config.get_page_size(),                          // kOutputPageSize
-            num_targets_forward,                                // kNumTargetsForwardDirection
-            num_targets_backward,                               // kNumTargetsBackwardDirection
+            0,                                                  // kNumTargetsForwardDirection (common arg 1)
+            0,                                                  // kNumTargetsBackwardDirection (common arg 2)
             static_cast<uint32_t>(fuse_op),                     // kFuseOp
             static_cast<uint32_t>(topology),                    // kTopology
             num_inputs,                                         // kNumInputs
             static_cast<uint32_t>(worker_direction),            // kDirection
-            unicast_route_arg0,                                 // kUnicastRouteArg0
-            unicast_route_arg1,                                 // kUnicastRouteArg1
+            0,                                                  // kUnicastRouteArg0 (common arg 3)
+            0,                                                  // kUnicastRouteArg1 (common arg 4)
             static_cast<uint32_t>(has_metadata),                // kHasMetadata
             meta_cb_index,                                      // kCbMetaId
             num_links,                                          // kNumLinks
@@ -1138,6 +1139,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_reader_forward_kernel.config = WriterConfigDescriptor{};
     sender_reader_forward_kernel.compile_time_args =
         make_reader_compile_time_args(sender_forward_cb_index, kForwardDirection);
+    sender_reader_forward_kernel.common_runtime_args = {ring_index, num_targets_forward, num_targets_backward};
 
     // Writer
     KernelDescriptor sender_writer_forward_kernel{};
@@ -1146,11 +1148,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_forward_kernel.core_ranges = sender_forward_core_ranges;
     sender_writer_forward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_forward_kernel.compile_time_args = make_writer_compile_time_args(
-        sender_forward_cb_index,
-        reserved_packet_header_forward_CB_index,
-        kForwardDirection,
-        unicast_backward_args[0],
-        unicast_backward_args[1]);
+        sender_forward_cb_index, reserved_packet_header_forward_CB_index, kForwardDirection);
+    sender_writer_forward_kernel.common_runtime_args = {
+        ring_index, num_targets_forward, num_targets_backward, unicast_backward_args[0], unicast_backward_args[1]};
     // Backward Direction
     // Reader
     KernelDescriptor sender_reader_backward_kernel{};
@@ -1160,6 +1160,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_reader_backward_kernel.config = WriterConfigDescriptor{};
     sender_reader_backward_kernel.compile_time_args =
         make_reader_compile_time_args(sender_backward_cb_index, kBackwardDirection);
+    sender_reader_backward_kernel.common_runtime_args = {ring_index, num_targets_forward, num_targets_backward};
 
     // Writer
     KernelDescriptor sender_writer_backward_kernel{};
@@ -1168,11 +1169,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_backward_kernel.core_ranges = sender_backward_core_ranges;
     sender_writer_backward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_backward_kernel.compile_time_args = make_writer_compile_time_args(
-        sender_backward_cb_index,
-        reserved_packet_header_backward_CB_index,
-        kBackwardDirection,
-        unicast_forward_args[0],
-        unicast_forward_args[1]);
+        sender_backward_cb_index, reserved_packet_header_backward_CB_index, kBackwardDirection);
+    sender_writer_backward_kernel.common_runtime_args = {
+        ring_index, num_targets_forward, num_targets_backward, unicast_forward_args[0], unicast_forward_args[1]};
 
     /* All gather fusion */
     // Inline equivalent of AllGatherFusedOpSignaler::init_all_gather for the descriptor
