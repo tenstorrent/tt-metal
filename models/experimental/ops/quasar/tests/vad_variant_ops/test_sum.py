@@ -32,6 +32,10 @@ C, Q = U.NUM_CAMS, U.NUM_QUERY
 )
 def test_sum(ttnn_mesh_device, reset_seeds, shape, dim):
     mesh = ttnn_mesh_device
+    if U.is_quasar():
+        # 6 x 10000 queries x padded-to-32 columns is 3.85 MB in L1, filling the emulator's two ~3.9 MB banks and
+        # leaving no room for the output. 1000 queries keeps the op, dims and layout (~0.4 MB per tensor).
+        shape = (*shape[:2], 1000, shape[3])
     x_torch = torch.randint(0, 2, shape).to(torch.bfloat16)
     x = U.to_tt_mem(x_torch, mesh, "l1")
     out = ttnn.sum(x, dim=dim, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
