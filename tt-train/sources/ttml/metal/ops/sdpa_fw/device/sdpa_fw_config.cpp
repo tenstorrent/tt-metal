@@ -158,6 +158,8 @@ SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChun
         .output = rows * shape.vWt,
         .reduction_scaler = 1U,
         .matmul_reduce = 1U,
+        // The partials stream through a fixed window of whole NoC batches; the merge keeps a whole item's
+        // rescale factors live, so alpha holds one tile per row (the program factory checks both).
         .partial = with_partials ? sdpa_items::kPartialCbRows * partial_tiles_per_row(shape) : 0U,
         .alpha = with_partials ? rows : 0U};
 }

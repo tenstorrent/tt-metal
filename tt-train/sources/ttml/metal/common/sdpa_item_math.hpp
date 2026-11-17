@@ -100,6 +100,8 @@ constexpr uint32_t kPartialCbRows = 4U;
 constexpr uint32_t partial_rows_per_batch(uint32_t rows) {
     return (rows % 2U == 0U) ? 2U : 1U;
 }
+// A batch is 1 or 2 rows and the window must hold whole batches, or a reserve would straddle the CB end.
+static_assert(kPartialCbRows % 2U == 0U && kPartialCbRows >= 2U, "the partial CB window holds whole NoC batches");
 
 struct WorkUnitFields {
     uint32_t item;

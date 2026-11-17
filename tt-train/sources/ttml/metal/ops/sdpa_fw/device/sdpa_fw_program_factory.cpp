@@ -186,11 +186,25 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // Depths and formats come from the CB plan in sdpa_fw_config.cpp, the same table l1_bytes summed when
     // resolve_chunks checked the L1 budget. The mask, gate, intermediates and split-unit CBs are only
     // created when the config uses them (depth 0 otherwise).
-    for (const SDPAForwardCb& cb : cb_plan(cb_tiles(shape, chunks, split_units))) {
+    const SDPAForwardCbTiles cb_depths = cb_tiles(shape, chunks, split_units);
+    for (const SDPAForwardCb& cb : cb_plan(cb_depths)) {
         if (cb.tiles > 0U) {
             create_circular_buffer(program, all_cores, cb.index, cb.format, tt::tile_size(cb.format), cb.tiles);
         }
     }
+    // What the merge kernel asks of those depths. It folds one partial row at a time, but keeps the whole
+    // item's rescale factors live: merge_partial pushes one alpha per row into c_19 and waits for r + 1
+    // without popping, so c_19 must hold rows tiles or its cb_reserve_back never returns. The partials
+    // themselves stream through a kPartialCbRows window of whole NoC batches, so c_17 / c_18 hold
+    // kPartialCbRows * (vWt + 2) tiles however wide the head or long the item.
+    TT_FATAL(
+        !split_units || (cb_depths.alpha >= rows && cb_depths.partial >= partial_tiles_per_row(shape)),
+        "sdpa_fw: the split units' CBs ({} alpha, {} partial tiles) are too small for an item of {} rows x {} "
+        "partial tiles",
+        cb_depths.alpha,
+        cb_depths.partial,
+        rows,
+        partial_tiles_per_row(shape));
 
     // Split units: the partials travel through DRAM scratch, one slot per sender, fp32, and the merger
     // waits on one of its core's semaphores until every sender has bumped it. The scratch is owned by the
