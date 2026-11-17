@@ -192,22 +192,16 @@ struct ScheduleSummary {
     double predicted_us = 0.0;  // the model's rating, the number the pick compares candidates on
 };
 
-// The schedule the program factory builds for cfg on sc: sender / merger counts and the model's rating.
-ScheduleSummary schedule_summary(const Scenario& sc, const ttml::metal::SDPAForwardProgramConfig& cfg) {
+// The schedule the program factory builds for cfg on this shape: sender / merger counts and the model's
+// rating. The shape comes from the run's own tensors through shape_of, the same call the factory makes,
+// rather than being rebuilt from the scenario here.
+ScheduleSummary schedule_summary(
+    const ttml::metal::ops::sdpa_fw::device::SDPAForwardShape& shape,
+    const ttml::metal::SDPAForwardProgramConfig& cfg) {
     using namespace ttml::metal::ops::sdpa_fw::device;
     auto* device = &ttml::autograd::ctx().get_device();
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t grid_cores = grid.x * grid.y;
-    const SDPAForwardShape shape{
-        .batch = sc.batch,
-        .q_heads = sc.q_heads,
-        .kv_heads = sc.kv_heads,
-        .St = sc.seq_len / tt::constants::TILE_HEIGHT,
-        .qWt = sc.head_dim / tt::constants::TILE_WIDTH,
-        .vWt = sc.head_dim / tt::constants::TILE_WIDTH,
-        .mask_type = sc.mask_type,
-        .has_gate = sc.gate,
-        .return_intermediates = true};
     const auto [chunks, schedule] = resolve_plan(cfg, shape, ttml::metal::available_l1_bytes(*device), grid_cores);
     uint32_t senders = 0;
     uint32_t mergers = 0;
@@ -259,6 +253,9 @@ void run_scenario(
         return metal::sdpa_fw(query, key, value, sc.mask_type, mask, 0.0F, /*return_intermediates=*/true, gate, cfg)[0]
             .value();
     };
+    // The shape the factory will resolve, from the tensors the runs use.
+    const auto shape = metal::ops::sdpa_fw::device::shape_of(
+        query, key, value, sc.mask_type, sc.gate, /* return_intermediates */ true);
     auto time_cfg = [&](const metal::SDPAForwardProgramConfig& cfg) {
         return benchmark_utils::time_device_avg_us(device, num_warmup, num_measure, [&]() { (void)run(cfg); });
     };
@@ -268,7 +265,7 @@ void run_scenario(
 
     auto measure = [&](const std::string& label, const metal::SDPAForwardProgramConfig& cfg) {
         Row row{.label = label};
-        const ScheduleSummary summary = schedule_summary(sc, cfg);
+        const ScheduleSummary summary = schedule_summary(shape, cfg);
         row.units = summary.units;
         row.predicted_us = summary.predicted_us;
         row.dram_alloc_mib =
@@ -315,11 +312,8 @@ void run_scenario(
         : sc.mask_type == metal::AttentionMaskType::Arbitrary ? "arbitrary"
                                                               : "none");
     const auto grid = device.compute_with_storage_grid_size();
-    const auto picked = metal::ops::sdpa_fw::device::resolve_chunks(
-        {},
-        metal::ops::sdpa_fw::device::shape_of(query, key, value, sc.mask_type, sc.gate, true),
-        metal::available_l1_bytes(device),
-        grid.x * grid.y);
+    const auto picked =
+        metal::ops::sdpa_fw::device::resolve_chunks({}, shape, metal::available_l1_bytes(device), grid.x * grid.y);
     fmt::print(
         "default chunks: q={} k={} h={} on {} cores\n",
         picked.Sq_chunk_t * tt::constants::TILE_HEIGHT,

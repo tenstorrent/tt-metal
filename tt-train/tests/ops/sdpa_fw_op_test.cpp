@@ -508,6 +508,54 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
     return {attention_qkv, intermediates};
 }
 
+// Host Q, K and V for the split tests that drive metal::sdpa_fw directly. V is in [0, 1] with the early
+// keys near 0.1 and the late ones near 0.9 -- the ramp expect_split_matches_unsplit needs, which
+// run_sdpa_test builds from value_min / value_max / value_key_ramp for the tests that go through it. The
+// three tensors take seed, seed + 1 and seed + 2, so equal shapes do not come out identical.
+struct SplitHostInputs {
+    xt::xarray<float> query, key, value;
+};
+
+SplitHostInputs split_host_inputs(const std::array<std::size_t, 4>& shape, uint32_t seed) {
+    xt::xarray<float> value = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 0.25F, seed + 2U);
+    for (std::size_t s = 0; s < shape[2]; ++s) {
+        xt::view(value, xt::all(), xt::all(), s, xt::all()) += 0.75F * static_cast<float>(s) / shape[2];
+    }
+    return SplitHostInputs{
+        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed)),
+        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 1U)),
+        round_to_bf16(value)};
+}
+
+// The same three on device.
+struct SplitDeviceInputs {
+    ttnn::Tensor query, key, value;
+};
+
+SplitDeviceInputs on_device(const SplitHostInputs& host) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    return SplitDeviceInputs{
+        ttml::core::from_xtensor(host.query, device),
+        ttml::core::from_xtensor(host.key, device),
+        ttml::core::from_xtensor(host.value, device)};
+}
+
+// One causal launch of cfg on those inputs, output as an xarray.
+xt::xarray<float> run_causal_split(
+    const ttml::metal::SDPAForwardProgramConfig& cfg, const SplitDeviceInputs& in, bool return_intermediates = false) {
+    return ttml::core::to_xtensor(ttml::metal::sdpa_fw(
+                                      in.query,
+                                      in.key,
+                                      in.value,
+                                      ttml::metal::AttentionMaskType::Causal,
+                                      std::nullopt,
+                                      0.0F,
+                                      return_intermediates,
+                                      std::nullopt,
+                                      cfg)[0]
+                                      .value());
+}
+
 struct SDPATestConfig {
     uint32_t batch_size;
     uint32_t sequence_length;
@@ -704,16 +752,8 @@ void run_sdpa_test(
         const auto grid = device->compute_with_storage_grid_size();
         const auto picked = ttml::metal::ops::sdpa_fw::device::resolve_chunks(
             config.program_config,
-            ttml::metal::ops::sdpa_fw::device::SDPAForwardShape{
-                .batch = config.batch_size,
-                .q_heads = config.num_query_heads,
-                .kv_heads = config.num_key_heads,
-                .St = config.sequence_length / 32U,
-                .qWt = head_dim_kv / 32U,
-                .vWt = head_dim_v / 32U,
-                .mask_type = config.mask_type,
-                .has_gate = true,
-                .return_intermediates = return_intermediates},
+            ttml::metal::ops::sdpa_fw::device::shape_of(
+                query, key, value, config.mask_type, /* has_gate */ true, return_intermediates),
             l1_budget_bytes,
             grid.x * grid.y);
         const ttml::metal::SDPAForwardProgramConfig pinned{
@@ -1559,13 +1599,10 @@ TEST_F(SDPAForwardTest, GateTest_ProgramCacheHitReadsNewGate) {
 // q_chunk_size / k_chunk_size knobs: same numbers, different chunking.
 // =============================================================================
 
-struct ChunkKnobs {
-    uint32_t q_chunk_size;
-    uint32_t k_chunk_size;
-    uint32_t heads_per_item = 0U;
-    uint32_t max_pieces = 0U;
-    uint32_t num_cores = 0U;
-};
+// The knob rows below are program configs: SDPAForwardProgramConfig's first five fields are these, in this
+// order, so there is nothing for a separate struct to say. (causal_pairs is the sixth and defaults false;
+// the rows that want it set it by name.)
+using ChunkKnobs = ttml::metal::SDPAForwardProgramConfig;
 
 // One Q row with a wide K step, many Q rows with one K tile, square, and both rectangles.
 const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64}, {128, 64}, {64, 256}};
@@ -1575,15 +1612,6 @@ const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64},
 // bf16 ULP at the ~0.03-0.1 output magnitudes here, where the 2e-2 reference tolerance would let a
 // uniform few-percent rescale error through.
 constexpr float kCrossChunkingMeanAbsTol = 5e-4F;
-
-ttml::metal::SDPAForwardProgramConfig program_config_of(const ChunkKnobs& knobs) {
-    return {
-        .q_chunk_size = knobs.q_chunk_size,
-        .k_chunk_size = knobs.k_chunk_size,
-        .heads_per_item = knobs.heads_per_item,
-        .max_pieces = knobs.max_pieces,
-        .num_cores = knobs.num_cores};
-}
 
 // The shape and chunks the program factory would resolve for config on this device.
 std::pair<ttml::metal::ops::sdpa_fw::device::SDPAForwardShape, ttml::metal::ops::sdpa_fw::device::SDPAForwardChunks>
@@ -1718,7 +1746,7 @@ void run_split_vs_unsplit(SDPATestConfig base, const ChunkKnobs& knobs) {
     }
     auto arm = [&](uint32_t max_pieces, const char* tag) {
         SDPATestConfig config = base;
-        config.program_config = program_config_of(knobs);
+        config.program_config = knobs;
         config.program_config.max_pieces = max_pieces;
         config.test_name = base.test_name + tag;
         return config;
@@ -1776,7 +1804,7 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
     }
     for (const auto& knobs : sweep) {
         SDPATestConfig config = base;
-        config.program_config = program_config_of(knobs);
+        config.program_config = knobs;
         config.test_name = fmt::format(
             "{}_q{}_k{}_h{}_p{}_c{}",
             base.test_name,
@@ -2037,7 +2065,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits) {
     run_split_vs_unsplit(kSplitUnitsBase, {64, 128, 1, 4, 0});
     const ChunkKnobs crowded{64, 128, 1, 4, 32};
     SDPATestConfig crowded_config = kSplitUnitsBase;
-    crowded_config.program_config = program_config_of(crowded);
+    crowded_config.program_config = crowded;
     using ttml::metal::ops::sdpa_fw::device::UnitRole;
     bool sender_then_merger = false;
     for (const auto& units : host_schedule(crowded_config).per_core) {
@@ -2184,7 +2212,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_TwoMergers
         .test_name = "ChunkKnobs_SplitUnits_TwoMergers"};
     const ChunkKnobs knobs{32, 96, 1, 4, 31};
     SDPATestConfig split = base;
-    split.program_config = program_config_of(knobs);
+    split.program_config = knobs;
     uint32_t highest_sem_idx = 0;
     for (const auto& units : host_schedule(split).per_core) {
         for (const auto& unit : units) {
@@ -2213,7 +2241,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate) {
     run_split_vs_unsplit(kSplitUnitsGqaGateBase, {64, 128, 2, 4, 0});
     // The gated split kernel without the logsumexp: a variant no other test compiles.
     SDPATestConfig no_intermediates = kSplitUnitsGqaGateBase;
-    no_intermediates.program_config = program_config_of({64, 128, 2, 4, 0});
+    no_intermediates.program_config = {64, 128, 2, 4, 0};
     no_intermediates.return_intermediates = false;
     no_intermediates.test_name = "ChunkKnobs_SplitUnits_GQA_Gate_NoIntermediates";
     ASSERT_GT(host_schedule(no_intermediates).num_slots, 0U);
@@ -2350,6 +2378,34 @@ using ttml::metal::ops::sdpa_fw::device::WorkUnit;
 
 // What every schedule must satisfy for the kernels to compute each item exactly once and for the senders
 // and mergers to find each other: full coverage, consecutive slots per item, matching semaphores, and
+// The two fuzzes' draw helpers.
+uint32_t pick_from(std::mt19937& rng, const std::vector<uint32_t>& choices) {
+    return choices[rng() % choices.size()];
+}
+
+std::vector<uint32_t> divisors(uint32_t n) {
+    std::vector<uint32_t> d;
+    for (uint32_t i = 1; i <= n; ++i) {
+        if (n % i == 0U) {
+            d.push_back(i);
+        }
+    }
+    return d;
+}
+
+uint32_t most_mergers_on_a_core(const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& s) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    uint32_t most = 0;
+    for (const auto& units : s.per_core) {
+        uint32_t n = 0;
+        for (const auto& u : units) {
+            n += u.role == UnitRole::Merger ? 1U : 0U;
+        }
+        most = std::max(most, n);
+    }
+    return most;
+}
+
 // The work-list layout the three kernels decode, pinned at compile time. check_schedule below encodes
 // every unit a schedule produced, which only ever exercises the field values those schedules reach: no
 // schedule here fills the item, step or slot fields, and none puts more than two mergers on a core, so
@@ -2481,8 +2537,9 @@ void check_schedule(
             next = end;
         }
         EXPECT_EQ(next, num_kv_steps(shape, chunks, item)) << "item " << item << ": pieces must cover every step";
-        // The merger owns the band the diagonal crosses, so every piece starts at or before the step that
-        // holds the item's first row's diagonal and no piece ever sees a row masked end to end.
+        // The merger owns the band the diagonal crosses, so every sender's steps lie below the diagonal of
+        // every row of the item and no piece ever sees a row masked end to end. The item's first row tile
+        // is the strictest: a sender's last step must end at or before it.
         const uint32_t first_row_tile =
             sdpa_items::first_row_tile_of(item, shape.St / chunks.Sq_chunk_t, chunks.Sq_chunk_t);
         const uint32_t below_band = first_row_tile / chunks.Sk_chunk_t;
@@ -2611,20 +2668,17 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     const SDPAForwardShape one_head_short = causal_shape(1U, 1U, 1U, 24U, 1U);
     const SDPAForwardChunks sq1sk3{.Sq_chunk_t = 1U, .Sk_chunk_t = 3U, .heads_per_item = 1U};
     const SDPAForwardSchedule two_mergers = make_schedule(one_head_short, sq1sk3, 31U, kDefaultMaxPieces);
-    uint32_t most_mergers_on_a_core = 0;
     uint32_t highest_sem_idx = 0;
     for (const auto& units : two_mergers.per_core) {
-        uint32_t mergers = 0;
         for (const auto& unit : units) {
             if (unit.role == UnitRole::Merger) {
-                ++mergers;
                 highest_sem_idx = std::max(highest_sem_idx, unit.sem_idx);
             }
         }
-        most_mergers_on_a_core = std::max(most_mergers_on_a_core, mergers);
     }
-    EXPECT_GE(most_mergers_on_a_core, 2U) << "the shape must put two mergers on one core";
-    EXPECT_EQ(highest_sem_idx + 1U, most_mergers_on_a_core) << "a core's mergers take its semaphores in turn";
+    const uint32_t mergers_on_a_core = most_mergers_on_a_core(two_mergers);
+    EXPECT_GE(mergers_on_a_core, 2U) << "the shape must put two mergers on one core";
+    EXPECT_EQ(highest_sem_idx + 1U, mergers_on_a_core) << "a core's mergers take its semaphores in turn";
     check_schedule(one_head_short, sq1sk3, two_mergers, kDefaultMaxPieces);
 
     // More cores than items with no cuts allowed: one core per item.
@@ -2991,39 +3045,13 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
         .mask_type = metal::AttentionMaskType::Causal,
         .return_intermediates = false};
     const std::array<std::size_t, 4> shape{1U, 2U, 1024U, 64U};
-    auto make_host = [&](uint32_t seed, float lo, float hi) {
-        return round_to_bf16(test_utils::make_uniform_xarray<float>(shape, lo, hi, seed));
-    };
-    // V in [0, 1] with the early keys near 0.1 and the late ones near 0.9: see expect_split_matches_unsplit.
-    auto make_host_value = [&](uint32_t seed) {
-        xt::xarray<float> value = test_utils::make_uniform_xarray<float>(shape, 0.0F, 0.25F, seed);
-        for (std::size_t s = 0; s < shape[2]; ++s) {
-            xt::view(value, xt::all(), xt::all(), s, xt::all()) += 0.75F * static_cast<float>(s) / shape[2];
-        }
-        return round_to_bf16(value);
-    };
-    auto make = [&](const xt::xarray<float>& host) { return core::from_xtensor(host, device); };
-    struct Inputs {
-        ttnn::Tensor query, key, value;
-    };
-    const Inputs first{make(make_host(1U, -1.0F, 1.0F)), make(make_host(2U, -1.0F, 1.0F)), make(make_host_value(3U))};
+    const SplitDeviceInputs first = on_device(split_host_inputs(shape, 1U));
     // The second set's host copies feed the anticausal reference below. Both sets stay alive: other addresses.
-    const xt::xarray<float> second_q = make_host(4U, -1.0F, 1.0F);
-    const xt::xarray<float> second_k = make_host(5U, -1.0F, 1.0F);
-    const xt::xarray<float> second_v = make_host_value(6U);
-    const Inputs second{make(second_q), make(second_k), make(second_v)};
-    auto run = [&](const metal::SDPAForwardProgramConfig& cfg, const Inputs& in) {
-        return core::to_xtensor(metal::sdpa_fw(
-                                    in.query,
-                                    in.key,
-                                    in.value,
-                                    metal::AttentionMaskType::Causal,
-                                    std::nullopt,
-                                    0.0F,
-                                    false,
-                                    std::nullopt,
-                                    cfg)[0]
-                                    .value());
+    const SplitHostInputs second_host = split_host_inputs(shape, 4U);
+    const SplitDeviceInputs second = on_device(second_host);
+    const xt::xarray<float>&second_q = second_host.query, &second_k = second_host.key, &second_v = second_host.value;
+    auto run = [&](const metal::SDPAForwardProgramConfig& cfg, const SplitDeviceInputs& in) {
+        return run_causal_split(cfg, in);
     };
     const metal::SDPAForwardProgramConfig a{.q_chunk_size = 64U, .k_chunk_size = 128U};
     const metal::SDPAForwardProgramConfig a_unsplit{.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 1U};
@@ -3311,19 +3339,6 @@ uint64_t schedule_signature(const ttml::metal::ops::sdpa_fw::device::SDPAForward
     return h;
 }
 
-uint32_t most_mergers_on_a_core(const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& s) {
-    using namespace ttml::metal::ops::sdpa_fw::device;
-    uint32_t most = 0;
-    for (const auto& units : s.per_core) {
-        uint32_t n = 0;
-        for (const auto& u : units) {
-            n += u.role == UnitRole::Merger ? 1U : 0U;
-        }
-        most = std::max(most, n);
-    }
-    return most;
-}
-
 }  // namespace
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_LongRows_Fp64Reference) {
@@ -3388,16 +3403,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ScheduleFuzz) {
     // satisfy check_schedule, be deterministic, drop idle trailing cores and carry a prediction.
     using namespace ttml::metal::ops::sdpa_fw::device;
     std::mt19937 rng(20261102U);
-    auto pick = [&](const std::vector<uint32_t>& v) { return v[rng() % v.size()]; };
-    auto divisors = [](uint32_t n) {
-        std::vector<uint32_t> d;
-        for (uint32_t i = 1; i <= n; ++i) {
-            if (n % i == 0U) {
-                d.push_back(i);
-            }
-        }
-        return d;
-    };
+    auto pick = [&](const std::vector<uint32_t>& v) { return pick_from(rng, v); };
     const std::vector<uint32_t> st_choices{1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 512};
     const std::vector<uint32_t> cores_choices{1, 2, 3, 4, 5, 7, 8, 13, 16, 31, 32, 64, 100, 120, 130};
     const std::vector<uint32_t> pieces_choices{1, 2, 3, 4, 5, 8, 16, 63};
@@ -3539,16 +3545,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_PickFuzz) {
     // exactly when the schedule cuts.
     using namespace ttml::metal::ops::sdpa_fw::device;
     std::mt19937 rng(42U);
-    auto pick = [&](const std::vector<uint32_t>& v) { return v[rng() % v.size()]; };
-    auto divisors = [](uint32_t n) {
-        std::vector<uint32_t> d;
-        for (uint32_t i = 1; i <= n; ++i) {
-            if (n % i == 0U) {
-                d.push_back(i);
-            }
-        }
-        return d;
-    };
+    auto pick = [&](const std::vector<uint32_t>& v) { return pick_from(rng, v); };
     const std::vector<uint32_t> st_choices{1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 256, 512, 1024};
     const std::vector<uint32_t> grid_choices{1, 2, 8, 64, 120, 130, 140};
     const std::vector<uint64_t> budgets{200'000U, 600'000U, 1'300'000U, 1'400'000U};
@@ -3687,7 +3684,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_OneTileEverything) 
         .test_name = "SplitEdge_OneTileEverything"};
     const ChunkKnobs knobs{32, 32, 1, 8, 0};
     SDPATestConfig split = base;
-    split.program_config = program_config_of(knobs);
+    split.program_config = knobs;
     const auto schedule = host_schedule(split);
     fmt::print(
         "SplitEdge_OneTileEverything: {} slots, most mergers on a core {}\n",
@@ -3822,34 +3819,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitNoProgramCache) {
     auto* device = &autograd::ctx().get_device();
     device->disable_and_clear_program_cache();
     const std::array<std::size_t, 4> shape{1U, 2U, 1024U, 64U};
-    auto make = [&](uint32_t seed, float lo, float hi) {
-        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, lo, hi, seed), device);
-    };
-    // V in [0, 1] with the early keys near 0.1 and the late ones near 0.9: see expect_split_matches_unsplit.
-    auto make_value = [&](uint32_t seed) {
-        xt::xarray<float> value = test_utils::make_uniform_xarray<float>(shape, 0.0F, 0.25F, seed);
-        for (std::size_t s = 0; s < shape[2]; ++s) {
-            xt::view(value, xt::all(), xt::all(), s, xt::all()) += 0.75F * static_cast<float>(s) / shape[2];
-        }
-        return core::from_xtensor(value, device);
-    };
-    struct Inputs {
-        ttnn::Tensor query, key, value;
-    };
-    const Inputs first{make(11U, -1.0F, 1.0F), make(12U, -1.0F, 1.0F), make_value(13U)};
-    const Inputs second{make(14U, -1.0F, 1.0F), make(15U, -1.0F, 1.0F), make_value(16U)};
-    auto run = [&](const metal::SDPAForwardProgramConfig& cfg, const Inputs& in) {
-        return core::to_xtensor(metal::sdpa_fw(
-                                    in.query,
-                                    in.key,
-                                    in.value,
-                                    metal::AttentionMaskType::Causal,
-                                    std::nullopt,
-                                    0.0F,
-                                    false,
-                                    std::nullopt,
-                                    cfg)[0]
-                                    .value());
+    const SplitDeviceInputs first = on_device(split_host_inputs(shape, 11U));
+    const SplitDeviceInputs second = on_device(split_host_inputs(shape, 14U));
+    auto run = [&](const metal::SDPAForwardProgramConfig& cfg, const SplitDeviceInputs& in) {
+        return run_causal_split(cfg, in);
     };
     const metal::SDPAForwardProgramConfig split{.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 4U};
     const metal::SDPAForwardProgramConfig unsplit{.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 1U};
@@ -3911,14 +3884,7 @@ TEST_F(SDPAForwardTwoChipTest, SDPAForwardTest_ChunkKnobs_SplitOnTwoChips) {
     const std::array<std::size_t, 4> shape{kBatch, kHeads, kS, kD};
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /* dim */ 0);
     const auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, /* dim */ 0);
-    const xt::xarray<float> query_host = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 31U));
-    const xt::xarray<float> key_host = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 32U));
-    // V in [0, 1] with the early keys near 0.1 and the late ones near 0.9: see expect_split_matches_unsplit.
-    xt::xarray<float> value_host = test_utils::make_uniform_xarray<float>(shape, 0.0F, 0.25F, 33U);
-    for (std::size_t s = 0; s < kS; ++s) {
-        xt::view(value_host, xt::all(), xt::all(), s, xt::all()) += 0.75F * static_cast<float>(s) / kS;
-    }
-    value_host = round_to_bf16(value_host);
+    const auto [query_host, key_host, value_host] = split_host_inputs(shape, 31U);
     const ttnn::Tensor query = core::from_xtensor(query_host, device, ttnn::Layout::TILE, mapper.get());
     const ttnn::Tensor key = core::from_xtensor(key_host, device, ttnn::Layout::TILE, mapper.get());
     const ttnn::Tensor value = core::from_xtensor(value_host, device, ttnn::Layout::TILE, mapper.get());
