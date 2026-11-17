@@ -164,14 +164,8 @@ void kernel_main() {
         if (unit.role == kUnitMerger) {
             read_gate(unit.item);  // only needed by finalize, so it goes out before the wait
             // The senders bump this core's semaphore once each after their partial landed in scratch.
-            static_assert(sdpa_items::kMaxMergersPerCore == 4U, "the semaphore ids are compile args 8..11");
-            const uint32_t sem_ids[sdpa_items::kMaxMergersPerCore] = {
-                get_compile_time_arg_val(8),
-                get_compile_time_arg_val(9),
-                get_compile_time_arg_val(10),
-                get_compile_time_arg_val(11)};
-            volatile tt_l1_ptr uint32_t* sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ids[unit.sem_idx]));
+            volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                work_unit_semaphore_addr</* first_sem_arg */ 8>(unit.sem_idx));
             noc_semaphore_wait_min(sem, unit.num_partials);
             noc_semaphore_set(sem, 0);
             // Partial rows come in kPartialRowsPerBatch at a time, one barrier each; cb_partial_in holds

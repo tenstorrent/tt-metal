@@ -116,12 +116,7 @@ void kernel_main() {
 #ifdef SPLIT_UNITS
         if (unit.role == kUnitSender) {
             // The partial state goes to its scratch slot; once it has landed, the merger's semaphore is bumped.
-            static_assert(sdpa_items::kMaxMergersPerCore == 4U, "the semaphore ids are compile args 5..8");
-            const uint32_t sem_ids[sdpa_items::kMaxMergersPerCore] = {
-                get_compile_time_arg_val(5),
-                get_compile_time_arg_val(6),
-                get_compile_time_arg_val(7),
-                get_compile_time_arg_val(8)};
+            const uint32_t merger_sem = work_unit_semaphore_addr</* first_sem_arg */ 5>(unit.sem_idx);
             for (uint32_t r = 0; r < rows; r += kPartialRowsPerBatch) {
                 write_tiles_by_row(
                     cb_partial_out,
@@ -131,7 +126,7 @@ void kernel_main() {
                     partial_tile_bytes,
                     kPartialRowsPerBatch * partial_row_tiles);
             }
-            noc_semaphore_inc(get_noc_addr(unit.merger_x, unit.merger_y, get_semaphore(sem_ids[unit.sem_idx])), 1);
+            noc_semaphore_inc(get_noc_addr(unit.merger_x, unit.merger_y, merger_sem), 1);
             noc_async_atomic_barrier();  // the kernel must not end with the increment in flight
             return;
         }
