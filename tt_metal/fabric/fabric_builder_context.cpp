@@ -61,7 +61,8 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment([[maybe_unused]
         .max_sender_counts = max_senders,
         .max_receiver_counts = max_receivers,
         .vc2_present = intermesh_vc_config_.requires_vc2,
-        .tensix_relay_present = fabric_context_.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::UDM};
+        .tensix_relay_present = fabric_context_.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::UDM,
+        .vc2_forwards = intermesh_vc_config_.vc2_forwards};
     return make_stream_assignment(stream_requirements(placement, plan));
 }
 
@@ -396,13 +397,24 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     // VC2 is independent of VC1 — only requires: RT option + Blackhole + no UDM/mux + 2D topology
     // (2D topology check happens in initialize_vc2_mappings, not here)
-    if (fabric_context_.get_rtoptions().get_enable_fabric_vc2()) {
+    // inter-domain traffic rides VC2
+    if (fabric_context_.get_rtoptions().get_enable_fabric_vc2() ||
+        fabric_context_.get_rtoptions().get_fabric_inter_domain()) {
         auto arch = fabric_context_.get_hal().get_arch();
         auto tensix_config = fabric_context_.get_fabric_tensix_config();
         bool is_blackhole = (arch == tt::ARCH::BLACKHOLE);
         bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
         bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
         config.requires_vc2 = is_blackhole && !is_udm_mode && !is_mux_extension;
+    }
+    // Inter-domain: VC2 spans the domain. Not yet with VC1 (multi-mesh domains): there VC2 only delivers, so traffic
+    // from another domain lands on the chip across the link.
+    if (fabric_context_.get_rtoptions().get_fabric_inter_domain()) {
+        TT_FATAL(config.requires_vc2, "inter-domain fabric needs VC2: Blackhole, no UDM or mux");
+        config.vc2_forwards = !config.requires_vc1;
+        if (config.requires_vc1) {
+            log_warning(tt::LogFabric, "inter-domain on a multi-mesh fabric: VC2 doesn't span the domain");
+        }
     }
 
     // The fabric router runs neither Tensix extension (mux, UDM) with an inter-mesh VC.

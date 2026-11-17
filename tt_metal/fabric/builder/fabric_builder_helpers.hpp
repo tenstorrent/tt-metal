@@ -130,7 +130,7 @@ inline uint32_t get_downstream_sender_channel_for_vc(
         return 1;  // 1D: sender channel 1 for forwarding
     }
     const size_t compact = direction_compact_index(upstream_direction, downstream_direction);
-    return vc == 0 ? static_cast<uint32_t>(1 + compact) : static_cast<uint32_t>(compact);
+    return vc != 1 ? static_cast<uint32_t>(1 + compact) : static_cast<uint32_t>(compact);  // VC0, VC2: worker first
 }
 
 // Helper function to determine perpendicular directions

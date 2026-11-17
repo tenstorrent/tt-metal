@@ -35,6 +35,7 @@ struct UnusedLink {
     FabricNodeId node{MeshId{0}, 0};
     chan_id_t chan = 0;
     uint64_t peer_asic = 0;
+    chan_id_t peer_chan = 0;
     bool peer_in_domain = false;  // the peer chip is in this fabric's meshes
     bool trained = true;          // false: down at build, or an FSD cable that never trained
 };
@@ -55,5 +56,8 @@ std::vector<PerimeterPort> perimeter_ports(
     const std::vector<Port>& ports,
     const MeshGraph& mesh_graph,
     Topology topology);
+
+// Trained N/E/S/W perimeter ports as graph ports: INTERDOMAIN, their peer left open (the port's own node).
+std::vector<Port> ports_from_perimeter(const std::vector<PerimeterPort>& perimeter);
 
 }  // namespace tt::tt_fabric::graph

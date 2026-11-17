@@ -22,7 +22,7 @@ namespace {
 std::map<FabricNodeId, PerDirectionCapabilities> chip_capabilities(const LogicalGraph& g) {
     std::map<FabricNodeId, PerDirectionCapabilities> chips;
     for (const auto& r : g.routers) {
-        chips[r.port.node].at(*r.port.direction) = r.port.capability;
+        chips[r.port.node].at(*r.port.direction) = stock_capability(r.port.capability);
     }
     return chips;
 }

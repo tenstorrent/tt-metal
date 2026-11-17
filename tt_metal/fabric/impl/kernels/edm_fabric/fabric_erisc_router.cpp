@@ -174,6 +174,7 @@ and `router/router_receiver.hpp`.
 #include "api/dataflow/dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router/router_inter_domain.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_single_erisc.hpp"
@@ -193,6 +194,23 @@ FORCE_INLINE void run_loop(Downstreams& downstreams) {
         receiver::run(downstreams);
     } else {
         run_idle();
+    }
+}
+
+// An inter-domain router's life after init (one ERISC): DRAIN, then per host connect, the loop until the host
+// disconnects.
+template <typename Downstreams>
+FORCE_INLINE void run_inter_domain(const RuntimeArgs& args, Downstreams& downstreams) {
+    single_erisc::SenderState sender_state;
+    sender::start_forwarding_channels(sender_state.states);
+    while (inter_domain::drain()) {
+        if (inter_domain::connect()) {
+            single_erisc::run_connected(sender_state, downstreams);
+            if (terminating()) {
+                break;
+            }
+            inter_domain::disconnect(args);
+        }
     }
 }
 
@@ -223,6 +241,9 @@ void kernel_main() {
     finish_phase<Phase::SETUP_DONE>();
 
     // Phase: handshakes.
+    if constexpr (is_inter_domain_router) {
+        inter_domain::set_state(InterDomainState::LOCAL_HANDSHAKE);
+    }
     run_handshakes();
     finish_phase<Phase::HANDSHAKE_DONE>();
 
@@ -248,7 +269,11 @@ void kernel_main() {
         router_state()->state = RouterState::INITIALIZING;
     }
 
-    run_loop(downstreams);
+    if constexpr (is_inter_domain_router) {
+        run_inter_domain(args, downstreams);
+    } else {
+        run_loop(downstreams);
+    }
     WAYPOINT("LPDN");
     teardown();
     WAYPOINT("TEDN");

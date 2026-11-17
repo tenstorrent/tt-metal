@@ -21,13 +21,13 @@ std::vector<std::string> find_problems(
         return g.routers[ch.router].id + ".vc" + std::to_string(ch.vc) + "." + channel_name(ch);
     };
 
-    std::vector<std::vector<const LogicalEdge*>> eth_out(g.channels.size());
+    std::vector<std::vector<const LogicalEdge*>> link_out(g.channels.size());  // eth or dynamic
     std::vector<bool> noc_fed(g.channels.size(), false);
     for (const auto& e : g.edges) {
-        if (e.transport == Transport::Eth) {
-            eth_out[e.from].push_back(&e);
-        } else {
+        if (e.transport == Transport::Noc) {
             noc_fed[e.to] = true;
+        } else {
+            link_out[e.from].push_back(&e);
         }
     }
 
@@ -41,14 +41,26 @@ std::vector<std::string> find_problems(
             continue;
         }
         ++senders;
-        for (const auto* e : eth_out[c]) {
+        // a link sender has one eth edge to its peer's receiver; a perimeter sender one dynamic edge, to its own
+        const bool perimeter = router.port.capability == EdgeCapability::INTERDOMAIN;
+        const Transport link = perimeter ? Transport::Dynamic : Transport::Eth;
+        size_t links = 0;
+        for (const auto* e : link_out[c]) {
+            if (e->transport != link) {
+                problems.push_back(
+                    where(c) +
+                    (perimeter ? ": perimeter sender with an eth edge" : ": dynamic edge off the perimeter"));
+                continue;
+            }
+            ++links;
             const auto& to = g.channels[e->to];
-            if (to.kind != ChannelKind::Receiver || to.vc != ch.vc || !router.peer || to.router != *router.peer) {
-                problems.push_back(where(c) + ": eth edge does not reach the peer's receiver on its VC");
+            const auto far = perimeter ? std::optional<RouterIndex>{ch.router} : router.peer;
+            if (to.kind != ChannelKind::Receiver || to.vc != ch.vc || !far || to.router != *far) {
+                problems.push_back(where(c) + ": link edge does not reach the far receiver on its VC");
             }
         }
-        if (eth_out[c].size() != 1) {
-            problems.push_back(where(c) + ": expected one eth edge, found " + std::to_string(eth_out[c].size()));
+        if (links != 1) {
+            problems.push_back(where(c) + ": expected one link edge, found " + std::to_string(links));
         }
         if (!ch.injection && !noc_fed[c]) {
             problems.push_back(where(c) + ": forwarding sender with no inbound noc edge");

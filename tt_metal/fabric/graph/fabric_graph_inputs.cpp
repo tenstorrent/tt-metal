@@ -149,18 +149,18 @@ std::vector<UnusedLink> unused_links(
         for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(*node)) {
             used.insert(chan);
         }
-        std::map<chan_id_t, uint64_t> live;  // every trained chan -> peer chip
+        std::map<chan_id_t, std::pair<uint64_t, chan_id_t>> live;  // every trained chan -> peer chip and chan
         if (auto it = local.find(chip); it != local.end()) {
             for (const auto& [chan, peer] : it->second) {
-                live[chan] = asics.at(std::get<0>(peer));
+                live[chan] = {asics.at(std::get<0>(peer)), std::get<1>(peer)};
             }
         }
         if (auto it = remote.find(chip); it != remote.end()) {
             for (const auto& [chan, peer] : it->second) {
-                live[chan] = std::get<0>(peer);
+                live[chan] = {std::get<0>(peer), std::get<1>(peer)};
             }
         }
-        for (const auto& [chan, peer_asic] : live) {
+        for (const auto& [chan, peer] : live) {
             if (used.contains(chan)) {
                 continue;
             }
@@ -168,8 +168,9 @@ std::vector<UnusedLink> unused_links(
             links.push_back(UnusedLink{
                 .node = *node,
                 .chan = chan,
-                .peer_asic = peer_asic,
-                .peer_in_domain = node_of(peer_asic).has_value(),
+                .peer_asic = peer.first,
+                .peer_chan = peer.second,
+                .peer_in_domain = node_of(peer.first).has_value(),
                 .trained = cluster.is_ethernet_link_up(chip, core)});
         }
 
@@ -186,7 +187,7 @@ std::vector<UnusedLink> unused_links(
             uint64_t key = peer_id ? **peer_id : std::hash<PhysicalNodeId>{}(peer_address);
             for (const auto& c : cables) {
                 if (auto it = live.find(c.src_chan); it != live.end()) {
-                    key = it->second;
+                    key = it->second.first;
                 }
             }
             for (const auto& c : cables) {
@@ -195,6 +196,7 @@ std::vector<UnusedLink> unused_links(
                         .node = *node,
                         .chan = c.src_chan,
                         .peer_asic = key,
+                        .peer_chan = static_cast<chan_id_t>(c.dst_chan),
                         .peer_in_domain = mapper.find_fabric_node_id_from_physical_node_id(peer_address).has_value(),
                         .trained = false});
                 }
@@ -265,12 +267,31 @@ std::vector<PerimeterPort> perimeter_ports(
             .eth_chan = l.chan,
             .direction = PortDirection{*it->second},
             .plane = planes[{l.node, *it->second}]++,
-            .link_trained = l.trained});
+            .link_trained = l.trained,
+            .peer_asic = l.peer_asic,
+            .peer_chan = l.peer_chan});
     }
     std::sort(out.begin(), out.end(), [](const PerimeterPort& a, const PerimeterPort& b) {
         return std::tie(a.node, a.direction, a.plane) < std::tie(b.node, b.direction, b.plane);
     });
     return out;
+}
+
+std::vector<Port> ports_from_perimeter(const std::vector<PerimeterPort>& perimeter) {
+    std::vector<Port> ports;
+    for (const auto& p : perimeter) {
+        // no router on a dead link, or (not yet) on Z: recorded only, and connect on it fails
+        if (!p.link_trained || *p.direction == RoutingDirection::Z) {
+            continue;
+        }
+        ports.push_back(Port{
+            .node = p.node,
+            .direction = p.direction,
+            .plane = p.plane,
+            .peer = p.node,
+            .capability = EdgeCapability::INTERDOMAIN});
+    }
+    return ports;
 }
 
 }  // namespace tt::tt_fabric::graph

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/experimental/fabric/inter_domain.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
@@ -54,6 +55,7 @@ struct IntermeshVCConfig {
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
     bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
+    bool vc2_forwards = false;                      // inter-domain: VC2 spans the domain, routers forward on it
     // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1: inter-mesh traffic lands on VC0 and goes only N or S from the
     // landing chip. Deadlock-free only for traffic that cannot form a buffer cycle across meshes.
     bool intermesh_vc_disabled = false;
@@ -190,6 +192,13 @@ public:
         return router_channel_layouts_.find(node, eth_chan);
     }
 
+    // ============ Inter-domain ============
+    // This host's perimeter ports for the current launch (inter-domain fabrics only), set by the build session.
+    void set_inter_domain_ports(std::vector<experimental::InterDomainPort> ports) {
+        inter_domain_ports_ = std::move(ports);
+    }
+    const std::vector<experimental::InterDomainPort>& get_inter_domain_ports() const { return inter_domain_ports_; }
+
     // ============ Diagnostic Buffer Map ============
     /** Returns the diagnostic buffer locations for all routers.
      *  The layout is identical across all router cores in the fabric. */
@@ -256,6 +265,8 @@ private:
     std::vector<uint32_t> num_initialized_routers_;
 
     RouterChannelLayouts router_channel_layouts_;
+
+    std::vector<experimental::InterDomainPort> inter_domain_ports_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(

@@ -126,6 +126,9 @@ void FabricBuilder::create_routers() {
             routers_.insert({eth_chan, make_router(location)});
         }
     }
+    for (const auto& location : perimeter_router_locations()) {
+        routers_.insert({location.eth_chan, make_router(location)});
+    }
 
     // Configure dispatch links
     if (device_has_dispatch_tunnel_) {
