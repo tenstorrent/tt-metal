@@ -1106,7 +1106,7 @@ class TtLlamaAttention(LightweightModule):
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv,
             cluster_axis=1,
-            num_links=prefill_num_links,
+            num_links=self.model_config["PREFILL_LINKS"]("ATTN_QKV", prefill_num_links),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
             batch_size=batch_size,
@@ -1272,7 +1272,7 @@ class TtLlamaAttention(LightweightModule):
                 attn_output_84SD = self.tt_ccl.line_all_reduce(
                     attn_output_84SD,
                     cluster_axis=1,
-                    num_links=prefill_num_links,
+                    num_links=self.model_config["PREFILL_LINKS"]("ATTN_SDPA", prefill_num_links),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     buffer_key="ATTN_REPLICATE",
                 )
@@ -1374,7 +1374,7 @@ class TtLlamaAttention(LightweightModule):
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
-            num_links=prefill_num_links,
+            num_links=self.model_config["PREFILL_LINKS"]("ATTN_OUT", prefill_num_links),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="WO_AG" if seq_len <= 4096 else "WO",
         )

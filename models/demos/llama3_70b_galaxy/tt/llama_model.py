@@ -221,6 +221,9 @@ class TtTransformer(LightweightModule):
                 # A decode run may have left the prefetcher (worker/prefetcher) sub-device manager loaded;
                 # clear it so prefill + sampling run on the default sub-device.
                 self.mesh_device.clear_loaded_sub_device_manager()
+                # Free the decode global CB now: prefill needs that L1 for its static CBs.
+                if self.prefetcher_setup is not None:
+                    self.prefetcher_setup.global_circular_buffer = None
             self.prefetcher_setup = None
             self.mesh_sub_device_manager_id_prefill = mesh_sub_device_manager_id_prefill
             if self.tt_ccl_prefill is not None:
@@ -781,7 +784,7 @@ class TtTransformer(LightweightModule):
                 dim=3,
                 num_links=3
                 if (self.use_prefetcher and not getattr(self.args, "is_blackhole", False))
-                else self.model_config["GALAXY_PREFILL_NUM_LINKS"],
+                else self.model_config["PREFILL_LINKS"]("LMHEAD", self.model_config["GALAXY_PREFILL_NUM_LINKS"]),
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",

@@ -270,6 +270,14 @@ class Generator(WarmupForwardMixin):
         for ccl_obj in ccl_refs:
             ccl_obj._prefill_column_mask = tt_column_mask
 
+    def _batched_prefill_allowed(self):
+        # BH prefetcher: the decode global CB stays allocated across the switch back to prefill, and the
+        # 32-user batched prefill needs static CBs up to ~967 KB, which overlaps it. Single-user prefill fits.
+        args = self.model_args
+        if getattr(args, "is_blackhole", False) and getattr(args, "use_prefetcher", False):
+            return os.environ.get("LLAMA_BH_BATCHED_PREFILL", "0") == "1"
+        return True
+
     def prefill_warmup(
         self,
         tokens: torch.Tensor,
@@ -331,7 +339,7 @@ class Generator(WarmupForwardMixin):
         # Phase 1: sp0 traces (no prefix caching) - batch 1 and 32
         for warmup_sequence_length in warmup_sequence_lengths:
             # Capture trace for both
-            for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
+            for batch in (1, 32) if self._batched_prefill_allowed() else (1,):  # TODO add proper support for batched prefill == b-32
                 # For batched prefill this needs to be *32
                 if batch == 32 and warmup_sequence_length >= 4096:
                     # For batched prefill max batch sequence length is 2048 or lower (128k limit), so we skip warmup for sequence lengths >= 4096
@@ -598,6 +606,7 @@ class Generator(WarmupForwardMixin):
             and prefill_seq_lens[0] == 128
             and (start_pos is None or all(x == 0 for x in start_pos))
             and not requires_slot_stable_prefill
+            and self._batched_prefill_allowed()
         ):
             use_batched_prefill = True
 
@@ -616,6 +625,7 @@ class Generator(WarmupForwardMixin):
             and not requires_slot_stable_prefill
             and 128 in prefill_seq_lens
             and len(set(prefill_seq_lens)) > 1
+            and self._batched_prefill_allowed()
         )
 
         prefill_work_items = []

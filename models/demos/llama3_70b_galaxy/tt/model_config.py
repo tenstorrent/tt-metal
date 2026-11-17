@@ -737,6 +737,8 @@ class TtModelArgs:
         else:
             self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
             self.model_config["GALAXY_PREFILL_NUM_LINKS"] = self.model_config["GALAXY_NUM_LINKS"]
+        # GALAXY_PREFILL_LINKS_<SITE> overrides the prefill link count of one collective, e.g. ATTN_QKV or MLP_W2OUT.
+        self.model_config["PREFILL_LINKS"] = lambda site, default: int(os.getenv(f"GALAXY_PREFILL_LINKS_{site}", default))
         self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
