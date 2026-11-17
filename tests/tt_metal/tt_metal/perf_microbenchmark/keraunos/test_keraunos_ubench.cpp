@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -54,7 +55,6 @@
 #include <tuple>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -66,6 +66,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tests/tt_metal/tt_metal/context/keraunos_session.hpp"
 #include "tests/tt_metal/tt_metal/context/mimir_contract.hpp"
 #include "tt_metal/tt_metal/test_kernels/misc/keraunos_ubench/keraunos_ubench.h"
 
@@ -73,6 +74,7 @@ namespace tt::tt_metal::keraunos_ubench_test {
 namespace {
 
 using namespace ::tt::tt_metal::mimir_contract;
+using namespace ::tt::tt_metal::keraunos_session;
 using namespace ::keraunos_ubench;
 
 constexpr const char* kKernelDir = "tests/tt_metal/tt_metal/test_kernels/misc/keraunos_ubench/";
@@ -156,13 +158,8 @@ std::string format_result(const Result& r) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Session: one device open for the whole suite.
+// Session
 // ---------------------------------------------------------------------------------------------------------------
-
-struct KeraunosCore {
-    CoreCoord logical;
-    uint32_t hsio = 0;
-};
 
 // A hart whose result block the host watches.
 struct Watched {
@@ -170,50 +167,18 @@ struct Watched {
     uint32_t hart = 0;
 };
 
-class Session {
+// The shared Session plus this benchmark's layout: result blocks, the control region, and the three addresses of a
+// flat SRAM offset.
+class UbenchSession : public Session {
 public:
-    Session() {
-        mesh_ = distributed::MeshDevice::create_unit_mesh(0);
-        device_ = &slow_dispatch::physical_device_from_unit_mesh(*mesh_);
-        const auto& hal = MetalContext::instance().hal();
-        sram_noc_base_ = hal.get_dev_noc_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
-        // Above the Ethernet-link slot and router regions, which sit inside IDLE_ETH's unreserved region.
-        base_ = (MEM_IERISC_ROUTER_UNRESERVED_BASE + 63) & ~63u;
-        TT_FATAL(
-            base_ >= hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED) &&
-                base_ + kRegionBytes <= MEM_IERISC_L1_SIZE,
-            "Benchmark region 0x{:x} + 0x{:x} does not fit the IDLE_ETH unreserved region",
-            base_,
-            kRegionBytes);
-        const auto& chiplet = soc_desc_of(device_).get_arch_descriptor().get_keraunos();
-        tile_stride_ = chiplet.tile_stride.value_or(kDefaultHsioTileStride);
-    }
-
-    uint32_t base() const { return base_; }
-    uint64_t tile_stride() const { return tile_stride_; }
-
-    // CCE0 of HSIO tile @p hsio, or nullopt when the descriptor does not list it.
-    std::optional<KeraunosCore> core(uint32_t hsio) const {
-        const auto& chiplet = soc_desc_of(device_).get_arch_descriptor().get_keraunos();
-        for (const auto& c : chiplet.cores) {
-            if (c.hsio == hsio && c.cce == 0) {
-                const CoreCoord logical =
-                    soc_desc_of(device_).get_logical_ethernet_core_from_physical({c.coord.x, c.coord.y});
-                if (!device_->ethernet_cores().contains(logical)) {
-                    return std::nullopt;
-                }
-                return KeraunosCore{logical, hsio};
-            }
-        }
-        return std::nullopt;
-    }
+    UbenchSession() : Session(kRegionBytes) {}
 
     // Addresses of flat offset @p off in @p core's SRAM.
     uint64_t idma_addr(const KeraunosCore& core, uint32_t off) const {
-        return hsio_local_addr(core.hsio, tile_stride_, off);
+        return hsio_local_addr(core.hsio, tile_stride(), off);
     }
     uint64_t global_addr(const KeraunosCore& core, uint32_t off) const {
-        return hsio_global_addr(core.hsio, tile_stride_, off);
+        return hsio_global_addr(core.hsio, tile_stride(), off);
     }
     // The CPU address a kernel on @p from uses for @p off on @p to: the uncached alias on the same core, the global
     // address on another tile.
@@ -221,63 +186,27 @@ public:
         return from.hsio == to.hsio ? static_cast<uint64_t>(MEM_IERISC_UNCACHED_BASE) + off : global_addr(to, off);
     }
 
-    void write(const KeraunosCore& core, uint32_t offset, const std::vector<uint32_t>& words) {
-        write_eth_sram(device_, core.logical, sram_noc_base_ + offset, words.data(), words.size() * sizeof(uint32_t));
-    }
-    std::vector<uint32_t> read(const KeraunosCore& core, uint32_t offset, uint32_t num_words) {
-        std::vector<uint32_t> words(num_words, 0);
-        read_eth_sram(device_, core.logical, sram_noc_base_ + offset, words.data(), num_words * sizeof(uint32_t));
-        return words;
-    }
     Result result(const KeraunosCore& core, uint32_t hart) {
-        Result value{};
-        read_eth_sram(device_, core.logical, sram_noc_base_ + base_ + result_offset(hart), &value, sizeof(value));
-        return value;
+        return read_struct<Result>(core, base() + result_offset(hart));
     }
 
     // Zeroes the result blocks, gate and mailboxes of @p core.
     void clear_control(const KeraunosCore& core) {
-        write(core, base_, std::vector<uint32_t>(kSamplesOffset / sizeof(uint32_t), 0));
+        write(core, base(), std::vector<uint32_t>(kSamplesOffset / sizeof(uint32_t), 0));
     }
 
-    // eth_cce_send.h's EthLink: the link peer's HSIO tile, then the valid word.
-    void write_eth_link(const KeraunosCore& core, const KeraunosCore& peer) {
-        write(core, MEM_IERISC_FABRIC_ETH_LINK_BASE, {peer.hsio, MEM_IERISC_FABRIC_ETH_LINK_VALID, 0, 0});
-    }
-
-    // Launches without blocking, polls each watched hart's status until it leaves running or the host timeout
-    // passes, then waits for the program. On a host timeout the harts are hung: the result blocks are printed and the
-    // process exits, because nothing after it could reach the device.
+    // Session::run over the watched harts' status words; a hang prints every watched result block.
     void run(Program& program, const std::vector<Watched>& watched) {
-        distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(mesh_->shape()), std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/false);
-
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(kHostTimeoutS);
+        std::vector<StatusWord> words;
         for (const Watched& w : watched) {
-            for (uint32_t status = result(w.core, w.hart).status; status == kStatusRunning || status == 0;
-                 status = result(w.core, w.hart).status) {
-                if (std::chrono::steady_clock::now() > deadline) {
-                    fmt::print(stderr, "Keraunos ubench: host timeout; device state follows\n");
-                    for (const Watched& d : watched) {
-                        fmt::print(stderr, "  hsio {} {}\n", d.core.hsio, format_result(result(d.core, d.hart)));
-                    }
-                    fmt::print(stderr, "Exiting: the kernels are stuck. Reset the emulator job before the next run.\n");
-                    std::fflush(stderr);
-                    std::_Exit(3);
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            }
+            words.push_back({w.core, base() + result_offset(w.hart) + static_cast<uint32_t>(offsetof(Result, status))});
         }
-        distributed::Finish(mesh_->mesh_command_queue());
+        Session::run(program, words, kStatusRunning, std::chrono::seconds(kHostTimeoutS), [&] {
+            for (const Watched& d : watched) {
+                fmt::print(stderr, "  hsio {} {}\n", d.core.hsio, format_result(result(d.core, d.hart)));
+            }
+        });
     }
-
-private:
-    std::shared_ptr<distributed::MeshDevice> mesh_;
-    IDevice* device_ = nullptr;
-    uint64_t sram_noc_base_ = 0;
-    uint32_t base_ = 0;
-    uint64_t tile_stride_ = kDefaultHsioTileStride;
 };
 
 KernelHandle create(Program& program, const char* name, const KeraunosCore& core, uint32_t hart) {
@@ -319,11 +248,11 @@ protected:
     void SetUp() override {
         skip_unless_ethernet_package();
         if (!session_) {
-            session_ = std::make_unique<Session>();
+            session_ = std::make_unique<UbenchSession>();
         }
     }
 
-    Session& s() { return *session_; }
+    UbenchSession& s() { return *session_; }
 
     KeraunosCore require_core(uint32_t hsio) {
         const auto c = s().core(hsio);
@@ -339,7 +268,7 @@ protected:
     // A start-gate value no earlier launch of this process used (gate() in keraunos_ubench.h).
     static uint32_t next_epoch() { return ++epoch_; }
 
-    static inline std::unique_ptr<Session> session_;
+    static inline std::unique_ptr<UbenchSession> session_;
     static inline uint32_t epoch_ = 0;
 };
 
@@ -413,7 +342,7 @@ struct LatencyRun {
 };
 
 // Runs one ping-pong between @p a (initiator) and @p b (responder), logs it and writes its record.
-void run_latency(Session& s, const LatencyEnd& a, const LatencyEnd& b, const LatencyRun& run) {
+void run_latency(UbenchSession& s, const LatencyEnd& a, const LatencyEnd& b, const LatencyRun& run) {
     const uint32_t base = s.base();
     const uint32_t warmup = kLatencyWarmup;
     const uint32_t samples = kLatencySamples;

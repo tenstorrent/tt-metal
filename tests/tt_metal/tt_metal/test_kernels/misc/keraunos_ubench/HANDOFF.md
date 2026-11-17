@@ -30,7 +30,8 @@ Port the X280 bandwidth and latency microbenchmarks (tt-metal PR #60692, `kzhao/
 | `.../keraunos_ubench/latency.cpp` | Ping-pong initiator and responder; transport is CpuStore, Idma or Eth |
 | `.../keraunos_ubench/transport_bw.cpp` | Per-hart bandwidth: IdmaMetal, IdmaLean or CpuStore64; start gate across harts |
 | `.../keraunos_ubench/eth_bw_sender.cpp`, `eth_bw_receiver.cpp` | Streamed Ethernet sends with a handshake and a closing flag |
-| `tests/tt_metal/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench.cpp` | Host side: `Session` (one device open for the whole binary), one parameterized test per sweep point, statistics, data checks and the result log. Its header comment lists the run filters and the environment variables |
+| `tests/tt_metal/tt_metal/context/keraunos_session.hpp` | `Session`, shared with `KeraunosEthSend`: device open, CCE0 lookup per HSIO tile, SRAM read and write, the Ethernet-link slot, and launch with a hang watchdog. Fails if the descriptor has no Keraunos `tile_stride` |
+| `tests/tt_metal/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench.cpp` | Host side: `UbenchSession` (the shared `Session` plus result blocks and address helpers; one device open for the whole binary), one parameterized test per sweep point, statistics, data checks and the result log. Its header comment lists the run filters and the environment variables |
 | `tests/tt_metal/tt_metal/perf_microbenchmark/sources.cmake`, `CMakeLists.txt` | Builds the `test_keraunos_ubench` executable under `TT_UMD_BUILD_GRENDEL_JTAG`, with the quasar include dir for `dev_mem_map.h` |
 
 ## Tests
@@ -92,7 +93,7 @@ If the host times out, a kernel is hung. The test prints every result block and 
 2. **`IdmaLean`** assumes command buffer 0 keeps its VC, TRID and copy-mode settings across issues, so that only src, dst and len need setting per transfer. No existing test confirms this. If it misbehaves, compare it against `IdmaMetal`.
 3. **On-chip iDMA addressing** uses the chiplet-local view `0x2000_0000 + hsio*tile_stride + 0x280_0000 + off`, the same as `eth_cce_send.h`'s `sram_local_addr()`. **CPU addressing** uses the global window `0x12_0680_0000 + hsio*tile_stride + off` for another tile, and the uncached alias (`+0x80_0000`) on the same core.
 4. **Ethernet.** RX writes are not snooped, so mailboxes and flags are read through the uncached alias. Payloads land at the same flat offset on the link peer. The closing flag in `EthBandwidth` goes out on TX queue 0 only after every send is acked, so DELIVERED is an upper bound and includes one return path.
-5. **SRAM region:** `base = MEM_IERISC_ROUTER_UNRESERVED_BASE` (rounded up to 64) plus `kRegionBytes = 0x110000`, which must fit in 4 MiB. The `Session` constructor checks this with `TT_FATAL`.
+5. **SRAM region:** `base = MEM_IERISC_ROUTER_UNRESERVED_BASE` (rounded up to 64) plus `kRegionBytes = 0x110000`, which must fit in 4 MiB. The shared `Session` constructor checks this with `TT_FATAL`.
 
 ## Next steps
 

@@ -33,7 +33,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
@@ -44,6 +43,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "keraunos_session.hpp"
 #include "mimir_contract.hpp"
 #include "tt_metal/tt_metal/test_kernels/misc/keraunos_eth_ordering.h"
 
@@ -51,6 +51,7 @@ namespace tt::tt_metal::keraunos_eth_send_test {
 namespace {
 
 using namespace ::tt::tt_metal::mimir_contract;
+using namespace ::tt::tt_metal::keraunos_session;
 using namespace ::keraunos_eth_ordering;
 
 constexpr const char* kSenderKernel = "tests/tt_metal/tt_metal/test_kernels/misc/keraunos_eth_ordering_sender.cpp";
@@ -60,105 +61,6 @@ constexpr uint32_t kSenderHsio = 0;
 constexpr uint32_t kReceiverHsio = 1;
 // Global HSIO 0 CCE SRAM window; tile j is tile_stride above it (as in KeraunosEmu.EthernetKernelWritesOtherTileSram).
 constexpr uint64_t kHsioGlobalSramBase = 0x1206800000ULL;
-
-struct KeraunosCore {
-    CoreCoord logical;
-    uint32_t hsio = 0;
-};
-
-class Session {
-public:
-    Session() {
-        mesh_ = distributed::MeshDevice::create_unit_mesh(0);
-        device_ = &slow_dispatch::physical_device_from_unit_mesh(*mesh_);
-        const auto& hal = MetalContext::instance().hal();
-        sram_noc_base_ = hal.get_dev_noc_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
-        // Above the Ethernet-link slot, which sits inside IDLE_ETH's unreserved region.
-        base_ = (MEM_IERISC_ROUTER_UNRESERVED_BASE + 63) & ~63u;
-        TT_FATAL(
-            base_ >= hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED) &&
-                base_ + kPayloadOffset + kMaxPayloadBytes <= MEM_IERISC_L1_SIZE,
-            "Test base 0x{:x} does not fit the IDLE_ETH unreserved region",
-            base_);
-    }
-
-    uint32_t base() const { return base_; }
-
-    // CCE0 of HSIO tile @p hsio, or nullopt when the descriptor does not list it.
-    std::optional<KeraunosCore> core(uint32_t hsio) const {
-        const auto& chiplet = soc_desc_of(device_).get_arch_descriptor().get_keraunos();
-        for (const auto& c : chiplet.cores) {
-            if (c.hsio == hsio && c.cce == 0) {
-                const CoreCoord logical =
-                    soc_desc_of(device_).get_logical_ethernet_core_from_physical({c.coord.x, c.coord.y});
-                if (!device_->ethernet_cores().contains(logical)) {
-                    return std::nullopt;
-                }
-                return KeraunosCore{logical, hsio};
-            }
-        }
-        return std::nullopt;
-    }
-
-    uint64_t tile_stride() const {
-        const auto& chiplet = soc_desc_of(device_).get_arch_descriptor().get_keraunos();
-        TT_FATAL(chiplet.tile_stride.has_value(), "mmk descriptor has no keraunos tile_stride");
-        return *chiplet.tile_stride;
-    }
-
-    void write(const KeraunosCore& core, uint32_t offset, const std::vector<uint32_t>& words) {
-        write_eth_sram(device_, core.logical, sram_noc_base_ + offset, words.data(), words.size() * sizeof(uint32_t));
-    }
-    std::vector<uint32_t> read(const KeraunosCore& core, uint32_t offset, uint32_t num_words) {
-        std::vector<uint32_t> words(num_words, 0);
-        read_eth_sram(device_, core.logical, sram_noc_base_ + offset, words.data(), num_words * sizeof(uint32_t));
-        return words;
-    }
-    template <typename T>
-    T read_struct(const KeraunosCore& core, uint32_t offset) {
-        T value{};
-        read_eth_sram(device_, core.logical, sram_noc_base_ + offset, &value, sizeof(value));
-        return value;
-    }
-
-    // eth_cce_send.h's EthLink: the link peer's HSIO tile, then the valid word.
-    void write_eth_link(const KeraunosCore& core, const KeraunosCore& peer) {
-        write(core, MEM_IERISC_FABRIC_ETH_LINK_BASE, {peer.hsio, MEM_IERISC_FABRIC_ETH_LINK_VALID, 0, 0});
-    }
-
-    // Launches without blocking, polls each core's status word until it leaves kStatusRunning or the host timeout
-    // passes, then waits for the program. On a host timeout the cores are hung, so @p dump prints what they recorded
-    // and the process exits: nothing after it could reach the device.
-    void run(Program& program, const std::vector<KeraunosCore>& watched, const std::function<void()>& dump) {
-        distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(mesh_->shape()), std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/false);
-
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::seconds(tt::parse_env<uint32_t>("KERAUNOS_ETH_HOST_TIMEOUT_S", 1800));
-        for (const KeraunosCore& core : watched) {
-            for (uint32_t status = read(core, base_ + kResultOffset, 1)[0];
-                 status == kStatusRunning || status == 0;
-                 status = read(core, base_ + kResultOffset, 1)[0]) {
-                if (std::chrono::steady_clock::now() > deadline) {
-                    fmt::print(stderr, "Keraunos Ethernet send: host timeout; device state follows\n");
-                    dump();
-                    fmt::print(stderr, "Exiting: the kernels are stuck. Reset the emulator job before the next run.\n");
-                    std::fflush(stderr);
-                    std::_Exit(3);
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            }
-        }
-        distributed::Finish(mesh_->mesh_command_queue());
-    }
-
-private:
-    std::shared_ptr<distributed::MeshDevice> mesh_;
-    IDevice* device_ = nullptr;
-    uint64_t sram_noc_base_ = 0;
-    uint32_t base_ = 0;
-};
 
 #define skip_unless_keraunos_loopback()                                                              \
     do {                                                                                             \
@@ -194,7 +96,7 @@ TEST_P(Ordering, Run) {
     skip_unless_keraunos_loopback();
     const OrderingVariant& variant = GetParam();
 
-    Session s;
+    Session s(kPayloadOffset + kMaxPayloadBytes);
     const auto tx = s.core(kSenderHsio);
     const auto rx = s.core(kReceiverHsio);
     if (!tx || !rx) {
@@ -246,7 +148,12 @@ TEST_P(Ordering, Run) {
         fmt::print(stderr, "{}\n", format_sender(s.read_struct<SenderResult>(*tx, base + kResultOffset)));
         fmt::print(stderr, "{}\n", format_receiver(s.read_struct<ReceiverResult>(*rx, base + kResultOffset)));
     };
-    s.run(program, {*tx, *rx}, dump);
+    s.run(
+        program,
+        {{*tx, base + kResultOffset}, {*rx, base + kResultOffset}},
+        kStatusRunning,
+        std::chrono::seconds(tt::parse_env<uint32_t>("KERAUNOS_ETH_HOST_TIMEOUT_S", 1800)),
+        dump);
 
     const auto tx_result = s.read_struct<SenderResult>(*tx, base + kResultOffset);
     const auto rx_result = s.read_struct<ReceiverResult>(*rx, base + kResultOffset);

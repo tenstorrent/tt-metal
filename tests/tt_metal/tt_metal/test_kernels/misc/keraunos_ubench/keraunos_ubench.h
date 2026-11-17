@@ -79,8 +79,6 @@ constexpr uint64_t kHsioCceSramOffset = 0x2800000ULL;
 // Global (package) view, which a CPU load or store to another tile uses (remap entries 6-9, as in
 // KeraunosEmu.EthernetKernelWritesOtherTileSram).
 constexpr uint64_t kHsioGlobalSramBase = 0x1206800000ULL;
-// Default HSIO tile stride; the host takes the descriptor's tile_stride when it has one.
-constexpr uint64_t kDefaultHsioTileStride = 0x4000000ULL;
 
 constexpr uint64_t hsio_local_addr(uint32_t hsio, uint64_t tile_stride, uint32_t offset) {
     return kHsioLocalBase + hsio * tile_stride + kHsioCceSramOffset + offset;
