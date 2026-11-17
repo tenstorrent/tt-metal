@@ -6,6 +6,7 @@ seeded from the key. Implements models/common/multimedia_store/reader.py's Embed
 
 import hashlib
 import struct
+from collections import OrderedDict
 
 import torch
 
@@ -15,12 +16,14 @@ from models.demos.minimax_m3.vision import format
 
 
 class StubEmbeddingReader:
-    """Values are built once per key and kept, so a repeated fetch costs a lookup rather than a fresh
-    randn of the whole value — the store it stands in for returns a view of what it already holds."""
+    """The last MAX_VALUES values are kept, so a repeated fetch costs a lookup rather than a fresh randn of
+    the whole value — the store it stands in for returns a view of what it already holds."""
+
+    MAX_VALUES = 16
 
     def __init__(self, hidden: int):
         self.hidden = hidden
-        self._values: dict[bytes, memoryview] = {}
+        self._values: OrderedDict[bytes, memoryview] = OrderedDict()
 
     def fetch(self, media_key: bytes) -> memoryview:
         return self.fetch_batch([FetchRequest(media_key)])[0]
@@ -35,6 +38,7 @@ class StubEmbeddingReader:
     def _value(self, media_key: bytes) -> memoryview:
         cached = self._values.get(media_key)
         if cached is not None:
+            self._values.move_to_end(media_key)
             return cached
         try:
             n = stub_key_tokens(media_key)
@@ -46,4 +50,6 @@ class StubEmbeddingReader:
         rows = (torch.randn(n, self.hidden, generator=gen) * 0.02).to(torch.bfloat16)
         format.embeddings(buf, self.hidden)[:] = rows.view(torch.int16).numpy()
         self._values[media_key] = buf
+        if len(self._values) > self.MAX_VALUES:
+            self._values.popitem(last=False)
         return buf

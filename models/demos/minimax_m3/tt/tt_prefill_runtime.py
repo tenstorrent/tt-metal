@@ -113,9 +113,7 @@ def _media_rows_of(reader, hidden: int, media_refs: list):
     bufs = reader.fetch_batch([FetchRequest(k) for k in keys])
     values = {}
     for key, buf in zip(keys, bufs, strict=True):
-        kind = media_format.Header.read(buf).kind
-        if kind != "image":
-            raise ValueError(f"media key {key.hex()} holds {kind!r}, not image rows")
+        media_format.Header.read(buf)
         values[key] = media_format.embeddings(buf, hidden)
 
     def rows_of(ref):
@@ -365,7 +363,7 @@ class TtPrefillRuntime:
             x = ttnn.unsqueeze_to_4D(x)
         return x
 
-    def _warm_media(self, kv_cache, chunk: int, n_chunks: int) -> None:
+    def _warm_media(self, chunk: int, n_chunks: int) -> None:
         """Compile the splice for every table height a forward can reach.
 
         The media hook is a lookup into the table and a where, so a height needs one embedding call
@@ -460,7 +458,7 @@ class TtPrefillRuntime:
             inp = self.make_forward_input([[0] * chunk] * n_chunks, [c.actual_start for c in chunks])
             self.prefill_forward(inp, kv_cache, chunks)
         if cfg.is_first_rank and self.media_embedding_reader is not None:
-            self._warm_media(kv_cache, chunk, n_chunks)
+            self._warm_media(chunk, n_chunks)
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(f"[prefill timing] task_id=WARMUP variants={len(plan)} runtime.compile() = {warmup_ms:.2f} ms")

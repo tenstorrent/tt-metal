@@ -89,13 +89,9 @@ def runtime_with(
     )
 
 
-def splice_chunks(
-    mesh_device, table, tokens, images, store, first_chunk_start, emb_tp_sharded=True, shard_vocab_on_sp=False
-):
-    """Embeddings of tokens[first_chunk_start:] after splicing, prefilled CHUNK tokens at a time.
-    images: (start, num_tokens, key) per image."""
+def embedding(mesh_device, table, shard_vocab_on_sp):
     mesh_shape = tuple(mesh_device.shape)
-    emb = TtParallelEmbedding(
+    return TtParallelEmbedding(
         mesh_device,
         VOCAB,
         HIDDEN,
@@ -105,6 +101,26 @@ def splice_chunks(
         dtype=ttnn.bfloat16,
         shard_vocab_on_sp=shard_vocab_on_sp,
     )
+
+
+def device_tokens(mesh_device, tokens):
+    return ttnn.from_torch(
+        tokens.reshape(1, 1, -1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, None)),
+    )
+
+
+def splice_chunks(
+    mesh_device, table, tokens, images, store, first_chunk_start, emb_tp_sharded=True, shard_vocab_on_sp=False
+):
+    """Embeddings of tokens[first_chunk_start:] after splicing, prefilled CHUNK tokens at a time.
+    images: (start, num_tokens, key) per image."""
+    mesh_shape = tuple(mesh_device.shape)
+    emb = embedding(mesh_device, table, shard_vocab_on_sp)
     runtime = runtime_with(
         store,
         sp=mesh_shape[0],
@@ -123,15 +139,7 @@ def splice_chunks(
         chunks = [PrefillChunk(0, start, end)]
         partials = TtPrefillRuntime._media_partials(runtime, chunks, refs)
         x = emb.forward(
-            ttnn.from_torch(
-                chunk_tokens.reshape(1, 1, CHUNK),
-                device=mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None)),
-            ),
-            media_fn=(lambda: partials) if partials is not None else None,
+            device_tokens(mesh_device, chunk_tokens), media_fn=(lambda: partials) if partials is not None else None
         )
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
@@ -213,6 +221,40 @@ def test_same_bucket_compiles_once(mesh_device, device_params, shard_vocab_on_sp
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+@pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["partials_2d", "by_position_1d"])
+def test_warm_media_leaves_nothing_to_compile(mesh_device, device_params, shard_vocab_on_sp):
+    """After compile()'s media warm-up, serving images from one token up to a whole chunk compiles no program."""
+    sp, chunk = mesh_device.shape[0], 2048
+    torch.manual_seed(0)
+    emb = embedding(mesh_device, torch.randn(VOCAB, HIDDEN, dtype=torch.bfloat16), shard_vocab_on_sp)
+    sizes = [1, 50, 300, 1000, chunk - 7]
+    embs = {bytes([i + 1]) * 32: torch.randn(n, HIDDEN).to(torch.bfloat16) for i, n in enumerate(sizes)}
+    runtime = runtime_with(
+        Store(embs),
+        sp=sp,
+        chunk_size=chunk,
+        mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
+        shard_vocab_on_sp=shard_vocab_on_sp,
+    )
+    runtime.make_forward_input = lambda tokens, starts: device_tokens(
+        mesh_device, torch.tensor(tokens[0], dtype=torch.int32)
+    )
+    runtime._embed_tokens = lambda inp, media_fn: emb.forward(inp, media_fn=media_fn)
+    runtime._media_partials = lambda chunks, refs: TtPrefillRuntime._media_partials(runtime, chunks, refs)
+    TtPrefillRuntime._warm_media(runtime, chunk, 1)
+    entries = mesh_device.num_program_cache_entries()
+
+    chunks = [PrefillChunk(0, 0, chunk)]
+    for key, rows in embs.items():
+        refs = [MediaRef(0, 7, 7 + len(rows), key)]
+        tokens = device_tokens(mesh_device, torch.randint(0, VOCAB, (chunk,), dtype=torch.int32))
+        ttnn.deallocate(emb.forward(tokens, media_fn=lambda: runtime._media_partials(chunks, refs)))
+
+    assert mesh_device.num_program_cache_entries() == entries, "a served image size compiled a program"
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
 def test_full_size_tables_refill_in_place(mesh_device, device_params):
     """Two forwards at one table height reuse its host table. At full hidden size the table is over the 32 MB above
     which copy_host_to_device_tensor takes its pinned, blocking path where the device can pin; each forward's device
@@ -256,7 +298,7 @@ def test_warm_media_reaches_packed_forwards(monkeypatch, shard_vocab_on_sp):
     runtime._media_partials = lambda chunks, refs: heights.append(
         build_media_partials(refs, chunks, zeros, sp, chunk // sp, not shard_vocab_on_sp)[0]
     )
-    TtPrefillRuntime._warm_media(runtime, None, chunk, n_chunks)
+    TtPrefillRuntime._warm_media(runtime, chunk, n_chunks)
     assert heights[-1] == table_height(n_chunks * chunk // sp + 1)
 
 

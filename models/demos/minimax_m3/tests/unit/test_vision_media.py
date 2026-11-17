@@ -113,6 +113,9 @@ def test_stub_reader_serves_stub_keys(expect_error):
     assert bytes(value) == bytes(reader.fetch(key)) != bytes(reader.fetch(stub_media_key(6, 1)))
     head, rest = reader.fetch_batch([FetchRequest(key, 0, 16), FetchRequest(key, 16)])
     assert bytes(head) + bytes(rest) == bytes(value)
+    for t in range(2, reader.MAX_VALUES + 2):
+        reader.fetch(stub_media_key(6, t))
+    assert len(reader._values) == reader.MAX_VALUES and bytes(reader.fetch(key)) == bytes(value)
     for key in (bytes(32), b"\0"):
         with expect_error(Missing, key.hex()):
             reader.fetch(key)

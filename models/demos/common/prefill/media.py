@@ -26,16 +26,6 @@ def _positions(chunk_start: int, sp: int, chunk_local: int) -> torch.Tensor:
 
 TILE_HEIGHT = 32
 
-# Host staging for lookup and is_img, reused across forwards: s_total is fixed for a deployment.
-_STAGING: dict = {}
-
-
-def _staged(shape: tuple, dtype) -> torch.Tensor:
-    buf = _STAGING.get((shape, dtype))
-    if buf is None:
-        buf = _STAGING[(shape, dtype)] = torch.zeros(shape, dtype=dtype)
-    return buf
-
 
 def next_table_height(height: int) -> int:
     return -(-int(height * 1.25) // TILE_HEIGHT) * TILE_HEIGHT
@@ -89,9 +79,6 @@ def build_media_partials(
 
     ``lookup`` and ``is_img`` are indexed by the all-gathered token order (chip-major, _positions), not
     by natural position: that is the order the lookup sees inside _forward_2d.
-
-    lookup and is_img are staging buffers kept per shape, so a caller must consume them before the next
-    call rather than hold them.
     """
     if not refs:
         return None
@@ -125,10 +112,8 @@ def build_media_partials(
         sp_row, slot = order // per_row, order % per_row + 1
 
     height = table_height(int(slot.max()) + 1 if slot.numel() else 1)
-    lookup = _staged((sp, s_total // sp if by_position else s_total), torch.int32)
-    is_img = _staged((s_total,), torch.bool)
-    lookup.zero_()
-    is_img.zero_()
+    lookup = torch.zeros(sp, s_total // sp if by_position else s_total, dtype=torch.int32)
+    is_img = torch.zeros(s_total, dtype=torch.bool)
     if by_position:
         lookup.view(-1)[flats] = slot.to(torch.int32)
     else:
