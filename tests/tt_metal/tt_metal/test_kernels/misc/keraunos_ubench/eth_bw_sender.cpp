@@ -46,10 +46,10 @@ bool drain_sends(uint32_t polls) {
     return __builtin_riscv_ttrocc_cmdbuf_idma_tr_ack_trid(cce_eth::kCmdBuf, cce_eth::kTrid) == 0;
 }
 
-void send_flag(uint32_t value) {
+void send_flag(uint32_t base, uint32_t value) {
     while (cce_eth::txq_busy(0)) {
     }
-    cce_eth::send_dword(0, kEthFlagOffset, value);
+    cce_eth::send_dword(0, base + kEthFlagOffset, value);
 }
 
 }  // namespace
@@ -90,7 +90,7 @@ void kernel_main() {
 
     // 2. Handshake. The receiver can start long after this core, so its first wait gets the full poll bound.
     const uint64_t h0 = now();
-    send_flag(1);
+    send_flag(base, 1);
     if (!wait_eq<uint32_t>(ack, 1, polls)) {
         r->detail = 2;  // handshake ack
         finish(r, kStatusTimeout);
@@ -111,7 +111,7 @@ void kernel_main() {
         return;
     }
     const uint64_t t_acked = now();
-    send_flag(2);
+    send_flag(base, 2);
     if (!wait_eq<uint32_t>(ack, 2, polls)) {
         r->detail = 4;  // closing ack
         finish(r, kStatusTimeout);
