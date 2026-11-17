@@ -494,10 +494,11 @@ void send_partial(uint32_t Wt, uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_
             pack_tile(i, cb_partial_out);
         }
         tile_regs_release();
+        // The pass above left the unpacker on cb_mm_out and nothing between reprograms it, so the copy
+        // needs no further init: the remaining output tiles go dst_tiles at a time.
         for (uint32_t t0 = first; t0 < Wt; t0 += dst_tiles) {
             const uint32_t n = (Wt - t0 < dst_tiles) ? (Wt - t0) : dst_tiles;
             tile_regs_acquire();
-            copy_init(cb_mm_out);
             for (uint32_t i = 0; i < n; ++i) {
                 copy_tile(cb_mm_out, r * Wt + t0 + i, i);
             }
