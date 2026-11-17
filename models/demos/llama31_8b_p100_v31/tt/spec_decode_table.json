@@ -1,0 +1,13 @@
+{
+  "row_counts": [1, 2, 4, 8, 16, 32],
+  "verify_rows": 32,
+  "row_offsets": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+  "sampling": {"temperature": 0.0, "top_k": 32, "top_p": 0.08},
+  "verify_sdpa": {"grid": [8, 8], "exp_approx": false},
+  "verify_blocks": [{"below": 32, "size": 32}, {"below": 64, "size": 64}],
+  "verify_block": 128,
+  "lookup": {"max_ngram": 4, "min_ngram": 3, "k": 31, "wide_after": 7},
+  "drafts": {
+    "eagle": {"k": 5, "rows": 8, "head_rows": [2, 4, 8], "feature_layers": [2, 16, 29], "prompt_rows": 128, "step_rows": 32, "kv_blocks": 1024, "pad_rows": 64}
+  }
+}
