@@ -90,20 +90,20 @@ protected:
         // With NOC translation on, ARC has the same coordinates on both NOCs.
         arc_ = tt_cxy_pair(chip_, arc.at(0).x, arc.at(0).y);
         // Created before any send, since a reader sees only the events that arrive after it.
-        const int pci_device_num = MetalContext::instance()
-                                       .get_cluster()
-                                       .get_driver()
-                                       ->get_tt_device(chip_)
-                                       ->get_pci_device()
-                                       ->get_device_num();
-        try {
-            events_ = std::make_unique<tt::umd::DeviceEventReader>(pci_device_num);
-            if (!events_->is_firmware_attached()) {
+        // Null for a chip reached only over Ethernet, which has no event path.
+        auto* pci_device = MetalContext::instance().get_cluster().get_driver()->get_tt_device(chip_)->get_pci_device();
+        if (pci_device == nullptr) {
+            log_info(tt::LogTest, "No device events: chip {} has no PCIe device", chip_);
+        } else {
+            try {
+                events_ = std::make_unique<tt::umd::DeviceEventReader>(pci_device->get_device_num());
+                if (!events_->is_firmware_attached()) {
+                    events_.reset();
+                }
+            } catch (const std::exception& e) {
                 events_.reset();
+                log_info(tt::LogTest, "No device events from KMD: {}", e.what());
             }
-        } catch (const std::exception& e) {
-            events_.reset();
-            log_info(tt::LogTest, "No device events from KMD: {}", e.what());
         }
         log_info(tt::LogTest, "Device events {}", events_ ? "checked" : "not checked");
     }

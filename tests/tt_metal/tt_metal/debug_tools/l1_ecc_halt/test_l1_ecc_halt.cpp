@@ -53,6 +53,8 @@ constexpr const char* mret_btb_alias_kernel = "tests/tt_metal/tt_metal/test_kern
 constexpr const char* sbe_then_dbe_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_sbe_then_dbe.cpp";
 const CoreCoord test_core{0, 0};
 constexpr auto report_deadline = std::chrono::seconds(30);
+// Within the 10 s a wait stalls before it reads the halt records without an event.
+constexpr auto event_report_deadline = std::chrono::seconds(5);
 
 }  // namespace
 
@@ -343,21 +345,31 @@ TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     // Created before the halt, since a reader sees only the events that arrive after it. Null when KMD or ARC firmware
     // does not publish device events.
     std::unique_ptr<tt::umd::DeviceEventReader> events;
-    try {
-        events = std::make_unique<tt::umd::DeviceEventReader>(
-            ctx.get_cluster().get_driver()->get_tt_device(test_target_.chip)->get_pci_device()->get_device_num());
-        if (!events->is_firmware_attached()) {
+    // Null for a chip reached only over Ethernet, which has no event path.
+    auto* pci_device = ctx.get_cluster().get_driver()->get_tt_device(test_target_.chip)->get_pci_device();
+    if (pci_device == nullptr) {
+        log_info(tt::LogTest, "No device events: chip {} has no PCIe device", test_target_.chip);
+    } else {
+        try {
+            events = std::make_unique<tt::umd::DeviceEventReader>(pci_device->get_device_num());
+            if (!events->is_firmware_attached()) {
+                events.reset();
+            }
+        } catch (const std::exception& e) {
             events.reset();
+            log_info(tt::LogTest, "No device events from KMD: {}", e.what());
         }
-    } catch (const std::exception& e) {
-        events.reset();
-        log_info(tt::LogTest, "No device events from KMD: {}", e.what());
     }
 
     auto workload = single_core_workload(hang_kernel, {1});  // raises IRQ 3
     auto& cq = devices_[0]->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    const auto halt_start = std::chrono::steady_clock::now();
     expect_halt_reported_by([&] { distributed::Finish(cq); });
+    // Firmware that publishes events reports the halt to the runtime's own reader, which ends the wait early.
+    if (events) {
+        EXPECT_LT(std::chrono::steady_clock::now() - halt_start, event_report_deadline);
+    }
 
     // Firmware never clears the watchdog interrupt, so the test does, first: left raised, it would halt the core again
     // as soon as the next firmware init arms IRQ 3.

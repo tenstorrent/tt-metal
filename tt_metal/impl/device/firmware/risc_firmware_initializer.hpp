@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -21,6 +22,9 @@ class ControlPlane;
 namespace tt::tt_metal {
 
 class dispatch_core_manager;
+namespace internal {
+class L1EccHaltEventListener;
+}  // namespace internal
 
 class RiscFirmwareInitializer : public FirmwareInitializer {
 public:
@@ -120,6 +124,9 @@ private:
     std::unordered_map<tt::ChipId, std::vector<uint8_t>> worker_logical_col_to_virtual_col_;
     std::unordered_map<tt::ChipId, std::vector<uint8_t>> worker_logical_row_to_virtual_row_;
     std::unordered_map<tt::ChipId, std::vector<uint32_t>> tensor_prefetcher_signal_noc_xy_;
+
+    // Reads device events while the firmware runs; started after launch, stopped first at teardown.
+    std::unique_ptr<internal::L1EccHaltEventListener> l1_ecc_halt_events_;
 
     bool initialized_ = false;
 };
