@@ -4558,3 +4558,59 @@ tasks:
   paths:
   - ttnn/ttnn/bringup
   device: true
+- id: P.72
+  title: 'OWNER 2026-11-17: STATIC_TABLES on vs off at realistic positions (DECODER_SKIP=decode): what the persistent
+    attention table (P.21) buys on the 8x4; measured only, the default stays on'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - FIX.35
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  brief:
+    details: 'OWNER 2026-11-17 (per-slot private state phase, step 2): a switch-only A/B of STATIC_TABLES (tt/settings.py:215,
+      P.21; off = the P.19 path that gathers each KV source''s compressed history from the SERVED cache over the mesh every
+      chunk). The only number we have is a 2x2 8-layer one (118.8 -> 103.5 ms); we need the 8x4 at realistic positions,
+      because off reads only served state and is the correct-by-construction fallback when a slot''s history was written by
+      someone else (store load, d2p, a reused slot). The orchestrator measures both sides itself (the gate''s tests: ladder
+      at last, both determinism checks, test_decoder_skip_decode, test_skip_positions and test_full_prefill under
+      DS41_DECODER_SKIP=decode). YOUR job is small: check that STATIC_TABLES=off still RUNS on today''s tree (it has been
+      off-default since 2026-10-22; P.38, P.51, P.64-P.67 came after): one run of DS41_STATIC_TABLES=off
+      DS41_DECODER_SKIP=decode test_decoder_skip_decode.py (covers the replay chunk) and one of DS41_STATIC_TABLES=off
+      test_determinism.py (models/demos/common/bringup/tests). If both pass, change NOTHING and stop. If off is broken,
+      fix it on the off path only (the on path must stay bit-identical), with the smallest honest change, and say what was
+      broken. Do not profile, do not run the A/B or the position tests yourself. No fork regression or unit suites (8x4).
+      Agent rules 18 / 19 (no single-card jobs); device jobs over a few minutes through devjob. Report short.'
+  ab:
+    keep_default: true
+    flip: true
+    env:
+      STATIC_TABLES: 'off'
+    change:
+      STATIC_TABLES: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      steady_wall_ms_p51200: '> 0'
+      steady_wall_ms_p1024000: '> 0'
+      resumed_wall_ms_p1024000: '> 0'
+      e2e_wall_s_p1024000: '> 0'
