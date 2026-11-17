@@ -187,3 +187,74 @@
     - × a pinned multi-block-per-core walk.
   - `perf/test_genify_matmul_perf_guard.py::test_perf_epilogues`: one representative per epilogue
     path at the model config, each with its epilogue-none twin.
+
+## Refinement 3 — Speed up PERF FOCUS 1 (Qwen3.8 prefill gate_up + SwiGLU, 2048 tokens)
+- Date: 2026-11-17
+- What was done:
+  - **Regime R1a `interleaved_2d_mcast`** (scheme-change). R1's region, blocking, CBs and compute
+    kernel are unchanged; only the reader's operand source changes.
+    - **Reader.** On a 2-D rectangle split, one injector per grid row-line reads each A K-block from
+      DRAM and multicasts it into the line's `cb_act_tiles`. One injector per column-line does the
+      same for B into `cb_weight_tiles` (`McastArgs` sender/receiver pipes; the handshake is "slot
+      reserved"). Every core delivers A then B per K-block, so the two channels cannot deadlock.
+    - **Kernel groups.** The injector roles are CT flags (`a_sends`, `b_sends`), one reader kernel
+      group per role; R1 attaches both channels as absent.
+    - **Uniform walk.** Every core walks the nominal `nb_m × nb_n` blocks, so the CB pointers stay
+      in lockstep and the multicast lands at the sender's own slot address. Padded-tail blocks of
+      ragged edge regions carry 0 valid tiles (the `block_extent` clamp in the reader and writer).
+    - **Host.** `uses_operand_mcast()` predicate (knob `OPERAND_MCAST`); mcast-aware `read_traffic`
+      (A once per row-line, B once per column-line), so the split now goes to the W-min 11×10
+      rectangle on PERF FOCUS 1. Two `ttnn.Mcast` channels at disjoint semaphore ids; `rect` vs
+      `rect_t` picks RowMajor or ColumnMajor lines.
+  - **Staggered injectors** (`STAGGER_INJECTORS`, `injector_offsets()`): `Staggered` fixed senders
+    with offsets chosen so no core injects both operands. Before this, core (0,0) read and
+    multicast both operands every K-block. 494 → 464 µs.
+  - **R1a gate** `MCAST_MIN_KBLOCK_BYTES = 32 KB`. Each round serializes injector read → handshake
+    → multicast, so tiny K-blocks are latency-bound. 64×16384×256 (16-bit DEST, 64 K-blocks of
+    16 KB) measured 119.8 µs under R1a against 107.7 µs under R1, so it stays on R1.
+  - **Single-walk K split** (`SINGLE_WALK_K_BLOCKS = 2`, resolves the folded L1-ledger finding). A
+    per-core walk of one K-block is split in two: the read overlaps compute, and the depth-2 second
+    slot is no longer dead.
+  - **Subblock tie-break knob** `SUBBLOCK_MIN_UNPACK = False`. Measured null: 2×2 is 477.8 µs vs
+    463.7 µs for 1×4.
+  - **Reused**: R1 split / blocking / CBs / compute kernel / writer. **Added**: the reader's mcast
+    delivery path, role kernel groups, channel attachment, `block_extent` clamp, and the knobs above.
+- Accuracy achieved: PERF FOCUS 1 (2048×5120×8704, bf16×bf4b, LoFi, swiglu): PCC 0.99992 /
+  rel-RMS 0.0085 [0.9995 / 0.03]. Unchanged on every unit and golden case run.
+- Golden test progress:
+  - interleaved single-weight loose cases: 53/53 pass (among them PERF FOCUS 1 and 4, and the
+    FLUX addcmul and time_mod cases);
+  - cartesian interleaved TILE single-weight cells: 300 pass, 60 xfail (the permanent fp32 ×
+    acc=False EXCLUSION), 0 fail, 0 XPASS;
+  - unit dir: 618 passed, 42 skipped (env-gated perf).
+- Perf (device ns, one fresh run per variant; before = this refinement's starting commit):
+  - PERF FOCUS 1 fused: 1673 → 463.5 µs (target 564.5, roofline 428.7). Epilogue-none twin:
+    1583 → 481 µs.
+  - Guard set, 2-D shapes: 0.22–0.56× (e.g. 2048×9216×6144 HiFi2 4446 → 987 µs; 4096³ HiFi4
+    2998 → 1294 µs; bf4b 2048×5120×4160 LoFi 1020 → 266 µs; FLUX addcmul 1804 → 438 µs).
+  - 1-D and other R1 shapes: unchanged within ±1%.
+  - L1-resident A/out (new guard cases): 128×5120×8704 swiglu 386 → 359 µs; 384×1536×1024
+    98.5 → 30.7 µs.
+- Bottleneck now (ablation on PERF FOCUS 1):
+  - full run: 464 µs;
+  - reader stubbed (CB sync kept): 449 µs;
+  - epilogue chain also stubbed: 413 µs (the matmul + packer-L1-acc floor);
+  - so the serialized swiglu epilogue is ~35 µs and exposed data movement is ~16 µs.
+- Next levers (not done here; the target is met and each is its own structural change):
+  - fold silu·up into the last K-block's pack (needs a matmul_block change to pack half a subblock);
+  - the injector stall-shadow: a trid-tagged read of K-block kb+1 issued before multicasting kb.
+    It also unlocks R1a for the tiny-K-block shapes now gated to R1.
+  - Finding: 128×5120×8704 (Qwen prefill-128, 4 M-tiles) runs on a flat 68-core R1 split at 359 µs
+    against `achievable` 105 µs. It is B-stream bound with B re-read per M-region; R1b / stream
+    work (Refinement 9 territory).
+- Issues encountered:
+  - The precompile farm still fails on this box (sfpi `__xtt_vector8`), best-effort only.
+  - `scripts/run_safe_pytest.sh -k "a and b"` splits the expression, so pass explicit test ids.
+- Tests added:
+  - `test_genify_matmul_mcast.py` (7 cases):
+    - R1a on `rect` and `rect_t`, with empty padded-tail blocks on both axes (bias, swiglu,
+      addcmul, none);
+    - staggered vs first-core injectors are bit-identical;
+    - the single-walk K split.
+  - `perf/test_genify_matmul_perf_guard.py::test_perf_l1_resident`: L1-resident A/output on the
+    R1a path.

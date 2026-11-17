@@ -126,3 +126,29 @@ def test_perf_epilogues(case, fused, device):
     )
     out = genify_matmul(ta, tb, compute_kernel_config=cfg, **kwargs)
     ttnn.synchronize_device(device)
+
+
+# Refinement 3: L1-resident A and output on the R1a (2-D operand multicast) path, so the operand
+# multicast is measured where A no longer comes from DRAM. (m, k, n, B dtype, fidelity, epilogue)
+L1_CASES = [
+    (128, 5120, 8704, "bfloat4_b", "LoFi", "swiglu"),  # Qwen prefill-128 gate_up (act_buffer=l1)
+    (384, 1536, 1024, "bfloat16", "HiFi4", "none"),
+]
+
+
+@pytest.mark.parametrize("case", L1_CASES, ids=[f"{m}-{k}-{n}-{w}-{f}-{e}" for m, k, n, w, f, e in L1_CASES])
+def test_perf_l1_resident(case, device):
+    m, k, n, w_dt, fid, epilogue = case
+    torch.manual_seed(0)
+    A = torch.randn(1, m, k)
+    B = torch.randn(k, n) / math.sqrt(k)
+    ta = create_ttnn_input_tensor(
+        A, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    tb = create_ttnn_input_tensor(B, device, dtype=getattr(ttnn, w_dt), layout=ttnn.TILE_LAYOUT)
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=getattr(ttnn.MathFidelity, fid), fp32_dest_acc_en=True, math_approx_mode=False
+    )
+    kwargs = {"activation": "swiglu"} if epilogue == "swiglu" else {}
+    out = genify_matmul(ta, tb, compute_kernel_config=cfg, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+    ttnn.synchronize_device(device)

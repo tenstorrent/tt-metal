@@ -11,3 +11,9 @@
 {"event":"fix_applied","text":"SUPPORTED widened (dtype bf8b/fp32, weight bf8b/bf4b, acc False); DEST16_BLOCK_K_MAX=8 caps in-DEST K chain under 16-bit DEST; precision matrix 540/540; golden 60/60 cartesian + 27/27 new loose","ts":"2026-11-17T03:09:51+00:00"}
 {"event":"test_run","refinement":2,"file":"test_genify_matmul_epilogue.py","result":"36/36 pass","note":"bias/bias_relu/swiglu/addcmul over 5 shapes + bf8b acc16 / fp32 / bf4b formats + L1 act/out","ts":"2026-11-17T03:20:19+00:00"}
 {"event":"perf_finding","refinement":2,"shape":"2048x5120x8704 bf4b LoFi swiglu","fused_ns":1654678,"none_ns":1572094,"ablation_chain_stubbed_ns":1564163,"lever":"SWIGLU_FAST_SILU bf16-precision sigmoid 1696216->1654678","note":"epilogue SFPU-bound, plumbing free","ts":"2026-11-17T03:38:30+00:00"}
+{"event":"hypothesis","text":"R1 prefill is DRAM-traffic bound (A x10, B x11); R1a row/column mcast removes the re-reads","ts":"2026-11-17T04:17:31+00:00"}
+{"event":"test_run","what":"PERF FOCUS 1 profile","result":"1696 -> 494 us with R1a, correct (rms 0.0085)","ts":"2026-11-17T04:17:31+00:00"}
+{"event":"device_print_observation","what":"ablation","text":"reader stubbed 449us vs 494 full; epilogue+reader stubbed 413us","ts":"2026-11-17T04:17:31+00:00"}
+{"event":"fix_applied","text":"staggered injectors (no core injects both operands): 494 -> 464 us","ts":"2026-11-17T04:17:31+00:00"}
+{"event":"fix_applied","text":"MCAST_MIN_KBLOCK_BYTES gate: 64x16384x256 16-bit DEST +11% under R1a with 16KB K-blocks -> back on R1","ts":"2026-11-17T04:17:31+00:00"}
+{"event":"test_run","what":"golden slices","result":"loose interleaved 53/53, cartesian interleaved 300 pass / 60 xfail; unit 618 pass","ts":"2026-11-17T04:17:31+00:00"}

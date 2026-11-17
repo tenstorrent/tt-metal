@@ -121,7 +121,7 @@ Cells that fail out of the box go to `EXCLUSIONS` with a reason, not into their 
 - Fused cost on PERF FOCUS 1: 1655 µs against 1572 µs for the epilogue-none twin. An ablation shows the plumbing is free and the remaining ~5% is the serialized SFPU silu, already cut from 124 to 83 µs by the bf16-precision sigmoid knob.
 - Next lever (Refinement 3): fold silu·up into the last K-block's pack (subblock-local gate/up permutation), or overlap the epilogue with the next block's K-walk.
 
-### [ ] Refinement 3 — Speed up PERF FOCUS 1 (Qwen3.8 prefill gate_up + SwiGLU, 2048 tokens)
+### [x] Refinement 3 — Speed up PERF FOCUS 1 (Qwen3.8 prefill gate_up + SwiGLU, 2048 tokens)
 
 **Type**: perf
 
@@ -151,6 +151,8 @@ No SUPPORTED change.
 - **Folded L1-ledger finding.** When a core's whole walk is one K-block (S1, `nb = 1`), the second slot of `cb_act_tiles` / `cb_weight_tiles` is dead L1. It also means compute only starts after the whole K is read (zero read/compute overlap). Resolve it here as part of the `block_k` / depth co-tune, and update `l1_ledger.md`.
 
 **Done when**: measured device ns on the flagged shape improves toward 564.5 µs, its soft precision gate holds, and the golden suite is green. There must be no regression across the config-spanning guard set: the perf guard dir plus one representative per kernel path × dtype × epilogue × placement added so far, including a 1-D (M ≤ 32) shape and an L1-resident A/output shape.
+
+**Outcome**: PERF FOCUS 1 measured **1673 → 463.5 µs** device time (one fresh run each; target `achievable_ns` 564.5 µs beaten, 8% above the 428.7 µs roofline). Precision is unchanged: PCC 0.99992, rel-RMS 0.0085 against the 0.03 gate. Levers: R1a row/column operand multicast (1673 → 494 µs, 110 cores, DRAM 504 → 64 MB); staggered line injectors so no core injects both operands (494 → 464 µs); single-walk K split (resolves the folded L1 finding, 0.79× on 384×1536×1024); an R1a gate `MCAST_MIN_KBLOCK_BYTES = 32 KB` (64×16384×256 16-bit DEST was +11% under R1a with 16 KB K-blocks, now R1 again). Guard set: every 2-D shape is 0.22–0.56×, nothing slower beyond ±1% noise. Measured null, kept as a knob: the 2×2 subblock, 477.8 µs vs 463.7 µs for 1×4 (`SUBBLOCK_MIN_UNPACK = False`). **Bottleneck now**, by ablation: the matmul + partials floor is 413 µs (reader and epilogue stubbed); the serialized swiglu epilogue costs ~35 µs and exposed data movement ~16 µs. **Next**: (1) fold silu·up into the last K-block's pack, or overlap the epilogue; this needs a matmul_block helper change to pack half a subblock. (2) The design's injector stall-shadow (trid-tagged read of K-block kb+1 issued before multicasting kb), which would also let R1a win on the tiny-K-block shapes now gated to R1. Neither was done here: the target is met, and each is a structural change of its own.
 
 ### [ ] Refinement 4 — dram_sharded placement (regime R4: weight streaming from the DRAM banks)
 

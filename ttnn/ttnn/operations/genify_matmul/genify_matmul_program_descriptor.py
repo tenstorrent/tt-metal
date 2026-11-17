@@ -62,6 +62,15 @@ BLOCK_K_FLOOR = 8  # smallest K-block the solve accepts (clamped to tensor_k_til
 # so the error grows with the in-DEST chain: K = 16384 as one 171-tile K-block measured rel-RMS 0.185
 # (stock ttnn.matmul 0.027); capped at 8 tiles 0.019 (32 tiles: 0.046). fp32 DEST is uncapped.
 DEST16_BLOCK_K_MAX = 8
+# A per-core walk that would be ONE K-block (S1, whole region resident) is split into this many K-blocks
+# when K allows (>= BLOCK_K_FLOOR each): otherwise compute waits for the whole read and the second slot of
+# the depth-2 operand CBs is dead L1. 2 measured 0.79x on 384x1536x1024, 0.92x on 32x1024x2048, neutral
+# elsewhere. 1 = unsplit.
+SINGLE_WALK_K_BLOCKS = 2
+# Subblock tie-break knob (same DEST area): True prefers the square-most subblock (fewest operand
+# unpacks per K step). Measured on PERF FOCUS 1 (LoFi, block 6x28): 2x2 477.8 us vs 1x4 463.7 us, so
+# the wide subblock stays the default.
+SUBBLOCK_MIN_UNPACK = False
 Q_N_MAX = 4  # subblock quantum on core_n_tiles (a 4-tile subblock always exists)
 # Core-assignment knob: a factorization whose per-core output tiles W are within (1 + GRID_W_SLACK)
 # of the best W competes on aggregate DRAM read traffic (R summed over the used cores). R1 has no
@@ -73,6 +82,17 @@ L1_RESERVE_BYTES = 0  # L1 held back for foreign tensors
 # Regime knob: sub-select R1a `interleaved_2d_mcast` (row / column operand multicast) whenever the split
 # is a 2-D physical rectangle. False keeps every core reading its own operands from DRAM (plain R1).
 OPERAND_MCAST = True
+# R1a gate: the larger operand K-block an injector multicasts per round must reach this many bytes.
+# Each round serializes injector read -> handshake -> multicast, so tiny K-blocks are latency-bound and
+# a core reading its own operands (R1) wins: 64x16384x256 16-bit DEST (64 K-blocks of 16 KB / 16 KB,
+# 16 cores) measured 119.8 us under R1a vs 107.7 us under R1. Every R1a winner of the guard set
+# multicasts >= 51 KB on at least one operand.
+MCAST_MIN_KBLOCK_BYTES = 32 * 1024
+# R1a injector placement knob. False: every line injects from its first core, so core (0, 0) reads and
+# multicasts BOTH operands each K-block (the serial critical path of the data movement). True: the
+# injectors are staggered along the lines (in-line index = offset + line index, wrapped) with offsets
+# chosen so no core injects both operands, and the DRAM readers spread over the grid.
+STAGGER_INJECTORS = True
 
 
 def _cdiv(a, b):
@@ -241,16 +261,37 @@ def grid_candidates(geom: Geometry, gx: int, gy: int):
     return list(seen.values())
 
 
-def uses_operand_mcast(grid: GridChoice):
+def uses_operand_mcast(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     """Regime R1a predicate: a single-batch 2-D split mapped onto a physical rectangle, so every grid
-    line (cores sharing a row region, or a column region) is a physical row or column of cores."""
+    line (cores sharing a row region, or a column region) is a physical row or column of cores, and a
+    K-block large enough to amortize the per-round line handshake (MCAST_MIN_KBLOCK_BYTES)."""
+    kblock_bytes = blk.block_k_tiles * max(blk.block_m_tiles * geom.a_tile_bytes, blk.block_n_tiles * geom.b_tile_bytes)
     return (
         OPERAND_MCAST
         and grid.grid_b == 1
         and grid.grid_m > 1
         and grid.grid_n > 1
         and grid.placement in ("rect", "rect_t")
+        and kblock_bytes >= MCAST_MIN_KBLOCK_BYTES
     )
+
+
+def injector_offsets(grid: GridChoice):
+    """(act_offset, weight_offset) of the R1a line injectors: the act line of row region i injects
+    from column region (act_offset + i) % grid_n, the weight line of column region j from row region
+    (weight_offset + j) % grid_m (ttnn.Mcast `Staggered` placement). Offsets minimize the number of
+    cores that inject both operands (zero whenever possible)."""
+    if not STAGGER_INJECTORS:
+        return 0, 0
+    best = None
+    for sa in range(grid.grid_n):
+        for sb in range(grid.grid_m):
+            both = sum(1 for i in range(grid.grid_m) if (sb + (sa + i) % grid.grid_n) % grid.grid_m == i)
+            if best is None or both < best[0]:
+                best = (both, sa, sb)
+            if both == 0:
+                return sa, sb
+    return best[1], best[2]
 
 
 def grid_work(grid: GridChoice):
@@ -265,7 +306,7 @@ def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
     a_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_m_tiles * geom.a_tile_bytes * nb_n
     b_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_n_tiles * geom.b_tile_bytes * nb_m
-    if uses_operand_mcast(grid):
+    if uses_operand_mcast(geom, grid, blk):
         # R1a: one A read per grid row-line, one B read per column-line.
         return a_per_core * grid.grid_m + b_per_core * grid.grid_n
     return (a_per_core + b_per_core) * grid.grid_b * grid.grid_m * grid.grid_n
@@ -328,11 +369,17 @@ def _logical_cores(grid: GridChoice, gx: int):
 
 
 def choose_subblock(block_m, block_n, dest_limit):
-    """Largest sb_h*sb_w <= dest_limit with sb_h | block_m, sb_w | block_n; ties go to larger sb_w."""
+    """Largest sb_h*sb_w <= dest_limit with sb_h | block_m, sb_w | block_n. Ties: SUBBLOCK_MIN_UNPACK
+    prefers the smallest operand-unpack count per subblock (sb_h + sb_w per K step), then larger sb_w;
+    otherwise larger sb_w."""
+
+    def key(h, w):
+        return (h * w, -(h + w) if SUBBLOCK_MIN_UNPACK else 0, w)
+
     best = (1, 1)
     for h in _divisors(block_m):
         for w in _divisors(block_n):
-            if h * w <= dest_limit and (h * w, w) > (best[0] * best[1], best[1]):
+            if h * w <= dest_limit and key(h, w) > key(*best):
                 best = (h, w)
     return best
 
@@ -387,6 +434,13 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
 
     # S1: whole per-core region, one resident K-block, no accumulator.
     if one_k_block and _footprint(geom, cm, cn, tk, partials=False) <= budget:
+        # A core whose whole walk is this single K-block can neither use the second slot of the
+        # depth-2 operand CBs nor overlap its read with compute. Split K so compute starts on the
+        # first half while the second lands (the two halves fill exactly the old one-slot footprint).
+        if SINGLE_WALK_K_BLOCKS > 1 and block_b == 1 and tk >= SINGLE_WALK_K_BLOCKS * BLOCK_K_FLOOR:
+            bk = _cdiv(tk, SINGLE_WALK_K_BLOCKS)
+            if _footprint(geom, cm, cn, bk, partials=True) <= budget:
+                return _make_blocking(geom, block_b, cm, cn, bk)
         return _make_blocking(geom, block_b, cm, cn, tk)
 
     # S2: whole region, K-walk with the accumulator.
@@ -557,7 +611,8 @@ def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=No
     reader_accessor_ct.extend(ttnn.TensorAccessorArgs(b).get_compile_time_args())
     reader_accessor_ct.extend(ttnn.TensorAccessorArgs(row_t).get_compile_time_args())
     reader_accessor_ct.extend(ttnn.TensorAccessorArgs(res_t).get_compile_time_args())
-    operand_mcast = uses_operand_mcast(grid)
+    operand_mcast = uses_operand_mcast(geom, grid, blk)
+    act_offset, weight_offset = injector_offsets(grid)
 
     writer_ct = [
         CB_OUTPUT_TILES,
@@ -613,7 +668,10 @@ def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=No
             # multicast per K-block); blocks in a ragged edge's padded tail run with 0 valid tiles.
             nb_m = _cdiv(grid.core_m_tiles, blk.block_m_tiles)
             nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
-            reader_roles[(core.x, core.y)] = (int(j == 0), int(i == 0))
+            reader_roles[(core.x, core.y)] = (
+                int(j == (act_offset + i) % grid.grid_n),
+                int(i == (weight_offset + j) % grid.grid_m),
+            )
         else:
             nb_m = _cdiv(rows_valid, blk.block_m_tiles)
             nb_n = _cdiv(cols_valid, blk.block_n_tiles)
@@ -670,15 +728,18 @@ def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=No
         config=compute_config,
     )
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
-    _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast)
+    _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset, weight_offset)
     descriptor.kernels = [*readers, writer, compute]
     return descriptor
 
 
-def _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast):
+def _attach_operand_channels(
+    descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset=0, weight_offset=0
+):
     """R1a: two line channels on the split rectangle at disjoint semaphore ids -- `act` along the lines
     of cores sharing a row region (logical i), `weight` along those sharing a column region (logical
-    j); each line's injector is its logical j == 0 (act) / i == 0 (weight) core, i.e. in-group index 0.
+    j). Groups are enumerated in line order and a line's cores in logical order, so the `Staggered`
+    fixed sender (offset + group index, wrapped) is exactly the injector `injector_offsets` picked.
     Under "rect" (x = j, y = i) act lines are physical rows; under "rect_t" (x = i, y = j) columns.
     Plain R1: both channels attach as absent."""
     if not operand_mcast:
@@ -689,7 +750,10 @@ def _attach_operand_channels(descriptor, readers, grid, core_ranges, device, ope
     row_major, col_major = ttnn.McastCoreOrder.RowMajor, ttnn.McastCoreOrder.ColumnMajor
     act_order, weight_order = (row_major, col_major) if grid.placement == "rect" else (col_major, row_major)
     config = ttnn.McastConfig(handshake=True)
-    mc_act = ttnn.Mcast(device, config, core_ranges, grid.grid_n, ttnn.McastFixedSenderConfig(), act_order)
-    mc_weight = ttnn.Mcast(device, config, core_ranges, grid.grid_m, ttnn.McastFixedSenderConfig(), weight_order)
+    staggered = ttnn.McastSenderPlacement.Staggered
+    act_sender = ttnn.McastFixedSenderConfig(sender_index=act_offset, placement=staggered)
+    weight_sender = ttnn.McastFixedSenderConfig(sender_index=weight_offset, placement=staggered)
+    mc_act = ttnn.Mcast(device, config, core_ranges, grid.grid_n, act_sender, act_order)
+    mc_weight = ttnn.Mcast(device, config, core_ranges, grid.grid_m, weight_sender, weight_order)
     mc_act.attach(descriptor, "act", readers, 0)
     mc_weight.attach(descriptor, "weight", readers, mc_act.next_semaphore_id())

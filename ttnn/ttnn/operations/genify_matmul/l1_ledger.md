@@ -29,6 +29,10 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
 - `cb_residual_tiles` row groups are pushed after each batch's K-walk, in epilogue order.
 - Ablation, PERF FOCUS 1: the Interm/partials plumbing adds no measurable time. With the chain compute stubbed the run takes 1564 µs, against 1572 µs for the epilogue-none twin. The fused swiglu costs only its SFPU compute.
 
+**Refinement 3 (R1a `interleaved_2d_mcast`, single-walk K split) as built.**
+- **No new CB.** Under R1a the line injector reads its K-block into its own `cb_act_tiles` / `cb_weight_tiles` slot and multicasts it to the same slot address on the line's receivers (the grid-uniform walk keeps every core's write pointer in lockstep). The receivers' slot is the landing zone; the handshake is "slot reserved". Producer and consumer per CB are unchanged (reader → compute). Two `ttnn.Mcast` channels add 2 + 2 L1 semaphores per core, no CB bytes.
+- **Folded finding resolved (dead second slot / no read-compute overlap).** When a core's whole walk would be ONE K-block (S1, `core_batches == 1`), the solve now splits K into `SINGLE_WALK_K_BLOCKS = 2` K-blocks (when `tensor_k_tiles ≥ 2·block_k_floor` and the split fits with `cb_partials`). The two halves occupy exactly the old single-slot bytes, so the depth-2 operand CBs now hold two live K-blocks and compute starts on the first while the second lands. Measured: 384×1536×1024 43.4 → 34.2 µs, 32×1024×2048 26.6 → 24.5 µs, neutral elsewhere. Shapes with `tensor_k_tiles < 16` keep the unsplit S1 block.
+
 ## Symbol table (non-block parameters and their bounds)
 
 | Symbol | Bound | Predicate establishing it |
@@ -85,6 +89,16 @@ Worked values, 11×10 grid, budget ≈ 1.4 MB (illustrative; the host computes t
 
 **1-D (decode-shaped) example** (1×6144 @ 6144×6144 bf16, `grid_n' = 96`):
 - DRAM: A ×96 = 37.7 MB, B ×1 = 75.5 MB, out 12 KB, total ≈ 113 MB
+
+**R1a as built (Refinement 3)** — DRAM crossings per tensor when `uses_operand_mcast()` holds:
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | `nb_n` | one injector per grid row-line reads each A K-block of its rows once per N-block | multicast of every A K-block to the `grid_n' − 1` other cores of the line |
+| B | `nb_m` | one injector per column-line reads each B K-block of its columns once per M-block | multicast of every B K-block to the `grid_m' − 1` other cores of the line |
+| output, bias / gate, residual | as R1 | unchanged (per-core) | none |
+
+Prefill gate_up (grid 11×10, block 6×28, `nb = 1`): DRAM ≈ 21 MB (A) + 25 MB (B) + 17.8 MB (out) ≈ 64 MB, down from ≈ 504 MB.
 
 > Cheapest-traffic split considered: `R1a interleaved_2d_mcast` (and `R1b interleaved_stream_mcast_a` for 1-D grids). Delta for prefill: DRAM 504 MB → 64 MB (−440 MB), adding NoC multicasts of each A K-block to `grid_n'−1` receivers per row and each B K-block to `grid_m'−1` per column. Delta for the 1-D example: DRAM 113 MB → 75.5 MB (−37.7 MB), adding a broadcast of A (≤ 0.4 MB) to 96 cores.
 > Implemented: `R1 interleaved_out_split`.
