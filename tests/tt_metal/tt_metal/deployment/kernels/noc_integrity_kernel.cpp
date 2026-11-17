@@ -5,7 +5,6 @@
 #include "api/dataflow/dataflow_api.h"
 
 #include "args.hpp"
-#include "timestamp.hpp"
 #include "noc_integrity_types.hpp"
 #include "patterns/patterns.hpp"
 
@@ -18,14 +17,30 @@
     X(uint32_t, iterations)    \
     X(uint32_t, timeout_ms)    \
     X(uint32_t, packet_size)   \
-    X(uint32_t, burst)         \
-    X(uint32_t, vc)
+    X(uint32_t, burst)
 
 // Assumes a ~1.35 GHz wall clock (same as eth/common.hpp)
 constexpr uint64_t CYCLES_PER_MS = 1350000ull;
 
+#define WALL_CLOCK_L (*(volatile uint32_t*)0xFFB121F0)
+#define WALL_CLOCK_H_LIVE (*(volatile uint32_t*)0xFFB121F4)
+
+// The wall clock, read high-low-high from the live high word and retried if the high word changed. The latched
+// high word that timestamp.hpp reads (0xFFB121F8) keeps tracking the clock until the tile's next register
+// access, so low-then-high tears by +2^32 cycles when the low word wraps between the two reads. That ended a
+// barrier wait early as a spurious 2 s timeout.
+static uint64_t wall_clock() {
+    for (;;) {
+        const uint32_t high = WALL_CLOCK_H_LIVE;
+        const uint32_t low = WALL_CLOCK_L;
+        if (WALL_CLOCK_H_LIVE == high) {
+            return ((uint64_t)high << 32) | low;
+        }
+    }
+}
+
 static bool wait_writes_flushed(uint64_t timeout_cycles) {
-    const uint64_t start = timestamp();
+    const uint64_t start = wall_clock();
     for (;;) {
         invalidate_l1_cache();
         bool done;
@@ -37,14 +52,14 @@ static bool wait_writes_flushed(uint64_t timeout_cycles) {
         if (done) {
             return true;
         }
-        if (timestamp() - start > timeout_cycles) {
+        if (wall_clock() - start > timeout_cycles) {
             return false;
         }
     }
 }
 
 static bool wait_reads_flushed(uint64_t timeout_cycles) {
-    const uint64_t start = timestamp();
+    const uint64_t start = wall_clock();
     for (;;) {
         invalidate_l1_cache();
         bool done;
@@ -57,7 +72,7 @@ static bool wait_reads_flushed(uint64_t timeout_cycles) {
             invalidate_l1_cache();
             return true;
         }
-        if (timestamp() - start > timeout_cycles) {
+        if (wall_clock() - start > timeout_cycles) {
             return false;
         }
     }
@@ -99,6 +114,60 @@ static void fill_pattern(
     }
 }
 
+// A slice is one source's own region in a destination's L1 (or DRAM buffer), slice_size bytes at the source's
+// slot, so concurrent sources never write the same bytes. These move a whole slice as packets of packet_bytes.
+//
+// Unlinked writes go through noc_async_write, so the watcher and NOC tracing see them. The dataflow API has no
+// linked unicast write, so a linked slice issues every packet through the low-level call, with the VC linked on
+// all but the last; the chain holds its VC from the first packet to the last. The last packet can't go through
+// noc_async_write either: with the watcher's linked-transaction check on, it hangs any unicast issued while the
+// previous packet left the link set.
+static void write_slice(
+    uint32_t src_addr, uint64_t dst, uint32_t slice_bytes, uint32_t packet_bytes, uint32_t vc, bool linked) {
+    for (uint32_t offset = 0; offset < slice_bytes; offset += packet_bytes) {
+        const uint32_t len = slice_bytes - offset < packet_bytes ? slice_bytes - offset : packet_bytes;
+        if (linked) {
+            ncrisc_noc_fast_write_any_len<noc_mode>(
+                noc_index,
+                write_cmd_buf,
+                src_addr + offset,
+                dst + offset,
+                len,
+                vc,
+                false,
+                offset + len < slice_bytes,
+                1,
+                false);
+        } else {
+            noc_async_write(src_addr + offset, dst + offset, len, noc_index, vc);
+        }
+    }
+}
+
+// The VC noc_init leaves on the read command buffer.
+constexpr uint32_t NOC_DEFAULT_READ_VC = 1;
+
+// In dedicated NOC mode noc_async_read ignores its VC argument and issues on whatever VC the read command buffer
+// holds, so set it first, and put the default back after so later kernels on this core read as they expect.
+static void read_slice(uint64_t src, uint32_t dst_addr, uint32_t slice_bytes, uint32_t packet_bytes, uint32_t vc) {
+    noc_async_read_one_packet_set_state<true>(src, packet_bytes, vc, noc_index);
+    for (uint32_t offset = 0; offset < slice_bytes; offset += packet_bytes) {
+        const uint32_t len = slice_bytes - offset < packet_bytes ? slice_bytes - offset : packet_bytes;
+        noc_async_read(src + offset, dst_addr + offset, len, noc_index, vc);
+    }
+    noc_async_read_one_packet_set_state<true>(src, packet_bytes, NOC_DEFAULT_READ_VC, noc_index);
+}
+
+// Records where a barrier timed out and marks the kernel aborted; the caller then returns.
+static void abort_on_timeout(
+    volatile uint32_t* progress, volatile uint32_t* r, uint32_t status, uint32_t pattern, uint32_t iter, uint32_t txn) {
+    r[NOC_RESULT_STATUS] = status;
+    r[NOC_RESULT_PATTERN] = pattern;
+    r[NOC_RESULT_ITERATION] = iter;
+    r[NOC_RESULT_TXN] = txn;
+    progress[NOC_PROGRESS_STATE] = NOC_STATE_ABORTED;
+}
+
 void kernel_main() {
     ARG_INIT(ARGS);
 
@@ -117,14 +186,10 @@ void kernel_main() {
 
     for (uint32_t d = 0; d < num_dests; d++) {
         volatile uint32_t* r = results + d * NOC_RESULT_WORDS;
+        for (uint32_t w = 0; w < NOC_RESULT_WORDS; w++) {
+            r[w] = 0;
+        }
         r[NOC_RESULT_STATUS] = NOC_STATUS_NOT_RUN;
-        r[NOC_RESULT_MISMATCHES] = 0;
-        r[NOC_RESULT_FIRST_OFFSET] = 0;
-        r[NOC_RESULT_EXPECTED] = 0;
-        r[NOC_RESULT_ACTUAL] = 0;
-        r[NOC_RESULT_PATTERN] = 0;
-        r[NOC_RESULT_ITERATION] = 0;
-        r[NOC_RESULT_TRANSFERS] = 0;
     }
 
     // Destination-outer, so a later abort can never leave a partially tested destination marked done.
@@ -137,57 +202,64 @@ void kernel_main() {
         progress[NOC_PROGRESS_DEST] = d;
 
         for (uint32_t iter = 0; iter < iterations; iter++) {
-            for (uint32_t pattern = 0; pattern < NOC_PATTERN_COUNT; pattern++) {
-                progress[NOC_PROGRESS_PATTERN] = pattern;
-                progress[NOC_PROGRESS_ITERATION] = iter;
+            progress[NOC_PROGRESS_ITERATION] = iter;
+            // Transaction-outer, so consecutive transfers to a destination always carry different data, and a
+            // write that never lands can't pass by reading back the previous transfer's identical bytes.
+            for (uint32_t txn = 0; txn < NOC_TXNS; txn++) {
+                const uint32_t vc = txn & NOC_TXN_VC_MASK;
+                const bool linked = txn & NOC_TXN_LINKED;
+                const uint32_t packet_bytes = (txn & NOC_TXN_SMALL) ? NOC_SMALL_PACKET : packet_size;
+                progress[NOC_PROGRESS_TXN] = txn;
 
-                fill_pattern(src, words, pattern, iter, dst_addr, seed ^ (d << 16) ^ (iter << 8) ^ pattern);
-                for (uint32_t i = 0; i < words; i++) {
-                    rb[i] = ~src[i];
-                }
+                for (uint32_t pattern = 0; pattern < NOC_PATTERN_COUNT; pattern++) {
+                    progress[NOC_PROGRESS_PATTERN] = pattern;
 
-                // Keep many packets in flight, like the fabric EDM does when forwarding to local cores.
-                for (uint32_t b = 0; b < burst; b++) {
-                    for (uint32_t off = 0; off < slice_size; off += packet_size) {
-                        const uint32_t len = slice_size - off < packet_size ? slice_size - off : packet_size;
-                        noc_async_write(src_addr + off, dst_noc_addr + off, len, noc_index, vc);
+                    fill_pattern(
+                        src, words, pattern, iter, dst_addr, seed ^ (d << 16) ^ (iter << 8) ^ (txn << 3) ^ pattern);
+                    for (uint32_t i = 0; i < words; i++) {
+                        rb[i] = ~src[i];
                     }
-                }
-                if (!wait_writes_flushed(timeout_cycles)) {
-                    r[NOC_RESULT_STATUS] = NOC_STATUS_WRITE_TIMEOUT;
-                    r[NOC_RESULT_PATTERN] = pattern;
-                    r[NOC_RESULT_ITERATION] = iter;
-                    progress[NOC_PROGRESS_STATE] = NOC_STATE_ABORTED;
-                    return;
-                }
 
-                noc_async_read(dst_noc_addr, readback_addr, slice_size);
-                if (!wait_reads_flushed(timeout_cycles)) {
-                    r[NOC_RESULT_STATUS] = NOC_STATUS_READ_TIMEOUT;
-                    r[NOC_RESULT_PATTERN] = pattern;
-                    r[NOC_RESULT_ITERATION] = iter;
-                    progress[NOC_PROGRESS_STATE] = NOC_STATE_ABORTED;
-                    return;
-                }
+                    // NOC_TEST_BURST > 1 rewrites the slice that many times before the barrier, keeping more packets in
+                    // flight, like the fabric EDM does when forwarding to local cores.
+                    for (uint32_t b = 0; b < burst; b++) {
+                        write_slice(src_addr, dst_noc_addr, slice_size, packet_bytes, vc, linked);
+                    }
+                    if (!wait_writes_flushed(timeout_cycles)) {
+                        abort_on_timeout(progress, r, NOC_STATUS_WRITE_TIMEOUT, pattern, iter, txn);
+                        return;
+                    }
 
-                uint32_t mismatches = 0;
-                for (uint32_t i = 0; i < words; i++) {
-                    const uint32_t expected = src[i];
-                    const uint32_t actual = rb[i];
-                    if (expected != actual) {
-                        if (r[NOC_RESULT_MISMATCHES] == 0 && mismatches == 0) {
-                            r[NOC_RESULT_FIRST_OFFSET] = i * sizeof(uint32_t);
-                            r[NOC_RESULT_EXPECTED] = expected;
-                            r[NOC_RESULT_ACTUAL] = actual;
-                            r[NOC_RESULT_PATTERN] = pattern;
-                            r[NOC_RESULT_ITERATION] = iter;
+                    // Read back on the same VC and packet size.
+                    read_slice(dst_noc_addr, readback_addr, slice_size, packet_bytes, vc);
+                    if (!wait_reads_flushed(timeout_cycles)) {
+                        abort_on_timeout(progress, r, NOC_STATUS_READ_TIMEOUT, pattern, iter, txn);
+                        return;
+                    }
+
+                    uint32_t mismatches = 0;
+                    for (uint32_t i = 0; i < words; i++) {
+                        const uint32_t expected = src[i];
+                        const uint32_t actual = rb[i];
+                        if (expected != actual) {
+                            if (r[NOC_RESULT_MISMATCHES] == 0 && mismatches == 0) {
+                                r[NOC_RESULT_FIRST_OFFSET] = i * sizeof(uint32_t);
+                                r[NOC_RESULT_EXPECTED] = expected;
+                                r[NOC_RESULT_ACTUAL] = actual;
+                                r[NOC_RESULT_PATTERN] = pattern;
+                                r[NOC_RESULT_ITERATION] = iter;
+                                r[NOC_RESULT_TXN] = txn;
+                            }
+                            mismatches++;
                         }
-                        mismatches++;
                     }
+                    r[NOC_RESULT_MISMATCHES] = r[NOC_RESULT_MISMATCHES] + mismatches;
+                    if (mismatches) {
+                        r[NOC_RESULT_TXN_MASK] = r[NOC_RESULT_TXN_MASK] | (1u << txn);
+                    }
+                    r[NOC_RESULT_TRANSFERS] = r[NOC_RESULT_TRANSFERS] + 1;
+                    progress[NOC_PROGRESS_HEARTBEAT] = progress[NOC_PROGRESS_HEARTBEAT] + 1;
                 }
-                r[NOC_RESULT_MISMATCHES] = r[NOC_RESULT_MISMATCHES] + mismatches;
-                r[NOC_RESULT_TRANSFERS] = r[NOC_RESULT_TRANSFERS] + 1;
-                progress[NOC_PROGRESS_HEARTBEAT] = progress[NOC_PROGRESS_HEARTBEAT] + 1;
             }
         }
         r[NOC_RESULT_STATUS] = NOC_STATUS_DONE;
