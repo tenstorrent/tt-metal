@@ -37,7 +37,6 @@
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_device_config.hpp"
 #include "llrt/llrt.hpp"
-#include "emulated_program_runner.hpp"  // emule::boot_firmware
 #include "common/executor.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -1518,6 +1517,7 @@ void RiscFirmwareInitializer::initialize_firmware(
 }
 
 void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId device_id) {
+#ifdef TT_METAL_USE_EMULE
     // Each core's core_info message and the reset jump word at the firmware launch address, as
     // initialize_and_launch_firmware writes them; the watcher and kernels read both.
     auto write_core_state = [&](HalProgrammableCoreType core_type, CoreType coord_type, const CoreCoord& logical_core) {
@@ -1537,11 +1537,9 @@ void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId devi
             sizeof(uint32_t),
             {static_cast<size_t>(device_id), virtual_core},
             jit_build_config.fw_launch_addr);
-#ifdef TT_METAL_USE_EMULE
         // Under TT_METAL_EMULE_REAL_FAST_DISPATCH the emulated core runs its firmware loop from here on.
         emule::boot_core_firmware(
             static_cast<int>(device_id), core_type, logical_core.x, logical_core.y, virtual_core.x, virtual_core.y);
-#endif
     };
     const CoreCoord grid = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     std::vector<emule::EmuleBootCore> boot_cores;
@@ -1581,6 +1579,9 @@ void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId devi
         MetalContext::instance(ctx_id).build_env_manager().get_device_build_env(device_id).build_env.get_defines(),
         boot_cores,
         firmware_binary_paths);
+#else
+    TT_THROW("Device {} is an emulated device, but tt-metal was built without TT_METAL_USE_EMULE", device_id);
+#endif
 }
 
 void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_id) {
