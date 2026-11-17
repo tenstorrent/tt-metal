@@ -54,7 +54,8 @@ inline std::vector<ttnn::device_operation::DeviceRunArgs> sp_rank_per_device(
 
 // Rank belongs to mesh placement, not to caller-owned tensor data: sp_size and local_rows are compile-time args of
 // every chronology reader, sp_rank a common run arg set per device. A factory using this declares
-// `uses_per_device_run_args` and no override: sp_rank depends only on the device, so it is set once, at the miss.
+// `uses_per_device_run_args` and `fixed_per_device_run_args`: sp_rank depends only on the device, so it is set
+// once, at the miss.
 inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
     const ttnn::device_operation::ProgramArtifacts& artifacts,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
