@@ -170,6 +170,89 @@ protected:
             EXPECT_EQ(got, data);
         }
     }
+
+    // Number of HSIO tiles in the descriptor (CCE0 of each).
+    uint32_t hsio_count() const {
+        uint32_t n = 0;
+        for (const auto& core : soc_desc_of(device_).get_arch_descriptor().get_keraunos().cores) {
+            n += core.eth_cce == 0 ? 1 : 0;
+        }
+        return n;
+    }
+
+    // Every ordered pair of distinct HSIO tiles, plus each tile through its own global window.
+    void expect_tile_matrix(Engine engine, bool read, uint32_t tag_base) {
+        const uint32_t n = hsio_count();
+        ASSERT_GE(n, 2u);
+        for (uint32_t from = 0; from < n; ++from) {
+            for (uint32_t to = 0; to < n; ++to) {
+                SCOPED_TRACE(fmt::format("HSIO {} {} HSIO {}", from, read ? "reads" : "writes", to));
+                expect_tile_to_tile(engine, from, to, read, tag_base + from * n + to);
+                if (HasFatalFailure()) {
+                    return;
+                }
+            }
+        }
+    }
+
+    // One GDDR copy from HSIO 2 CCE 0 to `mimir`'s DRAM view `view` at `extra` bytes into it. The package address
+    // of the view's start is its address_offset; the host reaches the same bytes through the view.
+    void expect_mimir_gddr_at(Engine engine, uint32_t mimir, uint32_t view, uint64_t extra, bool read, uint32_t tag) {
+        const auto k = hsio_core(2);
+        ASSERT_TRUE(k.has_value());
+        const auto& hal = MetalContext::instance().hal();
+        const metal_SocDescriptor& soc = soc_desc_of(device_);
+        const uint64_t host_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED) + extra;
+        const uint32_t bytes = hal.get_alignment(HalMemType::DRAM);
+        const auto data = pattern(tag, bytes);
+        const uint64_t remote =
+            mimir_gddr_spa_from_keraunos(mimir, static_cast<uint64_t>(soc.get_address_offset(static_cast<int>(view))) + host_offset);
+        GddrBackingScope gddr_backing;
+        if (read) {
+            write_gddr_view(*mesh_, device_, view, host_offset, data);
+            write_words(*k, kDstOffset, std::vector<uint32_t>(data.size(), 0));
+            const bool dst_local = engine == Engine::Cpu;
+            const uint64_t dst = dst_local ? local_addr(kDstOffset) : global_addr(*k, kDstOffset);
+            run_copy(engine, *k, remote, dst, bytes, dst_local);
+            EXPECT_EQ(read_words(*k, kDstOffset, data.size()), data);
+        } else {
+            write_words(*k, kSrcOffset, data);
+            write_gddr_view(*mesh_, device_, view, host_offset, std::vector<uint32_t>(data.size(), 0));
+            run_copy(engine, *k, global_addr(*k, kSrcOffset), remote, bytes);
+            std::vector<uint32_t> got;
+            read_gddr_view(*mesh_, device_, view, host_offset, bytes, got);
+            EXPECT_EQ(got, data);
+        }
+    }
+
+    // Every DRAM view of `mimir` at several offsets: the first bytes, a page in, 1 MiB in, and the view's midpoint.
+    void expect_mimir_gddr_views(Engine engine, uint32_t mimir, bool read, uint32_t tag_base) {
+        if (num_mimirs_on(device_) <= mimir) {
+            GTEST_SKIP() << "Descriptor has no Mimir " << mimir;
+        }
+        const metal_SocDescriptor& soc = soc_desc_of(device_);
+        const auto views = dram_views_for_channel(soc, mimir);
+        ASSERT_FALSE(views.empty());
+        const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+        uint32_t tag = tag_base;
+        for (uint32_t view : views) {
+            const uint64_t view_size = soc.dram_view_size;
+            std::vector<uint64_t> extras = {0, 4096, 1ull << 20};
+            if (view_size > 2 * (unreserved + (1ull << 20))) {
+                extras.push_back(view_size / 2);
+            }
+            for (uint64_t extra : extras) {
+                if (unreserved + extra + 64 > view_size) {
+                    continue;
+                }
+                SCOPED_TRACE(fmt::format("Mimir {} view {} +{:#x}", mimir, view, extra));
+                expect_mimir_gddr_at(engine, mimir, view, extra, read, tag++);
+                if (HasFatalFailure()) {
+                    return;
+                }
+            }
+        }
+    }
 };
 
 // --- HSIO SRAM ---------------------------------------------------------------------------------------
@@ -189,6 +272,30 @@ TEST_F(KeraunosPaths, IdmaReadsM1Gddr) { expect_mimir_gddr(Engine::Idma, 1, /*re
 // --- CPU loads across D2D: the original hang. Last, because a stuck load can leave the hart mid-transaction.
 TEST_F(KeraunosPaths, CpuReadsM1MimirCceSram) { expect_mimir_cce_sram(Engine::Cpu, 1, /*read=*/true, 0xB9); }
 TEST_F(KeraunosPaths, CpuReadsM1Gddr) { expect_mimir_gddr(Engine::Cpu, 1, /*read=*/true, 0xBA); }
+
+
+// --- Phase 2: the full matrix --------------------------------------------------------------------------
+// Every HSIO tile to every other, and to itself through its own global window.
+TEST_F(KeraunosPaths, IdmaWritesEveryTileSram) { expect_tile_matrix(Engine::Idma, /*read=*/false, 0x10); }
+TEST_F(KeraunosPaths, IdmaReadsEveryTileSram) { expect_tile_matrix(Engine::Idma, /*read=*/true, 0x30); }
+TEST_F(KeraunosPaths, CpuWritesEveryTileSram) { expect_tile_matrix(Engine::Cpu, /*read=*/false, 0x50); }
+TEST_F(KeraunosPaths, CpuReadsEveryTileSram) { expect_tile_matrix(Engine::Cpu, /*read=*/true, 0x70); }
+
+// CPU stores across D2D (loads are covered above).
+TEST_F(KeraunosPaths, CpuWritesM1MimirCceSram) { expect_mimir_cce_sram(Engine::Cpu, 1, /*read=*/false, 0xC1); }
+TEST_F(KeraunosPaths, CpuWritesM1Gddr) { expect_mimir_gddr(Engine::Cpu, 1, /*read=*/false, 0xC2); }
+
+// M1 GDDR: every DRAM view, several offsets, both engines, both directions.
+TEST_F(KeraunosPaths, IdmaWritesM1GddrViews) { expect_mimir_gddr_views(Engine::Idma, 1, /*read=*/false, 0xD0); }
+TEST_F(KeraunosPaths, IdmaReadsM1GddrViews) { expect_mimir_gddr_views(Engine::Idma, 1, /*read=*/true, 0xD1); }
+TEST_F(KeraunosPaths, CpuWritesM1GddrViews) { expect_mimir_gddr_views(Engine::Cpu, 1, /*read=*/false, 0xD2); }
+TEST_F(KeraunosPaths, CpuReadsM1GddrViews) { expect_mimir_gddr_views(Engine::Cpu, 1, /*read=*/true, 0xD3); }
+
+// M0 GDDR from Keraunos: the 0x1_0020_... route, M0's D2D1 behind M1 (two hops).
+TEST_F(KeraunosPaths, IdmaWritesM0GddrThroughM1) { expect_mimir_gddr_views(Engine::Idma, 0, /*read=*/false, 0xE0); }
+TEST_F(KeraunosPaths, IdmaReadsM0GddrThroughM1) { expect_mimir_gddr_views(Engine::Idma, 0, /*read=*/true, 0xE1); }
+TEST_F(KeraunosPaths, CpuWritesM0GddrThroughM1) { expect_mimir_gddr_views(Engine::Cpu, 0, /*read=*/false, 0xE2); }
+TEST_F(KeraunosPaths, CpuReadsM0GddrThroughM1) { expect_mimir_gddr_views(Engine::Cpu, 0, /*read=*/true, 0xE3); }
 
 }  // namespace
 }  // namespace tt::tt_metal
