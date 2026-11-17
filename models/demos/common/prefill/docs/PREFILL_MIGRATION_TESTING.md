@@ -591,6 +591,7 @@ keeps its contents after the processes exit):
 python -m models.demos.common.prefill.runners.migration_chunk_digest digest \
     --table <side table .pb> --device-map <this host's device map> \
     --slot <src slot on prefill, dst slot on decode> --positions <P> --configs 00,01 \
+    --layouts 00=rows,01=bfp8 \
     --out <shared dir>/<prefill|decode>_$(hostname).json
 ```
 
@@ -606,9 +607,15 @@ python -m models.demos.common.prefill.runners.migration_chunk_digest compare \
 It prints `identical/compared` per config and exits non-zero on any byte difference, on a chunk only one
 side hashed, and on a side whose digests hold fewer chunks than its table names. Each digest file records that
 count, so a host left out of both sides is caught too. Decode writes the migrated slot only at positions `>= P`, so `[0, P)` still
-holds the migrated bytes after decode has run. A chunk that `P` ends inside is skipped, since it also holds
-positions decode has written; `digest` prints how many positions that leaves unchecked. Leave the KDA configs out: decode advances that state after
+holds the migrated bytes after decode has run. Leave the KDA configs out: decode advances that state after
 the handoff, so compare it by PCC on the decode side instead.
+
+A chunk that `P` ends inside also holds positions decode has written, so `digest` hashes only its bytes below
+`P`. Where those sit depends on how the cache is stored, which the table does not record; `--layouts` names it
+per config: `rows` for a row-major cache (one page per position) and `bfp8` for a tiled `bfloat8_b` one. The
+line above is Kimi-K3.1's (scaled-FP8 KVPE, bfp8 index cache); dense Kimi-K3 is `00=bfp8`. Without a layout
+that chunk is skipped for the config, and `compare` then fails and names the positions left unchecked. It also
+fails when the two sides were digested with different arguments.
 
 ---
 
