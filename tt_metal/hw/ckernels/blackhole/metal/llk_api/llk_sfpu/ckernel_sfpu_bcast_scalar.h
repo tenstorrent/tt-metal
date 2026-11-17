@@ -14,10 +14,10 @@
 // lives until an init that programs the constant registers LREG12..14 (exp_tile_init, sfpu_normalize_bcast_scalar
 // and the like), after which sfpu_bcast_scalar_init + sfpu_bcast_scalar_load bring it back.
 //
-// The load is bit-exact: lane 0 is kept by a lane-id predicate (the other lanes become +0.0), spread over its
+// The load is bit-exact: lane 0 is kept by a lane-id predicate (the other lanes become +0.0) and spread over its
 // 8-lane sub-vector by rotate-by-1, 2, 4 and bitwise OR (the zero lanes contribute no bits, so -0.0, NaN payloads
-// and denormals survive), then over the four sub-vectors by SFPTRANSP of four copies (output 0's sub-vector j is
-// input j's sub-vector 0).
+// and denormals survive). No spread over the four sub-vectors is needed: the SFPCONFIG write of LREG14 takes only
+// lanes 0..7 of its source and broadcasts them to all 32 lanes.
 //
 // The multiply is the column-broadcast kernel's own instruction, SFPMUL by the broadcast register with a zero
 // addend, so a tile scaled by the parked scalar is bit-identical to sfpu_mul_bcast_col with a uniform column.
@@ -82,9 +82,7 @@ inline void _sfpu_bcast_scalar_load_(
     t = sfpi::subvec_shflror1(t);
     t = sfpi::subvec_shflror1(t);
     s = _bcast_scalar_or_bits_(s, t);
-    sfpi::vFloat a = s, b = s, c = s, d = s, e = 0.0f, f = 0.0f, g = 0.0f, h = 0.0f;
-    sfpi::subvec_transp(a, b, c, d, e, f, g, h);
-    sfpi::vConstFloatPrgm2 = a;
+    sfpi::vConstFloatPrgm2 = s;
 }
 
 // N consecutive DEST vectors from `addr` (address units) times LREG14, in place. No sfpi value is live here, so

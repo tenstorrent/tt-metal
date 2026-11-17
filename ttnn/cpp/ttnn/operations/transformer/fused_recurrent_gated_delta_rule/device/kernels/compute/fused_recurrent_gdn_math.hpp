@@ -295,15 +295,15 @@ void read_vector_pass(
     out.push_back(Vt);
 }
 
-// Update pass: S_next[i, j] <- e * S_cur[i, j] + kT16[i] x u16[j], groups of up to kUpdateGroup (= 4) S tiles per
-// acquire: ecol32 is copied into slot 0 and its [0, 0] parked in an SFPU register (sfpu_bcast_scalar_load), the exact
-// seeds are copied from the utd S_cur into slots 0..3, each is decayed by the parked e (sfpu_mul_bcast_scalar,
-// bit-identical to the column broadcast of a uniform column), then the rank-1 products accumulate onto the seeded
-// slots. With emit_state every slot is also packed to state_out. s_cur and s_next are state CBs; the pass touches their
-// utd ids only (the mm views are never pushed or popped). The outputs are reserved, packed (indices relative to the
-// reservation; the (i, j) order is sequential) and pushed per acquire group, so a writer can stream the state tiles
-// while the pass runs. Waits kT16 (Kt), u16 (Vt), S_cur (Kt*Vt), ecol32 (1); pushes S_next (Kt*Vt in total) and, with
-// emit_state, state_out (Kt*Vt in total).
+// Update pass: S_next[i, j] <- e * S_cur[i, j] + kT16[i] x u16[j]. First, in an acquire of its own, ecol32 is copied
+// into slot 0 and its [0, 0] parked in an SFPU register (sfpu_bcast_scalar_load) for the whole pass. Then groups of up
+// to kUpdateGroup (= 4) S tiles per acquire: the exact seeds are copied from the utd S_cur into slots 0..3, each is
+// decayed by the parked e (sfpu_mul_bcast_scalar, bit-identical to the column broadcast of a uniform column), then the
+// rank-1 products accumulate onto the seeded slots. With emit_state every slot is also packed to state_out. s_cur and
+// s_next are state CBs; the pass touches their utd ids only (the mm views are never pushed or popped). The outputs are
+// reserved, packed (indices relative to the reservation; the (i, j) order is sequential) and pushed per acquire group,
+// so a writer can stream the state tiles while the pass runs. Waits kT16 (Kt), u16 (Vt), S_cur (Kt*Vt), ecol32 (1);
+// pushes S_next (Kt*Vt in total) and, with emit_state, state_out (Kt*Vt in total).
 template <uint32_t Kt, uint32_t Vt>
 void update_pass(
     uint32_t cb_kT16,
@@ -324,6 +324,18 @@ void update_pass(
     ecol.wait_front(1);
     // Source geometry for the rank-1 matmul (32x16 x 16x32); the copies in the loop only change formats.
     reconfig_full_operand<SrcOrder::Reverse>(cb_kT16, cb_u16);
+    // e is one scalar for the whole token, and the parked value outlives the acquire group it was loaded in, so the
+    // copy of ecol32 and the load run once here rather than once per group. The loop keeps it parked: its copy, matmul
+    // and pack inits leave LREG14 and the ADDR_MOD_7 that sfpu_bcast_scalar_init programs alone. An init that programs
+    // LREG12..14 (exp_tile_init and the like) added to the loop would need the init and the load again after it.
+    tile_regs_acquire();
+    copy_init(cb_s_cur);  // 32x32 utd tiles: ecol32 and S_cur alike
+    copy_tile(cb_ecol32, 0, 0);
+    ckernel::sfpu_bcast_scalar_init();
+    ckernel::sfpu_bcast_scalar_load(0);
+    tile_regs_commit();
+    tile_regs_wait();
+    tile_regs_release();
     for (uint32_t i = 0; i < Kt; i++) {
         for (uint32_t j0 = 0; j0 < Vt; j0 += kUpdateGroup) {
             const uint32_t nn = (Vt - j0 < kUpdateGroup) ? (Vt - j0) : kUpdateGroup;
@@ -332,10 +344,7 @@ void update_pass(
                 st.reserve_back(nn);
             }
             tile_regs_acquire();
-            copy_init(cb_s_cur);  // 32x32 utd tiles: ecol32 and S_cur alike
-            copy_tile(cb_ecol32, 0, 0);
-            ckernel::sfpu_bcast_scalar_init();
-            ckernel::sfpu_bcast_scalar_load(0);  // e parked in the SFPU; slot 0 is free again
+            copy_init(cb_s_cur);
             for (uint32_t jj = 0; jj < nn; jj++) {
                 copy_tile(cb_s_cur, i * Vt + j0 + jj, jj);
             }
