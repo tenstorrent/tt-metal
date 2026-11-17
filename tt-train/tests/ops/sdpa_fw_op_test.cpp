@@ -2228,7 +2228,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate_S
     run_chunk_knob_sweep(kSplitUnitsGqaGateBase, {{128, 32, 2, 3, 16}});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NumCores) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_NumCores) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     run_chunk_knob_sweep(
         SDPATestConfig{
@@ -2733,8 +2733,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_RingRunsMainProgram) {
 }
 
 // main's program on device, through the single-chip op: a shard that reaches the paired placement (144
-// pairs over the grid) and one that falls back to blocks of rows (4 pairs on 8 cores).
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_RingProgramOnDevice) {
+// pairs over the grid) and one that falls back to blocks of rows (4 pairs on 8 cores). Nightly: 16 s, and
+// NIGHTLY_RingChunking_SingleDevice already runs the rows placement; the host-side ring coverage above
+// stays blocking.
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_RingProgramOnDevice) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     using namespace ttml::metal::ops::sdpa_fw::device;
     using ttml::metal::ops::ring_sdpa_fw::ring_program_config;
@@ -2838,6 +2840,24 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultFitsLargeHeadDim) {
     pinned.program_config = {.q_chunk_size = 32U, .k_chunk_size = 32U, .heads_per_item = 1U};
     pinned.test_name = "ChunkKnobs_PinnedWideHeadsRunUncut";
     EXPECT_EQ(host_schedule(pinned).num_slots, 0U);
+}
+
+// The D=1024 shapes above on device. The host-side checks are what guard the behaviour this is about (the
+// pick giving up the cut rather than refusing the shape); running the two of them costs 9.6 s, so nightly.
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_DefaultWideHeadsRunUncut) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    const SDPATestConfig wide{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 2048U,  // 2 heads * 1024
+        .key_value_dim = 2048U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_DefaultWideHeadsRunUncut"};
+    SDPATestConfig pinned = wide;
+    pinned.program_config = {.q_chunk_size = 32U, .k_chunk_size = 32U, .heads_per_item = 1U};
+    pinned.test_name = "ChunkKnobs_PinnedWideHeadsRunUncut";
     run_sdpa_test(wide);
     run_sdpa_test(pinned);
 }
@@ -3745,7 +3765,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_OneItemTwoCores) {
     run_split_vs_unsplit(base, {256, 32, 1, 4, 2});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_BatchGQAGateNoLse) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitEdge_BatchGQAGateNoLse) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Two batches, 4 heads over 2 kv heads stacked two per item (four-row items), a gate, no logsumexp. At
     // S=512 with two-row items the model refuses to cut these 32 items on the full grid: it charges each
