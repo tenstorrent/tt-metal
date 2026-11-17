@@ -21,6 +21,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "llrt.hpp"
+#include "program/kernel_build_job.hpp"
 #include "program/program_impl.hpp"
 #include "program/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
@@ -33,6 +34,7 @@
 #include "fabric/fabric_builder_context.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include <llrt/llrt.hpp>
+#include <tt-metalium/experimental/compile_session.hpp>
 
 namespace tt::tt_metal {
 
@@ -511,6 +513,7 @@ std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) 
     if (!build_session_) {
         return nullptr;
     }
+    const tt::tt_metal::detail::BuildSinkScope sink_scope(sink_fabric_builds_);
     auto fabric_program = tt::tt_fabric::create_and_compile_fabric_program(
         descriptor_->env_impl(),
         descriptor_->metal_context().get_dispatch_core_manager().get_dispatch_core_config(),
@@ -519,6 +522,9 @@ std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) 
     if (!fabric_program) {
         // Compile failure mostly comes from Nebula (TG)
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+        return fabric_program;
+    }
+    if (sink_fabric_builds_) {
         return fabric_program;
     }
     fabric_program->impl().finalize_offsets(dev);
@@ -583,8 +589,15 @@ void FabricFirmwareInitializer::compile_fabric_only() {
     }
     log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
 
+    // A precompile child's build sink takes the routers' kernels, so they build in the background instead of
+    // holding up the mesh open; the routers are never programmed here, so their binaries are not needed.
+    sink_fabric_builds_ = experimental::CompileSession::build_sink() != nullptr;
+    struct ResetSink {
+        bool& flag;
+        ~ResetSink() { flag = false; }
+    } reset_sink{sink_fabric_builds_};
     // Serial on purpose: the shared tensix mux config mutates state from a const getter, which
-    // races when devices compile in parallel.
+    // races when devices compile in parallel. Serial also keeps the compiles on this thread, whose build sink counts.
     build_fabric_programs(/*parallel=*/false);
 }
 

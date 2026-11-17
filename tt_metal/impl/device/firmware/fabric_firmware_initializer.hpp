@@ -77,6 +77,9 @@ private:
     // Builder state for the current fabric launch. Created before the per-device compiles (which only read it)
     // and destroyed in reset_state(), so each launch, including a relaunch after teardown, gets a fresh one.
     std::unique_ptr<tt::tt_fabric::FabricBuildSession> build_session_;
+    // Set by compile_fabric_only() while a compile session's build sink is on for this thread: the routers' kernels
+    // go to the sink and their offsets, which need binaries, are not laid out; nothing reads them on a mock device.
+    bool sink_fabric_builds_ = false;
     std::atomic_flag initialized_;
 };
 
