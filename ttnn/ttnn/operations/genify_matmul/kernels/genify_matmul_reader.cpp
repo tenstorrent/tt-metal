@@ -19,9 +19,61 @@
 //     before the first epilogue and pops it after the last batch of the block).
 //   - residual (addcmul): row groups of sb_h x block_n tiles after each batch's K-walk, in the
 //     epilogue's consumption order; depth 2 row groups.
+//
+// Regime R1a `interleaved_2d_mcast` (Refinement 3, `operand_mcast` = 1): same region, CBs and walk,
+// only the operand SOURCE changes. A K-block depends only on the core's row region, B only on its
+// column region, so one injector per line reads it from DRAM and multicasts it into the line's
+// cb_act_tiles / cb_weight_tiles (ttnn.Mcast + McastArgs, handshake = the receiver's CB slot is
+// reserved). `a_sends` / `b_sends` (CT, per kernel group) mark this core as the A-line / B-line
+// injector; every other core of the line receives. All cores of a line walk the same nominal block
+// sequence (host passes the grid-uniform nb_m / nb_n), so their CB write pointers stay in lockstep
+// and the multicast lands at the sender's own slot address. Per K-block every core delivers A, then
+// B: no core can block in B(kb) before every core has passed A(kb), so the two channels cannot
+// deadlock. The bias / gate row and the residual stay per-core reads (they are tiny or unshared).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+
+namespace {
+
+// Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
+// wholly in the padded tail of a ragged edge region: the grid-uniform R1a walk visits such blocks).
+FORCE_INLINE uint32_t block_extent(uint32_t valid, uint32_t start, uint32_t nominal) {
+    if (valid <= start) {
+        return 0;
+    }
+    return (valid - start) < nominal ? (valid - start) : nominal;
+}
+
+// One line pipe per operand: the sender face on the injector, the receiver face elsewhere, nothing
+// when the channel is absent (regime R1: every core reads for itself).
+template <bool SENDS, typename Channel>
+FORCE_INLINE auto make_line_pipe(const Channel& channel, const Noc& noc) {
+    if constexpr (!Channel::active) {
+        return 0;
+    } else if constexpr (SENDS) {
+        return channel.sender(noc);
+    } else {
+        return channel.receiver(noc);
+    }
+}
+
+// Deliver one K-block over the line: the injector multicasts its freshly read slot to the same
+// address on every receiver; a receiver acks its reserved slot and waits for the data.
+template <bool ACTIVE, bool SENDS, typename Pipe>
+FORCE_INLINE void line_deliver(Pipe& pipe, uint32_t l1, uint32_t bytes) {
+    if constexpr (ACTIVE) {
+        if constexpr (SENDS) {
+            pipe.send(l1, l1, bytes);
+        } else {
+            pipe.receive();
+        }
+    }
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t cb_act_tiles = get_compile_time_arg_val(0);
@@ -44,7 +96,10 @@ void kernel_main() {
     constexpr uint32_t row_page_bytes = get_compile_time_arg_val(17);
     constexpr uint32_t res_tile_bytes = get_compile_time_arg_val(18);
     constexpr uint32_t res_page_bytes = get_compile_time_arg_val(19);
-    constexpr auto a_args = TensorAccessorArgs<20>();
+    constexpr bool operand_mcast = get_compile_time_arg_val(20) != 0;  // regime R1a
+    constexpr bool a_sends = get_compile_time_arg_val(21) != 0;        // A-line injector (R1a)
+    constexpr bool b_sends = get_compile_time_arg_val(22) != 0;        // B-line injector (R1a)
+    constexpr auto a_args = TensorAccessorArgs<23>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto row_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto res_args = TensorAccessorArgs<row_args.next_compile_time_args_offset()>();
@@ -58,6 +113,17 @@ void kernel_main() {
 
     constexpr uint32_t act_block_tiles = block_m_tiles * block_k_tiles;
     constexpr uint32_t weight_block_tiles = block_k_tiles * block_n_tiles;
+    // R1: every core reads both operands. R1a: only the line injectors read from DRAM.
+    constexpr bool reads_act = !operand_mcast || a_sends;
+    constexpr bool reads_weight = !operand_mcast || b_sends;
+
+    // A rides the A-line channel, B the B-line channel (absent under R1).
+    constexpr auto mc_act = dataflow_kernel_lib::
+        McastArgs<get_named_compile_time_arg_val("act_ct_offset"), get_named_compile_time_arg_val("act_rt_offset")>();
+    constexpr auto mc_weight = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("weight_ct_offset"),
+        get_named_compile_time_arg_val("weight_rt_offset")>();
+    static_assert(mc_act.active == operand_mcast && mc_weight.active == operand_mcast);
 
     uint32_t arg = 0;
     const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
@@ -83,16 +149,20 @@ void kernel_main() {
     [[maybe_unused]] const auto row_acc = TensorAccessor(row_args, row_addr, row_page_bytes);
     [[maybe_unused]] const auto res_acc = TensorAccessor(res_args, res_addr, res_page_bytes);
 
+    Noc noc;
+    [[maybe_unused]] auto act_pipe = make_line_pipe<a_sends>(mc_act, noc);
+    [[maybe_unused]] auto weight_pipe = make_line_pipe<b_sends>(mc_weight, noc);
+
     for (uint32_t bb = 0; bb < nb_b; ++bb) {
         const uint32_t blk_b0 = bb * block_batches;
         const uint32_t blk_b_valid =
             (batches_valid - blk_b0) < block_batches ? (batches_valid - blk_b0) : block_batches;
         for (uint32_t mb = 0; mb < nb_m; ++mb) {
             const uint32_t blk_r0 = mb * block_m_tiles;
-            const uint32_t blk_rows = (rows_valid - blk_r0) < block_m_tiles ? (rows_valid - blk_r0) : block_m_tiles;
+            const uint32_t blk_rows = block_extent(rows_valid, blk_r0, block_m_tiles);
             for (uint32_t nbk = 0; nbk < nb_n; ++nbk) {
                 const uint32_t blk_c0 = nbk * block_n_tiles;
-                const uint32_t blk_cols = (cols_valid - blk_c0) < block_n_tiles ? (cols_valid - blk_c0) : block_n_tiles;
+                const uint32_t blk_cols = block_extent(cols_valid, blk_c0, block_n_tiles);
                 // The helper's batch loop consumes block_batches whole K-walks in batch order.
                 for (uint32_t bi = 0; bi < block_batches; ++bi) {
                     const bool batch_valid = bi < blk_b_valid;
@@ -105,9 +175,10 @@ void kernel_main() {
 
                         cb_reserve_back(cb_act_tiles, act_block_tiles);
                         cb_reserve_back(cb_weight_tiles, weight_block_tiles);
-                        if (batch_valid) {
+                        const uint32_t act_l1 = get_write_ptr(cb_act_tiles);
+                        const uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
+                        if (batch_valid && reads_act) {
                             // A: CB slot r*block_k + k  <-  page (a_row_base + r) * Kt + k0 + k
-                            uint32_t act_l1 = get_write_ptr(cb_act_tiles);
                             for (uint32_t r = 0; r < blk_rows; ++r) {
                                 uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
                                 uint32_t l1 = act_l1 + r * block_k_tiles * a_tile_bytes;
@@ -116,9 +187,10 @@ void kernel_main() {
                                     l1 += a_tile_bytes;
                                 }
                             }
+                        }
+                        if (batch_valid && reads_weight) {
                             // B: CB slot k*block_n + c  <-  page b_base + (k0 + k) * Nt + col(c)
                             // (col(c) = c, or the swiglu gate/up permutation).
-                            uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
                             for (uint32_t k = 0; k < k_valid; ++k) {
                                 uint32_t page = b_base + (k0 + k) * tensor_n_tiles;
                                 uint32_t l1 = weight_l1 + k * block_n_tiles * b_tile_bytes;
@@ -139,8 +211,13 @@ void kernel_main() {
                                     }
                                 }
                             }
+                        }
+                        if constexpr (reads_act || reads_weight) {
                             noc_async_read_barrier();  // one barrier per K-block, both operands
                         }
+                        // R1a: A over its line, then B over its line (fixed order on every core).
+                        line_deliver<operand_mcast, a_sends>(act_pipe, act_l1, act_block_tiles * a_tile_bytes);
+                        line_deliver<operand_mcast, b_sends>(weight_pipe, weight_l1, weight_block_tiles * b_tile_bytes);
                         cb_push_back(cb_act_tiles, act_block_tiles);
                         cb_push_back(cb_weight_tiles, weight_block_tiles);
                     }

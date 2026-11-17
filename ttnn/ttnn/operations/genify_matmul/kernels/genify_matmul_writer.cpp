@@ -12,6 +12,17 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
+namespace {
+// Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
+// wholly in the padded tail of a ragged edge region: the grid-uniform R1a walk visits such blocks).
+FORCE_INLINE uint32_t block_extent(uint32_t valid, uint32_t start, uint32_t nominal) {
+    if (valid <= start) {
+        return 0;
+    }
+    return (valid - start) < nominal ? (valid - start) : nominal;
+}
+}  // namespace
+
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t block_batches = get_compile_time_arg_val(1);
@@ -47,11 +58,10 @@ void kernel_main() {
             (batches_valid - blk_b0) < block_batches ? (batches_valid - blk_b0) : block_batches;
         for (uint32_t mb = 0; mb < nb_m; ++mb) {
             const uint32_t blk_r0 = mb * block_m_tiles;
-            const uint32_t blk_rows = (rows_valid - blk_r0) < block_m_tiles ? (rows_valid - blk_r0) : block_m_tiles;
+            const uint32_t blk_rows = block_extent(rows_valid, blk_r0, block_m_tiles);
             for (uint32_t nbk = 0; nbk < nb_n; ++nbk) {
                 const uint32_t blk_c0 = nbk * out_block_n_tiles;
-                const uint32_t blk_cols =
-                    (cols_valid - blk_c0) < out_block_n_tiles ? (cols_valid - blk_c0) : out_block_n_tiles;
+                const uint32_t blk_cols = block_extent(cols_valid, blk_c0, out_block_n_tiles);
                 for (uint32_t bi = 0; bi < block_batches; ++bi) {
                     const bool batch_valid = bi < blk_b_valid;
                     const uint32_t batch = b0 + blk_b0 + bi;

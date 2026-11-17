@@ -13,6 +13,11 @@ Host side of the blocking scheme:
                         (steps S1..S4), plus the derived output subblock (sb_h, sb_w).
 Every CB page count, kernel loop trip count and grid size below derives from those knobs; each knob is
 defined once and handed to the kernels as a CT / RT arg.
+
+Regime R1a `interleaved_2d_mcast` (Refinement 3) sub-selects from R1 on a 2-D rectangle split
+(`uses_operand_mcast`): the same region / blocking / CBs / compute kernel, but A crosses DRAM once per
+grid line instead of once per core -- the line's first core reads each A K-block and multicasts it
+along the line of cores that share its rows, and likewise for B down the line sharing its columns.
 """
 
 from __future__ import annotations
@@ -65,6 +70,9 @@ Q_N_MAX = 4  # subblock quantum on core_n_tiles (a 4-tile subblock always exists
 # made every core read all of A (10.5 GB instead of 1.3 GB, 4.5x slower).
 GRID_W_SLACK = 0.25
 L1_RESERVE_BYTES = 0  # L1 held back for foreign tensors
+# Regime knob: sub-select R1a `interleaved_2d_mcast` (row / column operand multicast) whenever the split
+# is a 2-D physical rectangle. False keeps every core reading its own operands from DRAM (plain R1).
+OPERAND_MCAST = True
 
 
 def _cdiv(a, b):
@@ -233,6 +241,18 @@ def grid_candidates(geom: Geometry, gx: int, gy: int):
     return list(seen.values())
 
 
+def uses_operand_mcast(grid: GridChoice):
+    """Regime R1a predicate: a single-batch 2-D split mapped onto a physical rectangle, so every grid
+    line (cores sharing a row region, or a column region) is a physical row or column of cores."""
+    return (
+        OPERAND_MCAST
+        and grid.grid_b == 1
+        and grid.grid_m > 1
+        and grid.grid_n > 1
+        and grid.placement in ("rect", "rect_t")
+    )
+
+
 def grid_work(grid: GridChoice):
     """W: per-core output tiles, the critical path (each costs tensor_k_tiles matmul steps)."""
     return grid.core_batches * grid.core_m_tiles * grid.core_n_tiles
@@ -243,12 +263,12 @@ def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     (A once per N-block, B once per M-block of each core's region)."""
     nb_m = _cdiv(grid.core_m_tiles, blk.block_m_tiles)
     nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
-    per_core = (
-        grid.core_batches
-        * geom.tensor_k_tiles
-        * (grid.core_m_tiles * geom.a_tile_bytes * nb_n + grid.core_n_tiles * geom.b_tile_bytes * nb_m)
-    )
-    return per_core * grid.grid_b * grid.grid_m * grid.grid_n
+    a_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_m_tiles * geom.a_tile_bytes * nb_n
+    b_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_n_tiles * geom.b_tile_bytes * nb_m
+    if uses_operand_mcast(grid):
+        # R1a: one A read per grid row-line, one B read per column-line.
+        return a_per_core * grid.grid_m + b_per_core * grid.grid_n
+    return (a_per_core + b_per_core) * grid.grid_b * grid.grid_m * grid.grid_n
 
 
 def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
@@ -531,10 +551,13 @@ def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=No
         ttnn.tile_size(res_t.dtype),
         res_t.buffer_aligned_page_size(),
     ]
-    reader_ct.extend(ttnn.TensorAccessorArgs(a).get_compile_time_args())
-    reader_ct.extend(ttnn.TensorAccessorArgs(b).get_compile_time_args())
-    reader_ct.extend(ttnn.TensorAccessorArgs(row_t).get_compile_time_args())
-    reader_ct.extend(ttnn.TensorAccessorArgs(res_t).get_compile_time_args())
+    # [operand_mcast, a_sends, b_sends] go at READER_ROLE_CT_INDEX, set per kernel group below.
+    reader_accessor_ct = []
+    reader_accessor_ct.extend(ttnn.TensorAccessorArgs(a).get_compile_time_args())
+    reader_accessor_ct.extend(ttnn.TensorAccessorArgs(b).get_compile_time_args())
+    reader_accessor_ct.extend(ttnn.TensorAccessorArgs(row_t).get_compile_time_args())
+    reader_accessor_ct.extend(ttnn.TensorAccessorArgs(res_t).get_compile_time_args())
+    operand_mcast = uses_operand_mcast(grid)
 
     writer_ct = [
         CB_OUTPUT_TILES,
@@ -569,13 +592,14 @@ def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=No
         0 if (SWIGLU_FAST_SILU and out.dtype != ttnn.float32) else 1,  # silu_fp32_precision
     ]
 
-    reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     a_addr, b_addr, out_addr = a.buffer_address(), b.buffer_address(), out.buffer_address()
     row_addr = row.buffer_address() if row is not None else 0
     res_addr = residual.buffer_address() if residual is not None else 0
     out_div = 2 if geom.swiglu else 1  # B columns per output column
+    reader_roles = {}  # core -> (a_sends, b_sends)
+    reader_args = {}  # core -> reader runtime args (placed per role group below)
     for bi, i, j, core in cores:
         b0 = bi * grid.core_batches
         batches_valid = min(grid.core_batches, geom.tensor_batches - b0)
@@ -584,10 +608,18 @@ def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=No
         col0 = j * grid.core_n_tiles
         cols_valid = min(grid.core_n_tiles, geom.tensor_n_tiles - col0)
         nb_b = _cdiv(batches_valid, blk.block_batches)
-        nb_m = _cdiv(rows_valid, blk.block_m_tiles)
-        nb_n = _cdiv(cols_valid, blk.block_n_tiles)
+        if operand_mcast:
+            # Every core of a line walks the same nominal block sequence (CB pointers in lockstep, one
+            # multicast per K-block); blocks in a ragged edge's padded tail run with 0 valid tiles.
+            nb_m = _cdiv(grid.core_m_tiles, blk.block_m_tiles)
+            nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
+            reader_roles[(core.x, core.y)] = (int(j == 0), int(i == 0))
+        else:
+            nb_m = _cdiv(rows_valid, blk.block_m_tiles)
+            nb_n = _cdiv(cols_valid, blk.block_n_tiles)
+            reader_roles[(core.x, core.y)] = (0, 0)
         region = [b0, batches_valid, row0, rows_valid, col0, cols_valid, nb_b, nb_m, nb_n]
-        reader_rt[core.x][core.y] = [
+        reader_args[(core.x, core.y)] = [
             a_addr,
             b_addr,
             *region,
@@ -603,13 +635,26 @@ def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=No
         writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n]
 
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
-        core_ranges=core_ranges,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NoC0
-    )
+    # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
+    # specialized, so every core hosts exactly one reader. Plain R1 is a single group (0, 0).
+    groups = {}
+    for (x, y), role in reader_roles.items():
+        groups.setdefault(role, []).append(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)))
+    readers = []
+    for (a_sends, b_sends), ranges in sorted(groups.items()):
+        group_cores = ttnn.CoreRangeSet(ranges)
+        rt = ttnn.RuntimeArgs()
+        for r in ranges:
+            rt[r.start.x][r.start.y] = reader_args[(r.start.x, r.start.y)]
+        readers.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
+                core_ranges=group_cores,
+                compile_time_args=[*reader_ct, int(operand_mcast), a_sends, b_sends, *reader_accessor_ct],
+                runtime_args=rt,
+                config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NoC0
+            )
+        )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "genify_matmul_writer.cpp"),
         core_ranges=core_ranges,
@@ -624,4 +669,27 @@ def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=No
         runtime_args=compute_rt,
         config=compute_config,
     )
-    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
+    _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast)
+    descriptor.kernels = [*readers, writer, compute]
+    return descriptor
+
+
+def _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast):
+    """R1a: two line channels on the split rectangle at disjoint semaphore ids -- `act` along the lines
+    of cores sharing a row region (logical i), `weight` along those sharing a column region (logical
+    j); each line's injector is its logical j == 0 (act) / i == 0 (weight) core, i.e. in-group index 0.
+    Under "rect" (x = j, y = i) act lines are physical rows; under "rect_t" (x = i, y = j) columns.
+    Plain R1: both channels attach as absent."""
+    if not operand_mcast:
+        for reader in readers:
+            ttnn.attach_absent_mcast(reader, "act")
+            ttnn.attach_absent_mcast(reader, "weight")
+        return
+    row_major, col_major = ttnn.McastCoreOrder.RowMajor, ttnn.McastCoreOrder.ColumnMajor
+    act_order, weight_order = (row_major, col_major) if grid.placement == "rect" else (col_major, row_major)
+    config = ttnn.McastConfig(handshake=True)
+    mc_act = ttnn.Mcast(device, config, core_ranges, grid.grid_n, ttnn.McastFixedSenderConfig(), act_order)
+    mc_weight = ttnn.Mcast(device, config, core_ranges, grid.grid_m, ttnn.McastFixedSenderConfig(), weight_order)
+    mc_act.attach(descriptor, "act", readers, 0)
+    mc_weight.attach(descriptor, "weight", readers, mc_act.next_semaphore_id())
