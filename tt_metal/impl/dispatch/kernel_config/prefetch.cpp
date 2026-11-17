@@ -422,11 +422,18 @@ void PrefetchKernel::InitializeRuntimeArgsValues() {
     static_config_.offsetof_my_dev_id = current_offset++;
     static_config_.offsetof_to_dev_id = current_offset++;
     static_config_.offsetof_router_direction = current_offset++;
+    static_config_.offsetof_quiesce_slot = current_offset++;
+
+    const uint32_t quiesce_slot =
+        (get_dispatch_query_manager_ref().cq_dispatch_layout().num_cqs_per_core > 1) ? cq_id_ : 0U;
+    TT_ASSERT(quiesce_slot < dev_msgs::QUIESCE_MAX_CQS);
+
     // Initialize runtime args
     runtime_args_.resize(current_offset);
     runtime_args_[static_config_.offsetof_my_dev_id.value()] = dependent_config_.my_dev_id.value_or(0);
     runtime_args_[static_config_.offsetof_to_dev_id.value()] = dependent_config_.to_dev_id.value_or(0);
     runtime_args_[static_config_.offsetof_router_direction.value()] = dependent_config_.router_direction.value_or(0);
+    runtime_args_[static_config_.offsetof_quiesce_slot.value()] = quiesce_slot;
 }
 
 void PrefetchKernel::CreateKernel() {
@@ -524,6 +531,7 @@ void PrefetchKernel::CreateKernel() {
         {"TO_MESH_ID", std::to_string(dependent_config_.to_mesh_id.value_or(0))},
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
+        {"DISPATCH_S_ENABLED", std::to_string(get_dispatch_query_manager_ref().dispatch_s_enabled())},
     };
 
     const auto& my_dispatch_constants = get_dispatch_mem_map();
@@ -547,6 +555,7 @@ void PrefetchKernel::CreateKernel() {
     defines["OFFSETOF_MY_DEV_ID"] = std::to_string(static_config_.offsetof_my_dev_id.value_or(0));
     defines["OFFSETOF_TO_DEV_ID"] = std::to_string(static_config_.offsetof_to_dev_id.value_or(0));
     defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(static_config_.offsetof_router_direction.value_or(0));
+    defines["OFFSETOF_QUIESCE_SLOT"] = std::to_string(static_config_.offsetof_quiesce_slot.value_or(0));
 
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::ETH) ? KernelBuildOptLevel::Os : KernelBuildOptLevel::O2;

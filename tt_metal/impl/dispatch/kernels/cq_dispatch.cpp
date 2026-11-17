@@ -20,6 +20,10 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
+#include "internal/quiesce_common.h"
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+#include "internal/tt-2xx/quasar/noc_quiesce.h"
+#endif
 
 #include <array>
 
@@ -265,8 +269,12 @@ FORCE_INLINE volatile uint32_t* get_dispatch_progress_ptr() {
     return reinterpret_cast<volatile uint32_t*>(l1_uncached_addr(dev_dispatch_progress_ptr));
 }
 
+#ifdef ARCH_QUASAR
+static uint32_t dispatch_d_sent_go_mask = 0U;
+#endif
+
 FORCE_INLINE
-void completion_queue_reserve_back(uint32_t num_pages) {
+bool completion_queue_reserve_back(uint32_t num_pages) {
     WAYPOINT("QRBW");
     // Transfer pages are aligned
     uint32_t data_size_16B = num_pages * completion_queue_page_size_16B;
@@ -275,6 +283,10 @@ void completion_queue_reserve_back(uint32_t num_pages) {
     uint32_t completion_rd_toggle;
     uint32_t available_space;
     do {
+        if (quiesce_requested()) {
+            WAYPOINT("QRBD");
+            return false;
+        }
         invalidate_l1_cache();
         completion_rd_ptr_and_toggle = *get_cq_completion_read_ptr();
         completion_rd_ptr = completion_rd_ptr_and_toggle & 0x7fffffff;
@@ -290,6 +302,7 @@ void completion_queue_reserve_back(uint32_t num_pages) {
     } while (data_size_16B > available_space);
 
     WAYPOINT("QRBD");
+    return true;
 }
 
 // This fn expects NOC coords to be preprogrammed
@@ -351,6 +364,7 @@ void process_write_host_h() {
     if (is_event) {
         last_event = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr + sizeof(CQDispatchCmd))[0];
     }
+    bool drop_host_writes = quiesce_requested();
     while (wlength != 0) {
         uint32_t length = (wlength > max_batch_size) ? max_batch_size : static_cast<uint32_t>(wlength);
         wlength -= length;
@@ -358,54 +372,68 @@ void process_write_host_h() {
             // Get a page if needed
             uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
             uint32_t xfer_size = (length > available_data) ? available_data : length;
-            uint32_t npages = (xfer_size + completion_queue_page_size - 1) / completion_queue_page_size;
-            completion_queue_reserve_back(npages);
-            uint32_t completion_queue_write_addr = cq_write_interface.completion_fifo_wr_ptr << 4;
-            // completion_queue_write_addr will never be equal to completion_queue_end_addr due to
-            // completion_queue_push_back wrap logic so we don't need to handle this case explicitly to avoid 0 sized
-            // transactions
-            if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
-                uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
+            if (!drop_host_writes) {
+                uint32_t npages = (xfer_size + completion_queue_page_size - 1) / completion_queue_page_size;
+                if (!completion_queue_reserve_back(npages)) {
+                    drop_host_writes = true;
+                } else {
+                    uint32_t orig_xfer_size = xfer_size;
+                    uint32_t completion_queue_write_addr = cq_write_interface.completion_fifo_wr_ptr << 4;
+                    // completion_queue_write_addr will never be equal to completion_queue_end_addr due to
+                    // completion_queue_push_back wrap logic so we don't need to handle this case explicitly to avoid 0
+                    // sized transactions
+                    if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
+                        uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
 #if defined(FABRIC_RELAY)
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
-                uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+                        uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-                noc_async_write_pcie(
-                    static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, last_chunk_size);
+                        noc_async_write_pcie(
+                            static_cast<uint32_t>(data_ptr),
+                            pcie_noc_xy | completion_queue_write_addr,
+                            last_chunk_size);
 #else
-                cq_noc_async_write_with_state_any_len(
-                    static_cast<uint32_t>(data_ptr), completion_queue_write_addr, last_chunk_size);
-                uint32_t num_noc_packets_written = div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
-                noc_increment_nonposted_writes_issued(noc_index, num_noc_packets_written);
-                noc_increment_nonposted_writes_acked(noc_index, num_noc_packets_written);
+                        cq_noc_async_write_with_state_any_len(
+                            static_cast<uint32_t>(data_ptr), completion_queue_write_addr, last_chunk_size);
+                        uint32_t num_noc_packets_written = div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
+                        noc_increment_nonposted_writes_issued(noc_index, num_noc_packets_written);
+                        noc_increment_nonposted_writes_acked(noc_index, num_noc_packets_written);
 #endif
-                completion_queue_write_addr = completion_queue_base_addr;
-                data_ptr += last_chunk_size;
-                length -= last_chunk_size;
-                xfer_size -= last_chunk_size;
+                        completion_queue_write_addr = completion_queue_base_addr;
+                        data_ptr += last_chunk_size;
+                        length -= last_chunk_size;
+                        xfer_size -= last_chunk_size;
+                    }
+#if defined(FABRIC_RELAY)
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+                    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
+                    noc_async_write_pcie(
+                        static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, xfer_size);
+#else
+                    cq_noc_async_write_with_state_any_len(
+                        static_cast<uint32_t>(data_ptr), completion_queue_write_addr, xfer_size);
+                    // completion_queue_push_back below will do a write to host, so we add 1 to the number of data
+                    // packets written
+                    uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE) + 1;
+                    noc_increment_nonposted_writes_issued(noc_index, num_noc_packets_written);
+                    noc_increment_nonposted_writes_acked(noc_index, num_noc_packets_written);
+#endif
+
+                    // This will update the write ptr on device and host
+                    // We flush to ensure the ptr has been read out of l1 before we update it again
+                    completion_queue_push_back(npages);
+
+                    length -= xfer_size;
+                    data_ptr += xfer_size;
+                    (void)orig_xfer_size;
+                    noc_async_writes_flushed();
+                    continue;
+                }
             }
-#if defined(FABRIC_RELAY)
-#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
-            uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
-#endif
-            noc_async_write_pcie(static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, xfer_size);
-#else
-            cq_noc_async_write_with_state_any_len(
-                static_cast<uint32_t>(data_ptr), completion_queue_write_addr, xfer_size);
-            // completion_queue_push_back below will do a write to host, so we add 1 to the number of data packets
-            // written
-            uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE) + 1;
-            noc_increment_nonposted_writes_issued(noc_index, num_noc_packets_written);
-            noc_increment_nonposted_writes_acked(noc_index, num_noc_packets_written);
-#endif
-
-            // This will update the write ptr on device and host
-            // We flush to ensure the ptr has been read out of l1 before we update it again
-            completion_queue_push_back(npages);
-
+            // Quiescing: consume and discard remaining CB bytes without issuing host/PCIe NOC writes.
             length -= xfer_size;
             data_ptr += xfer_size;
-            noc_async_writes_flushed();
         }
     }
     cmd_ptr = data_ptr;
@@ -1140,6 +1168,7 @@ static void process_wait() {
 #ifdef ARCH_QUASAR
     if (clear_stream) {
         *worker_completion_sem_addr(stream, first_stream_used, completion_counter_offset) = 0;
+        *worker_expected_completion_addr(stream, first_stream_used, completion_counter_offset) = 0;
     }
 #else
     if (clear_stream) {
@@ -1209,6 +1238,11 @@ void process_go_signal_mcast_cmd() {
     uint32_t go_ring_slot = cmd->mcast.go_ring_slot;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
+#ifdef ARCH_QUASAR
+        *worker_expected_completion_addr(stream, first_stream_used, completion_counter_offset) =
+            wait_count + workers_per_sub_device[multicast_go_offset];
+        dispatch_d_sent_go_mask |= (1U << (stream - first_stream_used));
+#endif
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint32_t go_addr =
             mcast_go_signal_addr + mcast_go_ring_size * multicast_go_offset + sizeof(go_msg_t) * go_ring_slot;
@@ -1446,6 +1480,17 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_TERMINATE:
             // DPRINT("dispatch terminate\n");
+#ifdef ARCH_QUASAR
+            for (uint32_t mask = dispatch_d_sent_go_mask; mask != 0U; mask &= (mask - 1U)) {
+                const uint32_t sub_dev = static_cast<uint32_t>(__builtin_ctz(mask));
+                const uint32_t stream = first_stream_used + sub_dev;
+                const uint32_t target =
+                    *worker_expected_completion_addr(stream, first_stream_used, completion_counter_offset);
+                if (target != 0U) {
+                    wait_worker_completion(stream, target);
+                }
+            }
+#endif
             if (is_d_variant && !is_h_variant) {
                 relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd));
             }
@@ -1620,6 +1665,7 @@ void kernel_main() {
         const uint32_t index = i + first_stream_used;
 #ifdef ARCH_QUASAR
         *worker_completion_sem_addr(index, first_stream_used, completion_counter_offset) = 0;
+        *worker_expected_completion_addr(index, first_stream_used, completion_counter_offset) = 0;
 #else
         NOC_STREAM_WRITE_REG(
             index,
@@ -1723,6 +1769,9 @@ void kernel_main() {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
     }
     noc_async_full_barrier();
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    noc_quiesce_hart_barrier();
+#endif
     noc_clear_packet_tags(my_noc_index);
     // DPRINT("dispatch_{}{}: out\n", is_h_variant, is_d_variant);
     set_l1_data_cache<false>();

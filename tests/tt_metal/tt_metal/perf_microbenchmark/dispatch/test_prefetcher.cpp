@@ -2979,7 +2979,7 @@ public:
             prefetch_logical,
             detail::prefetch_dm_processor(),
             prefetch_defines);
-        tt_metal::SetRuntimeArgs(program, prefetch_kernel, prefetch_logical, {0u, 0u, 0u});
+        tt_metal::SetRuntimeArgs(program, prefetch_kernel, prefetch_logical, {0u, 0u, 0u, 0u});
 
         const uint32_t dev_completion_base = dev_hugepage_base + this->sd_issue_queue_size();
         auto dispatch_defines = Common::make_sd_dispatch_defines(

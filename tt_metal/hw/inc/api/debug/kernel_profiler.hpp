@@ -26,6 +26,7 @@
 #endif
 
 #include "hostdev/dev_msgs.h"
+#include "internal/quiesce_common.h"
 
 #include "internal/ethernet/erisc.h"
 
@@ -383,7 +384,8 @@ __attribute__((noinline)) void signal_host_buffer_full(uint32_t control_buffer_i
 #if defined(COMPILE_FOR_ERISC)
         internal_::risc_context_switch(false);
 #endif
-    } while (profiler_control_buffer[control_buffer_index_for_dram] == DRAM_PROFILER_ADDRESS_STALLED);
+    } while (profiler_control_buffer[control_buffer_index_for_dram] == DRAM_PROFILER_ADDRESS_STALLED &&
+             !quiesce_requested());
 }
 
 // do_accumulate is runtime (not template) so dispatch cores (false=classic finish) and workers (true) share one fn,

@@ -20,6 +20,10 @@
 #include "hostdev/profiler_common.h"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "hostdev/dev_msgs.h"
+#include "internal/quiesce_common.h"
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+#include "internal/tt-2xx/quasar/noc_quiesce.h"
+#endif
 #include "risc_common.h"
 
 #ifdef FDS_SIGNALLING
@@ -206,6 +210,9 @@ constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
 static uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
 
 static uint32_t num_worker_sems = 1;
+#ifdef ARCH_QUASAR
+static uint32_t dispatch_s_sent_go_mask = 0U;
+#endif
 
 // The dispatch message entry limit also bounds the number of sub-devices.
 static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
@@ -703,6 +710,13 @@ void process_go_signal_mcast_cmd() {
     uint32_t go_ring_slot = cmd->mcast.go_ring_slot;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
+#ifdef ARCH_QUASAR
+    if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
+        *worker_expected_completion_addr(wait_stream, first_stream_used, completion_counter_offset) =
+            wait_count + workers_per_sub_device[multicast_go_offset];
+        dispatch_s_sent_go_mask |= (1U << (wait_stream - first_stream_used));
+    }
+#endif
 
     wait_for_workers_and_send_go_signal(
         aligned_go_signal_storage,
@@ -935,6 +949,17 @@ void kernel_main() {
                 break;
             case CQ_DISPATCH_CMD_TERMINATE:
                 DPRINT("CQ_DISPATCH_CMD_TERMINATE\n");
+#ifdef ARCH_QUASAR
+                for (uint32_t mask = dispatch_s_sent_go_mask; mask != 0U; mask &= (mask - 1U)) {
+                    const uint32_t sub_dev = static_cast<uint32_t>(__builtin_ctz(mask));
+                    const uint32_t stream = first_stream_used + sub_dev;
+                    const uint32_t target =
+                        *worker_expected_completion_addr(stream, first_stream_used, completion_counter_offset);
+                    if (target != 0U) {
+                        wait_for_workers(target, stream);
+                    }
+                }
+#endif
                 if (rt_profiler_enabled) {
                     // Publish the last record and terminate in one write, so the BRISC drains every
                     // record before it exits. No slot is opened, so no wait for space is needed.
@@ -982,7 +1007,12 @@ void kernel_main() {
 
     DPRINT("dispatch_s : done\n");
 #if DEVICE_PRINT_DISPATCH_ENABLED
-    device_print_dispatcher.shutdown();
+    if (!quiesce_requested()) {
+        device_print_dispatcher.shutdown();
+    }
+#endif
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    noc_quiesce_hart_barrier();
 #endif
     set_l1_data_cache<false>();
 }

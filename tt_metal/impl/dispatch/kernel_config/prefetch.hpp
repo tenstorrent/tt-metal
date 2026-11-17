@@ -60,6 +60,7 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> offsetof_my_dev_id;
     std::optional<uint32_t> offsetof_to_dev_id;
     std::optional<uint32_t> offsetof_router_direction;
+    std::optional<uint32_t> offsetof_quiesce_slot;
 };
 
 struct prefetch_dependent_config_t {

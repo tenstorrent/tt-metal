@@ -133,6 +133,15 @@ FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
     return uncached_l1_ptr<uint32_t>(
         DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (completion_counter_offset + stream - first_stream_used));
 }
+
+// Word 1 (+4B) of the same 16B uncached slot holds the expected cumulative worker completion count
+// for `stream` (written by whichever dispatcher issues go signals, zeroed on startup and clear_stream),
+// allowing CQ_DISPATCH_CMD_TERMINATE to drain all in-flight workers before parking.
+FORCE_INLINE volatile uint32_t* worker_expected_completion_addr(
+    uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
+    static_assert(L1_ALIGNMENT >= 2 * sizeof(uint32_t));
+    return &worker_completion_sem_addr(stream, first_stream_used, completion_counter_offset)[1];
+}
 #endif
 
 // Fills in where workers report done for a go: the dispatcher sending it (at NOC 0 virtual coordinates noc_x, noc_y)

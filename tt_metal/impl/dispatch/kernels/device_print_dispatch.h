@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/device_print.h"
 #include "cq_common.hpp"
+#include "internal/quiesce_common.h"
 #include "internal/risc_attribs.h"
 #include "noc_parameters.h"
 #include "risc_common.h"
@@ -510,6 +511,9 @@ private:
     }
 
     void push_data_to_dram(uint32_t buffer_size) {
+        if (quiesce_requested()) {
+            return;
+        }
         // All buffers and pointers are DRAM aligned. We don't need to think about that.
         // We just need to align local buffer size.
         uintptr_t buffer_address = l1_device_print_buffer_start;

@@ -24,7 +24,15 @@
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 #include "api/debug/dprint.h"
+#include "internal/quiesce_common.h"
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+#include "internal/tt-2xx/quasar/noc_quiesce.h"
+#endif
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
+
+#ifndef DISPATCH_S_ENABLED
+#define DISPATCH_S_ENABLED 0
+#endif
 
 // FABRIC_RELAY is defined exactly when !is_hd(), so this catches an _h/_d build.
 // Quasar FD assumes all three stages share one dispatch engine. A split build must resolve:
@@ -650,21 +658,117 @@ FORCE_INLINE uint32_t read_from_pcie(
 //   - If commands are already available (`cmd_ptr != fence`), do not barrier on in-flight reads (avoid added latency).
 //   - If no commands are available, retire exactly one oldest in-flight read per iteration to make progress; if nothing
 //     is in-flight and PrefetchQ is empty, spin until host posts work.
+enum class FetchQInflightFlags : uint32_t { NOSTALL = 0x0U, STALL_AFTER = 0x1U };
+struct FetchQInflightRead {
+    uint32_t read_start;        // where the read's preamble begins (payload at read_start + preamble)
+    uint32_t trid;              // NoC transaction ID
+    uint32_t reserved_size;     // payload + preamble (bytes to advance committed fence)
+    FetchQInflightFlags flags;  // inflight flags
+};
+static constexpr uint32_t FETCH_Q_INFLIGHT_MASK =
+    tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS - 1U;
+static std::array<FetchQInflightRead, tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS>
+    fetch_q_inflight;
+static uint32_t fetch_q_inflight_count = 0U;
+static uint32_t fetch_q_inflight_head = 0U;
+
+#if defined(ARCH_QUASAR)
+static uint32_t quiesce_slot_idx = 0U;
+static bool in_program_sequence = false;
+static bool in_noflush_sequence = false;
+static bool quiesce_aborted = false;
+static uint32_t op_completed_count = 0U;
+
+FORCE_INLINE void note_relayed_dispatch_cmd_id(CQDispatchCmdId dispatch_cmd_id) {
+    if (dispatch_cmd_id == CQ_DISPATCH_CMD_SET_WRITE_OFFSET) {
+        in_program_sequence = true;
+        quiesce_slot()->op_started_count[quiesce_slot_idx] = op_completed_count + 1U;
+    } else if (dispatch_cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL) {
+        if (in_program_sequence) {
+            in_program_sequence = false;
+            ++op_completed_count;
+        }
+    }
+}
+
+FORCE_INLINE void note_noflush_state(bool active) { in_noflush_sequence = active; }
+
+template <bool is_exec_buf>
+FORCE_INLINE bool should_quiesce_at_boundary() {
+    if (in_program_sequence || in_noflush_sequence) {
+        return false;
+    }
+    if constexpr (!is_exec_buf) {
+        if (stall_state != StallState::NOT_STALLED) {
+            return false;
+        }
+    }
+    const uint32_t ctrl = quiesce_slot()->control;
+    if (ctrl == QUIESCE_CTRL_NEXT_OP) {
+        return true;
+    }
+    if (ctrl == QUIESCE_CTRL_AT_OP_COUNT) {
+        return op_completed_count >= quiesce_slot()->target_op_count[quiesce_slot_idx];
+    }
+    return false;
+}
+
+FORCE_INLINE void drain_inflight_fetch_q_reads() {
+    while (fetch_q_inflight_count != 0U) {
+        noc_async_read_barrier_with_trid(fetch_q_inflight[fetch_q_inflight_head].trid);
+        fetch_q_inflight_head = (fetch_q_inflight_head + 1U) & FETCH_Q_INFLIGHT_MASK;
+        --fetch_q_inflight_count;
+    }
+}
+
+template <typename RelayInlineState>
+FORCE_INLINE void send_quiesce_terminate_to_dispatcher(uint32_t& local_downstream_data_ptr) {
+    uintptr_t term_src_ptr = cmddat_q_base;
+    RelayInlineState::cb_writer.acquire_pages(1);
+    write_downstream<RelayInlineState::downstream_cb_base_addr, RelayInlineState::downstream_write_cmd_buf>(
+        term_src_ptr,
+        local_downstream_data_ptr,
+        sizeof(CQDispatchCmd),
+        RelayInlineState::downstream_cb_end_addr,
+        RelayInlineState::downstream_noc_encoding);
+    local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
+    noc_async_writes_flushed();
+    RelayInlineState::cb_writer.release_pages(1, local_downstream_data_ptr);
+}
+
+FORCE_INLINE void synthesize_downstream_quiesce_terminate() {
+    // Write CQ_DISPATCH_CMD_TERMINATE through the uncached alias so it lands in TL1 SRAM directly
+    // before the NIU reads cmddat_q_base via the cached-form address.
+    static_assert(sizeof(CQDispatchCmd) == 4 * sizeof(uint32_t));
+    volatile tt_l1_ptr uint32_t* term_words = uncached_l1_ptr<uint32_t>(cmddat_q_base);
+    term_words[0] = 0U;
+    term_words[1] = 0U;
+    term_words[2] = 0U;
+    term_words[3] = 0U;
+    reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(term_words)->base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
+    asm volatile("fence" ::: "memory");
+
+    send_quiesce_terminate_to_dispatcher<DispatchRelayInlineState>(downstream_data_ptr);
+#if DISPATCH_S_ENABLED
+    send_quiesce_terminate_to_dispatcher<DispatchSRelayInlineState>(downstream_data_ptr_s);
+#endif
+}
+#else
+FORCE_INLINE void note_relayed_dispatch_cmd_id(CQDispatchCmdId) {}
+FORCE_INLINE void note_noflush_state(bool) {}
+template <bool is_exec_buf>
+constexpr FORCE_INLINE bool should_quiesce_at_boundary() {
+    return false;
+}
+#endif
+
 template <uint32_t preamble_size>
 void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_ptr) {
-    static constexpr uint32_t INFLIGHT_MASK = tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS - 1U;
-    enum class InflightFlags : uint32_t { NOSTALL = 0x0U, STALL_AFTER = 0x1U };
-    struct InflightRead {
-        uint32_t read_start;     // where the read's preamble begins (payload at read_start + preamble)
-        uint32_t trid;           // NoC transaction ID
-        uint32_t reserved_size;  // payload + preamble (bytes to advance committed fence)
-        InflightFlags flags;     // inflight flags
-    };
-
-    // Circular queue: only head + count are needed; tail is derived.
-    static std::array<InflightRead, tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS> inflight;
-    static uint32_t inflight_count = 0U;
-    static uint32_t inflight_head = 0U;
+    static constexpr uint32_t INFLIGHT_MASK = FETCH_Q_INFLIGHT_MASK;
+    using InflightFlags = FetchQInflightFlags;
+    auto& inflight = fetch_q_inflight;
+    uint32_t& inflight_count = fetch_q_inflight_count;
+    uint32_t& inflight_head = fetch_q_inflight_head;
 
     // NoC read transaction IDs used by the prefetcher:
     //   0                                default
@@ -933,6 +1037,12 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
 #endif
                 if (prefetch_q_read_slot(prefetch_q_rd_ptr) == 0U) {
+#if defined(ARCH_QUASAR)
+                    if (should_quiesce_at_boundary<false>()) {
+                        quiesce_aborted = true;
+                        return;
+                    }
+#endif
                     PrefetchTelemetryBlockGuard block_guard;
                     do {
                         invalidate_l1_cache();
@@ -940,6 +1050,12 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                         invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
 #endif
                         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+#if defined(ARCH_QUASAR)
+                        if (should_quiesce_at_boundary<false>()) {
+                            quiesce_aborted = true;
+                            return;
+                        }
+#endif
                     } while (prefetch_q_read_slot(prefetch_q_rd_ptr) == 0U);
                 }
                 // Host has work now; restart without recursion.
@@ -961,6 +1077,11 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
     volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t length = load_aligned<uint32_t>(&cmd->relay_inline.length);
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
+#if defined(ARCH_QUASAR)
+    uintptr_t first_byte_ptr = (cmddat_wrap_enable && data_ptr == cmddat_q_end) ? cmddat_q_base : data_ptr;
+    const CQDispatchCmdId relayed_cmd_id = *uncached_l1_ptr<CQDispatchCmdId>(first_byte_ptr);
+    note_relayed_dispatch_cmd_id(relayed_cmd_id);
+#endif
 
     uint32_t npages =
         (length + RelayInlineState::downstream_page_size - 1) >> RelayInlineState::downstream_log_page_size;
@@ -2045,6 +2166,13 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     uint32_t stride = load_aligned<uint32_t>(&cmd->relay_inline.stride);
     uint32_t remaining_stride = exec_buf_state.length;
     uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
+#if defined(ARCH_QUASAR)
+    bool recorded_cmd_id = false;
+    if (remaining > 0U) {
+        note_relayed_dispatch_cmd_id(*uncached_l1_ptr<CQDispatchCmdId>(data_ptr));
+        recorded_cmd_id = true;
+    }
+#endif
     while (length > remaining) {
         // wrap cmddat
         write_downstream<RelayInlineState::downstream_cb_base_addr, RelayInlineState::downstream_write_cmd_buf>(
@@ -2062,6 +2190,12 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
         noc_async_writes_flushed(RelayInlineState::downstream_noc_index);
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
         data_ptr = cmd_ptr;
+#if defined(ARCH_QUASAR)
+        if (!recorded_cmd_id) {
+            note_relayed_dispatch_cmd_id(*uncached_l1_ptr<CQDispatchCmdId>(data_ptr));
+            recorded_cmd_id = true;
+        }
+#endif
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
@@ -2229,6 +2363,14 @@ uint32_t process_exec_buf_cmd(
             if (done) {
                 break;
             }
+#if defined(ARCH_QUASAR)
+            if (should_quiesce_at_boundary<true>()) {
+                noc_async_read_barrier_with_trid(PrefetchExecBufState::READ_TRID);
+                quiesce_aborted = true;
+                done = true;
+                break;
+            }
+#endif
 
             exec_buf_state.length -= stride;
             cmd_ptr += stride;
@@ -2546,6 +2688,7 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_RELAY_LINEAR:
             // DPRINT("relay_linear: {}\n", cmd_ptr);
             stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr);
+            note_noflush_state(false);
             break;
 
         case CQ_PREFETCH_CMD_RELAY_PAGED:
@@ -2560,6 +2703,7 @@ bool process_cmd(
                 } else {
                     stride = process_relay_paged_cmd<false>(cmd_ptr, downstream_data_ptr, start_page);
                 }
+                note_noflush_state(false);
             }
             break;
 
@@ -2571,6 +2715,7 @@ bool process_cmd(
             } else {
                 stride = process_relay_paged_packed_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr, l1_cache);
             }
+            note_noflush_state(false);
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
@@ -2596,6 +2741,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             // DPRINT("relay_inline_noflush\n");
+            note_noflush_state(true);
             if (exec_buf) {
                 stride = process_exec_buf_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr, exec_buf_state);
             } else {
@@ -2660,6 +2806,7 @@ bool process_cmd(
             } else {
                 stride = process_relay_ringbuffer_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr, l1_cache);
             }
+            note_noflush_state(false);
             break;
 
         case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED:
@@ -2670,6 +2817,7 @@ bool process_cmd(
             } else {
                 stride = process_relay_linear_packed_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr, l1_cache);
             }
+            note_noflush_state(false);
             break;
 
         default:
@@ -3270,14 +3418,35 @@ void kernel_main_hd() {
 
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
+#if defined(ARCH_QUASAR)
+        if (should_quiesce_at_boundary<false>()) {
+            drain_inflight_fetch_q_reads();
+            synthesize_downstream_quiesce_terminate();
+            break;
+        }
+#endif
         constexpr uint32_t preamble_size = 0;
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+#if defined(ARCH_QUASAR)
+        if (quiesce_aborted) {
+            drain_inflight_fetch_q_reads();
+            synthesize_downstream_quiesce_terminate();
+            break;
+        }
+#endif
 
         uint32_t stride;
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
         cmd_ptr += stride;
+#if defined(ARCH_QUASAR)
+        if (quiesce_aborted || (!done && should_quiesce_at_boundary<false>())) {
+            drain_inflight_fetch_q_reads();
+            synthesize_downstream_quiesce_terminate();
+            break;
+        }
+#endif
     }
 }
 
@@ -3301,6 +3470,10 @@ void kernel_main() {
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
+#if defined(ARCH_QUASAR) && defined(OFFSETOF_QUIESCE_SLOT)
+    quiesce_slot_idx = get_arg_val<uint32_t>(OFFSETOF_QUIESCE_SLOT);
+    ASSERT(quiesce_slot_idx < QUIESCE_MAX_CQS);
+#endif
 
     if constexpr (specialize_paged_read_loop) {
         dram_bank_offsets_uniform = InterleavedBankWalker<true>::scan_offsets_uniform();
@@ -3329,6 +3502,9 @@ void kernel_main() {
     DispatchRelayInlineState::cb_writer.wait_all_pages(downstream_cb_pages);
 
     noc_async_full_barrier();
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    noc_quiesce_hart_barrier();
+#endif
     noc_clear_packet_tags(my_noc_index);
 
     DPRINT("prefetcher_{}{}: out\n", is_h_variant, is_d_variant);

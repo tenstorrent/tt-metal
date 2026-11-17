@@ -21,6 +21,10 @@
 
 #if !defined(ENV_LLK_INFRA)
 #include "risc_common.h"
+#include "internal/quiesce_common.h"
+FORCE_INLINE bool device_print_quiesce_requested() { return quiesce_requested(); }
+#else
+constexpr FORCE_INLINE bool device_print_quiesce_requested() { return false; }
 #endif
 
 #if defined(KERNEL_BUILD)
@@ -1593,8 +1597,8 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_b
         return 0;
     }
 
-    if (write_position == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
-        // If we are in disabled state, return immediately without waiting for space.
+    if (write_position == DEBUG_PRINT_SERVER_DISABLED_MAGIC || device_print_quiesce_requested()) {
+        // If we are in disabled or quiescing state, return immediately without waiting for space.
         return 0;
     }
 
@@ -1624,8 +1628,10 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_b
 #if DEVICE_PRINT_DISPATCH_ENABLED
                 ::device_print_dispatcher_execute_hook();
 #endif
-                // If we've closed the device, we've now disabled printing on it, don't hang.
-                if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                // If we've closed or quiesced the device, don't hang waiting on the host reader.
+                if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC ||
+                    device_print_quiesce_requested()) {
+                    device_print_buffer->aux.wpos = 0;
                     return 0;
                 };
 
@@ -1661,8 +1667,10 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_b
 #if DEVICE_PRINT_DISPATCH_ENABLED
                 ::device_print_dispatcher_execute_hook();
 #endif
-                // If we've closed the device, we've now disabled printing on it, don't hang.
-                if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                // If we've closed or quiesced the device, don't hang waiting on the host reader.
+                if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC ||
+                    device_print_quiesce_requested()) {
+                    device_print_buffer->aux.wpos = 0;
                     return 0;
                 };
 
@@ -1718,8 +1726,10 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_b
 #if DEVICE_PRINT_DISPATCH_ENABLED
             ::device_print_dispatcher_execute_hook();
 #endif
-            // If we've closed the device, we've now disabled printing on it, don't hang.
-            if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+            // If we've closed or quiesced the device, don't hang waiting on the host reader.
+            if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC ||
+                device_print_quiesce_requested()) {
+                device_print_buffer->aux.wpos = 0;
                 return 0;
             };
 
