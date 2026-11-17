@@ -16,8 +16,8 @@ the comparer join axes directly instead of translating them.
   example `dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats)`. It returns a list, or a
   single value.
 - An existing generator that returns a list of tuples can be exposed as flat axes with
-  `helpers.param_config.flat_axes(names, combinations)`. The cross product equals the original list, in the
-  same order, and columns wrapped in `runtime()` stay runtime-only.
+  `helpers.param_config.flat_axes(names, combinations)`. The cross product equals the original list as a set of cases (the order can
+  differ, because cases are grouped by first-seen value), and columns wrapped in `runtime()` stay runtime-only.
 - Axes that only change the input data, not the compiled kernel, are wrapped in `runtime()`.
 
 ## Perf CSV columns

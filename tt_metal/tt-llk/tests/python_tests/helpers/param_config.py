@@ -60,8 +60,8 @@ def flat_axes(names: Tuple[str, ...], combinations: List[tuple]) -> dict:
     ``names[i]`` names column ``i`` of every tuple. The returned dict is meant to be
     splatted into ``parametrize(**flat_axes(...))``: every axis is a callable that
     depends on all earlier axes and returns the values the combinations allow for
-    them, so the cross product equals ``combinations`` exactly (same cases, same
-    order) while each parameter keeps its harness name. Columns wrapped in
+    them, so the cross product equals ``combinations`` as a set of cases (the order
+    can differ: cases are grouped by first-seen value) while each parameter keeps its harness name. Columns wrapped in
     ``runtime()`` stay runtime-only axes.
     """
     runtime_columns = {

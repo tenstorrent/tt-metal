@@ -160,5 +160,10 @@ def test_reduce_block_max_row_dest_depth_quasar(
 ):
     """4 and 8 rows, one Dest section each."""
     test_reduce_block_max_row_quasar(
-        formats, block_ct_dim, (32, 32), dest_sync, num_rows=num_rows
+        formats,
+        block_ct_dim,
+        (32, 32),
+        dest_sync,
+        dest_acc_for(formats.output_format),
+        num_rows=num_rows,
     )
