@@ -1571,12 +1571,13 @@ class SpecMTP:
         return self._parse_pages(ttnn.to_torch(d).to(torch.int64))
 
     def _parse(self, r: torch.Tensor) -> dict:
-        r = r.reshape(-1) & 0xFFFFFFFF
+        # one host list per record (the served 8 x 1 verify parses 8 records per step: 268 -> 27 us with ~12 tensor scalar
+        # reads each replaced by list indexing; the same Python ints)
+        v = (r.reshape(-1) & 0xFFFFFFFF).tolist()
         K = self.K
-        n = int(r[0])
-        return dict(n=n, c=int(r[1]) - (1 << 32) * (int(r[1]) >= (1 << 31)), a=[int(v) for v in r[2 : 3 + K]],
-                    committed=[int(v) for v in r[2 : 3 + n]], drafts=[int(v) for v in r[16 : 16 + K]],
-                    steps=int(r[31]))  # fmt: skip
+        n = v[0]
+        return dict(n=n, c=v[1] - (1 << 32) * (v[1] >= (1 << 31)), a=v[2 : 3 + K], committed=v[2 : 3 + n],
+                    drafts=v[16 : 16 + K], steps=v[31])  # fmt: skip
 
     def abort(self) -> None:
         """the speculating request ended without a leave (released): the selector back to row 0 (its candidate rows are
