@@ -114,6 +114,31 @@ def test_fast_div_block_float_partial_block_input(device, width, output_dtype):
     _assert_real_lanes_kept(result, expected, ttnn.bfloat8_b)
 
 
+def _traced_ops(fn):
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    result = fn()
+    calltrace = ttnn.graph.extract_calltrace(ttnn.graph.end_graph_capture())
+    return result, calltrace
+
+
+@pytest.mark.parametrize("width", [33, 50], ids=lambda w: f"W={w}")
+def test_accurate_div_block_float_partial_block_input_not_widened(device, width):
+    """Only fast DIV packs a reciprocal of b, so an explicit fast_and_approximate_mode=False must not widen b."""
+    torch.manual_seed(0)
+    a = _to_device(torch.empty(2, 32, width).uniform_(2.0, 4.0), ttnn.bfloat8_b, device)
+    b = _to_device(torch.empty(2, 32, width).uniform_(2.0, 4.0), ttnn.bfloat8_b, device)
+
+    unset, unset_ops = _traced_ops(lambda: ttnn.div(a, b))
+    accurate, accurate_ops = _traced_ops(lambda: ttnn.div(a, b, fast_and_approximate_mode=False))
+    _, fast_ops = _traced_ops(lambda: ttnn.div(a, b, fast_and_approximate_mode=True))
+
+    assert accurate_ops.count("TypecastDeviceOperation") == unset_ops.count("TypecastDeviceOperation")
+    assert fast_ops.count("TypecastDeviceOperation") > accurate_ops.count("TypecastDeviceOperation")
+    expected = ttnn.to_torch(a).float() / ttnn.to_torch(b).float()
+    _assert_real_lanes_kept(ttnn.to_torch(accurate).float(), expected, ttnn.bfloat8_b)
+    _assert_real_lanes_kept(ttnn.to_torch(unset).float(), expected, ttnn.bfloat8_b)
+
+
 @pytest.mark.parametrize("side", ["lhs", "rhs"])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["out_bfloat8_b", "out_bfloat16"])
 @pytest.mark.parametrize("width", [33, 50, 64], ids=lambda w: f"W={w}")

@@ -873,13 +873,15 @@ inline auto invoke_binary_ng_impl(
         }
         return t;
     };
+    // Unset resolves to false for DIV, as in binary_ng's kernel selection.
+    const bool fast_div = is_div && fast_and_approximate_mode.value_or(false);
     const auto input_a = widen_if_non_finite_at_padding(
         tiled_a,
-        (is_div && fast_and_approximate_mode && scalar_is_lhs) ||
+        (fast_div && scalar_is_lhs) ||
             std::ranges::any_of(lhs_activations, operations::unary::utils::is_non_finite_at_zero));
     const auto input_b = widen_if_non_finite_at_padding(
         operations::binary::detail::to_layout(rhs_eff, Layout::TILE, sub_core_grids),
-        (is_div && fast_and_approximate_mode && !scalar_is_lhs) ||
+        (fast_div && !scalar_is_lhs) ||
             std::ranges::any_of(rhs_activations, operations::unary::utils::is_non_finite_at_zero));
 
     // The output is packed the same way, so it is produced as BFLOAT16 and the typecast zeroes the padding first.
