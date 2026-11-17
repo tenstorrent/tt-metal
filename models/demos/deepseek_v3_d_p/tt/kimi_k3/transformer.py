@@ -28,11 +28,9 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention, build_kda_scalars
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
@@ -161,6 +159,7 @@ class TtKimiK3Transformer(LightweightModule):
                 mesh_device,
                 hidden_size=model_cfg.EMB_SIZE,
                 eps=model_cfg.RMS_NORM_EPS,
+                sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 weights=load_attn_res_weights(
                     mesh_device,
@@ -203,7 +202,22 @@ class TtKimiK3Transformer(LightweightModule):
             # Rejects a KDA last layer, which would compute a recurrence and write nothing.
             self.schedule.validate_kv_only_last_layer()
 
-        if is_first_rank:
+        if is_first_rank and first_layer_idx > 0:
+            # A first rank past layer 0 exists only under the runner's PREFILL_PP_LAYER_OFFSET (capacity probes),
+            # standing in for a stage whose input arrives over D2D and which holds no embedding. A one-tile
+            # random table gives the same [1, 1, seq/sp, emb/tp] output (ids clamp to its last row), so the
+            # stage's memory is measured without the 0.55 GiB of real embedding weights.
+            import torch
+
+            self.embed = TtParallelEmbedding(
+                mesh_device=mesh_device,
+                vocab_size=ttnn.TILE_SIZE,
+                emb_dim=config.hidden_size,
+                torch_weight=torch.randn(ttnn.TILE_SIZE, config.hidden_size, dtype=torch.bfloat16),
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+            )
+        elif is_first_rank:
             self.embed = TtParallelEmbedding(
                 mesh_device=mesh_device,
                 vocab_size=config.vocab_size,
@@ -215,14 +229,9 @@ class TtKimiK3Transformer(LightweightModule):
             )
 
         # The KDA carries live in the engine-owned `KdaStates` slabs (one per rank, every slot and
-        # layer), handed over by the runtime at `compile()`. The model owns only one scratch carry,
-        # the state every KDA layer runs on: allocated once so a capture can bake in its address,
-        # from the same geometry the slabs use, and before the layers so each gets it at construction.
+        # layer), handed over by the runtime at `compile()`; the KDA layers read and write them in place.
         self.kda_states: KdaStates | None = None
-        self.kda_scratch: KdaState | None = None
-        if self.schedule.rank_kda_layer_ids():
-            geometry = kimi_k3_kda_geometry(mesh_device.shape, sp_axis, tp_axis)
-            self.kda_scratch = allocate_native_state(mesh_device, geometry)
+        self.has_kda_layers = bool(self.schedule.rank_kda_layer_ids())
 
         self.layers = []
         for local_idx in range(num_layers):
@@ -237,7 +246,6 @@ class TtKimiK3Transformer(LightweightModule):
                 layer_idx=layer_idx,
                 schedule=self.schedule,
                 seq_len=seq_len,
-                kda_scratch=self.kda_scratch,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 num_links=num_links,
@@ -451,6 +459,11 @@ class TtKimiK3Transformer(LightweightModule):
 
         if self.is_first_rank:
             hidden, inherited = ttnn.unsqueeze_to_4D(self.embed(token_ids)), None
+            if self.inbound_planes > 1:
+                # A first rank past layer 0 exists only under the runner's PREFILL_PP_LAYER_OFFSET (capacity
+                # probes): it takes tokens, so no upstream rank sends the sealed snapshots. Stand copies of the
+                # live stream in for them, at the shape and sharding the D2D receive would give.
+                inherited = ttnn.concat([hidden] * (self.inbound_planes - 1), dim=1)
         else:
             hidden, inherited = self._unpack_handoff(token_ids)
         residual = self._residual_factory(hidden, inherited)
@@ -468,7 +481,7 @@ class TtKimiK3Transformer(LightweightModule):
         # below. A rank without KDA layers builds nothing.
         kda_scalars, owned_scalars = (
             build_kda_scalars(self.mesh_device, metadata, cache_user_id, actual_start, actual_end)
-            if self.kda_scratch is not None
+            if self.has_kda_layers
             else (None, ())
         )
         try:

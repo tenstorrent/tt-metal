@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
-from tests.ttnn.utils_for_testing import assert_program_cache_flat
+from tt_py_test_utils_common.utils_for_testing import assert_program_cache_flat
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):

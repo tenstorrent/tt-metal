@@ -50,6 +50,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     RELU_CONFIG,
+    RELU_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     generate_input_dim,
@@ -328,6 +329,7 @@ def test_pack_quasar(
         "formats": formats,
         "templates": [
             DEST_SYNC(dest_sync_mode),
+            RELU_TYPE(relu_type),
         ],
         "runtimes": [
             TEST_FACE_DIMS(tile_shape.face_r_dim),

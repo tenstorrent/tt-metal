@@ -874,7 +874,7 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations) {
+    const std::string& name, const TensorSpec& spec, const TensorSpecRelaxations& relaxations) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -912,7 +912,7 @@ const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& na
     return &it->second.spec;
 }
 
-experimental::TensorSpecRelaxations ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
+TensorSpecRelaxations ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
     if (!metal2_registry_) {
         return {};
     }
@@ -2187,7 +2187,13 @@ void detail::ProgramImpl::update_dynamic_cross_node_dfb_address(uint8_t remote_d
         relay_dfb->set_borrowed_memory_base_addr(gdfb.buffer_address());
     }
 
-    // Invalidate cached command sequences so they are re-assembled with new addresses.
+    // Invalidate cached command sequences so they are re-assembled with new addresses. The runtime-arg views point
+    // into them (and hold the current values): move the values back into the kernels first.
+    for (auto& kernels : kernels_) {
+        for (auto& [handle, kernel] : kernels) {
+            kernel->reclaim_runtime_args_from_command_sequence();
+        }
+    }
     cached_program_command_sequences_.clear();
     trace_cached_program_command_sequences_.clear();
 }
