@@ -1451,10 +1451,12 @@ INSTANTIATE_TEST_SUITE_P(
 
 namespace gcb_abi = cce_gcb_receiver_abi;
 
-inline constexpr const char* kGcbDiscardReceiverKernel =
-    "tests/tt_metal/tt_metal/test_kernels/cce/cce_gcb_discard_receiver.cpp";
-inline constexpr uint32_t kUint32TileWords = tt::constants::TILE_HW;
-inline constexpr uint32_t kUint32TilePageBytes = kUint32TileWords * sizeof(uint32_t);
+using prefetcher::bank_with_sender_cce;
+using prefetcher::kGcbDiscardReceiverKernel;
+using prefetcher::kUint32TilePageBytes;
+using prefetcher::kUint32TileWords;
+using prefetcher::PrefetcherSession;
+
 // The prefetched tensor: one-tile pages through a one-tile FIFO, so every page waits for the receiver's credit.
 inline constexpr uint32_t kPrefetchTiles = 16;
 // rdcycle budgets of the prefetcher, the receiver and the trid stream; ~400 s of host polling each, at the ~85,000
@@ -1479,19 +1481,6 @@ std::string concurrent_route_name(const ::testing::TestParamInfo<ConcurrentRoute
         "Sender{}Receiver{}Stream{}", info.param.sender_cce, info.param.receiver_cce, info.param.stream_cce);
 }
 
-// The DRAM bank whose prefetcher sender is CCE `cce_index`, if any.
-std::optional<uint32_t> bank_with_sender_cce(distributed::MeshDevice& mesh, uint32_t cce_index) {
-    IDevice* device = mesh.get_devices().front();
-    const metal_SocDescriptor& soc = soc_desc_of(device);
-    for (uint32_t bank = 0; bank < soc.get_num_dram_views(); ++bank) {
-        const CoreCoord sender_logical = mesh.impl().dram_sender_logical_cores(device, bank).front();
-        if (soc.get_physical_dram_core_from_logical(sender_logical) == translated_dram_core(soc, cce_index)) {
-            return bank;
-        }
-    }
-    return std::nullopt;
-}
-
 // A UINT32 TILE tensor of kPrefetchTiles tiles on DRAM bank `bank` alone, seeded.
 MeshTensor write_prefetch_tensor(distributed::MeshDevice& mesh, uint32_t bank) {
     const CoreCoord bank_core = soc_desc_of(mesh.get_devices().front()).get_logical_core_for_dram_view(bank);
@@ -1511,36 +1500,6 @@ MeshTensor write_prefetch_tensor(distributed::MeshDevice& mesh, uint32_t bank) {
     command_queue.finish();
     return tensor;
 }
-
-// A Tensor prefetcher session on one sender bank. The destructor stops through the no-throw path; call stop() to see a
-// sender that ended Failed.
-class ConcurrentPrefetcherSession {
-public:
-    ConcurrentPrefetcherSession(distributed::MeshDevice& mesh, uint32_t sender_bank) : mesh_(mesh) {
-        distributed::start_tensor_prefetcher(
-            mesh_,
-            {},
-            distributed::QuasarTensorPrefetcherConfig{
-                .dram_sender_banks = {sender_bank}, .wait_budget_cycles = kConcurrentBudgetCycles});
-        active_ = true;
-    }
-    ConcurrentPrefetcherSession(const ConcurrentPrefetcherSession&) = delete;
-    ConcurrentPrefetcherSession& operator=(const ConcurrentPrefetcherSession&) = delete;
-    ~ConcurrentPrefetcherSession() {
-        if (active_) {
-            mesh_.impl().tensor_prefetcher(&mesh_).stop_without_throwing();
-        }
-    }
-
-    void stop() {
-        active_ = false;
-        experimental::StopTensorPrefetcher(mesh_);
-    }
-
-private:
-    distributed::MeshDevice& mesh_;
-    bool active_ = false;
-};
 
 // 2x only, no AMOs and no accumulate: the stream CCE runs kModeTridStream rounds into its local GDDR while the
 // prefetcher streams a tensor from the sender CCE's bank to a discard receiver on the other Mimir. The stream CCE is
@@ -1629,8 +1588,8 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
     stream_args[abi::kArgPollBudgetHi] = static_cast<uint32_t>(kConcurrentBudgetCycles >> 32);
     stream_args[abi::kArgStopOffset] = static_cast<uint32_t>(stop_offset);
     stream_args[abi::kArgProgressOffset] = static_cast<uint32_t>(progress_offset);
-    std::optional<ConcurrentPrefetcherSession> session;
-    session.emplace(*mesh, *sender_bank);
+    std::optional<PrefetcherSession> session;
+    session.emplace(*mesh, std::vector<uint32_t>{*sender_bank}, kConcurrentBudgetCycles);
     // Launched after the prefetcher started, so the stream's budget is not spent while it starts.
     const std::vector<CceKernelLaunch> stream_launch = {scenario_launch(scenario, stream_args)};
     poison_status_lines(device, stream_launch);

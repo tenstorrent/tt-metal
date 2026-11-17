@@ -517,7 +517,6 @@ TEST_F(MimirPrefetcher, GcbLayoutRejectsConflictingReceivers) {
 namespace gcb_abi = cce_gcb_receiver_abi;
 
 const char* const kGcbSmokeSenderKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_gcb_smoke_sender.cpp";
-const char* const kGcbDiscardReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_gcb_discard_receiver.cpp";
 const char* const kGcbValidatorReceiverKernel =
     "tests/tt_metal/tt_metal/test_kernels/cce/cce_gcb_validator_receiver.cpp";
 
@@ -526,12 +525,6 @@ inline constexpr uint32_t kGcbSmokeFifoBytes = 4 * kKiB;
 // a sender that writes past the FIFO end fails the test instead of landing in whatever the receiver zone holds next.
 inline constexpr uint32_t kGcbSmokeGuardBytes = 4 * gcb_abi::kLineBytes;
 inline constexpr uint32_t kGcbSmokeGuardPattern = 0x6A4D'0000;
-// rdcycle budgets per wait. On the Mimir emulator the chip clock was measured at ~85,000 cycles/s while the host polls
-// it and ~90 cycles/s while the host is idle, so these count host activity rather than wall time. The wait budget
-// bounds waits that should succeed (~200 s of polling, under TT_METAL_OPERATION_TIMEOUT_SECONDS=600); the stall budget
-// is the sender's in the stall case (~12 s of polling), which must expire while the receiver holds its credits.
-inline constexpr uint64_t kGcbSmokeWaitBudgetCycles = 1ull << 24;
-inline constexpr uint64_t kGcbSmokeStallBudgetCycles = 1ull << 20;
 inline constexpr std::chrono::seconds kGcbSmokeHostWaitLimit{120};
 inline constexpr std::chrono::milliseconds kGcbSmokeHostPollInterval{50};
 
@@ -1200,47 +1193,6 @@ TEST_F(MimirPrefetcher, SupportPreconditionsHoldWhileReceiverRuns) {
     EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeStopped);
 }
 
-// A Tensor prefetcher session on the CCE senders of `sender_banks`. The default stage ring's third holds the widest
-// K-row of the one-tile-wide tensors these tests write (one 4 KiB UINT32 tile). Declare it after any CceReceiverProgram
-// it serves, so it stops first and Stop's DRAIN sees live receivers. The destructor stops through the no-throw path,
-// which only logs a failure; call stop() to check the outcome.
-class PrefetcherSession {
-public:
-    PrefetcherSession(
-        distributed::MeshDevice& mesh,
-        std::vector<uint32_t> sender_banks,
-        uint64_t wait_budget_cycles = kGcbSmokeWaitBudgetCycles,
-        uint32_t stage_ring_bytes = distributed::QuasarTensorPrefetcherConfig{}.stage_ring_bytes) :
-        mesh_(mesh) {
-        distributed::start_tensor_prefetcher(
-            mesh_,
-            {},
-            distributed::QuasarTensorPrefetcherConfig{
-                .dram_sender_banks = std::move(sender_banks),
-                .wait_budget_cycles = wait_budget_cycles,
-                .stage_ring_bytes = stage_ring_bytes});
-        active_ = true;
-    }
-    PrefetcherSession(const PrefetcherSession&) = delete;
-    PrefetcherSession& operator=(const PrefetcherSession&) = delete;
-
-    ~PrefetcherSession() {
-        if (!active_) {
-            return;
-        }
-        mesh_.impl().tensor_prefetcher(&mesh_).stop_without_throwing();
-    }
-
-    void stop() {
-        active_ = false;
-        experimental::StopTensorPrefetcher(mesh_);
-    }
-
-private:
-    distributed::MeshDevice& mesh_;
-    bool active_ = false;
-};
-
 CceSenderStatus lifecycle_sender_status(distributed::MeshDevice& mesh, uint32_t cce_index) {
     const std::vector<uint32_t> words = read_cce_tl1(
         mesh.get_devices().front(),
@@ -1573,21 +1525,9 @@ TEST_F(MimirPrefetcher, LifecycleDrainAtStop) {
 // DRAM view into a validator receiver, then a second session in the same mesh streams another tensor's page into the
 // same GCB.
 
-inline constexpr uint32_t kUint32TileWords = tt::constants::TILE_HW;
-inline constexpr uint32_t kUint32TilePageBytes = kUint32TileWords * sizeof(uint32_t);
 inline constexpr uint32_t kSessionsPerRoute = 2;
 // One PREFETCH page, then Stop's DRAIN and STOP.
 inline constexpr uint32_t kRequestsForOnePrefetch = 3;
-
-std::optional<uint32_t> bank_with_sender_cce(distributed::MeshDevice& mesh, uint32_t cce_index) {
-    IDevice* device = mesh.get_devices().front();
-    for (uint32_t bank = 0; bank < soc_desc_of(device).get_num_dram_views(); ++bank) {
-        if (gcb_layout_sender_cce(device, mesh, bank) == cce_index) {
-            return bank;
-        }
-    }
-    return std::nullopt;
-}
 
 // Why a test whose senders and receivers are `route_cces` cannot run on this descriptor, or empty.
 std::string route_skip_reason(const std::vector<uint32_t>& route_cces) {
