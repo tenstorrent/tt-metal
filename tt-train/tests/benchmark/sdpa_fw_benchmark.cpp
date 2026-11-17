@@ -146,6 +146,7 @@ const ttml::metal::SDPAForwardProgramConfig kMainConfig{
 struct Row {
     std::string label;
     double device_us = 0.0;
+    double predicted_us = 0.0;    // what the cost model rated this schedule
     double speedup = 0.0;         // main_chunking_us / device_us, both this kernel
     double dram_alloc_mib = 0.0;  // allocated by the first launch: outputs, logsumexp, scratch
     float max_abs_diff = 0.0F;
@@ -153,8 +154,13 @@ struct Row {
     std::string skipped;
 };
 
-// The schedule the program factory builds for cfg on sc, summarised as sender / merger counts.
-std::string schedule_units(const Scenario& sc, const ttml::metal::SDPAForwardProgramConfig& cfg) {
+struct ScheduleSummary {
+    std::string units;         // "<senders>S/<mergers>M"
+    double predicted_us = 0.0;  // the model's rating, the number the pick compares candidates on
+};
+
+// The schedule the program factory builds for cfg on sc: sender / merger counts and the model's rating.
+ScheduleSummary schedule_summary(const Scenario& sc, const ttml::metal::SDPAForwardProgramConfig& cfg) {
     using namespace ttml::metal::ops::sdpa_fw::device;
     auto* device = &ttml::autograd::ctx().get_device();
     const auto grid = device->compute_with_storage_grid_size();
@@ -169,16 +175,16 @@ std::string schedule_units(const Scenario& sc, const ttml::metal::SDPAForwardPro
         .mask_type = sc.mask_type,
         .has_gate = sc.gate,
         .return_intermediates = true};
-    const SDPAForwardChunks chunks = resolve_chunks(cfg, shape, ttml::metal::available_l1_bytes(*device), grid_cores);
+    const auto [chunks, schedule] = resolve_plan(cfg, shape, ttml::metal::available_l1_bytes(*device), grid_cores);
     uint32_t senders = 0;
     uint32_t mergers = 0;
-    for (const auto& units : schedule_for(cfg, shape, chunks, grid_cores).per_core) {
+    for (const auto& units : schedule.per_core) {
         for (const auto& unit : units) {
             senders += unit.role == UnitRole::Sender ? 1U : 0U;
             mergers += unit.role == UnitRole::Merger ? 1U : 0U;
         }
     }
-    return fmt::format("{}S/{}M", senders, mergers);
+    return {fmt::format("{}S/{}M", senders, mergers), schedule.predicted_us};
 }
 
 uint32_t env_or(const char* name, uint32_t fallback) {
@@ -229,7 +235,9 @@ void run_scenario(
 
     auto measure = [&](const std::string& label, const metal::SDPAForwardProgramConfig& cfg) {
         Row row{.label = label};
-        row.units = schedule_units(sc, cfg);
+        const ScheduleSummary summary = schedule_summary(sc, cfg);
+        row.units = summary.units;
+        row.predicted_us = summary.predicted_us;
         row.dram_alloc_mib =
             static_cast<double>(benchmark_utils::capture_dram_peak(sc.name + "_" + label, [&]() { (void)run(cfg); })) /
             (1024.0 * 1024.0);
@@ -284,10 +292,16 @@ void run_scenario(
         picked.heads_per_item,
         grid.x * grid.y);
     fmt::print("this kernel at main's chunking (q=32, k=128, h=1, no cuts): {:.1f} us\n", main_chunking_us);
+    // predicted_us is what the pick compares its candidates on; pred/meas next to it is the model's drift,
+    // so a schedule the model rates well and the device does not shows up here (the cost model's constants
+    // are calibrated on p150b and sum the reader's DRAM time and the compute passes, which assumes the two
+    // do not overlap; a ratio that moves with the K/V step is where that assumption breaks).
     fmt::print(
-        "{:<24} {:>12} {:>9} {:>13} {:>12} {:>10}\n",
+        "{:<24} {:>12} {:>12} {:>10} {:>9} {:>13} {:>12} {:>10}\n",
         "config",
         "device_us",
+        "predicted_us",
+        "pred/meas",
         "speedup",
         "dram_alloc_MiB",
         "max_abs_diff",
@@ -295,17 +309,21 @@ void run_scenario(
     for (const Row& row : rows) {
         if (row.skipped.empty()) {
             fmt::print(
-                "{:<24} {:>12.1f} {:>8.3f}x {:>13.1f} {:>12.3e} {:>10}\n",
+                "{:<24} {:>12.1f} {:>12.1f} {:>10.3f} {:>8.3f}x {:>13.1f} {:>12.3e} {:>10}\n",
                 row.label,
                 row.device_us,
+                row.predicted_us,
+                row.device_us > 0.0 ? row.predicted_us / row.device_us : 0.0,
                 row.speedup,
                 row.dram_alloc_mib,
                 row.max_abs_diff,
                 row.units);
         } else {
             fmt::print(
-                "{:<24} {:>12} {:>9} {:>13} {:>12} {:>10}  skipped: {}\n",
+                "{:<24} {:>12} {:>12} {:>10} {:>9} {:>13} {:>12} {:>10}  skipped: {}\n",
                 row.label,
+                "-",
+                "-",
                 "-",
                 "-",
                 "-",

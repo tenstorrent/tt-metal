@@ -76,9 +76,14 @@ uint32_t chunk_size_to_tiles(uint32_t chunk_size, uint32_t St, const char* name)
 }
 
 // ---- cost model -------------------------------------------------------------------------------------
-// Microseconds on Blackhole, measured by knocking phases out of the kernel one at a time (q=128,
-// k=256, D=64 and D=128, S=2048). The reader's DRAM time and the compute passes did not overlap in
-// those measurements, so the per-step cost is their sum.
+// Microseconds on Blackhole p150b (110 cores), measured by knocking phases out of the kernel one at a
+// time (q=128, k=256, D=64 and D=128, S=2048). The reader's DRAM time and the compute passes did not
+// overlap in those measurements, so the per-step cost is their sum, although K and V are double-buffered
+// and could; the merge and K/V-loop passes have changed since the constants were taken.
+// The model is only ever used to compare candidates against each other, so a uniform error is harmless
+// and drift is what matters. sdpa_fw_benchmark prints predicted_us and pred/meas beside the measured
+// time of every row, which is where to see both the drift and whether the DRAM and compute terms should
+// be a max rather than a sum.
 constexpr double kExpUsPerScoreTile = 0.16;    // scaled exp, fp32
 constexpr double kMaxUsPerScoreTile = 0.066;   // row-max reduce
 constexpr double kPassUsPerScoreTile = 0.14;   // pack/unpack traffic of the score block
