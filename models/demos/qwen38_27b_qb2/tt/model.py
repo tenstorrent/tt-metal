@@ -18,6 +18,7 @@ from models.common.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, validate_qb2_mesh
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
+from models.experimental.op_genify import genify_matmul_adapter as genify
 
 MODEL_ID = "Qwen/Qwen3.8-27B"
 REVISION = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
@@ -252,6 +253,14 @@ class Qwen38Model:
         if decode:
             hidden = ttnn.reshape(ttnn.to_layout(hidden, ttnn.ROW_MAJOR_LAYOUT), [1, 1, batch, self.config.hidden_size])
             hidden = ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
+        if genify.enabled():
+            return genify.matmul(
+                hidden,
+                self.head_weight,
+                dtype=getattr(ttnn, self.precision["logits_dtype"]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.head_compute,
+            )
         return ttnn.linear(
             hidden,
             self.head_weight,
@@ -264,6 +273,18 @@ class Qwen38Model:
     def _dram_logits(self, hidden):
         parts = []
         for weight in self.head_decode_weights:
+            if genify.enabled():
+                # hidden is L1 width-sharded over K (8 x [32, 640]); each vocab chunk is one column
+                # shard per DRAM bank (the 12928-column chunk leaves the last bank part-filled).
+                out = genify.matmul(
+                    hidden,
+                    weight,
+                    dtype=getattr(ttnn, self.precision["logits_dtype"]),
+                    compute_kernel_config=self.head_compute,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                )
+                parts.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
+                continue
             config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 in0_block_w=5,
                 per_core_M=1,

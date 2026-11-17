@@ -16,6 +16,7 @@ import ttnn
 from models.common.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start
 from models.demos.qwen38_27b_qb2.tt.decoder import DEFAULT_POLICY, Qwen38Decoder
+from models.experimental.op_genify import genify_matmul_adapter as genify
 
 
 def validate_qb2_mesh(mesh_device):
@@ -262,7 +263,9 @@ class Qwen38TPDecoder(Qwen38Decoder):
         if self.policy.get("packed_mlp", False):
             gate, up = split(state_dict["mlp.gate_proj.weight"]), split(state_dict["mlp.up_proj.weight"])
             weight("mlp.gate_up", [torch.cat(parts) for parts in zip(gate, up)])
-        if self.policy.get("minimal_mlp", False):
+        if self.policy.get("minimal_mlp", False) or genify.enabled():
+            # (gate, up) 32-column tile pairs: minimal_matmul's fuse_swiglu layout, also genify_matmul's
+            # SwiGLU epilogue (#65150). Gets a padded DRAM-sharded decode copy below, 18 pairs per bank.
             gate, up = split(state_dict["mlp.gate_proj.weight"]), split(state_dict["mlp.up_proj.weight"])
             weight(
                 "mlp.interleaved_gate_up",
@@ -454,7 +457,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16")),
         )
 
-    def _linear(self, x, name, activation=None, keep_sharded=False):
+    def _linear(self, x, name, activation=None, keep_sharded=False, swiglu=False):
         if (
             self.policy.get("fused_input", False)
             and x.shape[-1] == 5120 // self.TP
@@ -600,17 +603,29 @@ class Qwen38TPDecoder(Qwen38Decoder):
                 x = ttnn.typecast(x, activation_dtype)
             if self.policy.get("prefill_1d_l1", self.policy.get("prefill_l1", False)):
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-            output = ttnn.linear(
-                x,
-                self.weights[name + ".weight"],
-                program_config=program,
-                compute_kernel_config=self.projection_configs[self._role(name)],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-            )
+            if genify.enabled() and activation is None:
+                output = genify.matmul(
+                    x,
+                    self.weights[name + ".weight"],
+                    activation="swiglu" if swiglu else None,
+                    compute_kernel_config=self.projection_configs[self._role(name)],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                )
+            else:
+                assert not swiglu, "swiglu projections run through genify_matmul"
+                output = ttnn.linear(
+                    x,
+                    self.weights[name + ".weight"],
+                    program_config=program,
+                    compute_kernel_config=self.projection_configs[self._role(name)],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                )
         else:
-            output = super()._linear(x, name, activation=activation, keep_sharded=keep_sharded)
-        width = self.projection_widths[name]
+            output = super()._linear(x, name, activation=activation, keep_sharded=keep_sharded, swiglu=swiglu)
+        # SwiGLU halves the output: (gate, up) pairs -> silu(gate) * up.
+        width = self.projection_widths[name] // (2 if swiglu else 1)
         if output.shape[-1] != width:
             output = output[..., :width]
         if self._role(name) not in ("output", "down"):

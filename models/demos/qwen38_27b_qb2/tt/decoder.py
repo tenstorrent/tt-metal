@@ -25,6 +25,7 @@ from models.demos.qwen38_27b_qb2.tt.cache_initialization import (
     require_cache_initialization_ready,
 )
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
+from models.experimental.op_genify import genify_matmul_adapter as genify
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
 DEFAULT_POLICY = {
@@ -295,7 +296,10 @@ class Qwen38Decoder(LightweightModule):
     def _weight_dtype(self, name):
         return getattr(ttnn, self.policy.get(self._role(name) + "_dtype", "bfloat8_b"))
 
-    def _linear(self, x, name, activation=None, keep_sharded=False):
+    def _linear(self, x, name, activation=None, keep_sharded=False, swiglu=False):
+        # swiglu=True: `name` holds (gate, up) 32-column tile pairs (mlp.interleaved_gate_up) and the
+        # generated matmul (#65150) applies silu(gate) * up in its epilogue; only the genify paths take it.
+        assert not swiglu or genify.enabled(), "swiglu projections run through genify_matmul"
         if self.policy.get("split_attention", False):
             if name == "self_attn.qkvg":
                 qg = self._linear(x, "self_attn.split_qg")
@@ -325,7 +329,11 @@ class Qwen38Decoder(LightweightModule):
             and self._role(name) in self.policy.get("minimal_prefill_roles", [])
         ):
             return self._minimal(
-                x, self.weights[name + ".weight"], self.projection_configs[self._role(name)], activation=activation
+                x,
+                self.weights[name + ".weight"],
+                self.projection_configs[self._role(name)],
+                activation=activation,
+                fuse_swiglu=swiglu,
             )
         grid = self.device.compute_with_storage_grid_size()
         dram_prefill = (
@@ -334,7 +342,10 @@ class Qwen38Decoder(LightweightModule):
         if dram_prefill and x.shape[0] * x.shape[1] > 32:
             step = 32 // x.shape[0]
             return ttnn.concat(
-                [self._linear(x[:, i : i + step, :], name, activation=activation) for i in range(0, x.shape[1], step)],
+                [
+                    self._linear(x[:, i : i + step, :], name, activation=activation, swiglu=swiglu)
+                    for i in range(0, x.shape[1], step)
+                ],
                 dim=1,
             )
         if self.policy.get("dram", False) and (x.shape[1] == 1 or dram_prefill):
@@ -352,28 +363,42 @@ class Qwen38Decoder(LightweightModule):
             memory = self._width_memory(cores, ((batch + 31) // 32) * 32, shard_tiles * 32)
             x = ttnn.reshape(x, [1, 1, batch, k])
             x = ttnn.to_memory_config(x, memory)
-            program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=block,
-                per_core_M=(batch + 31) // 32,
-                per_core_N=(
-                    self.dram_weights[name + ".weight"].memory_config().shard_spec.shape[1]
-                    // 32
-                    * self.device.dram_grid_size().x
-                    + cores
-                    - 1
+            if genify.enabled() and activation is None:
+                # Same operands as the stock DRAM-sharded matmul: A L1 width-sharded over K, B one
+                # column shard per DRAM bank. The output is L1 width-sharded on the op's bank workers.
+                output = genify.matmul(
+                    x,
+                    self.dram_weights[name + ".weight"],
+                    activation="swiglu" if swiglu else None,
+                    compute_kernel_config=self.projection_configs[role],
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
                 )
-                // cores,
-                fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation else None,
-                num_workers_per_dram_bank=self.policy.get(role + "_readers", 1),
-            )
-            output = ttnn.linear(
-                x,
-                self.dram_weights[name + ".weight"],
-                compute_kernel_config=self.projection_configs[role],
-                program_config=program,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-            )
+                if swiglu:
+                    n //= 2
+            else:
+                program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=block,
+                    per_core_M=(batch + 31) // 32,
+                    per_core_N=(
+                        self.dram_weights[name + ".weight"].memory_config().shard_spec.shape[1]
+                        // 32
+                        * self.device.dram_grid_size().x
+                        + cores
+                        - 1
+                    )
+                    // cores,
+                    fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation else None,
+                    num_workers_per_dram_bank=self.policy.get(role + "_readers", 1),
+                )
+                output = ttnn.linear(
+                    x,
+                    self.dram_weights[name + ".weight"],
+                    compute_kernel_config=self.projection_configs[role],
+                    program_config=program,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                )
             if dram_prefill:
                 return ttnn.reshape(
                     ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG), [public_shape[0], public_shape[1], n]
@@ -389,7 +414,11 @@ class Qwen38Decoder(LightweightModule):
                 keep_sharded=False,
                 force_dram=role == "attention" and batch >= self.policy.get("attention_dram_batch", 10**9),
             )
-        if self.policy.get("prefill_2d", False) and x.shape[1] >= self.policy.get("prefill_2d_min", 256):
+        if (
+            not genify.enabled()
+            and self.policy.get("prefill_2d", False)
+            and x.shape[1] >= self.policy.get("prefill_2d_min", 256)
+        ):
             gx, gy = self.policy.get("prefill_grid", [8, 8])
             k, n = self.weights[name + ".weight"].shape
             per_m = ((x.shape[1] + 31) // 32 + gy - 1) // gy
@@ -418,6 +447,15 @@ class Qwen38Decoder(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
             )
+        if genify.enabled() and activation is None:
+            return genify.matmul(
+                x,
+                self.weights[name + ".weight"],
+                activation="swiglu" if swiglu else None,
+                compute_kernel_config=self.projection_configs[self._role(name)],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
         return ttnn.linear(
             x,
             self.weights[name + ".weight"],
@@ -435,6 +473,15 @@ class Qwen38Decoder(LightweightModule):
             else ttnn.DRAM_MEMORY_CONFIG
         )
         x = ttnn.to_memory_config(x, target)
+        if genify.enabled() and activation is None:
+            return genify.matmul(
+                x,
+                weight,
+                activation="swiglu" if fuse_swiglu else None,
+                compute_kernel_config=compute,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
         config = ttnn.MinimalMatmulConfig(
             M_block_size=1 if x.shape[1] == 1 else self.policy.get("minimal_m", 4),
             K_block_size=self.policy.get("minimal_k", 8),
@@ -564,7 +611,10 @@ class Qwen38Decoder(LightweightModule):
                 x, attention, memory_config=memory, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16"))
             )
             n = self._norm(h, "post_attention_layernorm")
-            if self.policy.get("minimal_mlp", False):
+            if genify.enabled() and "mlp.interleaved_gate_up.weight" in self.weights:
+                # Fused SwiGLU epilogue on the (gate, up) tile-pair weight; replaces gate_up + mul.
+                product = self._linear(n, "mlp.interleaved_gate_up", swiglu=True)
+            elif self.policy.get("minimal_mlp", False):
                 product = self._minimal(
                     n, self.weights["mlp.interleaved_gate_up.weight"], self.projection_configs["gate"], fuse_swiglu=True
                 )
@@ -608,7 +658,9 @@ class Qwen38Decoder(LightweightModule):
             return self._public_rows(result, batch, 5120)
         h = ttnn.add(x, attention, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16")))
         n = self._norm(h, "post_attention_layernorm")
-        if self.policy.get("minimal_mlp", False):
+        if genify.enabled() and "mlp.interleaved_gate_up.weight" in self.weights:
+            product = self._linear(n, "mlp.interleaved_gate_up", swiglu=True)
+        elif self.policy.get("minimal_mlp", False):
             product = self._minimal(
                 n, self.weights["mlp.interleaved_gate_up.weight"], self.projection_configs["gate"], fuse_swiglu=True
             )
