@@ -285,13 +285,16 @@ def _set_ttml_token(own: dict, index: int, value: str) -> None:
 
 # Valid JSON of the right length that a setter would misread: the ttml text the C++ stream stops partway through
 # (non-ASCII digits, a word past 64 bits) or reads into a state no mt19937 has (a word past 32 bits, a position past
-# 624).
+# 624), and a cached Gaussian Python's setstate keeps but the next random.gauss cannot use.
 MISREAD = [
     pytest.param(lambda own: _set_ttml_token(own, 5, "\u00b2"), id="ttml_superscript_digit"),
     pytest.param(lambda own: _set_ttml_token(own, 5, "\u0663"), id="ttml_arabic_indic_digit"),
     pytest.param(lambda own: _set_ttml_token(own, 5, str(2**32)), id="ttml_word_past_32_bits"),
     pytest.param(lambda own: _set_ttml_token(own, 5, str(2**64)), id="ttml_word_past_64_bits"),
     pytest.param(lambda own: _set_ttml_token(own, -1, "625"), id="ttml_position_past_624"),
+    pytest.param(lambda own: own["python"].update(gauss_next="corrupt"), id="python_gauss_next_text"),
+    pytest.param(lambda own: own["python"].update(gauss_next=[0.5]), id="python_gauss_next_list"),
+    pytest.param(lambda own: own["python"].update(gauss_next=True), id="python_gauss_next_bool"),
 ]
 
 

@@ -472,7 +472,10 @@ def _set_ttml_position(own: dict, value: str) -> None:
     own["ttml"] = " ".join(tokens)
 
 
-DAMAGED_RNG = [pytest.param(lambda own: _set_ttml_position(own, "625"), id="ttml_position_past_624")]
+DAMAGED_RNG = [
+    pytest.param(lambda own: _set_ttml_position(own, "625"), id="ttml_position_past_624"),
+    pytest.param(lambda own: own["python"].update(gauss_next="corrupt"), id="python_gauss_next_text"),
+]
 
 
 @pytest.mark.parametrize("damage", DAMAGED_RNG)

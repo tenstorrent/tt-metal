@@ -167,7 +167,11 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
         python_state = state.get("python")
         if python_state is not None:
             words = tuple(int(w) for w in _u32_from_hex(python_state["state"]))
-            decoded["python"] = (int(python_state["version"]), words, python_state["gauss_next"])
+            gauss_next = python_state["gauss_next"]
+            # setstate stores the cached Gaussian as given; the next random.gauss would fail on anything but a number.
+            if gauss_next is not None and type(gauss_next) not in (int, float):
+                raise TypeError(f"python's cached Gaussian is a {type(gauss_next).__name__}, not a number or null")
+            decoded["python"] = (int(python_state["version"]), words, gauss_next)
             random.Random().setstate(decoded["python"])
         numpy_state = state.get("numpy")
         if numpy_state is not None:
