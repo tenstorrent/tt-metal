@@ -308,6 +308,19 @@ def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
     _run(device, "divide", mem_config, dtype_tt, shape, pcc=0.99)
 
 
+@pytest.mark.parametrize("layout", ["interleaved", "height"])
+def test_no_bcast_sfpu_rsub_fp32(device, layout):
+    # fp32 rsub routes the SFPU compute kernel (rsub_binary_tile, b - a), on interleaved and sharded. Exact: the
+    # golden is torch's fp32 b - a on the device's operands, with a 0 ULP bound.
+    if layout == "interleaved":
+        mem_config = ttnn.DRAM_MEMORY_CONFIG
+        shape = _INTERLEAVED_SHAPE
+    else:
+        mem_config = _height_sharded_config(_HEIGHT_SHARD, _HEIGHT_GRID)
+        shape = _HEIGHT_SHAPE
+    _run(device, "rsub", mem_config, ttnn.float32, shape)
+
+
 # (a_mem, b_mem, out_mem) permutations beyond the uniform III / SSS already covered by
 # test_no_bcast_interleaved / test_no_bcast_sharded. The id encodes the layout of each operand:
 #   I = DRAM-interleaved (NoC), IL1 = L1-interleaved (NoC), H/B/W = height/block/width sharded. The
