@@ -80,7 +80,9 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True, False],
     "placement": ["interleaved"],
-    "epilogue": ["none"],
+    # Refinement 2: every epilogue runs inside the same program on the accumulated block
+    # (matmul_block -> cb_partials -> add_bias_bcast_rows / eltwise_chain -> cb_output_tiles).
+    "epilogue": ["none", "bias", "bias_relu", "swiglu", "addcmul"],
     # m_non_aligned is a knob-turn already realized by the Phase 0 geometry (op_design.md, TARGET
     # table): M is tiled with ceil per image, every image is tile-padded on its own, and padded A rows
     # only feed padded output rows. K / N non-aligned are outside TARGET.
@@ -180,6 +182,14 @@ def validate(
         raise UnsupportedAxisValue(
             f"genify_matmul: placement 'interleaved' writes an interleaved output; got {memory_config.memory_layout}"
         )
+    # Epilogue operands are read through interleaved accessors, tile by tile.
+    for name, t in (("bias", bias), ("residual", residual), ("gate", gate)):
+        if t is None:
+            continue
+        if t.layout != ttnn.TILE_LAYOUT:
+            raise UnsupportedAxisValue(f"genify_matmul: {name} layout must be TILE_LAYOUT")
+        if t.memory_config().memory_layout != _ML.INTERLEAVED:
+            raise UnsupportedAxisValue(f"genify_matmul: {name} must be interleaved")
     return axes
 
 
@@ -272,6 +282,11 @@ def genify_matmul(
     # allocate_tensor_on_device takes positional args only.
     output_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_mc)
 
-    program_descriptor = create_program_descriptor(input_tensor, weight, output_tensor, cfg)
+    epilogue = _classify_epilogue(bias, activation, residual, gate)
+    row = bias if bias is not None else gate  # the (1, N) row the epilogue broadcasts
+    program_descriptor = create_program_descriptor(
+        input_tensor, weight, output_tensor, cfg, epilogue=epilogue, row=row, residual=residual
+    )
     # Exactly one dispatch; the output tensor is last.
-    return ttnn.generic_op([input_tensor, weight, output_tensor], program_descriptor)
+    io_tensors = [t for t in (input_tensor, weight, row, residual) if t is not None]
+    return ttnn.generic_op(io_tensors + [output_tensor], program_descriptor)

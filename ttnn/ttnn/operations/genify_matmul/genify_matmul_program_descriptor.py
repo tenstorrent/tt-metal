@@ -29,13 +29,22 @@ TILE = 32
 # ---- CB indices (op_design.md, Circular Buffers) ----
 CB_ACT_TILES = 0  # A K-blocks, reader -> compute
 CB_WEIGHT_TILES = 1  # B K-blocks, reader -> compute
+CB_BIAS_ROW = 2  # bias N-block row (bias / bias_relu), reader -> compute, one per block
+CB_GATE_ROW = 3  # gate N-block row (addcmul), reader -> compute, one per block
+CB_RESIDUAL_TILES = 4  # residual row groups (addcmul), reader -> compute
 CB_OUTPUT_TILES = 16  # output row groups, compute -> writer
-CB_PARTIALS = 24  # K-accumulator (packer L1 acc), compute -> compute; only when num_k_blocks > 1
+CB_PARTIALS = 24  # K-accumulator (packer L1 acc), compute -> compute; num_k_blocks > 1 or epilogue != none
+
+# ---- Epilogue kinds (compile-time arg shared by reader and compute) ----
+EPILOGUES = {"none": 0, "bias": 1, "bias_relu": 2, "swiglu": 3, "addcmul": 4}
 
 # ---- Buffer-depth knobs ----
 DEPTH_ACT = 2  # A K-blocks in flight
 DEPTH_WEIGHT = 2  # B K-blocks in flight
 DEPTH_OUT = 2  # output row groups in flight
+DEPTH_RESIDUAL = 2  # residual row groups in flight (addcmul)
+# Epilogue chain DEST lanes per acquire (eltwise_chain block_size; the chain clamps it to DEST).
+EPILOGUE_BLOCK_TILES = 1
 
 # ---- Blocking knobs ----
 BLOCK_K_FLOOR = 8  # smallest K-block the solve accepts (clamped to tensor_k_tiles)
@@ -88,6 +97,21 @@ class Geometry:
     p_dtype: object
     dest_limit: int
     block_k_cap: int  # longest in-DEST K chain (DEST16_BLOCK_K_MAX with 16-bit DEST, else all of K)
+    epilogue: str = "none"
+    row_tile_bytes: int = 0  # bias (bias / bias_relu) or gate (addcmul) tile bytes, else 0
+    r_tile_bytes: int = 0  # residual tile bytes (addcmul), else 0
+
+    @property
+    def swiglu(self):
+        return self.epilogue == "swiglu"
+
+    @property
+    def q_n_min(self):
+        # swiglu: whole (gate, up) tile pairs per core and per block (N % 64 == 0 makes Nt even).
+        return 2 if self.swiglu else 1
+
+    def out_block_n(self, block_n_tiles):
+        return block_n_tiles // 2 if self.swiglu else block_n_tiles
 
 
 @dataclass(frozen=True)
@@ -112,11 +136,13 @@ class Blocking:
     last_block_k_tiles: int
     sb_h: int
     sb_w: int
+    epilogue: str = "none"
 
     @property
     def use_partials(self):
-        # Epilogue none: the K-accumulator exists only for a multi-K-block walk.
-        return self.num_k_blocks > 1
+        # The K-accumulator exists for a multi-K-block walk, and always under an epilogue (the
+        # matmul packs its last K-block there for the epilogue to read: LastBlockTarget::Interm).
+        return self.num_k_blocks > 1 or self.epilogue != "none"
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +150,7 @@ class Blocking:
 # ---------------------------------------------------------------------------
 
 
-def _geometry(a, b, out, fp32_dest_acc_en):
+def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None):
     a_shape = list(a.shape)
     b_shape = list(b.shape)
     lead = a_shape[:-2]
@@ -160,6 +186,9 @@ def _geometry(a, b, out, fp32_dest_acc_en):
         p_dtype=p_dtype,
         dest_limit=4 if fp32_dest_acc_en else 8,
         block_k_cap=tensor_k_tiles if fp32_dest_acc_en else min(tensor_k_tiles, DEST16_BLOCK_K_MAX),
+        epilogue=epilogue,
+        row_tile_bytes=ttnn.tile_size(row.dtype) if row is not None else 0,
+        r_tile_bytes=ttnn.tile_size(residual.dtype) if residual is not None else 0,
     )
 
 
@@ -189,7 +218,7 @@ def grid_candidates(geom: Geometry, gx: int, gy: int):
                 core_b = _cdiv(tb, gb)
                 core_m = _cdiv(tm, gm)
                 n_per = _cdiv(tn, gn)
-                q_n = min(Q_N_MAX, _pow2_floor(n_per))
+                q_n = max(geom.q_n_min, min(Q_N_MAX, _pow2_floor(n_per)))
                 core_n = _round_up(n_per, q_n)
                 ub, um, un = _cdiv(tb, core_b), _cdiv(tm, core_m), _cdiv(tn, core_n)
                 placement = _placement_for(ub, um, un, gx, gy)
@@ -285,19 +314,23 @@ def choose_subblock(block_m, block_n, dest_limit):
 
 
 def _footprint(geom, bm, bn, bk, partials):
+    """F(block_m, block_n, block_k) of l1_ledger.md, epilogue terms included (E_bias, E_addcmul).
+    An epilogue always needs cb_partials (the matmul's last K-block lands there)."""
     sb_h, _ = choose_subblock(bm, bn, geom.dest_limit)
+    partials = partials or geom.epilogue != "none"
     return (
         DEPTH_ACT * bm * bk * geom.a_tile_bytes
         + DEPTH_WEIGHT * bk * bn * geom.b_tile_bytes
         + (bm * bn * geom.p_tile_bytes if partials else 0)
-        + DEPTH_OUT * sb_h * bn * geom.o_tile_bytes
+        + DEPTH_OUT * sb_h * geom.out_block_n(bn) * geom.o_tile_bytes
+        + bn * geom.row_tile_bytes  # cb_bias_row / cb_gate_row: one N-block row
+        + DEPTH_RESIDUAL * sb_h * bn * geom.r_tile_bytes  # cb_residual_tiles
     )
 
 
 def _block_k_max(geom, bm, bn, budget):
     """Largest block_k with F(bm, bn, block_k, partials=True) <= budget (F is affine in block_k)."""
-    sb_h, _ = choose_subblock(bm, bn, geom.dest_limit)
-    fixed = bm * bn * geom.p_tile_bytes + DEPTH_OUT * sb_h * bn * geom.o_tile_bytes
+    fixed = _footprint(geom, bm, bn, 0, partials=True)
     per_k = DEPTH_ACT * bm * geom.a_tile_bytes + DEPTH_WEIGHT * bn * geom.b_tile_bytes
     if budget < fixed:
         return 0
@@ -318,7 +351,7 @@ def _k_split(tk, bk_max):
 def _make_blocking(geom, block_b, bm, bn, bk_max):
     block_k, nkb, last = _k_split(geom.tensor_k_tiles, min(bk_max, geom.block_k_cap))
     sb_h, sb_w = choose_subblock(bm, bn, geom.dest_limit)
-    return Blocking(block_b, bm, bn, block_k, nkb, last, sb_h, sb_w)
+    return Blocking(block_b, bm, bn, block_k, nkb, last, sb_h, sb_w, geom.epilogue)
 
 
 def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
@@ -401,12 +434,13 @@ def l1_cb_budget(device, op_tensors):
     return room - L1_RESERVE_BYTES
 
 
-def plan(a, b, out, fp32_dest_acc_en, device):
-    """The full blocking decision (geometry, grid, blocking). Exposed for tests / perf tooling."""
-    geom = _geometry(a, b, out, fp32_dest_acc_en)
+def plan(a, b, out, fp32_dest_acc_en, device, epilogue="none", row=None, residual=None):
+    """The full blocking decision (geometry, grid, blocking). Exposed for tests / perf tooling.
+    `row` is the bias (bias / bias_relu) or gate (addcmul) tensor, `residual` the addcmul residual."""
+    geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual)
     grid_size = device.compute_with_storage_grid_size()
     gx, gy = grid_size.x, grid_size.y
-    budget = l1_cb_budget(device, [a, b, out])
+    budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
     grid, blocking = choose_split(geom, gx, gy, budget)
     return geom, grid, blocking, (gx, gy)
 
@@ -424,12 +458,16 @@ def _cb(index, dtype, page_size, num_pages, core_ranges):
     )
 
 
-def create_program_descriptor(a, b, out, compute_config) -> ttnn.ProgramDescriptor:
+def create_program_descriptor(a, b, out, compute_config, epilogue="none", row=None, residual=None):
+    """`row` = bias (bias / bias_relu) or gate (addcmul); `residual` = addcmul residual."""
     device = a.device()
-    geom, grid, blk, (gx, gy) = plan(a, b, out, bool(compute_config.fp32_dest_acc_en), device)
+    geom, grid, blk, (gx, gy) = plan(
+        a, b, out, bool(compute_config.fp32_dest_acc_en), device, epilogue=epilogue, row=row, residual=residual
+    )
     cores, core_ranges = _logical_cores(grid, gx)
 
-    out_block_n_tiles = blk.block_n_tiles  # epilogue none: output width == B width
+    out_block_n_tiles = geom.out_block_n(blk.block_n_tiles)  # swiglu halves the output width
+    cb_row = CB_GATE_ROW if epilogue == "addcmul" else CB_BIAS_ROW
 
     # ---- CBs: every page count derives from the block / depth knobs ----
     cbs = [
@@ -448,6 +486,23 @@ def create_program_descriptor(a, b, out, compute_config) -> ttnn.ProgramDescript
         cbs.append(
             _cb(CB_PARTIALS, geom.p_dtype, geom.p_tile_bytes, blk.block_m_tiles * blk.block_n_tiles, core_ranges)
         )
+    if row is not None:
+        # One N-block row of the bias / gate, refreshed once per block.
+        cbs.append(_cb(cb_row, row.dtype, geom.row_tile_bytes, blk.block_n_tiles, core_ranges))
+    if residual is not None:
+        cbs.append(
+            _cb(
+                CB_RESIDUAL_TILES,
+                residual.dtype,
+                geom.r_tile_bytes,
+                DEPTH_RESIDUAL * blk.sb_h * blk.block_n_tiles,
+                core_ranges,
+            )
+        )
+
+    # Absent epilogue tensors: B stands in for the accessor CT args (never dereferenced).
+    row_t = row if row is not None else b
+    res_t = residual if residual is not None else b
 
     # ---- Kernels ----
     reader_ct = [
@@ -463,9 +518,19 @@ def create_program_descriptor(a, b, out, compute_config) -> ttnn.ProgramDescript
         geom.b_tile_bytes,
         a.buffer_aligned_page_size(),
         b.buffer_aligned_page_size(),
+        EPILOGUES[epilogue],
+        cb_row,
+        CB_RESIDUAL_TILES,
+        blk.sb_h,
+        ttnn.tile_size(row_t.dtype),
+        row_t.buffer_aligned_page_size(),
+        ttnn.tile_size(res_t.dtype),
+        res_t.buffer_aligned_page_size(),
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(a).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(b).get_compile_time_args())
+    reader_ct.extend(ttnn.TensorAccessorArgs(row_t).get_compile_time_args())
+    reader_ct.extend(ttnn.TensorAccessorArgs(res_t).get_compile_time_args())
 
     writer_ct = [
         CB_OUTPUT_TILES,
@@ -492,12 +557,20 @@ def create_program_descriptor(a, b, out, compute_config) -> ttnn.ProgramDescript
         blk.num_k_blocks,
         blk.last_block_k_tiles,
         blk.block_n_tiles,
+        EPILOGUES[epilogue],
+        cb_row,
+        CB_RESIDUAL_TILES,
+        blk.block_m_tiles,
+        EPILOGUE_BLOCK_TILES,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     a_addr, b_addr, out_addr = a.buffer_address(), b.buffer_address(), out.buffer_address()
+    row_addr = row.buffer_address() if row is not None else 0
+    res_addr = residual.buffer_address() if residual is not None else 0
+    out_div = 2 if geom.swiglu else 1  # B columns per output column
     for bi, i, j, core in cores:
         b0 = bi * grid.core_batches
         batches_valid = min(grid.core_batches, geom.tensor_batches - b0)
@@ -517,8 +590,12 @@ def create_program_descriptor(a, b, out, compute_config) -> ttnn.ProgramDescript
             geom.tensor_k_tiles,
             geom.tensor_n_tiles,
             geom.weight_batch_stride,
+            row_addr,
+            res_addr,
         ]
-        writer_rt[core.x][core.y] = [out_addr, *region, geom.tensor_m_tiles, geom.out_n_tiles]
+        # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
+        out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
+        writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n]
 
     reader = ttnn.KernelDescriptor(
