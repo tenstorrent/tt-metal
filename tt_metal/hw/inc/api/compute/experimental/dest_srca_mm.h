@@ -85,6 +85,9 @@ ALWI void dest_srca_mm_page_to_dest(
  * moves where the words are read from (not where they go), e.g. to a page's scale fields held in the page before it.
  * In a full-sync DEST, codes_idst 8 to 15 address the 32-bit rows of tiles 4 to 7 (Dst32b row bit 9 is kept, ISA
  * Dst.md Adj32) and put the codes in the upper half; in a half-sync DEST codes_idst counts from the half in use.
+ * The codes' 16-bit rows lie in 32-bit tile codes_idst / 2 (8 to 15: 4 + (codes_idst - 8) / 2), which nothing else may
+ * write until the decode; with the pack-thread decode (gguf_decode_overlap_*), the next page's codes and the tile being
+ * decoded must be in different DEST halves, which one client uses at a time (e.g. decoded tiles 2 / 11, pages 3 / 12).
  *
  * | Argument     | Description                                              | Type     | Valid Range          | Required |
  * |--------------|----------------------------------------------------------|----------|----------------------|----------|

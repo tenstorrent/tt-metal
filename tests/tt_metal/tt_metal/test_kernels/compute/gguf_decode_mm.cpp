@@ -73,8 +73,8 @@ void kernel_main() {
 
 #if GGUF_MM
     // Per K tile, DEST tiles 1 / 4 hold the decoded tile, 2 / 5 its page, 3 / 6 scratch, alternating; tile 0 sums.
-    // Block-float codes: 2 / 11 and 3 / 12, so that a page's codes and the decode beside them use different DEST halves
-    // (gguf_matmul_compute.cpp).
+    // Block-float codes: 2 / 11 and 3 / 12 (codes in tiles 1 / 5, free), the next page's codes and the decode beside
+    // them in different DEST halves (dest_srca_mm.h).
     auto out_of = [](uint32_t set) -> uint32_t { return codes ? (set ? 11 : 2) : (set ? 4 : 1); };
 #if GGUF_OVERLAP
     gguf_decode_overlap_init();

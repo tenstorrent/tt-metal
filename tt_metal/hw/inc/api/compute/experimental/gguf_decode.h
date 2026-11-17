@@ -112,6 +112,7 @@ ALWI void gguf_zero_tile(const std::uint32_t idst) {
 /**
  * Overlap of the pack thread's decode with the math thread's dest_srca_mm in one full-sync acquire: semaphores PAGE
  * (FPU_SFPU, math -> pack), TILE (UNPACK_MATH_DONE, pack -> math) and BODY (PACK_DONE, math -> pack); see the calls.
+ * Block-float codes pages: the next page's codes in the other DEST half than the decode (dest_srca_mm.h).
  */
 // clang-format on
 ALWI void gguf_decode_overlap_init() {
