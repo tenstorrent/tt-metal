@@ -1,12 +1,41 @@
-# fabric_ring_exchange — the stats exchange of a fused CCL op, by itself
+# fabric_ring_exchange — the fixed cost of a fabric exchange: a tiny all-gather from L1 to L1
 
-**Concepts:** (1) what a correct ring exchange of a small payload costs with no other work, its floor;
+**What it is:** an all-gather around a ring (after one call every chip holds every other chip's slot), cut
+down to what a fused CCL op does: each chip's slot is already in L1, it is sent from L1 and lands in L1 on
+the peers, and it is small (128 B–32 KiB, usually one packet). No DRAM, no circular buffer, no copy cores.
+
+**Goal:** show the fixed cost of a fabric exchange — what a correct exchange costs when there is next to no
+data to move. That cost is almost all synchronization (the ready fence between calls), about 5 µs on a
+4-chip ring, and the bytes add little on top.
+
+**Concepts:** (1) the fixed cost of a correct ring exchange of a small payload, with no other work;
 (2) direct multi-hop sends vs one-hop store-and-forward on a 4-chip ring.
 
 **Situation:** a fused CCL op (here distributed_rms_norm) all-gathers a small per-row partial across a 4-chip
 ring inside one program. Its perf rounds stubbed the op's payloads and called the time left over (10–14 µs) a
 floor. This example measures what the exchange really costs, with nothing else running: a transport
 measurement, not a bound (the op's roofline is a pure resource bound and carries no fixed exchange cost).
+
+## How it differs from `fabric_all_gather`
+
+Both are ring all-gathers built the same way: a ready fence before the first send, packets that carry a fused
+increment of the receiver's arrival counter, relays that forward a slot once its counter says it landed, and
+counters re-armed to 0 so a trace can replay the call. What differs is where the bytes live and how many there
+are:
+
+| | `fabric_all_gather` | `fabric_ring_exchange` |
+|---|---|---|
+| Own data | a shard in DRAM, read into a circular buffer | a slot already in an L1 landing buffer |
+| Sending | reader → circular buffer → sender, chunks of up to 7 tiles, batched | the port core sends the slot from L1 |
+| Landing | the peer's output pages in DRAM; relays read them back from DRAM | the peer's L1 landing buffer (same address on every chip) |
+| Own copy | copy cores write the own shard into the output | none: the own slot is already in place |
+| Size | 4 tiles to 16 MiB per chip | 128 B to 32 KiB per chip |
+| Answers | how fast a large exchange can go (bandwidth, link balance) | what an exchange costs when there is nothing to move (fixed cost) |
+
+A small `fabric_all_gather` does not stand in for this example. At 8 KiB per chip on the same 1×4 ring, both
+untraced and on the slowest chip, it takes 10.6 µs against the relay exchange's 7.96 µs here (1 link; see
+`report.md`); the difference is the DRAM reads and writes, the circular-buffer handoff and the copy cores,
+which a fused op whose data is already in L1 does not pay.
 
 ## Variants
 

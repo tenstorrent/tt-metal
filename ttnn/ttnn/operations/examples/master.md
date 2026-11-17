@@ -423,7 +423,8 @@ the immutable input. Pull is faster wherever it behaves, but goes erratic above 
 (push has no back-pressure, so in-kernel repeats inflate it).
 
 ## ⭐⭐⭐ T3 — [`fabric_ring_exchange`](fabric_ring_exchange/README.md)
-**Concepts:** the floor of a small all-gather across chips; direct multi-hop sends vs store-and-forward.
+**Concepts:** the fixed cost of a fabric exchange, shown by an all-gather from L1 to L1 with a very small
+payload (no DRAM, unlike `fabric_all_gather`); direct multi-hop sends vs store-and-forward.
 **Situation:** a fused CCL op all-gathers a few KiB per chip around a 4-chip ring inside one program, and
 its perf rounds stubbed the payloads and treated what was left as a fixed floor.
 **Measured result:** on a Blackhole QuietBox 2 (1×4 ring, `FABRIC_2D_TORUS_XY`), traced, slowest chip: an
