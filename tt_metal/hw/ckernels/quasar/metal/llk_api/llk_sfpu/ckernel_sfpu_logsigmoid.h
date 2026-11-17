@@ -27,8 +27,9 @@ constexpr float LOGSIGMOID_D7 = 7.1853546614875086e-06f;   // +c7, held in vCons
 constexpr float LOGSIGMOID_D8 = -7.4961114648886e-08f;     // -c8, held in vConstFloatPrgm2
 
 // logsigmoid(x) = -softplus(-x), with exp(-x) supplied by the caller in dst_index_in1. Needs
-// logsigmoid_init first: d6..d8 are read from vConstFloatPrgm0..2, which every exp init also programs
-// (the compute API re-runs each op's init per tile, so the exp that produces exp(-x) never sees these).
+// logsigmoid_init first: d6..d8 are read from vConstFloatPrgm0..2, which other SFPU inits program
+// too. Nothing re-runs the init for a kernel that calls the Compute API directly: it must call
+// logsigmoid_tile_init again after any such init and before logsigmoid_tile.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_logsigmoid(
     const uint dst_index_in0,  // Index for input (x)
@@ -55,12 +56,11 @@ inline void calculate_logsigmoid(
             // For very positive: logsigmoid(x) ~= -exp(-x)
             result = -exp_neg_x;
         }
-        // -4 <= x <= 4 is implied here: v_elseif runs only where the v_if above was false, so the
-        // explicit `x >= -4.0f &&` the former code paid an SFPLOADI and a compare per row for is
-        // redundant; a NaN x fails both tests and passes through as the NaN it is either way.
+        // x <= 4 holds here, v_elseif running only where the v_if above was false. A NaN x fails
+        // both tests and passes through as the NaN it is.
         v_elseif(x > -4.0f) {
-            // Mid-range: sum d_k x^k = -P(-x), bit-identical to negating x and the result since
-            // negation commutes with every SFPMAD rounding (plain Horner and the even/odd split alike).
+            // Mid-range: sum d_k x^k = -P(-x). Negation commutes with every SFPMAD rounding, so
+            // this is the value of evaluating P at -x and negating the result.
             result = PolynomialEvaluator::eval(
                 x,
                 LOGSIGMOID_D0,
@@ -80,7 +80,7 @@ inline void calculate_logsigmoid(
 }
 
 // Programs d6..d8 into vConstFloatPrgm0..2 for calculate_logsigmoid. Nothing may program them
-// between this init and the row loop (exp_init and _init_reciprocal_ do).
+// between this init and the row loop (_init_reciprocal_, log_init and tanh_init do, among others).
 template <bool APPROXIMATION_MODE>
 void logsigmoid_init() {
     sfpi::vConstFloatPrgm0 = LOGSIGMOID_D6;
