@@ -87,6 +87,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp
     api/tt-metalium/experimental/metal2_host_api/program.hpp
     api/tt-metalium/workload/run_args/program_run_args.hpp
+    api/tt-metalium/workload/run_args/validation_mode.hpp
     api/tt-metalium/workload/specification/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp
     api/tt-metalium/workload/specification/scratchpad_spec.hpp

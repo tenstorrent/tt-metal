@@ -9,6 +9,7 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 
 #include <tt-logger/tt-logger.hpp>
@@ -146,7 +147,7 @@ void ValidateSuppliedArrayArgValues(
     }
 }
 
-// Serialization-time length check for an array arg value. It runs even under skip_validation: it costs
+// Serialization-time length check for an array arg value. It runs even under ValidationMode::SKIP: it costs
 // one comparison, and a wrong-length value would otherwise overrun into the neighbouring args
 // (RuntimeArgsData's own bounds check is debug-only).
 void CheckArrayArgValueLength(
@@ -164,7 +165,7 @@ void CheckArrayArgValueLength(
 }
 
 // Write an array arg's value to its slots in a dispatch buffer. Checks the length first, even under
-// skip_validation (see CheckArrayArgValueLength).
+// ValidationMode::SKIP (see CheckArrayArgValueLength).
 void WriteArrayArgValue(
     uint32_t* buffer,
     const KernelRTASchema::ArraySlots& slots,
@@ -975,7 +976,7 @@ void AttachBorrowedDFBBuffers(
 // PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs
 // ============================================================================
 
-void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& params, ValidationMode validation) {
     log_debug(tt::LogMetal, "Setting ProgramRunArgs");
 
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec (the run-args
@@ -987,7 +988,7 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
 
     // Validate parameters against the schema (can be skipped for trusted inputs, e.g. cached-program
     // re-enqueue inner loops where the args have already been validated once).
-    if (!skip_validation) {
+    if (validation == ValidationMode::FULL) {
         ValidateProgramRunArgs(program, params);
     }
 
@@ -1337,7 +1338,9 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
 }
 
 void experimental::UpdateTensorArgs(
-    Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args, bool skip_validation) {
+    Program& program,
+    const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args,
+    ValidationMode validation) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
     tt_metal::detail::ProgramImpl& program_impl = program.impl();
@@ -1352,7 +1355,7 @@ void experimental::UpdateTensorArgs(
         "UpdateTensorArgs called on Program before SetProgramRunArgs. Call SetProgramRunArgs at least once first.");
 
     // Validate the TensorArgument list (shared with the full-path validator).
-    if (!skip_validation) {
+    if (validation == ValidationMode::FULL) {
         ValidateTensorArgs(program, tensor_args);
     }
 
@@ -1414,15 +1417,15 @@ void experimental::UpdateTensorArgs(
 
 // Union the args of `src` into `dst` for a single kernel (same kernel name). Used by
 // MergeProgramRunArgs. Named RTAs (per node) and named CRTAs, scalar and array, union by name; a
-// given name may appear in at most one input (disjoint), else error unless skip_validation. Positional
+// given name may appear in at most one input (disjoint), else error unless ValidationMode::SKIP. Positional
 // varargs cannot be name-merged: at most one input may supply them for a given node / for common varargs.
 void MergeKernelRunArgsInto(
-    ProgramRunArgs::KernelRunArgs& dst, const ProgramRunArgs::KernelRunArgs& src, bool skip_validation) {
+    ProgramRunArgs::KernelRunArgs& dst, const ProgramRunArgs::KernelRunArgs& src, ValidationMode validation) {
     const auto& kernel_name = dst.kernel;
 
     // Named CRTAs.
     for (const auto& [name, value] : src.common_runtime_arg_values) {
-        if (!skip_validation) {
+        if (validation == ValidationMode::FULL) {
             TT_FATAL(
                 !dst.common_runtime_arg_values.get(name).has_value(),
                 "MergeProgramRunArgs: kernel '{}' common runtime arg '{}' is specified in more than one "
@@ -1438,7 +1441,7 @@ void MergeKernelRunArgsInto(
     for (const auto& [name, src_per_node] : src.runtime_arg_values) {
         auto& dst_per_node = dst.runtime_arg_values[name];
         for (const auto& [node, value] : src_per_node) {
-            if (!skip_validation) {
+            if (validation == ValidationMode::FULL) {
                 TT_FATAL(
                     !dst_per_node.get(node).has_value(),
                     "MergeProgramRunArgs: kernel '{}' node {} runtime arg '{}' is specified in more than one "
@@ -1453,7 +1456,7 @@ void MergeKernelRunArgsInto(
 
     // CRTA arrays, as named CRTAs. (An array merges whole: it is one arg.)
     for (const auto& [name, value] : src.common_runtime_array_arg_values) {
-        if (!skip_validation) {
+        if (validation == ValidationMode::FULL) {
             TT_FATAL(
                 !dst.common_runtime_array_arg_values.get(name).has_value(),
                 "MergeProgramRunArgs: kernel '{}' common runtime array arg '{}' is specified in more than one "
@@ -1468,7 +1471,7 @@ void MergeKernelRunArgsInto(
     for (const auto& [name, src_per_node] : src.runtime_array_arg_values) {
         auto& dst_per_node = dst.runtime_array_arg_values[name];
         for (const auto& [node, value] : src_per_node) {
-            if (!skip_validation) {
+            if (validation == ValidationMode::FULL) {
                 TT_FATAL(
                     !dst_per_node.get(node).has_value(),
                     "MergeProgramRunArgs: kernel '{}' node {} runtime array arg '{}' is specified in more than one "
@@ -1484,7 +1487,7 @@ void MergeKernelRunArgsInto(
     // Positional RTA varargs (per node): cannot be merged; at most one input may supply them.
     for (const auto& [node, vals] : src.advanced_options.runtime_varargs) {
         if (dst.advanced_options.runtime_varargs.get(node).has_value()) {
-            if (!skip_validation) {
+            if (validation == ValidationMode::FULL) {
                 TT_FATAL(
                     false,
                     "MergeProgramRunArgs: kernel '{}' node {} runtime varargs are specified in more than one "
@@ -1492,7 +1495,7 @@ void MergeKernelRunArgsInto(
                     kernel_name,
                     node.str());
             }
-            continue;  // skip_validation: keep dst's existing varargs.
+            continue;  // ValidationMode::SKIP: keep dst's existing varargs.
         }
         dst.advanced_options.runtime_varargs[node] = vals;
     }
@@ -1500,7 +1503,7 @@ void MergeKernelRunArgsInto(
     // Positional common varargs: at most one input may be non-empty.
     if (!src.advanced_options.common_runtime_varargs.empty()) {
         if (!dst.advanced_options.common_runtime_varargs.empty()) {
-            if (!skip_validation) {
+            if (validation == ValidationMode::FULL) {
                 TT_FATAL(
                     false,
                     "MergeProgramRunArgs: kernel '{}' common runtime varargs are specified in more than one "
@@ -1631,7 +1634,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/false);
 }
 
-void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, ValidationMode validation) {
     log_debug(tt::LogMetal, "Updating ProgramRunArgs (partial fast-path)");
 
     tt_metal::detail::ProgramImpl& program_impl = program.impl();
@@ -1646,7 +1649,7 @@ void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& 
         "UpdateProgramRunArgs: CRTA buffer not allocated because SetProgramRunArgs has not been called. Call "
         "SetProgramRunArgs at least once before a partial update.");
 
-    if (!skip_validation) {
+    if (validation == ValidationMode::FULL) {
         ValidateUpdateProgramRunArgs(program, params);
     }
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,
@@ -1839,10 +1842,11 @@ void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& 
     RecordPerDeviceRunArgDrops(program_impl, params);
 }
 
-ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
+ProgramRunArgs MergeProgramRunArgs(
+    ProgramRunArgs base, std::span<const ProgramRunArgs> rest, ValidationMode validation) {
     for (const ProgramRunArgs& other : rest) {
         for (const auto& [name, argument] : other.advanced_options.sram_arena_args) {
-            if (!skip_validation) {
+            if (validation == ValidationMode::FULL) {
                 TT_FATAL(
                     !base.advanced_options.sram_arena_args.contains(name),
                     "MergeProgramRunArgs: SRAMArenaParameter '{}' is specified in more than one ProgramRunArgs.",
@@ -1853,7 +1857,7 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
 
         // Tensor args: union by TensorParameter name (disjoint).
         for (const auto& [name, arg] : other.tensor_args) {
-            if (!skip_validation) {
+            if (validation == ValidationMode::FULL) {
                 TT_FATAL(
                     !base.tensor_args.contains(name),
                     "MergeProgramRunArgs: TensorParameter '{}' is specified in more than one ProgramRunArgs.",
@@ -1861,7 +1865,7 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
             }
             // Table::operator[] default-constructs its value; TensorArgument (a variant over a
             // reference_wrapper) is not default-constructible, so insert the pair directly. After
-            // the disjoint check the key is absent, so insert takes effect (under skip_validation a
+            // the disjoint check the key is absent, so insert takes effect (under ValidationMode::SKIP a
             // collision keeps base's existing entry).
             base.tensor_args.insert({name, arg});
         }
@@ -1869,7 +1873,7 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
         // PrefetcherPipe args: union by parameter name (disjoint). Same insert-not-[] reasoning as
         // tensor_args: reference_wrapper is not default-constructible.
         for (const auto& [name, arg] : other.advanced_options.prefetcher_pipe_args) {
-            if (!skip_validation) {
+            if (validation == ValidationMode::FULL) {
                 TT_FATAL(
                     !base.advanced_options.prefetcher_pipe_args.contains(name),
                     "MergeProgramRunArgs: PrefetcherPipeParameter '{}' is specified in more than one ProgramRunArgs.",
@@ -1880,7 +1884,7 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
 
         // DFB run overrides: union by DFB name (disjoint).
         for (const auto& dfb : other.dfb_run_overrides) {
-            if (!skip_validation) {
+            if (validation == ValidationMode::FULL) {
                 for (const auto& existing : base.dfb_run_overrides) {
                     TT_FATAL(
                         existing.dfb != dfb.dfb,
@@ -1906,10 +1910,14 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
                 base.kernel_run_args.push_back(kra);
                 continue;
             }
-            MergeKernelRunArgsInto(*dst, kra, skip_validation);
+            MergeKernelRunArgsInto(*dst, kra, validation);
         }
     }
     return base;
+}
+
+ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
+    return MergeProgramRunArgs(std::move(base), rest, skip_validation ? ValidationMode::SKIP : ValidationMode::FULL);
 }
 
 }  // namespace tt::tt_metal

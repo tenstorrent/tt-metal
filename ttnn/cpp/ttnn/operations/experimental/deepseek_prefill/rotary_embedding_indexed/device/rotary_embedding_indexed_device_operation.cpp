@@ -927,10 +927,10 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
                                                   : tensor_args.input.mesh_tensor()});
 
     // All programs share tensor specs and runtime schemas: validate once, then patch each without re-checking.
-    bool validated = false;
+    tt::tt_metal::ValidationMode validation = tt::tt_metal::ValidationMode::FULL;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
-        validated = true;
+        tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, validation);
+        validation = tt::tt_metal::ValidationMode::SKIP;
     }
     record = std::move(key);
 }
