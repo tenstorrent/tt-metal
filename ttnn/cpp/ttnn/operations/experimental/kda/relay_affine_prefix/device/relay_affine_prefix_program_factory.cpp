@@ -101,7 +101,8 @@ tt::tt_metal::ProgramDescriptor build_program(
             .id = first_notify_semaphore_id + k, .core_ranges = sender_set, .initial_value = 0});
     }
 
-    const std::vector<uint32_t> chronology = {sp_rank, sp_size, attrs.local_rows};
+    // sp_rank and successor_hops are runtime args, so a range's per-chip programs merge into one.
+    const std::vector<uint32_t> chronology = {sp_size, attrs.local_rows};
     std::vector<uint32_t> reader_ct = {cb_e, cb_b, cb_ein, cb_chron};
     reader_ct.insert(reader_ct.end(), chronology.begin(), chronology.end());
     reader_ct.push_back(kt);
@@ -120,8 +121,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
-        sender_ct.end(),
-        {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id, successor_hops});
+        sender_ct.end(), {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
 
     tt::tt_metal::KernelDescriptor reader{
@@ -166,6 +166,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt;
         reader_rt.push_back(h);
         reader_rt.push_back(arrival_address);
+        reader_rt.push_back(sp_rank);
         reader.emplace_runtime_args(core, reader_rt);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
         writer_rt.push_back(h);
@@ -173,6 +174,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         writer_rt.push_back(first_notify_semaphore_id + h / attrs.num_links);
         writer_rt.push_back(static_cast<uint32_t>(sender_core.x));
         writer_rt.push_back(static_cast<uint32_t>(sender_core.y));
+        writer_rt.push_back(sp_rank);
         writer.emplace_runtime_args(core, writer_rt);
     }
     desc.kernels = {std::move(reader), std::move(writer), std::move(compute), std::move(sender)};
@@ -201,6 +203,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         sender_rt.push_back(static_cast<uint32_t>(destination_node.chip_id));
         sender_rt.push_back(arrival_address);
         sender_rt.push_back(final_address);
+        sender_rt.push_back(sp_rank);
+        sender_rt.push_back(successor_hops);
         sender_rt.push_back(static_cast<uint32_t>(heads.size()));
         sender_rt.append(heads);
         sender_rt.append(notify);

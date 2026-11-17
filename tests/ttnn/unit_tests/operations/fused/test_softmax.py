@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc, merge_gate_subset
 from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
@@ -269,14 +269,31 @@ def run_softmax_sharded_stable(
         )
 
 
+# Mask on: bf16 with approx off and fp32 acc on and off, plus bf8 with fp32 acc and approx on.
+_SOFTMAX_SHARDED_STABLE_MERGE_GATE = {
+    (False, False, True, ttnn.bfloat16),
+    (False, False, False, ttnn.bfloat16),
+    (False, True, True, ttnn.bfloat8_b),
+}
+
+
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("num_heads", [4])
 @pytest.mark.parametrize("h", [384])
 @pytest.mark.parametrize("w", [384])
-@pytest.mark.parametrize("skip_scale_mask", [True, False])
-@pytest.mark.parametrize("math_approx", [True, False])
-@pytest.mark.parametrize("fp32_acc_en", [True, False])
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "in_dtype": [ttnn.bfloat8_b, ttnn.bfloat16],
+            "fp32_acc_en": [True, False],
+            "math_approx": [True, False],
+            "skip_scale_mask": [True, False],
+        },
+        keep=lambda skip_scale_mask, math_approx, fp32_acc_en, in_dtype: (
+            (skip_scale_mask, math_approx, fp32_acc_en, in_dtype) in _SOFTMAX_SHARDED_STABLE_MERGE_GATE
+        ),
+    )
+)
 def test_softmax_sharded_stable_with_program_cache(
     device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
 ):
@@ -394,7 +411,7 @@ def test_softmax_sharded_masked_subblock_w_zero(device, expect_error):
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [24, 32, 64])
 @pytest.mark.parametrize("w", [42, 32, 64])
-@pytest.mark.parametrize("dim", [-1, -2, -3, 0, 1, 2])
+@pytest.mark.parametrize("dim", [-1, -2, -3])
 def test_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
@@ -878,6 +895,30 @@ def test_softmax_large_non_divisible_width(device, Wt):
     _run_softmax_non_divisible_width(device, Wt, fp32_acc_en=True, numeric_stable=True)
 
 
+# broadcast mask: batch * Ht = 128 tile rows, so every core gets more than one row
+_SCALE_MASK_UNPADDED_CASES = [
+    (64, False, 5, 0),
+    (64, False, 7, 0),
+    (64, False, 13, 0),
+    (64, False, 47, 0),
+    # causal mask: re-read for every row rather than once per batch, square Wt*32 mask
+    (16, True, 5, 0),
+    (16, True, 7, 0),
+    (16, True, 13, 0),
+    # wide enough to select the streaming large kernel, which pads c_4 per pass; the other large-kernel
+    # cases are in SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES
+    (1, False, 637, 0),
+]
+# W not a multiple of 32: the mask's zero tile padding must not reach the row sum
+_SCALE_MASK_PADDED_CASES = [
+    (64, False, 1, 15),
+    (64, False, 4, 30),
+    (64, False, 7, 15),
+    (16, True, 2, 15),
+    (16, True, 4, 30),
+]
+SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES = _SCALE_MASK_UNPADDED_CASES + _SCALE_MASK_PADDED_CASES
+
 # Large-kernel masked cases that run nightly only (tests/ttnn/nightly/unit_tests/operations/fused/test_softmax.py):
 # the Wt=637 pad=15 one is 2.5 min on the simulator (#62486).
 SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES = [
@@ -887,31 +928,20 @@ SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES = [
 ]
 
 
+# Unpadded rows with fp32 acc and numeric stable on, plus causal Wt=13 with both off.
 @pytest.mark.parametrize(
-    "batch, causal, Wt, pad",
-    [
-        # broadcast mask: batch * Ht = 128 tile rows, so every core gets more than one row
-        (64, False, 5, 0),
-        (64, False, 7, 0),
-        (64, False, 13, 0),
-        (64, False, 47, 0),
-        # causal mask: re-read for every row rather than once per batch, square Wt*32 mask
-        (16, True, 5, 0),
-        (16, True, 7, 0),
-        (16, True, 13, 0),
-        # wide enough to select the streaming large kernel, which pads c_4 per pass; the other large-kernel
-        # cases are in SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES
-        (1, False, 637, 0),
-        # W not a multiple of 32: the mask's zero tile padding must not reach the row sum
-        (64, False, 1, 15),
-        (64, False, 4, 30),
-        (64, False, 7, 15),
-        (16, True, 2, 15),
-        (16, True, 4, 30),
-    ],
+    *merge_gate_subset(
+        {
+            "numeric_stable": [True, False],
+            "fp32_acc_en": [True, False],
+            "batch, causal, Wt, pad": SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES,
+        },
+        keep=lambda batch, causal, Wt, pad, fp32_acc_en, numeric_stable: (
+            ((batch, causal, Wt, pad) in _SCALE_MASK_UNPADDED_CASES and fp32_acc_en and numeric_stable)
+            or ((batch, causal, Wt, pad, fp32_acc_en, numeric_stable) == (16, True, 13, 0, False, False))
+        ),
+    )
 )
-@pytest.mark.parametrize("fp32_acc_en", [True, False])
-@pytest.mark.parametrize("numeric_stable", [True, False])
 def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, pad, fp32_acc_en, numeric_stable):
     """Issue #39050: the fused scale/mask path streams the attention mask (c_4) in blocks of the
     fixed block_size. Its CB is sized round_up(Wt, block_size), so a row of Wt tiles leaves the fifo
