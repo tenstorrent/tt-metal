@@ -14,6 +14,7 @@
 #include <tracy/Tracy.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
