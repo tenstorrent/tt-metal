@@ -178,34 +178,28 @@ A checkpoint is a directory holding the model's weights in the format `checkpoin
 ```yaml
 checkpoint:
   format:
-    type: hf        # hf or tt
-    set: trainable  # trainable or all
+    type: hf  # hf or tt
 ```
 
-| `type` | `set` | The directory holds |
+| `type` | Training | The directory holds |
 |---|---|---|
-| `hf` | `trainable` | The LoRA adapters as a PEFT adapter: `adapter_config.json` and `adapter_model.safetensors`. |
-| `hf` | `all` | The PEFT adapter, and the frozen base model in `base_model/`. |
-| `tt` | `all` | Every parameter, the base model's and the adapters', in `checkpoint.pkl`. |
+| `hf` | LoRA | The LoRA adapters as a PEFT adapter: `adapter_config.json` and `adapter_model.safetensors`. |
+| `hf` | Full fine-tuning | The model, as `save_pretrained` writes one. |
+| `tt` | LoRA | The LoRA adapters, in `checkpoint.pkl`. |
+| `tt` | Full fine-tuning | Every parameter, in `checkpoint.pkl`. |
 
 `hf` is HuggingFace's layout. The adapter of a fused layer is written per HF projection, so the PEFT adapter is the one
-PEFT would have trained. `base_model/` is laid out as `save_pretrained` writes a model: `config.json`, the tokenizer
-files, and the bf16 weights in `model.safetensors`, or in shards of at most 5 GB listed in
-`model.safetensors.index.json`.
+PEFT would have trained. A model is laid out as `save_pretrained` writes one: `config.json`, the tokenizer files, and
+the bf16 weights in `model.safetensors`, or in shards of at most 5 GB listed in `model.safetensors.index.json`.
 
 `tt` is ttml's own layout, the file GRPO saves with `ttml.checkpointing`: the weights as the model holds them, with q,
-k and v fused, the q and k rows permuted for RoPE, and the vocabulary padded. It holds every parameter, so it takes
-`set: all` only.
+k and v fused, the q and k rows permuted for RoPE, and the vocabulary padded.
 
-A checkpoint with every weight takes as much space as the model: about 16 GB for Llama 3.1 8B. The base model comes
-back from what the checkpoint records:
+The base model comes back from what the checkpoint records:
 
 - A PEFT adapter names it in `adapter_config.json`, as `base_model_name_or_path` and `revision`, so
-  `AutoPeftModelForCausalLM.from_pretrained(path)` loads the adapter on the model it was trained on. With
-  `set: all`, `PeftModel.from_pretrained(AutoModelForCausalLM.from_pretrained(f"{path}/base_model"), path)` downloads
-  nothing.
-- A `tt` checkpoint names it in the header of `checkpoint.pkl`, with the LoRA `r`, `alpha` and `target_modules`. A run
-  starting from it builds the model from `model.name` and then loads every weight from the file.
+  `AutoPeftModelForCausalLM.from_pretrained(path)` loads the adapter on the model it was trained on.
+- A `tt` checkpoint names it in the header of `checkpoint.pkl`, with the LoRA `r`, `alpha` and `target_modules`.
 
 The `checkpoint` section:
 
@@ -214,7 +208,7 @@ The `checkpoint` section:
 | `save_strategy` | `type: none` | When to save; see below. Unless `none`, the final checkpoint is also saved at the end. |
 | `rotation_strategy` | `type: last` | Which checkpoints to keep; see below. |
 | `init_strategy` | unset | A checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). Unset starts from the pretrained weights. |
-| `format` | `type: hf`, `set: trainable` | How a checkpoint stores the model; see above. |
+| `format` | `type: hf` | How a checkpoint stores the model; see above. |
 | `project_dir` | `runs/unified_trainer` | Checkpoints go in `<project_dir>/checkpoints/`. |
 | `final_checkpoint_name` | `final` | |
 
@@ -266,14 +260,12 @@ checkpoint:
     path: runs/my_run/checkpoints/final
 ```
 
-`init`, the only `type` so far, loads the checkpoint's weights: training starts at step 0 with a fresh optimizer. The
-checkpoint may be in either format, which is told from its files: with `checkpoint.pkl` it's a `tt` checkpoint, and
-every weight is loaded; with `adapter_config.json` it's a PEFT adapter, and its adapters are loaded onto the pretrained
-weights. Either must be of the run's `model.name`, with the run's LoRA `r`, `alpha` and `target_modules`.
+`init`, the only `type` so far, loads the checkpoint's weights onto the pretrained weights of `model.name`: training
+starts at step 0 with a fresh optimizer. The checkpoint must be in the layout the run saves, by `checkpoint.format` and
+whether it trains LoRA (see the table above), and of the run's `model.name`, with the run's LoRA `r`, `alpha` and
+`target_modules`.
 
-It takes effect with or without `CheckpointCallback`, and a checkpoint that doesn't load fails `setup`. A full model
-directory is not a checkpoint a run can start from: to train adapters on it, make it the `model.name` instead. That
-includes the `base_model/` of a checkpoint saved with `set: all`, which its own adapter then loads onto.
+It takes effect with or without `CheckpointCallback`, and a checkpoint that doesn't load fails `setup`.
 
 ---
 
@@ -308,31 +300,25 @@ finally:
 - **Reading the run.** `trainer.loss_to_float(loss)`, `trainer.current_learning_rate()` (a list, one LR per
   optimizer in `optimizer` order), `trainer.parameter_counts()` (total, trainable), `trainer.global_step` and
   `trainer.epoch`.
-- **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint in the format
-  `checkpoint.format` picks.
+- **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint as the run saves
+  them.
 
 ---
 
 ## Adding a model
 
 A model provider builds the ttml model for an HF `model_type`, and loads and exports its weights. It subclasses
-`ModelProvider` in `ttml/models/provider/base.py`; the trainer makes one per run, with the run's config as
-`self.config` and the model's HF `config.json` as `self.hf_config`. The trainer calls four methods:
+`ModelProvider` in `ttml/models/provider/base.py`, with the config as `self.config` and the model's HF `config.json`
+as `self.hf_config`, and implements its four methods:
 
-- `check()`: raise `UnsupportedTrainingConfig` for anything the model can't train, including a `device.mesh` it can't
-  be built on. It runs before the device opens.
-- `build()`: the model's architecture, wrapped in LoRA as `config.model.lora` describes, with no weights loaded yet.
-- `load_weights(model, checkpoint)`: the pretrained weights of `model.name`, then the checkpoint's if one is given.
-- `export_weights(model, directory)`: reads the weights from the device and writes them in the format
-  `checkpoint.format` picks.
+- `check()`: raise `UnsupportedTrainingConfig` for anything the model can't be built or trained with, including a
+  `device.mesh` it can't be built on. It must not download weights or open the device.
+- `build()`: the model, with the pretrained weights of `model.name`.
+- `load_weights(model, directory)`: the weights `export_weights` wrote to `directory`, into a model `build` made.
+- `export_weights(model, directory)`: reads the weights from the device and writes them to `directory`.
 
-A provider implements `check` and `build`. `load_weights` and `export_weights` come with `ModelProvider`, which reads
-and writes the checkpoint formats and checks that a checkpoint is of the run's model; they call what is the model's
-own:
-
-- `_load_hf_weights`: the pretrained weights, into the model `build` made; the LoRA adapters keep their initial values.
-- `_export_hf_model`: the model's weights, without the LoRA adapters, as an HF model directory.
-- `_export_adapter` / `_import_adapter`: the LoRA weights as PEFT tensors and adapter config, and back.
+What a checkpoint holds and how it is laid out is the provider's: `LlamaProvider` writes the layouts in the table under
+[Checkpoints](#checkpoints), with the shared helpers of `ttml/models/utils/` for PEFT adapters.
 
 Write it in `ttml/models/provider/<model>.py` and add it to `providers()` in `ttml/models/provider/__init__.py`, keyed
 by the `model_type`. `LlamaProvider` in `ttml/models/provider/llama.py` is the reference.

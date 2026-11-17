@@ -2,12 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Model providers: the only place that decides whether a model can be trained with a config, and that loads and
-exports its weights.
+"""Model providers: build one family of HF models in ttml, and load and export its weights.
 
-A provider builds one family of HF models in ttml for ``ttml.unified_trainer``. Bringing up a family means subclassing
-``ModelProvider`` (``base.py``) in ``ttml/models/provider/<family>.py`` and adding it to ``providers``, keyed by the
-``model_type`` of the HF ``config.json``; the trainer and its hosts don't change.
+Bringing up a family means subclassing ``ModelProvider`` (``base.py``) in ``ttml/models/provider/<family>.py`` and
+adding it to ``providers``, keyed by the ``model_type`` of the HF ``config.json``.
 """
 
 from __future__ import annotations

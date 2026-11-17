@@ -2,12 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The files that hold a model's weights in a checkpoint directory, in each format ``checkpoint.format`` picks
-(``ModelProvider.export_weights``):
+"""The files that hold a model's weights in a checkpoint directory, which providers write and read:
 
-- ``hf``: a LoRA run's checkpoint is a PEFT adapter directory (``PeftModel.from_pretrained`` loads it), which holds
-  its frozen base model in ``base_model/`` if every weight is saved; full fine-tuning's is an HF model directory.
-- ``tt``: ``checkpoint.pkl``, every parameter as ``ttml.checkpointing`` writes it.
+- a PEFT adapter directory (``PeftModel.from_pretrained`` loads it): ``adapter_config.json`` and
+  ``adapter_model.safetensors``;
+- ``checkpoint.pkl``: parameters as ``ttml.checkpointing`` writes them.
 """
 
 from __future__ import annotations
@@ -22,8 +21,6 @@ import numpy as np
 
 ADAPTER_CONFIG = "adapter_config.json"
 ADAPTER_WEIGHTS = "adapter_model.safetensors"
-BASE_MODEL_DIR = "base_model"
-MODEL_CONFIG = "config.json"
 TT_CHECKPOINT = "checkpoint.pkl"
 
 PathLike = Union[str, os.PathLike]
@@ -51,23 +48,9 @@ def read_adapter(directory: PathLike) -> AdapterState:
     from safetensors.numpy import load_file
 
     directory = Path(directory)
-    if not is_adapter_dir(directory):
+    config, weights = directory / ADAPTER_CONFIG, directory / ADAPTER_WEIGHTS
+    if not config.is_file():
         raise FileNotFoundError(f"{directory} is not a PEFT adapter directory: no {ADAPTER_CONFIG}")
-    weights = directory / ADAPTER_WEIGHTS
     if not weights.is_file():
         raise FileNotFoundError(f"{directory} has no {ADAPTER_WEIGHTS}")
-    return AdapterState(tensors=load_file(str(weights)), config=json.loads((directory / ADAPTER_CONFIG).read_text()))
-
-
-def is_adapter_dir(path: PathLike) -> bool:
-    return (Path(path) / ADAPTER_CONFIG).is_file()
-
-
-def is_model_dir(path: PathLike) -> bool:
-    """Whether ``path`` is an HF model directory, as ``save_pretrained`` writes one."""
-    path = Path(path)
-    return (path / MODEL_CONFIG).is_file() and any(path.glob("*.safetensors"))
-
-
-def is_tt_checkpoint(path: PathLike) -> bool:
-    return (Path(path) / TT_CHECKPOINT).is_file()
+    return AdapterState(tensors=load_file(str(weights)), config=json.loads(config.read_text()))

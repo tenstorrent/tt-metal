@@ -2,28 +2,36 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""HF ``model_type: llama`` checkpoints (Llama 3.x) on ttml's Python ``Llama``, with LoRA adapters.
+"""HF ``model_type: llama`` checkpoints (Llama 3.x) on ttml's Python ``Llama``, optionally with LoRA adapters.
 
 ttml's Llama fuses q, k and v into one ``qkv_linear``, and gate and up into one ``w_gate_up``. Each targeted
 projection still gets its own adapter, as in PEFT: a fused layer holds the adapters of the projections it fuses
 (``ttml.modules.LoraBlocks``), so any of them can be targeted on their own.
+
+The weights a checkpoint holds, by ``checkpoint.format.type`` and whether ``model.lora`` is set:
+
+- ``hf`` with LoRA: the adapters, as a PEFT adapter directory.
+- ``hf`` without: the model, as ``save_pretrained`` lays one out.
+- ``tt`` with LoRA: the adapters, in ``checkpoint.pkl``.
+- ``tt`` without: every parameter, in ``checkpoint.pkl``.
+
+``checkpoint.pkl`` has a header naming the base model and the LoRA settings, which a load must match.
 """
 
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Iterator, Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence
 
 import numpy as np
 
-from ..utils.checkpoint import AdapterState
+from ..utils.checkpoint import TT_CHECKPOINT, AdapterState, PathLike, read_adapter, write_adapter
 from ..utils.errors import UnsupportedTrainingConfig
 from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
-from .base import ModelProvider, model_dir, model_revision
+from .base import ModelProvider, model_dir, model_revision, same_model
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from ttml.unified_trainer.configs import LoraConfig, SFTTrainerConfig
 
 SUPPORTED_DTYPES = ("bfloat16",)
@@ -86,14 +94,6 @@ def _lora_named_layers(module: Any, prefix: str = "") -> Iterator[tuple[str, Any
             yield from _lora_named_layers(child, full_name)
 
 
-def _llama(model: Any) -> Any:
-    """The ``Llama`` of a model ``build`` made. A LoRA model's holds the frozen base weights and the adapters, which
-    have no HF tensors."""
-    from ttml.modules import LoraModel
-
-    return model.model if isinstance(model, LoraModel) else model
-
-
 def _read(tensor: Any) -> np.ndarray:
     """A 2-D weight stored ``[1, 1, rows, cols]`` (bf16) as a float32 ``[rows, cols]`` array; lossless."""
     import ttnn
@@ -121,9 +121,10 @@ class LlamaProvider(ModelProvider):
         if max_length > max_positions:
             _fail("max_length", f"exceeds the model's max_position_embeddings ({max_positions})")
         lora = config.model.lora
-        if lora.task_type != "CAUSAL_LM":
-            _fail("model.lora.task_type", f"only CAUSAL_LM is supported, got {lora.task_type!r}")
-        lora_layers(lora.target_modules)
+        if lora is not None:
+            if lora.task_type != "CAUSAL_LM":
+                _fail("model.lora.task_type", f"only CAUSAL_LM is supported, got {lora.task_type!r}")
+            lora_layers(lora.target_modules)
         self._llama_config()
 
     def _llama_config(self) -> Any:
@@ -140,12 +141,17 @@ class LlamaProvider(ModelProvider):
             ) from e
 
     def build(self) -> Any:
-        from ttml.models.llama import Llama
+        """The ``Llama`` with the pretrained weights, wrapped in ``ttml.modules.LoraModel`` if ``model.lora`` is set."""
+        from ttml.models.llama import Llama, load_from_safetensors
         from ttml.modules import LoraConfig as TtmlLoraConfig
         from ttml.modules import LoraModel
 
         model = Llama(self._llama_config())
+        # Before wrapping: the adapters LoraModel adds have no HF tensors, and keep their initial values.
+        load_from_safetensors(model, model_dir(self.config.model.name))
         lora = self.config.model.lora
+        if lora is None:
+            return model
         layers = lora_layers(lora.target_modules)
         lora_config = TtmlLoraConfig(
             rank=lora.r,
@@ -193,17 +199,84 @@ class LlamaProvider(ModelProvider):
             held = layout[f"{root}/{name.replace('.', '/')}/weight"]
             yield layer, held, layer.blocks.adapted if layer.blocks is not None else (True,) * len(held)
 
-    def _load_hf_weights(self, model: Any) -> None:
-        from ttml.models.llama import load_from_safetensors
+    def load_weights(self, model: Any, directory: PathLike) -> None:
+        directory = Path(directory)
+        if self.config.checkpoint.format.type == "tt":
+            self._load_tt_checkpoint(model, directory)
+        elif self.config.model.lora is not None:
+            adapter = read_adapter(directory)
+            self._check_base_model(directory, adapter.config.get("base_model_name_or_path"))
+            self._import_adapter(model, adapter)
+        else:
+            from ttml.models.llama import load_from_safetensors
 
-        llama = _llama(model)
-        adapters = [name for name in llama.parameters() if name.endswith(("/lora_A", "/lora_B"))]
-        load_from_safetensors(llama, model_dir(self.config.model.name), skip=adapters)
+            load_from_safetensors(model, directory)
 
-    def _export_hf_model(self, model: Any, directory: Path) -> None:
-        from ttml.models.llama import export_hf_model
+    def export_weights(self, model: Any, directory: PathLike) -> None:
+        directory = Path(directory)
+        if self.config.checkpoint.format.type == "tt":
+            from ttml import checkpointing
 
-        export_hf_model(_llama(model), directory, hf_source_dir=model_dir(self.config.model.name, local_only=True))
+            checkpointing.save_checkpoint(
+                str(directory / TT_CHECKPOINT), header=self._tt_header(), model_params=self._tt_parameters(model)
+            )
+        elif self.config.model.lora is not None:
+            write_adapter(directory, self._export_adapter(model))
+        else:
+            from ttml.models.llama import export_hf_model
+
+            export_hf_model(model, directory, hf_source_dir=model_dir(self.config.model.name, local_only=True))
+
+    # ------------------------------------------------------------------ tt checkpoints
+
+    def _tt_parameters(self, model: Any) -> Any:
+        """The parameters a ``tt`` checkpoint holds: the LoRA adapters of a LoRA model, else every parameter."""
+        import ttml
+
+        parameters = model.parameters()
+        if self.config.model.lora is None:
+            return parameters
+        adapters = ttml.NamedParameters()
+        for name, tensor in parameters.items():
+            if name.endswith(("/lora_A", "/lora_B")):
+                adapters[name] = tensor
+        return adapters
+
+    def _tt_header(self) -> dict:
+        return {
+            "base_model": {"name_or_path": self.config.model.name, "revision": model_revision(self.config.model.name)},
+            "model_type": self.hf_config.get("model_type"),
+            "lora": self._lora_settings(),
+        }
+
+    def _lora_settings(self) -> Optional[dict]:
+        """What a ``tt`` checkpoint's LoRA adapters must share with the model that loads them."""
+        lora = self.config.model.lora
+        if lora is None:
+            return None
+        return {"r": lora.r, "alpha": lora.alpha, "target_modules": hf_target_modules(lora)}
+
+    def _load_tt_checkpoint(self, model: Any, directory: Path) -> None:
+        from ttml import checkpointing
+
+        file = directory / TT_CHECKPOINT
+        if not file.is_file():
+            raise FileNotFoundError(f"{directory} is not a tt checkpoint: no {TT_CHECKPOINT}")
+        header = checkpointing.read_header(str(file))
+        self._check_base_model(directory, (header.get("base_model") or {}).get("name_or_path"))
+        expected = {"model_type": self.hf_config.get("model_type"), "lora": self._lora_settings()}
+        mismatched = {key: (header.get(key), want) for key, want in expected.items() if header.get(key) != want}
+        if mismatched:
+            details = ", ".join(f"{key}: checkpoint {got!r}, run {want!r}" for key, (got, want) in mismatched.items())
+            _fail("checkpoint", f"{directory} doesn't match this model ({details})")
+        checkpointing.load_checkpoint(str(file), model_params=self._tt_parameters(model))
+
+    def _check_base_model(self, directory: Path, base: Optional[str]) -> None:
+        name = self.config.model.name
+        if not same_model(base, name):
+            _fail("checkpoint", f"{directory} is for {base!r}, this model is {name!r}")
+
+    # ------------------------------------------------------------------ PEFT adapters
 
     def _export_adapter(self, model: Any) -> AdapterState:
         tensors: dict[str, np.ndarray] = {}

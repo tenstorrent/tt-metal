@@ -80,9 +80,9 @@ class SFTTrainer(Trainer):
     def _load_model(self) -> Any:
         model = self.provider.build()
         init = self.config.checkpoint.init_strategy
-        # Weights only: training still starts at step 0, with a fresh optimizer.
-        self.provider.load_weights(model, init.path if init is not None else None)
         if init is not None:
+            # Weights only: training still starts at step 0, with a fresh optimizer.
+            self.provider.load_weights(model, init.path)
             self.logger.info(f"Initialized the weights from {init.path}")
         return model
 

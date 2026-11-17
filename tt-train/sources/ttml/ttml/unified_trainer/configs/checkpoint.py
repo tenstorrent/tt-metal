@@ -4,7 +4,7 @@
 
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StepSave(BaseModel):
@@ -70,29 +70,22 @@ class InitStrategy(BaseModel):
 
     # "init" loads the checkpoint's weights: training starts at step 0 with a fresh optimizer.
     type: Literal["init"] = "init"
-    # A checkpoint directory, in either format.
+    # A checkpoint directory, in the format ``CheckpointConfig.format`` picks.
     path: str = Field(min_length=1)
 
 
 class CheckpointFormat(BaseModel):
-    """How a checkpoint stores the model.
+    """How a checkpoint stores the weights the run trains; a run loads its ``init_strategy`` checkpoint in this
+    format too.
 
-    ``hf`` writes HF layouts: a LoRA run saves a PEFT adapter, and with ``set: all`` also its frozen base model in
-    ``base_model/``, as ``save_pretrained`` lays one out; full fine-tuning saves the model that way. ``tt`` writes
-    every parameter in ttml's layout to one ``checkpoint.pkl``, as GRPO does.
+    ``hf`` writes HF layouts: a LoRA run saves a PEFT adapter, full fine-tuning the model as ``save_pretrained`` lays
+    one out. ``tt`` writes ttml's layout to one ``checkpoint.pkl`` with ``ttml.checkpointing``: the LoRA adapters of
+    a LoRA run, every parameter for full fine-tuning.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["hf", "tt"] = "hf"
-    # "trainable" saves the weights the run trains, "all" every weight of the model.
-    set: Literal["trainable", "all"] = "trainable"
-
-    @model_validator(mode="after")
-    def _check_set(self) -> "CheckpointFormat":
-        if self.type == "tt" and self.set != "all":
-            raise ValueError("set: a tt checkpoint holds every parameter, so set it to all")
-        return self
 
 
 # `type` picks one, and with it the other fields it takes.

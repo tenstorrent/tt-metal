@@ -10,11 +10,7 @@ from .callback import Callback
 
 
 class CheckpointCallback(Callback):
-    """Saves checkpoints, as ``config.checkpoint.save_strategy`` says.
-
-    Checkpoints hold the model's weights in the layout ``config.checkpoint.format`` picks
-    (``Trainer.save_checkpoint``).
-    """
+    """Saves checkpoints, as ``config.checkpoint.save_strategy`` says, with ``Trainer.save_checkpoint``."""
 
     def __init__(self) -> None:
         self.manager = None

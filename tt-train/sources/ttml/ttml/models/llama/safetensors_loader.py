@@ -13,7 +13,7 @@ from contextlib import ExitStack
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Collection, Iterator, Sequence
+from typing import Callable, Iterator, Sequence
 
 import ml_dtypes
 import numpy as np
@@ -366,12 +366,11 @@ class LoadResult:
         return "\n".join(lines)
 
 
-def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike, skip: Collection[str] = ()) -> LoadResult:
+def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike) -> LoadResult:
     """Load a HuggingFace Llama checkpoint into *model*.
 
     *safetensors_path* is a directory of .safetensors files holding one complete model, with HF's tensor names.
-    All checks run before any parameter is written, so a failed load leaves the model unchanged. *skip* names
-    parameters the checkpoint doesn't hold, such as LoRA adapters: they keep their values.
+    All checks run before any parameter is written, so a failed load leaves the model unchanged.
 
     Raises:
         FileNotFoundError: *safetensors_path* has no .safetensors files.
@@ -386,7 +385,7 @@ def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike, ski
             - a parameter is sharded over a mesh axis other than 'tp', or over 'tp' on a dim other than rows or columns
     """
     parameters = model.parameters()
-    parameter_names = set(parameters) - set(skip)
+    parameter_names = set(parameters)
     rules = list(_rules(model.config, parameter_names))
     tp = _tp_axis()
     mesh_size = tp.size if tp else 1

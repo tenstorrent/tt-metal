@@ -4,9 +4,8 @@
 
 """Writing checkpoint directories.
 
-A checkpoint holds the model's weights in the format ``checkpoint.format`` picks, which the model provider writes
-(``ttml.models.utils.checkpoint``), and a ``trainer_state.json`` with the step, epoch and metrics, the format, and
-the base model.
+A checkpoint holds the model's weights, which the model provider writes, and a ``trainer_state.json`` with the step,
+epoch and metrics, the format, and the base model.
 """
 
 from __future__ import annotations
