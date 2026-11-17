@@ -1489,6 +1489,9 @@ SfpuSnakeBeta:
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 12k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 12k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 5, note: 'bh: max 5 ULP, 3 variants / 12k lanes'}
+SfpuSwigluOai:
+- {input: Float16_b, output: Float16_b, dest: 'No', measured: 1, near_zero_atol: 1.925929944387236e-34, note: 'bh: below 1 ULP of the exact result; 0 where the logistic factor underflows, as stock'}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, near_zero_atol: 1.925929944387236e-34, note: 'bh: below 1 ULP of the exact result; 0 where the logistic factor underflows, as stock'}
 SfpuXlogy:
 - {output: Float16, metric: TOLERANCE, atol: 0.12, note: 0.0989 measured}
 - {output: Float16_b, metric: TOLERANCE, atol: 0.6}
