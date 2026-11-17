@@ -8,9 +8,11 @@ Nothing here writes a device register.
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-NIU_BASE = 0xFFB20000
-NOC_STRIDE = 0x10000
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
+from tt_llk_perf import headers  # noqa: E402
+
 NIU_COUNTERS = {
     "RD_REQ_RECEIVED": 0x2D4,
     "RD_DATA_WORD_SENT": 0x2CC,
@@ -21,8 +23,9 @@ NIU_COUNTERS = {
 }
 
 
-def niu_addr(noc, offset):
-    return NIU_BASE + noc * NOC_STRIDE + offset
+def niu_addr(tile, noc, offset, arch="blackhole"):
+    """Address of an NIU register of a DRAM tile given by its noc0 (x, y)."""
+    return headers.dram_niu_address(arch, noc, tile[1], offset)
 
 
 def card_busy(device_path):
@@ -45,6 +48,9 @@ class Reader:
         raise NotImplementedError
 
     def read32(self, tile, addr):
+        raise NotImplementedError
+
+    def read_bytes(self, tile, addr, size):
         raise NotImplementedError
 
     def close(self):
@@ -70,6 +76,9 @@ class UmdReader(Reader):
 
     def read32(self, tile, addr):
         return self._dev.noc_read32(tile[0], tile[1], addr)
+
+    def read_bytes(self, tile, addr, size):
+        return bytes(self._dev.noc_read(tile[0], tile[1], addr, size))
 
 
 class ExalensReader(Reader):
@@ -105,6 +114,14 @@ class ExalensReader(Reader):
         loc = OnChipCoordinate.create(f"{tile[0]},{tile[1]}", self._dev, "noc0")
         return loc.noc_read32(addr)
 
+    def read_bytes(self, tile, addr, size):
+        from ttexalens.coordinate import OnChipCoordinate
+
+        loc = OnChipCoordinate.create(f"{tile[0]},{tile[1]}", self._dev, "noc0")
+        buf = bytearray(size)
+        loc.noc_read(addr, buf)
+        return bytes(buf)
+
 
 def make_reader(mode, device_path=None):
     if mode == "umd":
@@ -118,13 +135,13 @@ def make_reader(mode, device_path=None):
     raise SystemExit(f"unknown mode {mode}")
 
 
-def snapshot(reader, tiles):
+def snapshot(reader, tiles, arch="blackhole"):
     """{(tile, noc, counter): value} of every NIU counter on both NoCs."""
     begin = getattr(reader, "begin_batch", None)
     if begin:
         begin()
     return {
-        (t, noc, name): reader.read32(t, niu_addr(noc, off))
+        (t, noc, name): reader.read32(t, niu_addr(t, noc, off, arch))
         for t in tiles
         for noc in (0, 1)
         for name, off in NIU_COUNTERS.items()

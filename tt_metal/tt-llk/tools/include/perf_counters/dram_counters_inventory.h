@@ -53,14 +53,16 @@ constexpr Layout layout_for(Arch arch)
         case Arch::QUASAR:
             return quasar::layout;
     }
-    return Layout {0, 0, 0, 0};
+    return Layout {0, 0, 0, 1, 0, 0, 0};
 }
 
-// Register address of a counter on the tile: the offset moves with the NoC instance.
-constexpr std::uint32_t niu_address(Arch arch, std::uint32_t noc, std::uint32_t offset)
+// Register address of a counter on a tile with the given noc0 y: the offset moves with the NoC instance and the
+// register instance of the tile.
+constexpr std::uint64_t niu_address(Arch arch, std::uint32_t noc, std::uint32_t tile_noc0_y, std::uint32_t offset)
 {
     const Layout l = layout_for(arch);
-    return l.niu_base + noc * l.noc_instance_stride + offset;
+    const std::uint32_t instance = (tile_noc0_y + l.tile_instance_bias) % l.tile_instance_count;
+    return l.niu_base + std::uint64_t(noc) * l.noc_instance_stride + std::uint64_t(instance) * l.tile_instance_stride + offset;
 }
 
 } // namespace llk::perf::dram

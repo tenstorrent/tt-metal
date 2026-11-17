@@ -44,11 +44,16 @@ struct Table
 };
 
 // What a table of one architecture is relative to. A zero niu_base or word_bytes means the value is not known.
+// A tile reaches its NIU through one of tile_instance_count register instances that the tiles of a column share; the
+// instance of a tile is (noc0 y + tile_instance_bias) % tile_instance_count.
 struct Layout
 {
-    std::uint32_t niu_base;            // address of NoC 0 register space on the tile
+    std::uint64_t niu_base;            // address of the NoC 0 register space of instance 0
     std::uint32_t noc_instance_stride; // address distance between the register spaces of two NoCs
-    std::uint32_t word_bytes;          // bytes behind one NIU data word
+    std::uint32_t tile_instance_stride;
+    std::uint32_t tile_instance_count;
+    std::uint32_t tile_instance_bias;
+    std::uint32_t word_bytes; // bytes behind one NIU data word
     std::uint32_t num_nocs;
 };
 

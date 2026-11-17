@@ -400,7 +400,7 @@ _DRAM_TABLE_DECL = re.compile(
 )
 _DRAM_ENTRY = re.compile(r"\{\s*DramCounter::(\w+)\s*,\s*(0[xX][0-9a-fA-F]+|\d+)\s*\}")
 _DRAM_LAYOUT = re.compile(
-    r"Layout\s+layout\s*=\s*\{\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\}"
+    r"Layout\s+layout\s*=\s*\{" + r",".join([r"\s*(\w+)\s*"] * 7) + r"\}"
 )
 
 
@@ -448,6 +448,9 @@ def dram_counter_table(arch, include_dir=None) -> List[tuple]:
 class DramLayout(NamedTuple):
     niu_base: int
     noc_instance_stride: int
+    tile_instance_stride: int
+    tile_instance_count: int
+    tile_instance_bias: int
     word_bytes: int
     num_nocs: int
 
@@ -458,4 +461,16 @@ def dram_layout(arch, include_dir=None) -> DramLayout:
     match = _DRAM_LAYOUT.search(text)
     if match is None:
         raise ValueError(f"no Layout found for arch {arch!r}")
-    return DramLayout(*(int(g.rstrip("uU"), 0) for g in match.groups()))
+    return DramLayout(*(int(g.rstrip("uUlL"), 0) for g in match.groups()))
+
+
+def dram_niu_address(arch, noc, tile_noc0_y, offset, include_dir=None) -> int:
+    """Address of an NIU register of a DRAM tile with the given noc0 y, in the space the host reads it in."""
+    layout = dram_layout(arch, include_dir)
+    instance = (tile_noc0_y + layout.tile_instance_bias) % layout.tile_instance_count
+    return (
+        layout.niu_base
+        + noc * layout.noc_instance_stride
+        + instance * layout.tile_instance_stride
+        + offset
+    )

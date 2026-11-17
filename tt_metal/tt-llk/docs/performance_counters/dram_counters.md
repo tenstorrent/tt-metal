@@ -7,7 +7,7 @@ Reference for the counters that sit in a DRAM channel tile and for `TT_METAL_PRO
 | Architecture | NIU slave counters | Captured |
 |---|---|---|
 | Blackhole | yes, host reads of the tile NIU, one data word is 64 B | yes |
-| Wormhole | same NIU map as a worker, one data word is 32 B, not tried on silicon | yes, untested |
+| Wormhole | NIU registers of a DRAM tile are in NoC address space at `0x100080000` plus an instance per tile, one data word is 32 B (assumed) | yes, address from the exalens register map, not yet confirmed to count |
 | Quasar | NIU status offsets equal the other architectures, but how a host reaches a DRAM tile, the NoC count and the word width are not known | no, the table is empty and the option logs a warning |
 
 Counters of the DRAM controller behind the tile (request, read-modify-write and ECC counts) are not described here: they need the controller register map, which is not available.
@@ -22,7 +22,7 @@ Headers in `tools/include/perf_counters/`, namespace `llk::perf::dram`, self-con
 | `dram_counters_blackhole.h`, `dram_counters_wormhole.h`, `dram_counters_quasar.h` | `layout` (NIU base, NoC instance stride, word bytes, NoC count) and the `niu_counters` table |
 | `dram_counters_inventory.h` | `niu_table(arch)`, `layout_for(arch)`, `niu_address(arch, noc, offset)`; the host picks the architecture at run time, so there is no `ARCH_*` switch |
 
-Every counter is a free-running 32-bit register: deltas are taken with wrapping subtraction. The NIU offsets are `0x200 + 4 * index` inside the NoC register space of the tile (`0xFFB20000` for NoC 0, `0x10000` further for NoC 1):
+Every counter is a free-running 32-bit register: deltas are taken with wrapping subtraction. The NIU offsets are `0x200 + 4 * index` inside the NoC register space of the tile. On Blackhole that space is `0xFFB20000` for NoC 0 and `0x10000` further for NoC 1. On Wormhole a DRAM tile has no worker-style register window: its NIU registers are at `0x100080000`, `0x100090000` or `0x1000A0000` for NoC 0 (instance 0, 1, 2 for noc0 y modulo 3 equal to 1, 2, 0) and `0x8000` above that for NoC 1, so the host needs the noc0 y of each tile (`Layout` holds base, strides, instance count and bias; `niu_address(arch, noc, noc0_y, offset)`):
 
 | Counter | Index | Meaning |
 |---|---|---|
@@ -95,4 +95,4 @@ The NIU write counters matched a kernel's output exactly on a Blackhole card. Op
 
 1. The own-read correction and the idle rate inside the runtime: `tools/dram_counters_probe/dram_validate.py` runs a program that moves a known number of bytes with the option off and on and compares `bytes / 64` with the measured words; expect writes exact and reads within 2 percent, no flags.
 2. `tools/dram_counters_probe/dram_idle_drift.py` measures the drift and the per-read increment on the UMD and exalens paths.
-3. Wormhole and Quasar: not tried.
+3. `tools/dram_counters_probe/dram_niu_probe.py --arch wormhole --mode umd|exalens` reads the read counter of every DRAM tile around a known host read of the tile and prints the change against the expected words; run it before trusting Wormhole numbers. Quasar: not tried.
