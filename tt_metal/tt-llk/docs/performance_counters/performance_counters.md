@@ -11,6 +11,7 @@
 - Shared host package (header parsers, metric engine): [tools/python/tt_llk_perf/](../../tools/python/tt_llk_perf/)
 - Report schema (metric columns derive from the shared engine): [tests/python_tests/helpers/perf/schema.py](../../tests/python_tests/helpers/perf/schema.py)
 - RISC-V performance monitor (CSRs, event tables, metal option): [riscv_pmc.md](riscv_pmc.md)
+- NoC interface counters (event tables, metal option): [noc_counters.md](noc_counters.md)
 - Host-side counter readback: [tests/python_tests/helpers/counters.py](../../tests/python_tests/helpers/counters.py)
 - Host-side derived metrics adapter: [tests/python_tests/helpers/metrics.py](../../tests/python_tests/helpers/metrics.py)
 - Test driver: [tests/python_tests/helpers/perf/core.py](../../tests/python_tests/helpers/perf/core.py)

@@ -309,3 +309,79 @@ def riscv_event_select(arch, kind, names, include_dir=None) -> int:
             )
         select |= event
     return select
+
+
+# NoC interface (NIU) counters: noc_counters_types.h has the names and groups, noc_counters_<arch>.h the table of
+# {name, status register index, group} in capture order plus the data word size and NoC count.
+_NOC_ARCH_HEADER = {
+    "blackhole": "noc_counters_blackhole.h",
+    "wormhole": "noc_counters_wormhole.h",
+    "wormhole_b0": "noc_counters_wormhole.h",
+    "quasar": "noc_counters_quasar.h",
+}
+NOC_GROUPS = ("MASTER", "SLAVE", "ATOMIC")
+_NOC_ENTRY = re.compile(
+    r"\{\s*NocCounter::(\w+)\s*,\s*(0[xX][0-9a-fA-F]+|\d+)\s*,\s*NocGroup::(\w+)\s*\}"
+)
+_NOC_TABLE_DECL = re.compile(
+    r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+noc_counters\b[^=;]*="
+)
+
+
+class NocEntry(NamedTuple):
+    name: str
+    reg: int
+    group: str
+
+
+class NocTable(NamedTuple):
+    entries: List[NocEntry]
+    num_nocs: int
+    word_bytes: int
+
+
+def noc_counter_names(include_dir=None) -> List[str]:
+    """NocCounter enumerator names in declaration order (UNDEF first), parsed from noc_counters_types.h."""
+    header = find_include_dir(include_dir) / "noc_counters_types.h"
+    names = parse_enum(header.read_text(), "NocCounter")
+    if not names:
+        raise ValueError(f"enum NocCounter in {header} parsed empty")
+    return [names[i] for i in sorted(names)]
+
+
+def _noc_constant(text: str, name: str, header: Path) -> int:
+    match = re.search(rf"\b{name}\s*=\s*(0[xX][0-9a-fA-F]+|\d+)", text)
+    if match is None:
+        raise ValueError(f"{header}: constant {name} not found")
+    return int(match.group(1), 0)
+
+
+def noc_counter_table(arch, include_dir=None) -> NocTable:
+    """Capture-order counter table, NoC count and data word bytes of one arch."""
+    arch = normalize_arch(arch)
+    if arch not in _NOC_ARCH_HEADER:
+        raise ValueError(
+            f"unknown arch {arch!r}; expected one of {sorted(_NOC_ARCH_HEADER)}"
+        )
+    header = find_include_dir(include_dir) / _NOC_ARCH_HEADER[arch]
+    text = _strip_comments(header.read_text())
+    decl = _NOC_TABLE_DECL.search(text)
+    if decl is None:
+        raise ValueError(f"{header}: no noc_counters table found")
+    chunk = text[decl.end() :].split("}};", 1)[0]
+    entries = [NocEntry(n, int(r, 0), g) for n, r, g in _NOC_ENTRY.findall(chunk)]
+    if len(entries) != int(decl.group(1)):
+        raise ValueError(
+            f"noc_counters: parsed {len(entries)} entries but the array declares {decl.group(1)}"
+        )
+    return NocTable(
+        entries,
+        _noc_constant(text, "NIU_NOCS", header),
+        _noc_constant(text, "NIU_DATA_WORD_BYTES", header),
+    )
+
+
+def noc_selected_counters(arch, group_mask, include_dir=None) -> List[NocEntry]:
+    """Entries of the groups a mask selects (bit n is NOC_GROUPS[n]), in capture order."""
+    table = noc_counter_table(arch, include_dir)
+    return [e for e in table.entries if (group_mask >> NOC_GROUPS.index(e.group)) & 1]
