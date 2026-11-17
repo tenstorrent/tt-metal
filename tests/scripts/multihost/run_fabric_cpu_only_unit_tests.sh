@@ -389,6 +389,7 @@ run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filt
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdHostFilter.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdChipsAbsentFromLive.*"
 run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestGenerate*ClusterDescriptorFromFSD:Cluster.TestNodeTypeArchitectureAndBoardRevision"
+run_test python3 -m pytest tests/ttnn/distributed/test_ttrun.py
 
 fi # unit
 
