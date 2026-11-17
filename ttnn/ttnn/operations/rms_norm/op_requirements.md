@@ -40,7 +40,7 @@ Cells that fail out of the box go to `EXCLUSIONS`, not their own refinement.
 
 **Outcome**: landed; loose interleaved perf cases pass. Wide rows (W>2048) run with fp32 DEST promoted internally because bf16-DEST sequential Σx² accumulation is biased (up to 20%); a bf16 reduction tree is the lever for perf refinement to evaluate. No device-ns measured here (correctness refinement).
 
-### [ ] Refinement 2 — W-split across cores with cross-core partial combine (perf-flagged-profile contract, part 2)
+### [x] Refinement 2 — W-split across cores with cross-core partial combine (perf-flagged-profile contract, part 2)
 
 **Goal**: shapes whose independent axes under-fill the grid or whose row exceeds L1 (decode `32×{1024..7168}`, `1×16384`, `1×32768`, `64×12288`, W-heavy resilience shapes) currently run on few cores and/or in the 2×-DRAM-read R2 regime. Split the dependent W axis across cores (logical width sharding of the interleaved tensor): each core keeps its W-slice resident (x read once), computes a partial Σx² tile per row, partials are combined across the cores of a row group (`ttnn.Mcast` + `McastArgs` sender/receiver + semaphores; the `cb_stat`/`Accumulate` slot is the combine point), then each core normalizes its slice. Keep both regimes available behind the host predicate in `pick_blocking`. The output of `cb_stat` is the existing slot, so the loop nest is unchanged.
 
@@ -49,6 +49,8 @@ Cells that fail out of the box go to `EXCLUSIONS`, not their own refinement.
 **Verifier notes**: scheme-change, stands alone. Ordered second because the perf-1 contract includes the decode shapes, which are only fast with a filled grid. Must land on the Refinement 1 config (bf16 / `fp32_dest_acc_en=False`). Folds in the ledger finding: record the new combine CBs in `l1_ledger.md` with their axis accounting (spans `n_w`, streams over rows).
 
 **Done when**: all Phase 0 + R1 cells still pass; the three wide `_WIDE` loose cases plus the decode perf cases run on > Rb-limited core counts (verify core count in the test) with device-ns for `32×5120`-class cells measurably below Phase 0; golden green.
+
+**Outcome**: W-split landed (all-gather of per-slice partials via unicast NoC writes + parity semaphores, L1-accumulating-pack combine into `cb_stat`). bf16/HiFi2/fp32_dest=False, gamma, device-ns split-off -> split-on: `32x5120` 73.3k -> 20.5k (8 cores), `32x1024` 23.0k -> 9.3k (4), `32x7168` 104k -> 25.9k (8), `1x16384` 272k -> 35.0k (16), `64x12288` 203k -> 34.8k (24), `32x32768` 555k -> 54.3k (16). The chosen n_w is conservative (W_SPLIT_OVERHEAD penalty, per-peer exchange is serial on the writer RISC); next levers: mcast of the partials instead of n_w unicasts, overlapping the exchange with pass-2 reads, tuning W_SPLIT_OVERHEAD toward more cores — left to the perf rounds. Limitation: n_w must divide Wt (prime Wt falls back to the row-split path).
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile
 

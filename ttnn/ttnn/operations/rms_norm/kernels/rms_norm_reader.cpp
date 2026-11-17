@@ -56,6 +56,8 @@ void kernel_main() {
     const uint32_t first_tile_row = get_arg_val<uint32_t>(2);
     const uint32_t rows_core = get_arg_val<uint32_t>(3);
     const uint32_t scaler_bits = get_arg_val<uint32_t>(4);
+    const uint32_t slice_tile0 = get_arg_val<uint32_t>(5);  // first W tile of this core's slice (W-split)
+    const bool is_last_slice = get_arg_val<uint32_t>(6) != 0;
 
     constexpr bool IS_RM = get_compile_time_arg_val(0) != 0;
     constexpr uint32_t ES_X = get_compile_time_arg_val(1);
@@ -75,14 +77,17 @@ void kernel_main() {
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(15);
     constexpr uint32_t cb_gamma_rm = get_compile_time_arg_val(16);
     constexpr bool GAMMA_TILE = get_compile_time_arg_val(17) != 0;
-    constexpr auto x_args = TensorAccessorArgs<18>();
+    constexpr uint32_t Wt_full = get_compile_time_arg_val(18);  // Wt is the per-core slice width
+    constexpr auto x_args = TensorAccessorArgs<19>();
     constexpr auto g_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t num_seg = Wt / Sb;
     constexpr uint32_t SEG_ELEMS = Sb * TILE_DIM;
     constexpr uint32_t SEG_BYTES_X = SEG_ELEMS * ES_X;
     constexpr uint32_t SEG_BYTES_G = SEG_ELEMS * ES_G;
-    constexpr uint32_t valid_w_last = W - TILE_DIM * (Wt - 1);  // 1..32
+    const uint32_t slice_off_x = slice_tile0 * TILE_DIM * ES_X;  // byte offset of the slice in an RM stick
+    const uint32_t slice_off_g = slice_tile0 * TILE_DIM * ES_G;
+    constexpr uint32_t valid_w_last = W - TILE_DIM * (Wt_full - 1);  // 1..32
 
     Noc noc;
     DataflowBuffer dfb_x(cb_x);
@@ -109,7 +114,7 @@ void kernel_main() {
                 for (uint32_t k = valid_rows; k < TILE_DIM; ++k) {
                     noc.async_write_zeros(dfb_x_rm, SEG_BYTES_X, {.offset_bytes = k * SEG_BYTES_X});
                 }
-                const uint32_t off = seg * SEG_BYTES_X;
+                const uint32_t off = slice_off_x + seg * SEG_BYTES_X;
                 const uint32_t avail = W * ES_X - off;
                 const uint32_t bytes = avail < SEG_BYTES_X ? avail : SEG_BYTES_X;
                 for (uint32_t k = 0; k < valid_rows; ++k) {
@@ -136,12 +141,13 @@ void kernel_main() {
             for (uint32_t rr = 0; rr < rb; ++rr) {
                 const uint32_t tr = tr0 + rr;
                 for (uint32_t c = 0; c < Sb; ++c) {
-                    noc_async_read_tile(tr * Wt + seg * Sb + c, x_acc, base + (rr * Sb + c) * x_tile_bytes);
+                    noc_async_read_tile(
+                        tr * Wt_full + slice_tile0 + seg * Sb + c, x_acc, base + (rr * Sb + c) * x_tile_bytes);
                 }
             }
             noc_async_read_barrier();
             if constexpr (valid_w_last < TILE_DIM) {
-                if (seg == num_seg - 1) {
+                if (is_last_slice && seg == num_seg - 1) {
                     for (uint32_t rr = 0; rr < rb; ++rr) {
                         const uint32_t t = base + (rr * Sb + Sb - 1) * x_tile_bytes;
                         if constexpr (ES_X == 2) {
@@ -164,7 +170,7 @@ void kernel_main() {
             const uint32_t gbase = dfb_gamma.get_write_ptr();
             const uint32_t gtb = dfb_gamma.get_tile_size();
             for (uint32_t c = 0; c < Sb; ++c) {
-                noc_async_read_tile(seg * Sb + c, g_acc, gbase + c * gtb);
+                noc_async_read_tile(slice_tile0 + seg * Sb + c, g_acc, gbase + c * gtb);
             }
             noc_async_read_barrier();
             dfb_gamma.push_back(Sb);
@@ -174,7 +180,7 @@ void kernel_main() {
         const uint32_t scratch = dfb_gamma_rm.get_write_ptr();
         noc.async_write_zeros(dfb_gamma_rm, SEG_BYTES_G);
         noc.write_zeros_l1_barrier();
-        const uint32_t off = seg * SEG_BYTES_G;
+        const uint32_t off = slice_off_g + seg * SEG_BYTES_G;
         const uint32_t avail = W * ES_G - off;
         noc_async_read(g_acc.get_noc_addr(0, off), scratch, avail < SEG_BYTES_G ? avail : SEG_BYTES_G);
         noc_async_read_barrier();

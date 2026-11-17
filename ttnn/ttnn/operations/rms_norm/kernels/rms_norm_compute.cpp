@@ -44,6 +44,10 @@ void kernel_main() {
     constexpr uint32_t cb_xn = get_compile_time_arg_val(14);
     constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t cb_out_rm = get_compile_time_arg_val(16);
+    constexpr uint32_t N_W = get_compile_time_arg_val(17);  // W-split row-group width; 1 = off
+    constexpr uint32_t cb_psend = get_compile_time_arg_val(18);
+    constexpr uint32_t cb_part = get_compile_time_arg_val(19);
+    constexpr bool SPLIT = N_W > 1;
 
     const uint32_t rows_core = get_arg_val<uint32_t>(0);
     const uint32_t inv_w_bits = get_arg_val<uint32_t>(1);
@@ -56,6 +60,8 @@ void kernel_main() {
     DataflowBuffer dfb_gamma(cb_gamma);
     DataflowBuffer dfb_sq(cb_sq);
     DataflowBuffer dfb_stat(cb_stat);
+    DataflowBuffer dfb_part(cb_part);
+    DataflowBuffer dfb_psend(cb_psend);
     DataflowBuffer dfb_xn(cb_xn);
     DataflowBuffer dfb_out_tiles(cb_out_tiles);
     DataflowBuffer dfb_out_rm(cb_out_rm);
@@ -120,6 +126,33 @@ void kernel_main() {
                 ckl::ReduceInputBlockShape::of(rb, Sb, 1),
                 ckl::ReduceInputMemoryLayout::contiguous(),
                 ckl::Accumulate::at(cb_stat, seg));
+        }
+
+        // ---------------- W-split combine: cb_stat[rr] = sum_j partial[rr][j] (L1-accumulating pack) ----
+        if constexpr (SPLIT) {
+            // Hand this core's finished partial (Accumulate keeps cb_stat in flux until the last segment)
+            // to the writer, which exchanges it with the row group; the sum is rebuilt into cb_stat.
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(rb),
+                ckl::CopyTile<ckl::input(cb_stat)>{dfb_stat},
+                ckl::PackTile<ckl::output(cb_psend)>{dfb_psend});
+            dfb_part.wait_front(Rb * N_W);
+            for (uint32_t rr = 0; rr < rb; ++rr) {
+                ckl::eltwise_chain(
+                    ckl::IterationShape::tiles(N_W),
+                    ckl::CopyTile<ckl::input(cb_part)>{dfb_part},
+                    ckl::PackTile<ckl::output(
+                        cb_stat,
+                        ckl::ReservePolicy::OneUpfront,
+                        ckl::PushPolicy::OneAtEnd,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileAddressing::Direct,
+                        ckl::DestAccumulation::Disabled,
+                        ckl::L1Accumulation::Enabled)>{dfb_stat});
+            }
+            if (rb < Rb) {
+                dfb_part.pop_front((Rb - rb) * N_W);  // unused rows of the block (ring stays in step)
+            }
         }
 
         // ---------------- inv_rms (in place on cb_stat) ----------------
