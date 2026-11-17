@@ -17,6 +17,8 @@ Covers:
 
 """
 
+import ctypes
+
 import pytest
 import torch
 from loguru import logger
@@ -32,6 +34,15 @@ def _assert_pages_equal(expected, actual, context):
         f"Expected first row: {expected[0, :8].tolist()}\n"
         f"Got first row:      {actual[0, :8].tolist()}"
     )
+
+
+def _capsule(address: int):
+    """A PyCapsule over a raw pointer, as ``H2DSocket.write``'s ``void*`` data argument takes it: nanobind accepts only
+    a capsule named ``nb_handle`` for a ``void*``."""
+    new = ctypes.pythonapi.PyCapsule_New
+    new.restype = ctypes.py_object
+    new.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+    return new(address, b"nb_handle", None)
 
 
 def _assert_num_program_cache_entries(mesh_device, expected, context):
@@ -166,6 +177,49 @@ def test_recv_async_h2d_basic(
         num_iterations=num_iterations,
         h2d_mode=h2d_mode,
     )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("page_size_bytes, fifo_pages", [(64, 2), (12288, 2), (256, 4)])
+def test_recv_async_h2d_write_across_wrap(mesh_device, page_size_bytes, fifo_pages):
+    """A multi-page ``write`` that starts part-way into the FIFO: one page first, then writes of ``fifo_pages`` pages,
+    each of which reaches the FIFO's end and goes on at its start. Written in one piece, the pages past the end land
+    in the L1 above the FIFO (the socket's config buffer), the receiver then reads a broken config and the host waits
+    for room for ever. 12288 B pages in a 2-page FIFO are DeepSeek-V4.1's Engram rows sockets."""
+    page_size_datums = page_size_bytes // 4
+    socket_core = ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0))
+    h2d_socket = ttnn.H2DSocket(
+        mesh_device, socket_core, ttnn.BufferType.L1, fifo_pages * page_size_bytes, ttnn.H2DMode.HOST_PUSH
+    )
+    h2d_socket.set_page_size(page_size_bytes)
+    start = 0
+    for iteration, num_pages in enumerate([1] + [fifo_pages] * 6 + [1, fifo_pages, fifo_pages]):
+        torch_input = torch.arange(start, start + num_pages * page_size_datums, dtype=torch.int32).reshape(
+            num_pages, page_size_datums
+        )
+        start += num_pages * page_size_datums
+        output_tensor = ttnn.from_torch(
+            torch.zeros(torch_input.shape, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        try:
+            ttnn.experimental.recv_async_h2d(output_tensor, h2d_socket)
+            # One write of every page (write_tensor writes a page at a time, which never crosses the end).
+            h2d_socket.write(_capsule(torch_input.data_ptr()), num_pages)
+            ttnn.synchronize_device(mesh_device)
+            _assert_pages_equal(
+                torch_input, ttnn.to_torch(output_tensor).to(torch.int32), f"write {iteration} of {num_pages} page(s)"
+            )
+        except BaseException as e:
+            # Printed now: a failed iteration can leave the receiver waiting, and the device's teardown then hangs
+            # before pytest reports anything.
+            print(f"\nwrite_across_wrap FAILED at write {iteration} ({num_pages} page(s)): {e!r}", flush=True)
+            raise
+        logger.info(f"write {iteration}: {num_pages} page(s) ok")
 
 
 @skip_for_wormhole_b0("This test is for blackhole")

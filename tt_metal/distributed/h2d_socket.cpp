@@ -914,23 +914,37 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
     bytes_acked_ = bytes_acked_value;
 }
 
+void H2DSocketImpl::copy_into_fifo(const void* data, uint32_t num_bytes) {
+    // A write of several pages may start part-way into the FIFO: the pages that do not fit before its end go to its
+    // start (push_bytes wraps write_ptr_ the same way, and the receiver pops a page at a time, wrapping at the end).
+    // Written in one piece, they would run past the FIFO into whatever L1 lies above it -- the socket's own config
+    // buffer, which init_config_buffer allocates right before the data buffer.
+    const auto* src = static_cast<const uint8_t*>(data);
+    const uint32_t first = std::min(num_bytes, fifo_curr_size_ - write_ptr_);
+    if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
+        pcie_writer(const_cast<uint8_t*>(src), first, aligned_data_buf_start_ + write_ptr_);
+        if (first < num_bytes) {
+            pcie_writer(const_cast<uint8_t*>(src + first), num_bytes - first, aligned_data_buf_start_);
+        }
+        tt_driver_atomics::sfence();
+    } else {
+        auto* host_fifo = reinterpret_cast<uint8_t*>(host_buffer_.get());
+        std::memcpy(host_fifo + write_ptr_, src, first);
+        if (first < num_bytes) {
+            std::memcpy(host_fifo, src + first, num_bytes - first);
+        }
+        this->count_staged_bytes(num_bytes);
+    }
+}
+
 void H2DSocketImpl::write(void* data, uint32_t num_pages) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
-    auto data_addr = aligned_data_buf_start_ + write_ptr_;
     this->reserve_bytes(num_bytes);
-
-    if (h2d_mode_ == H2DMode::HOST_PUSH) {
-        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
-        pcie_writer(data, num_bytes, data_addr);
-        tt_driver_atomics::sfence();
-    } else {
-        uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
-        std::memcpy(data_ptr, data, num_bytes);
-        this->count_staged_bytes(num_bytes);
-    }
+    this->copy_into_fifo(data, num_bytes);
     this->push_bytes(num_bytes);
     this->notify_receiver();
 }
@@ -954,16 +968,7 @@ bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
         }
     }
 
-    auto data_addr = aligned_data_buf_start_ + write_ptr_;
-    if (h2d_mode_ == H2DMode::HOST_PUSH) {
-        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
-        pcie_writer(data, num_bytes, data_addr);
-        tt_driver_atomics::sfence();
-    } else {
-        uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
-        std::memcpy(data_ptr, data, num_bytes);
-        this->count_staged_bytes(num_bytes);
-    }
+    this->copy_into_fifo(data, num_bytes);
     this->push_bytes(num_bytes);
     this->notify_receiver();
     return true;

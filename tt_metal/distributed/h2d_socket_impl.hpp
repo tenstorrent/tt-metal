@@ -150,6 +150,8 @@ private:
     void enable_mock_flow_control(const MeshDevice& mesh_device);
 
     void reserve_bytes(uint32_t num_bytes);
+    // Copies num_bytes (room already reserved) into the FIFO at write_ptr_, wrapping to the FIFO's start at its end.
+    void copy_into_fifo(const void* data, uint32_t num_bytes);
     void push_bytes(uint32_t num_bytes);
     void notify_receiver();
     // DEVICE_PULL: bytes copied into the host FIFO, which the device reads later.
