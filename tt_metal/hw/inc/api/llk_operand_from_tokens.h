@@ -13,51 +13,16 @@
 #include "api/tensor/tensor_binding_token.h"
 #include "tensor_shape.h"
 
-namespace binding_details {
-
 /**
  * Returns the LLK tile and face geometry of a resource binding.
  */
-constexpr ckernel::TensorShape tensor_shape_from_metadata(const TokenWithLLKMetadata& token) {
+constexpr ckernel::TensorShape get_tensor_shape(const binding_details::TokenWithLLKMetadata& token) {
     return ckernel::TensorShape{
         get_face_r_dim(token), get_face_c_dim(token), get_num_faces_r_dim(token), get_num_faces_c_dim(token)};
 }
 
-}  // namespace binding_details
-
-/**
- * Returns the DFB binding's LLK tile and face geometry.
- */
-template <dfb::AccessPattern P, dfb::AccessPattern C>
-constexpr ckernel::TensorShape get_tensor_shape(const DFBBindingToken<P, C>& token) {
-    return binding_details::tensor_shape_from_metadata(token);
-}
-
-/**
- * Returns the scratchpad binding's LLK tile and face geometry.
- */
-constexpr ckernel::TensorShape get_tensor_shape(const ScratchpadBindingToken& token) {
-    return binding_details::tensor_shape_from_metadata(token);
-}
-
 namespace tensor_accessor {
-
-/**
- * Returns the tensor binding's LLK tile and face geometry.
- */
-template <uint32_t Cta, uint32_t Addr>
-constexpr ckernel::TensorShape get_tensor_shape(const TensorBindingToken<Cta, Addr>& token) {
-    return binding_details::tensor_shape_from_metadata(token);
-}
-
-/**
- * Returns the per-node tensor binding's LLK tile and face geometry.
- */
-template <uint32_t Cta, uint32_t Addr>
-constexpr ckernel::TensorShape get_tensor_shape(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return binding_details::tensor_shape_from_metadata(token);
-}
-
+using ::get_tensor_shape;
 }  // namespace tensor_accessor
 
 #if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_TRISC)
