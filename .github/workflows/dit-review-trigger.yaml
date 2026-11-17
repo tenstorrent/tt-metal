@@ -1,0 +1,27 @@
+name: DiT review trigger
+
+# Records the PR number when a review is submitted or dismissed, so dit-review.yaml
+# can re-check the "DiT approval" status via workflow_run. This runs without secrets
+# (fork PRs get none on pull_request_review), so it does nothing else.
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  save-pr-number:
+    name: Save PR number
+    runs-on: ubuntu-slim
+    steps:
+      - name: Write PR number
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: echo "$PR_NUMBER" > pr_number
+      - name: Upload PR number
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dit-review-pr
+          path: pr_number
+          retention-days: 1
