@@ -20,6 +20,7 @@
 #include <tt-metalium/execution/mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/observability/capture_hooks.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "emule_deferred_mesh_dispatch.hpp"
@@ -127,7 +128,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     ttsl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
+    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (!mesh_device_->impl().is_local(device_coord)) {
         return false;
@@ -154,12 +155,17 @@ bool SDMeshCommandQueue::write_shard_to_device(
         host_transfer_stats_,
         HostTransferCategory::BufferWriteSlowDispatch,
         host_transfer_stats_->enabled() ? host_bytes_written(*shard_view, region_value.size, logical_core_filter) : 0);
+    const ChipId chip_id = device_buffer->device()->id();
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
+    } else if (pinned_memory != nullptr && pinned_memory->has_device(chip_id)) {
+        tt::tt_metal::slow_dispatch::WriteToBuffer(*shard_view, payload, pinned_memory->get_buffer(chip_id));
     } else {
         tt::tt_metal::slow_dispatch::WriteToBuffer(*shard_view, payload);
     }
-    return false;  // Slow dispatch doesn't support pinned memory
+    // Pinned or not, the write has finished reading host memory when it returns, so there is no pinned memory for the
+    // caller to keep alive past this call.
+    return false;
 }
 
 void SDMeshCommandQueue::read_shard_from_device(
