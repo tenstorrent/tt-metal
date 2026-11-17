@@ -2,7 +2,7 @@
 
 `tt-triage` is a tool that runs a series of checks/scripts to either diagnose a failure or provide insight into state of the system... It consists of the main program and a set of discoverable, user-defined scripts (python files)...
 
-Triage is many small scripts on top of a small framework. Keep it that way: small readable scripts, a clean provider API, and data other repos can plug into.
+Triage is many small, readable scripts on top of a small framework, with a clean provider API and data that other repos can plug into.
 
 # Running tt-triage
 
@@ -47,33 +47,51 @@ One limitation with `tt-run-triage`: its host-side argument check only knows the
 
 ## How it runs
 
-- `tools/tt-triage.py` → `tools/triage/triage.py` discovers every script in `tools/triage`, plus any `--additional-scripts-directory`.
-- It orders scripts topologically by `script_config.depends`. Among scripts that are ready, a higher `priority` runs first (`ScriptPriority.HIGH/MEDIUM/LOW`); ties break by path. Depending on a disabled script is an error.
-- A script runs on one of two paths. With no `--run`, or `--run=all`, `main()` runs the whole queue in that order. `--run=<script>`, and running a script file directly, go through `run_script`, which runs only that script and its dependencies. A rule about whether or how a script runs must hold on both paths. `disabled` doesn't yet: see [Script configuration](#script-configuration).
-- Each `run(args, context)` result is serialized:
-  - a Rich table on the console;
-  - CSV with `--llm-output` (on the console, in place of Rich) or `--llm-output-path` (to a file);
-  - a SQLite table per script with `--sqlite-output-path`. SQLite stores every field, whatever `-v` says.
-  - Check failures and warnings go to a diagnostics section/table.
-- `init_output_serializer` (`triage.py`) builds one serializer per output, and `serialize_result` hands each script's result, checks and failure status to all of them through `MultiSerializer` (`serializers.py`).
-- A script's rows reach the outputs once, after `run()` returns, so triage holds all of a script's rows in memory until then. Each output first turns every field it shows into text (`extract_table_data`, `serializers.py`); SQLite does this for every field. The SQLite writer then stores a number as its original value, `None` as NULL and anything else as the text (see [Output columns](#output-columns)).
-- Some output doesn't go through the serializers. `main()` prints a few console lines itself: a script skipped because a dependency failed, a data provider's failure, and the `--print-script-times` lines. `--triage-summary-path` writes one line per script, "pass" or "FAIL" with the reason (a data provider only when it fails). CI's `.github/scripts/utils/hang_report.py` puts that summary in the hung test's JUnit report.
-- **Device state** comes from tt-exalens (`Context`, `OnChipCoordinate`, `RiscDebug`, `ttexalens.tt_exalens_lib`). How tt-exalens reaches the hardware, and what each kind of read does to the device, is in tt-exalens's `docs/design.md`. **Host state** (what metal created) comes from Inspector through `inspector_data`.
+`tools/tt-triage.py` is a thin entry point to `tools/triage/triage.py`, which does three things: it finds the scripts, runs them in dependency order, and writes out what they return.
+
+**Finding the scripts.** Triage discovers every script in `tools/triage`, plus those in any `--additional-scripts-directory` (see [Script discovery](#script-discovery)).
+
+**Running them.** Scripts are ordered by their `depends` lists, so a script runs after everything it depends on. Among scripts that are ready at the same time, a higher `priority` runs first (`ScriptPriority.HIGH`, `MEDIUM`, `LOW`), and the script's path breaks ties. Depending on a disabled script is an error.
+
+A run can start in two ways, and they take different code paths:
+
+| Started as | What runs |
+|---|---|
+| `tt-triage.py`, alone or with `--run=all` | `main()` runs every discovered script, in the order above |
+| `tt-triage.py --run=<script>`, or the script file itself | `run_script` runs that script and its dependencies only |
+
+A rule about whether or how a script runs has to hold on both paths. `disabled` currently doesn't: see [Script configuration](#script-configuration).
+
+**Writing the results.** Each script's `run(args, context)` returns data, and triage hands it to every output that was asked for:
+
+| Output | Asked for with | Holds |
+|---|---|---|
+| Rich tables on the console | the default | the fields the verbosity level shows |
+| CSV | `--llm-output` (on the console, in place of Rich) or `--llm-output-path` (to a file) | the same fields |
+| SQLite, one table per script | `--sqlite-output-path` | every field, whatever `-v` says |
+
+Failed checks and warnings go to a diagnostics section, or table, of each output.
+
+A script's rows reach the outputs once, after its `run()` returns, so triage holds all of a script's rows in memory until then. Each output first turns every field it shows into text. The SQLite writer then stores a number as its original value, `None` as NULL and anything else as that text (see [Output columns](#output-columns)). In the code this is `init_output_serializer` and `serialize_result` in `triage.py`, and `MultiSerializer` and `extract_table_data` in `serializers.py`.
+
+A few lines don't go through the outputs. `main()` prints them itself: a script skipped because a dependency failed, a data provider's failure, and the `--print-script-times` timings. `--triage-summary-path` writes one line per script, "pass" or "FAIL" with the reason; a data provider gets a line only when it fails. CI's `.github/scripts/utils/hang_report.py` puts that summary into the hung test's JUnit report.
+
+**Where the data comes from.** Device state comes from tt-exalens (`Context`, `OnChipCoordinate`, `RiscDebug`, `ttexalens.tt_exalens_lib`). Host state, meaning what Metal created, comes from Inspector (see [Inspector and device ids](#inspector-and-device-ids)).
 
 ## Two kinds of scripts
 
 - **Data provider**: `ScriptConfig(data_provider=True, depends=[...])`.
-  - It reads and caches; it never renders.
-  - `@triage_singleton def run(args, context) -> XProvider` builds one object per run.
+  - It reads data for other scripts; it never renders.
+  - `run(args, context)` returns a data object, usually a class that other scripts query.
+  - If the data object is slow to generate (such as when parsing long log files), use the `@triage_singleton` decorator on `run` to make it a singleton: it is built once and every script gets the same object. If the data being processed is not changing, it is up to the developer to cache it if needed.
   - Consumers import it as `from x_provider import run as get_x_provider, XProvider, XData`.
   - If a data provider fails, every script that depends on it fails too.
 - **View / check script**: `ScriptConfig(depends=[...])`. It is thin: it gets providers, iterates with run_checks, and returns rows and/or logs checks. A check script can only check state (`check_noc_locations`), or check and return data (`check_arc`).
 - Several views can share one provider. For example, `operation_provider` makes one pass over the cores for `dump_running_operations`, `dump_op_window` and `dump_op_mesh`.
-- Why: other repos (tt-blaze's `dump_blaze_cbs`/`dump_blaze_semaphores`) import providers directly and add their own naming on top. Views stay cheap to add and replace.
 
 ### Provider shape
 
-Copy `semaphore_provider.py` or `circular_buffer_provider.py`:
+`semaphore_provider.py` and `circular_buffer_provider.py` are two examples of a provider. In outline:
 ```python
 @dataclass
 class SemaphoreData:
@@ -96,6 +114,7 @@ class SemaphoreProvider:
 def run(args, context: Context) -> SemaphoreProvider:
     return SemaphoreProvider(get_dispatcher_data(args, context), ...)
 ```
+The points below describe how the existing providers are written. Triage doesn't enforce them.
 - When not: a check whose data no other script reads stays one script. None of the 10 `check_*` scripts is a provider; `check_noc_status` depends only on run_checks, dispatcher_data and elfs_cache. Data that public tt-exalens functions already return doesn't need a provider either: other scripts and repos can call those functions, so a view calls them directly.
 - Use one provider per data domain. Getters are keyed by what they read (`location`, `risc_location` or `device`). Pair each `get_x` with a `@cache` `get_cached_x`, because several views ask for the same location in one run.
 - The constructor makes every Inspector call up front, because each one is an RPC round trip. Per-location methods only read the device.
@@ -107,11 +126,10 @@ def run(args, context: Context) -> SemaphoreProvider:
   - A flag that changes what is read goes on the provider (`--include-cb-content`).
   - A flag that only changes what is shown goes in the view (`--include-global-unchanged`, `--all-cores`).
   - Provider docs never mention -v/-vv.
-- Aggregate across cores once, inside the singleton `run()`, and return a bundle (`operation_provider` → `RunningOpsAggregation`), so every view reuses one pass.
 
 ### View shape
 
-Copy `dump_semaphores.py`, `dump_circular_buffers.py` or `firmware_versions.py`:
+A view is usually a few lines on top of a provider. `dump_semaphores.py` on `semaphore_provider` is one example, shown below. `dump_callstacks.py` and `dump_lightweight_asserts.py`, which both use `callstack_provider`, are another.
 ```python
 script_config = ScriptConfig(depends=["run_checks", "semaphore_provider"])
 
@@ -150,10 +168,10 @@ if __name__ == "__main__":
 ## Scripts that change device state
 
 - A normal triage run can leave cores halted. These reads through a RISC's debug interface halt the core: `get_pc()` when the core has no debug-bus PC signal, `--full-callstack` and `--gdb-callstack`, and ELF variable reads through `create_memory_access(risc_debug)` (`check_noc_status`).
-- Continuing a core after a halt and a read or write can break it on Wormhole and Blackhole (tt-exalens#908; tt-exalens `docs/design.md`, "RISC debug"). So `_patch_risc_debug` (`triage.py`) turns `cont()` and `continue_without_debug()` into no-ops on affected devices, and `ensure_halted()` only halts.
-- The patched `halt()` records each core it halts in the triage session and does nothing for a core already recorded. A recorded core can still stop reporting halted on Blackhole (tt-exalens `docs/design.md`, "RISC debug"). `check_broken_components` reports those cores at the end. So `halt()` returning doesn't mean the core is halted; check `is_halted()` as tt-exalens's `docs/design.md` says.
+- Continuing a core after a halt and a read or write can break it on Wormhole and Blackhole (tt-exalens#908). So `_patch_risc_debug` (`triage.py`) turns `cont()` and `continue_without_debug()` into no-ops on affected devices, and `ensure_halted()` only halts.
+- The patched `halt()` records each core it halts in the triage session and does nothing for a core already recorded. A recorded core can still stop reporting halted on Blackhole. `check_broken_components` reports those cores at the end. So `halt()` returning doesn't mean the core is halted; check `is_halted()`.
 - So a script that wants to see cores in the state the hang left them must run before anything that halts. A script that halts cores or otherwise changes the device should run after every other script: give it `ScriptPriority.LOW`, so it runs after every MEDIUM and HIGH script. Among LOW scripts the path decides, so check where it lands against `check_arc` and `check_broken_components`. Say in its Description what it changes and that it runs last.
-- Ethernet cores carry the traffic to remote chips, so debug access to them needs care: which cores must get no debug command, and which chip to finish first, is in tt-exalens's `docs/design.md`, "Multi-chip".
+- Ethernet cores carry the traffic to remote chips, so debug access to them needs care: halting one can cut off the chip behind it.
 
 ## Checks and messages
 
@@ -165,24 +183,22 @@ if __name__ == "__main__":
 
 ## Inspector and device ids
 
-- `inspector_data = get_inspector_data(args, context)`, then call RPC methods directly, with no try/except for older builds (triage and metal always match):
-  - `getPrograms().programs`
-  - `getGlobalSemaphores().semaphores`
-  - `getSockets().sockets`
-  - `getMeshWorkloadRuntimeEntries()`
-  - `getAllBuildEnvs()`
-  - `getSystemMesh()`
-  - `getConfiguration()`, through `configuration_provider`
-- The schema is `tt_metal/impl/debug/inspector/rpc.capnp`; `tools/triage/inspector.capnp` is a symlink to it.
-- Data sources, in order:
-  1. live RPC, on port 50051 plus the MPI rank;
-  2. serialized `<method>.capnp.bin` files (only parameterless methods are serialized). Triage looks in `--inspector-log-path`, else `$TT_METAL_LOGS_PATH/generated/inspector`, else `<tmp>/tt-metal/inspector`. Metal writes them to `$TT_METAL_LOGS_PATH/generated/inspector`, which defaults to the current directory, so set the same TT_METAL_LOGS_PATH for both, or pass `--inspector-log-path`.
-  - With neither, it raises `InspectorException`.
-- Inspector speaks metal device ids. Translate with `metal_device_id_mapping` (`get_unique_id`, `has_metal_device_id`) and `run_checks.get_device_by_unique_id`. Under `TT_METAL_VISIBLE_DEVICES` a metal id is not the exalens id.
-- Per-core program state comes from `dispatcher_data.get_cached_core_data(risc_location)`: kernel, go message, launch slot, mailboxes, `kernel_config_base`, `programmable_core_type`, `host_assigned_id`.
-  - Skip what the default view hides with `dispatcher_data.risc_enabled(risc_name)` and `is_idle_in_default_view(risc_location)`.
-  - Architecture differences live in `DispatcherData1xx` → Wormhole/Blackhole subclasses.
-- If a script needs host data Inspector doesn't have, add it to Inspector. Don't hardcode it or guess it in triage; hardcoded values drift when metal changes.
+Inspector is the part of Metal's host runtime that keeps track of what the host created: programs and their kernels, mesh devices and workloads, build environments, sockets, global semaphores and so on (see `docs/source/tt-metalium/tools/inspector.rst`). Triage reads the device through tt-exalens, but the device alone doesn't say which program a core is running or where that program's ELF files are. Inspector does, and that is what lets triage turn the addresses and ids it reads from a chip into kernel names, callstacks and operations.
+
+Triage gets Inspector's data in one of two ways, tried in this order:
+
+1. Live, over RPC, while the process is still running. The port is 50051 plus the MPI rank.
+2. From the files Metal serializes while it runs (`<method>.capnp.bin`), when the process is gone. Only methods without parameters are serialized. Triage looks in `--inspector-log-path`, else `$TT_METAL_LOGS_PATH/generated/inspector`, else `<tmp>/tt-metal/inspector`. Metal writes the files to `$TT_METAL_LOGS_PATH/generated/inspector`, which defaults to the current directory, so set the same `TT_METAL_LOGS_PATH` for both, or pass `--inspector-log-path`.
+
+With neither, the `inspector_data` script raises `InspectorException`, and the scripts that depend on it don't run.
+
+A script uses Inspector through the `inspector_data` provider: `inspector_data = get_inspector_data(args, context)`, then it calls the RPC methods on that object. The methods are defined in `tt_metal/impl/debug/inspector/rpc.capnp` (`tools/triage/inspector.capnp` is a symlink to it). Triage and Metal always come from the same build, so a script doesn't need a fallback for an older schema.
+
+Three things to know when using it:
+
+- Inspector speaks Metal device ids, which are not tt-exalens's ids under `TT_METAL_VISIBLE_DEVICES`. Translate with `metal_device_id_mapping` (`get_unique_id`, `has_metal_device_id`) and `run_checks.get_device_by_unique_id`.
+- Most scripts don't need to call Inspector themselves. `dispatcher_data.get_cached_core_data(risc_location)` already combines it with what the core reports: the kernel, go message, launch slot, mailboxes, `kernel_config_base`, `programmable_core_type` and `host_assigned_id`. `dispatcher_data.risc_enabled(risc_name)` and `is_idle_in_default_view(risc_location)` say what the default view hides. Architecture differences live in `DispatcherData1xx` and its Wormhole and Blackhole subclasses.
+- If a script needs host data that Inspector doesn't have, add it to Inspector (the page above shows how). Don't hardcode or guess it in triage: hardcoded values drift when Metal changes.
 
 ## Output
 
@@ -278,23 +294,6 @@ You can control the output with two independent flags:
 - Explain semantics there, not in code comments. `check_dram_health` and `dump_semaphores` are good models.
 - **Docopt trap:** docopt parses the whole docstring, so a prose line that starts with `-` or `--flag` redefines the option and breaks every triage run. Keep the flag mid-line, and check that `grep -nE '^\s+-' script.py` shows only real Options lines.
 
-## Special cases already solved
-
-- **Sampling over time:**
-  - Across scripts: an early HIGH-priority provider takes the first sample and a LOW-priority check takes the second (`arc_heartbeat_sampling` → `check_arc`).
-  - Inside one script: two passes with a short sleep (`check_eth_status`).
-- **Architecture differences:** one subclass per arch, picked once (`WormholeEthCore` / `BlackholeEthCore`).
-- **Variable number of columns:** `make_dataclass` (`dump_op_mesh`).
-- **Scripts switched by env:** `disabled=os.environ.get(...)` (`dump_callstacks` vs `dump_aggregated_callstacks`).
-
-## Newer style wins over older scripts
-
-`dump_circular_buffers`, `dump_semaphores`, `firmware_versions` and `check_dram_health` are the target: flat code, a 3-line `run()`, small functions. Some older scripts, `operation_provider` and `dump_fast_dispatch` among them, still have patterns not to copy:
-- broad try/except around each row;
-- `setdefault`-built dicts;
-- `log_check(True, ...)` used as an info log;
-- lookup machinery and closures inside `run()`;
-- `set_verbose_level` called from a script.
 
 # Writing a script
 
@@ -311,7 +310,7 @@ class ScriptConfig:
 ```
 If you set `data_provider` to `True`, your script is treated as a data provider script.
 
-If you set `disabled` to `True`, a full run doesn't execute your script (and all scripts that depend on it will fail). `disabled` is checked in one place, script discovery (`discover_all_in_directory`, `triage.py`). `tools/tt-triage.py` always discovers first and takes its options from the discovered scripts, so it doesn't accept a disabled script's options, with or without `--run`. `--run=<script>` and running the script file load the named script and its dependencies without that check, so they run it; only running the file directly also accepts its options. To keep a script out of full runs unless asked for, derive `disabled` from an environment variable (see "Scripts switched by env" in [Special cases already solved](#special-cases-already-solved)).
+If you set `disabled` to `True`, a full run skips your script, and every script that depends on it fails. `--run=<script>` and running the script file directly still run it. To keep a script out of full runs unless asked for, derive `disabled` from an environment variable, as `dump_aggregated_callstacks` does.
 
 `depends` is a list of scripts that your script depends on. Scripts that iterate devices, blocks or cores depend on `run_checks`. Scripts that depend on checking operations, kernels, or firmware depend on the `dispatcher_data` script.
 
