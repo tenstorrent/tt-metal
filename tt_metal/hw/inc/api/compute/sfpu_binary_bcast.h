@@ -81,7 +81,10 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
  * tile, `VectorMode::R` is rows 0..15 only (faces 0 and 1), after which rows
  * 16..31 of the data tile are untouched and rows 16..31 of the column tile are
  * never read. Other modes are rejected (LLK_ASSERT). `VectorMode::R` is not
- * supported on Quasar: a kernel that uses it fails to build.
+ * supported on Quasar: a kernel that uses it fails to build. On Quasar
+ * `vector_mode` must also be a compile-time constant: the unsupported R path
+ * is dropped only when the compiler can fold the mode check, so a run-time
+ * value fails to build there even when it is `VectorMode::RC`.
  *
  * Return value: None
  *

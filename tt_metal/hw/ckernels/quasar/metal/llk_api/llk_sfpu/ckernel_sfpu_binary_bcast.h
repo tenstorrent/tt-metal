@@ -325,6 +325,8 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
 
 // The partial-tile column-broadcast entries (VectorMode::R and the 4-row band of sfpu_*_bcast_col_band) are not
 // ported to Quasar either; the Compute API keeps their entry points, a kernel that calls one fails to build.
+// sfpu_*_bcast_col reaches the VectorMode::R entry through a run-time comparison, so the error fires unless the
+// compiler folds it: on Quasar, vector_mode must be a compile-time constant.
 [[gnu::error("sfpu_*_bcast_col with VectorMode::R and sfpu_*_bcast_col_band are not supported on Quasar")]] void
 sfpu_bcast_col_partial_is_not_supported_on_quasar();
 
