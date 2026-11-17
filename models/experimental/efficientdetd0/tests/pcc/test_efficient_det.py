@@ -7,7 +7,7 @@ import torch
 import pytest
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.demos.utils.common_demo_utils import get_mesh_mappers
