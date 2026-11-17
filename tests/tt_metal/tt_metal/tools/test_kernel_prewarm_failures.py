@@ -284,6 +284,37 @@ int main(int argc,char** argv) {
   std::cout<<"stale build_key: mode="<<expected<<" failed="<<summary[2]<<" abandoned="<<summary[11]<<" passed\n";
   return 0;
  }
+ if(mode=="stop") {
+  // TT_METAL_KERNEL_PREWARM_STOP_FILE: a worker giving its device back creates the file, and the batch
+  // takes no new kernel or target after it, so every join (compile barrier, exit) returns at once.
+  // expected: 0 = no variable, 1 = variable set but the file never appears, 2 = the file appears while
+  // kernel 4's first target builds (its second target and kernels 5-19 are skipped), 3 = it exists
+  // before the batch starts.
+  const fs::path stop_file=root/"stop";fs::remove(stop_file);
+  if(expected!=0)setenv("TT_METAL_KERNEL_PREWARM_STOP_FILE",stop_file.c_str(),1);
+  if(expected==2)stop_after=9;
+  if(expected==3)std::ofstream(stop_file)<<"stop";
+  std::vector<jit_server::CompileRequest> requests;
+  for(int i=0;i<20;++i) {
+   jit_server::CompileRequest req;req.kernel_name="kernel"+std::to_string(i);req.gpp="batch-stop";
+   jit_build::TargetRecipe first;first.target_name="first";auto second=first;second.target_name="second";
+   req.targets={first,second};requests.push_back(req);
+  }
+  auto count=run_prewarm(requests,root.string()+"/","",7,"",false);
+  if(expected<=1)assert(count==40 && summary[12]==0 && attempts==40);
+  if(expected==2) {
+   assert(count==9 && summary[12]==31 && attempts==9);
+   assert(fs::exists(root/"kernel4/first/complete") && !fs::exists(root/"kernel4/second/complete"));
+   assert(!fs::exists(root/"kernel5/first/complete"));
+  }
+  if(expected==3)assert(count==0 && summary[12]==40 && attempts==0);
+  for(int i=0;i<20;++i) {
+   failure::KernelLock released(root/("kernel"+std::to_string(i))/".prewarm.lock");
+   assert(released.acquired());
+  }
+  std::cout<<"stop file: mode="<<expected<<" built="<<count<<" stopped="<<summary[12]<<" passed\n";
+  return 0;
+ }
  if(mode=="batch") {
   struct rlimit limit{32,32};assert(setrlimit(RLIMIT_NOFILE,&limit)==0);
   fail_generated=expected==3;
@@ -339,7 +370,7 @@ def review_prefix():
     """INTEGRATION_PREFIX with one active worker and a build_target that locks, fails or completes."""
     # One active worker makes dispatch-time descriptor retention deterministic.
     prefix = INTEGRATION_PREFIX.replace("std::launch::async", "std::launch::deferred").replace(
-        "void write_generated_files(", "bool fail_generated=false;\nvoid write_generated_files("
+        "void write_generated_files(", "bool fail_generated=false;\nint stop_after=0;\nvoid write_generated_files("
     )
     prefix = prefix.replace(
         " ++attempts; fs::create_directories(dir);",
@@ -350,6 +381,7 @@ def review_prefix():
   int fd=::open((dir+"active").c_str(),O_CREAT|O_EXCL|O_WRONLY,0600);assert(fd>=0);
   usleep(1000);assert(::close(fd)==0);assert(::unlink((dir+"active").c_str())==0);
   if((gpp=="batch-fail" && t.target_name=="second") || gpp=="batch-stale")throw std::runtime_error("injected build failure");
+  if(gpp=="batch-stop" && attempts==stop_after)std::ofstream(getenv("TT_METAL_KERNEL_PREWARM_STOP_FILE"))<<"stop";
   std::ofstream(dir+"complete")<<"ok";return;
  }""",
     )
@@ -624,6 +656,16 @@ class PrewarmFailureTests(unittest.TestCase):
                 with self.subTest(batch_concurrent=concurrent):
                     subprocess.run(
                         [str(path / "test"), str(path / f"batch{concurrent}"), "batch", str(concurrent)],
+                        check=True,
+                        timeout=30,
+                    )
+            for case in (0, 1, 2, 3):
+                with self.subTest(stop_file=case):
+                    env = os.environ.copy()
+                    env.pop("TT_METAL_KERNEL_PREWARM_STOP_FILE", None)
+                    subprocess.run(
+                        [str(path / "test"), str(path / f"stop{case}"), "stop", str(case)],
+                        env=env,
                         check=True,
                         timeout=30,
                     )

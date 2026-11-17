@@ -707,7 +707,11 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_shape") = nb::none(),
         nb::arg("offset") = nb::none(),
         nb::arg("physical_device_ids") = nb::cast(std::vector<int>{}),
-        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
+        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
+        // Release GIL: the open takes 15-30 s on a galaxy (sysmem mapping, firmware and fabric init), and
+        // a caller's watcher thread must run meanwhile (ltx-server sets TT_METAL_DEVICE_OPEN_STOP_FILE
+        // from one when a job queues for the device mid-open).
+        nb::call_guard<nb::gil_scoped_release>());
     // Release GIL: close can block a long time; other threads need it to run Python (e.g. real-time profiler
     // callbacks).
     mod.def("close_mesh_device", &close_mesh_device, nb::arg("mesh_device"), nb::call_guard<nb::gil_scoped_release>());

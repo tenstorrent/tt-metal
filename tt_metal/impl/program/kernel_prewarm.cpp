@@ -761,6 +761,14 @@ bool from_other_commit(const std::string& entry_commit, const std::string& tree_
     return !entry_commit.empty() && !tree_commit.empty() && entry_commit != tree_commit;
 }
 
+// TT_METAL_KERNEL_PREWARM_STOP_FILE names a file whose existence stops the batch: a worker that
+// gives its device back to a waiting job creates it (ltx-server, worker._prewarm_stop). The batch
+// otherwise runs to its end (13517 kernels, 37-39 s on blx06) and every join waits for it: the
+// compile barrier in ProgramImpl::compile and the exit-time wait_for_prewarm. Once the file exists
+// the pool threads take no new kernel or target, so a join returns after the builds in flight.
+// One access() per kernel and per target (about a microsecond each) against builds of milliseconds.
+bool stop_file_present(const char* stop_file) { return stop_file != nullptr && ::access(stop_file, F_OK) == 0; }
+
 std::size_t run_prewarm(
     const std::vector<jit_server::CompileRequest>& requests,
     const std::string& out_kernel_root,
@@ -796,6 +804,20 @@ std::size_t run_prewarm(
     std::atomic<bool> stale{false};
     const std::string tree_commit = current_tree_commit(root_dir);
     std::atomic<size_t> abandoned{0};
+    const char* stop_file = env_or_null("TT_METAL_KERNEL_PREWARM_STOP_FILE");
+    std::atomic<bool> stop{false};
+    std::atomic<size_t> stopped{0}, kernels_started{0};
+    // Latched: once seen, no thread stats the file again.
+    const auto stop_requested = [&]() {
+        if (stop.load(std::memory_order_relaxed)) {
+            return true;
+        }
+        if (stop_file_present(stop_file)) {
+            stop.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    };
     const auto note_failure = [&]() {
         const size_t fails = failed.load() + previously_failed.load();
         if (stale_limit != 0 && fails >= stale_limit && fails >= 2 * successful.load() && !stale.exchange(true)) {
@@ -899,6 +921,11 @@ std::size_t run_prewarm(
                     abandoned += kernel.targets.size();
                     return;
                 }
+                if (stop_requested()) {
+                    stopped += kernel.targets.size();
+                    return;
+                }
+                ++kernels_started;
                 std::optional<failure::KernelLock> lock;
                 try {
                     lock.emplace(kernel_dir + ".prewarm.lock");
@@ -920,6 +947,10 @@ std::size_t run_prewarm(
                 for (size_t index = 0; index != kernel.targets.size(); ++index) {
                     if (stale.load()) {
                         abandoned += kernel.targets.size() - index;
+                        break;
+                    }
+                    if (stop_requested()) {
+                        stopped += kernel.targets.size() - index;
                         break;
                     }
                     const auto& work = kernel.targets[index];
@@ -975,13 +1006,22 @@ std::size_t run_prewarm(
             events);
     }
     sync_build_steps(events);
+    if (stop.load()) {
+        log_info(
+            tt::LogMetal,
+            "kernel prewarm: stopped by TT_METAL_KERNEL_PREWARM_STOP_FILE after {} of {} kernels; {} targets "
+            "not built",
+            kernels_started.load(),
+            kernels.size(),
+            stopped.load());
+    }
     auto elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
     log_info(
         tt::LogMetal,
         "kernel prewarm: attempted={} successful={} failed={} previously-failed-skipped={} in {}ms "
         "(duplicate-targets={} device-init-entries={} build-key-mismatch-entries={} foreign-tree-entries={} "
-        "deferred-targets={} genfiles-or-lock-failures={} stale-abandoned-targets={}); best-effort",
+        "deferred-targets={} genfiles-or-lock-failures={} stale-abandoned-targets={} stop-file-targets={}); best-effort",
         successful.load() + failed.load(),
         successful.load(),
         failed.load(),
@@ -993,7 +1033,8 @@ std::size_t run_prewarm(
         skipped_foreign_tree,
         deferred.load(),
         genfiles_failed.load(),
-        abandoned.load());
+        abandoned.load(),
+        stopped.load());
     if (skipped_foreign_commit > 0) {
         log_info(
             tt::LogMetal,
@@ -1165,6 +1206,12 @@ void maybe_launch_prewarm(
             return;
         }
 
+        if (stop_file_present(env_or_null("TT_METAL_KERNEL_PREWARM_STOP_FILE"))) {
+            // The worker already decided to give the device back (it set the file before or during
+            // the open): launching would only make its close wait. Capture stays armed above.
+            log_info(tt::LogMetal, "kernel prewarm: not launched, TT_METAL_KERNEL_PREWARM_STOP_FILE exists");
+            return;
+        }
         g_batch_launched.store(true, std::memory_order_release);
         // These function-local statics must be registered for teardown before the prewarm exit
         // handler. The handler is then newer and runs first in the shared LIFO atexit queue.
