@@ -14,6 +14,7 @@
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -35,10 +36,9 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/reflection.hpp>
-#include <tt_stl/small_vector.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-    namespace ttnn::device_operation {
+namespace ttnn::device_operation {
 
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
@@ -868,12 +868,11 @@ public:
 
         // Stored across cache entries: for each TensorArgument in a program's ProgramRunArgs, which
         // tensor (by index into the deterministic enumeration of io tensors followed by op-owned
-        // tensors) it was bound to. Each entry of candidate_indices is one such index; there is more
-        // than one only if the miss call passed the same MeshTensor in several slots, and then any
-        // of them is correct until a hit passes different tensors there (see refine_bindings).
+        // tensors) it was bound to. Pointer identity is only valid within a single call; the index
+        // is stable across calls.
         struct ResolvedTensorBinding {
             TensorParamName tensor_parameter_name;
-            ttsl::SmallVector<std::size_t, 2> candidate_indices;
+            std::size_t tensor_idx;
         };
 
         // The same for each PrefetcherPipeArgument: the index into operation_attributes_t::prefetcher_pipes
@@ -899,73 +898,13 @@ public:
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
         };
 
-        // True when at least one TensorParameter still has multiple candidate slots (from an
-        // aliased cache-miss call) and the current call supplies distinct MeshTensors across those
-        // slots, so a single representative index is no longer unambiguous. Op-owned tensors are
-        // sole-owner allocations that never alias, so every multi-candidate index lies within
-        // io_mesh_tensors.
-        static bool bindings_need_refinement(
-            const std::vector<ResolvedTensorBinding>& bindings,
-            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
-            // Any two candidate sets are either identical or disjoint (a miss creates them as
-            // pointer-identity classes and each refinement splits them by one hit's classes), so a
-            // group is identified by its first index.
-            ttsl::SmallVector<std::size_t, 4> checked_groups;
-            for (const auto& b : bindings) {
-                if (b.candidate_indices.size() <= 1) {
-                    continue;
-                }
-                if (std::find(checked_groups.begin(), checked_groups.end(), b.candidate_indices[0]) !=
-                    checked_groups.end()) {
-                    continue;
-                }
-                checked_groups.push_back(b.candidate_indices[0]);
-                const auto* first = &io_mesh_tensors.at(b.candidate_indices[0]).get();
-                for (std::size_t i = 1; i < b.candidate_indices.size(); ++i) {
-                    if (&io_mesh_tensors.at(b.candidate_indices[i]).get() != first) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        // Narrow any multi-candidate bindings by intersecting each parameter's candidate slots
-        // with the io_mesh_tensors positions matching the TensorArgument produced for this call.
-        static void refine_bindings(
-            std::vector<ResolvedTensorBinding>& bindings,
-            const tt::tt_metal::Table<TensorParamName, TensorArgument>& factory_tensor_args,
-            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
-            for (auto& b : bindings) {
-                if (b.candidate_indices.size() <= 1) {
-                    continue;
-                }
-                auto arg = factory_tensor_args.get(b.tensor_parameter_name);
-                TT_FATAL(
-                    arg.has_value(),
-                    "Refinement of cached ProgramSpec failed: factory did not emit TensorArgument '{}'",
-                    b.tensor_parameter_name);
-                const auto* target = &tt::tt_metal::mesh_tensor_of(*arg);
-                ttsl::SmallVector<std::size_t, 2> narrowed;
-                for (const std::size_t idx : b.candidate_indices) {
-                    if (idx < io_mesh_tensors.size() && &io_mesh_tensors[idx].get() == target) {
-                        narrowed.push_back(idx);
-                    }
-                }
-                TT_FATAL(
-                    !narrowed.empty(),
-                    "TensorArgument '{}' did not match any of its candidate io-tensor slots during cache-hit "
-                    "disambiguation",
-                    b.tensor_parameter_name);
-                b.candidate_indices = std::move(narrowed);
-            }
-        }
-
         // Cache-hit tensor refresh, shared so the two adapters' hit paths cannot drift apart.
         template <typename CachedWorkload>
         static void refresh_tensor_args(
             CachedWorkload& cached_workload,
-            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            const auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
@@ -981,19 +920,10 @@ public:
 
                 tt::tt_metal::Table<TensorParamName, TensorArgument> fresh_tensor_args;
                 for (const auto& b : sv.bindings) {
-                    fresh_tensor_args.emplace(
-                        b.tensor_parameter_name, TensorArgument{mesh_tensors[b.candidate_indices.front()]});
+                    fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, skip_validation);
             }
-        }
-
-        template <typename CachedWorkload>
-        static void refresh_tensor_args(
-            CachedWorkload& cached_workload,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
-            refresh_tensor_args(cached_workload, collect_mesh_tensors(tensor_args, tensor_return_value));
         }
 
         // Cache-hit pipe refresh: supply each program the pipes now at its resolved positions in
@@ -1059,15 +989,13 @@ public:
             return result;
         }
 
-        // Match each TensorArgument's MeshTensor reference back to its candidate indices in the
-        // combined enumeration (io tensors followed by op-owned tensors). Cache-miss path only.
+        // Match each TensorArgument's MeshTensor reference back to its index in the combined
+        // enumeration (io tensors followed by op-owned tensors). Cache-miss path only.
         //
-        // All matching slots are recorded rather than greedily claiming the first unclaimed slot:
-        // ProgramRunArgs::tensor_args is a Table whose iteration order is unspecified (and need not
-        // match the reflection order of tensor_args_t), so when two slots alias the same MeshTensor
-        // on a cache miss, MeshTensor pointer identity alone cannot tell which parameter belongs to
-        // which slot (#57248). Recording every matching slot lets SetProgramRunArgs run the aliased
-        // miss as-is and defers disambiguation to the first cache hit where those slots diverge.
+        // When several slots hold the same MeshTensor, pointer identity cannot tell which of them a
+        // TensorArgument came from (ProgramRunArgs::tensor_args is a Table with no promised order).
+        // Any of them is correct: compute_mesh_workload_hash keys spec ops by which io slots alias
+        // (compute_tensor_alias_signature), so every hit of this entry repeats the miss's aliasing.
         //
         // NOTE on host perf: the index-based binding scheme is what makes a fast cache-hit path
         // possible, but the current straightforward implementation isn't there yet -- the
@@ -1082,18 +1010,15 @@ public:
             // The name is the Table key; the TensorArgument value carries only the tensor ref.
             for (const auto& [tensor_parameter_name, tensor_arg] : factory_tensor_args) {
                 const auto* target = &tt::tt_metal::mesh_tensor_of(tensor_arg);
-                ttsl::SmallVector<std::size_t, 2> matches;
-                for (std::size_t idx = 0; idx < mesh_tensors.size(); ++idx) {
-                    if (&mesh_tensors[idx].get() == target) {
-                        matches.push_back(idx);
-                    }
-                }
+                const auto it = std::find_if(
+                    mesh_tensors.begin(), mesh_tensors.end(), [target](const auto& t) { return &t.get() == target; });
                 TT_FATAL(
-                    !matches.empty(),
+                    it != mesh_tensors.end(),
                     "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args / "
                     "tensor_return_value, or one of the factory's op_owned_tensors (got an unowned MeshTensor)",
                     tensor_parameter_name);
-                bindings.push_back({tensor_parameter_name, std::move(matches)});
+                bindings.push_back(
+                    {tensor_parameter_name, static_cast<std::size_t>(std::distance(mesh_tensors.begin(), it))});
             }
             return bindings;
         }
@@ -1212,21 +1137,6 @@ public:
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
 
-        // Re-running a factory that uploads op_owned_tensors would hit "Writes are not supported during
-        // trace capture" deep inside the factory; fail here instead with the actual cause and remedy.
-        static void assert_safe_to_reinvoke_op_owned_factory(
-            const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
-            auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
-            for (std::uint8_t cq = 0; cq < mesh_device->num_hw_cqs(); ++cq) {
-                TT_FATAL(
-                    !mesh_device->mesh_command_queue(cq).trace_id().has_value(),
-                    "{}: program cache hit requires disambiguating tensor bindings from an aliased warmup call, "
-                    "which cannot run during trace capture because this operation allocates op-owned tensors. "
-                    "Warm up the cache with distinct tensor arguments before begin_trace_capture.",
-                    ttsl::get_type_name<DeviceOperation>());
-            }
-        }
-
         // The framework's cache-hit dispatcher (handle_mesh_adapter_cache_hit in
         // device_operation.hpp) prefers a method named `apply_descriptor` over
         // `override_runtime_arguments` when both exist. We adopt the name to
@@ -1237,24 +1147,7 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            const auto io_mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
-            // Every range holds a copy of the same bindings, built and refined from one
-            // ProgramArtifacts, so checking any one range decides for all of them.
-            const auto& programs = cached_workload.workload.get_programs();
-            TT_FATAL(!programs.empty(), "Cached ProgramSpec workload has no programs");
-            const auto& representative_sv = cached_workload.shared_variables.at(programs.begin()->first);
-            if (SpecBindingSupport::bindings_need_refinement(representative_sv.bindings, io_mesh_tensors)) {
-                if (representative_sv.op_owned_tensors && !representative_sv.op_owned_tensors->empty()) {
-                    assert_safe_to_reinvoke_op_owned_factory(tensor_args, tensor_return_value);
-                }
-                auto fresh_artifacts = SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
-                for (const auto& [coordinate_range, _] : programs) {
-                    auto& sv = cached_workload.shared_variables.at(coordinate_range);
-                    SpecBindingSupport::refine_bindings(
-                        sv.bindings, fresh_artifacts.run_params.tensor_args, io_mesh_tensors);
-                }
-            }
-            SpecBindingSupport::refresh_tensor_args(cached_workload, io_mesh_tensors);
+            SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
             SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);
         }
     };
@@ -1308,10 +1201,7 @@ public:
         using TensorArgument = tt::tt_metal::ProgramRunArgs::TensorArgument;
         using ResolvedTensorBinding = typename SpecBindingSupport::ResolvedTensorBinding;
 
-        struct WorkloadSharedVariables : SpecBindingSupport::SpecSharedVariables {
-            ttnn::MeshCoordinateRangeSet tensor_coords;
-        };
-        using shared_variables_t = WorkloadSharedVariables;
+        using shared_variables_t = typename SpecBindingSupport::SpecSharedVariables;
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
         static consteval bool has_override_runtime_arguments() {
@@ -1368,11 +1258,10 @@ public:
                 shared_variables.emplace(
                     per_coord.range,
                     shared_variables_t{
-                        {.bindings =
-                             SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
-                         .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
-                             per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)},
-                        tensor_coords});
+                        .bindings =
+                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
+                        .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
+                            per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)});
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
@@ -1397,48 +1286,47 @@ public:
                     tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
                 }
             } else {
-                const auto io_mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
-                const ttnn::MeshCoordinateRangeSet* tensor_coords = nullptr;
-                for (const auto& [coordinate_range, _] : cached_workload.workload.get_programs()) {
-                    const auto& sv = cached_workload.shared_variables.at(coordinate_range);
-                    if (SpecBindingSupport::bindings_need_refinement(sv.bindings, io_mesh_tensors)) {
-                        tensor_coords = &sv.tensor_coords;
-                        break;
-                    }
-                }
-                if (tensor_coords != nullptr) {
-                    auto fresh_artifacts = WorkloadSpecFactory::create_mesh_workload_artifacts(
-                        attrs, tensor_args, tensor_return_value, *tensor_coords);
-                    TT_FATAL(
-                        fresh_artifacts.programs.size() == cached_workload.shared_variables.size(),
-                        "create_mesh_workload_artifacts returned {} programs on a cache hit, but the cached workload "
-                        "has {}: the factory must be deterministic for a given tensor_coords",
-                        fresh_artifacts.programs.size(),
-                        cached_workload.shared_variables.size());
-                    for (auto& per_coord : fresh_artifacts.programs) {
-                        auto it = cached_workload.shared_variables.find(per_coord.range);
-                        TT_FATAL(
-                            it != cached_workload.shared_variables.end(),
-                            "create_mesh_workload_artifacts returned range {} on a cache hit, which the cached "
-                            "workload does not have: the factory must be deterministic for a given tensor_coords",
-                            per_coord.range);
-                        SpecBindingSupport::refine_bindings(
-                            it->second.bindings, per_coord.run_params.tensor_args, io_mesh_tensors);
-                    }
-                }
-                SpecBindingSupport::refresh_tensor_args(cached_workload, io_mesh_tensors);
+                SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
             }
         }
     };
+
+    // A spec factory's cache hit replays the io slot each TensorArgument was matched to on the miss,
+    // unless it re-derives its run args with override_runtime_arguments. When the miss passed one
+    // MeshTensor in several slots, that match could have picked any of them (#57248), so such ops
+    // key the cache on which tensor_args slots alias: an entry is then only reused by calls whose
+    // aliased slots again hold one tensor, where every pick is right. Outputs need no entry in the
+    // signature: one aliases an input only via a tensor_args slot or by construction of the op.
+    static constexpr bool keys_on_tensor_aliasing =
+        []<typename... Factories>(std::type_identity<std::variant<Factories...>>) {
+            return (
+                (ProgramSpecFactoryConcept<Factories> ||
+                 (MeshWorkloadSpecFactoryConcept<Factories> && !detail::HasSpecRuntimeArgsOverride<Factories>)) ||
+                ...);
+        }(std::type_identity<program_factory_t>{});
+
+    // Empty unless the op keys on tensor aliasing and some tensors alias, so other calls hash as before.
+    static std::vector<std::uint32_t> tensor_alias_signature(
+        const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors) {
+        if constexpr (keys_on_tensor_aliasing) {
+            return detail::compute_tensor_alias_signature(tensors);
+        } else {
+            return {};
+        }
+    }
 
     static ttsl::hash::hash_t compute_mesh_workload_hash(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
         ttsl::hash::hash_t hash = compute_program_hash(attrs, tensor_args);
-        const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
+        const auto tensors = mesh_device_operation_utils::collect_tensors(tensor_args);
+        const auto coords = detail::extract_tensor_coordinates_impl(tensors, mesh_device);
         std::for_each(
             coords.begin(), coords.end(), [&](const auto& coord) { hash = ttsl::hash::hash_objects(hash, coord); });
+        if (const auto alias_signature = tensor_alias_signature(tensors); !alias_signature.empty()) {
+            hash = ttsl::hash::hash_objects(hash, alias_signature);
+        }
         return hash;
     }
 
@@ -1462,9 +1350,13 @@ public:
             return key;  // custom hash -> opt out beyond the op-identity prefix
         } else {
             key += ttsl::hash::canonical_key(attrs, tensor_args);
-            const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
+            const auto tensors = mesh_device_operation_utils::collect_tensors(tensor_args);
+            const auto coords = detail::extract_tensor_coordinates_impl(tensors, mesh_device);
             std::for_each(
                 coords.begin(), coords.end(), [&](const auto& coord) { key += ttsl::hash::canonical_key(coord); });
+            if (const auto alias_signature = tensor_alias_signature(tensors); !alias_signature.empty()) {
+                key += ttsl::hash::canonical_key(alias_signature);
+            }
             return key;
         }
     }

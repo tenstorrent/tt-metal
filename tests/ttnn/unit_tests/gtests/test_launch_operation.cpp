@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <gmock/gmock.h>
 #include <type_traits>
+#include <utility>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -15,7 +18,6 @@
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/operations/reduction/prod/device/prod_all_device_operation.hpp"
 #include "ttnn/operations/reduction/sampling/device/sampling_device_operation.hpp"
-#include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -26,6 +28,7 @@ namespace ttnn {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
 using ::ttnn::device_operation::mesh_device_operation_utils::all_tensors_have_uniform_storage;
@@ -221,6 +224,27 @@ using WorkloadSpecAdapter =
 // The cache-hit path forks on this; pin both directions.
 static_assert(!WorkloadSpecAdapter<MeshWorkloadSpecFactory>::has_override_runtime_arguments());
 static_assert(WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverride>::has_override_runtime_arguments());
+
+template <typename... Factories>
+struct OpWithFactories : ProgramSpecMinimalOp {
+    using program_factory_t = std::variant<Factories...>;
+    static program_factory_t select_program_factory(const OperationAttributes&, const Tensor&);
+};
+
+template <typename... Factories>
+constexpr bool keys_on_tensor_aliasing_v =
+    device_operation::MeshDeviceOperationAdapter<OpWithFactories<Factories...>>::keys_on_tensor_aliasing;
+
+// Only factories whose cache hit replays the bindings recorded on the miss key the cache on tensor
+// aliasing; the others re-derive their tensors on every hit, so their keys stay as they were.
+static_assert(keys_on_tensor_aliasing_v<ProgramSpecFactory>);
+static_assert(keys_on_tensor_aliasing_v<MeshWorkloadSpecFactory>);
+static_assert(!keys_on_tensor_aliasing_v<CustomProgramSpecFactory>);
+static_assert(!keys_on_tensor_aliasing_v<MeshWorkloadSpecFactoryWithOverride>);
+static_assert(!keys_on_tensor_aliasing_v<NewInfraProgramFactory>);
+static_assert(!device_operation::MeshDeviceOperationAdapter<ProgramSpecMinimalOp>::keys_on_tensor_aliasing);
+// One replaying factory is enough: any call of the op may select it.
+static_assert(keys_on_tensor_aliasing_v<CustomProgramSpecFactory, ProgramSpecFactory>);
 
 // Compile-coverage: taking the adapter methods' addresses ODR-uses them, forcing
 // the (otherwise un-instantiated) bodies to compile. Never dispatched.
@@ -655,381 +679,113 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyMultipleShardDims) {
         (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
 }
 
-template <typename Bindings>
-ttsl::SmallVector<std::size_t, 2> find_candidates(const Bindings& bindings, std::string_view name) {
-    for (const auto& b : bindings) {
-        if (b.tensor_parameter_name == tt::tt_metal::TensorParamName{std::string(name)}) {
-            return b.candidate_indices;
-        }
-    }
-    ADD_FAILURE() << "missing binding for " << name;
-    return {};
-}
-
-TEST_F(LaunchOperation2x4Test, SpecBindingSupportResolvesAndRefinesAliasedBindings) {
-    using Adapter = device_operation::MeshDeviceOperationAdapter<
-        ProgramSpecMinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
-    using TensorParamName = tt::tt_metal::TensorParamName;
-    using TensorArgument = tt::tt_metal::ProgramRunArgs::TensorArgument;
-    using TensorTable = tt::tt_metal::Table<TensorParamName, TensorArgument>;
+TEST_F(LaunchOperation2x4Test, TensorAliasSignature) {
+    using TensorRefs = std::vector<std::reference_wrapper<const Tensor>>;
+    using device_operation::detail::compute_tensor_alias_signature;
 
     const tt::tt_metal::TensorSpec spec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    auto make_tensor = [&]() { return ttnn::create_device_tensor(spec, mesh_device_.get()); };
+    const auto make_tensor = [&]() { return ttnn::create_device_tensor(spec, mesh_device_.get()); };
+    const auto a = make_tensor();
+    const auto b = make_tensor();
+    const auto c = make_tensor();
 
-    // 1. Out-of-order Table parameters primed with aliased inputs (SamplingInputs pattern:
-    //    io enumeration order is [k=0, p=1, temp=2, out=3], while Table lists temp before p).
-    {
-        auto k = make_tensor();
-        auto shared = make_tensor();
-        auto out = make_tensor();
-        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> miss_io = {
-            std::cref(k.mesh_tensor()),
-            std::cref(shared.mesh_tensor()),
-            std::cref(shared.mesh_tensor()),
-            std::cref(out.mesh_tensor())};
-        TensorTable miss_table{
-            {TensorParamName{"temp"}, TensorArgument{shared.mesh_tensor()}},
-            {TensorParamName{"k"}, TensorArgument{k.mesh_tensor()}},
-            {TensorParamName{"p"}, TensorArgument{shared.mesh_tensor()}},
-            {TensorParamName{"out"}, TensorArgument{out.mesh_tensor()}},
-        };
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{}), IsEmpty());
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{a, b, c}), IsEmpty());
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{a, b, a}), ElementsAre(0u, 1u, 0u));
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{a, b, b, a, c}), ElementsAre(0u, 1u, 1u, 0u, 4u));
 
-        auto bindings = Adapter::resolve_bindings(miss_table, miss_io);
-        EXPECT_THAT(find_candidates(bindings, "k"), ElementsAre(0u));
-        EXPECT_THAT(find_candidates(bindings, "temp"), ElementsAre(1u, 2u));
-        EXPECT_THAT(find_candidates(bindings, "p"), ElementsAre(1u, 2u));
-        EXPECT_THAT(find_candidates(bindings, "out"), ElementsAre(3u));
+    // A copied handle shares its MeshTensor, and so does a storage re-wrapping it in new TensorAttributes.
+    const Tensor a_copy = a;
+    const auto a_coords = a.device_storage().get_coords();
+    const Tensor a_rewrapped{
+        ttnn::DeviceStorage(a.device_storage(), std::vector<ttnn::MeshCoordinate>(a_coords.begin(), a_coords.end()))};
+    ASSERT_NE(a_rewrapped.tensor_attributes, a.tensor_attributes);
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{b, a, a_copy, a_rewrapped}), ElementsAre(0u, 1u, 1u, 1u));
 
-        // Another aliased call (different tensor, same aliasing pattern) needs no refinement.
-        auto shared_2 = make_tensor();
-        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> aliased_hit_io = {
-            std::cref(k.mesh_tensor()),
-            std::cref(shared_2.mesh_tensor()),
-            std::cref(shared_2.mesh_tensor()),
-            std::cref(out.mesh_tensor())};
-        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, aliased_hit_io));
-
-        // Distinct p and temp trigger refinement and recover p -> 1, temp -> 2 despite reversed Table order.
-        auto p_distinct = make_tensor();
-        auto temp_distinct = make_tensor();
-        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> distinct_hit_io = {
-            std::cref(k.mesh_tensor()),
-            std::cref(p_distinct.mesh_tensor()),
-            std::cref(temp_distinct.mesh_tensor()),
-            std::cref(out.mesh_tensor())};
-        EXPECT_TRUE(Adapter::bindings_need_refinement(bindings, distinct_hit_io));
-
-        TensorTable distinct_table{
-            {TensorParamName{"temp"}, TensorArgument{temp_distinct.mesh_tensor()}},
-            {TensorParamName{"k"}, TensorArgument{k.mesh_tensor()}},
-            {TensorParamName{"p"}, TensorArgument{p_distinct.mesh_tensor()}},
-            {TensorParamName{"out"}, TensorArgument{out.mesh_tensor()}},
-        };
-        Adapter::refine_bindings(bindings, distinct_table, distinct_hit_io);
-        EXPECT_THAT(find_candidates(bindings, "p"), ElementsAre(1u));
-        EXPECT_THAT(find_candidates(bindings, "temp"), ElementsAre(2u));
-        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, distinct_hit_io));
-        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, aliased_hit_io));
+    // Past the pairwise-scan limit the sort-based path must give the same answers.
+    std::vector<Tensor> distinct_tensors;
+    for (int i = 0; i < 20; ++i) {
+        distinct_tensors.push_back(make_tensor());
     }
+    EXPECT_THAT(
+        compute_tensor_alias_signature(TensorRefs(distinct_tensors.begin(), distinct_tensors.end())), IsEmpty());
 
-    // 2. Multi-stage 3-way partial aliasing: [x, x, x] -> [u, u, v] -> [p, q, r].
-    {
-        auto x = make_tensor();
-        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> miss_io = {
-            std::cref(x.mesh_tensor()), std::cref(x.mesh_tensor()), std::cref(x.mesh_tensor())};
-        TensorTable miss_table{
-            {TensorParamName{"in2"}, TensorArgument{x.mesh_tensor()}},
-            {TensorParamName{"in0"}, TensorArgument{x.mesh_tensor()}},
-            {TensorParamName{"in1"}, TensorArgument{x.mesh_tensor()}},
-        };
-
-        auto bindings = Adapter::resolve_bindings(miss_table, miss_io);
-        EXPECT_THAT(find_candidates(bindings, "in0"), ElementsAre(0u, 1u, 2u));
-        EXPECT_THAT(find_candidates(bindings, "in1"), ElementsAre(0u, 1u, 2u));
-        EXPECT_THAT(find_candidates(bindings, "in2"), ElementsAre(0u, 1u, 2u));
-
-        // Step 1: [u, u, v] narrows in2 -> {2} and leaves in0, in1 -> {0, 1}.
-        auto u = make_tensor();
-        auto v = make_tensor();
-        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> partial_io = {
-            std::cref(u.mesh_tensor()), std::cref(u.mesh_tensor()), std::cref(v.mesh_tensor())};
-        EXPECT_TRUE(Adapter::bindings_need_refinement(bindings, partial_io));
-        TensorTable partial_table{
-            {TensorParamName{"in2"}, TensorArgument{v.mesh_tensor()}},
-            {TensorParamName{"in0"}, TensorArgument{u.mesh_tensor()}},
-            {TensorParamName{"in1"}, TensorArgument{u.mesh_tensor()}},
-        };
-        Adapter::refine_bindings(bindings, partial_table, partial_io);
-        EXPECT_THAT(find_candidates(bindings, "in0"), ElementsAre(0u, 1u));
-        EXPECT_THAT(find_candidates(bindings, "in1"), ElementsAre(0u, 1u));
-        EXPECT_THAT(find_candidates(bindings, "in2"), ElementsAre(2u));
-        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, partial_io));
-
-        // Step 2: [p, q, r] resolves in0 -> {0} and in1 -> {1}.
-        auto p = make_tensor();
-        auto q = make_tensor();
-        auto r = make_tensor();
-        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> full_io = {
-            std::cref(p.mesh_tensor()), std::cref(q.mesh_tensor()), std::cref(r.mesh_tensor())};
-        EXPECT_TRUE(Adapter::bindings_need_refinement(bindings, full_io));
-        TensorTable full_table{
-            {TensorParamName{"in2"}, TensorArgument{r.mesh_tensor()}},
-            {TensorParamName{"in0"}, TensorArgument{p.mesh_tensor()}},
-            {TensorParamName{"in1"}, TensorArgument{q.mesh_tensor()}},
-        };
-        Adapter::refine_bindings(bindings, full_table, full_io);
-        EXPECT_THAT(find_candidates(bindings, "in0"), ElementsAre(0u));
-        EXPECT_THAT(find_candidates(bindings, "in1"), ElementsAre(1u));
-        EXPECT_THAT(find_candidates(bindings, "in2"), ElementsAre(2u));
-        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, full_io));
+    const std::array<const Tensor*, 3> cycle{&a, &b, &c};
+    TensorRefs cycled;
+    std::vector<std::uint32_t> expected;
+    for (std::uint32_t i = 0; i < 40; ++i) {
+        cycled.push_back(std::cref(*cycle[i % 3]));
+        expected.push_back(i % 3);
     }
+    EXPECT_THAT(compute_tensor_alias_signature(cycled), ElementsAreArray(expected));
 
-    // 3. A single io tensor bound to two distinct TensorParameters in ProgramSpec must resolve both
-    //    parameters to slot 0 without colliding or requiring refinement.
-    {
-        auto x = make_tensor();
-        auto out = make_tensor();
-        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> io = {
-            std::cref(x.mesh_tensor()), std::cref(out.mesh_tensor())};
-        TensorTable table{
-            {TensorParamName{"src_a"}, TensorArgument{x.mesh_tensor()}},
-            {TensorParamName{"src_b"}, TensorArgument{x.mesh_tensor()}},
-            {TensorParamName{"dst"}, TensorArgument{out.mesh_tensor()}},
-        };
-
-        auto bindings = Adapter::resolve_bindings(table, io);
-        EXPECT_THAT(find_candidates(bindings, "src_a"), ElementsAre(0u));
-        EXPECT_THAT(find_candidates(bindings, "src_b"), ElementsAre(0u));
-        EXPECT_THAT(find_candidates(bindings, "dst"), ElementsAre(1u));
-        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, io));
-    }
+    // Ops whose cache hit re-derives tensor bindings never key on aliasing.
+    using CustomAdapter = device_operation::MeshDeviceOperationAdapter<OpWithFactories<CustomProgramSpecFactory>>;
+    EXPECT_THAT(CustomAdapter::tensor_alias_signature(TensorRefs{a, a}), IsEmpty());
 }
 
-// Sampling inserts the temp TensorArgument before p, while the io enumeration of SamplingInputs is
-// [input_values, input_indices, k, p, temp] followed by the output.
+// Sampling is a base spec op whose factory lists TEMP before P in its Table, the reverse of SamplingInputs;
+// with p and temp aliased, the miss cannot tell which slot each parameter came from (#57248).
 using SamplingOp = ttnn::prim::SamplingDeviceOperation;
-constexpr std::size_t kSamplingPSlot = 3;
-constexpr std::size_t kSamplingTempSlot = 4;
+using SamplingAdapter = device_operation::MeshDeviceOperationAdapter<SamplingOp>;
+static_assert(SamplingAdapter::keys_on_tensor_aliasing);
 
-// A per-user BFLOAT16 [32] tensor, the shape and layout sampling requires of p and temp.
-Tensor make_sampling_user_tensor(MeshDevice* mesh_device) {
-    return ttnn::create_device_tensor(
-        tt::tt_metal::TensorSpec(
-            ttnn::Shape{32}, tt::tt_metal::TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, MemoryConfig{})),
-        mesh_device);
-}
+TEST_F(LaunchOperation2x4Test, ProgramCacheKeySeparatesTensorAliasingPatterns) {
+    auto* mesh_device = mesh_device_.get();
+    const auto make_tensor = [&](const ttnn::Shape& shape, DataType dtype, Layout layout) {
+        return ttnn::create_device_tensor(
+            tt::tt_metal::TensorSpec(shape, tt::tt_metal::TensorLayout(dtype, layout, MemoryConfig{})), mesh_device);
+    };
+    const auto values = make_tensor(ttnn::Shape{1, 1, 32, 64}, DataType::BFLOAT16, Layout::TILE);
+    const auto indices = make_tensor(ttnn::Shape{1, 1, 32, 64}, DataType::INT32, Layout::ROW_MAJOR);
+    // k, p and temp share one spec so that only which of them alias tells the calls apart.
+    const auto make_user_tensor = [&]() { return make_tensor(ttnn::Shape{32}, DataType::BFLOAT16, Layout::ROW_MAJOR); };
+    const auto k = make_user_tensor();
+    const auto p = make_user_tensor();
+    const auto temp = make_user_tensor();
+    const auto p_2 = make_user_tensor();
+    const auto temp_2 = make_user_tensor();
+    const auto shared = make_user_tensor();
+    const auto shared_2 = make_user_tensor();
 
-struct SamplingTensors {
-    Tensor values;
-    Tensor indices;
-    Tensor k;
-
-    explicit SamplingTensors(MeshDevice* mesh_device) :
-        values(ttnn::create_device_tensor(
-            tt::tt_metal::TensorSpec(
-                ttnn::Shape{1, 1, 32, 64},
-                tt::tt_metal::TensorLayout(DataType::BFLOAT16, Layout::TILE, MemoryConfig{})),
-            mesh_device)),
-        indices(ttnn::create_device_tensor(
-            tt::tt_metal::TensorSpec(
-                ttnn::Shape{1, 1, 32, 64},
-                tt::tt_metal::TensorLayout(DataType::INT32, Layout::ROW_MAJOR, MemoryConfig{})),
-            mesh_device)),
-        k(ttnn::create_device_tensor(
-            tt::tt_metal::TensorSpec(
-                ttnn::Shape{32}, tt::tt_metal::TensorLayout(DataType::INT32, Layout::ROW_MAJOR, MemoryConfig{})),
-            mesh_device)) {}
-
-    SamplingOp::tensor_args_t args(const Tensor& p, const Tensor& temp) const {
-        return {
+    const SamplingOp::operation_attributes_t attrs{};
+    const auto args = [&](const Tensor& k_arg, const Tensor& p_arg, const Tensor& temp_arg) {
+        return SamplingOp::tensor_args_t{
             .input_values = values,
             .input_indices = indices,
-            .k = k,
-            .p = p,
-            .temp = temp,
+            .k = k_arg,
+            .p = p_arg,
+            .temp = temp_arg,
             .preallocated_output = std::nullopt};
+    };
+    const auto key = [&](const SamplingOp::tensor_args_t& tensor_args) {
+        return std::pair{
+            SamplingAdapter::compute_mesh_workload_hash(mesh_device, attrs, tensor_args),
+            SamplingAdapter::compute_mesh_workload_canonical_key(
+                mesh_device, ttsl::get_type_name<SamplingOp>(), attrs, tensor_args)};
+    };
+
+    // Calls without aliasing share one entry, keyed exactly as before the signature existed.
+    const auto distinct = key(args(k, p, temp));
+    EXPECT_EQ(key(args(k, p_2, temp_2)), distinct);
+    auto baseline_hash = SamplingAdapter::compute_program_hash(attrs, args(k, p, temp));
+    for (const auto& coord : extract_tensor_coordinates(args(k, p, temp), mesh_device)) {
+        baseline_hash = ttsl::hash::hash_objects(baseline_hash, coord);
     }
-};
+    EXPECT_EQ(distinct.first, baseline_hash);
 
-// Sampling plus one op-owned scratch tensor, so the adapter parks it and the cache-hit refinement
-// takes the op-owned branch.
-struct SamplingWithScratchFactory {
-    static std::atomic<int> calls;
+    // An aliased call gets its own entry, which another call with the same aliasing reuses.
+    const auto p_is_temp = key(args(k, shared, shared));
+    EXPECT_NE(p_is_temp.first, distinct.first);
+    EXPECT_NE(p_is_temp.second, distinct.second);
+    EXPECT_EQ(key(args(k, shared_2, shared_2)), p_is_temp);
 
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const SamplingOp::operation_attributes_t& attrs,
-        const SamplingOp::tensor_args_t& tensor_args,
-        Tensor& tensor_return_value) {
-        ++calls;
-        auto artifacts =
-            ttnn::prim::SamplingProgramFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
-        auto scratch = make_sampling_user_tensor(tensor_args.p.device());
-        artifacts.op_owned_tensors.push_back(scratch.device_storage().release_mesh_tensor());
-        return artifacts;
-    }
-};
-std::atomic<int> SamplingWithScratchFactory::calls{0};
-
-static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<SamplingWithScratchFactory>);
-
-using SamplingScratchAdapter = device_operation::MeshDeviceOperationAdapter<
-    SamplingOp>::ProgramSpecMeshWorkloadFactoryAdapter<SamplingWithScratchFactory>;
-
-TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterRefinesAliasedBindingsWithOpOwnedTensors) {
-    const SamplingTensors sampling(mesh_device_.get());
-    const auto shared = make_sampling_user_tensor(mesh_device_.get());
-    const auto p = make_sampling_user_tensor(mesh_device_.get());
-    const auto temp = make_sampling_user_tensor(mesh_device_.get());
-    const auto aliased_args = sampling.args(shared, shared);
-    const auto distinct_args = sampling.args(p, temp);
-
-    const SamplingOp::operation_attributes_t attrs{};
-    auto output = SamplingOp::create_output_tensors(attrs, aliased_args);
-    ttnn::MeshCoordinateRangeSet tensor_coords;
-    tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device_->shape()));
-
-    auto cached = SamplingScratchAdapter::create_mesh_workload(attrs, tensor_coords, aliased_args, output);
-    ASSERT_EQ(cached.shared_variables.size(), 1u);
-    auto& sv = cached.shared_variables.begin()->second;
-    EXPECT_THAT(find_candidates(sv.bindings, "p"), ElementsAre(kSamplingPSlot, kSamplingTempSlot));
-    EXPECT_THAT(find_candidates(sv.bindings, "temp"), ElementsAre(kSamplingPSlot, kSamplingTempSlot));
-    ASSERT_NE(sv.op_owned_tensors, nullptr);
-    ASSERT_EQ(sv.op_owned_tensors->size(), 1u);
-    const auto* parked_op_owned_tensors = sv.op_owned_tensors.get();
-    const auto* parked_scratch = &sv.op_owned_tensors->front();
-
-    // The first distinct hit re-runs the factory once to narrow the bindings, despite temp preceding p
-    // in the factory's Table, and keeps the op-owned tensor allocated on the miss.
-    SamplingWithScratchFactory::calls = 0;
-    SamplingScratchAdapter::apply_descriptor(cached, attrs, distinct_args, output);
-    EXPECT_EQ(SamplingWithScratchFactory::calls.load(), 1);
-    EXPECT_THAT(find_candidates(sv.bindings, "p"), ElementsAre(kSamplingPSlot));
-    EXPECT_THAT(find_candidates(sv.bindings, "temp"), ElementsAre(kSamplingTempSlot));
-    EXPECT_EQ(sv.op_owned_tensors.get(), parked_op_owned_tensors);
-    EXPECT_EQ(&sv.op_owned_tensors->front(), parked_scratch);
-
-    // Resolved bindings serve both distinct and aliased hits without the factory.
-    SamplingScratchAdapter::apply_descriptor(cached, attrs, distinct_args, output);
-    SamplingScratchAdapter::apply_descriptor(cached, attrs, aliased_args, output);
-    EXPECT_EQ(SamplingWithScratchFactory::calls.load(), 1);
-}
-
-TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterAliasRefinementDuringTraceCapture) {
-    const SamplingTensors sampling(mesh_device_.get());
-    const auto shared = make_sampling_user_tensor(mesh_device_.get());
-    const auto p = make_sampling_user_tensor(mesh_device_.get());
-    const auto temp = make_sampling_user_tensor(mesh_device_.get());
-    const auto aliased_args = sampling.args(shared, shared);
-    const auto distinct_args = sampling.args(p, temp);
-
-    const SamplingOp::operation_attributes_t attrs{};
-    auto output = SamplingOp::create_output_tensors(attrs, aliased_args);
-    ttnn::MeshCoordinateRangeSet tensor_coords;
-    tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device_->shape()));
-    auto& cq = mesh_device_->mesh_command_queue();
-
-    // Unresolved bindings would re-run a factory that allocates op-owned tensors: rejected before
-    // the factory is called.
-    {
-        auto cached = SamplingScratchAdapter::create_mesh_workload(attrs, tensor_coords, aliased_args, output);
-        SamplingWithScratchFactory::calls = 0;
-        const auto trace_id = mesh_device_->begin_mesh_trace(cq);
-        EXPECT_ANY_THROW(SamplingScratchAdapter::apply_descriptor(cached, attrs, distinct_args, output));
-        mesh_device_->end_mesh_trace(cq, trace_id);
-        mesh_device_->release_mesh_trace(trace_id);
-        EXPECT_EQ(SamplingWithScratchFactory::calls.load(), 0);
-    }
-
-    // A distinct-input warmup resolves the bindings, after which capture needs no factory call.
-    {
-        auto cached = SamplingScratchAdapter::create_mesh_workload(attrs, tensor_coords, aliased_args, output);
-        SamplingScratchAdapter::apply_descriptor(cached, attrs, distinct_args, output);
-        const auto p_capture = make_sampling_user_tensor(mesh_device_.get());
-        const auto temp_capture = make_sampling_user_tensor(mesh_device_.get());
-        const auto capture_args = sampling.args(p_capture, temp_capture);
-        SamplingWithScratchFactory::calls = 0;
-        const auto trace_id = mesh_device_->begin_mesh_trace(cq);
-        EXPECT_NO_THROW(SamplingScratchAdapter::apply_descriptor(cached, attrs, capture_args, output));
-        mesh_device_->end_mesh_trace(cq, trace_id);
-        mesh_device_->release_mesh_trace(trace_id);
-        EXPECT_EQ(SamplingWithScratchFactory::calls.load(), 0);
-    }
-}
-
-// One single-coordinate sampling program per coordinate; odd columns bind p and temp to each
-// other's tensor, so each range maps the same parameters to different io slots.
-struct PerCoordSamplingFactory {
-    static std::atomic<int> calls;
-    static bool swaps_p_and_temp(const ttnn::MeshCoordinate& coord) { return coord[1] % 2 == 1; }
-
-    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
-        const SamplingOp::operation_attributes_t& attrs,
-        const SamplingOp::tensor_args_t& tensor_args,
-        Tensor& tensor_return_value,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-        ++calls;
-        auto swapped_args = tensor_args;
-        std::swap(swapped_args.p, swapped_args.temp);
-        ttnn::device_operation::MeshWorkloadArtifacts artifacts;
-        for (const auto& range : tensor_coords.ranges()) {
-            for (const auto& coord : range) {
-                auto program = ttnn::prim::SamplingProgramFactory::create_program_artifacts(
-                    attrs, swaps_p_and_temp(coord) ? swapped_args : tensor_args, tensor_return_value);
-                artifacts.programs.push_back(
-                    {.range = ttnn::MeshCoordinateRange(coord),
-                     .spec = std::move(program.spec),
-                     .run_params = std::move(program.run_params)});
-            }
-        }
-        return artifacts;
-    }
-};
-std::atomic<int> PerCoordSamplingFactory::calls{0};
-
-TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterRefinesAliasedBindingsPerRange) {
-    using Adapter = device_operation::MeshDeviceOperationAdapter<SamplingOp>::MeshWorkloadSpecFactoryAdapter<
-        PerCoordSamplingFactory>;
-    static_assert(ttnn::device_operation::MeshWorkloadSpecFactoryConcept<PerCoordSamplingFactory>);
-    static_assert(!Adapter::has_override_runtime_arguments());
-
-    const SamplingTensors sampling(mesh_device_.get());
-    const auto shared = make_sampling_user_tensor(mesh_device_.get());
-    const auto p = make_sampling_user_tensor(mesh_device_.get());
-    const auto temp = make_sampling_user_tensor(mesh_device_.get());
-    const auto aliased_args = sampling.args(shared, shared);
-    const auto distinct_args = sampling.args(p, temp);
-
-    const SamplingOp::operation_attributes_t attrs{};
-    auto output = SamplingOp::create_output_tensors(attrs, aliased_args);
-    ttnn::MeshCoordinateRangeSet tensor_coords;
-    tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device_->shape()));
-
-    auto cached = Adapter::create_mesh_workload(attrs, tensor_coords, aliased_args, output);
-    ASSERT_EQ(cached.shared_variables.size(), mesh_device_->num_devices());
-    for (const auto& [range, sv] : cached.shared_variables) {
-        EXPECT_THAT(find_candidates(sv.bindings, "p"), ElementsAre(kSamplingPSlot, kSamplingTempSlot))
-            << "range " << range;
-        EXPECT_THAT(find_candidates(sv.bindings, "temp"), ElementsAre(kSamplingPSlot, kSamplingTempSlot))
-            << "range " << range;
-    }
-
-    // One factory call over the saved tensor_coords narrows every range to its own mapping.
-    PerCoordSamplingFactory::calls = 0;
-    Adapter::apply_descriptor(cached, attrs, distinct_args, output);
-    EXPECT_EQ(PerCoordSamplingFactory::calls.load(), 1);
-    for (const auto& [range, sv] : cached.shared_variables) {
-        const bool swapped = PerCoordSamplingFactory::swaps_p_and_temp(range.start_coord());
-        EXPECT_THAT(find_candidates(sv.bindings, "p"), ElementsAre(swapped ? kSamplingTempSlot : kSamplingPSlot))
-            << "range " << range;
-        EXPECT_THAT(find_candidates(sv.bindings, "temp"), ElementsAre(swapped ? kSamplingPSlot : kSamplingTempSlot))
-            << "range " << range;
-    }
-
-    // Resolved bindings serve both distinct and aliased hits without the factory.
-    Adapter::apply_descriptor(cached, attrs, distinct_args, output);
-    Adapter::apply_descriptor(cached, attrs, aliased_args, output);
-    EXPECT_EQ(PerCoordSamplingFactory::calls.load(), 1);
+    // A different aliasing pattern of the same specs is a different entry again.
+    const auto k_is_p = key(args(shared, shared, temp));
+    EXPECT_NE(k_is_p.first, p_is_temp.first);
+    EXPECT_NE(k_is_p.second, p_is_temp.second);
+    EXPECT_NE(k_is_p.first, distinct.first);
 }
 
 }  // namespace
