@@ -16,7 +16,6 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.debug_tensix import TensixDebug
 from ttexalens.tt_exalens_lib import check_context
 
-
 # CLEARDVALID mode: bit 0 is Reset, bit 1 is KeepReadingSameSrc.
 _KEEP_READING_SAME_SRC = 0b10
 
