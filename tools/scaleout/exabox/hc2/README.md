@@ -59,12 +59,15 @@ Run folders go to `$TT_METAL_HOME/generated/hc2/`, or to `HC2_OUT_DIR` if it is 
   the step ends INCOMPLETE with a setup error, never a silent skip. This checkout's own
   `build/test/didt/unit_tests_didt_max_util` is not the default: tt-metal's fast dispatch now refuses kernels on active
   Ethernet cores, and the workload streams DRAM from them. A caller may still set `TRAY_MAXUTIL_BIN`.
-  There is no shared download location for the archive yet. To get one, build `unit_tests_didt_max_util` in a Release
-  build of tt-metal, then run `core/fleet/maxutil_pack.sh pack <tt-metal dir> <out dir> [<mpi prefix>]`. It writes
-  `maxutil-<sha12>.tar.zst` into `<out dir>`, which must be one of the dirs above (`TRAY_MAXUTIL_DIST` takes a
-  colon-separated list). The step accepts an archive only when its sha256 is the one in `maxutil.pin`, so a build of
-  your own also needs `maxutil.pin` replaced with the lines `maxutil_pack.sh pin <archive>` prints. Such a build is
-  not the pinned one: the pinned build also logs a CRC-32 per worker core, which this checkout's test does not, so the
+  There is no shared download location for the archive yet, and the pinned tree is not published. The archive was
+  built from a tt-metal tree that predates the fast-dispatch refusal above, with a per-core CRC-32 log added to the
+  test and the SFPI version bumped to 7.85.0. To pack your own, build `unit_tests_didt_max_util` in a Release build of
+  such a tree (one from before that refusal, not this checkout), then run
+  `core/fleet/maxutil_pack.sh pack <tt-metal dir> <out dir> [<mpi prefix>]`. It writes `maxutil-<sha12>.tar.zst`
+  into `<out dir>`, which must be one of the dirs above (`TRAY_MAXUTIL_DIST` takes a colon-separated list). A build of
+  this checkout packs and passes the pin check, but cannot run the load. The step accepts an archive only when its
+  sha256 is the one in `maxutil.pin`, so a build of your own also needs `maxutil.pin` replaced with the lines
+  `maxutil_pack.sh pin <archive>` prints. Such a build is not the pinned one: without the per-core CRC-32 log the
   output-CRC vote has nothing to compare on it. `maxutil_pack.sh verify <archive>` and `check <archive> <dir>` test an
   archive without opening a device.
 
