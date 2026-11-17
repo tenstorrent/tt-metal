@@ -11,6 +11,7 @@ which TTNN functions happen to be deprecated.
 import functools
 import inspect
 import os
+import types
 import warnings
 
 import pytest
@@ -21,35 +22,43 @@ from ttnn._deprecation import warn_deprecated
 # The helper treats every file in the directory that contains _deprecation.py as TTNN's own code.
 TTNN_PACKAGE_DIR = os.path.dirname(ttnn._deprecation.__file__)
 
-# Code compiled with a filename inside the TTNN package looks to the helper exactly like TTNN's own code, such as
-# the Python operation wrappers that every binding call goes through, without depending on any real TTNN function.
-_TTNN_SOURCE = """
+
+# The helper looks only at the filename recorded in each frame's code object. The functions below are templates:
+# the tests never call them as they are, but copy them with that filename replaced. A copy whose filename is inside
+# the TTNN package looks to the helper exactly like TTNN's own code, such as the Python operation wrappers that every
+# binding call goes through, without depending on any real TTNN function. A copy with importlib's bootstrap filename
+# looks like the frames between an `import` statement and the module being imported.
 def operation_wrapper(what, instead):
     return binding(what, instead)
+
 
 def binding(what, instead):
     warn_deprecated(what, instead)
 
+
 def package_init(import_module, submodule_code, what, instead):
     return import_module(submodule_code, what, instead)
-"""
 
-# Code compiled with importlib's bootstrap filename looks like the frames between an `import` statement and the
-# module being imported.
-_IMPORTLIB_SOURCE = """
+
 def import_module(function, *args):
     return function(*args)
-"""
 
 
-def _compile(source, filename):
-    namespace = {"warn_deprecated": warn_deprecated}
-    exec(compile(source, filename, "exec"), namespace)
-    return namespace
+def caller(what, instead):
+    warn_deprecated(what, instead)
+
+
+def _with_filename(function, filename, namespace):
+    # The copy looks up globals, such as `binding`, in `namespace` rather than in this module.
+    return types.FunctionType(function.__code__.replace(co_filename=filename), namespace, function.__name__)
 
 
 def _ttnn_code():
-    return _compile(_TTNN_SOURCE, os.path.join(TTNN_PACKAGE_DIR, "operations", "_compiled_for_test.py"))
+    filename = os.path.join(TTNN_PACKAGE_DIR, "operations", "_stand_in_operation.py")
+    namespace = {"warn_deprecated": warn_deprecated}
+    for function in (operation_wrapper, binding, package_init):
+        namespace[function.__name__] = _with_filename(function, filename, namespace)
+    return namespace
 
 
 def _through_ttnn_wrappers():
@@ -60,10 +69,10 @@ def _during_nested_import_of_ttnn():
     # The caller imports TTNN, whose package __init__ imports a submodule that calls a deprecated function:
     # caller -> importlib -> TTNN __init__ -> importlib -> TTNN submodule -> helper.
     # functools.partial adds no Python frames.
-    import_module = _compile(_IMPORTLIB_SOURCE, "<frozen importlib._bootstrap>")["import_module"]
+    bootstrap_import = _with_filename(import_module, "<frozen importlib._bootstrap>", {})
     ttnn_code = _ttnn_code()
-    package_init = functools.partial(ttnn_code["package_init"], import_module, ttnn_code["operation_wrapper"])
-    return functools.partial(import_module, package_init)
+    ttnn_package_init = functools.partial(ttnn_code["package_init"], bootstrap_import, ttnn_code["operation_wrapper"])
+    return functools.partial(bootstrap_import, ttnn_package_init)
 
 
 def test_warns_with_future_warning_and_the_policy_message():
@@ -95,11 +104,11 @@ def test_warning_points_at_the_callers_line(make_call):
 
 def test_frames_without_a_source_file_are_outside_ttnn_even_from_the_package_directory(monkeypatch):
     monkeypatch.chdir(TTNN_PACKAGE_DIR)
-    caller = _compile("def caller(what, instead):\n    warn_deprecated(what, instead)\n", "<string>")["caller"]
+    string_caller = _with_filename(caller, "<string>", {"warn_deprecated": warn_deprecated})
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        caller("ttnn.old_op", "ttnn.new_op")
+        string_caller("ttnn.old_op", "ttnn.new_op")
 
     filenames = [w.filename for w in caught]
     assert filenames == ["<string>"], f"warning attributed to {filenames}"
