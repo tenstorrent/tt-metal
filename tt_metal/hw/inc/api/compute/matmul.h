@@ -470,6 +470,18 @@ constexpr bool matmul_fe_main_math() {
 }
 #endif
 
+#ifdef TRISC_MATH
+// LoFi half sync, outside size mode, a plain call that runs main's math because the front end sees no constant block: the row form
+// where the call's kt_dim (a run-time value both the init and the calls receive) is 3 or more (census 65c1c: 40 of 76 keys faster,
+// 0 slower; the kt <= 2 blocks lose to the row path's per-call cost)
+template <std::uint32_t llk_dir, bool row_mop_on, std::uint32_t kt_key>
+constexpr bool matmul_fe_rowform_kt() {
+    return llk_dir == 0 && !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi &&
+           DST_SYNC_MODE == DstSync::SyncHalf && !LLK_SIZE_MODE &&
+           !matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, kt_key>>(0);
+}
+#endif
+
 // The unpack and math inits of matmul_block_init for the reuse direction the LLK runs
 template <
     std::uint32_t llk_dir,
@@ -497,6 +509,22 @@ ALWI void matmul_block_init_llk(
         in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 #ifdef TRISC_MATH
     if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
+        if constexpr (matmul_fe_rowform_kt<llk_dir, row_mop_on, kt_key>()) {
+            if (kt_dim >= 3) {
+                llk_math_matmul_init<
+                    matmul_elided_fidelity<in0_format, in1_format, out_format>(),
+                    MM_THROTTLE,
+                    false,
+                    false,
+                    in1_order,
+                    0,
+                    row_end_fold,
+                    llk_math_matmul_half_end_fold<false, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(),
+                    block_ct,
+                    block_rt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
+                return;
+            }
+        }
         mm_main::llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
         return;
     }
@@ -585,6 +613,23 @@ ALWI void matmul_block_llk(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
 #ifdef TRISC_MATH
     if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
+        if constexpr (matmul_fe_rowform_kt<llk_dir, row_mop_on, kt_key>()) {
+            if (kt_dim >= 3) {
+                matmul_block_math_dynamic_throttle<
+                    false,
+                    false,
+                    in1_order,
+                    in0_format,
+                    in1_format,
+                    out_format,
+                    0,
+                    row_end_fold,
+                    llk_math_matmul_half_end_fold<false, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(),
+                    block_ct,
+                    block_rt>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, held_a);
+                return;
+            }
+        }
         mm_main::matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim);
         return;
     }
