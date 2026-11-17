@@ -36,7 +36,7 @@
         "probe": "@1020k",
         "14kw": {
           "throughput_tok_s": 9714,
-          "ttft_s": 88.91,
+          "ttft_s": 90.27,
           "chunk_time_ms": 517
         }
       },
