@@ -17,7 +17,7 @@ from models.demos.vision.classification.mobilenetv2.tt.model_preprocessing impor
     create_mobilenetv2_input_tensors,
     create_mobilenetv2_model_parameters,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE}], indirect=True)

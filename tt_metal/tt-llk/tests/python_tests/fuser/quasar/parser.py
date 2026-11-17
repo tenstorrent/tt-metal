@@ -251,7 +251,6 @@ UNPACKER_MAP = {
             NO_TRANSPOSE,
             NO_UNPACK_TO_DEST,
             _reduce_col_only,
-            require_src_a_tiles((32, 32)),
         ],
     ),
 }
@@ -333,11 +332,6 @@ FPU_MAP = {
             ),
             reject(
                 lambda s, a, b: a.data_format.is_integer()
-                and a.tile_shape.tile_dims != (32, 32),
-                "Quasar integer Reduce requires 32x32 tiles",
-            ),
-            reject(
-                lambda s, a, b: a.data_format.is_integer()
                 and s.math_fidelity != MathFidelity.LoFi,
                 "Quasar integer Reduce requires LoFi fidelity",
             ),
@@ -372,17 +366,10 @@ FPU_MAP = {
     ),
 }
 
-# Quasar has no strided pack path for tiny tiles, so the shared full-tile rule carries
-# an arch-specific hint here.
-_untilize_full_tile = reject(
-    lambda s, output: output.tile_shape.total_num_faces() != 4,
-    "PackUntilize supports only 32x32 output tiles, tiny tiles need strided pack",
-)
-
 PACKER_MAP = {
     "Packer": (Packer, [L1_ACC_FORMAT_SUPPORTED]),
     "MatmulPacker": (MatmulPacker, [L1_ACC_FORMAT_SUPPORTED]),
-    "PackUntilize": (PackUntilize, [_untilize_full_tile, PACK_NO_L1_ACC]),
+    "PackUntilize": (PackUntilize, [PACK_NO_L1_ACC]),
 }
 
 OUTPUT_DIMS = {

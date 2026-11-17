@@ -29,6 +29,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
 
 # NOTE: the heavy model stack (TtPrefillRuntime / TtPrefillTransformer, the MoE gate, transformers'
 # AutoConfig) is imported lazily inside the methods that need it. This keeps `import ...adapters` cheap
@@ -57,6 +58,10 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    # Missing TTNN cache pieces are converted from the HF checkpoint (PREFILL_HF_MODEL) at start-up, which needs the
+    # DeepSeek-V3 HF key layout (see tt/runners/weight_categories.py). A model whose checkpoint differs sets False.
+    builds_missing_weight_cache = True
+
     def fabric_payload_size(self) -> int:
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
 
@@ -76,18 +81,18 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """Mirror the pytest weight_cache_path layout so the runner reads the same
         files the cache-populate run wrote:
-          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {sp}x{tp}
+          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {rows}x{cols}[_sp1]
+        ``mesh_shape`` is (axis 0, axis 1); see ``mesh_cache_key`` for the SP-axis suffix.
         Defaults to ``ttnn_cache_default``; None only if explicitly empty."""
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
             return None
         arch = "bh" if is_blackhole() else "wh"
         num_devices = ttnn.get_num_devices()
-        sp, tp = mesh_shape
-        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
+        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / mesh_cache_key(mesh_shape, sp_axis)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -163,6 +168,10 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
             tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
+            build_missing_cache=self.builds_missing_weight_cache,
+            hf_model_path=os.environ.get("PREFILL_HF_MODEL")
+            or os.environ.get(self.env_var, "")
+            or self.hf_model_default,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

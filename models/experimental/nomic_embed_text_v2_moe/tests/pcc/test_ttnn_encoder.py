@@ -52,7 +52,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     to_device,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.encoder import TtNomicBertEncoder
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
