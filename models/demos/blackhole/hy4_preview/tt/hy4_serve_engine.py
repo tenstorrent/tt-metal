@@ -102,6 +102,9 @@ class Hy4Engine:
         # pool pages per mesh row: the model length + the verify rows beyond the committed length (K + 1) + the pad rows of a lock-step prefill chunk, rounded to the prefill chunk
         need = max_seq_len + self.K + 2
         self.pages = (-(-need // self.pf_rows)) * self.pf_rows // PAGE
+        if os.environ.get("HY4_IDX_BLK", "0") == "1" and os.environ.get("HY4_B37_PAGES8", "1") == "1":
+            # B37: the blocked indexer score layout needs n_local = pages * 64 to be a multiple of 32 * B (B = 16): pages % 8 == 0 (2049 pages at the 1M pool broke it: block width 8196, see RESULT_B37)
+            self.pages = -(-self.pages // 8) * 8
         pool_bytes = (
             self.pages * 3_750_912 // 8
         )  # per bank: 78 (+MTP) kv pools + 22 key pools, 3,750,912 B per page per chip (CAPACITY_MEASURED.md)

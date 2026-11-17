@@ -193,6 +193,148 @@ def gather_filter_own(pos, lids, colinfo, S, out, perrow=False, nq=None):
     return out
 
 
+_DBG = {}
+
+
+def dbg_dump(md):
+    """sel3x debug counters (HY4_B36_DBG=1): per device aggregate over its (row, core) pages: [calls, N>K calls, sum g, max g, sum long runs, max run, sum runs, sum jmax, max jmax]"""
+
+    d = _DBG.get(id(md))
+    if d is None:
+        return None
+    out = []
+    for i, t in enumerate(ttnn.get_device_tensors(d)):
+        x = ttnn.to_torch(t).reshape(-1, 16).long()
+        out.append(
+            [
+                int(x[:, 0].max()),
+                int(x[:, 1].max()),
+                int(x[:, 2].sum()),
+                int(x[:, 3].max()),
+                int(x[:, 4].sum()),
+                int(x[:, 5].max()),
+                int(x[:, 6].sum()),
+                int(x[:, 7].sum()),
+                int(x[:, 8].max()),
+            ]
+        )
+    return out
+
+
+def sel3_own(push, lids, colinfo, S, out, perrow=False, K=2048, nq=None):
+    """B36 (HY4_B36_SEL3=1): stage-3 select of the indexer as one flag-consuming program. ``push`` = hy4_qpush.Push of the bf16 candidate score rows [S,1,1,KL] (already launched; every row sorted descending, as the stage-2 top-k
+    output), ``lids`` u32 [S,1,1,KL] this chip's local candidate ids (same order), colinfo / out as ``gather_filter_own``. Replaces push_wait + the stock top-K over the 8*KL gathered scores + gather_filter_own.
+    """
+    md = push.md
+    KL, PB, RP, NP = int(lids.shape[-1]), push.pb, push.rp, push.np
+    assert PB == KL * 2
+    nq = nq or int(os.environ.get("HY4_B36_NQ", "8"))
+    grid = md.compute_with_storage_grid_size()
+    assert nq <= grid.x and S <= grid.y and KL % nq == 0
+    cores = [(q, s) for s in range(S) for q in range(nq)]
+    cs = _core_set(cores)
+    fx, fy = push._phys(*push.fcore)
+    extra = [fx, fy] + list(push.flag_addrs) + [push.cnt_addr]
+    rt = ttnn.RuntimeArgs()
+    for s in range(S):
+        lc = md.worker_core_from_logical_core(ttnn.CoreCoord(0, s))
+        for q in range(nq):
+            rt[q][s] = [s, q, lc.x, lc.y] + extra
+    kq = KL // nq
+    exact = os.environ.get("HY4_B36_EXACT", "0") == "1"  # stock tie order emulated (sel3x.cpp)
+    total = 8 * PB + 128 + kq * 4 + 64 + nq * kq * 4 + nq * 16 + K * 4
+    if exact:
+        total = 8 * PB + 128 + KL * 4 + 64 + nq * KL * 4 + nq * 16 + K * 4 + KL * 4 + 8 * KL * 2
+    dbg = None
+    if (
+        exact and os.environ.get("HY4_B36_DBG", "0") == "1"
+    ):  # debug counters of sel3x (tie statistics of the real data), read back by dbg_dump
+        dbg = _DBG.get(id(md))
+        if dbg is None:
+            import torch
+
+            dbg = _DBG[id(md)] = ttnn.from_torch(
+                torch.zeros(S * nq, 1, 1, 16, dtype=torch.int32),
+                device=md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            )
+    ct = (
+        [K, S, COLS, 0, int(perrow), KL, nq, PB, RP, NP]
+        + _acc(push.land)
+        + _acc(lids)
+        + _acc(colinfo)
+        + _acc(out)
+        + _acc(dbg if dbg is not None else out)
+    )
+    k = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/sel3x.cpp" if exact else f"{KDIR}/sel3.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cs,
+        compile_time_args=ct,
+        runtime_args=rt,
+        common_runtime_args=[
+            push.land.buffer_address(),
+            lids.buffer_address(),
+            colinfo.buffer_address(),
+            out.buffer_address(),
+            dbg.buffer_address() if dbg is not None else 0,
+        ],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    prog = ttnn.ProgramDescriptor(
+        kernels=[k], semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=cs, initial_value=0)], cbs=[_cb(cs, total)]
+    )
+    prog.custom_program_hash = _hash(0x9B8, K, S, nq, int(exact), tuple(ct))
+    ttnn.generic_op([push.land, lids, colinfo, out], prog)
+    return out
+
+
+def sel2(bvals, bgids, S, nb, kb, kl, blocked, nq=None):
+    """B36 (HY4_B36_SEL2=1): stage-2 select of the indexer, one program: the kl best of the nb sorted candidate lists (cs_cand2 outputs ``bvals`` bf16 / ``bgids`` u32: blocked layout [S,1,1,nb*kb], else [S*nb,1,1,kb]) in total
+    order (value desc, list asc, position asc); returns (lids u32 [S,1,1,kl], lvals bf16 [S,1,1,kl]), sorted descending, exhausted entries (-inf, 0xFFFFFFFF). Replaces the stock top-kl + cs_gather.
+    """
+    md = bvals.device()
+    nq = nq or int(os.environ.get("HY4_B36_NQ2", "8"))
+    grid = md.compute_with_storage_grid_size()
+    assert nq <= grid.x and S <= grid.y and kl % nq == 0 and nb <= 16
+    lv = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([S, 1, 1, kl]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+    )
+    li = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([S, 1, 1, kl]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+    )
+    cores = [(q, s) for s in range(S) for q in range(nq)]
+    cs = _core_set(cores)
+    rt = ttnn.RuntimeArgs()
+    for s in range(S):
+        for q in range(nq):
+            rt[q][s] = [s, q]
+    oq = kl // nq
+    total = nb * kb * 2 + oq * 64 + ((oq * 2 + 63) // 64) * 64 + oq * 4 + 64
+    ct = [S, nq, kl, nb, kb, int(blocked), 0] + _acc(bvals) + _acc(bgids) + _acc(lv) + _acc(li)
+    k = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/sel2.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cs,
+        compile_time_args=ct,
+        runtime_args=rt,
+        common_runtime_args=[
+            bvals.buffer_address(),
+            bgids.buffer_address(),
+            lv.buffer_address(),
+            li.buffer_address(),
+        ],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cb(cs, total)])
+    prog.custom_program_hash = _hash(0x9B9, S, nq, nb, kb, kl, int(blocked), tuple(ct))
+    ttnn.generic_op([bvals, bgids, lv, li], prog)
+    return li, lv
+
+
 def gather_filter(pos, cand, colinfo, S, out, perrow=False, push=None, own=False):
     """B35: ``cs_gather`` + ``id_filter`` as one program (bit-identical). pos u32 RM [S,1,1,K] (top-k positions into the W candidates), cand u32 RM [S,1,1,W] (all-gathered ids) or, with ``push`` (a hy4_qpush.Push of the local id
     rows, already launched), its landing tensor (the program waits for the per-source flags). colinfo / out as ``id_filter``.

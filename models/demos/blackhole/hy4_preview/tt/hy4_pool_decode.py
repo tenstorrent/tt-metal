@@ -357,9 +357,23 @@ def select_global(ctx, qh, w32, key_view, fin_out=None):
     sel = ctx.sel
     B = max(1, min(sel["B"], n // sel["kb"]))
     kb, kloc = min(sel["kb"], n // B), min(sel["kloc"], n)
-    blk = (
-        os.environ.get("HY4_IDX_BLK", "0") == "1" and B > 1
-    )  # score written as [1,1,S*B,n/B] + cs_cand2 blocked outputs (no reshape copies)
+    # B37: HY4_IDX_BLK=1 at block width 8192 (1M pool, B=16) is broken in the model (RESULT_B37). HY4_B37_BLKMODE = both (default, as before) | score (blocked score write only) | cand (blocked cs_cand2 output only) | off
+    blk_on = os.environ.get("HY4_IDX_BLK", "0") == "1" and B > 1
+    bm = os.environ.get("HY4_B37_BLKMODE", "both")
+    if (n // B) > int(os.environ.get("HY4_IDX_BLK_MAXM", "1000000")):
+        bm = "off"
+    if (
+        blk_on and n % (32 * B) != 0
+    ):  # B37 ROOT CAUSE guard: a block boundary inside a 32-key tile strip makes the score writer issue misaligned page-split writes (garbage scores)
+        if not getattr(select_global, "_warned", False):
+            select_global._warned = True
+            print(
+                f"HY4 WARNING: blocked indexer layout disabled: n_local={n} is not a multiple of 32*B={32 * B} (use pool pages % 8 == 0)",
+                flush=True,
+            )
+        bm = "off"
+    blk = blk_on and bm in ("both", "score")
+    blk_out = blk_on and bm in ("both", "cand")
     score = IS.idx_score(
         qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n, kvt_rows=ctx.perrow, blocks=B if blk else 1
     )  # [1,1,S,n]
@@ -375,10 +389,26 @@ def select_global(ctx, qh, w32, key_view, fin_out=None):
             out=fin_out,
             perrow=ctx.perrow,
             own=own,
+            sel3=os.environ.get("HY4_B36_SEL3", "0") == "1",
             vpush=ctx.val_push(kloc) if os.environ.get("HY4_B35_VPUSH", "0") == "1" else None,
             push=ctx.id_push(kloc) if (os.environ.get("HY4_B35_IDPUSH", "0") == "1" and not own) else None,
         )
-    gids = select_v2(ctx.ag, ctx.colid, score, n, B, kb, kloc, K, sel["split"], False, None, blocked=blk, fin=fin)
+    gids = select_v2(
+        ctx.ag,
+        ctx.colid,
+        score,
+        n,
+        B,
+        kb,
+        kloc,
+        K,
+        sel["split"],
+        False,
+        None,
+        blocked=blk,
+        fin=fin,
+        blocked_out=blk_out,
+    )
     ttnn.deallocate(score)
     return gids
 
