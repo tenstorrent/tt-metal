@@ -882,6 +882,22 @@ def test_tilize_32bit_tiny_tile_rejected_on_quasar(device, dtype, input_tile, ou
         ttnn.tilize(tt_input, tile=ttnn.Tile(output_tile))
 
 
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("op", ["tilize", "tilize_with_val_padding"])
+def test_tilize_int32_to_float_rejected_on_quasar(device, op, output_dtype, expect_error):
+    """Quasar's packer cannot convert Int32 in DEST to a float format."""
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar-only validation")
+    tt_input = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "is not supported on Quasar"):
+        if op == "tilize":
+            ttnn.tilize(tt_input, dtype=output_dtype)
+        else:
+            ttnn.tilize_with_val_padding(tt_input, [32, 64], 0, dtype=output_dtype)
+
+
 @pytest.mark.parametrize(
     "memory_layout, tensor_shape, grid_shape",
     [
