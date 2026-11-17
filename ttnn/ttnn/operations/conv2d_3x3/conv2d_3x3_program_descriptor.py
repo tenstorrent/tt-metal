@@ -10,6 +10,10 @@ K in `num_k_blocks` blocks of `block_k_tiles` that never straddle a kernel row (
 Regime R3 (TILE input) keeps that blocking. The reader streams the M-block's footprint tile-rows
 into `cb_input_tiles` and compute untilizes them into `cb_halo_slab` (bf16 RM, one tile-row = 32
 pixels), from which the reader gathers exactly as on the ROW_MAJOR path.
+
+Regime R2 (HEIGHT_SHARDED input, either layout) keeps the same pipeline on the input shard grid: work
+index i runs on shard core i and owns output shard i. The reader fills the slab with page runs from
+any owner core, `cb_output_tiles` is backed on the output shard, and the writer stores nothing.
 """
 
 from __future__ import annotations
@@ -32,6 +36,10 @@ DEST_TILES_FP32_HALF_SYNC = 4
 
 # L1 left free for L1-resident tensors other code keeps alive while this program runs.
 L1_TENSOR_HEADROOM_BYTES = 128 * 1024
+# Sharded calls: CBs must clear this call's input and output shards plus one more such pair, the one a
+# chained model (and a cache-hit re-dispatch) keeps alive. L1 buffers grow down from the top, CBs up from
+# the base, and every enqueue re-checks that the two do not meet.
+RESIDENT_SHARD_SETS = 2
 
 # CB indices (semantic names; slots are arbitrary but fixed).
 CB_HALO_SLAB = 0
@@ -55,8 +63,11 @@ INPUT_TILE_DEPTH_BATCHES = 2
 SLAB_READ_STAGGER_PX_PER_CORE = 0
 
 
-def l1_cb_budget_bytes():
-    return ttnn.get_max_worker_l1_unreserved_size() - L1_TENSOR_HEADROOM_BYTES
+def l1_cb_budget_bytes(resident_shard_bytes=0):
+    """CB bytes per core. `resident_shard_bytes` is one call's input plus output shard on a core."""
+    return (
+        ttnn.get_max_worker_l1_unreserved_size() - L1_TENSOR_HEADROOM_BYTES - RESIDENT_SHARD_SETS * resident_shard_bytes
+    )
 
 
 def _div_up(a, b):
@@ -80,6 +91,9 @@ class Conv3x3Geometry:
     weight_tile_bytes: int
     out_tile_bytes: int
     has_bias: bool
+    # cb_output_tiles is backed on the output shard: its pages are not CB-region bytes, and every M-block
+    # of a core must land inside the shard (block_m_tiles divides core_m_tiles).
+    sharded_output: bool = False
 
     @property
     def num_out_px(self):
@@ -150,6 +164,13 @@ def _out_subblock(block_m_tiles, block_n_tiles):
     sb_w = _largest_divisor_at_most(block_n_tiles, DEST_TILES_FP32_HALF_SYNC)
     sb_h = _largest_divisor_at_most(block_m_tiles, DEST_TILES_FP32_HALF_SYNC // sb_w)
     return sb_h, sb_w
+
+
+def m_split(g: Conv3x3Geometry, num_cores):
+    """(core_m_tiles, num_m_groups): contiguous output tile-row ranges over `num_cores` cores. On a sharded
+    input this is also the output shard: roundup32(ceil(M / n)) / 32 == ceil(ceil(M / 32) / n)."""
+    core_m_tiles = _div_up(g.tensor_m_tiles, num_cores)
+    return core_m_tiles, _div_up(g.tensor_m_tiles, core_m_tiles)
 
 
 def _core_m_ranges(tensor_m_tiles, core_m_tiles):
@@ -237,7 +258,7 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
         + weight_depth * bk * bn * g.weight_tile_bytes
         + (bn * g.weight_tile_bytes if g.has_bias else 0)
         + bm * bn * TILE_BYTES_FP32
-        + OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes
+        + (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
     )
     return dict(
         num_k_blocks=num_k_blocks,
@@ -257,12 +278,13 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
 def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
     shrink bk to divisors of the kh block down to one pixel's channels (costs no bytes), then shrink bm
-    (re-streams weights and halo), then bk below the tap floor. bn is never shrunk. On a TILE input the
-    untilize batch shrinks before any of them."""
+    (re-streams weights and halo) and take the coarsest bk that fits it, then bk below the tap floor. bn
+    is never shrunk. On a TILE input the untilize batch shrinks before any of them.
+
+    `grid` is the (x, y) extent the work is split over; a sharded input passes (shard cores, 1), and the
+    descriptor maps work index i to shard core i."""
     grid_x, grid_y = grid
-    grid_cores = grid_x * grid_y
-    core_m_tiles = _div_up(g.tensor_m_tiles, grid_cores)
-    num_m_groups = _div_up(g.tensor_m_tiles, core_m_tiles)
+    core_m_tiles, num_m_groups = m_split(g, grid_x * grid_y)
     bn = g.tensor_n_tiles
     kkh = g.tensor_kkh_tiles
 
@@ -270,10 +292,13 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     tap_floor = g.c_in_p // TILE if g.c_in_p % TILE == 0 else kkh
     bk_above_floor = [d for d in divisors if d >= tap_floor]
     bk_below_floor = [d for d in divisors if d < tap_floor]
-    bm_candidates = sorted({_div_up(core_m_tiles, n) for n in range(1, core_m_tiles + 1)}, reverse=True)
+    if g.sharded_output:
+        bm_candidates = [d for d in range(core_m_tiles, 0, -1) if core_m_tiles % d == 0]
+    else:
+        bm_candidates = sorted({_div_up(core_m_tiles, n) for n in range(1, core_m_tiles + 1)}, reverse=True)
 
-    search = [(core_m_tiles, bk) for bk in bk_above_floor]
-    search += [(bm, bk_above_floor[-1]) for bm in bm_candidates[1:]]
+    # A smaller bm frees L1, so each bm retries the coarsest bk again: at a fixed bm, bk costs no bytes.
+    search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
 
     for bm, bk in search:
@@ -310,19 +335,45 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
 # ---------------------------------------------------------------------------
 
 
-def _core_coords(num_cores, grid_x):
-    """Cores filled row-major over the live grid."""
+def shard_cores(tensor):
+    """A sharded tensor's cores in shard order (core i holds shard i), as the buffer assigns them."""
+    spec = tensor.memory_config().shard_spec
+    return ttnn.corerange_to_cores(spec.grid, None, spec.orientation == ttnn.ShardOrientation.ROW_MAJOR)
+
+
+def _work_cores(input_tensor, num_cores, grid_x):
+    """Core of each work index. Interleaved: row-major over the live grid. Sharded: input shard order, so
+    work index i (= output shard i) runs where the output buffer places shard i."""
+    if input_tensor.memory_config().is_sharded():
+        return shard_cores(input_tensor)[:num_cores]
     return [ttnn.CoreCoord(i % grid_x, i // grid_x) for i in range(num_cores)]
 
 
-def _core_range_set(num_cores, grid_x):
-    full_rows, rem = divmod(num_cores, grid_x)
-    ranges = []
-    if full_rows:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, full_rows - 1)))
-    if rem:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(rem - 1, full_rows)))
-    return ttnn.CoreRangeSet(ranges)
+def _core_range_set(cores):
+    """Compact CoreRangeSet over `cores`: x-runs per row, then identical runs on consecutive rows merged."""
+    rows = {}
+    for c in cores:
+        rows.setdefault(c.y, []).append(c.x)
+    runs = []  # [y0, y1, x0, x1]
+    for y in sorted(rows):
+        xs = sorted(rows[y])
+        start = prev = xs[0]
+        row_runs = []
+        for x in xs[1:]:
+            if x != prev + 1:
+                row_runs.append((start, prev))
+                start = x
+            prev = x
+        row_runs.append((start, prev))
+        for x0, x1 in row_runs:
+            match = next((r for r in runs if r[1] == y - 1 and r[2] == x0 and r[3] == x1), None)
+            if match is not None:
+                match[1] = y
+            else:
+                runs.append([y, y, x0, x1])
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for y0, y1, x0, x1 in runs]
+    )
 
 
 def _cb(index, data_format, page_size, num_pages, cores):
@@ -355,7 +406,8 @@ def create_program_descriptor(
         )
 
     num_cores = b.num_m_groups
-    cores = _core_range_set(num_cores, b.grid_x)
+    core_list = _work_cores(input_tensor, num_cores, b.grid_x)
+    cores = _core_range_set(core_list)
     bm, bk, bn = b.block_m_tiles, b.block_k_tiles, b.block_n_tiles
 
     if g.tile_input:
@@ -369,14 +421,27 @@ def create_program_descriptor(
         _cb(CB_IM2COL_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores),
         _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * bk * bn, cores),
         _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, bm * bn, cores),
-        _cb(
-            CB_OUTPUT_TILES,
-            output_tensor.dtype,
-            g.out_tile_bytes,
-            b.out_depth_row_groups * b.out_subblock_h * bn,
-            cores,
-        ),
     ]
+    if g.sharded_output:
+        # Packs land in the output shard; its capacity is the core's whole M range, and the M-blocks
+        # (bm divides core_m_tiles) push exactly that many tiles, so compute never waits on a consumer.
+        output_cb = ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_TILES, output_tensor, core_ranges=cores)
+        if output_cb.total_size != b.core_m_tiles * bn * g.out_tile_bytes:
+            raise ValueError(
+                f"conv2d_3x3: output shard holds {output_cb.total_size} B, expected "
+                f"{b.core_m_tiles} x {bn} tiles of {g.out_tile_bytes} B"
+            )
+        cbs.append(output_cb)
+    else:
+        cbs.append(
+            _cb(
+                CB_OUTPUT_TILES,
+                output_tensor.dtype,
+                g.out_tile_bytes,
+                b.out_depth_row_groups * b.out_subblock_h * bn,
+                cores,
+            )
+        )
     if has_bias:
         cbs.append(_cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, bn, cores))
     if g.tile_input:
@@ -442,6 +507,7 @@ def create_program_descriptor(
         b.out_subblock_h,
         g.tensor_n_tiles,
         int(has_bias),
+        int(g.sharded_output),
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct_args.extend(
@@ -449,7 +515,11 @@ def create_program_descriptor(
         if has_bias
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
-    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args.extend(
+        ttnn.TensorAccessorArgs().get_compile_time_args()
+        if g.sharded_output
+        else ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    )
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
@@ -460,7 +530,7 @@ def create_program_descriptor(
     output_addr = output_tensor.buffer_address()
     n_tile_start = 0
     for core_idx, (core, (m_tile_start, actual_m_tiles)) in enumerate(
-        zip(_core_coords(num_cores, b.grid_x), _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles))
+        zip(core_list, _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles))
     ):
         num_m_blocks_this_core = _div_up(actual_m_tiles, bm)
         reader_rt[core.x][core.y] = [

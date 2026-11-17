@@ -1,4 +1,4 @@
-# L1 Ledger: conv2d_3x3 (regimes R0 interleaved-slab, R3 TILE-input untilize)
+# L1 Ledger: conv2d_3x3 (regimes R0 interleaved-slab, R2 HEIGHT-sharded, R3 TILE-input untilize)
 
 Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_design.md`
 Blocking Model): **M** (`block_m_tiles` = bm), **N** (`block_n_tiles` = bn), **K** (`block_k_tiles` = bk;
@@ -32,7 +32,7 @@ operand alone exceeds L1 (K = 18432 x N = 256 bf16 = 9.4 MB). It shrinks `bk` fi
 | `cb_weights` (page = `T_w`) | `weight_depth * bk * bn` (`weight_depth` = 2; 1 only if `num_k_blocks * num_m_blocks_this_core == 1`) | `bk * bn` per party | `{M: — (re-streamed per M-block; R5 would make it span K whole); N: spans -> bn; K: spans -> bk, streams K-blocks}` | weight_dtype (bf16 Phase 0) | writer | compute (matmul) | one K-block per slot | none — 2x gap is double buffering (writer streams K-block k+1 during matmul k); concurrent with all compute CBs. |
 | `cb_bias` (page = `T_w`; allocated only when `has_bias`) | `bn` | `bn` (fronted for the whole kernel) | `{M: — (shared by every M-block); N: spans -> bn; K: —}` | weight_dtype | writer | compute (bias add) | whole kernel | none — live for the whole kernel. |
 | `cb_matmul_partials` (page = `T_fp32`) | exactly `bm * bn` (mechanism cap #2: L1-acc lands on the same addresses every K-block) | `bm * bn` (accumulated in place across all K-blocks) | `{M: spans -> bm; N: spans -> bn; K: streams (reduced over, never materialized per K-block)}` | Float32 — `fp32_dest_acc_en=True`, so the accumulation keeps fp32 across K-blocks (audit 2: correct width) | compute (matmul pack) | compute (matmul drain/reload; bias add) | one M-block | none — TileRowMajor interm must be its own region; Float32 vs output format; concurrent with `cb_output_tiles` during the bias add. |
-| `cb_output_tiles` (page = `T_out`) | `out_depth_row_groups * sbh * bn` = `2*sbh*bn` | `sbh * bn` per party | `{M: streams -> one row group of sbh tile-rows (depth 2); N: spans -> bn; K: —}` | output dtype = input dtype (the output tensor's format by contract; not an intermediate) | compute | writer | one row group | none — 2x gap is double buffering (writer drains row group g while compute packs g+1). In R2-R4 this CB is backed on the output shard (capacity = the shard). |
+| `cb_output_tiles` (page = `T_out`) | `out_depth_row_groups * sbh * bn` = `2*sbh*bn` | `sbh * bn` per party | `{M: streams -> one row group of sbh tile-rows (depth 2); N: spans -> bn; K: —}` | output dtype = input dtype (the output tensor's format by contract; not an intermediate) | compute | writer | one row group | none — 2x gap is double buffering (writer drains row group g while compute packs g+1). **R2 (HEIGHT): backed on the output shard** (`cb_descriptor_from_sharded_tensor`, capacity = `core_m_tiles * bn` pages = the shard, not CB-region bytes); compute packs every M-block of the core into it in order and nothing pops it, so `bm` must divide `core_m_tiles` (pushes = capacity exactly). |
 
 ## Symbol table
 
@@ -48,7 +48,7 @@ operand alone exceeds L1 (K = 18432 x N = 256 bf16 = 9.4 MB). It shrinks `bk` fi
 | `slab_tile_rows` | TILE slab capacity in tile-rows | max over the core's M-blocks of the reader's band plan, rounded up to a multiple of `ub` | `_tile_slab_rows` (host mirror of the reader plan) |
 | `ub` = `untilize_batch_rows` | TILE footprint tile-rows per reader push / compute untilize call | `1 <= ub <= min(raw slab tile-rows, ceil(band_len_px/32) + 1)` | L1 solve (shrunk first) |
 | `im2col_rm_depth_rows`, `weight_depth`, `out_depth_row_groups` | buffer depths | 2, {1, 2}, 2 | Blocking Model depth table |
-| `L1_CB_BUDGET_BYTES` | CB budget per core | per-arch host constant minus L1-resident tensor bytes on the core (0 in R0) | `select_blocking` |
+| `L1_CB_BUDGET_BYTES` | CB budget per core | `get_max_worker_l1_unreserved_size() - 128 KB headroom - RESIDENT_SHARD_SETS * (input shard + output shard)`; `RESIDENT_SHARD_SETS = 2` in R2 (this call's pair plus the previous call's, which a chained model and the golden harness's cache-hit dispatch keep alive; every enqueue re-checks the CB region against the lowest live L1 buffer), 0 shard bytes in R0/R3 | `l1_cb_budget_bytes`, `select_blocking` |
 
 ## Total per-core footprint
 
@@ -60,9 +60,22 @@ F(bm, bk) = (2*band_stride_px(bm) + band_len_px(bm)) * c_in_p * 2       # slab (
           + weight_depth * bk * bn * T_w                                 # weights     — scales with bk x bn
           + has_bias * bn * T_w                                          # bias        — scales with bn
           + bm * bn * T_fp32                                             # partials    — scales with bm x bn
-          + out_depth_row_groups * sbh * bn * T_out                      # output      — scales with bn (sbh <= 4)
+          + out_depth_row_groups * sbh * bn * T_out                      # output      — scales with bn (sbh <= 4); 0 in R2 (shard-backed)
           <= L1_CB_BUDGET_BYTES
 ```
+
+Worked values, R2 HEIGHT LOOSE layers (bf8_b weights, with bias; 11x10 Blackhole, pinned shard grids; budget after
+subtracting 2 x the core's input + output shard):
+
+| Layer | cores | core_m_tiles | bm | bk / tensor_kkh_tiles | 2 x shards | footprint / budget |
+|-------|-------|--------------|----|-----------------------|------------|--------------------|
+| stem.conv1 (RM bf16, C_in 8, s 2) | 108 of 110 | 38 | 38 | 1 / 1 | 452 KB | 508 / 914 KB |
+| stem.conv2 | 108 of 110 | 38 | 38 | 6 / 6 | 323 KB | 1038 / 1044 KB |
+| stem.conv3 | 108 of 110 | 38 | 19 | 6 / 6 | 484 KB | 845 / 882 KB |
+| res2.x.conv2 | 103 | 10 | 10 | 6 / 6 | 85 KB | 390 / 1282 KB |
+| semantic decoder.res3.fuse_conv.0 | 86 | 3 | 3 | 30 / 30 | 114 KB | 1236 / 1252 KB |
+| semantic decoder.res2.fuse_conv.0 | 103 | 10 | 5 | 9 / 27 | 361 KB | 917 / 1005 KB (bm 10 at bk 9 needs 1136 KB; L1 left after both shard pairs: 1134 KB) |
+| semantic res2.fuse_conv.1 | 103 | 10 | 5 | 12 / 24 | 340 KB | 939 / 1027 KB |
 
 Worked values, Phase 0 INPUTS (bf16, with bias; every core runs one M-block, `bm = 1`). Budget on Blackhole p150
 (11x10 grid): `get_max_worker_l1_unreserved_size()` 1530976 B - 128 KB headroom = 1399904 B (1367 KB). Verified
@@ -84,6 +97,13 @@ against `select_blocking` on device (verification_report.md); bf8_b weights shri
 | weights | `num_m_groups * num_m_blocks_this_core` (each core streams all of `K_p x C_out_p` per M-block) | Per-core weight stream (prompt-directed Phase 0); no residency across cores | 0 |
 | bias | `num_m_groups` x `C_out_p` row (one tile row) | Read once per core | 0 |
 | output | 1 | Each output tile is written once by its owning core | 0 |
+
+R2 (HEIGHT_SHARDED) differs only in the activation and output rows: there is no DRAM crossing for either.
+The input crosses the NoC once plus halo (each core's three kh bands, read as page runs from whichever cores own
+them, one read per shard a band touches; the own-shard part is a self-aimed L1 copy into the slab, the layout
+transform into kh bands contiguous across shard edges). The output never moves: compute packs straight into the
+output shard. Weights are as R0, multiplied by `num_m_blocks_this_core` where the solve shrinks `bm`
+(semantic decoder.res2.fuse_conv.0: bm 5 of 10 doubles its 705 KB per-core weight stream; R1 removes it).
 
 Totals, INPUTS `32x64x128 -> 128, p1` (64 cores): input 1.6 MB (tensor 512 KB), weights 18.4 MB, output 512 KB, cross-core 0. INPUTS `8x16x2048 -> 256`: input 1.1 MB (tensor 512 KB), weights 37.7 MB, output 64 KB.
 

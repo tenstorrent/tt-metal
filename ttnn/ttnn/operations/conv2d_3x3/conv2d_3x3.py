@@ -10,6 +10,10 @@ One device program per call: im2col gather (reader) -> tilize + K-blocked matmul
 L1 accumulation (+ row-broadcast bias, + ReLU on the final value) (compute) -> output tiles
 (writer). A TILE input is untilized in-kernel into the reader's halo slab first. The weights come from
 prepare_conv2d_weights (rows ordered (kh, kw, c), each kh block padded to a tile multiple).
+
+Placement: a DRAM-interleaved input gives a DRAM-interleaved output computed on the whole grid. An L1
+HEIGHT_SHARDED input gives an L1 HEIGHT_SHARDED output on the input's shard grid, shard
+[roundup32(ceil(M / n_cores)), roundup32(C_out)], packed in place.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from .conv2d_3x3_program_descriptor import (
     Conv3x3Geometry,
     create_program_descriptor,
     l1_cb_budget_bytes,
+    m_split,
     select_blocking,
 )
 
@@ -137,7 +142,7 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-    "memory_layout": [_ML.INTERLEAVED],
+    "memory_layout": [_ML.INTERLEAVED, _ML.HEIGHT_SHARDED],
     "fp32_dest_acc_en": [True],
     "bias_mode": ["with_bias", "no_bias"],
     "activation": ["none", "relu"],
@@ -309,6 +314,22 @@ def _check_c_in_granule(c_in):
         )
 
 
+def _check_height_shard(input_tensor):
+    memory_config = input_tensor.memory_config()
+    if memory_config.memory_layout != _ML.HEIGHT_SHARDED:
+        return
+    if memory_config.buffer_type != ttnn.BufferType.L1:
+        raise ValueError("conv2d_3x3: a HEIGHT_SHARDED input must be sharded in L1")
+    spec = memory_config.shard_spec
+    if spec is None:
+        raise ValueError("conv2d_3x3: HEIGHT_SHARDED input carries no shard_spec")
+    padded_width = int(input_tensor.padded_shape[-1])
+    if int(spec.shape[1]) != padded_width:
+        raise ValueError(
+            f"conv2d_3x3: HEIGHT shard width {spec.shape[1]} must be the full padded row width {padded_width}"
+        )
+
+
 def _check_contract(
     input_tensor, weight_tensor, bias, *, input_height, input_width, padding, stride, dilation, activation
 ):
@@ -332,6 +353,7 @@ def _check_contract(
 
     c_in = shape[3]
     _check_c_in_granule(c_in)
+    _check_height_shard(input_tensor)
     w_shape = list(weight_tensor.shape)
     k_p = padded_k(c_in, input_tensor.layout, input_tensor.memory_config())
     if len(w_shape) != 4 or w_shape[0] != 1 or w_shape[1] != 1 or w_shape[2] != k_p:
@@ -453,16 +475,41 @@ def conv2d_3x3(
         weight_tile_bytes=ttnn.tile_size(weight_tensor.dtype),
         out_tile_bytes=ttnn.tile_size(input_tensor.dtype),
         has_bias=bias is not None,
+        sharded_output=input_tensor.memory_config().is_sharded(),
     )
-    grid = device.compute_with_storage_grid_size()
-    blocking = select_blocking(geometry, (grid.x, grid.y), l1_cb_budget_bytes())
+    if geometry.sharded_output:
+        # Same shard grid as the input; one work index per shard, shard i on shard core i.
+        in_spec = input_tensor.memory_config().shard_spec
+        work_grid = (in_spec.grid.num_cores(), 1)
+        core_m_tiles, _ = m_split(geometry, work_grid[0])
+        n_tiles = geometry.tensor_n_tiles
+        output_memory_config = ttnn.MemoryConfig(
+            _ML.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(in_spec.grid, [core_m_tiles * TILE, n_tiles * TILE], in_spec.orientation),
+        )
+        input_shard_pages = (
+            (in_spec.shape[0] // TILE) * (in_spec.shape[1] // TILE)
+            if input_tensor.layout == ttnn.TILE_LAYOUT
+            else in_spec.shape[0]
+        )
+        resident_shard_bytes = (
+            input_shard_pages * input_tensor.buffer_aligned_page_size()
+            + core_m_tiles * n_tiles * geometry.out_tile_bytes
+        )
+    else:
+        grid = device.compute_with_storage_grid_size()
+        work_grid = (grid.x, grid.y)
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        resident_shard_bytes = 0
+    blocking = select_blocking(geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes))
 
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, h_out * w_out, c_out]),
         input_tensor.dtype,
         ttnn.TILE_LAYOUT,
         device,
-        ttnn.DRAM_MEMORY_CONFIG,
+        output_memory_config,
     )
     descriptor = create_program_descriptor(
         input_tensor,

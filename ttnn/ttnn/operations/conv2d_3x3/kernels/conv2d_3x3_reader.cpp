@@ -15,6 +15,9 @@
 //     so each input pixel is read once.
 //   TILE: the reader streams the band's input tile-rows to compute, which untilizes them into the
 //     slab (compute -> reader CB). A band starting inside the previous band's tile-rows shares them.
+// Both fills read page runs through one TensorAccessor: on a HEIGHT-sharded input a run is the
+// contiguous part of one owner core's shard (own or remote), so a band costs one NoC read per shard it
+// crosses; on an interleaved input every page is its own read.
 //
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
@@ -112,6 +115,7 @@ void kernel_main() {
     static_assert(num_k_blocks * block_k_tiles == 3 * tensor_kkh_tiles, "K-blocks tile the kh blocks exactly");
     static_assert((c_in * ELEM_BYTES) % 16 == 0, "per-tap copies move whole 16 B L1 words");
     static_assert(!tile_input || (c_in_p % TILE_DIM) == 0, "TILE slab rows are whole tile columns");
+    static_assert(tile_input || input_page_bytes == pixel_bytes, "ROW_MAJOR: one input page is one slab pixel");
     static_assert(!tile_input || (slab_tile_rows % untilize_batch_rows) == 0, "slab is whole untilize batches");
 
     const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
@@ -137,16 +141,20 @@ void kernel_main() {
         }
     };
 
-    // ROW_MAJOR: slab pixels [x_from, x_to) are flat input pixels x + v_minus_x.
-    [[maybe_unused]] auto read_slab_pixels = [&](int32_t x_from, int32_t x_to, int32_t v_minus_x) {
-        const uint32_t end_page = x_to + v_minus_x;
-        for (int32_t x = x_from; x < x_to;) {
-            const uint32_t page = x + v_minus_x;
+    // Input pages [page, end_page) into consecutive L1 page slots from l1.
+    auto read_pages = [&](uint32_t page, uint32_t end_page, uint32_t l1) {
+        while (page < end_page) {
             // Interleaved runs step by the bank count, not by 1; only unit-stride runs are contiguous here.
             const uint32_t run = input.contiguous_page_stride() == 1 ? input.num_contiguous_pages(page, end_page) : 1;
-            reads.read(input.get_noc_addr(page), slab_l1 + x * pixel_bytes, run * pixel_bytes);
-            x += run;
+            reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
+            page += run;
+            l1 += run * input_page_bytes;
         }
+    };
+
+    // ROW_MAJOR: slab pixels [x_from, x_to) are flat input pixels x + v_minus_x.
+    [[maybe_unused]] auto read_slab_pixels = [&](int32_t x_from, int32_t x_to, int32_t v_minus_x) {
+        read_pages(x_from + v_minus_x, x_to + v_minus_x, slab_l1 + x_from * pixel_bytes);
     };
 
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
@@ -212,12 +220,16 @@ void kernel_main() {
                 cb_reserve_back(cb_input_tiles, batch_pages);
                 uint32_t l1 = get_write_ptr(cb_input_tiles);
                 reads.begin(TRID_INPUT_TILES);
-                for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs; ++r) {
+                for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs;) {
+                    // The batch's rows of one segment are consecutive input tile-rows: consecutive pages.
+                    const uint32_t seg_left = seg_count[seg] - seg_row;
+                    const uint32_t rows = untilize_batch_rows - r < seg_left ? untilize_batch_rows - r : seg_left;
                     const uint32_t page0 = (seg_first[seg] + seg_row) * c_in_tiles;
-                    for (uint32_t c = 0; c < c_in_tiles; ++c, l1 += input_page_bytes) {
-                        reads.read(input.get_noc_addr(page0 + c), l1, input_page_bytes);
-                    }
-                    if (++seg_row == seg_count[seg]) {
+                    read_pages(page0, page0 + rows * c_in_tiles, l1);
+                    l1 += rows * c_in_tiles * input_page_bytes;
+                    r += rows;
+                    seg_row += rows;
+                    if (seg_row == seg_count[seg]) {
                         ++seg;
                         seg_row = 0;
                     }

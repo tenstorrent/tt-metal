@@ -81,7 +81,7 @@
 
 **Result**: 480 / 480 interleaved `test_op` cells pass (160 INVALID skipped), all 33 `test_regression.py` cases run and pass (the C_in = 8 tap tests use C_out = 8, i.e. `both_unaligned`; `c_out_unaligned` / `both_unaligned` were promoted after a gate-lifted probe, no kernel change). NaN-lane tests pass, but on Blackhole the matmul FPU returns 0 for 0 x NaN / 0 x Inf, so they cannot fail there; the lane exclusion is kept as specified.
 
-### [ ] Refinement 2 — HEIGHT_SHARDED input and output (regime R2), all layouts
+### [x] Refinement 2 — HEIGHT_SHARDED input and output (regime R2), all layouts
 
 **Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` to `SUPPORTED["memory_layout"]` for every layout/dtype in SUPPORTED after Refinement 1 (RM bf16, TILE bf16, TILE bf8_b). This moves the 494 HEIGHT_SHARDED xfail cells to passing, including 14 Panoptic LOOSE_CASES: stem.conv1 (RM bf16, C_in = 8, stride 2) and the 13 TILE bf8_b HEIGHT layers.
 
@@ -107,6 +107,13 @@
 - **Performance bar**: Refinement 3 measures exactly this path. Fill the shard grid, batch halo reads per band, and keep the `cb_weights` quantum (`bk*bn`) and depth unchanged so the multicast receiver drops in.
 
 **Done when**: every golden `test_op` cell with `memory_layout=HEIGHT_SHARDED` passes. All 14 HEIGHT LOOSE_CASES pass at their pinned 110-core geometry. Both dispatches hit the program cache. No regression on the interleaved path.
+
+**Result**:
+- 480 / 480 HEIGHT `test_op` cells pass (160 INVALID skipped). 14 / 14 HEIGHT LOOSE_CASES pass at the pinned geometry, both dispatches, cache hit. Interleaved `test_op` 480 / 480 and `test_regression.py` 33 / 33 are unchanged.
+- The output CB is backed on the output shard and the writer moves no output.
+- The L1 budget subtracts 2 x (input + output shard). A cache-hit re-dispatch re-checks CBs against the live shards, and the harness keeps the first dispatch's pair alive.
+- On a sharded output, `bm` is restricted to divisors of the shard's tile-rows.
+- `semantic decoder.res2.fuse_conv.0` solves to bm 5 of 10 and streams its weights twice (868 us). bm 10 / bk 9 measured 506 us but misses the 2-pair L1 budget by 2 KB. This is Refinement 3's starting point.
 
 ### [ ] Refinement 3 — Weight multicast for the HEIGHT-sharded Panoptic layers
 
