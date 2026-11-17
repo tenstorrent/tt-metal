@@ -52,13 +52,15 @@ Cells that fail out of the box go to `EXCLUSIONS`, not their own refinement.
 
 **Outcome**: W-split landed (all-gather of per-slice partials via unicast NoC writes + parity semaphores, L1-accumulating-pack combine into `cb_stat`). bf16/HiFi2/fp32_dest=False, gamma, device-ns split-off -> split-on: `32x5120` 73.3k -> 20.5k (8 cores), `32x1024` 23.0k -> 9.3k (4), `32x7168` 104k -> 25.9k (8), `1x16384` 272k -> 35.0k (16), `64x12288` 203k -> 34.8k (24), `32x32768` 555k -> 54.3k (16). The chosen n_w is conservative (W_SPLIT_OVERHEAD penalty, per-peer exchange is serial on the writer RISC); next levers: mcast of the partials instead of n_w unicasts, overlapping the exchange with pass-2 reads, tuning W_SPLIT_OVERHEAD toward more cores — left to the perf rounds. Limitation: n_w must divide Wt (prime Wt falls back to the row-split path).
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile
+### [x] Refinement 3 — Speed up the perf-flagged profile
 
 **Type**: perf
 
 **Goal**: no loose case carries an `attention:` flag; free-select the region: the `_PERF_BASE` interleaved cases (bf16, HiFi2, `fp32_dest_acc_en=False`, TILE gamma), prefill `8192×{1024,2304,5120,7168}` (bandwidth-bound — x/out crossing DRAM once, gamma re-read per core) and decode `32×{1024..7168}`. Levers from `ttnn/ttnn/operations/examples/master.md`: block-size / buffer-depth co-tune (`G_CAP` 16→32, `Rb` > 1 for wide `Wb`, `x_depth` / `OUT_DEPTH`), fix the `Sb=1` degeneration for prime `Wt` via a ragged tail segment, the fused scale chain (gamma multiply without the `cb_xn` round trip), and gamma mcast from one injector (R6) for tall cases. Chunk granularity floor: whole tiles minimum, coarser amortizes. Prefer the cheap knob-tunes first; gamma mcast is its own T-higher lever.
 
 **Done when**: measured device-ns improves on the targeted perf-case shapes (e.g. `8192×5120`, `32×5120`) toward their `achievable_ns` (scaled by AICLK), the 0.9995 PCC gate holds, golden suite green, no regression on the guard set (one representative per kernel path × layout × placement: R1 TILE, R1 RM, R2 streamed, R3 W-split).
+
+**Outcome**: measured (bf16, HiFi2, fp32_dest=False, TILE gamma; device ns) 8192x1024 103.6k, 8192x2304 257k, 8192x5120 572k, 8192x7168 791k, 32x2304 9.2k, 32x5120 13.1k. `G_CAP` 16->32 and `OUT_DEPTH` 2->4 are both flat (within ~1-3%), so they stay live knobs at their defaults. Prefill moves ~295-325 GB/s (x in + out once), i.e. at the DRAM roofline: nothing to gain from block/depth tuning. Decode is already W-split (R2). Not tried / next: gamma mcast (small share of traffic at these shapes), prime-Wt ragged tail, fused scale chain (compute is not binding on prefill).
 
 ### [ ] Refinement 4 — HEIGHT_SHARDED in place + output `memory_config`
 

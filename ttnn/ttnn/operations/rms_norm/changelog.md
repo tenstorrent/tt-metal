@@ -25,3 +25,11 @@
 - Golden test progress: not run in full (harness gate); unit regression net green.
 - Issues encountered: pass-1 `Accumulate` pushes intermediate partials to its output CB each segment, so pointing it directly at the writer-consumed CB sent half-sums; fixed by the cb_stat -> cb_psend hand-off copy. Limitation: n_w must divide Wt (prime Wt stays on the row-split path). Unicast all-gather used instead of `ttnn.Mcast` (groups are arbitrary core lists; n_w tiny payloads).
 - Tests added: test_rms_norm_wsplit.py (core-count predicate + correctness), test_rms_norm_wsplit_perf.py (profile probe; RMS_WSPLIT=0 disables).
+
+## Refinement 3 — Speed up the perf-flagged profile
+- Date: 2026-11-17
+- What was done: added perf probe test_rms_norm_perf_r3.py (env overrides RMS_GCAP / RMS_ODEPTH for the module-level G_CAP / OUT_DEPTH knobs). Measured G_CAP 16 vs 32 and OUT_DEPTH 2 vs 4 on 8192x{1024,2304,5120,7168} and 32x{2304,5120}: all within noise (8192x5120 572k / 572k / 569k ns). Prefill is at ~300 GB/s effective DRAM bandwidth (bandwidth-bound); decode already W-split. No kernel change; knobs stay at defaults.
+- Accuracy achieved: PCC > 0.9995 on the 6 probe shapes (asserted in probe)
+- Golden test progress: not run (no functional change)
+- Issues encountered: None. Finding: remaining levers (gamma mcast, ragged-tail Sb for prime Wt, fused scale chain) target non-binding stages for these shapes.
+- Tests added: test_rms_norm_perf_r3.py
