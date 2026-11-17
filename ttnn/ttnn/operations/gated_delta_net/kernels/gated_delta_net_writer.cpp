@@ -271,14 +271,23 @@ void prep_writer(
     const uint32_t norm_units = norm_offset < all_units ? (all_units - 1 - norm_offset) / norm_stride + 1 : 0;
     uint32_t landed_units = 0;
     uint32_t stored_units = 0;
+    uint32_t head_landed[RATIO] = {};  // NORM_SPLIT: this core's landed units per head
     volatile tt_l1_ptr uint32_t* granted_count =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS));
     auto serve_norms = [&]() {
         if (landed_units < norm_units) {
-            volatile tt_l1_ptr uint32_t* o_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_semaphore(GDN_LANDED_FIRST_SEM_ID + landed_units));
-            if (*o_count >= PIECES) {
+            // One cumulative counter per (head, piece): a state core sends this core's units of its head in order,
+            // so the unit has landed when every piece of its head has sent one more than the head's earlier units.
+            const uint32_t j = (norm_offset + landed_units * norm_stride) % RATIO;
+            bool landed = true;
+            for (uint32_t p = 0; p < PIECES; ++p) {
+                volatile tt_l1_ptr uint32_t* o_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_semaphore(GDN_LANDED_FIRST_SEM_ID + j * PIECES + p));
+                landed = landed && *o_count > head_landed[j];
+            }
+            if (landed) {
                 cb_push_back(cb_o_in, Vt);
+                ++head_landed[j];
                 ++landed_units;
             }
         }
@@ -903,7 +912,7 @@ void kernel_main() {
                 noc_async_write_barrier();
                 cb_pop_front(cb_o_acc, Vb);
                 Noc noc;
-                Semaphore<> o_landed(GDN_LANDED_FIRST_SEM_ID + (NORM_SPLIT ? u / norm_count : INBOX_SLOTS + 1));
+                Semaphore<> o_landed(GDN_LANDED_FIRST_SEM_ID + (NORM_SPLIT ? head_in_group * PIECES + v_first / Vb : INBOX_SLOTS + 1));
                 o_landed.up(noc, producer_x[q], producer_y[q], 1);
                 continue;
             }

@@ -179,7 +179,11 @@ PREP_SEND_HEADS = None  # R-PREP: head blocks a prep core holds for its writer; 
 # by its own semaphore (the inbox ids, unused on a prep core): only where a core's units are at most the inbox slots
 # and PREP_NORM_MAX_ROWS tile rows' worth.
 PREP_NORM_SPLIT = True
-PREP_NORM_MAX_ROWS = 4
+PREP_NORM_MAX_ROWS = 8
+# PREP_NORM_SPLIT plans size the norm buffers (zw, o^2, inverse norm, z) for one unit instead of a tile row. With the
+# landings counted per piece (one cumulative semaphore each, not one per unit) the split then also fits a chip
+# T=4096 call (21 units per norm core, 1061 kB against 1217): 716.9 -> 682.4 us.
+PREP_NORM_SLIM = True
 # PREP_NORM_SPLIT: a prep core whose stride position is past the inbox depth sends a row only when the state cores
 # have freed its slot, and its next row's head blocks wait for that send. It normalizes this many of its norm units
 # between the conv and the heads of each later row (the time it would wait), where their o precedes its own rows.
@@ -671,6 +675,9 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_
     prep[CB_NORM_W] = Vt
     prep[CB_RINV_O] = heads * TOKEN_TILE_ROWS_PER_BLOCK
     prep[CB_ZW] = 2 * heads * Vt  # row k's, made before row k - 1's RMS norm, which takes row k - 1's
+    if norm_units and PREP_NORM_SLIM:
+        # PREP_NORM_SPLIT normalizes one unit (Vt tiles of one head) at a time: its buffers hold a unit, not a tile row.
+        prep.update({CB_ZW: Vt, CB_SQ_O: Vt, CB_RINV_O: 1, CB_Z: 2 * Vt})
     for idx, pages in _inbox_pages(Kt, Vb).items():
         state[idx] = inbox * pages
     state[CB_V] = 0  # the state core reads v from its inbox
@@ -1426,7 +1433,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             )  # per norm core, at most
             split_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared, units)
             if (
-                units <= min(inbox, PREP_NORM_MAX_ROWS * heads)
+                units <= PREP_NORM_MAX_ROWS * heads
+                and heads * pieces <= inbox  # one landing counter per (head, piece), on the inbox ids
                 and _prep_plan_bytes(split_plans, token_dtype) <= budget
             ):
                 norm_split, prep_plans = True, split_plans
