@@ -371,7 +371,6 @@ def test_sdpa_custom_mm_read_transposed(request, shape):
     """
     _skip_on_simulator(request)
     (M, K, N) = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
-    # The ct_dim==1 transposed-read path selects the wrong input tile (#60119);
     # ct>=2 shapes provide the intended transposed-read coverage.
     if N // DEFAULT_TILE_C_DIM == 1:
         pytest.skip(
