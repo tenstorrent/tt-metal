@@ -284,3 +284,14 @@ def test_conv2d_3x3_block_sharded_grid_column_mismatch(device, expect_error):
     )
     with expect_error(ValueError, "columns"):
         conv2d_3x3(tt_input, tt_weight, input_height=16, input_width=16, padding=1)
+
+
+@pytest.mark.parametrize("dtype,layout", [LAYOUTS[0], LAYOUTS[2]])
+def test_conv2d_3x3_block_sharded_writer_only_scatter(dtype, layout, device, monkeypatch):
+    """COMBINE_SPLIT_NOCS off: the writer scatters every N-slice on NoC1 and the reader sends nothing."""
+    torch.manual_seed(11)
+    monkeypatch.setattr(_pd, "COMBINE_SPLIT_NOCS", False)
+    case_hw, shards = SHAPES[4]
+    H, W, c_in = case_hw[0]
+    config = _block_config(H * W, c_in, layout, shards[layout])
+    _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)

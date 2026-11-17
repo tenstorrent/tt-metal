@@ -189,3 +189,65 @@ Lamps measured (kept at design defaults):
 - **Tests added**:
   - `test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core` (RM bf16, TILE bf8_b). One-tile-row M-blocks in 6-tile-row shards over 64 tile-rows: 10 cores take 18 multicast rounds and the ragged last core runs 4 M-blocks. It asserts the channel excludes that core.
   - `test_conv2d_3x3_perf.py`: `test_conv2d_3x3_height_sharded_perf` covers all 14 HEIGHT LOOSE layers (8 added).
+
+## Refinement 4 — BLOCK_SHARDED: K split across core columns + row reduce-scatter (regime R4)
+- Date: 2026-11-17
+- What was done: built regime R4 as designed (scheme-change: dependent-axis split + cross-core combine), on the existing R2/R3 pipeline.
+  - **Placement and work split.** The grid is the input shard grid. `block_grid_shape` reads (rows, cols) from the bounding box and the orientation: ROW_MAJOR runs height shards down y, COL_MAJOR down x. Core (r, c) owns output tile-rows `[r*core_m_tiles, ...)` (`m_split` over the grid rows) and channel slice c. Output: L1 BLOCK_SHARDED on the same grid, shard `[core_m_tiles*32, out_n_tiles*32]` with `out_n_tiles = ceil(tensor_n_tiles / k_cols)`. `cb_output_tiles` is backed on it. Columns past the last C_out tile own no output (empty shards) and only send. A single shard column is plain R2 on that column (`k_cols = 1`, R1 multicast still applies).
+  - **Weights.** `prepare_conv2d_weights` lays rows out as `(slice, kh, kw, c)`, one `3*roundup32(3*C_slice_p)` K-block per slice. `padded_k` and the BLOCK contract share `channel_slices()`. The writer offsets its weight reads by `col * tensor_k_tiles`.
+  - **Reader.** Reads only its column's slice of each band: row `v` of the slice is page `v * row_page_stride + col * pages_per_slice_row`. One owner shard stores its rows of the slice back to back, so a band costs one read per owner-shard run (pixels for RM, tile-rows for TILE). Gather, untilize and tilize are unchanged; a short last slice (C_in not a multiple of the shard width) gets its own reader kernel with the real channel count, so its lanes stay excluded.
+  - **Partials.** Under the split, the matmul packs fp32 partials `[bm, tensor_n_tiles]` with `caller_owns_pack_target`: compute reserves and pushes `cb_matmul_partials` once per M-block, and the WRITER is its only consumer. The helper's per-K-block drain would have made compute a second consumer. PACK_RELU is never armed for the matmul under the split.
+  - **Row reduce-scatter**, one round per M-block, two monotonic semaphores per core (`combine_credit`, `combine_arrival`):
+    - An owning column reserves its whole `cb_combine_slots` (`k_cols` slots of `[bm, out_n_tiles]` fp32) and credits every row peer.
+    - Each core waits for its partials and one credit per owning column. It writes N-slice y into slot `my_col` of column y, fences, and increments y's arrival count.
+    - After `k_cols` arrivals the owner pushes the slots.
+    - Compute sums them with `reduce<SUM, REDUCE_COL, AccumulateViaAdd, ReduceWithinTile::Skip>`: a `[k_cols, bm*ns]` block, pairwise FPU adds into fp32 DEST, odd counts seeded by a copy.
+    - With bias: the sum goes to `cb_combined` (fp32), then `add_bias_bcast_rows` with the core's bias N-slice. ReLU is armed only around that last pack. Without bias, the reduce packs straight into the output shard.
+  - **Two-NoC scatter** (`COMBINE_SPLIT_NOCS`, on). The writer sends its own and lower columns on NoC1; the reader sends the higher columns on NoC0, handed over by two core-local counters (`send_go`, `send_done`). The partials CB keeps a single consumer (the writer).
+  - **No per-column weight multicast.** R1's single channel is not attached under the split, because each column multiplies a different weight slice.
+  - **Contract.** BLOCK input must be in L1, one rectangle, with exactly one grid column per channel slice (`ValueError` otherwise). SUPPORTED `memory_layout` += BLOCK_SHARDED.
+  - **Reused / added.** Reused: R2's shard-backed output, sharded slab fill, gather, tilize, matmul and bias-add helpers, and the L1 solve (it never shrinks `bm` on a BLOCK LOOSE layer). Added: the channel-slice row reads, `cb_combine_slots` / `cb_combined`, the writer's combine round and the reader's NoC0 half (one shared scatter helper, `conv2d_3x3_combine_dataflow.hpp`), and the reduce + bias epilogue.
+- Accuracy achieved (HiFi4 unless noted, fp32 DEST, bias + ReLU):
+  - RM bf16, 16x16x64->128, 4 slices, bf16 weights: PCC 0.999984, rel-RMS 0.0021.
+  - TILE bf16, 8x16x256->256, 8 slices: PCC 0.999983, rel-RMS 0.0021. The non-split paths measure 0.0017; the difference is the tf32 operand read of the fp32 partials in the cross-core add.
+  - Panoptic bf8_b x bf8_b: res4.x PCC 0.99965 / rel-RMS 0.0155; res4.x at LoFi 0.99950 / 0.0243 (its gate is 0.996 / 0.08); aspp.convs.1 rel-RMS 0.0155.
+  - Golden tolerances (0.997, 0.04) / (0.99, 0.12) hold on every BLOCK cell.
+- Golden test progress:
+  - BLOCK_SHARDED `test_op`: 480 / 480 pass, 160 INVALID skipped.
+  - BLOCK LOOSE_CASES: 9 / 9 pass at the pinned grids: res4.0, res4.{1..5} and its LoFi twin, res5.0/1/2 (d 2/4/8), aspp.convs.1/2/3 (C_in up to 2048, d up to 18). Both dispatches, cache hit; also clean under `--dev` (watcher + NoC sanitizer).
+  - No regression: HEIGHT LOOSE 14 / 14, the interleaved + HEIGHT d = 18 cells 48 / 48, unit suites + `test_regression.py` 176 / 176.
+- Measured (Blackhole p150b, DEVICE KERNEL DURATION, Panoptic config, one fresh-cache run per variant):
+
+  | Layer (BLOCK) | cores | all-on-writer scatter | split NoC scatter (shipped) | weights stubbed | scatter writes stubbed |
+  |---------------|-------|-----------------------|-----------------------------|-----------------|------------------------|
+  | res4.0.conv2 (s 2) | 64 | 88.7 us | 81.3 us | 88.9 us | 68.3 us |
+  | res4.{1..5}.conv2 | 64 | 86.8 us | 78.7 us | 86.5 us | 66.1 us |
+  | res4.x @ LoFi | 64 | 67.9 us | 60.2 us | 68.3 us | 48.0 us |
+  | res5.0.conv2 (d 2) | 80 | 214.3 us | 210.5 us | 204.2 us | 208.0 us |
+  | res5.1.conv2 (d 4) | 80 | 281.2 us | 266.3 us | 281.6 us | 244.5 us |
+  | res5.2.conv2 (d 8) | 80 | 280.3 us | 265.9 us | 280.3 us | 244.5 us |
+  | aspp.convs.1 | 88 | 400.5 us | 400.8 us | 400.1 us | 396.4 us |
+  | aspp.convs.2 | 88 | 401.8 us | 401.5 us | 401.7 us | 398.4 us |
+  | aspp.convs.3 (no bias) | 88 | 207.2 us | 205.2 us | 194.6 us | 201.3 us |
+
+  The two ablations were measured on the all-on-writer build.
+  - **Weights.** The per-core weight stream is hidden: stubbing it moved at most 13 us (aspp.convs.3), so a per-column weight multicast buys almost nothing on these layers.
+  - **Scatter.** The scatter was the exposed cost: 20.7 us on res4.x. Rotating each sender's destination order was flat (88.4 us), so it was not destination incast. Sending only the leftward half cut it to 12.1 us for 56% of the bytes, so time scales with the bytes through one core's NoC interface (in plus out), not with ring distance. Splitting the scatter over both NoCs drops the per-interface peak from 16 to 9 slice units and measured 20.7 -> 12.6 us.
+  - **Guard set unchanged** (vs Refinement 3): 32x64x128 RM 26.5 us, TILE bf8_b 23.8 us; 8x16x2048 TILE bf16 291.5 us; stem.conv1 214.5 us; res3.x 40.7 us; fuse_conv.0 466.6 us.
+- **Bottleneck now**:
+  - res4.x: matmul ~25 us at HiFi4 (19 us more than LoFi), the remaining scatter ~12.6 us, and ~40 us of slab fill, untilize, gather and tilize per core.
+  - res5.x / aspp: the per-core K-slice matmul plus the gather path. res5.1/5.2 run `bk` 3 of 6 for L1 (the d = 4 / 8 slab), hence the 266 vs 210 us against res5.0.
+- **Next levers** (Refinement 5 scope, not taken here):
+  - Pipeline the scatter with the last K-block: an fp32 out-CB pushed per row group, which needs the helper's Out target and a second partials CB.
+  - Send bf16 partials, halving the scatter bytes at a precision cost the design does not allow by default.
+  - The R4b activation all-gather for res4.x.
+- Issues encountered: none on device; every kernel built and passed on its first full run after one compile fix (`ReduceFp32Mode` is global, not in `compute_kernel_lib`).
+- Tests added:
+  - `test_conv2d_3x3_block_sharded.py` (42 cases):
+    - Layout matrix: RM bf16 / TILE bf16 / TILE bf8_b x 5 shapes. Covers halo 8 shards away (d 8), stride 2, a single shard column, columns that own no output, a short last channel slice, a short last N-slice, and 8 slices.
+    - ReLU-after-combine: slices whose partials cancel. With ReLU armed on the partials, the `no_bias` cases fail PCC.
+    - COL_MAJOR orientation on an offset grid, with a cache-hit re-dispatch.
+    - Multi-M-block: 4 combine rounds per row.
+    - The writer-only scatter knob setting.
+    - Grid-column contract error.
+  - `test_conv2d_3x3_perf.py::test_conv2d_3x3_block_sharded_perf`: the 9 BLOCK LOOSE layers. `CONV2D_3X3_PERF_ABLATION=1` skips the PCC check for ablation profiling.

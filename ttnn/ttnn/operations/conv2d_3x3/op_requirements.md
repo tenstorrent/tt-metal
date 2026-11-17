@@ -148,7 +148,7 @@
 - **Next lever, not taken**: injector double-buffering (read round r+1 during round r's multicast). It would recover at most the 21 us still exposed on the 4-core deep-K shape and 1-3 us on small interleaved shapes, and none on the HEIGHT targets.
 - **bm re-check**: the bm 10 vs 5 choice was re-measured; the coarser bm is now slower (fuse_conv.0 497 vs 466 us), so the L1 budget rule stays.
 
-### [ ] Refinement 4 — BLOCK_SHARDED: K split across core columns + row reduce-scatter (regime R4)
+### [x] Refinement 4 — BLOCK_SHARDED: K split across core columns + row reduce-scatter (regime R4)
 
 **Goal**: add `ttnn.TensorMemoryLayout.BLOCK_SHARDED` to `SUPPORTED["memory_layout"]` for every layout/dtype/activation in SUPPORTED. This moves the 489 BLOCK_SHARDED xfail cells to passing, including the 9 BLOCK LOOSE_CASES: res4.0, `res4.{1..5}` and its LoFi twin, res5.0/1/2 (d = 2, 4, 8), aspp.convs.1/2/3 (C_in up to 2048, d up to 18).
 
@@ -164,6 +164,21 @@
 - **LoFi twin**: runs at `math_fidelity=LoFi` with tolerance `(0.996, 0.08)`. Fidelity is honored, never gated.
 
 **Done when**: every golden `test_op` cell with `memory_layout=BLOCK_SHARDED` passes and all 9 BLOCK LOOSE_CASES pass at their pinned grids. No ReLU is applied before the combine; a test with a negative-heavy partial distribution would expose it. No regression on interleaved or HEIGHT.
+
+**Result**:
+- 480 / 480 BLOCK `test_op` cells pass (160 INVALID skipped). 9 / 9 BLOCK LOOSE_CASES pass at their pinned grids, both dispatches, cache hit, and clean under `--dev`.
+- No regression: HEIGHT LOOSE 14 / 14, interleaved + HEIGHT unit suites and `test_regression.py` 176 / 176, guard-set device time unchanged.
+- ReLU after the combine only: a test whose channel slices produce large cancelling partials fails PCC when ReLU is armed on the partials, and passes as shipped.
+- Built as the design's R4:
+  - each core gathers its channel slice against its column's weight K-slice (rows `(slice, kh, kw, c)`);
+  - the writer takes the fp32 partials (`caller_owns_pack_target`) and scatters N-slice y to column y of the row;
+  - column y sums the `k_cols` slices in fp32 DEST (`reduce` AccumulateViaAdd + Skip), adds the bias slice, applies ReLU and packs its output shard in place.
+- The scatter runs on both NoCs (writer: own and lower columns on NoC1; reader: higher columns on NoC0). Measured: res4.x 86.8 -> 78.7 us, res5.1/5.2 281 -> 266 us.
+- Device time, Panoptic config:
+  - res4.x 78.7 us (LoFi 60.2 us), res4.0 81.3 us;
+  - res5.0 / 5.1 / 5.2: 210.5 / 266.3 / 265.9 us;
+  - aspp.convs.1 / 2 / 3: 400.8 / 401.5 / 205.2 us.
+- Weights are not on the critical path of any BLOCK LOOSE layer (stubbed: at most 13 us), so the per-column weight multicast was left to Refinement 5. The remaining scatter on res4.x is ~12.6 us; the rest is compute and the gather path. Details in changelog.md.
 
 ### [ ] Refinement 5 — Speed up the BLOCK-sharded res4 layer
 

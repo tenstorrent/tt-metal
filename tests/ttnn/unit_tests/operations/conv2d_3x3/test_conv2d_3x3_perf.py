@@ -6,7 +6,11 @@ Correctness is still checked (PCC), so a profile of a wrong kernel is not mistak
 
 test_conv2d_3x3_perf: DRAM-interleaved inputs on the whole grid (regimes R0 / R3).
 test_conv2d_3x3_height_sharded_perf: the 14 Panoptic HEIGHT-sharded layers at their pinned shard
-geometry, in their real config (bf8_b weights, bias, ReLU; regime R2)."""
+geometry, in their real config (bf8_b weights, bias, ReLU; regime R2).
+test_conv2d_3x3_block_sharded_perf: the 9 Panoptic BLOCK-sharded layers (K split + row reduce-scatter,
+regime R4) at their pinned grids, TILE bf8_b x bf8_b, fp32 DEST."""
+
+import os
 
 import pytest
 import torch
@@ -152,3 +156,91 @@ def test_conv2d_3x3_height_sharded_perf(layer, case, dtype, layout, shard_shape,
     )
     ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
     assert_with_pcc(ref, ttnn.to_torch(tt_output).float(), 0.99)
+
+
+# Ablation profiling stubs kernel payloads on purpose, so the output is wrong by construction: with this set,
+# the BLOCK harness measures without checking PCC.
+ABLATION = os.environ.get("CONV2D_3X3_PERF_ABLATION") == "1"
+
+# (layer, ((H, W, C_in), C_out, padding, dilation), shard_shape, (grid_x, grid_y), bias + ReLU, fidelity)
+BLOCK_SHAPES = [
+    ("res4_0_conv2", ((64, 128, 256), 256, 1, 1), [1024, 32], (8, 8), True, ttnn.MathFidelity.HiFi4, 2),
+    ("res4_conv2", ((32, 64, 256), 256, 1, 1), [256, 32], (8, 8), True, ttnn.MathFidelity.HiFi4, 1),
+    ("res4_conv2_lofi", ((32, 64, 256), 256, 1, 1), [256, 32], (8, 8), True, ttnn.MathFidelity.LoFi, 1),
+    ("res5_0_conv2", ((32, 64, 512), 512, 2, 2), [224, 64], (8, 10), True, ttnn.MathFidelity.HiFi4, 1),
+    ("res5_1_conv2", ((32, 64, 512), 512, 4, 4), [224, 64], (8, 10), True, ttnn.MathFidelity.HiFi4, 1),
+    ("res5_2_conv2", ((32, 64, 512), 512, 8, 8), [224, 64], (8, 10), True, ttnn.MathFidelity.HiFi4, 1),
+    ("aspp_convs1", ((32, 64, 2048), 256, 6, 6), [256, 192], (11, 8), True, ttnn.MathFidelity.HiFi4, 1),
+    ("aspp_convs2", ((32, 64, 2048), 256, 12, 12), [256, 192], (11, 8), True, ttnn.MathFidelity.HiFi4, 1),
+    ("aspp_convs3", ((32, 64, 1024), 256, 18, 18), [256, 96], (11, 8), False, ttnn.MathFidelity.HiFi4, 1),
+]
+
+
+@pytest.mark.parametrize(
+    "layer,case,shard_shape,grid_xy,bias_relu,fidelity,stride", BLOCK_SHAPES, ids=[c[0] for c in BLOCK_SHAPES]
+)
+def test_conv2d_3x3_block_sharded_perf(layer, case, shard_shape, grid_xy, bias_relu, fidelity, stride, device):
+    torch.manual_seed(0)
+    (H, W, c_in), c_out, padding, dilation = case
+    grid = device.compute_with_storage_grid_size()
+    gx, gy = grid_xy
+    if gx > grid.x or gy > grid.y:
+        pytest.skip(f"{layer}: pinned {gx}x{gy} shard grid does not fit {grid.x}x{grid.y}")
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))]),
+            shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    kwargs = dict(
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        input_dtype=ttnn.bfloat8_b,
+        input_layout=ttnn.TILE_LAYOUT,
+        weight_dtype=ttnn.bfloat8_b,
+        input_memory_config=memory_config,
+        device=device,
+    )
+    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
+    torch_bias = torch.randn(c_out).to(torch.bfloat16) if bias_relu else None
+    tt_weight = prepare_conv2d_weights(torch_weight, **kwargs)
+    tt_bias = prepare_conv2d_bias(torch_bias, **kwargs) if bias_relu else None
+    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    tt_output = conv2d_3x3(
+        tt_input,
+        tt_weight,
+        input_height=H,
+        input_width=W,
+        bias=tt_bias,
+        padding=padding,
+        stride=stride,
+        dilation=dilation,
+        activation="relu" if bias_relu else None,
+        compute_kernel_config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=fidelity, fp32_dest_acc_en=True, math_approx_mode=False
+        ),
+    )
+    assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+    x = torch_input.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
+    ref = torch.nn.functional.conv2d(
+        x,
+        torch_weight.float(),
+        None if torch_bias is None else torch_bias.float(),
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+    )
+    if bias_relu:
+        ref = torch.relu(ref)
+    ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
+    if not ABLATION:
+        assert_with_pcc(ref, ttnn.to_torch(tt_output).float(), 0.99)

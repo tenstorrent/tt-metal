@@ -1,4 +1,4 @@
-# L1 Ledger: conv2d_3x3 (regimes R0 interleaved-slab, R2 HEIGHT-sharded, R3 TILE-input untilize)
+# L1 Ledger: conv2d_3x3 (regimes R0 interleaved-slab, R2 HEIGHT-sharded, R3 TILE-input untilize, R4 BLOCK K split)
 
 Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_design.md`
 Blocking Model): **M** (`block_m_tiles` = bm), **N** (`block_n_tiles` = bn), **K** (`block_k_tiles` = bk;
@@ -30,9 +30,11 @@ operand alone exceeds L1 (K = 18432 x N = 256 bf16 = 9.4 MB). It shrinks `bk` fi
 | `cb_im2col_rm` (page = `T_bf16`, RM content: 32 rows x 32 cols) | `im2col_rm_depth_rows * bk` = `2*bk` | `bk` per party (one tile-row being filled, one being tilized) | `{M: streams -> 1 tile-row window (depth 2); N: —; K: spans -> bk}` | bfloat16 (RM bytes in tile-sized pages) | reader | compute (tilize) | one tile-row | none — gap to live set (2x) is double buffering (reader fills t+1 while compute tilizes t); concurrent with `cb_im2col_tiles` (tilize reads one while writing the other). |
 | `cb_im2col_tiles` (page = `T_in0`) | `bm * bk` | `bm * bk` (matmul waits the whole in0 block, `matmul_block_helpers.inl:265`) | `{M: spans -> bm; N: —; K: spans -> bk}` | in0 = activation dtype (bfloat16 in Phase 0). An operand, not an accumulator: values are exact in this format and srcB unpacks at most tf32, so audit 2's under-case does not apply. | compute (tilize, in PreKBlockFn) | compute (matmul) | one K-block | none — concurrent with `cb_matmul_partials` (matmul reads it while accumulating); alias with `cb_output_tiles` rejected above (cross-block pipelining). |
 | `cb_weights` (page = `T_w`) | `weight_depth * bk * bn` (`weight_depth` = 2; 1 only if `num_k_blocks * num_m_blocks_this_core == 1`) | `bk * bn` per party | `{M: — (re-streamed per M-block; R5 would make it span K whole); N: spans -> bn; K: spans -> bk, streams K-blocks}` | weight_dtype (bf16 Phase 0) | writer (R1: the sender's writer reads from DRAM, every other participant's writer receives the multicast into its own slot) | compute (matmul) | one K-block per slot | none — 2x gap is double buffering (writer streams K-block k+1 during matmul k); concurrent with all compute CBs. |
-| `cb_bias` (page = `T_w`; allocated only when `has_bias`) | `bn` | `bn` (fronted for the whole kernel) | `{M: — (shared by every M-block); N: spans -> bn; K: —}` | weight_dtype | writer | compute (bias add) | whole kernel | none — live for the whole kernel. |
-| `cb_matmul_partials` (page = `T_fp32`) | exactly `bm * bn` (mechanism cap #2: L1-acc lands on the same addresses every K-block) | `bm * bn` (accumulated in place across all K-blocks) | `{M: spans -> bm; N: spans -> bn; K: streams (reduced over, never materialized per K-block)}` | Float32 — `fp32_dest_acc_en=True`, so the accumulation keeps fp32 across K-blocks (audit 2: correct width) | compute (matmul pack) | compute (matmul drain/reload; bias add) | one M-block | none — TileRowMajor interm must be its own region; Float32 vs output format; concurrent with `cb_output_tiles` during the bias add. |
+| `cb_bias` (page = `T_w`; allocated only when `has_bias`) | `ns` (= `bn`, except under R4: the core's output N-slice) | `ns` (fronted for the whole kernel) | `{M: — (shared by every M-block); N: spans -> ns; K: —}` | weight_dtype | writer | compute (bias add) | whole kernel | none — live for the whole kernel. |
+| `cb_matmul_partials` (page = `T_fp32`) | exactly `bm * bn` (mechanism cap #2: L1-acc lands on the same addresses every K-block) | `bm * bn` (accumulated in place across all K-blocks) | `{M: spans -> bm; N: spans -> bn; K: streams (reduced over, never materialized per K-block)}` | Float32 — `fp32_dest_acc_en=True`, so the accumulation keeps fp32 across K-blocks (audit 2: correct width) | compute (matmul pack; R4: one caller-owned reserve/push per M-block) | compute (matmul drain/reload; bias add). R4: the writer (scatter, one wait/pop per M-block; the reader reads its higher-column slices in place between the writer's send_go and its own send_done) | one M-block | none — TileRowMajor interm must be its own region; Float32 vs output format; concurrent with `cb_output_tiles` during the bias add. |
 | `cb_output_tiles` (page = `T_out`) | `out_depth_row_groups * sbh * bn` = `2*sbh*bn` | `sbh * bn` per party | `{M: streams -> one row group of sbh tile-rows (depth 2); N: spans -> bn; K: —}` | output dtype = input dtype (the output tensor's format by contract; not an intermediate) | compute | writer | one row group | none — 2x gap is double buffering (writer drains row group g while compute packs g+1). **R2 (HEIGHT): backed on the output shard** (`cb_descriptor_from_sharded_tensor`, capacity = `core_m_tiles * bn` pages = the shard, not CB-region bytes); compute packs every M-block of the core into it in order and nothing pops it, so `bm` must divide `core_m_tiles` (pushes = capacity exactly). |
+| `cb_combine_slots` (R4, `k_cols > 1`; page = `T_fp32`) | `k_cols * bm * ns` (`ns` = `out_n_tiles` = `ceil(tensor_n_tiles / k_cols)`) | = capacity: the sum needs every row peer's slice of every output tile at once | `{M: spans -> bm; N: spans -> ns (the core's output columns); K: spans the row's k_cols channel slices (one slot each), reduced here}` | Float32 — partial sums keep the matmul's fp32 accumulation across cores (audit 2) | writer (reserve + push of the whole CB; the bytes are NoC-written by every row peer's writer/reader) | compute (`reduce` AccumulateViaAdd + Skip, BulkWaitBulkPop) | one M-block | none — cannot alias `cb_matmul_partials`: the writer is still scattering this core's own partials when peers' slices land. Reserved/pushed whole every round, so its base address is the same on every core. |
+| `cb_combined` (R4 with bias; page = `T_fp32`) | `bm * ns` | `bm * ns` (the reduce and the bias add are sequential helpers on the same TRISCs) | `{M: spans -> bm; N: spans -> ns; K: —}` | Float32 (an fp32 sum feeding the bias add) | compute (reduce) | compute (bias add) | one M-block | none — no bias: the reduce packs straight into the shard-backed `cb_output_tiles` and this CB is not allocated (pack into destination). With bias it cannot be the output shard: Float32 sum vs output dtype. |
 
 ## Symbol table
 
@@ -60,9 +62,23 @@ F(bm, bk) = (2*band_stride_px(bm) + band_len_px(bm)) * c_in_p * 2       # slab (
           + weight_depth * bk * bn * T_w                                 # weights     — scales with bk x bn
           + has_bias * bn * T_w                                          # bias        — scales with bn
           + bm * bn * T_fp32                                             # partials    — scales with bm x bn
-          + out_depth_row_groups * sbh * bn * T_out                      # output      — scales with bn (sbh <= 4); 0 in R2 (shard-backed)
+          + out_depth_row_groups * sbh * bn * T_out                      # output      — scales with bn (sbh <= 4); 0 in R2/R4 (shard-backed)
+          + k_split * (k_cols * bm * ns + has_bias * bm * ns) * T_fp32   # R4 combine slots + summed block — scale with bm x ns x k_cols
           <= L1_CB_BUDGET_BYTES
 ```
+(R4: the bias term is `ns * T_w`.)
+
+Worked values, R4 BLOCK LOOSE layers (bf8_b, Blackhole, pinned grids; budget after 2 x (input + output shard)).
+Every layer keeps one M-block per core (`bm = core_m_tiles`):
+
+| Layer | grid (cols x rows) | k_cols, ns | bm | bk / tensor_kkh_tiles | footprint / budget |
+|-------|--------------------|------------|----|-----------------------|--------------------|
+| res4.0.conv2 (s 2) | 8 x 8 | 8, 1 | 8 | 3 / 3 | 817 / 1282 KB |
+| res4.{1..5}.conv2 | 8 x 8 | 8, 1 | 8 | 3 / 3 | 694 / 1333 KB |
+| res5.0.conv2 (d 2) | 8 x 10 | 8, 2 | 7 | 6 / 6 | 1307 / 1307 KB |
+| res5.2.conv2 (d 8) | 8 x 10 | 8, 2 | 7 | 3 / 6 | 1236 / 1307 KB |
+| aspp.convs.1 (C_in 2048, d 6) | 11 x 8 | 11, 1 | 8 | 6 / 18 | 1241 / 1248 KB |
+| aspp.convs.3 (C_in 1024, d 18, no bias) | 11 x 8 | 11, 1 | 8 | 9 / 9 | 1075 / 1299 KB |
 
 Worked values, R2 HEIGHT LOOSE layers (bf8_b weights, with bias; 11x10 Blackhole, pinned shard grids; budget after
 subtracting 2 x the core's input + output shard):
@@ -97,6 +113,14 @@ against `select_blocking` on device (verification_report.md); bf8_b weights shri
 | weights | R1: `max_m_blocks_per_core` (+ `num_m_blocks` of a ragged last core, which streams its own). R0 (channel absent): `num_m_groups * num_m_blocks_this_core` | R1: the sender (work core 0) reads each `bk*bn` K-block once per M-block pass and multicasts it into every participant's `cb_weights` slot; no residency across M-blocks, so `bm < core_m_tiles` re-streams the weight once per extra M-block, now as multicast instead of `num_m_groups` DRAM copies | R1: `(participants - 1) * K_p * C_out_p * elem` per M-block pass of multicast payload (one sender-serialized transfer per K-block), plus one ack per receiver and one data-ready flag per round |
 | bias | `num_m_groups` x `C_out_p` row (one tile row) | Read once per core | 0 |
 | output | 1 | Each output tile is written once by its owning core | 0 |
+
+R4 (BLOCK_SHARDED, `k_cols > 1`): the input is read like R2 but per channel slice (each core reads only its column's
+slice of its bands, one read per owner-shard run); weights cross DRAM once per core (each core streams its column's
+K-slice, `K_p / k_cols` rows x all of C_out; no multicast, measured hidden on every BLOCK LOOSE layer); the output is
+packed in place. Cross-core traffic added: each core sends `bm * tensor_n_tiles` fp32 tiles per M-block (its own
+slice included, as a self-write) and receives `k_cols * bm * ns`. res4.x: 256 KB out + 256 KB in per core per call,
+which bounds the round on one NoC interface; split over NoC0 (reader, higher columns) and NoC1 (writer, own and
+lower columns) it measured 86.8 -> 78.7 us (scatter writes stubbed: 66.1 us).
 
 R2 (HEIGHT_SHARDED) differs only in the activation and output rows: there is no DRAM crossing for either.
 The input crosses the NoC once plus halo (each core's three kh bands, read as page runs from whichever cores own

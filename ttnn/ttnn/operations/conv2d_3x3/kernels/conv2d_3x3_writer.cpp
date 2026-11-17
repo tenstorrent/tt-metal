@@ -24,6 +24,12 @@
 //   2. once compute pushed its partials and every owning column gave its credit, the core writes N-slice
 //      y of its partials into slot `my_col` of column y, flushes, and bumps column y's arrival count;
 //   3. after k_cols arrivals the owning core pushes the slots to compute, which sums them.
+// With combine_split_nocs the scatter is shared with the reader: every core receives and sends k_cols
+// slices per round, and one NoC interface carrying all of them in and out is what bounds the round. The
+// writer sends to its own and lower columns on NoC1 (which runs toward lower x/y), the reader to the
+// higher columns on NoC0. Two core-local counters hand the round over: send_go (writer -> reader:
+// partials pushed, credits in) and send_done (reader -> writer: its slices written and acked). The
+// writer alone pops the partials and bumps the arrival counts, after both halves landed.
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
 // the same base address is right on every core. The counters only grow, so round j waits for
 // (j + 1) x the per-round count.
@@ -34,6 +40,7 @@
 #include "api/dataflow/noc.h"
 #include "api/semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "conv2d_3x3_combine_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
@@ -54,7 +61,10 @@ void kernel_main() {
     constexpr uint32_t cb_combine_slots = get_compile_time_arg_val(15);
     constexpr uint32_t combine_credit_sem_id = get_compile_time_arg_val(16);
     constexpr uint32_t combine_arrival_sem_id = get_compile_time_arg_val(17);
-    constexpr auto weight_args = TensorAccessorArgs<18>();
+    constexpr bool combine_split_nocs = get_compile_time_arg_val(18) != 0;
+    constexpr uint32_t combine_send_go_sem_id = get_compile_time_arg_val(19);
+    constexpr uint32_t combine_send_done_sem_id = get_compile_time_arg_val(20);
+    constexpr auto weight_args = TensorAccessorArgs<21>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     constexpr auto weight_mcast = dataflow_kernel_lib::McastArgs<
@@ -132,7 +142,13 @@ void kernel_main() {
     constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
     Semaphore<> combine_credit(combine_credit_sem_id);
     Semaphore<> combine_arrival(combine_arrival_sem_id);
+    Semaphore<> combine_send_go(combine_send_go_sem_id);
+    Semaphore<> combine_send_done(combine_send_done_sem_id);
     [[maybe_unused]] const uint32_t combine_base = get_write_ptr(cb_combine_slots);
+    [[maybe_unused]] const uint32_t partials_base = get_read_ptr(cb_partials);
+    // Columns this RISC sends to: all, or its own and the lower ones when the reader takes the rest.
+    [[maybe_unused]] const uint32_t writer_cols_end =
+        combine_split_nocs ? (my_col + 1 < num_owning_cols ? my_col + 1 : num_owning_cols) : num_owning_cols;
     auto peer_x = [](uint32_t col) { return get_arg_val<uint32_t>(row_peer_coords_arg + 2 * col); };
     auto peer_y = [](uint32_t col) { return get_arg_val<uint32_t>(row_peer_coords_arg + 2 * col + 1); };
     [[maybe_unused]] auto combine_round = [&](uint32_t m_block_idx) {
@@ -144,22 +160,15 @@ void kernel_main() {
         }
         cb_wait_front(cb_partials, partials_tiles);
         combine_credit.wait_min((m_block_idx + 1) * num_owning_cols);
-        const uint32_t tile_bytes = get_tile_size(cb_partials);
-        const uint32_t partials_l1 = get_read_ptr(cb_partials);
-        const uint32_t my_slot_l1 = combine_base + my_col * slot_tiles * tile_bytes;
-        for (uint32_t col = 0; col < num_owning_cols; ++col) {
-            const uint32_t n0 = col * out_n_tiles;
-            const uint32_t cols_valid = tensor_n_tiles - n0 < out_n_tiles ? tensor_n_tiles - n0 : out_n_tiles;
-            const uint32_t x = peer_x(col);
-            const uint32_t y = peer_y(col);
-            for (uint32_t t = 0; t < block_m_tiles; ++t) {
-                noc_async_write(
-                    partials_l1 + (t * block_n_tiles + n0) * tile_bytes,
-                    get_noc_addr(x, y, my_slot_l1 + t * out_n_tiles * tile_bytes),
-                    cols_valid * tile_bytes);
-            }
+        if constexpr (combine_split_nocs) {
+            combine_send_go.up(1);
         }
+        conv2d_3x3::scatter_partial_slices<block_m_tiles, block_n_tiles, out_n_tiles, tensor_n_tiles>(
+            partials_base, combine_base, get_tile_size(cb_partials), my_col, 0, writer_cols_end, row_peer_coords_arg);
         noc_async_write_barrier();
+        if constexpr (combine_split_nocs) {
+            combine_send_done.wait_min(m_block_idx + 1);
+        }
         for (uint32_t col = 0; col < num_owning_cols; ++col) {
             combine_arrival.up(noc, peer_x(col), peer_y(col), 1);
         }

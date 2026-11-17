@@ -22,6 +22,9 @@
 // slice of each input row (pixel or tile-row). Those pages are not consecutive page ids (the other
 // columns' slices sit between them), but one owner shard stores its rows of the slice back to back, so
 // a run is the part of a band inside one shard.
+// With combine_split_nocs the reader also sends the higher grid columns' N-slices of each M-block's
+// partials on NoC0 (see the writer's file comment): it waits for the writer's send_go, writes, fences and
+// raises send_done. It never waits on or pops the partials CB; the writer owns that CB's lifecycle.
 //
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
@@ -34,6 +37,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+#include "api/semaphore.h"
+#include "conv2d_3x3_combine_dataflow.hpp"
 
 namespace {
 
@@ -99,7 +104,16 @@ void kernel_main() {
     constexpr bool channel_slice = get_compile_time_arg_val(22) != 0;
     constexpr uint32_t input_shard_rows = get_compile_time_arg_val(23);
     constexpr uint32_t row_page_stride = get_compile_time_arg_val(24);
-    constexpr auto input_args = TensorAccessorArgs<25>();
+    constexpr bool combine_send = get_compile_time_arg_val(25) != 0;
+    constexpr uint32_t k_cols = get_compile_time_arg_val(26);
+    constexpr uint32_t block_n_tiles = get_compile_time_arg_val(27);
+    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(28);
+    constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(29);
+    constexpr uint32_t cb_partials = get_compile_time_arg_val(30);
+    constexpr uint32_t cb_combine_slots = get_compile_time_arg_val(31);
+    constexpr uint32_t combine_send_go_sem_id = get_compile_time_arg_val(32);
+    constexpr uint32_t combine_send_done_sem_id = get_compile_time_arg_val(33);
+    constexpr auto input_args = TensorAccessorArgs<34>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
@@ -107,6 +121,8 @@ void kernel_main() {
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(3);
     [[maybe_unused]] const uint32_t read_rotation = get_arg_val<uint32_t>(4);
     [[maybe_unused]] const uint32_t slice_page_offset = get_arg_val<uint32_t>(5);
+    [[maybe_unused]] const uint32_t my_col = get_arg_val<uint32_t>(6);
+    constexpr uint32_t row_peer_coords_arg = 7;  // (x, y) of grid columns 0..k_cols-1 of this row
 
     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     constexpr int32_t num_in_px = input_height * input_width;
@@ -383,6 +399,24 @@ void kernel_main() {
             constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
             cb_wait_front(cb_halo_slab, slab_pages);
             cb_pop_front(cb_halo_slab, slab_pages);
+        }
+
+        if constexpr (combine_send) {
+            constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
+            static_assert(num_owning_cols <= k_cols);
+            Semaphore<> send_go(combine_send_go_sem_id);
+            Semaphore<> send_done(combine_send_done_sem_id);
+            send_go.wait_min(m_block_idx + 1);
+            conv2d_3x3::scatter_partial_slices<block_m_tiles, block_n_tiles, out_n_tiles, tensor_n_tiles>(
+                get_read_ptr(cb_partials),
+                get_write_ptr(cb_combine_slots),
+                get_tile_size(cb_partials),
+                my_col,
+                my_col + 1,
+                num_owning_cols,
+                row_peer_coords_arg);
+            noc_async_write_barrier();
+            send_done.up(1);
         }
     }
     dataflow_kernel_lib::set_read_trid(reads.noc, 0);

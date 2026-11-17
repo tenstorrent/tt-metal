@@ -64,6 +64,13 @@ CB_COMBINED = 9
 # R4 reduce-scatter semaphores (the weight multicast channel is never attached on that path).
 SEM_COMBINE_CREDIT = 0
 SEM_COMBINE_ARRIVAL = 1
+SEM_COMBINE_SEND_GO = 2
+SEM_COMBINE_SEND_DONE = 3
+
+# R4: share the partial scatter between the writer (NoC1, own and lower columns) and the reader (NoC0, higher
+# columns). Every core sends and receives k_cols slices per round; on one NoC interface that traffic bounds
+# the round. False keeps the whole scatter on the writer.
+COMBINE_SPLIT_NOCS = True
 
 # Buffer-depth knobs (Blocking Model depth table).
 IM2COL_RM_DEPTH_ROWS = 2
@@ -544,6 +551,7 @@ def create_program_descriptor(
     else:
         row_page_stride, input_shard_rows = 0, 0
     pages_per_slice_row = g.c_in_tiles if g.tile_input else 1
+    combine_split_nocs = g.k_split and COMBINE_SPLIT_NOCS
 
     def reader_ct_args(slice_channels):
         args = [
@@ -572,6 +580,15 @@ def create_program_descriptor(
             int(g.k_split),
             input_shard_rows,
             row_page_stride,
+            int(combine_split_nocs),
+            g.k_cols,
+            bn,
+            ns,
+            g.tensor_n_tiles,
+            CB_MATMUL_PARTIALS,
+            CB_COMBINE_SLOTS,
+            SEM_COMBINE_SEND_GO,
+            SEM_COMBINE_SEND_DONE,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -624,6 +641,9 @@ def create_program_descriptor(
         CB_COMBINE_SLOTS,
         SEM_COMBINE_CREDIT,
         SEM_COMBINE_ARRIVAL,
+        int(combine_split_nocs),
+        SEM_COMBINE_SEND_GO,
+        SEM_COMBINE_SEND_DONE,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct_args.extend(
@@ -669,7 +689,8 @@ def create_program_descriptor(
             num_m_blocks_this_core,
             m_index * SLAB_READ_STAGGER_PX_PER_CORE,
             col * pages_per_slice_row,
-        ]
+            col,
+        ] + row_peer_coords.get(m_index, [])
         compute_rt[core.x][core.y] = [num_m_blocks_this_core, int(out_valid_tiles > 0)]
         writer_rt[core.x][core.y] = [
             weight_addr,
@@ -716,8 +737,8 @@ def create_program_descriptor(
     semaphores = []
     if g.k_split:
         semaphores = [
-            ttnn.SemaphoreDescriptor(id=SEM_COMBINE_CREDIT, core_ranges=cores, initial_value=0),
-            ttnn.SemaphoreDescriptor(id=SEM_COMBINE_ARRIVAL, core_ranges=cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=cores, initial_value=0)
+            for sem_id in (SEM_COMBINE_CREDIT, SEM_COMBINE_ARRIVAL, SEM_COMBINE_SEND_GO, SEM_COMBINE_SEND_DONE)
         ]
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
     # Each column multiplies against its own weight K-slice, so one weight stream cannot serve a K split.
