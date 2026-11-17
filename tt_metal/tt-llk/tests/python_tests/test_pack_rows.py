@@ -22,6 +22,7 @@ from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_ROWS_TO_PACK,
     NUM_TILES_IN_BLOCK,
+    TILE_COUNT,
     generate_input_dim,
 )
 from helpers.utils import passed_test, result_tensor
@@ -113,6 +114,7 @@ def test_pack_rows(
                 NUM_BLOCKS(num_blocks),
                 NUM_TILES_IN_BLOCK(num_tiles_in_block),
                 NUM_ROWS_TO_PACK(num_rows_to_pack),
+                TILE_COUNT(tile_cnt_A),
             ],
             variant_stimuli=StimuliConfig(
                 src_A,

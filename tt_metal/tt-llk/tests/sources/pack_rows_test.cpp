@@ -226,7 +226,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "Block tile index exceeds maximum destination tiles");
                         _llk_pack_rows_(tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
-                    if constexpr (sync_with_math)
+                    if constexpr (sync_with_math || PERF_PACK_SECTION_RELEASE)
                     {
                         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                     }
