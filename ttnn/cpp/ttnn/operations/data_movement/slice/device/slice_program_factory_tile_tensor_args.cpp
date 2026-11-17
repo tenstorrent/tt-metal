@@ -307,7 +307,7 @@ void SliceTileTensorArgsProgramFactory::override_runtime_arguments(
         {START_TENSOR, tensor_args.start_tensor.value().mesh_tensor()},
         {END_TENSOR, tensor_args.end_tensor.value().mesh_tensor()}};
     tt::tt_metal::experimental::UpdateProgramRunArgs(
-        cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
+        cached_program.program, run_args, ttnn::device_operation::program_args_validation_mode());
     run_args.tensor_args.clear();
 }
 

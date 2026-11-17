@@ -9,6 +9,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/validation_mode.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/workload/utils/table.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -64,7 +65,8 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpec(
 //
 // PER-DEVICE VALUES: the args are set for every device the Program runs on. Every per-device value
 // (UpdateProgramRunArgsForDevice) of the Program is dropped.
-void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
+void SetProgramRunArgs(
+    Program& program, const ProgramRunArgs& params, ValidationMode validation = ValidationMode::FULL);
 
 // Fast-path partial update: refresh an ARBITRARY subset of arguments for an existing Program.
 // Any argument not supplied exhibits STATEFUL behavior: it retains the value it was most recently
@@ -87,7 +89,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 //
 // PER-DEVICE VALUES: the args supplied are set for every device the Program runs on, and their per-device values
 // (UpdateProgramRunArgsForDevice) are dropped. Args not supplied keep their per-device values.
-void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
+void UpdateProgramRunArgs(
+    Program& program, const ProgramRunArgs& params, ValidationMode validation = ValidationMode::FULL);
 
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
 // All other ProgramRunArgs (named/vararg RTAs and CRTAs, DFB params) retain their current values
@@ -99,7 +102,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 // ProgramSpec, exactly once. The supplied MeshTensor's TensorSpec must match the
 // TensorParameter's declared spec (subject to any declared TensorSpecRelaxations).
 //
-// PRE-CONDITION: If skip_validation is true, the caller guarantees the completeness and
+// PRE-CONDITION: If validation is ValidationMode::SKIP, the caller guarantees the completeness and
 // spec-match requirements above.
 //
 // USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunArgs variation
@@ -110,7 +113,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 void UpdateTensorArgs(
     Program& program,
     const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args,
-    bool skip_validation = false);
+    ValidationMode validation = ValidationMode::FULL);
 
 // Per-device update: set the named run args in `values` to `device`'s own values.
 // (This will become a member function for the MeshWorkload class)
@@ -206,10 +209,10 @@ public:
     ///////////////////////////////////////////////////////////////
 
     // Single descriptor API for program execution arguments
-    void set_run_args(const ProgramRunArgs& params, bool skip_validation = false);
+    void set_run_args(const ProgramRunArgs& params, ValidationMode validation = ValidationMode::FULL);
 
     // Partial update API for program execution arguments
-    void update_run_args(const ProgramRunArgs& params, bool skip_validation = false);
+    void update_run_args(const ProgramRunArgs& params, ValidationMode validation = ValidationMode::FULL);
 
 
     ///////////////////////////////////////////////////////////////

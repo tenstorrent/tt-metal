@@ -156,10 +156,10 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     const tt::tt_metal::Table<tt::tt_metal::TensorParamName, tt::tt_metal::TensorArgument> bindings{
         {INPUT, tensor_args.input_tensor.mesh_tensor()}, {OUTPUT, tensor_return_value.mesh_tensor()}};
     // All coordinate programs declare the same tensor specs. Validate fresh buffers once per call.
-    bool validated = false;
+    tt::tt_metal::ValidationMode validation = tt::tt_metal::ValidationMode::FULL;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        tt::tt_metal::experimental::UpdateTensorArgs(program, bindings, /*skip_validation=*/validated);
-        validated = true;
+        tt::tt_metal::experimental::UpdateTensorArgs(program, bindings, validation);
+        validation = tt::tt_metal::ValidationMode::SKIP;
     }
 }
 

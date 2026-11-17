@@ -14,6 +14,7 @@
 #include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/workload/run_args/validation_mode.hpp>
 #include <tt-metalium/workload/utils/arg_value.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
@@ -220,8 +221,15 @@ inline const MeshTensor& mesh_tensor_of(const TensorArgument& arg) {
 // Helper function to merge two or more ProgramRunArgs objects into one.
 // Validates that the provided ProgramRunArgs objects specify mutually disjoint arguments.
 ProgramRunArgs MergeProgramRunArgs(
-    ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation = false);
+    ProgramRunArgs base, std::span<const ProgramRunArgs> rest, ValidationMode validation = ValidationMode::FULL);
 // Invocation: auto full = MergeProgramRunArgs(std::move(base_run_args), {appended_run_args});
+
+// Helper function to merge two or more ProgramRunArgs objects into one.
+// Same as the ValidationMode overload, with skip_validation == true meaning ValidationMode::SKIP.
+[[deprecated(
+    "Use the MergeProgramRunArgs overload that takes a ValidationMode instead. This overload will be removed after "
+    "2026-12-17.")]]
+ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation);
 
 //-----------------------------------------------------
 // Helper function for per-node runtime argument values
