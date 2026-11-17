@@ -231,26 +231,26 @@ TEST_F(ProgramRunArgsTestGen1, CPU_ArrayOnlyKernelMayNotOmitKernelRunArgs) {
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_WrongLengthArrayFailsEvenWithoutValidation) {
-    // The length check is kept under skip_validation: a wrong-length value would otherwise overrun into
+    // The length check is kept under ValidationMode::SKIP: a wrong-length value would otherwise overrun into
     // the neighbouring args. Checked on the first-call path, the in-place fast path, and the CRTA buffer.
     Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
     auto long_rta = MakeArrayKernelRunArgs(0);
     long_rta.runtime_array_arg_values["x"][kNodeA] = {1, 2, 3, 4};
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(long_rta), /*skip_validation=*/true); },
+        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(long_rta), ValidationMode::SKIP); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' array 'x' expects 3 elements, but 4 were provided")));
 
     SetProgramRunArgs(program, WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(long_rta), /*skip_validation=*/true); },
+        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(long_rta), ValidationMode::SKIP); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' array 'x' expects 3 elements, but 4 were provided")));
 
     auto long_crta = MakeArrayKernelRunArgs(0);
     long_crta.common_runtime_array_arg_values["d"] = {1, 2, 3};
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(long_crta), /*skip_validation=*/true); },
+        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(long_crta), ValidationMode::SKIP); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' array 'd' expects 2 elements, but 3 were provided")));
 }
@@ -286,7 +286,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateWithWrongLengthArrayFails) {
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("RTA array 'x' expects 3 elements, but 1 were provided")));
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, WrapKernelRunArgs(rta_update), /*skip_validation=*/true); },
+        [&] { UpdateProgramRunArgs(program, WrapKernelRunArgs(rta_update), ValidationMode::SKIP); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' array 'x' expects 3 elements, but 1 were provided")));
 

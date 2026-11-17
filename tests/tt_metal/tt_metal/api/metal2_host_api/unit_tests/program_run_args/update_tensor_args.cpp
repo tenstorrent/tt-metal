@@ -149,7 +149,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_TensorSpecMismatchFails) {
 }
 
 // Locks the gate's polarity: the three tests above prove UpdateTensorArgs validates by default, so
-// this one proves skip_validation=true is what turns it off — and still performs the address patch.
+// this one proves ValidationMode::SKIP is what turns it off — and still performs the address patch.
 TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_SkipValidationBypassesSpecCheck) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -176,10 +176,10 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_SkipValidationBypassesSpecCh
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"input_tensor"}, TensorArgument{wrong_tensor}},
     };
-    EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args, /*skip_validation=*/true));
+    EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args, ValidationMode::SKIP));
     EXPECT_EQ(
         ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(wrong_tensor.address()))
-        << "skip_validation should bypass only the checks, not the address patch";
+        << "ValidationMode::SKIP should bypass only the checks, not the address patch";
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_PatchesBindingAddress) {
