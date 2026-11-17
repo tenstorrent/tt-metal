@@ -79,13 +79,14 @@ Each core emits three `TS_DATA` markers per kernel launch (five on a Quasar data
 
 The deltas cover the kernel invocation in the firmware (waypoint `R` to `D`). On an ethernet core they cover the kernel call only. On Quasar DM0, which runs no kernel itself, they cover the window from the TRISC launch to the end of the dataflow-buffer drain. On Blackhole BRISC the
 bracket also covers `wait_for_go_message()` when BRISC has no kernel. The selects are re-emitted every
-launch so each capture says which events it counted. If the per-core profiler buffer is full the three
-markers are dropped rather than displacing zone markers. The Tensix counter multi-pass flow keeps the
+launch so each capture says which events it counted. The room for the markers is held back from the
+kernel's own zones at launch, so a kernel that fills the profiler buffer still gets its markers; only a buffer that
+was already full before the launch drops them. The Tensix counter multi-pass flow keeps the
 markers from pass 0 only, which is correct because the selects do not change between passes.
 
-Firmware cost with the option on: BRISC grows by about 250 B, NCRISC by about 200 B, the Blackhole
-TRISCs by about 215 B, the active ethernet ERISC0 by about 245 B (17604 B of 24576 B), the Quasar TRISCs by 256 to
-276 B and the Quasar DM image by about 740 B (8048 B of 12288 B), 1052 B with all four DM counters armed (8360 B).
+Firmware cost with the option on: BRISC grows by about 260 B, NCRISC by about 225 B, the Blackhole
+TRISCs by about 235 B, the active ethernet ERISC0 by about 265 B (17624 B of 24576 B), the Quasar TRISCs by 280 to
+300 B and the Quasar DM image by about 790 B (8100 B of 12288 B), 1104 B with all four DM counters armed (8412 B).
 The Blackhole BRISC region is 9728 B so that the hook still links next to the five Tensix counter groups (9468 B
 on a card with 7 DRAM banks).
 
