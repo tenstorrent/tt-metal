@@ -20,6 +20,7 @@ import numpy as np
 import torch
 from torchvision.transforms.v2 import functional as tvF
 
+from models.demos.minimax_m3.multimodal import format as media_format
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE
 from models.demos.minimax_m3.tt.vision.preprocess import (
     FACTOR,
@@ -29,7 +30,6 @@ from models.demos.minimax_m3.tt.vision.preprocess import (
     PATCH_SIZE,
     check_size,
 )
-from models.demos.minimax_m3.vision import format as media_format
 
 # The resize's geometry is the vision encoder's (tt/vision/preprocess.py and image_input.py, which need no ttnn
 # either), so prepare gives only images that the encoder's check_pixels takes.
@@ -191,7 +191,7 @@ class MiniMaxM3Media:
         if mesh_device is None:
             raise ValueError("mesh_device is None: load runs the encoder on the chip that the caller opened")
         import ttnn
-        from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder
+        from models.demos.minimax_m3.multimodal.encoder import TtMiniMaxM3VisionEncoder
 
         try:
             encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, weights_path, self.hf_config)
@@ -244,7 +244,7 @@ class MiniMaxM3Media:
         If forward or the read fails, it clears the failed call's frames before it raises, as load does.
         """
         import ttnn
-        from models.demos.minimax_m3.vision.encoder import read_embeddings
+        from models.demos.minimax_m3.multimodal.encoder import read_embeddings
 
         try:
             tokens = self._encoder.forward(item.pixels)

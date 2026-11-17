@@ -3,7 +3,7 @@
 
 """CPU tests of the vision encoder's input against Hugging Face's MiniMax-M3 image processor, and of the size checks.
 
-prepare (vision/media.py) must give the processor's resized image and grid, bit for bit. patch_rows
+prepare (multimodal/media.py) must give the processor's resized image and grid, bit for bit. patch_rows
 (tt/vision/preprocess.py) must give its pixel_values and image_grid_thw, bit for bit. The images are seeded noise,
 the hardest input for the resize, plus a photo. Their sizes take each branch of the resize rule, in several PIL modes.
 The processor gets the PIL image, and prepare the uint8 RGB array an encoder service passes. The checkpoint's own
@@ -24,6 +24,7 @@ import pytest
 import torch
 from PIL import Image
 
+from models.demos.minimax_m3.multimodal.media import MiniMaxM3Media, smart_resize
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, num_tokens
 from models.demos.minimax_m3.tt.vision.preprocess import (
     FACTOR,
@@ -34,7 +35,6 @@ from models.demos.minimax_m3.tt.vision.preprocess import (
     check_size,
     patch_rows,
 )
-from models.demos.minimax_m3.vision.media import MiniMaxM3Media, smart_resize
 
 REPO = Path(__file__).resolve().parents[5]
 # (height, width, PIL mode) of each noise image.
@@ -288,7 +288,7 @@ def test_vision_preprocess_imports_without_ttnn():
             "sys.meta_path.insert(0, NoTtnn())",
             f"sys.path.insert(0, {str(REPO)!r})",
             "from models.demos.minimax_m3.tt.vision import image_input, preprocess",
-            "from models.demos.minimax_m3.vision import media",
+            "from models.demos.minimax_m3.multimodal import media",
             "loaded = sorted(m for m in sys.modules if m.split('.')[0] in ('ttnn', 'transformers'))",
             "assert not tried and not loaded, (tried, loaded)",
             f"assert all(m.__file__.startswith({str(REPO)!r}) for m in (image_input, preprocess, media))",

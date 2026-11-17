@@ -44,9 +44,9 @@ from models.demos.common.prefill.chunk_layout import pack_forward_tokens
 from models.demos.common.prefill.media import build_media_partials, warm_media_refs
 from models.demos.common.prefill.media_partials import MediaPartials
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
+from models.demos.minimax_m3.multimodal import format as media_format
 from models.demos.minimax_m3.tt.residual import activation_mapper
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
-from models.demos.minimax_m3.vision import format as media_format
 
 
 @dataclass
@@ -372,7 +372,7 @@ class TtPrefillRuntime:
         rather than a prefill forward. warm_media_refs climbs table_height's ladder up to the tallest table
         images filling all n_chunks chunks can need, so nothing compiles while serving whatever the image
         count. StubEmbeddingReader stands in for the store, which need not be reachable at compile time."""
-        from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
+        from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
 
         chunks = [PrefillChunk(k, 0, chunk) for k in range(n_chunks)]
         real_reader = self.media_embedding_reader

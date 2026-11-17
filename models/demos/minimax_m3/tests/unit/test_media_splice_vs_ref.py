@@ -20,13 +20,13 @@ from models.demos.common.prefill.chunk_layout import pack_forward_tokens
 from models.demos.common.prefill.media import build_media_partials, table_height
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
 from models.demos.minimax_m3.config import MeshConfig
+from models.demos.minimax_m3.multimodal import format as media_format
+from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
 from models.demos.minimax_m3.tt import tt_prefill_runtime
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.parallel_embedding import TtParallelEmbedding
 from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
-from models.demos.minimax_m3.vision import format as media_format
-from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
 
 from ..test_factory import parametrize_mesh_with_fabric
 

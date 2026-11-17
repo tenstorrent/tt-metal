@@ -348,7 +348,7 @@ def main():
         n_media = int(os.getenv("PROFILE_MEDIA", "0"))
         media_tokens = int(os.getenv("PROFILE_MEDIA_TOKENS", "576"))
         if n_media:
-            from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
+            from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
 
             # compile() warms the splice through _warm_media, which installs a stub reader and then
             # restores the original in a finally — so afterwards the reader is whatever it was, and

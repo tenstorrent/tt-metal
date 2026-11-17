@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Device tests of TtMiniMaxM3VisionEncoder (vision/encoder.py) against the 2-layer reference of conftest.py.
+Device tests of TtMiniMaxM3VisionEncoder (multimodal/encoder.py) against the 2-layer reference of conftest.py.
 
 test_vision_encoder_vs_ref checks forward's output on noise images of the CI grids. M3_VISION_ALL_GRIDS=1 adds 84x56
 pixels (h4w6), a size small images resize to. test_vision_encoder_load_and_encode uses the encoder as load() and
@@ -19,10 +19,10 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.minimax_m3.multimodal import format as media_format
+from models.demos.minimax_m3.multimodal.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
+from models.demos.minimax_m3.multimodal.media import MiniMaxM3Media
 from models.demos.minimax_m3.tt.vision.preprocess import FACTOR, PATCH_SIZE, patch_rows
-from models.demos.minimax_m3.vision import format as media_format
-from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
-from models.demos.minimax_m3.vision.media import MiniMaxM3Media
 
 from ..test_factory import parametrize_mesh_with_fabric
 from .vision_checkpoint import write_checkpoint

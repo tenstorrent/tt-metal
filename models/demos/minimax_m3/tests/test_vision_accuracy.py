@@ -36,10 +36,10 @@ from safetensors.torch import load_file
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.minimax_m3.multimodal.encoder import TtMiniMaxM3VisionEncoder, read_embeddings
+from models.demos.minimax_m3.multimodal.media import MiniMaxM3Media
 from models.demos.minimax_m3.tt.vision.loader import load_vision_state_dict
 from models.demos.minimax_m3.tt.vision.preprocess import patch_rows
-from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings
-from models.demos.minimax_m3.vision.media import MiniMaxM3Media
 
 from .golden_hf_vision import (
     GOLDEN_FORMAT,

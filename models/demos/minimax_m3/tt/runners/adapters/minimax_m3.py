@@ -206,7 +206,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
                     "PREFILL_MEDIA_MAX_REFS > 0 needs the media embedding store (PREFILL_MEDIA_STORE_MASTER) "
                     "or PREFILL_MEDIA_STUB_EMBEDDINGS=1"
                 )
-            from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
+            from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
 
             media_embedding_reader = StubEmbeddingReader(hf_config.hidden_size)
 

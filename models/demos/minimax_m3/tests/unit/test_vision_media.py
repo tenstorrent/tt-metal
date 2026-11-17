@@ -13,9 +13,9 @@ import torch
 
 from models.common.multimedia_store.reader import FetchRequest, Missing
 from models.demos.common.prefill.media_stub import stub_media_key
-from models.demos.minimax_m3.vision import format as media_format
-from models.demos.minimax_m3.vision.media import IMAGE_END, IMAGE_START, M3Image, MiniMaxM3Media
-from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
+from models.demos.minimax_m3.multimodal import format as media_format
+from models.demos.minimax_m3.multimodal.media import IMAGE_END, IMAGE_START, M3Image, MiniMaxM3Media
+from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
 
 CONFIG = {
     "image_token_index": 200025,
@@ -175,7 +175,7 @@ def test_load_needs_the_callers_chip(tmp_path, expect_error):
 
 def test_encode_writes_every_item_of_a_call():
     """An encode call of two images writes each slot in full, header and rows, as a call of that image alone does."""
-    from models.demos.minimax_m3.vision.media import _stub_rows
+    from models.demos.minimax_m3.multimodal.media import _stub_rows
 
     media = MiniMaxM3Media(CONFIG)
     media.load(None, "", "image", {"stub_embeddings": True})
@@ -246,7 +246,7 @@ def test_failed_load_frees_what_it_put_on_the_chip(tmp_path, monkeypatch, expect
     The caller's chip stays open.
     """
     ttnn = pytest.importorskip("ttnn")
-    from models.demos.minimax_m3.vision import encoder as encoder_module
+    from models.demos.minimax_m3.multimodal import encoder as encoder_module
 
     class DeviceTensor:  # stands in for a tensor on the chip
         pass
@@ -281,7 +281,7 @@ def test_failed_warmup_frees_the_encoder(tmp_path, monkeypatch, expect_error):
     The caller's chip stays open.
     """
     ttnn = pytest.importorskip("ttnn")
-    from models.demos.minimax_m3.vision import encoder as encoder_module
+    from models.demos.minimax_m3.multimodal import encoder as encoder_module
 
     class DeviceTensor:  # stands in for a tensor on the chip
         pass
@@ -317,7 +317,7 @@ def test_failed_encode_keeps_no_device_tensors_past_close(tmp_path, monkeypatch,
     The chip stays open, and the tokens of a failed read are freed once.
     """
     ttnn = pytest.importorskip("ttnn")
-    from models.demos.minimax_m3.vision import encoder as encoder_module
+    from models.demos.minimax_m3.multimodal import encoder as encoder_module
 
     class DeviceTensor:  # stands in for a tensor on the chip
         pass

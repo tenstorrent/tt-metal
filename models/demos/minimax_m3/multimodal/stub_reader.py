@@ -12,7 +12,7 @@ import torch
 
 from models.common.multimedia_store.reader import FetchRequest, Missing
 from models.demos.common.prefill.media_stub import stub_key_tokens
-from models.demos.minimax_m3.vision import format
+from models.demos.minimax_m3.multimodal import format
 
 
 class StubEmbeddingReader:
