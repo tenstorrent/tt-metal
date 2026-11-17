@@ -21,7 +21,9 @@ namespace ttml::metal {
  *                 one otherwise (without a mask tensor the stacking measured flat).
  * max_pieces:     a causal work item heavier than its fair share of a core is cut into up to this many
  *                 pieces along its K/V steps, computed on different cores and merged (0 = 4, 1 = never
- *                 cut, at most 63). Above 1 the L1 check also reserves the partials' circular buffers.
+ *                 cut, at most 63). The partials' circular buffers are reserved only when the resolved
+ *                 schedule actually cuts, not whenever this is above 1: validate checks the chunks
+ *                 without them, and a causal run that cuts nothing keeps the full L1 for its chunks.
  *                 A program that cuts owns a DRAM scratch for the pieces' partials, allocated on the
  *                 program-cache miss and held for the life of the cache entry, not of the call:
  *                 slots * item rows * (d_v / 32 + 2) fp32 tiles, about 5 to 12 MiB at d = 128 with the
