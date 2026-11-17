@@ -1,0 +1,23 @@
+{
+ "BLACKHOLE_GALAXY": {
+  "flat expert dsv41_flash-8x4-10240-uniform": 730.4,
+  "flat expert dsv41_flash-8x4-5120-hot": 1736.5,
+  "flat expert dsv41_flash-8x4-5120-uniform": 641.9,
+  "flat expert dsv41_flash-8x4-5120-zipf": 684.8,
+  "flat expert glm53-4x4-5120-uniform": 1005.8,
+  "flat expert glm53-4x4-7680-uniform": 1115.4,
+  "flat expert glm53-8x4-10240-uniform": 721.2,
+  "flat expert glm53-8x4-10240-zipf": 714.5,
+  "flat expert glm53-8x4-5120-hot": 1426.4,
+  "flat expert glm53-8x4-5120-uniform": 529.4,
+  "flat expert glm53-8x4-5120-zipf": 551.1,
+  "flat expert glm53_flash-8x4-5120-uniform": 387.9,
+  "flat expert k27-8x4-5120-uniform": 848.7,
+  "flat expert k3-4x4-2560-uniform": 2606.5,
+  "flat expert k3-8x4-10240-uniform": 1446.8,
+  "flat expert k3-8x4-5120-hot": 1860.7,
+  "flat expert k3-8x4-5120-uniform": 1348.8,
+  "flat expert k3-8x4-5120-zipf": 1460.9,
+  "flat expert m3-8x4-5120-uniform": 415.5
+ }
+}
