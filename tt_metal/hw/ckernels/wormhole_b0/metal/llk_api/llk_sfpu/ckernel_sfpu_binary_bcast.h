@@ -130,7 +130,7 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects col
 //   Uses LREG0..LREG7 transiently during SFPTRANSP phases. LREG6 is NOT
 //   preserved as a persistent mask (SFPTRANSP clobbers LREG4..LREG7 window);
 //   BCAST_ROW does not need the col-0 lane mask. The band body is recorded
-//   into replay slots REPLAY_SLOT_ROW_BAND.. per full-tile call, and the
+//   into SFPU replay slots 0..15 per full-tile call, and the
 //   call leaves the dest base register pointed at the data tile (as the
 //   unary SFPU path leaves it at its tile) and RWC.Dst non-zero; both are
 //   reset by the next `_llk_math_eltwise_sfpu_start_` / `_done_` bracket.
@@ -160,12 +160,20 @@ constexpr std::uint32_t LREG_SCALAR_INV_STD = p_sfpu::LREG7;
 constexpr std::uint32_t SFPSHFT2_MOD1_SUBVEC_SHFLROR1 = 3;
 constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM = 1;
 
-// Replay-buffer slots (32 entries per thread; the two ranges are disjoint so
-// a COL init's recording survives a ROW op).
+// Replay-buffer slots. SFPU code owns [0, math::replay_buf_offset); the upper
+// half belongs to FPU programs recorded at init (matmul, reduce,
+// transpose_dest) and must never be written here. The ROW band body fills the
+// whole SFPU half, so it overwrites the COL broadcast program: a COL op after
+// a ROW op needs sfpu_bcast_col_init() again (it needs it anyway, since ROW
+// also clobbers the LREG6 lane mask).
 constexpr std::uint32_t REPLAY_SLOT_BROADCAST = 0;  // col-0 -> all-cols broadcast
 constexpr std::uint32_t REPLAY_LEN_BROADCAST = 11;  // see _record_broadcast_replay_
-constexpr std::uint32_t REPLAY_SLOT_ROW_BAND = REPLAY_SLOT_BROADCAST + REPLAY_LEN_BROADCAST;  // BCAST_ROW band body
-constexpr std::uint32_t REPLAY_LEN_ROW_BAND = 16;  // see _record_row_bcast_band_replay_
+constexpr std::uint32_t REPLAY_SLOT_ROW_BAND = 0;   // BCAST_ROW band body
+constexpr std::uint32_t REPLAY_LEN_ROW_BAND = 16;   // see _record_row_bcast_band_replay_
+static_assert(
+    REPLAY_SLOT_BROADCAST + REPLAY_LEN_BROADCAST <= math::replay_buf_offset &&
+        REPLAY_SLOT_ROW_BAND + REPLAY_LEN_ROW_BAND <= math::replay_buf_offset,
+    "SFPU bcast replay programs must stay in the SFPU half of the replay buffer");
 
 // SFPLOAD / SFPSTORE carry a 10-bit dest address that wraps; relative
 // (possibly "negative") tile offsets are formed modulo this.
