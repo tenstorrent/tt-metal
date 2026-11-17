@@ -1,0 +1,42 @@
+{
+ "prefix": 8192,
+ "last_logits": {
+  "suffix": 32,
+  "text": true,
+  "rows_vs_serial": {
+   "pcc": 0.967334,
+   "top1_equal": true,
+   "top5_overlap": 4
+  },
+  "rows_vs_cold": {
+   "pcc": 0.945231,
+   "top1_equal": true,
+   "top5_overlap": 3
+  },
+  "serial_vs_cold": {
+   "pcc": 0.925857,
+   "top1_equal": true,
+   "top5_overlap": 4
+  }
+ },
+ "rows_512": {
+  "seconds": 0.458,
+  "tok_s": 1117.8
+ },
+ "rows_2048": {
+  "seconds": 1.842,
+  "tok_s": 1111.6
+ },
+ "serial_32": {
+  "seconds": 2.308,
+  "tok_s": 13.9
+ },
+ "cold_prefill_8704": {
+  "seconds": 4.747,
+  "tok_s": 1833.5
+ },
+ "cold_prefill_10240": {
+  "seconds": 5.407,
+  "tok_s": 1894.0
+ }
+}
