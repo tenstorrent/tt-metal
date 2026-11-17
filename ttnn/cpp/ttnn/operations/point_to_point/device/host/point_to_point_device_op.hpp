@@ -9,10 +9,9 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn {
 namespace operations::point_to_point {
@@ -44,15 +43,15 @@ struct PointToPointOp {
         // Builds the entire workload in one call (cache miss):
         //   1. Allocates the shared GlobalSemaphore used by both endpoint
         //      programs and runs the cross-device Synchronize barrier; the
-        //      semaphore is parked in `WorkloadDescriptor::semaphores` so it
-        //      outlives the cached workload.
-        //   2. Builds ProgramDescriptors for the send_coord (via
+        //      semaphore is parked in `MeshWorkloadArtifacts::global_semaphores`
+        //      so it outlives the cached workload.
+        //   2. Builds the programs for the send_coord (via
         //      send_program_factory) and the receive_coord (via
         //      receive_program_factory) and pushes them as single-coord
         //      ranges into `programs`.  No program is emitted for any other
         //      mesh coord — matches the legacy create_mesh_workload that only
         //      added programs at the two endpoint coords.
-        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
@@ -105,7 +104,7 @@ Fabric1DRoute fabric_1d_routing(
 
 }  // namespace detail
 
-tt::tt_metal::ProgramDescriptor send_program_factory(
+ttnn::device_operation::ProgramArtifacts send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
     const PointToPointOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& send_coord,
@@ -113,13 +112,13 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
     PointToPointOp::tensor_return_value_t& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore);
 
-tt::tt_metal::ProgramDescriptor receive_program_factory(
+ttnn::device_operation::ProgramArtifacts receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
     PointToPointOp::tensor_return_value_t& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore);
 
 // Same-device (send_coord == receive_coord) local on-device copy — no fabric.
-tt::tt_metal::ProgramDescriptor local_copy_program_factory(
+ttnn::device_operation::ProgramArtifacts local_copy_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args, PointToPointOp::tensor_return_value_t& output_tensors);
 }  // namespace operations::point_to_point
 

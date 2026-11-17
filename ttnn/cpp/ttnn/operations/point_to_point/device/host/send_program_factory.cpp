@@ -2,27 +2,43 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
+#include <filesystem>
+
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "point_to_point_device_op.hpp"
 
 namespace ttnn::operations::point_to_point {
 
-tt::tt_metal::ProgramDescriptor send_program_factory(
+ttnn::device_operation::ProgramArtifacts send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
     const PointToPointOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& send_coord,
     const MeshCoordinate& receive_coord,
     PointToPointOp::tensor_return_value_t& output_tensors,
     const tt::tt_metal::GlobalSemaphore& semaphore) {
+    using namespace tt::tt_metal;
+
+    const KernelSpecName reader_kernel{"reader"};
+    const KernelSpecName writer_kernel{"writer"};
+    const DFBSpecName sender_dfb{"sender"};
+    const DFBSpecName packet_header_dfb{"packet_header"};
+    const DFBSpecName packet_dfb{"packet"};
+    const TensorParamName input_param{"input"};
+    const TensorParamName intermediate_param{"intermediate"};
+    const experimental::GlobalSemaphoreParamName receive_semaphore_param{"receive_semaphore"};
+    const experimental::FabricConnectionSpecName connection_spec{"connection"};
+
     auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
     const auto& topology = operation_attributes.topology;
     const auto& input_tensor = tensor_args.input_tensor;
+    const auto& intermediate_tensor = output_tensors.at(0);
 
     // basic accounting
     const uint32_t input_num_pages = data_movement::get_num_pages(input_tensor);
@@ -39,89 +55,145 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
         [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(use_cores, total_packets);
 
-    // program!
-    tt::tt_metal::ProgramDescriptor desc;
-
-    // CB for sender reader->writer kernels
-    // Note this ID is hardcoded in the reader kernel
-    constexpr auto sender_cb_id = tt::CBIndex::c_0;
-    constexpr auto cb_num_pages = 2;
+    // DFB for sender reader->writer kernels
+    constexpr auto dfb_num_pages = 2;
     const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = cb_num_pages * aligned_input_page_size_bytes,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(sender_cb_id),
-            .data_format = input_dataformat,
-            .page_size = aligned_input_page_size_bytes,
-        }}},
-    });
 
     // allocate space for packet headers for payload semaphore
-    constexpr auto packet_header_cb_id = tt::CBIndex::c_1;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
     const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(packet_header_cb_id),
-            .data_format = tt::DataFormat::RawUInt32,
-            .page_size = packet_header_size_bytes,
-        }}},
-    });
 
-    // Scratch CB for coalescing pages into packets
-    constexpr auto packet_cb_id = tt::CBIndex::c_2;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = packet_size_bytes,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(packet_cb_id),
-            .data_format = input_dataformat,
-            .page_size = packet_size_bytes,
-        }}},
-    });
+    Group<DataflowBufferSpec> dataflow_buffers = {
+        DataflowBufferSpec{
+            .unique_id = sender_dfb,
+            .entry_size = aligned_input_page_size_bytes,
+            .num_entries = dfb_num_pages,
+            .data_format_metadata = input_dataformat,
+        },
+        DataflowBufferSpec{
+            .unique_id = packet_header_dfb,
+            .entry_size = packet_header_size_bytes,
+            .num_entries = num_packet_headers_storable * buffering_factor,
+            .data_format_metadata = tt::DataFormat::RawUInt32,
+        },
+        // Scratch DFB for coalescing pages into packets
+        DataflowBufferSpec{
+            .unique_id = packet_dfb,
+            .entry_size = packet_size_bytes,
+            .num_entries = 1,
+            .data_format_metadata = input_dataformat,
+        },
+    };
 
     // basic reader kernel set up
-    std::vector<uint32_t> reader_ct_args;
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
-
-    tt::tt_metal::KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_unary_interleaved_start_id_gen.cpp";
-    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = std::move(reader_ct_args);
-    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+    KernelSpec reader_kernel_spec{
+        .unique_id = reader_kernel,
+        .source = std::filesystem::path("ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/"
+                                        "reader_unary_interleaved_start_id_gen_metal2.cpp"),
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = sender_dfb,
+                    .accessor_name = "in0",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = input_param,
+                    .accessor_name = "src",
+                },
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id", "page_bytes"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
 
     const auto this_fabric_id = mesh_device->get_fabric_node_id(send_coord);
 
     const auto [num_hops, dst_is_forward, next_fabric_id] =
         detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);
 
-    std::vector<uint32_t> writer_ct_args = {sender_cb_id, packet_header_cb_id, packet_cb_id, l1_alignment};
-    tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(writer_ct_args);
-
-    tt::tt_metal::KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_send.cpp";
-    writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = all_cores;
-    writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
-    writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
-
-    // Push kernels onto desc.kernels so we can refer to them by stable index;
-    // append_fabric_connection_rt_args() is templated on ProgramDescriptor and
-    // indexes into desc.kernels via the KernelHandle.
-    desc.kernels.push_back(std::move(reader_kernel_desc));
-    desc.kernels.push_back(std::move(writer_kernel_desc));
-    tt::tt_metal::KernelHandle send_unary_reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle send_unary_writer_kernel_id = 1;
+    KernelSpec writer_kernel_spec{
+        .unique_id = writer_kernel,
+        .source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_send_metal2.cpp"),
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = sender_dfb,
+                    .accessor_name = "sender",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                // The packet-header and packet DFBs are written and read by this kernel only.
+                DFBBinding{
+                    .dfb_spec_name = packet_header_dfb,
+                    .accessor_name = "packet_header",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = packet_header_dfb,
+                    .accessor_name = "packet_header",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = packet_dfb,
+                    .accessor_name = "packet",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = packet_dfb,
+                    .accessor_name = "packet",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = intermediate_param,
+                    .accessor_name = "dst",
+                },
+            },
+        .compile_time_args = {{"alignment", l1_alignment}},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {
+                        "page_idx_start",
+                        "page_idx_end",
+                        "dst_num_hops",
+                        "page_size_bytes",
+                        "payload_size_bytes",
+                        "max_pages_per_packet",
+                        "page_segments",
+                    },
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+    writer_kernel_spec.advanced_options.global_semaphore_bindings = {
+        {
+            .global_semaphore_parameter_name = receive_semaphore_param,
+            .accessor_name = "receive_semaphore",
+        },
+    };
+    writer_kernel_spec.advanced_options.fabric_connection_bindings = {
+        {
+            .fabric_connection_spec_name = connection_spec,
+            .accessor_name = "connection",
+        },
+    };
 
     constexpr auto link_idx = 0;  // for single link implementation
+
+    experimental::FabricConnectionSpec fabric_connection{
+        .unique_id = connection_spec,
+        .src_fabric_node_id = this_fabric_id,
+    };
+
+    KernelRunArgs reader_run_args{.kernel = reader_kernel};
+    KernelRunArgs writer_run_args{.kernel = writer_kernel};
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
@@ -136,55 +208,67 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
         increment = std::min(increment, input_num_pages - page_idx_start);
         page_idx_end += increment;
 
-        // Reader RT args.  arg[0] is the input tensor's buffer address; push
-        // it as Buffer* so the framework records a BufferBinding and patches
-        // it on cache hit (no override_runtime_arguments).
-        tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_tensor.buffer());
-        reader_rt_args.push_back(increment);
-        reader_rt_args.push_back(page_idx_start);
-        reader_rt_args.push_back(input_page_size_bytes);
-        desc.kernels[send_unary_reader_kernel_id].emplace_runtime_args(c, reader_rt_args);
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            c,
+            {
+                {"num_tiles", increment},
+                {"start_id", page_idx_start},
+                {"page_bytes", input_page_size_bytes},
+            });
 
-        // Writer RT args.  Use a plain std::vector<uint32_t> first to interop
-        // with append_fabric_connection_rt_args(), then promote to the
-        // KernelDescriptor's RTArgList — index 0 (output buffer address) and
-        // index 8 (semaphore address) become a Buffer* binding and an
-        // absolute semaphore address, respectively.
-        std::vector<uint32_t> writer_runtime_args = {
-            output_tensors.at(0).mesh_buffer().address(),  // placeholder, replaced via Buffer* below
-            page_idx_start,
-            page_idx_end,
-            num_hops,
-            input_page_size_bytes,
-            packet_size_bytes,
-            num_pages_per_packet,
-            num_page_segments,
-            semaphore.address(),
-            dst_is_forward,
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            c,
+            {
+                {"page_idx_start", page_idx_start},
+                {"page_idx_end", page_idx_end},
+                {"dst_num_hops", num_hops},
+                {"page_size_bytes", input_page_size_bytes},
+                {"payload_size_bytes", packet_size_bytes},
+                {"max_pages_per_packet", num_pages_per_packet},
+                {"page_segments", num_page_segments},
+            });
+
+        fabric_connection.targets[c] = {
+            experimental::FabricConnectionTarget{
+                .dst_fabric_node_id = next_fabric_id,
+                .link_idx = link_idx,
+            },
         };
-
-        if (dst_is_forward) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                *mesh_device, this_fabric_id, next_fabric_id, link_idx, desc, c, writer_runtime_args);
-        }
-        writer_runtime_args.emplace_back(!dst_is_forward);
-        if (!dst_is_forward) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                *mesh_device, this_fabric_id, next_fabric_id, link_idx, desc, c, writer_runtime_args);
-        }
-
-        tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args_builder;
-        writer_rt_args_builder.reserve(writer_runtime_args.size());
-        writer_rt_args_builder.push_back(output_tensors.at(0).buffer());  // tensor_address0 as Buffer*
-        for (size_t i = 1; i < writer_runtime_args.size(); ++i) {
-            writer_rt_args_builder.push_back(writer_runtime_args[i]);
-        }
-        desc.kernels[send_unary_writer_kernel_id].emplace_runtime_args(c, writer_rt_args_builder);
 
         page_idx_start += increment;
     }
 
-    return desc;
+    ProgramSpec spec{
+        .name = "point_to_point_send",
+        .kernels = {std::move(reader_kernel_spec), std::move(writer_kernel_spec)},
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = input_param, .spec = input_tensor.tensor_spec()},
+                TensorParameter{.unique_id = intermediate_param, .spec = intermediate_tensor.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "send",
+                    .kernels = {reader_kernel, writer_kernel},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
+    spec.advanced_options.global_semaphore_parameters = {
+        {.unique_id = receive_semaphore_param, .memory_type = BufferType::L1},
+    };
+    spec.advanced_options.fabric_connections = {std::move(fabric_connection)};
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args.emplace(input_param, input_tensor.mesh_tensor());
+    run_args.tensor_args.emplace(intermediate_param, intermediate_tensor.mesh_tensor());
+    run_args.advanced_options.global_semaphore_args.emplace(receive_semaphore_param, std::cref(semaphore));
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 }  // namespace ttnn::operations::point_to_point

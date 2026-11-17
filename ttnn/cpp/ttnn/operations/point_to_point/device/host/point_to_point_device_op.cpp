@@ -196,7 +196,7 @@ PointToPointOp::tensor_return_value_t PointToPointOp::create_output_tensors(
     return {intermediate_output_tensor, final_output_tensor};
 }
 
-tt::tt_metal::WorkloadDescriptor PointToPointOp::SendReceive::create_workload_descriptor(
+ttnn::device_operation::MeshWorkloadArtifacts PointToPointOp::SendReceive::create_mesh_workload_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
@@ -213,11 +213,14 @@ tt::tt_metal::WorkloadDescriptor PointToPointOp::SendReceive::create_workload_de
             "Tensor not present on coordinate: {}",
             coord);
 
-        tt::tt_metal::WorkloadDescriptor workload_descriptor;
-        workload_descriptor.programs.push_back(
-            {tt::tt_metal::distributed::MeshCoordinateRange(coord),
-             local_copy_program_factory(tensor_args, tensor_return_value)});
-        return workload_descriptor;
+        ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+        auto local_copy = local_copy_program_factory(tensor_args, tensor_return_value);
+        artifacts.programs.push_back({
+            .range = tt::tt_metal::distributed::MeshCoordinateRange(coord),
+            .spec = std::move(local_copy.spec),
+            .run_params = std::move(local_copy.run_params),
+        });
+        return artifacts;
     }
 
     auto* mesh_device = tensor_args.input_tensor.device();
@@ -225,11 +228,15 @@ tt::tt_metal::WorkloadDescriptor PointToPointOp::SendReceive::create_workload_de
     // Allocate the shared GlobalSemaphore used by both endpoint programs and
     // run the cross-device Synchronize barrier ONCE per workload (cache miss).
     // The semaphore's device-side allocation must outlive every program that
-    // references its absolute address — park it in WorkloadDescriptor.semaphores
-    // so the framework keeps it alive for the cached workload's lifetime.
+    // binds it — park it in MeshWorkloadArtifacts::global_semaphores so the
+    // framework keeps it alive for the cached workload's lifetime. The programs'
+    // run args reference that vector element, so nothing else is added to it.
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+    artifacts.global_semaphores.push_back(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
+    const tt::tt_metal::GlobalSemaphore& semaphore = artifacts.global_semaphores.back();
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in p2p op");
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     log_debug(tt::LogOp, "Synchronize devices in p2p op done");
@@ -243,23 +250,25 @@ tt::tt_metal::WorkloadDescriptor PointToPointOp::SendReceive::create_workload_de
         TT_FATAL(it != coords.end(), "Tensor not present on coordinate: {}", c);
     }
 
-    tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    workload_descriptor.semaphores.push_back(semaphore);
-
     // Only the sender and receiver coords participate.  The original
     // create_mesh_workload likewise added programs only for these two coords;
     // we keep that behaviour by emitting per-coord PerCoordProgram entries.
-    tt::tt_metal::ProgramDescriptor send_desc = send_program_factory(
+    auto send_program = send_program_factory(
         tensor_args, operation_attributes, send_coord, receive_coord, tensor_return_value, semaphore);
-    workload_descriptor.programs.push_back(
-        {tt::tt_metal::distributed::MeshCoordinateRange(send_coord), std::move(send_desc)});
+    artifacts.programs.push_back({
+        .range = tt::tt_metal::distributed::MeshCoordinateRange(send_coord),
+        .spec = std::move(send_program.spec),
+        .run_params = std::move(send_program.run_params),
+    });
 
-    tt::tt_metal::ProgramDescriptor receive_desc =
-        receive_program_factory(operation_attributes, tensor_return_value, semaphore);
-    workload_descriptor.programs.push_back(
-        {tt::tt_metal::distributed::MeshCoordinateRange(receive_coord), std::move(receive_desc)});
+    auto receive_program = receive_program_factory(operation_attributes, tensor_return_value, semaphore);
+    artifacts.programs.push_back({
+        .range = tt::tt_metal::distributed::MeshCoordinateRange(receive_coord),
+        .spec = std::move(receive_program.spec),
+        .run_params = std::move(receive_program.run_params),
+    });
 
-    return workload_descriptor;
+    return artifacts;
 }
 
 }  // namespace ttnn::operations::point_to_point

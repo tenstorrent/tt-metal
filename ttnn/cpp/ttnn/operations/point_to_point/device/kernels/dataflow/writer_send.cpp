@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// writer_send_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
