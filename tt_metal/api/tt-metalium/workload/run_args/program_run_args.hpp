@@ -11,7 +11,6 @@
 #include <span>
 #include <string>
 #include <utility>
-#include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/workload/run_args/validation_mode.hpp>
