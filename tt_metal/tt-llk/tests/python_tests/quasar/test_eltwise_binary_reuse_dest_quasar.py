@@ -153,6 +153,8 @@ def test_eltwise_binary_reuse_dest_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    test_name="sources/quasar/eltwise_binary_reuse_dest_quasar_test.cpp",
+    extra_templates=(),
 ):
 
     use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
@@ -328,13 +330,14 @@ def test_eltwise_binary_reuse_dest_quasar(
         raise ValueError("perf_report must be provided when is_perf=True")
 
     test_config_kwargs = {
-        "test_name": "sources/quasar/eltwise_binary_reuse_dest_quasar_test.cpp",
+        "test_name": test_name,
         "formats": formats,
         "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             REUSE_DEST_TYPE(reuse_dest_type),
             DEST_SYNC(dest_sync_mode),
+            *extra_templates,
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),

@@ -195,6 +195,8 @@ def test_eltwise_unary_datacopy_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    test_name="sources/quasar/eltwise_unary_datacopy_quasar_test.cpp",
+    extra_templates=(),
 ):
     (
         formats,
@@ -243,7 +245,7 @@ def test_eltwise_unary_datacopy_quasar(
         raise ValueError("perf_report must be provided when is_perf=True")
 
     test_config_kwargs = {
-        "test_name": "sources/quasar/eltwise_unary_datacopy_quasar_test.cpp",
+        "test_name": test_name,
         "formats": formats,
         "templates": [
             DATA_COPY_TYPE(data_copy_type),
@@ -253,6 +255,7 @@ def test_eltwise_unary_datacopy_quasar(
                 else UnpackerEngine.UnpA
             ),
             DEST_SYNC(dest_sync_mode),
+            *extra_templates,
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
