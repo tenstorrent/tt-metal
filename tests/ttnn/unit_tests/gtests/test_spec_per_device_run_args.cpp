@@ -5,13 +5,15 @@
 // MeshWorkloadSpecFactoryAdapter with per-device run args (`uses_per_device_run_args`): a Metal 2.0 op whose devices
 // differ only in a few named kernel run args runs one program per range (merged), or one per coordinate (split, the
 // fallback), and every call's base and per-device values reach each device. The op's kernel writes its args to L1,
-// where the test reads them on every device.
+// where the test reads them on every device; a second, tensor-backed op writes them into its output tensor, to check
+// that a cache hit rebinds the tensor on every device.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <random>
 #include <set>
 #include <string>
 #include <variant>
@@ -340,12 +342,15 @@ void kernel_main() {
 }
 )";
 
-uint32_t tensor_salt(uint32_t index, uint32_t call) { return 1000 * (index + 1) + call; }
+// `nonce` is random per test: DRAM is not cleared, and a test allocates its outputs at the same addresses on every
+// run, so without it an earlier test or run could leave the expected values where a broken rebind writes nothing.
+uint32_t tensor_salt(uint32_t nonce, uint32_t index, uint32_t call) { return nonce + 1000 * (index + 1) + call; }
 uint32_t tensor_bias(uint32_t index, uint32_t call) { return 50000 + 100 * index + call; }
 
 struct TensorPerDeviceRunArgsOp {
     struct operation_attributes_t {
         uint32_t call = 0;    // hash-excluded: the per-device values this call sets
+        uint32_t nonce = 0;   // hash-excluded: added to the salt (see tensor_salt)
         uint32_t ranges = 0;  // hashed: as PerDeviceRunArgsOp::operation_attributes_t::ranges
     };
     using tensor_args_t = PerDeviceRunArgsOp::tensor_args_t;
@@ -384,7 +389,7 @@ struct TensorPerDeviceRunArgsOp {
         for (const auto& coord : range) {
             const uint32_t index = PerDeviceRunArgsOp::index_of(coord, shape);
             m2::ProgramRunArgs::KernelRunArgs main{.kernel = m2::KernelSpecName{kMain}};
-            main.common_runtime_arg_values = {{"salt", tensor_salt(index, attrs.call)}};
+            main.common_runtime_arg_values = {{"salt", tensor_salt(attrs.nonce, index, attrs.call)}};
             main.runtime_arg_values["bias"][kCores.front()] = tensor_bias(index, attrs.call);
             m2::ProgramRunArgs values;
             values.kernel_run_args.push_back(std::move(main));
@@ -607,7 +612,7 @@ protected:
     }
 
     // Each device's shard of `output` holds the [salt, bias] of `call`.
-    void expect_tensor_values(const Tensor& output, uint32_t call) {
+    void expect_tensor_values(const Tensor& output, uint32_t nonce, uint32_t call) {
         const auto shape = mesh_device_->shape();
         const auto shards = ttnn::distributed::get_device_tensors(output);
         ASSERT_EQ(shards.size(), shape.mesh_size());
@@ -619,31 +624,40 @@ protected:
             ASSERT_GE(words.size(), 2u);
             EXPECT_EQ(
                 (std::vector<uint32_t>{words[0], words[1]}),
-                (std::vector<uint32_t>{tensor_salt(index, call), tensor_bias(index, call)}))
+                (std::vector<uint32_t>{tensor_salt(nonce, index, call), tensor_bias(index, call)}))
                 << "device " << coords.front() << ", call " << call;
         }
     }
 
     // Two calls on one cache entry, the first call's output kept alive so the hit's output lands at a new address:
     // the hit writes the new tensor on every device, with the miss's per-device values (fixed) or its own (override).
+    // The fixed factory's hit rebinds through refresh_tensor_args; the override's, through the tensor args it returns.
     template <typename Op>
-    void run_tensor_hit(bool fixed, uint32_t ranges, size_t expected_programs) {
+    void run_tensor_hit(uint32_t ranges, size_t expected_programs) {
         using Attrs = TensorPerDeviceRunArgsOp::operation_attributes_t;
-        const Tensor first = ttnn::device_operation::launch<Op>(Attrs{.call = 0, .ranges = ranges}, input());
+        using Factory = std::variant_alternative_t<0, typename Op::program_factory_t>;
+        using TensorAdapter = typename ttnn::device_operation::MeshDeviceOperationAdapter<
+            Op>::template MeshWorkloadSpecFactoryAdapter<Factory>;
+        constexpr bool fixed = TensorAdapter::fixed_per_device_run_args();
+        const uint32_t nonce = std::random_device{}() & 0x7fffffffu;
+        SCOPED_TRACE("nonce " + std::to_string(nonce));
+        const Tensor first =
+            ttnn::device_operation::launch<Op>(Attrs{.call = 0, .nonce = nonce, .ranges = ranges}, input());
         tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
-        expect_tensor_values(first, 0);
-        const Tensor second = ttnn::device_operation::launch<Op>(Attrs{.call = 1, .ranges = ranges}, input());
+        expect_tensor_values(first, nonce, 0);
+        const Tensor second =
+            ttnn::device_operation::launch<Op>(Attrs{.call = 1, .nonce = nonce, .ranges = ranges}, input());
         tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
         EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1u);
         ASSERT_NE(first.mesh_buffer().address(), second.mesh_buffer().address());
-        expect_tensor_values(second, fixed ? 0 : 1);
-        expect_tensor_values(first, 0);  // the hit did not write the miss's tensor
-        using TensorAdapter = typename ttnn::device_operation::MeshDeviceOperationAdapter<
-            Op>::template MeshWorkloadSpecFactoryAdapter<std::variant_alternative_t<0, typename Op::program_factory_t>>;
+        expect_tensor_values(second, nonce, fixed ? 0 : 1);
+        // Override: a hit still bound to the miss's tensor would have written call 1 here. (Fixed: it would rewrite
+        // the same values, so only the check above catches it.)
+        expect_tensor_values(first, nonce, 0);
         const auto args = input();
         const auto lookup = ttnn::device_operation::detail::look_up_program_cache<
             ttnn::device_operation::MeshDeviceOperationAdapter<Op>>(
-            Attrs{.call = 1, .ranges = ranges}, args, mesh_device_.get());
+            Attrs{.call = 1, .nonce = nonce, .ranges = ranges}, args, mesh_device_.get());
         ASSERT_TRUE(lookup.hit);
         EXPECT_EQ(
             mesh_device_->get_program_cache()
@@ -717,23 +731,23 @@ TEST_F(SpecPerDeviceRunArgsTest, WithoutOverrideSplitKeepsMissValues) {
 // A hit with a new output tensor on every device of a 2x4 mesh: the tensor is rebound, merged or split, and the
 // per-device values are the miss's (`fixed_per_device_run_args`) or the hit's own (override).
 TEST_F(SpecPerDeviceRunArgsTest, FixedHitRebindsTensor) {
-    run_tensor_hit<FixedTensorPerDeviceRunArgsOp>(/*fixed=*/true, /*ranges=*/2, /*expected_programs=*/3);
+    run_tensor_hit<FixedTensorPerDeviceRunArgsOp>(/*ranges=*/2, /*expected_programs=*/3);
 }
 
 TEST_F(SpecPerDeviceRunArgsTest, FixedSplitHitRebindsTensor) {
     ttnn::device_operation::per_device_run_args::ScopedForceSplit split(*mesh_device_);
     run_tensor_hit<FixedTensorPerDeviceRunArgsOp>(
-        /*fixed=*/true, /*ranges=*/0, /*expected_programs=*/mesh_device_->shape().mesh_size());
+        /*ranges=*/0, /*expected_programs=*/mesh_device_->shape().mesh_size());
 }
 
 TEST_F(SpecPerDeviceRunArgsTest, OverrideHitRebindsTensor) {
-    run_tensor_hit<TensorPerDeviceRunArgsOp>(/*fixed=*/false, /*ranges=*/2, /*expected_programs=*/3);
+    run_tensor_hit<TensorPerDeviceRunArgsOp>(/*ranges=*/2, /*expected_programs=*/3);
 }
 
 TEST_F(SpecPerDeviceRunArgsTest, OverrideSplitHitRebindsTensor) {
     ttnn::device_operation::per_device_run_args::ScopedForceSplit split(*mesh_device_);
     run_tensor_hit<TensorPerDeviceRunArgsOp>(
-        /*fixed=*/false, /*ranges=*/0, /*expected_programs=*/mesh_device_->shape().mesh_size());
+        /*ranges=*/0, /*expected_programs=*/mesh_device_->shape().mesh_size());
 }
 
 // Per-device values metal would reject (an array of the wrong length on one device, an arg the kernel does not
