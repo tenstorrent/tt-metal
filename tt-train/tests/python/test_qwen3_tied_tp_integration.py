@@ -388,10 +388,7 @@ def test_partial_gradients_are_marked_across_tp(tp_mesh, shard_dim):
 
 def test_per_head_norm_gradients_match_transformers(tp_mesh):
     """Each device normalizes only its own heads, so the gradients of the per-head norms q_norm and k_norm are partial
-    across tp until ttml.sync_gradients sums them. After that sum they equal transformers' gradients on the same
-    weights and tokens (about 1 % apart in bf16). The vocab of 128 splits into tile-aligned halves, so no padded logits
-    make the two losses differ. Negative control: unmarked, each device kept its own heads' part (relative error about
-    0.6)."""
+    across tp until ttml.sync_gradients sums them."""
     pytest.importorskip("transformers", reason="needs transformers for the reference gradients")
     from transformers import Qwen3Config as HFConfig
     from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM

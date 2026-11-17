@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tensor-parallel vocab padding, in both places that implement it.
+"""Tensor-parallel vocab padding.
 
 The rule is one invariant with two implementations -- ``tp_padded_vocab_size`` in the
 qwen3 example and ``Llama.padded_vocab_size`` in ``ttml.models.llama`` -- so both are
