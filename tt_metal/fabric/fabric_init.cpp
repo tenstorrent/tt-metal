@@ -24,12 +24,17 @@ bool isFabricUnitTest() { return false; }
 namespace tt::tt_fabric {
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
-    FabricContext& fabric_context, CoreType dispatch_core_type, tt::tt_metal::IDevice* device) {
+    FabricContext& fabric_context,
+    CoreType dispatch_core_type,
+    tt::tt_metal::IDevice* device,
+    const FabricBuildSession& session) {
     auto fabric_program_ptr = std::make_unique<tt::tt_metal::Program>(
         std::make_shared<tt::tt_metal::detail::ProgramImpl>(tt::tt_metal::extract_context_id(device)));
 
-    // Use FabricBuilder to coordinate the build phases
-    FabricBuilder builder(device, *fabric_program_ptr, fabric_context, dispatch_core_type);
+    // The launch's session picks the builder: the registered plugin's, or the default FabricBuilder.
+    auto builder_ptr = session.make_device_builder(device, *fabric_program_ptr, fabric_context, dispatch_core_type);
+    TT_FATAL(builder_ptr != nullptr, "Fabric build session returned a null FabricBuilder");
+    auto& builder = *builder_ptr;
 
     // Execute build phases
     builder.discover_channels();
@@ -48,15 +53,24 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
     return fabric_program_ptr;
 }
 
+std::unique_ptr<FabricBuildSession> begin_fabric_build_session(tt::tt_metal::MetalEnvImpl& env_impl) {
+    if (!tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config())) {
+        return nullptr;
+    }
+    return create_fabric_build_session(env_impl.get_control_plane().get_fabric_context());
+}
+
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(
     tt::tt_metal::MetalEnvImpl& env_impl,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
-    tt::tt_metal::IDevice* device) {
+    tt::tt_metal::IDevice* device,
+    const FabricBuildSession& session) {
     if (tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config())) {
         return create_and_compile_tt_fabric_program(
             env_impl.get_control_plane().get_fabric_context(),
             tt::tt_metal::get_core_type_from_config(dispatch_core_config),
-            device);
+            device,
+            session);
     }
     return nullptr;
 }

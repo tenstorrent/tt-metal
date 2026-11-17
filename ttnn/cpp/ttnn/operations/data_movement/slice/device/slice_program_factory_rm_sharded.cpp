@@ -13,14 +13,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -381,14 +380,14 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs slice_row_major_run_args(const SliceInputs& tensor_args, Tensor& output) {
+ProgramRunArgs slice_row_major_run_args(const SliceInputs& tensor_args, Tensor& output) {
     using namespace ttnn::prim::slice_metal2;
     ProgramRunArgs run_args;
     run_args.tensor_args = {{INPUT, tensor_args.input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
     return run_args;
 }
 
-tt::tt_metal::experimental::ProgramRunArgs SliceRmShardedProgramFactory::override_runtime_arguments(
+ProgramRunArgs SliceRmShardedProgramFactory::override_runtime_arguments(
     const SliceParams& /*args*/,
     const SliceInputs& tensor_args,
     Tensor& output,
