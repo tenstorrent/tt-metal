@@ -103,10 +103,17 @@ SFPU_UNARY_FORMATS = input_output_formats(
 TRIGONOMETRY_OPS = [
     MathOperation.Sin,
     MathOperation.Cos,
+    MathOperation.Tan,
     MathOperation.Acosh,
     MathOperation.Asinh,
     MathOperation.Atanh,
 ]
+
+# Two output steps, relative: the bound the tangent sweep holds on top of the suite tolerance.
+TAN_RTOL = {
+    DataFormat.Float32: 2 * 2.0**-23,
+    DataFormat.Float16_b: 2 * 2.0**-7,
+}
 
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
 # the Int16 container), so the sweep adds them to the float formats above.
@@ -474,6 +481,7 @@ def prepare_trig_inputs(
     stays in its accurate range:
       sin / cos — [-pi, pi] (argument reduction is valid far wider, but a small domain
                   keeps the Maclaurin polynomial precise).
+      tan      — [-1.3, 1.3] (the sfpu_domains range, inside the poles at +-pi/2).
       asinh    — [-10, 10] (log polynomial stable away from overflow).
       acosh    — [1.1, 50]  (x >= 1 domain; avoid near-1 where the 3rd-order log loses
                   precision).
@@ -484,6 +492,9 @@ def prepare_trig_inputs(
 
     if mathop in (MathOperation.Sin, MathOperation.Cos):
         lo, hi = -math.pi, math.pi
+    elif mathop == MathOperation.Tan:
+        spec = for_op(mathop, input_format).spec_A
+        lo, hi = spec.low, spec.high
     elif mathop == MathOperation.Asinh:
         lo, hi = -10.0, 10.0
     elif mathop == MathOperation.Acosh:
@@ -1427,6 +1438,19 @@ def run_eltwise_unary_sfpu_quasar(
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+    if mathop == MathOperation.Tan:
+        # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
+        # wrong order; the kernel itself stays within one output step of the golden.
+        golden = golden_tensor.to(torch.float64)
+        assert torch.all(
+            torch.isclose(
+                res_tensor.to(torch.float64),
+                golden,
+                rtol=TAN_RTOL[formats.output_format],
+                atol=0.0,
+            )
+        ), "tan is more than two output steps from the golden"
 
     if mathop == MathOperation.Softplus:
         # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
