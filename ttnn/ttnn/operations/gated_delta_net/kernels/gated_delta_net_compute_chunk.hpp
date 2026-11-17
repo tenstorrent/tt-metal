@@ -28,7 +28,20 @@ constexpr uint32_t FPU_UNBIAS_BITS = GDN_FPU_UNBIAS_BITS;
 // FUSED_RHS's sign.
 constexpr uint32_t CHUNK_DIAG_BETA = 2;
 constexpr bool M_BETA = PREP && GDN_PREP_M_BETA != 0;
-constexpr uint32_t KN_SCALE_BITS = (FPU_KN ? FPU_UNBIAS_BITS : ONE_BITS) | (FUSED_RHS ? 0x80000000u : 0u);
+// Host STATE_FOLD: M folded into the state core's operands, so its step has no rhs and U and O do not wait for one
+// another: U = M x V + Mk x S, O = (QD M) x V + q' x S with Mk = (M (*) -exp(c)^T) x kn and
+// q' = exp(c) (*) qn + (QD (M (*) -exp(c)^T)) x kn from the prep core. The head block keeps its pages
+// [exp(c) | QD M, M | Mk, q' | kn^T (*) w^T | v].
+constexpr bool FOLD = GDN_STATE_FOLD;
+static_assert(!FOLD || !PREP || (M_BETA && FPU_KN && FPU_QN), "STATE_FOLD folds the FPU-scaled operands");
+constexpr uint32_t CM_M = 2;  // FOLD prep core: M, M (*) -exp(c)^T, QD x (M (*) -exp(c)^T) after L and QD
+constexpr uint32_t CM_MT = 3;
+constexpr uint32_t CM_QDMT = 4;
+constexpr uint32_t FOLD_MAT_PAGES = 5;
+constexpr uint32_t KN_SCALE_BITS = (FOLD     ? GDN_FOLD_UNBIAS_BITS
+                                    : FPU_KN ? FPU_UNBIAS_BITS
+                                             : ONE_BITS) |
+                                   (FUSED_RHS ? 0x80000000u : 0u);
 
 // ---------------------------------------------------------------- one chunk step (R-CHUNK)
 // [Kn Kn^T; Qn Kn^T] -> cb_gram (2 tiles, left waited for head_prep); per key head, shared by its value heads.
@@ -132,7 +145,8 @@ ALWI void head_prep_vectors(uint32_t row_last) {
 }
 
 ALWI void head_prep_matrices() {
-    cb_reserve_back(cb_chunk_mat, PREP ? 1 : GDN_CHUNK_MAT_PAGES);
+    constexpr bool QD_LOCAL = !PREP || FOLD;  // QD stays on the core (FOLD: the operand of QD x M)
+    cb_reserve_back(cb_chunk_mat, QD_LOCAL ? GDN_CHUNK_MAT_PAGES : 1);
 
     // L and QD: fp32 SFPU products of the gram tiles with D and beta.
     tile_regs_acquire();
@@ -149,14 +163,14 @@ ALWI void head_prep_matrices() {
     tile_regs_commit();
     tile_regs_wait();
     pack_first(0, cb_chunk_mat, CM_L);
-    if constexpr (PREP) {
+    if constexpr (QD_LOCAL) {
+        pack_at(1, cb_chunk_mat, CM_QD);
+    } else {
         pack_at(1, cb_prep_send, HB_QD);
         cb_push_back(cb_prep_send, HB_M);
-    } else {
-        pack_at(1, cb_chunk_mat, CM_QD);
     }
     tile_regs_release();
-    cb_push_back(cb_chunk_mat, PREP ? 1 : GDN_CHUNK_MAT_PAGES);
+    cb_push_back(cb_chunk_mat, QD_LOCAL ? GDN_CHUNK_MAT_PAGES : 1);
     cb_wait_front(cb_chunk_vec, GDN_CHUNK_VEC_PAGES);
     GDN_MARK("m_hm");
 }
@@ -171,8 +185,11 @@ ALWI void head_prep(uint32_t row_last) {
 // beta exp(c) (*) kn and exp(c) (*) qn (the read [kq] x S then yields beta exp(c) Rk and exp(c) Rq),
 // kn^T (*) exp(c_last - c)^T (the update then multiplies U directly) and beta (*) v.
 ALWI void head_block(uint32_t head) {
-    cb_wait_front(cb_chunk_mat, 1);
+    cb_wait_front(cb_chunk_mat, FOLD ? GDN_CHUNK_MAT_PAGES : 1);
     cb_reserve_back(cb_chunk_vec, 1);
+    if constexpr (FOLD) {
+        cb_reserve_back(cb_chunk_mat, 2);
+    }
     tile_regs_acquire();
     begin_loads(cb_tri_mask);
     if constexpr (M_BETA) {
@@ -181,6 +198,9 @@ ALWI void head_block(uint32_t head) {
         load(cb_tri_mask, 1, 0);
     }
     load(cb_chunk_vec, CV_W, 2);
+    if constexpr (FOLD) {
+        load(cb_chunk_vec, CV_BEC, 3);
+    }
     triangle_solve_tile_init();
     triangle_solve_tile<DataFormat::Float32>(cb_chunk_mat, CM_L, 0, 1);
     if constexpr (FPU_KNT) {
@@ -192,24 +212,82 @@ ALWI void head_block(uint32_t head) {
     wait_sfpu_before_fpu();
     transpose_dest_init<true>(cb_chunk_vec);
     transpose_dest<true>(2);
+    if constexpr (FOLD) {
+        transpose_dest<true>(3);
+        mul_binary_tile_init();
+        mul_binary_tile(1, 3, 0);  // M (*) -exp(c)^T: kn's row scaling as M's column scaling (fp32)
+    }
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(cb_prep_send, 1);
-    pack_first(1, cb_prep_send, 0);  // HB_M (pack indices count from the reservation)
-    pack_at(2, cb_chunk_vec, 0);     // pack indices count from the reservation
+    if constexpr (FOLD) {
+        cb_reserve_back(cb_prep_send, HB_M + 1);  // exp(c) is packed, nothing of the block pushed yet
+        pack_first(1, cb_prep_send, HB_M);
+        pack_at(1, cb_chunk_mat, 0);  // pack indices count from the reservation
+        pack_at(0, cb_chunk_mat, 1);
+    } else {
+        cb_reserve_back(cb_prep_send, 1);
+        pack_first(1, cb_prep_send, 0);  // HB_M (pack indices count from the reservation)
+    }
+    pack_at(2, cb_chunk_vec, 0);  // pack indices count from the reservation
     tile_regs_release();
-    cb_pop_front(cb_chunk_mat, 1);
     cb_push_back(cb_chunk_vec, 1);
-    cb_push_back(cb_prep_send, 1);
+    if constexpr (FOLD) {
+        // QD x M (the state core's operand) and QD x (M (*) -exp(c)^T) (for q').
+        cb_push_back(cb_chunk_mat, 2);
+        cb_wait_front(cb_chunk_mat, CM_QDMT);
+        cb_reserve_back(cb_chunk_mat, 1);
+        tile_regs_acquire();
+        reconfig_data_format(cb_chunk_mat, cb_chunk_mat);
+        matmul_init(cb_chunk_mat, cb_chunk_mat);
+        matmul_tiles(cb_chunk_mat, cb_chunk_mat, CM_QD, CM_M, 0);
+        matmul_tiles(cb_chunk_mat, cb_chunk_mat, CM_QD, CM_MT, 1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_prep_send, HB_QD);
+        pack_at(1, cb_chunk_mat, 0);
+        tile_regs_release();
+        cb_push_back(cb_chunk_mat, 1);
+        cb_push_back(cb_prep_send, HB_M + 1);
+        cb_wait_front(cb_chunk_mat, FOLD_MAT_PAGES);
+    } else {
+        cb_pop_front(cb_chunk_mat, 1);
+        cb_push_back(cb_prep_send, 1);
+    }
     GDN_MARK("m_hb_m");
 
     cb_reserve_back(cb_prep_send, 2 * Kt);
+    // FOLD: Mk = (M (*) -exp(c)^T) x kn, then q' = exp(c) (*) qn + (QD (M (*) -exp(c)^T)) x kn, one window each.
+    for (uint32_t part = 0; FOLD && part < 2; ++part) {
+        tile_regs_acquire();
+        if (part == 1) {
+            reconfig_data_format(cb_kq_rows, cb_chunk_vec_mm);
+            mul_init(cb_kq_rows, cb_chunk_vec_mm);
+            for (uint32_t kt = 0; kt < Kt; ++kt) {
+                mul_tiles(cb_kq_rows, cb_chunk_vec_mm, Kt + kt, CV_EC, kt);
+            }
+        }
+        reconfig_data_format(cb_kq_rows, cb_chunk_mat);
+        matmul_init(cb_chunk_mat, cb_kq_rows);
+        for (uint32_t kt = 0; kt < Kt; ++kt) {
+            matmul_tiles(cb_chunk_mat, cb_kq_rows, part == 0 ? CM_MT : CM_QDMT, kt, kt);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_prep_send, part * Kt);
+        for (uint32_t i = 1; i < Kt; ++i) {
+            pack_at(i, cb_prep_send, part * Kt + i);
+        }
+        tile_regs_release();
+    }
+    if constexpr (FOLD) {
+        cb_pop_front(cb_chunk_mat, FOLD_MAT_PAGES);
+    }
 
     // [beta exp(c) (*) kn, exp(c) (*) qn]. FPU products: the Kt tiles of kn, then of qn, one window each, the scaling
     // vector read through cb_chunk_vec_mm: the same pages at the indices of cb_chunk_vec, whose read pointer is back
     // at the base at every head (a head pushes and pops exactly the buffer's pages).
     static_assert(Kt <= ckl::DEST_AUTO_LIMIT || SCALE_FPU == 0);
-    for (uint32_t part = 0; part < 2; ++part) {
+    for (uint32_t part = 0; !FOLD && part < 2; ++part) {
         if (!(part == 0 ? FPU_KN : FPU_QN)) {
             continue;
         }
@@ -426,9 +504,94 @@ ALWI void chunk_state(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint
 // R-PREP state core: the state part on the prescaled inbox operands (head_block), no broadcasts:
 //   [beta exp(c) Rk; exp(c) Rq] = [kq] x S,  U = M (beta V - beta exp(c) Rk),  O = exp(c) Rq + QD x U,
 //   S <- exp(c_last) S + (kn^T (*) exp(c_last - c)^T) x U.
+// STATE_FOLD: column tiles [vt0, vt0 + n) of U (part 0) or O (part 1) onto DEST slots d0.., on the folded operands.
+ALWI void fold_part(uint32_t s_mm, uint32_t part, uint32_t vt0, uint32_t n, uint32_t d0) {
+    reconfig_data_format(cb_in_v, cb_in_mat);
+    matmul_init(cb_in_mat, cb_in_v);
+    for (uint32_t i = 0; i < n; ++i) {
+        matmul_tiles(cb_in_mat, cb_in_v, part == 0 ? IN_MAT_M : IN_MAT_QD, vt0 + i, d0 + i);
+    }
+    reconfig_data_format(s_mm, cb_in_kq);
+    matmul_init(cb_in_kq, s_mm);
+    for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t kt = 0; kt < Kt; ++kt) {
+            matmul_tiles(cb_in_kq, s_mm, part * Kt + kt, kt * Vb + vt0 + i, d0 + i);
+        }
+    }
+}
+
+// STATE_FOLD: U -> cb_u and O -> cb_o_acc, one window when both fit a DEST half.
+ALWI void state_fold(uint32_t s_mm) {
+    constexpr bool ONE = 2 * Vb <= ckl::DEST_AUTO_LIMIT;
+    cb_wait_front(cb_in_mat, GDN_IN_MAT_PAGES);
+    cb_wait_front(cb_in_v, Vb);
+    cb_reserve_back(cb_u, Vb);
+    cb_reserve_back(cb_u_f32, Vb);
+    if constexpr (ONE) {
+        tile_regs_acquire();
+        fold_part(s_mm, 0, 0, Vb, 0);
+        fold_part(s_mm, 1, 0, Vb, Vb);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_u, 0);
+        for (uint32_t i = 1; i < Vb; ++i) {
+            pack_at(i, cb_u, i);
+        }
+        pack_first(Vb, cb_o_acc, 0);
+        for (uint32_t i = 1; i < Vb; ++i) {
+            pack_at(Vb + i, cb_o_acc, i);
+        }
+        tile_regs_release();
+        cb_push_back(cb_u, Vb);
+        cb_push_back(cb_u_f32, Vb);
+        GDN_MARK("m_st_o");
+        cb_wait_front(cb_u, Vb);
+        return;
+    }
+    for (uint32_t part = 0; part < 2; ++part) {
+        for (uint32_t vt0 = 0; vt0 < Vb; vt0 += ckl::DEST_AUTO_LIMIT) {
+            const uint32_t n = (Vb - vt0) < ckl::DEST_AUTO_LIMIT ? (Vb - vt0) : ckl::DEST_AUTO_LIMIT;
+            tile_regs_acquire();
+            fold_part(s_mm, part, vt0, n, 0);
+            if (HOLD && part == 0) {
+                commit_stay();
+            } else {
+                tile_regs_commit();
+            }
+            tile_regs_wait();
+            pack_first(0, part == 0 ? cb_u : cb_o_acc, vt0);
+            for (uint32_t i = 1; i < n; ++i) {
+                pack_at(i, part == 0 ? cb_u : cb_o_acc, vt0 + i);
+            }
+            if (HOLD && part == 0) {
+                release_stay();
+            } else {
+                tile_regs_release();
+            }
+        }
+        if (part == 0) {
+            cb_push_back(cb_u, Vb);
+            cb_push_back(cb_u_f32, Vb);
+            GDN_MARK("m_st_u");
+            cb_wait_front(cb_u, Vb);  // O's window starts behind U's release
+        }
+    }
+    GDN_MARK("m_st_o");
+}
+
 ALWI void chunk_state_prepped(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint32_t decay_bits) {
     // The state as a matmul operand (as read_state takes it).
     const uint32_t s_mm = first_in_pair ? cb_state_in_mm : cb_state_mm;
+    if constexpr (FOLD) {
+        cb_wait_front(first_in_pair ? cb_state_in : cb_state, n_state);
+        cb_wait_front(s_mm, n_state);
+        cb_wait_front(cb_in_kq, 2 * Kt);
+        state_fold(s_mm);
+        update_state<cb_in_knt>(first_in_pair, last_in_pair, cb_u, decay_bits);
+        cb_pop_front(cb_u, Vb);
+        cb_pop_front(cb_u_f32, Vb);
+        return;
+    }
     if constexpr (FUSED_RHS) {
         cb_wait_front(first_in_pair ? cb_state_in : cb_state, n_state);
         cb_wait_front(s_mm, n_state);

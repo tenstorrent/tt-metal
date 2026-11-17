@@ -177,6 +177,7 @@ def test_prep_shared_qk(device, monkeypatch, inputs, token_dtype):
 
     monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)
     monkeypatch.setattr(gdn_pd, "PREP_HEADS", 1)
+    monkeypatch.setattr(gdn_pd, "STATE_FOLD", True)  # "auto" would differ between the two plans
     torch.manual_seed(17)
     tensors = make_inputs(inputs)
     expected = reference(*(tensors[name] for name in ORDER))
@@ -208,6 +209,32 @@ def test_prep_norm_split_knobs(device, monkeypatch, inputs, norm_split, fused):
     monkeypatch.setattr(gdn_pd, "PREP_NORM_SPLIT", norm_split)
     monkeypatch.setattr(gdn_pd, "STATE_FUSED_RHS", fused)
     torch.manual_seed(19)
+    tensors = make_inputs(inputs)
+    expected = reference(*(tensors[name] for name in ORDER))
+    returned = gated_delta_net(*to_device(tensors, device), compute_kernel_config=compute_config())
+    check_call(returned, expected, inputs)
+
+
+@pytest.mark.parametrize("hold", [True, False], ids=["hold", "unpack"])
+@pytest.mark.parametrize("fold", [False, True], ids=["rhs", "fold"])
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        pytest.param(((1, 2, 256), (1, 3, 32, 64)), id="t2"),
+        pytest.param(((1, 200, 256), (1, 3, 32, 64)), id="t200"),
+        pytest.param(((1, 66, 256), (2, 3, 32, 64)), id="batched_b2_t33"),
+        pytest.param(((1, 20, 2560), (1, 12, 128, 128)), id="chip_t20"),
+        pytest.param(((1, 70, 2560), (1, 12, 128, 128)), id="chip_t70"),
+        pytest.param(((1, 1056, 2560), (1, 12, 128, 128)), id="chip_t1056"),
+    ],
+)
+def test_prep_state_fold(device, monkeypatch, inputs, fold, hold):
+    """STATE_FOLD (M folded into the state core's operands by the prep core) with and without STATE_HOLD, against the
+    reference."""
+    monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)
+    monkeypatch.setattr(gdn_pd, "STATE_FOLD", fold)
+    monkeypatch.setattr(gdn_pd, "STATE_HOLD", hold)
+    torch.manual_seed(29)
     tensors = make_inputs(inputs)
     expected = reference(*(tensors[name] for name in ORDER))
     returned = gated_delta_net(*to_device(tensors, device), compute_kernel_config=compute_config())

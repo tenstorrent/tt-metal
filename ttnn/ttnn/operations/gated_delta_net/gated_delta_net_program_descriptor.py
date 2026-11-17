@@ -224,6 +224,19 @@ PREP_M_BETA = True
 # U = M x rhs. The writer's diag(beta) page is scaled up by the mean loss of those two truncations (0.36 units in the
 # last place each), in quarter units: 3 is a factor of 1 + 0.75 * 2^-10.
 PREP_M_BETA_UNBIAS_Q = 3
+# R-PREP state step on operands with M folded in by the prep core (needs PREP_M_BETA, STATE_FUSED_RHS and
+# PREP_SCALE_FPU 1 | 2): U = M x V + Mk x S and O = (QD M) x V + q' x S, so the step has no rhs window and no pack /
+# unpack round trip between rhs and U, and O does not wait for U. The prep core pays 2 + Kt matmul pairs per head for
+# it (QD x M, QD x M~, M~ x kn in place of the kn scaling, + onto q): 1.3 us per head. T=1024 225.0 -> 209.4 us,
+# T=4096 682.0 -> 672.4. "auto": off where the q / k cores' plan gives its prep cores more than one tile row each
+# (prep-bound: T=512 134.3 -> 139.0 with it).
+STATE_FOLD = "auto"
+# STATE_FOLD: the factor on -exp(c) in M~ = M (*) -exp(c)^T (fp32 bits), the unbias of the truncations of M~ and of
+# Mk as FPU operands (PREP_FPU_UNBIAS_BITS counted the vector, kn's product and rhs).
+STATE_FOLD_UNBIAS_BITS = 0x3F801800
+# STATE_FOLD: PREP_M_BETA_UNBIAS_Q of the folded step, where v passes the FPU as well (M x V). The smallest setting of
+# the scan at which no gate case's state error is above the unfolded step's.
+STATE_FOLD_M_UNBIAS_Q = 4
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 # Per-unit inputs (S0, conv / gate / norm weights) in flight on a core that runs several units: the next unit's reads
 # overlap this unit's compute instead of waiting for its last pop (decode B=16: 2 units on most cores).
@@ -655,7 +668,15 @@ def _prep_qk_dests(ratio, heads):
     return ratio // heads
 
 
-def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_units=0):
+def _state_fold(shared, rows, per_group):
+    """STATE_FOLD of an R-PREP plan (PREP_SHARE_QK, tile rows per sequence, prep cores per group)."""
+    ok = PREP_M_BETA and STATE_FUSED_RHS and PREP_SCALE_FPU % 4 == 3
+    if STATE_FOLD == "auto":
+        return int(ok and not (shared and rows > per_group))
+    return int(bool(STATE_FOLD and ok))
+
+
+def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_units=0, fold=0):
     """R-PREP plans as (state, prep, q / k) lists of (indices, pages): the role's remotely written buffers first (the
     inbox buffers are exactly `inbox` slots, so tile row i lands in slot i % inbox; cb_kq_rows exactly PREP_KQ_DEPTH
     rows), then its own buffers. The q / k plan (PREP_SHARE_QK, else empty) starts with cb_qk_stage, its region base."""
@@ -671,7 +692,7 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_
         state[idx] = prep[idx] = 0
     state[CB_O_ACC] = O_ACC_DEPTH * Vb
     prep[CB_CHUNK_VEC] = CHUNK_VEC_PAGES + 1  # the chunk vectors, then exp(c_last - c)^T
-    prep[CB_CHUNK_MAT] = 1  # L, the operand of the inverse
+    prep[CB_CHUNK_MAT] = 5 if fold else 1  # L, the operand of the inverse; STATE_FOLD: + QD, M, M~, QD M~
     prep[CB_V_PREP] = heads * Vt
     prep[CB_PREP_SEND] = (PREP_SEND_HEADS or heads) * _head_block_pages(Kt, Vt)
     prep[CB_O_IN] = norm_units * Vt if norm_units else O_IN_DEPTH * heads * Vt  # PREP_NORM_SPLIT: per norm unit
@@ -942,8 +963,9 @@ def _prep_layout(
         if shared:  # the q / k landing and grant counters follow the inbox's
             inbox = min(inbox, MAX_SEMAPHORES - LANDED_FIRST_SEM_ID - 4 - _prep_qk_dests(ratio, heads))
         # The deepest inbox that fits L1 (a shallower one only costs slack between a grant and its landing).
+        fold = _state_fold(shared, max(_seq_tile_rows(seq, tokens) for seq in range(batch)), per_group)
         while inbox >= 1:
-            plans = _prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox, shared)
+            plans = _prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox, shared, fold=fold)
             if _prep_plan_bytes(plans, dtype) <= budget:
                 return per_group, inbox, heads, shared
             inbox -= 1
@@ -1383,6 +1405,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     heads = ratio  # R-PREP: value heads per prep group
     shared = False  # R-PREP: PREP_SHARE_QK (q / k cores)
     norm_split = False  # R-PREP: PREP_NORM_SPLIT
+    fold = 0  # R-PREP: STATE_FOLD
     if prep is None:
         inbox = 0
         # The deepest per-unit input depth that fits L1 (1 when every core runs one unit).
@@ -1423,7 +1446,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         check_l1_footprint("pair and q / k" if qk_cores else "pair", _plan_bytes(cb_plan, token_dtype), budget, l1_end)
     else:
         per_group, inbox, heads, shared = prep
-        prep_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared)
+        fold = _state_fold(shared, max(_seq_tile_rows(seq, tokens) for seq in range(batch)), per_group)
+        prep_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared, fold=fold)
         groups_per_kh = ratio // heads
         qk_extra = 2 if shared else 0  # q / k cores per (sequence, key head) and stride position
         # Group first units: heads value heads (each `pieces` units) from value head h0.
@@ -1436,7 +1460,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             units = max(
                 -(-rows * heads // (stride - rows % stride)) for rows, stride in zip(group_rows, strides)
             )  # per norm core, at most
-            split_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared, units)
+            split_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared, units, fold)
             if (
                 units <= PREP_NORM_MAX_ROWS * heads
                 and heads * pieces <= inbox  # one landing counter per (head, piece), on the inbox ids
@@ -1935,6 +1959,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if len(modes) < NUM_CB_SLOTS:
         modes = modes + [ttnn.UnpackToDestMode.Default] * (NUM_CB_SLOTS - len(modes))
     for idx in U2D_CBS:
+        if idx == CB_IN_V and fold:
+            continue  # v is a matmul operand of the folded step
         fp32_cb = idx not in TOKEN_CBS or token_dtype == ttnn.float32
         modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32 if fp32_cb else ttnn.UnpackToDestMode.Default
     compute_kernel_config.unpack_to_dest_mode = modes
@@ -1977,7 +2003,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_FPU_UNBIAS_BITS", f"{PREP_FPU_UNBIAS_BITS:#x}u"),
             ("GDN_PREP_M_BETA", str(int(prep is not None and PREP_M_BETA))),
             ("GDN_STATE_HOLD", str(int(prep is not None and STATE_HOLD and STATE_FUSED_RHS and not DST_FULL_SYNC))),
-            ("GDN_M_BETA_UNBIAS_Q", str(int(PREP_M_BETA_UNBIAS_Q))),
+            ("GDN_M_BETA_UNBIAS_Q", str(int(STATE_FOLD_M_UNBIAS_Q if fold else PREP_M_BETA_UNBIAS_Q))),
+            ("GDN_STATE_FOLD", str(fold)),
+            ("GDN_FOLD_UNBIAS_BITS", f"{STATE_FOLD_UNBIAS_BITS:#x}u"),
         ]
     )
     if packed:
