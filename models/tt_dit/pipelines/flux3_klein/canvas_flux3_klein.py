@@ -237,11 +237,10 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
         ttnn.deallocate(c1)
         h = r.conv2.forward(n2)
         ttnn.deallocate(n2)
+        # the shortcut's output is the CCL manager's persistent reduce-scatter buffer: never freed here
         shortcut = r.conv_shortcut.forward(x) if r.conv_shortcut is not None else x
         out = shortcut + h
         ttnn.deallocate(h)
-        if shortcut is not x:
-            ttnn.deallocate(shortcut)
         return out
 
     def _attention(self, attn: VaeAttention, x: ttnn.Tensor, masks: CanvasMasks) -> ttnn.Tensor:
