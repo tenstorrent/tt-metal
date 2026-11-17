@@ -1967,11 +1967,18 @@ def run_chunked_transformer_updated(
     # Ask THAT class whether its cache is complete: the answer is model-specific. Kimi-K3 answers
     # from per-layer completion markers rather than by composing each component's own check, since
     # `ttnn.as_tensor` silently caches a `torch.empty` placeholder when a file is absent (#54841).
+    # Check what THIS build loads: the variant's own model_cfg (which bias file its gate reads, centred or not;
+    # a LatentMoE's projections) and the last layer kv-only, as constructed below (kv_only_last_layer=True), with
+    # hf_config so a `full`-indexer last layer (Hy4-preview's) still requires its indexer cache. A fully built
+    # cache passes either way; a runner-built one holds only the kv-only pieces for its last layer.
     assert transformer_cls.check_cache_complete(
         effective_cache_path,
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        kv_only_last_layer=True,
+        model_cfg=variant.model_config,
+        hf_config=config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     profiler.start("tt_transformer_creation")
@@ -2594,6 +2601,8 @@ def run_chunked_transformer_updated(
             slot_layer_ids=getattr(variant, "kv_slot_layer_ids", lambda n: None)(num_layers),
             # NoPE models have no rotation in the second half to re-base.
             pe_interleave=getattr(variant, "kv_pe_interleave", True),
+            # The block-cyclic un-rotation follows the chunk width the cache was written with.
+            chunk_size=chunk_size,
         )
         # GLM/DSA only: the indexer's own key cache. Read back after the run like the KVPE cache, so
         # unlike the per-layer decoder PCC (which needs a mid-forward host readback and is therefore
@@ -2611,6 +2620,7 @@ def run_chunked_transformer_updated(
                 config,
                 tp_shard_kv=tp_shard_kv,
                 sp_axis=sp_axis,
+                chunk_size=chunk_size,
             )
 
     # Release the captured trace + the sub-device managers that own its buffers BEFORE the mesh

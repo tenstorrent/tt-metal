@@ -259,6 +259,8 @@ class TtPrefillRuntime:
                 # reports complete and the placeholder is loaded as the weights.
                 routed_expert_weights_dtype=self.config.routed_expert_weights_dtype,
                 mtp_levels=self.config.mtp_levels,
+                # The kv-only last layer's indexer cache is required iff that layer is a `full` one.
+                hf_config=self.hf_config,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             elif not state_dict:

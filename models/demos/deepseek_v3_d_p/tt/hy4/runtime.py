@@ -9,6 +9,9 @@ on Hy4's full/shared layer map, and the prefill MoE. Everything Hy4 changes ther
 
 * the weight-cache rebuild reads Hy4's checkpoint layout (fused routed experts, MXFP8 scales,
   ``linear_gate``) through ``tt/runners/hy4_checkpoint.py``;
+* MLA / indexer caches built before the RoPE frame reorder (``hy4_checkpoint.HY4_MLA_CACHE_FORMAT``) are stale:
+  their layers carry no format stamp, so their files are deleted and rebuilt from the checkpoint, and every layer
+  is stamped once the model has built;
 * there is no MTP predictor yet: the shared build would start GLM-5.3's, which reads the DeepSeek
   ``model.layers.78`` keys; Hy4 stores its MTP layer as ``model.mtp_layers.0`` (#65925).
 
@@ -23,6 +26,9 @@ Hooks for the sibling issues:
 
 from __future__ import annotations
 
+from loguru import logger
+
+from models.demos.deepseek_v3_d_p.tt.runners import hy4_checkpoint as hc
 from models.demos.deepseek_v3_d_p.tt.runners.hy4_checkpoint import load_hy4_trunk_state_dict
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
@@ -37,4 +43,22 @@ class TtHy4Runtime(TtPrefillRuntime):
             raise NotImplementedError(
                 f"Hy4-preview prefill has no MTP predictor yet (#65925); got mtp_levels={self.config.mtp_levels}"
             )
+        cache = self.config.weight_cache_path
+        layers = range(self.config.first_layer_idx, self.config.first_layer_idx + self.config.num_layers)
+        if cache:
+            stale = hc.stale_mla_cache_layers(cache, layers)
+            if stale:
+                if not self._can_build_missing_cache():
+                    raise RuntimeError(
+                        f"Hy4 MLA/indexer cache at {cache} for layers {stale} predates format "
+                        f"{hc.HY4_MLA_CACHE_FORMAT} (RoPE frame reorder) and there is no checkpoint at "
+                        f"{self.config.hf_model_path} to rebuild it from"
+                    )
+                n = hc.purge_mla_cache(cache, stale)
+                logger.warning(
+                    f"Hy4: MLA/indexer cache of layers {stale[0]}..{stale[-1]} ({len(stale)} layers, {n} files) "
+                    f"predates format {hc.HY4_MLA_CACHE_FORMAT}; deleted, rebuilding from the checkpoint"
+                )
         super()._build_model(state_dict)
+        if cache:
+            hc.stamp_mla_cache(cache, layers)

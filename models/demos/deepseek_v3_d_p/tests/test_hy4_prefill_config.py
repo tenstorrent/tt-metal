@@ -183,6 +183,47 @@ def test_kv_only_last_layer_needs_its_indexer_cache_when_full(tmp_path):
     assert wc._kv_only_indexer_cache_complete(tmp_path, "layer_77", 77, None)
 
 
+def _kv_only_cache(root, layer, with_indexer):
+    """The files a runner writes for a kv-only last layer: attn_norm, the KV projections (+ the indexer)."""
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
+
+    names = [
+        f"layer_{layer}.attn_norm_weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin",
+        f"layer_{layer}.mla.kv_a_layernorm_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin",
+        f"layer_{layer}.mla.kv_a_proj_with_mqa_dtype_BFLOAT8_B_layout_TILE.tensorbin",
+    ]
+    if with_indexer:
+        for name in TtIndexer.WEIGHT_NAMES:
+            short = TtIndexer._cache_short_name(name)
+            names.append(f"layer_{layer}.mla.indexer_{short}_dtype_{TtIndexer.WEIGHT_DTYPES[name].name}_x.tensorbin")
+    root.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        (root / n).touch()
+
+
+@pytest.mark.parametrize("with_indexer", [False, True], ids=["no-indexer", "indexer"])
+def test_transformer_cache_check_is_kv_only_aware_on_the_last_layer(tmp_path, with_indexer):
+    """The non-rebuild ``TtPrefillTransformer.check_cache_complete`` (used by the chunked test driver and the
+    runtime when it cannot rebuild): a kv-only last layer needs only attn_norm + the KV projections, plus its
+    indexer on a ``full`` indexer layer (Hy4's 77); GLM-5.3's ``shared`` 77 does not. Without
+    ``kv_only_last_layer`` the check is unchanged: a kv-only cache is not complete."""
+    pytest.importorskip("ttnn")
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+
+    _kv_only_cache(tmp_path, 77, with_indexer)
+
+    def check(**kw):
+        return TtPrefillTransformer.check_cache_complete(
+            tmp_path, 1, first_k_dense=1, first_layer_idx=77, is_first_rank=False, model_cfg=Hy4Config, **kw
+        )
+
+    assert check(kv_only_last_layer=True, hf_config=hy4_hf_config()) == with_indexer
+    assert check(kv_only_last_layer=True, hf_config=glm_5_3_hf_config())  # shared layer: no indexer needed
+    assert not check(hf_config=hy4_hf_config())  # full-layer check (FFN/MoE, Q, ...) as before
+    assert not check(kv_only_last_layer=True, is_last_rank=False, hf_config=hy4_hf_config())
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # HF-attribute config + config.json validation
 # ---------------------------------------------------------------------------------------------------------------
@@ -382,6 +423,7 @@ def test_adapter_builds_the_hy4_runtime_class(adapter):
 # ---------------------------------------------------------------------------------------------------------------
 
 H, Q, KV, I, E, HEADS = 64, 32, 32, 32, 4, 2  # tiny stand-ins (every quantized last dim a multiple of 32)
+NOPE, ROPE, INDEX_D, INDEX_ROPE = 4, 8, 8, 4  # tiny q/k head and index-key widths
 DENSE_I = 64
 
 
@@ -423,8 +465,8 @@ def _write_checkpoint(root: Path, mxfp8: bool) -> dict:
         a = p + "self_attn."
         put(a + "q_a_proj.weight", r(Q, H))
         put(a + "q_a_layernorm.weight", r(Q), quant=False)
-        put(a + "q_b_proj.weight", r(HEADS * 8, Q))
-        put(a + "kv_a_proj_with_mqa.weight", r(KV + 8, H))
+        put(a + "q_b_proj.weight", r(HEADS * (NOPE + ROPE), Q))
+        put(a + "kv_a_proj_with_mqa.weight", r(KV + ROPE, H))
         put(a + "kv_a_layernorm.weight", r(KV), quant=False)
         put(a + "kv_b_proj.weight", r(HEADS * 8, KV))
         put(a + "o_proj.weight", r(H, HEADS * 8 * 4))
@@ -502,9 +544,11 @@ def test_checkpoint_reads_fused_experts_and_remaps_attention(tmp_path, mxfp8):
             mxfp8,
         )
 
-    class Cfg:  # the per-layer maps hy4_layer_state_dict reads
+    class Cfg:  # the per-layer maps and head dims hy4_layer_state_dict reads
         indexer_types = ["full", "full", "shared"]
         mla_use_output_gate = True
+        kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim = KV, NOPE, ROPE
+        index_head_dim, index_rope_dim = INDEX_D, INDEX_ROPE
 
     class MCfg:
         MOE_INTERMEDIATE_SIZE = I
@@ -514,7 +558,14 @@ def test_checkpoint_reads_fused_experts_and_remaps_attention(tmp_path, mxfp8):
     sd0 = hc.hy4_layer_state_dict(ckpt, Cfg, MCfg, 0, everything)
     mla0 = sd0["mla_weights"]
     assert _close(mla0["g_proj.weight"], ref["model.layers.0.self_attn.linear_gate.weight"], False)
-    assert _close(mla0["indexer.k_norm_bias.weight"], ref["model.layers.0.self_attn.indexer.k_norm.bias"], False)
+    # In the device RoPE frames (test_hy4_rope_frames.py covers the reorders themselves).
+    index_perm = hc.index_k_device_perm(INDEX_D, INDEX_ROPE)
+    assert _close(
+        mla0["indexer.k_norm_bias.weight"], ref["model.layers.0.self_attn.indexer.k_norm.bias"][index_perm], False
+    )
+    kv_a = ref["model.layers.0.self_attn.kv_a_proj_with_mqa.weight"]
+    want_kv_a = torch.cat([kv_a[:KV], kv_a[KV:][hc.half_split_to_interleaved_perm(ROPE)]])
+    assert _close(mla0["kv_a_proj_with_mqa.weight"], want_kv_a, mxfp8)
     assert mla0["q_a_layernorm.weight"].dtype == torch.float32
     assert mla0["indexer.weights_proj.weight"].dtype == torch.float32
     assert mla0["q_b_proj.weight"].dtype == torch.bfloat16

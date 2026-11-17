@@ -20,6 +20,12 @@ cache writers) is shared with GLM-5.3 unchanged:
   * iHC: ``hc_attn_layer.hc_pre.*`` / ``hc_mlp_layer.hc_pre.*`` per layer plus ``model.hc_head.*``,
     not consumed by the prefill stack yet (#65891). ``pending_layer_tensors`` returns them, so those
     issues can add their cache category without re-deriving the key names.
+  * RoPE frames: Hy4's HF attention ropes its raw projection columns HALF-SPLIT (pairs ``(i, i + d/2)``),
+    with no DeepSeek-style interleave reshuffle of ``q_pe`` / ``k_pe``, and its indexer ropes the LAST 64
+    of the 128 index-key dims. ttMLA ropes INTERLEAVED pairs ``(2i, 2i + 1)`` and TtIndexer ropes the FIRST
+    64 dims, interleaved. ``hy4_mla_weights`` reorders the output rows of the affected projections (and the
+    index-key LayerNorm) so the device computes the same attention: see ``mla_rope_to_device_frame`` and
+    ``indexer_to_device_frame``. Caches built before that reorder are stale (``HY4_MLA_CACHE_FORMAT``).
 
 Import-light (torch + safetensors only); nothing here opens a device.
 """
@@ -140,9 +146,140 @@ class Hy4Checkpoint(wc._Checkpoint):
             return int(f.get_slice(key).get_shape()[-1])
 
 
-def hy4_mla_weights(ckpt: Hy4Checkpoint, layer_prefix: str, *, owns_indexer: bool, gated: bool) -> dict:
+# ---------------------------------------------------------------------------------------------------------------
+# RoPE frames: HF Hy4 (half-split) -> ttMLA / TtIndexer (interleaved)
+# ---------------------------------------------------------------------------------------------------------------
+# The golden-trace tooling (reference/hy4/golden.py, #65919) defines the same two permutations to read device
+# caches back into the HF frame; once both land it should import these instead of keeping its own copy.
+
+# Bumped whenever the MLA / indexer tensors hy4_mla_weights produces change for the same checkpoint. A layer whose
+# MLA cache carries no stamp for this value was built by an older reader and is rebuilt (tt/hy4/runtime.py).
+#   1: half-split -> interleaved RoPE reorder of q_b_proj / kv_a_proj_with_mqa and the index-key frame change.
+HY4_MLA_CACHE_FORMAT = 1
+
+
+def half_split_to_interleaved_perm(d: int) -> torch.Tensor:
+    """``out = x[..., perm]`` turns a half-split RoPE vector (pairs ``(i, i + d/2)``) into an interleaved one
+    (pairs ``(2i, 2i + 1)``) at the same frequencies: ``perm = [0, h, 1, h + 1, ...]`` with ``h = d / 2``.
+    Same convention as ``utils.test_utils.interleave_pe`` and ``tt.mla.rope.interleaved_perm_matrix``."""
+    if d % 2:
+        raise ValueError(f"RoPE width must be even, got {d}")
+    h = d // 2
+    return torch.stack([torch.arange(h), torch.arange(h) + h], dim=-1).reshape(d)
+
+
+def index_k_device_perm(index_head_dim: int, rope_dim: int) -> torch.Tensor:
+    """Index-key column permutation, HF frame -> TtIndexer frame: ``[nope | rope (half-split)]`` ->
+    ``[rope (interleaved) | nope]``. Applied to the output rows of ``wk``, to ``k_norm`` weight / bias and to
+    each head's rows of ``wq_b``, it makes the device emit (and rope) keys / queries in its own frame."""
+    if not 0 < rope_dim <= index_head_dim:
+        raise ValueError(f"index rope width {rope_dim} must be in (0, {index_head_dim}]")
+    nope = index_head_dim - rope_dim
+    return torch.cat([nope + half_split_to_interleaved_perm(rope_dim), torch.arange(nope)])
+
+
+def _per_head_rows(w: torch.Tensor, head_dim: int, row_perm: torch.Tensor) -> torch.Tensor:
+    """Apply ``row_perm`` (over ``head_dim``) to every head's block of output rows of a ``[heads * head_dim, in]``
+    Linear weight."""
+    if w.shape[0] % head_dim:
+        raise ValueError(f"{tuple(w.shape)} rows are not a multiple of the head width {head_dim}")
+    heads = w.shape[0] // head_dim
+    return w.reshape(heads, head_dim, -1)[:, row_perm].reshape(w.shape).contiguous()
+
+
+def mla_rope_to_device_frame(weights: dict, *, kv_lora_rank: int, qk_nope_head_dim: int, qk_rope_head_dim: int) -> dict:
+    """Reorder the RoPE output rows of ``kv_a_proj_with_mqa`` (``[kv_lora | k_pe]``) and of every head of
+    ``q_b_proj`` (``[q_nope | q_pe]``) from half-split to interleaved. q_pe . k_pe is unchanged (both get the same
+    permutation and the rotation pairs move with it), and the device's interleaved-roped k_pe equals the HF
+    half-split-roped k_pe re-based by ``interleave_pe``, which is how the KVPE cache is compared to the golden."""
+    out = dict(weights)
+    rp = half_split_to_interleaved_perm(qk_rope_head_dim)
+    kv = out["kv_a_proj_with_mqa.weight"]
+    if kv.shape[0] != kv_lora_rank + qk_rope_head_dim:
+        raise ValueError(f"kv_a_proj_with_mqa {tuple(kv.shape)}: expected {kv_lora_rank} + {qk_rope_head_dim} rows")
+    out["kv_a_proj_with_mqa.weight"] = torch.cat([kv[:kv_lora_rank], kv[kv_lora_rank:][rp]]).contiguous()
+    if "q_b_proj.weight" in out:
+        head = qk_nope_head_dim + qk_rope_head_dim
+        row_perm = torch.cat([torch.arange(qk_nope_head_dim), qk_nope_head_dim + rp])
+        out["q_b_proj.weight"] = _per_head_rows(out["q_b_proj.weight"], head, row_perm)
+    return out
+
+
+def indexer_to_device_frame(weights: dict, *, index_head_dim: int, rope_dim: int) -> dict:
+    """Put the indexer's keys and queries in TtIndexer's frame (``index_k_device_perm``): rows of ``wk`` and of
+    every head of ``wq_b``, and the k LayerNorm's weight / bias (LayerNorm commutes with a permutation of its
+    features when its affine parameters move with them). q . k per head is unchanged."""
+    out = dict(weights)
+    perm = index_k_device_perm(index_head_dim, rope_dim)
+    wk = out["indexer.wk.weight"]
+    if wk.shape[0] != index_head_dim:
+        raise ValueError(f"indexer.wk {tuple(wk.shape)}: expected {index_head_dim} rows")
+    out["indexer.wk.weight"] = wk[perm].contiguous()
+    for key in ("indexer.k_norm.weight", "indexer.k_norm_bias.weight"):
+        out[key] = out[key][..., perm].contiguous()
+    out["indexer.wq_b.weight"] = _per_head_rows(out["indexer.wq_b.weight"], index_head_dim, perm)
+    return out
+
+
+def _mla_cache_files(cache_path) -> dict[int, list]:
+    """``{layer: [tensorbin Path, ...]}`` of every MLA + indexer cache file (``layer_{i}.mla.*``,
+    ``layer_{i}.mla_repl.*``, ``layer_{i}.mla_tp.*``; the indexer's files are ``layer_{i}.mla.indexer_*``). One
+    directory scan."""
+    from pathlib import Path
+
+    files: dict[int, list] = {}
+    cache_path = Path(cache_path)
+    if not cache_path.is_dir():
+        return files
+    for f in cache_path.iterdir():
+        head, dot, rest = f.name.partition(".")
+        if not (dot and head.startswith("layer_") and head[6:].isdigit() and f.name.endswith(".tensorbin")):
+            continue
+        if rest.split(".", 1)[0] in ("mla", "mla_repl", "mla_tp"):
+            files.setdefault(int(head[6:]), []).append(f)
+    return files
+
+
+def mla_cache_stamp(cache_path, layer_idx: int):
+    """The marker saying layer ``layer_idx``'s MLA / indexer cache was built at ``HY4_MLA_CACHE_FORMAT``."""
+    from pathlib import Path
+
+    return Path(cache_path) / f"layer_{layer_idx}.mla.hy4_format_{HY4_MLA_CACHE_FORMAT}.stamp"
+
+
+def stale_mla_cache_layers(cache_path, layers) -> list[int]:
+    """Layers of ``layers`` that hold MLA / indexer cache files but no stamp for the current format: built by an
+    older reader (e.g. before the RoPE frame reorder) and not to be loaded."""
+    files = _mla_cache_files(cache_path)
+    return [i for i in layers if files.get(i) and not mla_cache_stamp(cache_path, i).exists()]
+
+
+def purge_mla_cache(cache_path, layers) -> int:
+    """Delete the MLA / indexer cache files of ``layers`` so the rebuild writes them afresh (``ttnn.as_tensor``
+    loads an existing file instead of converting the weights it is given). Returns the number removed."""
+    files = _mla_cache_files(cache_path)
+    n = 0
+    for i in layers:
+        for f in files.get(i, ()):
+            f.unlink(missing_ok=True)
+            n += 1
+        mla_cache_stamp(cache_path, i).unlink(missing_ok=True)
+    return n
+
+
+def stamp_mla_cache(cache_path, layers) -> list[int]:
+    """Stamp the layers of ``layers`` whose MLA cache files exist as built at the current format. Returns them."""
+    files = _mla_cache_files(cache_path)
+    done = [i for i in layers if files.get(i)]
+    for i in done:
+        mla_cache_stamp(cache_path, i).touch()
+    return done
+
+
+def hy4_mla_weights(ckpt: Hy4Checkpoint, layer_prefix: str, *, owns_indexer: bool, gated: bool, config) -> dict:
     """One layer's ttMLA weight dict in canonical names (norms and ``weights_proj`` fp32, the rest bf16, as
-    ``load_attention_state_dict`` produces for GLM). A ``shared`` indexer layer has no indexer tensors."""
+    ``load_attention_state_dict`` produces for GLM), in the device RoPE frames (module docstring). A ``shared``
+    indexer layer has no indexer tensors. ``config`` supplies the head dims (the hy_v4 HF config)."""
     names = dict(_MLA_KEYS)
     if owns_indexer:
         names.update(_INDEXER_KEYS)
@@ -152,6 +289,20 @@ def hy4_mla_weights(ckpt: Hy4Checkpoint, layer_prefix: str, *, owns_indexer: boo
     for src, canon in names.items():
         t = ckpt._read(f"{layer_prefix}.self_attn.{src}")
         out[canon] = t.float() if ("norm" in canon or "weights_proj" in canon) else t
+    out = mla_rope_to_device_frame(
+        out,
+        kv_lora_rank=int(config.kv_lora_rank),
+        qk_nope_head_dim=int(config.qk_nope_head_dim),
+        qk_rope_head_dim=int(config.qk_rope_head_dim),
+    )
+    if owns_indexer:
+        # TtIndexer's rope width (index_rope_dim, default 64); 0 would be a NoPE indexer with nothing to reorder.
+        rope_dim = getattr(config, "index_rope_dim", None)
+        rope_dim = 64 if rope_dim is None else int(rope_dim)
+        if rope_dim:
+            if not getattr(config, "index_rope_interleave", True):
+                raise ValueError("indexer_to_device_frame targets TtIndexer's interleaved rope (index_rope_interleave)")
+            out = indexer_to_device_frame(out, index_head_dim=int(config.index_head_dim), rope_dim=rope_dim)
     return out
 
 
@@ -169,6 +320,7 @@ def hy4_layer_state_dict(ckpt: Hy4Checkpoint, config, model_cfg, layer_idx: int,
             prefix,
             owns_indexer=not indexer_layer_is_reused(config, layer_idx),
             gated=bool(getattr(config, "mla_use_output_gate", False)),
+            config=config,
         )
     if wc.ROUTED_EXPERTS in categories:
         intermediate = model_cfg.MOE_INTERMEDIATE_SIZE

@@ -94,6 +94,7 @@ class TtPrefillTransformer(LightweightModule):
         model_cfg: type | None = None,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         mtp_levels: int = 0,
+        hf_config=None,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -117,14 +118,19 @@ class TtPrefillTransformer(LightweightModule):
             is_first_rank: a pipeline-parallel rank builds the embedding only on the
                 first rank, so check it only there. True for single-rank.
             is_last_rank / kv_only_last_layer: the rank's position and last-layer mode, passed by
-                the runtime alongside the model's own construction arguments. There is no final
-                norm / LM-head cache to gate on them any more, so they do not change what is checked.
+                the runtime alongside the model's own construction arguments. On the last rank of a
+                kv_only_last_layer model the last layer is checked kv-only (attn_norm + KV projections,
+                + its indexer on a ``full`` indexer layer), which is all such a model loads and all a
+                runner-built cache holds for it. A fully built cache still passes.
             model_cfg: Variant static-constants class, forwarded to the per-block check. Optional
                 so existing callers are unaffected, but MUST be passed for a LatentMoE model
                 (Kimi-K3): without it the block check cannot know to look for the
                 latent-projection cache files and reports a cache missing them as complete.
             mtp_levels: K, the MTP levels this model runs (0 = none). A last rank running MTP loads
                 the embedding table too, so pass the config value and let rank_loads_embedding() decide.
+            hf_config: the HF config, for the per-layer indexer map (``indexer_types``) the kv-only
+                last-layer check needs. Optional: without it the kv-only check cannot require a
+                ``full`` last layer's indexer cache.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -152,6 +158,8 @@ class TtPrefillTransformer(LightweightModule):
                 experts_per_chip,
                 model_cfg=model_cfg,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                kv_only=kv_only_last_layer and is_last_rank and local_idx == num_layers - 1,
+                hf_config=hf_config,
             ):
                 return False
 

@@ -87,8 +87,16 @@ class TtPrefillBlock(LightweightModule):
         *,
         model_cfg: type | None = None,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        kv_only: bool = False,
+        hf_config=None,
     ) -> bool:
         """Check if block cache is complete (norms + MLA + FFN/MoE).
+
+        ``kv_only``: the block is built kv-only (a ``kv_only_last_layer`` transformer's last layer). It reads
+        attn_norm and the KV projections and nothing else (no Q / output projections, FFN or MoE), plus its
+        indexer when it is a ``full`` indexer layer (it still writes the index keys decode reads). The indexer
+        files are only required when ``hf_config`` says so (``indexer_types``): GLM-5.3's last layer is
+        ``shared``, Hy4-preview's (77) is ``full``. Matches ``weight_categories.missing_trunk_categories``.
 
         ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
         cannot know to look for the latent-projection cache files, and would report a cache that is
@@ -103,6 +111,8 @@ class TtPrefillBlock(LightweightModule):
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
             return False
+        if kv_only:
+            return TtPrefillBlock._kv_only_mla_cache_complete(cache_path, prefix, layer_idx, hf_config)
         if not ttMLA.check_cache_complete(
             cache_path,
             f"{prefix}.mla",
@@ -132,6 +142,22 @@ class TtPrefillBlock(LightweightModule):
                 return False
 
         return True
+
+    @staticmethod
+    def _kv_only_mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, hf_config) -> bool:
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, indexer_layer_is_reused, resolve_has_indexer
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
+        for name in ("kv_a_layernorm", "kv_a_proj_with_mqa"):
+            if not pattern_exists(f"{prefix}.mla.{name}*.tensorbin", "MLA"):
+                logger.debug(f"TTNN cache missing: {prefix}.mla.{name}")
+                return False
+        owns_indexer = (
+            hf_config is not None
+            and resolve_has_indexer(hf_config)
+            and not indexer_layer_is_reused(hf_config, layer_idx)
+        )
+        return not owns_indexer or TtIndexer.check_cache_complete(cache_path, f"{prefix}.mla")
 
     @staticmethod
     def build_ttnn_cache(
