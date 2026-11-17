@@ -20,8 +20,14 @@ TEST_F(LLKBlackholeSingleCardFixture, CsaIndexRemapReinitializesSfpu) {
     constexpr std::uint32_t rows_per_bank = 16384;
     constexpr std::uint32_t rows_per_chunk = 32;
     constexpr std::uint32_t row_offset = 256;
+    // Output word [bank:3 at bit 14 | row-in-bank:14]: the window holds
+    // banks_per_device * rows_per_bank positions. Enumerate rows up to the last
+    // chunk that fits the window for every device/bank pair.
+    constexpr std::uint32_t capacity = banks_per_device * rows_per_bank;
+    constexpr std::uint32_t positions_per_chunk = devices * banks_per_device * rows_per_chunk;
+    constexpr std::uint32_t top = ((capacity - row_offset) / positions_per_chunk) * rows_per_chunk - 1;
     constexpr std::array<std::uint32_t, 16> rows{
-        0, 1, 7, 8, 30, 31, 32, 33, 255, 256, 511, 512, 8191, 8192, 16382, 16383};
+        0, 1, 7, 8, 30, 31, 32, 33, 255, 256, 511, 512, top - 32, top - 31, top - 1, top};
     constexpr std::uint32_t samples_per_bank = rows.size();
     std::vector<std::uint32_t> input(tiles * tt::constants::TILE_HW);
     auto golden = input;
@@ -40,7 +46,9 @@ TEST_F(LLKBlackholeSingleCardFixture, CsaIndexRemapReinitializesSfpu) {
             const auto position =
                 ((row / rows_per_chunk * devices + device) * banks_per_device + bank) * rows_per_chunk +
                 row % rows_per_chunk + row_offset;
-            golden[index] = (position % banks_per_device) * rows_per_bank | position / banks_per_device;
+            const auto output_row = position / banks_per_device;
+            ASSERT_LT(output_row, rows_per_bank) << "enumerated input lies outside the window";
+            golden[index] = (position % banks_per_device) * rows_per_bank + output_row;
         }
     }
 
