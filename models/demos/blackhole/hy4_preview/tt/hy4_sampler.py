@@ -31,6 +31,9 @@ import torch
 import ttnn
 
 VOCAB = 120832  # Hy4: 8 x 15104 = 8 x 472 tiles
+# strays2: HY4_SAMP_EXACT=1 computes the inverse-CDF prefix sums with ttnn.cumsum (fp32-exact, rel 1e-7) instead of fp32 triangular matmuls (the matmul path only keeps ~11 mantissa bits: the CDF of the draw
+# is off by up to 3e-4 absolute, so draws within that distance of a heavy token's edge land on the near-zero-probability token behind it in vocabulary order: ~1e-3 impossible tokens per sampled token, the stray CJK / junk tokens of GPQA thinking runs)
+_SAMP_EXACT = os.environ.get("HY4_SAMP_EXACT", "0") == "1"
 _RM_CCL = os.environ.get("HY4_SAMP_RM", "1") == "1"  # ROW_MAJOR dim-2 all-gathers instead of TILE dim-3 + tiny reshapes
 
 
@@ -81,6 +84,23 @@ class Hy4DeviceSampler:
         self.params = None
         self.stop = None  # stage name: forward returns right after it (cost bisection)
         self.prof = None  # list of (stage, seconds) when profiling eagerly
+
+    def prefix(self, w):
+        """(P, offs): inclusive prefix of w [T,1,PR,32] inside each row of 32 and the EXCLUSIVE prefix over the row totals [T,1,PR,1]."""
+        if _SAMP_EXACT:
+            P = ttnn.cumsum(w, dim=-1)
+            R = ttnn.slice(P, [0, 0, 0, 31], [w.shape[0], 1, self.PR, 32])
+            return P, ttnn.subtract(ttnn.cumsum(R, dim=2), R)
+        P = ttnn.matmul(w, self.u32, compute_kernel_config=self.ckc)
+        R = ttnn.slice(P, [0, 0, 0, 31], [w.shape[0], 1, self.PR, 32])
+        offs = ttnn.transpose(ttnn.matmul(ttnn.transpose(R, 2, 3), self.ustrict, compute_kernel_config=self.ckc), 2, 3)
+        return P, offs
+
+    def col_prefix(self, tot_all):
+        """inclusive prefix over the 8 column totals [1,1,T,cols]"""
+        if _SAMP_EXACT:
+            return ttnn.cumsum(tot_all, dim=-1)
+        return ttnn.matmul(tot_all, self.tri, compute_kernel_config=self.ckc)
 
     def _mark(self, name):
         if self.prof is not None:
@@ -345,11 +365,7 @@ class Hy4DeviceSampler:
                 return tau_p
             w = ttnn.multiply(e4, ttnn.ge(s4, self._v4(tau_p)))
         # inclusive prefix over the slice in vocabulary order: within rows of 32 (matmul with a triangular matrix), then the exclusive prefix over the row totals
-        P = ttnn.matmul(w, self.u32, compute_kernel_config=self.ckc)  # [T,1,PR,32]
-        R = ttnn.slice(P, [0, 0, 0, 31], [T, 1, PR, 32])  # [T,1,PR,1] row totals
-        offs = ttnn.transpose(
-            ttnn.matmul(ttnn.transpose(R, 2, 3), self.ustrict, compute_kernel_config=self.ckc), 2, 3
-        )  # [T,1,PR,1]
+        P, offs = self.prefix(w)  # [T,1,PR,32], [T,1,PR,1]
         cs = ttnn.add(P, offs)
         self._mark("prefix")
         if self.stop == "prefix":
@@ -357,9 +373,7 @@ class Hy4DeviceSampler:
         tot_c = ttnn.reshape(ttnn.slice(cs, [0, 0, PR - 1, 31], [T, 1, PR, 32]), [1, 1, T, 1])
         tot_all = self.mc.allgather(tot_c, self.ccl, axis=1, dim=3)  # [1,1,T,cols]
         total = ttnn.sum(tot_all, dim=-1, keepdim=True)
-        incl = ttnn.matmul(
-            tot_all, self.tri, compute_kernel_config=self.ckc
-        )  # inclusive prefix over columns [1,1,T,cols]
+        incl = self.col_prefix(tot_all)  # inclusive prefix over columns [1,1,T,cols]
         tgt = ttnn.multiply(u, total)
         colsel = ttnn.minimum(
             ttnn.sum(ttnn.le(incl, tgt), dim=-1, keepdim=True), float(cols - 1)

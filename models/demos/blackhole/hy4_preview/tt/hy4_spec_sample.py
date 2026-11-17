@@ -77,14 +77,12 @@ class SpecSampleOps:
     def draw_from_weights(self, w4, u):
         """w4 [T,1,PR,32] non-negative weights over this column's slice, u [1,1,T,1] fp32 in [0,1) -> token ids [1,1,T,1] fp32 (identical on every device)."""
         s, T, cols, shard, PR = self.s, self.T, self.s.cols, self.s.shard, self.s.PR
-        P = ttnn.matmul(w4, s.u32, compute_kernel_config=s.ckc)
-        R = ttnn.slice(P, [0, 0, 0, 31], [T, 1, PR, 32])
-        offs = ttnn.transpose(ttnn.matmul(ttnn.transpose(R, 2, 3), s.ustrict, compute_kernel_config=s.ckc), 2, 3)
+        P, offs = s.prefix(w4)
         cs = ttnn.add(P, offs)
         tot_c = self._row1(ttnn.slice(cs, [0, 0, PR - 1, 31], [T, 1, PR, 32]))  # [1,1,T,1]
         tot_all = self._cols(tot_c)  # [1,1,T,cols]
         total = ttnn.sum(tot_all, dim=-1, keepdim=True)
-        incl = ttnn.matmul(tot_all, s.tri, compute_kernel_config=s.ckc)
+        incl = s.col_prefix(tot_all)
         tgt = ttnn.multiply(u, total)
         colsel = ttnn.minimum(ttnn.sum(ttnn.le(incl, tgt), dim=-1, keepdim=True), float(cols - 1))
         excl_sel = ttnn.sum(
