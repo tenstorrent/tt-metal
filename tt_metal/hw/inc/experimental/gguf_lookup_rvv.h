@@ -24,12 +24,16 @@ inline __attribute__((always_inline)) void lookup_grid_rvv(
     const std::uint32_t part = 0,
     const std::uint32_t parts = 1) {
     static_assert(is_codebook<FMT>(), "lookup_grid_rvv: not a codebook format");
-    constexpr std::uint32_t batches = index_words<FMT>() / 8;
+    constexpr std::uint32_t unit = lookup_unit<FMT>(), units = index_words<FMT>() / unit;
 #if defined(KERNEL_BUILD)
     ASSERT(lookup_split_ok<FMT>(parts) && part < parts);
 #endif
-    const std::uint32_t m_begin = 8 * (part * batches / parts);
-    const std::uint32_t m_end = 8 * ((part + 1) * batches / parts);
+    const std::uint32_t m_begin = unit * (part * units / parts);
+    const std::uint32_t m_end = unit * ((part + 1) * units / parts);
+    if (m_begin % 8 != 0 || m_end % 8 != 0) {  // shares of 4 index words: the scalar path
+        lookup_grid<FMT>(indices, table, levels, part, parts);
+        return;
+    }
     auto* out = reinterpret_cast<std::uint16_t*>(const_cast<std::uint32_t*>(levels));
     constexpr std::size_t VL8 = 8, VL32 = 32;
     if constexpr (FMT == Format::IQ2_XXS || FMT == Format::IQ3_XXS) {

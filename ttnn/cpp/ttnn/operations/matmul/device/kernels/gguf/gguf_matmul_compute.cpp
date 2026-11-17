@@ -56,9 +56,9 @@ class CodebookLookups {
     static_assert(!kOn || kPackBegin <= kParts, "lookup parts");
     static_assert(
         !kOn || (FMT == experimental::gguf::Format::IQ3_S || FMT == experimental::gguf::Format::IQ3_XXS ? 64 : 32) %
-                        (8 * kParts) ==
+                        (4 * kParts) ==
                     0,
-        "lookup parts of a multiple of 8 index words");
+        "lookup parts of a multiple of 4 index words");
     // c_3's words: the pack thread's count at 0 and the math thread's at 4 (separate cache lines), then c_0's read
     // pointer, limit, size and page size (from the unpack thread, as the math thread has no circular buffer interfaces)
     // and c_0's acked count before the first page.
@@ -70,9 +70,7 @@ class CodebookLookups {
     static __attribute__((noinline)) void lookup_parts(const uint32_t page) {
         using namespace experimental::gguf;
         const auto* indices = reinterpret_cast<const uint32_t*>(page + index_offset<FMT>());
-        for (uint32_t q = B; q < E; q++) {
-            lookup_grid<FMT>(indices, table(), reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page), q, kParts);
-        }
+        lookup_grid<FMT>(indices, table(), reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page), B, kParts, E);
     }
 
     // The level table: in the thread's local data memory when it has at most 1 KiB (local_level_table), else in L1.

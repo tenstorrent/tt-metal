@@ -145,14 +145,13 @@ void kernel_main() {
                 const uint32_t first = address.value();
                 invalidate_l1_cache();
                 for (uint32_t p = 0; p < P; p++) {
-                    for (uint32_t q = GGUF_READER_PARTS; q < GGUF_READER_PARTS + GGUF_WRITER_PARTS; q++) {
-                        lookup_grid<FMT>(
-                            reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
-                            table,
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page),
-                            q,
-                            GGUF_LOOKUP_PARTS);
-                    }
+                    lookup_grid<FMT>(
+                        reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
+                        table,
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page),
+                        GGUF_READER_PARTS,
+                        GGUF_LOOKUP_PARTS,
+                        GGUF_READER_PARTS + GGUF_WRITER_PARTS);
                 }
                 asm volatile("fence" ::: "memory");
                 answers.set(++served);

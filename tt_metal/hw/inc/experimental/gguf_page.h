@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #if __has_include("experimental/ckernel_gguf_page.h")
 #include "experimental/ckernel_gguf_page.h"
@@ -188,28 +189,36 @@ constexpr std::uint32_t expanded_tail() {
     return FMT == Format::IQ3_S ? 0 : L.code_offset + L.code_bytes - index_offset<FMT>() - 4 * index_words<FMT>();
 }
 
-// Whether lookup_grid can split FMT's index words into `parts` equal shares of whole 8-word batches.
+// lookup_grid's unit of work in index words: batches of 8, and one of 4 (IQ3_S, IQ3_XXS: 8).
 template <Format FMT>
-constexpr bool lookup_split_ok(const std::uint32_t parts) {
-    return parts > 0 && (index_words<FMT>() / 8) % parts == 0;
+constexpr std::uint32_t lookup_unit() {
+    return FMT == Format::IQ3_S || FMT == Format::IQ3_XXS ? 8 : 4;
 }
 
-// Codebook formats: a page's grid indices to level codes through level_table, two per output word, for share `part`
-// of `parts` of the index words (lookup_split_ok).
+// Whether lookup_grid can split FMT's index words into `parts` equal shares of whole units.
+template <Format FMT>
+constexpr bool lookup_split_ok(const std::uint32_t parts) {
+    return parts > 0 && (index_words<FMT>() / lookup_unit<FMT>()) % parts == 0;
+}
+
+// Codebook formats: a page's grid indices to level codes through level_table, two per output word, for shares
+// [part, part_end or part + 1) of `parts` of the index words (lookup_split_ok).
 template <Format FMT, typename Out>
 inline __attribute__((always_inline)) void lookup_grid(
     const std::uint32_t* indices,
     const std::uint16_t* table,
     Out* levels,
     const std::uint32_t part = 0,
-    const std::uint32_t parts = 1) {
+    const std::uint32_t parts = 1,
+    const std::uint32_t part_end = 0) {
     static_assert(is_codebook<FMT>(), "lookup_grid: not a codebook format");
-    constexpr std::uint32_t batches = index_words<FMT>() / 8;
+    constexpr std::uint32_t unit = lookup_unit<FMT>(), units = index_words<FMT>() / unit;
+    const std::uint32_t end = part_end ? part_end : part + 1;
 #if defined(KERNEL_BUILD)
-    ASSERT(lookup_split_ok<FMT>(parts) && part < parts);
+    ASSERT(lookup_split_ok<FMT>(parts) && part < end && end <= parts);
 #endif
-    const std::uint32_t m_begin = 8 * (part * batches / parts);
-    const std::uint32_t m_end = 8 * ((part + 1) * batches / parts);
+    const std::uint32_t m_begin = unit * (part * units / parts);
+    const std::uint32_t m_end = unit * (end * units / parts);
     if constexpr (FMT == Format::IQ3_S || FMT == Format::IQ3_XXS) {
         constexpr bool high = FMT == Format::IQ3_S;
         const std::uint32_t* hi = indices + 64;
@@ -253,27 +262,32 @@ inline __attribute__((always_inline)) void lookup_grid(
         constexpr std::uint32_t lo = 0x00ff00ffu;
         constexpr std::uint32_t hi_bits = xs ? 1 : w_bits;
         constexpr std::uint32_t hi_mask = ((1u << hi_bits) - 1) * 0x01000100u;
-#pragma GCC unroll 1
-        for (std::uint32_t m0 = m_begin; m0 < m_end; m0 += 8) {
-            std::uint32_t x[8], hh[8];
+        auto batch = [&](auto kb, const std::uint32_t m0) __attribute__((always_inline)) {
+            constexpr std::uint32_t KB = decltype(kb)::value;
+            std::uint32_t x[KB], hh[KB];
 #pragma GCC unroll 8
-            for (std::uint32_t b = 0; b < 8; b++) {
+            for (std::uint32_t b = 0; b < KB; b++) {
                 x[b] = indices[m0 + b];
             }
             if constexpr (xs) {
-                const std::uint32_t* s = indices - 32 + 16 * (m0 >> 4) + ((m0 >> 3) & 1);
+                // Ninth bits of index words m0.. at stride 2 within a row of 8 (see above), per half batch.
+                auto row = [&](const std::uint32_t m) {
+                    return indices - 32 + 16 * (m >> 4) + ((m >> 3) & 1) + 2 * (m & 7);
+                };
+                const std::uint32_t* s0 = row(m0);
+                const std::uint32_t* s1 = row(m0 + 4);
 #pragma GCC unroll 8
-                for (std::uint32_t b = 0; b < 8; b++) {
-                    hh[b] = s[2 * b];
+                for (std::uint32_t b = 0; b < KB; b++) {
+                    hh[b] = b < 4 ? s0[2 * b] : s1[2 * (b - 4)];
                 }
             } else {
 #pragma GCC unroll 4
-                for (std::uint32_t b = 0; b < 4; b++) {
+                for (std::uint32_t b = 0; b < KB / 2; b++) {
                     hh[b] = indices[32 + m0 / 2 + b];
                 }
             }
 #pragma GCC unroll 8
-            for (std::uint32_t b = 0; b < 8; b++) {
+            for (std::uint32_t b = 0; b < KB; b++) {
                 const std::uint32_t h = hh[xs ? b : b / 2];
                 std::uint32_t h_ac = h;
                 std::uint32_t h_bd = h >> w_bits;
@@ -293,17 +307,25 @@ inline __attribute__((always_inline)) void lookup_grid(
                 levels[2 * (m0 + b)] = g0 | (g1 << 16);
                 levels[2 * (m0 + b) + 1] = g2 | (g3 << 16);
             }
+        };
+        std::uint32_t m0 = m_begin;
+#pragma GCC unroll 1
+        for (; m0 + 8 <= m_end; m0 += 8) {
+            batch(std::integral_constant<std::uint32_t, 8>{}, m0);
+        }
+        if (m0 < m_end) {
+            batch(std::integral_constant<std::uint32_t, 4>{}, m0);
         }
     } else {
-#pragma GCC unroll 1
-        for (std::uint32_t m0 = m_begin; m0 < m_end; m0 += 8) {
-            std::uint32_t x[8];
+        auto batch = [&](auto kb, const std::uint32_t m0) __attribute__((always_inline)) {
+            constexpr std::uint32_t KB = decltype(kb)::value;
+            std::uint32_t x[KB];
 #pragma GCC unroll 8
-            for (std::uint32_t b = 0; b < 8; b++) {
+            for (std::uint32_t b = 0; b < KB; b++) {
                 x[b] = indices[m0 + b];
             }
 #pragma GCC unroll 8
-            for (std::uint32_t b = 0; b < 8; b++) {
+            for (std::uint32_t b = 0; b < KB; b++) {
                 const std::uint32_t g0 = table[x[b] & 0xff];
                 const std::uint32_t g1 = table[(x[b] >> 8) & 0xff];
                 const std::uint32_t g2 = table[(x[b] >> 16) & 0xff];
@@ -311,6 +333,14 @@ inline __attribute__((always_inline)) void lookup_grid(
                 levels[2 * (m0 + b)] = g0 | (g1 << 16);
                 levels[2 * (m0 + b) + 1] = g2 | (g3 << 16);
             }
+        };
+        std::uint32_t m0 = m_begin;
+#pragma GCC unroll 1
+        for (; m0 + 8 <= m_end; m0 += 8) {
+            batch(std::integral_constant<std::uint32_t, 8>{}, m0);
+        }
+        if (m0 < m_end) {
+            batch(std::integral_constant<std::uint32_t, 4>{}, m0);
         }
     }
 }

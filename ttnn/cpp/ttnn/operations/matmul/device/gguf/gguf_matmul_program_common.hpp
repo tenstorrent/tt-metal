@@ -119,15 +119,18 @@ inline std::vector<uint32_t> weight_reader_args(
 }
 
 // Codebook formats: each page's index words in GGUF_LOOKUP_PARTS equal parts, looked up by the reader, the writer, and
-// the compute kernel's math and unpack threads; the pack thread takes the rest. An expanded codebook layout holds the
-// level codes: no lookups.
+// the compute kernel's math and unpack threads; the pack thread takes the rest. IQ2_XXS and IQ2_XS: eighths, three of
+// them on the writer, which then gets each record before the reader's scale work (measured, decode). An expanded
+// codebook layout holds the level codes: no lookups.
 inline std::map<std::string, std::string> lookup_defines(const Tensor& weight) {
     const GgufTraits& f = gguf_traits(weight.dtype());
     const bool expanded = is_gguf_expanded(weight.dtype()) && f.code_offset > 0;
+    const bool eighths = weight.dtype() == DataType::GGUF_IQ2_XXS || weight.dtype() == DataType::GGUF_IQ2_XS;
     struct LookupSplit {
         uint32_t parts, reader, writer, math, unpack;
     };
     const LookupSplit split = expanded            ? LookupSplit{4, 0, 0, 0, 0}
+                              : eighths           ? LookupSplit{8, 1, 3, 2, 2}
                               : f.code_offset > 0 ? LookupSplit{4, 1, 1, 1, 1}
                                                   : LookupSplit{2, 1, 1, 0, 0};
     return {

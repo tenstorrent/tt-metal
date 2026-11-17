@@ -249,6 +249,17 @@ void kernel_main() {
             noc.async_read_barrier<NocOptions::TXN_ID>({.trid = local});
             invalidate_l1_cache();
             const uint32_t first = pages.get_write_ptr();
+            // A writer with the larger share of the lookups gets the record before the scale work, which it then
+            // overlaps.
+            [[maybe_unused]] constexpr bool early = writer_parts > GGUF_READER_PARTS;
+            [[maybe_unused]] auto request = [&]() {
+                address.set(first);
+                asm volatile("fence" ::: "memory");  // the address is in L1 before the request
+                requests.set(++asked);
+            };
+            if constexpr (is_codebook<FMT>() && !expanded && writer_parts > 0 && early) {
+                request();
+            }
             if constexpr (shared_scales) {
                 prepare_scales<FMT>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + L.scale_offset));
                 asm volatile("fence" ::: "memory");
@@ -258,19 +269,18 @@ void kernel_main() {
                 noc.async_read_barrier<NocOptions::TXN_ID>({.trid = local});
             }
             if constexpr (is_codebook<FMT>() && !expanded) {
-                if constexpr (writer_parts > 0) {
-                    address.set(first);
-                    asm volatile("fence" ::: "memory");  // the address is in L1 before the request
-                    requests.set(++asked);
+                if constexpr (writer_parts > 0 && !early) {
+                    request();
                 }
                 for (uint32_t p = 0; p < P; p++) {
-                    for (uint32_t q = 0; q < GGUF_READER_PARTS; q++) {
+                    if constexpr (GGUF_READER_PARTS > 0) {
                         lookup_grid<FMT>(
                             reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
                             table,
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page),
-                            q,
-                            GGUF_LOOKUP_PARTS);
+                            0,
+                            GGUF_LOOKUP_PARTS,
+                            GGUF_READER_PARTS);
                     }
                 }
                 asm volatile("fence" ::: "memory");

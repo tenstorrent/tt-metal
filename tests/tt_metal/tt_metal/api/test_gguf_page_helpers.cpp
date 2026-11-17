@@ -255,8 +255,8 @@ TEST_F(GgufPageHelpersFixture, LookupGridRvvMatchesScalar) {
     }
 }
 
-// lookup_grid's splits: shares of whole 8-word batches (lookup_split_ok), which together give the whole lookup; an
-// uneven split (rejected on the device) still stays inside the page's level codes.
+// lookup_grid's splits: shares of whole units (lookup_split_ok), which together give the whole lookup; an uneven
+// split (rejected on the device) still stays inside the page's level codes.
 template <Format FMT>
 void check_splits(std::mt19937& rng) {
     namespace gg = ::experimental::gguf;
@@ -271,7 +271,7 @@ void check_splits(std::mt19937& rng) {
     gg::lookup_grid<FMT>(indices, gg::level_table<FMT>(), whole.data());
     for (const std::uint32_t parts : {1u, 2u, 3u, 4u, 8u}) {
         SCOPED_TRACE("parts " + std::to_string(parts));
-        EXPECT_EQ(gg::lookup_split_ok<FMT>(parts), (gg::index_words<FMT>() / 8) % parts == 0);
+        EXPECT_EQ(gg::lookup_split_ok<FMT>(parts), (gg::index_words<FMT>() / gg::lookup_unit<FMT>()) % parts == 0);
         std::vector<std::uint32_t> split(words + 16, 0xA5A5A5A5u);
         for (std::uint32_t part = 0; part < parts; part++) {
             gg::lookup_grid<FMT>(indices, gg::level_table<FMT>(), split.data(), part, parts);
@@ -291,7 +291,7 @@ TEST(GgufPageHelpersHost, LookupGridSplits) {
     check_splits<Format::IQ3_S>(rng);
     check_splits<Format::IQ3_XXS>(rng);
     EXPECT_FALSE(::experimental::gguf::lookup_split_ok<Format::IQ2_XXS>(3));
-    EXPECT_FALSE(::experimental::gguf::lookup_split_ok<Format::IQ2_XXS>(8));
+    EXPECT_TRUE(::experimental::gguf::lookup_split_ok<Format::IQ2_XXS>(8));
     EXPECT_TRUE(::experimental::gguf::lookup_split_ok<Format::IQ3_S>(8));
 }
 
