@@ -475,12 +475,13 @@ constexpr bool llk_pack_matmul_pack_bound()
 }
 
 // A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST or at LoFi an earlier pack start
-// costs them L1 grants. Only tall blocks lose them; a kernel whose constant blocks are all not tall keeps the early start.
+// costs them L1 grants. Above LoFi only tall blocks lose them, so a kernel whose constant blocks are all not tall keeps the early
+// start; at LoFi the one-row blocks lose them too (1xN Bfp8_b / Bfp4_b / Tf32-out +0.3..+1.5 cy/block, census 65c1c).
 template <std::uint32_t dep>
 constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
 {
     return (is_fp32_dest_acc_en || llk_pack_lofi_api<dep * 0 + 1>::value) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value &&
-           !(llk_pack_shape_marked<5, dep>(0) && !llk_pack_shape_marked<6, dep>(0));
+           !(!llk_pack_lofi_api<dep * 0 + 1>::value && llk_pack_shape_marked<5, dep>(0) && !llk_pack_shape_marked<6, dep>(0));
 }
 
 // Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h and seven eltwise_unary headers).
