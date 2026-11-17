@@ -32,12 +32,16 @@ inline void _sfpu_bcast_col_band_check_(uint32_t data_band, uint32_t bcast_band)
 
 // clang-format off
 /**
- * Initialize SFPU state for {add,sub,mul}-with-column-broadcast. Must be
- * called once (before any acquire_dst / sfpu_*_bcast_col pair) to configure
- * the persistent LREG_MASK and replay-buffer slot used by the broadcast
- * helper. A single init is shared across ADD / SUB / MUL because only the
- * broadcast state (which depends on BCAST_DIM) is persisted; the binop
- * opcode is selected per call.
+ * Initialize SFPU state for {add,sub,mul}-with-column-broadcast: the lane
+ * mask in LREG6 (LREG_MASK) and the replay-buffer slot of the broadcast
+ * helper. Call it before a run of column-broadcast ops (sfpu_*_bcast_col,
+ * sfpu_*_bcast_col_band, the sfpu_*normalize_bcast_col* forms); the state
+ * persists across them. Any other SFPU operation in between may overwrite it
+ * (sfpu_*_bcast_row, sfpu_bcast_scalar_load, sfpu_normalize_bcast_scalar, any
+ * sfpi-based op): call the init again before the next column-broadcast op.
+ * A single init is shared across ADD / SUB / MUL because only the broadcast
+ * state (which depends on BCAST_DIM) is persisted; the binop opcode is
+ * selected per call.
  *
  * On Quasar the init only checks the broadcast dim: each sfpu_*_bcast_*
  * call records its binop and lane mask before it runs, so nothing persists
