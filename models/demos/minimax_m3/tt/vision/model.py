@@ -180,6 +180,9 @@ class M3VLVisionModel(LightweightModule):
         self.activations = "l1"
         self._dram_fallbacks = 0  # fallbacks to DRAM_PLACEMENT so far
         self._warned_fallback = None  # the reason of the last fallback logged as a warning
+        # The reason of each L1 placement's clash, by (placement name, rows): later images of that placement and row
+        # count run in DRAM, without trying L1 again.
+        self._l1_clashes = {}
 
     @classmethod
     def from_state_dict(
@@ -303,14 +306,19 @@ class M3VLVisionModel(LightweightModule):
     def placement(self, x_tt: ttnn.Tensor) -> BlockPlacement:
         """Return the BlockPlacement that a forward gives the blocks for pixel values x_tt from push_pixel_values.
 
-        That is block_placement's, or DRAM_PLACEMENT with activations "dram". An L1 placement also needs
-        l1_free_for_activations to pass. Otherwise it is DRAM_PLACEMENT, and _log_dram_fallback logs why.
+        That is block_placement's, or DRAM_PLACEMENT with activations "dram". An L1 placement also needs no earlier
+        clash at this row count and l1_free_for_activations to pass. Otherwise it is DRAM_PLACEMENT, and
+        _log_dram_fallback logs why.
         """
         if self.activations == "dram" or not self.blocks:
             return DRAM_PLACEMENT
         placement = block_placement(self.blocks[0], x_tt.padded_shape[-2], self.activations)
         if placement is DRAM_PLACEMENT:
             return placement
+        clash = self._l1_clashes.get((placement.name, x_tt.padded_shape[-2]))
+        if clash is not None:
+            self._log_dram_fallback(clash)
+            return DRAM_PLACEMENT
         free, why_not = l1_free_for_activations(self.device)
         if free:
             return placement
@@ -335,7 +343,8 @@ class M3VLVisionModel(LightweightModule):
         """Run forward_tower's device ops on pixel values from push_pixel_values, leaving x_tt allocated.
 
         The blocks get placement(x_tt). The last block writes the tower's output to DRAM. If an op's buffers clash
-        with the blocks' L1 tensors, the image runs again with DRAM_PLACEMENT, once.
+        with the blocks' L1 tensors, the image runs again with DRAM_PLACEMENT, once, and later images of that
+        placement and row count run in DRAM from the start.
         """
         placement = self.placement(x_tt)
         if placement is DRAM_PLACEMENT:
@@ -350,6 +359,7 @@ class M3VLVisionModel(LightweightModule):
             traceback.clear_frames(error.__traceback__)
             line = " ".join(clash.groups())  # tt-metal's line without the program id
             reason = f"placement {placement.name} at {x_tt.padded_shape[-2]} rows failed: {line}"
+            self._l1_clashes[(placement.name, x_tt.padded_shape[-2])] = reason
         self._log_dram_fallback(reason)
         return self._run_tower(x_tt, image_grid_thw, DRAM_PLACEMENT)
 

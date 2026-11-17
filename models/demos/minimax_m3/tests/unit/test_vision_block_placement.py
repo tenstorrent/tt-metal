@@ -943,6 +943,7 @@ def test_vision_l1_clash_falls_back_to_dram(monkeypatch, activations, buffers, m
     with _fallback_logs() as logs:
         for failing in range(len(TOWER_ROLES)):
             case = (activations, TOWER_ROLES[failing])
+            model._l1_clashes.clear()  # each op's clash on its own: an earlier one sends the image to DRAM at once
             recorder.events.clear()
             made = len(recorder.made)
             # tt-metal gives each program a new id, so each clash names another program.
@@ -987,6 +988,7 @@ def test_vision_l1_clash_other_errors_raise(monkeypatch, expect_error):
     )
     for activations, raise_at, message in cases:
         model.activations = activations
+        model._l1_clashes.clear()  # each case on its own: an earlier clash sends the image to DRAM at once
         recorder.events.clear()
         recorder.raise_at = dict(raise_at)
         error = type(next(iter(raise_at.values())))
@@ -995,6 +997,32 @@ def test_vision_l1_clash_other_errors_raise(monkeypatch, expect_error):
         assert not recorder.raise_at, (activations, raise_at)
         calls = sum(event[0] == "call" for event in recorder.events)
         assert calls == max(raise_at), (activations, raise_at, calls)
+
+
+def test_vision_l1_clash_sends_later_images_to_dram(monkeypatch):
+    """After a clash, later images of that placement and row count run in DRAM, without trying L1 again.
+
+    They log the clash's reason at debug level. Images of another row count, and another model, still take L1.
+    """
+    recorder, model, x_tt, grid_thw, want = _clash_model(monkeypatch)
+    model.activations = "l1"
+    placement = model.placement(x_tt)
+    assert placement is not DRAM_PLACEMENT
+    with _fallback_logs() as logs:
+        recorder.events.clear()
+        recorder.raise_at = {TOWER_ROLES.index(("fc1", 1)): RuntimeError(CLASH_MESSAGE)}
+        model.forward_device(x_tt, grid_thw)
+        assert not recorder.raise_at, "the first image did not clash"
+        recorder.events.clear()
+        out = model.forward_device(x_tt, grid_thw)
+    assert out.value == want
+    ops = [event[1] for event in recorder.events if event[0] == "call"]
+    assert ops == [OPS[role] for role, _ in TOWER_ROLES], ops  # one run, with no L1 attempt
+    assert sum(event[0] == "alloc" for event in recorder.events) == 2  # only the RoPE copies are in L1
+    reason = f"placement {placement.name} at 2304 rows failed: Statically allocated circular buffers"
+    assert [level for level, _ in logs] == ["WARNING", "DEBUG"] and all(reason in line for _, line in logs), logs
+    assert model.placement(SimpleNamespace(padded_shape=(1, 1, 2176, x_tt.padded_shape[-1]))) is not DRAM_PLACEMENT
+    assert _model(recorder, (12, 10)).placement(x_tt) is placement
 
 
 def test_vision_l1_free_for_activations_hybrid_allocator(monkeypatch):
