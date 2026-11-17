@@ -5,6 +5,7 @@
 """Hardware-free checks of the RISC-V performance monitor tables and decoder in tt_llk_perf."""
 
 import re
+from pathlib import Path
 
 import pytest
 from tt_llk_perf import headers, riscv_metrics, riscv_pmc
@@ -309,6 +310,20 @@ def test_tracy_decoder_names_blackhole_ethernet_events():
     assert df["mcycle"][0] == 1000 and df["riscv_ipc_ratio"][0] == 0.4
 
 
+def test_tracy_decoder_keeps_ethernet_cores_apart():
+    analysis = _tracy_analysis()
+    rows = []
+    for core, cycles in (((9, 1), 1000), ((9, 6), 2000)):
+        rows += [
+            _marker(4, "ERISC", 9092, 10, (7 << 32) | 9, core),
+            _marker(4, "ERISC", 9093, 11, (400 << 32) | cycles, core),
+            _marker(4, "ERISC", 9094, 12, (0xA0000000 << 32) | 0x10110111, core),
+        ]
+    df = analysis.decode_riscv_pmc_markers(rows, "blackhole")
+    assert sorted(df["mcycle"]) == [1000, 2000]
+    assert set(df["risc_type"]) == {"ERISC"}
+
+
 def test_tracy_decoder_pairs_the_upper_dm_markers():
     analysis = _tracy_analysis()
     rows = []
@@ -352,3 +367,28 @@ def test_tracy_decoder_short_stream_pairs_what_it_can():
     ]
     df = analysis.decode_riscv_pmc_markers(rows, "quasar")
     assert len(df) == 1 and df["event3"][0] == "DM_PIPE_LONG_LATENCY"
+
+
+def _firmware(name):
+    path = Path(__file__).resolve().parents[4] / "hw/firmware/src/tt-1xx" / name
+    if not path.is_file():
+        pytest.skip("not inside a tt-metal checkout")
+    return path.read_text()
+
+
+@pytest.mark.parametrize(
+    "firmware, hooked",
+    (
+        ("brisc.cc", True),
+        ("ncrisc.cc", True),
+        ("trisc.cc", True),
+        ("active_erisc.cc", True),
+        ("idle_erisc.cc", True),
+        ("subordinate_erisc.cc", False),
+        ("drisc.cc", False),
+    ),
+)
+def test_firmware_hooks_match_the_cores_the_host_reads(firmware, hooked):
+    text = _firmware(firmware)
+    assert ("RiscvPmcBegin()" in text) == hooked
+    assert ("RiscvPmcEnd()" in text) == hooked
