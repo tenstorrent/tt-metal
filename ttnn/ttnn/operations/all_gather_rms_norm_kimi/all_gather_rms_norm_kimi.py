@@ -238,7 +238,7 @@ def _row_layout(G, Wt, P):
 
 
 RELAY_LAG = 3  # a relay of tile-row t is sent after this port's own packets of tile-row t + RELAY_LAG
-FAR_LEAD = 0  # an own relay-bound half of tile-row t is sent with the own direct halves of tile-row t - FAR_LEAD
+FAR_LEAD = 1  # an own relay-bound half of tile-row t is sent with the own direct halves of tile-row t - FAR_LEAD
 
 
 def _schedule(plan, max_pkt_tiles):
@@ -348,7 +348,7 @@ def _state(mesh_device, plan, key):
 # ---------------------------------------------------------------------------------------------------------------------
 
 PKT_GROUP = 4  # packets between sender header flushes
-PORT_FETCH = 2  # own packets each port reads from DRAM itself (its first sends)
+PORT_FETCH = 4  # own packets each port reads from DRAM itself (its first sends)
 
 
 def _crs(cores):

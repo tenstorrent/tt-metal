@@ -55,6 +55,11 @@ void kernel_main() {
     const uint32_t land_base = land_addr + parity * blk * tile_bytes;
     const uint32_t stage = get_write_ptr(CB_STAGE);
 
+    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
+    {
+        AGRN_ZONE("ps_open");
+        conn.open();
+    }
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[group];
     {
         AGRN_ZONE("ps_hdrs");
@@ -73,11 +78,6 @@ void kernel_main() {
                 d[w] = s0[w];
             }
         }
-    }
-    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
-    {
-        AGRN_ZONE("ps_open");
-        conn.open();
     }
 
     AGRN_ZONE("ps_send_all");
