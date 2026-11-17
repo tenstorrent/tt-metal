@@ -112,10 +112,6 @@
 #   run.sh --repro tray-drop <bdf> [--shape h3-replay|h3-cadence|imbalance|weights|cold-full|all] [--tries N] [--dry-run]
 #                 the tray-drop repro: H3-shaped bus-bar loads (fleet/drop_shapes.py) on all 4 trays aimed
 #                 at the bdf's tray; a POWER DROP or CHIP DROP of that tray is the hit (minutes to it, tray, its BDFs);
-#   run.sh --repro busbar-confirm [--tries N] [--dry-run]   (opt-in, not in plain run.sh or --mode=full; no bdf) the confirm step for a box
-#                 the plain feed-peak FAIL flagged: 25 min bus-bar mix, then the heavy chunk with the extra formats over
-#                 its 15 min (about 42 min of load), stop at the first drop; the verdict is the drop, the HSC OFF+IOUT_OC
-#                 latch or the VIN_UV_WARN latch, never a feed peak; a clean run does not clear a box (repro.sh --help)
 #   run.sh --repro warm-reset <bdf> [--tries N] [--dry-run]   the warm-reset loss repro (repro.sh): each try
 #                 is one plain run.sh cut to that fault's stages; it stops at the first hit (FAIL line naming the chip
 #                 by BDF and tray, the exact finding under it, time to failure, exit 8) or prints PASS after N tries.
@@ -810,6 +806,7 @@ rk_noglx_say() {  # [$1 "<bdf> <chip> <state>" lines, default rk_snap] [$2 conte
 # the same way. No answer: 1, RK_IPMI_DEAD names why (the callers then skip the re-power and touch no chip).
 # A check that could not be asked at all (ipmitool not found, or sudo -n refused it: 'a password is required') is a
 # setup fault of this host, not of the box: 1 with RK_IPMI_SETUP set instead, never a hardware verdict.
+rk_mcinfo_listed() { timeout -k 2 5 sudo -n -l "${TRAY_REPRO_IPMITOOL:-ipmitool}" mc info < /dev/null > /dev/null 2>&1; }   # the exact check command (MINFRA-2596 c), never sudo -n true
 rk_ipmi_ok() {
   local rc ipmi=${TRAY_REPRO_IPMITOOL:-ipmitool} su=() w=${TRAY_REPRO_IPMI_CHK_S:-10} n0 last
   RK_IPMI_DEAD=""; RK_IPMI_SETUP=""; [ "$(id -u)" = 0 ] || su=(sudo -n)
@@ -902,7 +899,7 @@ rk_glx() {  # $1 a log path: the tray re-power, tt-smi -glx_reset. Sets RK_GLX_O
   RK_GLX_TRIED=1   # a glx_reset was tried in this step; rk_recover_ may now re-power single trays (rk_traypwr)
   if ! rk_gate; then RK_GLX_SKIP=$RK_GATE_WHY; RK_GLX_WHY="SKIPPED-GATE: $RK_GATE_WHY"
   elif ! command -v "$smi" > /dev/null; then RK_GLX_WHY="$smi not found"
-  elif ! { rk_can_glx || :; : > "$1"; [ "$RK_GLX_RAWONLY" = 1 ] && { echo "in-band IPMI check skipped: sudo -n -l lists only the ipmitool raw 0x30 0x8B forms" >> "$1"; say "reset: in-band IPMI check skipped (sudo -n -l lists only the ipmitool raw 0x30 0x8B forms tt-smi -glx_reset issues)"; true; } || rk_ipmi_ok "$1"; }; then   # the check's lines open the glx log, which glx_reset appends to
+  elif ! { rk_can_glx || :; : > "$1"; [ "$RK_GLX_RAWONLY" = 1 ] && ! rk_mcinfo_listed && { echo "in-band IPMI check skipped: sudo -n -l lists only the ipmitool raw 0x30 0x8B forms, not ipmitool mc info" >> "$1"; say "reset: in-band IPMI check skipped (sudo -n -l lists only the ipmitool raw 0x30 0x8B forms tt-smi -glx_reset issues)"; true; } || rk_ipmi_ok "$1"; }; then   # the check's lines open the glx log, which glx_reset appends to
     if [ -n "$RK_IPMI_SETUP" ]; then RK_GLX_WHY="setup fault ($RK_IPMI_SETUP); tray re-power not run"
     else RK_GLX_WHY="in-band IPMI not answering ($RK_IPMI_DEAD); tray re-power skipped"; fi
   elif ! rk_pre "${RK_STEP:-reset}-glx"; then RK_GLX_SKIP=$RK_GATE_WHY; RK_GLX_WHY="SKIPPED-GATE: $RK_GATE_WHY"
@@ -1322,6 +1319,7 @@ rk_recheck() {  # $1 what ran, $2 a file for the result: wait up to RK_SETTLE_S 
   while [ -n "$RK_OPEN_RAN" ] && [ -n "$RK_OPEN_ERR" ] && [ $(( $(date +%s) - t0 )) -lt "$RK_SETTLE_S" ]; do
     sleep 5; RK_AFTER=$(rk_snap); rk_open "$RK_AFTER"; done
   s=$(( $(date +%s) - t0 )); en=$(rk_enum)
+  declare -F fl_drop_prune > /dev/null && fl_drop_prune "$RK_OPENED"   # a chip this recount shows ok and open in tt-umd (one that answers config space but fails the open stays named): its next loss is a new drop (final_verdict.py fold)
   nok=$(echo "$RK_AFTER" | grep -c ' ok$'); nnode=$(ls -d "$SYS"/bus/pci/devices/*/tenstorrent/tenstorrent!* 2>/dev/null | wc -l)
   RK_AFTER=$RK_OPENED
   say "re-check after the $1 (waited ${s} s): $nok/$(rk_total) answer PCIe config space with a tt-kmd node, $nnode tt-kmd nodes, tt-umd enumerates ${en:-?}, $([ -n "$RK_OPEN_RAN" ] && echo "$RK_OPEN_N/$(rk_total) open in tt-umd" || echo "open check not run (no answer)")"
@@ -1348,6 +1346,12 @@ rk_recheck() {  # $1 what ran, $2 a file for the result: wait up to RK_SETTLE_S 
 rk_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo -n "$@"; fi; }
 rk_bus() {  # PCI address (0000:88:00.0 or 88:00.0) -> its bus byte; rc 1, no output, when it has none
   [[ $1 =~ ^([0-9a-fA-F]{4,}:)?([0-9a-fA-F]{2}):[0-9a-fA-F]{2}\.[0-7]$ ]] && echo "${BASH_REMATCH[2]}"
+}
+# rk_sudo_rp tee|setpci <root port>: sudo -n -l lists this exact command for this root port (MINFRA-2596; run nothing)
+rk_sudo_rp() {
+  [ "$(id -u)" != 0 ] || return 0
+  case $1 in tee) set -- tee "$SYS/bus/pci/devices/$2/rescan" ;; *) set -- "${TRAY_REPRO_SETPCI:-setpci}" -s "$2" CAP_EXP+0x12.w ;; esac
+  timeout -k 2 5 sudo -n -l "$@" < /dev/null > /dev/null 2>&1
 }
 rk_rp() {  # chip BDF -> its root port, from the map taken at the start (fault_map: a chip off the bus loses its path),
            # else its sysfs path, else the bridge whose secondary bus is the chip's bus (a chip off the bus since boot)
@@ -1382,10 +1386,18 @@ rk_rescan() {
   done <<< "$cand"
   [ -n "$rps" ] || return 0
   if [ "${HOLD_ACTIVE:-0}" = 1 ]; then for rp in $rps; do say "rescan: --hold: root port $rp (${chips[$rp]}): lost chip left as it is, nothing written"; done; return 0; fi   # hang-debug hold: no action on a lost chip
-  if ! rk_can_root; then say "rescan: after the $what, root port rescan skipped (no root, and sudo -n -l does not allow the sysfs rescan):$rps"; return 0; fi
+  # not root and no NOPASSWD: ALL (MINFRA-2596): each root port is rescanned when sudo -n -l lists its exact tee form, and its LnkSta
+  # is polled when it lists its exact setpci form; a root port with neither listed is named and left as it is
+  local wr="" pl="" nw=""
+  if rk_can_root; then wr=$rps; pl=$rps
+  else for rp in $rps; do rk_sudo_rp tee "$rp" && wr="$wr $rp"; rk_sudo_rp setpci "$rp" && pl="$pl $rp"; done
+    for rp in $rps; do case " $wr " in *" $rp "*) ;; *) nw="$nw $rp" ;; esac; done
+    if [ -z "$wr" ]; then say "rescan: after the $what, root port rescan skipped (no root, no NOPASSWD: ALL, and sudo -n -l does not list tee $SYS/bus/pci/devices/<root port>/rescan):$rps"; return 0; fi
+    [ -z "$nw" ] || say "rescan: after the $what, no rescan of$nw (sudo -n -l does not list its tee form)"
+  fi
   if ! command -v "$setpci" > /dev/null; then say "rescan: $setpci not found: LnkSta not polled"; fi
-  t0=$(date +%s); left=$rps
-  while command -v "$setpci" > /dev/null; do   # every root port at once, so a whole tray waits 60 s, not 8 x 60 s
+  t0=$(date +%s); left=$pl
+  while [ -n "$left" ] && command -v "$setpci" > /dev/null; do   # every root port at once, so a whole tray waits 60 s, not 8 x 60 s
     nl=""
     for rp in $left; do
       v=$(rk_root "$setpci" -s "$rp" CAP_EXP+0x12.w 2>/dev/null | tr -d ' \n'); lv[$rp]=$v
@@ -1396,12 +1408,13 @@ rk_rescan() {
     left=$nl; { [ -z "$left" ] || [ $(( $(date +%s) - t0 )) -ge "$wait_s" ]; } && break; sleep 1
   done
   for rp in $left; do say "rescan: root port $rp (${chips[$rp]}): DLL Link Active not seen in $wait_s s (LnkSta ${lv[$rp]:+0x}${lv[$rp]:-unreadable}), rescanned anyway"; done
+  for rp in $wr; do case " $pl " in *" $rp "*) ;; *) say "rescan: root port $rp (${chips[$rp]}): LnkSta not polled (sudo -n -l does not list its setpci form), rescanned anyway" ;; esac; done
   if ! rk_gate; then   # the wait can take wait_s: the gate again, right before the writes
     for rp in $rps; do say "rescan SKIPPED-GATE after the $what ($RK_GATE_WHY): root port $rp (${chips[$rp]}): nothing written"; done
     RK_RESCAN_GSKIP="${RK_RESCAN_GSKIP:+$RK_RESCAN_GSKIP and }the $what"; return 0
   fi
   RK_RESCAN_RAN="${RK_RESCAN_RAN:+$RK_RESCAN_RAN and }the $what"   # where it ran, for the Reset: line
-  for rp in $rps; do
+  for rp in $wr; do
     echo 1 | rk_root tee "$SYS/bus/pci/devices/$rp/rescan" > /dev/null 2>&1
     say "rescan: echo 1 > /sys/bus/pci/devices/$rp/rescan (${chips[$rp]}): rc $?"
   done
@@ -1653,17 +1666,24 @@ rk_bound() {  # in rk_end ($1 its "when"): b, the reset step's bound (s), and RK
   return 0
 }
 rk_end_() {
-  local out=$1 seen=${3:-0} when=${4:-during the test} lost back notok why skip="" smi=${TRAY_REPRO_TT_SMI:-tt-smi} missing
+  local out=$1 seen=${3:-0} when=${4:-during the test} lost lraw late back notok why skip="" smi=${TRAY_REPRO_TT_SMI:-tt-smi} missing
   local short0 short gone gskip="" glab="" glxran="" aw RK_SETTLED_AW="" st named af="" ph=${RK_PHASE:-$([ "${4:-}" = "at the start" ] && echo "start reset" || echo "end reset")}; RK_GLXRAN=""
   local RK_STEP=${RK_STEP:-$([ "${4:-}" = "at the start" ] && echo start || echo end)}   # rk_hook's step
   declare -F mg_recover > /dev/null && mg_recover   # chips the MCE guard removed from PCI: root port rescan first
   RK_RESET_NEW=""; RK_RESCANNED=""; RK_RESCAN_RAN=""; RK_RESCAN_GSKIP=""; RK_GLX_TRIED=""; RK_BEFORE=$(rk_snap); short0=$(rk_short)
   [ "$when" = "at the start" ] && { rk_open "$RK_BEFORE"; RK_BEFORE=$RK_OPENED; }   # on PCIe but unopenable is lost
-  lost=$(echo "$2 $(echo "$RK_BEFORE" | awk '$3 != "ok" { print $2 }')" | rk_list)
+  lraw="$2 $(echo "$RK_BEFORE" | awk '$3 != "ok" { print $2 }')"; lost=$(echo "$lraw" | rk_list)
   [ -n "$lost$short0" ] && seen=1
   say "before the reset: $(echo "$RK_BEFORE" | grep -c ' ok$')/$(rk_total) chips answer${lost:+; lost $when: chips $lost}${short0:+; not on PCIe: $short0}"
   RK_RECOVERY_FIRST=0; [ "$when" = "at the start" ] && RK_RECOVERY_FIRST=1   # pre-load recovery: glx_reset first
-  rk_reset "$out/reset.log"; RK_RECOVERY_FIRST=0; MG_T0=$(date +%s)   # the guard looks only at ARC timeouts after this reset
+  RK_GLX_MISS=""; rk_reset "$out/reset.log"; RK_RECOVERY_FIRST=0; MG_T0=$(date +%s)   # the guard looks only at ARC timeouts after this reset
+  # the recount right before the glx_reset (rk_glx_evidence's, RK_GLX_MISS) can find a chip missing that the count above
+  # did not: it is in the loss (chips, chip drop) whether or not the reset brings it back, as fl_bb_pv_run's late DROP
+  late=$(echo "$RK_GLX_MISS" | sed -n 's/^chip \([0-9]*\) (.*/\1/p' | tr '\n' ' ')
+  if [ "$(echo "$lraw $late" | rk_list)" != "$lost" ]; then
+    say "before the glx_reset: its own recount finds chips $(echo "$late" | rk_list) missing; chips lost $when: ${lost:-none}"
+    lost=$(echo "$lraw $late" | rk_list); seen=1
+  fi
   rk_recheck "$RK_RESET_LBL" "$out/recheck.txt"; aw=$RK_AFTER; named=$(rk_umd_named "$RK_RESET_LOG")
   [ -n "$RK_RESET_SKIP" ] || rk_rescan "$RK_RESET_LBL" "$out/recheck_rescan.txt"   # chips still off the bus: wait for the link, rescan the root port (never after a gate-skipped reset)
   # a glx_reset that ran and FAILED: settle, then tt-umd discovery before any chip counts as back (as rk_recover_); the recount after a failed glx_reset is the health check before the test
@@ -1934,7 +1954,7 @@ case " $* " in *" -h "*|*" --help "*|*" --repro"*) ;; *) ! pv_planned || [ -x "$
 if [ -n "${HC_HOLDFILE:-}" ]; then . "$HC_HOLDFILE"; else hc_holdfile_off; fi   # the user's holds and allowlist: a held host runs nothing, exit 10
 hf_stop() { hf_check || { echo "NOT RUN: hold: $HF_WHY (TRAYTEST_HOLD_FILE, lib/holdfile.sh)" >&2; vd_say "NOT RUN (hold: $HF_WHY)"; exit 10; }; }   # runs after --help (help always prints) and before any device step
 . ./lib/sudo_route.sh   # no or partial passwordless sudo is output line 1, then the summary and RESULT
-case " $* " in *" -h "*|*" --help "*) ;; *) sudo_route_check hsc clear cpld sensors drop rescan; if [ -n "$SR_LINE" ]; then echo "$SR_LINE"; fi ;; esac
+case " $* " in *" -h "*|*" --help "*) ;; *) sudo_route_check hsc clear cpld sensors busbar drop rescan; if [ -n "$SR_LINE" ]; then echo "$SR_LINE"; fi ;; esac
 . ./lib/sha_line.sh; sha_line "$TT_TOP" || true   # own commit, first lines of run.log
 . ./lib/kmd_policy.sh; echo "power_policy: $(kp_read)"; KP_OPT=""   # the loaded KMD's power_policy, every mode
 chmod u+x setup.sh ub0_repro.py 2>/dev/null
@@ -1953,12 +1973,11 @@ while [ $# -gt 0 ]; do
     --mode=*) FLEET=${1#--mode=}; MODE_SET=1 ;;
     --mode) FLEET=${2:?--mode needs quick, full, smoke, long or repro}; MODE_SET=1; shift ;;
     --repro=*) REPRO=${1#*=}
-      case $REPRO in numeric|warm-reset|tray-drop) echo "--repro $REPRO is spelled --repro $REPRO <bdf> [...], last on the line (run.sh --help)" >&2; exit 1 ;;
-        busbar-confirm) echo "--repro busbar-confirm is spelled --repro busbar-confirm [...], last on the line (run.sh --help)" >&2; exit 1 ;; esac ;;
-    --repro) case ${2:-} in numeric|warm-reset|tray-drop|busbar-confirm) shift   # fast repro of one known fault (repro.sh): repro.sh runs plain run.sh per try until the first hit
+      case $REPRO in numeric|warm-reset|tray-drop) echo "--repro $REPRO is spelled --repro $REPRO <bdf> [...], last on the line (run.sh --help)" >&2; exit 1 ;; esac ;;
+    --repro) case ${2:-} in numeric|warm-reset|tray-drop) shift   # fast repro of one known fault (repro.sh): repro.sh runs plain run.sh per try until the first hit
         [ -z "$FLEET" ] && [ "$TRIES" = 0 ] && [ -z "$REPRO" ] || { echo "--repro takes no --mode, --tries or --ag-tries (repro.sh picks the stages)" >&2; exit 1; }
         hf_stop; TRAY_REPRO_HEAVY_LOGS=$HEAVY exec bash ./repro.sh "$@" "${ARGV0[@]:0:$(( ${#ARGV0[@]} - $# - 1 ))}" ;; esac
-      REPRO=${2:?--repro needs a repro name: link-a, abort-fabric, numeric, warm-reset, tray-drop or busbar-confirm}; shift   # --repro <name> [<bdf>]
+      REPRO=${2:?--repro needs a repro name: link-a, abort-fabric, numeric, warm-reset or tray-drop}; shift   # --repro <name> [<bdf>]
       if [[ ${2:-} =~ ^([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$ ]]; then REPRO_BDF=$2; shift; fi ;;
     --fleet=*|--fleet)   # the old name, kept for launchers during the switch-over; c7 (sustained) is retired
       if [ "$1" = --fleet ]; then FLEET=${2:?--mode needs quick, full, smoke, long or repro}; shift; else FLEET=${1#--fleet=}; fi
@@ -2006,8 +2025,8 @@ if [ -n "$REPRO" ]; then
     abort-fabric) [ -z "$REPRO_BDF" ] || { echo "--repro abort-fabric takes no chip BDF (it runs on all of this host's chips)" >&2; exit 1; }
       FLEET=repro-abortfab ;;
     numeric|warm-reset|tray-drop) echo "--repro $REPRO is spelled --repro $REPRO <bdf> [...], last on the line (run.sh --help)" >&2; exit 1 ;;
-    busbar-confirm) echo "--repro busbar-confirm is spelled --repro busbar-confirm [...], last on the line (run.sh --help)" >&2; exit 1 ;;
-    *) echo "--repro takes link-a, abort-fabric, numeric, warm-reset, tray-drop or busbar-confirm (got '$REPRO')" >&2; exit 1 ;;
+    busbar-confirm) echo "--repro busbar-confirm was removed: --mode=full runs the extra number formats over its whole heavy chunk (run.sh --help)" >&2; exit 1 ;;
+    *) echo "--repro takes link-a, abort-fabric, numeric, warm-reset or tray-drop (got '$REPRO')" >&2; exit 1 ;;
   esac
 elif [ "$FLEET" = repro-linka ]; then echo "--mode=repro-linka is spelled --repro link-a" >&2; exit 1
 elif [ "$FLEET" = repro-abortfab ]; then echo "--mode=repro-abortfab is spelled --repro abort-fabric" >&2; exit 1; fi

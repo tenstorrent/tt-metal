@@ -7,8 +7,6 @@
 etc.). Reads only the FINDING and WARN lines run.sh already wrote; no device, no new check.
   tray_why.py <findings.txt> <tray 1-4> [--stages <finding_stage.tsv>] [--max N] [--drop-trays "3 4"]
   tray_why.py <findings.txt> --result [--also <numeric.txt>] [--stages ..] [--drop-trays ..] [--known-tray N]
-  tray_why.py <findings.txt> --box   the one "BOX cause: POWER: bus bar set of the box" line when 3 or more trays have a feed peak
-at their warn limit at 160 W per chip or less, else nothing
 --result: one phrase naming every failed check fl_report will print as a FAIL tray line, for the RESULT line.
 --drop-trays: the trays that lost chips (POWER/CHIP DROP); a chunk whose load died then lists every tray's chips in its CHUNK
 FAIL line, but it is listed only under those trays, as fl_report counts it.
@@ -51,15 +49,6 @@ POWER_NEXT = "1. Replace the bus bar -> 2. if the tray still drops, replace tray
 # unread bits are 'not graded'. HSC_ADD: the OFF/IOUT_OC bits hsc_judge appends to an under-voltage leg line.
 HSC_NEW = re.compile(
     r"^HSC FAIL tray ([1-4]) \([^)]*\) HSC (0x[0-9a-fA-F]{2}): ([A-Z_]+(?:\+[A-Z_]+)*) (?:latched|set) during "
-)
-# a feed whose bus-bar peak reached its own IOUT_OC_WARN_LIMIT (lib/hsc_check.sh hsc_peak_judge): limits in A, 1 A per count
-HSC_PEAK = re.compile(
-    r"^HSC FAIL tray ([1-4]) \([^)]*\) HSC (0x[0-9a-fA-F]{2}): IOUT peak ([0-9.]+) A during [^,]*, "
-    r"at or above its own IOUT_OC_WARN_LIMIT ([0-9.]+) A \(4Ah\)"
-    # the run's per-chip TDP (hsc_tdps): at or below 160 W the bus bar is blamed, above it or unread the line blames nothing;
-    # a line without it (an older run) blames as before
-    r"(?:, (?:at TDP (?P<low>[0-9]+) W per chip|feed at its limit at (?P<high>[0-9]+) W[^,]*|(?P<unread>TDP not read)[^,]*))?"
-    r"(?:, trip IOUT_OC_FAULT_LIMIT (?P<trip>[0-9.]+) A)?"
 )
 HSC_ADD = re.compile(r"; ([A-Z_]+(?:\+[A-Z_]+)*) set during ")
 HSC_POWER_BITS = ("VIN_UV_WARN", "VIN_UV_FAULT", "OFF", "IOUT_OC")  # CML is a comm fault, never power
@@ -304,26 +293,6 @@ def cause(l, kind, u, findings, stage="", lines=()):
             "(ENODEV): not this tray's board",
             f"fix {t} first (see its FAIL line), then reset and recheck this chip",
         )
-    hp = HSC_PEAK.match(l)  # a feed at its own over-current warn limit under the bus-bar load: a POWER cause
-    if hp and not warn:
-        a, f = hp.group(2).lower(), HSC_FEED.get(hp.group(2).lower(), f"at HSC {hp.group(2).lower()}")
-        trip = f", {hp.group('trip')} A trip" if hp.group("trip") else ""
-        u, pk, wl = hp.group(1), hp.group(3), hp.group(4)
-        # a TDP above 160 W (or not read): the feed at its limit is not the bus bar's fault
-        if hp.group("high") or hp.group("unread"):
-            at = f"at {hp.group('high')} W per chip" if hp.group("high") else "at a TDP that was not read"
-            return (
-                f"feed at its limit {at}: tray {u} 12 V feed {f} (HSC {a}) peak {pk} A at or above its {wl} A warn limit{trip}; "
-                "a healthy feed can reach this at this TDP, so it is not blamed on the bus bar",
-                "rerun at the box's default TDP before any bus-bar work",
-            )
-        at = f" at {hp.group('low')} W per chip" if hp.group("low") else ""
-        return (
-            f"POWER: tray {u} 12 V feed {f} / bus bar: HSC {a} peak {pk} A at or above its "
-            f"{wl} A warn limit{trip} under the bus-bar load{at} (the feed is at its over-current limit)",
-            f"1. Check the bus bar and 12 V feed {f} of tray {u} (HSC {a}) -> 2. replace the bus bar if the "
-            "peak stays at the limit",
-        )
     hf = HSC_NEW.match(l)  # a power latch newly set during this run is a POWER cause naming
     # its feed and HSC; it comes before the whole-tray rule, which stays the fallback for lines it does not parse
     if hf and not warn:
@@ -379,7 +348,12 @@ def cause(l, kind, u, findings, stage="", lines=()):
             "its PCIe path (board, retimer or cable, or the host slot)",
             PCIE_NEXT,
         )
-    if PCIE_WHY and re.match(r"AER FAIL .*: correctable \+\d+ ", l):  # one root port's corrected AER, rule 1 or a stall
+    if PCIE_WHY and (
+        re.match(r"AER FAIL .*: correctable \+\d+ ", l)  # one root port's corrected AER, rule 1 or a stall
+        or re.match(
+            r"AER WARN .*: correctable \+\d+ .*every other root port \+2 or less", l
+        )  # rule 1 as a warning (no drop)
+    ):
         return (
             "the chip's PCIe path: board, retimer or cable, or the host slot"
             + (" (likely the stall's cause: the only port with errors)" if "likely " in l else ""),
@@ -863,35 +837,11 @@ def why(lines, u, stages=None, cap=10, findings="findings.txt", drop_trays=None,
     return out
 
 
-def box_line(lines):
-    """One box-level POWER cause line when 3 or more trays each have a feed at its warn limit in the bus-bar stage at a TDP
-    of 160 W or less (or from an older run with no TDP named): the bus bar set of the box, not one tray's. '' otherwise.
-    A tray counts by its peak line alone, whatever else it has (a latch FAIL, a whole-tray loss); repair_rec.recommend uses the
-    same rule for its 'bus bar set of the box' item. The peak FAIL exists only in the bus-bar stage.
-    """
-    trays = sorted({m.group(1) for m in map(HSC_PEAK.match, lines) if m and not (m.group("high") or m.group("unread"))})
-    if len(trays) < 3:
-        return ""
-    return (
-        f"BOX cause: POWER: bus bar set of the box: trays {', '.join(trays)} each have a 12 V feed at its over-current warn "
-        "limit under the bus-bar load (the load is at 160 W per chip or less) -> next: 1. Check the bus bar set of the box "
-        "-> 2. replace the bus bar set if the peaks stay at the limit (no tray board is named for a feed peak alone)"
-    )
-
-
 def main(a):
     if len(a) < 2:
         print(__doc__, file=sys.stderr)
         return 2
     f, u = a[0], a[1]
-    if u == "--box":  # tray_why.py <findings.txt> --box: the one box-level line, if any
-        try:
-            r = box_line(open(f, errors="replace").read().splitlines())
-        except OSError:
-            return 0
-        if r:
-            print(r)
-        return 0
     if (
         u == "--result"
     ):  # tray_why.py <findings.txt> --result [--also <numeric.txt>] [--stages ..] [--drop-trays ..] [--known-tray N]

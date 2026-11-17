@@ -11,11 +11,13 @@ python); the rest read files or sysfs and run with any python3.
   pairs <disc.json> <map.txt> [skip]    C5: local chip pairs in edge-coloured rounds (no chip twice in a round):
                                         idx round chipA chipB bdfA bdfB devA devB chansA chansB; skip = comma list of
                                         UMD chip ids whose pairs are left out. map.txt: "<bdf> <devnode>" (run.sh's rk_map)
-  aer <sysfs> <bdf>...                  C1: per endpoint and its root port: bdf role cor nonfatal fatal rxerr badtlp
+  aer <sysfs> <bdf>[@<root port>]...    C1: per endpoint and its root port: bdf role cor nonfatal fatal rxerr badtlp
   aerdelta <pre> <post> <rate_warn> <hours> [min] [host] [when] [fail]
                                         C1 run window: "AER WARN" for a correctable rise >= rate_warn per hour of the run (and
-                                        >= min events, default 2); "AER FAIL" for any uncorrectable (nonfatal/fatal) rise,
-                                        and for one root port's correctable rise >= fail with every other port +2 or less.
+                                        >= min events, default 2); "AER FAIL" for any uncorrectable (nonfatal/fatal) rise;
+                                        one root port's correctable rise >= fail with every other port +2 or less is an
+                                        "AER WARN" naming the chip, an "AER FAIL" when that chip dropped off PCIe or its
+                                        uncorrectable count rose (a correctable-only rise is a warning).
   aerhang <rows> <stall epoch> [host]   a stall naming no single chip: AER FAIL for the one port whose AER poll rows rose.
                                         journal (C1 history) also prints "AER FAIL" for a chip whose correctable rate is an
                                         outlier, >= 10x the box median and >= 20/h; not WARN-only.
@@ -264,10 +266,16 @@ def aer_file(path):
 
 def aer(sysfs, bdfs):
     print("bdf\trole\tof\tcor\tnonfatal\tfatal\trxerr\tbadtlp")
-    for b in bdfs:
+    for a in bdfs:
+        b, _, rpn = a.partition(
+            "@"
+        )  # <endpoint>[@<its root port>]: the root port still reads when the endpoint left PCIe
         ep = os.path.join(sysfs, "bus/pci/devices", b)
-        rp = os.path.basename(os.path.dirname(os.path.realpath(ep)))
-        for role, dev, name in (("ep", ep, b), ("rp", os.path.dirname(os.path.realpath(ep)), rp)):
+        rpdev = os.path.dirname(os.path.realpath(ep))
+        if rpn and not os.path.exists(ep):
+            rpdev = os.path.realpath(os.path.join(sysfs, "bus/pci/devices", rpn))
+        rp = os.path.basename(rpdev)
+        for role, dev, name in (("ep", ep, b), ("rp", rpdev, rp)):
             c = aer_file(os.path.join(dev, "aer_dev_correctable"))
             nf = aer_file(os.path.join(dev, "aer_dev_nonfatal")) or {}
             f = aer_file(os.path.join(dev, "aer_dev_fatal")) or {}
@@ -300,7 +308,10 @@ def _fail(v):
 
 def aerdelta(pre, post, rate, hours, least=2, host="?", when="during the run", fail=0):
     """fail (FLEET_AER_STAGE_FAIL, 0 = off): one root port's corrected rise (its own count or its chip's, the larger) >=
-    fail while every other port rose <= 2 is an AER FAIL naming the chip, in place of that port's WARN."""
+    fail while every other port rose <= 2 is an AER WARN naming the chip, in place of that port's rate WARN; an AER FAIL
+    when a chip under that port left PCIe (readable before, unreadable after) or an uncorrectable count under it rose
+    (user msgs #9628, #9646: a box that trips no under-voltage or over-current warning and does not drop is decent enough).
+    """
 
     def rows(p):
         out = {}
@@ -311,6 +322,11 @@ def aerdelta(pre, post, rate, hours, least=2, host="?", when="during the run", f
         return out
 
     a, b = rows(pre), rows(post)
+    gone = {  # chips readable before the stage and not after: off PCIe (aer prints '-' for a device that left the bus)
+        f[2]
+        for f in (l.split("\t") for l in open(post).read().splitlines()[1:])
+        if len(f) == 8 and f[1] == "ep" and f[3] == "-" and (f[0], "ep") in a
+    }
     rps = {of: k[0] for k, (of, _) in b.items() if k[1] == "rp"}
     rise = {}
     for k, (of, v) in b.items():
@@ -319,7 +335,14 @@ def aerdelta(pre, post, rate, hours, least=2, host="?", when="during the run", f
             rise[p] = max(rise.get(p, 0), v[0] - a[k][1][0])
     hot = one_port(rise, fail, 2)
     hk = [k for k, (of, _) in b.items() if k in a and rps.get(of, k[0]) == hot] if hot else []
-    hk = min(hk, key=lambda k: (k[1] != "rp", k)) if hk else None  # the FAIL goes on the rp row, else the chip's row
+    hk = min(hk, key=lambda k: (k[1] != "rp", k)) if hk else None  # the line goes on the rp row, else the chip's row
+    hot_unc = hot and any(
+        rps.get(of, k[0]) == hot and k in a and any(y - x > 0 for x, y in zip(a[k][1][1:3], v[1:3]))
+        for k, (of, v) in b.items()
+    )
+    hot_gone = bool(hot) and any(
+        rps.get(of) == hot for of in gone
+    )  # its root port row still reads when the chip is gone
     for k, (of, v) in sorted(b.items()):
         if k not in a:
             continue
@@ -329,10 +352,16 @@ def aerdelta(pre, post, rate, hours, least=2, host="?", when="during the run", f
         if d[1] > 0 or d[2] > 0:
             print(f"AER FAIL {who}: uncorrectable nonfatal +{d[1]} fatal +{d[2]} {when}")
         if hot and rps.get(of, k[0]) == hot:
-            if k == hk:  # an unreadable rp row ('-') still gets its FAIL, on the chip's row
+            if k == hk:  # an unreadable rp row ('-') still gets its line, on the chip's row
+                fatal = hot_unc or hot_gone
                 print(
-                    f"AER FAIL {of[5:]} ({ubb(of)}) root port {rps.get(of, '?')}, host {host}: correctable +{rise[hot]} (RxErr +{d[3]}, BadTLP +{d[4]}) {when} "
-                    f"(every other root port +2 or less)"
+                    f"AER {'FAIL' if fatal else 'WARN'} {of[5:]} ({ubb(of)}) root port {rps.get(of, '?')}, host {host}: correctable +{rise[hot]} "
+                    f"(RxErr +{d[3]}, BadTLP +{d[4]}) {when} (every other root port +2 or less; "
+                    + (
+                        f"FAIL because {'the chip dropped off PCIe' if hot_gone else 'an uncorrectable count under it rose'})"
+                        if fatal
+                        else "a correctable-only rise is a WARN: no drop and no uncorrectable rise)"
+                    )
                 )
             continue
         per_h = d[0] / max(hours, 1 / 60)
@@ -444,9 +473,9 @@ def aerrate(sysfs, state, dmesg, now, warn, chips, fail=0, host="?"):
         if hot:
             st["live"] = hot
             nm = ", ".join(f"{b[5:]} (tray {t})" for b, t in ports[hot]["chips"])
-            print(
-                f"AER FAIL {nm} root port {hot}, host {host}: correctable +{tot[hot]} live at minute "
-                f"{round((now - st.get('t0', now)) / 60)} of the stage (every other root port +2 or less)"
+            print(  # a WARN: a drop or an uncorrectable rise is judged at the stage's end (aerdelta)
+                f"AER WARN {nm} root port {hot}, host {host}: correctable +{tot[hot]} live at minute "
+                f"{round((now - st.get('t0', now)) / 60)} of the stage (every other root port +2 or less; correctable only so far)"
             )
     st.setdefault("t0", now)
     st.update(ports=ports, cor=out, t=now, dmesg_t=last_t)

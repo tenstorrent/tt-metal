@@ -14,14 +14,10 @@ The copy is a plain folder, not a submodule, so a normal clone of tt-metal has e
 `<hc2>/SYNC` records where the copy came from: the source repository, the source
 path, the source commit, and the sha256 of every file. Do not edit it by hand.
 
-Binaries the glue supplies, and files of tray-test's own routes, are never copied: `hc2_sync.sh` leaves out every path in its `EXCLUDE` rule and writes
+Binaries the glue supplies are never copied: `hc2_sync.sh` leaves out every path in its `EXCLUDE` rule and writes
 one `exclude:` line per path to SYNC. Today that is `fleet/pv/run-ttx`, the power virus binary. The core finds it through
 `HC_RUN_TTX` (else `fleet/pv/run-ttx` beside itself); when it is absent, run.sh prints a WARNING as its first line, at
 each power virus part and in the summary, and runs the bus-bar chunk load in its place.
-
-The second path, `h3/requirements-wheel.txt`, is left out too: it holds the pip pins of tray-test's own wheel route (`h3.sh wheel_setup`),
-which hc2 never runs (the glue sets `H3_TT_METAL_BUILD` and uses the checkout's `python_env`). Keeping it out of metal
-keeps a pin that cannot be installed there (the ttnn wheel is CPython 3.10) out of metal's dependency scan.
 
 Only `core/` and `SYNC` are managed. Everything else under `<hc2>/` (for example `glue/`) belongs to
 tt-metal and is never touched.

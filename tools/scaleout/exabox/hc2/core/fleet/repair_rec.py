@@ -34,7 +34,6 @@ RULES = [
         "POWER:{u}",
     ),
     (r"^POWER: tray [1-4] 12 V feed", "POWERFEED"),  # an HSC power latch newly set during this run
-    (r"^feed at its limit ", "FEEDHIGH"),  # a feed peak at a TDP above 160 W (or not read): no bus-bar blame
     (r"^test infrastructure", "no hardware repair (software: test infrastructure on tray {u})"),
     (r"^firmware version differs", "no hardware repair (firmware: reflash tray {u})"),
     (
@@ -71,9 +70,6 @@ def bdfs(text, u=None):
 
 HSC_FAIL = re.compile(r"HSC FAIL tray ([1-4]) \([^)]*\) HSC (0x[0-9a-f]{2}): (.*)")
 # the PCIe and board-loss repairs, the only items a tray's power loss folds away; numeric and link items stay
-PEAK_CAUSE = re.compile(
-    r"/ bus bar: HSC 0x[0-9a-f]+ peak "
-)  # tray_why's blamed feed peak (160 W or lower, or no TDP named)
 LOSS = ("the PCIe path (slot, retimer) of {b} on tray {u}, then the tray {u} board", "the tray {u} board carrying {b}")
 
 
@@ -88,18 +84,9 @@ def loss_bdfs(u, line):
 
 
 def add_feed(feed, u, r):
-    """Add one feed line to tray u's list; a latch line (HSC 0x4x ... set during) replaces that HSC's peak line."""
-    hsc = re.search(r"\(HSC (0x[0-9a-f]+) (peak )?", r)
-    if r in feed.setdefault(u, []) or not hsc:
-        if r not in feed[u]:
-            feed[u].append(r)
-        return
-    if hsc.group(2):  # a peak line: dropped when that HSC already has a latch line
-        if any(re.search(rf"\(HSC {hsc.group(1)} (?!peak )", x) for x in feed[u]):
-            return
-    else:
-        feed[u] = [x for x in feed[u] if not x.count(f"(HSC {hsc.group(1)} peak ")]
-    feed[u].append(r)
+    """Add one feed line (an HSC latch newly set during this run) to tray u's list, once."""
+    if r not in feed.setdefault(u, []):
+        feed[u].append(r)
 
 
 def power_item(u, hscs=()):
@@ -119,25 +106,7 @@ def item(u, part, cause, nxt, commit, kind=None):
             return ""
         bs = bdfs(part, u) or bdfs(nxt, u) or bdfs(cause, u)
         b = " ".join(bs) if bs else f"a chip of tray {u}"
-        if tpl == "FEEDHIGH":  # the load at this TDP can put a healthy feed at its limit: rerun first
-            m = re.search(
-                r"^feed at its limit (.+?): tray [1-4] 12 V feed (.+?) \(HSC (0x[0-9a-f]+)\) peak ([0-9.]+) A", cause
-            )
-            at = f", {m.group(1)}" if m else ""
-            return (
-                f"rerun run.sh at the box's default TDP before any bus-bar work (tray {u} 12 V feed "
-                f"{m.group(2) if m else ''} peak at its limit{at})"
-            )
         if tpl == "POWERFEED":
-            m = re.search(
-                r"12 V feed (.+?) / bus bar: HSC (0x[0-9a-f]+) peak ([0-9.]+) A at or above its ([0-9.]+) A warn limit(, [0-9.]+ A trip)?",
-                cause,
-            )
-            if m:  # a feed whose bus-bar peak reached its warn limit (no latch set)
-                return (
-                    f"bus bar / tray 12 V feed {m.group(1)} of tray {u} (HSC {m.group(2)} peak {m.group(3)} A at or above "
-                    f"its {m.group(4)} A warn limit{m.group(5) or ''}), no tray board for a feed peak alone"
-                )
             m = re.search(r"12 V feed (.+?) / bus bar: HSC (0x[0-9a-f]+) ([A-Z_+]+)", cause)
             src = (
                 f"feed {m.group(1)} of tray {u} (HSC {m.group(2)} {m.group(3)} newly set during this run)"
@@ -252,8 +221,6 @@ def recommend(rc, verdict, trays_text="", findings_text="", mode="", commit="?",
     )  # tray -> HSC addresses of its HSC FAIL lines (the feed line); PCIe/board-loss item -> its tray
     fold, off, lost = set(), set(), {}  # folded trays; trays with an HSC OFF; tray -> lost BDFs (listed and truncated)
     feed = {}  # tray -> its HSC-named feed lines (the POWERFEED rule)
-    rerun_items = []  # feed peaks at a TDP above 160 W (or not read): rerun at the default TDP first
-    peak_trays = set()  # trays with a blamed feed peak, whatever else they also have (tray_why.box_line's rule)
     u = None
     for l in trays_text.splitlines():
         h = HEAD.match(l)
@@ -279,15 +246,7 @@ def recommend(rc, verdict, trays_text="", findings_text="", mode="", commit="?",
             kind = []  # a POWERFEED cause on the same line still names its 12 V feed (one feed line per tray)
             r = item(u, w.group(1), w.group(2), w.group(3), commit, kind)
             named.add(u)
-            if kind and kind[0] == "FEEDHIGH":  # not the bus bar's fault: its own rerun line, no feed or tray repair
-                if r not in rerun_items:
-                    rerun_items.append(r)
-                continue
-            pk = bool(kind and kind[0] == "POWERFEED" and PEAK_CAUSE.search(w.group(2)))
-            if pk:
-                peak_trays.add(u)
-            else:  # a peak sets no latch: it adds no HSC to the tray's power loss
-                power.setdefault(u, set()).add(hf.group(2))
+            power.setdefault(u, set()).add(hf.group(2))
             if re.search(r"\bOFF\b", hf.group(3)):
                 off.add(u)
             if kind and kind[0] == "POWERFEED" and r:
@@ -301,8 +260,6 @@ def recommend(rc, verdict, trays_text="", findings_text="", mode="", commit="?",
             named.add(u)
             continue
         if kind and kind[0] == "POWERFEED":
-            if PEAK_CAUSE.search(w.group(2)):
-                peak_trays.add(u)
             add_feed(feed, u, r)
             named.add(u)
             continue
@@ -345,27 +302,10 @@ def recommend(rc, verdict, trays_text="", findings_text="", mode="", commit="?",
     # one feed line per tray, first. Only a whole-tray power loss (the RULES entry, or an HSC OFF with all 8 chips lost)
     # folds that tray's PCIe/board-loss lines and unknowns into it; numeric and link lines stay
     fold |= {t for t in off if len(lost.get(t, ())) >= 8}
-    # 3 or more trays at their warn limit (tray_why.box_line's rule, whatever else a tray has): one line for the bus bar set
-    # of the box; each such tray keeps its latch feed lines and its power loss, only its peak lines go into the box line
-    box = []
-    if len(peak_trays) >= 3:
-        box = [
-            f"the bus bar set of the box (trays {', '.join(sorted(peak_trays))} each at their 12 V feed over-current warn "
-            "limit under the bus-bar load, no tray board for a feed peak alone)"
-        ]
-        for t in peak_trays:
-            left = [x for x in feed.get(t, []) if not re.search(r"\(HSC 0x[0-9a-f]+ peak ", x)]
-            if left:
-                feed[t] = left
-            else:
-                feed.pop(t, None)
     # a tray's HSC-named feed line (a latch newly set during this run) replaces its generic bus-bar line
-    items = (
-        box
-        + [f for t in sorted(set(power) | set(feed)) for f in feed.get(t) or [power_item(t, power.get(t, ()))]]
-        + rerun_items
-        + [r for r in items if loss_of.get(r) not in fold]
-    )
+    items = [f for t in sorted(set(power) | set(feed)) for f in feed.get(t) or [power_item(t, power.get(t, ()))]] + [
+        r for r in items if loss_of.get(r) not in fold
+    ]
     unknown = [t for t in unknown if t not in fold]
     if unknown:
         items.append(f"{UNKNOWN} (tray {', '.join(sorted(set(unknown)))})")
