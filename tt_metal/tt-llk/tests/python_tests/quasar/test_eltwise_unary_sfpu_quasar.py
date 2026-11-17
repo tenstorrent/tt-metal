@@ -103,10 +103,17 @@ SFPU_UNARY_FORMATS = input_output_formats(
 TRIGONOMETRY_OPS = [
     MathOperation.Sin,
     MathOperation.Cos,
+    MathOperation.Tan,
     MathOperation.Acosh,
     MathOperation.Asinh,
     MathOperation.Atanh,
 ]
+
+# Two output steps, relative: the bound the tangent sweep holds on top of the suite tolerance.
+TAN_RTOL = {
+    DataFormat.Float32: 2 * 2.0**-23,
+    DataFormat.Float16_b: 2 * 2.0**-7,
+}
 
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
 # the Int16 container), so the sweep adds them to the float formats above.
@@ -439,8 +446,13 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
-    elif mathop == MathOperation.Softplus:
-        # for_op spans the t < -5 tail and the linear threshold.
+    elif mathop in (
+        MathOperation.Softplus,
+        MathOperation.Softsign,
+        MathOperation.I0,
+    ):
+        # for_op spans softplus' t < -5 tail and linear threshold, softsign's [-5, 5] and i0's
+        # |x| <= 3.75 fit.
         spec = for_op(mathop, input_format).spec_A
         min_val = spec.low
         max_val = spec.high
@@ -474,6 +486,7 @@ def prepare_trig_inputs(
     stays in its accurate range:
       sin / cos — [-pi, pi] (argument reduction is valid far wider, but a small domain
                   keeps the Maclaurin polynomial precise).
+      tan      — [-1.3, 1.3] (the sfpu_domains range, inside the poles at +-pi/2).
       asinh    — [-10, 10] (log polynomial stable away from overflow).
       acosh    — [1.1, 50]  (x >= 1 domain; avoid near-1 where the 3rd-order log loses
                   precision).
@@ -484,6 +497,9 @@ def prepare_trig_inputs(
 
     if mathop in (MathOperation.Sin, MathOperation.Cos):
         lo, hi = -math.pi, math.pi
+    elif mathop == MathOperation.Tan:
+        spec = for_op(mathop, input_format).spec_A
+        lo, hi = spec.low, spec.high
     elif mathop == MathOperation.Asinh:
         lo, hi = -10.0, 10.0
     elif mathop == MathOperation.Acosh:
@@ -995,6 +1011,7 @@ _APPROX_MATHOPS = (
     MathOperation.Gelu,
     MathOperation.Reciprocal,
     MathOperation.Rsqrt,
+    MathOperation.Softsign,
 )
 _QSR_EXTRA_MATHOPS = (
     MathOperation.Relu,
@@ -1056,6 +1073,9 @@ OP_CONFIGS = [
     # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
     OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Softsign, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Reaches calculate_i0 through SFPU_UNARY_INIT(i0), the Compute API's i0_tile_init.
+    OpConfig(MathOperation.I0, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
@@ -1427,6 +1447,19 @@ def run_eltwise_unary_sfpu_quasar(
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+    if mathop == MathOperation.Tan:
+        # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
+        # wrong order; the kernel itself stays within one output step of the golden.
+        golden = golden_tensor.to(torch.float64)
+        assert torch.all(
+            torch.isclose(
+                res_tensor.to(torch.float64),
+                golden,
+                rtol=TAN_RTOL[formats.output_format],
+                atol=0.0,
+            )
+        ), "tan is more than two output steps from the golden"
 
     if mathop == MathOperation.Softplus:
         # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
