@@ -216,6 +216,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
+
+        // Configure invariant SFPU state once. Each build selects one pool, and nothing below
+        // re-records its replay-buffer region before the per-tile calculations reuse it.
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+        ckernel::sfpu::_init_sdpa_reduce_row_8x32_<DataFormat::Float16_b>();
+        if constexpr (SDPA_REDUCE_POOL == SDPA_REDUCE_POOL_MAX)
+        {
+            ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_();
+        }
+        else
+        {
+            ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_();
+        }
         PROFILER_SYNC();
     }
     {
@@ -232,23 +245,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_packer_wait_for_math_done_();
                 }
 
-                // Enable the SFPU (config reg + counter reset), then run the op's self-contained init:
-                // _init_sdpa_reduce_row_8x32_ sets the ZERO / TILE_OFFSET addr_mods, and the replay-buffer
-                // recorder lays down the pool-specific fold sequence. sdpa.h records the replay buffer for
-                // exactly the pool it is about to compute, so we do the same here.
-                _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
-                ckernel::sfpu::_init_sdpa_reduce_row_8x32_<DataFormat::Float16_b>();
                 _llk_math_eltwise_sfpu_start_(SDPA_DST_INDEX);
 
                 if constexpr (SDPA_REDUCE_POOL == SDPA_REDUCE_POOL_MAX)
                 {
-                    ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_();
                     ckernel::sfpu::_calculate_sdpa_reduce_max_row_8x32_<DataFormat::Float16_b, SDPA_REDUCE_BLOCK_WIDTH, true /* skip_signalling */>(
                         SDPA_SRC_INDEX, SDPA_DST_INDEX, false /* prev_max */);
                 }
                 else
                 {
-                    ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_();
                     ckernel::sfpu::_calculate_sdpa_reduce_sum_row_8x32_<DataFormat::Float16_b, SDPA_REDUCE_BLOCK_WIDTH, true /* skip_signalling */>(
                         SDPA_SRC_INDEX, SDPA_DST_INDEX, false /* prev_sum */);
                 }
