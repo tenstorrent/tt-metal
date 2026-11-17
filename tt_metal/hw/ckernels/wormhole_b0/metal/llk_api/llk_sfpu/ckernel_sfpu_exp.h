@@ -319,6 +319,9 @@ constexpr std::uint32_t EXP_21F_TTI_ROW_B_DEST_OFFSET = 2;
 // reduction and both clamps. Row A lives in LREG0-2, row B in LREG4/5/7.
 template <bool SCALE_EN, bool CLAMP_NEGATIVE, bool BASE_TWO>
 sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_head_(const std::uint16_t exp_base_scale_factor) {
+    // Without the lower-clamp SFPSWAPs, the BASE_TWO upper clamp would read LREG4 one cycle
+    // after the SFPMAD that writes it.
+    static_assert(!BASE_TWO || CLAMP_NEGATIVE, "BASE_TWO needs CLAMP_NEGATIVE");
     // val = sfpi::dst_reg[0] (row A) and sfpi::dst_reg[1] (row B)
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, EXP_21F_TTI_ROW_B_DEST_OFFSET);
