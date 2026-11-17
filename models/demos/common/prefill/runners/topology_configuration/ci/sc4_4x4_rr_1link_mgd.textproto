@@ -8,8 +8,8 @@
 # Inside a mesh both axes are rings: SP on mesh axis 1, TP on axis 0, FABRIC_2D_TORUS_XY. Stage chain
 # 0 -> 1 -> ... -> 7 (no 7 -> 0 connection: prefill does not close the ring).
 #
-# Intra-mesh channels are STRICT 1: the variant of sc4_4x4_rr_mgd.textproto for pods where a host-to-host hop
-# has fewer than 16 links (pod6's c07u08 -> u14 hop has 13), so one seam torus has single-link edges.
+# Intra-mesh channels are RELAXED 2: the variant of sc4_4x4_rr_mgd.textproto for pods where a host-to-host hop
+# has fewer than 16 links (a seam torus then has a single-link edge), which the STRICT 2 descriptor cannot map.
 #
 # The pins are the subtorus_4x4_pipeline_8stage profiles that TestSubtorus4x4PipelineMgdPinningsExact
 # checks (corner pins and one orientation anchor per mesh, per board revision).
@@ -19,7 +19,7 @@ mesh_descriptors {
   arch: BLACKHOLE
   device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
   host_topology   { dims: [ 1, 1 ] }
-  channels { count: 1 policy: STRICT }
+  channels { count: 2 policy: RELAXED }
 }
 
 mesh_descriptors {
@@ -27,7 +27,7 @@ mesh_descriptors {
   arch: BLACKHOLE
   device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
   host_topology   { dims: [ 2, 1 ] }
-  channels { count: 1 policy: STRICT }
+  channels { count: 2 policy: RELAXED }
 }
 
 graph_descriptors {

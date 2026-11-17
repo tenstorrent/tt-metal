@@ -139,7 +139,7 @@ def mesh_graph(path):
         "host_dims": hosts,
         "dim_types": set(re.findall(r"dim_types: \[ (\w+), (\w+) \]", text)),
         "seams": re.findall(r"channels \{ count: (\d+) policy: RELAXED \}\s+assign_z_direction: true", text),
-        "intra_mesh": re.findall(r"channels \{ count: (\d) policy: STRICT \}", text),
+        "intra_mesh": re.findall(r"channels \{ count: ([1-7]) policy: (\w+) \}", text),
     }
 
 
@@ -153,15 +153,16 @@ def test_descriptors_alternate_single_and_two_host_rings(name, stages):
     assert g["meshes"] == [(f"M{i % 2}", str(i)) for i in range(stages)]
     # A chain: one 8-link seam between consecutive stages, nothing closing the ring.
     assert g["seams"] == ["8"] * (stages - 1)
-    assert g["intra_mesh"] == ["1" if name.endswith("1link") else "2"] * 2
+    # Both mesh kinds ask for 2 channels per edge: STRICT, or RELAXED so a pod with a single-link edge still maps.
+    assert g["intra_mesh"] == [("2", "RELAXED" if name.endswith("1link") else "STRICT")] * 2
 
 
 @pytest.mark.parametrize("pair", [("sc4_4x4_rr", "sc4_4x4_rr_1link"), ("sc2_4x4_rr", "sc2_4x4_rr_1link")])
-def test_single_link_variant_differs_only_in_intra_mesh_channels(pair):
+def test_single_link_variant_differs_only_in_intra_mesh_policy(pair):
     def body(name):
         text = (TOPO / f"ci/{name}_mgd.textproto").read_text()
         text = re.sub(r"^#.*\n", "", text, flags=re.M)
-        return re.sub(r"channels \{ count: \d policy: STRICT \}", "channels STRICT", text)
+        return re.sub(r"channels \{ count: 2 policy: (STRICT|RELAXED) \}", "channels INTRA", text)
 
     assert body(pair[0]) == body(pair[1])
 
