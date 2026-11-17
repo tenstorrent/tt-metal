@@ -13,6 +13,7 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/deprecation.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
@@ -98,12 +99,13 @@ inline std::string get_generic_reduction_doc(
 }
 
 // Wrapper that detects explicit use of the deprecated 'correction' parameter and
-// emits a Python DeprecationWarning before forwarding to the real implementation.
+// emits the TTNN deprecation warning before forwarding to the real implementation.
+// PythonName is the operation's public Python name, e.g. "ttnn.sum".
 // The binding-layer type is std::optional<bool> (default nb::none()) so we can
 // distinguish "user passed correction=True" from "used the default".
 // This whole function can be removed when the deprecated 'correction' parameter is removed.
 // Used by sum and mean, which take a trailing output_layout.
-template <auto Func>
+template <auto Func, ttnn::unique_string PythonName>
 inline Tensor reduction_with_deprecated_correction_and_layout(
     const Tensor& input_tensor,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
@@ -116,11 +118,9 @@ inline Tensor reduction_with_deprecated_correction_and_layout(
     bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
     if (correction.has_value()) {
-        nb::gil_scoped_acquire acquire;
-        PyErr_WarnEx(
-            PyExc_DeprecationWarning,
-            "The 'correction' parameter is deprecated and will be removed in a future release.",
-            1);
+        ttnn::warn_deprecated(
+            fmt::format("the correction argument of {}", static_cast<const char*>(PythonName)),
+            "a call without correction");
     }
     return Func(
         input_tensor,
@@ -136,7 +136,7 @@ inline Tensor reduction_with_deprecated_correction_and_layout(
 }
 
 // As above, used by max and min, which do not take output_layout.
-template <auto Func>
+template <auto Func, ttnn::unique_string PythonName>
 inline Tensor reduction_with_deprecated_correction(
     const Tensor& input_tensor,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
@@ -148,11 +148,9 @@ inline Tensor reduction_with_deprecated_correction(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode) {
     if (correction.has_value()) {
-        nb::gil_scoped_acquire acquire;
-        PyErr_WarnEx(
-            PyExc_DeprecationWarning,
-            "The 'correction' parameter is deprecated and will be removed in a future release.",
-            1);
+        ttnn::warn_deprecated(
+            fmt::format("the correction argument of {}", static_cast<const char*>(PythonName)),
+            "a call without correction");
     }
     return Func(
         input_tensor,
@@ -172,7 +170,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"sum">(
         mod,
         sum_doc.c_str(),
-        &reduction_with_deprecated_correction_and_layout<&ttnn::sum>,
+        &reduction_with_deprecated_correction_and_layout<&ttnn::sum, "ttnn.sum">,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -194,7 +192,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"mean">(
         mod,
         mean_doc.c_str(),
-        &reduction_with_deprecated_correction_and_layout<&ttnn::mean>,
+        &reduction_with_deprecated_correction_and_layout<&ttnn::mean, "ttnn.mean">,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -214,7 +212,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"max">(
         mod,
         max_doc.c_str(),
-        &reduction_with_deprecated_correction<&ttnn::max>,
+        &reduction_with_deprecated_correction<&ttnn::max, "ttnn.max">,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -231,7 +229,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"min">(
         mod,
         min_doc.c_str(),
-        &reduction_with_deprecated_correction<&ttnn::min>,
+        &reduction_with_deprecated_correction<&ttnn::min, "ttnn.min">,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
