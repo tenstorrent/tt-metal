@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/quasar/slice/slice.hpp"
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -14,6 +15,8 @@
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -23,6 +26,11 @@ inline bool is_rm_bw_sharded(const tt::tt_metal::MemoryConfig& mc) {
     const auto layout = mc.memory_layout();
     return mc.is_sharded() && (layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
                                layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED);
+}
+
+// True ND sharding gives an RM page one shard row, so like B/W sharding a tensor row can span several pages.
+inline bool is_rm_nd_sharded(const tt::tt_metal::MemoryConfig& mc) {
+    return mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED && mc.nd_shard_spec().has_value();
 }
 
 // RM constraint, not TILE: `noc_async_*_sharded` derives pages_per_row from the padded shape,
@@ -41,11 +49,23 @@ inline bool has_nontile_w(const ttnn::Tensor& input) {
     return s.rank() >= 1 && s[-1] % tt::constants::TILE_WIDTH != 0;
 }
 
-using ttnn::operations::data_movement::has_subaligned_shard_row;
+// has_subaligned_shard_row covers only legacy B/W specs; a true ND spec's shard row is its last dim.
+inline bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& mc, uint32_t element_size) {
+    if (ttnn::operations::data_movement::has_subaligned_shard_row(mc, element_size)) {
+        return true;
+    }
+    if (!is_rm_nd_sharded(mc)) {
+        return false;
+    }
+    const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
+    return (mc.nd_shard_spec()->shard_shape[-1] * element_size) % alignment != 0;
+}
 
-// Route RM sharded input through composite when native isn't safe: nontile-aligned B/W, B/W with a
-// sub-aligned shard row or non-zero width-begin, or nontile-aligned HEIGHT outside the sharded fast
-// path.
+// Route RM sharded input through composite when native isn't safe: nontile-aligned B/W, B/W or ND with
+// a sub-aligned shard row or non-zero width-begin, or nontile-aligned HEIGHT/ND outside the sharded
+// fast path.
 inline bool needs_rm_composite_input(
     const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mc, bool no_step, bool width_begin_nonzero) {
     if (input.layout() != Layout::ROW_MAJOR || !input.is_sharded()) {
@@ -56,6 +76,12 @@ inline bool needs_rm_composite_input(
         return has_nontile_w(input) || width_begin_nonzero ||
                has_subaligned_shard_row(input.memory_config(), input.element_size());
     }
+    // SliceRmProgramFactory applies the width-begin to the buffer base, which only lands inside the row
+    // when the row is a single page.
+    if (is_rm_nd_sharded(input.memory_config()) &&
+        (width_begin_nonzero || has_subaligned_shard_row(input.memory_config(), input.element_size()))) {
+        return true;
+    }
     // Require a spec: no-spec HEIGHT output triggers needs_sharded_output_reshard → composite anyway.
     const bool stays_on_sharded_fast_path =
         output_mc.is_sharded() && output_mc.shard_spec().has_value() &&
@@ -63,11 +89,11 @@ inline bool needs_rm_composite_input(
     return has_nontile_hw(input) && !stays_on_sharded_fast_path;
 }
 
-// Compose RM B/W-sharded output on nontile-aligned W or a sub-aligned shard row (irregular H is
+// Compose RM B/W- or ND-sharded output on nontile-aligned W or a sub-aligned shard row (irregular H is
 // fine natively). Callers must pass the post-rescale config, since the implicit-inheritance rescale
 // can turn an aligned inherited shard row into a sub-aligned one.
 inline bool needs_rm_composite_output(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mc) {
-    if (input.layout() != Layout::ROW_MAJOR || !is_rm_bw_sharded(output_mc)) {
+    if (input.layout() != Layout::ROW_MAJOR || !(is_rm_bw_sharded(output_mc) || is_rm_nd_sharded(output_mc))) {
         return false;
     }
     return has_nontile_w(input) || has_subaligned_shard_row(output_mc, input.element_size());
@@ -135,10 +161,11 @@ ttnn::Tensor slice(
     auto output_memory_config = memory_config;
 
     // Fill in a missing shard_spec on a sharded output: reuse source's if layouts match, else
-    // synthesize from the source shape.
+    // synthesize from the source shape. A populated nd_shard_spec is already fully specified.
     auto resolve_mc = [&](const ttnn::Tensor& source) {
         auto resolved_mc = output_memory_config;
-        if (resolved_mc.is_sharded() && !resolved_mc.shard_spec().has_value()) {
+        if (resolved_mc.is_sharded() && !resolved_mc.shard_spec().has_value() &&
+            !resolved_mc.nd_shard_spec().has_value()) {
             const auto& in_mc = source.memory_config();
             if (in_mc.is_sharded() && in_mc.memory_layout() == resolved_mc.memory_layout() &&
                 in_mc.shard_spec().has_value()) {
@@ -306,6 +333,43 @@ ttnn::Tensor slice(
                     tt::tt_metal::ShardSpec(shard_spec_val.grid, new_shard_shape, shard_spec_val.orientation);
                 output_memory_config = MemoryConfig(
                     output_memory_config.memory_layout(), output_memory_config.buffer_type(), new_shard_spec);
+            }
+        } else if (
+            mem_layout == tt::tt_metal::TensorMemoryLayout::ND_SHARDED &&
+            output_memory_config.nd_shard_spec().has_value()) {
+            // True ND sharding (e.g. CONTIGUOUS_1D) has no legacy 2D equivalent, so the HEIGHT/WIDTH/
+            // BLOCK rescale above can't apply; rescale the ND shard shape to the sliced output dims
+            // instead, preserving the caller's grid/distribution strategy.
+            const auto& nd_shard_spec_val = output_memory_config.nd_shard_spec().value();
+            const auto& input_padded_shape = input_tensor.padded_shape();
+            if (nd_shard_spec_val.shard_shape.rank() <= input_rank && input_padded_shape.rank() == input_rank) {
+                ttsl::SmallVector<uint32_t> output_dims(input_rank);
+                for (size_t i = 0; i < input_rank; i++) {
+                    output_dims[i] = output_dim_i(i, modified_ends);
+                }
+                if (!rm_only) {
+                    output_dims[input_rank - 2] =
+                        std::max(tt::round_up(output_dims[input_rank - 2], tile_shape[0]), tile_shape[0]);
+                    output_dims[input_rank - 1] =
+                        std::max(tt::round_up(output_dims[input_rank - 1], tile_shape[1]), tile_shape[1]);
+                }
+
+                auto new_nd_spec = ttnn::operations::data_movement::common::rescale_nd_shard_spec_for_output(
+                    nd_shard_spec_val,
+                    input_padded_shape,
+                    ttnn::Shape(output_dims),
+                    input_tensor.dtype(),
+                    PageConfig(rm_only ? Layout::ROW_MAJOR : Layout::TILE, input_tensor.tensor_spec().tile()),
+                    output_memory_config.buffer_type());
+
+                if (new_nd_spec != nd_shard_spec_val) {
+                    const bool was_range_lockstep =
+                        tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+                            output_memory_config);
+                    output_memory_config = MemoryConfig(output_memory_config.buffer_type(), new_nd_spec);
+                    tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(
+                        output_memory_config, was_range_lockstep);
+                }
             }
         }
     }
