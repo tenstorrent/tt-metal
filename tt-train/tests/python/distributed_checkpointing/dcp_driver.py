@@ -66,8 +66,8 @@ LOGITS_TOLERANCE = 0.03
 STATE_TOLERANCE = 0.06
 MESH_OPEN_FAILED = 3  # exit status when this host cannot open the requested mesh; the tests skip on it
 # The one mesh-open failure that means "this host cannot open the mesh" rather than a bug: a descriptor asking for
-# ethernet links this host's fabric does not have (the QuietBox 1x4 ring on a loudbox). Any other failure to open a
-# mesh the host has the devices for fails the test.
+# ethernet links this host's fabric does not have (a 1x4 ring on a QuietBox whose last chip has no link back to its
+# first, say). Any other failure to open a mesh the host has the devices for fails the test.
 DESCRIPTOR_MISMATCH = "connected_eth_cores.size() >= edge.connected_chip_ids.size()"
 T_MAX = 16  # cosine schedule length, longer than any --steps the tests use, so the LR keeps moving
 
