@@ -8,7 +8,7 @@
 #include <gmock/gmock.h>
 #include <optional>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "impl/kernels/kernel.hpp"

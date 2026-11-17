@@ -17,14 +17,13 @@ test_fallback_factory_is_engaged runs in a process with TTNN_QSR_NATIVE=0. Off Q
 
 Every TTNN_QSR_* tuning knob left unset takes the rule's value (resolve_native_config in
 binary_ng_utils.cpp): 4 compute threads; where the operands move over the NoC, a reader thread per compute
-thread and the writer threads that the 6 DM cores leave, and one of each where they are borrowed. With every
-operand in L1: batches of 8 tiles in the DM kernels, in rings of 16 entries per thread; in the compute, where each
-compute thread owns one tile counter of each ring, 4 tiles on the SFPU kernel (2 in fp32) and 8 on the FPU kernel at
-1,1,1 only. Beside a DRAM operand: batches of 1, in rings of 2 entries per thread, except where every operand is
-interleaved and a compute thread draws 4 tiles or more. The tests in this process use DRAM tensors. Each test
-predicts its output from its configuration: the tests in this process from the invocation's knobs, the arms from
-their own. A test that predicts wrong output is a strict expected failure, and it passes only on exactly the
-predicted wrong tiles.
+thread and the writer threads that the 6 DM cores leave, and one of each where they are borrowed. The batch size is
+the max batch size, the tiles that a DST section holds: 8 on the FPU kernel, 4 on the SFPU kernel (2 in fp32). The
+DM kernels move one batch per barrier, in rings of two batches per thread, and the compute runs batches of that size
+where each compute thread owns one tile counter of each ring. Every compute batch is exact. The tests in this process
+use DRAM tensors. Each test predicts its output from its configuration: the tests in this process from the
+invocation's knobs, the arms from their own. A test that predicts wrong output is a strict expected failure, and it
+passes only on exactly the predicted wrong tiles.
 """
 
 import json
@@ -41,6 +40,7 @@ import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _ROUNDING_HINT,
     _add_goldens,
     _matches_none,
     _run,
@@ -71,9 +71,11 @@ def _native_enabled():
 
 
 # The rule's value of every knob left unset. Mirrors resolve_native_config in binary_ng_utils.cpp: a test whose
-# prediction disagrees with the device is how a change on either side shows up.
+# prediction disagrees with the device is how a change on either side shows up. The DM batch is the max batch size (8
+# on the FPU kernel, 4 and 2 on the SFPU kernel), in rings of twice that; no prediction reads it, and the log test
+# checks it.
 _RULE_COMPUTE_THREADS = 4
-# The FPU kernel's rule batch is 8 at R = C = W = 1 only, until batching the other thread splits is measured.
+# The FPU kernel's rule batch is 8, the tiles that a 16-bit DST section holds, at every ring stride.
 _RULE_TILES_PER_CYCLE = 8
 # The SFPU kernel's rule batch is 4: it holds a tile in two DST slots, so 4 tiles fill a 16-bit DST section. In fp32
 # the rule runs it at 2; no prediction reads that batch, as SFPU batches are exact, and the log test checks it.
@@ -84,23 +86,20 @@ _USER_DM_CORES = 6
 _CLUSTERS = 32
 
 
-# Where a program's operands are, as (an input moves over the NoC, the output moves over the NoC, an operand is
-# in DRAM): all of them over the NoC and in L1, all of them over the NoC beside a DRAM operand, or all of them
-# borrowed in place. _path gives the others.
-_NOC_L1 = (True, True, False)
-_NOC_DRAM = (True, True, True)
-_BORROWED = (False, False, False)
+# What a program moves, as (an input moves over the NoC, the output moves over the NoC): all of them over the NoC,
+# or all of them borrowed in place. _path gives the others.
+_NOC = (True, True)
+_BORROWED = (False, False)
 
 
 def _resolve(knobs, path, sfpu=False):
     """(R, C, W, compute batch) of a program run with `knobs`, a mapping of TTNN_QSR_* names to values.
 
-    `path` is _NOC_L1, _NOC_DRAM, _BORROWED or one from _path. A borrowed pair of inputs or a borrowed output
-    runs one reader or writer thread whatever is set. Beside a DRAM operand it models batch 1, not the compute
-    thread's share: nothing that reads the batch predicts a wrong tile. `sfpu` is True for an op on the SFPU
-    kernel, whose rule batch is smaller. An empty value counts as unset, as in native_tuning().
+    `path` is _NOC, _BORROWED or one from _path. A borrowed pair of inputs or a borrowed output runs one reader or
+    writer thread whatever is set. `sfpu` is True for an op on the SFPU kernel, whose rule batch is smaller. An empty
+    value counts as unset, as in native_tuning().
     """
-    inputs_move, output_moves, dram = path
+    inputs_move, output_moves = path
 
     def knob(name, rule):
         value = knobs.get(name, "")
@@ -109,15 +108,14 @@ def _resolve(knobs, path, sfpu=False):
     c = knob("TTNN_QSR_COMPUTE_THREADS", _RULE_COMPUTE_THREADS)
     r = knob("TTNN_QSR_READER_THREADS", c) if inputs_move else 1
     w = knob("TTNN_QSR_WRITER_THREADS", min(c, max(1, _USER_DM_CORES - r))) if output_moves else 1
-    fpu_batch = _RULE_TILES_PER_CYCLE if r == c == w == 1 else 1
-    rule_batch = 1 if dram else (_RULE_SFPU_TILES_PER_CYCLE if sfpu else fpu_batch)
+    rule_batch = _RULE_SFPU_TILES_PER_CYCLE if sfpu else _RULE_TILES_PER_CYCLE
     batch = knob("TTNN_QSR_TILES_PER_CYCLE", rule_batch if r <= c and w <= c else 1)
     return r, c, w, batch
 
 
-def _path(borrowed, dram):
+def _path(borrowed):
     """The path of a program that borrows `borrowed`, a string of the operands "a", "b" and "c" it holds in place."""
-    return ("a" not in borrowed or "b" not in borrowed, "c" not in borrowed, dram)
+    return ("a" not in borrowed or "b" not in borrowed, "c" not in borrowed)
 
 
 def _route(case, knobs):
@@ -152,6 +150,10 @@ def _threads(r, c, w):
 # Compute batching off. Every other knob keeps the rule's value.
 _COMPUTE_BATCH_1 = {"TTNN_QSR_TILES_PER_CYCLE": "1"}
 
+# Batch 1 in every role: on ttsim the host profiler aborts on some batched programs. A test that sets
+# TT_METAL_DEVICE_PROFILER takes these two knobs, not _COMPUTE_BATCH_1 alone, and _run_shard_arm asserts it.
+_PROFILED_BATCH_1 = {**_COMPUTE_BATCH_1, "TTNN_QSR_DM_BATCH": "1"}
+
 # One tile per DM transfer and per compute batch, in rings of two entries per thread, so that a thread's ring
 # wraps every two tiles.
 _PER_TILE = {"TTNN_QSR_DM_BATCH": "1", "TTNN_QSR_ENTRIES_PER_THREAD": "2", "TTNN_QSR_TILES_PER_CYCLE": "1"}
@@ -178,11 +180,14 @@ def _expectation_marks(expected_wrong):
 def _matches_prediction(got, goldens, expected_wrong, what):
     """Assert that exactly the predicted number of output tiles differ from the oracles; 0 means exact.
 
-    Returns True when the output is wrong as predicted.
+    Returns True when the output is wrong as predicted. Every caller compares an FPU add, so a failure ends with
+    _ROUNDING_HINT: a craq-sim older than b05091aa rounds the add once, and fails here.
     """
     wrong = _wrong_tiles(got, goldens)
     total = got.numel() // (32 * 32)
-    assert wrong == expected_wrong, f"{what}: {wrong} of {total} tiles differ, the prediction is {expected_wrong}"
+    assert (
+        wrong == expected_wrong
+    ), f"{what}: {wrong} of {total} tiles differ, the prediction is {expected_wrong}. {_ROUNDING_HINT}"
     return wrong > 0
 
 
@@ -228,14 +233,14 @@ def _add_returning_operands(device, h_tiles=32, w_tiles=40, seed=0):
 
 
 # The benchmark shape under the invocation's knobs: 40 tiles per cluster on the NoC path.
-_BENCHMARK_WRONG = _batched_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, _NOC_DRAM)
+_BENCHMARK_WRONG = _batched_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, _NOC)
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.xfail(_BENCHMARK_WRONG > 0, raises=_WrongOutput, strict=True, reason=_BATCHED_REASON)
 def test_native_output_matches_the_prediction(device):
-    """bf16 add on this slice is exact: the output equals one of _FPU_ADD_ROUNDINGS bit for bit, except the
-    tiles that a set batch leaves wrong."""
+    """bf16 add on this slice is exact: the output equals the two-rounding model (_FPU_ADD_ROUNDINGS) bit for bit,
+    except the tiles that a set batch leaves wrong."""
     out, ta, tb = _add_returning_operands(device)
     if _matches_prediction(ttnn.to_torch(out), _add_goldens(ta, tb), _BENCHMARK_WRONG, "32x40 tiles"):
         raise _WrongOutput("32x40 tiles: wrong as predicted")
@@ -327,7 +332,7 @@ _ARM_SRC = """
 import hashlib, json, os, pathlib, sys
 import torch, ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _add_goldens, _matches_none)
+    _ROUNDING_HINT, _add_goldens, _matches_none)
 
 TILE_COUNTS = json.loads(os.environ["ARM_TILE_COUNTS"])
 
@@ -367,6 +372,9 @@ if failures or mismatches:
     print("FAIL")
     for f in failures + mismatches:
         print("  " + f)
+    if mismatches:
+        # Every case is a bf16 add.
+        print("  " + _ROUNDING_HINT)
     # 2 means only the output is wrong: every op ran and routed as expected.
     sys.exit(1 if failures else 2)
 print("OK over {} shapes".format(len(TILE_COUNTS)))
@@ -391,7 +399,9 @@ def _check_arm(p, what, expect_wrong=None):
     An expected-failure marker restricted to _WrongOutput therefore cannot hide a crash, a hang, a
     refusal or a fallback. expect_wrong maps the label of each shape the prediction gets wrong to the
     number of output tiles a modeled defect leaves wrong. Only exactly those counts raise
-    _WrongOutput, so a new defect, or a shape that is wrong where the prediction is 0, fails the test.
+    _WrongOutput, so a new defect, or a shape that is wrong where the prediction is 0, fails the test. The arm scripts
+    print _ROUNDING_HINT after their mismatch lines where an FPU add or subtract differs, and it reaches the message
+    through p.stdout.
     """
     expect_wrong = expect_wrong or {}
     if p.returncode == 2:
@@ -423,7 +433,7 @@ def _add_one_row(device, tiles, seed):
 
 
 def _parent_prediction(tiles):
-    return _batched_wrong_tiles(_noc_split(tiles), _PARENT_KNOBS, _NOC_DRAM)
+    return _batched_wrong_tiles(_noc_split(tiles), _PARENT_KNOBS, _NOC)
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
@@ -476,9 +486,8 @@ def test_native_even_and_uneven_share_a_process(device):
 
 
 # How the DM kernels and the compute move tiles in an arm. per-tile runs one tile per transfer and per batch
-# in two-entry rings, so the rings wrap at the low tile counts. batched sets a DM batch of 8 at every tile count,
-# in the 16-entry rings that the rule derives for it, with the compute batch at 1 so that only the DM batch
-# changes.
+# in two-entry rings, so the rings wrap at the low tile counts. batched sets the rule's DM batch of 8, in the
+# 16-entry rings that the rule derives for it, with the compute batch at 1 so that only the DM batch changes.
 _DM_BATCH_8 = {"TTNN_QSR_DM_BATCH": "8"}
 _BATCHING = {"per-tile": _PER_TILE, "batched": {**_DM_BATCH_8, **_COMPUTE_BATCH_1}}
 
@@ -525,7 +534,7 @@ _DM_BATCH_ARMS = [(4, 4, 2), (1, 4, 1)]
 def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
     """A DM batch of 8 on a role that owns more than one tile counter must stay bit-exact.
 
-    The batch is set by its knob. The rule's depth for it, 16, is the
+    The batch is set, so the arm runs it whatever the rule picks. The rule's depth for it, 16, is the
     smallest legal one: a batch occupies n consecutive slots and the ring wraps only afterwards, so the
     factory demands entries_per_thread >= 2n and entries_per_thread % n == 0. The compute batch is 1, so only
     the DM batch is under test.
@@ -554,7 +563,7 @@ def test_native_tiles_per_cycle_is_bit_exact(dm_batch):
 
     The compute kernel splits a thread's share into full chunks of num_tiles_per_cycle and one remainder
     chunk; a truncating divide there once dropped the tail and hung. The tile counts above reach every
-    branch of that split. Both batches are set by their knobs.
+    branch of that split. Both batches are set, so the arms run them whatever the rule picks.
     both-batches measured 1.81x the throughput of no batching at 1,1,1 on craq-sim (marginal cycles per
     tile), which models no DRAM time.
     """
@@ -578,16 +587,16 @@ def test_native_tiles_per_cycle_above_stride_one():
     _check_arm(p, "a compute batch of 8 on the L1 NoC path", expect_wrong=_expect_wrong(cases, knobs))
 
 
-# Batching on and off must give the same output bits. 2080 tiles are 65 per cluster, at least 16 per compute thread,
-# so with batching on both batches are 8, and with it off 1.
+# Batching on and off beside DRAM must give exact output and the same output bits. On, both batches are the rule's 8
+# at every tile count, so the rule split runs the batched rule beside DRAM; off, the two batch knobs set both to 1.
+# 2080 tiles give each compute thread of the rule 16 or 17 tiles: two full batches of 8 and a tail.
 _DRAM_BATCH_SPLITS = [
     ("rule", {}),
     ("R4C4W1", _threads(4, 4, 1)),
     ("R1C1W1", _threads(1, 1, 1)),
 ]
 _DRAM_BATCH_TILE_COUNTS = _RAGGED_TILE_COUNTS + [2080]
-# The factory's line for each program beside DRAM: its tile count, DM batch and compute batch.
-_PROGRAM_BATCHES = r"(\d+) tiles beside DRAM, \d+ per compute thread: dm_batch=(\d+) .*?tiles_per_cycle=(\d+)"
+_BATCHING_OFF = {"TTNN_QSR_DM_BATCH": "1", "TTNN_QSR_TILES_PER_CYCLE": "1"}
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
@@ -595,14 +604,16 @@ _PROGRAM_BATCHES = r"(\d+) tiles beside DRAM, \d+ per compute thread: dm_batch=(
 def test_native_dram_batch_is_bit_exact(split):
     label, knobs = split
     digests = {}
-    for state, switch, batch in (("ON", {}, 8), ("OFF", {"TTNN_QSR_DRAM_BATCH": "0"}, 1)):
+    for state, switch, batches in (
+        ("ON", {}, "dm_batch=8 (rule) tiles_per_cycle=8 (rule)"),
+        ("OFF", _BATCHING_OFF, "dm_batch=1 (TTNN_QSR_DM_BATCH) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"),
+    ):
         p = _run_arm(_DRAM_BATCH_TILE_COUNTS, knobs={**knobs, **switch, "TT_LOGGER_LEVEL": "info"}, timeout=1200)
         _check_arm(p, f"batching beside DRAM {state}, {label}")
-        log = p.stdout + p.stderr
-        assert f"batching beside DRAM {state}" in log, f"{label}: the log does not report batching {state}"
-        # The batches each program resolved, from the factory's line per program.
-        batches = {int(m.group(1)): (int(m.group(2)), int(m.group(3))) for m in re.finditer(_PROGRAM_BATCHES, log)}
-        assert batches.get(2080) == (batch, batch), f"{label}: with batching {state}, 2080 tiles resolve {batches}"
+        # The batches do not follow the tile count, so the settings line gives every program's.
+        line = next((ln for ln in (p.stdout + p.stderr).splitlines() if "Quasar-native ENABLED" in ln), "")
+        noc = next((part for part in line.split("Where ")[1:] if part.startswith(_NOC_SHAPE)), "")
+        assert batches in noc, f"{label}: with batching {state}, the NoC programs run {noc!r}"
         digests[state] = dict(re.findall(r"^digest (\d+): (\w+)$", p.stdout, re.MULTILINE))
     assert len(digests["ON"]) == len(_DRAM_BATCH_TILE_COUNTS), f"{label}: missing digests {digests['ON']}"
     differ = sorted(int(t) for t in digests["ON"] if digests["ON"][t] != digests["OFF"].get(t))
@@ -641,13 +652,12 @@ _GUARD_ARMS = [
         "dm_batch=8 (TTNN_QSR_DM_BATCH) must divide entries_per_thread=20 (TTNN_QSR_ENTRIES_PER_THREAD)",
     ),
     (
-        # The rule batches only when every operand is in L1: an L1-interleaved tensor of 5 tiles per bank
-        # takes the NoC path at the rule's 4 compute threads, where the rule's DM batch is 8 and its FPU batch 1.
+        # The rule's batches on the FPU kernel are 8, which need 16 entries per thread; the compute batch is checked
+        # first.
         "rule-batch-depth",
         {"TTNN_QSR_ENTRIES_PER_THREAD": "8"},
-        "dm_batch=8 (rule) needs entries_per_thread >= 16 for double buffering, "
+        "tiles_per_cycle=8 (rule) needs entries_per_thread >= 16 for double buffering, "
         "got entries_per_thread=8 (TTNN_QSR_ENTRIES_PER_THREAD)",
-        [("l1_160", "l1", None, None, (5 * 32, 32 * 32))],
     ),
     (
         "batch-beside-more-readers",
@@ -780,15 +790,14 @@ _MISMATCHED_SHARDS = [
     ),
 ]
 
-# The bit-exact configurations of the borrowed path. There the factory runs one reader and one writer
-# thread whatever is set, since they copy only the tail tiles. 1,1,1 keeps the rule's compute batch of 8
-# at ring stride 1. rule-n1 is the rule's 1,4,1, which puts the reader and the writer on four counters
-# each, with the compute batch at 1; 4,4,2-n1 checks that set reader and writer counts map to that same
-# program. So the DM side never outnumbers the Tensix side here, a case that some craq-sim builds corrupt.
+# The bit-exact configurations of the borrowed path. The rule runs 1,4,1, with a compute batch of 8 on the FPU kernel
+# and 4 on the SFPU kernel (2 in fp32); rule-n1 is the same program at batch 1. R and W stay at or below C, because some
+# craq-sim builds corrupt the output when the DM side outnumbers the Tensix side.
 _BORROWED_CONFIGS = {
     "R1C1W1": _threads(1, 1, 1),
     "rule-n1": _COMPUTE_BATCH_1,
     "R4C4W2-n1": {**_threads(4, 4, 2), **_COMPUTE_BATCH_1},
+    "rule": {},
 }
 # Two compute threads, on two-entry tail rings.
 _BORROWED_CONFIGS_C2 = {**_BORROWED_CONFIGS, "R1C2W1-n1": {**_threads(1, 2, 1), **_COMPUTE_BATCH_1}}
@@ -813,10 +822,10 @@ def _shard_cores(entry):
 
 
 def _runs_sfpu(entry):
-    """True when the op of a _SHARD_ARM_SRC entry runs the SFPU kernel: multiply out of its fast mode, divide, or any
-    op on fp32 operands."""
+    """True when the op of a _SHARD_ARM_SRC entry runs the SFPU kernel: multiply out of its fast mode, divide, maximum,
+    minimum, or any op on fp32 operands."""
     opts = entry[5] if len(entry) > 5 else {}
-    return opts.get("op") in ("multiply", "divide") or opts.get("dtype") == "float32"
+    return opts.get("op") in ("multiply", "divide", "maximum", "minimum") or opts.get("dtype") == "float32"
 
 
 def _expect_wrong(cases, knobs):
@@ -838,28 +847,38 @@ def _config_params(configs, cases):
     ]
 
 
+# The option "walk" of a broadcast entry is {"a", "b", "out", "pads"}, each 0 or 1: the operands that the program
+# borrows from L1, and whether its reader skips pad slots. The child checks it on an entry's first run, as it checks
+# "modes", from the JIT files of the one binary_ng reader and writer. No JIT file records the shard width or the stride.
+
 # Same shape as _ARM_SRC: a fixed child script, parameters as JSON in the environment. ARM_EXPECT names the factory
 # every op in the child must have bound: "qsr" for native, "dfb" for the fallback. The strategy "l1" or "dram" places a
 # tensor interleaved, and then the shard shape and range are None. The strategies "dram_height", "dram_width" and
 # "dram_block" shard it over all DRAM banks, and then the range is None. A shard entry may carry a sixth element, a dict
 # of options: "out" gives the output its own placement (otherwise it takes the inputs'), "b" does the same for b,
 # "output_tensor" supplies a preallocated output with its own placement, "in_place" adds b into a with add_, "grid" (x0,
-# y0, x1, y1) runs the op on that sub-core grid, "op" runs "subtract", "multiply", "divide" or "multiply_fast" (multiply
-# in fast and approximate mode) instead of add, "dtype": "float32" runs it on fp32 operands and output (with "op" add,
-# subtract, multiply or divide, and "act" None, "lhs", "rhs" or "relu"), and "act" chains SQUARE on a ("lhs"), on b ("rhs"), on both ("both") or
-# on the result ("post"), a lone RELU on the result ("relu"), RELU on a ("relu_lhs"), or SQUARE on a and RELU on the
-# result ("relu_chain"). "out" may also be None, so that the op derives the output's memory config, or
+# y0, x1, y1) runs the op on that sub-core grid, "op" runs "subtract", "multiply", "divide", "maximum", "minimum" or
+# "multiply_fast" (multiply in fast and approximate mode) instead of add, "dtype": "float32" runs it on fp32 operands
+# and output (with "op" add, subtract, multiply, divide, maximum or minimum, and "act" None, "lhs", "rhs" or "relu"),
+# and "act" chains SQUARE on a ("lhs"), on b ("rhs"), on both ("both") or on the result ("post"), a lone RELU on the
+# result ("relu"), RELU on a ("relu_lhs"), or SQUARE on a and RELU on the result ("relu_chain"). "out" may also be
+# None, so that the op derives the output's memory config, or
 # "height_specless", an L1 height-sharded config without a shard spec, which the op completes; then "resolved_out" names
 # the placement the output must take. A placement in an option may add a fourth element, "col", for column-major shard
-# order. An entry's tensors stay alive to the end when a later entry repeats its spec, so the repeat lands at new
-# addresses and must hit the program cache; the other entries' tensors are freed, so that many cases fit in L1 one after
-# another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the device profiler on), every core must show that many Neos
-# running the compute, or DM cores running a reader or writer thread; ARM_EXPECT_CORES names how many cores must report.
+# order. For a broadcast, "a_shape" and "b_shape" give a or b its own shape, and the entry's shape is the output's;
+# "modes" lists the [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] that the op's compute kernel must be built with,
+# all 0 for a dense program, read from the kernel's JIT defines. "scalar" runs tensor-scalar: b is that Python float,
+# which reaches the kernel in the operands' format. It takes no "maximum" or "minimum": the op sends a scalar to those
+# through the unary clamp, never to binary_ng. An entry's tensors stay alive until the last later entry that
+# repeats its spec has run, so the repeat lands at new addresses and must hit the program cache; the other entries'
+# tensors are freed, so that many cases fit in L1 one after another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the
+# device profiler on), every cluster must show that many Neos running the compute, or DM cores running a reader or
+# writer thread; ARM_EXPECT_CORES names how many clusters must report.
 _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _FPU_ADD_ROUNDINGS, _ULP, _matches_none)
+    _FPU_ADD_ROUNDINGS, _ROUNDING_HINT, _ULP, _matches_none)
 
 SHARDS = json.loads(os.environ["ARM_SHARDS"])
 EXPECT = os.environ["ARM_EXPECT"]
@@ -887,16 +906,19 @@ def truncate_to_bf16(x):
     return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
 
 
-# op -> (the op, its extra arguments, the kernel's bf16 results from the operands; an element is right when it
-# matches one). The FPU kernel adds and subtracts as _FPU_ADD_ROUNDINGS says, and multiplies with rounding to nearest
-# even. The SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even.
+# op -> (the op, its extra arguments, the kernel's bf16 results from the operands; an element is right when it matches
+# one). The FPU kernel adds and subtracts as _FPU_ADD_ROUNDINGS says, and multiplies with rounding to nearest even. The
+# SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even. It runs maximum
+# and minimum too. They select an operand, so each result is one of the operands, exactly.
 OPS = {"add": (ttnn.experimental.quasar.add, {}, _FPU_ADD_ROUNDINGS),
        "subtract": (ttnn.experimental.quasar.subtract, {},
                     tuple(lambda a, b, rounding=rounding: rounding(a, -b) for rounding in _FPU_ADD_ROUNDINGS)),
        "multiply": (ttnn.experimental.quasar.multiply, {}, (lambda a, b: truncate_to_bf16(torch.multiply(a, b)),)),
        "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True},
                          (lambda a, b: round_to_bf16(torch.multiply(a, b)),)),
-       "divide": (ttnn.experimental.quasar.divide, {}, (lambda a, b: round_to_bf16(torch.divide(a, b)),))}
+       "divide": (ttnn.experimental.quasar.divide, {}, (lambda a, b: round_to_bf16(torch.divide(a, b)),)),
+       "maximum": (ttnn.experimental.quasar.maximum, {}, (lambda a, b: round_to_bf16(torch.maximum(a, b)),)),
+       "minimum": (ttnn.experimental.quasar.minimum, {}, (lambda a, b: round_to_bf16(torch.minimum(a, b)),))}
 
 
 def square(x):
@@ -904,7 +926,7 @@ def square(x):
     return truncate_to_bf16(x * x).float()
 
 
-# act ->(the op's activation arguments, the output from the operands and one of the op's roundings). SQUARE
+# act ->(the op's activation arguments, the output from the operands and one of the op's results). SQUARE
 # chains on a, on b, on both or on the result; a lone RELU on the result runs in the packer, on the rounded result.
 # RELU on a, and RELU on the result beside a chain, run on the SFPU.
 SQUARE, RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE), ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
@@ -925,7 +947,9 @@ ACTS = {None: ({}, lambda a, b, op: op(a, b)),
 OPS_FP32 = {"add": (ttnn.experimental.quasar.add, {}, (torch.add,)),
             "subtract": (ttnn.experimental.quasar.subtract, {}, (torch.subtract,)),
             "multiply": (ttnn.experimental.quasar.multiply, {}, (torch.multiply,)),
-            "divide": (ttnn.experimental.quasar.divide, {}, (torch.divide,))}
+            "divide": (ttnn.experimental.quasar.divide, {}, (torch.divide,)),
+            "maximum": (ttnn.experimental.quasar.maximum, {}, (torch.maximum,)),
+            "minimum": (ttnn.experimental.quasar.minimum, {}, (torch.minimum,))}
 ACTS_FP32 = {None: ACTS[None],
              "lhs": ({"input_tensor_a_activations": [SQUARE]}, lambda a, b, op: op(a * a, b)),
              "rhs": ({"input_tensor_b_activations": [SQUARE]}, lambda a, b, op: op(a, b * b)),
@@ -934,6 +958,56 @@ DTYPES = {"bfloat16": ttnn.bfloat16, "float32": ttnn.float32}
 profile_csv = root / "generated" / "profiler" / ".logs" / "profile_log_device.csv"
 if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
     profile_csv.unlink()
+
+
+def kernels_logged():
+    # (JIT directory, source) of each kernel this process has compiled, in order. The inspector flushes after each one.
+    lines = [ln.strip() for ln in (root / "generated" / "inspector" / "kernels.yaml").read_text().splitlines()]
+    paths = [ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("path:")]
+    sources = [ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("source:")]
+    return list(zip(paths, sources))
+
+
+def compute_modes(kernels):
+    # [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] of the one binary_ng compute kernel among `kernels`, from its JIT
+    # defines. A dense program defines none of them, which reads as all 0.
+    computes = [path for path, source in kernels if "/binary_ng/device/kernels" in source and "/compute/" in source]
+    if len(computes) != 1:
+        return "{} binary_ng compute kernels".format(len(computes))
+    defines = {}
+    for line in (pathlib.Path(computes[0]) / "defines_generated.h").read_text().splitlines():
+        words = line.split(None, 2)
+        if len(words) == 3 and words[0] == "#define":
+            defines[words[1]] = words[2]
+    return [int(defines.get(k, "0")) for k in ("A_MODE", "B_MODE", "A_OUTER_BCAST", "B_OUTER_BCAST")]
+
+
+def dataflow_walk(kernels):
+    # Which operands the one binary_ng reader and writer among `kernels` borrow from L1, and whether the reader skips
+    # pad slots. A DM kernel's defines are on its compile command only, so this reads what the factory ties to them: a
+    # borrowed operand binds no tensor (no tail ring runs beside a moving one), and pad slots add the arg valid_rows.
+    binary_ng = [(path, source) for path, source in kernels if "/binary_ng/device/kernels" in source]
+    readers = [path for path, source in binary_ng if "/dataflow/reader" in source]
+    writers = [path for path, source in binary_ng if "/dataflow/writer" in source]
+    if len(readers) != 1 or len(writers) != 1:
+        return "{} binary_ng readers and {} writers".format(len(readers), len(writers))
+
+    def bound_tensors(path):
+        names = set()
+        for line in (pathlib.Path(path) / "kernel_bindings_generated.h").read_text().splitlines():
+            words = line.split()
+            if len(words) > 3 and words[0] == "using" and words[3].startswith("::tensor_accessor::TensorBindingToken"):
+                names.add(words[1][: -len("_t")])
+        return names
+
+    reader_tensors, writer_tensors = bound_tensors(readers[0]), bound_tensors(writers[0])
+    reader_args = (pathlib.Path(readers[0]) / "kernel_args_generated.h").read_text()
+    return {
+        "a": int("in0" not in reader_tensors),
+        "b": int("in1" not in reader_tensors),
+        "out": int("out" not in writer_tensors),
+        "pads": int("RtaArg<uint32_t> valid_rows{" in reader_args),
+    }
 
 
 def memory_config(strategy, shard_shape, rng, orientation="row"):
@@ -957,7 +1031,8 @@ def memory_config(strategy, shard_shape, rng, orientation="row"):
 
 
 mismatches, failures = [], []
-keep, seen = [], set()
+add_wrong = False  # a bf16 add or subtract is among the mismatches
+keep, seen = {}, set()
 specs = [json.dumps(entry[1:]) for entry in SHARDS]
 device = ttnn.open_device(device_id=0)
 try:
@@ -976,13 +1051,24 @@ try:
         fp32 = opts.get("dtype") == "float32"
         dtype = DTYPES[opts.get("dtype", "bfloat16")]
         cfg = dict(dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
-        ta = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=mem, **cfg)
-        tb = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=b_mem, **cfg)
+        # a and b take the output's shape unless a broadcast option gives them their own. A scalar b has no tensor; the
+        # host packs it to the operands' format, rounding to nearest even.
+        scalar = opts.get("scalar")
+        ta = ttnn.from_torch(torch.randn(opts.get("a_shape", shape), dtype=torch.float32), memory_config=mem, **cfg)
+        tb = None
+        if scalar is None:
+            tb = ttnn.from_torch(
+                torch.randn(opts.get("b_shape", shape), dtype=torch.float32), memory_config=b_mem, **cfg
+            )
+            b = ttnn.to_torch(tb).float()
+        else:
+            b = torch.tensor(scalar, dtype=torch.float32).to(torch.float32 if fp32 else torch.bfloat16).float()
         op_fn, op_extra, results = (OPS_FP32 if fp32 else OPS)[opts.get("op", "add")]
         act_kwargs, model = (ACTS_FP32 if fp32 else ACTS)[opts.get("act")]
-        a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+        a = ttnn.to_torch(ta).float()
         goldens = [model(a, b, op) for op in results]
         cached = device.num_program_cache_entries()
+        logged = len(kernels_logged())
         op_kwargs = {}
         if "grid" in opts:
             x0, y0, x1, y1 = opts["grid"]
@@ -997,18 +1083,29 @@ try:
                     torch.zeros(shape), memory_config=memory_config(*opts["output_tensor"]), **cfg)
             if out_mem is not None:
                 op_kwargs["memory_config"] = out_mem
-            out = op_fn(ta, tb, dtype=dtype, **op_extra, **act_kwargs, **op_kwargs)
+            out = op_fn(ta, tb if scalar is None else scalar, dtype=dtype, **op_extra, **act_kwargs, **op_kwargs)
         if "resolved_out" in opts and out.memory_config() != memory_config(*opts["resolved_out"]):
             failures.append("{}: the output took {}".format(name, out.memory_config()))
         spec = json.dumps(entry[1:])
         if spec in seen and device.num_program_cache_entries() != cached:
             failures.append("{}: repeats an earlier spec but missed the program cache".format(name))
+        # A repeat hits the program cache and compiles nothing, so only a first run shows its modes and its walk.
+        if "modes" in opts and spec not in seen:
+            modes = compute_modes(kernels_logged()[logged:])
+            if modes != opts["modes"]:
+                failures.append("{}: the compute ran with {}, the case expects {}".format(name, modes, opts["modes"]))
+        if "walk" in opts and spec not in seen:
+            walk = dataflow_walk(kernels_logged()[logged:])
+            if walk != opts["walk"]:
+                failures.append("{}: the reader walked {}, the case expects {}".format(name, walk, opts["walk"]))
         seen.add(spec)
         if spec in specs[i + 1:]:
-            keep.extend([ta, tb, out])
+            keep.setdefault(spec, []).extend([ta, tb, out])
+        else:
+            keep.pop(spec, None)
         got = ttnn.to_torch(out)
         # Integer ULP distance per element, as production measures it: the sign of a zero does not count. A bf16
-        # golden is one of the kernel's exact roundings; fp32 allows the op's measured bound.
+        # golden is the kernel's exact rounding; fp32 allows the op's measured bound.
         bound = _ULP[ttnn.float32][opts.get("op", "add")] if fp32 else 0
         differ = _matches_none(got, goldens, bound)
         if differ.any():
@@ -1017,6 +1114,7 @@ try:
             h, w = differ.shape[-2:]
             wrong = int(differ.reshape(-1, h // 32, 32, w // 32, 32).any(dim=4).any(dim=2).sum())
             mismatches.append("{}: {} of {} tiles differ".format(name, wrong, differ.numel() // 1024))
+            add_wrong = add_wrong or (not fp32 and opts.get("op", "add") in ("add", "subtract"))
         # Free this entry's tensors before the next entry allocates its own; `keep` holds the ones a repeat needs.
         del ta, tb, out, op_kwargs
 finally:
@@ -1060,10 +1158,20 @@ if failures or mismatches:
     print("FAIL")
     for f in failures + mismatches:
         print("  " + f)
+    if add_wrong:
+        print("  " + _ROUNDING_HINT)
     # 2 means only the output is wrong: every op ran and routed as expected.
     sys.exit(1 if failures else 2)
 print("OK over {} shards".format(len(SHARDS)))
 """
+
+
+def _with_walk(entry, c):
+    """`entry`, with its "walks" option, a walk per compute-thread count, replaced by the walk for `c`."""
+    if len(entry) < 6 or "walks" not in entry[5]:
+        return entry
+    opts = {key: value for key, value in entry[5].items() if key != "walks"}
+    return (*entry[:5], {**opts, "walk": entry[5]["walks"][c]})
 
 
 def _run_shard_arm(shards, expect, timeout, knobs=None):
@@ -1072,11 +1180,17 @@ def _run_shard_arm(shards, expect, timeout, knobs=None):
     Inherited TTNN_QSR_* variables are stripped, as in _run_arm, so the arm runs exactly `knobs` and the
     rule's value of every knob that `knobs` leaves unset. With the device profiler on, inherited DPRINT and
     streaming-profiler variables are stripped too, because the runtime refuses to start with either of
-    them next to it. A build without Tracy skips the test.
+    them next to it. A profiling run must pin batch 1 in every role (_PROFILED_BATCH_1). A build without Tracy
+    skips the test.
     """
     profiling = (knobs or {}).get("TT_METAL_DEVICE_PROFILER") == "1"
+    if profiling:
+        assert _PROFILED_BATCH_1.items() <= knobs.items(), "a profiler run must pin batch 1 in every role"
     stripped = ("TTNN_QSR_", "TT_METAL_DPRINT_", "TT_METAL_STREAMING_PROFILER") if profiling else ("TTNN_QSR_",)
     env = {k: v for k, v in os.environ.items() if not k.startswith(stripped)}
+    # A case with a walk per compute-thread count gets the walk of this configuration's count.
+    c = _resolve(knobs or {}, _NOC)[1]
+    shards = [_with_walk(entry, c) for entry in shards]
     env.update(
         {
             "TTNN_QSR_NATIVE": "1",
@@ -1092,12 +1206,12 @@ def _run_shard_arm(shards, expect, timeout, knobs=None):
 
 
 # Every borrowed shard above is even: each core computes one whole shard, and 4 divides it. So the rule's own
-# configuration runs them too, at the FPU kernel's compute batch of 1, which is exact.
+# configuration runs them too, at the FPU kernel's compute batch of 8, which is exact.
 _BORROWED_SHARD_CASES = [(entry, _BORROWED, [_shard_tiles(entry)] * _shard_cores(entry)) for entry in _BORROWED_SHARDS]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-@pytest.mark.parametrize("name, knobs", _config_params({**_BORROWED_CONFIGS, "rule": {}}, _BORROWED_SHARD_CASES))
+@pytest.mark.parametrize("name, knobs", _config_params(_BORROWED_CONFIGS, _BORROWED_SHARD_CASES))
 def test_native_borrowed_shards_match_the_prediction(name, knobs):
     """Height, block and width shards must run native and give the predicted output in every configuration.
 
@@ -1127,7 +1241,8 @@ def test_native_borrowed_indivisible_shards_stay_native(name, knobs):
 
     A borrowed ring sized to the whole shard dies on the DFB host assertion, and a tail copied from the
     wrong address or packed into the wrong ring fails the bit comparison. R1C2W1-n1 runs two-entry tail
-    rings. At 1,1,1 every shard divides, and 9 and 10 tiles leave a remainder after one compute batch of 8.
+    rings. At 1,1,1 every shard divides, and 9 and 10 tiles leave a remainder after one compute batch of 8. At
+    the rule, height_67 runs two full batches of 8 in each compute thread before its tail block.
     """
     p = _run_shard_arm(_SMALL_SHARDS, expect="qsr", timeout=900, knobs=knobs)
     _check_arm(p, f"indivisible shards, {name}")
@@ -1147,7 +1262,7 @@ def test_native_borrowed_indivisible_shards_use_every_compute_thread(shard):
         [shard],
         expect="qsr",
         timeout=900,
-        knobs={**_COMPUTE_BATCH_1, "TT_METAL_DEVICE_PROFILER": "1", "ARM_EXPECT_NEOS": "4"},
+        knobs={**_PROFILED_BATCH_1, "TT_METAL_DEVICE_PROFILER": "1", "ARM_EXPECT_NEOS": "4"},
     )
     _check_arm(p, f"{shard[0]} on four Neos")
 
@@ -1166,7 +1281,7 @@ def test_native_borrowed_mismatched_output_borrows_only_the_inputs():
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "5",
             "ARM_EXPECT_NEOS": "4",
@@ -1245,11 +1360,11 @@ _L1_INTERLEAVED_RULE_SPLITS = {
     "l1_256": (_BORROWED, [8] * 32),
     "l1_128_again": (_BORROWED, [4] * 32),
     "l1_128_in_place": (_BORROWED, [4] * 32),
-    "l1_160": (_NOC_L1, _noc_split(160)),
-    "l1_64": (_NOC_L1, _noc_split(64)),
-    "l1_8_idle": (_NOC_L1, _noc_split(8)),
-    "l1_128_sub_grid": (_NOC_L1, _noc_split(128, clusters=16)),
-    **{name: (_path(borrowed, True), [4] * 32) for name, borrowed in _L1_INTERLEAVED_PARTIAL_BORROWED.items()},
+    "l1_160": (_NOC, _noc_split(160)),
+    "l1_64": (_NOC, _noc_split(64)),
+    "l1_8_idle": (_NOC, _noc_split(8)),
+    "l1_128_sub_grid": (_NOC, _noc_split(128, clusters=16)),
+    **{name: (_path(borrowed), [4] * 32) for name, borrowed in _L1_INTERLEAVED_PARTIAL_BORROWED.items()},
 }
 _L1_INTERLEAVED_RULE_CASES = [
     (entry, *_L1_INTERLEAVED_RULE_SPLITS[entry[0]])
@@ -1277,7 +1392,7 @@ def test_native_l1_interleaved_is_bit_exact(name, knobs):
 def test_native_l1_interleaved_matches_the_rule_prediction(name, knobs):
     """With every knob unset, L1-interleaved operands must give the rule's predicted output.
 
-    The rule runs the FPU kernel at a compute batch of 1 at ring stride 4, so every case is exact. The NoC cases
+    The rule runs the FPU kernel at a compute batch of 8 at ring stride 4, which is exact. The NoC cases
     split their tiles over the worker clusters as usual.
     """
     p = _run_shard_arm([case[0] for case in _L1_INTERLEAVED_RULE_CASES], expect="qsr", timeout=900, knobs=knobs)
@@ -1301,7 +1416,7 @@ def test_native_l1_interleaved_borrows_in_place(case, cores, threads):
         timeout=900,
         knobs={
             **(_threads(4, 4, 2) if threads == "R4C4W2" else {}),
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "2",
             "ARM_EXPECT_NEOS": "4",
@@ -1326,7 +1441,7 @@ def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "6",
             "ARM_EXPECT_NEOS": "4",
@@ -1337,7 +1452,7 @@ def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
 
 
 _L1_INTERLEAVED_PARTIAL_ROUTES = [
-    (entry, *_route((entry, _path(_L1_INTERLEAVED_PARTIAL_BORROWED[entry[0]], True), [4] * 32), _COMPUTE_BATCH_1))
+    (entry, *_route((entry, _path(_L1_INTERLEAVED_PARTIAL_BORROWED[entry[0]]), [4] * 32), _COMPUTE_BATCH_1))
     for entry in _L1_INTERLEAVED_PARTIAL
 ]
 
@@ -1357,7 +1472,7 @@ def test_native_l1_interleaved_borrows_beside_dram(case, dms, cores):
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": str(dms),
             "ARM_EXPECT_NEOS": "4",
@@ -1420,18 +1535,16 @@ _DRAM_SHARDED = [
     ("dram_width_in_place", "dram_width", [4 * 32, 8 * 32], None, (4 * 32, 16 * 32), {"in_place": True}),
 ]
 # A DRAM-sharded operand always moves over the NoC. dram_a_l1_b_dram_out borrows b's slices on the 32 bank
-# clusters; every other case here splits its tiles over the 32 worker clusters, with 4 tiles each. Beside DRAM
-# the rule's program is the per-tile one: one page per transfer, a compute batch of 1, rings of 2 entries per
-# thread. So the per-tile arms run the rule at other thread counts, and the batched arms set a DM batch of 8,
-# which keeps the batched walk tested over DRAM-sharded accessors.
+# clusters; every other case here splits its tiles over the 32 worker clusters, with 4 tiles each. The per-tile
+# arms run one page per transfer, a compute batch of 1 and rings of 2 entries per thread, at two thread counts. The
+# batched arms and the rule run DM batches of 8 over the DRAM-sharded accessors.
 _DRAM_SHARDED_CONFIGS = {
     **{f"R{r}C{c}W{w}-per-tile": {**_threads(r, c, w), **_PER_TILE} for r, c, w in [(1, 1, 1), (1, 4, 1)]},
     "R1C1W1-batched": {**_threads(1, 1, 1), **_DM_BATCH_8, "TTNN_QSR_TILES_PER_CYCLE": "8"},
     "R1C4W1-dm8-n1": {**_threads(1, 4, 1), **_DM_BATCH_8, **_COMPUTE_BATCH_1},
-    "rule-dm8-n1": {**_DM_BATCH_8, **_COMPUTE_BATCH_1},
     "rule": {},
 }
-_DRAM_SHARDED_CASES = [(entry, _NOC_DRAM, _noc_split(_tensor_tiles(entry))) for entry in _DRAM_SHARDED]
+_DRAM_SHARDED_CASES = [(entry, _NOC, _noc_split(_tensor_tiles(entry))) for entry in _DRAM_SHARDED]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
@@ -1440,8 +1553,8 @@ def test_native_dram_sharded_matches_the_prediction(name, knobs):
     """DRAM-sharded operands must run native and give the predicted output, alone or beside interleaved
     operands.
 
-    Their fallback is the descriptor, which does not run on Quasar, so a refusing gate fails the test. A
-    page read from the wrong bank or offset fails the bit comparison, and a cached program that keeps the
+    The Metal 2.0 gate refuses a DRAM shard too, so a refusing native gate raises an error and fails the test.
+    A page read from the wrong bank or offset fails the bit comparison, and a cached program that keeps the
     first call's addresses fails the repeat.
     """
     p = _run_shard_arm(_DRAM_SHARDED, expect="qsr", timeout=900, knobs=knobs)
@@ -1469,7 +1582,7 @@ def test_native_dram_sharded_spreads_over_the_worker_grid(case):
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "6",
             "ARM_EXPECT_NEOS": "4",
@@ -1528,11 +1641,6 @@ def _placement(entry, operand):
     return entry[1:4]
 
 
-def _has_dram(entry):
-    """True when a, b or the output of a _SHARD_ARM_SRC entry is in DRAM, interleaved or sharded."""
-    return any(_placement(entry, operand)[0].startswith("dram") for operand in "abc")
-
-
 def _anchor_split(entry, anchor):
     """Tiles per cluster under `anchor`, pad slots included: "a", "b" or "c" puts one shard of that operand's
     placement on each core that holds one, "slice" puts each L1 bank's reservation on its cluster, and None
@@ -1554,7 +1662,7 @@ def _anchor_split(entry, anchor):
 
 def _anchored(entry, anchor, borrowed):
     """(entry, path, tiles per cluster) of a case whose anchor borrows the operands named in `borrowed`."""
-    return (entry, _path(borrowed, _has_dram(entry)), _anchor_split(entry, anchor))
+    return (entry, _path(borrowed), _anchor_split(entry, anchor))
 
 
 # (entry, anchor, the operands it borrows), as the rule picks them at its compute count of 4; a set count can
@@ -1749,10 +1857,8 @@ _MIXED_PAD_SLOTS = {
 }
 
 # R1C4W1-n1 puts one reader thread on four tile counters, so the shard walk takes the counter-major steps.
-# Beside DRAM the rule batches only all-interleaved operands, so rule-dm8-n1 sets a DM batch of 8 for these cases.
 _MIXED_CONFIGS = {
     "rule-n1": _COMPUTE_BATCH_1,
-    "rule-dm8-n1": {**_DM_BATCH_8, **_COMPUTE_BATCH_1},
     "R1C1W1": _threads(1, 1, 1),
     "R1C4W1-n1": {**_threads(1, 4, 1), **_COMPUTE_BATCH_1},
     "R4C4W2-per-tile": {**_threads(4, 4, 2), **_PER_TILE},
@@ -1779,7 +1885,12 @@ def test_native_mixed_layouts_match_the_prediction(name, knobs):
 # three borrowed as slices with partial tiles, all three borrowed as shards with 4 tiles per compute thread, and the
 # NoC path beside DRAM. Under the rule, the shards hold 4 tiles per compute thread, so the SFPU kernel runs one full
 # batch per thread. Every output is exact.
+# maximum and minimum run the SFPU kernel too, in bf16 and in fp32, on two of those mixes: the NoC path with partial
+# tiles, and borrowed inputs beside an output that moves. A and b are two normal draws, so they differ in sign and size
+# at almost every element, and a swap of maximum and minimum fails every case.
 _OTHER_OPS = ("subtract", "multiply", "multiply_fast", "divide")
+_MINMAX_OPS = ("maximum", "minimum")
+_MINMAX_MIXES = ("I.I.I_partial", "B32.B32.I")
 _OP_MIXES = (
     "I.I.W32",
     "B32.B32.I",
@@ -1801,28 +1912,33 @@ def _with_op(entry, op):
 
 _OP_CASES = [
     (_with_op(entry, op), path, split)
-    for op in _OTHER_OPS
+    for ops, mixes in ((_OTHER_OPS, _OP_MIXES), (_MINMAX_OPS, _MINMAX_MIXES))
+    for op in ops
     for entry, path, split in _MIXED_CASES
-    if entry[0] in _OP_MIXES
+    if entry[0] in mixes
 ]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params(_MIXED_CONFIGS, _OP_CASES))
 def test_native_other_ops_match_the_prediction(name, knobs):
-    """subtract, multiply and divide must run native in every kind of mix and give the predicted output, exactly as
-    each kernel rounds (OPS in _SHARD_ARM_SRC), so a wrong op define or DST slot fails."""
+    """subtract, multiply and divide must run native in every kind of mix, and maximum and minimum in two of them, and
+    give the predicted output, exactly as each kernel rounds (OPS in _SHARD_ARM_SRC), so a wrong op define or DST slot
+    fails."""
     p = _run_shard_arm([case[0] for case in _OP_CASES], expect="qsr", timeout=1800, knobs=knobs)
-    _check_arm(p, f"subtract, multiply and divide, {name}", expect_wrong=_expect_wrong(_OP_CASES, knobs))
+    _check_arm(
+        p, f"subtract, multiply, divide, maximum and minimum, {name}", expect_wrong=_expect_wrong(_OP_CASES, knobs)
+    )
 
 
-# Borrowed shards that 4 does not divide, so that their last tiles go through the tail rings: block_6 has a
-# borrowed part and a tail, height1 only a tail. At 1,1,1 height_5 runs a full SFPU batch and a short one.
+# Borrowed shards that 4 does not divide, so that their last tiles go through the tail rings: block_6 has a borrowed
+# part and a tail, height1 only a tail. At 1,1,1 height_5 runs a full SFPU batch and a short one; at the rule height_67
+# runs full batches before its tail block (test_native_prediction_tables_cover_their_cases checks it).
 _OP_TAIL_SHARDS = [
     _with_op(entry, op)
     for op in _OTHER_OPS
     for entry in _SMALL_SHARDS
-    if entry[0] in ("block_6", "height1", "height_5")
+    if entry[0] in ("block_6", "height1", "height_5", "height_67")
 ]
 
 
@@ -1840,7 +1956,8 @@ def test_native_other_ops_on_the_tail_rings_are_bit_exact(name, knobs):
 # (multiply), in one mix of each kind of borrowing: nothing borrowed, beside DRAM with partial tiles; all three
 # borrowed; the inputs borrowed beside an output that moves; the output borrowed beside inputs that move. SQUARE on both
 # inputs runs two self-loop rings on each Neo. block_6's shards hold 6 tiles, which 4 does not divide. The tail rings
-# carry no activation, so at the rule's compute count block_6 takes the NoC path.
+# carry no activation, so at the rule's compute count block_6 takes the NoC path. Multiply in fast mode runs ELWMUL on
+# the FPU kernel, the op with several fidelity phases, after each activation's init.
 # SQUARE and RELU have exact models; GELU and TANH do not. GELU also shifts the SFPU results of the later programs on
 # the same device, on both factories.
 _ACTIVATIONS = ("lhs", "rhs", "post", "relu", "relu_lhs", "relu_chain")
@@ -1857,26 +1974,26 @@ def _with_act(entry, act):
 _ACT_CASES = (
     [
         (_with_act(_with_op(entry, op), act), path, split)
-        for op in ("add", "multiply")
+        for op in ("add", "multiply", "multiply_fast")
         for act in _ACTIVATIONS
         for entry, path, split in _MIXED_CASES
         if entry[0] in _ACT_MIXES
     ]
     + [
         (_with_act(_with_op(entry, op), "both"), path, split)
-        for op in ("add", "multiply")
+        for op in ("add", "multiply", "multiply_fast")
         for entry, path, split in _MIXED_CASES
         if entry[0] == "B.B.B_partial"
     ]
     + [
-        (_with_act(_with_op(_BLOCK_6, op), act), _NOC_L1, _noc_split(_tensor_tiles(_BLOCK_6)))
-        for op in ("add", "multiply")
+        (_with_act(_with_op(_BLOCK_6, op), act), _NOC, _noc_split(_tensor_tiles(_BLOCK_6)))
+        for op in ("add", "multiply", "multiply_fast")
         for act in ("lhs", "relu")
     ]
 )
 
 # The activations change only the compute side: one compute thread at the rule's batch, four at batch 1, and the
-# rule, which batches the SFPU kernel at 4 and the FPU kernel at 1, both exact.
+# rule, which batches the SFPU kernel at 4 and the FPU kernel at 8, both exact.
 _ACT_CONFIGS = {name: _MIXED_CONFIGS[name] for name in ("R1C1W1", "rule-n1", "rule")}
 
 
@@ -1896,6 +2013,7 @@ def test_native_activations_match_the_prediction(name, knobs):
 # fp32: add, subtract, multiply and divide all run the SFPU kernel, in a 32-bit DST, where the rule's compute batch is 2.
 # They run the op mixes, the shards whose last tiles go through the tail rings, and three activations: SQUARE on a and
 # SQUARE on b, which run the Float32 activation rings of a and of b, and a lone RELU on the result, in the packer.
+# maximum and minimum run the SFPU kernel too, on their two mixes (_MINMAX_MIXES), and nowhere else in this section.
 _FP32_OPS = ("add", "subtract", "multiply", "divide")
 
 
@@ -1907,15 +2025,16 @@ def _with_fp32(entry):
 
 _FP32_CASES = [
     (_with_fp32(_with_op(entry, op)), path, split)
-    for op in _FP32_OPS
+    for ops, mixes in ((_FP32_OPS, _OP_MIXES), (_MINMAX_OPS, _MINMAX_MIXES))
+    for op in ops
     for entry, path, split in _MIXED_CASES
-    if entry[0] in _OP_MIXES
+    if entry[0] in mixes
 ]
 _FP32_TAIL_SHARDS = [
     _with_fp32(_with_op(entry, op))
     for op in _FP32_OPS
     for entry in _SMALL_SHARDS
-    if entry[0] in ("block_6", "height1", "height_5")
+    if entry[0] in ("block_6", "height1", "height_5", "height_67")
 ]
 _FP32_ACT_CASES = [
     (_with_act(_with_fp32(_with_op(entry, op)), act), path, split)
@@ -1925,14 +2044,16 @@ _FP32_ACT_CASES = [
     if entry[0] in _ACT_MIXES
 ]
 _FP32_CONFIGS = {name: _MIXED_CONFIGS[name] for name in ("R1C1W1", "rule-n1", "rule")}
-# The configurations that have tail rings: at C = 1 every shard divides, and R4C4W2-n1 builds rule-n1's program.
-_FP32_TAIL_CONFIGS = {name: _BORROWED_CONFIGS_C2[name] for name in ("rule-n1", "R1C2W1-n1")}
+# The configurations that have tail rings: at C = 1 every shard divides, and R4C4W2-n1 builds rule-n1's program. At the
+# rule, height_67 runs eight full batches of 2 in each compute thread before its tail block.
+_FP32_TAIL_CONFIGS = {name: _BORROWED_CONFIGS_C2[name] for name in ("rule-n1", "R1C2W1-n1", "rule")}
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params(_FP32_CONFIGS, _FP32_CASES))
 def test_native_fp32_ops_match_the_prediction(name, knobs):
-    """fp32 add, subtract, multiply and divide must run native in every kind of mix and give the predicted output.
+    """fp32 add, subtract, multiply and divide must run native in every kind of mix, and maximum and minimum in two of
+    them, and give the predicted output.
 
     The oracle is torch's fp32 result, within _ULP. A batch larger than a
     32-bit DST section holds overwrites the section the packer reads.
@@ -1955,6 +2076,1110 @@ def test_native_fp32_activations_match_the_prediction(name, knobs):
     """Activations on fp32 operands must run native and give the predicted output."""
     p = _run_shard_arm([case[0] for case in _FP32_ACT_CASES], expect="qsr", timeout=1800, knobs=knobs)
     _check_arm(p, f"fp32 activations, {name}", expect_wrong=_expect_wrong(_FP32_ACT_CASES, knobs))
+
+
+# Broadcast on the native path. Each operand has a mode, FULL, ROW, COL, SCALAR or VALUE (the values of A_MODE and
+# B_MODE, kernels_qsr/common/operand_walk.hpp), and an outer-dim broadcast flag. Every case names the modes that its
+# compute kernel must be built with. It names its walk too: one walk, or one per compute-thread count. Its output
+# must equal the oracle exactly. The rule batches the FPU kernel at 8 above ring stride 1 too, and every compute batch
+# is exact, because llk_unpack_AB steps a batch by the ring stride, so no case predicts wrong tiles. Beside a broadcast
+# operand the rule runs R = C = 4; R1C4W1 sets one reader thread on four tile counters, which a held page's change and
+# a VALUE ring's entries must survive.
+_MODE = {"FULL": 0, "ROW": 1, "COL": 2, "SCALAR": 3, "VALUE": 4}
+_BCAST_CONFIGS = {"rule": {}, "rule-n1": _COMPUTE_BATCH_1, "R1C1W1": _threads(1, 1, 1), "R1C4W1": _threads(1, 4, 1)}
+# The held, mixed and filled tests also run R2C4W2: each of two reader threads owns two tile counters of the input
+# rings. At R = C and at R = 1, which the four configurations above hold, every pairing of a counter agrees.
+_PAIRING_CONFIGS = {**_BCAST_CONFIGS, "R2C4W2": _threads(2, 4, 2)}
+# The held test also runs R1C4W1 at DM batch 1: the reader's dm_batch == 1 loop over four tile counters, with rings of
+# two entries. No other configuration of a broadcast test runs that loop.
+_HELD_CONFIGS = {**_PAIRING_CONFIGS, "R1C4W1-per-tile": {**_threads(1, 4, 1), **_PER_TILE}}
+
+
+def _modes(a="FULL", b="FULL", a_outer=False, b_outer=False):
+    """The [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] that the compute kernel of a case is built with."""
+    return [_MODE[a], _MODE[b], int(a_outer), int(b_outer)]
+
+
+def _walk(a=0, b=0, out=0, pads=0):
+    """The walk of a case, as dataflow_walk in _SHARD_ARM_SRC reads it: 1 for each operand that its program borrows
+    from L1, and 1 where its reader skips pad slots."""
+    return {"a": a, "b": b, "out": out, "pads": pads}
+
+
+# A broadcast operand is never borrowed. So b is 0 in the walks below, except _B_ANCHORED_WALK, where a is the
+# broadcast operand and an anchor borrows b and the output.
+_NOC_WALK = _walk()  # every operand moves over the NoC
+_ANCHORED_WALK = _walk(a=1, out=1)  # an anchor borrows a and the output; b moves in the anchor's tile order
+_PADDED_WALK = _walk(a=1, out=1, pads=1)  # the anchor has pad slots, which the reader skips
+_B_ANCHORED_WALK = _walk(b=1, out=1)  # an anchor borrows b and the output; a moves in the anchor's tile order
+# A tensor-scalar program binds no b tensor, which dataflow_walk reads as a borrowed b.
+_SCALAR_NOC_WALK = _walk(b=1)
+_SCALAR_ANCHORED_WALK = _walk(a=1, b=1, out=1)
+_SCALAR_PADDED_WALK = _walk(a=1, b=1, out=1, pads=1)
+# In L1 the bank walk gives a cluster 2 tiles of _OUTER_SHAPE, which 4 compute threads do not divide: these cases take
+# the NoC path at C = 4 and the slice anchor at C = 1, so they name a walk per compute-thread count ("walks"), and
+# _run_shard_arm passes the arm the walk of its configuration. The anchor's walk has pad slots: 60 tiles on 32 banks
+# leave 4 banks a page short. The VALUE and tensor-scalar L1 cases do the same. The held L1 cases do not: a held operand
+# refuses an anchor with pad slots, so they take the NoC path in every configuration.
+_L1_WALKS = {4: _NOC_WALK, 1: _PADDED_WALK}
+_L1_SCALAR_WALKS = {4: _SCALAR_NOC_WALK, 1: _SCALAR_PADDED_WALK}
+
+
+def _bcast(name, a_shape, b_shape, modes, a=_IDRAM, b=_IDRAM, out=_IDRAM, **opts):
+    """A _SHARD_ARM_SRC entry for a broadcast: a, b and the output each in their own placement, the output in the
+    shape of a and b broadcast."""
+    shape = list(torch.broadcast_shapes(tuple(a_shape), tuple(b_shape)))
+    return (
+        name,
+        *a,
+        shape,
+        {"a_shape": list(a_shape), "b_shape": list(b_shape), "b": b, "out": out, "modes": modes, **opts},
+    )
+
+
+# Outer-dim broadcast: FULL operands with a unit outer dim. Wt = 5 is not a multiple of 4 and Ht = 2; a unit outer dim
+# on a, on b, and on both. On the NoC path in DRAM; in L1, on the NoC path at C = 4 and with the slice anchor at C = 1;
+# beside a borrowed a and output in the shard walk (w = 4 < Wt = 32) and in the bank walk; with SQUARE on the broadcast
+# operand. In outer_b_same_config, b has the anchor's memory config but a broadcast shape, so its shards hold other
+# tiles: the anchor borrows a and the output, and b moves. outer_b_rank7 broadcasts dim -6 of a rank-7 output whose
+# dim -7 is 2: the walk's digit for dim -6.
+# outer_b_wide_shard puts a and the output in block shards 3 tiles wider than the tensor, on the 4 clusters of a
+# sub-grid. The cursor's step across a shard row's edge needs w <= Wt, so no anchor may take this program. outer_b_rank2
+# has a b of lower rank. outer_rank6 has rank 6, D = 2 and dim -6 = 3: a broadcasts dim -6, and b broadcasts D and C.
+# outer_b_uneven_shard borrows a and the output in shards over 14 x 60 tiles that leave pad rows and columns, beside a b
+# that moves. Together, outer_b_uneven_shard and row_b_uneven_shard prove that the mapped pad path compiles and runs
+# and skips no valid tile. Beside a broadcast b, a read of a pad slot stays in range, so a missing skip would not show.
+_OUTER_SHAPE = [2, 3, 64, 160]
+# H = 50 and W = 70 are not multiples of 32: the last tile row and tile column of each (N, C) slab are partial. A ROW
+# operand reads row 0 of its tile and a COL operand column 0, and the output keeps the rows and columns in the tensor.
+_PARTIAL_SHAPE = [2, 3, 50, 70]
+_B32_WALK = ("block", [4 * 32, 4 * 32], (0, 0, 7, 3))  # on [2, 1, 256, 1024]: 32 shards of 4x4 tiles
+_H32_4 = ("height", [4 * 32, 32], (0, 0, 7, 3))  # on [2, 1, 2048, 32]: 32 shards of 4 tiles; b's 16 shards
+_BLOCK_WIDE = ("block", [3 * 32, 4 * 32], (0, 0, 0, 3))  # on [2, 3, 64, 32]: 4 shards of 3x4 tiles, 1 tile wide
+_B32_W8 = ("block", [4 * 32, 8 * 32], (0, 0, 7, 3))  # on [2, 1, 224, 1920]: 32 shards, pad rows and columns
+_OUTER = [
+    _bcast("outer_b", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), walk=_NOC_WALK),
+    _bcast("outer_b_partial", _PARTIAL_SHAPE, [1, 3, 50, 70], _modes(b_outer=True), walk=_NOC_WALK),
+    _bcast("outer_a", [1, 3, 64, 160], _OUTER_SHAPE, _modes(a_outer=True), op="subtract", walk=_NOC_WALK),
+    _bcast(
+        "outer_both",
+        [2, 1, 64, 160],
+        [1, 3, 64, 160],
+        _modes(a_outer=True, b_outer=True),
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "outer_b_L1",
+        _OUTER_SHAPE,
+        [1, 3, 64, 160],
+        _modes(b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="divide",
+        walks=_L1_WALKS,
+    ),
+    _bcast(
+        "outer_b_shard_walk",
+        [2, 1, 256, 1024],
+        [1, 1, 256, 1024],
+        _modes(b_outer=True),
+        a=_B32_WALK,
+        out=_B32_WALK,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "outer_b_bank_walk",
+        [2, 1, 64, 1024],
+        [1, 1, 64, 1024],
+        _modes(b_outer=True),
+        a=_IL1,
+        out=_IL1,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("outer_b_act", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), act="rhs", walk=_NOC_WALK),
+    _bcast(
+        "outer_b_same_config",
+        [2, 1, 2048, 32],
+        [1, 1, 2048, 32],
+        _modes(b_outer=True),
+        a=_H32_4,
+        b=_H32_4,
+        out=_H32_4,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("outer_b_rank7", [2, 3, 1, 1, 2, 64, 64], [2, 1, 1, 1, 2, 64, 64], _modes(b_outer=True), walk=_NOC_WALK),
+    _bcast(
+        "outer_b_wide_shard",
+        [2, 3, 64, 32],
+        [2, 1, 64, 32],
+        _modes(b_outer=True),
+        a=_BLOCK_WIDE,
+        out=_BLOCK_WIDE,
+        grid=(0, 0, 0, 3),
+        walk=_NOC_WALK,
+    ),
+    _bcast("outer_b_rank2", _OUTER_SHAPE, [64, 160], _modes(b_outer=True), walk=_NOC_WALK),
+    _bcast(
+        "outer_rank6", [1, 2, 1, 2, 64, 64], [3, 1, 1, 1, 64, 64], _modes(a_outer=True, b_outer=True), walk=_NOC_WALK
+    ),
+    _bcast(
+        "outer_b_uneven_shard/multiply",
+        [2, 1, 7 * 32, 60 * 32],
+        [1, 1, 7 * 32, 60 * 32],
+        _modes(b_outer=True),
+        a=_B32_W8,
+        out=_B32_W8,
+        op="multiply",
+        walk=_PADDED_WALK,
+    ),  # w = 8: at C = 4 the step crosses a shard-row edge every 2 steps
+    # The mirror of outer_b_shard_walk: an outer-dim a beside a borrowed b, so the anchor takes b's shards and the
+    # output's.
+    _bcast(
+        "outer_a_shard_walk",
+        [1, 1, 256, 1024],
+        [2, 1, 256, 1024],
+        _modes(a_outer=True),
+        b=_B32_WALK,
+        out=_B32_WALK,
+        op="subtract",
+        walk=_B_ANCHORED_WALK,
+    ),
+    # Partial tiles in L1: 36 tiles on 32 banks, so the slice anchor at C = 1 has pad slots beside partial tiles.
+    _bcast(
+        "outer_b_partial_L1",
+        _PARTIAL_SHAPE,
+        [1, 3, 50, 70],
+        _modes(b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        walks=_L1_WALKS,
+    ),
+    # 64 tiles per bank: at the rule each tile counter of the bank walk runs 2 DM batches of 8.
+    _bcast(
+        "outer_b_L1_big",
+        [2, 1, 1024, 1024],
+        [1, 1, 1024, 1024],
+        _modes(b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        walk=_ANCHORED_WALK,
+    ),
+    # A b that moves from a block shard in L1, and from a DRAM width or block shard.
+    _bcast(
+        "outer_b_block_shard",
+        [2, 1, 128, 256],
+        [1, 1, 128, 256],
+        _modes(b_outer=True),
+        b=("block", [2 * 32, 2 * 32], (0, 0, 3, 1)),
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "outer_b_dram_width",
+        [2, 1, 128, 512],
+        [1, 1, 128, 512],
+        _modes(b_outer=True),
+        b=("dram_width", [4 * 32, 8 * 32], None),
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "outer_b_dram_block",
+        [2, 1, 128, 256],
+        [1, 1, 128, 256],
+        _modes(b_outer=True),
+        b=("dram_block", [4 * 32, 4 * 32], None),
+        walk=_NOC_WALK,
+    ),
+    # With this case, add, subtract, multiply, fast multiply and divide each run beside an outer-dim operand.
+    _bcast(
+        "outer_b/multiply_fast", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), op="multiply_fast", walk=_NOC_WALK
+    ),
+]
+# fp32: all four ops run the SFPU kernel, in L1, at the rule's batch of 2.
+_OUTER_FP32 = [
+    _bcast(
+        f"outer_b/fp32/{op}",
+        _OUTER_SHAPE,
+        [1, 3, 64, 160],
+        _modes(b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op=op,
+        dtype="float32",
+        walks=_L1_WALKS,
+    )
+    for op in _FP32_OPS
+] + [
+    _bcast(
+        "outer_both/fp32",
+        [2, 1, 64, 160],
+        [1, 3, 64, 160],
+        _modes(a_outer=True, b_outer=True),
+        dtype="float32",
+        walk=_NOC_WALK,
+    )
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_outer_broadcast_matches_the_oracle(name, knobs):
+    """An operand with a unit outer dim must run native, read through its Map in every walk, and give the oracle's bits.
+
+    A wrong stride or a cursor that drifts reads another tile and fails the exact comparison. A broadcast operand that
+    the anchor borrowed for its memory config would read its own shards in place of the output's tiles.
+    """
+    p = _run_shard_arm(_OUTER + _OUTER_FP32, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"outer-dim broadcast, {name}")
+
+
+# A full-width height shard on 2 clusters. Beside a COL or SCALAR b, production borrows a and the output, and so does
+# the native anchor: each cluster walks its 16 rows in order, and a Neo meets 3 or 4 tiles of each row.
+_H2_14 = ("height", [16 * 32, 14 * 32], (0, 0, 1, 0))  # on [1, 1, 1024, 448]: 2 shards of 16 x 14 tiles
+
+# ROW: a or b of one logical row. Its Map has no tile-row stride, so every tile of a column reads the same page, and
+# each kernel expands it: the FPU kernel into a staging ring per compute batch, the SFPU kernel straight into the
+# operand's DST slot. These cases run in bf16; the fp32 twins are in _FILLED. Add and subtract run the FPU kernel,
+# multiply, divide, maximum and minimum the SFPU kernel. In L1 the bank walk gives a cluster at most 2 tiles of
+# _OUTER_SHAPE.
+# Production borrows no shard beside a ROW operand, so row_b_full_batches runs on 32 clusters, 14 tiles each: FPU
+# add batches 8 at R1C1W1, and the SFPU kernel 4. SQUARE runs on the row tiles before the broadcast; a lone RELU
+# on the result runs in the SFPU post chain, as the factory keeps PACK_RELU off beside a broadcast.
+# row_b_uneven_shard has the pad rows and columns of 14 x 30 tiles in 4 x 4 shards. Multiply in fast mode runs
+# ELWMUL, the one FPU op with several fidelity phases, beside a ROW operand and, in
+# row_b_full_batches/multiply_fast, in batches of 8 at R1C1W1 through the staging ring.
+# row_b/maximum runs maximum beside a ROW b. A and b differ in sign and size, so a swap with minimum fails it.
+_ROW = [
+    _bcast("row_b", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), walk=_NOC_WALK),
+    _bcast("row_b_partial", _PARTIAL_SHAPE, [1, 3, 1, 70], _modes(b="ROW", b_outer=True), walk=_NOC_WALK),
+    _bcast("row_a", [1, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW", a_outer=True), op="subtract", walk=_NOC_WALK),
+    _bcast(
+        "row_a_act",
+        [1, 3, 1, 160],
+        _OUTER_SHAPE,
+        _modes(a="ROW", a_outer=True),
+        act="lhs",
+        op="subtract",
+        walk=_NOC_WALK,
+    ),
+    _bcast("row_b/multiply", _OUTER_SHAPE, [2, 3, 1, 160], _modes(b="ROW"), op="multiply", walk=_NOC_WALK),
+    _bcast("row_a/divide", [2, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW"), op="divide", walk=_NOC_WALK),
+    _bcast(
+        "row_b_L1",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        walks=_L1_WALKS,
+    ),
+    _bcast(
+        "row_b_L1/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="multiply",
+        walks=_L1_WALKS,
+    ),
+    _bcast(
+        "row_b_shard_walk",
+        [2, 1, 256, 1024],
+        [1, 1, 1, 1024],
+        _modes(b="ROW", b_outer=True),
+        a=_B32_WALK,
+        out=_B32_WALK,
+        walk=_ANCHORED_WALK,
+    ),
+    # Repeats row_b_shard_walk's spec while its tensors are alive: a cache hit that must rebind the borrowed shards.
+    _bcast(
+        "row_b_shard_walk_again",
+        [2, 1, 256, 1024],
+        [1, 1, 1, 1024],
+        _modes(b="ROW", b_outer=True),
+        a=_B32_WALK,
+        out=_B32_WALK,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "row_b_bank_walk",
+        [2, 1, 64, 1024],
+        [1, 1, 1, 1024],
+        _modes(b="ROW", b_outer=True),
+        a=_IL1,
+        out=_IL1,
+        op="multiply",
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("row_b_act", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="rhs", walk=_NOC_WALK),
+    _bcast(
+        "row_b_act/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        act="rhs",
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast("row_b/relu", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="relu", walk=_NOC_WALK),
+    _bcast(
+        "row_b/relu/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        act="relu",
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_full_batches",
+        [1, 1, 1024, 448],
+        [1, 1, 1, 448],
+        _modes(b="ROW"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_full_batches/multiply",
+        [1, 1, 1024, 448],
+        [1, 1, 1, 448],
+        _modes(b="ROW"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_uneven_shard",
+        [1, 1, 14 * 32, 30 * 32],
+        [1, 1, 1, 30 * 32],
+        _modes(b="ROW"),
+        a=_B32,
+        out=_B32,
+        walk=_PADDED_WALK,
+    ),
+    _bcast(
+        "row_b/multiply_fast",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        op="multiply_fast",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_full_batches/multiply_fast",
+        [1, 1, 1024, 448],
+        [1, 1, 1, 448],
+        _modes(b="ROW"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply_fast",
+        walk=_NOC_WALK,
+    ),
+    _bcast("row_b/maximum", _OUTER_SHAPE, [2, 3, 1, 160], _modes(b="ROW"), op="maximum", walk=_NOC_WALK),
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_row_broadcast_matches_the_oracle(name, knobs):
+    """A ROW operand, on a or on b, must run native on both kernels and give the oracle's bits.
+
+    An expansion that missed a tile, a staging ring read at the wrong index, or an init left over from the expansion
+    gives the binary op another row, and fails the exact comparison.
+    """
+    p = _run_shard_arm(_ROW, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"row broadcast, {name}")
+
+
+# COL and SCALAR: a held operand. The reader reads its page only where the page changed, and every other entry of its
+# ring is a credit only; the compute expands the page once into its held ring and reads held entry 0 until the next
+# change. COL changes on each tile row, SCALAR with outer dims above 1 on each (N, C) slab. A compute batch ends at the
+# next multiple of the batch size, as in the same-shape loop, or earlier at a change. The L1 cases of _OUTER_SHAPE take
+# the NoC path in every configuration: 60 pages leave short banks, and a held operand refuses an anchor with pad slots.
+# A cluster gets at most 2 tiles there. The col_b_split cases hold a and the output in _H2_14 shards, where a Neo meets
+# 3 or 4 tiles of each row: the SFPU kernel's batches of 4, and the FPU kernel's of 8 at R1C1W1, end early at row
+# changes, and a batch that crossed a multiple of the batch size would cross the end of a ring. col_b_rows/multiply
+# gives the same early ends on the NoC path, with 4 rows of 14 tiles on each cluster. col_b_split_act chains SQUARE on
+# a, whose post ring holds one batch per Neo. SQUARE on the held operand runs once per change, in the expansion. Beside
+# a height-sharded a and output, production borrows a and the output, and so does the native anchor. An uneven shard
+# beside a held operand takes no anchor: everything moves over the NoC. With one output tile per cluster, three Neos
+# per cluster hold nothing. These cases run in bf16; the fp32 twins are in _FILLED. col_b/minimum runs minimum on the
+# SFPU kernel beside a held COL b.
+_H8 = ("height", [4 * 32, 4 * 32], (0, 0, 7, 0))  # on [2, 1, 512, 128]: 8 shards of 4x4 tiles, Wt = 4
+_DH_COL = ("dram_height", [3 * 64, 32], None)  # on [2, 3, 64, 1]: 2 shards of 6 tiles, one per DRAM bank
+_HELD = [
+    _bcast("col_b", _OUTER_SHAPE, [1, 3, 64, 1], _modes(b="COL", b_outer=True), walk=_NOC_WALK),
+    _bcast("col_b_partial", _PARTIAL_SHAPE, [1, 3, 50, 1], _modes(b="COL", b_outer=True), walk=_NOC_WALK),
+    # b is a DRAM height shard beside an interleaved a: the held operand's pages come through the sharded accessor.
+    _bcast("col_b_dram_height", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), b=_DH_COL, walk=_NOC_WALK),
+    _bcast("col_a", [1, 3, 64, 1], _OUTER_SHAPE, _modes(a="COL", a_outer=True), op="subtract", walk=_NOC_WALK),
+    _bcast("col_b_L1", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), a=_IL1, b=_IL1, out=_IL1, walk=_NOC_WALK),
+    _bcast(
+        "col_b_L1/multiply",
+        _OUTER_SHAPE,
+        [2, 3, 64, 1],
+        _modes(b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast("scalar_b", _OUTER_SHAPE, [2, 3, 1, 1], _modes(b="SCALAR"), walk=_NOC_WALK),
+    _bcast(
+        "scalar_a/divide", [2, 1, 1, 1], _OUTER_SHAPE, _modes(a="SCALAR", a_outer=True), op="divide", walk=_NOC_WALK
+    ),
+    _bcast(
+        "scalar_b_L1/multiply",
+        _OUTER_SHAPE,
+        [2, 3, 1, 1],
+        _modes(b="SCALAR"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "col_b_shard_walk",
+        [2, 1, 256, 1024],
+        [1, 1, 256, 1],
+        _modes(b="COL", b_outer=True),
+        a=_B32_WALK,
+        out=_B32_WALK,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "col_b_bank_walk",
+        [2, 1, 64, 1024],
+        [2, 1, 64, 1],
+        _modes(b="COL"),
+        a=_IL1,
+        out=_IL1,
+        op="multiply",
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("col_b_act", _OUTER_SHAPE, [1, 3, 64, 1], _modes(b="COL", b_outer=True), act="rhs", walk=_NOC_WALK),
+    _bcast(
+        "col_b_act/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 64, 1],
+        _modes(b="COL", b_outer=True),
+        act="rhs",
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "col_b_height_borrowed", [2, 1, 512, 128], [2, 1, 512, 1], _modes(b="COL"), a=_H8, out=_H8, walk=_ANCHORED_WALK
+    ),
+    _bcast(
+        "col_b_uneven_shard",
+        [1, 1, 14 * 32, 30 * 32],
+        [1, 1, 14 * 32, 1],
+        _modes(b="COL"),
+        a=_B32,
+        out=_B32,
+        walk=_NOC_WALK,
+    ),
+    _bcast("col_b_idle_neos", [1, 1, 32, 64], [1, 1, 32, 1], _modes(b="COL"), walk=_NOC_WALK),
+    _bcast(
+        "col_b_split",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        walk=_ANCHORED_WALK,
+    ),
+    # Repeats col_b_split's spec while its tensors are alive: a cache hit that must rebind the shards and b.
+    _bcast(
+        "col_b_split_again",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "col_b_split/multiply",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply",
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "col_b_split_act/multiply",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply",
+        act="lhs",
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("col_b_rows/multiply", [1, 1, 4096, 448], [1, 1, 4096, 1], _modes(b="COL"), op="multiply", walk=_NOC_WALK),
+    _bcast(
+        "col_b_split/multiply_fast",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply_fast",
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "scalar_a_act",
+        [2, 1, 1, 1],
+        _OUTER_SHAPE,
+        _modes(a="SCALAR", a_outer=True),
+        op="subtract",
+        act="lhs",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "scalar_a_act/multiply",
+        [2, 1, 1, 1],
+        _OUTER_SHAPE,
+        _modes(a="SCALAR", a_outer=True),
+        op="multiply",
+        act="lhs",
+        walk=_NOC_WALK,
+    ),
+    _bcast("col_b/relu", _OUTER_SHAPE, [1, 3, 64, 1], _modes(b="COL", b_outer=True), act="relu", walk=_NOC_WALK),
+    _bcast(
+        "col_b/relu/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 64, 1],
+        _modes(b="COL", b_outer=True),
+        act="relu",
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast("col_b/minimum", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), op="minimum", walk=_NOC_WALK),
+    # The mirror of col_b_shard_walk: a held COL a beside a borrowed b.
+    _bcast(
+        "col_a_shard_walk",
+        [1, 1, 256, 1],
+        [2, 1, 256, 1024],
+        _modes(a="COL", a_outer=True),
+        b=_B32_WALK,
+        out=_B32_WALK,
+        op="subtract",
+        walk=_B_ANCHORED_WALK,
+    ),
+    # Partial tiles beside a held SCALAR b.
+    _bcast("scalar_b_partial", _PARTIAL_SHAPE, [2, 3, 1, 1], _modes(b="SCALAR"), walk=_NOC_WALK),
+    # With these two cases, add, subtract, multiply, fast multiply and divide each run beside COL and SCALAR.
+    _bcast("col_b/divide", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), op="divide", walk=_NOC_WALK),
+    _bcast(
+        "scalar_b/multiply_fast", _OUTER_SHAPE, [2, 3, 1, 1], _modes(b="SCALAR"), op="multiply_fast", walk=_NOC_WALK
+    ),
+]
+
+# VALUE: a tensor whose every dim is 1 is one value for the whole op. The reader reads its page 0 once per tile counter
+# and fills the entry from the first element; each compute thread waits for its entry once and reads it for every
+# tile. No unary_bcast, so bf16 and fp32. A rank-2 [1, 1] counts too. Beside a borrowed a, no operand is read per tile.
+# With one output tile per cluster, three Neos per cluster still take their entry.
+_VALUE = [
+    _bcast("value_b", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), walk=_NOC_WALK),
+    _bcast("value_a", [1, 1, 1, 1], _OUTER_SHAPE, _modes(a="VALUE"), op="subtract", walk=_NOC_WALK),
+    _bcast("value_b_rank2/multiply", _OUTER_SHAPE, [1, 1], _modes(b="VALUE"), op="multiply", walk=_NOC_WALK),
+    _bcast(
+        "value_b_L1/divide",
+        _OUTER_SHAPE,
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="divide",
+        walks=_L1_WALKS,
+    ),
+    _bcast("value_b_act", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), act="rhs", walk=_NOC_WALK),
+    _bcast(
+        "value_b_borrowed_a",
+        [2, 1, 2048, 32],
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        a=_H32_4,
+        out=_H32_4,
+        walk=_ANCHORED_WALK,
+    ),
+    # Repeats value_b_borrowed_a's spec while its tensors are alive: a cache hit that must rebind the shards and page 0.
+    _bcast(
+        "value_b_borrowed_a_again",
+        [2, 1, 2048, 32],
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        a=_H32_4,
+        out=_H32_4,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("value_b_one_tile", [1, 1, 32, 32], [1, 1, 1, 1], _modes(b="VALUE"), walk=_NOC_WALK),
+    _bcast("value_b/multiply_fast", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), op="multiply_fast", walk=_NOC_WALK),
+    # Partial tiles beside a VALUE b, and a RELU on the result beside it, on both kernels.
+    _bcast("value_b_partial", _PARTIAL_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), walk=_NOC_WALK),
+    _bcast("value_b/relu", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), act="relu", walk=_NOC_WALK),
+    _bcast(
+        "value_b/relu/multiply",
+        _OUTER_SHAPE,
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        act="relu",
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+]
+_VALUE_FP32 = [
+    _bcast(
+        f"value_b/fp32/{op}",
+        _OUTER_SHAPE,
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op=op,
+        dtype="float32",
+        walks=_L1_WALKS,
+    )
+    for op in _FP32_OPS
+] + [
+    _bcast(
+        "value_a/fp32", [1, 1, 1, 1], _OUTER_SHAPE, _modes(a="VALUE"), op="subtract", dtype="float32", walk=_NOC_WALK
+    )
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_HELD_CONFIGS.items()), ids=list(_HELD_CONFIGS))
+def test_native_held_broadcast_matches_the_oracle(name, knobs):
+    """A COL or SCALAR operand must run native on both kernels and give the oracle's bits.
+
+    A read skipped where the page changed, a held entry kept across a change, or a batch that crosses a change gives
+    the binary op another row or slab, and fails the exact comparison. A pad slot beside a held operand would hide a
+    change; the uneven shard must take the NoC path and stay exact.
+    """
+    p = _run_shard_arm(_HELD, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"held broadcast, {name}")
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_value_broadcast_matches_the_oracle(name, knobs):
+    """A tensor whose every dim is 1 must run native as one value, in bf16 and fp32, and give the oracle's bits.
+
+    A fill that the compute cannot see, an entry popped early, or a Neo with no tiles that skips its entry gives
+    stale data or hangs.
+    """
+    p = _run_shard_arm(_VALUE + _VALUE_FP32, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"value broadcast, {name}")
+
+
+# Mixed broadcast: one operand has one row and the other has one column. In ROW_A_COL_B the last two dims are [1, W] on
+# a and [H, 1] on b; ROW_B_COL_A swaps them. The op combines each row value with each column value, which is an outer
+# sum only for add. The ROW operand runs as ROW does and the COL operand is held, so a mix needs no code of its own.
+# These cases run in bf16; the fp32 twins are in _FILLED. Add, subtract and fast multiply run the FPU kernel, and
+# multiply, divide, maximum and minimum run the SFPU kernel. Only ROW_A_COL_B runs in L1 and beside a sharded output;
+# ROW_B_COL_A runs in DRAM only. Three DRAM cases, row_a_col_b, row_b_col_a/subtract and row_a_col_b_partial,
+# broadcast outer dims on both sides, and the others do not. In row_a_col_b_split the output is sharded on 2 clusters.
+# Production does not borrow it beside a ROW operand, so the native path takes no anchor and walks 15 tiles per
+# cluster, 2.5 rows, over 32 clusters.
+# The case has two twins: row_a_col_b_split/multiply_fast runs ELWMUL, the one FPU op with several fidelity phases, and
+# row_a_col_b_split/multiply runs the SFPU kernel. Across the three cases, the FPU kernel's batches of 8 at R1C1W1 and
+# the SFPU kernel's batches of 4 end early at COL changes. On the FPU kernel, a batch that crossed a multiple of 8 would
+# cross the end of the staging ring. row_a_col_b/maximum runs maximum beside a ROW a and a COL b.
+_H2_6 = ("height", [40 * 32, 6 * 32], (0, 0, 1, 0))  # on [1, 1, 2560, 192]: 2 shards of 40 x 6 tiles
+_MIXED_BCAST = [
+    _bcast(
+        "row_a_col_b",
+        [2, 1, 1, 160],
+        [1, 3, 64, 1],
+        _modes(a="ROW", b="COL", a_outer=True, b_outer=True),
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_col_a/subtract",
+        [1, 3, 64, 1],
+        [2, 1, 1, 160],
+        _modes(a="COL", b="ROW", a_outer=True, b_outer=True),
+        op="subtract",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_a_col_b_L1/multiply",
+        [2, 3, 1, 160],
+        [2, 3, 64, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast("row_b_col_a/divide", [2, 3, 64, 1], [2, 3, 1, 160], _modes(a="COL", b="ROW"), op="divide", walk=_NOC_WALK),
+    _bcast("row_a_col_b_act", [2, 3, 1, 160], [2, 3, 64, 1], _modes(a="ROW", b="COL"), act="both", walk=_NOC_WALK),
+    _bcast(
+        "row_a_col_b_split",
+        [1, 1, 1, 192],
+        [1, 1, 2560, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_H2_6,
+        walk=_NOC_WALK,
+    ),
+    # Repeats row_a_col_b_split's spec while its tensors are alive: a cache hit that must rebind the sharded output.
+    _bcast(
+        "row_a_col_b_split_again",
+        [1, 1, 1, 192],
+        [1, 1, 2560, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_H2_6,
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_a_col_b_split/multiply_fast",
+        [1, 1, 1, 192],
+        [1, 1, 2560, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_H2_6,
+        op="multiply_fast",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_a_col_b_split/multiply",
+        [1, 1, 1, 192],
+        [1, 1, 2560, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_H2_6,
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_a_col_b/maximum", [2, 3, 1, 160], [2, 3, 64, 1], _modes(a="ROW", b="COL"), op="maximum", walk=_NOC_WALK
+    ),
+    # Partial tiles beside a ROW a and a COL b.
+    _bcast(
+        "row_a_col_b_partial",
+        [2, 1, 1, 70],
+        [1, 3, 50, 1],
+        _modes(a="ROW", b="COL", a_outer=True, b_outer=True),
+        walk=_NOC_WALK,
+    ),
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_PAIRING_CONFIGS.items()), ids=list(_PAIRING_CONFIGS))
+def test_native_mixed_broadcast_matches_the_oracle(name, knobs):
+    """Both mixes must run native on both kernels, with a ROW operand beside a held one, and give the oracle's bits."""
+    p = _run_shard_arm(_MIXED_BCAST, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"mixed broadcast, {name}")
+
+
+def _scalar(name, shape, scalar, a=_IDRAM, out=_IDRAM, **opts):
+    """A _SHARD_ARM_SRC entry for tensor-scalar: a and the output in their placements, b the Python float `scalar`."""
+    return (name, *a, list(shape), {"scalar": scalar, "out": out, "modes": _modes(b="VALUE"), **opts})
+
+
+# Tensor-scalar: the scalar is VALUE, which the reader fills from the packed scalar, once per tile counter. bf16 and
+# fp32; 0.1 is not exact in bf16, so its golden takes the host's rounding. Beside a borrowed a no operand is read per
+# tile; with one output tile per cluster three Neos take only their entry; SQUARE on a runs per tile.
+# scalar_borrowed_a_2_shards takes its 2-shard anchor only because production, with no b, borrows those shards too.
+_SCALAR_OP = (
+    [
+        _scalar("scalar/add", _OUTER_SHAPE, 3.0, walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/subtract", _OUTER_SHAPE, 0.1, op="subtract", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/multiply", _OUTER_SHAPE, -1.5, op="multiply", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/divide", _OUTER_SHAPE, -0.75, op="divide", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_L1/multiply", _OUTER_SHAPE, 2.5, a=_IL1, out=_IL1, op="multiply", walks=_L1_SCALAR_WALKS),
+        _scalar("scalar_borrowed_a", [2, 1, 2048, 32], 2.5, a=_H32_4, out=_H32_4, walk=_SCALAR_ANCHORED_WALK),
+        _scalar("scalar_one_tile", [1, 1, 32, 32], 3.5, walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_lhs_act", _OUTER_SHAPE, 3.0, act="lhs", walk=_SCALAR_NOC_WALK),
+        # Partial tiles, and a RELU or a SQUARE on the result.
+        _scalar("scalar_partial", _PARTIAL_SHAPE, 3.0, walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/relu", _OUTER_SHAPE, -1.5, act="relu", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/post", _OUTER_SHAPE, 0.5, act="post", walk=_SCALAR_NOC_WALK),
+        # Special scalars: zero, minus zero, inf, minus inf, NaN and a value whose products overflow, and an fp32 scalar
+        # that bf16 cannot hold. A NaN result matches a NaN, and an inf matches an inf of the same sign.
+        _scalar("scalar_zero/divide", _OUTER_SHAPE, 0.0, op="divide", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_neg_zero/divide", _OUTER_SHAPE, -0.0, op="divide", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_inf/add", _OUTER_SHAPE, math.inf, walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_neg_inf/multiply", _OUTER_SHAPE, -math.inf, op="multiply", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_nan/subtract", _OUTER_SHAPE, math.nan, op="subtract", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_huge/multiply", _OUTER_SHAPE, 3.0e38, op="multiply", walk=_SCALAR_NOC_WALK),
+        _scalar(
+            "scalar_inexact/fp32/multiply", _OUTER_SHAPE, 0.1, op="multiply", dtype="float32", walk=_SCALAR_NOC_WALK
+        ),
+        _scalar(
+            "scalar_inf/fp32/subtract", _OUTER_SHAPE, math.inf, op="subtract", dtype="float32", walk=_SCALAR_NOC_WALK
+        ),
+        _scalar("scalar_nan/fp32/divide", _OUTER_SHAPE, math.nan, op="divide", dtype="float32", walk=_SCALAR_NOC_WALK),
+    ]
+    + [
+        _scalar(
+            f"scalar/fp32/{op}", _OUTER_SHAPE, -2.5, a=_IL1, out=_IL1, op=op, dtype="float32", walks=_L1_SCALAR_WALKS
+        )
+        for op in _FP32_OPS
+    ]
+    + [
+        _scalar("scalar/multiply_fast", _OUTER_SHAPE, -1.5, op="multiply_fast", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_borrowed_a_2_shards", [1, 1, 1024, 448], 2.5, a=_H2_14, out=_H2_14, walk=_SCALAR_ANCHORED_WALK),
+        # Repeats scalar_borrowed_a_2_shards' spec while its tensors are alive: a cache hit that must rebind the shards.
+        _scalar(
+            "scalar_borrowed_a_2_shards_again",
+            [1, 1, 1024, 448],
+            2.5,
+            a=_H2_14,
+            out=_H2_14,
+            walk=_SCALAR_ANCHORED_WALK,
+        ),
+    ]
+)
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_tensor_scalar_matches_the_oracle(name, knobs):
+    """Tensor-scalar must run native, in bf16 and fp32, with the reader's fill, and give the oracle's bits."""
+    p = _run_shard_arm(_SCALAR_OP, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"tensor-scalar, {name}")
+
+
+# fp32 ROW, COL, SCALAR and mixed: unary_bcast takes no 32-bit operand on Quasar, so the reader expands the tile in
+# software and the SFPU kernel, at a batch of 2, copies it. col_b_split and the _full_batches and _slabs cases have a
+# fill at entry 1 of a batch, so a fill must step one ring stride per entry: more than one entry where C >= 2.
+_FILLED = [
+    _bcast(
+        f"row_b/fp32/{op}",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        op=op,
+        dtype="float32",
+        walk=_NOC_WALK,
+    )
+    for op in _FP32_OPS
+] + [
+    _bcast("row_a/fp32", [2, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW"), op="subtract", dtype="float32", walk=_NOC_WALK),
+    _bcast("col_b/fp32", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), op="multiply", dtype="float32", walk=_NOC_WALK),
+    _bcast(
+        "col_a_L1/fp32",
+        [2, 3, 64, 1],
+        _OUTER_SHAPE,
+        _modes(a="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="divide",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast("scalar_b/fp32", _OUTER_SHAPE, [2, 3, 1, 1], _modes(b="SCALAR"), dtype="float32", walk=_NOC_WALK),
+    _bcast(
+        "col_b_act/fp32",
+        _OUTER_SHAPE,
+        [1, 3, 64, 1],
+        _modes(b="COL", b_outer=True),
+        act="rhs",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # Its batches end early at row changes.
+    _bcast(
+        "col_b_split/fp32",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        dtype="float32",
+        walk=_ANCHORED_WALK,
+    ),
+    # Repeats col_b_split/fp32's spec while its tensors are alive: a cache hit that must rebind the shards and b.
+    _bcast(
+        "col_b_split/fp32_again",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        dtype="float32",
+        walk=_ANCHORED_WALK,
+    ),
+    # Both operands are filled: a ROW a on every tile and a COL b once per row, so a batch can take two locks.
+    _bcast(
+        "row_a_col_b/fp32",
+        [2, 1, 1, 160],
+        [1, 3, 64, 1],
+        _modes(a="ROW", b="COL", a_outer=True, b_outer=True),
+        op="multiply",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # Both operands are filled: a COL a once per row and a ROW b on every tile, so a batch can take two locks.
+    _bcast(
+        "row_b_col_a/fp32",
+        [2, 3, 64, 1],
+        [2, 3, 1, 160],
+        _modes(a="COL", b="ROW"),
+        op="divide",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_full_batches/fp32",
+        [1, 1, 1024, 448],
+        [1, 1, 1, 448],
+        _modes(b="ROW"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # The a side of row_b_full_batches, with every operand in DRAM.
+    _bcast(
+        "row_a_full_batches/fp32",
+        [1, 1, 1, 448],
+        [1, 1, 1024, 448],
+        _modes(a="ROW"),
+        op="subtract",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "scalar_b_slabs/fp32",
+        [1, 64, 64, 64],
+        [1, 64, 1, 1],
+        _modes(b="SCALAR"),
+        op="multiply",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # The a side of scalar_b_slabs.
+    _bcast(
+        "scalar_a_slabs/fp32",
+        [1, 64, 1, 1],
+        [1, 64, 64, 64],
+        _modes(a="SCALAR"),
+        op="subtract",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # maximum and minimum beside a filled ROW b, COL a and SCALAR b.
+    _bcast(
+        "row_b/fp32/minimum",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        op="minimum",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "col_a/fp32/maximum",
+        [2, 3, 64, 1],
+        _OUTER_SHAPE,
+        _modes(a="COL"),
+        op="maximum",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "scalar_b/fp32/minimum",
+        _OUTER_SHAPE,
+        [2, 3, 1, 1],
+        _modes(b="SCALAR"),
+        op="minimum",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # Partial tiles beside a filled ROW b.
+    _bcast(
+        "row_b_partial/fp32",
+        _PARTIAL_SHAPE,
+        [1, 3, 1, 70],
+        _modes(b="ROW", b_outer=True),
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # With these four cases, add, subtract, multiply and divide each run beside every filled mode.
+    _bcast(
+        "col_b/fp32/subtract",
+        _OUTER_SHAPE,
+        [2, 3, 64, 1],
+        _modes(b="COL"),
+        op="subtract",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "scalar_b/fp32/divide",
+        _OUTER_SHAPE,
+        [2, 3, 1, 1],
+        _modes(b="SCALAR"),
+        op="divide",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    *(
+        _bcast(
+            f"row_a_col_b/fp32/{op}",
+            [2, 1, 1, 160],
+            [1, 3, 64, 1],
+            _modes(a="ROW", b="COL", a_outer=True, b_outer=True),
+            op=op,
+            dtype="float32",
+            walk=_NOC_WALK,
+        )
+        for op in ("add", "subtract")
+    ),
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_PAIRING_CONFIGS.items()), ids=list(_PAIRING_CONFIGS))
+def test_native_filled_broadcast_matches_the_oracle(name, knobs):
+    """An fp32 ROW, COL or SCALAR operand must run native, expanded by the reader, and give the oracle's bits.
+
+    A missed fill leaves one row, column or element of the tile, and a fill that the compute cannot see leaves the
+    bytes that the NoC wrote: either fails the exact comparison.
+    """
+    p = _run_shard_arm(_FILLED, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"filled broadcast, {name}")
 
 
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
@@ -2030,7 +3255,7 @@ def test_native_mixed_layouts_route_by_the_anchor(case, dms, cores):
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": str(dms),
             "ARM_EXPECT_NEOS": "4",
@@ -2059,7 +3284,7 @@ def test_native_rule_follows_a_set_compute_count():
         timeout=900,
         knobs={
             "TTNN_QSR_COMPUTE_THREADS": "2",
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "4",
             "ARM_EXPECT_NEOS": "2",
@@ -2069,21 +3294,19 @@ def test_native_rule_follows_a_set_compute_count():
     _check_arm(p, "C = 2 on the NoC path")
 
 
-# Each case: the knobs, the values each program shape's part of the settings line must name with their
-# sources, and whether the output must be exact. The line gives five shapes: every operand over the NoC and in
-# L1, the same beside a DRAM operand (batch 1 in the line), the output borrowed beside an input that
-# moves, the inputs borrowed beside an output that moves, all of them borrowed. With no knob set, the rule runs the
-# FPU kernel at batch 1 above ring stride 1, and the SFPU kernel at 4 and 2. C = 1 alone gives 1,1,1 by the
-# rule. R = 2 beside C = 1 makes each compute thread own two tile counters of the input rings, so the rule's
-# compute batch drops to 1 where the inputs move. That case checks the line only: its output is exact only on
-# craq-sim builds without the defect that corrupts a run whose DM side outnumbers its Tensix side. A hang still
-# fails it.
-_NOC_SHAPE = "the operands move over the NoC, all in L1"
-_DRAM_SHAPE = "an operand is in DRAM"
+# Each case: the knobs, the values each part of the settings line must name with their sources, and whether the
+# output must be exact. The line has five parts: every operand over the NoC, the output borrowed beside an input
+# that moves, the inputs borrowed beside an output that moves, all of them borrowed, and the SFPU kernel over the
+# NoC. With no knob set, the rule runs the FPU kernel at 8 and the SFPU kernel at 4 and 2, at every ring stride.
+# C = 1 alone gives 1,1,1 by the rule. R = 2 beside C = 1 makes each compute thread own two tile counters of the
+# input rings, so the rule's compute batch drops to 1 where the inputs move. That case checks the line only: its
+# output is exact only on craq-sim builds without the defect that corrupts a run whose DM side outnumbers its Tensix
+# side. A hang still fails it.
+_NOC_SHAPE = "the operands move over the NoC"
 _OUTPUT_SHAPE = "the output is borrowed and an input moves"
 _INPUTS_SHAPE = "the inputs are borrowed and the output moves"
 _ALL_SHAPE = "all of them are borrowed"
-_SFPU_SHAPE = "the SFPU kernel runs, all in L1 over the NoC"
+_SFPU_SHAPE = "the SFPU kernel runs over the NoC"
 _LOG_CASES = {
     "W1-n1": (
         {"TTNN_QSR_WRITER_THREADS": "1", **_COMPUTE_BATCH_1},
@@ -2096,7 +3319,6 @@ _LOG_CASES = {
                 "dm_batch=8 (rule)",
                 "tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)",
             ],
-            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _INPUTS_SHAPE: ["R=1 W=1 (TTNN_QSR_WRITER_THREADS) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
@@ -2116,13 +3338,15 @@ _LOG_CASES = {
                 "W=2 (rule)",
                 "entries_per_thread=16 (rule)",
                 "dm_batch=8 (rule)",
-                "tiles_per_cycle=1 (rule)",
+                "tiles_per_cycle=8 (rule)",
             ],
-            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (rule)"],
-            _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=1 (rule)"],
-            _INPUTS_SHAPE: ["R=1 W=4 (rule) tiles_per_cycle=1 (rule)"],
-            _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=1 (rule)"],
-            _SFPU_SHAPE: ["tiles_per_cycle=4 (rule) in a 16-bit DST", "tiles_per_cycle=2 (rule) in a 32-bit DST"],
+            _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=8 (rule)"],
+            _INPUTS_SHAPE: ["R=1 W=4 (rule) tiles_per_cycle=8 (rule)"],
+            _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
+            _SFPU_SHAPE: [
+                "entries_per_thread=8 (rule) dm_batch=4 (rule) tiles_per_cycle=4 (rule) in a 16-bit DST",
+                "entries_per_thread=4 (rule) dm_batch=2 (rule) tiles_per_cycle=2 (rule) in a 32-bit DST",
+            ],
         },
         True,
     ),
@@ -2130,7 +3354,6 @@ _LOG_CASES = {
         {"TTNN_QSR_COMPUTE_THREADS": "1"},
         {
             _NOC_SHAPE: ["R=1 (rule)", "C=1 (TTNN_QSR_COMPUTE_THREADS)", "W=1 (rule)", "tiles_per_cycle=8 (rule)"],
-            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (rule)"],
             _OUTPUT_SHAPE: ["R=1 (rule) W=1 tiles_per_cycle=8 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
@@ -2147,7 +3370,6 @@ _LOG_CASES = {
                 "W=1 (rule)",
                 "tiles_per_cycle=1 (rule)",
             ],
-            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (rule)"],
             _OUTPUT_SHAPE: ["R=2 (TTNN_QSR_READER_THREADS) W=1 tiles_per_cycle=1 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
@@ -2194,16 +3416,95 @@ def test_native_illegal_thread_knobs_fall_back():
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+def test_native_col_operand_with_more_readers_than_computes_falls_back():
+    """A COL operand beside more reader than compute threads must send the op to the fallback factory.
+
+    A held operand needs each compute thread to own one tile counter of its input ring, so R = 4 beside C = 2 fails the
+    gate's R <= C check, and the bf16 op runs on the Metal 2.0 factory, and runs right. The same shape with a full b
+    stays native at those knobs, so only the COL operand's program leaves the native factory. The COL entry drops its
+    modes and its walk, which the fallback's kernels do not define.
+    """
+    col_b = next(entry for entry in _HELD if entry[0] == "col_b")
+    col = (*col_b[:5], {key: value for key, value in col_b[5].items() if key not in ("modes", "walk")})
+    dense = ("col_b_dense", *col_b[1:5])
+    knobs = _threads(4, 2, 2)
+    p = _run_shard_arm([col], expect="dfb", timeout=900, knobs=knobs)
+    _check_arm(p, "a COL operand at R=4 beside C=2")
+    p = _run_shard_arm([dense], expect="qsr", timeout=900, knobs=knobs)
+    _check_arm(p, "a full b at R=4 beside C=2")
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+def test_native_value_and_scalar_with_more_readers_than_computes_fall_back():
+    """A VALUE b or a scalar beside more reader than compute threads must send the op to the fallback factory.
+
+    A VALUE operand needs each compute thread to own one tile counter of its input ring, as a held operand does, and a
+    scalar runs as VALUE. So R = 4 beside C = 2 fails the gate's R <= C check, and each op runs on the Metal 2.0
+    factory, and runs right. The entries drop their modes and their walk, which the fallback's kernels do not define.
+    """
+    picked = [
+        next(entry for entry in _VALUE if entry[0] == "value_b"),
+        next(entry for entry in _SCALAR_OP if entry[0] == "scalar/add"),
+    ]
+    entries = [(*entry[:5], {k: v for k, v in entry[5].items() if k not in ("modes", "walk")}) for entry in picked]
+    p = _run_shard_arm(entries, expect="dfb", timeout=900, knobs=_threads(4, 2, 2))
+    _check_arm(p, "a VALUE b and a scalar at R=4 beside C=2")
+
+
+# Every broadcast table, for the no-device checks below.
+_BCAST_TABLES = {
+    "outer": _OUTER + _OUTER_FP32,
+    "row": _ROW,
+    "held": _HELD,
+    "value": _VALUE + _VALUE_FP32,
+    "mixed": _MIXED_BCAST,
+    "scalar": _SCALAR_OP,
+    "filled": _FILLED,
+}
+
+
+def test_native_broadcast_tables_name_their_modes_and_walks():
+    """No device. Each broadcast case must name its modes and its walk, and no case name may repeat.
+
+    The broadcast oracle tests pass no expectation, so they catch any wrong tile, and this test makes no prediction.
+    A case declares one walk, or a walk for each compute-thread count that the broadcast configurations run ("walks"),
+    never both, and a walk has exactly the keys of _NOC_WALK. A case named X_again comes after X and repeats its spec,
+    so that the arm sees a program-cache hit.
+    """
+    counts = {_resolve(knobs, _NOC)[1] for knobs in _HELD_CONFIGS.values()}
+    for table, entries in _BCAST_TABLES.items():
+        names = [entry[0] for entry in entries]
+        assert len(names) == len(set(names)), f"{table}: a case name repeats"
+        for entry in entries:
+            assert "modes" in entry[5], f"{table}/{entry[0]}: no modes to check"
+            assert ("walk" in entry[5]) != ("walks" in entry[5]), f"{table}/{entry[0]}: needs one of walk and walks"
+            walks = entry[5].get("walks", {})
+            assert (
+                not walks or walks.keys() == counts
+            ), f"{table}/{entry[0]}: walks for the counts {sorted(walks)}, the configurations run {sorted(counts)}"
+            for walk in [entry[5].get("walk", _NOC_WALK), *walks.values()]:
+                assert (
+                    walk.keys() == _NOC_WALK.keys()
+                ), f"{table}/{entry[0]}: the walk has the keys {sorted(walk)}, a walk has exactly {sorted(_NOC_WALK)}"
+            if entry[0].endswith("_again"):
+                first = entry[0].removesuffix("_again")
+                assert first in names[: names.index(entry[0])], f"{table}/{entry[0]}: a repeat must come after {first}"
+                # The arm keys a spec by json.dumps, so a repeat must match that string, key order included.
+                first_spec = json.dumps(entries[names.index(first)][1:])
+                assert first_spec == json.dumps(entry[1:]), f"{table}/{entry[0]}: the spec differs from {first}'s"
+
+
 def test_native_prediction_tables_cover_their_cases():
     """Each prediction must describe its whole case, and every case must have one. No device.
 
     A split that misses tiles or counts a pad slot, a borrowed shard that 4 does not divide, or an
     L1-interleaved case that is neither in the rule table nor a pad case would make a prediction wrong, or
-    silently leave a case out of the rule column.
+    silently leave a case out of the rule column. At the rule, height_67 must give each compute thread whole batches
+    of 8 before its tail block, and it must sit in both tail tables.
     """
     cases = _BORROWED_SHARD_CASES + _BATCHED_BORROWED_CASES + _L1_INTERLEAVED_RULE_CASES + _DRAM_SHARDED_CASES
     # A pad slot takes a batch position but is not in the output, so a mixed case with pad slots must be exact in
-    # every configuration: at most one tile per compute thread, or a DRAM operand.
+    # every configuration, as every compute batch is.
     padded = [case for case in _MIXED_CASES if case[0][0] in _MIXED_PAD_SLOTS]
     unknown = _MIXED_PAD_SLOTS - {case[0][0] for case in _MIXED_CASES}
     assert not unknown, f"these cases with pad slots are not in the mixed table: {unknown}"
@@ -2234,8 +3535,6 @@ def test_native_prediction_tables_cover_their_cases():
     assert not racy, f"these in-place cases have a wrong-tile prediction: {racy}"
     uncovered = [entry[0] for entry, _, split in cases if sum(split) != _tensor_tiles(entry)]
     assert not uncovered, f"these splits do not cover their output: {uncovered}"
-    misplaced = [entry[0] for entry, path, _ in cases if path[2] != _has_dram(entry)]
-    assert not misplaced, f"these paths name the wrong DRAM placement: {misplaced}"
     indivisible = [entry[0] for entry in _BORROWED_SHARDS if _shard_tiles(entry) % _RULE_COMPUTE_THREADS] + [
         entry[0]
         for (entry, anchor, _), (_, _, split) in zip(_MIXED, _MIXED_CASES)
@@ -2257,3 +3556,13 @@ def test_native_prediction_tables_cover_their_cases():
         _L1_INTERLEAVED_RULE_SPLITS
     )
     assert left_out == {"l1_100_pad", "l1_250_pad"}, f"L1-interleaved cases in no prediction table: {left_out}"
+    # At the rule, height_67 gives each compute thread whole FPU batches before its tail block, and it is in both tail
+    # tables.
+    height_67 = next(entry for entry in _SMALL_SHARDS if entry[0] == "height_67")
+    tiles = _shard_tiles(height_67)
+    per_thread = (tiles - tiles % _RULE_COMPUTE_THREADS) // _RULE_COMPUTE_THREADS
+    assert (
+        per_thread % _RULE_TILES_PER_CYCLE == 0 and per_thread >= 2 * _RULE_TILES_PER_CYCLE
+    ), f"height_67 gives each compute thread {per_thread} tiles, not 2 or more batches of {_RULE_TILES_PER_CYCLE}"
+    for table_name, table in (("_OP_TAIL_SHARDS", _OP_TAIL_SHARDS), ("_FP32_TAIL_SHARDS", _FP32_TAIL_SHARDS)):
+        assert any(entry[0].startswith("height_67/") for entry in table), f"height_67 is not in {table_name}"

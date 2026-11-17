@@ -283,10 +283,6 @@ find_package(
     REQUIRED
 )
 
-foreach(lib ${BoostPackages})
-    target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
-endforeach()
-
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
@@ -324,8 +320,6 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        Boost::core
-        Boost::container
         tt-logger
         simde::simde
         FlatBuffers::FlatBuffers
@@ -427,8 +421,6 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        Boost::core
-        Boost::container
         tt-logger
         simde::simde
         FlatBuffers::FlatBuffers
@@ -441,6 +433,15 @@ if(COMMAND tt_configure_ccache_for_pch)
 endif()
 
 tt_reuse_precompile_headers(ttml ttml_pch)
+
+# Descriptor cache-hit parity check (opt-in via -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK, see ttnn/CMakeLists.txt).
+# The #ifdef lives in ttnn's mesh device-operation adapter, which is instantiated in tt-train's own translation units,
+# and TTNN::TTNN does not forward the definition from ttnn_core. Define it on ttml and on the PCH provider: a definition
+# missing from the PCH resolves the #ifdef when the PCH is built, compiling the check out of every consumer.
+if(ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    target_compile_definitions(ttml PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    target_compile_definitions(ttml_pch PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+endif()
 
 if(ENABLE_LIBCXX)
     target_link_libraries(
@@ -504,11 +505,7 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
 )
-nanobind_add_module(
-    _ttml
-    STABLE_ABI NB_STATIC
-    ${TTML_SRC_NANOBIND}
-)
+nanobind_add_module(_ttml STABLE_ABI NB_STATIC ${TTML_SRC_NANOBIND})
 target_link_libraries(
     _ttml
     PRIVATE

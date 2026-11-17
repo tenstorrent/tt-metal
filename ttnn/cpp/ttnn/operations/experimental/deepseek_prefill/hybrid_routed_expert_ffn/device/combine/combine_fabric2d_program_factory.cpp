@@ -66,39 +66,13 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // receiver eRisc. Everything else goes to forwardign buffer. Op manages when will sender cores send
 // "home-made" tokens and when will they send tokens from the forwarding buffer.
 //
-// Pages one stream's region has to hold. The kernels pack their chunks densely, computing each chunk's
-// length from expert_offsets, so this only has to bound the region's TOTAL — which is why splitting the same
-// tokens into more chunks does not grow it.
-//
-// A destination chip's whole return volume is seq_len_per_chip * num_experts_per_tok copies — that is just
-// its output buffer, so it holds however the router spread the copies over chips and experts, and whether or
-// not the top-k picks are distinct. Chunks heading to the same destination therefore SHARE that volume
-// rather than each reaching it. A stream relays half_extent - 1 distinct destinations: the nearer ones can
-// have their whole volume on an origin that splits the run num_links ways, while the farthest is reachable
-// only from the diametrically opposite chip, whose run is split across every stream. One page per chunk
-// covers the integer slicing of each share.
-// What the DENSE region cost per stream, which args.fwd_reduction divides. Same split by movement class as
-// the standalone op, and for the same reason: every chain of classes ends in one that delivers to the next
-// chip's output and so needs no space anywhere, which is what makes capacity a free parameter here too.
-uint32_t dense_pages_per_stream(const CombineFabric2dParams& args) {
-    const uint32_t per_destination = args.seq_len_per_chip * args.num_experts_per_tok;
-    const uint32_t half_extent = ring_extent(args) / 2;
-    return (half_extent - 2) * (per_destination / args.num_links) + per_destination / stream_count(args.num_links) +
-           relay_chunks_per_stream(ring_extent(args)) * args.experts_per_chip;
-}
-
-// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1, and a
-// channel shallower than a read batch spends all its time announcing.
-constexpr uint32_t MIN_VC_PAGES = 4;
-
-uint32_t fwd_vc_pages(const CombineFabric2dParams& args) {
-    const uint32_t per_stream = dense_pages_per_stream(args) / args.fwd_reduction;
-    const uint32_t pages = per_stream / num_vcs(ring_extent(args));
-    return pages < MIN_VC_PAGES ? MIN_VC_PAGES : pages;
-}
-
+// Pages one stream's region holds, given rather than computed. Same split by movement class as the
+// standalone op, and for the same reason: every chain of classes ends in one that delivers to the next
+// chip's output and so needs no space anywhere, which is what makes the depth a free parameter here too.
+// It used to be derived from a destination's whole return volume and then divided by a reduction factor;
+// credit return made that bound obsolete, and a pipeline buffer does not scale with a launch's volume.
 uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
-    return num_vcs(ring_extent(args)) * fwd_vc_pages(args);
+    return num_vcs(ring_extent(args)) * args.fwd_vc_pages;
 }
 
 constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
@@ -183,15 +157,15 @@ void validate_allocations(
         TT_FATAL(tensor->is_allocated(), "combine_fabric2d: {} has no device buffer", name);
     }
     TT_FATAL(
-        output.buffer()->aligned_page_size() == token_size_bytes(tensor_args),
+        output.mesh_buffer().aligned_page_size() == token_size_bytes(tensor_args),
         "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
         "between the two",
-        output.buffer()->aligned_page_size(),
+        output.mesh_buffer().aligned_page_size(),
         token_size_bytes(tensor_args));
     TT_FATAL(
-        output.buffer()->num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
+        output.mesh_buffer().num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
         "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
-        output.buffer()->num_pages(),
+        output.mesh_buffer().num_pages(),
         args.seq_len_per_chip * args.num_experts_per_tok);
 }
 
@@ -391,7 +365,7 @@ KernelPlan make_kernel_plan(
     plan.ring_freed_slot = RingSemaphores::FREED;
     plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
     plan.credit_done_addr = static_cast<uint32_t>(sems.credit_done.address());
-    plan.vc_pages = fwd_vc_pages(args);
+    plan.vc_pages = args.fwd_vc_pages;
     for (uint32_t v = 0; v < num_vcs(ring_extent(args)); v++) {
         plan.vc_arrived_addr.push_back(static_cast<uint32_t>(sems.vc_arrived[v].address()));
         plan.vc_freed_addr.push_back(static_cast<uint32_t>(sems.vc_freed[v].address()));
@@ -534,12 +508,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         return desc;
     }
 
-    // combine_fabric2d's own kernels are what get built here; this define is what selects their
-    // overlapped form, in place of a second copy of each kernel that only added it.
-    const auto add_combine_defines = [&](tt::tt_metal::KernelDescriptor& kernel) {
-        kernel.defines.emplace_back("CMBF2D_OVERLAPPED", "1");
-    };
-
     for (const auto& [stream, self] : placement.at(coord).streams) {
         KernelPlan plan = chip_plan;
         plan.stream = stream;
@@ -564,7 +532,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
             .noc = tt::tt_metal::NOC::NOC_1,
         };
-        add_combine_defines(snd);
         auto snd_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(snd));
 
@@ -575,7 +542,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         rdr.defines.emplace_back("TILE", dispatched_is_tiled(tensor_args) ? "1" : "0");
-        add_combine_defines(rdr);
         rdr.compile_time_args = cmbf2d::ReaderCtArgs(
                                     args,
                                     tensor_args,
@@ -620,21 +586,35 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, rt);
     }
 
-    // One kernel per untilizer core rather than one over a core range: they differ by their index in the
-    // group, which is what deals the group's batches out between them.
+    // One untilizer dataflow kernel per group, over the group's cores: they differ only by their position in the
+    // group, which deals the group's batches out between them, and by their produced-count semaphore, and those are
+    // runtime arguments. Their circular buffers and untilize compute kernel are the same on every untilizer core, so
+    // those are one each over both groups. A program pays per kernel and per circular buffer on every dispatch, and
+    // per buffer binding and arena-backed circular buffer on every cache hit.
+    std::set<CoreRange> untilizer_ranges;
     for (uint32_t g = 0; g < UNTILIZER_GROUPS; g++) {
+        if (groups[g].empty()) {
+            continue;
+        }
+        std::set<CoreRange> group_ranges;
+        std::vector<tt::tt_metal::CoreCoord> group_cores;
+        std::vector<uint32_t> produced_slots;
         for (uint32_t j = 0; j < groups[g].size(); j++) {
-            const CoreRangeSet core(CoreRange(groups[g][j].logical));
-            add_untilizer_cbs(desc, tensor_args, core, arena);
+            group_ranges.insert(CoreRange(groups[g][j].logical));
+            untilizer_ranges.insert(CoreRange(groups[g][j].logical));
+            group_cores.push_back(groups[g][j].logical);
+            produced_slots.push_back(sems.untilized(j));
+        }
+        {
+            const CoreRangeSet core(group_ranges);
 
             UntilizerPlan plan;
             plan.my_expert_base = chip_plan.my_expert_base;
             plan.expert_table_page_base = chip_plan.expert_table_page_base;
             plan.ready_sem = sems.ready();
-            plan.my_index = j;
+            plan.progress_sem = sems.progress();
             plan.num_peers = static_cast<uint32_t>(groups[g].size());
             plan.control_addr = l1.unt_control;
-            plan.produced_slot = sems.untilized(j);
             // A group serves one ring direction: group 0 is clockwise, matching untilizer_group_of.
             const StreamId first = make_stream_id(0, g == 0);
             plan.walks_down = stream_is_cw(first);
@@ -660,28 +640,30 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt::tt_metal::NOC::NOC_1,
             };
-            cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
-            add_combine_defines(kernel);
-            kernel.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(sems.progress()));
+            cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, group_cores, produced_slots);
             desc.kernels.push_back(std::move(kernel));
-
-            tt::tt_metal::KernelDescriptor untilize;
-            // The standalone op's kernel, unchanged: the untilize depends on nothing the overlap alters.
-            untilize.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/compute/"
-                "untilize_combine_fabric2d.cpp";
-            untilize.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-            untilize.core_ranges = core;
-            untilize.compile_time_args = {
-                cmbf2d::UNT_CB_IN,
-                cmbf2d::UNT_CB_OUT,
-                cmbf2d::UNT_CB_BATCHES,
-                tiles_per_token_row(tensor_args),
-                untilize_block_tiles(tensor_args),
-                cmbf2d::UNT_BATCH_ROWS};
-            untilize.config = tt::tt_metal::ComputeConfigDescriptor{};
-            desc.kernels.push_back(std::move(untilize));
         }
+    }
+    if (!untilizer_ranges.empty()) {
+        const CoreRangeSet untilizer_cores(untilizer_ranges);
+        add_untilizer_cbs(desc, tensor_args, untilizer_cores, arena);
+
+        tt::tt_metal::KernelDescriptor untilize;
+        // The standalone op's kernel, unchanged: the untilize depends on nothing the overlap alters.
+        untilize.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/compute/"
+            "untilize_combine_fabric2d.cpp";
+        untilize.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        untilize.core_ranges = untilizer_cores;
+        untilize.compile_time_args = {
+            cmbf2d::UNT_CB_IN,
+            cmbf2d::UNT_CB_OUT,
+            cmbf2d::UNT_CB_BATCHES,
+            tiles_per_token_row(tensor_args),
+            untilize_block_tiles(tensor_args),
+            cmbf2d::UNT_BATCH_ROWS};
+        untilize.config = tt::tt_metal::ComputeConfigDescriptor{};
+        desc.kernels.push_back(std::move(untilize));
     }
 
     add_collector(

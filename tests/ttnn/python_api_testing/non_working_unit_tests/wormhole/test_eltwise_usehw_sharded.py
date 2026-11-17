@@ -324,12 +324,15 @@ def test_eltwise_abs(
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    "input_shape, core_grid, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
     (test_sweep_args),
 )
-def test_eltwise_neg(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+def test_eltwise_neg(
+    input_shape, core_grid, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device
+):
     run_tests(
         input_shape,
+        core_grid,
         dtype,
         dlayout,
         sharding_strategy,
@@ -343,12 +346,15 @@ def test_eltwise_neg(input_shape, dtype, dlayout, sharding_strategy, shard_orien
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    "input_shape, core_grid, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
     (test_sweep_args),
 )
-def test_eltwise_selu(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+def test_eltwise_selu(
+    input_shape, core_grid, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device
+):
     run_tests(
         input_shape,
+        core_grid,
         dtype,
         dlayout,
         sharding_strategy,
@@ -362,18 +368,21 @@ def test_eltwise_selu(input_shape, dtype, dlayout, sharding_strategy, shard_orie
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    "input_shape, core_grid, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
     (test_sweep_args),
 )
-def test_eltwise_identity(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+def test_eltwise_identity(
+    input_shape, core_grid, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device
+):
     run_tests(
         input_shape,
+        core_grid,
         dtype,
         dlayout,
         sharding_strategy,
         shard_orientation,
         hw_as_shard_shape,
-        torch.identity,
+        torch.nn.Identity(),
         ttnn.identity,
         False,
         device,

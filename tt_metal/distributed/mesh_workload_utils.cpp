@@ -164,7 +164,7 @@ void write_go_signal_sequence(
 
 void write_rt_profiler_flush(
     uint8_t cq_id, SubDeviceId sub_device_id, SystemMemoryManager& sysmem_manager, uint32_t wait_count) {
-    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    MetalContext& metal_ctx = sysmem_manager.metal_context();
     DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_rt_profiler_flush();
     uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();

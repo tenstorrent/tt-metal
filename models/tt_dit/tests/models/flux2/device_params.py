@@ -31,6 +31,11 @@ ring_params_8k_flux2_req_exact = {**ring_params_8k_flux2, **REQ_EXACT}
 # Transformer: base + trace region.
 line_params_flux2_transformer = {**line_params_flux2, "trace_region_size": TRACE_REGION_SIZE}
 
+# Klein with its default resolutions, with and without a reference image: one denoising trace per
+# size and reference, plus the VAE traces. They take 42.2 MB on BH 2x2.
+KLEIN_TRACE_REGION_SIZE = 50_000_000
+line_params_flux2_klein = {**line_params_flux2, "trace_region_size": KLEIN_TRACE_REGION_SIZE}
+
 # Performance: base + req-exact so each row self-selects its mesh.
 line_params_flux2_perf = {**line_params_flux2, **REQ_EXACT}
 line_params_8k_flux2_perf = {**line_params_8k_flux2, **REQ_EXACT}

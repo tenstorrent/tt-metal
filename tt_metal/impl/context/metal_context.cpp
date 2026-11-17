@@ -13,6 +13,7 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include "simulator_termination.hpp"
 #include "context_types.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "context/metal_env_accessor.hpp"
@@ -50,6 +51,7 @@
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
+#include "dispatch/host_transfer_stats.hpp"
 #include <tt-metalium/math.hpp>
 
 #include <dispatch/dispatch_query_manager.hpp>
@@ -348,6 +350,10 @@ void MetalContext::teardown() {
         data_collector_->DumpData();
         data_collector_.reset();
     }
+    if (host_transfer_stats_->enabled()) {
+        host_transfer_stats_->log_summary();
+        host_transfer_stats_->reset();
+    }
 
     if (dprint_server_) {
         if (!get_cluster().is_mock_or_emulated()) {
@@ -495,11 +501,16 @@ void MetalContext::destroy_all_instances(bool check_device_count) {
 
 void MetalContext::register_handlers_locked() {
     if (!registered_handlers) {
+        // Registered first so it runs after destroy_all_instances.
+        install_simulator_termination_handler();
         std::atexit([]() {
             // Don't check device count because the destruction order is complicated and we can't guarantee that the
             // client isn't holding onto devices on process exit.
             MetalContext::destroy_all_instances(false);
         });
+        // Registered last so it runs before destroy_all_instances, and a signal arriving during that
+        // teardown bounds it instead of starting a second exit.
+        install_simulator_exit_guard();
         registered_handlers = true;
     }
 }
@@ -518,6 +529,7 @@ MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_e
     // Construct before the dispatch managers: dispatch core (re)initialization queries it to exclude
     // claimed service cores from the FD pool.
     service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl(), *this);
+    host_transfer_stats_ = std::make_unique<HostTransferStats>(rtoptions().get_host_transfer_stats_enabled());
     device_manager_ = std::make_unique<DeviceManager>(metal_env, *this);
 }
 
@@ -576,7 +588,12 @@ DispatchCoreConfig MetalContext::resolve_dispatch_core_config(
 }
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
-    TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
+    if (!dispatch_core_manager_) {
+        constexpr const char* reason = "Trying to get dispatch_core_manager before initializing it.";
+        // The context is already unusable. Throwing lets gtest continue and hold the Zebu job.
+        (void)release_simulator_session(1 /*exit_code*/, reason);
+        TT_FATAL(false, "{}", reason);
+    }
     return *dispatch_core_manager_;
 }
 
