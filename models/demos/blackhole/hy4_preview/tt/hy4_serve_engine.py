@@ -558,6 +558,19 @@ class Hy4Engine:
             self.prefill(ch_prompts)
             self._dram("after warm chain prefill")
             logger.info(f"HY4 warm-up: chain prefill 4 x 1024 {time.time() - tw:.1f} s (hybrid cap {self.hybrid_cap})")
+            # B38: HY4_WARM_CHAIN_LENS=n1,n2,..: extra chain prefills (4 rows each) BEFORE the captures, so the persistent L1 buffers (CCL global semaphores) that new chunk shapes create lazily exist before the trace
+            # scratch is laid out (see _l1_report / RESULT_B22FIX.md: a buffer created after the captures lands in the trace scratch and a replay clobbers it)
+            for ln in [int(x) for x in os.environ.get("HY4_WARM_CHAIN_LENS", "").split(",") if x.strip()]:
+                tw = time.time()
+                g2 = torch.Generator().manual_seed(ln)
+                self.prefill(
+                    {
+                        r: torch.randint(1000, 100000, (min(ln, self.hybrid_cap),), generator=g2).tolist()
+                        for r in range(ROWS)
+                    }
+                )
+                self._dram(f"after warm chain prefill {ln}")
+                logger.info(f"HY4 warm-up: chain prefill 4 x {ln} {time.time() - tw:.1f} s")
         t1 = time.time()
         if self.spec:
             # D75-1: EVERY lazily created persistent tensor of EVERY variant must exist before the FIRST capture (one allocated between two captures can sit in the first trace's scratch and is clobbered by its
