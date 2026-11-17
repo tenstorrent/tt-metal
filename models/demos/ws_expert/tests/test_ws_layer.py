@@ -1063,7 +1063,7 @@ def test_ws_layer_trace_bisect_chip(mesh_device):
 def test_ws_layer_trace_bisect_glx(mesh_device):
     """run_trace_bisect on the Galaxy torus (the layer with the device barrier; WSY_BISECT clocks, layer)."""
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    rlc = glx_lcfg(torus_cycles(*tuple(mesh_device.shape)), ks=KS)
+    rlc = routed_glx(mesh_device)
     run_trace_bisect(mesh_device, lc, rlc, "trace bisect glx e640 T 31250")
 
 

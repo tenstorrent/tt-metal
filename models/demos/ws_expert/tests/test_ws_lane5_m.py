@@ -310,7 +310,7 @@ def test_ws_lane5_glx_g(mesh_device):
 def test_ws_lane5_glx_yrm(mesh_device):
     """The 5 x 5 lane with row-major result rows (WS_L5 with yrm=1) into a [T 12 + 16, H] bf16 row-major buffer, through
     per-chip destination lists: every (expert, token) its own row, WSW_DEST "spread" (rows in random order over the
-    whole buffer, every bank, as the layer's t S + k) or "side" (a group's rows only in the DRAM banks of its side:
+    whole buffer, every bank, as the layer's t S + k; the buffer holds max(T 12, the rows routed) rows) or "side" (a group's rows only in the DRAM banks of its side:
     channels 4-7 at NoC x 9 for groups 2 / 3, 0-3 at x 0 for groups 0 / 1). PCC on WSW_PCC_CHIPS (default 0 and the
     last) over every expert's rows."""
     import torch
@@ -329,7 +329,7 @@ def test_ws_lane5_glx_yrm(mesh_device):
     R = [(m + 31) // 32 for m in Ms]
     out_rows = max(1, max(sum(R[e] for e in T["meta"][(X, g)]["order"]) for X in range(N) for g in range(G)))
     dev, refs = make_inputs5_lean(mesh_device, cfg, lc, T, Ms, out_rows)
-    rows = T_tok * 12
+    rows = -(-max(T_tok * 12, sum(Ms)) // 8) * 8  # (every (expert, token) its own row; whole bank stripes)
     gen = torch.Generator().manual_seed(7)
     dests = torch.zeros(N, cfg.nexp, cfg.RMAX * 32, dtype=torch.int32)
     for X in range(N):
