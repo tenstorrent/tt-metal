@@ -872,3 +872,35 @@ direction with the lane's non-blocking send; no schedule, slots, credits or cut-
 - More muxes: two muxes a (group, direction) on the same link (10 clients each, test_lane_fab_nmux) hang - every mux
   in forward_data waiting for router space, clients waiting on their mux: the router takes one worker connection a
   direction. Extra muxes need extra links; on the tray only the two middle vertical edges (1-5, 2-6) are unused.
+
+## 5 x 5 K-split groups, single-chip prototype (ws_g5.py, kernels g5_*.cpp; 2026-11-17)
+Why: on the Galaxy (640 experts, M 586, 200G links at ~23.5 GB/s a link direction) the weight floor is 13.7 ms a
+launch for any group shape, compute with 4 x 20 cores at ~75% is ~17 ms; 4 x 25 cores would bring compute to the
+weight floor. Group = 5 columns c x 5 rows r (j = 5 c + r):
+- K split uneven so that every core does 320 tile products a row: rows 0-3 hold 25 K tiles, row 4 holds 20; column c
+  holds pairs 4 c .. 4 c + 3 (8 partial tiles a row, 2 blocks of 1 x 4). Owners (c, o), o < 4, fold the 5
+  contributions of pair 4 c + o and run 4 down columns; row 4 owns no pair and runs 8 down columns. Measured MATH a
+  core (M 586): owners gate/up 2061K + fold 364K + down 929K, row 4 gate/up 1695K + down 1742K: balanced.
+- x: row r's K slice is needed by its 5 cores; core (c, r) gathers / tilizes rows q % 5 == c and the BRISC unicasts
+  each row to the 5 x rings (one flag a slot, credits a consumer column). h: owners -> column leader (c, q % 4) ->
+  multicast of the column's 4 tiles (even columns BRISC / NOC0, odd NCRISC / NOC1), 5 flags a slot. Partials: rows
+  below / itself from the BRISC, rows above from the NCRISC (ks scheme).
+- On this 11 x 10 grid only logical columns 0-6 are NoC contiguous: G <= 2 (columns 0-4, rows 0-4 / 5-9); the
+  Galaxy's 12 x 10 grid holds 4 (columns 0-4 and 7-11). Injectors: 25 cores, P 2 weight sets preloaded.
+- First run correct (PCC 0.99994, G 1 / 2, M 5 / 64 / 586 / 2048) but 61.7%: x waits. The compute's tilize
+  look-ahead refilled only when compute caught up with it; with rows dealt 1 in 5 a core's next own row was often
+  tilized just when peers needed it. Continuous look-ahead (every own row q <= need + TL): x waits 440K -> 5-10K.
+| G 2, 64 experts, same session | cores | M 586 util / cyc an expert | M 2048 |
+|---|---|---|---|
+| 10 x 2 K split (ws_ks, NXR 8, TL 3, dn_lag 2, D 3) | 40 | 75.4% / 72.6K | 75.4% / 244.3K |
+| 5 x 5, TL 9 | 50 | 71.4% / 61.3K | 73.5% / 200.7K |
+| 5 x 5, TL 9, D 4, FL 2 | 50 | 75.3% / 58.1K | 73.8% / 199.8K |
+| 5 x 5, TL 9, dn_lag 3, D 4, FL 2 (default) | 50 | 77.3% / 56.6K | 75.0% / 196.6K |
+| 5 x 5, TL 12, D 4, FL 2 | 50 | 68.7% | 66.8% (h waits) |
+  Per-core efficiency equal to the 10 x 2 split, 1.25 x the cores: 1.28 x / 1.24 x faster a chip-expert. Remaining
+  waits are h (owners 76K, row 4 117K at M 586). Single-launch runs vary +-3-4 points (32 experts); 64 experts above.
+  Configs with NS 8 or NXR 10 + TL 12 collide with the injectors' 415 KB of preloaded weights (prototype only).
+- Galaxy projection (M 586, 640 experts, 200G): compute 4 x 20 at 75% 17.2 ms, 4 x 25 at 77% 13.5 ms, weight floor
+  13.7 ms: with 5 x 5 the launch is bound by weight delivery unless the lanes reach ~100% of the links.
+- Lane L1 estimate (4 slots of the larger slice 184 KB = 737 KB, x ring 8 x 25 bfp8 218 KB, landing 82, partials 33,
+  h ring NS 6 bfp8 131, CB 7 102, CB 8 109, CB 17 33): ~1,445 KB of 1,460 KB - fits only with bfp8 h and tight rings.
