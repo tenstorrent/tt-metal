@@ -12,7 +12,7 @@ from models.demos.wormhole.mamba.tt.preprocessing import (
     split_input_into_prefill_and_decode_segments,
     split_sequence_length,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_allclose, comp_pcc
 
 
 @pytest.mark.parametrize(

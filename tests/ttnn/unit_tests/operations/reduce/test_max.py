@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import torch_random
-from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+from tests.ttnn.utils_for_testing import assert_allclose, assert_equal, merge_gate_subset
 
 TEST_PADDING_VALUE = -42
 
@@ -63,10 +63,17 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
     assert_equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.merge_gate
-@pytest.mark.parametrize("h", [64, 15])
-@pytest.mark.parametrize("w", [64, 22])
-@pytest.mark.parametrize("dim", [-2, -1, 0, 1])
+# On 2D inputs dim=0 and dim=1 are exact aliases of -2 and -1, so only the negative dims are gated.
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dim": [-2, -1, 0, 1],
+            "w": [64, 22],
+            "h": [64, 15],
+        },
+        keep=lambda dim, **_: dim < 0,
+    )
+)
 def test_max_2d(device, h, w, dim):
     torch.manual_seed(0)
 

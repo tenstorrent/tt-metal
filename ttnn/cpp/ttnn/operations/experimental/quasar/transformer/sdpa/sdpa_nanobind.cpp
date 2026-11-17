@@ -232,7 +232,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("chunk_start_idx") = nb::none(),
         nb::kw_only(),
         nb::arg("chunk_start_idx_tensor") = nb::none(),
-        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("scale") = nb::none(),
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
@@ -282,7 +282,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("joint_strategy"),
         nb::arg("program_config").noconvert(),
-        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("scale") = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 
     const auto* const mla_doc =

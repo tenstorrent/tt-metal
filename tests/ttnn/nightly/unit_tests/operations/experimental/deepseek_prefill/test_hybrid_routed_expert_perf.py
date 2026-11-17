@@ -5,9 +5,9 @@
 """Device perf gate for HybridRoutedExpertFfn: per-case device duration over the kimi/glm ISL
 sweep on the x_rm production path, measured with the real-time program profiler.
 
-The same cases as test_routed_expert_crossover_perf.py -- same models, same sweep, same weight
-placements, same margins -- so the union op's number sits next to the best-of-both number the two
-ops it replaces achieve on exactly the same case.
+Same models, ISL sweep, weight placements and x_rm input as test_moe_fused_swiglu_perf.py and
+test_single_routed_expert_perf.py, so every case sits next to the two ops the union replaces on
+exactly that case.
 
 One expert over an _ISL_ALLOCATED_TOKENS region with `active_tokens` live rows, and the model's
 own threshold decides which half serves it. The other half still launches on every core and
@@ -31,7 +31,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill impo
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
     _ISL_EXHAUSTIVE_MODELS,
-    _ISL_EXHAUSTIVE_SWEEP,
+    _ISL_PERF_SWEEP,
     SINGLE_EXPERT_MODELS,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_hybrid_routed_expert import (
@@ -59,58 +59,69 @@ _LOW_ISL_MARGIN = 0.08
 _KNEE_TOKENS = 512
 
 # Device duration in ns per (model, active), x_rm layout: the MIDPOINT of three sweeps on a BH
-# p150b (2026-09-18), each case a median of _ITERS dispatches. Three, not one, because the
-# low counts carry real cross-sweep spread -- up to 4.0% at active=256 -- and a single sweep can
+# p150b (2026-10-23), each case a median of _ITERS dispatches. Three, not one, because the
+# low counts carry real cross-sweep spread -- up to 5.1% at active=256 -- and a single sweep can
 # land at either end of it, which no margin then holds. Recalibrate on the perf runner (it is
 # DDR-speed dependent): each case logs an "RT-CAL" line in this dict's format.
 #
-# Every entry is above the best-of-both number the two ops this one replaces reach on the same
-# case in test_routed_expert_crossover_perf.py -- by ~8-15 us across the sweep, and by 8.0 us at
-# active=0, where no expert does any work at all and the whole difference is the second pass plus
-# the grid barrier.
+# Every entry is above the faster of the two ops this one replaces on the same case -- by
+# 1.9-17.2 us across the sweep, and by 4.0-4.1 us at active=0, where no expert does any work at all
+# and the whole difference is the second pass, the grid barrier and the weight-table load.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 11_039,
-    ("kimi_k2_7", 128): 104_367,
-    ("kimi_k2_7", 256): 126_942,
-    ("kimi_k2_7", 512): 171_510,
-    ("kimi_k2_7", 768): 235_003,
-    ("kimi_k2_7", 1024): 304_004,
-    ("kimi_k2_7", 2048): 590_696,
-    ("kimi_k2_7", 4096): 1_166_144,
-    ("kimi_k2_7", 5120): 1_453_411,
-    ("glm_53", 0): 11_034,
-    ("glm_53", 128): 93_162,
-    ("glm_53", 256): 120_377,
-    ("glm_53", 512): 152_494,
-    ("glm_53", 768): 207_245,
-    ("glm_53", 1024): 267_217,
-    ("glm_53", 2048): 518_599,
-    ("glm_53", 4096): 1_022_134,
-    ("glm_53", 5120): 1_269_726,
+    ("kimi_k2_7", 0): 5_901,
+    ("kimi_k2_7", 32): 81_021,
+    ("kimi_k2_7", 64): 83_574,
+    ("kimi_k2_7", 96): 90_446,
+    ("kimi_k2_7", 128): 92_851,
+    ("kimi_k2_7", 256): 115_965,
+    ("kimi_k2_7", 512): 151_908,
+    ("kimi_k2_7", 768): 205_737,
+    ("kimi_k2_7", 1024): 269_821,
+    ("kimi_k2_7", 2048): 520_622,
+    ("kimi_k2_7", 4096): 1_017_093,
+    ("kimi_k2_7", 5120): 1_267_271,
+    ("glm_53", 0): 5_980,
+    ("glm_53", 32): 68_764,
+    ("glm_53", 64): 72_700,
+    ("glm_53", 96): 80_189,
+    ("glm_53", 128): 80_219,
+    ("glm_53", 256): 104_754,
+    ("glm_53", 512): 135_193,
+    ("glm_53", 768): 181_302,
+    ("glm_53", 1024): 237_667,
+    ("glm_53", 2048): 452_262,
+    ("glm_53", 4096): 884_853,
+    ("glm_53", 5120): 1_106_698,
 }
 
 # Same measurement and key with the weights DRAM ND-sharded. Its own table because the placement
 # moves the op: a core fetches its whole K-row weight slice in one NoC request instead of one per
 # tile, which the op is only bound by at the low counts.
 _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 11_123,
-    ("kimi_k2_7", 128): 94_706,
-    ("kimi_k2_7", 256): 120_486,
-    ("kimi_k2_7", 512): 166_315,
-    ("kimi_k2_7", 768): 234_897,
-    ("kimi_k2_7", 1024): 304_249,
-    ("kimi_k2_7", 2048): 591_246,
-    ("kimi_k2_7", 4096): 1_167_110,
-    ("kimi_k2_7", 5120): 1_459_315,
-    ("glm_53", 0): 11_103,
-    ("glm_53", 128): 85_575,
-    ("glm_53", 256): 104_698,
-    ("glm_53", 512): 148_123,
-    ("glm_53", 768): 206_711,
-    ("glm_53", 1024): 266_964,
-    ("glm_53", 2048): 516_896,
-    ("glm_53", 4096): 1_020_632,
-    ("glm_53", 5120): 1_274_889,
+    ("kimi_k2_7", 0): 5_810,
+    ("kimi_k2_7", 32): 68_431,
+    ("kimi_k2_7", 64): 71_164,
+    ("kimi_k2_7", 96): 78_381,
+    ("kimi_k2_7", 128): 79_141,
+    ("kimi_k2_7", 256): 105_679,
+    ("kimi_k2_7", 512): 145_534,
+    ("kimi_k2_7", 768): 207_079,
+    ("kimi_k2_7", 1024): 270_984,
+    ("kimi_k2_7", 2048): 519_687,
+    ("kimi_k2_7", 4096): 1_014_554,
+    ("kimi_k2_7", 5120): 1_264_535,
+    ("glm_53", 0): 5_893,
+    ("glm_53", 32): 59_493,
+    ("glm_53", 64): 63_113,
+    ("glm_53", 96): 70_136,
+    ("glm_53", 128): 69_908,
+    ("glm_53", 256): 95_387,
+    ("glm_53", 512): 129_290,
+    ("glm_53", 768): 181_035,
+    ("glm_53", 1024): 236_270,
+    ("glm_53", 2048): 453_476,
+    ("glm_53", 4096): 886_807,
+    ("glm_53", 5120): 1_101_203,
 }
 
 
@@ -141,7 +152,7 @@ def _perf_params():
         if name not in _ISL_EXHAUSTIVE_MODELS:
             continue
         threshold = _threshold_of(config)
-        for active in _ISL_EXHAUSTIVE_SWEEP:
+        for active in _ISL_PERF_SWEEP:
             params.append(
                 pytest.param(
                     name,

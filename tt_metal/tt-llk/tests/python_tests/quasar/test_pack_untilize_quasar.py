@@ -5,7 +5,7 @@ from typing import List
 
 import pytest
 from helpers.data_format_inference import unpacks_to_dest
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
@@ -156,6 +156,13 @@ PERF_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
     PACK_UNTILIZE_FORMATS,
     is_perf=True,
 )
+# Float32 unpacks straight to a 32-bit Dest, then packs untilized to Float32 or Float16_b.
+PACK_UNTILIZE_FLOAT32_COMBINATIONS = generate_pack_untilize_combinations(
+    [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    ]
+)
 
 
 @pytest.mark.quasar
@@ -260,3 +267,13 @@ def test_pack_untilize_quasar(
         formats.output_format,
         tile_shape=tile_shape,
     ), "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats_dest_acc_sync_dimensions_tile_dims=PACK_UNTILIZE_FLOAT32_COMBINATIONS,
+)
+def test_pack_untilize_float32_quasar(formats_dest_acc_sync_dimensions_tile_dims):
+    test_pack_untilize_quasar(
+        formats_dest_acc_sync_dimensions_tile_dims, [PerfRunType.L1_TO_L1], 1
+    )

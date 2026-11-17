@@ -15,7 +15,7 @@
 
 using namespace tt;
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 

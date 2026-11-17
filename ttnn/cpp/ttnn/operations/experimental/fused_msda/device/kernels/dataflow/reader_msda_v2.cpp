@@ -175,7 +175,7 @@ void kernel_main() {
     ref_scratch_cb.reserve_back(TILE_MAX_ROWS * NUM_REFS);
 
     ReferencePlusOffset loc_src{
-        .off_acc = TensorAccessor(off_args, off_addr, loc_stick_nbytes),
+        .off_acc = TensorAccessor(off_args, off_addr, loc_page_nbytes),
         .ref_acc = TensorAccessor(ref_args, ref_addr, ref_stick_nbytes),
         .off_arena_l1 = off_arena_l1,
         .ref_arena_l1 = ref_scratch_cb.get_write_ptr(),

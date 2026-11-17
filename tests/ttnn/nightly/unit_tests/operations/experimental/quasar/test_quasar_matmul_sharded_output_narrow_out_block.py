@@ -4,13 +4,17 @@
 
 """#58046 in the Quasar copy of the 1D and 2D multicast factories: a sharded output with out_block_w < per_core_N
 (allowed when out_block_h == 1) must not share the output shard with the partials when a core computes more than
-one output block."""
+one output block.
+
+#62465 in the Quasar 1D mcast_in1 factory: the in0 buffer may point straight at a height-sharded in0 only when no
+row-block is read twice. With in0_block_w == K and more than one row-block and column-block per core, each row-block
+is consumed once per column-block, so in0 must be copied per block instead."""
 
 import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
 
 # Every test in this module takes the function-scoped `device` fixture without
 # parametrizing device_params, so the device is opened once per module rather than
@@ -55,6 +59,58 @@ def test_quasar_matmul_1d_sharded_output_narrow_out_block(device, out_block_w, m
         ttnn_input_a, ttnn_input_b, program_config=program_config, memory_config=memory_config
     )
     assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
+
+
+@pytest.mark.parametrize(
+    "out_block_h, out_block_w",
+    [(4, 4), (8, 4), (4, 8)],
+    ids=["2_row_x_2_col_blocks", "1_row_block", "1_col_block"],
+)
+def test_quasar_matmul_1d_height_sharded_in0_multi_block(device, out_block_h, out_block_w):
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    num_cores = 4
+    if grid.x * grid.y < num_cores:
+        pytest.skip(f"needs {num_cores} cores")
+    per_core_M, per_core_N = 8, 8
+    M, K, N = 32 * per_core_M * num_cores, 128, 32 * per_core_N
+    in0_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True),
+            [32 * per_core_M, K],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    torch_input_a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+    torch_output = torch_input_a.float() @ torch_input_b.float()
+    ttnn_input_a = ttnn.from_torch(
+        torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_memory_config
+    )
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = qsr.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=K // 32,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=False,
+    )
+    output = ttnn.experimental.quasar.matmul(
+        ttnn_input_a, ttnn_input_b, program_config=program_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output = ttnn.to_torch(output).float()
+    assert_with_pcc(torch_output, output, 0.999)
+    # A single row read from the wrong row-block barely moves the PCC over 1024 rows, so also bound each element.
+    assert_allclose(torch_output, output, rtol=0, atol=0.1 * torch_output.abs().max().item())
 
 
 @pytest.mark.parametrize("out_block_w", [4, 2, 1])

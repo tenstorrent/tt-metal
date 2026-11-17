@@ -29,7 +29,7 @@ from loguru import logger
 import ttnn
 from models.common.moe.tt_moe_gate import TTMoEGate
 from models.common.moe.tt_moe_gate_config import TTMoEGateConfig
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CONFIGS_DIR = Path(__file__).resolve().parents[2] / "moe" / "configs"
 CONFIG_PATHS = sorted(CONFIGS_DIR.glob("*.yaml"))

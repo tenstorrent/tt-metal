@@ -484,8 +484,10 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     sfpi::vFloat pio2 = PI_2;
     r = __builtin_rvtt_sfpmad(p.get(), z.get(), z.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-    // Undo the endpoint reduction and restore the input sign.
-    v_if(t >= 0.0f) { r = pio2 + neg_two * r; }
+    // Undo the endpoint reduction and restore the input sign. One predicated SFPMAD
+    // (-2*r is exact, so pio2 + neg_two*r rounds once either way); writing r in place
+    // avoids the copy sfpi needs to keep r live for the disabled lanes.
+    v_if(t >= 0.0f) { r = __builtin_rvtt_sfpmad(r.get(), neg_two.get(), pio2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE); }
     v_endif;
 
     r = sfpi::copysgn(r, x);
@@ -584,6 +586,9 @@ template <bool is_fp32_dest_acc_en>
 inline void acos_init() {
     asin_acos_init<is_fp32_dest_acc_en>();
 }
+
+// Whether BF16 DEST runs the generated acos kernel as one call over the whole tile.
+inline constexpr bool acos_bf16_whole_tile = false;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
@@ -1025,6 +1030,14 @@ inline void calculate_acosh() {
     }
 }
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_asinh_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated asinh kernel as one call over the whole tile.
+inline constexpr bool asinh_bf16_whole_tile = true;
 // asinh(x) = sign(x) * log(|x| + sqrt(x^2 + 1)), reformulated to remove the
 // cancellation at x -> 0 and the x^2 overflow at large |x|. Regions in a = |x|:
 //   a < 0.75          -> a * P(a^2), degree-6 minimax polynomial (<=1 ulp)
@@ -1038,6 +1051,12 @@ inline void calculate_acosh() {
 // overflows (the old x^2 + 1 produced +inf at ~1.84e19).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_asinh()) {
+            calculate_asinh_bf16<ITERATIONS>();
+            return;
+        }
+    }
     constexpr float LOG1P_LARGE = 0x1.0p28;
     constexpr float LN2 = 0.6931471805599453f;
     // SFPU microcode

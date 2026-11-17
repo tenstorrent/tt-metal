@@ -45,6 +45,15 @@ CROSSCHECK_SEED = 7  # historical seed for the oracle cross-check case
 # are replaced by mask_token 32 (residue index +1 for the cls token).
 
 
+def nrmse(expected, actual) -> float:
+    expected_t = torch.as_tensor(expected, dtype=torch.float64).reshape(-1)
+    actual_t = torch.as_tensor(actual, dtype=torch.float64).reshape(-1)
+    denom = torch.sqrt(torch.sum(expected_t * expected_t)).item()
+    if denom == 0.0:
+        return 0.0 if torch.equal(expected_t, actual_t) else float("inf")
+    return torch.sqrt(torch.sum((actual_t - expected_t) ** 2)).item() / denom
+
+
 def make_case(cfg, batch: int, length: int, seed: int):
     rng = np.random.default_rng(seed)
     ids = rng.integers(4, 24, size=(batch, length), dtype=np.int64)
@@ -184,8 +193,6 @@ def main() -> int:
     # Whole-pipeline cross-check vs the FP32 oracle implementation (short case)
     # plus fixed-case output checksums for run-to-run drift detection.
     try:
-        from tests.util import nrmse
-
         ids, am = make_case(cfg, 1, 130, seed=CROSSCHECK_SEED)
         got = backend.embed(ids, am)
         results["output_checksums_fp32"] = {
