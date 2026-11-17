@@ -111,14 +111,20 @@ class CCLManager:
         # asserts ccl_core_grid_offset.x < sdpa_grid.x, so both must derive from this
         # same grid (Blackhole is wider than 8x8).
         self.ring_attention_ccl_core_grid_offset = (self.compute_grid_size.x - 1, 0)
-        # Three semaphores are needed: two for forward/backward all-gather
-        # and one for neighbor-halo exchange.
+        # Global layers' ring SDPA: forward/backward all-gather, plus the shared op's halo slot (sliding
+        # layers use the fork and their own list below).
         self.ring_attention_ccl_semaphore_handles = [
             ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)
         ]
+        # Sliding layers: the 2 all-gather semaphores, then one halo-arrival semaphore per CP rank.
+        self.sliding_ring_attention_ccl_semaphore_handles = self.ring_attention_ccl_semaphore_handles[:2] + [
+            ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(mesh_config.cp_degree)
+        ]
         self._ring_gather_buffers = {}
 
-    def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    def get_ring_gather_buffer(
+        self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG, batch=1
+    ):
         """Return persistent ring-attention receive storage.
 
         Distinct ``key`` values isolate receive buffers. ``seq`` is the full cache
@@ -126,17 +132,23 @@ class CCLManager:
         ``n_kv_local`` is the per-device head count (this device's TP shard); each
         device holds a zero-filled ``[1, n_kv_local, seq, head_dim]``. The op
         overwrites valid entries and masks invalid ones, so the scratch buffer needs
-        no re-zeroing.
+        no re-zeroing. Create each buffer before trace capture: the first call for a
+        key synchronizes the device.
         """
-        cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config))
+        # batch: one receive batch per request of a lanes ring SDPA.
+        cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config), batch)
         if cache_key not in self._ring_gather_buffers:
             self._ring_gather_buffers[cache_key] = ttnn.zeros(
-                [1, n_kv_local, seq, head_dim],
+                [batch, n_kv_local, seq, head_dim],
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=memory_config,
             )
+            # Each device runs its zero fill in its own queue, but peers write into this buffer over fabric as soon
+            # as they reach their first use of it. A peer that runs ahead can land rows before a lagging device's
+            # fill, which then zeroes them. Finish the fill on every device before anything targets the buffer.
+            ttnn.synchronize_device(self.mesh_device)
         return self._ring_gather_buffers[cache_key]
 
     def get_rs_semaphore(self):

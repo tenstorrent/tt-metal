@@ -166,3 +166,36 @@ def test_muse_glimmer_isl(mesh_device, tp, isl):
         f"isl={len(prompt)} tp={tp}"
     )
     gen.release_traces()
+
+
+@pytest.mark.parametrize("device_params", [device_params()], indirect=True)
+@(
+    pytest.mark.parametrize("mesh_device", [system_mesh_shape_from_env()], indirect=True)
+    if system_mesh_shape_from_env() is not None
+    else (lambda f: f)
+)
+def test_muse_glimmer_repeat(mesh_device):
+    """Repeated generate() calls on one TP4 batch-32 generator compile no new program once the prompt-length buckets
+    are known (prefill program plans depend on free L1, which the first decode step must not change; new prompt
+    lengths must not compile per-length ops), and the same prompts give the same greedy tokens."""
+    if mesh_device.get_num_devices() < 4:
+        pytest.skip("needs 4 devices")
+    sm = dp_submeshes(mesh_device, 1, 4)[0]
+    ckpt = checkpoint_dir()
+    args = MuseGlimmerModelArgs.from_checkpoint(ckpt, mesh_device=sm, max_batch_size=32, max_seq_len=_MAX_SEQ_LEN)
+    gen = MuseGlimmerGenerator([MuseGlimmerModel(args, sm)], enable_trace=True)
+    tokenizer = load_tokenizer(ckpt)
+    with open(_PROMPTS_FILE) as f:
+        texts = json.load(f)
+    prompts = [encode_chat(tokenizer, texts[i % len(texts)]) for i in range(gen.global_batch_size)]
+    stop_ids = list(args.eos_token_ids)
+    first = gen.generate(prompts, 32, stop_token_ids=stop_ids)["tokens"]
+    n_programs = sm.num_program_cache_entries()
+    # Other prompt lengths in the same 128-row bucket.
+    other = [encode_chat(tokenizer, texts[i % len(texts)] + " Be brief.") for i in range(gen.global_batch_size)]
+    assert {len(p) for p in other} - {len(p) for p in prompts} and max(map(len, other)) <= 128
+    gen.generate(other, 32, stop_token_ids=stop_ids)
+    again = gen.generate(prompts, 32, stop_token_ids=stop_ids)["tokens"]
+    gen.release_traces()
+    assert sm.num_program_cache_entries() == n_programs, "a later generate() compiled new programs"
+    assert again == first

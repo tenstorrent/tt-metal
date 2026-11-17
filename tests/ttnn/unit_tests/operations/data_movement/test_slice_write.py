@@ -201,3 +201,21 @@ def test_slice_write_sharded_cache_hit(layout, shape, device):
     ttnn.experimental.slice_write(tt_in_b, tt_out_b, begins, ends, strides)
     assert device.num_program_cache_entries() == entries
     assert_equal(src_b, ttnn.to_torch(tt_out_b))
+
+
+@pytest.mark.parametrize("out_width, step", [(256, 8), (1024, 32)])
+def test_slice_write_last_dim_strided_wide_output(out_width, step, device):
+    torch.manual_seed(0)
+    out_shape = [1, 2, 256, out_width]
+    torch_out = torch.randn(out_shape, dtype=torch.bfloat16)
+    slices = (slice(None), slice(None), slice(None), slice(0, out_width, step))
+    torch_src = torch.randn(torch_out[slices].shape, dtype=torch.bfloat16)
+
+    tt_out = ttnn.from_torch(
+        torch_out, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_in = ttnn.from_torch(torch_src, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.experimental.slice_write(tt_in, tt_out, [0, 0, 0, 0], out_shape, [1, 1, 1, step])
+
+    torch_out[slices] = torch_src
+    assert_equal(torch_out, ttnn.to_torch(tt_out))

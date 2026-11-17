@@ -17,6 +17,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/tile_constants.h"
 // #include "api/debug/dprint.h"
 
 template <typename DSpec, typename DFB>
@@ -31,13 +32,12 @@ inline void write_tiles_in_block(
     uint32_t block_row_size_unpadded,  // to remove padding from the last block in the row
     uint32_t num_rows_unpadded,
     const TensorAccessor<DSpec>& s) {
-    constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
     uint32_t block_row_id = block_start_row_id;
     for (uint32_t tile_row_id = 0; tile_row_id < block_height_ntiles; tile_row_id++) {
         // We reserve back an entire row of tiles in a block and issue a bunch of reads
         dfb_out0.wait_front(block_width_ntiles);
         uint32_t l1_read_addr = dfb_out0.get_read_ptr();
-        for (uint32_t j = 0; j < TILE_HEIGHT; j++) {
+        for (uint32_t j = 0; j < tt::constants::TILE_HEIGHT; j++) {
             if (block_row_id >= num_rows_unpadded) {
                 break;
             }
@@ -67,13 +67,11 @@ void kernel_main() {
     auto block_start_row_offset = get_arg(args::block_start_row_offset);
 
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
+    constexpr bool ONE_BYTE_DTYPE = get_arg(args::one_byte_dtype) == 1;
 
-    constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
-
-    const uint32_t block_width_ntiles =
-        FLOAT32_DTYPE ? block_row_size >> 7
-                      : block_row_size >> 6;  // Assuming 4/2 bytes per datum, there are 128/64 bytes per tile row
-    const uint32_t block_height_ntiles = num_rows_block / TILE_HEIGHT;
+    // 32-datum tile row: 4/2/1 bytes per datum -> shift 7/6/5.
+    const uint32_t block_width_ntiles = block_row_size >> (FLOAT32_DTYPE ? 7 : (ONE_BYTE_DTYPE ? 5 : 6));
+    const uint32_t block_height_ntiles = num_rows_block / tt::constants::TILE_HEIGHT;
 
     const auto s = TensorAccessor(tensor::dst);
 

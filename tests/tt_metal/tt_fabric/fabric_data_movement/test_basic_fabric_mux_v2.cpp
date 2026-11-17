@@ -526,6 +526,7 @@ std::optional<MuxDeployment> create_mux_deployment(
     if (test_case.build_mux_from_descriptor) {
         tt::tt_metal::ProgramDescriptor desc;
         tt::tt_fabric::add_fabric_mux_v2_to_program(
+            *device,
             desc,
             *mux_config,
             mux_logical_core,
@@ -533,10 +534,11 @@ std::optional<MuxDeployment> create_mux_deployment(
             anchor_dst_fabric_node_id,
             link_indices.front(),
             test_case.forwarder_noc);
-        program = std::make_shared<tt::tt_metal::Program>(desc);
+        program = std::make_shared<tt::tt_metal::Program>(*device, desc);
     } else {
         program = std::make_shared<tt::tt_metal::Program>(tt::tt_metal::CreateProgram(*device));
         tt::tt_fabric::add_fabric_mux_v2_to_program(
+            *device,
             *program,
             *mux_config,
             mux_logical_core,

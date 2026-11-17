@@ -8,7 +8,7 @@ from helpers.param_config import parametrize, quasar_dest_sync_modes, runtime
 from quasar.test_matmul_quasar import (
     FULL_MATMUL_SHAPES,
     MATMUL_FORMAT,
-    TINY_MATMUL_FORMATS,
+    NON_MX_MATMUL_FORMATS,
     TINY_MATMUL_SHAPE_CASES,
     matmul_dest_acc_modes,
     matmul_enable_direct_indexing,
@@ -77,7 +77,7 @@ def test_perf_matmul_quasar(
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(TINY_MATMUL_SHAPE_CASES),
-    format=TINY_MATMUL_FORMATS,
+    format=NON_MX_MATMUL_FORMATS,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
     dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,

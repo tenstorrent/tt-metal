@@ -11,14 +11,17 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
+#include <bit>
 #include <numeric>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -337,7 +340,7 @@ int common_tm_bw_model(
     auto element_size_bytes = input_tensor.element_size();
     bool input_is_2d_sharded =
         input_tensor.memory_config().is_sharded() && input_tensor.memory_config().shard_spec().has_value();
-    bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool input_is_dram = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool input_is_tiled = input_tensor.layout() == Layout::TILE;
     uint32_t input_size_bytes = input_shape.volume() * element_size_bytes;
 
@@ -373,7 +376,7 @@ int common_tm_bw_model(
 
     uint32_t num_read_transactions = std::ceil((float)input_size_bytes / (float)input_transaction_size);
 
-    bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool output_is_dram = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool output_is_tiled = output_tensor.layout() == Layout::TILE;
     bool output_2d_is_sharded =
         output_tensor.memory_config().is_sharded() && output_tensor.memory_config().shard_spec().has_value();
@@ -661,38 +664,61 @@ ttnn::Tensor pad_to_tile_vol(
 }
 uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : index; }
 
-// not unit tested, use with caution
-uint16_t float_to_uint16(float f) {
-    // For positive infinity, return the maximum uint16_t value
-    // For negative infinity, return the minimum uint16_t value
-    if (std::isinf(f)) {
-        return (f > 0) ? std::numeric_limits<uint16_t>::max() : std::numeric_limits<uint16_t>::min();
-    }
-
-    // For Not-a-Number (NaN), return 0
+namespace {
+// Rounds to nearest and clamps to Int's range; NaN gives 0.
+template <typename Int>
+Int saturating_float_to_int(float f) {
     if (std::isnan(f)) {
         return 0;
     }
-
-    // Handle overflow and underflow
-    const float max_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::max());
-    const float min_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::min());
-    if (f >= max_uint16) {
-        return std::numeric_limits<uint16_t>::max();
+    if (f >= static_cast<float>(std::numeric_limits<Int>::max())) {
+        return std::numeric_limits<Int>::max();
     }
-    if (f <= min_uint16) {
-        return std::numeric_limits<uint16_t>::min();
+    if (f <= static_cast<float>(std::numeric_limits<Int>::min())) {
+        return std::numeric_limits<Int>::min();
     }
-
-    // For all other finite values, safely cast after rounding
-    return static_cast<uint16_t>(std::round(f));
+    return static_cast<Int>(std::round(f));
 }
+}  // namespace
+
+uint16_t float_to_uint16(float f) { return saturating_float_to_int<uint16_t>(f); }
 
 // based off pack_two_bfloat16_into_uint32
 uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) {
     // first -> lower 16
     // second -> upper 16
     return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
+}
+
+uint32_t pack_scalar_into_uint32(DataType dtype, float value) {
+    // No default, so -Wswitch rejects a new DataType without a case here.
+    switch (dtype) {
+        case DataType::FLOAT32: return std::bit_cast<uint32_t>(value);
+        case DataType::BFLOAT16: return pack_two_bfloat16_into_uint32({bfloat16(value), bfloat16(value)});
+        case DataType::UINT16: {
+            const uint16_t v = float_to_uint16(value);
+            return pack_two_uint16_into_uint32({v, v});
+        }
+        // 32-bit integers truncate, matching fill_pad and the single-core tile pad.
+        case DataType::INT32: return std::bit_cast<uint32_t>(saturating_float_to_int<int32_t>(std::trunc(value)));
+        case DataType::UINT32: return saturating_float_to_int<uint32_t>(std::trunc(value));
+        // UINT8 truncates like the 32-bit integers and fills all four bytes.
+        case DataType::UINT8: return saturating_float_to_int<uint8_t>(std::trunc(value)) * 0x01010101u;
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+        case DataType::FP8_E4M3:
+        case DataType::INT8:
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2:
+        case DataType::INVALID: break;
+    }
+    TT_THROW("Cannot pack a scalar value for dtype {}", dtype);
 }
 
 ttnn::Shape compute_padded_shape(
@@ -773,7 +799,8 @@ std::array<uint32_t, 2> compute_height_sharded_shard_shape(
     const uint32_t total_num_cores) {
     auto [tensor_height, tensor_width] = squeezed_tensor_hw;
     auto squeezed_height_padded_to_tile =
-        layout == tt::tt_metal::Layout::TILE ? tt::round_up(tensor_height, total_num_cores) : tensor_height;
+        layout == tt::tt_metal::Layout::TILE ? tt::round_up(tensor_height, total_num_cores * tt::constants::TILE_HEIGHT)
+                                             : tensor_height;
     return {tt::div_up(squeezed_height_padded_to_tile, total_num_cores), tensor_width};
 }
 
@@ -822,9 +849,15 @@ ttnn::MemoryConfig create_sharded_memory_config(
             case ShardStrategy::WIDTH:
                 computed_shard_shape = compute_width_sharded_shard_shape(squeezed_tensor_hw, total_num_cores);
                 break;
-            case ShardStrategy::HEIGHT:
-                computed_shard_shape = compute_height_sharded_shard_shape(squeezed_tensor_hw, layout, total_num_cores);
+            case ShardStrategy::HEIGHT: {
+                // A tiled tensor pads each batch's height to a whole tile, so shards must cover the padded rows.
+                const uint32_t physical_height = layout == tt::tt_metal::Layout::TILE
+                                                     ? batch_size * tt::round_up(height, tt::constants::TILE_HEIGHT)
+                                                     : tensor_height;
+                computed_shard_shape =
+                    compute_height_sharded_shard_shape({physical_height, tensor_width}, layout, total_num_cores);
                 break;
+            }
             default: TT_ASSERT(false, "Invalid shard strategy");
         }
     }
@@ -903,7 +936,7 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
         return spec.shape[1] * t.element_size();
     }
     if (mc.is_sharded()) {
-        return static_cast<uint32_t>(t.buffer()->aligned_page_size());
+        return static_cast<uint32_t>(t.mesh_buffer().aligned_page_size());
     }
     return row_bytes;
 }

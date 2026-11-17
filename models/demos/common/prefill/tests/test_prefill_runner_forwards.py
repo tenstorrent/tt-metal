@@ -57,7 +57,7 @@ def loop(monkeypatch):
         words.append(sentinel_words(SHUTDOWN_WORD, F))
         it = iter(words)
 
-        def socket_next(service, sockets, n_mtp=0):
+        def socket_next(service, sockets, n_mtp=0, stage_metadata=None):
             return _Tensor(), None, runner._meta_from_words(next(it))
 
         monkeypatch.setattr(runner, "_socket_next", socket_next)
@@ -69,7 +69,7 @@ def loop(monkeypatch):
             d2d_rows=0,
             d2d_width=0,
             h2d_service=object(),
-            d2d_out=d2d_out,
+            outbound=runner.D2DBoundary(activation=d2d_out),
             sockets=runner.SocketBuffers(metadata=None),
         )
 
@@ -106,7 +106,7 @@ def test_first_rank_refuses_a_bad_forward(loop, expect_error):
 def test_a_wrong_chunk_output_shuts_down_the_next_rank(loop, monkeypatch, expect_error, is_last_rank, returns, message):
     shutdowns = []
     monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
-    monkeypatch.setattr(runner, "_forward_shutdown", lambda d2d_out, *a: shutdowns.append(d2d_out))
+    monkeypatch.setattr(runner, "_forward_shutdown", lambda outbound, *a: shutdowns.append(outbound.activation))
     monkeypatch.setattr(runner, "_chunk_rows", lambda inp, k, rows: _Tensor())
     monkeypatch.setattr(runner, "_device_record", lambda words, dev: _Tensor())
 
@@ -127,7 +127,7 @@ def test_a_wrong_chunk_output_shuts_down_the_next_rank(loop, monkeypatch, expect
 def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_error):
     shutdowns = []
     monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
-    monkeypatch.setattr(runner, "_forward_shutdown", lambda d2d_out, *a: shutdowns.append(d2d_out))
+    monkeypatch.setattr(runner, "_forward_shutdown", lambda outbound, *a: shutdowns.append(outbound.activation))
     runtime = _PackedRuntime()
     runtime.config.is_last_rank = False
     d2d_out = object()
@@ -138,18 +138,37 @@ def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_er
     assert runtime.calls == []
 
 
-def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
+def test_indexer_top_k_rides_the_activation_service_with_the_d2d_metadata(monkeypatch):
     made = []
+
+    def record(**kw):
+        made.append((kw["metadata_size_bytes"], [spec for spec, _ in kw["extra_tensors"]]))
+
+    services = SimpleNamespace(create_receiver=record, create_sender=record)
+    monkeypatch.setattr(runner.ttnn, "D2DStreamService", services)
+    monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
+    monkeypatch.setattr(runner, "d2d_worker_cores", lambda dev: None)
+    monkeypatch.setattr(runner, "activation_global_spec", lambda *a: None)
+    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 16)
+    tail = (("idx", runner.INDEX_MAPPER_CONFIG),)
+    runner.build_d2d_pipeline_endpoints(None, 1, 3, 32, 64, extra_specs=("ids",), inbound_tail=tail, outbound_tail=())
+    assert made == [(16, ["ids", "idx"]), (16, ["ids"])]
+
+
+# Only a middle stage builds a sender after its receiver, so only its receivers keep a relay link free for it.
+@pytest.mark.parametrize("rank, reserve", [(1, True), (2, False)])
+def test_receivers_reserve_links_only_when_a_sender_follows(monkeypatch, rank, reserve):
+    reserved = []
     services = SimpleNamespace(
-        create_receiver=lambda **kw: made.append(kw["metadata_size_bytes"]),
-        create_sender=lambda **kw: made.append(kw["metadata_size_bytes"]),
+        create_receiver=lambda **kw: reserved.append(kw["reserve_links_for_later_service"]),
+        create_sender=lambda **kw: None,
     )
     monkeypatch.setattr(runner.ttnn, "D2DStreamService", services)
     monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
-    monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
-    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 16)
-    runner.build_d2d_index_endpoints(None, 1, (1, 1, 32, 8), inbound=True, outbound=True)
-    assert made == [12, 12]
+    monkeypatch.setattr(runner, "d2d_worker_cores", lambda *a: None)
+    monkeypatch.setattr(runner, "activation_global_spec", lambda *a: None)
+    runner.build_d2d_pipeline_endpoints(None, rank, 3, 32, 64)
+    assert reserved == [reserve]
 
 
 def _request_ids(forwards):
@@ -164,12 +183,24 @@ class _PerChunkRuntime(_PackedRuntime):
         self.calls.append((request_id, PrefillChunk(slot_id, actual_start, actual_end)))
 
 
-@pytest.mark.parametrize("per_chunk, rank, size", [(True, 0, 12), (True, 1, 12), (False, 0, 56), (False, 1, 60)])
-def test_layer_ack_record_size(monkeypatch, per_chunk, rank, size):
-    monkeypatch.setattr(runner, "PER_CHUNK_FORWARDS", per_chunk)
-    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", 56)
-    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 60)
+# Above one chunk per forward every ack names one chunk (12 B), whether the runner or prefill_forward runs the chunks.
+@pytest.mark.parametrize("forward_chunks, rank, size", [(4, 0, 12), (4, 1, 12), (1, 0, 12), (1, 1, 16)])
+def test_layer_ack_record_size(monkeypatch, forward_chunks, rank, size):
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", forward_chunks)
+    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", 56 if forward_chunks > 1 else 12)
+    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 60 if forward_chunks > 1 else 16)
     assert runner._layer_ack_record_bytes(rank) == size
+
+
+@pytest.mark.parametrize(
+    "use_trace, packed, size",
+    [(False, True, 4096), (True, False, 4096), (True, True, 16384)],  # 60 records x 64 B: 3840 -> 4 KiB; x4 -> 16 KiB
+)
+def test_layer_ack_fifo_holds_the_warm_pass(monkeypatch, use_trace, packed, size):
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", 4)
+    monkeypatch.setattr(runner, "LAYER_ACK_FIFO_SIZE_BYTES", 4096)
+    monkeypatch.setattr(runner, "ADAPTER", SimpleNamespace(supports_packed_forward=packed))
+    assert runner._layer_ack_fifo_bytes(60, use_trace) == size
 
 
 def test_per_chunk_forwards_run_each_chunk_once(loop, monkeypatch):
@@ -198,6 +229,9 @@ class _Act:
 class _D2D:
     def get_backing_tensor(self):
         return _Act([])
+
+    def get_backing_tensors(self):
+        return [_Act([])]
 
     def wait_for_fabric_links(self):
         pass
@@ -256,7 +290,11 @@ def test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata
     monkeypatch.setattr(
         runner,
         "_d2d_recv",
-        lambda d2d_in, sockets: (_Act([1, 1, F * rows, hidden]), runner._meta_from_words(next(it))),
+        lambda d2d_in, sockets, stage_metadata=None: (
+            _Act([1, 1, F * rows, hidden]),
+            [],
+            runner._meta_from_words(next(it)),
+        ),
     )
 
     runtime = _EchoRuntime()
@@ -268,8 +306,8 @@ def test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata
         3,
         d2d_rows=0,
         d2d_width=0,
-        d2d_in=_D2D(),
-        d2d_out=_D2D(),
+        inbound=runner.D2DBoundary(activation=_D2D()),
+        outbound=runner.D2DBoundary(activation=_D2D()),
         sockets=sockets,
     )
 

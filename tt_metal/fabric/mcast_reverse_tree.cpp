@@ -215,9 +215,8 @@ std::optional<std::vector<std::uint16_t>> pack_mcast_reverse_tree(const McastRev
                 axis == Fabric2DAxis::Y ? "Y" : "X"));
         }
 
-        packed.push_back(static_cast<std::uint16_t>(
-            (static_cast<std::uint16_t>(edge.child) & 0x3F) | ((static_cast<std::uint16_t>(edge.parent) & 0x3F) << 6) |
-            (static_cast<std::uint16_t>(output_code) << 12)));
+        packed.push_back(Routing2DCodec::mcast_edge_pack(
+            static_cast<std::uint32_t>(edge.child), static_cast<std::uint32_t>(edge.parent), output_code));
     }
 
     return packed;
