@@ -98,7 +98,7 @@ def test_repeat(device):
 
     # Repeat the tensor along specified dimensions
     repeated_tensor = ttnn.repeat(input_tensor_tt, (1, 2))
-    logger.info("Repeated Tensor Shape:", repeated_tensor.shape)  # Repeated Tensor Shape: Shape([2, 4])
+    logger.info(f"Repeated Tensor Shape: {repeated_tensor.shape}")  # Shape([2, 4])
 
 
 def test_repeat_interleave(device):
@@ -163,7 +163,7 @@ def test_fill_rm(device):
 
     # Fill the tensor
     output = ttnn.fill_rm(N, C, H, W, hOnes, wOnes, xt, val_hi, val_lo)
-    logger.info("Filled Tensor Shape:", output.shape)
+    logger.info(f"Filled Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
 
 
 def test_fill_ones_rm(device):
@@ -183,7 +183,7 @@ def test_fill_ones_rm(device):
 
     # Fill the tensor
     output = ttnn.fill_ones_rm(N, C, H, W, hOnes, wOnes, xt)
-    logger.info("Filled Ones Tensor Shape:", output.shape)
+    logger.info(f"Filled Ones Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
 
 
 def test_untilize(device):
@@ -192,7 +192,7 @@ def test_untilize(device):
 
     # Untilize the tensor
     untilized_tensor = ttnn.untilize(tilized_tensor)
-    logger.info("Untilized Tensor Shape:", untilized_tensor.shape)
+    logger.info(f"Untilized Tensor Layout: {untilized_tensor.layout}")  # Layout.ROW_MAJOR
 
 
 def test_untilize_with_unpadding(device):

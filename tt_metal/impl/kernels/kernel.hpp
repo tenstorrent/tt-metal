@@ -267,6 +267,8 @@ public:
     const CoreRangeSet& core_range_set() const { return core_range_set_; }
 
     const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
+    // 1 when runtime-arg storage is prefixed with a watcher count word, else 0.
+    uint32_t watcher_count_word_offset() const { return watcher_count_word_offset_; }
 
     const std::map<std::string, std::string>& defines() const { return defines_; }
 
@@ -317,6 +319,10 @@ public:
     std::size_t logical_common_runtime_arg_count() const;
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
+    // Once a command sequence is assembled, the runtime-arg views point into it and hold the current values. Before
+    // the program's command sequences are discarded, copy the current values back into the kernel's own storage and
+    // point the views there again, so the next assembly starts from them.
+    void reclaim_runtime_args_from_command_sequence();
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
 
     virtual bool configure(
