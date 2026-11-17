@@ -335,14 +335,14 @@ def test_bw_pow_preallocated_output_wins_over_memory_config(input_shapes, expone
 
 
 @pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
-@pytest.mark.parametrize("exponent", [1.0, 2.0, 3.0, 4.0])
+@pytest.mark.parametrize("exponent", [1.0, 2.0, 3.0, 4.0, 2.5])
 def test_bw_unary_pow_zero_input(input_shapes, exponent, device):
-    """The gradient at input == 0 must match the golden, which masks `input < 0` only.
+    """The gradient at input == 0 must be finite and match torch autograd: n * 0**(n-1),
+    i.e. 1 for exponent 1 and 0 for exponent > 1.
 
-    The kernel used lez(input) as the mask, so every zero element got +inf instead of
-    the finite gradient (1 for exponent 1, 0 for exponent > 1). A PCC comparison cannot
-    catch this: get_atol_rtol_pcc rewrites infs and the golden's zeros to 0, mapping the
-    wrong answer onto the right one. So this test checks exact values and finiteness.
+    Regression for the old where(lez(input), +inf) fix-up, which turned every zero element
+    into +inf. A PCC comparison cannot catch this: get_atol_rtol_pcc rewrites infs and the
+    golden's zeros to 0, mapping the wrong answer onto the right one. So check exact values.
     """
     in_data = torch.zeros(input_shapes, dtype=torch.bfloat16, requires_grad=True)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
