@@ -13,13 +13,6 @@ them is a valid pick.
 
 import ttnn
 
-# Gathered rows are padded to whole tiles, the width ttnn.embedding copies cleanly.
-_TILE = ttnn.TILE_SIZE
-
-
-def _padded_width(width):
-    return -(-width // _TILE) * _TILE
-
 
 def _top_logits(logits, max_num, num_classes):
     """(1, 1, num_query, num_classes) logits to the top max_num scores (1, max_num) float32 and
@@ -39,17 +32,18 @@ def _top_logits(logits, max_num, num_classes):
 
 
 def _gather_rows(table, query_index):
-    """Rows query_index (1, k) uint32 of the (num_query, width) table, as (1, k, width) float32."""
+    """Rows query_index (1, k) uint32 of the (num_query, width) table, as (1, k, width) float32,
+    in the table's own precision."""
     num_query, width = table.shape[-2], table.shape[-1]
     table = ttnn.reshape(ttnn.to_layout(table, ttnn.TILE_LAYOUT), (num_query, width))
-    if table.dtype != ttnn.bfloat16:
-        table = ttnn.typecast(table, ttnn.bfloat16)
-    table = ttnn.pad(table, [(0, 0), (0, _padded_width(width) - width)], 0.0)
-    rows = ttnn.embedding(
-        ttnn.to_layout(query_index, ttnn.ROW_MAJOR_LAYOUT), ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
-    )
-    rows = ttnn.typecast(ttnn.to_layout(rows, ttnn.TILE_LAYOUT), ttnn.float32)
-    return rows[..., :width]
+    k = query_index.shape[-1]
+    # gather takes an index per output element: each row's query index, across its width.
+    column = ttnn.reshape(ttnn.to_layout(query_index, ttnn.ROW_MAJOR_LAYOUT), (k, 1))
+    index = ttnn.to_layout(ttnn.repeat(column, (1, width)), ttnn.TILE_LAYOUT)
+    rows = ttnn.gather(table, 0, index)
+    if rows.dtype != ttnn.float32:
+        rows = ttnn.typecast(rows, ttnn.float32)
+    return ttnn.reshape(rows, (1, k, width))
 
 
 def _in_range(values, low, high):
