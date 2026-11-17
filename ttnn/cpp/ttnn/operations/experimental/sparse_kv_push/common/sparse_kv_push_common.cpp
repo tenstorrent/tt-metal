@@ -129,8 +129,7 @@ std::string chip_directions(
         if (other == coord) {
             continue;
         }
-        // No mesh-context lookup of a multi-hop route exists yet; like the mux's connection args (#52020), this reads
-        // the default control plane.
+        // No mesh-context lookup of a multi-hop route exists yet, so this reads the default control plane.
         const auto first_hop =
             tt::tt_fabric::get_eth_forwarding_direction(my_node, mesh_device->get_fabric_node_id(other));
         const bool covered =
