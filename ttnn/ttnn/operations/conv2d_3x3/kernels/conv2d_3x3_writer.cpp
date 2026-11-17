@@ -15,6 +15,7 @@
 // receiver; a receiver acks only after reserving that slot, so the slot is free. All participants
 // push the same quanta in the same order, so their cb_weights write pointers agree every round.
 // A core outside the channel (one with fewer M-blocks, or an absent channel) reads its own weights.
+// Under a K split the channel has one group per grid column, whose sender reads that column's K-slice.
 //
 // K split (BLOCK_SHARDED, k_cols > 1; regime R4): every core of a grid row computes fp32 partials
 // [bm, all C_out] over its own channel slice, and grid column y owns output N-slice y. Per M-block the

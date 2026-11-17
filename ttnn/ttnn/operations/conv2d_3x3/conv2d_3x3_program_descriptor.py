@@ -61,7 +61,7 @@ CB_INPUT_TILES = 7
 CB_COMBINE_SLOTS = 8
 CB_COMBINED = 9
 
-# R4 reduce-scatter semaphores (the weight multicast channel is never attached on that path).
+# R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
 SEM_COMBINE_CREDIT = 0
 SEM_COMBINE_ARRIVAL = 1
 SEM_COMBINE_SEND_GO = 2
@@ -71,6 +71,12 @@ SEM_COMBINE_SEND_DONE = 3
 # columns). Every core sends and receives k_cols slices per round; on one NoC interface that traffic bounds
 # the round. False keeps the whole scatter on the writer.
 COMBINE_SPLIT_NOCS = True
+
+# Tap-major im2col: when a K-block is whole taps of whole tiles, stride is 1 and no lane is padding, the
+# reader lays each tap of a tile-row out as its own [32 pixels, C_in_p] block, which is one contiguous run of
+# slab pixels per output image row, and compute tilizes it c_in_tiles wide. False keeps one im2col row per
+# pixel (one gather read per pixel per K-block).
+TAP_MAJOR_IM2COL = True
 
 # Buffer-depth knobs (Blocking Model depth table).
 IM2COL_RM_DEPTH_ROWS = 2
@@ -401,6 +407,17 @@ def block_grid_shape(shard_spec):
     return size.x, size.y
 
 
+def tap_major_im2col(g: Conv3x3Geometry, b: Conv3x3Blocking):
+    return (
+        TAP_MAJOR_IM2COL
+        and g.stride == 1
+        and g.c_in_p % TILE == 0
+        # Every channel slice is all data: no lane needs excluding from a whole-pixel copy.
+        and g.c_in == g.k_cols * g.c_in_p
+        and b.block_k_tiles % g.c_in_tiles == 0
+    )
+
+
 def _slice_channels(g: Conv3x3Geometry, col):
     """Real input channels of channel slice `col` (the last slice may be short)."""
     return min(g.c_in_p, g.c_in - col * g.c_in_p)
@@ -453,6 +470,24 @@ def _weight_mcast_cores(core_list, m_blocks_per_core):
     if len(receivers.ranges()) > MAX_MCAST_RECTANGLES:
         return None
     return receivers
+
+
+def _column_weight_mcast(input_tensor, work, m_blocks_per_index):
+    """K split: one weight stream per channel slice, shared by that slice's grid column. Participants are
+    the grid rows that run the most M-blocks (same rounds, as in _weight_mcast_cores); each column is one
+    group, its first participating row the sender. (receivers, group size, receiver order), or None when a
+    column would have too few participants or the participants are not one rectangle."""
+    most = max(m_blocks_per_index[i] for _, i, _ in work)
+    rows = {i for _, i, _ in work if m_blocks_per_index[i] == most}
+    if len(rows) < max(WEIGHT_MCAST_MIN_CORES, 2):
+        return None
+    receivers = _core_range_set([core for core, i, _ in work if i in rows])
+    if len(receivers.ranges()) != 1:
+        return None
+    # A ROW_MAJOR grid keeps a channel slice on one x (shard (h, w) on core (x0 + w, y0 + h)); COL_MAJOR on one y.
+    by_column = input_tensor.memory_config().shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+    order = ttnn.McastCoreOrder.ColumnMajor if by_column else ttnn.McastCoreOrder.RowMajor
+    return receivers, len(rows), order
 
 
 def _cb(index, data_format, page_size, num_pages, cores):
@@ -552,6 +587,9 @@ def create_program_descriptor(
         row_page_stride, input_shard_rows = 0, 0
     pages_per_slice_row = g.c_in_tiles if g.tile_input else 1
     combine_split_nocs = g.k_split and COMBINE_SPLIT_NOCS
+    tap_major = tap_major_im2col(g, b)
+    # Width of one tilize block of im2col rows: one tap (tap-major) or the whole K-block.
+    tilize_width = g.c_in_tiles if tap_major else bk
 
     def reader_ct_args(slice_channels):
         args = [
@@ -589,6 +627,7 @@ def create_program_descriptor(
             CB_COMBINE_SLOTS,
             SEM_COMBINE_SEND_GO,
             SEM_COMBINE_SEND_DONE,
+            int(tap_major),
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -620,6 +659,7 @@ def create_program_descriptor(
         CB_COMBINED,
         b.combine_subblock_h,
         b.combine_subblock_w,
+        tilize_width,
     ]
 
     writer_ct_args = [
@@ -741,18 +781,30 @@ def create_program_descriptor(
             for sem_id in (SEM_COMBINE_CREDIT, SEM_COMBINE_ARRIVAL, SEM_COMBINE_SEND_GO, SEM_COMBINE_SEND_DONE)
         ]
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
-    # Each column multiplies against its own weight K-slice, so one weight stream cannot serve a K split.
-    mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
-    if mcast_receivers is None:
+    # The writer's NoC (WriterConfigDescriptor).
+    weight_mcast_config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
+    weight_mcast = None
+    if g.k_split:
+        # Each column multiplies against its own weight K-slice: one stream per column.
+        column_channel = _column_weight_mcast(input_tensor, work, m_blocks_per_index)
+        if column_channel is not None:
+            receivers, group_size, order = column_channel
+            weight_mcast = ttnn.Mcast(
+                device, weight_mcast_config, receivers, group_size, ttnn.McastFixedSenderConfig(), order
+            )
+    else:
+        mcast_receivers = _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
+        if mcast_receivers is not None:
+            weight_mcast = ttnn.Mcast(
+                device,
+                weight_mcast_config,
+                mcast_receivers,
+                mcast_receivers.num_cores(),
+                ttnn.McastExplicitFixedSenderConfig([core_list[0]]),
+            )
+    if weight_mcast is None:
         ttnn.attach_absent_mcast(writer, WEIGHT_MCAST_PREFIX)
     else:
-        weight_mcast = ttnn.Mcast(
-            device,
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1),  # the writer's NoC (WriterConfigDescriptor)
-            mcast_receivers,
-            mcast_receivers.num_cores(),
-            ttnn.McastExplicitFixedSenderConfig([core_list[0]]),
-        )
-        weight_mcast.attach(descriptor, WEIGHT_MCAST_PREFIX, [writer], 0)
+        weight_mcast.attach(descriptor, WEIGHT_MCAST_PREFIX, [writer], len(semaphores))
     descriptor.kernels = readers + [writer, compute]
     return descriptor

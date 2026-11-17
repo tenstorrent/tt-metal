@@ -26,6 +26,11 @@
 // partials on NoC0 (see the writer's file comment): it waits for the writer's send_go, writes, fences and
 // raises send_done. It never waits on or pops the partials CB; the writer owns that CB's lifecycle.
 //
+// im2col layout: by default one row per output pixel ([32, block_k_cols] per tile-row), costing one read
+// (or one per tap) per pixel per K-block. Tap-major (stride 1, whole unpadded taps): each tap of a tile-row
+// is its own [32, C_in_p] block; the pixels of one output image row read consecutive slab pixels, so a
+// tap costs one read per image row it spans, plus zero-fills for padding.
+//
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
 // zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
@@ -113,7 +118,8 @@ void kernel_main() {
     constexpr uint32_t cb_combine_slots = get_compile_time_arg_val(31);
     constexpr uint32_t combine_send_go_sem_id = get_compile_time_arg_val(32);
     constexpr uint32_t combine_send_done_sem_id = get_compile_time_arg_val(33);
-    constexpr auto input_args = TensorAccessorArgs<34>();
+    constexpr bool tap_major = get_compile_time_arg_val(34) != 0;
+    constexpr auto input_args = TensorAccessorArgs<35>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
@@ -142,6 +148,9 @@ void kernel_main() {
     static_assert(tile_input || input_page_bytes == pixel_bytes, "ROW_MAJOR: one input page is one slab pixel");
     static_assert(!tile_input || (slab_tile_rows % untilize_batch_rows) == 0, "slab is whole untilize batches");
     static_assert(!channel_slice || input_shard_rows > 0, "a channel slice is read in owner-shard runs");
+    static_assert(
+        !tap_major || (stride == 1 && !lanes_padded && !k_padded && block_k_cols % c_in_p == 0),
+        "tap-major rows are whole unpadded taps read in unit-stride pixel runs");
 
     const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
     // TILE: compute pushes exactly slab_tile_rows tile-rows per M-block and the reader pops them all,
@@ -331,61 +340,101 @@ void kernel_main() {
                 const uint32_t rows_l1 = get_write_ptr(cb_im2col_rm);
                 reads.begin(TRID_GATHER);
 
-                int32_t ho = o / output_width;
-                int32_t wo = o % output_width;
-                for (uint32_t r = 0; r < TILE_DIM && o < o_end; ++r, ++o) {
-                    const uint32_t row_l1 = rows_l1 + r * im2col_row_bytes;
-                    const int32_t h_in = ho * stride + kh * dilation - padding;
-                    const int32_t w_in0 = wo * stride - padding;
-                    const bool row_in_image = h_in >= 0 && h_in < input_height;
-                    const int32_t slab_x0 = slab_x_base_kh + h_in * input_width + w_in0;
+                if constexpr (tap_major) {
+                    // Tap kw of this tile-row is a [32 pixels, c_in_p] block. At stride 1 the pixels of one
+                    // output image row read consecutive slab pixels, so each such run is one read.
+                    const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
+                    for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
+                        uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
+                        int32_t ho = o / output_width;
+                        int32_t wo = o % output_width;
+                        for (uint32_t p = o; p < row_end;) {
+                            const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
+                            const int32_t h_in = ho + kh * dilation - padding;
+                            const int32_t w_lo = wo - padding + kw * dilation;
+                            // Pixels [in_lo, in_hi) of the run are inside the image row; the rest are padding.
+                            int32_t in_lo = w_lo < 0 ? (-w_lo < run ? -w_lo : run) : 0;
+                            int32_t in_hi = input_width - w_lo < run ? input_width - w_lo : run;
+                            if (h_in < 0 || h_in >= input_height || in_hi < in_lo) {
+                                in_lo = in_hi = run;
+                            }
+                            if (in_lo > 0) {
+                                zero_fill(dst, in_lo * pixel_bytes);
+                            }
+                            if (in_hi > in_lo) {
+                                reads.read(
+                                    slab_noc + (slab_x_base_kh + h_in * input_width + w_lo + in_lo) * pixel_bytes,
+                                    dst + in_lo * pixel_bytes,
+                                    (in_hi - in_lo) * pixel_bytes);
+                            }
+                            if (run > in_hi) {
+                                zero_fill(dst + in_hi * pixel_bytes, (run - in_hi) * pixel_bytes);
+                            }
+                            dst += run * pixel_bytes;
+                            p += run;
+                            wo = 0;
+                            ++ho;
+                        }
+                    }
+                    o = row_end;
+                } else {
+                    int32_t ho = o / output_width;
+                    int32_t wo = o % output_width;
+                    for (uint32_t r = 0; r < TILE_DIM && o < o_end; ++r, ++o) {
+                        const uint32_t row_l1 = rows_l1 + r * im2col_row_bytes;
+                        const int32_t h_in = ho * stride + kh * dilation - padding;
+                        const int32_t w_in0 = wo * stride - padding;
+                        const bool row_in_image = h_in >= 0 && h_in < input_height;
+                        const int32_t slab_x0 = slab_x_base_kh + h_in * input_width + w_in0;
 
-                    const bool combined = !lanes_padded && dilation == 1 && row_in_image && w_in0 + kw_first >= 0 &&
-                                          w_in0 + kw_last < input_width && kw_first <= kw_last;
-                    if (combined) {
-                        // d = 1, no lanes: the touched taps are consecutive slab pixels, so one read covers them.
-                        reads.read(
-                            slab_noc + slab_x0 * pixel_bytes + col_lo * ELEM_BYTES,
-                            row_l1,
-                            (data_hi - col_lo) * ELEM_BYTES);
-                    } else {
-                        for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
-                            const uint32_t tap_lo = kw * c_in_p;
-                            const uint32_t seg_lo = col_lo > tap_lo ? col_lo : tap_lo;
-                            const uint32_t seg_hi = data_hi < tap_lo + c_in_p ? data_hi : tap_lo + c_in_p;
-                            const uint32_t real_hi = seg_hi < tap_lo + c_in ? seg_hi : tap_lo + c_in;
-                            const uint32_t dst = row_l1 + (seg_lo - col_lo) * ELEM_BYTES;
-                            const int32_t w_in = w_in0 + kw * dilation;
-                            if (row_in_image && w_in >= 0 && w_in < input_width) {
-                                const int32_t slab_x = slab_x0 + kw * dilation;
-                                if (real_hi > seg_lo) {
-                                    reads.read(
-                                        slab_noc + slab_x * pixel_bytes + (seg_lo - tap_lo) * ELEM_BYTES,
-                                        dst,
-                                        (real_hi - seg_lo) * ELEM_BYTES);
-                                }
-                                if constexpr (lanes_padded && !zero_im2col_once) {
-                                    const uint32_t lane_lo = real_hi > seg_lo ? real_hi : seg_lo;
-                                    if (seg_hi > lane_lo) {
-                                        zero_fill(
-                                            row_l1 + (lane_lo - col_lo) * ELEM_BYTES, (seg_hi - lane_lo) * ELEM_BYTES);
+                        const bool combined = !lanes_padded && dilation == 1 && row_in_image && w_in0 + kw_first >= 0 &&
+                                              w_in0 + kw_last < input_width && kw_first <= kw_last;
+                        if (combined) {
+                            // d = 1, no lanes: the touched taps are consecutive slab pixels, so one read covers them.
+                            reads.read(
+                                slab_noc + slab_x0 * pixel_bytes + col_lo * ELEM_BYTES,
+                                row_l1,
+                                (data_hi - col_lo) * ELEM_BYTES);
+                        } else {
+                            for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
+                                const uint32_t tap_lo = kw * c_in_p;
+                                const uint32_t seg_lo = col_lo > tap_lo ? col_lo : tap_lo;
+                                const uint32_t seg_hi = data_hi < tap_lo + c_in_p ? data_hi : tap_lo + c_in_p;
+                                const uint32_t real_hi = seg_hi < tap_lo + c_in ? seg_hi : tap_lo + c_in;
+                                const uint32_t dst = row_l1 + (seg_lo - col_lo) * ELEM_BYTES;
+                                const int32_t w_in = w_in0 + kw * dilation;
+                                if (row_in_image && w_in >= 0 && w_in < input_width) {
+                                    const int32_t slab_x = slab_x0 + kw * dilation;
+                                    if (real_hi > seg_lo) {
+                                        reads.read(
+                                            slab_noc + slab_x * pixel_bytes + (seg_lo - tap_lo) * ELEM_BYTES,
+                                            dst,
+                                            (real_hi - seg_lo) * ELEM_BYTES);
                                     }
+                                    if constexpr (lanes_padded && !zero_im2col_once) {
+                                        const uint32_t lane_lo = real_hi > seg_lo ? real_hi : seg_lo;
+                                        if (seg_hi > lane_lo) {
+                                            zero_fill(
+                                                row_l1 + (lane_lo - col_lo) * ELEM_BYTES,
+                                                (seg_hi - lane_lo) * ELEM_BYTES);
+                                        }
+                                    }
+                                } else {
+                                    zero_fill(dst, (seg_hi - seg_lo) * ELEM_BYTES);
                                 }
-                            } else {
-                                zero_fill(dst, (seg_hi - seg_lo) * ELEM_BYTES);
                             }
                         }
-                    }
-                    if constexpr (!zero_im2col_once) {
-                        if (col_hi > tap_cols) {
-                            const uint32_t pad_lo = col_lo > tap_cols ? col_lo : tap_cols;
-                            zero_fill(row_l1 + (pad_lo - col_lo) * ELEM_BYTES, (col_hi - pad_lo) * ELEM_BYTES);
+                        if constexpr (!zero_im2col_once) {
+                            if (col_hi > tap_cols) {
+                                const uint32_t pad_lo = col_lo > tap_cols ? col_lo : tap_cols;
+                                zero_fill(row_l1 + (pad_lo - col_lo) * ELEM_BYTES, (col_hi - pad_lo) * ELEM_BYTES);
+                            }
                         }
-                    }
 
-                    if (++wo == static_cast<int32_t>(output_width)) {
-                        wo = 0;
-                        ++ho;
+                        if (++wo == static_cast<int32_t>(output_width)) {
+                            wo = 0;
+                            ++ho;
+                        }
                     }
                 }
                 // Rows past the block's last valid pixel keep stale bytes: every phase downstream is

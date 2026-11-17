@@ -37,8 +37,12 @@ namespace {
 
 // Tilizes one K-block (block_m_tiles tile-rows x block_k_tiles) of gathered im2col rows. The matmul
 // restores its own state afterwards (InitMode::ShortAfterPreKBlock).
+// The reader lays a tile-row out either as one [32, block_k_tiles * 32] row block or tap-major, as
+// block_k_tiles / tilize_width_tiles blocks of [32, tilize_width_tiles * 32]; tilizing those blocks in order
+// yields the same tiles in the same [m][k] order.
 template <
     uint32_t block_k_tiles,
+    uint32_t tilize_width_tiles,
     uint32_t block_m_tiles,
     uint32_t cb_im2col_rm,
     uint32_t cb_im2col_tiles,
@@ -54,7 +58,9 @@ struct TilizeIm2colKBlock {
             // OutWithRelu turns PACK_RELU on before this hook; activations must not be clamped.
             pack_relu_config(ReluConfig::none());
         }
-        ckl::tilize<block_k_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
+        static_assert(block_k_tiles % tilize_width_tiles == 0);
+        ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+            *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
         if constexpr (relu_on_last_matmul_pack) {
             if (is_last) {
                 pack_relu_config(ReluConfig::zero());
@@ -92,6 +98,7 @@ void kernel_main() {
     constexpr uint32_t cb_combined = get_compile_time_arg_val(23);
     constexpr uint32_t combine_subblock_h = get_compile_time_arg_val(24);
     constexpr uint32_t combine_subblock_w = get_compile_time_arg_val(25);
+    constexpr uint32_t im2col_tilize_width_tiles = get_compile_time_arg_val(26);
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
@@ -145,8 +152,13 @@ void kernel_main() {
     DataflowBuffer combined_dfb(cb_combined);
     DataflowBuffer output_tiles_dfb(cb_output_tiles);
 
-    using TilizeFn =
-        TilizeIm2colKBlock<block_k_tiles, block_m_tiles, cb_im2col_rm, cb_im2col_tiles, relu_on_last_matmul_pack>;
+    using TilizeFn = TilizeIm2colKBlock<
+        block_k_tiles,
+        im2col_tilize_width_tiles,
+        block_m_tiles,
+        cb_im2col_rm,
+        cb_im2col_tiles,
+        relu_on_last_matmul_pack>;
     const TilizeFn tilize_k_block{&im2col_rm_dfb, &im2col_tiles_dfb};
 
     if constexpr (has_bias) {
