@@ -50,10 +50,12 @@ class TransformerBlock(Module):
         is_fsdp: bool = False,
         shard_prompt: bool = False,
         row_capacity: int | None = None,
+        row_independent_matmul_config: bool = False,
     ) -> None:
         """`row_capacity` is the largest per-device row count of the spatial stream (a multiple of
         32); with it, its norms and attention serve every row count up to it with one program. The
-        prompt stream has a fixed length and does not need one."""
+        prompt stream has a fixed length and does not need one. `row_independent_matmul_config` gives
+        the spatial stream's matmuls one config for every row count (see `get_matmul_config`)."""
         super().__init__()
 
         if modulation_dim is None:
@@ -141,6 +143,7 @@ class TransformerBlock(Module):
             shard_prompt=shard_prompt,
             per_head_norm=True,
             row_capacity=row_capacity,
+            row_independent_matmul_config=row_independent_matmul_config,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -164,6 +167,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            row_independent_matmul_config=row_independent_matmul_config,
         )
 
         self.norm2_context = None

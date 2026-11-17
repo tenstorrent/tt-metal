@@ -108,8 +108,12 @@ class Attention(Module):
         is_fsdp: bool = False,
         shard_prompt: bool = False,
         row_capacity: int | None = None,
+        row_independent_matmul_config: bool = False,
     ) -> None:
-        """`row_capacity` is the largest per-device row count of `sequence_1` (a multiple of 32). With
+        """`row_independent_matmul_config` gives the `sequence_1` projections one matmul config for
+        every row count (see `get_matmul_config`), for a stream whose row count follows the input size.
+
+        `row_capacity` is the largest per-device row count of `sequence_1` (a multiple of 32). With
         it, the Q/K norms and the head split and merge take the row count at run time, so one program
         serves every row count up to it; None keeps one program per row count. Ring SDPA then takes
         the token count at run time too, where the rows per device are whole tiles (see
@@ -183,7 +187,13 @@ class Attention(Module):
 
         # chunks=3 splits QKV inside minimal_matmul_split (faster than matmul + ttnn.chunk).
         self.to_qkv = ColParallelLinear(
-            query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
+            query_dim,
+            3 * padded_inner_dim,
+            bias=proj_bias,
+            mesh_axis=tp_axis,
+            chunks=3,
+            row_independent_matmul_config=row_independent_matmul_config,
+            **common_args,
         )
 
         # Fuses head-split + RMSNorm + RoPE. Weight is tiled per-head → [padded_inner_dim] in
@@ -204,7 +214,14 @@ class Attention(Module):
         )
 
         self.to_out = (
-            ColParallelLinear(padded_inner_dim, out_dim, bias=proj_bias, mesh_axis=tp_axis, **common_args)
+            ColParallelLinear(
+                padded_inner_dim,
+                out_dim,
+                bias=proj_bias,
+                mesh_axis=tp_axis,
+                row_independent_matmul_config=row_independent_matmul_config,
+                **common_args,
+            )
             if not self.pre_only
             else None
         )
