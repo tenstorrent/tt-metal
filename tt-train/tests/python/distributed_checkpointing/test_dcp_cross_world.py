@@ -133,7 +133,7 @@ def _run(args: list[str], what: str, expect_ok: bool = True) -> str:
     proc = run_world(_command(args), env, CHILD_TIMEOUT_S)
     lines = output_lines(proc)
     opened = not any("MESH_OPEN_FAILED" in ln for ln in lines)  # tt-run may not carry a rank's exit status
-    if proc.returncode == MESH_OPEN_FAILED or not opened:  # only the descriptor-fabric mismatch: the QuietBox 1x4 ring
+    if proc.returncode == MESH_OPEN_FAILED or not opened:  # only the descriptor-fabric mismatch (see dcp_driver)
         reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")
         pytest.skip(f"{what}: this host cannot open the mesh: {reason}")
     for line in lines:  # the measured differences, for the log
