@@ -323,7 +323,8 @@ void RunTestOnCore(
                       "use_inline_dw_write_from_state",
                       "use_inline_dw_write_with_state",
                       "invalid_txn_id",
-                      "use_dram_bank_dst"}},
+                      "use_dram_bank_dst",
+                      "raw_local_noc_read"}},
             .hw_config = dm_cfg,
         };
         WorkUnitSpec wu{
@@ -369,6 +370,7 @@ void RunTestOnCore(
     const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
     uint32_t invalid_txn_id = 0;
     bool use_dram_bank_dst = false;
+    bool raw_local_noc_read = false;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -388,14 +390,14 @@ void RunTestOnCore(
             // This is illegal because we'd be writing to the mailbox memory
             buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX);
             break;
-        case SanitizeNOCMailboxWriteUncachedAlias:
-            // Quasar-only (skipped at the top otherwise): the mailbox is aliased into the uncached L1
-            // window (upper 4 MB, same physical memory as the cached view). Target the alias so a NoC
-            // access landing in the mailbox through it is still flagged. Complements
-            // SanitizeNOCMailboxWrite, which covers the cached view.
-            buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX) +
-                          hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+        case SanitizeNOCMailboxWriteUncachedAlias: {
+            // The legacy read passes the local address to the NoC unchanged; Noc::async_read would map the
+            // uncached alias (MEM_L1_UNCACHED_BASE) back to the cached view.
+            constexpr uint32_t l1_uncached_base = 0x400000;
+            buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX) + l1_uncached_base;
+            raw_local_noc_read = true;
             break;
+        }
         case SanitizeNOCInlineWriteDram:
             use_inline_dw_write = true;
             // Under ATT the destination is addressed as DRAM bank 0.
@@ -536,7 +538,8 @@ void RunTestOnCore(
         use_inline_dw_write_from_state,
         use_inline_dw_write_with_state,
         invalid_txn_id,
-        use_dram_bank_dst};
+        use_dram_bank_dst,
+        raw_local_noc_read};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
@@ -568,7 +571,8 @@ void RunTestOnCore(
                  {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
                  {"use_inline_dw_write_with_state", use_inline_dw_write_with_state},
                  {"invalid_txn_id", invalid_txn_id},
-                 {"use_dram_bank_dst", use_dram_bank_dst}}),
+                 {"use_dram_bank_dst", use_dram_bank_dst},
+                 {"raw_local_noc_read", raw_local_noc_read}}),
         }};
         tt_metal::experimental::SetProgramRunArgs(program, params);
     }

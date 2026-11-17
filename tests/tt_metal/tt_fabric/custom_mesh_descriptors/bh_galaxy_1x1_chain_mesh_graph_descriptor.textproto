@@ -1,0 +1,33 @@
+# Three one-chip Blackhole meshes chained mesh0 - mesh1 - mesh2 over plain N/E/S/W links, one process per mesh
+# (one pipeline stage per chip). No assign_z_direction: a chip's Z lane serves one neighbour mesh, and mesh 1 has two.
+# Chips are pinned by bh_galaxy_1x1_chain_rank_bindings.yaml. Used by MultiHost.BHGalaxy1x1MeshChainRoutingPlanes
+# and MultiHostFabric.OneChipMeshChainDeviceSetupAndTeardown.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 1 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 2 }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

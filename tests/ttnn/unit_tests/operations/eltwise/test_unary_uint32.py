@@ -78,6 +78,34 @@ def test_unary_uint32(ttnn_op, value_ranges, input_shape, device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
+UINT32_EDGE_VALUES = [0, 1, 2, 2147483646, 2147483647, 2147483648, 2147483649, 3000000000, 4294967294, 4294967295]
+
+
+@pytest.mark.parametrize(
+    "ttnn_op, reference",
+    [
+        (ttnn.gtz, lambda x: x > 0),
+        (ttnn.gez, lambda x: x >= 0),
+        (ttnn.ltz, lambda x: x < 0),
+        (ttnn.lez, lambda x: x <= 0),
+    ],
+)
+@pytest.mark.parametrize("input_shape", [torch.Size([2, 64, 64]), torch.Size([3, 33, 47])])
+def test_unary_zero_comp_uint32(ttnn_op, reference, input_shape, device):
+    # int64 holds the full uint32 range exactly, so the reference compares are exact.
+    torch.manual_seed(0)
+    num_elements = input_shape.numel()
+    torch_input_tensor = torch.randint(0, 2**32, (num_elements,), dtype=torch.int64)
+    torch_input_tensor[::3] = 0
+    torch_input_tensor[1 : 1 + len(UINT32_EDGE_VALUES)] = torch.tensor(UINT32_EDGE_VALUES, dtype=torch.int64)
+    torch_input_tensor = torch_input_tensor.reshape(input_shape)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor), dtype=torch.int64)
+
+    assert torch.equal(output_tensor, reference(torch_input_tensor).to(torch.int64))
+
+
 height_sharded_memory_config = ttnn.create_sharded_memory_config(
     [128, 160],
     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (1, 6)), ttnn.CoreRange((3, 0), (3, 6))}),
