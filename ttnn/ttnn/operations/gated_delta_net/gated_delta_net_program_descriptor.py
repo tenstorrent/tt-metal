@@ -82,8 +82,11 @@ QK_RAW_HANDOFF = True
 # R-QKCORE pair cores (decode R-STEP): each key head's q and k core placed right after its pair cores in row-major order
 # (False: every q / k core after the last key head's). NOC 1 starts a multicast at the rectangle's highest corner, so a
 # sender just past its group reaches it on a short path instead of from the grid's bottom rows across the other groups.
-QK_CORES_AFTER_GROUP = True
 # y send 1.3-3 -> 0.3-0.6 us after its pack at B=8; wall 39.0 vs 38.9 (B=8), 69.4 vs 69.3 us (B=16): noise.
+# Off since refinement 32: the q / k cores between the groups cut the kernel groups into 16 core ranges per RISC
+# (B=8 / B=16), after the last group into 5, and the dispatcher writes binaries and launch messages once per range
+# (start gap in the QB2 decode trace 28 / 40 us per layer). Kernel B=8 35.74 -> 36.22 us, B=16 69.71 -> 70.02.
+QK_CORES_AFTER_GROUP = False
 # R-QKCORE q cores: percent of the window's history rows their reader copies (the writer the rest, and it sends the
 # small inputs; k cores split half and half). B=8: 70 / 85 make the reader the later RISC (last column 7.6 / 7.9 vs
 # 7.4 us at 50); 50 emits no define.
@@ -116,6 +119,9 @@ PREP_RECT = True
 # Tile rows per sequence up to which PREP_RECT places (T=1024 233.0 us against 234.2 in blobs, T=2048 368.5 / 368.4,
 # T=4096 808.4 / 808.0: 0.4 us of kernel against 59 us of start gap per layer in the QB2 4096-token prefill trace).
 PREP_RECT_MAX_ROWS = 128
+# The same for PREP_SHARE_QK plans of one sequence with one value head per group (see _prep_rect_shared; chip T=128 to
+# 512: 69 -> 11 core ranges per RISC).
+PREP_RECT_SHARED = True
 NOC_GRID = (17, 12)  # Blackhole NoC torus (x, y), in NOC 0 coordinates (R-PREP is Blackhole-only)
 # Pieces per pair under R-PREP, at most; _prep_estimate picks among them. Fewer pieces leave more prep cores and halve
 # the fan-out of a prepped row, more shorten the state step: T=128 4 pieces 87 us, 2 pieces 92; T=512 255 vs 199;
@@ -1137,6 +1143,42 @@ def _prep_rect_place(device, grid, n_groups, n_state, strides):
     return state, picks, noc0
 
 
+def _prep_rect_shared(grid, n_kh, per_kh, pieces, stride):
+    """PREP_SHARE_QK plan (one sequence, one value head per group) in column strips: a group is three columns, its
+    state cores in the middle one (its pieces below one another), prep cores left of them sending on NOC 0 and right
+    of them on NOC 1, so no two groups share a link on the way to their state cores; the key heads are bands of
+    `pieces` rows below one another. Stride positions 0 and 1 take the two cores that reach both pieces without the
+    torus wrap (NOC 0 routes east then south, NOC 1 north then west). The q / k cores: the columns right of the last
+    group (NOC 1) and the rows above the bands (NOC 0). Returns (state cores per group, prep cores per group in stride
+    order, {(x, y): sends on NOC 0}, q / k cores per key head) or None when the plan does not fit."""
+    y0 = grid.y - n_kh * pieces
+    side = range(3 * per_kh, grid.x)
+    top = [ttnn.CoreCoord(x, y) for x in range(grid.x) for y in range(y0)]
+    if y0 < 0 or pieces < 2 or stride > 2 * pieces or not side:
+        return None
+    state, picks, pools, noc0 = [], [], [], {}
+    for kh in range(n_kh):
+        ys = list(range(y0 + kh * pieces, y0 + (kh + 1) * pieces))
+        pool = [ttnn.CoreCoord(x, y) for y in ys for x in side][: 2 * stride]
+        noc0.update({(c.x, c.y): False for c in pool})
+        need = 2 * stride - len(pool)
+        if need > len(top):
+            return None
+        pool, top = pool + top[:need], top[need:]
+        noc0.update({(c.x, c.y): True for c in pool[2 * stride - need :]})
+        for j in range(per_kh):
+            x = 3 * j + 1
+            # Left column top down, right column bottom up, in turn: positions 0 and 1 need no wrap.
+            cells = [c for pair in zip(((x - 1, y) for y in ys), ((x + 1, y) for y in reversed(ys))) for c in pair]
+            if stride <= pieces:
+                cells = [(x - 1, y) for y in ys]
+            state.append([ttnn.CoreCoord(x, y) for y in ys])
+            picks.append([ttnn.CoreCoord(*c) for c in cells[:stride]])
+            noc0.update({c: c[0] < x for c in cells[:stride]})
+        pools.append(pool)
+    return state, picks, noc0, pools
+
+
 def _mcast_rects(device, cores):
     """Multicast rectangles covering exactly `cores` (logical, row-major order): one per run of cores consecutive in
     one row of virtual NoC coordinates (non-worker columns split a row), as [count, then (x_lo, y_lo, x_hi, y_hi,
@@ -1379,8 +1421,12 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             free = list(grid_cores)
             assignment, cluster_picks, qk_pools = [], [], {}
             seq_rows = max(_seq_tile_rows(seq, tokens) for seq in range(batch))
-            rect_ok = PREP_RECT and not shared and seq_rows <= PREP_RECT_MAX_ROWS
-            rect = _prep_rect_place(device, grid, len(groups), heads * pieces, strides) if rect_ok else None
+            rect_ok = PREP_RECT and seq_rows <= PREP_RECT_MAX_ROWS
+            if rect_ok and not shared:
+                rect = _prep_rect_place(device, grid, len(groups), heads * pieces, strides)
+            elif rect_ok and PREP_RECT_SHARED and batch == 1 and heads == 1:
+                rect = _prep_rect_shared(grid, key_heads, groups_per_kh, pieces, strides[0])
+                qk_pools = dict(enumerate(rect[3])) if rect else qk_pools
             if rect is not None:
                 cluster_picks = rect[1]
                 for first, cores in zip(groups, rect[0]):
@@ -1800,7 +1846,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             rts[1][core.x, core.y] = [kh_first, 1, tokens, role, zero_slots, zero_slot_bytes] + rows
             rts[1][core.x, core.y] += [c for d in dst_noc for c in (d.x, d.y)]
             rts[2][core.x, core.y] = [kh_first, 1, tokens, v_eps_bits, role] + rows
-            prep_send_noc0[core.x, core.y] = send_noc0(core, [(d.x, d.y) for d in dst_noc])
+            prep_send_noc0[core.x, core.y] = (
+                rect[2][core.x, core.y] if rect else send_noc0(core, [(d.x, d.y) for d in dst_noc])
+            )
         roles[ROLE_PREP_QK] = (prep_qk_cores, *rts)
     if qk_cores:
         # A q / k core's "unit" is its key head; its count the sequences (token rows 0..B-1 of the decode tile row).
