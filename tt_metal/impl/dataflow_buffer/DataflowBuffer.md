@@ -212,7 +212,7 @@ Packed as `(tensix_id[1:0], tc_id[4:0])` in `PackedTileCounter`.
 
 **A single DFB may own many TCs.** Each participating RISC round-robins `num_tcs_to_rr` slots (`MAX_NUM_TILE_COUNTERS_TO_RR = 6`).
 
-**Why 6:** Quasar reserves **DM0** (DFB ISR) and **DM1** (remapper programming), so at most **DM2–DM7** (= 6) can be ordinary producers/consumers. `MAX_NUM_TILE_COUNTERS_TO_RR` and `MAX_PRODUCERS_PER_DFB` are the same limit — one RISC never RR-walks more TCs for a DFB than that participation cap (and the producer-ready signal region is strided by it). How many TCs a given DFB actually gets is still set by access pattern and P/C counts (see [C2](#c2-access-patterns--tile-counter-counts)), not by always allocating 6. Kernels only see a `DataflowBuffer` built from a `DFBBindingToken`.
+**Why 6:** Quasar reserves **DM0** (DFB ISR) and **DM1** (remapper programming), so at most **DM2–DM7** (= 6) can be ordinary producers/consumers. `MAX_NUM_TILE_COUNTERS_TO_RR` and `MAX_PRODUCERS_PER_DFB` are the same limit — one RISC never RR-walks more TCs for a DFB than that participation cap. How many TCs a given DFB actually gets is still set by access pattern and P/C counts (see [C2](#c2-access-patterns--tile-counter-counts)), not by always allocating 6. Kernels only see a `DataflowBuffer` built from a `DFBBindingToken`.
 
 ### C2. Access patterns + tile-counter counts
 
@@ -325,8 +325,8 @@ Firmware enables the remapper globally during DM FW initialization (`g_remapper_
 
 - If a pair’s ClientL **valid** bits are clear (ClientR[0] not valid), HW keeps **default mirroring**.
 - Kernel launch **programs only needed pairs**, setting ClientL valid.
-- After the kernel, **clear valid** on programmed pairs so they do not leak:
-  - DM1: `clear_clientL_valid_up_to_high_watermark_hw()`
+- After the kernel, **clear valid** on programmed pairs so they do not leak. Remapped producers wait for their pair's valid bits at the next launch, so this clear is also what keeps them from seeing the previous launch's pair:
+  - DM0, up to DM1's pair watermark: `clear_clientL_valid_up_to_high_watermark_hw()`
   - Packer: `dfb_clear_packer_remapper_window([lo, hi))`
 
 
@@ -440,11 +440,10 @@ So one ISR fire means: all participating DMs have each completed their NOC ops o
 
 #### Setting up txn-id interrupts (`setup_dfb_implicit_sync`)
 
-Host packs a **DM0 ISR blob** into the DFB config region. Layout:
+Host packs a **DM0 ISR blob** into the DFB config region, and DM0 reads its prologue from one header word:
 
-1. `dfb_dm0_isr_blob_core_header_t` — `producer_txn_id_mask` and `consumer_txn_id_mask` (bit `i` set ⇒ txn id `i` needs poster and/or acker IRQ)
-2. **Threshold pool** — one `threshold` per used id, ascending id order (dense slots)
-3. **Descriptor pool** — 32B `TxnDFBDescriptor` images per used id: which TCs to touch and how many tiles to `inc_posted` / `inc_acked` when that id fires
+1. `dfb_global_header_t::dm0_packed` — the blob offset, the descriptor stride, and the `producer_txn_id_mask` / `consumer_txn_id_mask` (bit `i` set ⇒ txn id `i` needs poster and/or acker IRQ)
+2. **Descriptor pool** (the whole blob) — one `TxnDFBDescriptor` image per used id, ascending id order, each slot 8, 16 or 32B: which TCs to touch and how many tiles to `inc_posted` / `inc_acked` when that id fires, plus the side's kernel-exit finish record, with the CMDBUF threshold in the slot's last byte (byte 23 of a 32B slot, which is followed by padding)
 
 At kernel launch DM0 runs `setup_dfb_implicit_sync`:
 
@@ -545,8 +544,9 @@ sequenceDiagram
   DM1->>DM1: write_ClientR_then_ClientL_set_valid
   Other->>Other: g_dfb_interface
   Note over Other: Packer_programs_intra_alias_pairs
+  Prod->>Prod: remapped_poll_ClientL_valid
   Prod->>Prod: reset_TCs_set_capacity
-  Prod->>Other: dfb_signal_producer_ready
+  Prod->>Other: dfb_signal_hart_byte
   Other->>Other: DataflowBuffer_ctor_dfb_ensure_ready
   Note over DM1,Other: After_kernel_clear_ClientL_valid
 ```
@@ -554,12 +554,12 @@ sequenceDiagram
 
 
 1. FW already enabled the remapper globally.
-2. Host packs: remapper blob → DM0 ISR blob → per-hart iface blobs → signal region.
+2. Host packs: DM1 remapper blob (only when the core has remapper slots) → DM0 ISR blob (only with implicit sync) → per-hart iface blobs → signal region.
 3. **DM0:** txn descriptors, thresholds, IE masks, enable tile ISR, `dm0_isr_ready`.
-4. **DM1:** ClientR then ClientL for this launch (sets valid bits).
+4. **DM1:** ClientR then ClientL for each slot (sets valid bits). It publishes nothing in L1: remapper register writes are posted, so an L1 flag could be seen before the pair is live.
 5. **Other DMs / TRISCs:** `setup_local_dfb_interfaces`. Packer programs intra alias pairs itself (Tensix-only TCs invisible to DM1).
-6. **Producers** reset TCs and set capacities, then publish bytes in `dfb_signal[]`.
-7. `DataflowBuffer` **constructor / `dfb_ensure_ready`:** poll expected producer signal bits; if using the ISR path, also wait for `dm0_isr_ready`; remapped producers wait for ClientL valid.
+6. **Producers:** a remapped producer first polls its pair's ClientL valid bits in the remapper (`RMSW` / `RMSD`), with a ~100-cycle `dfb_spin` backoff between reads so producers do not contend with DM1's writes. A register read is non-posted, so valid bits that read back as set mean the pair is live. Every producer then resets its TCs and sets capacities, and after its whole init walk writes its own byte in `dfb_signal[]` once.
+7. `DataflowBuffer` **constructor / `dfb_ensure_ready`:** poll the signal byte of every hart in the DFB's expected producer mask; on DMs of a core with implicit sync, also wait for `dm0_isr_ready`.
 8. After kernel: clear ClientL valid (DM1 watermark + packer window).
 
 
@@ -645,6 +645,7 @@ See [Part D](#part-d--common-debugging).
 | `WFW` / `WFD`   | `wait_front`         | Waiting for / got consumer tiles                    |
 | `RBW` / `RBD`   | `reserve_back`       | Waiting for / got producer space                    |
 | `DFW` / `DFD`   | `dfb_ensure_ready`   | Constructor sync (producer signals / DM0 ISR ready) |
+| `RMSW` / `RMSD` | DFB init walk        | Remapped producer polling for / saw its pair's ClientL valid bits |
 | `UPTW` / `UPTD` | unpack tilize/reduce | Unpack stalled on tiles / done                      |
 | `AAW` / `AAD`   | firmware, kernel exit | Draining until posted==acked                       |
 | `DXW` / `DXD`   | DM firmware, kernel exit | Waiting for implicit-sync traffic, then handing progress to DM0 |
@@ -662,8 +663,8 @@ See [Part D](#part-d--common-debugging).
   Consumer never `pop_front` / never acked; ring full.
    Check: consumer progress; ALL remapper space only after *all* consumers ack; DM–DM ALL needs every consumer TC acked.
 3. **Hang in ctor (**`DFW`**)**
-  Missing producer-ready signal; ClientL not valid yet; `dm0_isr_ready` never set when ISR expected.
-   Check: which harts are producers; DM0/DM1 setup blobs ran.
+  Missing producer-ready signal; `dm0_isr_ready` never set when ISR expected. A producer that never signals is often itself stuck at `RMSW` in its init walk, waiting for DM1 to program its remapper pair.
+   Check: which harts are producers; the producer harts' waypoints (`RMSW` points at DM1); DM0/DM1 setup blobs ran.
 4. **Hang at kernel exit (**`AAW`**)**
   Unbalanced kernel: a producer pushed more than its consumers popped (or the reverse); one RR TC never drained; ALL consumer still holding occupancy. DM0 posts partial implicit batches only once every DM issuing on that DFB side has returned, so also check that no issuer is stuck before `DXD`.
    Check: reserve/push vs wait/pop counts per endpoint; entry-count divisibility vs txn ids / TCs.

@@ -886,6 +886,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align_power_of_2(length, alignment) - length;
         uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+        bool snoop = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_SNOOP;
         auto wait_for_barrier = [&]() {
             if (!must_barrier) {
                 return;
@@ -930,28 +931,39 @@ void process_write_packed_large(uint32_t* l1_cache) {
             if (length > available_data) {
                 xfer_size = available_data;
                 wait_for_barrier();
-                cq_noc_async_write_with_state_any_len(static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_dests);
+                cq_noc_async_write_with_state_any_len(
+                    static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_dests, noc_index, snoop);
                 must_barrier = false;
             } else {
                 xfer_size = length;
                 if (unlink) {
                     wait_for_barrier();
                     uint32_t rem_xfer_size = cq_noc_async_write_with_state_any_len<false>(
-                        static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_dests);
+                        static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_dests, noc_index, snoop);
                     // Unset Link flag
                     cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0, num_dests, noc_index);
                     uint32_t data_offset = xfer_size - rem_xfer_size;
+#if defined(ARCH_QUASAR)
+                    if (snoop) {
+                        noc_set_packet_tags<NCRISC_WR_CMD_BUF>(/*snoop=*/true, /*flush=*/false);
+                    }
+#endif
                     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_wait>(
                         static_cast<uint32_t>(data_ptr + data_offset),
                         dst_addr + data_offset,
                         rem_xfer_size,
                         num_dests);
+#if defined(ARCH_QUASAR)
+                    if (snoop) {
+                        noc_set_packet_tags<NCRISC_WR_CMD_BUF>(/*snoop=*/false, /*flush=*/false);
+                    }
+#endif
                     // Later writes must barrier, but the `must_barrier = true` in the `if (init_state)` block above
                     // will see to that.
                 } else {
                     wait_for_barrier();
                     cq_noc_async_write_with_state_any_len(
-                        static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_dests);
+                        static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_dests, noc_index, snoop);
                     must_barrier = false;
                 }
             }
