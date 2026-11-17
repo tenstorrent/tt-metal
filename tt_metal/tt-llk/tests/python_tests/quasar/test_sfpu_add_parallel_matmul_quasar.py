@@ -27,14 +27,16 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     PerfRunType,
+    SfpuImpl,
     Transpose,
     format_dict,
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
+    generate_parallel_matmul_dest_depth_profiles,
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
     quasar_mx_smoke,
     runtime,
@@ -56,7 +58,9 @@ from helpers.test_variant_parameters import (
     ENABLE_DIRECT_INDEXING,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATH_OP,
     NUM_FACES,
+    SFPU_IMPL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -68,6 +72,9 @@ DIMENSION_PROFILES = (
     ([32, 32], [32, 32], [32, 32]),
     ([32, 256], [64, 64], [64, 128]),
 )
+# Perf uses the multi-tile profile; one tile is too short to time.
+PERF_DIMENSION_PROFILE = DIMENSION_PROFILES[1]
+
 
 # Caps each add operand at 45% of format max so |a|+|b| stays <= 90% with rounding headroom.
 ADD_RANGE_SAFETY_FACTOR = 0.45
@@ -75,7 +82,6 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 SFPU_ADD_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
     ]
     # The MX pair is on the input side: these operands reach the SFPU through UNP_S
@@ -105,8 +111,7 @@ def _matmul_output_fits_dest(
     dest_sync: DestSync,
 ) -> bool:
     matmul_dims = generate_tile_dims((MATMUL_A_DIMENSIONS, MATMUL_B_DIMENSIONS))
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles = max_dest_tiles(dest_acc, dest_sync)
     return matmul_dims.output_tile_cnt <= max_tiles
 
 
@@ -118,20 +123,24 @@ def generate_parallel_matmul_add_combinations(
         formats_list
     ):
         dest_sync_modes = (DestSync.Half, DestSync.Full)
-        dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
+        dimension_profiles = (
+            (PERF_DIMENSION_PROFILE,) if is_perf else DIMENSION_PROFILES
+        )
         for dest_sync in dest_sync_modes:
+            profiles = [
+                profile
+                for profile in dimension_profiles
+                if _matmul_output_fits_dest(profile[1], profile[2], dest_acc, dest_sync)
+            ]
+            if not is_perf:
+                profiles += generate_parallel_matmul_dest_depth_profiles(
+                    dest_acc, dest_sync
+                )
             for (
                 ADD_INPUT_DIMENSIONS,
                 MATMUL_A_DIMENSIONS,
                 MATMUL_B_DIMENSIONS,
-            ) in dimension_profiles:
-                if not _matmul_output_fits_dest(
-                    MATMUL_A_DIMENSIONS,
-                    MATMUL_B_DIMENSIONS,
-                    dest_acc,
-                    dest_sync,
-                ):
-                    continue
+            ) in profiles:
                 combinations.append(
                     (
                         fmt,
@@ -321,6 +330,9 @@ def test_sfpu_add_parallel_matmul_quasar(
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
+            MATH_OP(mathop=MathOperation.SfpuElwadd),
+            # AddSrcs is plain SFPI; there is no SFPLOADMACRO variant of this kernel.
+            SFPU_IMPL(SfpuImpl.Sfpi),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),

@@ -21,6 +21,10 @@
 #if !defined(COMPILE_FOR_TRISC) && defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && \
     !defined(FORCE_WATCHER_OFF)
 
+// The condition above in one name, for code outside this header that exists only for the NoC sanitizer, such as
+// sanitize_multicast_destination.h and the nodes a multicast destination keeps for it.
+#define DEBUG_SANITIZE_NOC_ENABLED
+
 #include "watcher_common.h"
 #include "internal/hw_thread.h"
 
@@ -709,6 +713,22 @@ void debug_sanitize_noc_and_worker_addr(
     // Check noc addr, get any extra alignment req for worker.
     uint32_t alignment_mask = debug_sanitize_noc_addr(noc_id, noc_addr, worker_addr, len, multicast, dir, check_linked);
 
+#if defined(ARCH_QUASAR)
+    // Quasar-only: a NOC read whose destination is a local register can strand the response and stall L1
+    // writes; reads must land in L1. Every register map sits at or above TT_LOCAL_TENSIX_REG_MAP_BASE_ADDR.
+    if (dir == DEBUG_SANITIZE_NOC_READ && worker_addr + len > TT_LOCAL_TENSIX_REG_MAP_BASE_ADDR) {
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            worker_addr,
+            len,
+            multicast,
+            dir,
+            DEBUG_SANITIZE_NOC_LOCAL,
+            DebugSanitizeNocReadToRegAddr);
+    }
+#endif
+
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
         // Local addr needs to be checked depending on core type.
@@ -1144,3 +1164,5 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid)
 
 #endif  // WATCHER_ENABLED
+
+#include "internal/debug/sanitize_multicast_destination.h"

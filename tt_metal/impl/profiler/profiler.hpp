@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <atomic>
 #include <cstddef>
 #include <filesystem>
@@ -19,7 +19,6 @@
 
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
-#include "context/context_types.hpp"
 #include "core_coord.hpp"
 #include "mesh_device.hpp"
 #include "profiler_optional_metadata.hpp"

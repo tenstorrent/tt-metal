@@ -56,8 +56,8 @@
 #include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
-#include "tracy/Tracy.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
 #include <env_lib.hpp>
 
@@ -99,15 +99,24 @@ int generate_unique_mesh_id() {
     return next_id++;
 }
 
+std::atomic<uint64_t> mesh_device_close_count{0};
+
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
-    ContextId context_id, const std::vector<Device*>& physical_devices) {
+    ContextId context_id,
+    const std::vector<Device*>& physical_devices,
+    std::chrono::microseconds spin_window = std::chrono::microseconds(0)) {
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool(context_id);
     }
-    return create_device_bound_thread_pool(context_id, physical_devices);
+    return create_device_bound_thread_pool(context_id, physical_devices, spin_window);
 }
+
+// Covers the p90 host gap between fan-outs in GLM-5.2 and Kimi K2.7 prefill (144 us), so workers are still polling
+// when the next fan-out comes instead of paying a wake (~14 us for 32 workers). Past that, the wake is a small share
+// of the gap, and a longer window only costs every worker more idle CPU time.
+constexpr auto DISPATCH_POOL_SPIN = std::chrono::microseconds(250);
 
 // Helper function to verify all devices in the MeshDevice have the same value
 template <typename F>
@@ -376,7 +385,8 @@ MeshDeviceImpl::MeshDeviceImpl(
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
-    dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
+    dispatch_thread_pool_(
+        create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()), DISPATCH_POOL_SPIN)),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     local_devices_ = view_->impl().get_devices();
@@ -536,7 +546,9 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     return mesh_device;
 }
 
-void MeshDeviceImpl::enqueue_to_thread_pool(std::function<void()>&& f) { dispatch_thread_pool_->enqueue(std::move(f)); }
+void MeshDeviceImpl::enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f) {
+    dispatch_thread_pool_->enqueue(std::move(f));
+}
 
 void MeshDeviceImpl::wait_for_thread_pool() { dispatch_thread_pool_->wait(); }
 
@@ -1127,8 +1139,11 @@ bool MeshDeviceImpl::close() {
     return false;
 }
 
+uint64_t MeshDeviceImpl::close_count() { return mesh_device_close_count.load(std::memory_order_acquire); }
+
 bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     TTZoneScopedD(MISC);
+    mesh_device_close_count.fetch_add(1, std::memory_order_acq_rel);
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
@@ -1209,7 +1224,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
     // rest of the mesh tears down. If the caller forgot to call StopTensorPrefetcher
-    // we still wait for the kernel's natural num_layers exit so the GCB / receivers it
+    // we still wait for the kernel's natural num_layers exit so the pipes / receivers it
     // touches remain valid until it returns.
     if (tensor_prefetcher_) {
         if (tensor_prefetcher_->is_active()) {
@@ -1222,8 +1237,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         tensor_prefetcher_.reset();
     }
 
-    // DRISC L1 arena is torn down after the prefetcher manager so any GCB-owned
-    // allocation handles have already been released (GCBs are user-owned and the
+    // DRISC L1 arena is torn down after the prefetcher manager so any pipe-owned
+    // allocation handles have already been released (pipes are user-owned and the
     // user's invariant is to destroy them before close).
     drisc_l1_arena_.reset();
 
@@ -1261,6 +1276,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         destroy_metal_context_instance_on_close_ = false;
     }
 
+    // Again after teardown: entries checked while it ran are not trusted after it.
+    mesh_device_close_count.fetch_add(1, std::memory_order_acq_rel);
     return true;
 }
 
@@ -1793,7 +1810,7 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
         this->mesh_id_,
         *(active_sub_device_manager->id()));
     // Re-send any Tensor prefetcher requests captured during this trace's capture, before
-    // dispatching the trace so the host worker can begin filling the GCB as the consuming
+    // dispatching the trace so the host worker can begin filling the pipes as the consuming
     // program is dispatched. No-op (and no manager created) when the prefetcher is unused.
     if (tensor_prefetcher_) {
         tensor_prefetcher_->replay_trace(trace_id);
@@ -1892,7 +1909,7 @@ bool MeshDeviceImpl::initialize_impl(
     Inspector::mesh_device_initialized(this);
 
     // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
-    // cores so users don't observe a lazy side-effect on first DRAM-sender GCB creation.
+    // cores so users don't observe a lazy side-effect on first DRAM-sender pipe creation.
     if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
     }
@@ -1949,6 +1966,10 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
     return *tensor_prefetcher_;
 }
 
+bool MeshDeviceImpl::wait_for_cq_on_tensor_prefetcher_if_active(MeshCommandQueue& cq) const {
+    return tensor_prefetcher_ != nullptr && tensor_prefetcher_->enqueue_cq_signal_and_wait_if_active(cq);
+}
+
 std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
     if (!host_region_) {
         // A closed mesh has no live PCIe endpoint to provision against; a fresh region here
@@ -1961,34 +1982,8 @@ std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
-    const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
-    const uint32_t num_banks = soc_desc.get_num_dram_views();
-    TT_FATAL(
-        bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device->id(), num_banks);
-
-    std::set<std::pair<size_t, size_t>> reserved;
-    for (const auto& c : soc_desc.dram_view_worker_cores.at(bank_id)) {
-        reserved.emplace(c.x, c.y);
-    }
-    for (const auto& c : soc_desc.dram_view_eth_cores.at(bank_id)) {
-        reserved.emplace(c.x, c.y);
-    }
-
-    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
-    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
-    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
-        tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
-            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
-        if (!reserved.contains({coord.x, coord.y})) {
-            return soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
-        }
-    }
-    TT_THROW(
-        "No unused DRAM subchannel found for bank_id={} on device {}; all {} subchannels are reserved as "
-        "worker/eth endpoints",
-        bank_id,
-        device->id(),
-        num_subchannels);
+    return tt::tt_metal::pick_unused_dram_logical_core(
+        metal_env().get_cluster().get_soc_desc(device->id()), bank_id, device->id());
 }
 
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
@@ -2370,8 +2365,6 @@ std::vector<IDevice*> MeshDevice::get_devices() const {
     auto devices = pimpl_->get_devices();
     return {devices.begin(), devices.end()};
 }
-IDevice* MeshDevice::get_device(ChipId physical_device_id) const { return pimpl_->get_device(physical_device_id); }
-IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return pimpl_->get_device(coord); }
 tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coord) const {
     return pimpl_->get_fabric_node_id(coord);
 }
@@ -2400,7 +2393,9 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) const {
     return pimpl_->mesh_command_queue(cq_id);
 }
-void MeshDevice::enqueue_to_thread_pool(std::function<void()>&& f) { pimpl_->enqueue_to_thread_pool(std::move(f)); }
+void MeshDevice::enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f) {
+    pimpl_->enqueue_to_thread_pool(std::move(f));
+}
 void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }

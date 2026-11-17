@@ -11,12 +11,8 @@ import transformers
 
 import ttnn
 
-from ....encoders.qwen3vl.vision_qwen3vl import (
-    Qwen3VlVisionBlock,
-    resolve_vision_parallel,
-    vision_cu_seqlens,
-    vision_rope_tensors,
-)
+from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionBlock
+from ....encoders.vision import resolve_vision_parallel, vision_cu_seqlens, vision_rope_tensors
 from ....utils import tensor
 from ....utils.check import assert_quality
 from .common import (

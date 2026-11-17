@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>  // GetCommonRuntimeArgs (cache-hit in-place patch)
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>  // corerange_to_cores
 #include <array>
 #include <bit>
 #include <string>
@@ -77,7 +78,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const uint32_t out_elem_bytes = output.element_size();
     const uint32_t q_row_bytes = k_dim * q_elem_bytes;
     const uint32_t k_row_bytes = k_dim * kv_elem_bytes;
-    const uint32_t packed_page_bytes = scaled_kv ? t.kv.buffer()->aligned_page_size() : 0;
+    const uint32_t packed_page_bytes = scaled_kv ? t.kv.mesh_buffer().aligned_page_size() : 0;
     const uint32_t scale_blocks = ::sparse_sdpa::scale_block_count(v_dim);
     constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
     constexpr tt::DataFormat fp32 = tt::DataFormat::Float32;
@@ -108,9 +109,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
     auto* device = t.q.device();
-    tt::tt_metal::CoreCoord grid = device->compute_with_storage_grid_size();
-    auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-    const uint32_t num_cores = grid.x * grid.y;
+    const auto& core_grid = attrs.worker_core_grid;
+    const auto cores = corerange_to_cores(core_grid, std::nullopt, /*row_wise=*/true);
+    const uint32_t num_cores = cores.size();
     const uint32_t base = S / num_cores;
     const uint32_t extra = S % num_cores;
 
@@ -352,7 +353,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
+        const auto& core = cores[i];
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
         reader_desc.emplace_runtime_args(core, {tok_start, tok_count});
@@ -376,18 +377,18 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     // tensor-accessor metadata follows these slots and remains unchanged under the cache key.
     const auto& t = tensor_args;
     const uint32_t offset = operation_attributes.cache_batch_idx.value_or(0) * t.kv.logical_shape()[2];
-    const uint32_t kv = t.kv.buffer()->address();
+    const uint32_t kv = t.kv.mesh_buffer().address();
     auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, 0);
     auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, 1);
-    reader_args[::sparse_sdpa::reader_common_arg::Q_ADDRESS] = t.q.buffer()->address();
+    reader_args[::sparse_sdpa::reader_common_arg::Q_ADDRESS] = t.q.mesh_buffer().address();
     reader_args[::sparse_sdpa::reader_common_arg::KV_ADDRESS] = kv;
-    reader_args[::sparse_sdpa::reader_common_arg::INDICES_ADDRESS] = t.indices.buffer()->address();
+    reader_args[::sparse_sdpa::reader_common_arg::INDICES_ADDRESS] = t.indices.mesh_buffer().address();
     reader_args[::sparse_sdpa::reader_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
-    writer_args[::sparse_sdpa::writer_common_arg::OUTPUT_ADDRESS] = tensor_return_value.buffer()->address();
+    writer_args[::sparse_sdpa::writer_common_arg::OUTPUT_ADDRESS] = tensor_return_value.mesh_buffer().address();
     writer_args[::sparse_sdpa::writer_common_arg::KV_ADDRESS] = kv;
     writer_args[::sparse_sdpa::writer_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
     writer_args[::sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS] =
-        t.attention_sink.has_value() ? t.attention_sink->buffer()->address() : 0u;
+        t.attention_sink.has_value() ? t.attention_sink->mesh_buffer().address() : 0u;
 }
 
 }  // namespace ttnn::prim

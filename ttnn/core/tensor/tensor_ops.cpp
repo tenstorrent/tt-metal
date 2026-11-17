@@ -29,6 +29,7 @@
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_host_pad_apis.hpp>
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using tt::tt_metal::BufferRegion;
 using tt::tt_metal::DataType;
@@ -51,6 +52,28 @@ using ttnn::Tensor;
 
 namespace ttnn {
 
+namespace {
+
+// The label of a tensor allocated across the mesh without a mapper, one shard per device: Replicate along every mesh
+// axis, over every coordinate. create_device_tensor and allocate_tensor_on_host label their tensors alike.
+TensorTopology replicated_over_mesh(const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    // TODO (#25340): Implement correct logic and add test for this
+    // River: why are we constructing the topology here like this instead of using the
+    // TensorTopology::create_fully_replicated_tensor_topology function?
+    //
+    // Use Replicate as default value for placements in MeshMapperConfig
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
+        mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coordinates;
+    coordinates.reserve(mesh_shape.mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+        coordinates.push_back(coord);
+    }
+    return TensorTopology{mesh_shape, std::move(placements), std::move(coordinates)};
+}
+
+}  // namespace
+
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
@@ -71,9 +94,8 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::dist
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(
-        host_tensor_from_buffer_with_topology(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
+    return Tensor(host_tensor_from_buffer_with_topology(
+        std::move(distributed_host_buffer), tensor_spec, replicated_over_mesh(device->shape())));
 }
 
 Tensor create_device_tensor(
@@ -94,22 +116,7 @@ Tensor create_device_tensor(
         if (tensor_topology.has_value()) {
             return std::move(*tensor_topology);
         }
-        // TODO (#25340): Implement correct logic and add test for this
-        // River: why are we constructing the topology here like this instead of using the
-        // TensorTopology::create_fully_replicated_tensor_topology function?
-        //
-        // Use Replicate as default value for placements in MeshMapperConfig
-        const auto& mesh_shape = mesh_device->shape();
-        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
-            mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
-
-        std::vector<tt::tt_metal::distributed::MeshCoordinate> coordinates;
-        coordinates.reserve(mesh_shape.mesh_size());
-        for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
-            coordinates.push_back(coord);
-        }
-
-        return TensorTopology{mesh_shape, placements, std::move(coordinates)};
+        return replicated_over_mesh(mesh_device->shape());
     });
 
     output = Tensor(allocate_mesh_tensor_on_device_with_topology(*mesh_device, tensor_spec, topology));
@@ -236,9 +243,13 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
         output = Tensor(cq.enqueue_read_tensor(input_tensor.mesh_tensor(), blocking));
     } else {
         auto coords = input_tensor.device_storage().get_coords();
-        output = Tensor(tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
-            cq, input_tensor.mesh_tensor(), coords, blocking));
+        output = Tensor(
+            tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
+                cq, input_tensor.mesh_tensor(), coords, blocking));
     }
+    // The read labels the host tensor with the MeshTensor's topology; a storage that labels its own shards
+    // (get_device_tensors) carries that label to the host instead.
+    output.update_tensor_topology(input_tensor.tensor_topology());
     output = ttnn::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -444,7 +455,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
     auto new_spec = TensorSpec(
         new_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             input_tensor.tensor_spec().page_config(),
             output_memory_config,

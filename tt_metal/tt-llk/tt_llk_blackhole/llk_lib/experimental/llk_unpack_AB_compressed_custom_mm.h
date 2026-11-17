@@ -21,7 +21,8 @@ using namespace ckernel::unpacker;
 // in0 tile shape: [{1, 2, 4, 8}, 32]
 // in1 tile shape: [32, 32]
 // rt_dim: 1
-// ct_dim: any integer from 1 to 16
+// ct_dim: any integer from 1 to 64, as long as the ct_dim output tiles fit in the DEST sync region
+//         (custom_mm_tile_rows of the CustomMmDestLayout each); nothing else bounds it
 // kt_dim: even number from 2 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
@@ -175,7 +176,7 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo)
  *                           word holds 10 tiles: the previous tile's format in bits 1:0, then per tile a use_b bit
  *                           and a 2-bit format (0 zero, 1 bfp2, 2 bfp4, 3 bfp8).
  * @param kt_dim: Inner dimension in tiles, an even number from 2 to 256.
- * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param ct_dim: Output width in tiles, 1 to 64; DEST capacity bounds it, see @ref _llk_math_compressed_custom_mm_.
  * @note Call @ref _llk_unpack_AB_compressed_custom_mm_init_ first.
  * @note Every call ends on the to/from-bfp2 format stall, so the next call's metadata can start from the
  *       previous-format sentinel (0) without encoding one.
@@ -277,7 +278,7 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
     std::uint32_t meta = meta_ptr[full_iters];
     for (std::uint32_t i = 0; i < rem_iters; ++i)
     {
-        std::uint32_t idx0        = (meta >> 0) & 0b11111;
+        std::uint32_t idx0 = (meta >> 0) & 0b11111;
         TT_INSN(FMTABLE[idx0]);
         meta >>= 3;
     }

@@ -11,6 +11,7 @@
 #include <string_view>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
@@ -101,8 +102,23 @@ auto create_mesh_workload_from_workload_factory(
                       const typename device_operation_t::tensor_args_t& tensor_args,
                       typename device_operation_t::tensor_return_value_t& tensor_return_value) {
                       WorkloadFactory::create_mesh_workload(
-                          operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                          operation_attributes,
+                          tensor_coords,
+                          tensor_args,
+                          tensor_return_value,
+                          ttnn::MergePerDevicePrograms{});
                   }) {
+        // The factory runs the op itself, including its cache hits: it may merge per-device programs.
+        return WorkloadFactory::create_mesh_workload(
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value, ttnn::MergePerDevicePrograms{});
+    } else if constexpr (requires(
+                             const typename device_operation_t::operation_attributes_t& operation_attributes,
+                             const ttnn::MeshCoordinateRangeSet& tensor_coords,
+                             const typename device_operation_t::tensor_args_t& tensor_args,
+                             typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+                             WorkloadFactory::create_mesh_workload(
+                                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                         }) {
         return WorkloadFactory::create_mesh_workload(
             operation_attributes, tensor_coords, tensor_args, tensor_return_value);
     } else if constexpr (requires(
@@ -215,7 +231,9 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
-        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device);
+        // Metal has no implicit queue selection; pass the thread's current TTNN queue explicitly.
+        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
+            mesh_device->mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()));
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
@@ -224,7 +242,12 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    if (is_recording_command_list()) [[unlikely]] {
+        record_to_command_list(
+            get_operation_name<mesh_device_operation_t>(operation_attributes), mesh_device, workload);
+    } else {
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    }
 
     ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
 
@@ -526,28 +549,6 @@ void prepare_operation_with_adapter(
 }
 
 template <DeviceOperationConcept device_operation_t>
-ttnn::MeshDevice* get_mesh_device(
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    ttnn::MeshDevice* mesh_device;
-    auto first_tensor = ttsl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    // Try to get the mesh device from the first tensor
-    if (first_tensor.has_value()) [[likely]] {
-        mesh_device = first_tensor.value().device();
-    } else {
-        // If no tensor is found, try to get the mesh device from the operation attributes
-        auto mesh_device_opt = ttsl::reflection::get_first_object_of_type<ttnn::MeshDevice*>(operation_attributes);
-        if (mesh_device_opt.has_value()) [[likely]] {
-            mesh_device = mesh_device_opt.value();
-        } else {
-            TT_THROW("No mesh device found in operation attributes or tensor args");
-        }
-    }
-
-    return mesh_device;
-}
-
-template <DeviceOperationConcept device_operation_t>
 void validate_input_tensors(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const std::vector<std::reference_wrapper<const Tensor>>& input_tensors) {
@@ -621,7 +622,7 @@ typename device_operation_t::tensor_return_value_t launch(
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
 
-    ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
+    ttnn::MeshDevice* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
 
     // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
@@ -658,7 +659,7 @@ void prepare(
     detail::validate_input_tensors<device_operation_t>(operation_attributes, input_tensors);
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
-    auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
+    auto* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
     TT_FATAL(!mesh_device->get_device_ids().empty(), "Cannot prepare an operation for an inactive MeshDevice");
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);

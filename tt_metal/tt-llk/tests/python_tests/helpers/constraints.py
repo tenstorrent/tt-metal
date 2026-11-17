@@ -4,11 +4,13 @@
 
 from typing import List
 
+import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -23,8 +25,8 @@ def get_valid_dest_accumulation_modes(formats):
 
     Constraints (all architectures):
     - Dest accumulation must be ENABLED for the following format combination:
-        - Input format is 32bit integer format
-        Reason: HW limitation, Unpacker cannot unpack 32bit integer formats into SrcA and SrcB registers
+        - Input format is 32-bit
+        Reason: HW limitation, Unpacker cannot unpack 32-bit formats into SrcA and SrcB registers
 
     Constraints (Wormhole/Blackhole only):
     - Dest accumulation must be ENABLED for the following format combinations:
@@ -45,7 +47,7 @@ def get_valid_dest_accumulation_modes(formats):
     chip_arch = get_chip_architecture()
     in_fmt, out_fmt = formats.input, formats.output
 
-    if in_fmt in [DataFormat.Int32, DataFormat.UInt32]:
+    if in_fmt.is_32_bit():
         return [DestAccumulation.Yes]
 
     if chip_arch == ChipArchitecture.QUASAR:
@@ -138,6 +140,17 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
         ):
             return [MathFidelity.LoFi]
 
+    else:
+        # Wormhole/Blackhole: the SrcA layout is narrower than Quasar's, so the caps differ.
+        # Integer and block-float inputs are already exact at LoFi, Float16_b reaches full
+        # precision at HiFi2, and Float32 needs the high phases (HiFi3/HiFi4).
+        if format.input == DataFormat.Int8 or format.input.is_block_float():
+            return [MathFidelity.LoFi]
+        if format.input == DataFormat.Float16_b:
+            return [MathFidelity.LoFi, MathFidelity.HiFi2]
+        if format.input == DataFormat.Float32:
+            return [MathFidelity.HiFi3, MathFidelity.HiFi4]
+
     # HiFi2 will multiply BFP8 and BFP8_b in full precision, skip HiFi3 and HiFi4
     if PERF_RUN and format.input in [DataFormat.Bfp8_b, DataFormat.Bfp8]:
         return [MathFidelity.LoFi, MathFidelity.HiFi2]
@@ -151,12 +164,7 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
     ]:
         return [MathFidelity.LoFi]
 
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
+    return list(ALL_MATH_FIDELITIES)
 
 
 def get_perf_math_operations():
@@ -430,3 +438,37 @@ def is_valid_quasar_packer_conversion(
     hardware_input = _quasar_sfpu_hardware_format(pack_input_format)
     hardware_output = _quasar_sfpu_hardware_format(output_format)
     return hardware_output in _QUASAR_PACK_OUTPUTS.get(hardware_input, set())
+
+
+def is_valid_quasar_dest_mode_conversion(
+    in_fmt: DataFormat, out_fmt: DataFormat, dest_acc: DestAccumulation
+) -> bool:
+    """Check Quasar Dest-mode packing. A 16-bit Dest rejects non-32-bit inputs packed
+    to 32-bit outputs and source-register Int8/UInt8 format conversions."""
+    if dest_acc != DestAccumulation.No:
+        return True
+    if out_fmt.is_32_bit() and not in_fmt.is_32_bit():
+        return False
+    src_reg_fmt = {
+        DataFormat.Int4: DataFormat.Int8,
+        DataFormat.UInt4: DataFormat.UInt8,
+    }.get(in_fmt, in_fmt)
+    return not (
+        src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8) and src_reg_fmt != out_fmt
+    )
+
+
+def skip_reason_32bit_input_without_dest_acc(formats, dest_acc):
+    """Why :func:`skip_if_32bit_input_without_dest_acc` skips this variant, or ``None``.
+    The exact-op guard in hardware_free/accuracy/test_sfpu_accuracy_budget.py asks it
+    too, so its exclusions cannot drift from the skip."""
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        return "32-bit inputs need a 32-bit Dest (dest_acc=Yes)"
+    return None
+
+
+def skip_if_32bit_input_without_dest_acc(formats, dest_acc):
+    """32-bit inputs need a 32-bit Dest (dest_acc=Yes)."""
+    reason = skip_reason_32bit_input_without_dest_acc(formats, dest_acc)
+    if reason:
+        pytest.skip(reason)

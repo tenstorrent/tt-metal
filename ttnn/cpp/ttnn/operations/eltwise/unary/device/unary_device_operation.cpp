@@ -10,6 +10,11 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <bit>
+#include <cstdint>
+#include <variant>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
@@ -37,10 +42,6 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::ABS: return is_unsigned_int(dtype);
         case UnaryOpType::ABS_INT32:
         case UnaryOpType::CLAMP_TSS:
-        case UnaryOpType::GEZ:
-        case UnaryOpType::GTZ:
-        case UnaryOpType::LEZ:
-        case UnaryOpType::LTZ:
         case UnaryOpType::NEG:
         case UnaryOpType::SIGNBIT: return is_int32(dtype);
 
@@ -49,6 +50,10 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::LEAKY_RELU: return is_unsigned_int(dtype);
 
         case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::GEZ:
+        case UnaryOpType::GTZ:
+        case UnaryOpType::LEZ:
+        case UnaryOpType::LTZ:
         case UnaryOpType::MAXIMUM:
         case UnaryOpType::MINIMUM:
         case UnaryOpType::RSUB:
@@ -92,16 +97,13 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
     if (!is_integer_dtype(input_dtype)) {
         return;
     }
-    // A TYPECAST in a multi-op chain changes the dtype for later ops; this checker only
-    // sees the original tensor dtype, so skip rather than reject a valid post-cast float op.
-    if (op_chain.size() > 1) {
-        for (const auto& op : op_chain) {
-            if (op.type() == UnaryOpType::TYPECAST) {
-                return;
-            }
-        }
-    }
+    // A TYPECAST changes the dtype for the ops after it; this checker only knows the original
+    // tensor dtype, so it stops there rather than reject a valid post-cast float op. The ops
+    // before the cast still run on the integer input and are checked.
     for (const auto& op : op_chain) {
+        if (op.type() == UnaryOpType::TYPECAST) {
+            break;
+        }
         TT_FATAL(
             unary_op_supports_integer_dtype(op.type(), input_dtype),
             "Unary: {} does not support integer input dtype {}",
@@ -113,8 +115,21 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
 }  // namespace
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
-    return ttsl::hash::hash_objects_with_default_seed(
-        op_chain,
+    // Params are embedded bit-for-bit in kernel defines, but std::hash<float> equates +0.0 and -0.0.
+    auto hash = ttsl::hash::hash_objects_with_default_seed(op_chain.size());
+    for (const auto& op : op_chain) {
+        hash = ttsl::hash::hash_objects(hash, op.type(), op.base.index());
+        std::visit(
+            [&hash](auto params) {
+                hash = ttsl::hash::hash_objects(hash, params.size());
+                for (const auto param : params) {
+                    hash = ttsl::hash::hash_objects(hash, std::bit_cast<std::uint32_t>(param));
+                }
+            },
+            op.get_params());
+    }
+    return ttsl::hash::hash_objects(
+        hash,
         output_dtype,
         memory_config,
         fp32_dest_acc_en,
@@ -140,8 +155,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
-        "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
+        input_tensor.is_allocated(), "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
 
@@ -310,7 +324,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const auto output_layout = tensor_args.input.layout();
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             args.output_dtype,
             PageConfig(output_layout),
             args.memory_config,

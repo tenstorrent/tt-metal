@@ -26,6 +26,7 @@
 #include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 #include <optional>
 #include <tuple>
+#include <unordered_map>
 
 namespace ttnn::experimental::prim {
 
@@ -103,34 +104,139 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_workload_d
     return wd;
 }
 
-void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_runtime_arguments(
+namespace ring_attention_all_gather_async_dynamic {
+
+void record_semaphore_arg_slot(
+    SemaphoreArgPatch& patch,
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*tensor_return_value*/,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    namespace dyn = ring_attention_all_gather_async_dynamic;
-
-    // Kernel identity fixes the semaphore, so the sender cores need not be re-derived here.
-    const auto patch_semaphore_arg = [&program](uint32_t kernel_idx, uint32_t arg_idx, uint32_t address) {
-        auto& args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_idx);
-        for (auto& args_by_y : args_by_core) {
-            for (auto& args : args_by_y) {
-                if (arg_idx < args.size()) {
-                    args[arg_idx] = address;
-                }
+    uint32_t kernel_idx,
+    uint32_t arg_idx,
+    uint32_t semaphore_idx) {
+    SemaphoreArgSlot slot{.kernel_idx = kernel_idx, .arg_idx = arg_idx, .semaphore_idx = semaphore_idx};
+    const auto& args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_idx);
+    for (uint32_t x = 0; x < args_by_core.size(); ++x) {
+        for (uint32_t y = 0; y < args_by_core[x].size(); ++y) {
+            const auto& args = args_by_core[x][y];
+            if (args.size() == 0) {
+                continue;
             }
+            TT_FATAL(
+                arg_idx < args.size(),
+                "Kernel {} core ({}, {}) has {} runtime args, no semaphore arg {}",
+                kernel_idx,
+                x,
+                y,
+                args.size(),
+                arg_idx);
+            slot.cores.emplace_back(x, y);
         }
-    };
+    }
+    TT_FATAL(!slot.cores.empty(), "Kernel {} has no runtime arguments", kernel_idx);
+    patch.slots.push_back(std::move(slot));
+}
 
-    const auto& semaphore = operation_attributes.semaphore;
-    const auto forward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kForwardSemaphoreIdx).address());
-    const auto backward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kBackwardSemaphoreIdx).address());
+void record_all_gather_semaphore_arg_slots(
+    SemaphoreArgPatch& patch, tt::tt_metal::Program& program, uint32_t first_kernel_idx) {
+    namespace ag_detail = ttnn::ring_attention_all_gather_async_detail;
+    record_semaphore_arg_slot(
+        patch,
+        program,
+        first_kernel_idx + ag_detail::kReaderForwardKernelOffset,
+        kReaderSemaphoreArg,
+        kForwardSemaphoreIdx);
+    record_semaphore_arg_slot(
+        patch,
+        program,
+        first_kernel_idx + ag_detail::kWriterForwardKernelOffset,
+        kWriterSemaphoreArg,
+        kForwardSemaphoreIdx);
+    record_semaphore_arg_slot(
+        patch,
+        program,
+        first_kernel_idx + ag_detail::kReaderBackwardKernelOffset,
+        kReaderSemaphoreArg,
+        kBackwardSemaphoreIdx);
+    record_semaphore_arg_slot(
+        patch,
+        program,
+        first_kernel_idx + ag_detail::kWriterBackwardKernelOffset,
+        kWriterSemaphoreArg,
+        kBackwardSemaphoreIdx);
+}
 
-    patch_semaphore_arg(dyn::kReaderForwardKernelIdx, dyn::kReaderSemaphoreArg, forward_sem_addr);
-    patch_semaphore_arg(dyn::kWriterForwardKernelIdx, dyn::kWriterSemaphoreArg, forward_sem_addr);
-    patch_semaphore_arg(dyn::kReaderBackwardKernelIdx, dyn::kReaderSemaphoreArg, backward_sem_addr);
-    patch_semaphore_arg(dyn::kWriterBackwardKernelIdx, dyn::kWriterSemaphoreArg, backward_sem_addr);
+std::vector<uint32_t> semaphore_addresses(const std::vector<GlobalSemaphore>& semaphores) {
+    std::vector<uint32_t> addresses;
+    addresses.reserve(semaphores.size());
+    for (const auto& semaphore : semaphores) {
+        addresses.push_back(static_cast<uint32_t>(semaphore.address()));
+    }
+    return addresses;
+}
+
+void apply_semaphore_arg_patch(
+    SemaphoreArgPatch& patch, tt::tt_metal::Program& program, const std::vector<GlobalSemaphore>& semaphores) {
+    auto addresses = semaphore_addresses(semaphores);
+    if (addresses == patch.addresses) {
+        return;
+    }
+    for (const auto& slot : patch.slots) {
+        TT_FATAL(
+            slot.semaphore_idx < addresses.size(),
+            "Kernel {} needs semaphore {}, got {} semaphores",
+            slot.kernel_idx,
+            slot.semaphore_idx,
+            addresses.size());
+        const uint32_t address = addresses[slot.semaphore_idx];
+        auto& args_by_core = tt::tt_metal::GetRuntimeArgs(program, slot.kernel_idx);
+        for (const auto& core : slot.cores) {
+            args_by_core[core.x][core.y][slot.arg_idx] = address;
+        }
+    }
+    patch.addresses = std::move(addresses);
+}
+
+}  // namespace ring_attention_all_gather_async_dynamic
+
+RingAttentionAllGatherAsyncMeshWorkloadFactory::cached_mesh_workload_t
+RingAttentionAllGatherAsyncMeshWorkloadFactory::create_mesh_workload(
+    const RingAttentionAllGatherAsyncParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const RingAttentionAllGatherAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
+    namespace dyn = ring_attention_all_gather_async_dynamic;
+    auto descriptor_cached = descriptor_adapter_t::create_mesh_workload(
+        operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
+        auto& shared = shared_variables[range];
+        shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
+        dyn::record_all_gather_semaphore_arg_slots(shared.semaphore_patch, program, dyn::kReaderForwardKernelIdx);
+        shared.semaphore_patch.addresses = dyn::semaphore_addresses(operation_attributes.semaphore);
+    }
+    return {std::move(descriptor_cached.workload), std::move(shared_variables)};
+}
+
+void RingAttentionAllGatherAsyncMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const RingAttentionAllGatherAsyncParams& operation_attributes,
+    const RingAttentionAllGatherAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
+    if (cached_workload.shared_variables.empty()) {
+        return;
+    }
+    // Every coordinate's descriptor copy holds the same workload resources, so collect once.
+    const auto collected = descriptor_adapter_t::collect_tensor_buffers(
+        tensor_args,
+        tensor_return_value,
+        cached_workload.shared_variables.begin()->second.descriptor.workload_descriptor);
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        auto& shared = cached_workload.shared_variables.at(range);
+        if (!shared.descriptor.resolved_bindings.empty()) {
+            tt::tt_metal::apply_resolved_bindings(program, shared.descriptor.resolved_bindings, collected.buffers);
+        }
+        ring_attention_all_gather_async_dynamic::apply_semaphore_arg_patch(
+            shared.semaphore_patch, program, operation_attributes.semaphore);
+    }
 }
 
 }  // namespace ttnn::experimental::prim
@@ -245,7 +351,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     const CoreRangeSet workers(worker_core_range);
 
     const uint32_t page_size = op_config.get_page_size();
-    const uint32_t packet_buffer_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t packet_buffer_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const uint32_t pages_per_packet = std::min(packet_buffer_bytes / page_size, kMaxHaloPagesPerPacket);
     const uint32_t cb_pages = kDoubleBufferingFactor * kPrefetchPackets * pages_per_packet;
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.front().dtype());
@@ -370,8 +476,8 @@ void ring_attention_neighbor_halo_exchange_helper(
     const auto& halo_semaphore = semaphores.at(2);
     for (uint32_t link = 0; link < num_links; ++link) {
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(
-            static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        reader_args.push_back(static_cast<uint32_t>(
+            halo_semaphore.address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
         reader_args.push_back(link);
         KernelDescriptor::RTArgList writer_args;
         const CoreCoord worker_physical = mesh_device->worker_core_from_logical_core(worker_cores[link]);
@@ -386,8 +492,8 @@ void ring_attention_neighbor_halo_exchange_helper(
         const CoreCoord arrival_core = halo.has_rendezvous() ? halo.rendezvous_noc[link] : worker_physical;
         writer_args.push_back(arrival_core.x);
         writer_args.push_back(arrival_core.y);
-        writer_args.push_back(
-            static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        writer_args.push_back(static_cast<uint32_t>(
+            halo_semaphore.address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
 
         writer_args.push_back(link);
 
@@ -553,6 +659,7 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(1u);
         }
         tt::tt_fabric::append_fabric_connection_rt_args(
+            *mesh_device,
             mesh_device->get_fabric_node_id(target_device_coord),
             mesh_device->get_fabric_node_id(transport_device_coord),
             halo.link_base + link,
@@ -926,13 +1033,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         "ring_attention_all_gather_writer.cpp";
 
     const auto make_reader_compile_time_args = [&](uint32_t cb_index, bool worker_direction) {
+        // The per-chip slots (rank, targets) are 0: the kernel reads them from its common runtime args, so every chip
+        // compiles the same binary.
         std::vector<uint32_t> args = {
-            ring_index,                                         // kMyTransportRank
+            0,                                                  // kMyTransportRank (common arg 0)
             cb_index,                                           // kCbOutputId
             num_pages_per_packet,                               // kPacketSizeInPages
             op_config.get_page_size(),                          // kInputTensorPageSize
-            num_targets_forward,                                // kNumTargetsForwardDirection
-            num_targets_backward,                               // kNumTargetsBackwardDirection
+            0,                                                  // kNumTargetsForwardDirection (common arg 1)
+            0,                                                  // kNumTargetsBackwardDirection (common arg 2)
             static_cast<uint32_t>(topology),                    // kTopology
             kContiguousPagesAdvanced,                           // kContigPagesAdvanced
             num_inputs,                                         // kNumInputs
@@ -941,7 +1050,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(has_metadata),                // kHasMetadata
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
-            static_cast<uint32_t>(rank_mapping.full_mesh),      // kFullMeshRankMapping
+            rank_mapping_compile_time_arg(rank_mapping),        // kFullMeshRankMapping
             static_cast<uint32_t>(rank_mapping.orientation),    // kSnakeOrientation
             rank_mapping.mesh_rows,                             // kMeshRows
             rank_mapping.mesh_cols,                             // kMeshCols
@@ -978,28 +1087,27 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     const auto make_writer_compile_time_args = [&](uint32_t cb_index,
                                                    uint32_t packet_header_cb_index,
-                                                   bool worker_direction,
-                                                   uint32_t unicast_route_arg0,
-                                                   uint32_t unicast_route_arg1) {
+                                                   bool worker_direction) {
+        // The per-chip slots (rank, targets, route) are 0: the kernel reads them from its common runtime args.
         std::vector<uint32_t> args = {
-            ring_index,                                         // kMyTransportRank
+            0,                                                  // kMyTransportRank (common arg 0)
             packet_header_cb_index,                             // kReservedPacketHeaderCbId
             cb_index,                                           // kCbOutputId
             num_pages_per_packet,                               // kPacketSizeInPages
             op_config.get_page_size(),                          // kOutputPageSize
-            num_targets_forward,                                // kNumTargetsForwardDirection
-            num_targets_backward,                               // kNumTargetsBackwardDirection
+            0,                                                  // kNumTargetsForwardDirection (common arg 1)
+            0,                                                  // kNumTargetsBackwardDirection (common arg 2)
             static_cast<uint32_t>(fuse_op),                     // kFuseOp
             static_cast<uint32_t>(topology),                    // kTopology
             num_inputs,                                         // kNumInputs
             static_cast<uint32_t>(worker_direction),            // kDirection
-            unicast_route_arg0,                                 // kUnicastRouteArg0
-            unicast_route_arg1,                                 // kUnicastRouteArg1
+            0,                                                  // kUnicastRouteArg0 (common arg 3)
+            0,                                                  // kUnicastRouteArg1 (common arg 4)
             static_cast<uint32_t>(has_metadata),                // kHasMetadata
             meta_cb_index,                                      // kCbMetaId
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
-            static_cast<uint32_t>(rank_mapping.full_mesh),      // kFullMeshRankMapping
+            rank_mapping_compile_time_arg(rank_mapping),        // kFullMeshRankMapping
             static_cast<uint32_t>(rank_mapping.orientation),    // kSnakeOrientation
             rank_mapping.mesh_rows,                             // kMeshRows
             rank_mapping.mesh_cols,                             // kMeshCols
@@ -1031,6 +1139,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_reader_forward_kernel.config = WriterConfigDescriptor{};
     sender_reader_forward_kernel.compile_time_args =
         make_reader_compile_time_args(sender_forward_cb_index, kForwardDirection);
+    sender_reader_forward_kernel.common_runtime_args = {ring_index, num_targets_forward, num_targets_backward};
 
     // Writer
     KernelDescriptor sender_writer_forward_kernel{};
@@ -1039,11 +1148,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_forward_kernel.core_ranges = sender_forward_core_ranges;
     sender_writer_forward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_forward_kernel.compile_time_args = make_writer_compile_time_args(
-        sender_forward_cb_index,
-        reserved_packet_header_forward_CB_index,
-        kForwardDirection,
-        unicast_backward_args[0],
-        unicast_backward_args[1]);
+        sender_forward_cb_index, reserved_packet_header_forward_CB_index, kForwardDirection);
+    sender_writer_forward_kernel.common_runtime_args = {
+        ring_index, num_targets_forward, num_targets_backward, unicast_backward_args[0], unicast_backward_args[1]};
     // Backward Direction
     // Reader
     KernelDescriptor sender_reader_backward_kernel{};
@@ -1053,6 +1160,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_reader_backward_kernel.config = WriterConfigDescriptor{};
     sender_reader_backward_kernel.compile_time_args =
         make_reader_compile_time_args(sender_backward_cb_index, kBackwardDirection);
+    sender_reader_backward_kernel.common_runtime_args = {ring_index, num_targets_forward, num_targets_backward};
 
     // Writer
     KernelDescriptor sender_writer_backward_kernel{};
@@ -1061,11 +1169,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_backward_kernel.core_ranges = sender_backward_core_ranges;
     sender_writer_backward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_backward_kernel.compile_time_args = make_writer_compile_time_args(
-        sender_backward_cb_index,
-        reserved_packet_header_backward_CB_index,
-        kBackwardDirection,
-        unicast_forward_args[0],
-        unicast_forward_args[1]);
+        sender_backward_cb_index, reserved_packet_header_backward_CB_index, kBackwardDirection);
+    sender_writer_backward_kernel.common_runtime_args = {
+        ring_index, num_targets_forward, num_targets_backward, unicast_forward_args[0], unicast_forward_args[1]};
 
     /* All gather fusion */
     // Inline equivalent of AllGatherFusedOpSignaler::init_all_gather for the descriptor
@@ -1245,6 +1351,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_args.push_back(static_cast<uint32_t>(neighbor_coord.has_value()));
         if (neighbor_coord.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
+                *mesh_device,
                 mesh_device->get_fabric_node_id(target_device_coord),
                 mesh_device->get_fabric_node_id(*neighbor_coord),
                 placement.link,
