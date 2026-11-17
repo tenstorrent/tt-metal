@@ -7,8 +7,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
@@ -16,7 +16,6 @@ namespace ttnn::experimental::prim {
 using namespace tt::constants;
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts
 NlpCreateHeadsVitDeviceOperation::NlpCreateQkvHeadsVitProgramFactory::create_program_artifacts(
@@ -29,7 +28,7 @@ NlpCreateHeadsVitDeviceOperation::NlpCreateQkvHeadsVitProgramFactory::create_pro
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt::tile_size(data_format);
-    TT_ASSERT(a.buffer()->size() % single_tile_size == 0);
+    TT_ASSERT(a.mesh_buffer().device_local_size() % single_tile_size == 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup
@@ -65,9 +64,9 @@ NlpCreateHeadsVitDeviceOperation::NlpCreateQkvHeadsVitProgramFactory::create_pro
     ttnn::Tensor& k = output[1];
     ttnn::Tensor& v = output[2];
 
-    TT_ASSERT(q.buffer() != nullptr, "Output q buffer should be allocated on device!");
-    TT_ASSERT(k.buffer() != nullptr, "Output k buffer should be allocated on device!");
-    TT_ASSERT(v.buffer() != nullptr, "Output v buffer should be allocated on device!");
+    TT_ASSERT(q.is_allocated(), "Output q buffer should be allocated on device!");
+    TT_ASSERT(k.is_allocated(), "Output k buffer should be allocated on device!");
+    TT_ASSERT(v.is_allocated(), "Output v buffer should be allocated on device!");
 
     // The Metal 2.0 binding layer works with the Metalium tensor type; extract once.
     const auto& input_mesh_tensor = a.mesh_tensor();

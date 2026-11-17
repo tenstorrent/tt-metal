@@ -20,12 +20,7 @@ target_include_directories(
 )
 
 # Link libraries to the object library
-target_link_libraries(
-    unit_tests_api_lib
-    PRIVATE
-        test_metal_common_libs
-        Boost::smart_ptr
-)
+target_link_libraries(unit_tests_api_lib PRIVATE test_metal_common_libs)
 
 TT_ENABLE_UNITY_BUILD(unit_tests_api_lib)
 tt_reuse_precompile_headers(unit_tests_api_lib metal_test_pch)
@@ -60,12 +55,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(
-    unit_tests_tensor_lib
-    PRIVATE
-        test_metal_common_libs
-        Boost::smart_ptr
-)
+target_link_libraries(unit_tests_tensor_lib PRIVATE test_metal_common_libs)
 TT_ENABLE_UNITY_BUILD(unit_tests_tensor_lib)
 tt_reuse_precompile_headers(unit_tests_tensor_lib metal_test_pch)
 
@@ -85,6 +75,7 @@ add_executable(
     allocator/test_per_core_allocation.cpp
     allocator/test_range_lockstep_allocation.cpp
     allocator/test_range_lockstep_allocation_host.cpp
+    metal2_host_api/integration_tests/per_node_tensor_bindings.cpp
 )
 target_include_directories(
     unit_tests_hybrid_allocator
@@ -93,6 +84,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${PROJECT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_link_libraries(unit_tests_hybrid_allocator PRIVATE test_metal_common_libs)
 tt_reuse_precompile_headers(unit_tests_hybrid_allocator metal_test_pch)
@@ -115,12 +107,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(
-    dfb_init_timing_bench
-    PRIVATE
-        test_metal_common_libs
-        Boost::smart_ptr
-)
+target_link_libraries(dfb_init_timing_bench PRIVATE test_metal_common_libs)
 tt_reuse_precompile_headers(dfb_init_timing_bench metal_test_pch)
 set_target_properties(
     dfb_init_timing_bench

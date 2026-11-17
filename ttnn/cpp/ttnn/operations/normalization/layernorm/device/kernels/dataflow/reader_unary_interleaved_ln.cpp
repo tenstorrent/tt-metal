@@ -166,8 +166,8 @@ void kernel_main() {
             // for welford reads. Absent when no alias is active; the duplicate push would then
             // double-count dfb_in0's semaphore.
 #ifdef WELFORD_FP32_ALIAS
-            dfb_x_welford.reserve_back(block.full_block_size());
-            dfb_x_welford.push_back(block.full_block_size());
+            dfb_x_welford.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+            dfb_x_welford.push_back(static_cast<uint16_t>(block.full_block_size()));
 #endif
 #endif
         }

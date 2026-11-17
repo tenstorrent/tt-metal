@@ -17,9 +17,8 @@ class BottleneckOptimizer:
 
 bottleneck_layer_optimisations = {
     "default": BottleneckOptimizer(
-        conv1={"act_block_h": 32, "memory_config": ttnn.DRAM_MEMORY_CONFIG},
+        conv1={"memory_config": ttnn.DRAM_MEMORY_CONFIG},
         conv2={
-            "act_block_h": 32,
             "memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "deallocate_activation": True,
             "reallocate_halo_output": True,
@@ -36,7 +35,6 @@ bottleneck_layer_optimisations = {
     ),
     "layer1": BottleneckOptimizer(
         conv1={
-            "act_block_h": 32,
             "reallocate_halo_output": True,
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             "reshard_if_not_optimal": True,
@@ -44,7 +42,6 @@ bottleneck_layer_optimisations = {
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         },
         conv2={
-            "act_block_h": 256,
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             "deallocate_activation": True,
             "reallocate_halo_output": True,
@@ -55,14 +52,12 @@ bottleneck_layer_optimisations = {
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         },
         conv3={
-            "act_block_h": 32,
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             "deallocate_activation": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         },
         downsample={
-            "act_block_h": 32,
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             "deallocate_activation": True,
             "reallocate_halo_output": True,
@@ -84,7 +79,6 @@ bottleneck_layer_optimisations = {
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         },
         conv2={
-            "act_block_h": 256,
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             "deallocate_activation": True,
             "reallocate_halo_output": True,
@@ -94,7 +88,6 @@ bottleneck_layer_optimisations = {
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         },
         conv3={
-            "act_block_h": 32,
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             "deallocate_activation": True,
             "reallocate_halo_output": True,
@@ -145,7 +138,6 @@ bottleneck_layer_optimisations = {
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         },
         downsample={
-            "act_block_h": 32,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": True,
             "reallocate_halo_output": True,
@@ -168,7 +160,6 @@ bottleneck_layer_optimisations = {
             "dtype": ttnn.bfloat16,
         },
         conv2={
-            "act_block_h": 512,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "deallocate_activation": True,
             "reshard_if_not_optimal": True,

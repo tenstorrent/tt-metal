@@ -22,7 +22,7 @@ void kernel_main() {
     uint32_t a = get_arg(args::a);
     uint32_t b = get_arg(args::b);
     constexpr uint32_t l1_address = get_arg(args::l1_address);
-    CoreLocalMem<std::uint32_t> result(l1_address);
+    CoreLocalMem<std::uint32_t> result(l1_address + MEM_L1_UNCACHED_BASE);
 
     result[0] = a + b;
     DPRINT("Adding two ints: {} + {} = {}\n", a, b, result[0]);

@@ -15,6 +15,7 @@
 #include "ttnn/operations/experimental/quasar/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -173,7 +174,7 @@ Tensor div(
                 input,
                 value,
                 binary::BinaryOpType::DIV_FLOOR,
-                std::nullopt,
+                output_dtype,
                 output_mem_config,
                 output_tensor,
                 post_activations,
@@ -188,7 +189,7 @@ Tensor div(
                 input,
                 value,
                 binary::BinaryOpType::DIV_TRUNC,
-                std::nullopt,
+                output_dtype,
                 output_mem_config,
                 output_tensor,
                 post_activations,
@@ -207,7 +208,7 @@ Tensor div(
             input,
             value,
             binary::BinaryOpType::DIV,
-            std::nullopt,
+            output_dtype,
             output_mem_config,
             output_tensor,
             post_activations,
@@ -225,7 +226,7 @@ Tensor div(
             input,
             value,
             binary::BinaryOpType::DIV,
-            std::nullopt,
+            output_dtype,
             output_mem_config,
             output_tensor,
             post_activations,
@@ -250,12 +251,28 @@ Tensor div(
     const bool suppress_fap = fast_and_approximate_mode && input.dtype() == DataType::BFLOAT16;
     const bool effective_fap = suppress_fap ? false : fast_and_approximate_mode;
 
+    // A preallocated output pins the result dtype exactly like an explicit dtype does, so the two
+    // have to agree before either can decide how the quotient is rounded.
+    TT_FATAL(
+        !output_dtype.has_value() || !output_tensor.has_value() || *output_dtype == output_tensor->dtype(),
+        "If both output dtype and output tensor are provided, their dtypes should match");
+    const std::optional<const DataType> requested_dtype =
+        output_tensor.has_value() ? std::optional<const DataType>{output_tensor->dtype()} : output_dtype;
+
+    // The quotient has to stay in floating point until it is rounded: narrowing it to an integer
+    // dtype first truncates toward zero, which would turn floor(-3.5) into -3 instead of -4. An
+    // integer destination is therefore filled by a typecast after the rounding step.
+    const bool cast_after_rounding = requested_dtype.has_value() && !tt::tt_metal::is_floating_point(*requested_dtype);
+    const std::optional<const DataType> quotient_dtype =
+        cast_after_rounding ? std::optional<const DataType>{} : output_dtype;
+    const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
+
     std::optional<Tensor> divided = q::divide(
         input,
         value,
-        std::nullopt,
+        quotient_dtype,
         output_mem_config,
-        output_tensor,
+        quotient_output,
         post_activations,
         lhs_activations,
         rhs_activations,
@@ -263,10 +280,13 @@ Tensor div(
         sub_core_grids,
         sub_device_id);
 
-    if (rounding_mode == "trunc") {
-        return ttnn::trunc(divided.value(), output_mem_config, output_tensor, sub_core_grids);
+    Tensor rounded = (rounding_mode == "trunc")
+                         ? ttnn::trunc(divided.value(), output_mem_config, quotient_output, sub_core_grids)
+                         : ttnn::floor(divided.value(), output_mem_config, quotient_output, sub_core_grids);
+    if (!cast_after_rounding) {
+        return rounded;
     }
-    return ttnn::floor(divided.value(), output_mem_config, output_tensor, sub_core_grids);
+    return ttnn::typecast(rounded, *requested_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
 Tensor div(
@@ -297,7 +317,7 @@ Tensor div(
                 input_a,
                 input_b,
                 binary::BinaryOpType::DIV_FLOOR,
-                std::nullopt,
+                output_dtype,
                 output_mem_config,
                 output_tensor,
                 post_activations,
@@ -312,7 +332,7 @@ Tensor div(
                 input_a,
                 input_b,
                 binary::BinaryOpType::DIV_TRUNC,
-                std::nullopt,
+                output_dtype,
                 output_mem_config,
                 output_tensor,
                 post_activations,
@@ -331,7 +351,7 @@ Tensor div(
             input_a,
             input_b,
             binary::BinaryOpType::DIV,
-            std::nullopt,
+            output_dtype,
             output_mem_config,
             output_tensor,
             post_activations,
@@ -349,7 +369,7 @@ Tensor div(
             input_a,
             input_b,
             binary::BinaryOpType::DIV,
-            std::nullopt,
+            output_dtype,
             output_mem_config,
             output_tensor,
             post_activations,
@@ -374,12 +394,28 @@ Tensor div(
     const bool suppress_fap = fast_and_approximate_mode && input_dtype == DataType::BFLOAT16;
     const bool effective_fap = suppress_fap ? false : fast_and_approximate_mode;
 
+    // A preallocated output pins the result dtype exactly like an explicit dtype does, so the two
+    // have to agree before either can decide how the quotient is rounded.
+    TT_FATAL(
+        !output_dtype.has_value() || !output_tensor.has_value() || *output_dtype == output_tensor->dtype(),
+        "If both output dtype and output tensor are provided, their dtypes should match");
+    const std::optional<const DataType> requested_dtype =
+        output_tensor.has_value() ? std::optional<const DataType>{output_tensor->dtype()} : output_dtype;
+
+    // The quotient has to stay in floating point until it is rounded: narrowing it to an integer
+    // dtype first truncates toward zero, which would turn floor(-3.5) into -3 instead of -4. An
+    // integer destination is therefore filled by a typecast after the rounding step.
+    const bool cast_after_rounding = requested_dtype.has_value() && !tt::tt_metal::is_floating_point(*requested_dtype);
+    const std::optional<const DataType> quotient_dtype =
+        cast_after_rounding ? std::optional<const DataType>{} : output_dtype;
+    const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
+
     std::optional<Tensor> divided = q::divide(
         input_a,
         input_b,
-        std::nullopt,
+        quotient_dtype,
         output_mem_config,
-        output_tensor,
+        quotient_output,
         post_activations,
         lhs_activations,
         rhs_activations,
@@ -387,10 +423,13 @@ Tensor div(
         sub_core_grids,
         sub_device_id);
 
-    if (rounding_mode == "trunc") {
-        return ttnn::trunc(divided.value(), output_mem_config, output_tensor, sub_core_grids);
+    Tensor rounded = (rounding_mode == "trunc")
+                         ? ttnn::trunc(divided.value(), output_mem_config, quotient_output, sub_core_grids)
+                         : ttnn::floor(divided.value(), output_mem_config, quotient_output, sub_core_grids);
+    if (!cast_after_rounding) {
+        return rounded;
     }
-    return ttnn::floor(divided.value(), output_mem_config, output_tensor, sub_core_grids);
+    return ttnn::typecast(rounded, *requested_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
 Tensor div_no_nan(

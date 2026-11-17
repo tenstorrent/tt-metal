@@ -6,12 +6,10 @@ Replicates ttnn tilize compute kernel flow (compute_kernel_hw_startup +
 fast_tilize_init/block/uninit) through the LLK test infra.
 """
 
-import pytest
-import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -23,21 +21,19 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TILE_R = 32
 TILE_C = 32
 
 
+@blackhole_only
 @parametrize(
     formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
     dest_acc=[DestAccumulation.No],
     dimensions=[(1, 2), (1, 4), (1, 8), (2, 4), (2, 8), (10, 12)],
 )
 def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     rt, ct = dimensions
     input_dimensions = [rt * TILE_R, ct * TILE_C]
     tile_count = rt * ct
@@ -79,6 +75,5 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
     )
 
     res = cfg.run().result
-    assert len(res) == len(golden)
-    res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res, formats.output_format, golden)
     assert passed_test(golden, res_tensor, formats.output_format)

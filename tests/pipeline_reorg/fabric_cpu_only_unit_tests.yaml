@@ -8,7 +8,7 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group wh-galaxy
   skus:
     cpu_medium:
-      timeout: 8
+      timeout: 6
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -23,7 +23,7 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-misc
   skus:
     cpu_medium:
-      timeout: 8
+      timeout: 6
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -67,7 +67,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-sp4-glx
   skus:
     cpu_medium:
-      timeout: 20
+      timeout: 13
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -80,7 +80,7 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc16
   skus:
     cpu_medium:
-      timeout: 14
+      timeout: 16
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -91,7 +91,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-fsd-reliability
   skus:
     cpu_medium:
-      timeout: 20
+      timeout: 30
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -102,7 +102,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
   skus:
     cpu_medium:
-      timeout: 48
+      timeout: 37
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -113,7 +113,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-blitz-decode
   skus:
     cpu_medium:
-      timeout: 24
+      timeout: 25
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -135,7 +135,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "subtorus_sc16_4x32_3bigmesh"
   skus:
     cpu_medium:
-      timeout: 6
+      timeout: 5
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -146,7 +146,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
   skus:
     cpu_medium:
-      timeout: 66
+      timeout: 80
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -157,7 +157,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-heterogeneous
   skus:
     cpu_medium:
-      timeout: 7
+      timeout: 28
   team: scaleout
   budget_type: unit
   arch: wormhole_b0

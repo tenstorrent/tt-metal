@@ -143,7 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         PROFILER_SYNC();
@@ -153,7 +153,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
             if constexpr (is_fp32_dest_acc_en)
@@ -226,9 +226,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
+        // PACK_ISOLATE packs without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -252,7 +252,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)

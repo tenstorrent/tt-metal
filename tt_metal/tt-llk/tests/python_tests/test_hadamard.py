@@ -19,7 +19,12 @@ import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import HadamardH128Golden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
+from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+)
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import StimuliMode, TestConfig
@@ -41,15 +46,6 @@ FACE_ELEMENTS = 16 * 16
 TILE_SLOT_ELEMENTS = 1024
 
 NORM_SCALE = 1.0 / math.sqrt(128.0)
-
-# All four fidelities. LoFi issues one MVMUL per matmul pass; HiFi2/3/4 all issue two with the
-# asymmetric phase step, so they are expected to be indistinguishable in most tests.
-FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 
 
 def _sylvester(order):
@@ -177,7 +173,9 @@ def _assert_close(device, expected, output_format, what):
     )
 
 
-@parametrize(fidelity=FIDELITIES, normalize=[False, True], num_tiles=[1, 8])
+# LoFi issues one MVMUL per matmul pass; HiFi2/3/4 issue two with the asymmetric
+# phase step, so they are expected to be indistinguishable in most tests.
+@parametrize(fidelity=ALL_MATH_FIDELITIES, normalize=[False, True], num_tiles=[1, 8])
 def test_hadamard_h128(fidelity, normalize, num_tiles):
     inputs = _signs(seed=101, count=num_tiles)
 

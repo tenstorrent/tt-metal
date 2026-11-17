@@ -2,15 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared DRAM-sender topology helpers: turning a caller's (bank id -> receivers) request into
-// the (DRAM-logical sender core -> receivers) mapping the remote-buffer objects are built from,
-// and deriving each sender's bank-local slab base from that mapping.
-//
-// Used by both DRAM-sender transports -- GlobalCircularBuffer
-// (CreateGlobalCircularBufferForTensorPrefetcher) and PrefetcherPipe
-// (CreatePrefetcherPipesForTensorPrefetcher) -- so the two agree on sender placement, the
-// dual-sender receiver split, and slab numbering. The Tensor prefetcher's receiver-contiguous
-// contract depends on all three matching what the consumer op computes independently.
+// DRAM-sender topology helpers: turning a caller's (bank id -> receivers) request into the
+// (DRAM-logical sender core -> receivers) mapping DRAM-sender PrefetcherPipes are built from
+// (CreatePrefetcherPipesForTensorPrefetcher), and deriving each sender's bank-local slab base from
+// that mapping. The Tensor prefetcher's delivery contract depends on sender placement, the
+// dual-sender receiver split, and slab numbering matching what the consumer op computes
+// independently.
 
 #pragma once
 
@@ -21,7 +18,10 @@
 #include <vector>
 
 #include <core_coord.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/hal_types.hpp>
+
+struct metal_SocDescriptor;
 
 namespace tt::tt_metal {
 
@@ -30,6 +30,14 @@ class IDevice;
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
+
+// The logical DRAM core of DRAM view `bank_id` whose physical NoC coord the SoC descriptor does not
+// already claim as a worker_endpoint or eth_endpoint -- i.e. one safe for a DRISC kernel to occupy.
+// Resolved against `soc_desc`'s harvested DRAM topology; `device_id` only names the device in errors.
+// Throws if no free subchannel exists, or TT_FATALs if bank_id is out of range. Depends only on the SoC
+// descriptor, so device init can name this core in the firmware's tensor_prefetcher_signal_noc_xy table before
+// any MeshDevice exists.
+CoreCoord pick_unused_dram_logical_core(const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id);
 
 // How many DRISC sender cores drive one DRAM bank. TwoPerBank splits a bank's receivers across
 // both of its senders; OnePerBank is what a shard feeding more than one receiver requires.
@@ -60,9 +68,8 @@ void validate_dram_senders_across_mesh(
 // Per-sender bank-local recv_index_base. Senders are ordered [bank b s0, bank b s1, bank b+1 s0,
 // ...] (sender_logical.x == bank_id); recv_index_base resets to 0 on a bank change and accumulates
 // within a bank (dual senders share a bank). Returns one value per sender in mapping order. Called
-// once per target, where the mapping is built: a GCB derives its bases from its own immutable
-// mapping, and CreatePrefetcherPipesForTensorPrefetcher hands each pipe the base it keeps. Single
-// source for those and for a consumer's own slab accounting.
+// once, where the mapping is built: CreatePrefetcherPipesForTensorPrefetcher hands each pipe the
+// base it keeps. Single source for those and for a consumer's own slab accounting.
 std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping);
 
 // Write `bytes` into DRAM-logical sender core `sender_logical`'s own L1 on `device`, at DRISC-L1

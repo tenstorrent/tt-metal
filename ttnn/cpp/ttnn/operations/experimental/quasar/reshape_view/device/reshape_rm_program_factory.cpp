@@ -10,7 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #define MASK_64 0xFFFFFFFFFFFFFFC0
 #define MASK_16 0xFFFFFFFFFFFFFFF0

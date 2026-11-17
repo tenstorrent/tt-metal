@@ -8,9 +8,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_sync.h"
 #include "llk_unpack_common.h"
-#include "llk_unpack_unary_operand_to_dest.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -19,9 +17,8 @@ using namespace ckernel;
  * @brief MOP configuration for unpack of unary operations
  * @details Sets up MOP for unpacking a single operand by tiles
  * Specialized for tiny-tile unpack where each face is a separate tile in HW.
- * Works for any unpack resource
  * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
+ * values = p_unpacr::UNP_A/p_unpacr::UNP_B
  * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
@@ -32,15 +29,13 @@ template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
 {
-    // TODO: Implement Unpack to dest for tiny tiles
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B");
 
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
 
-    // For UNP_A/UNP_B: Dst Tile Idx Inc = 0 so each face overwrites the same SrcA/B tile slot.
+    // Dst Tile Idx Inc = 0 so each face overwrites the same SrcA/B tile slot.
     // Dvalid is set per face so math can consume each face before the next one arrives.
-    // For UNP_DEST: Dst Tile Idx Inc = 1 to place faces at consecutive dest positions (no math involved).
     std::uint32_t unpack_tile_instrn;
     std::uint32_t unpack_tile_w_dvalid_instrn;
     std::uint32_t reset_dest_tile_cnt_instrn = TT_OP_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0 /*Value*/);
@@ -78,23 +73,17 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
 /**
  * @brief MOP configuration for unpack of unary operations
  * @details Sets up MOP for unpacking a single operand by tiles
- * works for any unpack resource
  * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
+ * values = p_unpacr::UNP_A/p_unpacr::UNP_B
  * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
- * @note For UNP_DEST no dvalid is set (no math is involved): the caller's DEST handshake takes its place, either the dest-dvalid
- *       @ref _llk_unpack_dest_dvalid_section_done_ for a bare UNP_DEST unpack, or the UNPACK_MATH / MATH_PACK section handshake
- *       that brackets the tile / block calls of llk_unpack_unary_operand_to_dest.h (see @ref _llk_unpack_unary_operand_to_dest_init_).
  */
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
-    static_assert(
-        (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
-        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
+    static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B");
 
     const std::uint32_t MOP_OUTER_LOOP     = num_tiles;
     constexpr std::uint32_t MOP_INNER_LOOP = 1;
@@ -109,17 +98,12 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
     {
         unpack_tile_instrn = TT_OP_UNPACR1_TILE_INC(0 /*Dst_Tile_Idx_Inc*/, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
     }
-    else if constexpr (UNP_SEL == p_unpacr::UNP_DEST)
-    {
-        // Consecutive tiles land at consecutive DEST positions; no dvalid, see the @note above.
-        unpack_tile_instrn = TT_OP_UNPACR_DEST_TILE_INC(1 /*Dst_Tile_Idx_Inc*/, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
-    }
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
 
     // If EN_32BIT_DEST and UNP_SEL = UNP_A, zero out the SRCB reg
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
-    if constexpr (EN_32BIT_DEST && (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B))
+    if constexpr (EN_32BIT_DEST)
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
         temp.set_end_op(clr_unused_unpacr_engine);
@@ -282,13 +266,10 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  *
  * Programs the transpose config, then dispatches to the reuse_dest, transpose, or plain MOP builder.
  *
- * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB, values = <true/false>
  * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam unpack_to_dest: When true, selects the semaphore-synchronized unpack-to-DEST path of llk_unpack_unary_operand_to_dest.h (this
- *         init keeps the num_tiles MOP, the execute forwards to @ref _llk_unpack_unary_operand_to_dest_tile_); requires UNP_SEL == UNP_DEST,
- *         values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
@@ -297,38 +278,17 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  *       unpack half of an eltwise binary op, so pair with @ref _llk_math_eltwise_binary_init_ (the dummy-dvalid NOP here feeds the source register that math
  *       fills with MOVD2A/B from dest).
  * @note @ref _llk_unpack_unary_operand_ is the matching execute call on this thread.
- * @note UNP_DEST with unpack_to_dest = false is the bare dest-dvalid form; pair it with @ref _llk_unpack_dest_dvalid_section_done_. unpack_to_dest =
- *       true is kept so that callers which select the semaphore form through this family (the tt-llk test infra and fuser) keep working; new code
- *       should call the llk_unpack_unary_operand_to_dest.h family directly. That arm also runs the DEST bank reset (@ref _llk_unpack_dest_init_)
- *       on every init, as the inline path did, because those callers issue no separate once-per-program init.
+ * @note To unpack straight into DEST, use @ref _llk_unpack_unary_operand_to_dest_init_ (llk_unpack_unary_operand_to_dest.h) instead.
  */
-template <
-    std::uint32_t UNP_SEL,
-    bool TRANSPOSE_EN,
-    bool EN_32BIT_DEST,
-    EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                   = false>
+template <std::uint32_t UNP_SEL, bool TRANSPOSE_EN, bool EN_32BIT_DEST, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t num_tiles)
 {
+    static_assert(
+        (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B),
+        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B; for unpack to DEST please use _llk_unpack_unary_operand_to_dest_init_");
     static_assert(!(TRANSPOSE_EN && reuse_dest != EltwiseBinaryReuseDestType::NONE), "Transpose is not supported with reuse_dest");
 
-    if constexpr (unpack_to_dest)
-    {
-        static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
-
-        // Compatibility path for callers that still size the MOP at init (see the @note above): the unpack-to-dest
-        // family's own MOP is one tile per run, so this arm keeps this family's num_tiles MOP and only the execute
-        // (@ref _llk_unpack_unary_operand_) forwards. The per-init DEST bank reset is what this arm did before the
-        // family was split out: unpack owns the DEST section base in this path and these callers issue no separate
-        // once-per-program _llk_unpack_dest_init_.
-        _llk_unpack_dest_init_();
-        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
-        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
-        _llk_unpack_unary_operand_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles);
-        return;
-    }
-
-    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
+    if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, TRANSPOSE_EN);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
@@ -349,62 +309,32 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
     }
     else
     {
-        if constexpr (UNP_SEL == p_unpacr::UNP_DEST) // workaround for unpack to dest, since not supported for tiny tile currently
+        if (tensor_shape.total_num_faces() == NUM_FACES || tensor_shape.total_num_faces() == 1) // Using regular tile dimensions
         {
             _llk_unpack_unary_operand_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles);
         }
-        else
+        else // Using tiny-tiles
         {
-            if (tensor_shape.total_num_faces() == NUM_FACES || tensor_shape.total_num_faces() == 1) // Using regular tile dimensions
-            {
-                _llk_unpack_unary_operand_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles);
-            }
-            else // Using tiny-tiles
-            {
-                _llk_unpack_unary_operand_variable_tile_size_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles, tensor_shape);
-            }
+            _llk_unpack_unary_operand_variable_tile_size_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles, tensor_shape);
         }
     }
 }
 
 /**
- * @brief Unpacks a single operand; works for any unpack resource.
+ * @brief Unpacks a single operand into SrcA or SrcB.
  *
- * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam reuse_dest: When not NONE, sets the source counter for the CB unpacker only, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam unpack_to_dest: When true, runs the UNPACK_MATH / MATH_PACK section handshake around one @ref _llk_unpack_unary_operand_to_dest_tile_
- *         run of the init's num_tiles MOP; requires UNP_SEL == UNP_DEST, values = <true/false>
- * @tparam DEST_SYNC_MODE: Only used with unpack_to_dest: in SyncHalf the DEST section base flips to the other bank after each call,
- *         values = <SyncFull/SyncHalf>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc (unused with unpack_to_dest, which
- *        supports regular tiles only)
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note Call @ref _llk_unpack_unary_operand_init_ with matching template args before this function.
  */
-template <
-    std::uint32_t UNP_SEL,
-    EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                   = false,
-    ckernel::DstSync DEST_SYNC_MODE       = ckernel::DstSync::SyncFull>
+template <std::uint32_t UNP_SEL, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const TensorShape& tensor_shape)
 {
-    if constexpr (unpack_to_dest)
-    {
-        static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
-
-        // One MOP run (the init's num_tiles tiles) into DEST tiles [0, num_tiles) as one section, bracketed with the
-        // section handshake that tt-metal callers of the to-dest family run in tile_regs_acquire / tile_regs_commit
-        // (llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done). EN_32BIT_DEST stays pinned to true, as it
-        // was when this arm was inline: it sizes the SyncHalf bank flip and must match the pack side of the same op.
-        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
-        _llk_unpack_unary_operand_to_dest_tile_(l1_tile_idx, 0 /*dst_tile_idx*/);
-        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
-        if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
-        {
-            _llk_sync_advance_dest_section_<to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
-        }
-        return;
-    }
+    static_assert(
+        (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B),
+        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B; for unpack to DEST please use _llk_unpack_unary_operand_to_dest_tile_/_block_");
 
     // RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must
@@ -428,10 +358,8 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
         // For tiny-tiles, each face is considered a separate tile in HW. We need to multiply the tile idx by num_faces to get the correct SW defined tile
         // offset.
         TT_SET_SRC_TILE_FACE_ROW_IDX(
-            p_set_inc_sel::TILE_SEL,
-            UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL,
-            (tensor_shape.total_num_faces() == NUM_FACES) ? l1_tile_idx : l1_tile_idx * tensor_shape.total_num_faces());
-        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL, 0 /*Value*/);
+            p_set_inc_sel::TILE_SEL, UNP_SEL, (tensor_shape.total_num_faces() == NUM_FACES) ? l1_tile_idx : l1_tile_idx * tensor_shape.total_num_faces());
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0 /*Value*/);
     }
 
     // Runs MOP

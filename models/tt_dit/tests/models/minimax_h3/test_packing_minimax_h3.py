@@ -207,6 +207,21 @@ def test_slot_routing_rejects_a_role_it_would_drop(expect_error):
         p.build_slot_routing(layout, roles=("video", "audio"))
 
 
+@pytest.mark.parametrize("case", [BRINGUP, CANONICAL, T2VA], ids=lambda c: c[0])
+def test_adaln_indices_are_unsigned_table_rows(case):
+    """The pipeline uploads the slot and adaLN rows as uint32 with no device typecast: all >= 0, inside the table."""
+    _, latent_height, latent_width, num_frames, anchors = case
+    layout = _layout(latent_height, latent_width, num_frames, anchors)
+    row_slot, roles = p.build_slot_routing(layout)
+    rows = p.adaln_indices(layout.token_tags, row_slot)
+    assert row_slot.min().item() >= 0
+    assert rows.min().item() >= 0
+    assert rows.max().item() < len(roles) * p.MINIMAX_H3_MODALITY_NUM
+    # the reference tags padding rows -1; the clamp keeps them on the slot's first row
+    padded = p.adaln_indices(torch.full((4,), -1, dtype=torch.long), row_slot[:4])
+    assert torch.equal(padded, row_slot[:4] * p.MINIMAX_H3_MODALITY_NUM)
+
+
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])
 def test_patchify_round_trip(case):
     _, latent_height, latent_width, num_frames, _ = case

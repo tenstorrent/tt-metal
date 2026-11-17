@@ -37,7 +37,7 @@ void run_eltwise_binary_test(
     log_info(LogTest, "====================================================================");
     log_info(LogTest, "======= Running eltwise_binary test for op={}", op_id_to_op_name[eltwise_op]);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     distributed::MeshWorkload mesh_workload;
     CoreCoord core = {0, 0};
 

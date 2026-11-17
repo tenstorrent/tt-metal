@@ -52,7 +52,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     to_device,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.encoder import TtNomicBertEncoder
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
@@ -229,8 +229,9 @@ def test_routing_agreement_holds_at_depth(device, config, reference_model, refer
             # measuring there would report decisions the model never makes.
             tt_attn = layer.attn(tensor, rot_mats)
             tt_hidden = layer._norm(tt_attn, tensor, layer.norm1)
-            _, _, indices = layer.mlp.router.select(flatten_tokens(tt_hidden))
-            selected = ttnn.to_torch(indices).long().reshape(tokens, config.moe_top_k)
+            routing = layer.mlp.router(flatten_tokens(tt_hidden))
+            selected = ttnn.to_torch(routing.indices).long().reshape(tokens, config.moe_top_k)
+            routing.deallocate()
             with torch.no_grad():
                 block = reference.layers[idx]
                 ref_hidden = block.norm1(block.attn(reference_input, attention_mask=None) + reference_input)

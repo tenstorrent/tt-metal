@@ -28,6 +28,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -60,7 +61,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        if constexpr (unpack_to_dest)
+        {
+            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
+            // bank offset reset to 0 keeps every section at DEST tile 0.
+            _llk_unpack_dest_init_();
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+        }
+        else
+        {
+            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        }
 
         // Program dest-dvalid CFG after HW configure so wait masks are the last
         // writes before TILE_LOOP. UNPACK is only a dest client on UNP_DEST.
@@ -100,7 +111,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                if constexpr (unpack_to_dest)
+                {
+                    _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, TILE_CNT);
+                }
+                else
+                {
+                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                }
                 if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -145,7 +163,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
         if constexpr (!unpack_to_dest)
         {
@@ -175,8 +193,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else
         {
             // CFG wait masks persist across run types. MATH_ISOLATE runs without
-            // a pack consumer; UNPACK_ISOLATE / L1_CONGESTION only mock Src
-            // handshakes. None of them may inherit the FPU→SFPU→PACK chain.
+            // a pack consumer; UNPACK_ISOLATE only mocks Src
+            // handshakes. Neither may inherit the FPU→SFPU→PACK chain.
             set_up_zero_dest_dvalid_handshake_for_math();
             set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
@@ -184,7 +202,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
             {
@@ -283,7 +301,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // PACK_ISOLATE / L1_CONGESTION pack independently. UNPACK_ISOLATE /
+            // PACK_ISOLATE packs independently. UNPACK_ISOLATE /
             // MATH_ISOLATE do not pack. None may inherit the L1_TO_L1 wait mask.
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -291,7 +309,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {

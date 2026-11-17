@@ -20,6 +20,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -97,7 +98,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     TensorMemoryLayout output_memory_layout = operation_attributes.output_mem_config.memory_layout();
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     // Input must be in valid tile layout
@@ -279,7 +280,7 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
 
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype,
             PageConfig(Layout::ROW_MAJOR),
             operation_attributes.output_mem_config,

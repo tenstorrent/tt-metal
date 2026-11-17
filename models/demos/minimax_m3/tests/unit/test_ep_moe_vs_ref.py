@@ -19,8 +19,6 @@ dispatch/combine (fused clamped-swigluoai kernel) across all 32 chips, then adds
 Random weights. Needs TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy ([8,4]). Anchor: transformers minimax_m3_vl.
 """
 
-import json
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -34,13 +32,15 @@ from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.mlp import MLP
 from models.demos.minimax_m3.tt.moe import shared_overlap
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config
 
 from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
-# Real M3 MoE dims (from configs/MiniMax-M3/config.json).
-HIDDEN, E, TOPK = 6144, 128, 4
-INTER, SHARED_INTER = 3072, 3072  # routed intermediate_size / shared_intermediate_size
-SCALE, ALPHA, LIMIT = 2.0, 1.702, 7.0  # routed_scaling_factor / swigluoai alpha / clamp limit
+# Real MoE dims from the selected variant's config (M3_MODEL_VARIANT / HF_MODEL; utils/model_variant.py).
+_CFG = load_config()
+HIDDEN, E, TOPK = _CFG["hidden_size"], _CFG["num_local_experts"], _CFG["num_experts_per_tok"]
+INTER, SHARED_INTER = _CFG["intermediate_size"], _CFG["shared_intermediate_size"]
+SCALE, ALPHA, LIMIT = _CFG["routed_scaling_factor"], _CFG["swiglu_alpha"], _CFG["swiglu_limit"]
 
 
 def _rand(*s):
@@ -101,12 +101,8 @@ def _build(mesh_device, seq_len, overlap_shared_expert=True):
         state[f"experts.{e}.w3.weight"] = w3
         state[f"experts.{e}.w2.weight"] = w2
 
-    # --- config from the real M3 config.json (128 experts / top-4, real dims) ---
-    cfg_path = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M3", "config.json")
-    with open(cfg_path) as f:
-        c = json.load(f)
-    hf_config = SimpleNamespace(**c)
-    assert hf_config.num_local_experts == E and hf_config.hidden_size == HIDDEN, "config.json is not stock M3"
+    # --- the selected variant's config (real expert count / top-k / dims) ---
+    hf_config = SimpleNamespace(**_CFG)
 
     mesh_config = MeshConfig((rows, cols), tp=cols)
     ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)

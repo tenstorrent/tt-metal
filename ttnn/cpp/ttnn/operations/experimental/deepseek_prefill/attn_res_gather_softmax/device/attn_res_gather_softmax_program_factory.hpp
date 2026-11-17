@@ -28,7 +28,6 @@ struct AttnResGatherSoftmaxSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
     tt::tt_metal::KernelHandle gather_kernel_id{};
-    std::vector<tt::tt_metal::CoreCoord> fold_cores;
     tt::tt_metal::CoreCoord gather_core;
 };
 

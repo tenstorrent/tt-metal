@@ -9,6 +9,8 @@
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -34,24 +36,73 @@ bool uses_contiguous_staging(
         ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config));
 }
 
+template <typename ProgramFactory>
+using DescriptorAdapter = ttnn::device_operation::MeshDeviceOperationAdapter<
+    ReduceScatterMinimalAsyncDeviceOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;
+
+// The cache-hit re-application of the caller-owned semaphores depends on the adapter reaching these hooks.
+static_assert(DescriptorAdapter<RingReduceScatterProgramFactory>::has_override_runtime_arguments());
+static_assert(DescriptorAdapter<LineReduceScatterProgramFactory>::has_override_runtime_arguments());
+
 }  // unnamed namespace
 
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-        return RingReduceScatterMeshWorkloadFactory{};
+        return RingReduceScatterProgramFactory{};
     }
     TT_FATAL(operation_attributes.topology == ttnn::ccl::Topology::Linear, "Topology must be Ring or Linear");
-    return LineReduceScatterMeshWorkloadFactory{};
+    return LineReduceScatterProgramFactory{};
+}
+
+bool ReduceScatterMinimalAsyncDeviceOperation::line_runtime_rows(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& shape = input_tensor.padded_shape();
+    if (shape.rank() < 2) {
+        return false;
+    }
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        shape.rank() == 2 ? ttnn::experimental::ccl::reduce_scatter_map_2d_to_4d(operation_attributes.dim)
+                          : ttnn::experimental::ccl::reduce_scatter_map_nd_to_4d(shape, operation_attributes.dim);
+    const auto sharded = [](const auto& optional) { return optional.has_value() && optional->is_sharded(); };
+    const bool tiled_interleaved = input_tensor.layout() == tt::tt_metal::Layout::TILE && !input_tensor.is_sharded() &&
+                                   !operation_attributes.output_mem_config.is_sharded() &&
+                                   !sharded(operation_attributes.optional_intermediate_mem_config) &&
+                                   !sharded(tensor_args.optional_intermediate_tensor) &&
+                                   !sharded(tensor_args.optional_output_tensor);
+    return ttnn::experimental::ccl::reduce_scatter_line_runtime_rows(
+        operation_attributes.topology,
+        normalized_dim,
+        input_tensor_B,
+        input_tensor_C,
+        tiled_interleaved,
+        operation_attributes.chunks_per_sync,
+        operation_attributes.num_workers_per_link);
+}
+
+ttsl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!line_runtime_rows(operation_attributes, tensor_args)) {
+        return ttsl::hash::hash_objects_with_default_seed(operation_attributes, tensor_args);
+    }
+    using ttnn::operations::common::hash_spec_without_rows;
+    return ttsl::hash::hash_objects_with_default_seed(
+        operation_attributes.attribute_values(),
+        /*row_free=*/true,
+        hash_spec_without_rows(tensor_args.input_tensor),
+        hash_spec_without_rows(tensor_args.optional_intermediate_tensor),
+        hash_spec_without_rows(tensor_args.optional_output_tensor),
+        tensor_args.optional_penult_intermediate_tensor.has_value());
 }
 
 void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Lightweight validation for cache hits
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
 
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         TT_FATAL(
@@ -62,6 +113,31 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
         TT_FATAL(
             tensor_args.optional_penult_intermediate_tensor->device() == input_tensor.device(),
             "Persistent penult intermediate tensor must be allocated on the same mesh device as the input tensor");
+    }
+    if (line_runtime_rows(operation_attributes, tensor_args)) {
+        const auto& shape = input_tensor.padded_shape();
+        TT_FATAL(
+            shape[-2] % tt::constants::TILE_HEIGHT == 0,
+            "reduce_scatter_minimal_async: input height {} must be a multiple of the tile height",
+            shape[-2]);
+        const auto input_pages = input_tensor.mesh_buffer().num_pages();
+        if (tensor_args.optional_intermediate_tensor.has_value()) {
+            TT_FATAL(
+                tensor_args.optional_intermediate_tensor->mesh_buffer().num_pages() >= 2 * input_pages,
+                "reduce_scatter_minimal_async: the intermediate ({} pages) must hold two copies of the input ({} "
+                "pages)",
+                tensor_args.optional_intermediate_tensor->mesh_buffer().num_pages(),
+                input_pages);
+        }
+        if (tensor_args.optional_output_tensor.has_value()) {
+            const auto& output_shape = tensor_args.optional_output_tensor->padded_shape();
+            TT_FATAL(
+                output_shape[-2] == shape[-2] && output_shape[-1] * operation_attributes.ring_size == shape[-1],
+                "reduce_scatter_minimal_async: output {} cannot take the dim-3 scatter of input {} over {} devices",
+                output_shape,
+                shape,
+                operation_attributes.ring_size);
+        }
     }
 }
 
@@ -391,10 +467,10 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     // take max(read_bw, write_bw) rather than summing them.
     // =========================================================================
     const auto& output_tensor = output_tensors[1];  // [0] is intermediate, [1] is output
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
     const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
     const uint32_t num_cores = device_rows * device_cols;

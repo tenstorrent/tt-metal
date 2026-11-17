@@ -48,7 +48,10 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
+    uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set);
+    const CoreRangeSet& worker_core_range_set,
+    const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt,
+    const std::optional<ttnn::Tensor>& staging_buffer = std::nullopt);
 }  // namespace ttnn::prim

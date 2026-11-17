@@ -43,30 +43,29 @@ distributed::MeshCoordinateRange single_device_range() {
     return distributed::MeshCoordinateRange(zero, zero);
 }
 
-Program& add_empty_program(distributed::MeshWorkload& workload) {
+Program& add_empty_program(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload) {
     auto range = single_device_range();
-    workload.add_program(range, Program());
+    workload.add_program(range, CreateProgram(mesh_device));
     return workload.get_programs().at(range);
 }
 
 // One print kernel per node, each its own KernelSpec in its own WorkUnit. These tests are about a
 // program carrying several distinct kernels, so this deliberately does not collapse them into a
 // single kernel fanned out over a node range.
-Program make_worker_print_program(
-    distributed::MeshDevice& mesh_device, const std::vector<experimental::NodeCoord>& nodes) {
-    experimental::ProgramSpec spec{.name = "dprint_multi_kernel"};
+Program make_worker_print_program(distributed::MeshDevice& mesh_device, const std::vector<NodeCoord>& nodes) {
+    ProgramSpec spec{.name = "dprint_multi_kernel"};
     for (size_t i = 0; i < nodes.size(); i++) {
-        const experimental::KernelSpecName name{"worker_print_" + std::to_string(i)};
-        spec.kernels.push_back(experimental::KernelSpec{
+        const KernelSpecName name{"worker_print_" + std::to_string(i)};
+        spec.kernels.push_back(KernelSpec{
             .unique_id = name,
             .source = std::filesystem::path{kWorkerKernel},
             .num_threads = 1,
             .hw_config = DevicePrintFixture::SingleThreadDmConfig(mesh_device.arch()),
         });
         spec.work_units.push_back(
-            experimental::WorkUnitSpec{.name = "wu_" + std::to_string(i), .kernels = {name}, .target_nodes = nodes[i]});
+            WorkUnitSpec{.name = "wu_" + std::to_string(i), .kernels = {name}, .target_nodes = nodes[i]});
     }
-    return experimental::MakeProgramFromSpec(mesh_device, spec);
+    return tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
 }
 
 EthernetConfig make_active_eth_config() {
@@ -114,7 +113,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
         }
 
         distributed::MeshWorkload workload;
-        Program& program = add_empty_program(workload);
+        Program& program = add_empty_program(*mesh_device, workload);
 
         const CoreRangeSet crs(std::set<CoreRange>(eth_cores.begin(), eth_cores.end()));
         CreateKernel(program, kEriscKernel, crs, make_active_eth_config());
@@ -156,7 +155,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthProgramsBackToBack) {
         const EthernetConfig config = make_active_eth_config();
         for (int i = 0; i < 2; i++) {
             distributed::MeshWorkload workload;
-            Program& program = add_empty_program(workload);
+            Program& program = add_empty_program(*mesh_device, workload);
             CreateKernel(program, kEriscKernel, core, config);
             this->RunProgram(mesh_device, workload);
         }

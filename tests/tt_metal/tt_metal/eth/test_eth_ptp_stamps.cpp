@@ -127,8 +127,8 @@ void run_link(
     detail::WriteToDeviceL1(transmitter_device, transmitter_core, result_addr, zeros, CoreType::ETH);
     detail::WriteToDeviceL1(receiver_device, receiver_core, result_addr, zeros, CoreType::ETH);
 
-    const auto make_workload = [&](const CoreCoord& core, bool transmitter) {
-        Program program;
+    const auto make_workload = [&](distributed::MeshDevice& mesh, const CoreCoord& core, bool transmitter) {
+        Program program = CreateProgram(mesh);
         EthernetConfig config{.compile_args = {transmitter ? 1u : 0u}};
         eth_test_common::set_arch_specific_eth_config(config);
         const KernelHandle kernel = CreateKernel(program, kKernel, core, config);
@@ -138,8 +138,8 @@ void run_link(
         workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), std::move(program));
         return workload;
     };
-    distributed::MeshWorkload transmitter_workload = make_workload(transmitter_core, true);
-    distributed::MeshWorkload receiver_workload = make_workload(receiver_core, false);
+    distributed::MeshWorkload transmitter_workload = make_workload(*transmitter_mesh, transmitter_core, true);
+    distributed::MeshWorkload receiver_workload = make_workload(*receiver_mesh, receiver_core, false);
     std::thread transmitter_thread([&] { fixture->RunProgram(transmitter_mesh, transmitter_workload); });
     std::thread receiver_thread([&] { fixture->RunProgram(receiver_mesh, receiver_workload); });
     transmitter_thread.join();

@@ -8,10 +8,10 @@
 //
 // compute_kernel_hw_startup(in0, out) does the one-time setup (packer for out + unpack/pack
 // hw_configure) once, outside every loop. Each operand switch then calls
-// copy_tile_to_dst_init_short, which re-runs llk_unpack_A_init -> bump-allocates the next id
+// copy_init, which re-runs llk_unpack_A_init -> bump-allocates the next id
 // from the unpack partition ([0,16)) and programs it from that input's own L1 address
 // (get_local_dfb_interface(operand).tc_slots[0].base_addr). copy_tile itself only executes; it
-// programs no descriptor, so there is NO per-tile re-init -- the per-operand init_short is what
+// programs no descriptor, so there is NO per-tile re-init -- the per-operand copy_init is what
 // repoints the single Unp0 engine at each input. With num_inputs * num_loops (= 30) operand
 // inits per run the partition wraps and hands out reused ids; every copy (including post-wrap
 // ones) is bit-exact-checked on the host, so a wrapped id that programs the wrong descriptor is
@@ -29,7 +29,7 @@
 
 namespace {
 // Copy a block of n_tiles from one input DFB into the output DFB. The caller must have programmed
-// the unpack BFD for `in` (via copy_tile_to_dst_init_short) before calling this. No per-tile
+// the unpack BFD for `in` (via copy_init) before calling this. No per-tile
 // re-init: the single init before the block covers every tile in it.
 template <typename DFBIn, typename DFBOut>
 void copy_block(DFBIn& in, std::uint32_t in_id, DFBOut& out, std::uint32_t n_tiles) {
@@ -60,7 +60,7 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 
     // One-time hardware setup (packer for out + unpack/pack hw_configure). Done ONCE, outside all
-    // loops -- the per-operand copy_tile_to_dst_init_short below programs each unpack BFD.
+    // loops -- the per-operand copy_init below programs each unpack BFD.
     compute_kernel_hw_startup(dfb::in0, dfb::out);
 
     // Outer loop: repeat the whole three-input block copy num_loops times. Each operand switch

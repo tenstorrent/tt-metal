@@ -5,20 +5,24 @@
 #include "rotary_embedding_indexed_device_operation.hpp"
 
 #include <cstdint>
+#include <variant>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/device.hpp"
+#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/chip_position/chip_position_table.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_metal2_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -26,7 +30,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 // Reused-kernel binding vocabulary (CB / tensor names, writer+compute sources) — single-sourced here.
 using namespace ttnn::experimental::prim::rope_metal2;
 
@@ -49,6 +53,9 @@ constexpr uint32_t kMetadataBytes = 16;  // CB page size (16B L1 alignment floor
 const ScratchpadSpecName META_SCRATCH{"meta"};
 const TensorParamName METADATA_PARAM{"metadata"};
 const TensorParamName CONCAT_PREFIX_PARAM{"concat_prefix"};
+// row_major_output only: the prefix tiles the reader hands compute, and the untilized rows compute hands the writer.
+const DFBSpecName PREFIX_DFB{"prefix"};
+const DFBSpecName ROWS_DFB{"rows"};
 
 uint32_t axis_extent(const distributed::MeshDeviceView& mesh_view, uint32_t axis) {
     return axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -134,8 +141,7 @@ void validate_runtime_args(
         const auto& prefix = *tensor_args.concat_prefix;
         require_standard_tile(prefix, "concat_prefix");
         TT_FATAL(
-            prefix.storage_type() == StorageType::DEVICE && prefix.buffer() != nullptr,
-            "concat_prefix must be on device");
+            prefix.storage_type() == StorageType::DEVICE && prefix.is_allocated(), "concat_prefix must be on device");
         TT_FATAL(prefix.device() == input.device(), "concat_prefix must be on the input device");
         TT_FATAL(prefix.dtype() == input.dtype(), "concat_prefix dtype must match input");
         TT_FATAL(prefix.logical_shape().rank() == 4, "concat_prefix must be rank 4");
@@ -161,7 +167,7 @@ void validate_runtime_args(
         // without this guard a uint32-then-bf16 sequence would silently reuse the cached program.
         const auto& metadata = tensor_args.metadata.value();
         TT_FATAL(metadata.storage_type() == StorageType::DEVICE, "metadata must be on device");
-        TT_FATAL(metadata.buffer() != nullptr, "metadata must be allocated in a buffer on device");
+        TT_FATAL(metadata.is_allocated(), "metadata must be allocated in a buffer on device");
         TT_FATAL(metadata.device() == input.device(), "metadata must be on the same device as input");
         TT_FATAL(
             metadata.dtype() == DataType::UINT32,
@@ -205,6 +211,22 @@ void validate_runtime_args(
         cos_shard_Ht);
 }
 
+// The reader's chip table entry for `coord`: SP index | query-subshard index << 16.
+uint32_t chip_entry(
+    const RotaryEmbeddingIndexedDeviceOperation::operation_attributes_t& args,
+    const RotaryEmbeddingIndexedDeviceOperation::tensor_args_t& tensor_args,
+    const ttnn::MeshCoordinate& coord) {
+    // Use the cache tensor for the SP coordinate and the query tensor for its subshard coordinate.
+    const uint32_t sp_coord =
+        ::ttnn::ccl::get_linearized_index_from_physical_coord(tensor_args.cos, coord, args.cluster_axis);
+    const uint32_t subshard_coord =
+        args.seq_subshard_axis.has_value()
+            ? ::ttnn::ccl::get_linearized_index_from_physical_coord(tensor_args.input, coord, args.seq_subshard_axis)
+            : 0;
+    TT_FATAL(sp_coord <= 0xFFFF && subshard_coord <= 0xFFFF, "mesh coordinate {} does not fit the chip table", coord);
+    return sp_coord | (subshard_coord << 16);
+}
+
 }  // namespace
 
 RotaryEmbeddingIndexedDeviceOperation::program_factory_t RotaryEmbeddingIndexedDeviceOperation::select_program_factory(
@@ -226,10 +248,10 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
 
     // Every operand is bound as a tensor parameter and accessed on the input's mesh device, so all
     // must be allocated and live on that same device.
-    TT_FATAL(input.buffer() != nullptr, "input must be allocated in a buffer on device");
-    TT_FATAL(cos.buffer() != nullptr, "cos must be allocated in a buffer on device");
-    TT_FATAL(sin.buffer() != nullptr, "sin must be allocated in a buffer on device");
-    TT_FATAL(trans_mat.buffer() != nullptr, "trans_mat must be allocated in a buffer on device");
+    TT_FATAL(input.is_allocated(), "input must be allocated in a buffer on device");
+    TT_FATAL(cos.is_allocated(), "cos must be allocated in a buffer on device");
+    TT_FATAL(sin.is_allocated(), "sin must be allocated in a buffer on device");
+    TT_FATAL(trans_mat.is_allocated(), "trans_mat must be allocated in a buffer on device");
     TT_FATAL(cos.device() == input.device(), "cos must be on the same device as input");
     TT_FATAL(sin.device() == input.device(), "sin must be on the same device as input");
     TT_FATAL(trans_mat.device() == input.device(), "trans_mat must be on the same device as input");
@@ -273,6 +295,39 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t input_seq = input_shape[-2];
     TT_FATAL(input_seq % TILE_HEIGHT == 0, "input seq dim ({}) must be tile-aligned", input_seq);
+    if (args.row_major_output) {
+        TT_FATAL(
+            tensor_args.concat_prefix.has_value(), "rotary_embedding_indexed row_major_output needs concat_prefix");
+        TT_FATAL(
+            args.rotary_offset == 0 && args.rotary_dim == input_shape[-1],
+            "rotary_embedding_indexed row_major_output needs the input rotated across its whole width (rotary_offset "
+            "{}, rotary_dim {}, input width {})",
+            args.rotary_offset,
+            args.rotary_dim,
+            input_shape[-1]);
+        TT_FATAL(
+            tensor_args.concat_prefix->padded_shape()[-1] % args.rotary_dim == 0,
+            "rotary_embedding_indexed row_major_output needs a concat_prefix width ({}) that is a multiple of "
+            "rotary_dim ({})",
+            tensor_args.concat_prefix->padded_shape()[-1],
+            args.rotary_dim);
+        TT_FATAL(
+            input.dtype() == DataType::BFLOAT16,
+            "rotary_embedding_indexed row_major_output needs a bfloat16 input, got {}",
+            input.dtype());
+        // The writer writes every padded row, one full-width row per output page.
+        TT_FATAL(
+            input.logical_shape() == input_shape &&
+                tensor_args.concat_prefix->logical_shape() == tensor_args.concat_prefix->padded_shape(),
+            "rotary_embedding_indexed row_major_output needs an unpadded input and concat_prefix (input {} padded to "
+            "{})",
+            input.logical_shape(),
+            input_shape);
+        TT_FATAL(
+            args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "rotary_embedding_indexed row_major_output needs an interleaved output, got {}",
+            args.output_mem_config.memory_layout());
+    }
 
     validate_runtime_args(args, tensor_args);
 }
@@ -300,7 +355,10 @@ RotaryEmbeddingIndexedDeviceOperation::spec_return_value_t RotaryEmbeddingIndexe
     }
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(input.layout()), args.output_mem_config));
+        tt::tt_metal::TensorLayout(
+            input.dtype(),
+            tt::tt_metal::PageConfig(args.row_major_output ? Layout::ROW_MAJOR : input.layout()),
+            args.output_mem_config));
 }
 
 RotaryEmbeddingIndexedDeviceOperation::tensor_return_value_t
@@ -324,8 +382,8 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     // its dtype, shape and layout all follow the input.
     //
     // Only kv_actual_global is excluded: it is a reader runtime arg patched on cache hits, so successive
-    // chunks reuse one cached program. Per-device my_sp_coord is a per-coordinate compile-time arg the
-    // mesh adapter already folds into the workload hash via the target coordinates.
+    // chunks reuse one cached program. Per-chip programs are keyed by coordinate (the mesh adapter adds
+    // them); a whole-mesh chip table by the coordinate -> fabric chip mapping hashed below.
     auto hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
         tensor_args.metadata.has_value(),
         tensor_args.concat_prefix.has_value(),
@@ -336,6 +394,7 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
         args.rotary_offset,
         args.compute_kernel_config,
         args.output_mem_config,
+        args.row_major_output,
         tensor_args.input.tensor_spec(),
         tensor_args.cos.tensor_spec(),
         tensor_args.sin.tensor_spec(),
@@ -347,6 +406,8 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
         // metadata is an optional TensorParameter, compared just as strictly when it is present.
         hash = ttsl::hash::hash_objects(hash, tensor_args.metadata->tensor_spec());
     }
+    hash = ttsl::hash::hash_objects(
+        hash, chip_mapping_hash(*tensor_args.input.device(), tensor_args.input.device_storage().get_coords()));
     return hash;
 }
 
@@ -355,7 +416,8 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     const operation_attributes_t& args,
     const ttnn::MeshCoordinate& coord,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    tensor_return_value_t& output,
+    const std::optional<std::vector<uint32_t>>& chip_table) {
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& cos = tensor_args.cos.mesh_tensor();
     const auto& sin = tensor_args.sin.mesh_tensor();
@@ -393,18 +455,13 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
 
-    // Per-device cos/sin shard offset inputs, baked into this coordinate's program as compile-time args:
-    // sp_factor is the mesh extent along the cluster axis and my_sp_coord is this chip's index along it.
-    // Both are structural (per mesh coordinate) and constant across calls, so they are baked as CTAs.
+    // sp_factor is the mesh extent along the cluster axis; this chip's index along it comes from the chip table
+    // (whole mesh, or only `coord`'s entry).
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t sp_factor = axis_extent(mesh_view, args.cluster_axis);
-    // Use the cache tensor for the SP coordinate and the query tensor for its subshard coordinate.
-    const uint32_t my_sp_coord =
-        ::ttnn::ccl::get_linearized_index_from_physical_coord(tensor_args.cos, coord, args.cluster_axis);
-    const uint32_t subshard_coord =
-        args.seq_subshard_axis.has_value()
-            ? ::ttnn::ccl::get_linearized_index_from_physical_coord(tensor_args.input, coord, args.seq_subshard_axis)
-            : 0;
+    const bool chip_lookup = chip_table.has_value();
+    const std::vector<uint32_t> reader_chip_table =
+        chip_table.value_or(std::vector<uint32_t>{chip_entry(args, tensor_args, coord)});
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
@@ -482,6 +539,26 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
             .data_format_metadata = output_cb_data_format},
     };
 
+    const bool row_major_output = args.row_major_output;
+    if (row_major_output) {
+        // Two tile rows of each, so the reader and writer overlap compute.
+        constexpr uint32_t buffered_tile_rows = 2;
+        // Without reload, compute waits for all of a core's sin/cos rows before it takes any prefix, and the reader
+        // pushes each row's sin/cos after that row's prefix, so the prefix buffer holds all of them.
+        const uint32_t prefix_tile_rows =
+            use_reload_impl ? buffered_tile_rows : std::max(buffered_tile_rows, num_sin_cos_rows_per_core);
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = PREFIX_DFB,
+            .entry_size = input_single_tile_size,
+            .num_entries = prefix_tile_rows * prefix_head_dim_t,
+            .data_format_metadata = input_cb_data_format});
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = ROWS_DFB,
+            .entry_size = output_single_tile_size,
+            .num_entries = buffered_tile_rows * output_head_dim_t,
+            .data_format_metadata = output_cb_data_format});
+    }
+
     std::vector<ScratchpadSpec> scratchpads = {
         ScratchpadSpec{
             .unique_id = ZERO_SCRATCH,
@@ -518,8 +595,9 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         };
     }
 
-    const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
-    KernelSpec::CompilerOptions::Defines reader_defines = reload_define;
+    const KernelSpec::CompilerOptions::Defines kernel_defines{
+        {"RELOAD_IMPL", use_reload_impl ? "1" : "0"}, {"ROW_MAJOR_OUTPUT", row_major_output ? "1" : "0"}};
+    KernelSpec::CompilerOptions::Defines reader_defines = kernel_defines;
     if (has_metadata) {
         reader_defines.emplace("HAS_METADATA", "1");
     }
@@ -538,6 +616,12 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         TensorBinding{.tensor_parameter_name = SIN_PARAM, .accessor_name = "sin"},
         TensorBinding{.tensor_parameter_name = TRANS_MAT_PARAM, .accessor_name = "trans_mat"},
     };
+    if (row_major_output) {
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = PREFIX_DFB, .accessor_name = "prefix", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_tensors.push_back(
+            TensorBinding{.tensor_parameter_name = CONCAT_PREFIX_PARAM, .accessor_name = "concat_prefix"});
+    }
     // meta is a reader-private staging region (fill + read back), so it is a Scratchpad, not a self-loop DFB.
     std::vector<ScratchpadBinding> reader_scratchpads;
     if (has_metadata) {
@@ -569,25 +653,30 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"sin_Ht", sin_seq_len_t},
              {"rotary_Ht", rotary_seq_len_t},
              {"tile_height", TILE_HEIGHT},  // reader divides kv_actual_global (tokens) into tiles
-             {"my_sp_coord", my_sp_coord},
              {"sp_factor", sp_factor},
              {"chunk_local_t", full_sp_slab_tiles(tensor_args.input, mesh_view, args.seq_subshard_axis)},
-             {"query_offset_t", seq_len_t * subshard_coord}},
+             {"prefix_Wt", prefix_head_dim_t}},
         .runtime_arg_schema = reader_schema,
         .hw_config = create_reader_datamovement_config()};
+    reader_spec.compile_time_args.emplace("chip_lookup", static_cast<uint32_t>(chip_lookup));
+    reader_spec.compile_time_array_args.emplace("chip_table", reader_chip_table);
 
     // ------------------------------------------------------------------ indexed writer + reused llama compute
     TT_FATAL(
         rotary_seq_len_t == seq_len_t,
         "Indexed RoPE writer requires compute to produce rotary tiles for every input row");
+    // Row-major output hands the writer untilized rows instead of the rotated tiles.
+    const DFBBinding writer_output_binding =
+        row_major_output
+            ? DFBBinding{.dfb_spec_name = ROWS_DFB, .accessor_name = "rows", .endpoint_type = DFBEndpointType::CONSUMER}
+            : DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER};
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/kernels/dataflow/"
             "writer_rotary_embedding_indexed.cpp",
-        .compiler_options = {.defines = reload_define},
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .compiler_options = {.defines = kernel_defines},
+        .dfb_bindings = {writer_output_binding},
         // Reuse the shared "zero" scratchpad slot for the writer-only passthrough-tile staging.
         .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = ZERO_SCRATCH, .accessor_name = "copy"}},
         .tensor_bindings =
@@ -609,7 +698,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = kComputeSource,
-        .compiler_options = {.defines = reload_define, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = kernel_defines, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
@@ -645,10 +734,20 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
                  .dfb_spec_name = SIN_INTERM_DFB,
                  .accessor_name = "sin_interm",
                  .endpoint_type = DFBEndpointType::CONSUMER}},
-        .compile_time_args = {{"Wt", head_dim_t}, {"rotary_Ht", rotary_seq_len_t}},
+        .compile_time_args = {{"Wt", head_dim_t}, {"rotary_Ht", rotary_seq_len_t}, {"prefix_Wt", prefix_head_dim_t}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "n_heads"}},
         .hw_config = compute_hw_config};
+
+    if (row_major_output) {
+        // Compute also consumes its rotated tiles (untilizing them with the prefix) and produces the rows.
+        compute_spec.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_spec.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = PREFIX_DFB, .accessor_name = "prefix", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_spec.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = ROWS_DFB, .accessor_name = "rows", .endpoint_type = DFBEndpointType::PRODUCER});
+    }
 
     // ------------------------------------------------------------------ per-node runtime args
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
@@ -740,8 +839,8 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     }
     run_args.tensor_args.emplace(CONCAT_PREFIX_PARAM, TensorArgument{prefix});
 
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
-    SetProgramRunArgs(program, run_args);
+    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    tt::tt_metal::experimental::SetProgramRunArgs(program, run_args);
     return {std::move(program), SharedVariables{}};
 }
 
@@ -753,8 +852,21 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_mesh_workload
     tensor_return_value_t& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    // With a whole-mesh chip table the program does not depend on the coordinate: one program per range.
+    const auto chip_table =
+        chip_lookup_table(*tensor_args.input.device(), tensor_coords.coords(), [&](const ttnn::MeshCoordinate& coord) {
+            return chip_entry(args, tensor_args, coord);
+        });
+    if (chip_table.has_value()) {
+        for (const auto& range : tensor_coords.ranges()) {
+            auto cached_program = create_at(args, range.start_coord(), tensor_args, output, chip_table);
+            workload.add_program(range, std::move(cached_program.program));
+            shared_variables.emplace(range, cached_program.shared_variables);
+        }
+        return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+    }
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(args, coord, tensor_args, output);
+        auto cached_program = create_at(args, coord, tensor_args, output, std::nullopt);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
     }
@@ -766,12 +878,34 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    // kv_actual_global is not hashed and can change per chunk; per-core RTAs and my_sp_coord are stable
-    // (same shapes / same coordinate), so a cache hit only refreshes tensor addresses and, on the scalar
+    // kv_actual_global is not hashed and can change per chunk; per-core RTAs and the chip table are stable
+    // (same shapes / same coordinates), so a cache hit only refreshes tensor addresses and, on the scalar
     // path, the kv_actual_global common arg. The metadata path advances the value on-device (the reader
     // re-reads element [0]), so only its tensor address needs refreshing. has_metadata is hashed, so it
     // matches the cached program on every hit -- read it straight from tensor_args. The run args are
     // coordinate-independent, so build them once and apply to every stamped program.
+    //
+    // These usually repeat call to call, so skip the update when they match the last applied ones (kept on the
+    // first program; every program gets the same args). Specs and optional-tensor presence are hashed, so equal
+    // (lockstep-allocated) addresses mean equal bindings. Command-list recording always updates: it reads each
+    // binding's buffer identity, which a skip leaves stale.
+    const auto address_of = [](const Tensor& tensor) -> uint64_t { return tensor.buffer()->address(); };
+    std::vector<uint64_t> key = {
+        address_of(tensor_args.input),
+        address_of(tensor_args.cos),
+        address_of(tensor_args.sin),
+        address_of(tensor_args.trans_mat),
+        address_of(output),
+        tensor_args.metadata.has_value() ? address_of(*tensor_args.metadata) : args.kv_actual_global,
+        tensor_args.concat_prefix.has_value() ? address_of(*tensor_args.concat_prefix) : 0};
+    TT_FATAL(!cached_workload.shared_variables.empty(), "rotary_embedding_indexed: cached workload has no programs");
+    auto& record = cached_workload.shared_variables.begin()->second.applied_run_args;
+    if (record == key && !ttnn::device_operation::detail::is_recording_command_list()) {
+        return;
+    }
+    // Cleared first so a throw part-way cannot leave a record matching half-patched programs.
+    record.clear();
+
     ProgramRunArgs run_args;
     run_args.tensor_args = {
         {INPUT_PARAM, TensorArgument{tensor_args.input.mesh_tensor()}},
@@ -792,14 +926,13 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
             tensor_args.concat_prefix.has_value() ? tensor_args.concat_prefix->mesh_tensor()
                                                   : tensor_args.input.mesh_tensor()});
 
-    // All stamped programs declare identical tensor specs and runtime schemas; only my_sp_coord
-    // differs. Validate this update once, then refresh every program's bindings without repeating
-    // the same spec/name checks. Validation still runs on every invocation, including fresh metadata.
+    // All programs share tensor specs and runtime schemas: validate once, then patch each without re-checking.
     bool validated = false;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
+        tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
         validated = true;
     }
+    record = std::move(key);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed
@@ -819,7 +952,8 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& seq_subshard_axis,
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
-    const std::optional<ttnn::Tensor>& concat_prefix) {
+    const std::optional<ttnn::Tensor>& concat_prefix,
+    bool row_major_output) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::
         RotaryEmbeddingIndexedDeviceOperation;
 
@@ -844,6 +978,7 @@ ttnn::Tensor rotary_embedding_indexed(
         .rotary_offset = rotary_offset,
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,
+        .row_major_output = row_major_output,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input = input,

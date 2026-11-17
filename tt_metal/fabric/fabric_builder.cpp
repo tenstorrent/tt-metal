@@ -15,7 +15,6 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <set>
-#include <string>
 
 namespace tt::tt_fabric {
 

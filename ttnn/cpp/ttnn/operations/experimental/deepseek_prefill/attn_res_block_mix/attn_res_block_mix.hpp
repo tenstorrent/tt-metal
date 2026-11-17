@@ -1,0 +1,46 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+#include <tuple>
+#include <vector>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/core.hpp"
+
+namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix {
+
+// The sealed half of an AttnRes block's mixture, for R read sites, from the block's
+// statistics as `attn_res_block_stats` gathers them across the tensor-parallel axis:
+//
+//   s[r][c][n]   = stats[c][n][1 + r] * rsqrt(stats[c][n][0] / (P * d) + eps)
+//                  (stats summed over the P partials side by side on the last dim, each
+//                  over a d-wide shard, so P * d is the hidden size)
+//   shift[r][n]  = max_c s[r][c][n]
+//   e[r][c][n]   = exp(s[r][c][n] - shift[r][n])
+//   mass[r][n]   = sum_c e[r][c][n]
+//   partial[r][n][d] = sum_c e[r][c][n] * v[c][n][d]
+//
+// Returns `{partials, shift, mass, closed}`: `[R, 1, N, d]` in the sealed set's dtype and
+// `[R, 1, N, 1]` float32 twice, the layouts `attn_res_gather_softmax` reads per site.
+//
+// The leading `num_closed_sites` sites have no live stream to fold in, so their read is the
+// mixture alone, `partial[r] / mass[r]`: those come back as `closed`,
+// `[num_closed_sites, 1, N, d]`, and the first three hold only the open sites. Without
+// closed sites, `closed` is empty.
+//
+// `sealed` is the sealed set as it was sealed, one or more `[1, S_i, N, d]` tensors whose
+// planes in order are the C candidates. Each candidate tile is read once for all R sites.
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> attn_res_block_mix(
+    const std::vector<ttnn::Tensor>& sealed,
+    const ttnn::Tensor& stats,
+    uint32_t num_sites,
+    float eps,
+    uint32_t num_closed_sites,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+
+}  // namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix

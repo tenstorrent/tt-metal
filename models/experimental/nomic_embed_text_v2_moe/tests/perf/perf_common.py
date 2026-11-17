@@ -14,9 +14,9 @@ The gap between the second and the third is host work and transfers; the gap bet
 and the device kernel total reported by test_nomic_device_perf.py is dispatch. Collapsing them
 into one figure hides which of trace, sharding or precision is worth doing.
 
-Shapes are fixed rather than swept. T = B * S is what the expert bank scales with: 8x512, 4096
-tokens, fills exactly one expert pass (MAX_TOKENS_PER_PASS in tt/experts.py), and 8x384 three
-quarters of one.
+Shapes are fixed rather than swept. T = B * S is what the expert bank scales with: 8x512 is 4096
+tokens, the most whose router intermediates sit in L1 (tt/router.py), and 8x384 three quarters of
+that.
 """
 
 from __future__ import annotations

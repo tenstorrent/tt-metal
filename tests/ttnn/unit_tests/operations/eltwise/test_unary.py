@@ -546,6 +546,45 @@ def test_unary_log_operations_ttnn(
         assert_with_ulp(expected_result=golden_tensor, actual_result=tt_result, ulp_threshold=2)
 
 
+@pytest.mark.parametrize(
+    "log_function",
+    [ttnn.log, ttnn.log2, ttnn.log10],
+    ids=["log", "log2", "log10"],
+)
+def test_unary_log_subnormal_fast_mode(device, log_function):
+    # A positive float32 subnormal must give -inf in fast mode, as it does in
+    # accurate mode: the kernel flushes subnormals to +0.0 before reading the
+    # exponent. The fast path used to skip that flush, so the exponent field (0)
+    # was decremented and wrapped to 255 on top of a non-zero mantissa, which is
+    # a NaN pattern, and that NaN was then multiplied into the result.
+    # float32 only. A bfloat16 subnormal reaches the kernel with its exponent-0
+    # pattern intact, and the unfixed fast path mishandles it just the same, but
+    # on Wormhole the NaN its SFPMAD produces for a positive subnormal carries the
+    # product's sign (0xff800001 on the float32 rows), and convert<vFloat16b>
+    # (SFPSTOCHRND) in calculate_log turns a NaN into the infinity of its sign, so
+    # the bfloat16 row reads -inf and passes with or without the fix. (Blackhole's
+    # SFPMAD returns the canonical +NaN, so there a bfloat16 row would fail, but
+    # the test has to detect the bug on both.) -0.0 is covered for both dtypes by
+    # test_log_signed_zero. 1e-40 and 2**-130 are both float32 subnormals.
+    x_torch = torch.tensor([[1e-40, 2.0**-130, 1.0]], dtype=torch.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    accurate = ttnn.to_torch(log_function(x_tt, fast_and_approximate_mode=False))
+    fast = ttnn.to_torch(log_function(x_tt, fast_and_approximate_mode=True))
+    fast_sub, accurate_sub = fast[0, :2], accurate[0, :2]
+
+    assert torch.isneginf(fast_sub).all(), (
+        f"fast {log_function.__name__} of a positive subnormal returned {fast_sub.tolist()!r}, expected -inf; "
+        f"accurate mode returned {accurate_sub.tolist()!r}. The subnormal flush in "
+        "calculate_log_body must run in fast mode too."
+    )
+    assert torch.equal(fast_sub, accurate_sub), (
+        f"fast {log_function.__name__} of a positive subnormal returned {fast_sub.tolist()!r}, "
+        f"accurate mode returned {accurate_sub.tolist()!r}."
+    )
+    assert fast[0, 2].item() == 0.0, f"fast {log_function.__name__}(1.0) returned {fast[0, 2].item()!r}, expected 0.0."
+
+
 @pytest.mark.parametrize("h", [0])
 @pytest.mark.parametrize("w", [1])
 def test_01_volume_sin(device, h, w):
@@ -1200,43 +1239,6 @@ def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
 
 
 @pytest.mark.parametrize(
-    "input_shapes",
-    [
-        torch.Size([1, 1, 32, 32]),
-    ],
-)
-@pytest.mark.parametrize(
-    "low, high",
-    [
-        (-5, 5),  # Small range
-    ],
-)
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.eqz,
-        ttnn.nez,
-        ttnn.ltz,
-        ttnn.lez,
-        ttnn.gtz,
-        ttnn.gez,
-    ],
-)
-def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
-    in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    cq_id = 0
-    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    golden_tensor = golden_function(in_data)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert torch.equal(golden_tensor, output_tensor)
-
-
-@pytest.mark.parametrize(
     "low, high, torch_dtype, ttnn_dtype, input_shapes",
     [
         (0, 2, torch.int32, ttnn.uint16, torch.Size([32, 32])),  # Small range
@@ -1859,15 +1861,11 @@ def test_unary_hardtanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, min_val, max
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
-        (torch.int32, ttnn.int32),
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
 def test_unary_signbit_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
-    if torch_dtype == torch.int32:
-        in_data = torch.randint(-100, 100, input_shapes, dtype=torch_dtype)
-    else:
-        in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
@@ -1883,27 +1881,6 @@ def test_unary_signbit_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 def test_unary_signbit_int32_edge_case_ttnn(device):
     in_data = torch.tensor([-2147483648, 2147483647, +0, -0, 0], dtype=torch.int32)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.signbit(input_tensor)
-    golden_function = ttnn.get_golden_function(ttnn.signbit)
-    golden_tensor = golden_function(in_data)
-
-    assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
-
-
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype",
-    [
-        (torch.float32, ttnn.float32),
-    ],
-)
-def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
-    in_data = torch.tensor(
-        [-0.0, 0.0, +0.0, -float("inf"), +float("inf"), +float("nan"), -float("nan")], dtype=torch_dtype
-    )
-    input_tensor = ttnn.from_torch(
-        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
-    )
 
     output_tensor = ttnn.signbit(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.signbit)

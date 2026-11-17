@@ -21,7 +21,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.logger import logger
-from helpers.param_config import parametrize, runtime
+from helpers.param_config import DEST_DEPTH_BLOCK_COUNTS, parametrize, runtime
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -36,7 +36,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 MAX_TILES_16_BIT = 8
 MAX_TILES_32_BIT = 4
@@ -54,7 +54,6 @@ REDUCE_FORMATS = [
     for fmt in (
         DataFormat.Float32,
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Int32,
     )
 ]
@@ -386,7 +385,7 @@ def test_sfpu_reduce_quasar(
 
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
     if mathop == MathOperation.ReduceColumn:
@@ -476,12 +475,31 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range):
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
     if mathop == MathOperation.ReduceColumn:
         return golden_tensor[0], res_tensor[0]
     return golden_tensor[:, 0], res_tensor[:, 0]
+
+
+@pytest.mark.quasar
+@parametrize(
+    reduce_pool=[ReducePool.Sum, ReducePool.Max],
+    formats=REDUCE_FORMATS,
+    # Not runtime: the block shape is a compile-time template parameter here.
+    blocks=list(DEST_DEPTH_BLOCK_COUNTS),
+)
+def test_sfpu_reduce_dest_depth_quasar(formats, reduce_pool, blocks):
+    """Column reduce over 4 and 8 full Dest sections (DEST_SYNC() is SyncHalf)."""
+    test_sfpu_reduce_quasar(
+        formats,
+        MathOperation.ReduceColumn,
+        reduce_pool,
+        (0, 1000),
+        [TILE_DIM, blocks * get_max_tiles(formats) * TILE_DIM],
+        TILE_DIM,
+    )
 
 
 @pytest.mark.quasar

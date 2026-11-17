@@ -19,9 +19,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
 static constexpr std::uint32_t INPUT_TILES       = (PACK_K + ELEMENTS_PER_TILE - 1) / ELEMENTS_PER_TILE;
-static constexpr std::uint32_t SCORES      = 0;
-static constexpr std::uint32_t IDS         = 2;
-static constexpr std::uint32_t OUT         = PACK_ALIAS == 0 ? 4 : (PACK_ALIAS == 1 ? SCORES : IDS);
+static constexpr std::uint32_t SCORES            = 0;
+static constexpr std::uint32_t IDS               = 2;
+static constexpr std::uint32_t OUT               = PACK_ALIAS == 0 ? 4 : (PACK_ALIAS == 1 ? SCORES : IDS);
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -71,8 +71,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        tensor_shape, formats.math);
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     ckernel::sfpu::_topk_xl_pack_supplied_indices_init_();
 
@@ -83,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t t = 0; t < INPUT_TILES; ++t)
         {
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                base_tile + t /* dst_index */, formats.math, formats.math);
+                base_tile + t /* dst_index */, formats.math, formats.math, tensor_shape);
         }
     }
     _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::_topk_xl_pack_supplied_indices_<PACK_K>, SCORES, IDS, OUT, VectorMode::RC_custom, PACK_HALF);

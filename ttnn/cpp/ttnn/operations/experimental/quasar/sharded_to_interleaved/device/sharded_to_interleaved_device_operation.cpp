@@ -7,6 +7,7 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -19,7 +20,7 @@ std::pair<bool, std::string> ShardedToInterleavedDeviceOperation::validate_input
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return {false, "Operands to shard need to be on device!"};
     }
-    if (input_tensor.buffer() == nullptr) {
+    if (!input_tensor.is_allocated()) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
     if (!input_tensor.memory_config().is_sharded()) {
@@ -39,7 +40,7 @@ std::pair<bool, std::string> ShardedToInterleavedDeviceOperation::validate_input
         if (output_tensor.storage_type() != StorageType::DEVICE) {
             return {false, "Operands to shard need to be on device!"};
         }
-        if (output_tensor.buffer() == nullptr) {
+        if (!output_tensor.is_allocated()) {
             return {false, "Operands to shard need to be allocated in buffers on device!"};
         }
         if (output_tensor.device() != input_tensor.device()) {
@@ -108,7 +109,7 @@ tt::tt_metal::TensorSpec ShardedToInterleavedDeviceOperation::compute_output_spe
     // inter-stick byte overlap and data corruption.
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             args.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
             args.output_mem_config,

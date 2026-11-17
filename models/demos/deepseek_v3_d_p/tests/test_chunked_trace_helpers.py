@@ -120,3 +120,37 @@ def test_sharded_read_partly_past_the_end_raises(tmp_path, expect_error):
     trace = _write_windowed_trace(tmp_path, capture_rows=(0, 256))
     with expect_error(FileNotFoundError, "cover only 56 of rows"):
         _load_golden_kv_post(trace, 0, 64, start=200)
+
+
+@pytest.mark.parametrize("position0", [0, 65536])
+def test_index_k_rope_rebase_uses_absolute_position(tmp_path, position0):
+    """A half-split tail golden re-bases to the device's interleaved pairing at its own prompt
+    positions: row r of a window starting at ``position0`` was roped at ``position0 + r``, not r."""
+    import torch
+    from safetensors.torch import save_file
+
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+    from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
+
+    hf_config = glm_5_3_hf_config(max_seq=4096)
+    n, d = 64, hf_config.qk_rope_head_dim
+
+    def rope(x, interleave):
+        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=position0 + n)
+        cos, sin = cos[0, 0, position0:].float(), sin[0, 0, position0:].float()
+        pe = x[:, :d]
+        if interleave:
+            y = pe.reshape(n, d // 2, 2)
+            rot = torch.stack([-y[:, :, 1], y[:, :, 0]], dim=-1).reshape(n, d)
+        else:
+            rot = torch.cat([-pe[:, d // 2 :], pe[:, : d // 2]], dim=-1)
+        return torch.cat([pe * cos + rot * sin, x[:, d:]], dim=-1)
+
+    key = torch.randn(n, 2 * d, generator=torch.Generator().manual_seed(0))
+    (tmp_path / "dsa" / "indexer_k_layer_0").mkdir(parents=True)
+    save_file(
+        {"indexer_k_layer_0": rope(key, interleave=False)},
+        str(tmp_path / "dsa" / "indexer_k_layer_0" / f"rows_00000000_{n:08d}.safetensors"),
+    )
+    g = _load_golden_index_k(tmp_path, 0, n, rope_layout="half_split", hf_config=hf_config, position0=position0)
+    torch.testing.assert_close(g, rope(key, interleave=True), rtol=1e-4, atol=1e-4)

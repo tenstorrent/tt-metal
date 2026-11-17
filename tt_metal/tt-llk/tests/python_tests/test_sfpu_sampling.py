@@ -38,7 +38,6 @@ only re-test unpack/pack. Float32 with dest_acc=No is skipped, as elsewhere in t
 SFPU suites.
 """
 
-import struct
 
 import pytest
 import torch
@@ -61,9 +60,10 @@ from helpers.test_variant_parameters import (
     SAMPLING_PRGM0_HAZARD,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
+    fp32_bits,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
 
@@ -114,10 +114,6 @@ RECIP_REL_TOL = 2e-2
 # packed down to bf16.
 BF16_ULP_REL = 2**-8
 ULP_ALLOWANCE = 2
-
-
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _rel_tol(op: str, dest_acc: DestAccumulation, out_format: DataFormat) -> float:
@@ -258,7 +254,7 @@ def test_sfpu_sampling(formats, dest_acc, op, vector_mode):
     )
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
 
-    scalar_bits = _f32_bits(CLAMP_MAX if op == "clamp_max_scalar" else MUL_SCALAR)
+    scalar_bits = fp32_bits(CLAMP_MAX if op == "clamp_max_scalar" else MUL_SCALAR)
 
     configuration = TestConfig(
         "sources/sfpu_sampling_test.cpp",
@@ -285,7 +281,7 @@ def test_sfpu_sampling(formats, dest_acc, op, vector_mode):
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     result_tiles = [
         untilize_block(
@@ -409,7 +405,7 @@ def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, skip_init):
         ]
     )
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
-    scalar_bits = _f32_bits(MUL_SCALAR)
+    scalar_bits = fp32_bits(MUL_SCALAR)
 
     configuration = TestConfig(
         "sources/sfpu_sampling_test.cpp",
@@ -436,7 +432,7 @@ def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, skip_init):
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     out_face = untilize_block(
         res_tensor[:ELEMENTS_PER_TILE],
         formats.output_format,

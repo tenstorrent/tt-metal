@@ -6,11 +6,9 @@
 // pass over the input per group:
 //   dst[s] += input_tile[c] * weight_col[s][c]   for c in [0, num_candidates)
 //
-// The multiply and the add are the same instruction. `compute_kernel_hw_startup`
-// and `bcast_init` set up PACK + UNPACK + hw_configure for ELWMUL with a column
-// broadcast; overriding the MATH init with acc_to_dest=1 turns every
-// `mul_tiles_bcast_cols` into a MAC against its destination. That is what buys the
-// fusion: no intermediate CB, no second read of the input.
+// The multiply and the add are the same instruction: `mul_bcast_cols_init` with
+// acc_to_dest turns every `mul_tiles_bcast_cols` into a MAC against its destination.
+// That is what buys the fusion: no intermediate CB, no second read of the input.
 //
 // The accumulators start at zero without being cleared here. The whole of DEST
 // is zeroed once before `kernel_main`, and the packer zeroes the section it just
@@ -51,9 +49,7 @@ void kernel_main() {
     CircularBuffer cb_out0_obj(cb_out0);
 
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
-    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_in0, cb_in1);
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
-        cb_in0, cb_in1, 1 /*acc_to_dest*/)));
+    mul_bcast_cols_init(cb_in0, cb_in1, true /*acc_to_dest*/);
     reconfig_data_format(cb_in0, cb_in1);
 
     for (uint32_t group = 0; group < num_groups; ++group) {
