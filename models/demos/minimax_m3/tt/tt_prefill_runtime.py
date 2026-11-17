@@ -569,8 +569,10 @@ class TtPrefillRuntime:
             # The embedding calls this after enqueuing the token lookup, so the host's fetch and upload
             # overlap that work rather than delaying it.
             media_fn = (lambda: self._media_partials(chunks, media_refs)) if media_refs else None
-            x_embd = self._embed_tokens(input_tensor, media_fn=media_fn)
-            ttnn.deallocate(input_tensor)
+            try:
+                x_embd = self._embed_tokens(input_tensor, media_fn=media_fn)
+            finally:
+                ttnn.deallocate(input_tensor)
         else:
             assert not media_refs, "media is spliced on the first rank only"
             x_embd = input_tensor

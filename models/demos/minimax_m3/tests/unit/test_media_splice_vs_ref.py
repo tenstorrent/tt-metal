@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.multimedia_store.reader import FetchRequest
+from models.common.multimedia_store.reader import FetchRequest, Missing
 from models.demos.common.prefill.media import build_media_partials, table_height
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
 from models.demos.minimax_m3.config import MeshConfig
@@ -25,6 +25,7 @@ from models.demos.minimax_m3.tt.parallel_embedding import TtParallelEmbedding
 from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 from models.demos.minimax_m3.vision import format as media_format
+from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
 
 from ..test_factory import parametrize_mesh_with_fabric
 
@@ -323,6 +324,22 @@ def test_one_batched_fetch_per_forward():
     want = [rows for _, _, rows in build_media_partials(refs, chunks, u16, sp, chunk // sp)[3]]
     assert store.calls == 1
     assert len(got) == len(want) and all(np.array_equal(g, w) for g, w in zip(got, want))
+
+
+def test_failed_fetch_frees_the_input(monkeypatch, expect_error):
+    """A forward whose image value is missing raises, and still frees the token input it consumes."""
+    freed = []
+    monkeypatch.setattr(tt_prefill_runtime.ttnn, "deallocate", freed.append)
+    runtime = TtPrefillRuntime.__new__(TtPrefillRuntime)
+    vars(runtime).update(vars(runtime_with(StubEmbeddingReader(HIDDEN), sp=1, chunk_size=CHUNK, mesh_shape=(1, 1))))
+    vars(runtime.config).update(forward_chunks=1, num_users=1, max_seq_len=CHUNK, is_first_rank=True)
+    runtime.model_built = True
+    runtime._embed_tokens = lambda tokens, media_fn: media_fn()
+    tokens = object()
+
+    with expect_error(Missing, bytes(32).hex()):
+        runtime.prefill_forward(tokens, None, [PrefillChunk(0, 0, CHUNK)], media_refs=[MediaRef(0, 0, 10, bytes(32))])
+    assert freed == [tokens]
 
 
 def tiny_hf_model():
