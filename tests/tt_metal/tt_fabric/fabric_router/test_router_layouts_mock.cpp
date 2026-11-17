@@ -40,6 +40,9 @@ protected:
         }
     }
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         SetFabricConfig(FabricConfig::DISABLED);
         MetalContext::instance().rtoptions().set_enable_fabric_vc2(false);
     }
