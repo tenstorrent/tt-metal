@@ -386,7 +386,7 @@ void BandwidthResultsManager::write_summary_csv_to_file(
         const std::string& stat_name = BandwidthStatisticsHeader.at(stat);
         csv_stream << "," << stat_name;
     }
-    csv_stream << ",tolerance_percent\n";
+    csv_stream << ",tolerance_percent,max_packet_size\n";
     log_info(tt::LogTest, "Initialized CSV file: {}", csv_path.string());
 
     for (const auto& result : results_summary_) {
@@ -410,7 +410,7 @@ void BandwidthResultsManager::write_summary_csv_to_file(
         } else {
             csv_stream << "," << golden_it->tolerance_percent;
         }
-        csv_stream << "\n";
+        csv_stream << "," << result.max_packet_size << "\n";
     }
     csv_stream.close();
     log_info(tt::LogTest, "Bandwidth summary results written to CSV file: {}", csv_path.string());
