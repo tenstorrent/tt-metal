@@ -994,6 +994,20 @@ TEST_F(DevicePrintOutputFixture, DISABLED_PrintInUnbracedIfElse) {
     TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_unbraced_if_else.cpp", messages);
 }
 
+// Known issue: dprint.h, which every kernel includes, defines its old stream API's generic type names, such as F32,
+// BF16, U32, ENDL and HEX, at global scope, so today this kernel doesn't compile. Disabled until that is fixed.
+TEST_F(DevicePrintOutputFixture, DISABLED_PrintWithUserGlobalNames) {
+    std::vector<std::string> messages = {
+        "dprint: 1.5",
+        "print_tile_rows: 2",
+        "DPRINT_DISPATCH",
+        "DPRINT_COMBINE",
+        "DEBUG_PRINT: 0",
+    };
+
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_user_global_names.cpp", messages);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintCallstackPcFullRaFirmware) {
     // The PC inline chain reaches the kernel_main terminal, so the unwind stops there and the
     // firmware return address is never resolved -- no continuation sentinel is emitted.
