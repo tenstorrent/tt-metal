@@ -28,7 +28,7 @@ SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
 import diag.tray_power as tray_power  # noqa: E402
-from diag.model import FAIL, PASS, SKIP, WARN, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.tray_power import (  # noqa: E402
     TRAY_POWER_ALLOWED,
     TRAY_POWER_BUS,
@@ -42,6 +42,7 @@ from diag.tray_power import (  # noqa: E402
     run_tray_power,
     tray_bdf_range,
 )
+import diag_runner  # noqa: E402
 from diag_runner import build_diag_arg_parser  # noqa: E402
 from tiers import TIERS  # noqa: E402
 
@@ -311,8 +312,8 @@ class TestTrayPowerPhase(unittest.TestCase):
         for err in (
             "sudo: unable to resolve host h: Name or service not known\nsudo: a password is required\n",
             "sudo: a terminal is required to read the password\n",
-            "smarton is not in the sudoers file.  This incident will be reported.\n",
-            "Sorry, user smarton is not allowed to execute '/usr/bin/ipmitool raw' as root on h.\n",
+            "user is not in the sudoers file.  This incident will be reported.\n",
+            "Sorry, user user is not allowed to execute '/usr/bin/ipmitool raw' as root on h.\n",
             "sudo: ipmitool: command not found\n",
         ):
             calls = []
@@ -637,6 +638,94 @@ class TestPlumbing(unittest.TestCase):
     def test_skip_flag(self):
         args = build_diag_arg_parser().parse_args(["--tier", "pre_reboot", "--skip-tray-power"])
         self.assertTrue(args.skip_tray_power)
+
+
+class TestRunDiagWiring(unittest.TestCase):
+    """diag_runner.run_diag() with every other phase mocked out: where the
+    tray_power phase sits in the report, what --skip-tray-power and a crashing
+    reader leave behind, and which tiers run it."""
+
+    def run_diag(self, tier, reader=None, **kwargs):
+        import json
+        import tempfile
+
+        def noop(*_a, **_k):
+            return None
+
+        reader = reader or noop
+        with tempfile.TemporaryDirectory() as tmp:
+            snap = Path(tmp) / "snap.json"
+            snap.write_text("{}")
+            patches = [
+                mock.patch.object(diag_runner, "validate_snapshot", return_value=None),
+                mock.patch.object(diag_runner, "collect_fru_info", noop),
+                mock.patch.object(diag_runner, "resolve_tt_smi", return_value="tt-smi"),
+                mock.patch.object(diag_runner, "reset_loop", noop),
+                mock.patch.object(diag_runner, "run_post_test_reset", noop),
+                mock.patch.object(diag_runner, "run_tests", noop),
+                mock.patch.object(diag_runner, "run_triage", noop),
+                mock.patch.object(diag_runner, "run_qsfp_tests", noop),
+                mock.patch.object(diag_runner, "run_sys_triage", noop),
+                mock.patch.object(diag_runner, "run_tray_power", side_effect=reader),
+            ]
+            with contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                tray_mock = diag_runner.run_tray_power
+                code, report = diag_runner.run_diag(
+                    tier, input_snapshot=snap, output=Path(tmp) / "report.json", dry_run=True, **kwargs
+                )
+            self.assertEqual(
+                json.loads((Path(tmp) / "report.json").read_text())["phases"].keys(), report["phases"].keys()
+            )
+        return code, report, tray_mock
+
+    def test_pre_reboot_runs_tray_power_right_after_snapshot_before_resets(self):
+        def reader(phase, dry_run):
+            phase.add(Check(name="tray_1_12v_feed", status=PASS, details="clean", ip="board"))
+
+        code, report, tray_mock = self.run_diag("pre_reboot", reader)
+        names = list(report["phases"])
+        self.assertEqual(names[:2], ["snapshot", "tray_power"])
+        self.assertLess(names.index("tray_power"), names.index("reset_loop"))
+        tray_mock.assert_called_once()
+        self.assertTrue(tray_mock.call_args.args[1])  # dry_run is passed through
+        phase = report["phases"]["tray_power"]
+        self.assertEqual(phase["error"], "")
+        self.assertEqual(phase["status"], PASS)
+        self.assertFalse(phase["gates"])
+
+    def test_skip_flag_gives_one_skip_check_and_the_phase_stays_skip(self):
+        code, report, tray_mock = self.run_diag("pre_reboot", skip_tray_power=True)
+        tray_mock.assert_not_called()
+        phase = report["phases"]["tray_power"]
+        self.assertEqual(
+            [(c["name"], c["status"], c["details"]) for c in phase["checks"]],
+            [("tray_12v_feed", SKIP, "--skip-tray-power")],
+        )
+        self.assertEqual(phase["status"], SKIP)
+
+    def test_reader_exception_becomes_one_skip_check_with_error_set(self):
+        def boom(phase, dry_run):
+            raise RuntimeError("bmc went away")
+
+        code, report, _ = self.run_diag("pre_reboot", boom)
+        phase = report["phases"]["tray_power"]
+        self.assertEqual([(c["name"], c["status"]) for c in phase["checks"]], [("tray_12v_feed", SKIP)])
+        self.assertIn("bmc went away", phase["error"])
+        self.assertIn("bmc went away", phase["checks"][0]["details"])
+        self.assertEqual(phase["status"], SKIP)
+        self.assertEqual(code, 0)
+
+    def test_other_tiers_have_no_tray_power_phase(self):
+        for tier in TIERS:
+            if tier == "pre_reboot":
+                continue
+            with self.subTest(tier=tier):
+                _, report, tray_mock = self.run_diag(tier)
+                self.assertNotIn("tray_power", report["phases"])
+                tray_mock.assert_not_called()
 
 
 if __name__ == "__main__":
