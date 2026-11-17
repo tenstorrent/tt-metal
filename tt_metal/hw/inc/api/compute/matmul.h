@@ -429,8 +429,7 @@ constexpr bool matmul_fe_tile_mop() {
         !row_mop_on && kt_key == 0 &&
         matmul_hifi2_half_wide(
             MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncHalf, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb()) &&
-        matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<13, K>(0) &&
-        !matmul_fe_mark::is_used_d<15, K>(0)) {
+        matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<15, K>(0)) {
         return false;
     } else if constexpr (
         !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf &&
@@ -471,14 +470,23 @@ constexpr bool matmul_fe_main_math() {
 #endif
 
 #ifdef TRISC_MATH
-// LoFi half sync, outside size mode, a plain call that runs main's math because the front end sees no constant block: the row form
-// where the call's kt_dim (a run-time value both the init and the calls receive) is 3 or more (census 65c1c: 40 of 76 keys faster,
-// 0 slower; the kt <= 2 blocks lose to the row path's per-call cost)
+// The smallest kt_dim from which a plain call that runs main's math because the front end sees no constant block takes the row
+// form (0: never), outside size mode: LoFi half sync from kt 3 (census 65c1c: 40 of 76 keys faster, 0 slower; kt <= 2 loses to the
+// row path's per-call cost), HiFi2 half sync with a 32-bit DEST from kt 2 (a kt-1 block loses: ccl F32 4x1x1 +1.05). The init and the
+// calls receive the same kt_dim.
 template <std::uint32_t llk_dir, bool row_mop_on, std::uint32_t kt_key>
-constexpr bool matmul_fe_rowform_kt() {
-    return llk_dir == 0 && !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi &&
-           DST_SYNC_MODE == DstSync::SyncHalf && !LLK_SIZE_MODE &&
-           !matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, kt_key>>(0);
+constexpr std::uint32_t matmul_fe_rowform_min_kt() {
+    if constexpr (
+        llk_dir != 0 || row_mop_on || kt_key != 0 || DST_SYNC_MODE != DstSync::SyncHalf || LLK_SIZE_MODE ||
+        matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, kt_key>>(0)) {
+        return 0;
+    } else if constexpr (MATH_FIDELITY == MathFidelity::LoFi) {
+        return 3;
+    } else if constexpr (matmul_hifi2_half_wide(MATH_FIDELITY, true, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb())) {
+        return 2;
+    } else {
+        return 0;
+    }
 }
 #endif
 
@@ -509,8 +517,8 @@ ALWI void matmul_block_init_llk(
         in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 #ifdef TRISC_MATH
     if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
-        if constexpr (matmul_fe_rowform_kt<llk_dir, row_mop_on, kt_key>()) {
-            if (kt_dim >= 3) {
+        if constexpr (matmul_fe_rowform_min_kt<llk_dir, row_mop_on, kt_key>() != 0) {
+            if (kt_dim >= matmul_fe_rowform_min_kt<llk_dir, row_mop_on, kt_key>()) {
                 llk_math_matmul_init<
                     matmul_elided_fidelity<in0_format, in1_format, out_format>(),
                     MM_THROTTLE,
@@ -613,8 +621,8 @@ ALWI void matmul_block_llk(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
 #ifdef TRISC_MATH
     if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
-        if constexpr (matmul_fe_rowform_kt<llk_dir, row_mop_on, kt_key>()) {
-            if (kt_dim >= 3) {
+        if constexpr (matmul_fe_rowform_min_kt<llk_dir, row_mop_on, kt_key>() != 0) {
+            if (kt_dim >= matmul_fe_rowform_min_kt<llk_dir, row_mop_on, kt_key>()) {
                 matmul_block_math_dynamic_throttle<
                     false,
                     false,

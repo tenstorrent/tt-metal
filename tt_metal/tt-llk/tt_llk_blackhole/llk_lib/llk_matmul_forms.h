@@ -222,8 +222,8 @@ constexpr char matmul_default_form()
 }
 
 // The plain calls the kernel-wide row form keeps on the tile MOP at HiFi2 half sync with a 32-bit DEST, which the front end moves to
-// the row form in a kernel with a constant block and no constant one-tile or kt-1 block (bmm census 49 keys all faster; a one-tile
-// kt-1 block reads slower: recurrent_chunk_scan Float32 1x1x1 +5.45 cy/block in production)
+// the row form from kt 2: a constant-block kernel without a constant kt-1 block, and a run-time-block one by its call's kt_dim (bmm
+// census 49 keys faster, 1x1x2 -2.7; a kt-1 block reads slower: recurrent_chunk_scan 1x1x1 +5.45, ccl F32 4x1x1 +1.05)
 constexpr bool matmul_hifi2_half_wide(const MathFidelity fidelity, const bool half_sync, const bool fp32_dest, const bool may_pack_32bit)
 {
     return fidelity == MathFidelity::HiFi2 && half_sync && fp32_dest && may_pack_32bit;
