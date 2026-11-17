@@ -156,6 +156,7 @@ enum class EnvVarID {
     TT_METAL_PROFILE_RISCV_PMC,                    // Enable RISC-V baby-core HPM counters
     TT_METAL_PROFILE_RISCV_PMC_DM,                 // Event selects of the Quasar data-movement cores
     TT_METAL_PROFILE_NOC_COUNTERS,                 // Per-launch NoC interface event counters
+    TT_METAL_PROFILE_ROUTER_COUNTERS,              // Per-launch NoC router packet and flit counters
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -1370,6 +1371,42 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             if (mask != 0) {
                 this->profiler_noc_counters_groups = static_cast<uint32_t>(mask);
+                this->profiler_enabled = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILE_ROUTER_COUNTERS
+        // Per-launch deltas of the NoC router counters of each Tensix tile, captured by one core per tile. Value is
+        // "on" (every virtual channel summed per port, every port) or an integer mask, hex or decimal: bits 0-15 select
+        // virtual channels, bits 16-23 select ports (banks of the architecture's table), bit 24 keeps the selected
+        // virtual channels apart instead of adding them up. See
+        // tt_metal/tt-llk/docs/performance_counters/router_counters.md. Default: disabled Usage: export
+        // TT_METAL_PROFILE_ROUTER_COUNTERS=0x30002
+        case EnvVarID::TT_METAL_PROFILE_ROUTER_COUNTERS: {
+            constexpr unsigned long kVcBits = 0x0000FFFFul;
+            constexpr unsigned long kBankBits = 0x00FF0000ul;
+            constexpr unsigned long kPerVc = 0x01000000ul;
+            unsigned long mask = kVcBits | kBankBits;
+            if (std::strcmp(value, "on") != 0) {
+                char* end = nullptr;
+                mask = std::strtoul(value, &end, 0);
+                if (end == value || *end != '\0' || mask > (kVcBits | kBankBits | kPerVc)) {
+                    TT_THROW(
+                        "TT_METAL_PROFILE_ROUTER_COUNTERS=\"{}\" is not an option mask. Expected \"on\" or an "
+                        "integer of virtual channel bits 0-15, port bits 16-23 and the keep-apart bit 24.",
+                        value);
+                }
+                if (mask != 0 && ((mask & kVcBits) == 0 || (mask & kBankBits) == 0)) {
+                    TT_THROW(
+                        "TT_METAL_PROFILE_ROUTER_COUNTERS={:#x} selects {}. Set at least one of the bits 0-15 and one "
+                        "of the bits 16-23.",
+                        mask,
+                        (mask & kVcBits) == 0 ? "no virtual channel" : "no port");
+                }
+            }
+            if (mask != 0) {
+                this->profiler_router_counters_mask = static_cast<uint32_t>(mask);
                 this->profiler_enabled = true;
             }
             break;

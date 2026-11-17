@@ -264,6 +264,7 @@ class RunTimeOptions {
     uint32_t profiler_riscv_pmc_dm_event5 = 0;
     uint32_t profiler_riscv_pmc_dm_event6 = 0;
     uint32_t profiler_noc_counters_groups = 0;
+    uint32_t profiler_router_counters_mask = 0;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
@@ -753,6 +754,10 @@ public:
         if (profiler_noc_counters_groups != 0) {
             compile_hash_str += fmt::format("_noc{:x}", profiler_noc_counters_groups);
         }
+        // Likewise the router counter option mask.
+        if (profiler_router_counters_mask != 0) {
+            compile_hash_str += fmt::format("_rtr{:x}", profiler_router_counters_mask);
+        }
         return compile_hash_str;
     }
 
@@ -796,6 +801,8 @@ public:
     uint32_t get_profiler_riscv_pmc_dm_event6() const { return profiler_riscv_pmc_dm_event6; }
     uint32_t get_profiler_noc_counters_groups() const { return profiler_noc_counters_groups; }
     bool get_profiler_noc_counters_enabled() const { return profiler_noc_counters_groups != 0; }
+    uint32_t get_profiler_router_counters_mask() const { return profiler_router_counters_mask; }
+    bool get_profiler_router_counters_enabled() const { return profiler_router_counters_mask != 0; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }

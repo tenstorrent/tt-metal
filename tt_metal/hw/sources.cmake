@@ -266,7 +266,9 @@ set(HW_JIT_API_HEADERS
     inc/internal/profiler/noc_event_profiler.hpp
     inc/internal/profiler/perf_counters.hpp
     inc/internal/profiler/riscv_pmc.hpp
+    inc/internal/profiler/router_counters.hpp
     inc/internal/profiler/synchronization_event_profiler.hpp
+    inc/internal/profiler/tile_counters.hpp
     inc/internal/atomic_rwptr.h
     inc/internal/bit_utils.h
     inc/internal/circular_buffer_interface.h

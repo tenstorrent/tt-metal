@@ -47,7 +47,7 @@ The hardware description is in tt-llk (`tools/include/perf_counters/`, namespace
 | `router_counters_inventory.h` | Picks the arch header from `ARCH_*`; `selected_bank_offsets<Option>()`, `selected_vcs<Option>()`, `value_count(option)` |
 | `router_counters_hw.h` | `read(noc, bank_offset, vc)` |
 
-The metal consumer is `tt_metal/hw/inc/internal/profiler/router_counters.hpp`: marker ids, payload layout and emission. The hooks are in `tt_metal/hw/firmware/src/tt-1xx/brisc.cc` and `tt-2xx/dm.cc`; the option is parsed in `tt_metal/llrt/rtoptions.cpp` and becomes `-DPROFILE_ROUTER_COUNTERS=<mask>` in `tt_metal/jit_build/build.cpp`. The host side is `tools/python/tt_llk_perf/`: `headers.py` parses the tables, `router_counters.py` decodes the markers and `router_metrics.py` derives the totals; `tools/tracy/perf_counter_analysis.py` has `decode_router_counter_markers`.
+The metal consumer is `tt_metal/hw/inc/internal/profiler/router_counters.hpp`: marker ids, payload layout and emission. The hooks are in the BRISC kernel entry `tt_metal/hw/firmware/src/tt-1xx/brisck.cc` (through `tile_counters.hpp`) and the Quasar DM0 firmware `tt-2xx/dm.cc`; the option is parsed in `tt_metal/llrt/rtoptions.cpp` and becomes `-DPROFILE_ROUTER_COUNTERS=<mask>` in `tt_metal/jit_build/build.cpp`. The host side is `tools/python/tt_llk_perf/`: `headers.py` parses the tables, `router_counters.py` decodes the markers and `router_metrics.py` derives the totals; `tools/tracy/perf_counter_analysis.py` has `decode_router_counter_markers`.
 
 Adding a port: append the enumerator to `RouterPort` if it is new and add one `{RouterPort::NAME, offset}` entry to the arch table, bump the array size. The host parsers read the headers, so nothing else changes. The table has at most 8 entries: the option has 8 port bits.
 
@@ -100,29 +100,16 @@ Labels are the port name (`OUT_PORT1`) or the port name with the channel (`OUT_P
 - Anything above those numbers is traffic from other tiles passing through the router, which a single-core run on a quiet device should keep small.
 - The sum over all channels is at least the VC 1 total.
 
-## 7. Firmware size
+## 7. Size
 
-The capture is one scan routine and one emission routine, so its size hardly depends on the option mask. Measured with the firmware built offline, same toolchain, profiler on with the runtime's DRAM buffer size (`PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC` nonzero), over every DRAM bank count a card can have (7 and 8 banks, 36 Blackhole build keys), option on versus option off:
+On Blackhole the capture is part of the BRISC kernel image, so the BRISC firmware region and the L1 layout do not
+change: 436 B for the reader kernel of `metal_example_eltwise_binary` with the option `on`. Every combination of
+counter options builds, all of them together with the five Tensix counter groups included (checked on a p100a, 7 DRAM
+banks). On Quasar it is in the DM0 firmware, 444 B over a 7308 B image; with every option on, router counters
+included, DM0 is 10204 B of its 12288 B region. With the option off the hooks compile to nothing.
 
-| Core | Image before | Extra bytes | Region |
-|---|---|---|---|
-| Blackhole BRISC | 7372 to 7396 B | 476 | 9984 B |
-| Quasar DM0 | 7308 B | 444 | 12288 B |
-
-The other cores do not change, and with the option off the firmware images are byte-identical to a build without the hooks, profiler on or off.
-
-The Blackhole BRISC region was grown twice for the counters already in it and is not grown again, so not every combination of counter options fits:
-
-| NoC interface counters (`3`) | RISC-V monitor | Tensix groups (`47`) | Router counters | BRISC image | Fits 9984 B |
-|---|---|---|---|---|---|
-| on | on | on | off | 9736 to 9784 B | yes |
-| off | on | on | on | 9876 to 9924 B | yes |
-| on | on | off | on | 8352 to 8376 B | yes |
-| on | off | off | on | 8136 to 8160 B | yes |
-| on | off | on | on | 9992 B or more | no |
-| on | on | on | on | about 10.2 KB | no |
-
-When the firmware does not fit, the firmware build fails with a message that names the option; turn off one of the others. Quasar DM0 with every option on, router counters included, is 10204 B of its 12288 B region. The BRISC capture is kept for the window it gives: NCRISC has room (1836 B of 2560 B with every option on), but a capture there would cover the NCRISC kernel only and would be missing for a launch without one.
+The capture runs on BRISC for the window it gives: it opens before the go message and closes once NCRISC and the
+TRISCs have finished. A launch in which BRISC runs no kernel publishes no capture.
 
 ## 8. Open questions
 
