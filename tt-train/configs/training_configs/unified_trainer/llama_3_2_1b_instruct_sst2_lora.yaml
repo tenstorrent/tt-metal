@@ -1,28 +1,28 @@
-# LoRA fine-tuning of Llama 3.1 8B Instruct on Alpaca, on a single chip.
+# LoRA fine-tuning of Llama 3.2 1B Instruct on SST-2, on a single chip.
 #
 #   python -m ttml.unified_trainer \
-#     --config tt-train/configs/training_configs/unified_trainer/llama_3_1_8b_alpaca_lora.yaml
+#     --config tt-train/configs/training_configs/unified_trainer/llama_3_2_1b_instruct_sst2_lora.yaml
+#
+# Checkpoints are PEFT adapter directories under <project_dir>/checkpoints/.
 model:
-  name: meta-llama/Llama-3.1-8B-Instruct
+  name: meta-llama/Llama-3.2-1B-Instruct
   lora:
     r: 4
     alpha: 8
     target_modules: [q_proj, k_proj, v_proj, o_proj]
-  gradient_checkpointing: true
 
 dataset:
-  id: alpaca
+  id: sst2
 
 optimizer:
   type: adamw
   lr: 1.0e-4
-  weight_decay: 0.01
 
 device:
   mesh: [1, 1]
 
-max_length: 256
-batch_size: 4
+max_length: 64
+batch_size: 8
 seed: 0
 stopping_criteria:
   type: step
@@ -38,4 +38,4 @@ checkpoint:
   save_strategy:
     type: step
     frequency: 100
-  project_dir: runs/llama_3_1_8b_alpaca_lora
+  project_dir: runs/llama_3_2_1b_instruct_sst2_lora

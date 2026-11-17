@@ -14,7 +14,7 @@ From the command line, with a recipe from `tt-train/configs/training_configs/uni
 
 ```bash
 python -m ttml.unified_trainer \
-  --config tt-train/configs/training_configs/unified_trainer/llama_3_2_1b_sst2_lora.yaml \
+  --config tt-train/configs/training_configs/unified_trainer/llama_3_2_1b_instruct_sst2_lora.yaml \
   --set stopping_criteria.limit=100 --set model.lora.r=8
 ```
 
