@@ -4,16 +4,12 @@
 
 #pragma once
 #include <stdint.h>
-#include <memory>
 #include <string>
 #include <span>
 #include <vector>
 
-#include <tt_stl/span.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in SetRuntimeArgs/GetRuntimeArgs default parameter).
 #include <tt-umd/types/core_coordinates.hpp>
 
