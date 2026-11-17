@@ -466,6 +466,43 @@ def _adamw_stochastic_rounding(params):
     return ttml.optimizers.AdamW(params, cfg)
 
 
+def _set_ttml_position(own: dict, value: str) -> None:
+    tokens = own["ttml"].split()
+    tokens[-1] = value
+    own["ttml"] = " ".join(tokens)
+
+
+DAMAGED_RNG = [pytest.param(lambda own: _set_ttml_position(own, "625"), id="ttml_position_past_624")]
+
+
+@pytest.mark.parametrize("damage", DAMAGED_RNG)
+def test_a_load_asking_for_damaged_rng_state_changes_nothing_and_one_without_rng_goes_ahead(
+    tp_mesh, tmp_path, damage, expect_error
+):
+    ctx = ttml.autograd.AutoContext.get_instance()
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    path = str(tmp_path / "ckpt")
+    dcp.save(path, model=model)
+    header_path = os.path.join(path, "header.json")
+    with open(header_path) as f:
+        header = json.load(f)
+    damage(header["train_state"]["rng"]["ranks"]["0"])
+    with open(header_path, "w") as f:
+        json.dump(header, f)
+
+    model2, params2, _ = fresh_tp(DIM)
+    before, generator = _model_shards(params2), ctx.get_generator_state()
+    with expect_error(dcp.CheckpointError, "the stored RNG state is malformed .*pass rng=False to load"):
+        dcp.load(path, model=model2, rng=True)
+    _assert_same_shards(_model_shards(params2), before)
+    assert ctx.get_generator_state() == generator, "refused before any generator was set"
+
+    loaded = dcp.load(path, model=model2, rng=False)
+    assert loaded.restored == [] and ctx.get_generator_state() == generator
+    _assert_same_shards(_model_shards(params2), _model_shards(params))
+
+
 def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_error):
     """The scheduler, the dataloader and every generator continue exactly as the uninterrupted run would, and so
     does the next training step, taken with the restored moments, step count, LR and generator: the optimizer rounds

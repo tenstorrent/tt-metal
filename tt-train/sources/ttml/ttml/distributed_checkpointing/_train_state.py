@@ -149,16 +149,21 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     try:
         if state.get("ttml") is not None:
-            text = str(state["ttml"])
-            tokens = text.split()
-            # The C++ setter would read a short text partway and leave the generator in neither state, so it is
-            # checked here: no throwaway ttml generator exists to try it on.
-            if len(tokens) != _MT19937_TOKENS or not all(token.isdigit() for token in tokens):
+            tokens = str(state["ttml"]).split()
+            # The C++ setter streams the text into the live generator and stops partway at anything it cannot read,
+            # leaving the generator in neither state, and no throwaway ttml generator exists to try it on. So the text
+            # is checked to be what an mt19937 writes: 624 ASCII-decimal 32-bit words and a position in [0, 624].
+            if (
+                len(tokens) != _MT19937_TOKENS
+                or not all(token.isascii() and token.isdigit() for token in tokens)
+                or any(int(token) > 0xFFFFFFFF for token in tokens[:-1])
+                or int(tokens[-1]) > _MT19937_TOKENS - 1
+            ):
                 raise ValueError(
-                    f"the ttml generator state is {len(tokens)} tokens, not the {_MT19937_TOKENS} integers of an "
-                    "mt19937"
+                    f"the ttml generator state is not the {_MT19937_TOKENS - 1} 32-bit words and position in "
+                    f"[0, {_MT19937_TOKENS - 1}] of an mt19937 ({len(tokens)} tokens)"
                 )
-            decoded["ttml"] = text
+            decoded["ttml"] = " ".join(tokens)
         python_state = state.get("python")
         if python_state is not None:
             words = tuple(int(w) for w in _u32_from_hex(python_state["state"]))
@@ -190,7 +195,10 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
             if torch is not None:
                 torch.Generator().set_state(torch.from_numpy(decoded["torch"]))
     except (KeyError, TypeError, ValueError, IndexError, RuntimeError) as err:
-        raise CheckpointError(f"the stored RNG state is malformed ({type(err).__name__}: {err})") from err
+        raise CheckpointError(
+            f"the stored RNG state is malformed ({type(err).__name__}: {err}); pass rng=False to load to restore "
+            "everything else and keep the current generators"
+        ) from err
     return decoded
 
 
