@@ -744,7 +744,7 @@ class MiniMaxH3Pipeline:
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
         self._tt_endpoint_timestep = StateTensor()
-        self._tt_modulation_rows = StateTensor()
+        self._tt_modulation_row_indices = StateTensor()
         self._tt_logical_n = StateTensor()
         # True during `warmup`, whose output is discarded.
         self._warming = False
@@ -3259,10 +3259,10 @@ class MiniMaxH3Pipeline:
                 rows = torch.nn.functional.pad(rows, (0, ADALN_PREPARED_ROWS - rows.numel()))
                 return from_torch(rows.reshape(1, 1, -1, 1), device=self.mesh_device, dtype=ttnn.float32)
 
-            def modulation_rows(i: int) -> dict:
+            def modulation_row_indices(i: int) -> dict:
                 rows = torch.arange(i * num_slots, (i + 1) * num_slots, dtype=torch.int32)
-                self._tt_modulation_rows.update(self._replicated_indices(rows), traced=False)
-                return {"modulation_rows": self._tt_modulation_rows.value}
+                self._tt_modulation_row_indices.update(self._replicated_indices(rows), traced=False)
+                return {"modulation_row_indices": self._tt_modulation_row_indices.value}
 
         if _is_host_rank():
             _tqdm_spacer()
@@ -3311,7 +3311,7 @@ class MiniMaxH3Pipeline:
                             traced=traced,
                             **tilerow_kwargs,
                             **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
-                            **(modulation_rows(i) if precompute_adaln_modulation else {}),
+                            **(modulation_row_indices(i) if precompute_adaln_modulation else {}),
                         )
                     except RuntimeError as err:
                         if "Out of Memory" in str(err):

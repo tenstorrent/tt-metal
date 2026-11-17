@@ -1066,9 +1066,9 @@ def test_minimax_h3_transformer_block_prepared_modulation(
     reset_seeds,
     expect_error,
 ) -> None:
-    """The block reading its step's rows of `prepare_modulation`'s table (`modulation_rows`) matches the block
+    """The block reading its step's rows of `prepare_modulation`'s table (`modulation_row_indices`) matches the block
     projecting that step's temb: for a step whose rows reach the table's second 32-row tile, and for the last step
-    of a different schedule prepared after a release. Without a prepared table, `modulation_rows` raises."""
+    of a different schedule prepared after a release. Without a prepared table, `modulation_row_indices` raises."""
     MIN_PCC = 0.9995  # against the torch reference, as test_minimax_h3_transformer_block
     MIN_PCC_PROJECTED = 0.99999  # against the same block projecting the step's temb itself
     NUM_STEPS = 49  # the denoising forwards of a 50-step request
@@ -1086,7 +1086,7 @@ def test_minimax_h3_transformer_block_prepared_modulation(
     assert_quality(fixture.torch_out, projected, pcc=MIN_PCC)
 
     def rows_of(step: int) -> ttnn.Tensor:
-        """`modulation_rows` for `step`: its `slots` rows of the table, uint32 and replicated."""
+        """`modulation_row_indices` for `step`: its `slots` rows of the table, uint32 and replicated."""
         rows = torch.arange(step * slots, (step + 1) * slots, dtype=torch.int32).reshape(1, slots)
         return from_torch(rows, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR)
 
@@ -1102,14 +1102,14 @@ def test_minimax_h3_transformer_block_prepared_modulation(
     for step in (32 // slots, NUM_STEPS - 1):
         tt_model.release_modulation()
         prepare(step)
-        prepared = fixture.run(tt_model, temb=None, modulation_rows=rows_of(step))
+        prepared = fixture.run(tt_model, temb=None, modulation_row_indices=rows_of(step))
         logger.info(f"step {step} (rows {step * slots}..{(step + 1) * slots - 1}): prepared vs projected")
         assert_quality(projected, prepared, pcc=MIN_PCC_PROJECTED)
         assert_quality(fixture.torch_out, prepared, pcc=MIN_PCC)
 
     tt_model.release_modulation()
-    with expect_error(RuntimeError, "modulation_rows needs prepare_modulation first"):
-        fixture.run(tt_model, temb=None, modulation_rows=rows_of(0))
+    with expect_error(RuntimeError, "modulation_row_indices needs prepare_modulation first"):
+        fixture.run(tt_model, temb=None, modulation_row_indices=rows_of(0))
 
 
 @GALAXY_RING_AND_LINE

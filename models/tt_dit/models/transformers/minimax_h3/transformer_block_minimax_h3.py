@@ -204,7 +204,7 @@ class MiniMaxH3TransformerBlock(Module):
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
         # `prepare_modulation`'s projection of every step's temb, row-major [steps * slots, adaLN width].
-        self._projected_steps: ttnn.Tensor | None = None
+        self._precomputed_adaln_projections: ttnn.Tensor | None = None
         # The dynamic-length modulation gathers: one-hot [rows, 32] @ table [32, hidden_local] through
         # minimal_matmul, whose program keeps only the M > N bit of the row count (fixed per selector kind).
         self._gather_config = None
@@ -244,7 +244,7 @@ class MiniMaxH3TransformerBlock(Module):
 
     # ------------------------------------------------------------------ modulation
 
-    def _project(self, temb: ttnn.Tensor) -> ttnn.Tensor:
+    def _compute_adaln_projection(self, temb: ttnn.Tensor) -> ttnn.Tensor:
         """adaln_proj(silu(temb)) as [1, 1, rows, MODALITY_NUM * 6 * hidden_local], row-major.
 
         The SiLU runs at `temb`'s own (float32) precision and only its result is cast
@@ -262,30 +262,31 @@ class MiniMaxH3TransformerBlock(Module):
         return ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
 
     def prepare_modulation(self, temb_steps: ttnn.Tensor) -> None:
-        """Project every denoising step's temb at once; `forward(modulation_rows=...)` then picks one step's rows.
+        """Project every denoising step's temb at once; a forward looks up its step's rows by `modulation_row_indices`.
 
         `temb_steps` is [1, 1, rows, time_embed_dim], the rows of all steps (and any padding). temb depends on the
         timesteps only, which the scheduler fixes before the first step, so one projection (and one FSDP gather of
         the 2688 x 24192 weight a device) serves the whole denoise instead of one a step.
         """
         self.release_modulation()
-        projected = self._project(temb_steps)
-        self._projected_steps = ttnn.reshape(projected, (projected.shape[2], projected.shape[3]))
+        projected = self._compute_adaln_projection(temb_steps)
+        self._precomputed_adaln_projections = ttnn.reshape(projected, (projected.shape[2], projected.shape[3]))
 
     def release_modulation(self) -> None:
-        if self._projected_steps is not None:
-            ttnn.deallocate(self._projected_steps)
-            self._projected_steps = None
+        if self._precomputed_adaln_projections is not None:
+            ttnn.deallocate(self._precomputed_adaln_projections)
+            self._precomputed_adaln_projections = None
 
-    def _prepared_rows(self, modulation_rows: ttnn.Tensor) -> ttnn.Tensor:
-        """Rows `modulation_rows` ([1, num_slots] uint32) of `prepare_modulation`'s projection: what `_project`
-        returns for those steps' temb, by an embedding lookup (a copy, so bit-identical)."""
-        if self._projected_steps is None:
-            raise RuntimeError("modulation_rows needs prepare_modulation first")
-        return ttnn.embedding(modulation_rows, self._projected_steps, layout=ttnn.ROW_MAJOR_LAYOUT)
+    def _lookup_precomputed_adaln_projections(self, modulation_row_indices: ttnn.Tensor) -> ttnn.Tensor:
+        """Rows `modulation_row_indices` ([1, num_slots] uint32) of `prepare_modulation`'s table: what
+        `_compute_adaln_projection` returns for those steps' temb, by an embedding lookup (a copy, so bit-identical)."""
+        if self._precomputed_adaln_projections is None:
+            raise RuntimeError("modulation_row_indices needs prepare_modulation first")
+        return ttnn.embedding(modulation_row_indices, self._precomputed_adaln_projections, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def _modulation_tables(self, projected: ttnn.Tensor) -> list[ttnn.Tensor]:
-        """Split a projection (`_project` or `_prepared_rows`) into the six per-(slot, modality) modulation tables.
+        """Split a projection (`_compute_adaln_projection` or `_lookup_precomputed_adaln_projections`) into the six
+        per-(slot, modality) modulation tables.
 
         Returns six [num_slots * MODALITY_NUM, hidden_local] tables, row `slot * MODALITY_NUM + modality`,
         matching the row order that `adaln_indices` addresses.
@@ -388,12 +389,12 @@ class MiniMaxH3TransformerBlock(Module):
         rope_sin: ttnn.Tensor,
         onehot: ttnn.Tensor | None = None,
         tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        modulation_rows: ttnn.Tensor | None = None,
+        modulation_row_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
         temb: [1, 1, num_slots, time_embed_dim], replicated, float32, projected into the adaLN tables.
-            Pass exactly one of `temb` and `modulation_rows`.
+            Pass exactly one of `temb` and `modulation_row_indices`.
         adaln_indices: [1, 1, 1, N_local] integer row indices, fractured N on SP
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
@@ -401,14 +402,17 @@ class MiniMaxH3TransformerBlock(Module):
         onehot / tilerow: the shared one-hot gather matrix (built here when absent) and the `(tile_map, selector)`
             pair from `tilerow_tables`; without the pair the norms take the per-token gather.
 
-        modulation_rows: [1, num_slots] uint32, the rows of `prepare_modulation`'s projection to take the tables
-            from in place of projecting a `temb`: the transformer's `modulation_rows`, flattened.
+        modulation_row_indices: [1, num_slots] uint32, the rows of `prepare_modulation`'s projection to take the tables
+            from in place of projecting a `temb`: the transformer's `modulation_row_indices`, flattened.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        if (temb is None) == (modulation_rows is None):
-            raise ValueError("pass exactly one of temb and modulation_rows")
-        projected = self._project(temb) if modulation_rows is None else self._prepared_rows(modulation_rows)
+        if (temb is None) == (modulation_row_indices is None):
+            raise ValueError("pass exactly one of temb and modulation_row_indices")
+        if modulation_row_indices is None:
+            projected = self._compute_adaln_projection(temb)
+        else:
+            projected = self._lookup_precomputed_adaln_projections(modulation_row_indices)
         tables = self._modulation_tables(projected)
 
         if onehot is None:
