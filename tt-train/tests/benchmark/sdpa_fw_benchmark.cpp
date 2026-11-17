@@ -281,6 +281,7 @@ void run_scenario(
     // The default rows are what the comparison is about, so a failure there fails the benchmark; the
     // command-line configs are optional and a config the shape cannot take is reported as skipped.
     std::vector<Row> rows;
+    rows.reserve(kDefaultRows.size() + extra_configs.size());
     for (const auto& [label, cfg] : kDefaultRows) {
         rows.push_back(measure(label, cfg));
     }
