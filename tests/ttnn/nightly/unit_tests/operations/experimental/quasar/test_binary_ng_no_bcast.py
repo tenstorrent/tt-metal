@@ -316,8 +316,13 @@ def test_no_bcast_sfpu_rsub_fp32(device, layout):
         mem_config = ttnn.DRAM_MEMORY_CONFIG
         shape = _INTERLEAVED_SHAPE
     else:
-        mem_config = _height_sharded_config(_HEIGHT_SHARD, _HEIGHT_GRID)
-        shape = _HEIGHT_SHAPE
+        # Shard over the device's whole compute grid rather than a fixed one: a small emulator grid (two L1 banks
+        # on emu-quasar 2x3_DISPATCH) has no bank on the cores a fixed four-core column would ask for.
+        grid = device.compute_with_storage_grid_size()
+        num_cores = grid.x * grid.y
+        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (grid.x - 1, grid.y - 1))})
+        mem_config = _height_sharded_config(_HEIGHT_SHARD, core_grid)
+        shape = (num_cores * _HEIGHT_SHARD[0], _HEIGHT_SHARD[1])
     _run(device, "rsub", mem_config, ttnn.float32, shape)
 
 
