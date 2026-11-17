@@ -266,6 +266,18 @@ def run_diag(
         "phases": {},
     }
 
+    # A report left by an earlier run would read as this run's if this one
+    # never wrote its own. One that cannot be removed cannot be replaced at the
+    # end either, so stop before any phase touches the unit.
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.unlink(missing_ok=True)
+    except OSError as e:
+        report["overall_status"] = FAIL
+        report["error"] = f"cannot replace {output}: {e!r}"
+        log(f"ERROR: {report['error']}")
+        return 1, report
+
     # Phase 1: snapshot
     snap_phase = Phase(name="snapshot")
     t0 = time.time()
@@ -470,8 +482,15 @@ def run_diag(
 
     # Only the phases that write logs create this directory, and any of them can
     # be skipped — don't lose a completed run's report to a missing parent dir.
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2))
+    # A report that cannot be written leaves the caller no verdict to read, so
+    # that is a failed run whatever its phases found.
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2))
+    except OSError as e:
+        log(f"ERROR: could not write report {output}: {e!r}")
+        _print_overall(report)
+        return 1, report
     log(f"wrote report: {output} (overall={report['overall_status']})")
 
     _print_overall(report)

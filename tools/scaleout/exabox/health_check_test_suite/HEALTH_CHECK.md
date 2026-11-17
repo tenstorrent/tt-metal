@@ -75,7 +75,13 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
   `--tt-metal-path` after a `--` separator, using an in-container repo path.
   Host paths (`--input-snapshot`, `--qsfp-descriptor`, `--triage-dir`) supplied
   before the separator are mounted read-only for you.
-- The exit code is the suite's own: `1` on FAIL, `0` on PASS/WARN.
+- One run per output directory. When a run ends, everything it wrote is handed
+  back to the user who launched the wrapper, so the container user cannot
+  overwrite it. A directory that already holds a run (a `diag_report.json` or
+  `console.log`) is refused before anything starts, rather than failing on the
+  run's first write and leaving the earlier report in place.
+- The exit code is the suite's own: `1` on FAIL, `0` on PASS/WARN. A report that
+  could not be written is `1` too, whatever the phases found.
 
 ## Tiers
 

@@ -62,7 +62,8 @@ Wrapper options:
                          positionally, like run_diag.sh itself.
   -o, --output-dir PATH  Host directory for the report, the per-step logs and
                          the console transcript. Created if absent and chmod
-                         0777 so the image user can write to it.
+                         0777 so the image user can write to it. One run per
+                         directory: one that already holds a run is refused.
                          (default: ./test_output_<date>-<time>)
   -i, --image IMAGE      Container image (default: exabox-tools:latest; see
                          DEFAULT_IMAGE at the top of this script). :latest is
@@ -248,6 +249,14 @@ WANT_QSFP=false
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[ -n ${OUTPUT_DIR} ]] || OUTPUT_DIR="test_output_$(date +%Y%m%d-%H%M%S)"
+# One directory per run. Everything a run writes is handed back to the caller
+# when it ends, so the image user cannot overwrite it: a second run into the
+# same directory would fail on its first write and leave the first run's report
+# standing as if it were its own.
+if [[ -e ${OUTPUT_DIR}/diag_report.json || -e ${OUTPUT_DIR}/console.log ]]; then
+    die "${OUTPUT_DIR} already holds a run. Its files were handed back to $(id -un) when it ended,
+       so the container cannot overwrite them. Pick a new --output-dir."
+fi
 mkdir -p "${OUTPUT_DIR}" || die "cannot create ${OUTPUT_DIR}"
 OUTPUT_DIR="$( cd "${OUTPUT_DIR}" && pwd )"
 # The image runs as its own non-root user, whose uid is not the caller's, so the
