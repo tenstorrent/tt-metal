@@ -12,7 +12,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_eltwise_bcast_col_custom import (
-    _TILE_ROWS,
+    BCAST_COL_CUSTOM_TILE_DIMENSIONS,
     _run_eltwise_bcast_col_custom,
 )
 
@@ -28,7 +28,7 @@ from test_eltwise_bcast_col_custom import (
     dest_acc=[DestAccumulation.No],
     math_fidelity=ALL_MATH_FIDELITIES,
     broadcast_type=[BroadcastType.Column],
-    tile_rows=_TILE_ROWS,
+    tile_dimensions=BCAST_COL_CUSTOM_TILE_DIMENSIONS,
     input_width=list(range(32, 257, 32)) + [1024],
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
@@ -41,7 +41,7 @@ def test_perf_eltwise_bcast_col_custom(
     dest_acc,
     math_fidelity,
     broadcast_type,
-    tile_rows,
+    tile_dimensions,
     input_width,
     run_types,
     loop_factor,
@@ -53,7 +53,7 @@ def test_perf_eltwise_bcast_col_custom(
         dest_acc,
         math_fidelity,
         broadcast_type,
-        tile_rows,
+        tile_dimensions,
         input_width,
         is_perf=is_perf,
         perf_report=perf_report,
