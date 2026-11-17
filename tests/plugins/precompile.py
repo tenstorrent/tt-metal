@@ -41,6 +41,9 @@ Knobs (environment):
                                   all (default 20)
   PRECOMPILE_CHILD_DIR=dir        where the child's log, descriptor and result go (default: a new temp dir)
   PRECOMPILE_READONLY_DISK=0      let dry-run bodies write files (debug)
+  PRECOMPILE_VERIFY=1             check the child's binaries instead of using them: the child builds into a cache of
+                                  its own, the real run compiles as without precompile, and afterwards every ELF both
+                                  built is compared by its loaded sections (verify_* fields; differences are listed)
   PRECOMPILE_FAKE_DATA=0          real torch data in the child (default 1: fake, see _FakeDataMode)
   PRECOMPILE_FAKE_BUDGET=N        with fake data, a body stops after N passing values with no new program; an op run
                                   on zero-filled stand-ins counts as PRECOMPILE_ZERO_FILL_COST plus one per
@@ -98,6 +101,7 @@ _REMOTE_MIN_KERNELS = int(os.environ.get("PRECOMPILE_REMOTE_MIN_KERNELS", "10"))
 _STALL_S = float(os.environ.get("PRECOMPILE_CHILD_STALL_S", "900"))
 _MAX_ATTEMPTS = int(os.environ.get("PRECOMPILE_CHILD_MAX_ATTEMPTS", "20"))
 _READONLY_DISK = os.environ.get("PRECOMPILE_READONLY_DISK", "1") == "1"
+_VERIFY = os.environ.get("PRECOMPILE_VERIFY") == "1"
 _DESCRIPTOR_TIMEOUT_S = float(os.environ.get("PRECOMPILE_DESCRIPTOR_TIMEOUT_S", "300"))
 # The child at SCHED_IDLE (see _child_preexec) leaves the cores to the real run it runs alongside. In wait mode nothing
 # runs alongside it.
@@ -504,13 +508,68 @@ def _stand_ins():
         yield
 
 
+def _cache_root():
+    return os.environ.get("TT_METAL_CACHE") or os.path.join(os.path.expanduser("~"), ".cache", "tt-metal-cache")
+
+
 def _kernel_build_dirs():
     """One entry per kernel binary in the kernel cache (<cache>/<build>/kernels/<name>/<hash>)."""
-    root = os.environ.get("TT_METAL_CACHE") or os.path.join(os.path.expanduser("~"), ".cache", "tt-metal-cache")
+    root = _cache_root()
     dirs = set()
     for depth in ("", "*", os.path.join("*", "*")):
         dirs.update(glob.glob(os.path.join(root, depth, "kernels", "*", "*")))
     return dirs
+
+
+def _loaded_sections(path):
+    """{name: bytes} of an ELF's sections that occupy memory and have contents (SHF_ALLOC, not NOBITS): what reaches
+    the device. Debug info and symbol tables, which name the cache directory the ELF was built in, are left out."""
+    import struct
+
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:4] != b"\x7fELF":
+        return {"<not an ELF>": data}
+    is64, end = data[4] == 2, "<" if data[5] == 1 else ">"
+    if is64:
+        shoff, shentsize, shnum, shstrndx = struct.unpack_from(end + "Q", data, 0x28)[0], *struct.unpack_from(
+            end + "HHH", data, 0x3A
+        )
+        layout, fields = end + "IIQQQQ", (0, 1, 2, 4, 5)
+    else:
+        shoff, shentsize, shnum, shstrndx = struct.unpack_from(end + "I", data, 0x20)[0], *struct.unpack_from(
+            end + "HHH", data, 0x2E
+        )
+        layout, fields = end + "IIIIII", (0, 1, 2, 4, 5)
+    headers = []
+    for i in range(shnum):
+        raw = struct.unpack_from(layout, data, shoff + i * shentsize)
+        headers.append(tuple(raw[k] for k in fields))  # name, type, flags, offset, size
+    strtab = headers[shstrndx]
+    names = data[strtab[3] : strtab[3] + strtab[4]]
+    sections = {}
+    for name, sh_type, flags, offset, size in headers:
+        if flags & 0x2 and sh_type != 8:  # SHF_ALLOC, not SHT_NOBITS
+            sections[names[name : names.index(b"\0", name)].decode()] = data[offset : offset + size]
+    return sections
+
+
+def _verify_binaries(child_root, real_root):
+    """Compare every ELF both caches hold at the same relative path (firmware and kernels, keyed by build key and
+    kernel hash) by its loaded sections. Returns (compared, differing paths)."""
+    compared, differing = 0, []
+    for path in glob.glob(os.path.join(child_root, "**", "*.elf"), recursive=True):
+        rel = os.path.relpath(path, child_root)
+        real = os.path.join(real_root, rel)
+        if not os.path.exists(real):
+            continue
+        compared += 1
+        try:
+            if _loaded_sections(path) != _loaded_sections(real):
+                differing.append(rel)
+        except (OSError, ValueError, IndexError) as e:
+            differing.append(f"{rel} (unreadable: {e})")
+    return compared, sorted(differing)
 
 
 def _emit_result(**fields):
@@ -1220,6 +1279,8 @@ class _Child:
         )
         # The child's builds go to PRECOMPILE_JIT_SERVER through its session, never through the runtime.
         env.pop("TT_METAL_JIT_SERVER_ENABLE", None)
+        if _VERIFY:
+            env["TT_METAL_CACHE"] = os.path.join(self.dir, "verify_cache")
         if _JIT_SERVER:
             # The real run is another process and reuses a server-built ELF only through the dependency sidecar
             # that preprocess-and-ship writes next to it; without it every such kernel is compiled again.
@@ -1400,6 +1461,14 @@ def _parent_after_real_run(session):
     _CHILD.stop("stopped at real-run end")
     child = _CHILD.read_result() or {}
     stats = child.get("stats", {})
+    verify = {}
+    if _VERIFY:
+        compared, differing = _verify_binaries(os.path.join(_CHILD.dir, "verify_cache"), _cache_root())
+        verify = {
+            "verify_compared": compared,
+            "verify_identical": compared - len(differing),
+            "verify_differ": len(differing),
+        }
     _emit_result(
         mode="wait" if _WAIT else "stream",
         route="server" if _JIT_SERVER else "local",
@@ -1424,7 +1493,12 @@ def _parent_after_real_run(session):
         child_crashed=len(_CHILD.crashed),
         **{k: v for k, v in child.items() if k.startswith("fake_") and isinstance(v, (int, float))},
         **stats,
+        **verify,
     )
+    if verify.get("verify_differ"):
+        print("PRECOMPILE: binaries the child built differently from the real run:", flush=True)
+        for rel in differing[:50]:
+            print(f"PRECOMPILE:   {rel}", flush=True)
     if child.get("fake_rerun_reasons"):
         print("PRECOMPILE: why bodies reran with real data (most common first):", flush=True)
         for why, count in child["fake_rerun_reasons"][:10]:
