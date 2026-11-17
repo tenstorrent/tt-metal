@@ -6,10 +6,11 @@ TILE bf16, TILE bf8_b), the fused ReLU, and C_in that is not a multiple of 32.
 
 - layout matrix: every (dtype, layout) pair against the torch reference, with ReLU and bias on and off.
 - NaN padding lanes: channels C_in..C_in_p of a pixel are padding (tile padding on TILE, DRAM page
-  alignment on ROW_MAJOR) and sit against zero weight rows; 0 x NaN = NaN, so the kernel must never
-  feed them to the matmul. The inputs here carry NaN in exactly those lanes.
-- multi-M-block: a forced small L1 budget makes each core run several M-blocks, so state left by one
-  block's epilogue (PACK_RELU, packer L1 accumulation) meets the next block's untilize and tilize.
+  alignment on ROW_MAJOR) and sit against zero weight rows. The kernel never copies them into the
+  im2col rows. The inputs here carry NaN in exactly those lanes. On Blackhole the matmul FPU returns
+  0 for 0 x NaN / 0 x Inf, so these tests pin the output contract, not the lane exclusion itself.
+- multi-M-block: a pinned one-tile-row M-block makes each core run several M-blocks, so state left by
+  one block's epilogue (PACK_RELU, packer L1 accumulation) meets the next block's untilize and tilize.
 """
 
 import importlib
@@ -41,6 +42,7 @@ SHAPES = [
     ((14, 16, 48), 64, 1, 1, 1),  # C_in = 48: lanes in the second channel tile
     ((32, 32, 8), 32, 1, 2, 1),  # stem-like: C_in = 8, stride 2
     ((32, 32, 64), 64, 2, 1, 2),  # dilated: per-tap gather
+    ((16, 16, 32), 48, 1, 1, 1),  # C_out = 48: output tile padding
 ]
 
 
@@ -211,11 +213,26 @@ def test_conv2d_3x3_multi_m_block_relu(dtype, layout, with_bias, device, monkeyp
     )
     core_m_tiles = -(-geometry.tensor_m_tiles // (grid.x * grid.y))
     assert core_m_tiles >= 2, "shape too small to give a core more than one M-block on this grid"
-    budget = _pd._footprint(geometry, core_m_tiles, 1, geometry.tensor_kkh_tiles, geometry.tensor_n_tiles)[
-        "footprint_bytes"
-    ]
-    blocking = _pd.select_blocking(geometry, (grid.x, grid.y), budget)
+    # Pin one tile-row per M-block (the blocking an L1-bound shape would get) instead of tuning a budget
+    # against the solver's search order.
+    fit = _pd._footprint(geometry, core_m_tiles, 1, geometry.tensor_kkh_tiles, geometry.tensor_n_tiles)
+    blocking = _pd.Conv3x3Blocking(
+        grid_x=grid.x,
+        core_m_tiles=core_m_tiles,
+        num_m_groups=-(-geometry.tensor_m_tiles // core_m_tiles),
+        block_m_tiles=1,
+        block_k_tiles=geometry.tensor_kkh_tiles,
+        block_n_tiles=geometry.tensor_n_tiles,
+        im2col_rm_depth_rows=_pd.IM2COL_RM_DEPTH_ROWS,
+        out_depth_row_groups=_pd.OUT_DEPTH_ROW_GROUPS,
+        **fit,
+    )
     assert blocking.max_m_blocks_per_core > 1
-    monkeypatch.setattr(_op_module, "l1_cb_budget_bytes", lambda: budget)
+
+    def pinned_blocking(g, grid_xy, l1_budget):
+        assert g == geometry, "the test's geometry must match the op's"
+        return blocking
+
+    monkeypatch.setattr(_op_module, "select_blocking", pinned_blocking)
 
     _run(case, dtype, layout, ttnn.bfloat16, device, with_bias=with_bias, relu=True)

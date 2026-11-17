@@ -27,16 +27,24 @@ def _shape_id(case):
     return f"H{H}_W{W}_Ci{c_in}_Co{c_out}_p{padding}"
 
 
+LAYOUTS = [
+    pytest.param(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, id="rm_bf16"),
+    pytest.param(ttnn.bfloat16, ttnn.TILE_LAYOUT, id="tile_bf16"),
+    pytest.param(ttnn.bfloat8_b, ttnn.TILE_LAYOUT, id="tile_bf8b"),
+]
+
+
+@pytest.mark.parametrize("dtype,layout", LAYOUTS)
 @pytest.mark.parametrize("case", PERF_SHAPES, ids=[_shape_id(c) for c in PERF_SHAPES])
-def test_conv2d_3x3_perf(case, device):
+def test_conv2d_3x3_perf(case, dtype, layout, device):
     torch.manual_seed(0)
     (H, W, c_in), c_out, padding = case
     kwargs = dict(
         stride=1,
         padding=padding,
         dilation=1,
-        input_dtype=ttnn.bfloat16,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_dtype=dtype,
+        input_layout=layout,
         weight_dtype=ttnn.bfloat16,
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=device,
@@ -48,8 +56,8 @@ def test_conv2d_3x3_perf(case, device):
     torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        layout=layout,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -59,4 +67,4 @@ def test_conv2d_3x3_perf(case, device):
     x = torch_input.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
     ref = torch.nn.functional.conv2d(x, torch_weight.float(), torch_bias.float(), padding=padding)
     ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
-    assert_with_pcc(ref, ttnn.to_torch(tt_output).float(), 0.995)
+    assert_with_pcc(ref, ttnn.to_torch(tt_output).float(), 0.995 if dtype == ttnn.bfloat16 else 0.99)

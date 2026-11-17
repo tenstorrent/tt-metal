@@ -141,7 +141,9 @@ SUPPORTED = {
     "fp32_dest_acc_en": [True],
     "bias_mode": ["with_bias", "no_bias"],
     "activation": ["none", "relu"],
-    "channel_alignment": ["tile_aligned", "c_in_unaligned"],
+    # C_out off the tile grid needs no kernel work: prepared weight and bias columns past C_out are
+    # zero tile padding, so the output's padding columns come out zero.
+    "channel_alignment": ["tile_aligned", "c_in_unaligned", "c_out_unaligned", "both_unaligned"],
     "hw_alignment": ["hw_aligned"],
     "stride_mode": ["unit", "strided"],
     "dilation_mode": ["unit", "dilated"],

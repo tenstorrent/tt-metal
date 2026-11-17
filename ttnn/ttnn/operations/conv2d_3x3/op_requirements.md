@@ -48,7 +48,7 @@
 - **Compute config**: caller fidelity/approx honored; fp32 DEST (gated True); packer-L1 fp32 accumulation over 3 kh K-blocks
 - **Golden baseline**: 64 / 64 supported cells passing (1399 xfail_expected, 480 invalid_skipped, 0 loud) per `golden_results/verifier_report.json`
 
-### [ ] Refinement 1 — TILE / bf8_b activation, fused ReLU, unaligned C_in (interleaved path)
+### [x] Refinement 1 — TILE / bf8_b activation, fused ReLU, unaligned C_in (interleaved path)
 
 **Goal**: add `ttnn.TILE_LAYOUT` to `SUPPORTED["layout"]`, `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, `"relu"` to `SUPPORTED["activation"]`, and `"c_in_unaligned"` to `SUPPORTED["channel_alignment"]` on the DRAM-interleaved path. This moves all 416 INTERLEAVED xfail cells to passing: every dtype x weight_dtype x layout x activation x alignment combination, including the mixed bf8_b-activation x bf16-weight cells.
 
@@ -78,6 +78,8 @@
 - **Ordering**: before Refinement 2. Its TILE untilize stage and ReLU epilogue are what the 13 TILE bf8_b HEIGHT LOOSE layers and stem.conv1 need.
 
 **Done when**: every golden `test_op` cell with `memory_layout=INTERLEAVED` passes (0 xfail on the interleaved path). The 9 `test_regression.py` C_in = 8 tap-shift cases run and pass. The NaN-lane regression passes. The acceptance and precision-baseline suites stay green.
+
+**Result**: 480 / 480 interleaved `test_op` cells pass (160 INVALID skipped), all 33 `test_regression.py` cases run and pass (the C_in = 8 tap tests use C_out = 8, i.e. `both_unaligned`; `c_out_unaligned` / `both_unaligned` were promoted after a gate-lifted probe, no kernel change). NaN-lane tests pass, but on Blackhole the matmul FPU returns 0 for 0 x NaN / 0 x Inf, so they cannot fail there; the lane exclusion is kept as specified.
 
 ### [ ] Refinement 2 — HEIGHT_SHARDED input and output (regime R2), all layouts
 

@@ -187,6 +187,7 @@ def _tile_slab_rows(g: Conv3x3Geometry, f, band_len):
     return next_free
 
 
+@functools.lru_cache(maxsize=1024)
 def _block_extents(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
     """(max band_len_px, max TILE slab tile-rows) over every M-block of every core."""
     worst_band, worst_slab_rows = 0, 0
@@ -202,7 +203,14 @@ def _block_extents(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
     return worst_band, worst_slab_rows
 
 
-def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn):
+def _default_untilize_batch_rows(g: Conv3x3Geometry, band_len, raw_slab_rows):
+    """One untilize batch = the tile-rows one band can touch, so the reader fences about once per band."""
+    if not g.tile_input:
+        return 1
+    return max(1, min(raw_slab_rows, _div_up(band_len, TILE) + 1))
+
+
+def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
     num_k_blocks = g.tensor_k_tiles // bk
     max_m_blocks = _div_up(core_m_tiles, bm)
     weight_depth = 1 if num_k_blocks * max_m_blocks == 1 else WEIGHT_DEPTH
@@ -210,9 +218,10 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn):
     band_stride = min(g.dilation * g.input_width, band_len)
     sb_h, sb_w = _out_subblock(bm, bn)
     if g.tile_input:
-        # One untilize batch = the tile-rows one band can touch, so the reader fences about once per band.
+        ub = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+        if ub_cap is not None:
+            ub = min(ub, ub_cap)
         # The slab is a whole number of batches: every reader push and compute untilize has one quantum.
-        ub = max(1, min(raw_slab_rows, _div_up(band_len, TILE) + 1))
         slab_tile_rows = _div_up(max(raw_slab_rows, 1), ub) * ub
         slab_bytes = slab_tile_rows * g.c_in_tiles * TILE_BYTES_BF16
         input_tile_bytes = INPUT_TILE_DEPTH_BATCHES * ub * g.c_in_tiles * g.in0_tile_bytes
@@ -248,7 +257,8 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn):
 def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
     shrink bk to divisors of the kh block down to one pixel's channels (costs no bytes), then shrink bm
-    (re-streams weights and halo), then bk below the tap floor. bn is never shrunk."""
+    (re-streams weights and halo), then bk below the tap floor. bn is never shrunk. On a TILE input the
+    untilize batch shrinks before any of them."""
     grid_x, grid_y = grid
     grid_cores = grid_x * grid_y
     core_m_tiles = _div_up(g.tensor_m_tiles, grid_cores)
@@ -267,8 +277,17 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
 
     for bm, bk in search:
-        fit = _footprint(g, core_m_tiles, bm, bk, bn)
-        if fit["footprint_bytes"] <= l1_budget:
+        # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
+        # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
+        band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
+        ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+        fit = None
+        for ub_cap in range(ub_default, 0, -1):
+            candidate = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap)
+            if candidate["footprint_bytes"] <= l1_budget:
+                fit = candidate
+                break
+        if fit is not None:
             return Conv3x3Blocking(
                 grid_x=grid_x,
                 core_m_tiles=core_m_tiles,
