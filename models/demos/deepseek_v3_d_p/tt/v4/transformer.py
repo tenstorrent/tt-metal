@@ -79,6 +79,7 @@ class TtV4Transformer(LightweightModule):
         sparse_kv_cache_format=None,
         mtp_predictor=None,
         tp_shard_kv: Optional[bool] = None,
+        moe_impl: Optional[str] = None,
         **block_kwargs,
     ):
         """``state_dict`` is ``{"embed_weight", "norm_weight", "hc_head": (fn, base, scale), "layers"}``,
@@ -94,6 +95,9 @@ class TtV4Transformer(LightweightModule):
         DRAM grows linearly with it: at 55k on 8x4, about 20 MiB per CSA layer and 0.7 MiB per HCA layer,
         per slot, per chip.
         """
+        # (the runtime's MoE choice, tt/moe_impl.py: DeepSeek-V4 runs TtMoe only - the MoE block is GLM-5.3's and
+        # Kimi-K3's)
+        assert moe_impl in (None, "ttmoe"), f"DeepSeek-V4 runs TtMoe only, not moe_impl={moe_impl!r}"
         super().__init__()
         if mtp_predictor is not None:
             raise ValueError("DeepSeek-V4 prefill has no MTP predictor; got a non-None mtp_predictor")
