@@ -19,10 +19,16 @@ from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing._errors import TopologyError
 from ttml.distributed_checkpointing._index import FileRecord, Index, data_file_name
 from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
-from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
+from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, owner
 
 R = Placement.replicate
 S = Placement.shard
+
+
+def one_process_owner(key: str, group) -> object:
+    """The election of a single-process save: the chunk of the group's coordinates ``_topology.owner`` picks."""
+    coord = owner(key, [c.mesh_coord for c in group])
+    return next(c for c in group if c.mesh_coord == coord)
 
 
 def label_local_shape(label: Label, global_shape) -> tuple[int, ...]:
@@ -96,7 +102,7 @@ class FakeCheckpoint:
     def save(self, tensors: dict[str, tuple[np.ndarray, Label, object]]) -> Index:
         """``tensors[key] = (device-layout global array, label, transform)``."""
         infos = [info(key, label, arr.shape, transform) for key, (arr, label, transform) in tensors.items()]
-        plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord))
+        plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord), one_process_owner)
         self.files = {}
         records = []
         crcs = {}
@@ -113,10 +119,10 @@ class FakeCheckpoint:
         self.index = Index(checkpoint_id="fake", world={"group_size": 1}, files=records, entries=plan.entries(crcs))
         return self.index
 
-    def load(self, dests: dict[str, tuple[Label, object, tuple]], strict=True):
+    def load(self, dests: dict[str, tuple[Label, object, tuple]]):
         """``dests[key] = (label, transform, global shape)``; returns the plan and ``{key: {group: shard array}}``."""
         infos = [info(key, label, global_shape, transform) for key, (label, transform, global_shape) in dests.items()]
-        plan = create_load_plan(self.index, infos, strict=strict)
+        plan = create_load_plan(self.index, infos)
         shards: dict[str, dict[tuple, np.ndarray]] = {}
         for key, kplan in plan.keys.items():
             out = {group: np.full(box.sizes, np.nan, dtype=np.float32) for group, box in kplan.boxes.items()}

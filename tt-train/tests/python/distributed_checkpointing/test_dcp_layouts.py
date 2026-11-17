@@ -19,6 +19,7 @@ from ttml.distributed_checkpointing._layouts import (
     Identity,
     Pad,
     Segments,
+    check_fused_segments,
     compose,
     declared_transform,
     fused_segments,
@@ -26,7 +27,6 @@ from ttml.distributed_checkpointing._layouts import (
     transform_from_json,
 )
 from ttml.distributed_checkpointing._topology import Placement
-
 
 TP4 = world([Placement.shard(2)], (4,))
 DP2_TP1 = world([Placement.replicate(), Placement.shard(2)], (2, 1))  # a TP layer's label on a TP-1 axis
@@ -198,3 +198,14 @@ def test_declared_transform_refuses_layouts_it_cannot_describe(expect_error):
     fsdp2_rows_tp4 = world([Placement.shard(2), Placement.shard(2)], (2, 4))
     with expect_error(LayoutError, "2 mesh axes shard"):
         declared_transform((1, 1, 64, 32), fsdp2_rows_tp4, fused=(2, (32, 16, 16)))
+
+
+def test_check_fused_segments_is_the_one_check_of_a_fused_declaration(expect_error):
+    assert check_fused_segments([128, 64.0, 64], 256, 4) == (128, 64, 64), "sizes come back as ints"
+    with expect_error(LayoutError, "sum to 254 but the fused dim has 256 rows"):
+        check_fused_segments((128, 64, 62), 256, 2)
+    with expect_error(LayoutError, "segment size 66 is not divisible by the 4 shards"):
+        check_fused_segments((128, 66, 62), 256, 4)
+    for sizes, shards in (((), 1), ((128, 0, 128), 1), ((256,), 0)):
+        with expect_error(LayoutError, "bad sizes"):
+            check_fused_segments(sizes, 256, shards)
