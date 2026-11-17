@@ -324,8 +324,8 @@ _PERF_START = _ROWS + 320
         pytest.param(*case.values, reference_us, margin, marks=case.marks, id=case.id)
         for case, reference_us, margin in (
             # Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY.
-            # Galaxy's 32 chips start a call further apart, so its medians spread wider (194-209 us over repeated runs).
-            (kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"), 203.0, 0.08),
+            # Galaxy runs one program for all 32 chips, so they start a call together (130-132 us over repeated runs).
+            (kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"), 131.0, 0.08),
             (kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1"), 276.0, 0.05),
             (kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1"), 123.3, 0.05),
         )
