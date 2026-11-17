@@ -65,14 +65,15 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void add_int([[maybe_unused]] const uint dst_offset) {
     // dst_reg rows per Dest tile with a 32-bit Dest: the second operand is always the tile
     // right after the first (sfpu_add_int(idst, idst + 1)); dst_offset is not consulted.
+    // Rows use immediate offsets and leave the Dest RWC alone: the face walk sets it from the
+    // carriage-return counter, so no per-row INCRWC is needed.
     constexpr uint dst_tile_size_sfpi = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt a = dst_reg[0].mode<sfpi::DataLayout::I32>();
-        vInt b = dst_reg[dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+        vInt a = dst_reg[d].mode<sfpi::DataLayout::I32>();
+        vInt b = dst_reg[dst_tile_size_sfpi + d].mode<sfpi::DataLayout::I32>();
 
-        dst_reg[0].mode<sfpi::DataLayout::I32>() = a + b;
-        dst_reg++;
+        dst_reg[d].mode<sfpi::DataLayout::I32>() = a + b;
     }
 }
 
