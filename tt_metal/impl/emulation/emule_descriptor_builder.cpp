@@ -218,7 +218,8 @@ static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
                     continue;
                 }
                 CbDescriptor cd;
-                cd.address = cb->address();
+                // A fast-dispatch compile precedes allocation; its launches read the rings from L1.
+                cd.address = cb->is_allocated() ? cb->address() : 0;
                 cd.total_size = cb->size();
                 cd.globally_allocated = cb->globally_allocated();
                 cd.creation_index = cb_creation_index.at(cb.get());
