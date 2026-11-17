@@ -786,10 +786,14 @@ inline void _llk_unpack_AB_matmul_(
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
 
+        // the next row's addresses only where one follows: a one-row call runs no more than the per-row body
         if constexpr (hoisted)
         {
-            address_a += reuse_a ? tile_size_a * kt_dim : 0;
-            address_b += reuse_a ? 0 : tile_size_b;
+            if (t + 1 < t_dim)
+            {
+                address_a += reuse_a ? tile_size_a * kt_dim : 0;
+                address_b += reuse_a ? 0 : tile_size_b;
+            }
         }
     }
 }
