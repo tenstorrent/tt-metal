@@ -12,6 +12,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
 
@@ -113,14 +114,21 @@ FORCE_INLINE void fabric_write_pages(
     uint32_t page_size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header,
     uint64_t inc_addr = 0) {
+    // fabric router writes on NOC1: resolve the DRAM endpoints for its NoC (SYS-1419)
     if (count == 1) {
-        fabric_write_bytes<MaxPayload>(conn, out_acc.get_noc_addr(first), l1_src_addr, page_size, header, inc_addr);
+        fabric_write_bytes<MaxPayload>(
+            conn,
+            tt::tt_fabric::linear::addrgen_detail::get_noc_address(out_acc, first),
+            l1_src_addr,
+            page_size,
+            header,
+            inc_addr);
         return;
     }
     uint64_t dst[NOC_SCATTER_WRITE_MAX_CHUNKS];
     uint16_t sizes[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];
     for (uint32_t i = 0; i < count; ++i) {
-        dst[i] = out_acc.get_noc_addr(first + i);
+        dst[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(out_acc, first + i);
         if (i + 1 < count) {
             sizes[i] = static_cast<uint16_t>(page_size);
         }

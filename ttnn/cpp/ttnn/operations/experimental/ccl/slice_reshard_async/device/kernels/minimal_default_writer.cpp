@@ -125,7 +125,9 @@ void kernel_main() {
                 cb_output.wait_front(1);
                 uint32_t l1_read_addr = cb_output.get_read_ptr();
 
-                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
+                // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+                uint64_t dst_noc_addr =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_accessor, dst_stick_id);
 
                 pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
                 if (direction) {

@@ -37,6 +37,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 
 using namespace tt::tt_fabric::linear::experimental;
 
@@ -189,13 +190,15 @@ FORCE_INLINE void transport_phase(
         for (uint32_t i = 0; i < carried_tiles; ++i) {
             noc.async_writes_flushed();
             // The fabric write takes the page's raw NoC address.
+            // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
             fabric_multicast_noc_fused_unicast_with_atomic_inc(
                 &line.connection,
                 line.header,
                 scratch_addr + i * tile_bytes,
                 tile_bytes,
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                    out.get_noc_addr((first_tile + i * tile_step) * page_tile_stride + rank * page_rank_stride, 0, 0),
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                        out, (first_tile + i * tile_step) * page_tile_stride + rank * page_rank_stride),
                     data_noc_addr,
                     1,
                     true},
