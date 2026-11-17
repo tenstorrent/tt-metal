@@ -134,8 +134,9 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects col
 //   program another SFPU op recorded at init (COL bcast, reduce, fast exp,
 //   ...), which must re-run its init after a ROW call. The
 //   call leaves the dest base register pointed at the data tile (as the
-//   unary SFPU path leaves it at its tile) and RWC.Dst non-zero; both are
-//   reset by the next `_llk_math_eltwise_sfpu_start_` / `_done_` bracket.
+//   unary SFPU path leaves it at its tile) and RWC.Dst non-zero; the
+//   enclosing `_llk_math_eltwise_sfpu_done_` clears RWC.Dst and the next
+//   `_llk_math_eltwise_sfpu_start_` rewrites the dest base.
 //
 // BCAST_SCALAR normalize path:
 //   LREG6/LREG7 retain the negated scalar mean and inverse standard deviation for the
@@ -180,6 +181,11 @@ static_assert(
 // SFPLOAD / SFPSTORE carry a 10-bit dest address that wraps; relative
 // (possibly "negative") tile offsets are formed modulo this.
 constexpr std::uint32_t DEST_ADDR_MASK = 0x3FF;
+
+constexpr std::uint32_t dest_addr_wrap(std::uint32_t addr) { return addr & DEST_ADDR_MASK; }
+
+// INCRWC's dest increment field is 4 bits; a 16-row face jump is two steps.
+constexpr std::uint32_t INCRWC_FACE_HALF_STEP = 8;
 
 // BCAST_ROW col-group offsets within a face pair (face N + face N+1), in
 // dest addr units. A "col group" is one 4-row x 8-col SFPLOAD/SFPSTORE slot.
@@ -780,9 +786,10 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
 // op. Recording with Exec costs no SFPU time: band 0 runs while it records.
 //
 // Setup (once per full-tile call, hoisted out of the per-band loop):
-//   0. Dest base := data tile (SETC16); RWC.Dst := 0. The caller's
-//      `_llk_math_eltwise_sfpu_start_` bracket guarantees no SFPU instruction
-//      is in flight here. Load bcast tile's 4 col-groups (face 0, row band 0)
+//   0. Dest base := data tile (SETC16); RWC.Dst := 0. The previous SFPU op's
+//      `_llk_math_eltwise_sfpu_done_` waited for the SFPU, and the SETC16 is
+//      ordered before the SFPLOAD/SFPSTOREs that follow it. Load bcast tile's
+//      4 col-groups (face 0, row band 0)
 //      into LREG4..7, addressed relative to the data tile. The dest address
 //      is 10 bits and wraps, so a bcast tile below the data tile is reached
 //      with a "negative" (wrapped) offset.
@@ -874,13 +881,13 @@ inline void _record_row_bcast_band_replay_(std::uint32_t out_rel) {
 
     // (5) Store LREG0..3 to the 4 col-groups of the output band. `out_rel` is
     //     the per-call data -> out tile distance (0 for the in-place API).
-    TT_SFPSTORE(p_sfpu::LREG0, IM, ADDR_MOD_3, (out_rel + COL_GROUP_OFFSETS[0]) & DEST_ADDR_MASK);
-    TT_SFPSTORE(p_sfpu::LREG1, IM, ADDR_MOD_3, (out_rel + COL_GROUP_OFFSETS[1]) & DEST_ADDR_MASK);
-    TT_SFPSTORE(p_sfpu::LREG2, IM, ADDR_MOD_3, (out_rel + COL_GROUP_OFFSETS[2]) & DEST_ADDR_MASK);
-    TT_SFPSTORE(p_sfpu::LREG3, IM, ADDR_MOD_3, (out_rel + COL_GROUP_OFFSETS[3]) & DEST_ADDR_MASK);
+    TT_SFPSTORE(p_sfpu::LREG0, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[0]));
+    TT_SFPSTORE(p_sfpu::LREG1, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[1]));
+    TT_SFPSTORE(p_sfpu::LREG2, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[2]));
+    TT_SFPSTORE(p_sfpu::LREG3, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[3]));
 
     // (6) Next band.
-    TTI_INCRWC(0, ROW_BAND_STRIDE, 0, 0);
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ ROW_BAND_STRIDE, /*rwc_b*/ 0, /*rwc_a*/ 0);
 }
 
 template <BinaryOp BINOP>
@@ -893,18 +900,18 @@ inline void _calculate_sfpu_binary_bcast_row_full_tile_(
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index_data);
     math::clear_dst_reg_addr();
 
-    const std::uint32_t bcast_rel = ((dst_index_bcast - dst_index_data) * DEST_TILE_SIZE_RAW) & DEST_ADDR_MASK;
-    const std::uint32_t out_rel = ((dst_index_out - dst_index_data) * DEST_TILE_SIZE_RAW) & DEST_ADDR_MASK;
+    const std::uint32_t bcast_rel = dest_addr_wrap((dst_index_bcast - dst_index_data) * DEST_TILE_SIZE_RAW);
+    const std::uint32_t out_rel = dest_addr_wrap((dst_index_out - dst_index_data) * DEST_TILE_SIZE_RAW);
 
     // Hoisted bcast load: bcast row 0 lives in face 0 row band 0 and is
     // identical for every output band, so we load its 4 col-groups exactly
     // once. The per-band binop is structured to leave LREG4..7 unchanged,
     // so the second SFPTRANSP per band restores them to this face-major
     // layout.
-    TT_SFPLOAD(p_sfpu::LREG4, IM, ADDR_MOD_3, (bcast_rel + FACE0_BASE + COL_GROUP_OFFSETS[0]) & DEST_ADDR_MASK);
-    TT_SFPLOAD(p_sfpu::LREG5, IM, ADDR_MOD_3, (bcast_rel + FACE0_BASE + COL_GROUP_OFFSETS[1]) & DEST_ADDR_MASK);
-    TT_SFPLOAD(p_sfpu::LREG6, IM, ADDR_MOD_3, (bcast_rel + FACE0_BASE + COL_GROUP_OFFSETS[2]) & DEST_ADDR_MASK);
-    TT_SFPLOAD(p_sfpu::LREG7, IM, ADDR_MOD_3, (bcast_rel + FACE0_BASE + COL_GROUP_OFFSETS[3]) & DEST_ADDR_MASK);
+    TT_SFPLOAD(p_sfpu::LREG4, IM, ADDR_MOD_3, dest_addr_wrap(bcast_rel + FACE0_BASE + COL_GROUP_OFFSETS[0]));
+    TT_SFPLOAD(p_sfpu::LREG5, IM, ADDR_MOD_3, dest_addr_wrap(bcast_rel + FACE0_BASE + COL_GROUP_OFFSETS[1]));
+    TT_SFPLOAD(p_sfpu::LREG6, IM, ADDR_MOD_3, dest_addr_wrap(bcast_rel + FACE0_BASE + COL_GROUP_OFFSETS[2]));
+    TT_SFPLOAD(p_sfpu::LREG7, IM, ADDR_MOD_3, dest_addr_wrap(bcast_rel + FACE0_BASE + COL_GROUP_OFFSETS[3]));
 
     // Upper half (face 0/1): band 0 records + executes, bands 1..3 replay.
     _record_row_bcast_band_replay_<BINOP>(out_rel);
@@ -912,10 +919,10 @@ inline void _calculate_sfpu_binary_bcast_row_full_tile_(
         lltt::replay(REPLAY_SLOT_ROW_BAND, REPLAY_LEN_ROW_BAND);
     }
 
-    // RWC.Dst: FACE1_BASE -> FACE2_BASE (INCRWC's increment is 4 bits wide).
-    static_assert(FACE2_BASE - FACE1_BASE == 16, "two 8-step INCRWCs span one face");
-    TTI_INCRWC(0, 8, 0, 0);
-    TTI_INCRWC(0, 8, 0, 0);
+    // RWC.Dst: FACE1_BASE -> FACE2_BASE.
+    static_assert(FACE2_BASE - FACE1_BASE == 2 * INCRWC_FACE_HALF_STEP, "two INCRWCs span one face");
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
 
     // Lower half (face 2/3): bands 0..3 replay.
     for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
