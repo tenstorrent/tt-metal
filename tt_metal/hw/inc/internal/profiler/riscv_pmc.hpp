@@ -7,7 +7,8 @@
 // description (CSRs, select formats, event tables) is in tt-llk perf_counters/riscv_pmc_*.h; this header adds the
 // profiler marker format and emission.
 //
-// Enable with TT_METAL_PROFILE_RISCV_PMC=<mhpmevent3>[,<mhpmevent4>] (Quasar DMs: TT_METAL_PROFILE_RISCV_PMC_DM).
+// Enable with TT_METAL_PROFILE_RISCV_PMC=<mhpmevent3>[,<mhpmevent4>] (Quasar DMs:
+// TT_METAL_PROFILE_RISCV_PMC_DM=<mhpmevent3>[,<mhpmevent4>[,<mhpmevent5>[,<mhpmevent6>]]]).
 // The selects are compile-time constants and part of the firmware build key.
 
 #pragma once
@@ -17,6 +18,9 @@
 constexpr uint16_t RISCV_PMC_COUNTS_PROFILER_ID = 9092;  // (pmc4 << 32) | pmc3
 constexpr uint16_t RISCV_PMC_CYCLES_PROFILER_ID = 9093;  // (minstret << 32) | mcycle
 constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) | mhpmevent3
+// Quasar data-movement cores with a programmed counter 5 or 6 add these two markers.
+constexpr uint16_t RISCV_PMC_COUNTS_UPPER_PROFILER_ID = 9095;  // (pmc6 << 32) | pmc5
+constexpr uint16_t RISCV_PMC_EVENTS_UPPER_PROFILER_ID = 9096;  // (mhpmevent6 << 32) | mhpmevent5
 
 // Cores that carry the counters and have a firmware hook.
 #if defined(ARCH_BLACKHOLE) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || \
@@ -46,6 +50,12 @@ constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) |
 #if !defined(PROFILE_RISCV_PMC_DM_EV4)
 #define PROFILE_RISCV_PMC_DM_EV4 0
 #endif
+#if !defined(PROFILE_RISCV_PMC_DM_EV5)
+#define PROFILE_RISCV_PMC_DM_EV5 0
+#endif
+#if !defined(PROFILE_RISCV_PMC_DM_EV6)
+#define PROFILE_RISCV_PMC_DM_EV6 0
+#endif
 
 // The Quasar data-movement cores take (event mask << 8) | event set; every other core takes eight nibbles.
 #if defined(COMPILE_FOR_DM)
@@ -54,6 +64,11 @@ constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) |
 #else
 #define RISCV_PMC_SEL3 ((uint32_t)PROFILE_RISCV_PMC_EV3)
 #define RISCV_PMC_SEL4 ((uint32_t)PROFILE_RISCV_PMC_EV4)
+#endif
+
+// Only the data-movement cores have counters 5 and 6, and only a programmed one is captured.
+#if defined(COMPILE_FOR_DM) && (PROFILE_RISCV_PMC_DM_EV5 != 0 || PROFILE_RISCV_PMC_DM_EV6 != 0)
+#define RISCV_PMC_UPPER 1
 #endif
 
 #include "perf_counters/riscv_pmc_hw.h"
@@ -73,22 +88,35 @@ static uint32_t cycle_begin, instret_begin;
 inline __attribute__((always_inline)) void begin() {
     llk::perf::riscv::select(RISCV_PMC_SEL3, RISCV_PMC_SEL4);
     llk::perf::riscv::zero_counters();
+#if defined(RISCV_PMC_UPPER)
+    llk::perf::riscv::select_upper(PROFILE_RISCV_PMC_DM_EV5, PROFILE_RISCV_PMC_DM_EV6);
+    llk::perf::riscv::zero_counters_upper();
+#endif
     cycle_begin = llk::perf::riscv::read_mcycle();
     instret_begin = llk::perf::riscv::read_minstret();
 }
 
-// The three markers share one buffer-room check and one timestamp, which keeps the BRISC image
+// The markers share one buffer-room check and one timestamp, which keeps the BRISC image
 // inside its region. Re-emitting the selects every launch keeps each capture self-describing.
 // No flush_to_dram_if_full(): a full buffer drops the markers, and the flush would pull noc_index
 // into firmware images that do not define it.
 inline __attribute__((always_inline)) void end() {
     const uint32_t pmc3 = llk::perf::riscv::read_counter3();
     const uint32_t pmc4 = llk::perf::riscv::read_counter4();
+#if defined(RISCV_PMC_UPPER)
+    const uint32_t pmc5 = llk::perf::riscv::read_counter5();
+    const uint32_t pmc6 = llk::perf::riscv::read_counter6();
+#endif
     const uint32_t mcycle = llk::perf::riscv::read_mcycle();
     const uint32_t minstret = llk::perf::riscv::read_minstret();
 
     constexpr uint32_t marker_words = PROFILER_L1_MARKER_UINT32_SIZE + 2;
-    if (!bufferHasRoom<DoingDispatch::DISPATCH>(3 * marker_words - 1)) {
+#if defined(RISCV_PMC_UPPER)
+    constexpr uint32_t marker_count = 5;
+#else
+    constexpr uint32_t marker_count = 3;
+#endif
+    if (!bufferHasRoom<DoingDispatch::DISPATCH>(marker_count * marker_words - 1)) {
         return;
     }
 
@@ -118,6 +146,10 @@ inline __attribute__((always_inline)) void end() {
     put(RISCV_PMC_COUNTS_PROFILER_ID, pmc4, pmc3);
     put(RISCV_PMC_CYCLES_PROFILER_ID, minstret - instret_begin, mcycle - cycle_begin);
     put(RISCV_PMC_EVENTS_PROFILER_ID, RISCV_PMC_SEL4, RISCV_PMC_SEL3);
+#if defined(RISCV_PMC_UPPER)
+    put(RISCV_PMC_COUNTS_UPPER_PROFILER_ID, pmc6, pmc5);
+    put(RISCV_PMC_EVENTS_UPPER_PROFILER_ID, PROFILE_RISCV_PMC_DM_EV6, PROFILE_RISCV_PMC_DM_EV5);
+#endif
     wIndex = w;
 }
 

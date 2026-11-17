@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Decoder of the metal profiler's RISC-V performance monitor markers (ids 9092, 9093, 9094).
+"""Decoder of the metal profiler's RISC-V performance monitor markers (ids 9092 to 9096).
 Names come from tools/include/perf_counters/riscv_pmc_*.h through headers.py; the formulas are in metrics.py.
 """
 
@@ -12,7 +12,12 @@ from . import headers, riscv_metrics
 COUNTS_MARKER_ID = 9092  # (mhpmcounter4 delta << 32) | mhpmcounter3 delta
 CYCLES_MARKER_ID = 9093  # (minstret delta << 32) | mcycle delta
 EVENTS_MARKER_ID = 9094  # (mhpmevent4 << 32) | mhpmevent3
+COUNTS_UPPER_MARKER_ID = (
+    9095  # (mhpmcounter6 delta << 32) | mhpmcounter5, Quasar data-movement cores only
+)
+EVENTS_UPPER_MARKER_ID = 9096  # (mhpmevent6 << 32) | mhpmevent5
 MARKER_IDS = (COUNTS_MARKER_ID, CYCLES_MARKER_ID, EVENTS_MARKER_ID)
+UPPER_MARKER_IDS = (COUNTS_UPPER_MARKER_ID, EVENTS_UPPER_MARKER_ID)
 
 _MASK32 = 0xFFFFFFFF
 
@@ -24,6 +29,10 @@ class Launch(NamedTuple):
     minstret: int
     event3: int
     event4: int
+    pmc5: int = 0
+    pmc6: int = 0
+    event5: int = 0
+    event6: int = 0
 
 
 def core_kind(arch, risc_type) -> Optional[str]:
@@ -46,8 +55,8 @@ def core_kind(arch, risc_type) -> Optional[str]:
     return None
 
 
-def unpack_launch(counts, cycles, events) -> Launch:
-    """Split the three 64-bit marker payloads of one launch."""
+def unpack_launch(counts, cycles, events, counts_upper=0, events_upper=0) -> Launch:
+    """Split the 64-bit marker payloads of one launch; the upper pair is only emitted for Quasar DMs."""
     return Launch(
         counts & _MASK32,
         counts >> 32,
@@ -55,6 +64,10 @@ def unpack_launch(counts, cycles, events) -> Launch:
         cycles >> 32,
         events & _MASK32,
         events >> 32,
+        counts_upper & _MASK32,
+        counts_upper >> 32,
+        events_upper & _MASK32,
+        events_upper >> 32,
     )
 
 
@@ -73,12 +86,19 @@ def decode_launch(arch, kind, launch: Launch, include_dir=None) -> Dict[str, obj
         counts[label3] = launch.pmc3
     if label4 != "DISABLED":
         counts[label4] = launch.pmc4
-    return {
-        "event3": label3,
-        "event4": label4,
-        "mcycle": launch.mcycle,
-        "minstret": launch.minstret,
-        "metrics": riscv_metrics.compute_riscv_metrics(
-            launch.mcycle, launch.minstret, counts
-        ),
-    }
+    out = {"event3": label3, "event4": label4}
+    if kind == "dm":
+        out["event5"] = event_label(arch, kind, launch.event5, include_dir)
+        out["event6"] = event_label(arch, kind, launch.event6, include_dir)
+        for label, count in (
+            (out["event5"], launch.pmc5),
+            (out["event6"], launch.pmc6),
+        ):
+            if label != "DISABLED":
+                counts[label] = count
+    out["mcycle"] = launch.mcycle
+    out["minstret"] = launch.minstret
+    out["metrics"] = riscv_metrics.compute_riscv_metrics(
+        launch.mcycle, launch.minstret, counts
+    )
+    return out

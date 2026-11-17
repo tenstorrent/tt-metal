@@ -94,5 +94,30 @@ TEST_F(RiscvPmcOptionTest, DataMovementInvalidRejected) {
     EXPECT_ANY_THROW(with("0x1"));
 }
 
+TEST_F(RiscvPmcOptionTest, DataMovementFourSelectsParsedAndHashed) {
+    setenv(kEnvDm, "0x201,0x801,0x202,0x402", 1);
+    RunTimeOptions opts = with("0x10110111");
+    EXPECT_EQ(opts.get_profiler_riscv_pmc_dm_event3(), 0x201u);
+    EXPECT_EQ(opts.get_profiler_riscv_pmc_dm_event4(), 0x801u);
+    EXPECT_EQ(opts.get_profiler_riscv_pmc_dm_event5(), 0x202u);
+    EXPECT_EQ(opts.get_profiler_riscv_pmc_dm_event6(), 0x402u);
+    EXPECT_NE(opts.get_compile_hash_string().find("_dm201_801_dmu202_402"), std::string::npos);
+}
+
+TEST_F(RiscvPmcOptionTest, DataMovementUpperSelectsDefaultToIdleAndStayOutOfTheHash) {
+    setenv(kEnvDm, "0x201,0x801", 1);
+    RunTimeOptions opts = with("0x10110111");
+    EXPECT_EQ(opts.get_profiler_riscv_pmc_dm_event5(), 0u);
+    EXPECT_EQ(opts.get_profiler_riscv_pmc_dm_event6(), 0u);
+    EXPECT_EQ(opts.get_compile_hash_string().find("_dmu"), std::string::npos);
+}
+
+TEST_F(RiscvPmcOptionTest, DataMovementSelectCountAndFormatChecked) {
+    for (const char* bad : {"0x1,0x2,0x3,0x4,0x5", "0x1,", ",0x1", "0x1,,0x2", "0x1ffffffff", "0x1,0x2,0x3,zz"}) {
+        setenv(kEnvDm, bad, 1);
+        EXPECT_ANY_THROW(with("0x1")) << bad;
+    }
+}
+
 }  // namespace
 }  // namespace tt::llrt
