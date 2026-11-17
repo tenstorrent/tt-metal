@@ -11,9 +11,6 @@
 
 namespace cce_test {
 
-// As kPollBudgetCycles in dram/mimir_dm_common.hpp.
-inline constexpr uint64_t kIdmaWaitBudgetCycles = 1ull << 22;
-
 // The command-buffer settings every iDMA copy in these kernels shares, after the reset and the copy or accumulate
 // setup: no ongoing mode, `backend_vc` for requests and the write-response VC for responses, `trid`, and full-size
 // packets.

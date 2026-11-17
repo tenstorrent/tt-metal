@@ -30,12 +30,13 @@
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
+#include "tt_metal/tt_metal/test_kernels/cce/cce_test_status_abi.h"
 
 namespace tt::tt_metal::mimir_test {
 
 // Rdcycle cycles per kernel wait or poll. The emulated clock runs at about 85,000 cycles/s while the host polls, so
 // 2^22 is about kPollBudgetHostTime.
-inline constexpr uint64_t kPollBudgetCycles = 1ull << 22;
+using cce_test_status_abi::kPollBudgetCycles;
 inline constexpr std::chrono::seconds kPollBudgetHostTime{50};
 inline constexpr std::chrono::milliseconds kRecheckDelay{500};
 inline constexpr const char* kFreshSessionNote =

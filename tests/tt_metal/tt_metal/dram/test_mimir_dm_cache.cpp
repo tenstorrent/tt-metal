@@ -539,7 +539,7 @@ inline constexpr uint64_t kGddrSourceOffset = 0x200000;
 inline constexpr uint32_t kDataWindowCycles = static_cast<uint32_t>(kPollBudgetCycles / 16);
 inline constexpr uint32_t kReaderHart = 0;
 inline constexpr uint32_t kWriterHart = 1;
-inline constexpr uint32_t kWordsPerLine = abi::kLineBytes / sizeof(uint32_t);
+using abi::kWordsPerLine;
 
 struct HartKernel {
     uint32_t cce_index = 0;

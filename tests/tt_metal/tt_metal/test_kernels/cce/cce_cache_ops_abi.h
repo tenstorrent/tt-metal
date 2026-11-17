@@ -12,6 +12,7 @@
 namespace cce_cache_ops_abi {
 
 using cce_test_status_abi::kLineBytes;
+using cce_test_status_abi::kWordsPerLine;
 
 // Runtime args. kArgStatusOffset is a 64 B aligned offset in the kernel's own TL1. kArgDataOffset is a hart-local TL1
 // offset in a data area. The host pre-fills word i with kArgOldValue + i; the kernel writes kArgValue + i. The store

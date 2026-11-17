@@ -553,21 +553,20 @@ struct PartialCheck {
 };
 
 static PartialCheck check_partial_lines(const Args& args) {
-    constexpr uint32_t kWordsPerLine = abi::kLineBytes / sizeof(uint32_t);
     PartialCheck result;
     bool mismatch_seen = false;
     const volatile uint32_t* observed_words = own_tl1_words<uint32_t>(args.data_offset);
-    for (uint32_t line = 0; line < args.num_words / kWordsPerLine; ++line) {
-        alignas(8) uint32_t expected[kWordsPerLine];
-        for (uint32_t word = 0; word < kWordsPerLine; ++word) {
-            expected[word] = args.old_value + line * kWordsPerLine + word;
+    for (uint32_t line = 0; line < args.num_words / abi::kWordsPerLine; ++line) {
+        alignas(8) uint32_t expected[abi::kWordsPerLine];
+        for (uint32_t word = 0; word < abi::kWordsPerLine; ++word) {
+            expected[word] = args.old_value + line * abi::kWordsPerLine + word;
         }
         store_partial(reinterpret_cast<volatile uint8_t*>(expected), args.value + line);
         bool partial_landed = true;
         bool exact = true;
         bool untouched_changed = false;
-        for (uint32_t word = 0; word < kWordsPerLine; ++word) {
-            const uint32_t observed = observed_words[line * kWordsPerLine + word];
+        for (uint32_t word = 0; word < abi::kWordsPerLine; ++word) {
+            const uint32_t observed = observed_words[line * abi::kWordsPerLine + word];
             const uint32_t mask = partial_mask(word);
             partial_landed = partial_landed && ((observed ^ expected[word]) & mask) == 0;
             untouched_changed = untouched_changed || ((observed ^ expected[word]) & ~mask) != 0;
@@ -575,7 +574,7 @@ static PartialCheck check_partial_lines(const Args& args) {
                 exact = false;
                 if (!mismatch_seen) {
                     mismatch_seen = true;
-                    result.first_mismatch.first_mismatch_word = line * kWordsPerLine + word;
+                    result.first_mismatch.first_mismatch_word = line * abi::kWordsPerLine + word;
                     result.first_mismatch.observed = observed;
                 }
             }
@@ -885,14 +884,13 @@ static void for_each_pattern_line(const Args& args, Visit visit) {
 }
 
 static void run_thrash(const Args& args, Report& report) {
-    constexpr uint32_t kWordsPerLine = abi::kLineBytes / sizeof(uint32_t);
     volatile uint32_t* cached_words = cached_tl1_words<uint32_t>(args.data_offset);
     uint32_t pass_cycles[abi::kMaxPasses] = {};
     bool mismatch_seen = false;
     for (uint32_t pass = 0; pass < args.passes; ++pass) {
         const uint64_t start = get_timestamp();
         for_each_pattern_line(args, [&](uint32_t line) {
-            for (uint32_t word = line * kWordsPerLine; word < (line + 1) * kWordsPerLine; ++word) {
+            for (uint32_t word = line * abi::kWordsPerLine; word < (line + 1) * abi::kWordsPerLine; ++word) {
                 if (pass != 0) {
                     const uint32_t observed = cached_words[word];
                     if (observed != abi::thrash_word(args.value, args.seed, pass - 1, word)) {
