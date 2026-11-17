@@ -24,6 +24,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # GLU activations this module can run over its gate/up pair. Spelled as the HF ``hidden_act``
 # and as the torch reference (reference/tt/moe/expert.py), so a model config's string maps across
@@ -277,6 +278,7 @@ class TtSharedExpert(LightweightModule):
                 dtype=weights_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
                 cache_file_name=_cache_name(name),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         gate_tt = _to_ttnn(gate_w, mesh_shard_dims(-1, tp_axis), "gate_proj")
@@ -497,6 +499,7 @@ class TtSharedExpert(LightweightModule):
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=self._cache_name(name),
+            cache_dump_mode=weight_cache_dump_mode(),
         )
 
         logger.debug(f"Created {name}: {tt_weight.shape}")
