@@ -3524,14 +3524,19 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_PickFuzz) {
     uint32_t accepted = 0;
     uint32_t cut_picks = 0;
     for (int it = 0; it < 3000; ++it) {
-        const uint32_t kv_heads = pick({1, 2, 4, 8});
-        const uint32_t group = pick({1, 1, 2, 4, 8});
-        const uint32_t St = pick(st_choices);
+        // A third of the draws are the shape the cut exists for: one or two causal head stacks over a long
+        // sequence on a full grid, where the items are too few to fill the cores. Drawn uniformly the fuzz
+        // reached the cut path 14 times in 3000 iterations, which is thin coverage of the branch that sizes
+        // the partials' circular buffers and allocates the scratch.
+        const bool few_item_causal = (rng() % 3U) == 0U;
+        const uint32_t kv_heads = few_item_causal ? 1U : pick({1, 2, 4, 8});
+        const uint32_t group = few_item_causal ? pick({1, 2}) : pick({1, 1, 2, 4, 8});
+        const uint32_t St = few_item_causal ? pick({32, 64, 128, 256, 512}) : pick(st_choices);
         const uint32_t qWt = pick({1, 2, 4, 8, 12});
         const uint32_t vWt = pick({1, 2, 3, 4, 8});
-        const uint32_t mask_pick = pick({0, 0, 1, 2});
+        const uint32_t mask_pick = few_item_causal ? 0U : pick({0, 0, 1, 2});
         const SDPAForwardShape shape{
-            .batch = pick({1, 2, 4}),
+            .batch = few_item_causal ? 1U : pick({1, 2, 4}),
             .q_heads = kv_heads * group,
             .kv_heads = kv_heads,
             .St = St,
@@ -3548,13 +3553,13 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_PickFuzz) {
             .q_chunk_size = (rng() % 2U) ? pick(st_divs) * 32U : 0U,
             .k_chunk_size = (rng() % 2U) ? pick(st_divs) * 32U : 0U,
             .heads_per_item = (rng() % 2U) ? pick(group_divs) : 0U,
-            .max_pieces = pick({0, 0, 1, 2, 4, 8, 63}),
-            .num_cores = pick({0, 0, 1, 3, 16, 64, 120}),
-            .causal_pairs = (rng() % 4U) == 0U};
+            .max_pieces = few_item_causal ? pick({0, 2, 4, 8, 63}) : pick({0, 0, 1, 2, 4, 8, 63}),
+            .num_cores = few_item_causal ? 0U : pick({0, 0, 1, 3, 16, 64, 120}),
+            .causal_pairs = !few_item_causal && (rng() % 4U) == 0U};
         if (config.causal_pairs && config.max_pieces > 1U) {
             config.max_pieces = 1U;
         }
-        const uint32_t grid = pick(grid_choices);
+        const uint32_t grid = few_item_causal ? pick({120, 130}) : pick(grid_choices);
         if (config.num_cores > grid) {
             config.num_cores = grid;
         }
@@ -3609,7 +3614,16 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_PickFuzz) {
         ASSERT_NO_THROW(schedule = schedule_for(config, shape, chunks, grid));
         const bool cuts = schedule.num_slots > 0U;
         cut_picks += cuts ? 1U : 0U;
-        EXPECT_LE(l1_bytes(cb_tiles(shape, chunks, cuts)), budget) << "the program's CBs do not fit the budget";
+        // That the CBs fit the budget is resolve_chunks' own check_l1, which the ASSERT_NO_THROW above
+        // already covers, so it is not re-stated here. What is worth pinning is that the plan the factory
+        // runs is self-consistent: resolve_plan rates its candidates by building schedules and hands one
+        // back, and that one must be the schedule schedule_for builds for the chunking it returned.
+        const auto plan = resolve_plan(config, shape, budget, grid);
+        EXPECT_EQ(plan.chunks.Sq_chunk_t, chunks.Sq_chunk_t);
+        EXPECT_EQ(plan.chunks.Sk_chunk_t, chunks.Sk_chunk_t);
+        EXPECT_EQ(plan.chunks.heads_per_item, chunks.heads_per_item);
+        EXPECT_EQ(schedule_signature(plan.schedule), schedule_signature(schedule))
+            << "the plan's schedule is not the one schedule_for builds for its chunking";
         EXPECT_LE(schedule.per_core.size(), effective_num_cores(config, grid));
         check_schedule(shape, chunks, schedule, effective_max_pieces(config));
         // Every unit's words must encode with real NoC coordinates (the factory's path).
@@ -3622,7 +3636,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_PickFuzz) {
     }
     fmt::print("pick fuzz: {} configs accepted by validate, {} of them cut\n", accepted, cut_picks);
     EXPECT_GT(accepted, 500U);
-    EXPECT_GT(cut_picks, 10U);
+    EXPECT_GT(cut_picks, 200U) << "the few-item causal draws must keep the cut path well covered";
 }
 
 // Device edge cases of the split path, each against the same rows uncut (run_split_vs_unsplit) and the
