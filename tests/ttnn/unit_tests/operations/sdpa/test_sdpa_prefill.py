@@ -468,7 +468,19 @@ def run_test_sdpa_sliding_window(
 
 
 def run_test_sdpa_with_attention_sink(
-    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal=True, sink_values=None, rmse_threshold=None
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    is_causal=True,
+    sink_values=None,
+    rmse_threshold=None,
+    fp32_dest_acc_en=False,
 ):
     """Test SDPA with attention sinks using per-head sink values."""
     program_config = ttnn.SDPAProgramConfig(
@@ -481,7 +493,7 @@ def run_test_sdpa_with_attention_sink(
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
 
@@ -743,6 +755,7 @@ def test_sdpa_sliding_window_streaming_parity(
     )
 
 
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_dest", "fp32_dest"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
@@ -751,7 +764,9 @@ def test_sdpa_sliding_window_streaming_parity(
     "b, nh, nkv, s, d",
     ([1, 8, 1, 256, 32],),
 )
-def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, is_causal, q_chunk_size, k_chunk_size, reset_seeds):
+def test_sdpa_with_attention_sink(
+    device, b, nh, nkv, s, d, dtype, is_causal, q_chunk_size, k_chunk_size, fp32_dest_acc_en, reset_seeds
+):
     """Test SDPA with per-head attention sinks on device."""
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
@@ -760,7 +775,18 @@ def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, is_causal, q_
 
     rmse_threshold = 0.02
     run_test_sdpa_with_attention_sink(
-        device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal=is_causal, rmse_threshold=rmse_threshold
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        is_causal=is_causal,
+        rmse_threshold=rmse_threshold,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
@@ -955,7 +981,9 @@ def test_sdpa_fp32_dest_wide_score_rows(
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    tt_q, tt_k, tt_v = (ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    tt_q, tt_k, tt_v = (
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v)
+    )
     actual = ttnn.to_torch(
         ttnn.transformer.scaled_dot_product_attention(
             tt_q,

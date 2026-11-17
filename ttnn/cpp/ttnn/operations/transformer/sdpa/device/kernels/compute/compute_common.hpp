@@ -2100,6 +2100,9 @@ void sdpa_inner_loop(
                 alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+            //    The max CBs can be fp32 while exp_max_diff stays at the stats format.
+            reconfig_data_format(alias_prev_max, alias_cur_max);
+            pack_reconfig_data_format(cb_exp_max_diff);
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
             CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
