@@ -13,7 +13,7 @@ from ...layers.conv2d import configure_conv2d
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import Flux2VaeParallelConfig
-from ...parallel.manager import CCLManager
+from ...parallel.manager import CCLManager, apply_on_rows
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tracing import traced_function
 from .vae import (
@@ -180,7 +180,10 @@ class Flux2VaeDecoder(Module):
         z = self.conv_norm_out.forward(z)
 
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
-            z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
+            ccl_manager = self._ctx.ccl_manager
+            z = apply_on_rows(
+                z, lambda t: ccl_manager.all_gather(t, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
+            )
 
         # The image stays split over the H and W axes: the host assembles it (see output_concat_dims),
         # which saves gathering it on the device, at a program per image size.
@@ -292,7 +295,10 @@ class Flux2VaeEncoder(Module):
         x = self.conv_norm_out.forward(x)
 
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
-            x = self._ctx.ccl_manager.all_gather(x, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
+            ccl_manager = self._ctx.ccl_manager
+            x = apply_on_rows(
+                x, lambda t: ccl_manager.all_gather(t, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
+            )
 
         x = self.conv_out.forward(x)
         return _all_gather_hw(self._ctx, x)

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Callable
 from contextlib import contextmanager
 
 import torch
@@ -9,6 +10,22 @@ import torch
 import ttnn
 
 from ..utils.tensor import local_device_to_torch, shape_tuple
+
+
+def apply_on_rows(x: ttnn.Tensor, fn: Callable[[ttnn.Tensor], ttnn.Tensor], /) -> ttnn.Tensor:
+    """Apply a channel collective to an [N, H, W, C] tensor viewed as [N, 1, H * W, C].
+
+    A dim-3 `all_gather_async` keys its program on every dimension but the rows, so on [N, H, W, C]
+    each new H compiles again. A dim-3 `reduce_scatter_minimal_async` leaves the rows out only for a
+    [1, 1, rows, C] tile-interleaved tensor on a line, so on [1, H, W, C] each new H or W compiles
+    again. For a tile-layout `x` with H > 1 and a whole number of tiles in W, both reshapes are views
+    of the same buffer; otherwise `fn` runs on `x` as is.
+    """
+    n, h, w, c = x.shape
+    if h == 1 or x.layout != ttnn.TILE_LAYOUT or w % ttnn.TILE_SIZE != 0:
+        return fn(x)
+    y = fn(ttnn.reshape(x, (n, 1, h * w, c)))
+    return ttnn.reshape(y, (n, h, w, y.shape[-1]))
 
 
 class CCLManager:

@@ -12,7 +12,7 @@ import torch
 import ttnn
 
 from ..parallel.config import vae_all_gather
-from ..parallel.manager import CCLManager
+from ..parallel.manager import CCLManager, apply_on_rows
 from .module import Module, Parameter
 
 if TYPE_CHECKING:
@@ -626,8 +626,11 @@ class Conv2d(Module):
         x = ttnn.reshape(x, (b, out_height, out_width, -1))
 
         if self.in_mesh_axis is not None:
-            x = self.ccl_manager.reduce_scatter(
-                x, dim=-1, mesh_axis=self.in_mesh_axis, use_persistent_buffer=use_persistent_buffer
+            x = apply_on_rows(
+                x,
+                lambda t: self.ccl_manager.reduce_scatter(
+                    t, dim=-1, mesh_axis=self.in_mesh_axis, use_persistent_buffer=use_persistent_buffer
+                ),
             )
 
         return x
