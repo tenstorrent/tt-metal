@@ -74,6 +74,8 @@ def blocks(dtype, k, n, seed=0, raw=False):
     block_elems, block_bytes = gguf.GGML_QUANT_SIZES[q]
     data = rng.integers(0, 256, size=(n * k // block_elems, block_bytes), dtype=np.uint8)
     if raw:
+        if name == "NVFP4":  # UE4M3 scales: bit 7 clear (from_gguf refuses the rest)
+            data[:, :4] &= 0x7F
         return data.reshape(n, -1)
     scales = (rng.uniform(0.5, 1.0, size=(data.shape[0], 4)) * 2.0**-7).astype(np.float16).view(np.uint8)
     if name == "NVFP4":  # four UE4M3 scales: exponents 5..8, any mantissa

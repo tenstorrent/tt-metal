@@ -138,6 +138,15 @@ void valid_tq2_0_codes(std::vector<std::byte>& blocks) {
     }
 }
 
+// NVFP4 scales are UE4M3 (from_gguf refuses bit 7): each block's four scale bytes with bit 7 cleared.
+void valid_nvfp4_scales(std::vector<std::byte>& blocks) {
+    for (size_t block = 0; block < blocks.size(); block += 36) {
+        for (size_t j = 0; j < 4; ++j) {
+            blocks[block + j] &= std::byte(0x7F);
+        }
+    }
+}
+
 TEST(GgufDtypesTest, RoundTripIsBitExact) {
     for (const DataType dtype : gguf_dtypes()) {
         SCOPED_TRACE(fmt::format("{}", dtype));
@@ -145,6 +154,9 @@ TEST(GgufDtypesTest, RoundTripIsBitExact) {
         auto blocks = random_blocks(gguf_bytes(dtype, k, n), static_cast<uint32_t>(dtype));
         if (dtype == DataType::GGUF_TQ2_0) {
             valid_tq2_0_codes(blocks);
+        }
+        if (dtype == DataType::GGUF_NVFP4) {
+            valid_nvfp4_scales(blocks);
         }
         const HostTensor tensor = from_gguf(blocks, gguf_spec(dtype, k, n));
         EXPECT_EQ(tensor.dtype(), dtype);
@@ -206,6 +218,15 @@ TEST(GgufDtypesTest, Tq2_0RefusesCode3) {
     EXPECT_NO_THROW(from_gguf(blocks, gguf_spec(dtype, 512, 32)));
     blocks[3 * 66 + 10] |= std::byte(0x30);  // block 3: column 1, K block 1
     EXPECT_ANY_THROW(from_gguf(blocks, gguf_spec(dtype, 512, 32)));
+}
+
+TEST(GgufDtypesTest, Nvfp4RefusesSignedScale) {
+    const DataType dtype = DataType::GGUF_NVFP4;
+    auto blocks = random_blocks(gguf_bytes(dtype, 128, 32), 3);
+    valid_nvfp4_scales(blocks);
+    EXPECT_NO_THROW(from_gguf(blocks, gguf_spec(dtype, 128, 32)));
+    blocks[36 + 2] |= std::byte(0x80);  // block 1 (column 0, K block 1), scale 2
+    EXPECT_ANY_THROW(from_gguf(blocks, gguf_spec(dtype, 128, 32)));
 }
 
 TEST(GgufDtypesTest, RejectsShapesThePagesCannotHold) {

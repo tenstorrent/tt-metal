@@ -441,6 +441,37 @@ void bfp_codes(DataType type, const GgufTraits& f, uint8_t* blocks, size_t bytes
     }
 }
 
+// NVFP4 scales (the first 4 bytes of a block, UE4M3) <-> the page's scale bytes: the fp16 bits of S = UE4M3 / 2 shifted
+// right by 7 (exact: S has four significant bits and lies in [2^-10, 224]), and 0 / 1 for UE4M3 0 / 0x7F, where S is 0,
+// so that the decoder takes S's fp16 bits as they are (ckernel_sfpu_gguf_decode_fp4.h). A scale byte with bit 7 set is
+// not UE4M3: from_gguf refuses it. Applied by pack_pages and unpack_pages, around the bit permutations.
+void nvfp4_scales(uint8_t* blocks, size_t bytes, int64_t row_blocks, bool to_device) {
+    constexpr uint8_t subnormal[8] = {0, 40, 48, 52, 56, 58, 60, 62};  // m 2^-10: fp16 bits >> 7
+    std::array<uint8_t, 128> to_page{};
+    std::array<uint8_t, 256> to_gguf{};
+    for (int u = 0; u < 128; ++u) {
+        to_page[u] = u == 0x7F ? 1 : u < 8 ? subnormal[u] : uint8_t(u + 56);  // (e + 7) << 3 | m
+        to_gguf[to_page[u]] = uint8_t(u);
+    }
+    for (size_t block = 0; block < bytes; block += 36) {
+        for (size_t j = 0; j < 4; ++j) {
+            const uint8_t b = blocks[block + j];
+            if (to_device) {
+                const int64_t index = int64_t(block / 36);
+                TT_FATAL(
+                    b < 128,
+                    "DataType::GGUF_NVFP4: block {} (column {}, K block {}) has scale byte {:#x}; UE4M3 scales have "
+                    "bit 7 clear",
+                    index,
+                    index / row_blocks,
+                    index % row_blocks,
+                    b);
+            }
+            blocks[block + j] = to_device ? to_page[b] : to_gguf[b];
+        }
+    }
+}
+
 // ------------------------------------------------------------------------------------------- codebook formats
 // Each: d (one scale row), then per K tile s (sub-block s of the 256-element block) the part the reader's grid lookup
 // and the decoder read.
@@ -723,7 +754,7 @@ void unpack_page_bits(DataType type, const uint8_t* pages, int64_t K, int64_t N,
 }
 
 // GGUF blocks <-> pages. TQ2_0 and the block-float code formats map their codes first (tq2_0_codes, which refuses code
-// 3; bfp_codes); the rest is a bit permutation.
+// 3; bfp_codes), NVFP4 its scales (nvfp4_scales, which refuses bit 7); the rest is a bit permutation.
 void pack_pages(DataType type, const uint8_t* blocks, int64_t K, int64_t N, uint8_t* pages) {
     if (type != GGUF_TQ2_0 && !has_bfp_codes(type)) {
         pack_page_bits(type, blocks, K, N, pages);
@@ -736,6 +767,9 @@ void pack_pages(DataType type, const uint8_t* blocks, int64_t K, int64_t N, uint
         tq2_0_codes(codes.data(), bytes, K / 256, true);
     } else {
         bfp_codes(type, f, codes.data(), bytes, true);
+        if (type == GGUF_NVFP4) {
+            nvfp4_scales(codes.data(), bytes, K / f.block_elems, true);
+        }
     }
     pack_page_bits(type, codes.data(), K, N, pages);
 }
@@ -746,7 +780,11 @@ void unpack_pages(DataType type, const uint8_t* pages, int64_t K, int64_t N, uin
         tq2_0_codes(blocks, size_t(N) * size_t(K / 256) * 66, K / 256, false);
     } else if (has_bfp_codes(type)) {
         const GgufTraits& f = gguf_traits(type);
-        bfp_codes(type, f, blocks, size_t(N) * size_t(K / f.block_elems) * f.block_bytes, false);
+        const size_t bytes = size_t(N) * size_t(K / f.block_elems) * f.block_bytes;
+        bfp_codes(type, f, blocks, bytes, false);
+        if (type == GGUF_NVFP4) {
+            nvfp4_scales(blocks, bytes, K / f.block_elems, false);
+        }
     }
 }
 

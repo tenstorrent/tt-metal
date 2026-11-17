@@ -64,6 +64,16 @@ def test_tq2_0_refuses_code_3(expect_error):
     assert "block 3 (column 1, K block 1)" in str(error.value)
 
 
+def test_nvfp4_refuses_signed_scale(expect_error):
+    dtype = ttnn.gguf_nvfp4
+    blocks = _blocks(dtype, 128, 32).copy()
+    ttnn.from_gguf(blocks, (128, 32), dtype)
+    blocks.reshape(-1, 36)[1, 2] |= 0x80  # block 1: column 0, K block 1
+    with expect_error(RuntimeError, "UE4M3 scales have bit 7 clear") as error:
+        ttnn.from_gguf(blocks, (128, 32), dtype)
+    assert "block 1 (column 0, K block 1)" in str(error.value)
+
+
 def test_values_need_gguf_py(expect_error):
     dtype = ttnn.gguf_q4_0
     tensor = ttnn.from_gguf(_blocks(dtype, 64, 32), (64, 32), dtype)
