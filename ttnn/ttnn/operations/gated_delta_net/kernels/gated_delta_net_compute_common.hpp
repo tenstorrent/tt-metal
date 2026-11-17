@@ -83,8 +83,45 @@
 // Per-block device profiler zones, compiled in only with the host knob PROFILE_ZONES (GDN_PROFILE_ZONES), on the
 // unpack and pack threads: they hold the CB waits, so their zones split wait from work. A math-thread zone is
 // occupancy only, and that thread's binary (the largest) would push some builds over the kernel-config text budget.
+// Capture window (GDN_ZONE_SKIP > 0, env GDN_ZONE_SKIP): a RISC does not record its first GDN_ZONE_SKIP zone
+// executions, so runs with rising skips cover a launch whose zones do not fit the ~250 markers of one RISC.
+#if GDN_PROFILE_ZONES && GDN_ZONE_SKIP && !defined(GDN_ZONE_WIN)
+#define GDN_ZONE_WIN
+namespace gdn_zone {
+inline uint32_t seen = 0;
+template <uint32_t id>
+struct win {
+    bool on;
+    inline __attribute__((always_inline)) win() :
+        on(seen++ >= GDN_ZONE_SKIP &&
+           kernel_profiler::bufferHasRoom(2 * kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE - 1)) {
+        if (on) {
+            kernel_profiler::stackSize += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+            kernel_profiler::mark_time_at_index_inlined(kernel_profiler::wIndex, id);
+            kernel_profiler::wIndex += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+        }
+    }
+    inline __attribute__((always_inline)) ~win() {
+        if (on) {
+            kernel_profiler::mark_time_at_index_inlined(
+                kernel_profiler::wIndex, kernel_profiler::get_const_id(id, kernel_profiler::ZONE_END));
+            kernel_profiler::wIndex += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+            kernel_profiler::stackSize -= kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+        }
+    }
+};
+}  // namespace gdn_zone
+#endif
+#if GDN_PROFILE_ZONES && GDN_ZONE_SKIP
+#define GDN_SCOPE(name)                                                        \
+    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+    gdn_zone::win<hash> zone;
+#else
+#define GDN_SCOPE(name) DeviceZoneScopedN(name)
+#endif
 #if GDN_PROFILE_ZONES && !defined(TRISC_MATH)
-#define GDN_ZONE(name) DeviceZoneScopedN(name)
+#define GDN_ZONE(name) GDN_SCOPE(name)
 #else
 #define GDN_ZONE(name)
 #endif

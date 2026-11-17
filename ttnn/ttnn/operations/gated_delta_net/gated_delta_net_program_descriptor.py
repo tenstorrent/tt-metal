@@ -327,6 +327,8 @@ RMS_ONE_COPY = True
 # RISC's ~250 markers per launch.
 # Level 2 also compiles the point marks (GDN_MARK) of each block's end, for chain timelines (zone_timeline.py).
 PROFILE_ZONES = int(os.environ.get("GDN_PROFILE_ZONES", "0") or 0)
+# env GDN_ZONE_SKIP=n: each RISC leaves its first n zone executions unrecorded (captures of a later window).
+PROFILE_ZONE_SKIP = int(os.environ.get("GDN_ZONE_SKIP", "0") or 0)
 # Knob overrides for before / after runs in one build: GDN_KNOBS="NAME=literal,NAME=literal".
 _knobs = os.environ.get("GDN_KNOBS", "")
 for _item in filter(None, _knobs.split(";" if ";" in _knobs else ",")):  # ";" when a value holds a comma
@@ -1615,6 +1617,29 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     prep_cores = [core for core, _, _, _ in prep_units]
     prep_qk_cores = [unit[0] for unit in prep_qk_units]
     all_cores = _merged_ranges(state_cores + prep_cores + prep_qk_cores) if prep_units else all_cores
+    # env GDN_LAYOUT_DUMP=<file>: the core roles of this program, for timeline tools.
+    if os.environ.get("GDN_LAYOUT_DUMP"):
+        import json
+
+        def _xy(core):
+            noc = device.worker_core_from_logical_core(core)
+            return [noc.x, noc.y, core.x, core.y]
+
+        with open(os.environ["GDN_LAYOUT_DUMP"], "w") as out:
+            json.dump(
+                {
+                    "batch": batch,
+                    "tokens": tokens,
+                    "value_heads": value_heads,
+                    "key_heads": key_heads,
+                    "pieces": pieces,
+                    "state": [_xy(c) + [first, count, stride] for c, first, count, stride in assignment],
+                    "qk": [_xy(c) + [hk, role] for c, hk, role in qk_cores],
+                    "prep": [_xy(c) + [first, pos, stride] for c, first, pos, stride in prep_units],
+                    "prep_qk": [_xy(u[0]) + [u[1], u[2], u[3], u[4]] for u in prep_qk_units],
+                },
+                out,
+            )
 
     # ---- circular buffers ----
     cbs = []
@@ -1938,6 +1963,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_S0_WRITER_AFTER_INPUTS", str(int(S0_WRITER_AFTER_INPUTS))),
             ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
             ("GDN_PROFILE_ZONES", str(0 if _noc_tracing() else int(PROFILE_ZONES))),
+            *([("GDN_ZONE_SKIP", str(int(PROFILE_ZONE_SKIP)))] if PROFILE_ZONE_SKIP else []),
             ("GDN_TOKEN_VECTOR_FUSED", str(int(fused_vector if TOKEN_VECTOR_FUSED == "auto" else TOKEN_VECTOR_FUSED))),
             ("GDN_DECAY_ONE_PASS", str(int(DECAY_ONE_PASS))),
             ("GDN_EARLY_S0", str(int(early_s0))),
@@ -2151,9 +2177,7 @@ def program_cache_size():
     return len(_program_cache)
 
 
-def cached_program_descriptor(
-    key, inputs, outputs, *, epsilon, compute_kernel_config, packed=False, l1_end=None
-):
+def cached_program_descriptor(key, inputs, outputs, *, epsilon, compute_kernel_config, packed=False, l1_end=None):
     entry = _program_cache.get(key)
     if entry is None:
         descriptor = create_program_descriptor(
