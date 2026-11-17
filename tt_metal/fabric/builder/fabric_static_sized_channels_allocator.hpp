@@ -7,6 +7,7 @@
 #include "fabric_channel_allocator.hpp"
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include <array>
@@ -15,16 +16,6 @@
 #include <vector>
 
 namespace tt::tt_fabric {
-
-// A router's channel buffers: each channel's first slot address and slot count, by VC.
-struct RouterChannelLayout {
-    struct Channel {
-        uint32_t base_address = 0;
-        uint32_t num_slots = 0;
-    };
-    std::array<std::vector<Channel>, builder_config::MAX_NUM_VCS> senders;
-    std::array<std::vector<Channel>, builder_config::MAX_NUM_VCS> receivers;
-};
 
 /**
  * Static-sized channels allocator implementation.

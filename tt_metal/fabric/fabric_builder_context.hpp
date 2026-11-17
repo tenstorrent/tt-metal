@@ -7,23 +7,17 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
-#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
+#include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include <vector>
-#include <map>
 #include <memory>
-#include <mutex>
 #include <array>
 #include <limits>
 #include <optional>
 #include <unordered_map>
 #include <utility>
-
-namespace tt::tt_metal::distributed::multihost {
-class DistributedContext;
-}  // namespace tt::tt_metal::distributed::multihost
 
 namespace tt::tt_fabric {
 
@@ -178,16 +172,20 @@ public:
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
     // ============ Router Channel Layouts ============
-    // Each router's channel buffers, by fabric node and Ethernet channel. Every device's build publishes its routers'
-    // layouts; the exchange then gives each host the receivers of the routers on the far end of its links, before any
-    // router kernel is emitted. Cleared at the start of each fabric launch.
-    void clear_router_channel_layouts();
-    void publish_router_channel_layout(FabricNodeId node, chan_id_t eth_chan, RouterChannelLayout layout);
-    // Collective over `context`: every rank calls it once per launch, after its devices have published.
-    void exchange_router_channel_layouts(const tt::tt_metal::distributed::multihost::DistributedContext& context);
-    const RouterChannelLayout& get_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const;
-    // nullptr when no layout was published for the router.
-    const RouterChannelLayout* find_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const;
+    // See RouterChannelLayouts.
+    void clear_router_channel_layouts() { router_channel_layouts_.begin_launch(); }
+    void publish_router_channel_layout(FabricNodeId node, chan_id_t eth_chan, RouterChannelLayout layout) {
+        router_channel_layouts_.publish(node, eth_chan, std::move(layout));
+    }
+    void exchange_router_channel_layouts(const tt::tt_metal::distributed::multihost::DistributedContext& context) {
+        router_channel_layouts_.exchange(context);
+    }
+    const RouterChannelLayout& get_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.get(node, eth_chan);
+    }
+    const RouterChannelLayout* find_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.find(node, eth_chan);
+    }
 
     // ============ Diagnostic Buffer Map ============
     /** Returns the diagnostic buffer locations for all routers.
@@ -254,9 +252,7 @@ private:
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
 
-    // Published from the per-device builds, which run concurrently.
-    mutable std::mutex router_channel_layouts_mutex_;
-    std::map<std::pair<FabricNodeId, chan_id_t>, RouterChannelLayout> router_channel_layouts_;
+    RouterChannelLayouts router_channel_layouts_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(
