@@ -16,13 +16,13 @@
 /**
  * Returns the LLK tile and face geometry of a resource binding.
  */
-constexpr ckernel::TensorShape get_tensor_shape(const binding_details::TokenWithLLKMetadata& token) {
+constexpr ckernel::TensorShape get_tile_shape(const binding_details::TokenWithLLKMetadata& token) {
     return ckernel::TensorShape{
         get_face_r_dim(token), get_face_c_dim(token), get_num_faces_r_dim(token), get_num_faces_c_dim(token)};
 }
 
 namespace tensor_accessor {
-using ::get_tensor_shape;
+using ::get_tile_shape;
 }  // namespace tensor_accessor
 
 #if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_TRISC)
@@ -46,7 +46,7 @@ struct LLKOperandExtractor {
         "LLKOperandFrom requires a BindingToken with llk metadata (DFB / Scratchpad / Tensor)");
 
     static constexpr DataFormat format = get_dataformat(Token);
-    static constexpr ckernel::TensorShape shape = get_tensor_shape(Token);
+    static constexpr ckernel::TensorShape shape = get_tile_shape(Token);
 
     using OperandT = ckernel::experimental::LLKOperand<format, shape>;
 };

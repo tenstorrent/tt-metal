@@ -53,7 +53,7 @@ ProgramSpec MakeNonPublicGeometryProgramSpec(const GeometryCase& geometry, const
     return spec;
 }
 
-std::string MakeNonPublicTensorShapeQuerySource(const GeometryCase& geometry, const std::string& query) {
+std::string MakeNonPublicTileShapeQuerySource(const GeometryCase& geometry, const std::string& query) {
     const Tile tile = geometry.tile.value_or(Tile{});
     const auto face = tile.get_face_shape();
     return fmt::format(
@@ -94,26 +94,26 @@ protected:
 };
 
 // Blackhole DFB shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometry, CPU_DfbTensorShape) {
+TEST_P(BindingTokenGeometry, CPU_DfbTileShape) {
     const GeometryCase geometry = GetParam();
-    const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(dfb::input_dfb)");
+    const std::string source = MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(dfb::input_dfb)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
 // Blackhole scratchpad shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometry, CPU_ScratchpadTensorShape) {
+TEST_P(BindingTokenGeometry, CPU_ScratchpadTileShape) {
     const GeometryCase geometry = GetParam();
-    const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)");
+    const std::string source = MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(scratch::pad)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
-// Blackhole common and per-node tensor shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometry, CPU_TensorBindingTensorShape) {
+// Blackhole common and per-node tile shape queries compile in data movement and all compute stages.
+TEST_P(BindingTokenGeometry, CPU_TensorBindingTileShape) {
     const GeometryCase geometry = GetParam();
     const std::string source =
-        MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)");
+        MakeNonPublicTileShapeQuerySource(geometry, "tensor_accessor::get_tile_shape(tensor::local)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
@@ -219,26 +219,26 @@ protected:
 };
 
 // Wormhole DFB shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometryWormhole, CPU_DfbTensorShape) {
+TEST_P(BindingTokenGeometryWormhole, CPU_DfbTileShape) {
     const GeometryCase geometry = GetParam();
-    const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(dfb::input_dfb)");
+    const std::string source = MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(dfb::input_dfb)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
 // Wormhole scratchpad shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometryWormhole, CPU_ScratchpadTensorShape) {
+TEST_P(BindingTokenGeometryWormhole, CPU_ScratchpadTileShape) {
     const GeometryCase geometry = GetParam();
-    const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)");
+    const std::string source = MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(scratch::pad)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
-// Wormhole common and per-node tensor shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometryWormhole, CPU_TensorBindingTensorShape) {
+// Wormhole common and per-node tile shape queries compile in data movement and all compute stages.
+TEST_P(BindingTokenGeometryWormhole, CPU_TensorBindingTileShape) {
     const GeometryCase geometry = GetParam();
     const std::string source =
-        MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)");
+        MakeNonPublicTileShapeQuerySource(geometry, "tensor_accessor::get_tile_shape(tensor::local)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
@@ -304,22 +304,22 @@ TEST_P(BindingTokenCustomFaceWidth, CPU_TensorGeometry) {
 }
 
 // A scratchpad's aggregate shape preserves custom face dimensions and grid counts.
-TEST_P(BindingTokenCustomFaceWidth, CPU_ScratchpadTensorShape) {
+TEST_P(BindingTokenCustomFaceWidth, CPU_ScratchpadTileShape) {
     const GeometryCase geometry = GetParam();
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
     spec.dataflow_buffers[0].tile_format_metadata.reset();
     spec.kernels[1].source =
-        KernelSpec::SourceCode{MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)")};
+        KernelSpec::SourceCode{MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(scratch::pad)")};
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
 // A tensor binding's aggregate shape preserves custom face dimensions and grid counts.
-TEST_P(BindingTokenCustomFaceWidth, CPU_TensorBindingTensorShape) {
+TEST_P(BindingTokenCustomFaceWidth, CPU_TensorBindingTileShape) {
     const GeometryCase geometry = GetParam();
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
     spec.dataflow_buffers[0].tile_format_metadata.reset();
     spec.kernels[1].source = KernelSpec::SourceCode{
-        MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)")};
+        MakeNonPublicTileShapeQuerySource(geometry, "tensor_accessor::get_tile_shape(tensor::local)")};
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
@@ -338,30 +338,30 @@ struct ShapeWithoutFormatCase {
     bool per_node = false;
 };
 
-class BindingTokenTensorShapeWithoutFormat : public test_helpers::ProgramSpecTestBlackhole,
-                                             public ::testing::WithParamInterface<ShapeWithoutFormatCase> {
+class BindingTokenTileShapeWithoutFormat : public test_helpers::ProgramSpecTestBlackhole,
+                                           public ::testing::WithParamInterface<ShapeWithoutFormatCase> {
 protected:
     distributed::MeshDevice& fixture_device() { return *mesh_device_; }
 };
 
 // An aggregate shape query returns default geometry without requiring a storage format.
-TEST_P(BindingTokenTensorShapeWithoutFormat, CPU_DefaultGeometry) {
+TEST_P(BindingTokenTileShapeWithoutFormat, CPU_DefaultGeometry) {
     const ShapeWithoutFormatCase missing = GetParam();
     const GeometryCase geometry{"Default", std::nullopt, 32, 32, 4, false, false, missing.per_node};
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
-    spec.kernels[1].source = KernelSpec::SourceCode{MakeNonPublicTensorShapeQuerySource(geometry, missing.query)};
+    spec.kernels[1].source = KernelSpec::SourceCode{MakeNonPublicTileShapeQuerySource(geometry, missing.query)};
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
 INSTANTIATE_TEST_SUITE_P(
     ResourceShapes,
-    BindingTokenTensorShapeWithoutFormat,
+    BindingTokenTileShapeWithoutFormat,
     ::testing::Values(
-        ShapeWithoutFormatCase{"Dfb", "get_tensor_shape(DFBBindingToken<>{0})"},
-        ShapeWithoutFormatCase{"Scratchpad", "get_tensor_shape(ScratchpadBindingToken{0, 1024})"},
-        ShapeWithoutFormatCase{"Tensor", "get_tensor_shape(decltype(tensor::local){binding_details::LLKMetadata{}})"},
+        ShapeWithoutFormatCase{"Dfb", "get_tile_shape(DFBBindingToken<>{0})"},
+        ShapeWithoutFormatCase{"Scratchpad", "get_tile_shape(ScratchpadBindingToken{0, 1024})"},
+        ShapeWithoutFormatCase{"Tensor", "get_tile_shape(decltype(tensor::local){binding_details::LLKMetadata{}})"},
         ShapeWithoutFormatCase{
-            "PerNodeTensor", "get_tensor_shape(decltype(tensor::local){binding_details::LLKMetadata{}})", true}),
+            "PerNodeTensor", "get_tile_shape(decltype(tensor::local){binding_details::LLKMetadata{}})", true}),
     [](const ::testing::TestParamInfo<ShapeWithoutFormatCase>& info) { return info.param.name; });
 
 }  // namespace
