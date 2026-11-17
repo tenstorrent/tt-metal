@@ -8,6 +8,9 @@
 // (DRAM or L1) through TensorAccessor. Padded rows / columns of ragged edge blocks are skipped.
 // One flush per row group (the CB slot may be reused once the writes have left L1), one barrier at
 // the end.
+//
+// Regime R4 (`out_in_place` = 1): the output CB is backed on this core's own L1 output shard and the
+// compute packs straight into it, so the writer only retires the row groups (wait / pop, no NoC).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -31,7 +34,8 @@ void kernel_main() {
     constexpr uint32_t sb_h = get_compile_time_arg_val(4);
     constexpr uint32_t o_tile_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t o_page_bytes = get_compile_time_arg_val(6);
-    constexpr auto out_args = TensorAccessorArgs<7>();
+    constexpr bool out_in_place = get_compile_time_arg_val(7) != 0;
+    constexpr auto out_args = TensorAccessorArgs<8>();
 
     constexpr uint32_t row_group_tiles = sb_h * out_block_n_tiles;
     constexpr uint32_t num_row_groups = block_m_tiles / sb_h;
@@ -67,7 +71,7 @@ void kernel_main() {
                     const uint32_t batch = b0 + blk_b0 + bi;
                     for (uint32_t g = 0; g < num_row_groups; ++g) {
                         cb_wait_front(cb_output_tiles, row_group_tiles);
-                        if (batch_valid) {
+                        if (!out_in_place && batch_valid) {
                             const uint32_t l1_base = get_read_ptr(cb_output_tiles);
                             for (uint32_t r = 0; r < sb_h; ++r) {
                                 const uint32_t blk_row = g * sb_h + r;

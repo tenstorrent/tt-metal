@@ -17,7 +17,8 @@
 //   bias / bias_relu  add_bias_bcast_rows<RowBroadcast, TileRowMajor> (+ PACK_RELU for bias_relu)
 //   swiglu            eltwise_chain over (block_m, block_n/2): gate (Strided base 0) -> Silu,
 //                     up (Strided base block_n/2), MulBinary; the reader permuted B so all gate tiles
-//                     of the N-block precede all up tiles.
+//                     of the N-block precede all up tiles. R4 keeps B in natural (gate, up) pair
+//                     order instead and walks the block flat with row stride 2 (swiglu_natural_pairs).
 //   addcmul           eltwise_chain over (block_m, block_n): FPU Mul with the row-broadcast gate, then
 //                     SFPU AddBinary of the streamed residual (no DEST reuse ahead of an FPU op).
 // The bias / gate row is waited once before the first batch's epilogue and popped after the last.
@@ -61,6 +62,9 @@ constexpr uint32_t epilogue_block_tiles = get_compile_time_arg_val(17);  // chai
 // 1: silu runs the full-precision (fp32) sigmoid; 0: the bf16-precision sigmoid (host picks 0 only
 // for a non-fp32 output, whose own rounding dominates).
 constexpr bool silu_fp32_precision = get_compile_time_arg_val(18) != 0;
+// swiglu B-column order inside the block: 0 = gate half then up half (the R1 / R1a reader permutes per
+// tile); 1 = natural (gate, up) tile pairs (R4 reads whole bank-shard rows in one coalesced read).
+constexpr bool swiglu_natural_pairs = get_compile_time_arg_val(19) != 0;
 
 constexpr bool has_epilogue = epilogue != 0;
 constexpr bool is_bias = epilogue == 1 || epilogue == 2;
@@ -70,6 +74,14 @@ constexpr bool is_addcmul = epilogue == 4;
 constexpr bool has_row = is_bias || is_addcmul;
 constexpr uint32_t half_n = block_n_tiles / 2;
 constexpr uint32_t block_tiles = block_m_tiles * block_n_tiles;
+// swiglu walk over the block (Strided tile = base + r * row_stride + c). Permuted halves: grid
+// (block_m, half_n), gate at row-stride block_n from 0, up from half_n. Natural pairs: the gate of
+// output tile t = m * half_n + p is block tile m * block_n + 2p = 2t, its up 2t + 1, so a flat
+// (block_m * half_n, 1) walk with row stride 2 reads both and packs t in row-major output order.
+constexpr uint32_t swiglu_rows = swiglu_natural_pairs ? block_m_tiles * half_n : block_m_tiles;
+constexpr uint32_t swiglu_cols = swiglu_natural_pairs ? 1 : half_n;
+constexpr uint32_t swiglu_stride = swiglu_natural_pairs ? 2 : block_n_tiles;
+constexpr uint32_t swiglu_up_base = swiglu_natural_pairs ? 1 : half_n;
 
 // FMA step count per K-block: the balanced split leaves the last K-block narrower; the reader
 // pushes the nominal block_k pages, so the garbage tail must never be summed.
@@ -153,7 +165,7 @@ ALWI void run_epilogue(
         // Strided addressing requires caller-managed (None, None) lifecycles on cb_partials.
         partials_buf.wait_front(block_tiles);
         eltwise_chain(
-            IterationShape::grid(block_m_tiles, half_n).block_size(epilogue_block_tiles),
+            IterationShape::grid(swiglu_rows, swiglu_cols).block_size(epilogue_block_tiles),
             CopyTile<
                 input(
                     cb_partials,
@@ -162,7 +174,7 @@ ALWI void run_epilogue(
                     InputTileMapping::Block,
                     DataFormatReconfig::Enabled,
                     TileAddressing::Strided),
-                Dst::D0>{partials_dfb, StridedTileRange{0, block_n_tiles}},
+                Dst::D0>{partials_dfb, StridedTileRange{0, swiglu_stride}},
             Silu<silu_fp32_precision, Dst::D0>{},
             CopyTile<
                 input(
@@ -172,7 +184,7 @@ ALWI void run_epilogue(
                     InputTileMapping::Block,
                     DataFormatReconfig::Enabled,
                     TileAddressing::Strided),
-                Dst::D1>{partials_dfb, StridedTileRange{half_n, block_n_tiles}},
+                Dst::D1>{partials_dfb, StridedTileRange{swiglu_up_base, swiglu_stride}},
             MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
             PackTile<output(cb_output_tiles, ReservePolicy::PerOuter, PushPolicy::PerOuter)>{out_dfb});
         partials_buf.pop_front(block_tiles);

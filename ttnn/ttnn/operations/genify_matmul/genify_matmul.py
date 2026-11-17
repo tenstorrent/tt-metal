@@ -18,7 +18,12 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .genify_matmul_program_descriptor import TILE, create_program_descriptor
+from .genify_matmul_program_descriptor import (
+    TILE,
+    DramShardedLayoutError,
+    create_program_descriptor,
+    dram_sharded_output_memory_config,
+)
 
 _ML = ttnn.TensorMemoryLayout
 
@@ -79,7 +84,9 @@ SUPPORTED = {
     "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True, False],
-    "placement": ["interleaved"],
+    # Refinement 4: dram_sharded = regime R4 (B streamed from its DRAM bank shards by one worker per
+    # bank, A broadcast from its own width-shard cores, output in place in an op-built L1 width shard).
+    "placement": ["interleaved", "dram_sharded"],
     # Refinement 2: every epilogue runs inside the same program on the accumulated block
     # (matmul_block -> cb_partials -> add_bias_bcast_rows / eltwise_chain -> cb_output_tiles).
     "epilogue": ["none", "bias", "bias_relu", "swiglu", "addcmul"],
@@ -173,15 +180,18 @@ def validate(
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"genify_matmul: unsupported combination (refinement candidate): {exc}")
 
-    # Phase 0 (R1) only reads B and writes the output through interleaved accessors.
-    if weight.memory_config().memory_layout != _ML.INTERLEAVED:
-        raise UnsupportedAxisValue("genify_matmul: placement 'interleaved' needs an interleaved weight")
     if weight.layout != ttnn.TILE_LAYOUT:
         raise UnsupportedAxisValue("genify_matmul: weight layout must be TILE_LAYOUT")
-    if memory_config is not None and memory_config.memory_layout != _ML.INTERLEAVED:
-        raise UnsupportedAxisValue(
-            f"genify_matmul: placement 'interleaved' writes an interleaved output; got {memory_config.memory_layout}"
-        )
+    if axes["placement"] == "dram_sharded":
+        _validate_dram_sharded(input_tensor, weight, activation, memory_config)
+    else:
+        # R1 / R1a read B and write the output through interleaved accessors.
+        if weight.memory_config().memory_layout != _ML.INTERLEAVED:
+            raise UnsupportedAxisValue("genify_matmul: placement 'interleaved' needs an interleaved weight")
+        if memory_config is not None and memory_config.memory_layout != _ML.INTERLEAVED:
+            raise UnsupportedAxisValue(
+                f"genify_matmul: placement 'interleaved' writes an interleaved output; got {memory_config.memory_layout}"
+            )
     # Epilogue operands are read through interleaved accessors, tile by tile.
     for name, t in (("bias", bias), ("residual", residual), ("gate", gate)):
         if t is None:
@@ -191,6 +201,28 @@ def validate(
         if t.memory_config().memory_layout != _ML.INTERLEAVED:
             raise UnsupportedAxisValue(f"genify_matmul: {name} must be interleaved")
     return axes
+
+
+def _validate_dram_sharded(input_tensor, weight, activation, memory_config):
+    """R4 layout gate: A L1 width-sharded over K (all rows per shard, shards in core order), B DRAM
+    width-sharded one column shard per bank; the output is L1 width-sharded on a spec the op builds,
+    so a requested memory_config may carry no shard spec or exactly that one."""
+    try:
+        op_mc = dram_sharded_output_memory_config(input_tensor, weight, swiglu=activation == "swiglu")
+    except DramShardedLayoutError as e:
+        raise UnsupportedAxisValue(f"genify_matmul: {e}") from e
+    if memory_config is None:
+        return
+    if memory_config.buffer_type != ttnn.BufferType.L1 or memory_config.memory_layout != _ML.WIDTH_SHARDED:
+        raise UnsupportedAxisValue(
+            "genify_matmul: placement 'dram_sharded' writes an L1 WIDTH_SHARDED output "
+            f"(e.g. ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG); got {memory_config}"
+        )
+    spec = memory_config.shard_spec
+    if spec is not None and (list(spec.shape) != list(op_mc.shard_spec.shape) or spec.grid != op_mc.shard_spec.grid):
+        raise UnsupportedAxisValue(
+            f"genify_matmul: dram_sharded builds its own output shard spec {op_mc.shard_spec}; got {spec}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +291,7 @@ def genify_matmul(
 ) -> ttnn.Tensor:
     """out = epilogue(A @ B) in one device program. See op_design.md."""
     _check_contract(input_tensor, weight, bias, activation, residual, gate)
-    validate(
+    axes = validate(
         input_tensor,
         weight,
         bias=bias,
@@ -273,7 +305,12 @@ def genify_matmul(
     cfg = _resolve_compute_config(compute_kernel_config)
     device = input_tensor.device()
     out_dtype = dtype if dtype is not None else input_tensor.dtype
-    out_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    placement = axes["placement"]
+    if placement == "dram_sharded":
+        # The op chooses the output shard spec: one width shard per bank worker.
+        out_mc = dram_sharded_output_memory_config(input_tensor, weight, swiglu=activation == "swiglu")
+    else:
+        out_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
     a_shape = list(input_tensor.shape)
     n_out = weight.shape[-1] // 2 if activation == "swiglu" else weight.shape[-1]
@@ -285,7 +322,7 @@ def genify_matmul(
     epilogue = _classify_epilogue(bias, activation, residual, gate)
     row = bias if bias is not None else gate  # the (1, N) row the epilogue broadcasts
     program_descriptor = create_program_descriptor(
-        input_tensor, weight, output_tensor, cfg, epilogue=epilogue, row=row, residual=residual
+        input_tensor, weight, output_tensor, cfg, epilogue=epilogue, row=row, residual=residual, placement=placement
     )
     # Exactly one dispatch; the output tensor is last.
     io_tensors = [t for t in (input_tensor, weight, row, residual) if t is not None]

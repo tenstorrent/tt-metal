@@ -30,6 +30,17 @@
 // and the multicast lands at the sender's own slot address. Per K-block every core delivers A, then
 // B: no core can block in B(kb) before every core has passed A(kb), so the two channels cannot
 // deadlock. The bias / gate row and the residual stay per-core reads (they are tiny or unshared).
+//
+// Regime R4 `dram_sharded` (Refinement 4, `dram_sharded` = 1): one worker per DRAM bank owns the block
+// rows x (its bank's B column shard) and walks K one A shard per round (`k_blocks_per_round` K-blocks
+// per shard). Per K-block it (1) issues ONE coalesced read of the K-block's rows from its bank shard
+// (the rows of a bank shard are contiguous) -- before waiting on A, since B does not depend on it --
+// then (2) runs the A round on the `act` channel: the core owning A shard `round` multicasts the
+// K-block from its resident L1 shard into every worker's reserved cb_act_tiles slot (rotating senders,
+// ttnn.Mcast + McastArgs); a worker that owns that shard sends instead of receiving. Cores of the
+// broadcast that are not workers (`ds_worker` = 0) only send their own rounds (no CB traffic: they
+// address the workers' slot as base + (K-block % depth) * slot bytes) or, inside the receiver
+// rectangle, just land the payload and exit. B columns stay in natural (gate, up) order for swiglu.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -48,10 +59,11 @@ FORCE_INLINE uint32_t block_extent(uint32_t valid, uint32_t start, uint32_t nomi
 }
 
 // One line pipe per operand: the sender face on the injector, the receiver face elsewhere, nothing
-// when the channel is absent (regime R1: every core reads for itself).
-template <bool SENDS, typename Channel>
+// when the channel is absent or not a line channel (regime R1: every core reads for itself; R4: the
+// act channel is the rotating A broadcast, built separately).
+template <bool SENDS, bool LINE, typename Channel>
 FORCE_INLINE auto make_line_pipe(const Channel& channel, const Noc& noc) {
-    if constexpr (!Channel::active) {
+    if constexpr (!LINE || !Channel::active) {
         return 0;
     } else if constexpr (SENDS) {
         return channel.sender(noc);
@@ -99,7 +111,11 @@ void kernel_main() {
     constexpr bool operand_mcast = get_compile_time_arg_val(20) != 0;  // regime R1a
     constexpr bool a_sends = get_compile_time_arg_val(21) != 0;        // A-line injector (R1a)
     constexpr bool b_sends = get_compile_time_arg_val(22) != 0;        // B-line injector (R1a)
-    constexpr auto a_args = TensorAccessorArgs<23>();
+    constexpr bool dram_sharded = get_compile_time_arg_val(23) != 0;   // regime R4
+    constexpr bool ds_worker = get_compile_time_arg_val(24) != 0;      // R4 bank worker (else sender / lander)
+    constexpr uint32_t k_blocks_per_round = get_compile_time_arg_val(25);  // R4: K-blocks per A shard
+    constexpr uint32_t act_cb_blocks = get_compile_time_arg_val(26);       // cb_act_tiles depth in K-blocks
+    constexpr auto a_args = TensorAccessorArgs<27>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto row_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto res_args = TensorAccessorArgs<row_args.next_compile_time_args_offset()>();
@@ -123,7 +139,8 @@ void kernel_main() {
     constexpr auto mc_weight = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("weight_ct_offset"),
         get_named_compile_time_arg_val("weight_rt_offset")>();
-    static_assert(mc_act.active == operand_mcast && mc_weight.active == operand_mcast);
+    static_assert(mc_act.active == (operand_mcast || dram_sharded) && mc_weight.active == operand_mcast);
+    static_assert(!(operand_mcast && dram_sharded));
 
     uint32_t arg = 0;
     const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
@@ -150,8 +167,38 @@ void kernel_main() {
     [[maybe_unused]] const auto res_acc = TensorAccessor(res_args, res_addr, res_page_bytes);
 
     Noc noc;
-    [[maybe_unused]] auto act_pipe = make_line_pipe<a_sends>(mc_act, noc);
-    [[maybe_unused]] auto weight_pipe = make_line_pipe<b_sends>(mc_weight, noc);
+    [[maybe_unused]] auto act_pipe = make_line_pipe<a_sends, operand_mcast>(mc_act, noc);
+    [[maybe_unused]] auto weight_pipe = make_line_pipe<b_sends, operand_mcast>(mc_weight, noc);
+
+    // R4 A broadcast faces (std::nullopt where this core has no such role) and the A K-block source:
+    // K-block (row block mb, K-block kb) of the sender's row-major shard (rows x a_shard_k_tiles) starts
+    // at row mb*block_m, column (kb % k_blocks_per_round) * block_k -- one contiguous run, because the
+    // host splits a shard (k_blocks_per_round > 1) only when block_m == 1.
+    [[maybe_unused]] auto a_sender = mc_act.optional_sender(noc);
+    [[maybe_unused]] auto a_receiver = mc_act.optional_receiver(noc);
+    constexpr uint32_t a_shard_k_tiles = block_k_tiles * k_blocks_per_round;
+    constexpr uint32_t act_block_bytes = act_block_tiles * a_tile_bytes;
+    [[maybe_unused]] auto a_shard_src = [&](uint32_t mb, uint32_t kb) {
+        return a_addr +
+               (mb * block_m_tiles * a_shard_k_tiles + (kb % k_blocks_per_round) * block_k_tiles) * a_tile_bytes;
+    };
+    if constexpr (dram_sharded && !ds_worker) {
+        // A shard core that is not a bank worker: send this core's rounds into the workers' slots. The
+        // workers' cb_act_tiles write pointer visits slot (K-block % depth) in lockstep from its base.
+        if (a_sender) {
+            const uint32_t act_base = get_write_ptr(cb_act_tiles);
+            uint32_t slot = 0;
+            for (uint32_t mb = 0; mb < nb_m; ++mb) {
+                for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+                    if (mc_act.should_send(kb / k_blocks_per_round)) {
+                        a_sender->send(a_shard_src(mb, kb), act_base + slot * act_block_bytes, act_block_bytes);
+                    }
+                    slot = (slot + 1 == act_cb_blocks) ? 0 : slot + 1;
+                }
+            }
+        }
+        return;
+    }
 
     for (uint32_t bb = 0; bb < nb_b; ++bb) {
         const uint32_t blk_b0 = bb * block_batches;
@@ -173,53 +220,76 @@ void kernel_main() {
                         const uint32_t k_valid = (kb == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
                         const uint32_t k0 = kb * block_k_tiles;
 
-                        cb_reserve_back(cb_act_tiles, act_block_tiles);
-                        cb_reserve_back(cb_weight_tiles, weight_block_tiles);
-                        const uint32_t act_l1 = get_write_ptr(cb_act_tiles);
-                        const uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
-                        if (batch_valid && reads_act) {
-                            // A: CB slot r*block_k + k  <-  page (a_row_base + r) * Kt + k0 + k
-                            for (uint32_t r = 0; r < blk_rows; ++r) {
-                                uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
-                                uint32_t l1 = act_l1 + r * block_k_tiles * a_tile_bytes;
+                        if constexpr (dram_sharded) {
+                            // B (stall-shadow: issued before the A round it does not depend on): rows
+                            // [k0, k0 + k_valid) of this bank's column shard are one contiguous run.
+                            cb_reserve_back(cb_weight_tiles, weight_block_tiles);
+                            noc_async_read(
+                                b_acc.get_noc_addr(k0 * tensor_n_tiles + col0 + blk_c0),
+                                get_write_ptr(cb_weight_tiles),
+                                k_valid * block_n_tiles * b_tile_bytes);
+                            // A round: the owner of A shard `round` multicasts this K-block to every
+                            // worker's reserved slot (the receiver acks the slot, then waits the data).
+                            cb_reserve_back(cb_act_tiles, act_block_tiles);
+                            const uint32_t round = kb / k_blocks_per_round;
+                            if (mc_act.should_send(round)) {
+                                a_sender->send(a_shard_src(mb, kb), get_write_ptr(cb_act_tiles), act_block_bytes);
+                            } else {
+                                a_receiver->receive(round);
+                            }
+                            noc_async_read_barrier();
+                            cb_push_back(cb_act_tiles, act_block_tiles);
+                            cb_push_back(cb_weight_tiles, weight_block_tiles);
+                        } else {
+                            cb_reserve_back(cb_act_tiles, act_block_tiles);
+                            cb_reserve_back(cb_weight_tiles, weight_block_tiles);
+                            const uint32_t act_l1 = get_write_ptr(cb_act_tiles);
+                            const uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
+                            if (batch_valid && reads_act) {
+                                // A: CB slot r*block_k + k  <-  page (a_row_base + r) * Kt + k0 + k
+                                for (uint32_t r = 0; r < blk_rows; ++r) {
+                                    uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
+                                    uint32_t l1 = act_l1 + r * block_k_tiles * a_tile_bytes;
+                                    for (uint32_t k = 0; k < k_valid; ++k) {
+                                        noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+                                        l1 += a_tile_bytes;
+                                    }
+                                }
+                            }
+                            if (batch_valid && reads_weight) {
+                                // B: CB slot k*block_n + c  <-  page b_base + (k0 + k) * Nt + col(c)
+                                // (col(c) = c, or the swiglu gate/up permutation).
                                 for (uint32_t k = 0; k < k_valid; ++k) {
-                                    noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
-                                    l1 += a_tile_bytes;
-                                }
-                            }
-                        }
-                        if (batch_valid && reads_weight) {
-                            // B: CB slot k*block_n + c  <-  page b_base + (k0 + k) * Nt + col(c)
-                            // (col(c) = c, or the swiglu gate/up permutation).
-                            for (uint32_t k = 0; k < k_valid; ++k) {
-                                uint32_t page = b_base + (k0 + k) * tensor_n_tiles;
-                                uint32_t l1 = weight_l1 + k * block_n_tiles * b_tile_bytes;
-                                if constexpr (is_swiglu) {
-                                    // blk_cols is even: pair p = (gate 2p, up 2p+1) -> slots p, h + p.
-                                    for (uint32_t p = 0; p < blk_cols / 2; ++p) {
-                                        noc_async_read(
-                                            b_acc.get_noc_addr(page + 2 * p), l1 + p * b_tile_bytes, b_tile_bytes);
-                                        noc_async_read(
-                                            b_acc.get_noc_addr(page + 2 * p + 1),
-                                            l1 + (half_n + p) * b_tile_bytes,
-                                            b_tile_bytes);
-                                    }
-                                } else {
-                                    for (uint32_t n = 0; n < blk_cols; ++n) {
-                                        noc_async_read(b_acc.get_noc_addr(page + n), l1, b_tile_bytes);
-                                        l1 += b_tile_bytes;
+                                    uint32_t page = b_base + (k0 + k) * tensor_n_tiles;
+                                    uint32_t l1 = weight_l1 + k * block_n_tiles * b_tile_bytes;
+                                    if constexpr (is_swiglu) {
+                                        // blk_cols is even: pair p = (gate 2p, up 2p+1) -> slots p, h + p.
+                                        for (uint32_t p = 0; p < blk_cols / 2; ++p) {
+                                            noc_async_read(
+                                                b_acc.get_noc_addr(page + 2 * p), l1 + p * b_tile_bytes, b_tile_bytes);
+                                            noc_async_read(
+                                                b_acc.get_noc_addr(page + 2 * p + 1),
+                                                l1 + (half_n + p) * b_tile_bytes,
+                                                b_tile_bytes);
+                                        }
+                                    } else {
+                                        for (uint32_t n = 0; n < blk_cols; ++n) {
+                                            noc_async_read(b_acc.get_noc_addr(page + n), l1, b_tile_bytes);
+                                            l1 += b_tile_bytes;
+                                        }
                                     }
                                 }
                             }
+                            if constexpr (reads_act || reads_weight) {
+                                noc_async_read_barrier();  // one barrier per K-block, both operands
+                            }
+                            // R1a: A over its line, then B over its line (fixed order on every core).
+                            line_deliver<operand_mcast, a_sends>(act_pipe, act_l1, act_block_tiles * a_tile_bytes);
+                            line_deliver<operand_mcast, b_sends>(
+                                weight_pipe, weight_l1, weight_block_tiles * b_tile_bytes);
+                            cb_push_back(cb_act_tiles, act_block_tiles);
+                            cb_push_back(cb_weight_tiles, weight_block_tiles);
                         }
-                        if constexpr (reads_act || reads_weight) {
-                            noc_async_read_barrier();  // one barrier per K-block, both operands
-                        }
-                        // R1a: A over its line, then B over its line (fixed order on every core).
-                        line_deliver<operand_mcast, a_sends>(act_pipe, act_l1, act_block_tiles * a_tile_bytes);
-                        line_deliver<operand_mcast, b_sends>(weight_pipe, weight_l1, weight_block_tiles * b_tile_bytes);
-                        cb_push_back(cb_act_tiles, act_block_tiles);
-                        cb_push_back(cb_weight_tiles, weight_block_tiles);
                     }
 
                     if constexpr (has_row) {
