@@ -583,6 +583,28 @@ void kernel_main() {
                         k_block_right_tile,
                         k_block_right_tile + k_right_tiles,
                         k_right_tiles);
+#ifdef READ_FROM_LOCAL_INPUT
+                    // Each block is read once with the first N block: complete the gathered tensor with this
+                    // device's own K range, so a later op can read the whole gathered input from it.
+                    if (n_block_iter == 0) {
+                        write_local_in0_tiles(
+                            noc_obj,
+                            in0_reader,
+                            in0_shape,
+                            in0_start_address,
+                            in0_tile_size,
+                            my_rank * K_tiles_per_device,
+                            ((my_rank + 1) * K_tiles_per_device) - 1,
+                            m_tile,
+                            m_tile_end,
+                            k_block_left_tile,
+                            k_block_left_tile + k_left_tiles,
+                            k_left_tiles,
+                            k_block_right_tile,
+                            k_block_right_tile + k_right_tiles,
+                            k_right_tiles);
+                    }
+#endif
                 } else if constexpr (mcast) {
                     in0_rx->receive();
                 } else {

@@ -491,6 +491,51 @@ void read_in0_block_sync(
     noc.write_zeros_l1_barrier();
 }
 
+#ifdef READ_FROM_LOCAL_INPUT
+/**
+ * Write the tiles of an in0 block that read_in0_block_sync read from this device's own input (local K range) to the
+ * gathered tensor, which then holds every device's K range, this one's too. Same block layout as the read.
+ */
+template <typename TensorAccessorType>
+void write_local_in0_tiles(
+    Noc noc,
+    const TensorAccessorType& tensor_accessor,
+    const TensorShape2D& shape,
+    uint32_t block_ptr,
+    uint32_t tile_size_bytes,
+    uint32_t local_k_start,
+    uint32_t local_k_end,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start_left,
+    uint32_t d1_end_left,
+    uint32_t d1_tiles_left,
+    uint32_t d1_start_right,
+    uint32_t d1_end_right,
+    uint32_t d1_tiles_right) {
+    auto write_range = [&](uint32_t i, uint32_t start, uint32_t end, uint32_t& ptr) {
+        for (uint32_t j = start; j < end; j++, ptr += tile_size_bytes) {
+            if (j < shape.logical_d1 && local_k_start <= j && j <= local_k_end) {
+                noc.async_write(
+                    CoreLocalMem<uint8_t>(ptr),
+                    tensor_accessor,
+                    tile_size_bytes,
+                    {},
+                    {.page_id = i * shape.logical_d1 + j});
+            }
+        }
+    };
+    uint32_t ptr = block_ptr;
+    for (uint32_t i = d0_start; i < d0_end && i < shape.logical_d0; i++) {
+        write_range(i, d1_start_left, d1_end_left, ptr);
+        ptr += (d1_tiles_left - (d1_end_left - d1_start_left)) * tile_size_bytes;
+        write_range(i, d1_start_right, d1_end_right, ptr);
+        ptr += (d1_tiles_right - (d1_end_right - d1_start_right)) * tile_size_bytes;
+    }
+    noc.async_writes_flushed();
+}
+#endif
+
 /**
  * Read a block of in1 from a potentially padded tensor.
  * Since this is for matmul, no need to read when N >= logical_N
