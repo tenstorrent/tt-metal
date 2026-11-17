@@ -331,12 +331,27 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
         passes};
     TensorAccessorArgs(*input.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
+    writer_ct.insert(writer_ct.end(), {f.format_id, request_sem, answer_sem, address_sem});
 
-    // The reader generates the core's records itself, and does all of a codebook page's grid lookups: the prefill
-    // writer moves the input and the compute kernel decodes each weight tile once per M chunk.
+    // The reader generates the core's records itself and does a codebook page's grid lookups. With up to 16 row tiles a
+    // band (M <= 512 rows; IQ2_XXS, whose lookups cost least: 4), where the reader's lookups bound the op, the writer
+    // takes half of them whenever it would wait; with more rows the writer is busier moving the input and that was
+    // slower or no faster (measured). The compute kernel takes none. A codebook page's lookups are in quarters here,
+    // whatever split the decode program uses.
     std::map<std::string, std::string> reader_defines = lookup_defines(weight);
-    reader_defines["GGUF_READER_PARTS"] = reader_defines["GGUF_LOOKUP_PARTS"];
-    reader_defines["GGUF_WRITER_PARTS"] = reader_defines["GGUF_MATH_PARTS"] = reader_defines["GGUF_UNPACK_PARTS"] = "0";
+    const bool codebook = !is_gguf_expanded(weight.dtype()) && f.code_offset > 0;
+    if (codebook) {
+        reader_defines["GGUF_LOOKUP_PARTS"] = "4";
+    }
+    const uint32_t split_rows = weight.dtype() == DataType::GGUF_IQ2_XXS ? 4 : 16;
+    const bool split = codebook && mb <= split_rows;
+    reader_defines["GGUF_READER_PARTS"] = split ? "2" : reader_defines["GGUF_LOOKUP_PARTS"];
+    reader_defines["GGUF_WRITER_PARTS"] = split ? "2" : "0";
+    reader_defines["GGUF_MATH_PARTS"] = reader_defines["GGUF_UNPACK_PARTS"] = "0";
+    const std::map<std::string, std::string> writer_defines = {
+        {"GGUF_LOOKUP_PARTS", reader_defines["GGUF_LOOKUP_PARTS"]},
+        {"GGUF_READER_PARTS", reader_defines["GGUF_READER_PARTS"]},
+        {"GGUF_WRITER_PARTS", reader_defines["GGUF_WRITER_PARTS"]}};
     reader_defines["GGUF_PREFILL"] = "1";
     shared_variables_t shared;
     for (uint32_t parity = 0; parity < 2; parity++) {
@@ -356,7 +371,7 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
             reader_ct,
             writer_ct,
             reader_defines,
-            {},
+            writer_defines,
             shared);
     }
     const KernelHandle compute_kernel = CreateKernel(

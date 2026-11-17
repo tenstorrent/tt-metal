@@ -26,6 +26,12 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#if GGUF_WRITER_PARTS
+#include "api/dataflow/noc_semaphore.h"
+#include "experimental/gguf_page.h"
+
+alignas(4) std::uint16_t table_copy[1024 / 2];  // local_level_table
+#endif
 
 void kernel_main() {
     constexpr uint32_t k_tiles = get_compile_time_arg_val(0);
@@ -53,6 +59,49 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = 2048, block_tiles = ur * kb, block_bytes = block_tiles * tile_bytes;
     constexpr uint32_t units = mc / ur;  // per M chunk per K block
     constexpr uint32_t cb_in0 = 1, cb_out = 16, cb_send = 17, cb_recv = 18;
+#if GGUF_WRITER_PARTS
+    // Codebook formats: per request of the reader (the record's first page in address_sem, then the count of requests
+    // in request_sem), index-word parts [GGUF_READER_PARTS, GGUF_READER_PARTS + GGUF_WRITER_PARTS) of each page, served
+    // whenever this kernel would wait; the count served goes to answer_sem.
+    using namespace experimental::gguf;
+    constexpr uint32_t lookup_args = output_args.next_compile_time_args_offset();
+    constexpr auto FMT = static_cast<Format>(get_compile_time_arg_val(lookup_args));
+    // IQ2_S's 2 KiB level table is copied to the stack, the 4 KiB tables (IQ1_S, IQ1_M) stay in L1.
+    alignas(4) std::uint16_t stack_copy[table_entries<FMT>() == 1024 ? 1024 : 2];
+    constexpr PageLayout L = page_layout<FMT>();
+    constexpr uint32_t P = L.group_tiles / L.page_tiles, page = L.rows * 64;
+    Semaphore requests(get_compile_time_arg_val(lookup_args + 1)), answers(get_compile_time_arg_val(lookup_args + 2));
+    Semaphore address(get_compile_time_arg_val(lookup_args + 3));
+    uint32_t served = 0;
+    const std::uint16_t* table = level_table<FMT>();  // in L1 until the first request is answered
+    auto serve = [&]() {
+        if (requests.value() > served) {
+            const uint32_t first = address.value();
+            invalidate_l1_cache();
+            for (uint32_t p = 0; p < P; p++) {
+                for (uint32_t q = GGUF_READER_PARTS; q < GGUF_READER_PARTS + GGUF_WRITER_PARTS; q++) {
+                    lookup_grid<FMT>(
+                        reinterpret_cast<const uint32_t*>(first + p * page + index_offset<FMT>()),
+                        table,
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + p * page),
+                        q,
+                        GGUF_LOOKUP_PARTS);
+                }
+            }
+            asm volatile("fence" ::: "memory");
+            answers.set(++served);
+            if (served == (table_entries<FMT>() * 2 <= 1024 ? 1u : 2u)) {
+                // The local copy once the first request (IQ2_S: the second) is answered, while the reader works on the
+                // next.
+                if constexpr (table_entries<FMT>() * 2 <= 1024) {
+                    table = local_level_table<FMT>(table_copy);
+                } else {
+                    table = local_level_table<FMT, sizeof(stack_copy)>(stack_copy);
+                }
+            }
+        }
+    };
+#endif
 
     const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(0));
     const auto output = TensorAccessor(output_args, get_arg_val<uint32_t>(1));
@@ -125,6 +174,9 @@ void kernel_main() {
     const uint32_t subs_total = active && krole != 1 ? mchunks * (mc / sh) * (nc / sw) : 0;
     uint32_t subs_done = 0, chunk = 0, row = 0, col = 0;  // chunk counts over all passes
     auto drain = [&]() {
+#if GGUF_WRITER_PARTS
+        serve();
+#endif
         if (krole == 1) {
             // A unit goes into ring slot units_sent % kRecvUnits of each partner's c_18 once every partner has
             // granted it.
