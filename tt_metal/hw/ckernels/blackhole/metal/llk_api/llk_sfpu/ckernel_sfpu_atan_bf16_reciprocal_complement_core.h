@@ -3,8 +3,11 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::atan {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
+using ::sfpi::SFPLOADI_MOD0_LOWER;
+using ::sfpi::SFPLOADI_MOD0_UPPER;
+using ::sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B;
+using ::sfpi::SFPSTOCHRND_RND_EVEN;
 constexpr unsigned reciprocal_complement_held_slots = 4u;
 // Below degree eight, rung J feeds coefficient kDegree - 2 - J: LREG7/6/5 first, then LREG3, then
 // LCONST_0 for the zero constant term.
