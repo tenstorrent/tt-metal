@@ -118,6 +118,24 @@ class TtLlamaAttention(LightweightModule):
 
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
+        # Opt-in LLAMA_GALAXY_ATTN_W_BFP4=1 (LlamaOptimizations.bfp4_attn_w): wqkv and wo in bfp4, their
+        # matmuls at LoFi (same pattern as FF2 bfp4 in llama_mlp.py). Llama only. self.dtype is left alone:
+        # init_kv_cache also uses it. The weight cache files differ by dtype (ttnn.as_tensor appends
+        # _dtype_BFLOAT4_B), so bfp8 files are never reused.
+        self.attn_w_bfp4 = (
+            bool(getattr(getattr(configuration, "optimizations", None), "bfp4_attn_w", False)) and not self.is_qwen
+        )
+        wqkv_dtype = ttnn.bfloat4_b if self.attn_w_bfp4 else self.dtype
+        wo_dtype = ttnn.bfloat4_b if self.attn_w_bfp4 else ttnn.bfloat8_b
+        if self.attn_w_bfp4:
+            self.attn_w_decode_compute_kernel_config = configuration.compute_kernel_config_lofi_fp32acc
+            self.qkv_prefill_compute_kernel_config = configuration.compute_kernel_config_lofi_fp32acc
+            self.wo_prefill_compute_kernel_config = configuration.compute_kernel_config_lofi
+        else:
+            self.attn_w_decode_compute_kernel_config = configuration.compute_kernel_config_hifi2
+            self.qkv_prefill_compute_kernel_config = configuration.compute_kernel_config_hifi2
+            self.wo_prefill_compute_kernel_config = configuration.compute_kernel_config_hifi2_fp16
+
         self.transformation_mats = transformation_mats
 
         self.model_config = configuration.get_model_config()
@@ -206,7 +224,7 @@ class TtLlamaAttention(LightweightModule):
         # Qwen3: [1, 1, 5120, 10240] -> [1280, 1536]
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
-            dtype=self.dtype,
+            dtype=wqkv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["SHARDED_QKV_RING_MEMCFG"],
@@ -215,7 +233,7 @@ class TtLlamaAttention(LightweightModule):
         )
         self.wqkv_interleaved = ttnn.as_tensor(
             qkv_cat,
-            dtype=self.dtype,
+            dtype=wqkv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -238,7 +256,7 @@ class TtLlamaAttention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             pt_wo,
-            dtype=ttnn.bfloat8_b,
+            dtype=wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["SHARDED_WO_RING_MEMCFG"],
@@ -251,7 +269,7 @@ class TtLlamaAttention(LightweightModule):
         )
         self.wo_interleaved = ttnn.as_tensor(
             pt_wo,
-            dtype=ttnn.bfloat8_b,
+            dtype=wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -264,7 +282,7 @@ class TtLlamaAttention(LightweightModule):
         )
         self.wo_interleaved_col_sharded = ttnn.as_tensor(
             pt_wo,
-            dtype=ttnn.bfloat8_b,
+            dtype=wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -634,7 +652,7 @@ class TtLlamaAttention(LightweightModule):
                     else self.model_config["XQKV_DECODE_RING_PROGCFG"]
                 ),
                 memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.attn_w_decode_compute_kernel_config,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
                 dtype=ttnn.bfloat8_b if self.use_unfused_ccl else ttnn.bfloat16,
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id,
@@ -652,7 +670,7 @@ class TtLlamaAttention(LightweightModule):
                 program_config=None,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 core_grid=None,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.attn_w_decode_compute_kernel_config,
                 # bf8 so the column all-reduce input matches persistent_buffers[1] (bf8) CB sizing.
                 dtype=ttnn.bfloat8_b,
             )
@@ -1007,7 +1025,7 @@ class TtLlamaAttention(LightweightModule):
                 self.wo_interleaved_col_sharded if use_replicated_full_wo else self.wo_interleaved,
                 program_config=None,
                 memory_config=None,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.attn_w_decode_compute_kernel_config,
                 global_cb=None,
                 dtype=ttnn.bfloat8_b,
                 sub_device_id=None,
@@ -1019,7 +1037,7 @@ class TtLlamaAttention(LightweightModule):
                 self.wo,
                 program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
                 memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.attn_w_decode_compute_kernel_config,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
                 dtype=ttnn.bfloat8_b,
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id,
@@ -1079,7 +1097,7 @@ class TtLlamaAttention(LightweightModule):
                 self.wqkv_interleaved,
                 dtype=self.ccl_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.qkv_prefill_compute_kernel_config,
                 program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
             )
         else:
@@ -1092,7 +1110,7 @@ class TtLlamaAttention(LightweightModule):
                 self.wqkv_per_device,
                 dtype=self.ccl_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.qkv_prefill_compute_kernel_config,
                 program_config=None,
             )
         # Minimal matmul is giving bad outputs for seqlen > 128
@@ -1355,7 +1373,7 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.linear(
                 attn_output_11SH,
                 self.wo_interleaved,
-                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                compute_kernel_config=self.wo_prefill_compute_kernel_config,
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
@@ -1365,7 +1383,7 @@ class TtLlamaAttention(LightweightModule):
                 input_tensor=attn_output_11SH,
                 weight_tensor=self.wo_interleaved,
                 config=self.model_config["WO_PREFILL_MINIMAL_PROGCFG"](seq_len),
-                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                compute_kernel_config=self.wo_prefill_compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 

@@ -511,6 +511,13 @@ class LlamaOptimizations:
         default_factory=lambda: os.environ.get("LLAMA_GALAXY_FF2_BFP4", "0") == "1",
         repr=False,
     )
+    # Opt-in (LLAMA_GALAXY_ATTN_W_BFP4=1): attention wqkv and wo weights in bfp4 at LoFi instead of bfp8 at
+    # HiFi2, decode (prefetcher ring) and prefill. Read when the optimizations object is built. Llama only
+    # (llama_attention.py ignores it for Qwen).
+    bfp4_attn_w: bool = field(
+        default_factory=lambda: os.environ.get("LLAMA_GALAXY_ATTN_W_BFP4", "0") == "1",
+        repr=False,
+    )
     # Future fields will go here:
     # bfp8_activations: bool
     # bfp8_layernorm: bool
@@ -519,8 +526,9 @@ class LlamaOptimizations:
     def __repr__(self):
         # Unset: same text as the generated dataclass repr. Set: the repr changes, so callers that key a
         # weight-cache marker on repr(optimizations) (demo/text_demo.py build_variant) see a different
-        # variant and cold-load instead of handing a placeholder w2 to a bfp4 cache miss.
+        # variant and cold-load instead of handing a placeholder weight to a bfp4 cache miss.
         extra = ", bfp4_ff2=True" if self.bfp4_ff2 else ""
+        extra += ", bfp4_attn_w=True" if self.bfp4_attn_w else ""
         return f"{self.__class__.__qualname__}(bfp4_mlp={self.bfp4_mlp!r}{extra})"
 
     @classmethod
