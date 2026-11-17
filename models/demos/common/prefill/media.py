@@ -64,7 +64,7 @@ def build_media_partials(
     chunk_local: int,
     by_position: bool = False,
 ) -> Optional[tuple[int, torch.Tensor, torch.Tensor, list]]:
-    """(h, lookup [sp, s_total] uint32, is_img [s_total] bool, runs), or None without refs. h is
+    """(h, lookup [sp, s_total] or [sp, s_local] uint32, is_img [s_total] bool, runs), or None without refs. h is
     table_height(k + 1), so a forward reuses one of a few table shapes. Each run (sp_row, slot, rows) puts
     rows, consecutive media rows viewed from rows_of, at table slots slot.. of that SP row; the caller
     copies them straight into the table, so the media rows are copied once.
@@ -77,8 +77,9 @@ def build_media_partials(
     by_position is for the 1D embedding, which has no reduce-scatter: each image row goes to the SP row whose
     chips hold its position, and lookup is [sp, s_local], over that row's own positions.
 
-    ``lookup`` and ``is_img`` are indexed by the all-gathered token order (chip-major, _positions), not
-    by natural position: that is the order the lookup sees inside _forward_2d.
+    Positions are in the forward's chip-major token order (_positions), not natural order: ``is_img`` and the 2D
+    ``lookup`` follow the all-gathered tokens _forward_2d looks up, and row r of the 1D ``lookup`` follows SP row r's
+    own tokens.
     """
     if not refs:
         return None
@@ -96,18 +97,19 @@ def build_media_partials(
         row_in_ref.append(flat_pos[sel] - ref.start_pos)
     flats, ref_id, row_in_ref = torch.cat(flats), torch.cat(ref_id), torch.cat(row_in_ref)
 
-    # Contiguous blocks: the n-th image row goes to SP row n // per_row, at slot n % per_row + 1, so a
-    # row's slots are one run and filling it is one copy rather than a strided scatter. Slot 0 stays
-    # zero, so a row that was not assigned a position contributes nothing to the reduce-scatter's sum.
-    # The tallest row still holds per_row slots, so the table is the same height round-robin gave.
+    # Slot 0 of every row stays zero. Each SP row's slots are 1..count in order, so consecutive media rows fill
+    # consecutive slots and a run is one copy rather than a strided scatter.
     order = torch.arange(flats.numel())
     s_total = positions.numel()
     if by_position:
+        # Each image row goes to the SP row holding its position.
         sp_row, by_row = (flats // (s_total // sp)).sort(stable=True)
         flats, ref_id, row_in_ref = flats[by_row], ref_id[by_row], row_in_ref[by_row]
         counts = torch.bincount(sp_row, minlength=sp)
         slot = order - (counts.cumsum(0) - counts)[sp_row] + 1
     else:
+        # Contiguous blocks: the n-th image row goes to SP row n // per_row. A row that was not assigned a
+        # position contributes nothing to the reduce-scatter's sum.
         per_row = max(1, -(-flats.numel() // sp))
         sp_row, slot = order // per_row, order % per_row + 1
 

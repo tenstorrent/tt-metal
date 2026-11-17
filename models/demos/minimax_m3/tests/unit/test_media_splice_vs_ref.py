@@ -16,6 +16,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.multimedia_store.reader import FetchRequest, Missing
+from models.demos.common.prefill.chunk_layout import pack_forward_tokens
 from models.demos.common.prefill.media import build_media_partials, table_height
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
 from models.demos.minimax_m3.config import MeshConfig
@@ -197,6 +198,49 @@ def test_post_splice_embeddings(
         mesh_device, table, tokens, images, Store(embs), first_chunk_start, sharded_residual == "1", shard_vocab_on_sp
     )
     check(got, want[first_chunk_start:], images, first_chunk_start, seq_len)
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+@pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["partials_2d", "by_position_1d"])
+def test_packed_forward(mesh_device, device_params, shard_vocab_on_sp):
+    """Two slots' chunks in one forward: each position gets its image row or its token embedding, in the
+    forward's chip-major token order."""
+    mesh_shape = tuple(mesh_device.shape)
+    torch.manual_seed(0)
+    table = torch.randn(VOCAB, HIDDEN, dtype=torch.bfloat16)
+    chunks = [PrefillChunk(0, 0, CHUNK), PrefillChunk(1, CHUNK, 2 * CHUNK)]
+    tokens = torch.randint(0, VOCAB, (2, CHUNK), dtype=torch.int32)
+    images = {bytes([1]) * 32: (0, 10, 40), bytes([2]) * 32: (1, CHUNK + 100, 28)}
+    embs = {key: torch.randn(n, HIDDEN).to(torch.bfloat16) for key, (_, _, n) in images.items()}
+    refs = [MediaRef(k, s, s + n, key) for key, (k, s, n) in images.items()]
+    runtime = runtime_with(
+        Store(embs),
+        sp=mesh_shape[0],
+        chunk_size=CHUNK,
+        mesh_shape=mesh_shape,
+        mesh_device=mesh_device,
+        shard_vocab_on_sp=shard_vocab_on_sp,
+    )
+    cells = pack_forward_tokens(
+        [[(k, c.actual_start + i) for i in range(CHUNK)] for k, c in enumerate(chunks)],
+        [c.actual_start for c in chunks],
+        mesh_shape[0],
+    )
+    ids = torch.tensor([tokens[k, p - chunks[k].actual_start] for k, p in cells], dtype=torch.int32)
+    want = F.embedding(ids.long(), table)
+    for j, (k, p) in enumerate(cells):
+        for key, (rk, s, n) in images.items():
+            if rk == k and s <= p < s + n:
+                want[j] = embs[key][p - s]
+
+    partials = TtPrefillRuntime._media_partials(runtime, chunks, refs)
+    x = embedding(mesh_device, table, shard_vocab_on_sp).forward(
+        device_tokens(mesh_device, ids), media_fn=lambda: partials
+    )
+    got = ttnn.to_torch(
+        x, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 3))
+    ).reshape(len(cells), -1)[:, :HIDDEN]
+    assert torch.equal(got, want)
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
