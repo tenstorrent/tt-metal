@@ -17,7 +17,6 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
-    NUM_GUARD_TILES,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -72,7 +71,6 @@ def _run_fast_tilize_metal_api(
                 TILE_COUNT(tile_count),
                 LOOP_FACTOR(1),
                 NUM_FACES(4),
-                NUM_GUARD_TILES(0),
             ],
             variant_stimuli=StimuliConfig(
                 src_A,

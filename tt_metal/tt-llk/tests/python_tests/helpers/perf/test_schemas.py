@@ -530,7 +530,6 @@ PERF_TEST_SCHEMAS = {
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
-            "count",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
