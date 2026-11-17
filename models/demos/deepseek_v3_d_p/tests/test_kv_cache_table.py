@@ -399,6 +399,7 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
     from models.demos.common.prefill.adapter import get_adapter
     from models.demos.common.prefill.runners.migration import setup_kv_chunk_table
     from models.demos.common.prefill.runners.prefill_producer import _decode_kv_chunk
+    from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_bit_identical
     from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_state_patterns, native_state_from_global, upload_slab
     from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
         assemble_convolution,
@@ -409,7 +410,6 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import kda_position, kda_segments_per_layer
     from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
-    from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
     sp_axis, tp_axis = 0, 1
     mesh_shape = tuple(mesh_device.shape)

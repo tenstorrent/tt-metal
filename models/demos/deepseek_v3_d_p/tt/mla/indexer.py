@@ -1030,7 +1030,6 @@ class TtIndexerBase:
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
             compute_kernel_config=self._score_compute_kernel_config,
-
             # Q rows and the index cache are SP-major (sp_coord*tp + tp_coord): row-major on the mesh at
             # sp_axis=0, column-major at sp_axis=1.
             full_mesh_outer_axis=self.sp_axis,

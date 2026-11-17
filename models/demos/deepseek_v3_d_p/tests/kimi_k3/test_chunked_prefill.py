@@ -57,13 +57,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     token_ids,
     upload_tokens,
 )
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
-    PLACEMENTS,
-    SP_AXIS,
-    TP_AXIS,
-    _compose,
-    _model_state_dict,
-)
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import PLACEMENTS, _compose, _model_state_dict
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
