@@ -61,6 +61,9 @@ SC1_CHIPS = 32
 # (reshards_heads_to_seq), so every chip attends with all 64 heads at any TP, and SC1's planned core (64 heads
 # over the local KV stripe, LSE merge) does too. Context-parallel KV over all 32 chips and EP32 routed experts
 # (256 / 32 = 8 per chip) already run in the dev layout, which is the same 8x4 mesh with the same SP / TP axes.
+# The 2D-TP shared expert and dense layer-0 FFN (#65890) are ``TtMlp2D`` (tt/moe/tt_mlp_2d.py: hidden over TP, axis 1,
+# intermediate over SP, axis 0), which the prefill block builds when the model config sets FFN_2D_TP; the tp32 layout
+# does (``ffn_2d_tp`` below, ``Hy4TP32Config``).
 TP32_BLOCKERS = (
     (
         "2D TP attention: ttMLA shards q_a / q_b / kv_a / wkv_b / o_proj / g_proj over the TP mesh axis only (axis "
@@ -74,11 +77,6 @@ TP32_BLOCKERS = (
         "DSA indexer on the 2D layout: TtIndexer runs on this mesh (128 index dims / TP 4 = 32 per chip, tile "
         "aligned) but shards its weights over TP only and replicates them over the 8 SP chips (indexer.py)",
         "#65887",
-    ),
-    (
-        "2D TP shared expert and dense layer-0 FFN: TtSharedExpert and TtFfn shard over the TP axis only and "
-        "replicate over the other",
-        "#65890",
     ),
     (
         "vocab-sharded embedding over 32 chips: TtParallelEmbedding shards the hidden dim over the TP axis and "
@@ -108,6 +106,9 @@ class Hy4PrefillLayout:
     # The mesh axis the attention heads split over in the projections: "tp" (ttMLA, GLM-5.3: heads with the hidden)
     # or "sp" (2D TP, #65884: heads with the sequence, the hidden alone on TP).
     heads_over: str = "tp"
+    # Shared expert and dense layer-0 FFN 2D tensor parallel (TtMlp2D: hidden over the TP axis, intermediate over the
+    # SP axis, nothing replicated; #65890). The dev layout keeps GLM-5.3's TP-only modules and caches.
+    ffn_2d_tp: bool = False
 
     @property
     def runnable(self) -> bool:
@@ -159,6 +160,7 @@ HY4_PREFILL_LAYOUTS = {
             cache_suffix="_tp32",
             blockers=TP32_BLOCKERS,
             heads_over="sp",
+            ffn_2d_tp=True,
         ),
         Hy4PrefillLayout(
             name=DEV_LAYOUT,

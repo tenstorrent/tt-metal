@@ -31,7 +31,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4Config, hy4_hf_config, load_hy4_config_json
+from models.demos.deepseek_v3_d_p.reference.hy4_config import (
+    Hy4Config,
+    Hy4TP32Config,
+    hy4_hf_config,
+    load_hy4_config_json,
+)
 from models.demos.deepseek_v3_d_p.tt.hy4.layout import resolve_layout
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
@@ -154,9 +159,17 @@ class Hy4Adapter(GLM53Adapter):
         self._check_pending_deltas(hf_config)  # before the cache takes DRAM, not after
         return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
 
+    def model_config_for(self, params) -> type:
+        """The model-constants class for this mesh: ``Hy4TP32Config`` (2D-TP shared expert and dense FFN, #65890) on a
+        layout that asks for it (tp32), ``Hy4Config`` otherwise (the dev layout and test meshes)."""
+        layout = self._resolve_layout(params.sp_factor, params.tp_factor, params.sp_axis)
+        return Hy4TP32Config if layout is not None and layout.ffn_2d_tp else Hy4Config
+
     def build_runtime(self, *, mesh_device, hf_config, params):
         self._check_layout(params)
         self._check_pending_deltas(hf_config)
+        # Shadows the class attribute for this adapter instance only; the runtime config reads it.
+        self.model_config = self.model_config_for(params)
         return super().build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
 
     def _runtime_cls(self) -> type:

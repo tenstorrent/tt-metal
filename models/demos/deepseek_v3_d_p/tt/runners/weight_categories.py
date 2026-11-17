@@ -111,6 +111,7 @@ def missing_trunk_categories(
     ``embedding`` / ``lm_head`` carry ``[-1]``. Uses the same per-component checks as
     ``TtPrefillTransformer.check_cache_complete``, one category at a time.
     """
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import TtMlp2D, ffn_2d_tp
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGatePrefill, gate_bias_centered
     from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
     from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
@@ -164,8 +165,10 @@ def missing_trunk_categories(
             miss(NORMS, layer_idx)
         if not (exists and _mla_cache_complete(cache_path, prefix, layer_idx, model_cfg, hf_config, tp_factor)):
             miss(MLA, layer_idx)
+        # FFN_2D_TP (Hy4 SC1, #65890): the dense FFN and the shared expert cache as TtMlp2D, under its file names.
+        mlp_check = TtMlp2D.check_cache_complete if ffn_2d_tp(model_cfg) else None
         if layer_idx < first_k_dense:
-            if not (exists and TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn")):
+            if not (exists and (mlp_check or TtFfn.check_cache_complete)(cache_path, f"{prefix}.ffn")):
                 miss(DENSE_FFN, layer_idx)
             continue
         if not (
@@ -175,7 +178,7 @@ def missing_trunk_categories(
             )
         ):
             miss(MOE_GATE, layer_idx)
-        if not (exists and TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert")):
+        if not (exists and (mlp_check or TtSharedExpert.check_cache_complete)(cache_path, f"{prefix}.shared_expert")):
             miss(SHARED_EXPERTS, layer_idx)
         if not (
             exists
