@@ -53,6 +53,7 @@ SP_AXIS = 1
 MODEL_NAME = "moonshotai/Kimi-K3"
 
 
+# TODO(#66023): settle how production finds the tokenizer instead of the env var with a download fallback.
 def tokenizer_source() -> str:
     """Where `AutoTokenizer.from_pretrained` loads Kimi's tokenizer from: the local checkpoint folder that
     $KIMI_K3_HF_MODEL names, which saves a download when the tokenizer ships with the weights, else MODEL_NAME (the
@@ -164,6 +165,8 @@ class KimiK3Media:
         """
         if kind not in self.placeholder_token_ids:
             raise ValueError(f"Kimi-K3 does not accept {kind}")
+        # TODO(#66023): Kimi-K3's reference handles non-RGB images (alpha onto a chessboard, after the resize), which
+        # an RGB array can't reproduce. Either the service does it, or this interface takes alpha or the original image.
         if media.dtype != np.uint8 or media.ndim != 3 or media.shape[2] != 3 or 0 in media.shape:
             raise ValueError(
                 f"expected a non-empty uint8 RGB [height, width, 3] array, got {media.dtype} {media.shape}"
