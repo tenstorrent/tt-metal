@@ -38,20 +38,22 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     {
         LLK_ASSERT(in1_row >= kt_dim, "row_stride must contain the contraction tiles");
     }
-    volatile std::uint32_t* cfg         = get_cfg_pointer();
     const std::uint32_t block_increment = read_transposed ? in1_row * tile_size_a : tile_size_a;
     const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * in1_row) - 1) * tile_size_a : tile_size_a;
 
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
 
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
-
     if (mask_chunk)
     {
+        // Wait for all contexts to be free, then write the mask base
+        wait_for_next_context(1);
+        // The mask UNPACR adds CfgContextOffset to its explicit context 1
+        reset_config_context();
+        volatile std::uint32_t* cfg                    = get_cfg_pointer();
         cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = base_address_mask;
+        // Hold a context until the mask UNPACR has issued
+        semaphore_post(semaphore::UNPACK_SYNC);
         if constexpr (configure_mask_extent)
         {
             LLK_ASSERT(ct_dim * 2 <= 64, "mask_chunk requires ct_dim*2 <= 64 SrcB rows");
@@ -63,7 +65,8 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
         {
             TT_SETADCXX(p_setadc::UNP_B, operandB_face_r_dim * FACE_C_DIM - 1, 0x0);
         }
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
     }
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, tile_size_b, block_increment, inner_increment, kt_dim);
+    _llk_unpack_AB_custom_mm_run_(address_a, address_b, tile_size_b, block_increment, inner_increment, kt_dim);
 }

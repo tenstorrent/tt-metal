@@ -42,8 +42,8 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     // Unpack SrcB (in0, one instruction per face, uses counters to manipulate addresses for both L1 and SrcB)
     // Counters of interest are CH0 Y and Z (both with a stride of a single face in L1
     // (datum_size * 16 * face_r_dim) and CH1 Y with a stride of a face in SrcB (16 rows)
-    // Each unpack instruction we move to next face in L1, but this is split among Y and Z counters.
-    // The L1 face index is (Y & 0xff) + (Z & 0xff), so one base covers CUSTOM_MM_MAX_KT_PER_WALK k-tiles.
+    // Each unpack instruction moves to the next face in L1, split among the Y and Z counters.
+    // The L1 face index is (Y & 0xff) + (Z & 0xff), so one base address covers CUSTOM_MM_MAX_KT_PER_WALK k-tiles.
     // For SrcB first unpack has to land at index 0 and second one at index 16,
     // increment from first to second is straightforward, but moving back to 0 after second requires us to exploit
     // counter overflow as CH1 counters only use low 6 bits and wrap at the number of rows in a Src reg (64)
@@ -229,17 +229,26 @@ inline void _llk_unpack_AB_custom_mm_init_(
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-// Most k-tiles the SrcB face walk reads from one base address.
+// Most k-tiles one SrcB base address covers.
 constexpr std::uint32_t CUSTOM_MM_MAX_KT_PER_WALK = 255;
+
+// Load a 32-bit value into p_gpr_unpack::TMP0 (slot 0) or TMP1 (slot 1).
+template <std::uint32_t slot>
+inline void _llk_unpack_AB_custom_mm_load_gpr_(const std::uint32_t value)
+{
+    static_assert(slot < 2, "custom_mm: GPR slot must be 0 (TMP0) or 1 (TMP1)");
+    constexpr std::uint32_t gpr = slot == 0 ? p_gpr_unpack::TMP0 : p_gpr_unpack::TMP1;
+    TT_SETDMAREG(0 /*Payload_SigSelSize*/, LOWER_HALFWORD(value), 0 /*SetSignalsMode*/, LO_16(gpr));
+    TT_SETDMAREG(0 /*Payload_SigSelSize*/, UPPER_HALFWORD(value), 0 /*SetSignalsMode*/, HI_16(gpr));
+}
 
 /**
  * @brief Issue the SrcA/SrcB unpack of a kt_dim x ct_dim block with the MOP that @ref _llk_unpack_AB_custom_mm_init_
  *        recorded. Shared by @ref _llk_unpack_AB_custom_mm_ and @ref _llk_unpack_AB_sdpa_custom_mm_.
  *
- * Splits kt_dim into ceil(kt_dim / CUSTOM_MM_MAX_KT_PER_WALK) SrcB face walks whose lengths differ by at most one.
- * Each walk sets the SrcB base, waits for its UNPACRs to issue and resets the counters. The SrcA base carries over.
+ * Config registers are written with WRCFG. The call runs on config context 0 and returns switched to context 1.
+ * kt_dim is split into walks of at most CUSTOM_MM_MAX_KT_PER_WALK k-tiles, each with its own SrcB base address.
  *
- * @param cfg: Config register pointer of the unpack thread.
  * @param address_a: L1 address of the first weight tile (SrcA), in 16-byte words.
  * @param address_b: L1 address of the first activation tile (SrcB), in 16-byte words.
  * @param tile_size_b: L1 stride between activation k-tiles, in 16-byte words (the in0 CB page size).
@@ -248,8 +257,7 @@ constexpr std::uint32_t CUSTOM_MM_MAX_KT_PER_WALK = 255;
  * @param kt_dim: Inner dimension in tiles, 1 or more.
  */
 inline void _llk_unpack_AB_custom_mm_run_(
-    volatile std::uint32_t* cfg,
-    std::uint32_t address_a,
+    const std::uint32_t address_a,
     const std::uint32_t address_b,
     const std::uint32_t tile_size_b,
     const std::uint32_t block_increment,
@@ -257,33 +265,56 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t kt_dim)
 {
     LLK_ASSERT(kt_dim >= 1, "custom_mm: kt_dim must be at least 1");
-    // Program SrcA address once, its updated using CFGSHIFTMASK across all walks
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-    // Setup CFGSHIFTMASK increments
-    // block_increment moves to next tile in tile_row
-    cfg[SCRATCH_SEC0_val_ADDR32] = block_increment;
-    // inner_increment moves to next tile_row (next inner_dim)
-    cfg[SCRATCH_SEC1_val_ADDR32] = inner_increment;
+
+    // Wait for a free context, then run on context 0
+    wait_for_next_context(2);
+    semaphore_post(semaphore::UNPACK_SYNC);
+    reset_config_context();
+
+    // CFGSHIFTMASK increments: block_increment to the next tile in a k-row, inner_increment to the next k-row
+    _llk_unpack_AB_custom_mm_load_gpr_<0>(block_increment);
+    _llk_unpack_AB_custom_mm_load_gpr_<1>(inner_increment);
+    // Wait for the GPR writes and for earlier RISC config writes before WRCFG
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON | p_stall::TRISC_CFG);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, SCRATCH_SEC1_val_ADDR32);
+
+    // SrcA base and the SrcB base of the first walk
+    _llk_unpack_AB_custom_mm_load_gpr_<0>(address_a);
+    _llk_unpack_AB_custom_mm_load_gpr_<1>(address_b);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG3_Base_address_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_address_ADDR32);
 
     constexpr std::uint32_t mop_template_0 = 0;
     constexpr std::uint32_t no_skip_zmask  = 0;
 
-    // The first kt_dim % num_walks walks take one extra k-tile
-    const std::uint32_t num_walks  = (kt_dim + CUSTOM_MM_MAX_KT_PER_WALK - 1) / CUSTOM_MM_MAX_KT_PER_WALK;
-    const std::uint32_t base_kt    = kt_dim / num_walks;
-    const std::uint32_t long_walks = kt_dim % num_walks;
-    std::uint32_t walk_kt          = 0;
-    std::uint32_t walk             = 0;
+    // Split kt_dim into near-equal walks; the first kt_dim % num_walks take one extra k-tile
+    std::uint32_t num_walks  = 1;
+    std::uint32_t base_kt    = kt_dim;
+    std::uint32_t long_walks = 0;
+    if (kt_dim > CUSTOM_MM_MAX_KT_PER_WALK)
+    {
+        num_walks  = (kt_dim + CUSTOM_MM_MAX_KT_PER_WALK - 1) / CUSTOM_MM_MAX_KT_PER_WALK;
+        base_kt    = kt_dim / num_walks;
+        long_walks = kt_dim % num_walks;
+    }
+
+    std::uint32_t walk_kt = 0;
+    std::uint32_t walk    = 0;
     for (std::uint32_t walk_start = 0; walk_start < kt_dim; walk_start += walk_kt, walk++)
     {
         walk_kt = base_kt + (walk < long_walks ? 1 : 0);
 
-        // Program SrcB address once per walk, its updated using counters within the walk
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b + walk_start * tile_size_b;
-
-        semaphore_post(semaphore::UNPACK_SYNC);
-
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        if (walk != 0)
+        {
+            // Move the SrcB base to this walk and reset the counters
+            _llk_unpack_AB_custom_mm_load_gpr_<0>(address_b + walk_start * tile_size_b);
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+            TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_address_ADDR32);
+            TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+            TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+        }
 
         // One mop iteration per kt_dim loop, at most CUSTOM_MM_MAX_MOP_ITERATIONS per TT_MOP
         for (std::uint32_t kt_done = 0; kt_done < walk_kt; kt_done += CUSTOM_MM_MAX_MOP_ITERATIONS)
@@ -292,18 +323,17 @@ inline void _llk_unpack_AB_custom_mm_run_(
             const std::uint32_t iterations = kt_left < CUSTOM_MM_MAX_MOP_ITERATIONS ? kt_left : CUSTOM_MM_MAX_MOP_ITERATIONS;
             TT_MOP(mop_template_0, iterations - 1, no_skip_zmask);
         }
-
-        // Executes once every UNPACR of this walk has issued, so the counters and SrcB base can change after it
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-        // Wait for all contexts to be free
-        wait_for_next_context(1);
-        reset_config_context();
-
-        // Reset counters at the end of each walk
-        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
-        TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
     }
+
+    // Release the context once all UNPACRs have issued
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+    // Switch to context 1
+    switch_config_context(unp_cfg_context);
+
+    // Reset counters at the end
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
 /**
@@ -333,17 +363,11 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim)
 {
-    volatile std::uint32_t* cfg = get_cfg_pointer();
-
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
     const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * kt_dim) - 1) * tile_size_a : tile_size_a;
 
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
 
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
-
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, tile_size_b, block_increment, inner_increment, kt_dim);
+    _llk_unpack_AB_custom_mm_run_(address_a, address_b, tile_size_b, block_increment, inner_increment, kt_dim);
 }

@@ -25,7 +25,7 @@
 //                                  faces, each face_r_dim rows tall; face_r_dim = M)
 //   in1 (B, the [K,N] operand)  -> SrcA, full [32,32] tiles, or [32,16] ones (num_faces_B = 2)
 //                                  giving [M,16] output tiles (num_faces = 1)
-//   rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim in [1,256], LoFi only.
+//   rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim >= 1, LoFi only.
 //
 // So the header restricts M to {1,2,4,8} rows: only those DEST rows are defined. The math
 // LLK (_llk_math_custom_mm_) runs one MVMUL walk per k-tile, accumulating A*B into DEST.
@@ -110,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     const std::uint32_t in1_tile_size = TILE_SIZE_UNPACK_B / TILE_NUM_FACES * num_faces_B;
-    // in0 is packed densely: two [M, 16] Float16_b faces per k-tile, 4 * M 16-byte words
+    // L1 size of one in0 k-tile: two [M, 16] Float16_b faces, in 16-byte words
     const std::uint32_t in0_k_tile_size = 4 * in0_face_r_dim;
 
     {

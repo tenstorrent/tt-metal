@@ -146,7 +146,7 @@ class CustomMMStimuliConfig(StimuliConfig):
         )
         self.packed_a = packed_a
         self.packed_b = packed_b
-        # Reserve only the bytes of the densely packed in0, not a full tile per k-tile
+        # in0 is packed densely; reserve only its bytes
         self.tile_count_A = max(1, -(-len(packed_a) // self.tile_size_A_bytes))
         self._calculate_tile_sizes()
 
@@ -478,8 +478,7 @@ def test_custom_mm_split_acc_multi_call(layout, ct):
 
 
 # kt above CUSTOM_MM_MAX_MOP_ITERATIONS (128) splits the unpack over several TT_MOPs, with the one-slot MOP at ct = 1
-# and the four-slot one at ct = 4 (Bfp8_b weights keep that B within L1). test_custom_mm_face_walk_exact covers kt
-# past one SrcB face walk.
+# and the four-slot one at ct = 4 (Bfp8_b weights keep that B within L1).
 LONG_K_CASES = [
     pytest.param(
         8,
@@ -530,8 +529,8 @@ def _face_walk_starts(kt):
 
 
 def _face_walk_operands(M, kt, ct):
-    """Integer operands, exact in bf16: A has a +-1 on in0 faces at the ends, at each walk boundary and at every face
-    255 mod 256, its sign flipping every 256 faces; B holds nonzero integers in [-2, 2].
+    """Exact bf16 integer operands. A is +-1 only on faces at the ends, the walk boundaries and every 256th face;
+    B is random in {-2, -1, 1, 2}.
     """
     torch.manual_seed(0)
     num_faces = 2 * kt
@@ -553,8 +552,7 @@ def _face_walk_operands(M, kt, ct):
     return torch_a, torch_b
 
 
-# One walk (255), two (256, 300) and three (511, 765). Bfp8_b and Bfp4_b weights keep long cases within L1; ct = 2 and
-# 4 use the two- and four-slot unpack MOPs. LONG_K_CASES covers M = 1 at kt = 256.
+# One walk (255), two (256, 300) and three (511, 765). Bfp8_b and Bfp4_b weights keep B within L1.
 FACE_WALK_CASES = [
     pytest.param(
         M,

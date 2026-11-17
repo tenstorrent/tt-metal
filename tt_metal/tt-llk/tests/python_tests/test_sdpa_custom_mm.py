@@ -138,7 +138,7 @@ class _SdpaCustomMMStimuli(StimuliConfig):
             tile_count_A=len(packed_in1) // 2048 + (mask is not None),
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=DataFormat.Float16_b,
-            # in0 is packed densely, so reserve only its bytes, not a full tile per k-tile
+            # in0 is packed densely; reserve only its bytes
             tile_count_B=max(1, -(-len(packed_in0) // 2048)),
             stimuli_res_format=DataFormat.Float16_b,
             tile_count_res=ct * (2 if mask is not None else 1),

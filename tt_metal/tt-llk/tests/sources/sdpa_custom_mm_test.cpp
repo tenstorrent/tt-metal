@@ -124,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // heuristic (post1) in the MOP config.
     _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
 
-    // in0 is packed densely: two [M, 16] Float16_b faces per k-tile, 4 * M 16-byte words
+    // L1 size of one in0 k-tile: two [M, 16] Float16_b faces, in 16-byte words
     const std::uint32_t in0_k_tile_size = 4 * params.in0_face_r_dim;
 
     // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
