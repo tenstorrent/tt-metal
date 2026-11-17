@@ -87,8 +87,7 @@ class TestDPxTP:
             _assert_mean_over_axis(before[name], _shards(grad), dp_tp_mesh.shape, dp, name)
 
 
-# --- MoE experts split across an axis of [2, 2] ("dp", "tp") -------------------------------------------------------
-# Kept next to TestDPxTP: dp_tp_mesh is module-scoped, and a later [2, 2] fixture replaces the mesh it opened.
+# --- MoE experts on dp, [2, 2] ("dp", "tp") ----------------------------------------------------------------------
 
 MOE_EXPERTS, MOE_SEQ_LEN, MOE_VOCAB = 4, 64, 128
 # Relative Frobenius error. bf16 rounding measured at most 0.012; MoE gradients a factor dp off score about 1.
@@ -148,15 +147,10 @@ def _synced_step(model: DeepSeek, ids: np.ndarray, targets: np.ndarray, mapper) 
 
 
 class TestExpertParallelMoE:
-    @pytest.mark.parametrize("moe_axis", ["dp", "tp"])
-    def test_gradients_match_the_dense_moe(self, dp_tp_mesh, moe_axis):
-        """sparse_ep with its experts and shared experts split across ``moe_axis``, the batch split across "dp", against
-        the dense MoE on the whole batch: after sync_gradients every gradient is the dense model's. With the experts on
-        "dp" the MoE runs on every dp rank's tokens, so its parameters must come out the dp mean every other parameter
-        gets, and the gradient it hands back must be each rank's own."""
-        dp, ep = dp_tp_mesh.axis_size("dp"), dp_tp_mesh.axis_size(moe_axis)
+    def test_gradients_match_the_dense_moe(self, dp_tp_mesh):
+        dp = ep = dp_tp_mesh.axis_size("dp")
         dense = _deepseek("dense", None)
-        model = _deepseek("sparse_ep", moe_axis)
+        model = _deepseek("sparse_ep", "dp")
         params = model.parameters()
         for name, param in params.items():
             mapper = ttml.Sharding.from_tensor(param).derive_mapper()

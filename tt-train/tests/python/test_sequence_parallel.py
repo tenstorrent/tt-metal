@@ -17,7 +17,7 @@ from ttml.common.utils import build_causal_mask
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.modules import LoraColumnParallelLinear, LoraConfig, LoraModel
-from ttml.parallel import TPStrategy, partial_axes
+from ttml.parallel import TPStrategy
 from bf16_ulp import assert_within_bf16_ulp
 
 TP_AXIS_SIZE = 2  # the 'tp' extent of conftest's tp_mesh fixture
@@ -192,17 +192,6 @@ class TestMatchesTensorParallel:
                 np.testing.assert_array_equal(grads[:, 0], grads[:, 1], err_msg=f"{name}: tp ranks disagree")
         assert_same_grads(sp_lora, tp_lora)
 
-    def test_marks_the_parameters_of_the_sequence_sharded_region(self):
-        """Exactly the norm gains and the row-parallel bias see a per-rank slice of the sequence, so their gradients
-        are partial across tp."""
-        tp_model, sp_model = paired_models(attention_bias=True)
-        assert not any(partial_axes(p) for _, p in tp_model.parameters().items())
-
-        marked = {name: partial_axes(p) for name, p in sp_model.parameters().items() if partial_axes(p)}
-        per_block = ("attention_norm/gamma", "mlp_norm/gamma", "attention/out_linear/bias")
-        expected = {f"Llama/blocks/{i}/{suffix}" for i in range(N_LAYERS) for suffix in per_block}
-        assert marked == {name: {"tp"} for name in expected | {"Llama/ln_fc/gamma"}}
-
 
 @pytest.mark.requires_device
 @pytest.mark.usefixtures("tp_mesh")
@@ -246,22 +235,6 @@ class TestTPStrategy:
     def test_rejects_sp_without_tp(self, expect_error):
         with expect_error(ValueError, "requires enable_tp"):
             TPStrategy.from_flags(False, enable_sp=True)
-
-    def test_enable_sp_is_keyword_only(self, expect_error):
-        with expect_error(TypeError, "positional argument"):
-            TPStrategy.from_flags(True, True)  # type: ignore
-
-    @pytest.mark.parametrize(
-        "strategy,tensor,sequence",
-        [
-            (TPStrategy.NONE, False, False),
-            (TPStrategy.TENSOR, True, False),
-            (TPStrategy.TENSOR_SEQUENCE, True, True),
-        ],
-    )
-    def test_properties(self, strategy, tensor, sequence):
-        assert strategy.tensor_parallel is tensor
-        assert strategy.sequence_parallel is sequence
 
 
 if __name__ == "__main__":

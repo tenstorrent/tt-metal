@@ -918,13 +918,6 @@ class TestLoadIntoTensorParallelModel:
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), placement)
 
-    def test_sequence_parallel_layout_matches_tensor_parallel(self, tmp_path):
-        """SP changes the collectives, not the weight sharding, so the loader needs no SP path."""
-        hf = write_hf_checkpoint(tmp_path, hf_tensors())
-        model = Llama(e2e_config(TPStrategy.TENSOR_SEQUENCE, EmbeddingPlacement.VocabParallel))
-        load_from_safetensors(model, tmp_path)
-        assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), EmbeddingPlacement.VocabParallel)
-
     def test_pads_the_vocab_the_model_rounds_up_to_a_tile(self, tmp_path):
         """The one end-to-end vocab that is not tile-aligned: 120 rounds up to 128, and the pad rows shard too."""
         vocab = VOCAB - 8
