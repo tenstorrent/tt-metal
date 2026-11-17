@@ -98,7 +98,7 @@ inline void _calculate_fill_rows_(const std::uint32_t row_begin, const std::uint
 // the stores alone. (Unrolling the run-time loop above instead does not compile: its run-time bounds would have to
 // live across the unrolled bands, and sfpi cannot spill a vector object.)
 template <std::uint32_t ROW_BEGIN, std::uint32_t ROW_END, std::uint32_t BAND>
-inline void _fill_rows_band_ct_(const sfpi::vFloat fill_val) {
+sfpi_inline void _fill_rows_band_ct_(const sfpi::vFloat fill_val) {
     constexpr std::uint32_t r0 = 4 * BAND;
     constexpr std::uint32_t lo = ROW_BEGIN > r0 ? ROW_BEGIN - r0 : 0;
     constexpr std::uint32_t hi = ROW_END >= r0 + 4 ? 4 : (ROW_END > r0 ? ROW_END - r0 : 0);
