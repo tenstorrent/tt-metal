@@ -904,3 +904,29 @@ weight floor. Group = 5 columns c x 5 rows r (j = 5 c + r):
   13.7 ms: with 5 x 5 the launch is bound by weight delivery unless the lanes reach ~100% of the links.
 - Lane L1 estimate (4 slots of the larger slice 184 KB = 737 KB, x ring 8 x 25 bfp8 218 KB, landing 82, partials 33,
   h ring NS 6 bfp8 131, CB 7 102, CB 8 109, CB 17 33): ~1,445 KB of 1,460 KB - fits only with bfp8 h and tight rings.
+
+## 5 x 5 groups on the lane (ws_lane5.py, kernels l5_*.cpp; tray, 2026-11-17)
+The lane's schedule, slot tables, muxes and credits unchanged; the groups are the 5 x 5 K split of ws_g5.py:
+- Weight packets of CHT 20 bfp4 tiles (11.5 KB): owners' slices 200 gate/up + 80 down tiles = 10 + 4 packets, row 4
+  160 + 160 = 8 + 8. One weight-ring tensor a core (K slots of the largest slice, 320 tiles), CB 1 / CB 3 mapped over
+  it per core type (gate/up slots, then down slots). Own experts: slice_layout5 (chunk q = own index x 360 + the
+  core's first chunk + u). 25-client muxes in column 0, groups in columns 1-5 (rows 0-4 / 5-9).
+- Compute (l5_compute): g5_compute in the chip's order with the weights from slot s (use_slot), each expert finished
+  on its own before the next one's weights are waited for (the schedule's slot-release rule).
+- h without multicasts. First version, a fan-out (each owner writes its tile + flag into all 25 cores; credits from
+  every core to the 20 owners): 41.0% / 48.1% at M 586 / 2048 - the owners' BRISC spent ~3.3 K cycles a row on 50
+  transactions, partials and folds waited behind it. Now a two-stage all-gather: stage A (owner BRISC) the tile to
+  the 5 cores of its column; stage B (NCRISC) each core forwards its column's 4 tiles as one block to the 4 other
+  cores of its row (+ a column flag); credits from each consumer to its column's 4 owners and its row's 4 other cores.
+| tray, 20 warm-up + 5 measured, every expert checked | M 586 util / end to end | M 2048 | M 0 (weights only) | PCC |
+|---|---|---|---|---|
+| 10 x 2 lane (final config, 40 cores) | 63.7% / 2,190 us | 69.0% / 6,448 us | 1,112 / 1,055 us | 0.99988 |
+| 5 x 5 lane, h fan-out | 41.0% / 2,678 us | 48.1% / 7,484 us | | 0.99988 |
+| 5 x 5 lane, two-stage h (4 slots) | 54.0% / 2,086 us | 72.9% / 4,914 us | 1,185 / 1,184 us | 0.99988 |
+  M 0 / M 5 pass, dynamic M (zeros .. 4000, every expert) min PCC 0.99985. Per launch 1.05 x / 1.31 x the 10 x 2 lane.
+- Sweep (10 + 5 launches; M 586 / M 2048 end to end): base 2,094 / 4,907; NS 6 2,102 / 4,914; D 4 2,113 / 4,918;
+  NXR 8 2,138 / 4,912; dn_lag 2 2,136 / 4,982; TL 6 2,100 / 4,904; TL 12 2,155 / 4,912; FL 1 2,111 / 4,997 - ring depths
+  do not matter; 5 slots (d0,d1,d0d1,any,any; NXR 4, D 2, TL 6, NS 4 to fit) 1,924 us (58.1%) / 4,950: -8% at M 586;
+  mux nbuf 4 does not fit the mux core (25 channels).
+- Galaxy layout in L5Cfg (12 x 10: groups at columns 1-5 / 7-11, rows 0-4 / 5-9, muxes in columns 0 / 6) and
+  test_ws_lane5_glx (not run: no Galaxy reachable from this cluster).

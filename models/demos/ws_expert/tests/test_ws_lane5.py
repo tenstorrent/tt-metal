@@ -14,12 +14,13 @@ from loguru import logger
 
 import ttnn
 from models.demos.ws_expert.bench_util import aiclk_mhz, quantize, to_dev
-from models.demos.ws_expert.tests.test_ws_fab_bench import FAB
+from models.demos.ws_expert.tests.test_ws_fab_bench import FAB, TORUS
 from models.demos.ws_expert.tests.test_ws_lane import chip_pcc, chip_time, lcfg_from_env
 from models.demos.ws_expert.ws_expert import interleave_gu
 from models.demos.ws_expert.ws_group import GCfg
 from models.demos.ws_expert.ws_lane import make_tables, tables_tensor
 from models.demos.ws_expert.ws_lane5 import L5Cfg, build_lane5, slice_layout5
+from models.demos.ws_expert.ws_sf import torus_cycles
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
@@ -178,4 +179,17 @@ def test_ws_lane5_tray_dynm(mesh_device):
     rnd = random.Random(3)
     Ms = [rnd.choice([0, 1, 5, 31, 33, 64, 300, 586, 1100, 2048, 4000]) for _ in range(cfg.nexp)]
     rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, "tray dynamic M", warm=2, meas=1)
+    assert min(pcs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [TORUS], indirect=True)
+@pytest.mark.parametrize("nexp,T,M", [(128, 8192, 586), (640, 31250, 586)], ids=["e128m586", "e640m586"])
+def test_ws_lane5_glx(mesh_device, nexp, T, M):
+    """The whole Galaxy (8 x 4, FABRIC_2D_TORUS_XY): two edge-disjoint Hamiltonian cycles x 2 links = 4 lanes, G 4
+    groups of 5 x 5 (12 x 10 grid). Not run yet."""
+    cfg, lc, l5 = configs(nexp, 4, T)
+    lc.cycles = torus_cycles(*tuple(mesh_device.shape))
+    Ms = [M] * cfg.nexp
+    rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, f"glx {nexp} experts M {M}")
     assert min(pcs.values()) > 0.999

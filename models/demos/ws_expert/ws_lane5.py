@@ -7,8 +7,9 @@ down columns with 25 K tiles; row 4 runs 8 down columns with 20 K tiles), the we
 tiles (owners 10 gate/up + 4 down packets a slice, row 4 8 + 8), h goes to the group as a unicast fan-out with slot
 credits (no multicasts). Kernels: l5_writer.cpp (BRISC), l5_reader.cpp (NCRISC), l5_compute.cpp.
 
-Layout (G <= 2 on the 11 x 10 tray grid): group g in logical columns 1-5 (NoC contiguous), rows 5 g .. 5 g + 4; its two
-mux cores in column 0 (west of the group: the cores reach them on NOC1)."""
+Layout (L5Cfg): groups in logical columns 1-5 (and 7-11 on a 12 x 10 Galaxy chip; each block NoC contiguous), rows
+0-4 / 5-9; each group's two mux cores in the column just west of it (0 / 6: the cores reach them on NOC1). The 11 x 10
+tray grid holds G 2."""
 
 from dataclasses import dataclass
 
@@ -37,9 +38,11 @@ class L5Cfg:
     FL: int = 2  # fold lag
     TL: int = 9  # tilize look-ahead (rows; own rows are 1 in 5)
     RD: int = 4  # own-expert chunk reads in flight
-    origins: tuple = ((1, 0), (1, 5))  # top-left logical core of group g
-    mux_col: int = 0
-    mux_rows: tuple = ((1, 3), (6, 8))  # (direction 0, direction 1) mux rows of group g
+    # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
+    # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
+    origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
+    mux_cols: tuple = (0, 0, 6, 6)
+    mux_rows: tuple = ((1, 3), (6, 8), (1, 3), (6, 8))
 
 
 def g5_lane_cores(l5: L5Cfg, g):
@@ -100,7 +103,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
     ln = lanes((R, Cn), lc)
     groups = [g5_lane_cores(l5, g) for g in range(G)]
     C = [c for gr in groups for c in gr]
-    muxes = [(l5.mux_col, l5.mux_rows[g][d]) for g in range(G) for d in range(2)]
+    muxes = [(l5.mux_cols[g], l5.mux_rows[g][d]) for g in range(G) for d in range(2)]
     assert not set(muxes) & set(C)
     KTD, NS, LT, NH = cfg.PAIRS, cfg.NS, 2 * NR, OWN_ROWS * NCOL
     assert NS >= cfg.dn_lag + 1, "h ring below DN_LAG + 1 rows"
@@ -292,7 +295,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
             for g, gr in enumerate(groups):
                 cyc, link = ln[g]
                 for d in range(2):
-                    m = (l5.mux_col, l5.mux_rows[g][d])
+                    m = (l5.mux_cols[g], l5.mux_rows[g][d])
                     p.kernels[mux_idx].runtime_args[m[0]][m[1]].extend(
                         mcfg.kernel_runtime_args(
                             source_node_id=node(mesh, me_rc),
@@ -303,7 +306,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                         )
                     )
                 for d in range(2):
-                    m = (l5.mux_col, l5.mux_rows[g][d])
+                    m = (l5.mux_cols[g], l5.mux_rows[g][d])
                     mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
                     master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
                     term_sem = None
