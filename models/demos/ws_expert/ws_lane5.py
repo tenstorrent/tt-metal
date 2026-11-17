@@ -53,6 +53,9 @@ class L5Cfg:
     # output bank affinity (WL5_OAFF, a group mask): group g's output tiles only in the DRAM banks at NoC x 9 (bit g
     # set) or x 0 (bit clear), so no output write crosses the chip; the output tensor holds 2x the pages (half unused)
     oaff: int = 0
+    # row-major result rows (hmc 2; WL_Y_RM / WL5_Y_RM): every down row to its row of a row-major [rows, H] result buffer,
+    # given by the expert's destination list (build_lane5's dest_t), posted, fenced at fence_row
+    yrm: int = 0
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -109,12 +112,17 @@ def slice_layout5(cfg, CHT, wg, wu, wd):
     return out.reshape(-1, 32)
 
 
-def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t, out_t, tab_t, T, out_rows):
-    """generic_op mesh program of the 5 x 5 lane design; returns (mesh program, io tensors, stamps)."""
+def build_lane5(
+    mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t, out_t, tab_t, T, out_rows, dest_t=None, fence_row=None
+):
+    """generic_op mesh program of the 5 x 5 lane design; returns (mesh program, io tensors, stamps). With l5.yrm, out_t
+    is the row-major result buffer [rows, H] and dest_t the destination lists [nexp, RMAX 32] uint32 (out_rows unused);
+    fence_row: its spare rows (one a DRAM bank) for the posted row writes' fence."""
     R, Cn = tuple(mesh.shape)
     N, G = R * Cn, cfg.G
     assert cfg.GC == GC5 and cfg.PAIRS == OWN_ROWS * NCOL and cfg.KT == 120 and cfg.HT == 120
     assert lc.out_all, "the 5 x 5 lane writes every expert's rows"
+    assert not l5.yrm or (l5.hmc == 2 and dest_t is not None and not l5.oaff), "yrm: hmc 2, dest_t, no oaff"
     ln = lanes((R, Cn), lc)
     groups = [g5_lane_cores(l5, g) for g in range(G)]
     C = [c for gr in groups for c in gr]
@@ -143,6 +151,9 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
     lflags, lcred = w16(l5.D * NR), w16(NR)
     pring = sharded_l1(mesh, C, [l5.PD * NW * 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT)
     scr = w16(16 if l5.hmc else 8)
+    # (yrm: the row writes need CB 17 64 B aligned: a sharded tensor of 8 tiles a core - owners 2 x 4, row 4 1 x 8)
+    YDEP_T = 8
+    ysh = sharded_l1(mesh, C, [YDEP_T * 32, 32], cfg.out_dt, ttnn.TILE_LAYOUT) if l5.yrm else None
     counts_l1 = sharded_l1(mesh, C, [1, 32 + max(4, cfg.nexp)], U, RM, torch.int32)
     idx_l1 = sharded_l1(mesh, C, [4, 32], U, RM, torch.int32)
     table_l1 = sharded_l1(mesh, C, [1, TLW + 16], U, RM, torch.int32)
@@ -226,6 +237,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             hmc_rt[(x, y)] = [x_t.buffer_address(), idx_t.buffer_address()]
                             hmc_rt[(x, y)] += [counts_t.buffer_address(), k0, tab_t.buffer_address()]
                             hmc_rt[(x, y)] += [ws_t.buffer_address(), ch0[j]]
+                            hmc_rt[(x, y)] += [dest_t.buffer_address()] if l5.yrm else []
                     if l5.hmc == 2:
                         for j, (x, y) in sub:
                             (hx0, hy0), (hx1, hy1) = noc(mesh, *gr[0]), noc(mesh, *gr[-1])
@@ -258,7 +270,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                     if l5.hmc:
                         hmc_ct = [xring.buffer_address(), xtile, TB, cfg.RMAX, cfg.H * 2, idx_addr, cfg.nexp, PKE]
                         hmc_ct += [l5.RD, hcons.buffer_address()]
-                        for t in (x_t, idx_t, counts_t, tab_t, ws_t):
+                        for t in (x_t, idx_t, counts_t, tab_t, ws_t) + ((dest_t,) if l5.yrm else ()):
                             hmc_ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
                     kernels.append(
                         ttnn.KernelDescriptor(
@@ -276,6 +288,8 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             runtime_args=rd_rt,
                             defines=FAB_DEFS
                             + ([("WL5_OAFF", str(l5.oaff))] if l5.oaff else [])
+                            + ([("WL5_Y_RM", "1")] if l5.yrm else [])
+                            + ([("WL5_Y_FENCE", str(fence_row))] if l5.yrm and fence_row is not None else [])
                             + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
                             + ([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else []),
                             config=dm(1),
@@ -313,7 +327,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                         core_ranges=cs,
                         compile_time_args=[ksl, KTD, dc, DB, cnt_base, K, NW, l5.FL, l5.TL, own, tab_base + 64],
                         named_compile_time_args=[("expert_activation", 0)],
-                        defines=act_defs,
+                        defines=act_defs + ([("WL_Y_RM", "1")] if l5.yrm else []),
                         runtime_args=cp_rt[own],
                         config=ccfg,
                     )
@@ -325,7 +339,11 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                     sh(3, wring, address_offset=K * wgu * wtile, total_size=K * wdn * wtile, core_ranges=cs),
                     cb(7, ttnn.bfloat16, cfg.XRM * ksl, cs),
                     cb(8, cfg.x_dt, (l5.TL // NCOL + 3) * ksl, cs),
-                    cb(17, cfg.out_dt, 2 * dc, cs),
+                    (
+                        sh(17, ysh, total_size=YDEP_T * TILE_BYTES[cfg.out_dt], core_ranges=cs)
+                        if l5.yrm
+                        else cb(17, cfg.out_dt, 2 * dc, cs)
+                    ),
                 ]
             cset = crs(C)
             cbs += [
@@ -407,4 +425,5 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
     io = [x_t, idx_t, counts_t, ws_t, tab_t, wring, warr, cred, freew, hring, hflags, hcolf, hcred, xring, xflags]
     io += [xcred]
     io += [land, lflags, lcred, pring, scr, counts_l1, idx_l1, table_l1, st, out_t] + ([hcons] if l5.hmc else [])
+    io += [ysh, dest_t] if l5.yrm else []
     return mpd, io, st

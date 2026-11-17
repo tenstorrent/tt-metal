@@ -24,7 +24,9 @@ from models.demos.ws_expert.tests.test_ws_fab_bench import TORUS
 from models.demos.ws_expert.tests.test_ws_lane import first_visible
 from models.demos.ws_expert.ws_end import build_end, end_span_us
 from models.demos.ws_expert.ws_fab import slice_layout
+from models.demos.ws_expert.ws_group import GCfg
 from models.demos.ws_expert.ws_lane import LCfg, build_lane, make_tables, tables_tensor
+from models.demos.ws_expert.ws_lane5 import L5Cfg, build_lane5, slice_layout5
 from models.demos.ws_expert.ws_layer import (
     LayerCfg,
     gcfg,
@@ -58,6 +60,65 @@ from models.demos.ws_expert.ws_fold import build_fold, fold_span_us
 LOGITS = os.environ.get("WSY_LOGITS", "0") == "1"  # (router head: its logits written for the checks)
 FOLD = os.environ.get("WSY_FOLD", "0") == "1"  # (the shared expert folded into the end pass: ws_fold)
 KS = os.environ.get("WSY_KS", "0") == "1"  # (the routed stream as the K-split lane: ws_layer.KS_LANE)
+# WSY_L5=1: the routed stream as the 5 x 5 K-split lane with the corner-hub h multicast (ws_lane5: hmc 2, muxes on
+# NOC0, row-major result rows); WSY_L5CFG "k=v;..." overrides L5Cfg fields
+L5 = os.environ.get("WSY_L5", "0") == "1"
+
+
+def l5_cfgs(lc):
+    """(GCfg, L5Cfg) of the 5 x 5 lane in the layer (tests/test_ws_lane5.py's configs, row-major outputs)."""
+    rcfg = GCfg(nexp=lc.nexp, G=lc.G, T=lc.T, MMAX=lc.T, GC=25, h_dt=ttnn.bfloat8_b, XRM=2, NS=5, dn_lag=3)
+    kw = dict(hmc=2, mux_noc=0, yrm=1)
+    for item in filter(None, os.environ.get("WSY_L5CFG", "").split(";")):
+        k, v = item.split("=")
+        kw[k] = int(v)
+    return rcfg, L5Cfg(**kw)
+
+
+def l5_lcfg(cycles):
+    """The 5 x 5 lane's LCfg on the torus (tests/test_ws_lane5.py's LANE_DEFAULT)."""
+    return LCfg(cycles=cycles, CHT=20, slots="d0,d1,d0d1,any", keep=2, sched_c=7, wpoll=1)
+
+
+def routed_glx(mesh):
+    cyc = torus_cycles(*tuple(mesh.shape))
+    return l5_lcfg(cyc) if L5 else glx_lcfg(cyc, ks=KS)
+
+
+def stream_program(mesh, lc, st, hd):
+    """The routed stream's program (mesh program, io, stamps) on the head's outputs hd, into the result buffer."""
+    if st.get("rl5") is not None:
+        return build_lane5(
+            mesh,
+            st["rcfg"],
+            st["rlc"],
+            st["rl5"],
+            hd["x_rm"],
+            hd["idx_t"],
+            hd["counts_t"],
+            st["ws_t"],
+            st["res_t"],
+            st["tab_t"],
+            st["rtb"],
+            0,
+            dest_t=hd["dest_t"],
+            fence_row=lc.T * lc.S,
+        )
+    return build_lane(
+        mesh,
+        st["rcfg"],
+        st["rlc"],
+        hd["x_rm"],
+        hd["idx_t"],
+        hd["counts_t"],
+        st["ws_t"],
+        st["res_t"],
+        st["tab_t"],
+        st["rtb"],
+        0,
+        dest_t=hd["dest_t"],
+        fence_row=lc.T * lc.S,
+    )
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
@@ -95,12 +156,22 @@ def make_layer(mesh, lc: LayerCfg, routed_lc: LCfg, seed=0):
         x[:, : lc.T, 0] = 1.0
         wr[0, :] = shift
         wr[0, :skew] = shift + 50.0
-    rcfg = gcfg(E, lc.G, lc.T, ks=routed_lc.ks)
+    rl5 = None
+    if L5:
+        rcfg, rl5 = l5_cfgs(lc)
+    else:
+        rcfg = gcfg(E, lc.G, lc.T, ks=routed_lc.ks)
     rtb = make_tables(shape, rcfg, routed_lc)
-    per_chip = [
-        slice_layout(rcfg, routed_lc.CHT, wg[o].float(), wu[o].float(), wd[o].float(), ks=routed_lc.ks)
-        for o in rtb["own"]
-    ]
+    if L5:  # (each chip's slices in bf16 before the concatenation: host memory)
+        per_chip = [
+            slice_layout5(rcfg, routed_lc.CHT, wg[o].float(), wu[o].float(), wd[o].float()).to(torch.bfloat16)
+            for o in rtb["own"]
+        ]
+    else:
+        per_chip = [
+            slice_layout(rcfg, routed_lc.CHT, wg[o].float(), wu[o].float(), wd[o].float(), ks=routed_lc.ks)
+            for o in rtb["own"]
+        ]
     shard = ttnn.ShardTensorToMesh(mesh, dim=0)
     dram = ttnn.DRAM_MEMORY_CONFIG
     st = dict(
@@ -111,6 +182,7 @@ def make_layer(mesh, lc: LayerCfg, routed_lc: LCfg, seed=0):
         hc=head_consts(mesh, lc),
         rcfg=rcfg,
         rlc=routed_lc,
+        rl5=rl5,
         rtb=rtb,
         tab_t=tables_tensor(mesh, rtb["tabs"]),
         ws_t=ttnn.from_torch(
@@ -245,21 +317,7 @@ def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=F
         ),
         (
             "stream",
-            lambda: build_lane(
-                mesh,
-                st["rcfg"],
-                st["rlc"],
-                hd["x_rm"],
-                hd["idx_t"],
-                hd["counts_t"],
-                st["ws_t"],
-                st["res_t"],
-                st["tab_t"],
-                st["rtb"],
-                0,
-                dest_t=hd["dest_t"],
-                fence_row=lc.T * lc.S,
-            ),
+            lambda: stream_program(mesh, lc, st, hd),
             lane_span_us,
         ),
         ("end", lambda: build_end(mesh, lc.T, lc.K, lc.H, st["res_t"], hd["w"], st["y_t"]), end_span_us),
@@ -627,21 +685,7 @@ def layer_programs(mesh, lc: LayerCfg, st, phases=None, diag=None, clk=None, clo
             continue
         run(
             "stream",
-            *build_lane(
-                mesh,
-                st["rcfg"],
-                st["rlc"],
-                hd["x_rm"],
-                hd["idx_t"],
-                hd["counts_t"],
-                st["ws_t"],
-                st["res_t"],
-                st["tab_t"],
-                st["rtb"],
-                0,
-                dest_t=hd["dest_t"],
-                fence_row=lc.T * lc.S,
-            ),
+            *stream_program(mesh, lc, st, hd),
             zero=sp != "stream:run",
             launch=sp != "stream:zero",
         )
@@ -1037,9 +1081,22 @@ def test_ws_layer_trace_chip(mesh_device):
 def test_ws_layer_trace_glx(mesh_device):
     """The traced layer on the Galaxy torus, as test_ws_layer_glx."""
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    rlc = glx_lcfg(torus_cycles(*tuple(mesh_device.shape)), ks=KS)
+    rlc = routed_glx(mesh_device)
     chips = [int(c) for c in os.environ.get("WSY_CHIPS", "0,31").split(",")]
     run_trace(mesh_device, lc, rlc, "trace glx e640 T 31250", chips, int(os.environ.get("WSY_TOKENS", 64)))
+
+
+def soak_aiclks():
+    """Every chip's AICLK from sysfs (MHz)."""
+    import glob
+
+    out = []
+    for f in sorted(glob.glob("/sys/class/tenstorrent/tenstorrent!*/tt_aiclk")):
+        try:
+            out.append(int(open(f).read().strip()))
+        except (OSError, ValueError):
+            pass
+    return out
 
 
 def run_soak(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips):
@@ -1114,9 +1171,11 @@ def run_soak(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips):
             ypcc = min(pcc(b.float(), a.float()) for a, b in zip(s0["y"], s1["y"]))
             if not all(same.values()):
                 bad.append((done, same, ypcc))
+            ck = soak_aiclks()
             logger.info(
                 f"WSY {tag} soak {mode}: {done}/{iters} layers, wall ms a layer {(t1 - t0) * 1e3 / n:.2f} over the last "
-                f"{n}; equal to the first layer's {same}, y pcc {ypcc:.6f}"
+                f"{n}; equal to the first layer's {same}, y pcc {ypcc:.6f}; AICLK {len(ck)} chips median "
+                f"{statistics.median(ck) if ck else -1:.0f} min {min(ck) if ck else -1} MHz"
             )
             t0 = time.perf_counter()
     finally:
@@ -1138,5 +1197,5 @@ def test_ws_layer_soak_chip(mesh_device):
 @pytest.mark.parametrize("device_params", [dict(TORUS, trace_region_size=TRACE_REGION)], indirect=True)
 def test_ws_layer_soak_glx(mesh_device):
     lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
-    rlc = glx_lcfg(torus_cycles(*tuple(mesh_device.shape)), ks=KS)
+    rlc = routed_glx(mesh_device)
     run_soak(mesh_device, lc, rlc, "soak glx", [0, 31])

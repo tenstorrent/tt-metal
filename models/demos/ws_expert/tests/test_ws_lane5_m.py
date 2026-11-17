@@ -303,3 +303,93 @@ def test_ws_lane5_glx_g(mesh_device):
     N = mesh_device.get_num_devices()
     for ci in (0, N - 1):
         group_report(cfg, sts[ci], f"chip {ci}")
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [TORUS], indirect=True)
+def test_ws_lane5_glx_yrm(mesh_device):
+    """The 5 x 5 lane with row-major result rows (WS_L5 with yrm=1) into a [T 12 + 16, H] bf16 row-major buffer, through
+    per-chip destination lists: every (expert, token) its own row, WSW_DEST "spread" (rows in random order over the
+    whole buffer, every bank, as the layer's t S + k) or "side" (a group's rows only in the DRAM banks of its side:
+    channels 4-7 at NoC x 9 for groups 2 / 3, 0-3 at x 0 for groups 0 / 1). PCC on WSW_PCC_CHIPS (default 0 and the
+    last) over every expert's rows."""
+    import torch
+    from models.demos.ws_expert.bench_util import pcc
+
+    M = int(os.environ["WSW_M"])
+    nexp, T_tok = int(os.environ.get("WSW_NEXP", "640")), int(os.environ.get("WSW_T", "31250"))
+    mode = os.environ.get("WSW_DEST", "spread")
+    cfg, lc, l5 = L5.configs(nexp, 4, T_tok)
+    assert l5.yrm and l5.hmc == 2, "WS_L5 needs hmc=2;yrm=1"
+    lc.cycles = torus_cycles(*tuple(mesh_device.shape))
+    N, G = mesh_device.get_num_devices(), cfg.G
+    assert mesh_device.dram_grid_size().x == 8
+    Ms = [M] * cfg.nexp
+    T = L5.make_tables(tuple(mesh_device.shape), cfg, lc)
+    R = [(m + 31) // 32 for m in Ms]
+    out_rows = max(1, max(sum(R[e] for e in T["meta"][(X, g)]["order"]) for X in range(N) for g in range(G)))
+    dev, refs = make_inputs5_lean(mesh_device, cfg, lc, T, Ms, out_rows)
+    rows = T_tok * 12
+    gen = torch.Generator().manual_seed(7)
+    dests = torch.zeros(N, cfg.nexp, cfg.RMAX * 32, dtype=torch.int32)
+    for X in range(N):
+        grp = {e: g for g in range(G) for e in T["meta"][(X, g)]["order"]}
+        if mode == "side":
+            pools = []
+            for h in (0, 1):  # rows r with (r % 8 >= 4) == h, in random order
+                r = torch.arange(rows)
+                r = r[(r % 8 >= 4) == bool(h)]
+                pools.append(r[torch.randperm(len(r), generator=gen)])
+            cur = [0, 0]
+            for e in range(cfg.nexp):
+                h = 1 if grp[e] >= 2 else 0
+                dests[X, e, : Ms[e]] = pools[h][cur[h] : cur[h] + Ms[e]].to(torch.int32)
+                cur[h] += Ms[e]
+                assert cur[h] <= len(pools[h])
+        else:
+            perm = torch.randperm(rows, generator=gen)
+            off = 0
+            for e in range(cfg.nexp):
+                dests[X, e, : Ms[e]] = perm[off : off + Ms[e]].to(torch.int32)
+                off += Ms[e]
+    dest_t = ttnn.from_torch(
+        dests.reshape(N * cfg.nexp, -1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    res_t = ttnn.zeros(
+        [rows + 16, cfg.H], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    dev["out_t"] = res_t
+    tab_t = L5.tables_tensor(mesh_device, T["tabs"])
+    clk = L5.aiclk_mhz(0)
+    warm, meas = int(os.environ.get("WS_WARM", "20")), int(os.environ.get("WS_MEAS", "5"))
+    e2e = []
+    for i in range(warm + meas):
+        mpd, io, st = L5.build_lane5(
+            mesh_device, cfg, lc, l5, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], res_t, tab_t, T, out_rows,
+            dest_t=dest_t, fence_row=rows,
+        )
+        ttnn.synchronize_device(mesh_device)
+        ttnn.generic_op(io, mpd)
+        ttnn.synchronize_device(mesh_device)
+        if i >= warm:
+            sts = ttnn.get_device_tensors(st)
+            e2e.append(max(L5.chip_time(cfg, Ms, T, ci, sts[ci])[3] for ci in range(N)) / clk)
+            if i == warm + meas - 1:
+                group_report(cfg, sts[0], f"yrm {mode} chip 0")
+            del sts
+        del mpd, io, st
+    chips = [int(c) for c in os.environ.get("WSW_PCC_CHIPS", f"0,{N - 1}").split(",")]
+    outs = ttnn.get_device_tensors(res_t)
+    pcs = {}
+    for ci in chips:
+        out = ttnn.to_torch(outs[ci]).float()
+        vals = [pcc(out[dests[ci, e, : r.shape[0]].long()], r) for g in range(G) for _, e, r in refs[(ci, g)]]
+        pcs[ci] = min(vals)
+        del out
+    logger.info(
+        f"WL5Y SUMMARY dest {mode}: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz, end to end (slowest "
+        f"chip) median {statistics.median(e2e):.1f} us (samples {[round(v, 1) for v in e2e]}), pcc {pcs}"
+    )
+    assert min(pcs.values()) > 0.999

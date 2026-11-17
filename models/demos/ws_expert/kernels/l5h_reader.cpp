@@ -22,7 +22,10 @@
 // CT: as l5_reader.cpp (0-36, TensorAccessorArgs(out)), then x ring, x tile, table page bytes, RMAX, x row bytes,
 //     idx L1, NEXP, PKE, RD, HCONS, then TensorAccessorArgs(x), (idx), (counts), (table), (own slices).
 // RT: as l5_reader.cpp (0-19, the mux client args 20-53), then 54 x addr, 55 idx addr, 56 counts addr, 57 K0,
-//     58 table addr, 59 own slices addr, 60 CH0.
+//     58 table addr, 59 own slices addr, 60 CH0, 61 destination lists addr (WL5_Y_RM; CT TensorAccessorArgs(dest)
+//     after the own slices').
+// WL5_Y_RM: row-major result rows - each down row tile's rows (CB 17, pack-untilized) to their rows in the expert's
+// destination list, at this core's columns, posted, fenced (WL5_Y_FENCE: the result buffer's spare rows).
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -76,6 +79,7 @@ void kernel_main() {
     constexpr auto cargs = TensorAccessorArgs<iargs.next_compile_time_args_offset()>();
     constexpr auto targs = TensorAccessorArgs<cargs.next_compile_time_args_offset()>();
     constexpr auto wargs = TensorAccessorArgs<targs.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto dargs = TensorAccessorArgs<wargs.next_compile_time_args_offset()>();
     static_assert(RD >= 1 && RD <= 8);
 #if defined(WL5_GATHER0)
     constexpr bool GATHER0 = true;  // (the BRISC gathers x on NOC0: diagnostic)
@@ -544,6 +548,59 @@ void kernel_main() {
         return true;
     };
 
+#if defined(WL5_Y_RM)
+    // ---- QY: each row of a down row tile to its destination row of the row-major result buffer, at this core's
+    // columns (wl_reader.cpp's WL_Y_RM): a state machine (0: next row tile, 1: its 32 destinations requested, 2: its rows
+    // written); the destinations (the expert's destination list, the token lists' layout) are read on their own
+    // transaction id, the row writes are posted (fenced at the end: WL5_Y_FENCE), and CB 17's pages are freed once the
+    // writes have left
+    constexpr uint32_t Y_TRID = 0xD;  // (own chunk reads use 1 .. RD, the gather GTRID)
+    static_assert(RD < Y_TRID && Y_TRID != GTRID);
+    constexpr uint32_t seg = DCOLS * 64;  // a row's bytes at this core's columns
+    const auto os = TensorAccessor(oargs, get_arg_val<uint32_t>(4), HT * 64);
+    const auto dls = TensorAccessor(dargs, get_arg_val<uint32_t>(RX + 7), RMAX * 32 * 4);
+    constexpr uint32_t dst_l1 = idx_l1 + 256;
+    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1);
+    uint32_t drained = 0, d_n = 0, d_r = 0, y_state = 0;
+    auto qy = [&]() -> bool {
+        if (y_state == 2) {
+            if (!ncrisc_noc_posted_writes_sent(noc_index)) {
+                return false;
+            }
+            cb_pop_front(y_cb, DCOLS);
+            ++d_r;
+            ++drained;
+            y_state = 0;
+            return true;
+        }
+        if (y_state == 1) {
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, Y_TRID) ||
+                !cb_pages_available_at_front(y_cb, DCOLS)) {
+                return false;
+            }
+            invalidate_l1_cache();
+            const uint32_t m = counts[16 + (order[d_n] & 0xFFFF)] - d_r * 32;
+            uint32_t l1 = get_read_ptr(y_cb);
+            for (uint32_t r = 0; r < (m < 32 ? m : 32); ++r, l1 += seg) {
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1, os.get_noc_addr(dst[r], DS * 64), seg);
+            }
+            y_state = 2;
+            return true;
+        }
+        if (drained >= total_rows) {
+            return false;
+        }
+        while (d_r >= rows_of(d_n)) {
+            ++d_n;
+            d_r = 0;
+        }
+        noc_async_read_set_trid(Y_TRID);
+        noc_async_read(dls.get_noc_addr(order[d_n] & 0xFFFF) + d_r * 128, dst_l1, 128);
+        noc_async_read_set_trid(0);
+        y_state = 1;
+        return true;
+    };
+#else
     // ---- QY: every expert's down rows, packed in the chip's order from tile row g ORMAX
     const uint32_t obytes = get_tile_size(y_cb);
     const auto os = TensorAccessor(oargs, get_arg_val<uint32_t>(4), obytes);
@@ -570,6 +627,7 @@ void kernel_main() {
         return true;
     };
 
+#endif
     // ---- Q1: x gather (l5_writer.cpp's, reads with transaction id GTRID)
     constexpr uint32_t xrm_cb = tt::CBIndex::c_7, xst_cb = tt::CBIndex::c_8;
     const uint32_t koff = K0 * 64;
@@ -802,6 +860,17 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+#if defined(WL5_Y_RM)
+    noc_async_posted_writes_flushed();
+#if defined(WL5_Y_FENCE)
+    // the posted row writes' fence: an acknowledged 4-B write into every DRAM bank (the result buffer's spare rows from
+    // WL5_Y_FENCE, nobody reads them) after them on the same NoC and VC; its acks mean every row landed
+    for (uint32_t i = 0; i < NUM_DRAM_BANKS; ++i) {
+        noc_async_write(dst_l1, os.get_noc_addr(WL5_Y_FENCE + i), 4);
+    }
+    noc_async_write_barrier();
+#endif
+#endif
     for (uint32_t d = 0; d < 2; ++d) {
         tt::tt_fabric::fabric_client_disconnect(mux[d]);
         if (master[d]) {

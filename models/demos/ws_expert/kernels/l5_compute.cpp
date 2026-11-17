@@ -14,6 +14,8 @@
 // (OWN 0) has no fold: its rows count as folded FL rows after their gate/up (the down's lag rule). x rows q with q % 5
 // == c are tilized here (the BRISC gathers them; CB 7 -> CB 8), up to TL rows ahead. RT: 0 stamps, 1 j, 2 g, 3 order
 // length. CT: 0 KSL, 1 KTD, 2 DCOLS, 3 DB, 4 counts L1, 5 K (slots), 6 NW, 7 FL, 8 TL, 9 OWN, 10 order table L1
+// WL_Y_RM: the down row tile is pack-untilized into CB 17 (32 rows x DCOLS * 32 columns, row after row) for the
+// reader's row writes (kl_compute.cpp's scheme; DEST's untilize remap enabled once at the start).
 #ifndef DN_LAG
 #define DN_LAG 1
 #endif
@@ -28,6 +30,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/expert_activation.hpp"
 #include "glu_fused.hpp"
+#ifdef WL_Y_RM
+#include "api/compute/pack_untilize.h"
+#endif
 
 constexpr uint32_t xr_cb = tt::CBIndex::c_0;
 constexpr uint32_t w_cb = tt::CBIndex::c_1;
@@ -123,6 +128,9 @@ FORCE_INLINE void down_row() {
     to_dn();
     pack_reconfig_data_format(p_cb, y_cb);
     cb_reserve_back(y_cb, dcols);
+#ifdef WL_Y_RM
+    pack_untilize_dest_init<DB, dcols, false, TILE_C_DIM, false, false /*configure_remap*/>(y_cb);
+#endif
     for (uint32_t b = 0; b < dcols / DB; ++b) {
         tile_regs_acquire();
         for (uint32_t k = 0; k < ktd; ++k) {
@@ -130,11 +138,18 @@ FORCE_INLINE void down_row() {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef WL_Y_RM
+        pack_untilize_dest<DB, dcols>(y_cb, 1, b);
+#else
         for (uint32_t t = 0; t < DB; ++t) {
             pack_tile<true>(t, y_cb, b * DB + t);
         }
+#endif
         tile_regs_release();
     }
+#ifdef WL_Y_RM
+    pack_untilize_uninit(y_cb);
+#endif
     pack_reconfig_data_format(y_cb, p_cb);
     cb_pop_front(hr_cb, ktd);
     cb_push_back(y_cb, dcols);
@@ -201,6 +216,9 @@ void kernel_main() {
     g_ = get_arg_val<uint32_t>(2);
     nexp_g = get_arg_val<uint32_t>(3);
     compute_kernel_hw_startup<SrcOrder::Reverse>(xr_cb, w_cb, p_cb);
+#ifdef WL_Y_RM
+    MATH((llk_math_reconfig_remap(true)));  // (DEST's untilize remap on once: the down rows pack-untilize)
+#endif
     ws_glu::init<2>();
     while (counts[0] == 0) {
     }
