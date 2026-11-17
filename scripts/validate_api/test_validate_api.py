@@ -16,13 +16,41 @@ from validate_api import (
     ALLOWED_PREFIXES,
     ALLOWED_UMD_HEADERS,
     BANNED_HEADERS,
+    HEADER_SUFFIXES,
     SKIP_FILES,
+    ApiTree,
+    Include,
+    include_target,
     load_exceptions,
     main,
     skip_unrelated_commit,
     source_lines,
     validate,
 )
+
+API_ROOT = Path(__file__).resolve().parents[2] / "tt_metal/api"
+
+
+def resolver_mismatches(root):
+    """Includes in headers under root where ApiTree.target and include_target disagree.
+
+    validate() classifies each include in a header with ApiTree.target; includes in sources are
+    not classified, so they are not compared here. A divergence from include_target
+    can classify an internal include as stable, and the boundary check then passes silently.
+    """
+    tree = ApiTree(root)
+    mismatches = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and p.suffix in HEADER_SUFFIXES):
+        for number, line in source_lines(path.read_text(encoding="utf-8")):
+            include = Include.from_line(str(path), number, line)
+            if include is None:
+                continue
+            fast = tree.target(path, include.path, include.quoted)
+            slow = include_target(root, path, include.path, include.quoted)
+            if fast != slow:
+                spelling = f'"{include.path}"' if include.quoted else f"<{include.path}>"
+                mismatches.append(f"{path}:{number}: {spelling} ApiTree={fast!r} include_target={slow!r}")
+    return mismatches
 
 
 class ApiValidationTests(unittest.TestCase):
@@ -40,6 +68,7 @@ class ApiValidationTests(unittest.TestCase):
     def errors(self, exceptions=None):
         # Small fixtures exercise individual rules without populating the
         # repository-wide prefix allowlist. Test that cleanup rule separately.
+        self.assertEqual(resolver_mismatches(self.root), [])
         return validate(self.root, exceptions or set(), check_unused_prefixes=False)[0]
 
     def populate_prefixes(self):
@@ -477,6 +506,10 @@ class ApiValidationTests(unittest.TestCase):
         self.assertTrue(any("Unused allowed prefixes" in error for error in validate(self.root, set())[0]))
         self.populate_prefixes()
         self.assertEqual(validate(self.root, set())[0], [])
+
+    def test_api_tree_matches_include_target_on_the_real_api(self):
+        self.assertTrue(API_ROOT.is_dir(), API_ROOT)
+        self.assertEqual(resolver_mismatches(API_ROOT), [])
 
     def _run_cli(self, exceptions):
         # PRE_COMMIT makes main() skip a commit that does not touch the API. This fixture is a
