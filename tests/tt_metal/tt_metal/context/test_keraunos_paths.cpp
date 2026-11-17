@@ -141,6 +141,51 @@ protected:
         }
     }
 
+    // HSIO 2 CCE 0 and one Mimir CCE's SRAM, named by its global CCE index (the SRAM SPA window numbering).
+    void expect_mimir_cce_index(Engine engine, uint32_t mimir_cce, bool read, uint32_t tag) {
+        const auto k = hsio_core(2);
+        ASSERT_TRUE(k.has_value());
+        const CoreCoord mimir_core = logical_mimir_cce_core(soc_desc_of(device_), mimir_cce);
+        constexpr uint32_t kBytes = 256;
+        const auto data = pattern(tag, kBytes);
+        const uint64_t remote = mimir_cce_sram_spa(mimir_cce, mimir_cce_offset());
+        if (read) {
+            write_mimir_cce_sram(device_, mimir_core, mimir_cce_noc_addr(), data.data(), kBytes);
+            write_words(*k, kDstOffset, std::vector<uint32_t>(data.size(), 0));
+            const bool dst_local = engine == Engine::Cpu;
+            const uint64_t dst = dst_local ? local_addr(kDstOffset) : global_addr(*k, kDstOffset);
+            run_copy(engine, *k, remote, dst, kBytes, dst_local);
+            EXPECT_EQ(read_words(*k, kDstOffset, data.size()), data);
+        } else {
+            write_words(*k, kSrcOffset, data);
+            const std::vector<uint32_t> zero(data.size(), 0);
+            write_mimir_cce_sram(device_, mimir_core, mimir_cce_noc_addr(), zero.data(), kBytes);
+            run_copy(engine, *k, global_addr(*k, kSrcOffset), remote, kBytes);
+            std::vector<uint32_t> got(data.size(), 0);
+            read_mimir_cce_sram(device_, mimir_core, mimir_cce_noc_addr(), got.data(), kBytes);
+            EXPECT_EQ(got, data);
+        }
+    }
+
+    // Every Mimir CCE (CCE0 and CCE1 of M0 and M1), one after another.
+    void expect_every_mimir_cce(Engine engine, bool read, uint32_t tag_base) {
+        const uint32_t n = num_mimir_cces_on(device_);
+        if (n == 0) {
+            GTEST_SKIP() << "Descriptor has no Mimir CCE";
+        }
+        for (uint32_t mimir_cce = 0; mimir_cce < n; ++mimir_cce) {
+            SCOPED_TRACE(fmt::format(
+                "Mimir {} CCE {} (global {})",
+                mimir_index_for_cce(soc_desc_of(device_), mimir_cce),
+                mimir_cce,
+                mimir_cce));
+            expect_mimir_cce_index(engine, mimir_cce, read, tag_base + mimir_cce);
+            if (HasFatalFailure()) {
+                return;
+            }
+        }
+    }
+
     // HSIO 2 CCE 0 and Mimir `mimir`'s GDDR.
     void expect_mimir_gddr(Engine engine, uint32_t mimir, bool read, uint32_t tag) {
         if (num_mimirs_on(device_) <= mimir) {
@@ -296,6 +341,13 @@ TEST_F(KeraunosPaths, IdmaWritesM0GddrThroughM1) { expect_mimir_gddr_views(Engin
 TEST_F(KeraunosPaths, IdmaReadsM0GddrThroughM1) { expect_mimir_gddr_views(Engine::Idma, 0, /*read=*/true, 0xE1); }
 TEST_F(KeraunosPaths, CpuWritesM0GddrThroughM1) { expect_mimir_gddr_views(Engine::Cpu, 0, /*read=*/false, 0xE2); }
 TEST_F(KeraunosPaths, CpuReadsM0GddrThroughM1) { expect_mimir_gddr_views(Engine::Cpu, 0, /*read=*/true, 0xE3); }
+
+
+// --- Phase 3: K CCE <-> Mimir CCE SRAM over BAR1, every Mimir CCE --------------------------------------
+TEST_F(KeraunosPaths, IdmaWritesEveryMimirCceSram) { expect_every_mimir_cce(Engine::Idma, /*read=*/false, 0x90); }
+TEST_F(KeraunosPaths, IdmaReadsEveryMimirCceSram) { expect_every_mimir_cce(Engine::Idma, /*read=*/true, 0xA0); }
+TEST_F(KeraunosPaths, CpuWritesEveryMimirCceSram) { expect_every_mimir_cce(Engine::Cpu, /*read=*/false, 0xB0); }
+TEST_F(KeraunosPaths, CpuReadsEveryMimirCceSram) { expect_every_mimir_cce(Engine::Cpu, /*read=*/true, 0xC0); }
 
 }  // namespace
 }  // namespace tt::tt_metal
