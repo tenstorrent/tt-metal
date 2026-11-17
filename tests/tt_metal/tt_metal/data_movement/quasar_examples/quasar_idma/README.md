@@ -68,4 +68,4 @@ TT_METAL_SIMULATOR=1 TT_METAL_DPRINT_CORES=0,0 \
 
 ## Dispatch Mode
 
-Uses fast dispatch (Mesh Device API) via `MeshDeviceSingleCardFixture`. Tests are skipped automatically on non-Quasar architectures and when `TT_METAL_SIMULATOR` is not set.
+Uses fast dispatch (Mesh Device API) via `MeshDeviceSingleCardFixture`. Tests are skipped automatically on non-Quasar architectures.
