@@ -435,7 +435,8 @@ constexpr bool llk_pack_matmul_kernel()
 
 // Marks the matmul API's plain inits set as the kernel is parsed (matmul.h): completing llk_pack_shape_set<N> makes
 // llk_pack_shape_used(llk_pack_shape_tag<N>) callable. 5: an init with a constant block that is not tall, 6: one with a
-// constant tall block (rt >= 4, ct <= 2), 9: one with a constant one-row block of two or more tiles; a run-time block sets none.
+// constant tall block (rt >= 4, ct <= 2), 9: one with a constant one-row block of two or more tiles, 11: a call with a constant
+// kt of 1; a run-time block sets none.
 #define LLK_PACK_SHAPE_MARKS 1
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnon-template-friend"
@@ -482,7 +483,7 @@ constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
 {
     return (is_fp32_dest_acc_en || llk_pack_lofi_api<dep * 0 + 1>::value) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value &&
            !(llk_pack_shape_marked<5, dep>(0) && !llk_pack_shape_marked<6, dep>(0) &&
-             !(llk_pack_lofi_api<dep * 0 + 1>::value && llk_pack_shape_marked<9, dep>(0)));
+             !(llk_pack_lofi_api<dep * 0 + 1>::value && llk_pack_shape_marked<9, dep>(0) && !llk_pack_shape_marked<11, dep>(0)));
 }
 
 // Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h and seven eltwise_unary headers).

@@ -1310,13 +1310,25 @@ ALWI void matmul_block_fe(
              : (MATMUL_FE_V(rt) >= 4 && MATMUL_FE_V(ct) <= 2)       ? 6                                \
                                                                     : 5>) +                            \
      0 * sizeof(::ckernel::packer::llk_pack_shape_set<(MATMUL_FE_V(rt) == 1u && MATMUL_FE_V(ct) >= 2u && MATMUL_FE_V(ct) != 0xFFu) ? 9 : 10>))
+// 0, marking a call with a constant kt of 1 for the pack (11)
+#define MATMUL_FE_PACK_KT1(kt) \
+    (0 * sizeof(::ckernel::packer::llk_pack_shape_set < (MATMUL_FE_CK(kt) == 1u) ? 11 : 12 >))
 #else
 #define MATMUL_FE_PACK_SHAPE(ct, rt) 0
+#define MATMUL_FE_PACK_KT1(kt) 0
 #endif
-#define MATMUL_FE_UCELL(a, b, ct, rt, kt)                                                                                \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu,                                                \
-                         MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_SHAPE(ct, rt), \
-                         MATMUL_FE_KDEC(a, (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_CK(ct), MATMUL_FE_CK(rt)>(MATMUL_FE_CK(kt))))>
+#define MATMUL_FE_UCELL(a, b, ct, rt, kt)                                                                      \
+    matmul_block_init_fe<                                                                                      \
+        MATMUL_FE_C(a),                                                                                        \
+        MATMUL_FE_C(b),                                                                                        \
+        0xFFu,                                                                                                 \
+        0xFFu,                                                                                                 \
+        MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_SHAPE(ct, rt) +       \
+            MATMUL_FE_PACK_KT1(kt),                                                                            \
+        MATMUL_FE_KDEC(                                                                                        \
+            a,                                                                                                 \
+            (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_CK(ct), MATMUL_FE_CK(rt)>( \
+                MATMUL_FE_CK(kt))))>
 #define MATMUL_FE_UINIT_2(a, b) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b)
 #define MATMUL_FE_UINIT_3(a, b, tr) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b, tr)
 #define MATMUL_FE_UINIT_4(a, b, tr, ct) MATMUL_FE_UINIT(a, b, ct, 1)(__builtin_LINE(), a, b, tr, ct)
@@ -1324,13 +1336,23 @@ ALWI void matmul_block_fe(
 #define MATMUL_FE_UINIT_6(a, b, tr, ct, rt, kt) MATMUL_FE_UCELL(a, b, ct, rt, kt)(__builtin_LINE(), a, b, tr, ct, rt, kt)
 #define MATMUL_FE_UINIT_7(a, b, tr, ct, rt, kt, line) MATMUL_FE_UCELL(a, b, ct, rt, kt)(line, a, b, tr, ct, rt, kt)
 #define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_UBLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
-#define MATMUL_FE_UBCELL(a, b, ct, rt, kt)                                                                         \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt), \
-                    MATMUL_FE_KDEC(a, false)>
+#define MATMUL_FE_UBCELL(a, b, ct, rt, kt)                                                        \
+    matmul_block_fe<                                                                              \
+        MATMUL_FE_C(a),                                                                           \
+        MATMUL_FE_C(b),                                                                           \
+        0xFFu,                                                                                    \
+        0xFFu,                                                                                    \
+        MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_KT1(kt), \
+        MATMUL_FE_KDEC(a, false)>
 // the experimental 2_0 call (no transpose argument)
-#define MATMUL_FE_UBLOCK_8(a, b, i0, i1, d, ct, rt, kt)                                                                   \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt),             \
-                    ::ckernel::matmul_fe_unkeyed<MATMUL_FE_KDEC(a, false)>()>(__builtin_LINE(), a, b, i0, i1, d, ct, rt, kt)
+#define MATMUL_FE_UBLOCK_8(a, b, i0, i1, d, ct, rt, kt)                      \
+    matmul_block_fe<                                                         \
+        MATMUL_FE_C(a),                                                      \
+        MATMUL_FE_C(b),                                                      \
+        0xFFu,                                                               \
+        0xFFu,                                                               \
+        MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_KT1(kt), \
+        ::ckernel::matmul_fe_unkeyed<MATMUL_FE_KDEC(a, false)>()>(__builtin_LINE(), a, b, i0, i1, d, ct, rt, kt)
 #define MATMUL_FE_UBLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt) \
     MATMUL_FE_UBCELL(a, b, ct, rt, kt)(__builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
 #define MATMUL_FE_UBLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line) \
