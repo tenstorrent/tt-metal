@@ -59,7 +59,7 @@ from ._layouts import transform_from_json
 from ._planner import TensorInfo, _checked_groups
 from ._state_dict import is_structural_scalar
 from ._topology import Chunk, Label, crc31, owner
-from ._train_state import RNG_FORMAT
+from ._train_state import RNG_FORMAT, this_world_rank
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
 # other user of ttnn's point-to-point calls (tag 0 by default; tt-train's GRPO rollout uses 22010-22013 and
@@ -157,12 +157,15 @@ def current_transport() -> Transport | None:
 
 class LoopbackTransport:
     """The transport of a single process, the group of one: an allgather returns its own value, and with one rank no
-    point-to-point transfer ever happens."""
+    point-to-point transfer ever happens. ``world_rank`` is the process's rank in the MPI world, which a one-rank sub
+    context of a split launch has too."""
 
     broken: str | None = None
     rank = 0
     size = 1
-    world_rank = 0
+
+    def __init__(self, world_rank: int = 0) -> None:
+        self.world_rank = world_rank
 
     def allgather_int(self, value: int) -> list[int]:
         return [int(value)]
@@ -269,8 +272,10 @@ class Group:
 
 
 def current_group() -> Group:
-    """The group of this process: the MPI world under ``tt-run`` with several ranks, else the group of one."""
-    return Group(current_transport() or LoopbackTransport())
+    """The group of this process: the MPI world under ``tt-run`` with several ranks, else the group of one, under the
+    process's MPI world rank as ``this_world_rank`` reports it (nonzero in a one-rank sub context of a split launch),
+    so save, load and the RNG helpers key its files and generators alike."""
+    return Group(current_transport() or LoopbackTransport(this_world_rank()))
 
 
 def state_hash(value: Any) -> int:

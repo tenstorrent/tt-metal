@@ -32,6 +32,7 @@ from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
 from ttml.distributed_checkpointing._state_dict import check_param_groups, is_structural_scalar, restore_scalars
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
+from ttml.distributed_checkpointing._train_state import this_world_rank
 
 
 def _label(placements, shape):
@@ -540,6 +541,23 @@ def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset(exp
     check_param_groups(_Opt(["shared/w", "stage1/w"]), index.scalars, strict=True)  # each rank holds part of the union
     with expect_error(CheckpointError, "holds params the checkpoint's group 0 does not"):
         check_param_groups(_Opt(["shared/w", "stage2/w"]), index.scalars, strict=True)
+
+
+def test_a_one_rank_sub_context_is_the_group_of_one_under_its_world_rank(monkeypatch):
+    """A split launch can leave a process alone in its sub context: still the group of one, but under its MPI world
+    rank, as capture_rng and restore_rng key its generators."""
+    for name, value in (
+        ("distributed_context_is_initialized", True),
+        ("distributed_context_get_size", 1),
+        ("distributed_context_get_rank", 0),
+        ("distributed_context_world_rank", 3),
+    ):
+        monkeypatch.setattr(ttnn, name, lambda value=value: value, raising=False)
+    group = _coordinator.current_group()
+    assert isinstance(group.transport, LoopbackTransport)
+    assert (group.rank, group.size, group.world_rank) == (0, 1, 3) and this_world_rank() == 3
+    monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: False, raising=False)
+    assert _coordinator.current_group().world_rank == 0 == this_world_rank()
 
 
 def test_the_group_of_one_runs_phases_directly_and_keeps_error_types(expect_error):
