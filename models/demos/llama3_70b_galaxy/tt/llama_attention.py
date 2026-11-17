@@ -2,11 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import WO_AG_MAX
+
+# Opt-in: prefill SDPA (ring, chunked/prefix-cached, regular) at HiFi2 instead of HiFi4.
+# Read once at import. Unset keeps the shared HiFi4 config object used before this change.
+PREFILL_SDPA_HIFI2 = os.environ.get("LLAMA_GALAXY_PREFILL_SDPA_HIFI2", "0") == "1"
 
 
 class TtLlamaAttention(LightweightModule):
@@ -117,6 +123,19 @@ class TtLlamaAttention(LightweightModule):
         self.compute_kernel_config_hifi2_fp16 = configuration.compute_kernel_config_hifi2_fp16
 
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+        # Prefill SDPA compute config. Default: the shared HiFi4 config (unchanged behaviour).
+        # LLAMA_GALAXY_PREFILL_SDPA_HIFI2=1: HiFi2 with the other fields of compute_kernel_config_hifi4
+        # (model_config.py and qwen_model_config.py: approx False, fp32 dest acc True, packer L1 acc True).
+        self.prefill_sdpa_compute_kernel_config = (
+            ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            if PREFILL_SDPA_HIFI2
+            else self.compute_kernel_config_hifi4
+        )
 
         # Opt-in LLAMA_GALAXY_ATTN_W_BFP4=1 (LlamaOptimizations.bfp4_attn_w): wqkv and wo in bfp4, their
         # matmuls at LoFi (same pattern as FF2 bfp4 in llama_mlp.py). Llama only. self.dtype is left alone:
@@ -1257,7 +1276,7 @@ class TtLlamaAttention(LightweightModule):
                 v_heads_1VSD_8b,
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.prefill_sdpa_compute_kernel_config,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=0),
                 page_table=None,
                 chunk_start_idx=None,
@@ -1277,7 +1296,7 @@ class TtLlamaAttention(LightweightModule):
                     input_tensor_v=values_BKSD,
                     page_table_tensor=page_table,
                     chunk_start_idx_tensor=chunk_start_idx_tensor,
-                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                    compute_kernel_config=self.prefill_sdpa_compute_kernel_config,
                     program_config=self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"](seq_len, page_size),
                 )
 
@@ -1307,7 +1326,7 @@ class TtLlamaAttention(LightweightModule):
                     v_heads_1VSD_8b,
                     is_causal=True,
                     scale=self.scale,
-                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                    compute_kernel_config=self.prefill_sdpa_compute_kernel_config,
                     program_config=self.model_config["SDPA_PROGCFG"](
                         seq_len // batch_size if seq_len // batch_size == 128 else seq_len
                     ),
