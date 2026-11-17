@@ -18,6 +18,8 @@ and their helpers contain only TTNN device operations and shape orchestration.
 import os
 from dataclasses import dataclass
 
+from ttnn.operations.gated_delta_net import gated_delta_net
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen38_27b_qb2.tt.cache_initialization import (
@@ -26,7 +28,6 @@ from models.demos.qwen38_27b_qb2.tt.cache_initialization import (
     require_cache_initialization_ready,
 )
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
-from ttnn.operations.gated_delta_net import gated_delta_net
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
 DEFAULT_POLICY = {
@@ -951,7 +952,10 @@ class Qwen38Decoder(LightweightModule):
             packed = Qwen38Decoder._linear(self, x, "linear_attn.packed", keep_sharded=True)
         else:
             packed = self._linear(x, "linear_attn.packed")
-        if packed.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+        # QWEN38_GDN_SHARD (default 1; compact decode, packed rows): the op reads the width-sharded L1 rows of the
+        # projection as they are, no copy to DRAM (one program less per GDN layer and decode step).
+        shard = compact and self.gdn_packed and os.environ.get("QWEN38_GDN_SHARD", "1") != "0"
+        if packed.memory_config() != ttnn.DRAM_MEMORY_CONFIG and not shard:
             packed = ttnn.to_memory_config(packed, ttnn.DRAM_MEMORY_CONFIG)
         if self.gdn_packed:
             width = conv_width + z_width + 2 * hv
