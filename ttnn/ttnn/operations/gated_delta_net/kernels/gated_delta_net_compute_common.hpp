@@ -395,6 +395,9 @@ ALWI void silu_tile_bf16(uint32_t dst) {
 }
 
 // GDN_SILU_MID: x / (1 + exp(-x)) with the bf16 arm's exp, two reciprocal iterations, no rounding to bf16.
+#ifndef GDN_ZW_FPU
+#define GDN_ZW_FPU 0
+#endif
 #ifndef GDN_STATE_LEAN
 #define GDN_STATE_LEAN 0
 #endif
@@ -1392,6 +1395,24 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
             mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_zw);
             for (uint32_t i = 0; i < n; ++i) {
                 mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_zw, first + i, i);
+            }
+            if constexpr (GDN_ZW_FPU != 0) {
+                // Host PREP_ZW_FPU: cb_zw holds silu(z) alone; norm_weight's row is broadcast into the product here
+                // (DEST to srcA, the row-broadcast operand in srcB).
+                constexpr auto REUSE = EltwiseBinaryReuseDestType::DEST_TO_SRCA;
+                reconfig_data_format_srcb(cb_norm_w);
+                UNPACK((llk_unpack_A_init<BroadcastType::ROW, true, REUSE>(false, false, cb_norm_w)));
+                MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MATH_FIDELITY, REUSE>(
+                    cb_norm_w, cb_norm_w, false)));
+                for (uint32_t i = 0; i < n; ++i) {
+                    UNPACK((llk_unpack_A<BroadcastType::ROW, true, REUSE>(cb_norm_w, (first + i) % W)));
+                    MATH((llk_math_eltwise_binary<
+                          EltwiseBinaryType::ELWMUL,
+                          BroadcastType::ROW,
+                          DST_ACCUM_MODE,
+                          MATH_FIDELITY,
+                          REUSE>(cb_norm_w, cb_norm_w, i, true)));
+                }
             }
             tile_regs_commit();
             tile_regs_wait();

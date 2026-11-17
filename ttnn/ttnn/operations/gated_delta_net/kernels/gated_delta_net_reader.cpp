@@ -324,6 +324,16 @@ void kernel_main() {
     const uint32_t tr_offset = get_arg_val<uint32_t>(arg++);
     const uint32_t tr_stride = get_arg_val<uint32_t>(arg++);
     const uint32_t unit_stride = get_arg_val<uint32_t>(arg++);  // units first_unit, + stride, ... (R-QKCORE: Hv)
+    // Host PREP_START_STAGGER (cycles): the DRAM banks serve the first reads of every core at once, and only tile
+    // row 0's set when the chain starts: the prep cores of the other stride positions issue theirs that much later,
+    // the state cores (S0 is read long before row 0 lands) twice that.
+    if constexpr (GDN_START_STAGGER != 0 || GDN_START_STATE != 0) {
+        if ((PREP || PREP_QK) && tr_offset != 0) {
+            riscv_wait(GDN_START_STAGGER);
+        } else if (STATE) {
+            riscv_wait(GDN_START_STATE);
+        }
+    }
     // R-PREP prep core, NORM_SPLIT: the norm units (tile row i, value head j of the group: unit i * PREP_HEADS + j)
     // it normalizes: offset, + stride, ...
     const uint32_t norm_offset = PREP ? get_arg_val<uint32_t>(arg++) : 0;

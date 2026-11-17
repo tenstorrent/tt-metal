@@ -76,6 +76,10 @@ struct win {
 
 // R-PREP norm split (host PREP_NORM_SPLIT): a prep core preps all of its tile rows first and normalizes afterwards
 // the rows norm_offset, + norm_stride, ..., which need not be the rows it prepped.
+#ifndef GDN_START_STAGGER
+#define GDN_START_STAGGER 0
+#define GDN_START_STATE 0
+#endif
 #ifndef GDN_PREP_NORM_SPLIT
 #define GDN_PREP_NORM_SPLIT 0
 #endif

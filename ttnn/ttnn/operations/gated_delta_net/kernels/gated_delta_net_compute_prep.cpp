@@ -14,9 +14,34 @@ static_assert(PREP, "R-PREP prep-role kernel");
 template <uint32_t N>
 ALWI void zw_block() {
     constexpr uint32_t W = PREP ? Vb / RATIO : 1;  // columns of one head (norm_weight holds W tiles)
+    GDN_ZONE("gdn_zw");
     cb_wait_front(cb_z, N);
     cb_reserve_back(cb_zw, N);
-    for (uint32_t vt = 0; vt < N; ++vt) {
+    if constexpr (GDN_ZW_FPU != 0) {
+        // Host PREP_ZW_FPU: silu(z) of the unit's tiles in one window; norm_weight enters in the norm's FPU product.
+        static_assert(N <= ckl::DEST_AUTO_LIMIT);
+        tile_regs_acquire();
+        begin_loads(cb_z);
+        for (uint32_t vt = 0; vt < N; ++vt) {
+            load(cb_z, vt, vt);
+        }
+        silu_tile_init();
+        for (uint32_t vt = 0; vt < N; ++vt) {
+            if constexpr ((GDN_SILU_BF16 & 1) != 0) {
+                silu_tile_bf16(vt);
+            } else {
+                silu_tile(vt);
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_zw, 0);
+        for (uint32_t vt = 1; vt < N; ++vt) {
+            pack_at(vt, cb_zw, vt);
+        }
+        tile_regs_release();
+    }
+    for (uint32_t vt = 0; GDN_ZW_FPU == 0 && vt < N; ++vt) {
         tile_regs_acquire();
         begin_loads(cb_z);
         load(cb_z, vt, 0);

@@ -120,8 +120,10 @@ def test_static_buffers_shrink_below_l1_input(device, monkeypatch, inputs, low_k
     """The packed rows allocated under low_kb KB of other L1 data per core, which is then freed: the input's address
     is far below L1_CB_REGION_END and the program's static buffers must end below it."""
     # The two calls run different plans and are compared to the bit: the state cores' norm of the last rows
-    # (STATE_NORM_TAIL "auto") would be in one of them only.
+    # (STATE_NORM_TAIL "auto") and the one-window gate factor of norm-split plans (PREP_ZW_FPU "auto") would be in
+    # one of them only.
     monkeypatch.setattr(gdn_pd, "STATE_NORM_TAIL", 0)
+    monkeypatch.setattr(gdn_pd, "PREP_ZW_FPU", False)
     torch.manual_seed(9)
     tensors = make_inputs(inputs)
     want = run(device_args(tensors, device, ttnn.bfloat16))

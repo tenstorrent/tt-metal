@@ -187,6 +187,14 @@ PREP_NORM_SLIM = True
 # R-PREP prep writer: a head's state cores are told that their row landed after that head's block, not after the
 # row's last one.
 PREP_HEAD_UP = True
+# R-PREP start: the DRAM banks serve every core's first reads at once (about 8 us for the lot), and the chain starts
+# with tile row 0's. PREP_START_STAGGER_US: where no prep core has more than two tile rows, the prep (and q / k) cores
+# past stride position 0 hold their first reads back by this much (T=128 49.4 -> 46.5 us, T=256 72.0 -> 69.1; with
+# more rows per core T=512 117.1 -> 117.5, T=1024 186.5 -> 186.7 at 1 us: not applied). STATE_START_US: in plans
+# without q / k cores the state cores hold their S0 read back, which is needed only when row 0 lands (T=1024 186.5 ->
+# 184.9, T=2048 289.4 -> 286.6, T=4096 548.7 -> 546.0; 12 to 45 us measure alike).
+PREP_START_STAGGER_US = 3.0
+STATE_START_US = 20.0
 # The inverse norms (L2 norm of q / k, RMS norm) on whole tiles: rsqrt(sum + eps) * scale only on the vectors that hold
 # column 0, where the row sum is and which every reader broadcasts (8 of a tile's 32 vectors).
 NORM_RSQRT_COL0 = True
@@ -199,6 +207,11 @@ PREP_VEC_COL0 = True
 # R-PREP prep core's RMS norm: o^2 and (o (*)col rinv) (*) (norm_weight silu(z)) as FPU products, four tiles per window
 # and no loads, instead of fp32 SFPU products one tile per window. The output is bf16; o passes the FPU's operands.
 PREP_NORM_FPU = True
+# PREP_NORM_FPU prep core (norm units of one head): the gate factor pass is silu(z) alone, the unit's four tiles in one
+# window; norm_weight's row enters the norm's FPU product as a row-broadcast operand (DEST to srcA). T=4096 554.1 ->
+# 548.7 us; T=1024 186.3 -> 187.2, T=2048 289.5 -> 290.3 (the last units after the chain get the longer product).
+# "auto": from 128 tile rows on.
+PREP_ZW_FPU = "auto"
 # R-PREP prep core with its own q / k columns: the L2 norm's squares and the scalings q (*)col rinv, k (*)col rinv as
 # FPU products (Kt tiles per window, no loads) instead of fp32 SFPU passes. kn and qn are read only as FPU operands;
 # PREP_L2_UNBIAS (fp32 factor on both inverse norms) scales the mean loss of the added truncations back: the smallest
@@ -2105,6 +2118,9 @@ def create_program_descriptor(
         roles[ROLE_QK] = ([core for core, _, _ in qk_cores], *rts)
 
     l2_fpu = prep is not None and not shared and conv_on_fpu and bool(PREP_L2_FPU)
+    few_waves = prep is not None and all(_seq_tile_rows(seq, tokens) <= 2 * min(strides) for seq in range(seqs))
+    zw_fpu = prep is not None and norm_split and bool(PREP_NORM_FPU) and conv_on_fpu
+    zw_fpu = zw_fpu and (seq_rows_min >= 128 if PREP_ZW_FPU == "auto" else bool(PREP_ZW_FPU))
     # PREP_NORM_FPU for the tail rows too (cb_reads then holds only them: the folded or fused step reads no cb_reads).
     tail_fpu = bool(tail) and bool(PREP_NORM_FPU) and bool(STATE_FUSED_RHS) and v_block_tiles * 2 <= 4
     compute_kernel_config = _copy_compute_config(compute_kernel_config)  # never mutate the caller's
@@ -2118,6 +2134,8 @@ def create_program_descriptor(
             continue  # the held o: FPU operands of the state cores' tail norm
         if idx in (CB_Y_QK, CB_RINV) and l2_fpu:
             continue  # FPU operands of the prep cores' L2 norm
+        if idx == CB_NORM_W and zw_fpu and not tail:
+            continue  # the row-broadcast FPU operand (the state cores' tail norm loads it)
         if idx in (CB_O_IN, CB_ZW, CB_RINV_O) and prep is not None and PREP_NORM_FPU:
             continue  # FPU operands of the prep cores' norm
         fp32_cb = idx not in TOKEN_CBS or token_dtype == ttnn.float32
@@ -2155,6 +2173,8 @@ def create_program_descriptor(
             ("GDN_RMS_ONE_COPY", str(int(RMS_ONE_COPY and prep is None and unit_lag(unit_depth)))),
             ("GDN_PREP_NORM_SPLIT", str(int(norm_split))),
             ("GDN_PREP_HEAD_UP", str(int(PREP_HEAD_UP))),
+            ("GDN_START_STAGGER", str(int(PREP_START_STAGGER_US * 1350) if few_waves else 0)),
+            ("GDN_START_STATE", str(int(STATE_START_US * 1350) if prep is not None and not shared else 0)),
             ("GDN_RSQRT_COL0", str(int(NORM_RSQRT_COL0))),
             ("GDN_GATES_LEFT", str(int(PREP_GATES_LEFT and value_heads <= 16))),
             ("GDN_VEC_COL0", str(int(PREP_VEC_COL0))),
@@ -2162,6 +2182,7 @@ def create_program_descriptor(
             ("GDN_L2_FPU", str(int(l2_fpu))),
             ("GDN_FOLD_ORDER", str(int(STATE_FOLD_ORDER))),
             ("GDN_STATE_LEAN", str(int(STATE_LEAN) if prep is not None else 0)),
+            ("GDN_ZW_FPU", str(int(zw_fpu))),
             ("GDN_TAIL_FPU", str(int(tail_fpu))),
             ("GDN_L2_UNBIAS_BITS", f"{_float_bits(PREP_L2_UNBIAS):#x}u"),
             ("GDN_L2_Q_SCALE_BITS", f"{_float_bits(key_dim**-0.5 * PREP_L2_UNBIAS):#x}u"),
