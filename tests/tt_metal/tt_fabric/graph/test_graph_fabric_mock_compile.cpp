@@ -26,19 +26,25 @@ namespace {
 
 class GraphFabricMockCompile : public ::testing::TestWithParam<FabricConfig> {
 protected:
-    // TT_FABRIC_GRAPH_STOCK=1 runs the stock builder instead, for an A/B
-    static void SetUpTestSuite() {
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fabric_graph_builder(
-            std::getenv("TT_FABRIC_GRAPH_STOCK") == nullptr);
-    }
-
     void SetUp() override {
         if (std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
             GTEST_SKIP() << "needs a mock cluster: set TT_METAL_MOCK_CLUSTER_DESC_PATH, or run under tt-run with a "
                             "mock rank binding";
         }
+        // TT_FABRIC_GRAPH_STOCK=1 runs the stock builder instead, for an A/B
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        was_graph_ = rtoptions.get_fabric_graph_builder();
+        rtoptions.set_fabric_graph_builder(std::getenv("TT_FABRIC_GRAPH_STOCK") == nullptr);
     }
-    void TearDown() override { SetFabricConfig(FabricConfig::DISABLED); }
+    void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
+        SetFabricConfig(FabricConfig::DISABLED);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fabric_graph_builder(was_graph_);
+    }
+
+    bool was_graph_ = false;
 };
 
 TEST_P(GraphFabricMockCompile, BuildsRoutersOnEveryChip) {
