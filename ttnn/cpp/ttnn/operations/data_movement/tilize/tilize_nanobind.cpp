@@ -50,7 +50,7 @@ void bind_tilize(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+               * - FLOAT32, INT32, UINT32, UINT8
                  - ROW_MAJOR
 
             ``BFLOAT16`` input values must not be NaN. On Blackhole, a ``UINT8`` input must be in DRAM and needs a tile height
