@@ -65,7 +65,10 @@ class ParallelFeedForward(Module):
         ff2_dtype=ttnn.bfloat16,
         activation_dtype=None,
         pin_output_bf16=False,
+        row_independent_matmul_config: bool = False,
     ):
+        """`row_independent_matmul_config`: one matmul config for every row count (see
+        `get_matmul_config`), for input whose row count follows the input size."""
         super().__init__()
 
         if inner_dim is None:
@@ -100,6 +103,7 @@ class ParallelFeedForward(Module):
             ccl_manager=ccl_manager,
             activation_dtype=activation_dtype,
             pin_output_bf16=pin_output_bf16,
+            row_independent_matmul_config=row_independent_matmul_config,
         )
         self.ff2 = RowCls(
             inner_dim,
@@ -110,6 +114,7 @@ class ParallelFeedForward(Module):
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            row_independent_matmul_config=row_independent_matmul_config,
         )
 
     def forward(

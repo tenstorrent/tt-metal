@@ -80,6 +80,7 @@ class Flux2SingleTransformerBlock(Module):
             is_fsdp=is_fsdp,
             shard_prompt=shard_prompt,
             row_capacity=row_capacity,
+            row_independent_matmul_config=True,
         )
 
         self.norm = DistributedLayerNorm(
@@ -103,6 +104,7 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            row_independent_matmul_config=True,
         )
 
         # Shard input, since size of input dimension >> size of output dimension.
@@ -114,6 +116,7 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            row_independent_matmul_config=True,
             # No explicit L1 mm_memory_config: the fused MMRS path now hands the MM output to the
             # RS through the rolling L1 window by default (see Linear.forward_fused_addcmul).
         )
@@ -241,7 +244,14 @@ class Flux2Transformer(Module):
             joint_attention_dim, inner_dim, bias=False, mesh_device=device, mesh_axis=tp_axis
         )
 
-        self.x_embedder = ColParallelLinear(in_channels, inner_dim, bias=False, mesh_device=device, mesh_axis=tp_axis)
+        self.x_embedder = ColParallelLinear(
+            in_channels,
+            inner_dim,
+            bias=False,
+            mesh_device=device,
+            mesh_axis=tp_axis,
+            row_independent_matmul_config=True,
+        )
 
         self.transformer_blocks = ModuleList(
             TransformerBlock(
@@ -261,6 +271,7 @@ class Flux2Transformer(Module):
                 is_fsdp=is_fsdp,
                 shard_prompt=shard_prompt,
                 row_capacity=row_capacity,
+                row_independent_matmul_config=True,
             )
             for i in range(num_layers)
         )
@@ -306,7 +317,9 @@ class Flux2Transformer(Module):
         # takes the token count at run time. A split layer would reduce-scatter its 128 output
         # channels over the token rows (too few channels to scatter over TP 8), and that
         # reduce-scatter compiles a program per token count. The weights are 0.75 MB.
-        self.proj_out = Linear(inner_dim, out_channels, bias=False, mesh_device=device)
+        self.proj_out = Linear(
+            inner_dim, out_channels, bias=False, mesh_device=device, row_independent_matmul_config=True
+        )
 
         self.device = device
         self._ccl_manager = ccl_manager

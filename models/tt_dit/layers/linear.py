@@ -90,8 +90,14 @@ class Linear(Module):
         # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
+        row_independent_matmul_config: bool = False,
     ):
         super().__init__()
+
+        # One matmul config for every row count (`get_matmul_config(..., row_independent=True)`), for a
+        # layer whose row count follows the input size. Only the minimal_matmul paths honour it; the
+        # Ring paths (fused all-gather and reduce-scatter matmuls) pick their own configs.
+        self._row_independent_matmul_config = row_independent_matmul_config
 
         self.in_features = in_features
         self.out_features = out_features
@@ -150,6 +156,7 @@ class Linear(Module):
             fused_activation=self.fused_activation_fn,
             fuse_swiglu=self.fuse_swiglu,
             matmul_config=matmul_config,
+            row_independent_matmul_config=self._row_independent_matmul_config,
         )
 
         return _apply_activation_fn(output, self.activation_fn)
@@ -192,8 +199,14 @@ class ColParallelLinear(Module):
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
         pin_output_bf16=False,
+        row_independent_matmul_config: bool = False,
     ):
         super().__init__()
+
+        # One matmul config for every row count (`get_matmul_config(..., row_independent=True)`), for a
+        # layer whose row count follows the input size. Only the minimal_matmul paths honour it; the
+        # Ring paths (fused all-gather and reduce-scatter matmuls) pick their own configs.
+        self._row_independent_matmul_config = row_independent_matmul_config
 
         self.in_features = in_features
         self.out_features = out_features
@@ -514,7 +527,9 @@ class ColParallelLinear(Module):
                 )
 
             if self.chunks is not None:
-                matmul_config = matmul_config or get_matmul_config(M, K, N, core_grid, default_block_size)
+                matmul_config = matmul_config or get_matmul_config(
+                    M, K, N, core_grid, default_block_size, row_independent=self._row_independent_matmul_config
+                )
                 outputs = ttnn.experimental.minimal_matmul_split(
                     x,
                     weight,
@@ -535,7 +550,12 @@ class ColParallelLinear(Module):
                     msg = "fused addcmul is not supported alongside a fused activation on the minimal_matmul path"
                     raise ValueError(msg)
                 matmul_config = matmul_config or get_matmul_config(
-                    M, K, N, core_grid, default_block_size
+                    M,
+                    K,
+                    N,
+                    core_grid,
+                    default_block_size,
+                    row_independent=self._row_independent_matmul_config,
                 )
                 output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
                     x,
@@ -560,6 +580,7 @@ class ColParallelLinear(Module):
                     fused_activation=self.fused_activation_fn,
                     fuse_swiglu=self.fuse_swiglu,
                     matmul_config=matmul_config,
+                    row_independent_matmul_config=self._row_independent_matmul_config,
                 )
 
         return _apply_activation_fn(output, self.activation_fn)
@@ -584,8 +605,14 @@ class RowParallelLinear(Module):
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
         mm_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        row_independent_matmul_config: bool = False,
     ):
         super().__init__()
+
+        # One matmul config for every row count (`get_matmul_config(..., row_independent=True)`), for a
+        # layer whose row count follows the input size. Only the minimal_matmul paths honour it; the
+        # Ring paths (fused all-gather and reduce-scatter matmuls) pick their own configs.
+        self._row_independent_matmul_config = row_independent_matmul_config
 
         self.in_features = in_features
         self.out_features = out_features
@@ -670,7 +697,9 @@ class RowParallelLinear(Module):
             M, N = x[0].padded_shape[-2], weight.padded_shape[-1]
 
             core_grid = get_matmul_core_grid(self.mesh_device)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            matmul_config = get_matmul_config(
+                M, K, N, core_grid, default_block_size, row_independent=self._row_independent_matmul_config
+            )
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=list(x),
                 weight_tensor=weight,
@@ -688,6 +717,7 @@ class RowParallelLinear(Module):
                 compute_kernel_config=compute_kernel_config or self.compute_config,
                 dtype=dtype,
                 default_block_size=default_block_size,
+                row_independent_matmul_config=self._row_independent_matmul_config,
             )
 
         if self._mesh_axis_size > 1:
@@ -822,7 +852,11 @@ def _linear(
     fused_activation: ttnn.UnaryOpType | tuple[ttnn.UnaryOpType, bool] | None = None,
     fuse_swiglu: bool = False,
     matmul_config=None,
+    row_independent_matmul_config: bool = False,
 ) -> ttnn.Tensor:
+    """`row_independent_matmul_config`: the row count follows the input size, so take the shape's one
+    config for every row count (see `get_matmul_config`) and skip the 1D kernel, whose program
+    depends on it."""
     core_grid = get_matmul_core_grid(mesh_device)
     # Index the shapes rather than unpack them: unpacking a ttnn.Shape costs about 2.5 us.
     x_shape = shape_tuple(x.padded_shape)
@@ -836,6 +870,7 @@ def _linear(
         and not fuse_swiglu
         and default_block_size is None
         and matmul_config is None
+        and not row_independent_matmul_config
     ):
         return ttnn.linear(
             x,
@@ -850,7 +885,15 @@ def _linear(
         input_tensor=x,
         weight_tensor=weight,
         bias_tensor=bias,
-        config=matmul_config or get_matmul_config(rows, in_features, out_features, core_grid, default_block_size),
+        config=matmul_config
+        or get_matmul_config(
+            rows,
+            in_features,
+            out_features,
+            core_grid,
+            default_block_size,
+            row_independent=row_independent_matmul_config,
+        ),
         fused_activation=fused_activation,
         compute_kernel_config=compute_kernel_config,
         dtype=dtype,
