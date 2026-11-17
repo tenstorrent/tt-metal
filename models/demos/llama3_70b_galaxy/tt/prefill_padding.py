@@ -43,3 +43,36 @@ def padded_prefill_len(seq_len: int, extra_seqlens=()) -> int:
         if seq_len <= extra < padded:
             padded = extra
     return padded
+
+
+# LLAMA_GALAXY_PREFILL_SLAB1024 (opt-in): ring SDPA q_chunk_size for the 4096/6144/8192 buckets.
+# ring_distributed_sdpa splits each device's two seqlen/8 slices into 8 heads x q-chunks and, when the
+# chunk count per slice is even, hands them out in pairs, one pair per core. With q_chunk 256 a 4096
+# prefill keeps 8 of 70 cores busy with 512 Q rows each; 5120 (q_chunk 128, 5 chunks, odd) keeps 40
+# cores busy with 128 rows each. The value is the q_chunk_size to use at those lengths:
+#   unset / "0": original (256 at every power of two >= 2048).
+#   "1" / "128": 128, the 5120 setting (4096 and 8192 halve rows per core; 6144 is unchanged).
+#   "64": 64, 128 Q rows per busy core at 4096, 6144 and 8192 (32 / 48 / 64 cores).
+PREFILL_SLAB1024_ENV = "LLAMA_GALAXY_PREFILL_SLAB1024"
+PREFILL_SLAB1024_SEQLENS = (4096, 6144, 8192)
+
+
+def prefill_slab1024_q_chunk(env_value=None):
+    """Ring SDPA q_chunk_size selected by LLAMA_GALAXY_PREFILL_SLAB1024, or None when unset."""
+    value = os.environ.get(PREFILL_SLAB1024_ENV, "") if env_value is None else env_value
+    value = value.strip()
+    if value in ("", "0"):
+        return None
+    if value in ("1", "128"):
+        return 128
+    if value == "64":
+        return 64
+    raise ValueError(f"{PREFILL_SLAB1024_ENV}={value!r} is not supported; use 1, 128 or 64, or leave it unset")
+
+
+def ring_sdpa_q_chunk_override(seqlen, default, q_chunk=None):
+    """q_chunk for ring SDPA at seqlen: `q_chunk` for the PREFILL_SLAB1024_SEQLENS when it divides the
+    per-device slice (seqlen/8), else `default`. q_chunk None keeps `default` everywhere."""
+    if q_chunk is None or seqlen not in PREFILL_SLAB1024_SEQLENS or (seqlen // 8) % q_chunk != 0:
+        return default
+    return q_chunk
