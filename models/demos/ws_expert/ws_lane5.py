@@ -6,6 +6,10 @@ credits unchanged; each group is 5 columns x 5 rows (core j = 5 c + r, rows 0-3 
 down columns with 25 K tiles; row 4 runs 8 down columns with 20 K tiles), the weights move in packets of CHT 20 bfp4
 tiles (owners 10 gate/up + 4 down packets a slice, row 4 8 + 8), h goes to the group as a unicast fan-out with slot
 credits (no multicasts). Kernels: l5_writer.cpp (BRISC), l5_reader.cpp (NCRISC), l5_compute.cpp.
+L5Cfg.hmc: h by one multicast a row from the group's hub (core 0, the rectangle's NOC0 multicast start corner): the
+owners send their tiles to the hub, whose BRISC (l5h_hub.cpp) multicasts the 20-tile row to the group; every other
+transfer of the group's cores (and the muxes) runs on NOC1 from the NCRISC (l5h_reader.cpp), so that inside a group's
+rectangle NOC0 carries only its hub's multicasts.
 
 Layout (L5Cfg): groups in logical columns 1-5 (and 7-11 on a 12 x 10 Galaxy chip; each block NoC contiguous), rows
 0-4 / 5-9; each group's two mux cores in the column just west of it (0 / 6: the cores reach them on NOC1). The 11 x 10
@@ -38,6 +42,7 @@ class L5Cfg:
     FL: int = 2  # fold lag
     TL: int = 9  # tilize look-ahead (rows; own rows are 1 in 5)
     RD: int = 4  # own-expert chunk reads in flight
+    hmc: int = 0  # h by the group hub's multicast (l5h_reader.cpp / l5h_hub.cpp; NOC0 only for the multicasts)
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -120,6 +125,8 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
     # h flags: a word a (slot, producer) for stage A, a word a (slot, column) for stage B; credits: words 0-4 the
     # column's cores (by row, at the owners), 5-9 the row's cores (by column)
     hflags, hcolf, hcred = w16(NS * NH), w16(NS * NCOL), w16(2 * NR)
+    # hmc: the cores' consumed h rows at the hub (a word a core)
+    hcons = w16(GC5) if l5.hmc else None
     xring = sharded_l1(mesh, C, [l5.NXR * 25 * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT)
     xflags, xcred = w16(l5.NXR), w16(NCOL)
     land = sharded_l1(mesh, C, [l5.D * LT * 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT)
@@ -164,6 +171,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
             me_rc = (r, c)
             kernels, rd_idx = [], {}
             nxt = {}
+            hmc_rt = {}
             for g, gr in enumerate(groups):
                 cyc, link = ln[g]
                 i = cyc.index(me_rc)
@@ -202,7 +210,14 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             + ry
                         )
                     cs = crs([xy for _, xy in sub])
-                    kernels.append(
+                    if l5.hmc:
+                        for j, (x, y) in sub:
+                            _, _, k0, _, _, _, _ = core_geom(cfg, j)
+                            hmc_rt[(x, y)] = [x_t.buffer_address(), idx_t.buffer_address()]
+                            hmc_rt[(x, y)] += [counts_t.buffer_address(), k0, tab_t.buffer_address()]
+                            hmc_rt[(x, y)] += [ws_t.buffer_address(), ch0[j]]
+                    if not l5.hmc:
+                      kernels.append(
                         ttnn.KernelDescriptor(
                             kernel_source=kpath("l5_writer.cpp"),
                             core_ranges=cs,
@@ -220,11 +235,17 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             runtime_args=wr_rt,
                             config=dm(0),
                         )
-                    )
+                      )
                     rd_idx[(g, own)] = len(kernels)
+                    hmc_ct = []
+                    if l5.hmc:
+                        hmc_ct = [xring.buffer_address(), xtile, TB, cfg.RMAX, cfg.H * 2, idx_addr, cfg.nexp, PKE]
+                        hmc_ct += [l5.RD, hcons.buffer_address()]
+                        for t in (x_t, idx_t, counts_t, tab_t, ws_t):
+                            hmc_ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
                     kernels.append(
                         ttnn.KernelDescriptor(
-                            kernel_source=kpath("l5_reader.cpp"),
+                            kernel_source=kpath("l5h_reader.cpp" if l5.hmc else "l5_reader.cpp"),
                             core_ranges=cs,
                             compile_time_args=[ksl, dc, own, l5.NXR, xflags.buffer_address(), xcred.buffer_address()]
                             + [l5.D, land.buffer_address(), lflags.buffer_address(), lcred.buffer_address(), ptile]
@@ -233,12 +254,30 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             + [freew.buffer_address(), lc.CHT, wtile, l5.PD, pring.buffer_address()]
                             + [hcred.buffer_address(), K, hcolf.buffer_address(), hring.buffer_address(), htile]
                             + client_ct
-                            + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args()),
+                            + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args())
+                            + hmc_ct,
                             runtime_args=rd_rt,
                             defines=FAB_DEFS,
                             config=dm(1),
                         )
                     )
+            if l5.hmc:  # the hubs' multicasters (core 0 of each group)
+                hub_rt = ttnn.RuntimeArgs()
+                for g, gr in enumerate(groups):
+                    (hx0, hy0), (hx1, hy1) = noc(mesh, *gr[0]), noc(mesh, *gr[-1])
+                    assert (hx1 - hx0, hy1 - hy0) == (NCOL - 1, NR - 1), "a group rectangle NoC contiguous"
+                    hub_rt[gr[0][0]][gr[0][1]] = [st.buffer_address(), E, hx0, hy0, hx1, hy1, GC5]
+                kernels.append(
+                    ttnn.KernelDescriptor(
+                        kernel_source=kpath("l5h_hub.cpp"),
+                        core_ranges=crs([gr[0] for gr in groups]),
+                        compile_time_args=[NS, KTD, hring.buffer_address(), hflags.buffer_address()]
+                        + [hcons.buffer_address(), hcolf.buffer_address(), htile, scr.buffer_address(), cnt_base]
+                        + [tab_base],
+                        runtime_args=hub_rt,
+                        config=dm(0),
+                    )
+                )
             cp_rt = {own: ttnn.RuntimeArgs() for own in (1, 0)}
             for g, gr in enumerate(groups):
                 for j, (x, y) in enumerate(gr):
@@ -286,7 +325,10 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                     compile_time_args=list(mcfg.kernel_compile_time_args()),
                     runtime_args=mrt,
                     defines=FAB_DEFS,
-                    config=dm(0),
+                    config=ttnn.DataMovementConfigDescriptor(
+                        processor=ttnn.DataMovementProcessor.RISCV_0,
+                        noc=ttnn.NOC.RISCV_1_default if l5.hmc else ttnn.NOC.RISCV_0_default,
+                    ),
                     opt_level=fabric_mux.KernelBuildOptLevel.O3,
                 )
             )
@@ -327,9 +369,14 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             term_sem = args[10]
                         own = 1 if core_geom(cfg, j)[6] else 0
                         p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(args)
+            if l5.hmc:  # (l5h_reader.cpp's extra RT args, after both directions' mux client args)
+                for g, gr in enumerate(groups):
+                    for j, (x, y) in enumerate(gr):
+                        own = 1 if core_geom(cfg, j)[6] else 0
+                        p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(hmc_rt[(x, y)])
             mc = ttnn.MeshCoordinate(r, c)
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
     io = [x_t, idx_t, counts_t, ws_t, tab_t, wring, warr, cred, freew, hring, hflags, hcolf, hcred, xring, xflags]
     io += [xcred]
-    io += [land, lflags, lcred, pring, scr, counts_l1, idx_l1, table_l1, st, out_t]
+    io += [land, lflags, lcred, pring, scr, counts_l1, idx_l1, table_l1, st, out_t] + ([hcons] if l5.hmc else [])
     return mpd, io, st
