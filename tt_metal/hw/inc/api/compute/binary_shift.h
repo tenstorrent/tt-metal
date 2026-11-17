@@ -42,7 +42,7 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for left shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+        (data_format == DataFormat::UInt16) ? InstrModLoadStore::UINT16 : InstrModLoadStore::INT32;
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -87,7 +87,7 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for right shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+        (data_format == DataFormat::UInt16) ? InstrModLoadStore::UINT16 : InstrModLoadStore::INT32;
     // UInt32 uses a logical shift and clamps counts >= 32 to 31, matching the
     // scalar right-shift contract. UInt16 and Int32 retain their existing paths.
     if constexpr (is_uint32_format(data_format)) {
@@ -144,7 +144,7 @@ ALWI void binary_logical_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for logical right shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+        (data_format == DataFormat::UInt16) ? InstrModLoadStore::UINT16 : InstrModLoadStore::INT32;
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
