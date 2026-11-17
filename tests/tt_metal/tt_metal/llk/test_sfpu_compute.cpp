@@ -297,6 +297,11 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "mul_binary_tile_init();"},
       {"SFPU_OP_CHAIN_0", "mul_binary_tile(0, 1, 0);"}}},
+    // The NearestEven form is the one binary_ng emits for bf16 ttnn.rsub.
+    {"rsub_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "rsub_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "rsub_binary_tile<ckernel::DstRoundingMode::NearestEven>(0, 1, 0);"}}},
     {"atan2",
      {{"SFPU_OP_BINARY_ATAN2_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "atan2_binary_tile_init();"},
@@ -1171,6 +1176,10 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs_bf
     if (op_name == "mul_float") {
         return bfloat16(lhs * rhs);
     }
+    if (op_name == "rsub_binary") {
+        // rsub(lhs, rhs) = rhs - lhs.
+        return bfloat16(rhs - lhs);
+    }
     if (op_name == "atan2") {
         // Compute API convention: the first operand is y and the second is x.
         return bfloat16(std::atan2(lhs, rhs));
@@ -1602,7 +1611,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
             generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed),
             generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed + 1)};
     }
-    if (op_name == "binary_max" || op_name == "binary_min" || op_name == "copy_dest") {
+    if (op_name == "binary_max" || op_name == "binary_min" || op_name == "copy_dest" || op_name == "rsub_binary") {
         auto lhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed);
         auto rhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed + 1);
         return {lhs, rhs};
@@ -4073,6 +4082,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         std::make_tuple(1, "div_binary"),
         std::make_tuple(1, "mul_float"),
+        std::make_tuple(1, "rsub_binary"),
         std::make_tuple(1, "atan2"),
         std::make_tuple(1, "add_int"),
         std::make_tuple(1, "mul_int"),

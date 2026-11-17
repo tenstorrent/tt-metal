@@ -19,7 +19,7 @@ namespace ckernel {
 namespace sfpu {
 
 /**
- * @brief LLK caller for binary SFPU operations, currently supports ADD, SUB, MUL and DIV.
+ * @brief LLK caller for binary SFPU operations, currently supports ADD, SUB, RSUB, MUL and DIV.
  *
  * @note DIV special cases (matching BH semantics):
  *   - 0 / 0 -> NaN
@@ -27,9 +27,9 @@ namespace sfpu {
  *   - x / x -> 1.0 (forced exact, regardless of reciprocal rounding)
  *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
- * @tparam BINOP: selects which binary op to compute (ADD, SUB, MUL or DIV)
- * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB)
- * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB results (no-op if is_fp32_dest_acc_en).
+ * @tparam BINOP: selects which binary op to compute (ADD, SUB, RSUB = in1 - in0, MUL or DIV)
+ * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB, RSUB)
+ * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB/RSUB results (no-op if is_fp32_dest_acc_en).
  *         DIV ignores this and always rounds RNE, to match BH semantics.
  * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
@@ -44,13 +44,15 @@ template <
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV,
-        "calculate_sfpu_binary only supports ADD, SUB, MUL and DIV");
+        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::MUL ||
+            BINOP == BinaryOp::DIV,
+        "calculate_sfpu_binary only supports ADD, SUB, RSUB, MUL and DIV");
     static_assert(
-        dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB,
-        "NearestEven rounding parameter is currently supported for ADD and SUB only");
+        dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB ||
+            BINOP == BinaryOp::RSUB,
+        "NearestEven rounding parameter is currently supported for ADD, SUB and RSUB only");
     constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
-    // ADD/SUB narrow to bf16 in software under NearestEven on a 16-bit Dest; DIV always does on a
+    // ADD/SUB/RSUB narrow to bf16 in software under NearestEven on a 16-bit Dest; DIV always does on a
     // 16-bit Dest.
     constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
     constexpr bool round_div_to_bf16 = BINOP == BinaryOp::DIV && !is_fp32_dest_acc_en;
@@ -82,6 +84,8 @@ inline void calculate_sfpu_binary(
                 result = in0 * in1;
             } else if constexpr (BINOP == BinaryOp::SUB) {
                 result = in0 - in1;
+            } else if constexpr (BINOP == BinaryOp::RSUB) {
+                result = in1 - in0;
             } else if constexpr (BINOP == BinaryOp::DIV) {
                 constexpr int reciprocal_iterations = 2;  // Two Newton-Raphson iterations
                 result = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
@@ -107,7 +111,8 @@ inline void calculate_sfpu_binary(
                 }
             }
 
-            if constexpr ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB) && round_to_bf16_rne) {
+            if constexpr (
+                (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && round_to_bf16_rne) {
                 result = float32_to_bf16_rne(result, rne_bias, rne_mask);
             }
 
