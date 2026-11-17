@@ -1534,7 +1534,7 @@ def _check_finite(host, case, op_name, index):
     )
 
 
-def _check_placement(got, spec, mesh_device, op_name, index, source="captured"):
+def _check_placement(got, spec, mesh_device, op_name, index, source="captured", op_picks_grid=False):
     """Assert the output landed in the expected layout / buffer type / shard.
 
     Without this a no-op ``to_memory_config`` or ``interleaved_to_sharded`` — one
@@ -1544,7 +1544,11 @@ def _check_placement(got, spec, mesh_device, op_name, index, source="captured"):
     The shard *detail* (grid, per-core shape, orientation) is compared only when the
     expected grid exists on this device: on a smaller device the op derives its own
     grid, and the capture's absolute core coordinates are then not the answer to
-    compare against (the memory layout and buffer type still are).
+    compare against (the memory layout and buffer type still are). When
+    ``op_picks_grid`` is set the op chose its output shard grid from this device's grid
+    (see ``_op_picks_grid``): the orientation is still compared, and so is the shard
+    width of a height-sharded output (the channels each core holds, which the grid does
+    not change); the core range and the grid-dependent shard dimensions are not.
     """
     if "layout" in spec:
         want_layout = LAYOUT[spec["layout"]]
@@ -1565,6 +1569,18 @@ def _check_placement(got, spec, mesh_device, op_name, index, source="captured"):
         got_mem.buffer_type == want_buffer
     ), f"{op_name}: output[{index}] buffer type {got_mem.buffer_type} != {source} {want_buffer}"
 
+    if mem.get("shard") is not None and op_picks_grid:
+        got_shard, want_shard = got_mem.shard_spec, mem["shard"]
+        assert got_shard is not None, f"{op_name}: output[{index}] has no shard spec, {source} is sharded"
+        want_orientation = ORIENTATION[want_shard["orientation"]]
+        assert (
+            got_shard.orientation == want_orientation
+        ), f"{op_name}: output[{index}] shard orientation {got_shard.orientation} != {source} {want_orientation}"
+        if want_mem_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            assert (
+                got_shard.shape[1] == want_shard["shape"][1]
+            ), f"{op_name}: output[{index}] shard width {got_shard.shape[1]} != {source} {want_shard['shape'][1]}"
+        return
     if mem.get("shard") is None or not _shard_grid_fits(mem, mesh_device)[0]:
         return
     want_mem = build_memory_config(mem, mesh_device)
@@ -1588,6 +1604,21 @@ def _output_tensors(out):
 
 _POOL_OPS = frozenset({"ttnn.max_pool2d", "ttnn.avg_pool2d"})
 
+# The compute grid the capture ran on (README: 20-core Blackhole, 5x4).
+_CAPTURE_GRID = (5, 4)
+# Ops that pick their output shard grid from the device's compute grid when the call
+# names no output memory_config: conv2d shards over as many cores as the device has, so
+# a 5x4 capture's 4x4 block-sharded output becomes 8x4 on a 32-core Quasar grid.
+_OP_PICKS_GRID_OPS = frozenset({"ttnn.conv2d"})
+
+
+def _op_picks_grid(case, op_name, mesh_device):
+    """Did the op choose this output's shard grid itself, for a grid other than the capture's?"""
+    if op_name not in _OP_PICKS_GRID_OPS or case["kwargs"].get("memory_config") is not None:
+        return False
+    grid = mesh_device.compute_with_storage_grid_size()
+    return (grid.x, grid.y) != _CAPTURE_GRID
+
 
 def _check_output(out, case, mesh_device, op_name):
     """Check every returned tensor against its captured spec, then its values.
@@ -1607,6 +1638,7 @@ def _check_output(out, case, mesh_device, op_name):
             expected
         ), f"{op_name}: op returned {len(tensors)} tensor(s), capture recorded {len(expected)}"
 
+    op_picks_grid = _op_picks_grid(case, op_name, mesh_device)
     for i, got in enumerate(tensors):
         spec = expected[i] if i < len(expected) else None
         source = "captured"
@@ -1636,7 +1668,7 @@ def _check_output(out, case, mesh_device, op_name):
         # A single-slice pool's flattened L1 output can't match the captured DRAM placement, but its
         # layout must still be the requested one (TILE output takes a different kernel path).
         placement_spec = {k: v for k, v in spec.items() if k != "mem"} if pool_single_slice else spec
-        _check_placement(got, placement_spec, mesh_device, op_name, i, source)
+        _check_placement(got, placement_spec, mesh_device, op_name, i, source, op_picks_grid)
 
     for i, t in enumerate(tensors):
         _check_finite(from_tt(t, mesh_device), case, op_name, i)
