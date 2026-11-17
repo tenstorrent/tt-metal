@@ -31,6 +31,14 @@
 // higher columns on NoC0. Two core-local counters hand the round over: send_go (writer -> reader:
 // partials pushed, credits in) and send_done (reader -> writer: its slices written and acked). The
 // writer alone pops the partials and bumps the arrival counts, after both halves landed.
+// Split slab fill (HEIGHT-sharded ROW_MAJOR, see the reader's file comment): before each M-block's weights the
+// writer reads the slab runs owned by higher-index input shards on NoC1, whose responses take the short way back,
+// and raises slab_fwd_done; from the second block on it first waits for the reader's slab_free.
+//
+// Split face-direct gather: after issuing each K-block's weights the writer waits for the reader's gather_go (the
+// in0 block is reserved and the slab complete), then writes every odd row group of in0_stream_rows tile-rows on
+// NoC1, raising gather_done after each; the reader pushes the groups in order.
+//
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
 // the same base address is right on every core. The counters only grow, so round j waits for
 // (j + 1) x the per-round count.
@@ -42,6 +50,8 @@
 #include "api/semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "conv2d_3x3_combine_dataflow.hpp"
+#include "conv2d_3x3_slab_dataflow.hpp"
+#include "conv2d_3x3_gather_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
@@ -65,9 +75,32 @@ void kernel_main() {
     constexpr bool combine_split_nocs = get_compile_time_arg_val(18) != 0;
     constexpr uint32_t combine_send_go_sem_id = get_compile_time_arg_val(19);
     constexpr uint32_t combine_send_done_sem_id = get_compile_time_arg_val(20);
-    constexpr auto weight_args = TensorAccessorArgs<21>();
+    constexpr bool slab_split = get_compile_time_arg_val(21) != 0;
+    constexpr uint32_t cb_halo_slab = get_compile_time_arg_val(22);
+    constexpr int32_t input_height = get_compile_time_arg_val(23);
+    constexpr int32_t input_width = get_compile_time_arg_val(24);
+    constexpr uint32_t output_width = get_compile_time_arg_val(25);
+    constexpr uint32_t num_out_px = get_compile_time_arg_val(26);
+    constexpr int32_t padding = get_compile_time_arg_val(27);
+    constexpr int32_t stride = get_compile_time_arg_val(28);
+    constexpr int32_t dilation = get_compile_time_arg_val(29);
+    constexpr int32_t band_stride_px = get_compile_time_arg_val(30);
+    constexpr int32_t band_last_tap = get_compile_time_arg_val(31);
+    constexpr uint32_t input_page_bytes = get_compile_time_arg_val(32);
+    constexpr uint32_t input_shard_rows = get_compile_time_arg_val(33);
+    constexpr uint32_t slab_fwd_done_sem_id = get_compile_time_arg_val(34);
+    constexpr uint32_t slab_free_sem_id = get_compile_time_arg_val(35);
+    constexpr bool gather_split = get_compile_time_arg_val(36) != 0;
+    constexpr uint32_t in0_stream_rows = get_compile_time_arg_val(37);
+    constexpr uint32_t gather_go_sem_id = get_compile_time_arg_val(38);
+    constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(39);
+    constexpr uint32_t cb_im2col_tiles = get_compile_time_arg_val(40);
+    constexpr uint32_t c_in_p = get_compile_time_arg_val(41);
+    constexpr uint32_t tensor_kkh_tiles = get_compile_time_arg_val(42);
+    constexpr auto weight_args = TensorAccessorArgs<43>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto weight_mcast = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("weight_mcast_ct_offset"),
         get_named_compile_time_arg_val("weight_mcast_rt_offset")>();
@@ -83,7 +116,9 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t out_n_tile_start = get_arg_val<uint32_t>(8);
     const uint32_t out_valid_tiles = get_arg_val<uint32_t>(9);
     [[maybe_unused]] const uint32_t my_col = get_arg_val<uint32_t>(10);
-    constexpr uint32_t row_peer_coords_arg = 11;  // (x, y) of grid columns 0..k_cols-1 of this row
+    [[maybe_unused]] const uint32_t input_addr = get_arg_val<uint32_t>(11);
+    [[maybe_unused]] const uint32_t my_shard = get_arg_val<uint32_t>(12);
+    constexpr uint32_t row_peer_coords_arg = 13;  // (x, y) of grid columns 0..k_cols-1 of this row
 
     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
@@ -180,9 +215,93 @@ void kernel_main() {
         }
     };
 
+    // ---- fill_halo_slab, higher-shard half, and the trailing tile-rows of the face-direct gather (see the file
+    // comment).
+    const uint32_t slab_l1 = get_write_ptr(cb_halo_slab);
+    int32_t slab_x_base[3];
+    uint32_t o_first = 0;
+    uint32_t o_end = 0;
+    [[maybe_unused]] auto fill_forward_slab = [&](uint32_t m_block_idx) {
+        static_assert(!slab_split || input_shard_rows > 0);
+        // Compiled on every path; only the split fill runs it.
+        constexpr uint32_t shard_rows = input_shard_rows > 0 ? input_shard_rows : 1;
+        if (m_block_idx > 0) {
+            Semaphore<>(slab_free_sem_id).wait_min(m_block_idx);
+        }
+        const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
+        const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+        const uint32_t block_valid_tiles =
+            actual_m_tiles - block_tiles_done < block_m_tiles ? actual_m_tiles - block_tiles_done : block_m_tiles;
+        o_first = (m_tile_start + block_tiles_done) * 32;
+        const uint32_t o_end_tiles = o_first + block_valid_tiles * 32;
+        o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
+        conv2d_3x3::slab_bands<input_width, input_height * input_width, dilation, band_stride_px>(
+            conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+                o_first, o_end),
+            slab_x_base,
+            [&](int32_t, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
+                if (x_lo >= x_hi) {
+                    return;
+                }
+                uint32_t l1 = slab_l1 + x_lo * input_page_bytes;
+                for (uint32_t page = x_lo + v_minus_x, end_page = x_hi + v_minus_x; page < end_page;) {
+                    const uint32_t run = input.num_contiguous_pages(page, end_page);
+                    if (page / shard_rows > my_shard) {
+                        noc_async_read(input.get_noc_addr(page), l1, run * input_page_bytes);
+                    }
+                    page += run;
+                    l1 += run * input_page_bytes;
+                }
+            });
+        noc_async_read_barrier();
+        Semaphore<>(slab_fwd_done_sem_id).up(1);
+    };
+
+    using FaceGather = conv2d_3x3::FaceGather<
+        output_width,
+        input_height,
+        input_width,
+        stride,
+        padding,
+        dilation,
+        c_in_p,
+        tensor_kkh_tiles,
+        block_k_tiles,
+        band_last_tap>;
+    conv2d_3x3::TaggedReads gather_reads;
+    constexpr uint32_t TRID_GATHER = 1;
+    // Every in0 K-block starts at the CB base: its capacity is one K-block.
+    const uint32_t in0_l1 = get_write_ptr(cb_im2col_tiles);
+    [[maybe_unused]] auto gather_odd_groups = [&](uint32_t k_block_seq) {
+        Semaphore<>(gather_go_sem_id).wait_min(k_block_seq + 1);
+        const int32_t kh = (k_block_seq % num_k_blocks) * block_k_tiles / tensor_kkh_tiles;
+        for (uint32_t group = 1; group < block_m_tiles / in0_stream_rows; group += 2) {
+            gather_reads.begin(TRID_GATHER);
+            FaceGather::tile_rows(
+                gather_reads,
+                in0_l1,
+                group * in0_stream_rows,
+                (group + 1) * in0_stream_rows,
+                o_first,
+                o_end,
+                kh,
+                slab_l1,
+                slab_x_base);
+            gather_reads.wait(TRID_GATHER);
+            Semaphore<>(gather_done_sem_id).up(1);
+        }
+        dataflow_kernel_lib::set_read_trid(gather_reads.noc, 0);
+    };
+
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+        if constexpr (slab_split) {
+            fill_forward_slab(m_block_idx);
+        }
         while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
             issue_weight_k_block();
+            if constexpr (gather_split) {
+                gather_odd_groups(k_blocks_issued - 1);
+            }
         }
         if constexpr (k_split) {
             combine_round(m_block_idx);

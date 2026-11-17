@@ -31,6 +31,18 @@
 // is its own [32, C_in_p] block; the pixels of one output image row read consecutive slab pixels, so a
 // tap costs one read per image row it spans, plus zero-fills for padding.
 //
+// Split slab fill (HEIGHT-sharded ROW_MAJOR): a read response travels the requesting NoC's direction from the
+// owner core, so on NoC0 a run owned by a higher-index shard (to the right / below) wraps around the ring. The
+// reader reads the runs of its own and lower shards; the writer reads the higher shards' runs on NoC1 into the
+// same slab and raises slab_fwd_done per M-block. The reader raises slab_free once a block's gather has
+// landed, so the writer never refills a slab still being read.
+//
+// Face-direct im2col (see conv2d_3x3_gather_dataflow.hpp): the reader reserves the K-block's in0 tiles and pushes
+// them in row groups of in0_stream_rows tile-rows, in order, so compute multiplies each group as it lands. With a
+// split gather it raises gather_go once the block is reserved and the slab complete; the writer then gathers every
+// odd row group and counts them in gather_done, while the reader gathers the even ones. Only the reader touches
+// the CB's pointers; the writer writes into the reserved block, which starts at the CB base.
+//
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
 // zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
@@ -44,6 +56,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "api/semaphore.h"
 #include "conv2d_3x3_combine_dataflow.hpp"
+#include "conv2d_3x3_slab_dataflow.hpp"
+#include "conv2d_3x3_gather_dataflow.hpp"
 
 namespace {
 
@@ -52,34 +66,7 @@ constexpr uint32_t ELEM_BYTES = 2;        // bf16 slab and im2col rows
 constexpr uint32_t TRID_GATHER = 4;       // ROW_MAJOR bands use trids 1..3
 constexpr uint32_t TRID_INPUT_TILES = 5;  // TILE footprint batches
 
-// The NIU counts outstanding reads per transaction id in a counter capped at
-// NOC_MAX_TRANSACTION_ID_COUNT; long batches are throttled to stay well below it.
-constexpr uint32_t TRID_CHECK_EVERY_PACKETS = 64;
-constexpr uint32_t TRID_MIN_FREE = (NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2;
-
-struct TaggedReads {
-    Noc noc;
-    uint32_t trid = 0;
-    uint32_t packets_since_check = 0;
-
-    FORCE_INLINE void begin(uint32_t new_trid) {
-        trid = new_trid;
-        packets_since_check = 0;
-        dataflow_kernel_lib::set_read_trid(noc, trid);
-    }
-
-    FORCE_INLINE void read(uint64_t src_noc_addr, uint32_t dst_l1_addr, uint32_t bytes) {
-        noc_async_read(src_noc_addr, dst_l1_addr, bytes);
-        packets_since_check += (bytes + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE;
-        if (packets_since_check >= TRID_CHECK_EVERY_PACKETS) {
-            packets_since_check = 0;
-            while (noc_available_transactions(noc.get_noc_id(), trid) < TRID_MIN_FREE) {
-            }
-        }
-    }
-
-    FORCE_INLINE void wait(uint32_t which) { dataflow_kernel_lib::async_read_barrier_with_trid(noc, which); }
-};
+using conv2d_3x3::TaggedReads;
 
 }  // namespace
 
@@ -119,7 +106,17 @@ void kernel_main() {
     constexpr uint32_t combine_send_go_sem_id = get_compile_time_arg_val(32);
     constexpr uint32_t combine_send_done_sem_id = get_compile_time_arg_val(33);
     constexpr bool tap_major = get_compile_time_arg_val(34) != 0;
-    constexpr auto input_args = TensorAccessorArgs<35>();
+    constexpr bool face_direct = get_compile_time_arg_val(35) != 0;
+    constexpr int32_t band_last_tap = get_compile_time_arg_val(36);
+    constexpr uint32_t cb_im2col_tiles = get_compile_time_arg_val(37);
+    constexpr bool slab_split = get_compile_time_arg_val(38) != 0;
+    constexpr uint32_t slab_fwd_done_sem_id = get_compile_time_arg_val(39);
+    constexpr uint32_t slab_free_sem_id = get_compile_time_arg_val(40);
+    constexpr bool gather_split = get_compile_time_arg_val(41) != 0;
+    constexpr uint32_t in0_stream_rows = get_compile_time_arg_val(42);
+    constexpr uint32_t gather_go_sem_id = get_compile_time_arg_val(43);
+    constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(44);
+    constexpr auto input_args = TensorAccessorArgs<45>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
@@ -128,7 +125,8 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t read_rotation = get_arg_val<uint32_t>(4);
     [[maybe_unused]] const uint32_t slice_page_offset = get_arg_val<uint32_t>(5);
     [[maybe_unused]] const uint32_t my_col = get_arg_val<uint32_t>(6);
-    constexpr uint32_t row_peer_coords_arg = 7;  // (x, y) of grid columns 0..k_cols-1 of this row
+    [[maybe_unused]] const uint32_t my_shard = get_arg_val<uint32_t>(7);
+    constexpr uint32_t row_peer_coords_arg = 8;  // (x, y) of grid columns 0..k_cols-1 of this row
 
     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     constexpr int32_t num_in_px = input_height * input_width;
@@ -139,9 +137,11 @@ void kernel_main() {
     constexpr bool k_padded = tensor_kkh_tiles * TILE_DIM > tap_cols;
     // One K-block per kernel row: every K-block puts taps, lanes and K padding at the same row offsets.
     constexpr bool one_k_block_per_kh = block_k_tiles == tensor_kkh_tiles;
-    constexpr bool zero_im2col_once = one_k_block_per_kh && (lanes_padded || k_padded);
+    constexpr bool zero_im2col_once = !face_direct && one_k_block_per_kh && (lanes_padded || k_padded);
     constexpr uint32_t c_in_tiles = c_in_p / TILE_DIM;
-    static_assert((tensor_kkh_tiles % block_k_tiles) == 0, "a K-block never straddles a kernel row");
+    static_assert(
+        (tensor_kkh_tiles % block_k_tiles) == 0 || (face_direct && block_k_tiles % tensor_kkh_tiles == 0),
+        "a K-block never straddles a kernel row, unless it is whole kernel rows (face-direct)");
     static_assert(num_k_blocks * block_k_tiles == 3 * tensor_kkh_tiles, "K-blocks tile the kh blocks exactly");
     static_assert((c_in * ELEM_BYTES) % 16 == 0, "per-tap copies move whole 16 B L1 words");
     static_assert(!tile_input || (c_in_p % TILE_DIM) == 0, "TILE slab rows are whole tile columns");
@@ -149,15 +149,46 @@ void kernel_main() {
     static_assert(!tile_input || (slab_tile_rows % untilize_batch_rows) == 0, "slab is whole untilize batches");
     static_assert(!channel_slice || input_shard_rows > 0, "a channel slice is read in owner-shard runs");
     static_assert(
+        !slab_split || (!tile_input && !channel_slice && input_shard_rows > 0),
+        "the slab fill is split by owner shard of ROW_MAJOR HEIGHT pages");
+    static_assert(
         !tap_major || (stride == 1 && !lanes_padded && !k_padded && block_k_cols % c_in_p == 0),
         "tap-major rows are whole unpadded taps read in unit-stride pixel runs");
+
+    using FaceGather = conv2d_3x3::FaceGather<
+        output_width,
+        input_height,
+        input_width,
+        stride,
+        padding,
+        dilation,
+        c_in_p,
+        tensor_kkh_tiles,
+        block_k_tiles,
+        band_last_tap>;
+    constexpr uint32_t FACE_DIM = FaceGather::FACE_DIM;
+    constexpr uint32_t in0_tile_bytes = FaceGather::tile_bytes;
+    constexpr int32_t face_taps = face_direct ? FaceGather::face_taps : 1;
+    constexpr uint32_t kh_per_k_block = face_direct ? FaceGather::kh_per_k_block : 1;
+    // A tile column of a kernel row holds two face columns of face_taps taps each; past tap 2 it is K padding.
+    constexpr bool padding_only_faces = face_direct && 2 * tensor_kkh_tiles > (3 + face_taps - 1) / face_taps;
+    static_assert(
+        !face_direct || (!tile_input && !lanes_padded && stride * c_in_p == FACE_DIM &&
+                         face_taps * c_in_p == FACE_DIM && (face_taps == 1 || dilation == 1)),
+        "face-direct: one output pixel steps the slab by one face row of adjacent, unpadded taps");
+    static_assert(face_direct || band_last_tap == 2, "only face-direct reads a tap past the kernel row's last one");
+    constexpr uint32_t in0_groups = block_m_tiles / in0_stream_rows;
+    static_assert(in0_groups * in0_stream_rows == block_m_tiles, "row groups tile the in0 block");
+    static_assert(in0_groups == 1 || (face_direct && num_k_blocks == 1), "only a whole-K face-direct block streams");
+    static_assert(!gather_split || (slab_split && in0_groups >= 2), "the writer gathers odd row groups");
+    // The writer's row groups of every earlier K-block, for the cumulative gather_done count.
+    constexpr uint32_t writer_groups_per_k_block = gather_split ? in0_groups / 2 : 0;
 
     const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
     // TILE: compute pushes exactly slab_tile_rows tile-rows per M-block and the reader pops them all,
     // so the slab always starts at the CB base.
     const uint32_t slab_l1 = tile_input ? get_read_ptr(cb_halo_slab) : get_write_ptr(cb_halo_slab);
     const uint64_t slab_noc = get_noc_addr(slab_l1);
-    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
     TaggedReads reads;
 
     if constexpr (zero_im2col_once) {
@@ -165,22 +196,23 @@ void kernel_main() {
         reads.noc.async_write_zeros(CircularBuffer(cb_im2col_rm), im2col_rm_bytes);
         reads.noc.write_zeros_l1_barrier();
     }
+    if constexpr (padding_only_faces) {
+        reads.noc.async_write_zeros(CircularBuffer(cb_im2col_tiles), block_m_tiles * block_k_tiles * in0_tile_bytes);
+        reads.noc.write_zeros_l1_barrier();
+    }
 
-    auto zero_fill = [&](uint32_t dst_l1, uint32_t bytes) {
-        while (bytes > 0) {
-            const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
-            reads.read(zeros_noc, dst_l1, chunk);
-            dst_l1 += chunk;
-            bytes -= chunk;
-        }
-    };
+    auto zero_fill = [&](uint32_t dst_l1, uint32_t bytes) { reads.zero_fill(dst_l1, bytes); };
 
-    // Input pages [page, end_page) into consecutive L1 page slots from l1.
+    // Input pages [page, end_page) into consecutive L1 page slots from l1. With the split fill, runs of higher
+    // shards are the writer's.
+    constexpr uint32_t owner_shard_rows = input_shard_rows > 0 ? input_shard_rows : 1;
     auto read_pages = [&](uint32_t page, uint32_t end_page, uint32_t l1) {
         while (page < end_page) {
             // Interleaved runs step by the bank count, not by 1; only unit-stride runs are contiguous here.
             const uint32_t run = input.contiguous_page_stride() == 1 ? input.num_contiguous_pages(page, end_page) : 1;
-            reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
+            if (!slab_split || page / owner_shard_rows <= my_shard) {
+                reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
+            }
             page += run;
             l1 += run * input_page_bytes;
         }
@@ -218,13 +250,11 @@ void kernel_main() {
         const uint32_t o_end_tiles = o_first + block_valid_tiles * TILE_DIM;
         const uint32_t o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
 
-        const int32_t ho_first = o_first / output_width;
-        const int32_t wo_first = o_first % output_width;
-        const int32_t ho_last = (o_end - 1) / output_width;
-        const int32_t wo_last = (o_end - 1) % output_width;
-        const int32_t f = (ho_first * stride - padding) * input_width + wo_first * stride - padding;
-        const int32_t band_len =
-            (ho_last - ho_first) * stride * input_width + (wo_last - wo_first) * stride + 2 * dilation + 1;
+        const conv2d_3x3::SlabFootprint footprint =
+            conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+                o_first, o_end);
+        const int32_t f = footprint.f;
+        const int32_t band_len = footprint.band_len;
 
         int32_t slab_x_base[3];
         [[maybe_unused]] uint32_t slab_ready_pages[3];  // TILE: slab pages that hold band kh once compute pushed them
@@ -293,24 +323,25 @@ void kernel_main() {
         } else {
             // ---- fill_halo_slab (ROW_MAJOR): band kh tagged trid kh + 1; overlapping bands read only their
             // new tail.
-            for (int32_t kh = 0; kh < 3; ++kh) {
-                const int32_t seg_lo = kh == 0 ? 0
-                                               : ((kh - 1) * band_stride_px + band_len > kh * band_stride_px
-                                                      ? (kh - 1) * band_stride_px + band_len
-                                                      : kh * band_stride_px);
-                const int32_t seg_hi = kh * band_stride_px + band_len;
-                const int32_t v_minus_x = f + kh * dilation * input_width - kh * band_stride_px;
-                slab_x_base[kh] = -v_minus_x;
-                const int32_t x_lo = seg_lo > -v_minus_x ? seg_lo : -v_minus_x;
-                const int32_t x_hi = seg_hi < num_in_px - v_minus_x ? seg_hi : num_in_px - v_minus_x;
-                reads.begin(kh + 1);
-                if (x_lo < x_hi) {
-                    // Each core starts its band at a different pixel so the cores do not all open on one bank.
-                    const int32_t x_split =
-                        x_lo + static_cast<int32_t>(read_rotation % static_cast<uint32_t>(x_hi - x_lo));
-                    read_slab_pixels(x_split, x_hi, v_minus_x);
-                    read_slab_pixels(x_lo, x_split, v_minus_x);
+            if constexpr (slab_split) {
+                if (m_block_idx > 0) {
+                    // The writer refills the slab only after this block's gather no longer reads it.
+                    Semaphore<>(slab_free_sem_id).up(1);
                 }
+            }
+            conv2d_3x3::slab_bands<input_width, num_in_px, dilation, band_stride_px>(
+                footprint, slab_x_base, [&](int32_t kh, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
+                    reads.begin(kh + 1);
+                    if (x_lo < x_hi) {
+                        // Each core starts its band at a different pixel so the cores do not all open on one bank.
+                        const int32_t x_split =
+                            x_lo + static_cast<int32_t>(read_rotation % static_cast<uint32_t>(x_hi - x_lo));
+                        read_slab_pixels(x_split, x_hi, v_minus_x);
+                        read_slab_pixels(x_lo, x_split, v_minus_x);
+                    }
+                });
+            if constexpr (slab_split) {
+                Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);
             }
         }
 
@@ -321,13 +352,52 @@ void kernel_main() {
             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
             const uint32_t col_hi = col_lo + block_k_cols;
             if (col_lo == 0) {
-                if constexpr (tile_input) {
-                    if (slab_ready_pages[kh] > 0) {
-                        cb_wait_front(cb_halo_slab, slab_ready_pages[kh]);
+                for (int32_t band = kh; band < kh + static_cast<int32_t>(kh_per_k_block); ++band) {
+                    if constexpr (tile_input) {
+                        if (slab_ready_pages[band] > 0) {
+                            cb_wait_front(cb_halo_slab, slab_ready_pages[band]);
+                        }
+                    } else {
+                        reads.wait(band + 1);
                     }
-                } else {
-                    reads.wait(kh + 1);
                 }
+            }
+
+            if constexpr (face_direct) {
+                cb_reserve_back(cb_im2col_tiles, block_m_tiles * block_k_tiles);
+                const uint32_t tiles_l1 = get_write_ptr(cb_im2col_tiles);
+                if constexpr (gather_split) {
+                    Semaphore<>(gather_go_sem_id).up(1);
+                }
+                const uint32_t writer_groups_before =
+                    (m_block_idx * num_k_blocks + k_block_idx) * writer_groups_per_k_block;
+                // Push row groups [pushed, end_group) in order, a writer's group once the writer counted it.
+                uint32_t pushed = 0;
+                auto push_through = [&](uint32_t end_group) {
+                    for (; pushed < end_group; ++pushed) {
+                        if (gather_split && pushed % 2 == 1) {
+                            Semaphore<>(gather_done_sem_id).wait_min(writer_groups_before + (pushed + 1) / 2);
+                        }
+                        cb_push_back(cb_im2col_tiles, in0_stream_rows * block_k_tiles);
+                    }
+                };
+                for (uint32_t group = 0; group < in0_groups; group += gather_split ? 2 : 1) {
+                    reads.begin(TRID_GATHER);
+                    FaceGather::tile_rows(
+                        reads,
+                        tiles_l1,
+                        group * in0_stream_rows,
+                        (group + 1) * in0_stream_rows,
+                        o_first,
+                        o_end,
+                        kh,
+                        slab_l1,
+                        slab_x_base);
+                    reads.wait(TRID_GATHER);
+                    push_through(group + 1);
+                }
+                push_through(in0_groups);
+                continue;
             }
             const uint32_t data_hi = col_hi < tap_cols ? col_hi : tap_cols;
             const int32_t kw_first = col_lo < tap_cols ? col_lo / c_in_p : 3;

@@ -78,6 +78,29 @@ COMBINE_SPLIT_NOCS = True
 # pixel (one gather read per pixel per K-block).
 TAP_MAJOR_IM2COL = True
 
+# Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
+# tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
+# reader then writes the bf16 in0 tiles itself, one read per face run, and compute skips the tilize. False keeps
+# the row gather + tilize.
+FACE_DIRECT_IM2COL = True
+FACE_DIM = 16
+# On face-direct shapes, take the whole K walk as one K-block (op_design lamp P1): one matmul init, one pack of
+# the fp32 block and no L1-accumulation passes per M-block. False keeps one K-block per kernel row.
+FACE_DIRECT_WHOLE_K_BLOCK = True
+
+# HEIGHT-sharded ROW_MAJOR slab fill split by NoC: the reader (NoC0) reads the runs of its own and lower input
+# shards, the writer (NoC1) those of higher shards, so no read response wraps around the ring. False keeps the
+# whole fill on the reader.
+SLAB_SPLIT_NOCS = True
+# Face-direct in0 streaming: with one K-block per M-block, the reader pushes the in0 block in row groups of this
+# many tile-rows (rounded to whole matmul subblocks dividing the block) and compute runs one matmul call per group,
+# so the matmul overlaps the gather. A value >= block_m_tiles pushes and multiplies the whole block at once.
+IN0_STREAM_TILE_ROWS = 2
+# Face-direct gather split between the two data-movement RISCs: the writer gathers every other row group on NoC1
+# while the reader gathers the rest, since the gather is bound by read issue. Applies with the split slab fill (the
+# writer then holds the slab plan) and in0 streaming. False keeps the whole gather on the reader.
+GATHER_SPLIT_RISCS = True
+
 # Buffer-depth knobs (Blocking Model depth table).
 IM2COL_RM_DEPTH_ROWS = 2
 WEIGHT_DEPTH = 2
@@ -170,6 +193,31 @@ class Conv3x3Geometry:
     def tensor_k_tiles(self):
         return 3 * self.tensor_kkh_tiles
 
+    @property
+    def face_taps(self):
+        """Taps of one kernel row in one face row (face-direct im2col)."""
+        return max(1, FACE_DIM // self.c_in_p)
+
+    @property
+    def face_direct_capable(self):
+        """A face's rows step through the slab by exactly one face row, the face's taps are adjacent pixels,
+        the activation is bf16 like the slab, and no lane of a pixel is padding."""
+        return (
+            FACE_DIRECT_IM2COL
+            and not self.tile_input
+            and self.stride * self.c_in_p == FACE_DIM
+            and (self.face_taps == 1 or self.dilation == 1)
+            and self.c_in == self.k_cols * self.c_in_p
+        )
+
+    @property
+    def band_last_tap(self):
+        """Last kernel-row tap the gather reads. A face-direct face that holds the third tap also reads the
+        next pixel into its K-padding lanes (zero weight rows), so the band reaches one tap further."""
+        if self.face_direct_capable:
+            return _div_up(3, self.face_taps) * self.face_taps - 1
+        return 2
+
 
 @dataclass(frozen=True)
 class Conv3x3Blocking:
@@ -189,6 +237,7 @@ class Conv3x3Blocking:
     out_subblock_w: int
     combine_subblock_h: int
     combine_subblock_w: int
+    in0_stream_rows: int
     im2col_rm_depth_rows: int
     weight_depth: int
     out_depth_row_groups: int
@@ -227,10 +276,11 @@ def _core_m_ranges(tensor_m_tiles, core_m_tiles):
 
 
 def _block_band_len(g: Conv3x3Geometry, o_first, o_last):
-    """Pixels one kernel row of the block touches: from tap (kh, 0) of o_first to tap (kh, 2) of o_last."""
+    """Pixels one kernel row of the block touches: from tap (kh, 0) of o_first to tap (kh, band_last_tap) of
+    o_last."""
     ho0, wo0 = divmod(o_first, g.output_width)
     ho1, wo1 = divmod(o_last, g.output_width)
-    return (ho1 - ho0) * g.stride * g.input_width + (wo1 - wo0) * g.stride + 2 * g.dilation + 1
+    return (ho1 - ho0) * g.stride * g.input_width + (wo1 - wo0) * g.stride + g.band_last_tap * g.dilation + 1
 
 
 def _block_first_tap(g: Conv3x3Geometry, o_first):
@@ -280,6 +330,23 @@ def _default_untilize_batch_rows(g: Conv3x3Geometry, band_len, raw_slab_rows):
     return max(1, min(raw_slab_rows, _div_up(band_len, TILE) + 1))
 
 
+def face_direct_im2col(g: Conv3x3Geometry, bk):
+    """Face-direct gather: needs whole kernel rows per K-block, so every K-block has one column layout. Under a
+    K split the matmul's L1-accumulating packs to the caller-owned partials are ordered only by the tilize's own
+    pack between K-blocks, so without a tilize the K walk must be one K-block."""
+    return g.face_direct_capable and bk % g.tensor_kkh_tiles == 0 and (not g.k_split or bk == g.tensor_k_tiles)
+
+
+def _in0_stream_rows(g: Conv3x3Geometry, bm, bk, sb_h):
+    """Tile-rows per in0 push and matmul call: whole matmul subblocks dividing bm, at most IN0_STREAM_TILE_ROWS.
+    Only face-direct with one K-block per M-block streams (the reader produces in0, and a K-block walk would need
+    every row group of every K-block); otherwise the whole block."""
+    if not (face_direct_im2col(g, bk) and bk == g.tensor_k_tiles and not g.k_split):
+        return bm
+    target = max(IN0_STREAM_TILE_ROWS, sb_h)
+    return max(r for r in range(sb_h, bm + 1, sb_h) if bm % r == 0 and r <= target)
+
+
 def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
     num_k_blocks = g.tensor_k_tiles // bk
     max_m_blocks = _div_up(core_m_tiles, bm)
@@ -306,7 +373,7 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
     total = (
         slab_bytes
         + input_tile_bytes
-        + IM2COL_RM_DEPTH_ROWS * bk * TILE_BYTES_BF16
+        + (0 if face_direct_im2col(g, bk) else IM2COL_RM_DEPTH_ROWS * bk * TILE_BYTES_BF16)
         + bm * bk * g.in0_tile_bytes
         + weight_depth * bk * bn * g.weight_tile_bytes
         + (ns * g.weight_tile_bytes if g.has_bias else 0)
@@ -326,6 +393,7 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
         out_subblock_w=sb_w,
         combine_subblock_h=combine_sb_h,
         combine_subblock_w=combine_sb_w,
+        in0_stream_rows=_in0_stream_rows(g, bm, bk, sb_h),
         footprint_bytes=total,
     )
 
@@ -348,6 +416,8 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     divisors = [d for d in range(kkh, 0, -1) if kkh % d == 0]
     tap_floor = g.c_in_p // TILE if g.c_in_p % TILE == 0 else kkh
     bk_above_floor = [d for d in divisors if d >= tap_floor]
+    if g.face_direct_capable and FACE_DIRECT_WHOLE_K_BLOCK:
+        bk_above_floor = [g.tensor_k_tiles] + bk_above_floor
     bk_below_floor = [d for d in divisors if d < tap_floor]
     if g.sharded_output:
         bm_candidates = [d for d in range(core_m_tiles, 0, -1) if core_m_tiles % d == 0]
@@ -539,9 +609,12 @@ def create_program_descriptor(
         slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16, b.slab_tile_rows * g.c_in_tiles, cores)
     else:
         slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, pixel_bytes, b.slab_px, cores)
-    cbs = [
-        slab_cb,
-        _cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, b.im2col_rm_depth_rows * bk, cores),
+    face_direct = face_direct_im2col(g, bk)
+    cbs = [slab_cb]
+    if not face_direct:
+        cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, b.im2col_rm_depth_rows * bk, cores))
+    cbs += [
+        # Face-direct: the reader writes these tiles; it relies on every K-block starting at the CB base.
         _cb(CB_IM2COL_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores),
         _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * bk * bn, cores),
         _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, bm * bn, cores),
@@ -578,11 +651,14 @@ def create_program_descriptor(
 
     # Channel-slice reads (R4): the core's slice of input row v is page v * row_page_stride + col offset,
     # and one owner shard holds input_shard_rows consecutive rows of it contiguously.
+    slab_split = SLAB_SPLIT_NOCS and g.sharded_output and not g.tile_input and not g.k_split
     if g.k_split:
         in_spec = input_tensor.memory_config().shard_spec
         page_cols = TILE if g.tile_input else g.c_in_p
         row_page_stride = _div_up(int(input_tensor.padded_shape[-1]), page_cols)
         input_shard_rows = int(in_spec.shape[0]) // (TILE if g.tile_input else 1)
+    elif slab_split:
+        row_page_stride, input_shard_rows = 0, int(input_tensor.memory_config().shard_spec.shape[0])
     else:
         row_page_stride, input_shard_rows = 0, 0
     pages_per_slice_row = g.c_in_tiles if g.tile_input else 1
@@ -590,6 +666,16 @@ def create_program_descriptor(
     tap_major = tap_major_im2col(g, b)
     # Width of one tilize block of im2col rows: one tap (tap-major) or the whole K-block.
     tilize_width = g.c_in_tiles if tap_major else bk
+
+    stream_rows = b.in0_stream_rows
+    gather_split = GATHER_SPLIT_RISCS and face_direct and slab_split and bm // stream_rows >= 2
+    # Semaphore ids: the R4 combine's four, then the split slab fill's two and the split gather's two; the weight
+    # channel attaches after.
+    sem_ids = (SEM_COMBINE_CREDIT, SEM_COMBINE_ARRIVAL, SEM_COMBINE_SEND_GO, SEM_COMBINE_SEND_DONE) if g.k_split else ()
+    slab_sem_ids = (len(sem_ids), len(sem_ids) + 1) if slab_split else (0, 0)
+    sem_ids += slab_sem_ids if slab_split else ()
+    gather_sem_ids = (len(sem_ids), len(sem_ids) + 1) if gather_split else (0, 0)
+    sem_ids += gather_sem_ids if gather_split else ()
 
     def reader_ct_args(slice_channels):
         args = [
@@ -628,6 +714,14 @@ def create_program_descriptor(
             SEM_COMBINE_SEND_GO,
             SEM_COMBINE_SEND_DONE,
             int(tap_major),
+            int(face_direct),
+            g.band_last_tap,
+            CB_IM2COL_TILES,
+            int(slab_split),
+            *slab_sem_ids,
+            int(gather_split),
+            stream_rows,
+            *gather_sem_ids,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -660,6 +754,8 @@ def create_program_descriptor(
         b.combine_subblock_h,
         b.combine_subblock_w,
         tilize_width,
+        int(face_direct),
+        b.in0_stream_rows,
     ]
 
     writer_ct_args = [
@@ -684,6 +780,26 @@ def create_program_descriptor(
         int(combine_split_nocs),
         SEM_COMBINE_SEND_GO,
         SEM_COMBINE_SEND_DONE,
+        int(slab_split),
+        CB_HALO_SLAB,
+        g.input_height,
+        g.input_width,
+        g.output_width,
+        g.num_out_px,
+        g.padding,
+        g.stride,
+        g.dilation,
+        b.band_stride_px,
+        g.band_last_tap,
+        input_page_bytes,
+        input_shard_rows,
+        *slab_sem_ids,
+        int(gather_split),
+        stream_rows,
+        *gather_sem_ids,
+        CB_IM2COL_TILES,
+        g.c_in_p,
+        g.tensor_kkh_tiles,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct_args.extend(
@@ -695,6 +811,11 @@ def create_program_descriptor(
         ttnn.TensorAccessorArgs().get_compile_time_args()
         if g.sharded_output
         else ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    )
+    writer_ct_args.extend(
+        ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+        if slab_split
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
 
     # One reader kernel per distinct slice width: the gather's lane handling is compile-time.
@@ -730,6 +851,7 @@ def create_program_descriptor(
             m_index * SLAB_READ_STAGGER_PX_PER_CORE,
             col * pages_per_slice_row,
             col,
+            m_index,
         ] + row_peer_coords.get(m_index, [])
         compute_rt[core.x][core.y] = [num_m_blocks_this_core, int(out_valid_tiles > 0)]
         writer_rt[core.x][core.y] = [
@@ -744,6 +866,8 @@ def create_program_descriptor(
             out_n_tile_start,
             out_valid_tiles,
             col,
+            input_addr,
+            m_index,
         ] + row_peer_coords.get(m_index, [])
 
     readers = [
@@ -774,12 +898,7 @@ def create_program_descriptor(
             fp32_dest_acc_en=True,
         ),
     )
-    semaphores = []
-    if g.k_split:
-        semaphores = [
-            ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=cores, initial_value=0)
-            for sem_id in (SEM_COMBINE_CREDIT, SEM_COMBINE_ARRIVAL, SEM_COMBINE_SEND_GO, SEM_COMBINE_SEND_DONE)
-        ]
+    semaphores = [ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=cores, initial_value=0) for sem_id in sem_ids]
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
     # The writer's NoC (WriterConfigDescriptor).
     weight_mcast_config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)

@@ -7,6 +7,10 @@
 // and finalize_block is empty. ReLU applies only to the final value: the bias-add pack, or the last
 // K-block's pack without bias.
 //
+// Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook. With one
+// K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it lands,
+// keeping the weights fronted across the calls; the bias add then runs once over the whole block.
+//
 // matmul_block leaves packer L1 accumulation on and (OutWithRelu) PACK_RELU on; every later pack
 // (untilize, tilize, combine, bias add) first restores the state it needs.
 //
@@ -19,6 +23,7 @@
 // fp32 DEST), adds the bias and packs into the output shard; ReLU is armed only for that last pack.
 
 #include <cstdint>
+#include <type_traits>
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
@@ -99,6 +104,8 @@ void kernel_main() {
     constexpr uint32_t combine_subblock_h = get_compile_time_arg_val(24);
     constexpr uint32_t combine_subblock_w = get_compile_time_arg_val(25);
     constexpr uint32_t im2col_tilize_width_tiles = get_compile_time_arg_val(26);
+    constexpr bool face_direct = get_compile_time_arg_val(27) != 0;
+    constexpr uint32_t in0_stream_rows = get_compile_time_arg_val(28);
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
@@ -109,6 +116,12 @@ void kernel_main() {
     static_assert(in1_num_subblocks * out_subblock_w == block_n_tiles);
     constexpr auto mm_shape = ckl::MatmulBlockShape::of(
         in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks);
+    // One matmul call per in0 row group (face-direct, one K-block): the group's subblock rows x all of N.
+    constexpr uint32_t in0_groups = block_m_tiles / in0_stream_rows;
+    static_assert(in0_groups * in0_stream_rows == block_m_tiles && in0_stream_rows % out_subblock_h == 0);
+    static_assert(in0_groups == 1 || (face_direct && num_k_blocks == 1 && !k_split));
+    constexpr auto stream_shape = ckl::MatmulBlockShape::of(
+        in0_stream_rows / out_subblock_h, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, 1);
     constexpr auto bias_shape =
         ckl::BiasAddShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_n_tiles);
     static_assert(block_m_tiles % combine_subblock_h == 0 && out_n_tiles % combine_subblock_w == 0);
@@ -130,10 +143,13 @@ void kernel_main() {
         has_bias ? ckl::LastBlockTarget::Interm
                  : (apply_relu ? ckl::LastBlockTarget::OutWithRelu : ckl::LastBlockTarget::Out);
 
-    // Startup matches the first op (untilize for TILE input, else tilize); every later phase
-    // reconfigures itself.
+    // Startup matches the first op (untilize for TILE input, the matmul for face-direct, else tilize); every
+    // later phase reconfigures itself.
     if constexpr (tile_input) {
         compute_kernel_hw_startup(cb_input_tiles, cb_halo_slab);
+    } else if constexpr (face_direct) {
+        compute_kernel_hw_startup<SrcOrder::Reverse>(
+            cb_im2col_tiles, cb_weights, (has_bias || k_split) ? cb_matmul_partials : cb_output_tiles);
     } else {
         compute_kernel_hw_startup(cb_im2col_rm, cb_im2col_tiles);
     }
@@ -159,7 +175,15 @@ void kernel_main() {
         cb_im2col_rm,
         cb_im2col_tiles,
         relu_on_last_matmul_pack>;
-    const TilizeFn tilize_k_block{&im2col_rm_dfb, &im2col_tiles_dfb};
+    auto make_pre_k_block = [&]() {
+        if constexpr (face_direct) {
+            return ckl::NoPreKBlock{};
+        } else {
+            return TilizeFn{&im2col_rm_dfb, &im2col_tiles_dfb};
+        }
+    };
+    const auto pre_k_block = make_pre_k_block();
+    using PreKBlockFn = std::decay_t<decltype(pre_k_block)>;
 
     if constexpr (has_bias) {
         bias.wait_front(out_n_tiles);
@@ -218,7 +242,7 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::NoPostCompute,
-                TilizeFn,
+                PreKBlockFn,
                 ckl::NoPostKBlock,
                 /*untilize_block_ct_dim=*/0,
                 ckl::NoKBlockInnerDimFn,
@@ -231,13 +255,34 @@ void kernel_main() {
                 partials,
                 mm_shape,
                 {},
-                tilize_k_block,
+                pre_k_block,
                 /*in1_per_core_w=*/block_n_tiles,
                 /*out_row_width=*/block_n_tiles);
             partials.push_back(partials_tiles);
             if (owns_output_columns) {
                 combine_block();
             }
+        } else if constexpr (in0_groups > 1) {
+            for (uint32_t group = 0; group < in0_groups; ++group) {
+                ckl::matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    last_block_target,
+                    ckl::OutputCBLayout::TileRowMajor,
+                    ckl::matmul_config::InitMode::Short,
+                    ckl::InputPolicy::WaitAndPopPerKBlock,
+                    ckl::InputPolicy::WaitAndRetainOnLastBlock>(
+                    im2col_tiles,
+                    weights,
+                    output_tiles,
+                    partials,
+                    stream_shape,
+                    {},
+                    {},
+                    /*in1_per_core_w=*/block_n_tiles,
+                    /*out_row_width=*/block_n_tiles);
+            }
+            weights.pop_front(block_k_tiles * block_n_tiles);
         } else {
             ckl::matmul_block<
                 /*transpose=*/false,
@@ -248,19 +293,24 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::NoPostCompute,
-                TilizeFn>(
+                PreKBlockFn>(
                 im2col_tiles,
                 weights,
                 output_tiles,
                 partials,
                 mm_shape,
                 {},
-                tilize_k_block,
+                pre_k_block,
                 /*in1_per_core_w=*/block_n_tiles,
                 /*out_row_width=*/block_n_tiles);
         }
 
         if constexpr (has_bias && !k_split) {
+            // Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook.
+            // With one
+            // K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it
+            // lands, keeping the weights fronted across the calls; the bias add then runs once over the whole block.
+            //
             // matmul_block leaves packer L1 accumulation on after its last K-block.
             pack_reconfig_l1_acc(0);
             if constexpr (apply_relu) {
