@@ -1,0 +1,98 @@
+# DRAM tile traffic counters
+
+Reference for the counters that sit in a DRAM channel tile and for `TT_METAL_PROFILE_DRAM_COUNTERS`, the tt-metal runtime option that turns them into a measured DRAM traffic number per program. The Tensix counters ([hardware_reference.md](hardware_reference.md)) and the RISC-V monitor ([riscv_pmc.md](riscv_pmc.md)) live in worker cores; these belong to the DRAM tile, so a core cannot read them with a CSR or an MMIO load, the host reads them over PCIe.
+
+## 1. Support matrix
+
+| Architecture | NIU slave counters | Captured |
+|---|---|---|
+| Blackhole | yes, host reads of the tile NIU, one data word is 64 B | yes |
+| Wormhole | same NIU map as a worker, one data word is 32 B, not tried on silicon | yes, untested |
+| Quasar | NIU status offsets equal the other architectures, but how a host reaches a DRAM tile, the NoC count and the word width are not known | no, the table is empty and the option logs a warning |
+
+Counters of the DRAM controller behind the tile (request, read-modify-write and ECC counts) are not described here: they need the controller register map, which is not available.
+
+## 2. Where the definitions live
+
+Headers in `tools/include/perf_counters/`, namespace `llk::perf::dram`, self-contained:
+
+| Header | Holds |
+|---|---|
+| `dram_counters_types.h` | `DramCounter` (names, append only), `Arch`, `Entry` = `{counter, register offset}`, `Layout` |
+| `dram_counters_blackhole.h`, `dram_counters_wormhole.h`, `dram_counters_quasar.h` | `layout` (NIU base, NoC instance stride, word bytes, NoC count) and the `niu_counters` table |
+| `dram_counters_inventory.h` | `niu_table(arch)`, `layout_for(arch)`, `niu_address(arch, noc, offset)`; the host picks the architecture at run time, so there is no `ARCH_*` switch |
+
+Every counter is a free-running 32-bit register: deltas are taken with wrapping subtraction. The NIU offsets are `0x200 + 4 * index` inside the NoC register space of the tile (`0xFFB20000` for NoC 0, `0x10000` further for NoC 1):
+
+| Counter | Index | Meaning |
+|---|---|---|
+| `NIU_SLV_RD_DATA_WORD_SENT` | 0x33 | data words the tile sent as read responses |
+| `NIU_SLV_RD_REQ_RECEIVED` | 0x35 | read requests received |
+| `NIU_SLV_NONPOSTED_WR_DATA_WORD_RECEIVED` | 0x38 | data words of non-posted writes |
+| `NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED` | 0x39 | data words of posted writes |
+| `NIU_SLV_NONPOSTED_WR_REQ_RECEIVED` | 0x3A | non-posted write requests |
+| `NIU_SLV_POSTED_WR_REQ_RECEIVED` | 0x3B | posted write requests |
+
+The counters count NoC traffic into and out of the DRAM channel tile, not what the memory controller does behind it. Bytes are `words * word_bytes`. Every DRAM tile has them, and a bank is reachable through several tiles, so traffic to one bank can land on a tile other than its preferred one: the totals over all tiles are the robust number, the per-tile split follows the NoC endpoint each core used.
+
+The runtime reads three of the six: `NIU_SLV_RD_DATA_WORD_SENT` and the two write data word counters, on both NoCs. Request counters are in the table for completeness and are not read, to keep the number of register reads (and their own traffic, below) small.
+
+## 3. Capture
+
+`TT_METAL_PROFILE_DRAM_COUNTERS=1` makes the runtime read the NIU counters of every DRAM tile on both NoCs through host register reads before a program is launched and after it is done, and write the differences. `raw` does the same without the idle calibration (the capture's own reads are still removed). The option does not need the device profiler, nothing is compiled into firmware, and with the option unset no code of the feature runs.
+
+Hooks sit in the slow-dispatch launch (after the host writes are fenced, right before the go signal) and where the host observes the cores idle: a blocking enqueue, `Finish`, or the wait before a later program on the same cores. Before the end snapshot the write counters are re-read until two consecutive readings agree (at most 8) so that posted writes still in flight when the cores report done are counted; the read counters are never waited on, because other traffic keeps them moving. A program whose write counters never settled is flagged.
+
+Limits:
+
+- Fast dispatch is not captured. Programs are queued and run asynchronously, the host has no instant at which one program starts and the next has not, so a host snapshot cannot be attributed to a program. A fast-dispatch mode would have to drain the queue before and after every program; the option logs a warning instead.
+- Any other traffic in the window lands in the number: another host thread that reads or writes device DRAM, other processes on the chip, a second program in flight on the same device (rows are flagged `overlapped`). Measure on an otherwise quiet device.
+- With a non-blocking enqueue the end snapshot is taken when the host next waits, so the window can run past the end of the program; enqueue blocking, or call `Finish` right after the program, for the tightest window. A program launched while another is still in flight closes the earlier one at that moment (flag `overlapped` on both).
+- Each snapshot is one PCIe register read per counter (tiles x NoCs x 3), so expect on the order of milliseconds per snapshot and three or more snapshots per program.
+
+### The capture's own reads
+
+On the UMD register path a host read of any register of a DRAM tile NIU is itself counted by the tile as one read word (and one read request) on one NoC: back-to-back reads of one register increment it by exactly 1 per read there, and not on the other path (exalens). The runtime therefore counts the register reads it issues to every tile and removes them exactly: the correction of a read counter between its start and end reading is the number of reads issued to that tile between those two readings. This holds whether a read sees its own increment or not, because it is a difference of two read indices. Which NoC the reads count on is measured once per device (64 back-to-back reads of the read counter of the first tile on each NoC, a slope near 1 means coupled); the correction applies to the read counters of that NoC only, never to write counters. `dram_traffic.csv` keeps the removed words in `self_words`.
+
+### Other agents' traffic
+
+With nothing running on the card, the read counters still advanced at several thousand words per second in a bursty way, writes did not; the same rate shows with the reader on either path, so it is another agent. The runtime measures it once per device before the first program (option value `1`): three back-to-back snapshot pairs give a residual cost per pair, three pairs 20 ms apart give a rate per second, per register, medians, after the own reads are removed. It writes `dram_idle.csv`. The decoder subtracts `per_pair + per_second * elapsed` from every register of every program and clamps at zero. Being bursty, the rate is only a mean: the precision of the read number is bounded by the variance of that traffic over the program's window, so short programs on a busy card have the largest relative error.
+
+## 4. Output
+
+Both files are written to the profiler log directory (`TT_METAL_PROFILER_DIR` or `generated/profiler/.logs`), recreated by the first program of a process.
+
+`dram_traffic.csv`, one row per program launch, DRAM tile, NoC and counter with a nonzero corrected delta (`NONE` row when nothing moved):
+
+| Column | Meaning |
+|---|---|
+| `device_id`, `program_id` | chip and the program runtime id, the id the device profiler logs as the op identifier |
+| `launch_seq` | counter of launches on the device in this process |
+| `flags` | bit 0: another program was in flight; bit 1: write counters were still moving after 8 reads |
+| `elapsed_ns` | host time from the start snapshot to the final snapshot |
+| `dram_x`, `dram_y`, `noc` | translated coordinates of the tile and the NoC (0 or 1) |
+| `counter`, `delta_words`, `self_words` | `DramCounter` name, its wrapped difference with the capture's own reads removed, and the words removed |
+
+`dram_idle.csv`: `device_id, dram_x, dram_y, noc, counter, words_per_snapshot_pair, words_per_second`.
+
+## 5. Python decode
+
+`tt_llk_perf.dram_counters` (stdlib only) reads both files:
+
+```python
+from tt_llk_perf import dram_counters
+rows = dram_counters.read_traffic("generated/profiler/.logs/dram_traffic.csv")
+idle = dram_counters.read_idle("generated/profiler/.logs/dram_idle.csv")
+for p in dram_counters.per_program(rows, "blackhole", idle):
+    print(p.program, p.read_bytes, p.write_bytes, p.read_gbps)
+```
+
+`per_program` returns per launch: read and write bytes per DRAM tile, totals, GB/s over `elapsed_ns`, and the flags. `python -m tt_llk_perf.dram_counters <log dir> --arch blackhole` prints a table. Join with the op table on `program_id`.
+
+## 6. What has to be checked on hardware
+
+The NIU write counters matched a kernel's output exactly on a Blackhole card. Open:
+
+1. The own-read correction and the idle rate inside the runtime: `tools/dram_counters_probe/dram_validate.py` runs a program that moves a known number of bytes with the option off and on and compares `bytes / 64` with the measured words; expect writes exact and reads within 2 percent, no flags.
+2. `tools/dram_counters_probe/dram_idle_drift.py` measures the drift and the per-read increment on the UMD and exalens paths.
+3. Wormhole and Quasar: not tried.
