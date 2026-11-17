@@ -191,6 +191,7 @@ void MetalContext::initialize(
     }
     // run_launch_phase below releases any BRISC still halted and zeroes every halt record.
     set_l1_ecc_halt_detected(false);
+    set_l1_ecc_halt_event(false);
 
     initialized_ = true;
 

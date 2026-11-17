@@ -4,11 +4,20 @@
 
 #pragma once
 
+#include <atomic>
+#include <memory>
+#include <set>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include <internal/l1_ecc_halt.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
+
+namespace tt::umd {
+class DeviceEventReader;
+}  // namespace tt::umd
 
 // Blackhole silicon: BRISC halts on an L1 DBE and writes l1_ecc_halt_slot_t::record. Waits detect halts through
 // L1EccHaltWatch.
@@ -38,5 +47,28 @@ void clear_l1_ecc_halt_records(MetalContext& ctx, ChipId device_id);
 
 // Logs the halt record of every Tensix core that halted.
 void report_l1_ecc_at_close(MetalContext& ctx, ChipId device_id);
+
+// Reads the chips' device events on a background thread. When ARC forwards a Tensix halt record, or events may have
+// been lost, it makes the next L1EccHaltWatch::poll() read the halt records at once instead of after the wait's 10 s
+// window. Does nothing where L1EccHaltWatch is off, and skips chips without a PCIe device or whose KMD or ARC firmware
+// does not publish events; those keep only the 10 s window.
+class L1EccHaltEventListener {
+public:
+    L1EccHaltEventListener(MetalContext& ctx, const std::set<ChipId>& device_ids);
+    ~L1EccHaltEventListener();
+
+    L1EccHaltEventListener(const L1EccHaltEventListener&) = delete;
+    L1EccHaltEventListener& operator=(const L1EccHaltEventListener&) = delete;
+    L1EccHaltEventListener(L1EccHaltEventListener&&) = delete;
+    L1EccHaltEventListener& operator=(L1EccHaltEventListener&&) = delete;
+
+private:
+    void run();
+
+    MetalContext& ctx_;
+    std::vector<std::pair<ChipId, std::unique_ptr<umd::DeviceEventReader>>> readers_;
+    std::atomic<bool> stop_{false};
+    std::thread thread_;
+};
 
 }  // namespace tt::tt_metal::internal

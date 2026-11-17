@@ -252,6 +252,8 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                 throw;
             }
         }
+        l1_ecc_halt_events_ =
+            std::make_unique<internal::L1EccHaltEventListener>(descriptor_->metal_context(), device_ids);
     }
     initialized_ = true;
 }
@@ -279,6 +281,7 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
 }
 
 void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*init_done*/) {
+    l1_ecc_halt_events_.reset();
     auto all_devices = cluster_.all_chip_ids();
 
     if (!cluster_.is_mock_or_emulated()) {

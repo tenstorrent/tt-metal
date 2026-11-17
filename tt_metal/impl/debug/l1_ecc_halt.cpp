@@ -7,12 +7,16 @@
 #include <bit>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <vector>
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-umd/pcie/device_event_reader.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "context/metal_context.hpp"
@@ -30,6 +34,11 @@ constexpr uint32_t l1_ecc_polls_per_clock_read = 1024;
 static_assert(std::has_single_bit(l1_ecc_polls_per_clock_read));
 // A released BRISC returns from the handler within its first few instructions.
 constexpr auto brisc_release_timeout = std::chrono::milliseconds(100);
+// One thread waits on each chip's events in turn, so a halt is seen within about this times the number of chips.
+constexpr auto event_read_timeout = std::chrono::milliseconds(10);
+constexpr size_t events_per_read = 16;
+// KMD's TT_EVENT_TYPE_FW_EVENTS_LOST: ARC dropped records before KMD read them; data[0] counts them.
+constexpr uint16_t fw_events_lost_event_type = 0x8000;
 
 // Mock devices have no registers to read, and ttsim exits on any ECC register access.
 bool is_blackhole_silicon(const MetalContext& ctx) {
@@ -244,12 +253,91 @@ void L1EccHaltWatch::poll() {
     if (next_check_ == std::chrono::steady_clock::time_point{}) {
         next_check_ = now + l1_ecc_check_interval;
     }
-    // Once one wait has reported a halt, every other wait stops at once instead of at its own next window.
-    if (now < next_check_ && !ctx_->l1_ecc_halt_detected()) {
+    // Once one wait has reported a halt, every other wait stops at once instead of at its own next window. So does a
+    // wait that a halt event reaches.
+    if (now < next_check_ && !ctx_->l1_ecc_halt_detected() && !ctx_->take_l1_ecc_halt_event()) {
         return;
     }
     next_check_ = now + l1_ecc_check_interval;
     check_now();
+}
+
+L1EccHaltEventListener::L1EccHaltEventListener(MetalContext& ctx, const std::set<ChipId>& device_ids) : ctx_(ctx) {
+    if (!l1_ecc_halt_enabled(ctx)) {
+        return;
+    }
+    for (ChipId device_id : device_ids) {
+        umd::PCIDevice* pci_device = ctx.get_cluster().get_driver()->get_tt_device(device_id)->get_pci_device();
+        if (pci_device == nullptr) {
+            continue;
+        }
+        try {
+            auto reader = std::make_unique<umd::DeviceEventReader>(pci_device->get_device_num());
+            if (reader->is_firmware_attached()) {
+                readers_.emplace_back(device_id, std::move(reader));
+            }
+        } catch (const std::exception& e) {
+            log_debug(tt::LogMetal, "Chip {}: no device events from KMD: {}", device_id, e.what());
+        }
+    }
+    log_debug(tt::LogMetal, "L1 ECC halt events read from {} of {} chips", readers_.size(), device_ids.size());
+    if (!readers_.empty()) {
+        thread_ = std::thread([this] { run(); });
+    }
+}
+
+L1EccHaltEventListener::~L1EccHaltEventListener() {
+    if (!thread_.joinable()) {
+        return;
+    }
+    stop_.store(true, std::memory_order_release);
+    for (auto& [device_id, reader] : readers_) {
+        reader->cancel();
+    }
+    thread_.join();
+}
+
+void L1EccHaltEventListener::run() {
+    try {
+        while (!stop_.load(std::memory_order_acquire)) {
+            for (auto& [device_id, reader] : readers_) {
+                const umd::DeviceEventBatch batch = reader->read_for(events_per_read, event_read_timeout);
+                if (batch.lost != 0 || batch.device_reset) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Chip {}: {} device events lost{}; checking for L1 ECC halts",
+                        device_id,
+                        batch.lost,
+                        batch.device_reset ? " to a device reset" : "");
+                    ctx_.set_l1_ecc_halt_event(true);
+                }
+                for (const umd::DeviceEvent& e : batch.events) {
+                    if (e.type == fw_events_lost_event_type) {
+                        log_warning(
+                            tt::LogMetal,
+                            "Chip {}: ARC lost {} device events; checking for L1 ECC halts",
+                            device_id,
+                            e.data[0]);
+                        ctx_.set_l1_ecc_halt_event(true);
+                    } else if (e.type == l1_ecc_halt_event_type) {
+                        log_debug(
+                            tt::LogMetal,
+                            "Chip {}: halt event, source 0x{:x}, cause 0x{:x}",
+                            device_id,
+                            e.source,
+                            e.cause);
+                        ctx_.set_l1_ecc_halt_event(true);
+                    }
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogMetal,
+            "Stopped reading device events: {}. L1 ECC halts are reported after {} s instead.",
+            e.what(),
+            l1_ecc_check_interval.count());
+    }
 }
 
 }  // namespace tt::tt_metal::internal

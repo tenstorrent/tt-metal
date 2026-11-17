@@ -227,6 +227,9 @@ public:
     // close skips dispatch teardown.
     bool l1_ecc_halt_detected() const { return l1_ecc_halt_detected_.load(std::memory_order_acquire); }
     void set_l1_ecc_halt_detected(bool detected) { l1_ecc_halt_detected_.store(detected, std::memory_order_release); }
+    // Set by L1EccHaltEventListener when ARC reports a halt. Taking it makes one wait read the halt records at once.
+    bool take_l1_ecc_halt_event() { return l1_ecc_halt_event_.exchange(false, std::memory_order_acq_rel); }
+    void set_l1_ecc_halt_event(bool event) { l1_ecc_halt_event_.store(event, std::memory_order_release); }
 
 private:
     friend class ttsl::Indestructible<MetalContext>;
@@ -270,6 +273,7 @@ private:
     bool dispatch_timeout_detection_processed_ = false;
 
     std::atomic<bool> l1_ecc_halt_detected_{false};
+    std::atomic<bool> l1_ecc_halt_event_{false};
 
     // The MetalEnv is normally owned by the user
     // For the legacy code, we will initialize it in the MetalContext constructor and own the env
