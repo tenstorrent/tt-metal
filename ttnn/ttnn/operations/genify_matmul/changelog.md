@@ -721,3 +721,173 @@
   and to sb_h > 1 subblocks (R1b).
 - With the epilogue at 62 µs, the focus tail is the epilogue plus the write stream again (~1:1). A
   progressive split becomes interesting only once the tail is write-bound.
+
+## Perf 2 — perf tournament round 2 (PERF FOCUS 1: Qwen3.8 prefill gate_up + SwiGLU, 2048 tokens)
+- Date: 2026-11-17
+- **Focus config (exact golden case, all in SUPPORTED):**
+  - A 1×2048×5120 bf16 @ B 5120×8704 bfloat4_b → bf16 out;
+  - LoFi, fp32_dest_acc_en=True, math_approx_mode=False;
+  - DRAM interleaved, swiglu.
+  - Plan (unchanged): R1a on rect_t 11×10; one 6×28 block per core; subblock 1×4; block_k 12 × 14 K-blocks (last 4).
+- **Result: 418.3 → 391.9 µs (−6.3%).**
+  - PCC 0.999919 and rel-RMS 0.00829, both unchanged.
+  - Every idea was measured, and all 3 graduated (one of them only as a pair).
+  - No regression; SUPPORTED unchanged.
+
+### Measured breakdown (focus, before; device ns, one fresh run each)
+- Ablation, peeled cumulatively. Hooks: `agent_logs/perf1_ablation_hooks.patch`, applied only for the runs.
+
+  | run | µs |
+  |---|---|
+  | full | 418.3 |
+  | epilogue stubbed | 405.9 |
+  | epilogue + writes stubbed | 347.0 |
+  | + reads / mcast stubbed (matmul only) | 331.7 |
+  | compute only (no DM) | 393.3 |
+  | DM only | 259.8 |
+  | everything stubbed (sync / pack-L1-acc floor) | 86.5 |
+
+- Zones (p50 over 110 cores):
+  - `cmp_matmul` 345.8 µs, then `cmp_epilogue` 62.2 µs;
+  - `wr_write` 31.8 µs (in 3 µs bursts, one per epilogue row);
+  - the reader ends at 338 µs;
+  - the first K-block of both operands lands 15.7 µs after kernel start on every core.
+- **Ranked:**
+  1. **Tail, ~72 µs, balanced: the epilogue (62 µs) runs in parallel with a DRAM write wall (~59 µs).**
+     - Stubbing the epilogue alone saves only 12 µs. Stubbing the writes after it saves another 59 µs.
+     - The whole 17.8 MB output goes out in the last ~60 µs, from all 110 cores on NoC1, at ~300 GB/s. The spec is 460.8 GB/s, a 38.7 µs floor.
+     - Both halves have to drop to move the wall.
+  2. **K-walk head, 15.7 µs.** It is the K-walk's entire exposed data movement: 345.8 µs with DM, 330.0 µs without.
+     - K-block 0 is 3.45 MB chip-wide, read by all 21 injectors at once, against a ~7.5 µs DRAM floor.
+     - In steady state the reads are hidden: the reader sits blocked on full CBs for 88 µs.
+  3. Raw K-walk overhead, ~12 µs over the 318.6 µs FPU floor. Round 1 graduated this; it was not re-floated.
+- **Roofline gate (`/perf-ceiling-dm`):**
+  - The write stream is at 65% of DRAM peak, so it has headroom. The skill's Step 4b says a both-NoC split can approach peak.
+  - The `noc_estimate` CLI is not built on this box (it needs `--build-tests`). The gate therefore uses the DRAM spec cap instead of the NPE bracket.
+
+### Portfolio and verdicts
+Artifacts: `perf_experiments/<slug>/` and `tests/.../genify_matmul/perf_experiments/<slug>/`.
+
+| idea | verdict | before → after (device ns) | domain |
+|---|---|---|---|
+| `swiglu_epilogue_loadmacro`: SFPLOADMACRO-pipelined SwiGluMul | **WIN** (isolated); REGRESSION on the whole op if graduated alone | isolated epilogue 61,827 → 46,648. Whole op alone 418.4 → 434.3 µs: the epilogue stops pacing the output and the write wall gets congested. With writes stubbed, 408.6 → 394.5 µs | every swiglu path: R4 natural pairs 63.7 → 48.8; 16-bit DEST 62.7 → 45.3; bf8b out 61.8 → 46.9; fp32 grade 75.7 → 54.9; no exceptions. Blackhole only |
+| `tail_writes_both_nocs`: the idle reader writes 36% of the last block's rows on NoC0 | **WIN** | write stream 60.1 → ~44 µs (with the epilogue stubbed, 405.7 → 388.8 µs). Whole op alone 418.2 → 415.5 µs (−0.65%) | R1 descriptor (R1 / R1a / R1b, any epilogue, DRAM- or L1-interleaved output). Measured: 2048×5120×4160 −5.3%, FLUX addcmul −1.6%, R1b flat |
+| `kwalk_head_ramp`: short first K deliveries [4, 6, 8, 10, 12×11] | **WIN** (focus within noise; material elsewhere) | focus 418.2 → 409.6 µs (−2.05%, 3 stable repeats). 384×1536×1024 bias 35.6 → 33.1 (−7.2%); 8192×4096×64 R1 291.2 → 282.2 (−3.1%) | R1 and the R1a raw walk. Inexpressible elsewhere (see the carve-outs below) |
+
+- **Swiglu menu (isolated focus epilogue).**
+  - Every option has identical precision: PCC 0.999999, rel-RMS 0.00163, max 2.03 / mean 0.275 bf16 ULP.
+
+    | option | ns | note |
+    |---|---|---|
+    | baseline | 61,827 | |
+    | tuned | 55,133 | hand-ordered stream; bit-identical |
+    | tuned_k2c | 53,637 | bit-identical |
+    | lm | 50,330 | |
+    | **lm2** | **46,648** | **graduated** |
+    | lm3 | 48,107 | replay buffer |
+
+  - Binding thread: the SFPU pass is 56.1 of the 61.8 µs; unpack and pack together are ~6 µs.
+  - lm2 runs at 19 cycles per SFPU row, against ~28 for the round-1 element.
+  - lm2 changes the product order to (g·r)(1+e)·u. On the bf16 focus block, 2 of 86,016 elements differ from the old order, both at ~2e-38.
+- **Tail split menu (NoC0 share; whole op with the epilogue stubbed):**
+
+  | NoC0 share | µs |
+  |---|---|
+  | 0% (baseline) | 405.7 |
+  | 15% | 398.2 |
+  | 25% | 396.3 |
+  | 30% | 390.8 |
+  | **36% (graduated)** | **388.9** |
+  | 43% | 392.0 |
+  | 50% column cut | 399.7 |
+  | 50% alternating tiles | 402.2 |
+  | 100% NoC0 | 451.1 (NoC0 writes pile up on the DRAM-column links) |
+
+  Per-core shares were no better than the uniform cut.
+- **Head ramp menu (whole focus):**
+
+  | variant | µs | note |
+  |---|---|---|
+  | ragged block first [4, 12×13] | 418.8 | NULL: the next 12-wide block lands 10 µs late |
+  | [4, 8, 12×12, 4] | 414.1 | |
+  | [2, 4, 6, 8, 12×11, 8] | 412.7 | |
+  | [3, 5, 8, 12×12] | 410.5 | |
+  | **auto [4, 6, 8, 10, 12×11]** | **409.6** | **graduated** |
+  | auto with B-only compaction | 412.2 | |
+
+  Delivery time grows faster than linearly in its width, so each ramp step lands before compute finishes the previous one.
+
+### What graduated (one path each; replaced code deleted)
+- **`SwiGluMul` (lm2)** replaces the round-1 SFPI body in `kernels/genify_matmul_swiglu_sfpu.hpp` outright.
+  - It is the only swiglu SFPU step on every regime and both precision grades. No carve-out.
+  - The result now lands in the up slot (D1); the chain packs from `SwiGluMul::out_slot`.
+- **Tail write split** (`kernels/tail_split.hpp` plus the reader, writer and host).
+  - It is the R1 descriptor's only write path, and it is unconditional: the patch's on/off host knob was removed.
+  - The output CB keeps a single consumer: the writer posts each last-block batch to the reader through three local semaphores, and pops only after the reader's share has left L1.
+  - Under addcmul, the reader serves output batches inside its residual loop, so the depth-2 residual ring cannot deadlock.
+  - Domain: R1, R1a, R1b.
+    - **Carve-out (inexpressible):** R4 in-place output has nothing to write.
+    - **Not extended:** the R2 / R3 / R4 descriptors with a non-in-place output. Their readers have a different tail state (R4 streams B to the end; R3 exchanges A shards), so the split needs separate reader integration there. This is recorded as the next lever, not claimed.
+- **Head ramp** (`kernels/genify_matmul_kschedule.hpp`).
+  - The reader, the raw K-walk and the helper walk (via `LastKBlockInnerDim` and `MatmulBlockShape`) all follow one delivery schedule.
+  - With `GM_K_RAMP` off, the schedule is the identity; a `static_assert` checks this, so the legacy cells keep the same code.
+  - Host `k_head_ramp()` is a carve-out predicate (`if (cannot) legacy`). Every carve-out is inexpressible, none is merely unmeasured:
+    - R1b: the writer's A stream has its own nominal K loop;
+    - residency walks;
+    - one-K-block walks: a ramp there would *introduce* packer L1 accumulation where K accumulates wholly in DEST, which changes precision rather than speed;
+    - R1a walks on the matmul_block helper (epilogue none, sb_h > 1): the helper strides A rows by block_k, so A cannot be compacted, and a short head still multicasts a full A slot. The ramp's mechanism is gone there; measured flat to +2.3%.
+  - `GM_COMPACT_A` (A laid out with the delivery's row stride) is on the raw walk only, enforced by a `static_assert`.
+  - B multicasts only its valid `kv·block_n` prefix whenever the ramp is on.
+- **Instrumentation** extended (permanent):
+  - `rd_tail_write` on the reader. It is occupancy: it includes the wait for the writer's post.
+  - `wr_tail_wait_reader` on the writer.
+  - The per-K-block reader zones now run once per delivery.
+  - The focus run peaks at 168 markers per RISC, under the cap.
+
+### Whole op before / after
+- **Focus: 418.3 → 399.9 µs** (SwiGluMul + tail split) **→ 391.9 µs** (+ head ramp).
+- Zones after: `cmp_matmul` 337.6 µs (was 345.8: the head), `cmp_epilogue` 46.7 µs (was 62.2). The writer ends ~7 µs after compute.
+- Still ahead of stock (564.5 µs) and below the #65148 roofline (428.7 µs).
+
+### Guard set (no regression)
+- Coverage: the full `perf/test_genify_matmul_perf_guard.py` (62 cells: every regime × layout × placement representative) and `perf/test_genify_matmul_perf_flux.py` (16 cells).
+- Method: new vs the pre-round kernels, one fresh profiled run each. Table: `agent_logs/perf2_guard_cmp.txt`.
+- Wins:
+  - focus −6.4%; its epilogue-none twin −6.8%;
+  - 2048×5120×4160 bf4b −5.2%;
+  - 384×1536×1024 bias fused −8.0%;
+  - batched (PDL H pass) 75.4 → 69.5 µs (−7.9%);
+  - Qwen prefill-128 swiglu with A in L1: −3.5%;
+  - 4096³ HiFi2 −2.5%; FLUX 1×6144×6144 −3.3%.
+  - Everything else is within ±3%.
+- Four cells were over +3% in one run. Each was re-measured 3× for base and new with the zones compiled out; medians, µs:
+
+  | cell | base | new |
+  |---|---|---|
+  | 256×9216×6144 HiFi4 | 367.7 | 367.1 |
+  | 256×6144×9216 HiFi2 | 323.2 | 321.7 |
+  | bias_relu 2048×256×512 fused | 9.84 | 9.85 |
+  | bias_relu none | 8.80 | 8.93 (+1.5%, noise) |
+  | FLUX fp32 1×6144×6144 | 207.8 | 207.1 |
+  | FLUX 256×6144×9216 | 332.3 | 324.4 |
+
+- No material regression, so measurement earned no carve-out.
+
+### Golden suite and unit tests
+- `test_golden.py`, all 1887 cells in 8 chunks: 1512 passed, 375 xfailed (the permanent EXCLUSIONs), 0 failed. Identical to round 1.
+- `test_translated.py` + `test_regression.py`: 212 passed, 20 skipped, 80 xfailed, 14 failed.
+  - The 14 failures are the same pre-existing `test_matmul_1d_multiple_output_blocks_per_core` program-cache-count asserts recorded in Perf 1. They are not numerical.
+- Unit dir: 687 / 687 passed, including the mcast, residency, stream, sharded, epilogue and precision-matrix tests.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| no helper covers this (eltwise_chain SFPU binary elements: no `silu(a)*b`; SFPI has no load-macro scheduling) | capability | (1) No kernel_lib element computes silu(a)·b. (2) Neither SFPI nor any LLK API exposes SFPLOADMACRO, the facility that lets a load also schedule a MAD, round, store or SWAP on an otherwise idle SFPU sub-unit. (3) SFPI does not software-pipeline across SFPU rows, so dependent SFPMADs and per-face drains leave ~4 bubbles per row. The raw stream issues 18 + 1 cycles per row instead of ~28. A helper that let an element declare "load X also issues op Y on sub-unit Z after N" would cover this. The chain itself is still used (init, DEST / CB sync, reconfig, pack). | 61,827 (isolated focus epilogue, round-1 SFPI element, itself already a round-1 bypass) | 46,648 | `kernels/genify_matmul_compute.cpp:262` → `kernels/genify_matmul_swiglu_sfpu.hpp:272` |
+
+- The round-1 `kw::matmul_accumulate_interm` bypass is unchanged in kind. It now also takes a per-delivery inner width and an A row stride, so `compute_kernel_lib::matmul_block` gains one more missing capability: **a per-K-block A row stride**. The helper strides in0 rows by the nominal `block_k`, which is why the head ramp cannot compact A on the helper walk (the R1a epilogue-none carve-out above).
+- The tail split and the head ramp are dataflow-only and bypass no helper.
+
+### Next levers (not done)
+- Extend the raw K-walk (or give `matmul_block` a per-K-block A stride) to the epilogue-none and sb_h > 1 walks. That would lift the R1a head-ramp carve-out and round 1's SETC16 cost there.
+- Extend the tail split to the R2 / R3 / R4 descriptors with non-in-place output.
+- Focus tail now: epilogue 46.7 µs, then ~7 µs of write drain. The K-walk is 337.6 µs against the 318.6 µs FPU floor.

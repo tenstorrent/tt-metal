@@ -86,6 +86,12 @@
 //   rd_mcast_b   R1a B-line delivery
 //   rd_ds_kblock / rd_bs_kblock   one zone per R4 / R3 K-block (B issue + A round + barrier)
 //   rd_row / rd_residual          epilogue operand reads
+//   rd_tail_write  (Perf 2) the reader's share of the last block's output writes on NoC0, per output batch
+//                  (OCCUPANCY: includes the wait for the writer's post, i.e. for compute's epilogue)
+// Perf 2 head ramp (genify_matmul_kschedule.hpp): the R1 / R1a K loop walks the schedule's deliveries (one
+// more than num_k_blocks on PERF FOCUS 1), so the per-K-block zones above run once per delivery.
+// Perf 2 tail write split (tail_split.hpp): after its K-walk this RISC writes TAIL_NC_PCT % of every output row
+// of the core's last block on NoC0 (the writer keeps the rest on NoC1 and stays the output CB's only consumer).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -93,6 +99,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
 
 namespace {
 
@@ -189,6 +197,11 @@ void kernel_main() {
 
     constexpr uint32_t act_block_tiles = block_m_tiles * block_k_tiles;
     constexpr uint32_t weight_block_tiles = block_k_tiles * block_n_tiles;
+    // K-delivery schedule (Perf 2 head ramp, genify_matmul_kschedule.hpp; the identity without GM_K_RAMP).
+    using KS = gm_ks::Sched<block_k_tiles, num_k_blocks, last_block_k_tiles>;
+    static_assert(
+        !gm_ks::ramp || (!dram_sharded && !block_sharded && !act_on_writer && !weight_resident && !act_resident),
+        "the head ramp runs on the R1 / R1a K-walk only");
     // R1: every core reads both operands. R1a: only the line injectors read from DRAM. R1b: B only (A is
     // produced into cb_act_tiles by the writer).
     constexpr bool reads_act = !act_on_writer && (!operand_mcast || a_sends);
@@ -229,6 +242,82 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t row_addr = get_arg_val<uint32_t>(arg++);
     [[maybe_unused]] const uint32_t res_addr = get_arg_val<uint32_t>(arg++);
     [[maybe_unused]] const uint32_t own_kb = get_arg_val<uint32_t>(arg++);  // R3: this core's K shard (grid column)
+#if TAIL_SPLIT_MODE != 0
+    // tail_writes_both_nocs: the writer's output region (same RT layout as the writer's first 12 args).
+    constexpr auto out_args = TensorAccessorArgs<res_args.next_compile_time_args_offset()>();
+    constexpr uint32_t t_out_block_n = TAIL_OUT_BLOCK_N;
+    constexpr uint32_t t_write_batch = TAIL_WRITE_BATCH;
+    constexpr uint32_t t_o_tile_bytes = TAIL_O_TILE_BYTES;
+    constexpr uint32_t t_batch_rows = t_write_batch * sb_h;
+    constexpr uint32_t t_groups_per_batch = num_row_groups / t_write_batch;  // writer batches per block batch
+    const uint32_t t_out_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_b0 = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_batches_valid = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_row0 = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_rows_valid = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_col0 = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_cols_valid = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_nb_b = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_nb_m = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_nb_n = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_tensor_m_tiles = get_arg_val<uint32_t>(arg++);
+    const uint32_t t_out_n_tiles = get_arg_val<uint32_t>(arg++);
+    const auto t_out_acc = TensorAccessor(out_args, t_out_addr, TAIL_O_PAGE_BYTES);
+    const uint32_t tail_mbox = get_semaphore(TAIL_SEM_MBOX);
+    const uint32_t tail_post = get_semaphore(TAIL_SEM_POST);
+    const uint32_t tail_done = get_semaphore(TAIL_SEM_DONE);
+    // The writer's LAST block (the tail): its coordinates exactly as the writer computes them.
+    const uint32_t t_blk_b0 = (t_nb_b - 1) * block_batches;
+    const uint32_t t_blk_b_valid =
+        (t_batches_valid - t_blk_b0) < block_batches ? (t_batches_valid - t_blk_b0) : block_batches;
+    const uint32_t t_blk_r0 = (t_nb_m - 1) * block_m_tiles;
+    const uint32_t t_blk_rows = block_extent(t_rows_valid, t_blk_r0, block_m_tiles);
+    const uint32_t t_blk_c0 = (t_nb_n - 1) * t_out_block_n;
+    const uint32_t t_blk_cols = block_extent(t_cols_valid, t_blk_c0, t_out_block_n);
+    uint32_t tail_served = 0;  // writer batches of the tail this reader has served
+    // Serve the reader's share of tail batch s (0-based, writer order: bi major, row-group batch minor).
+    auto serve_one = [&]() {
+        const uint32_t s = tail_served;
+        const uint32_t bi = s / t_groups_per_batch;
+        const uint32_t g = (s % t_groups_per_batch) * t_write_batch;
+        tail_split::wait_at_least(tail_post, s + 1);
+        const uint32_t l1_base = tail_split::read(tail_mbox);
+        if (bi < t_blk_b_valid) {
+            const uint32_t batch = t_b0 + t_blk_b0 + bi;
+            for (uint32_t r = 0; r < t_batch_rows; ++r) {
+                const uint32_t blk_row = g * sb_h + r;
+                if (blk_row >= t_blk_rows) {
+                    break;
+                }
+                const uint32_t page =
+                    (batch * t_tensor_m_tiles + t_row0 + t_blk_r0 + blk_row) * t_out_n_tiles + t_col0 + t_blk_c0;
+                uint32_t l1 = l1_base + r * t_out_block_n * t_o_tile_bytes;
+                for (uint32_t n = 0; n < t_blk_cols; ++n) {
+                    if (tail_split::reader_owns(n, t_blk_cols)) {
+                        noc_async_write(l1, t_out_acc.get_noc_addr(page + n), t_o_tile_bytes);
+                    }
+                    l1 += t_o_tile_bytes;
+                }
+            }
+            noc_async_writes_flushed();  // the reader's share left L1
+        }
+        *tail_split::word(tail_done) = s + 1;
+        ++tail_served;
+    };
+    // Serve every tail batch whose last row group (global over the block's batches) is < `rg_end`.
+    [[maybe_unused]] auto serve_before = [&](uint32_t rg_end) {
+        while (tail_served < block_batches * t_groups_per_batch) {
+            const uint32_t s = tail_served;
+            const uint32_t last_rg = (s / t_groups_per_batch) * num_row_groups +
+                                     (s % t_groups_per_batch) * t_write_batch + t_write_batch - 1;
+            if (last_rg >= rg_end) {
+                break;
+            }
+            MaybeDeviceZoneScope("rd_tail_write");
+            serve_one();
+        }
+    };
+#endif
 
     const auto a_acc = TensorAccessor(a_args, a_addr, a_page_bytes);
     const auto b_acc = TensorAccessor(b_args, b_addr, b_page_bytes);
@@ -254,16 +343,18 @@ void kernel_main() {
 
     // A K-block: CB slot r*block_k + k  <-  page (a_row_base + r) * Kt + k0 + k (interleaved A under R1;
     // a peer's shard tiles under the R3 unicast stepping stone -- the accessor resolves the owning core).
-    auto read_act = [&](uint32_t act_l1, uint32_t a_row_base, uint32_t k0, uint32_t blk_rows, uint32_t k_valid) {
-        for (uint32_t r = 0; r < blk_rows; ++r) {
-            uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
-            uint32_t l1 = act_l1 + r * block_k_tiles * a_tile_bytes;
-            for (uint32_t k = 0; k < k_valid; ++k) {
-                noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
-                l1 += a_tile_bytes;
+    // `a_stride`: the slot's A row stride in tiles (block_k; the delivery's K width under GM_COMPACT_A).
+    auto read_act =
+        [&](uint32_t act_l1, uint32_t a_row_base, uint32_t k0, uint32_t blk_rows, uint32_t k_valid, uint32_t a_stride) {
+            for (uint32_t r = 0; r < blk_rows; ++r) {
+                uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
+                uint32_t l1 = act_l1 + r * a_stride * a_tile_bytes;
+                for (uint32_t k = 0; k < k_valid; ++k) {
+                    noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+                    l1 += a_tile_bytes;
+                }
             }
-        }
-    };
+        };
     // B K-block: CB slot k*block_n + c  <-  page b_base + (k0 + k) * Nt + col(c)
     // (col(c) = c, or the swiglu gate/up permutation).
     auto read_weight = [&](uint32_t weight_l1, uint32_t b_base, uint32_t k0, uint32_t k_valid, uint32_t blk_cols) {
@@ -338,9 +429,9 @@ void kernel_main() {
                     const uint32_t batch = b0 + blk_b0 + bi;
                     const uint32_t a_row_base = batch * tensor_m_tiles + row0 + blk_r0;
                     const uint32_t b_base = batch * weight_batch_stride + col0 + blk_c0;
-                    for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-                        const uint32_t k_valid = (kb == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
-                        const uint32_t k0 = kb * block_k_tiles;
+                    for (uint32_t kb = 0; kb < KS::n; ++kb) {
+                        const uint32_t k_valid = KS::kv(kb);
+                        const uint32_t k0 = KS::k0(kb);
 
                         if constexpr (dram_sharded) {
                             MaybeDeviceZoneScope("rd_ds_kblock");
@@ -393,7 +484,8 @@ void kernel_main() {
                             } else {
                                 if (!own) {
                                     cb_reserve_back(cb_act_tiles, act_block_tiles);
-                                    read_act(get_write_ptr(cb_act_tiles), a_row_base, k0, blk_rows, k_valid);
+                                    read_act(
+                                        get_write_ptr(cb_act_tiles), a_row_base, k0, blk_rows, k_valid, block_k_tiles);
                                 }
                             }
                             noc_async_read_barrier();  // one barrier per K-block, both operands
@@ -426,7 +518,13 @@ void kernel_main() {
                                 {
                                     MaybeDeviceZoneScope("rd_issue");
                                     if (batch_valid && reads_act && load_act) {
-                                        read_act(act_l1, a_row_base, k0, blk_rows, k_valid);
+                                        read_act(
+                                            act_l1,
+                                            a_row_base,
+                                            k0,
+                                            blk_rows,
+                                            k_valid,
+                                            gm_ks::compact_a ? k_valid : block_k_tiles);
                                     }
                                     if (batch_valid && reads_weight && load_weight) {
                                         read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
@@ -439,13 +537,19 @@ void kernel_main() {
                             if constexpr (operand_mcast) {
                                 if (load_act) {
                                     MaybeDeviceZoneScope("rd_mcast_a");
+                                    // Head ramp: only the delivery's valid tiles go on the wire (A compact
+                                    // under GM_COMPACT_A; B's valid rows are always a prefix of its slot).
                                     line_deliver<operand_mcast, a_sends>(
-                                        act_pipe, act_l1, act_block_tiles * a_tile_bytes);
+                                        act_pipe,
+                                        act_l1,
+                                        (gm_ks::compact_a ? block_m_tiles * k_valid : act_block_tiles) * a_tile_bytes);
                                 }
                                 if (load_weight) {
                                     MaybeDeviceZoneScope("rd_mcast_b");
                                     line_deliver<operand_mcast, b_sends>(
-                                        weight_pipe, weight_l1, weight_block_tiles * b_tile_bytes);
+                                        weight_pipe,
+                                        weight_l1,
+                                        (gm_ks::ramp ? k_valid * block_n_tiles : weight_block_tiles) * b_tile_bytes);
                                 }
                             }
                             if (load_act) {
@@ -494,10 +598,24 @@ void kernel_main() {
                                 noc_async_read_barrier();
                             }
                             cb_push_back(cb_residual_tiles, residual_group_tiles);
+#if TAIL_SPLIT_MODE != 0
+                            // Tail block: serve the output batches compute can already finish (rows < g) so the
+                            // residual ring (refilled only as compute advances) never deadlocks on the writer.
+                            if (bb + 1 == nb_b && mb + 1 == nb_m && nbk + 1 == nb_n) {
+                                serve_before(bi * num_row_groups + g);
+                            }
+#endif
                         }
                     }
                 }
             }
         }
     }
+#if TAIL_SPLIT_MODE != 0
+    {
+        MaybeDeviceZoneScope("rd_tail_write");
+        serve_before(0xFFFFFFFFu);  // the rest of the tail
+        noc_async_write_barrier();
+    }
+#endif
 }

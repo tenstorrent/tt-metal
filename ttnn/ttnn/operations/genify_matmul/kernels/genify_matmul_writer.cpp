@@ -27,6 +27,10 @@
 //   wr_wait_out   cb_wait_front on a row-group batch   (starved: compute has not packed it yet)
 //   wr_write      the batch's NoC write issue + flush
 //   wr_final_barrier  the closing noc_async_write_barrier
+//   wr_tail_wait_reader  (Perf 2) last block: wait for the reader's NoC0 share of a batch to leave L1 before pop
+// Perf 2 tail write split (tail_split.hpp): on the core's LAST block the writer posts each output batch to the
+// reader (idle once its K-walk is done), writes its own share on NoC1 and pops only after the reader's share
+// left L1. PERF FOCUS 1 write stream 60 -> 44 us (17.8 MB from 110 cores; all-NoC1 ~300 GB/s, split ~410).
 //   wr_ds_round   one R4 A round (reserve + round + push), per K-block
 //   wr_a_inject / wr_a_receive   one R1b A K-walk (injector: reads + multicasts; receiver: acks + waits)
 #include <cstdint>
@@ -36,6 +40,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
 
 namespace {
 // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
@@ -127,6 +132,14 @@ void kernel_main() {
         return;
     }
 
+    // tail_writes_both_nocs: the post / done words (semaphores, zero-initialized).
+    [[maybe_unused]] uint32_t tail_seq = 0;
+#if TAIL_SPLIT_MODE != 0
+    const uint32_t tail_mbox = get_semaphore(TAIL_SEM_MBOX);
+    const uint32_t tail_post = get_semaphore(TAIL_SEM_POST);
+    const uint32_t tail_done = get_semaphore(TAIL_SEM_DONE);
+#endif
+
     for (uint32_t bb = 0; bb < nb_b; ++bb) {
         const uint32_t blk_b0 = bb * block_batches;
         const uint32_t blk_b_valid =
@@ -200,6 +213,10 @@ void kernel_main() {
                         }
                     }
                 }
+                // tail_writes_both_nocs: the core's LAST block (its reader has finished every read by the time
+                // this block's output arrives) is split with the reader.
+                const bool tail =
+                    tail_split::active && !out_in_place && bb + 1 == nb_b && mb + 1 == nb_m && nbk + 1 == nb_n;
                 for (uint32_t bi = 0; bi < block_batches; ++bi) {
                     const bool batch_valid = bi < blk_b_valid;
                     const uint32_t batch = b0 + blk_b0 + bi;
@@ -208,6 +225,12 @@ void kernel_main() {
                             MaybeDeviceZoneScope("wr_wait_out");
                             cb_wait_front(cb_output_tiles, batch_tiles);
                         }
+#if TAIL_SPLIT_MODE != 0
+                        if (tail) {
+                            ++tail_seq;
+                            tail_split::post(tail_mbox, tail_post, get_read_ptr(cb_output_tiles), tail_seq);
+                        }
+#endif
                         if (!out_in_place && batch_valid) {
                             MaybeDeviceZoneScope("wr_write");
                             const uint32_t l1_base = get_read_ptr(cb_output_tiles);
@@ -220,12 +243,20 @@ void kernel_main() {
                                     (batch * tensor_m_tiles + row0 + blk_r0 + blk_row) * out_n_tiles + col0 + blk_c0;
                                 uint32_t l1 = l1_base + r * out_block_n_tiles * o_tile_bytes;
                                 for (uint32_t n = 0; n < blk_cols; ++n) {
-                                    noc_async_write(l1, out_acc.get_noc_addr(page + n), o_tile_bytes);
+                                    if (!tail || !tail_split::reader_owns(n, blk_cols)) {
+                                        noc_async_write(l1, out_acc.get_noc_addr(page + n), o_tile_bytes);
+                                    }
                                     l1 += o_tile_bytes;
                                 }
                             }
                             noc_async_writes_flushed();  // slot is free once the writes left L1
                         }
+#if TAIL_SPLIT_MODE != 0
+                        if (tail) {
+                            MaybeDeviceZoneScope("wr_tail_wait_reader");
+                            tail_split::wait_at_least(tail_done, tail_seq);  // the reader's share left L1
+                        }
+#endif
                         cb_pop_front(cb_output_tiles, batch_tiles);
                     }
                 }

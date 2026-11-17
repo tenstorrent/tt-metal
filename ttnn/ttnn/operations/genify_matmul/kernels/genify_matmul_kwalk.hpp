@@ -31,6 +31,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
 
 namespace kw {
 
@@ -109,7 +110,9 @@ struct NoPostKBlock {
     ALWI void operator()(uint32_t, uint32_t, bool) const {}
 };
 
-// Accumulate one (in0_num_subblocks x 1) x (in1_num_subblocks x sb_w) block over num_k_blocks K-blocks
+// Accumulate one (in0_num_subblocks x 1) x (in1_num_subblocks x sb_w) block over the K deliveries of the
+// gm_ks schedule (Perf 2 head ramp: per-delivery width kv, A row stride kv under GM_COMPACT_A; without the
+// ramp, num_k_blocks K-blocks with the ragged last_block_k last)
 // into partials_cb (fp32, packer L1 acc), tile row-major, row stride block_n. Waits / pops in0 and in1
 // per K-block; reserves the whole block in partials_cb before and pushes it after (it ends fronted
 // there for the epilogue). Leaves packer L1 accumulation enabled (caller disables it, as with the helper).
@@ -142,8 +145,10 @@ ALWI void matmul_accumulate_interm(
     PACK((llk_pack_reconfig_l1_acc(0)));
     cb_reserve_back(partials_cb, block_tiles);
 
-    for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-        const uint32_t inner = (kb == num_k_blocks - 1) ? last_block_k : block_k;
+    using KS = gm_ks::Sched<block_k, num_k_blocks, last_block_k>;
+    for (uint32_t kb = 0; kb < KS::n; ++kb) {
+        const uint32_t inner = KS::kv(kb);
+        const uint32_t a_stride = gm_ks::compact_a ? inner : block_k;  // A slot row stride (tiles)
         const uint32_t a_cb = in0_source(kb, in0_cb);
         cb_wait_front(a_cb, in0_block_tiles);
         cb_wait_front(in1_cb, in1_block_tiles);
@@ -154,7 +159,7 @@ ALWI void matmul_accumulate_interm(
             for (uint32_t n = 0; n < in1_num_subblocks; ++n) {
                 tile_regs_acquire();
                 MATH((pass_begin(in0_cb, in1_cb, sb_w)));
-                uint32_t in0_index = m * block_k;
+                uint32_t in0_index = m * a_stride;
                 uint32_t in1_index = n * sb_w;
                 for (uint32_t k = 0; k < inner; ++k) {
 #ifndef SKIP_COMPUTE
@@ -175,7 +180,7 @@ ALWI void matmul_accumulate_interm(
         }
         cb_pop_front(a_cb, in0_block_tiles);
         cb_pop_front(in1_cb, in1_block_tiles);
-        post_k_block(kb, num_k_blocks, kb == num_k_blocks - 1);
+        post_k_block(kb, KS::n, kb == KS::n - 1);
     }
     cb_push_back(partials_cb, block_tiles);
 }

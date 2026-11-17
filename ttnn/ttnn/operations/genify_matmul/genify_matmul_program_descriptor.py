@@ -100,6 +100,13 @@ RESIDENT_SPLIT_BLOCKS = 4
 # Measured flat to +1.6% on PERF FOCUS 3 at 4 / 8 (the writer never stalled on its per-row-group flush:
 # the DRAM write stream itself binds), so it is parked at 1 = one row group (the Refinement 7 shape).
 OUT_WRITE_BATCH_ROW_GROUPS = 1
+# Tail write split knob (Perf, tail_writes_both_nocs; R1 / R1a / R1b): the core's LAST block's output rows
+# are written TAIL_NC_PCT % by the reader RISC on NoC0 (idle once its K-walk is done), the rest by the
+# writer on NoC1. NoC0-only writes measured 1.11x slower than NoC1-only on PERF FOCUS 1's 11x10 grid (the
+# DRAM-column links concentrate them), so NoC0 takes the smaller share: 36 % (5 of 14 tiles) measured best
+# (PERF FOCUS 1, epilogue stubbed: write tail 60 -> 43 us, ~414 GB/s; 25 / 30 / 43 / 50 % all worse).
+# It is the R1 descriptor's only write path (R1 / R1a / R1b; R4 in-place output has nothing to write).
+TAIL_NC_PCT = 36
 # Subblock tie-break knob (same DEST area): True prefers the square-most subblock (fewest operand
 # unpacks per K step). Measured on PERF FOCUS 1 (LoFi, block 6x28): 2x2 477.8 us vs 1x4 463.7 us, so
 # the wide subblock stays the default.
@@ -425,6 +432,36 @@ def uses_act_stream(geom: Geometry, grid: GridChoice, blk: "Blocking"):
         and blk.block_batches == 1
         and blk.block_k_tiles * blk.block_m_tiles * geom.a_tile_bytes >= ACT_STREAM_MIN_KBLOCK_BYTES
     )
+
+
+def k_head_ramp(blk: "Blocking", mode: int, epilogue: str):
+    """Perf 2 head ramp (kernels/genify_matmul_kschedule.hpp) -> (ramp, compact_a) for an R1-descriptor walk.
+
+    The ramp is the K-walk's delivery schedule wherever it can be expressed. Carve-outs (inexpressible, not
+    unmeasured):
+      - R1b: the writer's A stream runs its own K loop over nominal K-blocks;
+      - residency walks and one-K-block walks: one delivery by construction (a ramp there would introduce
+        packer L1 accumulation where K accumulates wholly in DEST -- a precision change, not a speedup);
+      - R1a on the matmul_block helper walk (epilogue none, sb_h > 1): the helper strides A rows by block_k, so A
+        cannot be compacted and a short head delivery still multicasts a full A slot (the ramp's mechanism is
+        gone: measured flat to +2.3%).
+    compact_a: A laid out with the delivery's row stride -- the raw K-walk only (epilogue, 1 x sb_w subblocks).
+    """
+    raw_walk = epilogue != "none" and blk.sb_h == 1 and not (blk.weight_resident or blk.act_resident)
+    if mode == 2 or blk.weight_resident or blk.act_resident or blk.num_k_blocks <= 1:
+        return False, False
+    if mode == 1 and not raw_walk:
+        return False, False
+    return True, raw_walk
+
+
+def _attach_k_head_ramp(readers, compute, blk, mode, epilogue):
+    ramp, compact_a = k_head_ramp(blk, mode, epilogue)
+    if not ramp:
+        return
+    defs = [("GM_K_RAMP", "1"), ("GM_COMPACT_A", "1" if compact_a else "0")]
+    for k in [*readers, compute]:
+        k.defines = list(k.defines) + defs
 
 
 def operand_mode(geom: Geometry, grid: GridChoice, blk: "Blocking"):
@@ -1002,7 +1039,10 @@ def create_program_descriptor(
         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
         a_stream_rt = [a_addr, geom.tensor_k_tiles] if act_stream else []  # R1b: the writer reads A
-        writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles, *a_stream_rt]
+        wrt = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles, *a_stream_rt]
+        # Tail write split (Perf 2): the reader serves part of the last block's writes on NoC0.
+        reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
+        writer_rt[core.x][core.y] = wrt
         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
 
     # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
@@ -1028,6 +1068,7 @@ def create_program_descriptor(
                     *_DS_ROLE_ABSENT,
                     *_BS_ROLE_ABSENT,
                     *reader_accessor_ct,
+                    *ttnn.TensorAccessorArgs(out).get_compile_time_args(),  # tail write split: the output
                 ],
                 runtime_args=rt,
                 config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NoC0
@@ -1053,8 +1094,37 @@ def create_program_descriptor(
         _attach_act_stream(descriptor, writer, core_ranges, device)
     else:
         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
+    _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
+    _attach_k_head_ramp(readers, compute, blk, mode, epilogue)
     descriptor.kernels = [*readers, writer, compute]
     return descriptor
+
+
+def _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out):
+    """Tail write split: the reader (NCRISC / NoC0) writes TAIL_NC_PCT % of every output row of the core's
+    LAST block, the writer (BRISC / NoC1) the rest; a post / done handshake on three local semaphores keeps
+    the writer the output CB's only consumer."""
+    sems = list(descriptor.semaphores)
+    base = max([sm.id for sm in sems], default=-1) + 1
+    for i in range(3):  # mailbox (L1 address), post seq, done seq
+        sems.append(ttnn.SemaphoreDescriptor(id=base + i, core_ranges=core_ranges, initial_value=0))
+    descriptor.semaphores = sems
+    common = [
+        ("TAIL_SPLIT_MODE", "1"),
+        ("TAIL_NC_PCT", str(TAIL_NC_PCT)),
+        ("TAIL_SEM_MBOX", str(base)),
+        ("TAIL_SEM_POST", str(base + 1)),
+        ("TAIL_SEM_DONE", str(base + 2)),
+    ]
+    rd = common + [
+        ("TAIL_OUT_BLOCK_N", str(out_block_n_tiles)),
+        ("TAIL_WRITE_BATCH", str(blk.write_batch)),
+        ("TAIL_O_TILE_BYTES", str(geom.o_tile_bytes)),
+        ("TAIL_O_PAGE_BYTES", str(out.buffer_aligned_page_size())),
+    ]
+    for r in readers:
+        r.defines = list(r.defines) + rd
+    writer.defines = list(writer.defines) + common
 
 
 def _attach_act_stream(descriptor, writer, core_ranges, device):

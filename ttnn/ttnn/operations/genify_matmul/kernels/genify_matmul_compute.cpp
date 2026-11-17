@@ -24,6 +24,9 @@
 //                     SFPU AddBinary of the streamed residual (no DEST reuse ahead of an FPU op).
 // The bias / gate row is waited once before the first batch's epilogue and popped after the last.
 //
+// SwiGluMul (Perf 2): rewritten as a hand-scheduled SFPLOADMACRO instruction stream -- isolated focus epilogue
+// 61.8 -> 46.6 us (bf16 grade), fp32 grade 75.7 -> 54.9 us, same precision; RAW-LLK, justified at the head of
+// genify_matmul_swiglu_sfpu.hpp; do NOT "fix" it back. The result now lands in the up slot (D1, out_slot).
 // SwiGluMul (Perf 1): the chain library has no silu(a)*b element, so the op declares one through the chain's
 // documented BinaryOp CRTP extension point (genify_matmul_swiglu_sfpu.hpp): out = silu(gate) * up in ONE raw-SFPI
 // pass (branch-free sigmoid, Newton step folded into the product, rows software-pipelined in pairs). It replaced
@@ -31,6 +34,8 @@
 // output 116.9 -> 75.6 us (fp32 grade), with lower error on every measured metric. It is a chain element, not a
 // bypass of the chain (the chain still owns init, DEST sync, CB sync and data-format reconfig).
 //
+// K deliveries (Perf 2 head ramp, genify_matmul_kschedule.hpp): both walks follow the reader's delivery schedule
+// (LastKBlockInnerDim -> KS::kv); the raw walk reads A with the delivery's row stride under GM_COMPACT_A.
 // K-walk under an epilogue (Perf 1): kw::matmul_accumulate_interm (genify_matmul_kwalk.hpp) replaces
 // compute_kernel_lib::matmul_block<..., LastBlockTarget::Interm, ...>. RAW-LLK, justified by measurement
 // (PERF FOCUS 1 whole op 466.3 -> 441.5 us, output bit-identical): every matmul_block flavour writes the
@@ -65,6 +70,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_swiglu_sfpu.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kwalk.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
 
 // Per-stage device zones (Perf 1, PERMANENT -- free with the profiler off; never remove, extend instead).
 // One execution per block (per batch slice under an epilogue). Each is recorded on all three TRISCs and
@@ -127,10 +133,12 @@ constexpr uint32_t swiglu_up_base = swiglu_natural_pairs ? 1 : half_n;
 
 // FMA step count per K-block: the balanced split leaves the last K-block narrower; the reader
 // pushes the nominal block_k pages, so the garbage tail must never be summed.
+// The K deliveries (Perf 2 head ramp, genify_matmul_kschedule.hpp): the identity [block_k.., last] without
+// GM_K_RAMP; with it, the ramp head then whole block_k deliveries then the remainder.
+using KS = gm_ks::Sched<block_k_tiles, num_k_blocks, last_block_k_tiles>;
+static_assert(!gm_ks::ramp || num_k_blocks > 1, "a one-K-block walk keeps its single DEST accumulation");
 struct LastKBlockInnerDim {
-    ALWI uint32_t operator()(uint32_t block, uint32_t block_k) const {
-        return (block == num_k_blocks - 1) ? last_block_k_tiles : block_k;
-    }
+    ALWI uint32_t operator()(uint32_t block, uint32_t /*block_k*/) const { return KS::kv(block); }
 };
 
 // R3: K-block own_kb reads this core's resident A shard instead of cb_act_tiles.
@@ -164,6 +172,8 @@ constexpr uint32_t cb_interm = (has_epilogue || num_k_blocks > 1) ? cb_partials 
 // (helper): sb_h > 1, and operand residency (WaitAndRetainOnLastBlock).
 constexpr bool kwalk_expressible = sb_h == 1 && !act_resident && !weight_resident &&
                                    block_m_tiles == in0_num_subblocks && block_n_tiles == in1_num_subblocks * sb_w;
+// A compaction (head ramp) needs the raw walk: compute_kernel_lib::matmul_block strides A rows by block_k.
+static_assert(!gm_ks::compact_a || (has_epilogue && kwalk_expressible), "GM_COMPACT_A needs the raw K-walk");
 
 template <ckl::LastBlockTarget target>
 ALWI void run_matmul(
@@ -249,8 +259,10 @@ ALWI void run_epilogue(
                     DataFormatReconfig::Enabled,
                     TileAddressing::Strided),
                 Dst::D1>{partials_dfb, StridedTileRange{swiglu_up_base, swiglu_stride}},
-            SwiGluMul<swiglu_fp32_grade, Dst::D0, Dst::D1, Dst::D0>{},
-            PackTile<output(cb_output_tiles, ReservePolicy::PerOuter, PushPolicy::PerOuter)>{out_dfb});
+            SwiGluMul<swiglu_fp32_grade>{},  // result lands in the up slot (D1)
+            PackTile<
+                output(cb_output_tiles, ReservePolicy::PerOuter, PushPolicy::PerOuter),
+                SwiGluMul<swiglu_fp32_grade>::out_slot>{out_dfb});
         partials_buf.pop_front(block_tiles);
     } else if constexpr (is_addcmul) {
         partials_buf.wait_front(block_tiles);
@@ -281,7 +293,7 @@ void kernel_main() {
 
     if constexpr (!has_epilogue) {
         const auto shape = ckl::MatmulBlockShape::of(
-            in0_num_subblocks, in1_num_subblocks, sb_h, sb_w, block_k_tiles, num_k_blocks, block_batches);
+            in0_num_subblocks, in1_num_subblocks, sb_h, sb_w, block_k_tiles, KS::n, block_batches);
         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
             const bool act_last_use = !act_resident || (block_idx + 1) % nb_n == 0;
             {
@@ -298,7 +310,7 @@ void kernel_main() {
         // One batch slice per matmul call: cb_partials holds exactly one block, and the epilogue
         // must drain it before the next slice is accumulated.
         const auto shape = ckl::MatmulBlockShape::of(
-            in0_num_subblocks, in1_num_subblocks, sb_h, sb_w, block_k_tiles, num_k_blocks, /*batch=*/1);
+            in0_num_subblocks, in1_num_subblocks, sb_h, sb_w, block_k_tiles, KS::n, /*batch=*/1);
         CircularBuffer row_buf(has_row ? cb_row : cb_partials);
         DataflowBuffer partials_dfb(cb_partials), row_dfb(has_row ? cb_row : cb_partials),
             residual_dfb(is_addcmul ? cb_residual_tiles : cb_partials), out_dfb(cb_output_tiles);

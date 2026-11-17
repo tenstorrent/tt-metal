@@ -1,0 +1,332 @@
+diff -ruN twbn_a/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py twbn_b/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
+--- a/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py	2026-11-17 12:22:27.808802968 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py	2026-11-17 12:22:27.808802968 +0000
+@@ -100,6 +100,14 @@
+ # Measured flat to +1.6% on PERF FOCUS 3 at 4 / 8 (the writer never stalled on its per-row-group flush:
+ # the DRAM write stream itself binds), so it is parked at 1 = one row group (the Refinement 7 shape).
+ OUT_WRITE_BATCH_ROW_GROUPS = 1
++# Tail write split knob (Perf, tail_writes_both_nocs; R1 / R1a / R1b): the core's LAST block's output rows
++# are written TAIL_NC_PCT % by the reader RISC on NoC0 (idle once its K-walk is done), the rest by the
++# writer on NoC1. NoC0-only writes measured 1.11x slower than NoC1-only on PERF FOCUS 1's 11x10 grid (the
++# DRAM-column links concentrate them), so NoC0 takes the smaller share: 36 % (5 of 14 tiles) measured best
++# (PERF FOCUS 1, epilogue stubbed: write tail 60 -> 43 us, ~414 GB/s; 25 / 30 / 43 / 50 % all worse).
++# 1 = column cut on, 0 = off (the writer writes everything).
++TAIL_SPLIT_MODE = 1
++TAIL_NC_PCT = 36
+ # Subblock tie-break knob (same DEST area): True prefers the square-most subblock (fewest operand
+ # unpacks per K step). Measured on PERF FOCUS 1 (LoFi, block 6x28): 2x2 477.8 us vs 1x4 463.7 us, so
+ # the wide subblock stays the default.
+@@ -1002,7 +1010,10 @@
+         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
+         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
+         a_stream_rt = [a_addr, geom.tensor_k_tiles] if act_stream else []  # R1b: the writer reads A
+-        writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles, *a_stream_rt]
++        wrt = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles, *a_stream_rt]
++        if TAIL_SPLIT_MODE:  # tail_writes_both_nocs: the reader serves part of the last block's writes
++            reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
++        writer_rt[core.x][core.y] = wrt
+         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
+ 
+     # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
+@@ -1028,6 +1039,7 @@
+                     *_DS_ROLE_ABSENT,
+                     *_BS_ROLE_ABSENT,
+                     *reader_accessor_ct,
++                    *(ttnn.TensorAccessorArgs(out).get_compile_time_args() if TAIL_SPLIT_MODE else []),
+                 ],
+                 runtime_args=rt,
+                 config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NoC0
+@@ -1053,10 +1065,39 @@
+         _attach_act_stream(descriptor, writer, core_ranges, device)
+     else:
+         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
++    if TAIL_SPLIT_MODE:
++        _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
+     descriptor.kernels = [*readers, writer, compute]
+     return descriptor
+ 
+ 
++def _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out):
++    """Tail write split: the reader (NCRISC / NoC0) writes TAIL_NC_PCT % of every output row of the core's
++    LAST block, the writer (BRISC / NoC1) the rest; a post / done handshake on three local semaphores keeps
++    the writer the output CB's only consumer."""
++    sems = list(descriptor.semaphores)
++    base = max([sm.id for sm in sems], default=-1) + 1
++    for i in range(3):  # mailbox (L1 address), post seq, done seq
++        sems.append(ttnn.SemaphoreDescriptor(id=base + i, core_ranges=core_ranges, initial_value=0))
++    descriptor.semaphores = sems
++    common = [
++        ("TAIL_SPLIT_MODE", str(TAIL_SPLIT_MODE)),
++        ("TAIL_NC_PCT", str(TAIL_NC_PCT)),
++        ("TAIL_SEM_MBOX", str(base)),
++        ("TAIL_SEM_POST", str(base + 1)),
++        ("TAIL_SEM_DONE", str(base + 2)),
++    ]
++    rd = common + [
++        ("TAIL_OUT_BLOCK_N", str(out_block_n_tiles)),
++        ("TAIL_WRITE_BATCH", str(blk.write_batch)),
++        ("TAIL_O_TILE_BYTES", str(geom.o_tile_bytes)),
++        ("TAIL_O_PAGE_BYTES", str(out.buffer_aligned_page_size())),
++    ]
++    for r in readers:
++        r.defines = list(r.defines) + rd
++    writer.defines = list(writer.defines) + common
++
++
+ def _attach_act_stream(descriptor, writer, core_ranges, device):
+     """R1b: one channel over the whole split (one group: every core needs every A K-block), a fixed
+     in-group injector (ACT_STREAM_INJECTOR in row-wise order) on the writer RISC's NoC. A flat split's
+diff -ruN twbn_a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp twbn_b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp	2026-11-17 12:22:27.808802968 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp	2026-11-17 12:22:27.808802968 +0000
+@@ -93,6 +93,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+ #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
+ 
+ namespace {
+ 
+@@ -229,6 +230,82 @@
+     [[maybe_unused]] const uint32_t row_addr = get_arg_val<uint32_t>(arg++);
+     [[maybe_unused]] const uint32_t res_addr = get_arg_val<uint32_t>(arg++);
+     [[maybe_unused]] const uint32_t own_kb = get_arg_val<uint32_t>(arg++);  // R3: this core's K shard (grid column)
++#if TAIL_SPLIT_MODE != 0
++    // tail_writes_both_nocs: the writer's output region (same RT layout as the writer's first 12 args).
++    constexpr auto out_args = TensorAccessorArgs<res_args.next_compile_time_args_offset()>();
++    constexpr uint32_t t_out_block_n = TAIL_OUT_BLOCK_N;
++    constexpr uint32_t t_write_batch = TAIL_WRITE_BATCH;
++    constexpr uint32_t t_o_tile_bytes = TAIL_O_TILE_BYTES;
++    constexpr uint32_t t_batch_rows = t_write_batch * sb_h;
++    constexpr uint32_t t_groups_per_batch = num_row_groups / t_write_batch;  // writer batches per block batch
++    const uint32_t t_out_addr = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_b0 = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_batches_valid = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_row0 = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_rows_valid = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_col0 = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_cols_valid = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_nb_b = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_nb_m = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_nb_n = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_tensor_m_tiles = get_arg_val<uint32_t>(arg++);
++    const uint32_t t_out_n_tiles = get_arg_val<uint32_t>(arg++);
++    const auto t_out_acc = TensorAccessor(out_args, t_out_addr, TAIL_O_PAGE_BYTES);
++    const uint32_t tail_mbox = get_semaphore(TAIL_SEM_MBOX);
++    const uint32_t tail_post = get_semaphore(TAIL_SEM_POST);
++    const uint32_t tail_done = get_semaphore(TAIL_SEM_DONE);
++    // The writer's LAST block (the tail): its coordinates exactly as the writer computes them.
++    const uint32_t t_blk_b0 = (t_nb_b - 1) * block_batches;
++    const uint32_t t_blk_b_valid =
++        (t_batches_valid - t_blk_b0) < block_batches ? (t_batches_valid - t_blk_b0) : block_batches;
++    const uint32_t t_blk_r0 = (t_nb_m - 1) * block_m_tiles;
++    const uint32_t t_blk_rows = block_extent(t_rows_valid, t_blk_r0, block_m_tiles);
++    const uint32_t t_blk_c0 = (t_nb_n - 1) * t_out_block_n;
++    const uint32_t t_blk_cols = block_extent(t_cols_valid, t_blk_c0, t_out_block_n);
++    uint32_t tail_served = 0;  // writer batches of the tail this reader has served
++    // Serve the reader's share of tail batch s (0-based, writer order: bi major, row-group batch minor).
++    auto serve_one = [&]() {
++        const uint32_t s = tail_served;
++        const uint32_t bi = s / t_groups_per_batch;
++        const uint32_t g = (s % t_groups_per_batch) * t_write_batch;
++        tail_split::wait_at_least(tail_post, s + 1);
++        const uint32_t l1_base = tail_split::read(tail_mbox);
++        if (bi < t_blk_b_valid) {
++            const uint32_t batch = t_b0 + t_blk_b0 + bi;
++            for (uint32_t r = 0; r < t_batch_rows; ++r) {
++                const uint32_t blk_row = g * sb_h + r;
++                if (blk_row >= t_blk_rows) {
++                    break;
++                }
++                const uint32_t page =
++                    (batch * t_tensor_m_tiles + t_row0 + t_blk_r0 + blk_row) * t_out_n_tiles + t_col0 + t_blk_c0;
++                uint32_t l1 = l1_base + r * t_out_block_n * t_o_tile_bytes;
++                for (uint32_t n = 0; n < t_blk_cols; ++n) {
++                    if (tail_split::reader_owns(n, t_blk_cols)) {
++                        noc_async_write(l1, t_out_acc.get_noc_addr(page + n), t_o_tile_bytes);
++                    }
++                    l1 += t_o_tile_bytes;
++                }
++            }
++            noc_async_writes_flushed();  // the reader's share left L1
++        }
++        *tail_split::word(tail_done) = s + 1;
++        ++tail_served;
++    };
++    // Serve every tail batch whose last row group (global over the block's batches) is < `rg_end`.
++    [[maybe_unused]] auto serve_before = [&](uint32_t rg_end) {
++        while (tail_served < block_batches * t_groups_per_batch) {
++            const uint32_t s = tail_served;
++            const uint32_t last_rg = (s / t_groups_per_batch) * num_row_groups +
++                                     (s % t_groups_per_batch) * t_write_batch + t_write_batch - 1;
++            if (last_rg >= rg_end) {
++                break;
++            }
++            MaybeDeviceZoneScope("rd_tail_write");
++            serve_one();
++        }
++    };
++#endif
+ 
+     const auto a_acc = TensorAccessor(a_args, a_addr, a_page_bytes);
+     const auto b_acc = TensorAccessor(b_args, b_addr, b_page_bytes);
+@@ -494,10 +571,24 @@
+                                 noc_async_read_barrier();
+                             }
+                             cb_push_back(cb_residual_tiles, residual_group_tiles);
++#if TAIL_SPLIT_MODE != 0
++                            // Tail block: serve the output batches compute can already finish (rows < g) so the
++                            // residual ring (refilled only as compute advances) never deadlocks on the writer.
++                            if (bb + 1 == nb_b && mb + 1 == nb_m && nbk + 1 == nb_n) {
++                                serve_before(bi * num_row_groups + g);
++                            }
++#endif
+                         }
+                     }
+                 }
+             }
+         }
+     }
++#if TAIL_SPLIT_MODE != 0
++    {
++        MaybeDeviceZoneScope("rd_tail_write");
++        serve_before(0xFFFFFFFFu);  // the rest of the tail
++        noc_async_write_barrier();
++    }
++#endif
+ }
+diff -ruN twbn_a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp twbn_b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp	2026-11-17 12:22:27.808802968 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp	2026-11-17 12:22:27.808802968 +0000
+@@ -36,6 +36,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+ #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
+ 
+ namespace {
+ // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
+@@ -127,6 +128,14 @@
+         return;
+     }
+ 
++    // tail_writes_both_nocs: the post / done words (semaphores, zero-initialized).
++    [[maybe_unused]] uint32_t tail_seq = 0;
++#if TAIL_SPLIT_MODE != 0
++    const uint32_t tail_mbox = get_semaphore(TAIL_SEM_MBOX);
++    const uint32_t tail_post = get_semaphore(TAIL_SEM_POST);
++    const uint32_t tail_done = get_semaphore(TAIL_SEM_DONE);
++#endif
++
+     for (uint32_t bb = 0; bb < nb_b; ++bb) {
+         const uint32_t blk_b0 = bb * block_batches;
+         const uint32_t blk_b_valid =
+@@ -200,6 +209,10 @@
+                         }
+                     }
+                 }
++                // tail_writes_both_nocs: the core's LAST block (its reader has finished every read by the time
++                // this block's output arrives) is split with the reader.
++                const bool tail = tail_split::active && !out_in_place && bb + 1 == nb_b && mb + 1 == nb_m &&
++                                  nbk + 1 == nb_n;
+                 for (uint32_t bi = 0; bi < block_batches; ++bi) {
+                     const bool batch_valid = bi < blk_b_valid;
+                     const uint32_t batch = b0 + blk_b0 + bi;
+@@ -208,6 +221,12 @@
+                             MaybeDeviceZoneScope("wr_wait_out");
+                             cb_wait_front(cb_output_tiles, batch_tiles);
+                         }
++#if TAIL_SPLIT_MODE != 0
++                        if (tail) {
++                            ++tail_seq;
++                            tail_split::post(tail_mbox, tail_post, get_read_ptr(cb_output_tiles), tail_seq);
++                        }
++#endif
+                         if (!out_in_place && batch_valid) {
+                             MaybeDeviceZoneScope("wr_write");
+                             const uint32_t l1_base = get_read_ptr(cb_output_tiles);
+@@ -220,12 +239,20 @@
+                                     (batch * tensor_m_tiles + row0 + blk_r0 + blk_row) * out_n_tiles + col0 + blk_c0;
+                                 uint32_t l1 = l1_base + r * out_block_n_tiles * o_tile_bytes;
+                                 for (uint32_t n = 0; n < blk_cols; ++n) {
+-                                    noc_async_write(l1, out_acc.get_noc_addr(page + n), o_tile_bytes);
++                                    if (!tail || !tail_split::reader_owns(n, blk_cols)) {
++                                        noc_async_write(l1, out_acc.get_noc_addr(page + n), o_tile_bytes);
++                                    }
+                                     l1 += o_tile_bytes;
+                                 }
+                             }
+                             noc_async_writes_flushed();  // slot is free once the writes left L1
+                         }
++#if TAIL_SPLIT_MODE != 0
++                        if (tail) {
++                            MaybeDeviceZoneScope("wr_tail_wait_reader");
++                            tail_split::wait_at_least(tail_done, tail_seq);  // the reader's share left L1
++                        }
++#endif
+                         cb_pop_front(cb_output_tiles, batch_tiles);
+                     }
+                 }
+diff -ruN twbn_a/ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp twbn_b/ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp	1970-01-01 00:00:00.000000000 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp	2026-11-17 12:22:27.808802968 +0000
+@@ -0,0 +1,59 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Tail write split (Perf, tail_writes_both_nocs): split the LAST block's output write stream between the writer
++// (BRISC / NoC1) and the reader (NCRISC / NoC0), which is idle once its K-walk is done.
++//
++// The output CB keeps ONE consumer (the writer: cb_wait_front / cb_pop_front). Per batch of the tail the
++// writer posts the batch's L1 address (mailbox) and a sequence number, issues its own share, flushes, then
++// waits for the reader's `done` >= seq before popping (the reader's share has left L1). The reader, after
++// its walk, waits for each post, issues its share on NoC0, flushes and publishes `done`. Both words are
++// program semaphores (zero-initialized by dispatch), used as plain local L1 words.
++//
++// TAIL_SPLIT_MODE (define; absent = 0) / TAIL_NC_PCT:
++//   0 off (baseline: the writer writes everything on NoC1)
++//   1 column cut: the reader owns tiles n < blk_cols * TAIL_NC_PCT / 100 of every row, the writer the rest
++#pragma once
++#include <cstdint>
++
++#ifndef TAIL_SPLIT_MODE
++#define TAIL_SPLIT_MODE 0
++#endif
++#ifndef TAIL_NC_PCT
++#define TAIL_NC_PCT 50
++#endif
++
++namespace tail_split {
++constexpr uint32_t mode = TAIL_SPLIT_MODE;
++constexpr bool active = mode != 0;
++
++// Does the reader (NCRISC) own tile n of a row of blk_cols valid tiles?
++FORCE_INLINE bool reader_owns(uint32_t n, uint32_t blk_cols) {
++    if constexpr (mode == 1) {
++        return n < (blk_cols * TAIL_NC_PCT) / 100;
++    } else {
++        return false;
++    }
++}
++
++FORCE_INLINE volatile tt_l1_ptr uint32_t* word(uint32_t addr) {
++    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
++}
++
++// Writer side: publish batch `seq` (1-based) at L1 address `l1`.
++FORCE_INLINE void post(uint32_t mbox_addr, uint32_t seq_addr, uint32_t l1, uint32_t seq) {
++    *word(mbox_addr) = l1;
++    *word(seq_addr) = seq;
++}
++
++FORCE_INLINE void wait_at_least(uint32_t addr, uint32_t v) {
++    do {
++        invalidate_l1_cache();
++    } while (*word(addr) < v);
++}
++
++FORCE_INLINE uint32_t read(uint32_t addr) {
++    invalidate_l1_cache();
++    return *word(addr);
++}
++}  // namespace tail_split
