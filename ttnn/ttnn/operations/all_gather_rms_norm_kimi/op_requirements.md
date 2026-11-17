@@ -127,7 +127,7 @@ Measure only in the op; never on a dummy exchange. Relevant catalog entries: `fa
 
 Bottleneck now: the tail after the last landing is mostly the DRAM output store (`nocompute` 18.43 vs full 18.96). On the stats chain the largest piece is the one-tile combine, about 2.2 µs of whole-tile SFPU. Next: `sfpu_tile_scope` (column-0 faces only), which is Refinement 3's local-compute item, not done here for that reason.
 
-### [ ] Refinement 3 — Local compute chain: cut the per-core compute + store time
+### [x] Refinement 3 — Local compute chain: cut the per-core compute + store time
 
 **Type**: perf
 
@@ -149,3 +149,11 @@ Profile per TRISC (`DeviceZoneScopedN`) first to see which phase dominates. Keep
 - The golden tolerance `(PCC ≥ 0.999, rel-RMS ≤ 0.01)` still holds (Phase 0 measures 0.999998 / 0.0024).
 - The golden suite, the acceptance tests and the determinism test stay green.
 - No regression on the tall regime shape `(1,1,2048,384)`.
+
+**Outcome**: harness fastest chip 18.96 → **18.72 µs**, slowest 20.27 → **19.76 µs** (`perf/r3_baseline.json` → `perf/r3_final.json`, verdict: win). Local-only (`nobulk`) 16.96 (R2) / 17.02 (R3 start) → **15.74 µs**; `nobulk,nostore` 11.01 → 9.69 µs. Tall `(1,1,2048,384)`: 55.89 / 58.84 → **51.00 / 53.65 µs**. Accuracy unchanged (PCC 0.999998, rel-RMS ≤ 0.0024, max 1.09 ULP). Levers, each measured:
+- **`COMBINE_COL0`** (`sfpu_tile_scope`): the G-way fp32 sum, ×1/W, +eps and rsqrt now run as ONE custom chain element on the column-0 vectors (8 vector ops; before, 6 whole-tile passes of 32). The combine + expand went from 2.2 µs to ~1.0 µs; `nobulk` −1.2 µs. Alone it cost the full op +0.38 µs: the own cores now stored ~1.1 µs earlier, inside the bulk (with `nostore` it is neutral). A 3000-cycle busy-wait before the own stores recovered that, which confirmed the cause.
+- **`OWN_STORE_GATE = 2`**: an own core stores only after both ports of its link have issued the reads of the whole own entry (the ports increment its otherwise unused `landed`). Gate 1 (per block) gave 19.25 µs; gate 2 gave 18.99 / 20.06. With everything else in place, gate 0 costs +0.32 µs.
+- **`LATE_BLOCK`** (`compute_block_size`): a block with no chunk ahead (all of it lands at the end of the stream; this is what the last-finishing cores hold) runs one gamma pass and one normalize pass over the whole block, pushed per chunk, instead of a gamma + normalize pass per chunk. The per-tile arithmetic is the same, so replicas stay bit-identical. The landing → store-ready tail dropped from ~2.07 µs to ~1 µs (`perf/r3_tail_probe.patch`) → **18.72 / 19.76**.
+- Parked as live knobs: **`NORMALIZE_MODE = "scale"`** (S = rstd ⊙ γ after the combine, one x ⊙ S pass per chunk) gave 18.78 / 20.55: fastest better, slowest worse, because early-landed remote cores then store in the middle of the bulk, where NoC1 stores from the right-hand columns take up to 8 µs for 12 tiles. **`COMPUTE_STORE_NOC = 0`**: 24.5 µs (kept 1). `XG_LATE_STREAM_CHUNKS` re-swept with `LATE_BLOCK`: 4 / 8 / 12 = 19.59 / 18.72 / 18.75, so it stays at 8. `FUSE_LATE_CHUNKS` with col-0 gave 19.46 (stays off).
+
+Breakdown now (fastest chip, µs, R2 in brackets): skeleton 6.92 (6.91) / `nobulk,nostore` 9.69 (11.01) / `nobulk` 15.74 (16.96) / transport-only 15.85 (15.71) / `nostore` 17.73 (17.82) / `nocompute` 17.76 (18.43) / full 18.72 (18.96). The op is now bound by transport (15.85) plus a 2.9 µs tail. In that tail the last chunk's compute is ~1 µs; the rest is DRAM-store contention with the bulk on NoC1. In local-only the store burst at the end is +6 µs over `nobulk,nostore`, against a DRAM speed of light of ~3.8 µs. Next to try: steer the store NoC routes away from the fabric's NoC1 traffic (per-core NoC choice or core placement by column; the global NoC0 swap is far worse), and stores from the remote cores that land early timed against the stream position, like the own-store gate. Not done here: the probe shows the slowness is route- and column-specific, which needs a NoC-route study beyond this refinement's local-compute scope.

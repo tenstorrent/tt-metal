@@ -9,3 +9,4 @@
 {"event":"test_run","lever":"fuse_late_chunks","status":"fail","classification":"replication mismatch: own slice via cb_xg fp32 round trip vs remote via DEST reuse are not bit-identical","next":"one arithmetic for every member: fused everywhere (no xg ahead) vs xg everywhere","ts":"2026-11-17T20:52:17+00:00"}
 {"event":"test_run","lever":"fuse_late_chunks","status":"pass","fused_everywhere_fastest":19.497,"fused_slowest":21.572,"parked_false_fastest":19.316,"decision":"park FUSE_LATE_CHUNKS=False (live knob)","ts":"2026-11-17T20:58:28+00:00"}
 {"event":"test_run","refinement":2,"status":"pass","final_fastest_us":18.945,"final_slowest_us":20.261,"golden":"7/7","acceptance":"8/8","precision":"4/4","full_minus_transport_us":3.25,"ts":"2026-11-17T21:49:01+00:00"}
+{"event":"test_run","refinement":3,"status":"pass","final_fastest_us":18.718,"final_slowest_us":19.76,"nobulk_us":15.743,"golden":"7/7","unit":"12/12","tall_us":[51,53.65],"ts":"2026-11-17T23:25:11+00:00"}

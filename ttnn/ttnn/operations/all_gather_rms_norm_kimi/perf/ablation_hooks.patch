@@ -1,8 +1,8 @@
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
-index 9079be05066..8a74b354551 100644
+index 3fd89060bcc..57c9d6daf6f 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
-@@ -29,6 +29,7 @@ Knobs (single source of truth; every CB size / loop count / RT arg derives from
+@@ -31,6 +31,7 @@ Knobs (single source of truth; every CB size / loop count / RT arg derives from
  from __future__ import annotations
  
  import hashlib
@@ -10,7 +10,25 @@ index 9079be05066..8a74b354551 100644
  import math
  import struct
  from dataclasses import dataclass, field
-@@ -490,6 +491,7 @@ def op_core_crs(geo):
+@@ -414,7 +415,7 @@ def port_stream(geo, p, l, d):
+     return out
+ 
+ 
+-def own_block_reads(geo, p):
++def own_block_reads(geo, p, abl=()):
+     """How many port streams read each own block of chip p (each such port increments the block's `landed` once);
+     the same for every own block (every link's own rows ride entry 0 of both directions)."""
+     counts = {
+@@ -422,7 +423,7 @@ def own_block_reads(geo, p):
+         for m in range(geo.nb)
+     }
+     assert len(set(counts.values())) == 1, counts
+-    return counts[0]
++    return 0 if "nobulk" in abl else counts[0]
+ 
+ 
+ def stream_incs(geo, entries):
+@@ -521,6 +522,7 @@ def op_core_crs(geo):
  
  
  def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilon, cfg):
@@ -18,7 +36,7 @@ index 9079be05066..8a74b354551 100644
      mesh = geo.mesh_device
      G, L = geo.G, geo.L
      virt = lambda c: mesh.worker_core_from_logical_core(c)
-@@ -536,6 +538,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -567,6 +569,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
              hub_crs = _crs([pl.hub])
              program = ttnn.ProgramDescriptor()
              program.custom_program_hash = _hash(
@@ -26,23 +44,32 @@ index 9079be05066..8a74b354551 100644
                  "all_gather_rms_norm_kimi",
                  geo.key[1:],
                  coord,
-@@ -624,6 +627,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -641,7 +644,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+             reader_ct += list(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+             writer_common = [out_addr, stats_addr, p, _xy(hub_v)] + geo.row_base
+             writer_ct = geo_ct + [CB_PARTIAL, CB_OUT, SEM_OWN_PARTIALS, tile_bytes, SEM_LANDED]
+-            writer_ct += [own_block_reads(geo, p) if OWN_STORE_GATE else 0]
++            writer_ct += [own_block_reads(geo, p, ABL) if OWN_STORE_GATE else 0]
+             writer_ct += list(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+             compute_common = [p] + geo.row_base + xg_ahead_table(geo, p)
+             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
+@@ -662,6 +665,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      compile_time_args=reader_ct,
                      runtime_args=ttnn.RuntimeArgs(),
                      common_runtime_args=reader_common,
 +                    defines=[("AGRN_NOBULK", "1")] if "nobulk" in ABL else [],
                      config=ttnn.DataMovementConfigDescriptor(
-                         processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0
+                         processor=ttnn.DataMovementProcessor.RISCV_1, noc=_NOCS[1 - COMPUTE_STORE_NOC]
                      ),
-@@ -634,6 +638,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -672,6 +676,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      compile_time_args=writer_ct,
                      runtime_args=ttnn.RuntimeArgs(),
                      common_runtime_args=writer_common,
 +                    defines=[("AGRN_NOSTORE", "1")] if "nostore" in ABL else [],
                      config=ttnn.DataMovementConfigDescriptor(
-                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1
+                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=_NOCS[COMPUTE_STORE_NOC]
                      ),
-@@ -644,6 +649,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -682,6 +687,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      compile_time_args=compute_ct,
                      runtime_args=ttnn.RuntimeArgs(),
                      common_runtime_args=compute_common,
@@ -50,7 +77,7 @@ index 9079be05066..8a74b354551 100644
                      config=ccfg,
                  ),
              ]
-@@ -655,6 +661,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -693,6 +699,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                      core = pl.ports[(l, d)]
                      peer = next_c if d == FWD else prev_c
                      entries = port_stream(geo, p, l, d)
@@ -59,20 +86,20 @@ index 9079be05066..8a74b354551 100644
                      blocks = []  # (q, m, relay, entry_end)
                      for k, (q, ms) in enumerate(entries):
                          for i, m in enumerate(ms):
-@@ -722,6 +730,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+@@ -761,6 +769,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
+                     core = pl.receivers[(l, d)]
                      up_p = (p - 1) % G if d == FWD else (p + 1) % G
                      up_entries = port_stream(geo, up_p, l, d)
-                     local_entries = port_stream(geo, p, l, d)
 +                    if "nobulk" in ABL:
 +                        up_entries = []
+                     local_entries = port_stream(geo, p, l, d)
                      thresholds, incs = stream_incs(geo, up_entries)
                      events = []
-                     t = 0
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
-index 1ed0a9a7061..58055f56916 100644
+index d3ab9d26d6f..da6f622e8da 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
-@@ -180,6 +180,17 @@ void kernel_main() {
+@@ -234,6 +234,17 @@ void kernel_main() {
      const uint32_t h = b.h;
  
      compute_kernel_hw_startup(cb_x_block, cb_x_block, cb_out);
@@ -105,10 +132,10 @@ index 86aa64d5cca..608a9ef074f 100644
          }
      }
 diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
-index 7b0c2d6f0fa..0ab03a746d8 100644
+index c6914e911f5..768e24f375a 100644
 --- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
 +++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
-@@ -58,7 +58,9 @@ void kernel_main() {
+@@ -65,7 +65,9 @@ void kernel_main() {
              const uint32_t r = t / block_w;
              const uint32_t j = t - r * block_w;
              const uint32_t page = (b.m * block_h + r) * Wt + b.q * Wl_t + j;

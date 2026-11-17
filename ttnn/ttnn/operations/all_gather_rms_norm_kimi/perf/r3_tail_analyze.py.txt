@@ -1,0 +1,20 @@
+import csv, sys, collections
+F=1350.0; rows=[]
+with open(sys.argv[1]) as f:
+    next(f); r=csv.reader(f); next(r)
+    for x in r: rows.append(x)
+prog=collections.defaultdict(list)
+for x in rows: prog[(x[0],x[7])].append((int(x[1]),int(x[2]),x[3],int(x[5]),x[10],x[11]))
+for (chip,run),ev in sorted(prog.items(), key=lambda k:(k[0][0],int(k[0][1]))):
+    if not any(e[4]=="W_LASTW" for e in ev): continue
+    t0=min(e[3] for e in ev if e[4].endswith("-KERNEL") and e[5]=="ZONE_START")
+    ends={}
+    for cx,cy,risc,t,name,typ in ev:
+        if name.endswith("-KERNEL") and typ=="ZONE_END": ends[(cx,cy)]=max(ends.get((cx,cy),0),t)
+    core=max(ends,key=ends.get)
+    z={}
+    for cx,cy,risc,t,name,typ in ev:
+        if (cx,cy)==core and name in("R_LAST","C_LASTG","C_LASTN","W_LASTW"):
+            z.setdefault((name,risc),{})[typ]=(t-t0)/F
+    s=" ".join(f"{n}/{r[-1] if r.startswith('TRISC') else r[0]}:{v.get('ZONE_START',0):.2f}-{v.get('ZONE_END',0):.2f}" for (n,r),v in sorted(z.items(), key=lambda kv: kv[1].get('ZONE_START',0)))
+    print(chip,run,core,f"end {(ends[core]-t0)/F:.2f}",s)

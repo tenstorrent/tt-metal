@@ -132,3 +132,34 @@
   - The tail after the last landing is now mostly the DRAM store (`nocompute` within 0.5 µs of full).
   - The stats-critical chain's largest piece is the 1-tile combine: ~2.2 µs of SFPU (4 copies, 3 fp32 adds, rsqrt over the whole tile on the math thread). The `sfpu_tile_scope` item (column-0 faces only) of Refinement 3 is the next lever on it.
 - Tests added: none (the acceptance + determinism + precision tests cover the changed paths). Perf tooling: `perf/zone_probe.patch`, `perf/zone_probe_driver.py.txt`, `perf/zone_analyze.py.txt`, `perf/r2_*.json`.
+
+## Refinement 3 — Local compute chain: cut the per-core compute + store time
+- Date: 2026-11-17
+- What was done (harness, 5 experiments, PERF FOCUS cell, fastest / slowest chip µs; start 18.96 / 20.27, `perf/r3_baseline.json`):
+  - Per-stage zones first (the R2 probe plus combine/expand zones). On the stats-critical chain, the combine + rstd expand took 2.2 µs (7.4 → 9.6 µs). A last-chunk probe (`perf/r3_tail_probe.patch`, `perf/r3_tail_analyze.py.txt`) showed the full op ends on a remote core that holds a late block: last landing → compute reaches the last chunk +0.8 µs (still busy with the previous chunk) → gamma pass 0.4 → normalize pass 0.6 → store 0.55.
+  - **`COMBINE_COL0`** (`sfpu_tile_scope`, c_skip): one custom chain element (`CombineCol0Rsqrt`, raw sfpi, with the reason in the kernel) does the G-way fp32 sum in the fixed q order, × 1/W, + eps and rsqrt on the even-parity vectors of the two left faces only (8 vector ops instead of 6 × 32). The combine + expand take ~1.0 µs; `nobulk` 17.02 → 15.80. In the full op alone: 19.34 / 20.26. The own cores' stores now overlapped the bulk: `nostore` was neutral, and delaying the own stores by 3000 cycles (diagnostic only) gave 18.91.
+  - **`OWN_STORE_GATE`**: the ports increment an own core's `landed` (unused on own cores) once they have issued the reads of its block (1) or of the link's whole own entry (2). The own writer waits for the host-derived count (`own_block_reads`). Gate 1 gave 19.25; gate 2 gave 18.99 / 20.06. **`COMPUTE_STORE_NOC`** knob: stores on NoC0 gave 24.5, so it stays 1.
+  - **`NORMALIZE_MODE`** knob: "scale" brings back the R1 S path (S = rstd_full ⊙ γ into `cb_xg`'s allocation, then x ⊙ S as chunks land; one pass per chunk). It measured 18.78 / 20.55 twice. The slowest chip is worse because early-landed remote cores then store in the middle of the bulk (12 tiles taking up to 8 µs from the right-hand columns). A global wall-clock store delay (diagnostic) did not fix it. Parked at "xg".
+  - **`LATE_BLOCK`** (`compute_block_size`): when a block has no chunk ahead, compute runs one gamma pass (x waited cumulatively, xg pushed per chunk) and one normalize pass (xg waited cumulatively, out pushed per chunk) over the whole block, instead of a gamma + normalize pass per chunk. The per-tile arithmetic is identical, so the replication test stays bit-exact. → **18.72 / 19.76** (`perf/r3_final.json`; `compare`: fastest −0.245, slowest −0.505, noise 0.05: win).
+  - Re-sweeps with everything in: `XG_LATE_STREAM_CHUNKS` 4 / 8 / 12 = 19.59 / 18.72 / 18.75 (stays 8). Gate 0 = 19.04 / 19.98. Col-0 off = 18.85 / 19.98. `FUSE_LATE_CHUNKS` + col-0 = 19.46 (stays off).
+  - Not done: the **block knobs** (`block_w` < `Wl_t` on the idle cores, or `block_h = 2`). The per-core compute is no longer on the critical path: `nobulk,nostore` is 9.69 against a 6.92 skeleton. A `block_w` split also needs a same-slice partial combine with a bit-exact fixed order, which is a scheme change for < 1 µs of headroom.
+- Breakdown now (fastest chip, µs; R2 in brackets; `perf/r3_abl_*.json`, hooks regenerated in `perf/ablation_hooks.patch`, which now also carries the nocompute hunk):
+
+  | Variant | µs (R2) |
+  |---|---|
+  | skeleton | 6.92 (6.91) |
+  | `nobulk,nostore` | 9.69 (11.01) |
+  | local-only (`nobulk`) | 15.74 (16.96) |
+  | transport-only | 15.85 (15.71) |
+  | `nostore` | 17.73 (17.82) |
+  | `nocompute` | 17.76 (18.43) |
+  | full | 18.72 (18.96) |
+
+- Tall regime `(1,1,2048,384)`: 55.89 / 58.84 → 51.00 / 53.65 (`perf/r3_tall_final.json`).
+- Accuracy achieved: PCC = 0.999998, relative RMS ≤ 0.00241 (max ULP 1.09) on shapes [(1,1,32,32), (1,1,128,256), (1,1,640,384), (1,1,2048,384)].
+- Golden test progress: 7/7 (test_golden 1 + test_regression 6); unit dir 12/12 (acceptance 8 incl. tall and bit-identical repeat/replication; precision baseline 4).
+- Issues encountered:
+  - The col-0 combine alone regressed the full op by moving the own stores into the bulk; the store gate fixed that.
+  - Scale mode trades the fastest chip against the slowest through the same store contention.
+- Remaining headroom (finding): the op is transport (15.85) plus a 2.9 µs tail. The tail is ~1 µs of last-chunk compute plus DRAM stores slowed by NoC1 contention with the fabric traffic; some cores take 8 µs to store 12 tiles mid-bulk. In local-only, the end-of-op store burst is +6 µs against a ~3.8 µs DRAM SOL. Next: route the stores away from the fabric's NoC1 paths (per-core NoC choice or compute placement by column), and time the stores of the early-landed remote cores against the stream position.
+- Tests added: none (acceptance + determinism + precision cover the changed paths). Perf tooling: `perf/r3_*.json`, `perf/r3_tail_probe.patch`, `perf/r3_tail_analyze.py.txt`, regenerated `perf/ablation_hooks.patch`.

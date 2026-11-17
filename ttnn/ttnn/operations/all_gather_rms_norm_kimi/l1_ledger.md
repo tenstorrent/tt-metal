@@ -120,3 +120,15 @@ data-movement budget above is unchanged: placement moves no bytes, only NoC hop 
 | `stats_scratch` + γ tail (`Wt·64 B` + 64 B align) + hub mask words (`16·G B`, one 16 B L1 slot each: a NoC write source must share the destination's 16 B alignment) | +3.1 KiB on every op core | regime R6 (γ read once per chip) and the per-slot stats publish |
 
 Compute-core footprint: 132 → 159 KiB at the PERF FOCUS cell; tall regime (block 3 × 12): 346 → 373 KiB.
+
+## Refinement 3 changes (local compute chain)
+
+| Change | L1 effect | Why |
+|--------|-----------|-----|
+| `COMBINE_COL0`: the combine's SFPU tail runs on column 0 of the partial tiles (one custom chain element) | 0 | same CBs (`cb_partials` → `cb_rstd`); only DEST vectors change |
+| `LATE_BLOCK`: an all-late block runs one gamma pass + one normalize pass over the block | 0 | `cb_xg` already holds the whole block (`block_h·block_w` fp32), so the gamma pass can fill it before the normalize drains it |
+| `NORMALIZE_MODE = "scale"` (parked): S = rstd_full ⊙ γ is written into `cb_xg`'s allocation | 0 | S and xg are never both live (one mode per build), same size and format |
+| `OWN_STORE_GATE`: the ports increment the own core's `landed` semaphore | 0 | own cores never used `landed`; no new semaphore |
+
+Compute-core footprint unchanged: 159 KiB at the PERF FOCUS cell; 373 KiB in the tall regime. Data-movement budget
+unchanged: the gate moves no bytes, only the time of the own-slice stores.

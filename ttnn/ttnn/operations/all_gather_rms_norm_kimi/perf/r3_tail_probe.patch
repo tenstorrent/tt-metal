@@ -1,0 +1,106 @@
+diff --git a/scripts/run_safe_pytest.sh b/scripts/run_safe_pytest.sh
+index a6f4b8de666..f30205364da 100755
+--- a/scripts/run_safe_pytest.sh
++++ b/scripts/run_safe_pytest.sh
+@@ -1,4 +1,20 @@
+ #!/bin/bash
++# Auto-generated wrapper: wait for build before running tests
++while [ ! -f "/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/.build_complete" ]; do
++    if [ -f "/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/.infra_failed" ]; then
++        echo "NOTE: Background build failed. Proceeding (agent may rebuild)." >&2
++        break
++    fi
++    sleep 5
++done
++while [ ! -f "/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/.venv_complete" ]; do
++    if [ -f "/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/.infra_failed" ]; then
++        echo "NOTE: Background venv failed. Proceeding (agent may recreate)." >&2
++        break
++    fi
++    sleep 5
++done
++# --- Original scripts/run_safe_pytest.sh below ---
+ # run_safe_pytest.sh - Cooperative device-aware test runner
+ #
+ # Uses flock to serialize device access across multiple agents/terminals.
+@@ -864,4 +880,4 @@ rm -f "$PYTEST_STDOUT_LOG"
+ # hangs (handled above). The label keeps both visible to readers and to
+ # hooks parsing this output.
+ echo "SAFE_PYTEST_RESULT: FAIL (pytest exit code: $EXIT_CODE; wrapper exit: 1)"
+-exit 1
++exit 1
+\ No newline at end of file
+diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
+index ca601ee176a..d37b21facdc 100644
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
+@@ -31,6 +31,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+ #include "all_gather_rms_norm_kimi_common.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
+ #ifdef TRISC_MATH
+ #include "ckernel_sfpu_sqrt.h"
+ #include "sfpu/ckernel_sfpu_converter.h"
+@@ -286,6 +287,9 @@ void kernel_main() {
+             normalize_chunk(k);
+         } else if constexpr (fuse_late) {
+             fused_chunk(k);
++        } else if (k + 1 == n_chunks) {
++            { DeviceZoneScopedN("C_LASTG"); gamma_chunk(k); }
++            { DeviceZoneScopedN("C_LASTN"); normalize_chunk(k); }
+         } else {
+             gamma_chunk(k);
+             normalize_chunk(k);
+diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
+index 86aa64d5cca..b58a9228c0b 100644
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_reader.cpp
+@@ -20,6 +20,7 @@
+ #include "api/dataflow/dataflow_api.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+ #include "all_gather_rms_norm_kimi_common.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
+ 
+ using namespace agrn;
+ 
+@@ -137,7 +138,12 @@ void kernel_main() {
+         volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed));
+         const uint32_t n_chunks = n_tiles / chunk_tiles;
+         for (uint32_t k = 0; k < n_chunks; ++k) {
+-            noc_semaphore_wait_min(landed, k + 1);
++            if (k + 1 == n_chunks) {
++                DeviceZoneScopedN("R_LAST");
++                noc_semaphore_wait_min(landed, k + 1);
++            } else {
++                noc_semaphore_wait_min(landed, k + 1);
++            }
+             cb_push_back(cb_x_block, chunk_tiles);
+         }
+     }
+diff --git a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
+index c6914e911f5..2d5b0c6c217 100644
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_writer.cpp
+@@ -13,6 +13,7 @@
+ 
+ #include "api/dataflow/dataflow_api.h"
+ #include "all_gather_rms_norm_kimi_common.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
+ 
+ using namespace agrn;
+ 
+@@ -59,7 +60,12 @@ void kernel_main() {
+     const uint32_t n_chunks = b.h * block_w / chunk_tiles;
+     uint32_t t = 0;
+     for (uint32_t k = 0; k < n_chunks; ++k) {
+-        cb_wait_front(cb_out, chunk_tiles);
++        if (k + 1 == n_chunks) {
++            DeviceZoneScopedN("W_LASTW");
++            cb_wait_front(cb_out, chunk_tiles);
++        } else {
++            cb_wait_front(cb_out, chunk_tiles);
++        }
+         uint32_t src = get_read_ptr(cb_out);
+         for (uint32_t i = 0; i < chunk_tiles; ++i, ++t) {
+             const uint32_t r = t / block_w;

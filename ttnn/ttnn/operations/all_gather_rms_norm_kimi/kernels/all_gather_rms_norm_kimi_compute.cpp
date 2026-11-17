@@ -6,13 +6,15 @@
 //   partial_block (b)   (q == p) reduce<SUM, REDUCE_ROW, Accurate fp32 SFPU> -> cb_partial (col 0 = row sums)
 //   combine_stats_block eltwise_chain: CopyTile P_0..P_{G-1} -> D0..D{G-1} (UnpackToDestFp32, lossless), then
 //                       D0 += D1, D0 += D2, ... in the fixed order q = 0..G-1 (SFPU fp32), * 1/W, + eps, rsqrt
-//                       -> cb_rstd
+//                       -> cb_rstd; COMBINE_COL0: all of it as one pass over the column-0 vectors only
 //   gamma_block         xg = x * gamma (row broadcast, fp32 DEST, exact bf16 x bf16 product) -> cb_xg, per landed
 //                       chunk; needs no stats, so it runs BEFORE the combine for the whole own block and for the first
 //                       remote chunks the host look-ahead table expects landed by then (the stall shadow)
 //   expand_rstd_block   unary_bcast<Col> -> cb_rstd_full (one tile per block row)
 //   normalize_block     per chunk: out = xg * rstd_full -> cb_out; a chunk not done ahead runs x * gamma * rstd_full
-//                       as one chain (DEST reused as srcA, FUSE_LATE_CHUNKS)
+//                       as one chain (DEST reused as srcA, FUSE_LATE_CHUNKS); a block with no chunk ahead runs one
+//                       gamma pass + one normalize pass over the whole block (LATE_BLOCK). NORMALIZE_MODE "scale"
+//                       instead computes S = rstd_full * gamma after the combine and out = x * S per landed chunk
 // After the stats only the combine and one multiply per tile stand between the landed chunks and their DRAM store,
 // so the stores (DRAM-bound, ~4 us for the whole output) start right after the combine instead of after a whole-
 // block scale. Each chunk is one (rows x cols) window of the block: a run inside one block row, or whole rows.
