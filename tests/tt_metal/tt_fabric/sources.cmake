@@ -36,6 +36,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_channel_trimming_replay.cpp
     fabric_router/test_static_sized_channels_allocator.cpp
     fabric_router/test_router_channel_layouts.cpp
+    fabric_router/test_router_layouts_mock.cpp
     fabric_router/test_fabric_slot_and_trid_allocators.cpp
     disaggregation/test_kv_chunk_address_table_protobuf.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp

@@ -9,6 +9,7 @@
 
 #include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_fabric {
 namespace {
@@ -125,12 +126,28 @@ TEST(FabricLaunchGateTest, AllOk) {
 
 TEST(FabricLaunchGateTest, RankFailed) { EXPECT_ANY_THROW(check_fabric_launch_headers({{5, 0, 3, 2}, {0, 1, 3, 2}})); }
 
-TEST(FabricLaunchGateTest, ConfigMismatch) {
-    EXPECT_ANY_THROW(check_fabric_launch_headers({{5, 0, 3, 2}, {5, 0, 4, 2}}));
+// meshes may run different fabric configs (the control plane checks them)
+TEST(FabricLaunchGateTest, ConfigsMayDiffer) {
+    EXPECT_NO_THROW(check_fabric_launch_headers({{5, 0, 3, 2}, {5, 0, 4, 2}}));
 }
 
 TEST(FabricLaunchGateTest, GenerationMismatch) {
     EXPECT_ANY_THROW(check_fabric_launch_headers({{5, 0, 3, 2}, {5, 0, 3, 1}}));
+}
+
+// each fabric counts its own launches
+TEST(FabricLaunchGateTest, GenerationPerFabric) {
+    const auto& world = *tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    std::vector<uint32_t> seen;
+    const auto record = [&](const std::vector<Header>& headers) { seen.push_back(headers.at(0).launch_generation); };
+    RouterChannelLayouts a, b;
+    a.begin_launch();
+    a.exchange(world, {}, record);
+    a.begin_launch();
+    a.exchange(world, {}, record);
+    b.begin_launch();
+    b.exchange(world, {}, record);
+    EXPECT_EQ(seen, (std::vector<uint32_t>{1, 2, 1}));
 }
 
 }  // namespace
