@@ -6,13 +6,13 @@
 loaded on another: each world in its own process (``dcp_qwen3_driver.py``), as in ``test_dcp_cross_world.py``.
 
 Every case saves on a ``[1, 2]`` TP mesh after two training steps and loads onto a fresh model: on the same world,
-where everything must come back exactly, and on TP 4 (the QuietBox ring) or TP 8 (a loudbox's eight chips), where the
-parameters, the AdamW moments and the train state must come back exactly and the logits and the step after the load
-within tolerance. The variants cover what the qwen3 example declares for checkpoints: the fused ``kv_proj``, the tied
-LM head padded to ``32 * tp`` rows (vocab 300: 320 rows at TP 2, 384 at TP 4, 512 at TP 8), the untied embedding padded
-the same way while the untied LM head keeps the logical vocab (vocab 320: shards that end inside a tile at TP 4 and 8),
-and LoRA adapters on every projection, ``lora_B`` following ``kv_proj``'s fused rows. A host that cannot open a world's
-mesh skips that case: a loudbox has no 1x4 descriptor, and a QuietBox has four chips.
+where everything must come back exactly, and on TP 4 (a ``[1, 4]`` line, which a QuietBox and a loudbox open) or TP 8
+(a loudbox's eight chips), where the parameters, the AdamW moments and the train state must come back exactly and the
+logits and the step after the load within tolerance. The variants cover what the qwen3 example declares for
+checkpoints: the fused ``kv_proj``, the tied LM head padded to ``32 * tp`` rows (vocab 300: 320 rows at TP 2, 384 at
+TP 4, 512 at TP 8), the untied embedding padded the same way while the untied LM head keeps the logical vocab (vocab
+320: shards that end inside a tile at TP 4 and 8), and LoRA adapters on every projection, ``lora_B`` following
+``kv_proj``'s fused rows. A host with too few chips for a world skips that case, as a QuietBox skips TP 8.
 """
 
 import os
@@ -31,7 +31,7 @@ DRIVER = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)
 
 WORLDS = {  # name: (mesh dp x tp, descriptor, devices needed)
     "tp2": ("1x2", "bh_1_2_line_line.textproto", 2),
-    "tp4": ("1x4", "bh_qb_1_4_ring_ring.textproto", 4),
+    "tp4": ("1x4", "bh_1_4_line_line.textproto", 4),
     "tp8": ("1x8", "bh_1_8_line_line.textproto", 8),
 }
 MODELS = {  # name: the save world's model flags
@@ -60,7 +60,7 @@ def _run(args: list[str], what: str) -> str:
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
     proc = run_world(DRIVER + args, env, CHILD_TIMEOUT_S)
     lines = output_lines(proc)
-    # Only the descriptor-fabric mismatch (the QuietBox 1x4 ring on a loudbox) is a skip: the driver re-raises any
+    # Only the descriptor-fabric mismatch (see dcp_driver) is a skip: the driver re-raises any
     # other failure to open the mesh.
     if proc.returncode == MESH_OPEN_FAILED or any("MESH_OPEN_FAILED" in ln for ln in lines):
         reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")
