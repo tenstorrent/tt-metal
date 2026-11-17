@@ -412,6 +412,15 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 "are not captured.");
         });
     }
+    if (mesh_device_->impl().metal_env().get_rtoptions().get_profiler_eth_counters_enabled()) {
+        static std::once_flag warned;
+        std::call_once(warned, [] {
+            log_warning(
+                tt::LogMetal,
+                "TT_METAL_PROFILE_ETH_COUNTERS measures slow dispatch programs one by one: with fast dispatch only "
+                "the totals from device open to device close are written.");
+        });
+    }
     auto lock = lock_api_function_();
     in_use_ = true;
     // The active sub-device manager id doubles as the key for per-program cached command sequences.

@@ -123,6 +123,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_server_controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/remote_compile_coordinator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/dram_counters.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/eth_counters.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp

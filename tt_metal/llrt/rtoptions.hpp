@@ -256,6 +256,8 @@ class RunTimeOptions {
     bool profiler_dram_counters_enabled = false;
     bool profiler_dram_counters_calibrate = true;
     bool profiler_dram_controller_enabled = false;
+    bool profiler_eth_counters_enabled = false;
+    bool profiler_eth_counters_calibrate = true;
     bool profiler_riscv_pmc_enabled = false;
     uint32_t profiler_riscv_pmc_event3 = 0;
     uint32_t profiler_riscv_pmc_event4 = 0;
@@ -792,6 +794,8 @@ public:
     bool get_profiler_dram_counters_enabled() const { return profiler_dram_counters_enabled; }
     bool get_profiler_dram_counters_calibrate() const { return profiler_dram_counters_calibrate; }
     bool get_profiler_dram_controller_enabled() const { return profiler_dram_controller_enabled; }
+    bool get_profiler_eth_counters_enabled() const { return profiler_eth_counters_enabled; }
+    bool get_profiler_eth_counters_calibrate() const { return profiler_eth_counters_calibrate; }
     bool get_profiler_riscv_pmc_enabled() const { return profiler_riscv_pmc_enabled; }
     uint32_t get_profiler_riscv_pmc_event3() const { return profiler_riscv_pmc_event3; }
     uint32_t get_profiler_riscv_pmc_event4() const { return profiler_riscv_pmc_event4; }

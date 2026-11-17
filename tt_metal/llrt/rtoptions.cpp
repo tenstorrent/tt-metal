@@ -153,6 +153,7 @@ enum class EnvVarID {
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_PROFILE_DRAM_COUNTERS,                // Measure DRAM traffic per program from the DRAM tile counters
     TT_METAL_PROFILE_DRAM_CONTROLLER,              // Also read the memory controller activity monitor per program
+    TT_METAL_PROFILE_ETH_COUNTERS,                 // Measure ethernet link traffic from the queue and link counters
     TT_METAL_PROFILE_RISCV_PMC,                    // Enable RISC-V baby-core HPM counters
     TT_METAL_PROFILE_RISCV_PMC_DM,                 // Event selects of the Quasar data-movement cores
     TT_METAL_PROFILE_NOC_COUNTERS,                 // Per-launch NoC interface event counters
@@ -1277,6 +1278,24 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILE_DRAM_CONTROLLER:
             this->profiler_dram_controller_enabled = is_env_enabled(value);
             break;
+
+        // TT_METAL_PROFILE_ETH_COUNTERS
+        // Snapshots the TX/RX queue counters and the firmware link counters of every active ethernet core around each
+        // slow-dispatch program and around the device lifetime, and writes the deltas to eth_traffic.csv and
+        // eth_run.csv. "1" also measures the idle rate of the queue registers once per device, "raw" skips that. Does
+        // not need the device profiler. Default: disabled.
+        // See tt_metal/tt-llk/docs/performance_counters/eth_counters.md.
+        // Usage: export TT_METAL_PROFILE_ETH_COUNTERS=1
+        case EnvVarID::TT_METAL_PROFILE_ETH_COUNTERS: {
+            if (std::string_view(value) == "raw") {
+                this->profiler_eth_counters_enabled = true;
+                this->profiler_eth_counters_calibrate = false;
+            } else if (is_env_enabled(value)) {
+                this->profiler_eth_counters_enabled = true;
+                this->profiler_eth_counters_calibrate = true;
+            }
+            break;
+        }
 
         // TT_METAL_PROFILE_RISCV_PMC
         // RISC-V performance monitor of the Tensix baby cores: BRISC, NCRISC and TRISC0/1/2 on Blackhole,

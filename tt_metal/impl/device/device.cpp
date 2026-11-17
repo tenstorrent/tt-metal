@@ -48,6 +48,7 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
+#include "impl/profiler/eth_counters.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -619,6 +620,7 @@ bool Device::initialize(
 
     this->initialized_ = true;
     this->initialize_smc_dispatch_telemetry_control();
+    eth_counters::begin_run(MetalContext::instance(this->get_context_id()), *this);
 
     return true;
 }
@@ -629,6 +631,7 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
+    eth_counters::end_run(MetalContext::instance(this->get_context_id()), *this);
     this->invalidate_smc_dispatch_telemetry_control();
 
     tt::tt_metal::MetalContext::instance(this->get_context_id())

@@ -5,6 +5,7 @@ set(UNIT_TESTS_JIT_BUILD_SRC
     test_compile_stress.cpp
     test_compiler_version.cpp
     test_dram_counters_option.cpp
+    test_eth_counters_option.cpp
     test_depend.cpp
     test_file_renamer.cpp
     test_firmware_build_dedup.cpp

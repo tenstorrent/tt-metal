@@ -30,6 +30,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <llrt/llrt.hpp>
 #include "impl/profiler/dram_counters.hpp"
+#include "impl/profiler/eth_counters.hpp"
 #include <distributed/mesh_device_impl.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include <thread>
@@ -215,6 +216,7 @@ void SDMeshCommandQueue::wait_for_cores_idle() {
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
             tt::llrt::internal_::wait_for_idle(context, device_id, logical_cores);
             tt::tt_metal::dram_counters::end_pending(context, device_id);
+            tt::tt_metal::eth_counters::end_pending(context, device_id);
         }
         logical_cores_for_previous_workload_.clear();
     }
@@ -262,6 +264,7 @@ void SDMeshCommandQueue::dispatch_program(
         if (need_wait) {
             tt::llrt::internal_::wait_for_idle(context, device_id, cores_to_wait);
             tt::tt_metal::dram_counters::end_pending(context, device_id);
+            tt::tt_metal::eth_counters::end_pending(context, device_id);
         }
 
         local_devices.push_back(device);
