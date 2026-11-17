@@ -6,7 +6,7 @@ from math import floor
 import ttnn
 from loguru import logger
 
-from models.tt_cnn.tt.builder import TtConv2d
+from models.experimental.panoptic_deeplab.tt.genify_conv import create_conv_layer
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
@@ -107,8 +107,8 @@ class TtASPP(LightweightModule):
         )
         logger.info(f"[MEMORY_CONFIG] {conv_path}: sharding={shard_type}, act_block_h_override={act_block_h}")
 
-        # Create TtConv2d using TT CNN Builder
-        return TtConv2d(final_config, self.device)
+        # Create TtConv2d using TT CNN Builder (a genify_matmul 1x1 conv when TT_GENIFY_MATMUL=1)
+        return create_conv_layer(final_config, self.device, conv_path)
 
     def forward(self, x):
         signpost("ASPP_START")

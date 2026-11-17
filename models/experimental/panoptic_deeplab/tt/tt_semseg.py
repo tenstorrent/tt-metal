@@ -7,7 +7,7 @@ from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
 from models.experimental.panoptic_deeplab.tt.tt_upsample import BilinearUpsampleMatmulTTNN as TtBilinearUpsample
-from models.tt_cnn.tt.builder import TtConv2d
+from models.experimental.panoptic_deeplab.tt.genify_conv import create_conv_layer
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
@@ -102,8 +102,8 @@ class TtDeepLabV3PlusHead(LightweightModule):
         )
         logger.info(f"[MEMORY_CONFIG] {conv_path}: sharding={shard_type}, act_block_h_override={act_block_h}")
 
-        # Create TtConv2d using TT CNN Builder
-        return TtConv2d(final_config, self.device)
+        # Create TtConv2d using TT CNN Builder (a genify_matmul 1x1 conv when TT_GENIFY_MATMUL=1)
+        return create_conv_layer(final_config, self.device, conv_path)
 
     def _initialize_decoder(
         self,

@@ -5,7 +5,7 @@ import ttnn
 from loguru import logger
 from dataclasses import replace
 
-from models.tt_cnn.tt.builder import TtConv2d
+from models.experimental.panoptic_deeplab.tt.genify_conv import create_conv_layer
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -130,8 +130,8 @@ class TtBottleneck(LightweightModule):
         out_w = (final_config.input_width + 2 * pad_w - dil_w * (kernel_w - 1) - 1) // stride_w + 1
         output_shape = (final_config.batch_size, out_h, out_w, final_config.out_channels)
 
-        # Create TtConv2d using TT CNN Builder
-        conv_layer = TtConv2d(final_config, self.device)
+        # Create TtConv2d using TT CNN Builder (a genify_matmul 1x1 conv when TT_GENIFY_MATMUL=1)
+        conv_layer = create_conv_layer(final_config, self.device, conv_path)
         logger.debug(
             f"Created {conv_path} - in={final_config.in_channels}, out={final_config.out_channels}, stride={final_config.stride}, dilation={final_config.dilation}, out_shape={output_shape}"
         )
@@ -269,7 +269,12 @@ class TtBottleneck(LightweightModule):
         # reshard if needed
         if out.memory_config() != identity.memory_config():
             identity_old = identity
-            identity = ttnn.reshard(identity, out.memory_config())
+            if identity.is_sharded():
+                identity = ttnn.reshard(identity, out.memory_config())
+            else:
+                # Only with TT_GENIFY_MATMUL=1: a genify 1x1 shortcut reading an interleaved block input
+                # writes an interleaved output (the stock shortcut always returns a sharded tensor).
+                identity = ttnn.to_memory_config(identity, out.memory_config())
             ttnn.deallocate(identity_old)
 
         out = ttnn.add(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
