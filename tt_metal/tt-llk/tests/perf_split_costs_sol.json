@@ -91,6 +91,7 @@
   "perf_transpose_dest": 1.1,
   "perf_unpack_A_custom": 24.0,
   "perf_unpack_a_bcast_eltwise": 0.0,
+  "perf_unpack_A_sdpa": 43.0,
   "perf_unpack_tilize": 531.6,
   "perf_unpack_transpose": 8.8,
   "perf_vif_equiv_sweep": 0.0
