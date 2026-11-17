@@ -8,14 +8,25 @@ rms_norm(concat_p x[p], gamma) of shape (1, 1, M, W), W = G * W_local.
 
 Design (per chip, identical core layout on every chip of the mesh):
   * Row cores: one per (row block b, group slice p). Core (b, p) owns the tile-rows of block b and the Wt = W_local / 32
-    tile columns of slice p. Its persistent L1 landing buffer (two halves, one per call parity) receives slice p's
-    block straight from the fabric (p remote) or from DRAM (p = this chip). It computes the row partial sum of squares,
-    exchanges it with the G - 1 other cores of its block (fp32, on chip), and writes its normalized Wt output tiles.
-  * Port cores: one per (ring direction, link), next to the link's Ethernet core. Each streams this chip's own slice of
-    the row blocks of its link (block b -> link b % L) as fabric line multicasts: on an even ring of G, toward p + 1 the
-    first half of each tile-row goes G/2 hops and the second half G/2 - 1 hops, toward p - 1 the other way round, so
-    every chip receives each remote slice exactly once and both directions carry (G - 1) / 2 slices per link.
-  * No fence between calls: landing buffers and arrival counters alternate by call parity (see port_sender.cpp).
+    tile columns of slice p. Its persistent L1 landing buffer (two halves, one per call parity) receives slice p's block
+    straight from the fabric (p remote) or from DRAM (p = this chip). It computes S = sum_j x_j^2 (fp32), sends S to
+    the G - 1 other cores of its block (one write per core: S tile + tag), row-reduces the G S tiles in fp32 DEST in
+    slice order (bit-identical on every core and chip), takes rsqrt(. / W + eps) on column 0, and writes its normalized
+    Wt output tiles.
+  * Port cores: one per (ring direction, link), next to the link's Ethernet core (probed). Each sends one-hop fabric
+    writes from its staging buffer, in a host-fixed order (_schedule): this chip's own slice for the row blocks of its
+    link (block b -> link b % L), and peers' packets that have hops left (a ring relay: the receiving row core pushes
+    them to its port). On an even ring of G, toward p + 1 the first half of each tile-row goes G/2 hops and the second
+    G/2 - 1, toward p - 1 the other way round: every chip receives each remote slice once and both directions carry
+    (G - 1) / 2 slices per link. Relays are one-hop sends, so the ring may turn (the QuietBox 1x4 snake does).
+  * Packets carry no semaphore increment: each payload ends in a 16 B tag (call counter + 1, a per-state random salt)
+    that receivers poll. No fence between calls: landing buffers alternate by call parity (see port_sender.cpp).
+  * Local row cores read their slice in send order (a token chain, PUSH_AHEAD rows ahead) and push packets to the
+    ports; ports fetch their first PORT_FETCH packets from DRAM themselves; remote row cores read gamma only after
+    their first packet lands (so ~700 tiny gamma reads don't queue in DRAM ahead of the first packets).
+
+Persistent state (per mesh, shape, axis, links): one global semaphore (the call counter, on every op core) and the
+landing buffers (2 x RowLayout slots per row core, ~56 KB of L1 per row core, zero-filled at creation).
 """
 
 from __future__ import annotations
