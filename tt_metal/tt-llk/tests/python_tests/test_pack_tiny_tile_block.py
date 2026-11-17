@@ -76,7 +76,7 @@ def _make_config(
     run_types=None,
     loop_factor=1,
 ):
-    """Build TestConfig for a given tile shape and tile count."""
+    """Execute the LLK test for a given tile shape and tile count."""
     tile_r, tile_c = tile_dims
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
     num_faces = num_faces_r_dim * num_faces_c_dim
