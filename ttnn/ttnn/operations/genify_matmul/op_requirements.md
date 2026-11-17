@@ -1,0 +1,405 @@
+# Operation Requirements: genify_matmul
+
+## Definition
+- **Formula**: `Y = A @ B` (B shared `(K, N)`, or batched `(..., K, N)` with A's leading dims). Then:
+  - none → `Y`
+  - bias → `Y + bias[0, n]`
+  - bias_relu → `relu(Y + bias[0, n])`
+  - swiglu → `out[..., m, 32j+c] = silu(Y[..., m, 64j+c]) · Y[..., m, 64j+32+c]` (width N/2)
+  - addcmul → `residual + gate[0, n] · Y`
+- **PyTorch Reference**:
+  ```python
+  def pytorch_genify_matmul(A, B, *, bias=None, activation=None, residual=None, gate=None):
+      y = torch.matmul(A.float(), B.float())
+      if bias is not None:
+          y = y + bias.float()
+      if activation == "relu":
+          y = torch.relu(y)
+      elif activation == "swiglu":
+          *lead, n = y.shape
+          t = y.reshape(*lead, n // 64, 2, 32)
+          y = (torch.nn.functional.silu(t[..., 0, :]) * t[..., 1, :]).reshape(*lead, n // 2)
+      if residual is not None:
+          y = residual.float() + gate.float() * y
+      return y
+  ```
+- **Import Path**: `from ttnn.operations.genify_matmul import genify_matmul`
+- **Function Signature**:
+  ```python
+  genify_matmul(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, bias: ttnn.Tensor = None,
+                activation: str = None, residual: ttnn.Tensor = None, gate: ttnn.Tensor = None,
+                dtype: ttnn.DataType = None, memory_config: ttnn.MemoryConfig = None,
+                compute_kernel_config: ttnn.ComputeConfigDescriptor = None) -> ttnn.Tensor
+  ```
+
+## Phases
+
+> **Non-regression rule**: Every refinement must pass all tests from prior phases.
+> **Drift signal**: XPASS-strict failures mean the implementer added support but forgot to update SUPPORTED. The implementer fixes by updating SUPPORTED.
+> **Checkbox protocol**: Implementer marks `[x]` when the refinement is complete and all tests pass, `[~]` when real work landed but at least one named axis value is deferred (treated as completed by the queue, surfaced as partial), `[ ]` only when nothing usable was produced.
+> **Refinement ID + follow-up naming (mandatory — the runner parses this)**: Primary refinements are `Refinement N` (e.g. `Refinement 1`, `Refinement 2`). When you ship `[~]` partial and file the sharper follow-up the partial-tick protocol requires, name it by appending a lowercase letter to the parent's number: `Refinement 1b`, `Refinement 1c`, … (never `Refinement 1.5`, `Refinement 1 (follow-up)`, or a fresh number). Order follow-ups immediately after their parent so the queue runs them before later refinements — a partial's remaining-blocker follow-up must be picked next, not leapfrogged. The runner's parser matches exactly `Refinement \d+[a-z]?`; any other shape is invisible to the queue and silently skipped.
+> **Perf guard set**: `GENIFY_MATMUL_PERF=1 eval/eval_test_runner.sh tests/ttnn/unit_tests/operations/genify_matmul/perf <out>` records device ns for 14 interleaved shapes × {HiFi4, HiFi2}. Every refinement extends it with one representative per new kernel path / placement / dtype it adds, so later perf phases can measure regressions.
+
+### [x] Phase 0 — Core Implementation (regime R1 `interleaved_out_split`)
+
+- **SUPPORTED dtype**: [bfloat16]; **weight_dtype**: [bfloat16]
+- **SUPPORTED layout**: [TILE_LAYOUT]
+- **SUPPORTED shape-derived axes**: alignment ∈ {tile_aligned, m_non_aligned}; weight_batch = single
+- **SUPPORTED op-specific axes**: placement = interleaved (A, B and the output in DRAM or L1); epilogue = none; fp32_dest_acc_en = True
+- **Cores**: full grid. The independent M×N output split comes from `choose_split()`, which is blocking-aware and traffic-ranked within `GRID_W_SLACK` of the best W. Each core walks its region in L1-solved blocks, with the K-walk accumulated in L1 (packer L1 acc).
+- **Compute config**: honours the caller's `math_fidelity` / `math_approx_mode`. `fp32_dest_acc_en=True` only. The default comes from `default_compute_kernel_config()` (HiFi4, fp32 DEST).
+- **Golden baseline**: 94 supported_pass, 2088 xfail_expected, 0 xpass_drift, 0 xfail_wrong_mode. There is 1 supported_fail, a harness L1-capture false-negative on an expected-`ValueError` test (see verification_report.md).
+
+### [x] Refinement 1 — Numerical configurability (activation, weight and DEST formats)
+
+**Goal**: Add these values to SUPPORTED, for every placement and epilogue the op supports at the time:
+- `ttnn.bfloat8_b` and `ttnn.float32` to `SUPPORTED["dtype"]`;
+- `ttnn.bfloat8_b` and `ttnn.bfloat4_b` to `SUPPORTED["weight_dtype"]`;
+- `False` to `SUPPORTED["fp32_dest_acc_en"]`.
+
+Then:
+- Derive every CB page format from its tensor: A, B, the output, and the partials (Float16_b when `fp32_dest_acc_en=False`).
+- Keep the subblock limit keyed on DEST width (`dest_limit` 8 with 16-bit DEST).
+- Keep `{"dtype": float32, "fp32_dest_acc_en": False}` as the permanent EXCLUSION.
+
+Cells that fail out of the box go to `EXCLUSIONS` with a reason, not into their own refinement.
+
+**Implementation skill**: /numeric-formats-metal
+
+**Verifier notes**:
+- **Anchor for Refinement 3.** The PERF FOCUS 1 contract is bf16 A × **bfloat4_b** B, LoFi, `fp32_dest_acc_en=True`, interleaved DRAM, swiglu. This refinement lands its weight dtype; Refinement 2 lands the epilogue. LoFi / HiFi2 are already honoured (not gated).
+- **Mixed formats are the norm here.** The model cases pair:
+  - bf16 × bf4b / bf8b;
+  - fp32 A → bf16 out (FLUX time_mod);
+  - bf16 A → bf8b out (PDL);
+  - bf8b × bf8b with 16-bit DEST (PDL W pass).
+
+  The output `dtype` override already works: bf16 → fp32/bf8b is tested in `test_genify_matmul_extended.py`. The L1 solve already takes tile bytes from the tensors, so bf4b weights (576 B tiles) automatically get coarser blocks.
+- **fp32 output precision.** The helper reloads the Float32 partials through SrcA on the last K-block, which truncates them to tf32. The precision baseline shows it as a −2.6e-4 median got/true bias on K-walk shapes. fp32-out still measured rel-RMS 0.00047 against the 0.005 gate. If the `(float32, True)` cells miss, `UnpackToDestFp32` tagging on `cb_partials` is the lever, not a tolerance change.
+- **Expected unblock.** 24 loose cases are blocked only by `weight_dtype`, plus the cartesian dtype / acc cells.
+
+**Done when**: every golden cell (cartesian and loose) whose only unsupported axes are among dtype / weight_dtype / fp32_dest_acc_en passes or is an EXCLUSION with a stated reason. The phase-0 suites stay green, and the guard set shows no device-ns regression on bf16.
+
+**Outcome**: SUPPORTED widened to dtype {bf16, bf8b, fp32}, weight_dtype {bf16, bf8b, bf4b} and fp32_dest_acc_en {True, False}. The only EXCLUSION is the permanent fp32 × acc=False. Golden: 60/60 cartesian and 27/27 newly unlocked loose cells pass. No kernel change was needed. New precision knob `DEST16_BLOCK_K_MAX = 8`: with 16-bit DEST, a single long DEST chain gave rel-RMS 0.18 at K = 16k; capped, it is 0.019, and it is also 0.76–0.96× device time. The bf16 / fp32-DEST blocking is unchanged.
+
+### [x] Refinement 2 — Fused epilogues: bias, bias_relu, swiglu, addcmul
+
+**Goal**: Add `bias`, `bias_relu`, `swiglu` and `addcmul` to `SUPPORTED["epilogue"]`. Each runs inside the same device program, on the accumulated block, before the output is packed. Follow op_design.md "Block Operation Realization" rows 2', 3a, 3b and 3c:
+
+- **Compute.**
+  - `matmul_block<…, LastBlockTarget::Interm, …>` into `cb_partials`. It is now allocated whenever epilogue ≠ none, still sized to exactly one block.
+  - Then one epilogue block op:
+    - `add_bias_bcast_rows` (+ PACK_RELU for bias_relu);
+    - `eltwise_chain` swiglu: Strided gate/up tiles, Sigmoid·Mul·Mul;
+    - `eltwise_chain` addcmul: FPU mul with the row-broadcast gate, then SFPU add of the residual.
+- **Reader.**
+  - `cb_bias_row` / `cb_gate_row`: one N-block row, read **once per block**.
+  - `cb_residual_tiles`: row groups, depth 2.
+  - For swiglu: the gate/up column permutation within each N-block.
+- **Host.**
+  - `q_n ≥ 2` for swiglu, so whole gate/up pairs land per core and per block.
+  - `out_block_n = block_n / 2`.
+  - Bias, gate and residual join the `generic_op` tensor list.
+  - The epilogue CB terms (`E_bias`, `E_addcmul` in the L1 ledger) go **into `_footprint`** before the solve.
+
+**Verifier notes**:
+- No skill in the inventory covers fused epilogues; the design doc's realization table and the `compute_fusion` catalog entry are the references. Use no DEST reuse ahead of an FPU op.
+- **Anchor for Refinement 3.** The flagged prefill gate_up runs swiglu on a **bf4b** weight, so this refinement must pass that exact loose case: (1,2048,5120) @ (5120,8704), LoFi, fp32 DEST. Order it after Refinement 1.
+- **Bias dtype.** The bias is bf8b when the weight is bf4b (golden helper rule), so the bias CB format is its own, not the weight's.
+- **Build it performantly.** Refinement 3 optimizes this exact path:
+  - no second pass over the output;
+  - no per-row-group re-read of the bias row;
+  - the residual stream double-buffered;
+  - the R1 split still filling the grid.
+- **Batch interaction.** Epilogues must also hold under `block_batches > 1` once Refinement 7 lands batched weights; keep the bias / gate lifecycle per block, not per kernel.
+- **Never a host-side or ttnn-op epilogue.** That is a prompt MUST.
+
+**Done when**: every golden cell whose only unsupported axis value is one of the four epilogues passes (cartesian INPUTS plus the interleaved loose cases, among them PERF FOCUS 1 and 4 and the FLUX addcmul cases), within `helpers` tolerances, with phase-0 and Refinement 1 cells still green.
+
+**Outcome**: SUPPORTED epilogue = {none, bias, bias_relu, swiglu, addcmul}, all running in the one program on the L1 block (`matmul_block<Interm>` → `add_bias_bcast_rows` / `eltwise_chain`).
+- Golden: 240/240 cartesian interleaved epilogue cells and 13/13 interleaved loose epilogue cases pass, among them PERF FOCUS 1 (rms 0.0085 against the 0.03 limit) and 4. The unit dir is green.
+- Fused cost on PERF FOCUS 1: 1655 µs against 1572 µs for the epilogue-none twin. An ablation shows the plumbing is free and the remaining ~5% is the serialized SFPU silu, already cut from 124 to 83 µs by the bf16-precision sigmoid knob.
+- Next lever (Refinement 3): fold silu·up into the last K-block's pack (subblock-local gate/up permutation), or overlap the epilogue with the next block's K-walk.
+
+### [x] Refinement 3 — Speed up PERF FOCUS 1 (Qwen3.8 prefill gate_up + SwiGLU, 2048 tokens)
+
+**Type**: perf
+
+**Goal**: `feature_spec.LOOSE_CASES` flags `_qwen_prefill(2048, 5120, 8704, epilogue="swiglu")` as the mandatory perf target. Its contract:
+- A (1, 2048, 5120) bf16 × B (5120, 8704) **bfloat4_b**;
+- LoFi, `fp32_dest_acc_en=True`;
+- interleaved DRAM; swiglu; bf16 out.
+
+The goal is to match or beat `achievable_ns` = 564.5 µs; the roofline is 428.7 µs. The soft precision gate is `LOW_FIDELITY_TOLERANCES[(bf16, True)]`.
+
+Under R1 this shape re-reads A ~10× and B ~11× from DRAM. The bf16×bf16 / epilogue-none twin measures 4.3 ms, ~8× off, entirely traffic-bound. Primary lever: the deferred regime **R1a `interleaved_2d_mcast`** from `ttnn/ttnn/operations/examples/master.md` (`mcast_topology`, `shared_input_reuse`):
+- a row injector multicasts each A K-block along its grid row;
+- a column injector multicasts each B K-block down its column, via the multicast helper (`ttnn.Mcast` + `McastArgs`);
+- the compute kernel and CB inventory stay unchanged (op_design.md "Inter-Tensix contracts").
+
+After the topology lands, co-tune the R1 knobs it exposes:
+- `block_k_tiles` cap vs `depth_act` / `depth_weight` (`double_buffer`, `trid_double_issue`);
+- `GRID_W_SLACK` / the factorization priority;
+- `q_n` / subblock (`matmul_output_subblock`);
+- `InitMode::None` after the first block;
+- the split reader (`split_reader`).
+
+No SUPPORTED change.
+
+**Verifier notes**:
+- This is a ⭐⭐⭐ T3 restructure: one topology per phase. Do not bundle the dram_sharded or batched work.
+- **Folded L1-ledger finding.** When a core's whole walk is one K-block (S1, `nb = 1`), the second slot of `cb_act_tiles` / `cb_weight_tiles` is dead L1. It also means compute only starts after the whole K is read (zero read/compute overlap). Resolve it here as part of the `block_k` / depth co-tune, and update `l1_ledger.md`.
+
+**Done when**: measured device ns on the flagged shape improves toward 564.5 µs, its soft precision gate holds, and the golden suite is green. There must be no regression across the config-spanning guard set: the perf guard dir plus one representative per kernel path × dtype × epilogue × placement added so far, including a 1-D (M ≤ 32) shape and an L1-resident A/output shape.
+
+**Outcome**: PERF FOCUS 1 measured **1673 → 463.5 µs** device time (one fresh run each; target `achievable_ns` 564.5 µs beaten, 8% above the 428.7 µs roofline). Precision is unchanged: PCC 0.99992, rel-RMS 0.0085 against the 0.03 gate. Levers: R1a row/column operand multicast (1673 → 494 µs, 110 cores, DRAM 504 → 64 MB); staggered line injectors so no core injects both operands (494 → 464 µs); single-walk K split (resolves the folded L1 finding, 0.79× on 384×1536×1024); an R1a gate `MCAST_MIN_KBLOCK_BYTES = 32 KB` (64×16384×256 16-bit DEST was +11% under R1a with 16 KB K-blocks, now R1 again). Guard set: every 2-D shape is 0.22–0.56×, nothing slower beyond ±1% noise. Measured null, kept as a knob: the 2×2 subblock, 477.8 µs vs 463.7 µs for 1×4 (`SUBBLOCK_MIN_UNPACK = False`). **Bottleneck now**, by ablation: the matmul + partials floor is 413 µs (reader and epilogue stubbed); the serialized swiglu epilogue costs ~35 µs and exposed data movement ~16 µs. **Next**: (1) fold silu·up into the last K-block's pack, or overlap the epilogue; this needs a matmul_block helper change to pack half a subblock. (2) The design's injector stall-shadow (trid-tagged read of K-block kb+1 issued before multicasting kb), which would also let R1a win on the tiny-K-block shapes now gated to R1. Neither was done here: the target is met, and each is a structural change of its own.
+
+### [x] Refinement 4 — dram_sharded placement (regime R4: weight streaming from the DRAM banks)
+
+**Goal**: Add `"dram_sharded"` to `SUPPORTED["placement"]`:
+- A is L1 width-sharded over **K**;
+- B is DRAM width-sharded, one column shard per bank (`device.dram_grid_size().x`; the last shard may be partly padding; swiglu shards are 64-column granules);
+- `memory_config` is `ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG` with **no shard spec**. The op builds the output's L1 width-shard spec itself and returns exactly that placement.
+
+Required topology (op_design.md R4):
+- **Workers.** One per bank, from `get_optimal_dram_bank_to_logical_worker_assignment` (no hardcoded coordinates). Each reads its bank's B shard with coalesced reads (`read_coalescing`).
+- **A broadcast.** A's K-slices live on A's own cores, so each A shard crosses the NoC once, broadcast from its owning core (rotating / explicit senders) to the irregular set of bank workers. Use `McastArgs` / `ttnn.Mcast`, `irregular_receiver_set_mode`.
+- **K-blocks.** Divide the sender's shard width. B's next K-block is issued before waiting on the A round (stall-shadow).
+- **Output.** Written to its L1 shard: local when the worker owns it, otherwise a NoC write.
+- The existing EXCLUSION `{"placement": "dram_sharded", "weight_batch": "batched"}` stays.
+
+**Verifier notes**:
+- **Scheme-change, stands alone.** A is cut along K (dependent), so the A broadcast topology *is* the work. No skill covers it, so the topology above is the spec.
+- **Read A where it lives.** No reshard or interleaved copy of A; that is a prompt MUST.
+- **Ordering.** Hardest-first, and a true dependency of Refinement 6 (PERF FOCUS 2 runs dram_sharded).
+- **Mixed formats.** Qwen decode is bf16 × bf4b, LoFi, so Refinement 1's formats must carry onto this path.
+- **swiglu.** The decode gate_up cases need it, from Refinement 2.
+
+**Done when**: every dram_sharded golden cell (cartesian INPUTS and the Qwen decode / LM-head loose cases) passes, except the permanent EXCLUSION. The requested placement and the op-chosen shard spec are honoured, and all earlier cells stay green.
+
+**Outcome**: `dram_sharded` is in SUPPORTED as regime R4. Topology:
+- one worker per bank (optimal NOC_0 assignment), each streaming its bank shard with one coalesced read per K-block, issued before the K-block's A round;
+- every A shard multicast once from its own core in its K turn (rotating senders via `ttnn.Mcast` + `McastArgs`). The receiver group is the workers' bounding rectangle with the handshake restricted to the workers, because the helper's rotating mode needs a rectangle and the 8 scattered bank workers exceed its 3-rectangle irregular multicast;
+- the output packed in place into an op-built L1 width shard (shard w on bank w's worker).
+
+Golden: 310/310 single-weight cartesian dram_sharded cells plus the 10 Qwen decode / LM-head loose cases pass; 60 + 90 xfail on the two permanent EXCLUSIONs. The 57 translated DRAM-sharded tests pass, among them program-cache reuse. Earlier suites are green.
+
+Baseline device time, for Refinement 6:
+- PERF FOCUS 2: 42.7 µs (target 36.9, roofline 27.2), B-stream-bound at ~64% of DRAM peak. Each of the 8 K-blocks waits its own read barrier before the next bank read is issued.
+- LM head 1×5120×16384: 147.8 µs (127.0 stock).
+- gate_up 32×5120×9216 swiglu: 102.6 µs (64.0 stock).
+
+Next levers are Refinement 6's: trid-pipelined B stream depth 3–4, and a larger A round per handshake.
+
+### [x] Refinement 5 — block_sharded placement (regime R3: cross-core A K-slice exchange)
+
+**Goal**: Add `"block_sharded"` to `SUPPORTED["placement"]`:
+- A is L1 block-sharded: rows over grid rows, **K over grid columns**;
+- B is DRAM interleaved;
+- the output is L1 block-sharded on A's grid with exactly the requested shard spec.
+
+Required topology (op_design.md R3/R3a):
+- **Per core.** The block is `shard_m_tiles × out_shard_w`, walking K one peer shard per K-block (`num_k_blocks = grid cols`).
+- **Own K-slice.** Zero-copy from `cb_act_shard` (`ttnn.cb_descriptor_from_sharded_tensor`), selected by `In0SourceFn`.
+- **Peer K-slices.** Arrive in `cb_act_tiles`. Use unicast reads as the stepping stone, then a rotating-sender row multicast (each core injects its own shard on its K turn). B column slices are read from DRAM.
+- **Output.** In place via `cb_output_shard` when `block_n` equals the shard width; otherwise a streaming CB plus a local write.
+- **L1 budget.** The CB budget must account for A's and the output's resident shards; the existing `l1_cb_budget` fragmentation-aware view does.
+
+**Verifier notes**:
+- **Scheme-change, stands alone.** The reduction dim is split across cores, so A moves between peers. No skill covers sharding with a cross-core dependency, so the topology above is the spec.
+- **The own shard must not be re-read through a `TensorAccessor`.** That would only tolerate the layout, not implement it, and does not count as done.
+- **Model inputs.** PDL's block-sharded convs are bf8b with bias / bias_relu (Refinements 1 and 2). The ASPP-pool cell (M = 1 on an 8×1 grid) under-fills the grid; correctness only here.
+
+**Done when**: every block_sharded golden cell (cartesian INPUTS and the PDL res4 / res5 / ASPP loose cases) passes with the requested shard spec, and earlier cells stay green.
+
+**Outcome**: `block_sharded` is in SUPPORTED as regime R3. The own shard is zero-copy via `cb_act_shard` + `In0SourceFn`; peers come over a rotating-sender row multicast (`BS_ROW_MCAST`, with unicast as the other setting); B is read from DRAM per core; the output is packed in place in the requested shard. Golden `-k block_sharded`: 311 passed (300 cartesian + 11 PDL), 150 xfail (fp32 × 16-bit-DEST EXCLUSION, batched weight), 0 failed. PDL device time with the multicast: res5 shortcut 79.8 µs (stock 72.4), res4 reduce 18.7 (16.6), res5 expand 45.6 (24.2), ASPP 1×1 19.6 (13.8). Remaining headroom: wide-N shapes are B-bound (B crosses DRAM once per grid row). Next lever: R3a's B column multicast.
+
+### [x] Refinement 6 — Speed up PERF FOCUS 2 (Qwen3.8 decode MLP down)
+
+**Type**: perf
+
+**Goal**: The second flagged case, `_qwen_decode(1, 4352, 5120, cores=8)`:
+- A (1,1,1,4352) bf16 width-sharded on 8 cores × B (4352, 5120) **bfloat4_b**, DRAM width-sharded over the banks;
+- LoFi, fp32 DEST, dram_sharded.
+
+The goal is to match or beat `achievable_ns` = 36.9 µs; the roofline is 27.2 µs (12.5 MB of bfp4 at 460.8 GB/s). The soft precision gate is `LOW_FIDELITY_TOLERANCES[(bf16, True)]`.
+
+This is a weight-streaming, DRAM-bound regime. Relevant levers in `ttnn/ttnn/operations/examples/master.md`:
+- B stream depth 3–4 with transaction-id barriers (`trid_double_issue`);
+- coalesced per-bank reads (`read_coalescing`);
+- start-bank stagger (`bank_stagger`);
+- B reads on a second DM RISC (`split_reader`);
+- amortizing the A broadcast round over a larger `block_k`.
+
+No SUPPORTED change.
+
+**Done when**: measured device ns on the flagged shape improves toward 36.9 µs, its soft precision gate holds, and the golden suite is green. There must be no regression across the guard set (one representative per kernel path × placement × dtype, including the interleaved PERF FOCUS 1 shape).
+
+**Outcome**: PERF FOCUS 2 measured **42.8 → 29.2 µs** device time (one fresh run each; target `achievable_ns` 36.9 µs beaten, 7% above the 27.2 µs roofline); precision unchanged (PCC 0.999993, rel-RMS 0.0050 vs the 0.9995 / 0.03 gate). The ablation at the start showed the one-worker-per-bank R4 was **compute-bound**, not B-bound: matmul alone 38.7 µs, B stream alone ~28 µs. Levers: (1) a `cores_per_bank` split (`DS_CORES_PER_BANK`, auto: 5 workers × 4 columns per bank, 40 compute cores) — 42.8 → 34.8 µs, compute down to 10.6 µs, DM now binding; (2) the A rounds moved to the writer RISC (BRISC / NoC1, `DS_ACT_ON_WRITER`, `split_reader`) so they stop sitting between the reader's B issues and barriers — 35.0 → 28.9 µs, A now fully hidden (A-stubbed run 29.7 µs ≈ full); (3) a trid-tagged B ring (`DS_B_AHEAD` / `DS_DEPTH_WEIGHT`, `trid_double_issue`) — correct but measured flat to +3% at depth 2–3 once 5 slice readers share each bank, so parked at 1 / 2 as a live knob. Same levers on the other R4 shapes: LM head 1×5120×16384 148.5 → 105.8 µs (stock 127.0), gate_up 32×5120×9216 swiglu 103.4 → 63.1 µs (stock 64.0); the 1-tile-shard cartesian shape (C = 1) is unchanged; the rest of the guard set is within ±1% (block_sharded res5 shortcut re-measured 3×: +0.8%). **Bottleneck now**: the B stream (compute-stubbed 28.8 µs ≈ full; B alone 27.9 µs vs the 27.2 µs roofline, ~97% of DRAM peak). **Next**: what is left is ~1.5 µs of fixed cost — the first K-block's exposed B latency before compute starts and the output tail — e.g. a smaller first K-block (split A shard 0's round) to start compute earlier. Not done: it is within ~6% of the DRAM roofline and each remaining µs needs a structural change of its own.
+
+### [x] Refinement 7 — height_sharded placement + batched weights (local shards, independent batch split)
+
+**Goal**: two independent axes, bundled into one refinement.
+
+1. **height_sharded.** Add `"height_sharded"` to `SUPPORTED["placement"]` (regime R2):
+   - A is L1 height-sharded; each core's shard holds all of K for its rows, so the work stays local.
+   - A is consumed **in place**: `cb_act_shard` via `ttnn.cb_descriptor_from_sharded_tensor`, one `cb_push_back`, no NoC read of the own shard.
+   - The block is `shard_m_tiles × out_n` with `block_k = tensor_k_tiles`.
+   - B comes from DRAM.
+   - The output goes in place into the requested L1 height-sharded spec on A's cores (`cb_output_shard` when the block spans the full shard width; otherwise a streaming CB plus a local write).
+2. **Batched weights.** Add `"batched"` to `SUPPORTED["weight_batch"]` (regime R1d, a knob-turn):
+   - `grid_b > 1` in the factorization;
+   - `weight_batch_stride` in the reader, which already carries it;
+   - `MatmulBlockShape.batch = block_batches`;
+   - validate the batched B layout on interleaved placements.
+
+**Implementation skill**: /interleaved-parallel
+
+**Verifier notes**:
+- **Knob-turns, so bundled.** Both are knob-turns of R1 with no new cross-core topology. `/interleaved-parallel` applies to the batched part (the `grid_b` independent-axis split on interleaved tensors). No skill covers sharded placement (do not attach `/memory-layouts`); the CB-placement pattern above is the spec.
+- **Honest SUPPORTED.** An own-shard read through a `TensorAccessor` passes the golden cells but does not implement height_sharded. Send it back, do not tick it.
+- **Model inputs.**
+  - PDL's height-sharded convs need bf8b + bias / bias_relu (Refinements 1 and 2).
+  - The batched-weight PERF FOCUS 3 case needs bf8b, `fp32_dest_acc_en=False` and B in L1. Refinement 1 lands the formats; L1-interleaved B already works.
+- **Follow-up candidate (not a refinement).** The B multicast across A's cores (R2a) is the perf successor for PDL height-sharded shapes. No PDL height-sharded case is perf-flagged, so it stays a report note.
+
+**Done when**: every height_sharded and every batched-weight golden cell passes (cartesian INPUTS and the PDL loose cases, including PERF FOCUS 3), except the permanent `dram_sharded × batched` EXCLUSION. The requested output shard spec is honoured, and all earlier cells stay green.
+
+**Outcome**: SUPPORTED placement += `height_sharded` (R2, built as R3's single-K-shard case on A's shard cores: the resident shard is compute's A operand via `cb_act_shard`, no `cb_act_tiles`, no NoC read of the own shard; output in place in its L1 height shard, N-split streamed fallback), weight_batch += `batched` (R1d on interleaved; R2 / R3 shards mapped onto whole images or one image's rows by `ShardRows`). Golden: 450/450 cartesian HS, 150/150 batched interleaved + block_sharded, 12/12 PDL HS loose, PERF FOCUS 3; unit net green. Perf finding: R2 is B-DRAM-bound (each shard core reads all of B: PDL res3 reduce 20.2 µs vs stock 6.9 µs); the lever is the deferred R2a B multicast. PERF FOCUS 3 baseline 70.8 µs (stock 123.0 µs).
+
+### [x] Refinement 8 — Speed up PERF FOCUS 3 (PDL bilinear upsample, H pass: batched weight)
+
+**Type**: perf
+
+**Goal**: The third flagged case:
+- A (1,32,512,128) bf8b × B (1,32,128,1024) bf8b, B in **L1** interleaved;
+- LoFi, **`fp32_dest_acc_en=False`**; interleaved; epilogue none.
+
+The goal is to match or beat `achievable_ns` = 123.0 µs; the roofline is 43.5 µs. The soft precision gate is `LOW_FIDELITY_TOLERANCES[(bf8b, False)]`.
+
+32 independent batches of a small-K matmul, compute- and write-heavy. Relevant levers in `ttnn/ttnn/operations/examples/master.md`:
+- 16-bit DEST allows 8-tile subblocks (`matmul_output_subblock`, 1.46×);
+- the `block_batches` / grid_b co-tune, so one `matmul_block` call spans several batches (`compute_block_size`);
+- output write batching and NoC placement (`noc_placement`).
+
+No SUPPORTED change.
+
+**Done when**: measured device ns on the flagged shape improves toward 123.0 µs, its soft precision gate holds, and the golden suite is green. There must be no regression across the guard set (one representative per kernel path × placement × dtype, including the PERF FOCUS 1 and 2 shapes).
+
+**Outcome**: PERF FOCUS 3 measured **70.3 → 65.2 µs** device time (median of 5 fresh runs each; stock 123.0 µs, roofline 43.5 µs); precision PCC 0.9989, rel-RMS 0.017 (gate 0.997 / 0.15). The ablation at the start showed the output **DRAM write stream binds**: write-only 59.9 µs, while the reads (A re-read 3× from DRAM by the 32×1×3 split, 6.6 MB) sat before compute as a ~10 µs prologue and competed with the writes for DRAM. Levers: (1) **operand residency** (`RESIDENT_SPLIT_BLOCKS = 4`): a one-K-block S1 walk is split along one axis with the smaller per-core operand held fronted (matmul_block `WaitAndRetainOnLastBlock`; `act_resident` = A held across N-blocks, `weight_resident` = B held across M-blocks), so compute and the first writes start after the resident operand + one block; (2) **`L1_READ_COST = 0.25`** in the split ranking (L1-sourced operand bytes do not load DRAM): PERF FOCUS 3 moves to 32×3×1 with A resident, so A crosses DRAM once (2.2 MB) and B is re-read from L1 instead; (3) **write batching** (`OUT_WRITE_BATCH_ROW_GROUPS`): correct but flat to +1.6% at 4 / 8, parked at 1 as a live knob. Also measured: the 16-bit-DEST 8-tile subblock already holds (1×8 on the new block); `block_batches = 2` (16×{3,2,1}×{1,3} splits) 71.6–81.6 µs, so one batch per core stays; writer on NoC0 107 µs, so NoC1 stays; write bank-stagger, N-block rotation and posted writes are all within noise. Same levers elsewhere: the PDL upsample W pass 15.6 → 12.7 µs; 2048×256×512 bf16 −11% / −14% (HiFi4 / HiFi2); 2048×128×3072 −6% / −4%. The rest of the guard set is within ±2% (plans unchanged). A residency split that would lose the R1a multicast is refused: 2048×256×512 bf8b had measured +11% before that gate. **Bottleneck now**: the interleaved DRAM write stream. Write-only time is 59–61 µs at 32, 64 or 96 cores (≈ 300 GB/s for 1088 B tile writes). Full 65 µs = that floor plus ~5 µs of read prologue, because every core reads its resident A and first B block before its first write. **Next**: shorten that prologue. Options: B multicast within each batch's 3-core group (it re-reads the same L1 B 3×, 13 MB on NoC0), or a staggered core start. Not done: the multicast needs a batch-line topology, a scheme change, and the whole remaining gap is ~8% above a measured write floor that no read-side lever moves.
+
+### [x] Refinement 9 — Speed up PERF FOCUS 4 (FLUX.2 prompt-stream FF1 + SwiGLU, 256 tokens)
+
+**Type**: perf
+
+**Goal**: The fourth flagged case, `_flux(256, 6144, 18432, epilogue="swiglu")`:
+- A (1,256,6144) bf16 × B (6144,18432) bf16;
+- HiFi2, fp32 DEST, interleaved DRAM, swiglu.
+
+The goal is to match or beat `achievable_ns` = 865.9 µs; the roofline is 508.6 µs, bound by the 226 MB bf16 weight. With M = 8 tiles the traffic-optimal split is `grid_m = 1`, so B crosses DRAM exactly once. A (8 tiles × K) is then reuse-shared by every core, so the lever is **R1b `interleaved_stream_mcast_a`**: one injector broadcasts each A K-block (`shared_input_reuse`, 1.7×). Co-tune B stream depth / trids (`trid_double_issue`) and the bank stagger (`bank_stagger`).
+
+Its epilogue-none twin (256×6144×9216) is 989 µs vs 453 µs stock today. The guidance / timestep linear_2 (M = 1, 1.6× stock) share the regime.
+
+No SUPPORTED change.
+
+**Verifier notes**: Reuse the multicast infrastructure Refinement 3 builds. This is a different topology (one-to-all A broadcast instead of row/column), so it gets its own phase.
+
+**Done when**: measured device ns on the flagged shape improves toward 865.9 µs, its soft precision gate holds, and the golden suite is green. There must be no regression across the guard set (one representative per kernel path × placement × dtype, including the PERF FOCUS 1–3 shapes).
+
+**Outcome**: PERF FOCUS 4 measured **1125 → 645 µs** device time (median of 3 fresh runs, range 630–646). The `achievable_ns` target of 865.9 µs is beaten, and the result is 1.27× the 508.6 µs roofline. Precision: PCC 0.99999, rel-RMS 0.0084.
+- **What landed.** R1b `interleaved_stream_mcast_a` on a 1-D N split of 96 cores: every core streams its own B columns, and one injector broadcasts each A K-block from the writer RISC (BRISC / NoC1). Co-tuned levers:
+  - the row-aware N quantum (`Q_N_ROW_AWARE`: 72 → 96 cores, 2×2 subblock);
+  - `ACT_STREAM_DEPTH = 4` (683 → 633 µs);
+  - the injector stall-shadow `ACT_STREAM_AHEAD = 2`: −3 to −4% on A-heavy shapes, noise on FF1.
+- **Gates.** The split ranking caps R1b by the single injector's throughput (`ACT_STREAM_INJECTOR_COST = 18`), and R1b runs only on weight-streaming shapes. Together these keep text-encoder down and x_embedder on their old plans.
+- **Same regime, other shapes:**
+  - the twin, 559 → 321 µs;
+  - guidance / timestep linear_2, 308 / 407 → 206 / 209 µs;
+  - context_embedder, 2226 → 351 µs;
+  - attn-out txt, 888 → 144 µs;
+  - FF2 txt, 570 → 323 µs;
+  - text-encoder qkv, 1314 → 232 µs.
+- **Guard set.** PERF FOCUS 1–3, block_sharded, height_sharded, 4096³, the W pass and the L1 shapes are all within ±1% (PERF FOCUS 3: median of 5).
+- **Bottleneck now (ablation).** The B DRAM stream: B alone takes 550 µs, ≈ 411 GB/s for interleaved 2 KB tile reads from every bank. The A broadcast adds 28 µs, but its lockstep keeps the cores on the same DRAM rows: with A stubbed and compute on, the run is slower (744 µs vs 688 µs). Compute alone is 274 µs, and ~55 µs of compute stays outside the stream.
+- **Next.** A split B reader (half of each B slot filled by BRISC on NoC1 under a local slot handshake), or a rotating injector for A-heavy shapes (a rectangular landing zone as in R4). Neither was done: each is a structural change, and the gain depends on NoC0 link saturation, which was not measured. Same-bank coalesced reads measured slower (627 vs 578 µs).
+
+### [x] Refinement 10 — Weight multicast for sharded A (R2a height_sharded, R3a block_sharded): PDL 1×1 convs
+
+*Filed by the run operator after Perf 1, from the shape-set review of every model case against stock.*
+
+**Goal**: no SUPPORTED change. Speed up the `height_sharded` and `block_sharded` regimes, now the op's largest gap to stock. Every PDL 1×1-conv model case in `LOOSE_CASES` (bfp8, LoFi, the model's shard layouts in `extras.act_shard`) is 1.1–3.1× slower than its `achievable_ns`. Times are from the golden run after Perf 1:
+- R2 (`height_sharded`) re-reads all of B from DRAM on every shard core (op_design.md R2 → R2a):
+  - res3 shortcut 8192×256×512 (bf16 A): 41.0 µs vs 13.1 stock
+  - res3 reduce 8192×512×128: 20.1 vs 6.9
+  - res3 expand 8192×128×512: 23.5 vs 8.2
+  - res2 shortcut 32768×128×256: 19.0 vs 9.8
+- R3 (`block_sharded`) reads its B column slice from DRAM once per grid row (R3 → R3a):
+  - res5 reduce 2048×2048×512: 40.3 vs 16.1
+  - res5 expand 2048×512×2048: 43.0 vs 24.2
+  - res5 reduce 2048×1024×512: 19.8 vs 10.6
+
+Build the designed successors:
+- R2a: one injector reads each B chunk once and multicasts it to all of A's shard cores.
+- R3a: B column multicast down each grid column, beside the existing A row multicast.
+
+Make them the path for every height- and block-sharded call where they are correct. Carve out only shapes where they measure slower.
+
+**Implementation skill**: /perf-measure for the breakdown first; the multicast helpers in `ttnn/cpp/ttnn/kernel_lib/mcast/`.
+
+**Done when**:
+- Every PDL sharded model case is at or under its clock-scaled `achievable_ns`, or its remaining gap is explained by a measured floor.
+- Golden stays fully green: 1,512 supported pass, 0 fail.
+- The guard set shows no regression beyond ±3% elsewhere, PERF FOCUS 1–4 included.
+
+**Outcome**:
+- **What was built.** R2a and R3a: one fixed injector per B group multicasts B rounds, and the first bias / gate row rides one row round on the same channel. R3 is gated at ≥ 3 MiB of saved B re-reads.
+- **HS results.** All 12 PDL cases ran 0.38–0.81× of before. Examples: res3 shortcut 41.3 → 15.7 µs, res3 reduce 20.5 → 8.4, res3 expand 23.5 → 9.9, res2 shortcut 18.9 → 10.7. They are now 1.02–1.26× achievable.
+- **BS results.**
+  - res5 shortcut 78.0 → 30.4 (0.42× achievable), res5 expand 44.5 → 24.0 (0.99×), res5 reduce 19.3 → 14.9, res5 reduce 2 40.5 → 22.9, ASPP 1×1 19.8 → 18.4.
+  - The gated shapes (res4 reduce / expand / reduce 5, ASPP projection) are unchanged, as is ASPP pool (one grid row).
+- **Guard set.** PERF FOCUS 1–4 and the guard shapes are within noise.
+- **Remaining gaps are measured floors, not B traffic.**
+  - HS: two ~1.4 µs handshake rounds on 86–103-core groups, plus the injector's serial tile-read issue.
+  - R3 res5 reduce 2: the A row exchange is ~5.7 µs of bytes plus handshakes, and the 4 B rounds add 3.3 µs serialized behind them on the reader.
+  - res4 reduce: 16.0 µs remains with the matmul and the A bytes both stubbed. The cause is thin 2-tile K-blocks that each pay a full partials pack.
+- **Next.** Move the B channel onto the writer RISC so B rounds overlap the A rounds (this also lifts the R3 gate), then pipeline the A exchange two rounds deep. Not done here: each is a separate structural change to the writer / A exchange, outside this heading's B-multicast scope.
+
+### [x] Refinement 11 — Interleaved split for narrow N and mid M (FLUX.2 proj_out, text-encoder projections, single-block projections, mid-M prefill)
+
+*Filed by the run operator after Perf 1, from the shape-set review of every model case against stock.*
+
+**Goal**: no SUPPORTED change. Fix the interleaved model cases still slower than their `achievable_ns`. Times are from the golden run after Perf 1:
+- FLUX.2 `proj_out` 2048×3072×128 (N = 4 tiles): 164.7 µs vs 61.0 stock.
+- Text encoder (bf16 × bfp8, HiFi2):
+  - `qkv_proj` 512×5120×3072: 232 vs 139
+  - `o_proj` 512×4096×2560: 96.7 vs 79.4
+  - `down` 512×16384×5120: 551 vs 509
+- FLUX.2 single blocks (M = 2,304, HiFi2):
+  - QKV 2304×6144×9216: 1390 vs 1245
+  - out 2304×12288×6144: 1983 vs 1689
+  - FF1 + SwiGLU 2304×6144×18432: 2614 vs 2398
+- Qwen3.8 prefill (bfp4, LoFi):
+  - qkvg 4096×5120×3584: 440 vs 372
+  - in_proj 1024×5120×4160: 165 vs 139
+  - the M = 512 rows: 0.89–0.94× of stock
+
+Start from a measured breakdown of each case: the regime and split `choose_split` picks, per-core DRAM traffic, and stage times.
+
+Likely levers:
+- Split-K (R1c) or a 2-D split for narrow N.
+- Choosing between R1, R1a and R1b by measured cost instead of the current ranking.
+- Block and subblock sizes for M = 2,304.
+
+**Implementation skill**: /perf-measure
+
+**Done when**:
+- Each listed case is at or under its clock-scaled `achievable_ns`, or its remaining gap is explained by a measured floor.
+- Golden stays fully green.
+- The guard set shows no regression beyond ±3%, PERF FOCUS 1–4 included.
+
+**Outcome**: device ns (one fresh run each, 1350 MHz, stock `achievable_ns` in brackets):
+- **At or under stock**: proj_out 160.5 → **57.2** µs (61.0); text-encoder qkv 232.7 → **111.4** (139.2); FLUX single QKV 1382 → **1117** (1245), out 1978 → **1426** (1689), FF1 + SwiGLU 2588 → **2155** (2398); Qwen in_proj M = 1024 147.1 → **137.2** (139.0); Qwen M = 512 rows in 100.2 (108.8), out 52.1 (52.1), gate_up 194.3 (214.4), down 101.2 (111.7), qkvg 94.8 (101.3); qkvg M = 4096 409.4 → **372.5** (371.9, +0.2%: noise).
+- **Above stock, gap = a measured floor**: text-encoder o_proj 96.1 → 85.2 (79.4) and down 541.6 → 524.7 (508.6). Ablation: DM-only (compute skipped) 82.3 / 509.5 µs, compute-only 60.3 / 405.2 µs, sync floor 14.7 / 37.9 µs. Both are bound by the R1a line injectors' serial read → multicast chain (B lines of 1.1 MB / 8.4 MB per injector on an 8-row grid; M = 16 tiles caps the split at 80–88 cores).
+- **Levers** (all host knobs, one source of truth each): (1) `SPLIT_COST_MODEL` — `choose_split` blocks every candidate and ranks by `split_cost` = max(padded K-walk × fidelity tile-K cost, DRAM stream, busiest core's reads, busiest core's writes), with `q_n_min` candidates and a padding-aware S3 block search; (2) `MIN_K_BLOCKS = 8` — R1a helper walks re-split into ≥ 8 K-blocks (shorter pipeline fill; Qwen M = 512 −4..−12%); (3) `R1A_INJECTOR_AHEAD = 2` — R1a injector reads K-block kb+1 under its own trid while multicasting kb, depth-3 rings, gated to injector-bound walks (proj_out 66.6 → 58.5; it loses 4–8% where the K-walk is as long as the injector stream, so it is path-gated there); (4) `NONE_RAW_WALK` — the Perf 1 raw K-walk + an identity copy for epilogue-none multi-K-block walks, gated to compute-bound splits (−4..−5% on FLUX single QKV / out and Qwen M = 4096; +2–4% on DM-bound ones, so gated).
+- **Guard set** (140 cells, every perf file incl. PERF FOCUS 1–4, sharded): geomean 0.93×, no cell slower beyond +2.9% (R1b / M = 1 cells with identical plans, noise band); PERF FOCUS 1 391.1 → 391.4, 2 29.8 → 29.9, 3 66.6 → 66.0, 4 617.5 → 616.8. Golden interleaved slice 429 passed / 75 xfailed; translated + regression unchanged (212 passed, the 14 pre-existing cache-count failures).
+- **Next** (not done): move the R1a B-line injection onto the writer RISC (BRISC / NoC1, as R1b does for A) so B reads overlap the A-line rounds — the only lever that moves the te_o / te_down DM floor; the in-RISC prefetch cannot, because its read issue blocks the same RISC that multicasts. Not done here: it is a reader / writer topology restructure of its own, and both remaining gaps are within 9% of stock with a measured floor.
