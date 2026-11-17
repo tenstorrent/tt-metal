@@ -308,6 +308,15 @@ class PoolCtx:
 
 def append_key_rows(ctx, key_pool4, k):
     """k [1,1,S,128] TILE (S verify rows of the step, already norm + rope) -> the key pool at the S positions of ``ctx.upd_rows``: one ``paged_update_cache`` per row, in order (two rows of the same bfp8 tile must not race)."""
+    if ctx.S > 1 and ctx.S <= 4:
+        from models.demos.blackhole.hy4_preview.tt import hy4_key_append as KA
+
+        if KA.enabled():  # B32: the S appends as ONE one-core program (bit-identical)
+            kk = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG) if k.memory_config().is_sharded() else k
+            KA.key_append(kk, key_pool4, ctx.upd_rows, ctx.pt, ctx.S)
+            if kk is not k:
+                ttnn.deallocate(kk)
+            return
     for j in range(ctx.S):
         kj = k if ctx.S == 1 else ttnn.slice(k, [0, 0, j, 0], [1, 1, j + 1, 128])
         kd = ttnn.to_memory_config(kj, ctx.kcfg_key)
