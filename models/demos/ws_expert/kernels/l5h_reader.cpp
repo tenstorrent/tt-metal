@@ -25,7 +25,9 @@
 //     58 table addr, 59 own slices addr, 60 CH0, 61 destination lists addr (WL5_Y_RM; CT TensorAccessorArgs(dest)
 //     after the own slices').
 // WL5_Y_RM: row-major result rows - each down row tile's rows (CB 17, pack-untilized) to their rows in the expert's
-// destination list, at this core's columns, posted, fenced (WL5_Y_FENCE: the result buffer's spare rows).
+// destination list, at this core's columns, posted, fenced (WL5_Y_FENCE: the result buffer's spare rows). WL5_YT (the
+// staging slot's L1 address): the rows come from the BRISC's transposed copy (l5h_writer.cpp QT; YREADY / YDONE in
+// scratch words 12 / 13) instead of CB 17.
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -567,20 +569,33 @@ void kernel_main() {
             if (!ncrisc_noc_posted_writes_sent(noc_index)) {
                 return false;
             }
+#if defined(WL5_YT)
+            *W(scr + 13 * 16) = drained + 1;  // YDONE: the staging slot is free
+#else
             cb_pop_front(y_cb, DCOLS);
+#endif
             ++d_r;
             ++drained;
             y_state = 0;
             return true;
         }
         if (y_state == 1) {
-            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, Y_TRID) ||
-                !cb_pages_available_at_front(y_cb, DCOLS)) {
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, Y_TRID)) {
                 return false;
             }
             invalidate_l1_cache();
-            const uint32_t m = counts[16 + (order[d_n] & 0xFFFF)] - d_r * 32;
+#if defined(WL5_YT)
+            if (*W(scr + 12 * 16) < drained + 1) {  // YREADY: the BRISC staged this row tile
+                return false;
+            }
+            uint32_t l1 = WL5_YT;
+#else
+            if (!cb_pages_available_at_front(y_cb, DCOLS)) {
+                return false;
+            }
             uint32_t l1 = get_read_ptr(y_cb);
+#endif
+            const uint32_t m = counts[16 + (order[d_n] & 0xFFFF)] - d_r * 32;
             for (uint32_t r = 0; r < (m < 32 ? m : 32); ++r, l1 += seg) {
                 noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1, os.get_noc_addr(dst[r], DS * 64), seg);
             }

@@ -57,6 +57,7 @@ class L5Cfg:
     # given by the expert's destination list (build_lane5's dest_t), posted, fenced at fence_row
     yrm: int = 0
     remap_row: int = 0  # yrm: DEST's untilize remap only around each down row (WL5_REMAP_ROW), not for the whole kernel
+    yt: int = 0  # yrm: plain tiles from the compute, transposed to rows by the BRISC into a staging slot (WL5_YT)
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -152,7 +153,8 @@ def build_lane5(
     lflags, lcred = w16(l5.D * NR), w16(NR)
     pring = sharded_l1(mesh, C, [l5.PD * NW * 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT)
     scr = w16(16 if l5.hmc else 8)
-    # (yrm: the row writes need CB 17 64 B aligned: a sharded tensor of 8 tiles a core - owners 2 x 4, row 4 1 x 8)
+    # (yrm: the row writes need CB 17 64 B aligned: a sharded tensor of 8 tiles a core - owners 2 x 4, row 4 1 x 8; with
+    # yt the same tensor is the BRISC's row-major staging slot, 32 rows x DCOLS 64 B, and CB 17 holds plain tiles)
     YDEP_T = 8
     ysh = sharded_l1(mesh, C, [YDEP_T * 32, 32], cfg.out_dt, ttnn.TILE_LAYOUT) if l5.yrm else None
     counts_l1 = sharded_l1(mesh, C, [1, 32 + max(4, cfg.nexp)], U, RM, torch.int32)
@@ -260,8 +262,10 @@ def build_lane5(
                             + list(ttnn.TensorAccessorArgs(counts_t).get_compile_time_args())
                             + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
                             + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args())
-                            + ([hcons.buffer_address(), hcolf.buffer_address()] if l5.hmc == 2 else []),
-                            defines=[("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else [],
+                            + ([hcons.buffer_address(), hcolf.buffer_address()] if l5.hmc == 2 else [])
+                            + ([ysh.buffer_address()] if l5.yrm and l5.yt else []),
+                            defines=([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else [])
+                            + ([("WL5_YT", "1")] if l5.yrm and l5.yt else []),
                             runtime_args=wr_rt,
                             config=dm(0),
                         )
@@ -290,6 +294,7 @@ def build_lane5(
                             defines=FAB_DEFS
                             + ([("WL5_OAFF", str(l5.oaff))] if l5.oaff else [])
                             + ([("WL5_Y_RM", "1")] if l5.yrm else [])
+                            + ([("WL5_YT", str(ysh.buffer_address()))] if l5.yrm and l5.yt else [])
                             + ([("WL5_Y_FENCE", str(fence_row))] if l5.yrm and fence_row is not None else [])
                             + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
                             + ([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else []),
@@ -329,7 +334,7 @@ def build_lane5(
                         compile_time_args=[ksl, KTD, dc, DB, cnt_base, K, NW, l5.FL, l5.TL, own, tab_base + 64],
                         named_compile_time_args=[("expert_activation", 0)],
                         defines=act_defs
-                        + ([("WL_Y_RM", "1")] if l5.yrm else [])
+                        + ([("WL_Y_RM", "1")] if l5.yrm and not l5.yt else [])
                         + ([("WL5_REMAP_ROW", "1")] if l5.yrm and l5.remap_row else []),
                         runtime_args=cp_rt[own],
                         config=ccfg,
@@ -344,8 +349,8 @@ def build_lane5(
                     cb(8, cfg.x_dt, (l5.TL // NCOL + 3) * ksl, cs),
                     (
                         sh(17, ysh, total_size=YDEP_T * TILE_BYTES[cfg.out_dt], core_ranges=cs)
-                        if l5.yrm
-                        else cb(17, cfg.out_dt, 2 * dc, cs)
+                        if l5.yrm and not l5.yt
+                        else cb(17, cfg.out_dt, (YDEP_T // dc if l5.yt else 2) * dc, cs)
                     ),
                 ]
             cset = crs(C)

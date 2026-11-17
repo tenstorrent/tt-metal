@@ -16,7 +16,9 @@
 //      word 3.
 // The counts and the slot table are loaded by the NCRISC (counts word 0 set once they are in). WL5_GATHER0 (diagnostic,
 // outside the NoC rule: DRAM read responses enter the rectangle on NOC0): the x gather from here, as l5_writer.cpp.
-// CT: as l5_writer.cpp (0-34), then 35 HCONS, 36 HCOLF; RT: as l5_writer.cpp (0-20), then 21-24 the group's NOC0
+//   QT (WL5_YT): the down row tiles (CB 17) transposed into row-major rows in a staging slot for the NCRISC's row
+//      writes (the compute packs plain tiles: no untilize in the packer).
+// CT: as l5_writer.cpp (0-34), then 35 HCONS, 36 HCOLF (37 the staging slot with WL5_YT); RT: as l5_writer.cpp (0-20), then 21-24 the group's NOC0
 //     rectangle (x0, y0, x1, y1). Scratch words (16 B): 0 x flag, 1 partial flag, 2 hub flag, 3 rows multicast,
 //     4 PAVAIL, 5 PDONE, 8 XAVAIL, 9 XADDR, 10 XDONE.
 #include "api/dataflow/dataflow_api.h"
@@ -53,6 +55,9 @@ void kernel_main() {
     constexpr auto wargs = TensorAccessorArgs<targs.next_compile_time_args_offset()>();
     constexpr uint32_t hcons = get_compile_time_arg_val(wargs.next_compile_time_args_offset());
     constexpr uint32_t hcolf = get_compile_time_arg_val(wargs.next_compile_time_args_offset() + 1);
+#if defined(WL5_YT)
+    constexpr uint32_t ystage = get_compile_time_arg_val(wargs.next_compile_time_args_offset() + 2);
+#endif
     constexpr uint32_t NR = 5, NCOL = 5, NOWN = 4, PC = 4, NW = 8, LT = 2 * NR, NH = NOWN * NCOL, GC = NR * NCOL;
     constexpr uint32_t WGU = KSL * NW, WDN = KTD * DCOLS;
     constexpr uint32_t GU_PK = WGU / CHT, PK = (WGU + WDN) / CHT;
@@ -234,6 +239,41 @@ void kernel_main() {
         return true;
     };
 
+#if defined(WL5_YT)
+    // ---- QT: the compute's down row tiles (CB 17, DCOLS bf16 tiles) to row-major rows in the staging slot (row r at
+    // r DCOLS 64 B: tile c's columns at c 64), once the NCRISC has written out the previous row tile (YDONE, scratch
+    // word 13); then YREADY (word 12) = rows staged. A tile's row r is its face row r of faces 0 / 1 (r < 16) or 2 / 3.
+    constexpr uint32_t y_cb = tt::CBIndex::c_17;
+    constexpr uint32_t seg = DCOLS * 64;
+    uint32_t t_q = 0;
+    auto qt = [&]() -> bool {
+        if (t_q >= total_rows || !cb_pages_available_at_front(y_cb, DCOLS)) {
+            return false;
+        }
+        invalidate_l1_cache();
+        if (t_q > 0 && *W(scr + 13 * 16) < t_q) {
+            return false;
+        }
+        const uint32_t src = get_read_ptr(y_cb);
+        for (uint32_t c = 0; c < DCOLS; ++c) {
+            const uint32_t* tile = reinterpret_cast<const uint32_t*>(src + c * 2048);
+            for (uint32_t r = 0; r < 32; ++r) {
+                const uint32_t* f = tile + ((r < 16 ? 0 : 256) + (r & 15) * 8);  // (face 0 / 2 row; face 1 / 3 at + 128)
+                uint32_t* d = reinterpret_cast<uint32_t*>(ystage + r * seg + c * 64);
+#pragma GCC unroll 8
+                for (uint32_t i = 0; i < 8; ++i) {
+                    d[i] = f[i];
+                    d[8 + i] = f[128 + i];
+                }
+            }
+        }
+        asm volatile("fence" ::: "memory");
+        *W(scr + 12 * 16) = t_q + 1;  // YREADY
+        cb_pop_front(y_cb, DCOLS);
+        ++t_q;
+        return true;
+    };
+#endif
     // ---- QM (hub): h rows multicast to the group
     const uint32_t mx0 = get_arg_val<uint32_t>(21), my0 = get_arg_val<uint32_t>(22);
     const uint32_t mx1 = get_arg_val<uint32_t>(23), my1 = get_arg_val<uint32_t>(24);
@@ -290,8 +330,13 @@ void kernel_main() {
         t[4] = wall();
         did[4] = qm();
         t[5] = wall();
+#if defined(WL5_YT)
+        did[5] = qt();
+        t[6] = wall();
+#else
         did[5] = false;
         t[6] = t[5];
+#endif
         bool any = false;
         for (uint32_t i = 0; i < 6; ++i) {
             if (did[i]) {
@@ -304,7 +349,12 @@ void kernel_main() {
 #else
         const bool gathered = true;
 #endif
-        if (!any && gathered && xq >= total_rows && pq >= total_rows && (!OWN || cr_sent >= total_rows) &&
+#if defined(WL5_YT)
+        const bool staged = t_q >= total_rows;
+#else
+        const bool staged = true;
+#endif
+        if (!any && gathered && staged && xq >= total_rows && pq >= total_rows && (!OWN || cr_sent >= total_rows) &&
             (J != 0 || m_q >= total_rows)) {
             break;
         }
