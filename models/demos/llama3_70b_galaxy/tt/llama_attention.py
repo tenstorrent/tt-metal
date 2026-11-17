@@ -9,6 +9,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import WO_AG_MAX
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_minmm
 
 # Opt-in: prefill SDPA (ring, chunked/prefix-cached, regular) at HiFi2 instead of HiFi4.
 # Read once at import. Unset keeps the shared HiFi4 config object used before this change.
@@ -1081,6 +1082,25 @@ class TtLlamaAttention(LightweightModule):
 
         return dense_out_reduced
 
+    def _qkv_minmm_config(self, seq_len):
+        """MinimalMatmulConfig for the QKV matmul under LLAMA_GALAXY_PREFILL_MINMM=qkv.
+
+        Not XQKV_PREFILL_MINIMAL_PROGCFG: that config (7x8 grid, N block 8, subblock 1x8) is the one behind the
+        "bad outputs for seqlen > 128" note. M > N, so the op puts N on the 8 grid rows: 40 N tiles -> 5 per core,
+        and the output is garbage (decoder PCC 0.03 at 2048 with real weights; also with N block 5 / subblock 1x5).
+        On the full 7x10 grid each core gets 4 N tiles: N block 4, subblock 1x4 matches the linear PCC.
+        LLAMA_GALAXY_PREFILL_MINMM_QKV_CFG="M/K/N/sub_h/sub_w/grid_x/grid_y" (blocks in tiles) overrides it."""
+        spec = os.environ.get("LLAMA_GALAXY_PREFILL_MINMM_QKV_CFG", "").strip() or "8/8/4/1/4/7/10"
+        m, k, n, sh, sw, gx, gy = (int(v) for v in spec.replace("/", ",").split(","))
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=m,
+            K_block_size=k,
+            N_block_size=n,
+            subblock_h=sh,
+            subblock_w=sw,
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        )
+
     def _prefill_qkv_seqsplit_enabled(self, seq_len, batch_size, chunk_start_idx):
         """LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT=1 (opt-in, read at call time): cold batch-1 ring prefill on Wormhole."""
         if os.environ.get("LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT", "0") != "1":
@@ -1175,13 +1195,25 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         ###
 
+        # LLAMA_GALAXY_PREFILL_MINMM=qkv: minimal_matmul on the unslabbed [1, 1, S, 2048] input.
+        qkv_minmm = self.use_prefetcher and batch_size == 1 and seq_len >= 2048 and prefill_minmm("qkv")
+
         # reshaping long sequence to matmul fit on device
         # 3072/5120 (LLAMA_GALAXY_PREFILL_PAD) are not multiples of 2048, so they use 1024-row slabs.
-        if seq_len > 2048:
+        if seq_len > 2048 and not qkv_minmm:
             qkv_slab = 2048 if seq_len % 2048 == 0 else 1024
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // qkv_slab, qkv_slab, -1])
 
-        if self.use_prefetcher:
+        if qkv_minmm:
+            xqkv = ttnn.experimental.minimal_matmul(
+                input_tensor=x_11SH,
+                weight_tensor=self.wqkv_interleaved,
+                dtype=self.ccl_dtype,
+                config=self._qkv_minmm_config(seq_len),
+                compute_kernel_config=self.qkv_prefill_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        elif self.use_prefetcher:
             xqkv = ttnn.linear(
                 x_11SH,
                 self.wqkv_interleaved,
@@ -1473,7 +1505,8 @@ class TtLlamaAttention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
         ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        wo_minmm = seq_len == 2048 and batch_size == 1 and self.use_prefetcher and prefill_minmm("wo2048")
+        if (seq_len < 4096 or batch_size > 1) and not wo_minmm:
             output_11SH = ttnn.linear(
                 attn_output_11SH,
                 self.wo_interleaved,

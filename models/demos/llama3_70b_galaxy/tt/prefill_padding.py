@@ -86,3 +86,24 @@ PREFILL_SDPA_Q64_2048_ENV = "LLAMA_GALAXY_PREFILL_SDPA_Q64_2048"
 
 def prefill_sdpa_q64_2048_enabled():
     return os.environ.get(PREFILL_SDPA_Q64_2048_ENV, "0").strip() == "1"
+
+
+# LLAMA_GALAXY_PREFILL_MINMM (opt-in, read at call time): move prefill matmuls from ttnn.linear to
+# ttnn.experimental.minimal_matmul (FF2: the fused all_gather_minimal_matmul_async), which reaches
+# 137-155 TFLOP/s on FF1 where linear reaches 81-105. Comma (or +) list of parts, or "1" for all:
+#   qkv     : the QKV matmul at every batch-1 prefill length >= 2048 (unslabbed [1, 1, S, 2048] input)
+#   mlp2048 : FF1/FF3 (minimal) and FF2 (fused AG + minimal) at 2048
+#   wo2048  : WO at 2048
+PREFILL_MINMM_ENV = "LLAMA_GALAXY_PREFILL_MINMM"
+PREFILL_MINMM_PARTS = ("qkv", "mlp2048", "wo2048")
+
+
+def prefill_minmm(part):
+    value = os.environ.get(PREFILL_MINMM_ENV, "").strip()
+    if value in ("", "0"):
+        return False
+    parts = PREFILL_MINMM_PARTS if value == "1" else tuple(p.strip() for p in value.replace("+", ",").split(","))
+    for p in parts:
+        if p not in PREFILL_MINMM_PARTS:
+            raise ValueError(f"{PREFILL_MINMM_ENV}={value!r}: unknown part {p!r}; use 1 or a list of {PREFILL_MINMM_PARTS}")
+    return part in parts

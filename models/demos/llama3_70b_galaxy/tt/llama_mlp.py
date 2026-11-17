@@ -4,6 +4,7 @@
 
 import torch
 import ttnn
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_minmm
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
 
@@ -383,8 +384,19 @@ class TtLlamaMLP(LightweightModule):
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
+        # LLAMA_GALAXY_PREFILL_MINMM=mlp2048: minimal matmuls (FF2 fused with its all-gather) at 2048 too.
+        mlp_minmm = (
+            seq_len == 2048
+            and batch_size == 1
+            and self.args.use_prefetcher
+            and not self.args.is_blackhole
+            and not self.args.is_qwen
+            and prefill_minmm("mlp2048")
+        )
+        if mlp_minmm:
+            use_w1_w3_interleaved = True
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        if (seq_len < 4096 or batch_size > 1) and not mlp_minmm:
             w1_out = ttnn.linear(
                 x,
                 self.w1_interleaved if use_w1_w3_interleaved else self.w1,
@@ -420,7 +432,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w1_out)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        if (seq_len < 4096 or batch_size > 1) and not mlp_minmm:
             w3_out = ttnn.linear(
                 x,
                 self.w3_interleaved if use_w1_w3_interleaved else self.w3,
@@ -464,7 +476,7 @@ class TtLlamaMLP(LightweightModule):
         # On Blackhole always use the unfused all_gather + matmul: the fused all_gather_minimal_matmul_async
         # kernel only supports the 1D LowLatencyPacketHeader and fails to compile against the 2D-torus
         # fabric's HybridMeshPacketHeader required on BH.
-        if seq_len < 4096 or batch_size > 1 or self.args.is_blackhole:
+        if (seq_len < 4096 or batch_size > 1 or self.args.is_blackhole) and not mlp_minmm:
             w2_in_gathered = self.tt_ccl.line_all_gather(
                 w2_in,
                 cluster_axis=1,
