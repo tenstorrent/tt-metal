@@ -724,12 +724,13 @@ tt-train/** @tenstorrent/tt-train
 tt-train/sources/ttml/metal/** @tenstorrent/tt-train @lgalasTT
 tt-train/sources/ttml/ops/** @tenstorrent/tt-train @lgalasTT
 tt-train/tests/** @tenstorrent/tt-train @lgalasTT @abustamanteTT
-# Unified trainer and the dataset/model providers and utils it builds on: only the people developing them, not whole tt-train team.
-tt-train/sources/ttml/ttml/datasets/provider/** @mmilosevicTT @jmalone-tt @vladimirjovanovicTT @mcupacTT
-tt-train/sources/ttml/ttml/datasets/utils/** @mmilosevicTT @jmalone-tt @vladimirjovanovicTT @mcupacTT
-tt-train/sources/ttml/ttml/models/provider/** @mmilosevicTT @jmalone-tt @vladimirjovanovicTT @mcupacTT
-tt-train/sources/ttml/ttml/models/utils/** @mmilosevicTT @jmalone-tt @vladimirjovanovicTT @mcupacTT
-tt-train/sources/ttml/ttml/unified_trainer/** @mmilosevicTT @jmalone-tt @vladimirjovanovicTT @mcupacTT
+# Files related to the productization of training effort.
+tt-train/configs/training_configs/unified_trainer/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/sources/ttml/ttml/datasets/provider/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/sources/ttml/ttml/datasets/utils/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/sources/ttml/ttml/models/provider/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/sources/ttml/ttml/models/utils/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/sources/ttml/ttml/unified_trainer/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 # Last on purpose: CODEOWNERS is last-match-wins, so this must follow the directory rules
 # above for infra to keep co-ownership of every CMakeLists.txt.
 tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @abustamanteTT @tenstorrent/metalium-developers-infra
