@@ -132,14 +132,28 @@ constexpr const std::uint16_t* level_table() {
 }
 
 // The level table for lookups on a RISC-V core: tables of up to 1 KiB are copied to `copy` (512 entries) in the core's
-// local data memory, faster to load from than L1.
+// local data memory, which loads in 2 cycles against 8 or more from L1.
 template <Format FMT>
 inline const std::uint16_t* local_level_table(std::uint16_t* copy) {
     static_assert(is_codebook<FMT>(), "local_level_table: not a codebook format");
     const std::uint16_t* table = level_table<FMT>();
     if constexpr (table_entries<FMT>() * 2 <= 1024) {
-        for (std::uint32_t j = 0; j < table_entries<FMT>() / 2; j++) {
-            reinterpret_cast<std::uint32_t*>(copy)[j] = reinterpret_cast<const std::uint32_t*>(table)[j];
+        constexpr std::uint32_t words = table_entries<FMT>() / 2;
+        static_assert(words % 8 == 0);
+        const auto* from = reinterpret_cast<const std::uint32_t*>(table);
+        auto* to = reinterpret_cast<std::uint32_t*>(copy);
+#pragma GCC unroll 1
+        for (std::uint32_t j = 0; j < words; j += 8) {
+            // Eight loads, then their stores: independent loads overlap.
+            std::uint32_t w[8];
+#pragma GCC unroll 8
+            for (std::uint32_t k = 0; k < 8; k++) {
+                w[k] = from[j + k];
+            }
+#pragma GCC unroll 8
+            for (std::uint32_t k = 0; k < 8; k++) {
+                to[j + k] = w[k];
+            }
         }
         table = copy;
     }

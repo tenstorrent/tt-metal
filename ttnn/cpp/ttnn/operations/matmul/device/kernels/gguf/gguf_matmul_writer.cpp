@@ -80,10 +80,7 @@ void kernel_main() {
     constexpr bool split = is_codebook<FMT>() && P > 1 && GGUF_WRITER_PARTS > 0;
     Semaphore requests(request_sem), answers(answer_sem), address(address_sem);
     uint32_t served = 0;
-    [[maybe_unused]] const std::uint16_t* table = nullptr;
-    if constexpr (split) {
-        table = local_level_table<FMT>(table_copy);
-    }
+    [[maybe_unused]] const std::uint16_t* table = level_table<FMT>();  // in L1 until the first request is answered
 #if GGUF_STREAM
     // Weight units granted by the reader: its records into their c_0 pages, one unit at a time, with transaction id 1;
     // the answer semaphore counts 1 + units landed (1: this writer streams).
@@ -156,6 +153,10 @@ void kernel_main() {
                 }
                 asm volatile("fence" ::: "memory");
                 answers.set(++served);
+                if (served == 1) {
+                    // The local copy once the first request is answered, while the reader works on the next.
+                    table = local_level_table<FMT>(table_copy);
+                }
             }
         }
 #if GGUF_STREAM

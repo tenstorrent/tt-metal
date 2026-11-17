@@ -71,11 +71,20 @@ class CodebookLookups {
         using namespace experimental::gguf;
         const auto* indices = reinterpret_cast<const uint32_t*>(page + index_offset<FMT>());
         for (uint32_t q = B; q < E; q++) {
-            lookup_grid<FMT>(
-                indices, level_table<FMT>(), reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page), q, kParts);
+            lookup_grid<FMT>(indices, table(), reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page), q, kParts);
         }
     }
 
+    // The level table: in the thread's local data memory when it has at most 1 KiB (local_level_table), else in L1.
+    static constexpr bool kLocalTable = experimental::gguf::table_entries<FMT>() * 2 <= 1024;
+    static inline const std::uint16_t* table_ = nullptr;
+    static const std::uint16_t* table() {
+        if constexpr (kLocalTable) {
+            return table_;
+        } else {
+            return experimental::gguf::level_table<FMT>();
+        }
+    }
     volatile tt_l1_ptr uint32_t* sync_ = nullptr;
     uint32_t total_pages_ = 0;                            // pages of this core's K work
     uint32_t done_ = 0;                                   // math, pack: pages looked up; unpack: pages entered
@@ -122,6 +131,10 @@ class CodebookLookups {
 public:
     // Before the first page. Runtime args as in kernel_main.
     void start(const uint32_t segments, const uint32_t finish) {
+        if constexpr (kOn && kLocalTable) {
+            alignas(4) static std::uint16_t copy[experimental::gguf::table_entries<FMT>()];
+            table_ = experimental::gguf::local_level_table<FMT>(copy);
+        }
         if constexpr (kMath || kPack) {
             for (uint32_t s = 0; s < segments; s++) {
                 if (get_arg_val<uint32_t>(3 + 3 * s) != finish) {
