@@ -231,3 +231,10 @@ UMD: baremetal 543/543, `api_tests` 17 pass + 9 skipped (`EmuTTDevice.*` need th
 - **chippy.** `bringup_mmk_fw.py` uses SysEng's firmware, so the ad-hoc `bringup_mmk.py` CCE1 steps are not on the main path. `probe/keraunos_cce1` was removed.
 
 **Process note.** UMD changes were committed locally at the user's explicit request on 2026-11-13 (the UMD `CLAUDE.md` default is to leave them unstaged). `PR_DRAFT_keraunos_cce1.md` in UMD is still untracked. Nothing has been pushed from any repo.
+
+## Final regression (2026-11-17, tt-metal `0aab80473f3`)
+- **mmk:** `Keraunos*` 85/85 in one batch (`KeraunosAtomics.*` are `DISABLED_`). `Mimir*` 103/103 earlier, in three batches because each hit the 3000 s `emu` limit, with no failures.
+- **mimir model:** `MimirEmu.*` and `MimirCceSramRoundTrip*` 7/7. **mm model:** the same filter 11/11. The shared Quasar header and firmware-init changes did not regress the Mimir-only packages.
+- **UMD:** baremetal 543/543, `api_tests` 17 pass + 9 skipped (emulator-only `EmuTTDevice.*`).
+- **Correction:** the commit message of `8f4753f5487` says `KeraunosPathsCce1.* 18/18`. The suite has 14 tests and all 14 passed.
+- **Emulator:** two runs hung in firmware load on ZeBu (once on mmk, once on mm) and had to be released and retried. They were not test failures; the retries passed.
