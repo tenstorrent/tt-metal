@@ -1028,4 +1028,4 @@ static_assert(
 constexpr bool is_inter_domain_router =
     has_named_ct_arg("INTER_DOMAIN_ROUTER") && NAMED_CT_ARG("INTER_DOMAIN_ROUTER") != 0;
 constexpr uint32_t inter_domain_ctrl_addr = is_inter_domain_router ? NAMED_CT_ARG("INTER_DOMAIN_CTRL_ADDR") : 0;
-static_assert(!is_inter_domain_router || NUM_ACTIVE_ERISCS == 1, "inter-domain routers run on one ERISC");
+static_assert(!is_inter_domain_router || NUM_ACTIVE_ERISCS == 2, "inter-domain routers run on two ERISCs");
