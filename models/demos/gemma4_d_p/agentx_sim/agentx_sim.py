@@ -36,8 +36,9 @@ Prefill:
 - Step time is Model.step_s from cost_model.py (dense(M) + per-request attention at its own depth, calibrated on
   silicon; a config without its own fit is marked *), plus the scheduler's gap between steps, which advances the
   clock but is not busy time. --chunk-overhead-ms adds to every step and --request-overhead-ms delays every request
-  on its way to the engine. Serving through tt-d-gen on silicon (tt-metal#60869), chunks ran at the calibrated step
-  time and each request took about 95 ms more: frontend, admission, and the handoff after its last chunk.
+  on its way to the engine, plus --request-overhead-ms-per-1k per 1000 prompt tokens. Serving through tt-d-gen on
+  silicon (tt-metal#60869), chunks ran at the calibrated step time and each request took about 13.6 ms plus 0.87 ms
+  per 1000 prompt tokens more: frontend and admission, the wait for the runner, and the handoff after its last chunk.
 
 TTFT is from send to prefill done (the decode's first token is not modelled).
 """
@@ -382,7 +383,7 @@ def run(
     t_fed = None  # when the last session started: the load is at full concurrency until then
 
     def overhead_s(n):
-        """From send to reaching the engine: tt-d-gen tokenizes and hashes the whole prompt."""
+        """Serving overhead, applied up front: tt-d-gen tokenizes and hashes the whole prompt."""
         return request_overhead_s + request_overhead_per_token_s * n["in"]
 
     def start_session(t):
@@ -750,7 +751,7 @@ def main():
     ap.add_argument("--decode-tps", default="100", help="per-request decode rate for the closed loop")
     ap.add_argument("--chunk-overhead-ms", default="0", help="added to every step")
     ap.add_argument(
-        "--request-overhead-ms", default="0", help="from send to reaching the engine (tt-d-gen on silicon: 15)"
+        "--request-overhead-ms", default="0", help="from send to reaching the engine (tt-d-gen on silicon: 13.6)"
     )
     ap.add_argument(
         "--request-overhead-ms-per-1k",
