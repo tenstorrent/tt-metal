@@ -219,7 +219,7 @@ def selection_window_metadata(
 ):
     """window_metadata from an explicit (T, K) selection, for weights that are not descending and above
     0, which scores cannot express: routing_metadata takes the selection as it is."""
-    from tests.ttnn.nightly.unit_tests.operations.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
+    from models.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
         to_host,
     )
 
