@@ -2,11 +2,16 @@ name: DiT review
 
 # For PRs touching models/tt_dit/:
 #   - assign-reviewers requests 1-2 DiT team members chosen by recent commit history
-#     in the touched directories (always at least one), and withdraws the team-wide
-#     CODEOWNERS requests when the PR only changes models/tt_dit/.
+#     in the touched directories (always at least one), then withdraws the
+#     metalium-dit team-wide CODEOWNERS request. The cse-developer-ttnn request is
+#     withdrawn only when the PR only changes models/tt_dit/, since that team also
+#     owns other paths.
 #   - check-approval posts a "DiT approval" commit status that is pending until a
 #     member of tenstorrent/metalium-dit approves. Other PRs get success immediately,
 #     so the status can be made required repo-wide.
+#   - The same job reports whether the PR would qualify for auto-merge, as a
+#     "DiT auto-merge (report only)" status and the dit-auto-merge-eligible label.
+#     Nothing is approved or merged; this is a trial to tune the criteria.
 # Logic lives in .github/scripts/dit_review.py.
 #
 # Reviews do not trigger pull_request_target, and pull_request_review runs without
@@ -102,3 +107,10 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: python3 .github/scripts/dit_review.py check
+      - name: Report auto-merge eligibility (report only)
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          STATUS_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: python3 .github/scripts/dit_review.py eligibility

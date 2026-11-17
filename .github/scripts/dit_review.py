@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 """Targeted review requests and a DiT-approval status for models/tt_dit/ PRs.
 
-Two modes:
+Three modes:
 
   assign  Request reviews from the DiT team members who most recently committed to
           the directories the PR touches, so a PR gets 1-2 relevant reviewers rather
           than the whole team. At least one DiT team member is always requested.
-          When every changed file is under models/tt_dit/, the team-wide requests
-          that CODEOWNERS added are withdrawn. This does not weaken the code owner
-          rule: GitHub still requires an approval from a code owner.
+          The DiT team-wide request that CODEOWNERS added is then withdrawn; requests
+          for co-owning teams (which also own non-DiT paths) are withdrawn only when
+          every changed file is under models/tt_dit/. This does not weaken the code
+          owner rule: GitHub still requires an approval from a code owner.
 
   check   Post a "DiT approval" commit status on the PR head commit: success when
           the PR does not touch models/tt_dit/ or a DiT team member has approved,
           pending otherwise. Branch protection can make this status required.
+
+  eligibility
+          Report-only trial of auto-merging small DiT PRs. Posts a "DiT auto-merge
+          (report only)" status saying whether the PR would qualify and why not, and
+          keeps the dit-auto-merge-eligible label in sync so qualifying PRs can be
+          searched for later. Always posts success: it never blocks or approves.
+          Skips PRs that do not touch models/tt_dit/.
 
 The script never checks out or runs PR code; it only reads PR metadata via the API.
 
@@ -23,8 +31,9 @@ Environment variables:
   REPO           owner/name.
   PR_NUMBER      Pull request number.
   DIT_TEAM       Team whose members count as DiT reviewers (default: metalium-dit).
-  REMOVE_TEAMS   Comma-separated teams whose review requests to withdraw in assign
-                 mode (default: metalium-dit,cse-developer-ttnn).
+  DIT_ONLY_REMOVE_TEAMS
+                 Comma-separated co-owning teams whose review requests are withdrawn
+                 when the PR only changes models/tt_dit/ (default: cse-developer-ttnn).
   NUM_REVIEWERS  Number of reviewers to request (default: 2).
   HISTORY_DAYS   How far back to look at commit history (default: 180).
   DRY_RUN        "1" prints what would change without changing anything.
@@ -47,6 +56,15 @@ DIT_PREFIX = "models/tt_dit/"
 STATUS_CONTEXT = "DiT approval"
 # Bounds the number of commit-history API calls for very large PRs.
 MAX_DIRS = 25
+
+ELIGIBILITY_CONTEXT = "DiT auto-merge (report only)"
+ELIGIBLE_LABEL = "dit-auto-merge-eligible"
+# Auto-merge criteria. New test files are allowed and do not count toward the size
+# limits; changes to existing tests are not (they often loosen quality gates).
+MAX_SOURCE_FILES = 3
+MAX_SOURCE_LINES = 40
+# Shared by every pipeline, so changes here always get a human review.
+CORE_DIRS = ("layers/", "parallel/", "utils/")
 
 
 def api(method: str, path: str, token: str, body: dict | None = None):
@@ -133,6 +151,82 @@ def dit_approvers(reviews: list[dict], members: set[str]) -> list[str]:
     return sorted(u for u, s in latest.items() if s == "APPROVED" and u in members)
 
 
+def is_test_file(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return path.startswith(DIT_PREFIX + "tests/") or name.startswith("test_") or name == "conftest.py"
+
+
+def ineligibility_reasons(files: list[dict], author: str, members: set[str], unresolved_threads: int) -> list[str]:
+    """Why a PR would not qualify for auto-merge; empty means it would.
+
+    `files` are entries from the PR files API (filename, status, additions, deletions).
+    """
+    reasons = []
+    if author not in members:
+        reasons.append("author not on DiT team")
+    if any(not f["filename"].startswith(DIT_PREFIX) for f in files):
+        reasons.append("changes files outside models/tt_dit/")
+    if any(is_test_file(f["filename"]) and f["status"] != "added" for f in files):
+        reasons.append("changes existing tests")
+    if any(f["filename"].startswith(DIT_PREFIX + d) for f in files for d in CORE_DIRS):
+        reasons.append("changes core code (" + ", ".join(d.rstrip("/") for d in CORE_DIRS) + ")")
+    source = [f for f in files if not is_test_file(f["filename"])]
+    if len(source) > MAX_SOURCE_FILES:
+        reasons.append(f"{len(source)} non-test files (max {MAX_SOURCE_FILES})")
+    lines = sum(f["additions"] + f["deletions"] for f in source)
+    if lines > MAX_SOURCE_LINES:
+        reasons.append(f"{lines} non-test lines (max {MAX_SOURCE_LINES})")
+    if unresolved_threads:
+        reasons.append(f"{unresolved_threads} unresolved review threads")
+    return reasons
+
+
+def unresolved_thread_count(repo: str, number: int, token: str) -> int:
+    owner, name = repo.split("/")
+    query = """query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved } } }
+      }
+    }"""
+    result = api("POST", "/graphql", token, {"query": query, "variables": {"owner": owner, "name": name, "number": number}})
+    threads = result["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    return sum(1 for t in threads if not t["isResolved"])
+
+
+def eligibility(repo: str, number: int, pr: dict, file_objs: list[dict], token: str, dry_run: bool) -> None:
+    if not dir_weights([f["filename"] for f in file_objs]):
+        print("No models/tt_dit/ changes; nothing to report.")
+        return
+    org = repo.split("/")[0]
+    members = team_members(org, os.environ.get("DIT_TEAM", "metalium-dit"), token)
+    reasons = ineligibility_reasons(file_objs, pr["user"]["login"], members, unresolved_thread_count(repo, number, token))
+    eligible = not reasons
+    # Not gated on yet; reported so the trial shows how often they would block.
+    copilot_reviewed = any(
+        "copilot" in (r.get("user") or {}).get("login", "").lower()
+        for r in api_list(f"/repos/{repo}/pulls/{number}/reviews", token)
+    )
+    description = "Would auto-merge" if eligible else "No: " + "; ".join(reasons)
+    if eligible and not copilot_reviewed:
+        description += " (Copilot review not yet posted)"
+    print(f"{ELIGIBILITY_CONTEXT}: {description}")
+
+    if dry_run:
+        print("DRY_RUN set; status and label not changed.")
+        return
+    has_label = any(label["name"] == ELIGIBLE_LABEL for label in pr["labels"])
+    if eligible and not has_label:
+        api("POST", f"/repos/{repo}/issues/{number}/labels", token, {"labels": [ELIGIBLE_LABEL]})
+    elif not eligible and has_label:
+        api("DELETE", f"/repos/{repo}/issues/{number}/labels/{urllib.parse.quote(ELIGIBLE_LABEL)}", token)
+    body = {"state": "success", "context": ELIGIBILITY_CONTEXT, "description": description[:140]}
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    if run_id:
+        body["target_url"] = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{run_id}"
+    status_token = os.environ.get("STATUS_TOKEN") or token
+    api("POST", f"/repos/{repo}/statuses/{pr['head']['sha']}", status_token, body)
+
+
 def assign(repo: str, number: int, pr: dict, files: list[str], token: str, dry_run: bool) -> None:
     if pr["draft"]:
         print("Draft PR; reviewers are assigned when it is marked ready for review.")
@@ -143,7 +237,8 @@ def assign(repo: str, number: int, pr: dict, files: list[str], token: str, dry_r
         return
 
     org = repo.split("/")[0]
-    members = team_members(org, os.environ.get("DIT_TEAM", "metalium-dit"), token)
+    dit_team = os.environ.get("DIT_TEAM", "metalium-dit")
+    members = team_members(org, dit_team, token)
     author = pr["user"]["login"]
     reviewed = {r["user"]["login"] for r in api_list(f"/repos/{repo}/pulls/{number}/reviews", token) if r.get("user")}
     requested_users = {u["login"] for u in pr["requested_reviewers"]}
@@ -166,10 +261,13 @@ def assign(repo: str, number: int, pr: dict, files: list[str], token: str, dry_r
         print(f"  {login}: {score}")
     print(f"Requesting: {picks or 'nobody (a DiT member is already on the PR)'}")
 
-    remove = [t for t in os.environ.get("REMOVE_TEAMS", "metalium-dit,cse-developer-ttnn").split(",") if t]
-    # Only withdraw team requests when the whole PR is DiT code; other changes may
-    # legitimately need those teams.
-    to_remove = sorted(requested_teams & set(remove)) if all(f.startswith(DIT_PREFIX) for f in files) else []
+    # The DiT team only owns models/tt_dit/, so its request is always safe to withdraw.
+    # Co-owning teams also own other paths, so only withdraw theirs when the whole PR
+    # is DiT code.
+    remove = {dit_team}
+    if all(f.startswith(DIT_PREFIX) for f in files):
+        remove |= {t for t in os.environ.get("DIT_ONLY_REMOVE_TEAMS", "cse-developer-ttnn").split(",") if t}
+    to_remove = sorted(requested_teams & remove)
     print(f"Withdrawing team requests: {to_remove or 'none'}")
 
     if dry_run:
@@ -216,17 +314,23 @@ def check(repo: str, number: int, pr: dict, files: list[str], token: str, dry_ru
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in ("assign", "check"):
-        print(f"usage: {sys.argv[0]} assign|check", file=sys.stderr)
+    modes = ("assign", "check", "eligibility")
+    if len(sys.argv) != 2 or sys.argv[1] not in modes:
+        print(f"usage: {sys.argv[0]} {'|'.join(modes)}", file=sys.stderr)
         return 2
+    mode = sys.argv[1]
     token = os.environ["GH_TOKEN"]
     repo = os.environ["REPO"]
     number = int(os.environ["PR_NUMBER"])
     dry_run = os.environ.get("DRY_RUN") == "1"
 
     pr = api("GET", f"/repos/{repo}/pulls/{number}", token)
-    files = [f["filename"] for f in api_list(f"/repos/{repo}/pulls/{number}/files", token)]
-    (assign if sys.argv[1] == "assign" else check)(repo, number, pr, files, token, dry_run)
+    file_objs = api_list(f"/repos/{repo}/pulls/{number}/files", token)
+    if mode == "eligibility":
+        eligibility(repo, number, pr, file_objs, token, dry_run)
+    else:
+        files = [f["filename"] for f in file_objs]
+        (assign if mode == "assign" else check)(repo, number, pr, files, token, dry_run)
     return 0
 
 
