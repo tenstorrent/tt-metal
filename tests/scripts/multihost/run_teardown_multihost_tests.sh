@@ -33,12 +33,21 @@ last_host=$(host_names | awk '{print $NF}')  # the remote host we inject faults 
 victim_rank=$((num_hosts - 1))               # one rank per host, so the last rank runs on last_host
 
 # --------------------------------------------------------------------------------------------------------------
-# build the probe and put it on every host (exabox shares home over NFS, so the copy is just a fallback)
+# build the probe and stage it on every host. The compile dir is a local mktemp under /tmp, which SC4 does NOT
+# share across hosts (only the workspace is synced), so the copy is required, not a fallback. scp will not create
+# the destination directory, so make it first on each host, and verify the probe actually landed and is runnable
+# there — otherwise a worker that never got the probe would fail the launch, not the staging.
 # --------------------------------------------------------------------------------------------------------------
 probe="$(mktemp -d)/teardown_mpi_probe"
 probe_src="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/distributed/multiprocess/teardown_sanity/sanity_mpi_probe.cpp"
 mpicxx -O1 -o "$probe" "$probe_src" || { echo "::error::the probe did not compile ($probe_src)"; exit 1; }
-for host in $(host_names); do scp -q "$probe" "$host:$probe" 2>/dev/null || true; done
+for host in $(host_names); do
+  ssh -o BatchMode=yes "$host" "mkdir -p '$(dirname "$probe")'" \
+    || { echo "::error::could not create the probe directory on $host"; exit 1; }
+  scp -q "$probe" "$host:$probe" 2>/dev/null || true  # a no-op on the compile host (same file); verified next
+  ssh -o BatchMode=yes "$host" "test -x '$probe'" \
+    || { echo "::error::the probe is not staged/executable on $host ($probe)"; exit 1; }
+done
 
 launcher="$(command -v 'mpirun-ulfm' || command -v 'mpirun')"
 
