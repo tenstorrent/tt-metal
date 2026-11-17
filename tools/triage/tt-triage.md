@@ -254,7 +254,7 @@ The output looks like:
   - Split into int columns, or use a categorical string (`Up`/`Down`).
   - Hex goes through `hex_serializer`; `None` renders as `N/A`.
 - Detail columns of data that is always read get `verbose=1/2`. SQLite keeps them all anyway.
-- Dump raw values (ints, hex, indices) rather than decoding when the decode adds little. Cover general state for any op. Consumer-specific naming (blaze CB aliases, arg→tensor) belongs in a post-triage script in the consumer repo.
+- Dump raw values (ints, hex, indices) rather than decoding when the decode adds little. Cover general state for any op. Consumer-specific naming belongs in a post-triage script in the consumer repo.
 - A display tweak changes rendering only (`to_row` or the view), never aggregation keys, filters or row count.
 
 ### dump_callstacks output modes
