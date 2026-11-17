@@ -227,7 +227,7 @@ UMD: baremetal 543/543, `api_tests` 17 pass + 9 skipped (`EmuTTDevice.*` need th
 - **Remote atomics.** Still `DISABLED_` (see the atomics probe above). Question for SysEng: which fmt/op is an int32 add?
 - **Watcher and host NOC sanitizer.** Both reject native CCE1 addresses (`bad write eth address noc{5-3, 0x00408080}`) and the watcher reader asks UMD for an address it rejects. Predates this work.
 - **Fast dispatch.** Per-CCE kernel text offsets are handled in slow dispatch only.
-- **UMD `eth_cces_per_core`** is unused by `mmk.yaml` and could be removed.
+- **UMD `eth_cces_per_core`** (the one-core-spans-both-CCEs layout) was removed on 2026-11-17: field, parse and dump, the schema entry, the `keraunos_control_address` CCE parameter, the hart loops in `tt_device.cpp`, and two descriptor tests. These UMD changes are **uncommitted** in the submodule, pending the user's review. UMD baremetal 541/541, `api_tests` 17 pass + 9 skipped, and 17/17 emulator tests (`KeraunosEmu.*`, `KeraunosCce1.*`, `KeraunosFabric.*`, identity, one paths test) pass with it. `pre-commit` and `clang-format` are not installed on the machine, so neither has been run.
 - **chippy.** `bringup_mmk_fw.py` uses SysEng's firmware, so the ad-hoc `bringup_mmk.py` CCE1 steps are not on the main path. `probe/keraunos_cce1` was removed.
 
 **Process note.** UMD changes were committed locally at the user's explicit request on 2026-11-13 (the UMD `CLAUDE.md` default is to leave them unstaged). `PR_DRAFT_keraunos_cce1.md` in UMD is still untracked. Nothing has been pushed from any repo.
