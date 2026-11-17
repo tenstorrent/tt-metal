@@ -7,8 +7,10 @@
 SQLite output back end for tt-triage.
 
 Each script's output becomes one table, named after the script, with a row per
-result and a column per serializable field. Columns are INTEGER, REAL or TEXT,
-chosen from the values the script produced.
+result and a column per serializable field. Columns are INTEGER, REAL, BLOB or
+TEXT, chosen from the values the script produced. Rows a script writes with
+`insert_rows` during its run take their column types from the row dataclass
+instead, since later rows aren't known yet.
 
 Unlike the console and CSV back ends, this one ignores the `-v` verbosity level:
 a database is an archive, not a screen, so every field a script produced is
@@ -26,10 +28,11 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from typing import Any, Iterable
+from dataclasses import fields
+from typing import Any, Iterable, get_type_hints
 
 from triage import CheckEntry, CheckType
-from serializers import ALL_VERBOSE_LEVELS, OutputSerializer, strip_rich_markup, extract_table_data
+from serializers import ALL_VERBOSE_LEVELS, OutputSerializer, TableData, strip_rich_markup, extract_table_data
 
 
 def quote_identifier(name: str) -> str:
@@ -67,7 +70,7 @@ def _check_row_widths(script: str, columns: list[str], rows: list[list[str]]) ->
 
 
 def _sql_value(serialized: Any, unserialized: Any) -> Any:
-    """Pick what gets stored for one cell: a number, or the serialized string.
+    """Pick what gets stored for one cell: a number, bytes, or the serialized string.
 
     Numbers stay numbers so they remain comparable - a `hex_serializer` field
     would otherwise arrive as "0x1234" and `WHERE pc > 4096` could never work.
@@ -75,6 +78,8 @@ def _sql_value(serialized: Any, unserialized: Any) -> Any:
     """
     if unserialized is None:
         return None
+    if isinstance(unserialized, bytes):
+        return unserialized
     if isinstance(unserialized, int):
         # SQLite's INTEGER is signed 64-bit and there is no wider type, so a
         # value past that cannot be bound. Falling back to the string makes
@@ -90,10 +95,10 @@ def _sql_value(serialized: Any, unserialized: Any) -> Any:
 def _column_type(values: Iterable[Any]) -> str:
     """Choose the SQL type for a column from the values going into it.
 
-    INTEGER or REAL when every value is numeric, TEXT otherwise. NULLs are
-    skipped, since they fit any type.
+    INTEGER or REAL when every value is numeric, BLOB when every value is
+    bytes, TEXT otherwise. NULLs are skipped, since they fit any type.
     """
-    seen_int = seen_float = False
+    seen_int = seen_float = seen_bytes = False
     for value in values:
         if value is None:
             continue
@@ -101,11 +106,61 @@ def _column_type(values: Iterable[Any]) -> str:
             seen_int = True
         elif isinstance(value, float):
             seen_float = True
+        elif isinstance(value, bytes):
+            seen_bytes = True
         else:
             return "TEXT"
+    if seen_bytes:
+        return "TEXT" if seen_int or seen_float else "BLOB"
     if seen_float:
         return "REAL"
     return "INTEGER" if seen_int else "TEXT"
+
+
+# SQL type for each field annotation whose values `_sql_value` stores as numbers or bytes; any other annotation is TEXT.
+_DECLARED_TYPES: dict[Any, str] = {
+    bool: "INTEGER",
+    bool | None: "INTEGER",
+    int: "INTEGER",
+    int | None: "INTEGER",
+    float: "REAL",
+    float | None: "REAL",
+    bytes: "BLOB",
+    bytes | None: "BLOB",
+}
+
+
+def _declared_column_types(row: Any) -> list[str]:
+    """Choose each column's SQL type from the row dataclass's field annotations, in `extract_table_data`'s column order."""
+    annotations = get_type_hints(type(row))
+    column_types: list[str] = []
+    for fld in fields(row):
+        if fld.metadata.get("dont_serialize"):
+            continue
+        if fld.metadata.get("recurse"):
+            column_types.extend(_declared_column_types(getattr(row, fld.name)))
+        elif "additional_fields" in fld.metadata:
+            # A combined field stores its serializer's string.
+            column_types.append("TEXT")
+        elif "serialized_name" in fld.metadata:
+            column_types.append(_DECLARED_TYPES.get(annotations[fld.name], "TEXT"))
+    return column_types
+
+
+def _sql_rows(script: str, table_data: TableData) -> list[list[Any]]:
+    """The values to store for each row, after checking the rows line up with the header."""
+    _check_for_duplicates(script, table_data.columns)
+    _check_row_widths(script, table_data.columns, table_data.rows)
+    rows: list[list[Any]] = []
+    for serialized, unserialized in zip(table_data.rows, table_data.unserialized_values):
+        # Strip the Rich markup some scripts embed in cell values.
+        rows.append(
+            [
+                strip_rich_markup(value) if isinstance(value, str) else value
+                for value in (_sql_value(text, original) for text, original in zip(serialized, unserialized))
+            ]
+        )
+    return rows
 
 
 DIAGNOSTICS_TABLE = "diagnostics"
@@ -153,22 +208,22 @@ class SqliteSerializer(OutputSerializer):
             # Check-only scripts return nothing; their diagnostics are the output.
             self._con.commit()
             return
-        table = os.path.splitext(script_name)[0]
-        columns = table_data.columns
-        _check_for_duplicates(script_name, columns)
-        _check_row_widths(script_name, columns, table_data.rows)
+        rows = _sql_rows(script_name, table_data)
+        column_types = [_column_type(row[i] for row in rows) for i in range(len(table_data.columns))]
+        self._insert(os.path.splitext(script_name)[0], table_data.columns, column_types, rows)
 
-        rows: list[list[Any]] = []
-        for serialized, unserialized in zip(table_data.rows, table_data.unserialized_values):
-            # Strip the Rich markup some scripts embed in cell values.
-            rows.append(
-                [
-                    strip_rich_markup(value) if isinstance(value, str) else value
-                    for value in (_sql_value(text, original) for text, original in zip(serialized, unserialized))
-                ]
-            )
+    def insert_rows(self, table: str, rows: list[Any]) -> None:
+        """Write a script's rows to `table` now, during its run(), so it doesn't hold them until it returns.
 
-        spec = ", ".join(f"{quote_identifier(c)} {_column_type(r[i] for r in rows)}" for i, c in enumerate(columns))
+        The rows reach no other output. Column types come from the row dataclass, so they don't depend on which
+        rows come first.
+        """
+        table_data = extract_table_data(rows, ALL_VERBOSE_LEVELS)
+        assert table_data is not None, f"{table}: rows must be a non-empty list of dataclasses"
+        self._insert(table, table_data.columns, _declared_column_types(rows[0]), _sql_rows(table, table_data))
+
+    def _insert(self, table: str, columns: list[str], column_types: list[str], rows: list[list[Any]]) -> None:
+        spec = ", ".join(f"{quote_identifier(c)} {t}" for c, t in zip(columns, column_types))
         self._con.execute(f"CREATE TABLE IF NOT EXISTS {quote_identifier(table)} ({spec})")
 
         names = ", ".join(quote_identifier(c) for c in columns)
