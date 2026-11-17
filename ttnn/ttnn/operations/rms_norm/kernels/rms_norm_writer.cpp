@@ -36,7 +36,8 @@ void kernel_main() {
     constexpr uint32_t cb_part = get_compile_time_arg_val(13);
     constexpr uint32_t sem_id0 = get_compile_time_arg_val(14);
     constexpr uint32_t sem_id1 = get_compile_time_arg_val(15);
-    constexpr auto o_args = TensorAccessorArgs<16>();
+    constexpr bool OUT_SHARDED = get_compile_time_arg_val(16) != 0;  // compute packs straight into the out shard
+    constexpr auto o_args = TensorAccessorArgs<17>();
 
     constexpr uint32_t TILE_DIM = 32;
     constexpr uint32_t num_seg = Wt / Sb;
@@ -119,7 +120,7 @@ void kernel_main() {
                     noc_async_write_barrier();
                     dfb_rm.pop_front(Sb);
                 }
-            } else {
+            } else if constexpr (!OUT_SHARDED) {
                 dfb_tiles.wait_front(rb * Sb);
                 const uint32_t base = dfb_tiles.get_read_ptr();
                 for (uint32_t rr = 0; rr < rb; ++rr) {

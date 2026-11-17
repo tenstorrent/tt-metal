@@ -61,7 +61,7 @@ SUPPORTED = {
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED],
 }
 
 
@@ -77,6 +77,9 @@ EXCLUSIONS = [
     {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
     # bfloat8_b gamma cannot be an RM stick tensor.
     {"gamma_dtype": ttnn.bfloat8_b, "gamma_layout": ttnn.ROW_MAJOR_LAYOUT},
+    # ROW_MAJOR HEIGHT_SHARDED: shard sticks are not tile-row aligned (multi-image / ragged / W-padded sticks),
+    # so the shard cannot back the tilize/untilize CBs in place; only TILE shards are consumed natively.
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED},
 ]
 
 
@@ -112,10 +115,24 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_con
         axes[axis_name] = tagger((shape,), axes)
 
     # Requested output placement must also be a supported memory_layout.
-    if memory_config is not None and memory_config.memory_layout not in SUPPORTED["memory_layout"]:
-        raise UnsupportedAxisValue(
-            f"rms_norm: output memory_layout={memory_config.memory_layout!r} not in SUPPORTED {SUPPORTED['memory_layout']}"
-        )
+    if memory_config is not None:
+        if memory_config.memory_layout not in SUPPORTED["memory_layout"]:
+            raise UnsupportedAxisValue(
+                f"rms_norm: output memory_layout={memory_config.memory_layout!r} not in SUPPORTED "
+                f"{SUPPORTED['memory_layout']}"
+            )
+        if memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
+                raise ExcludedCell("rms_norm: ROW_MAJOR with HEIGHT_SHARDED output is not supported yet")
+            in_mc = input_tensor.memory_config()
+            if (
+                in_mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                and in_mc.shard_spec != memory_config.shard_spec
+            ):
+                raise UnsupportedAxisValue("rms_norm: sharded input and sharded output must share one shard spec")
+    shard_spec = input_tensor.memory_config().shard_spec
+    if shard_spec is not None and shard_spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+        raise UnsupportedAxisValue("rms_norm: only ROW_MAJOR shard orientation is supported")
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
@@ -141,12 +158,17 @@ def rms_norm(
     if compute_kernel_config is None:
         compute_kernel_config = default_compute_kernel_config()
 
+    if memory_config is None:  # sharded input -> output inherits its placement; otherwise DRAM interleaved
+        in_mc = input_tensor.memory_config()
+        memory_config = (
+            in_mc if in_mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else ttnn.DRAM_MEMORY_CONFIG
+        )
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
         input_tensor.dtype,
         input_tensor.layout,
         input_tensor.device(),
-        memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
+        memory_config,
     )
 
     program_descriptor = create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compute_kernel_config)

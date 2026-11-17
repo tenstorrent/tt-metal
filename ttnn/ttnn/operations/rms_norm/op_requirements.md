@@ -62,13 +62,19 @@ Cells that fail out of the box go to `EXCLUSIONS`, not their own refinement.
 
 **Outcome**: measured (bf16, HiFi2, fp32_dest=False, TILE gamma; device ns) 8192x1024 103.6k, 8192x2304 257k, 8192x5120 572k, 8192x7168 791k, 32x2304 9.2k, 32x5120 13.1k. `G_CAP` 16->32 and `OUT_DEPTH` 2->4 are both flat (within ~1-3%), so they stay live knobs at their defaults. Prefill moves ~295-325 GB/s (x in + out once), i.e. at the DRAM roofline: nothing to gain from block/depth tuning. Decode is already W-split (R2). Not tried / next: gamma mcast (small share of traffic at these shapes), prime-Wt ragged tail, fused scale chain (compute is not binding on prefill).
 
-### [ ] Refinement 4 — HEIGHT_SHARDED in place + output `memory_config`
+### [~] Refinement 4 — HEIGHT_SHARDED in place + output `memory_config`
 
 **Goal**: add `HEIGHT_SHARDED` to `SUPPORTED["memory_layout"]` and honor `memory_config` for the output (sharded input → sharded output). Local shard = whole row block; back `cb_x` / `cb_out_tiles` with `ttnn.cb_descriptor_from_sharded_tensor` (zero-copy, no reader NoC re-read of the local shard, `Rb` = shard rows). Includes the `_SHARDED`/resilience HEIGHT cells; ragged shards must work.
 
 **Verifier notes**: knob-turn / CB-placement change over R1; no new math and no cross-core traffic. The native path means the shard is consumed in place — never re-read through a `TensorAccessor`. No existing skill covers sharding placement (don't attach `/memory-layouts`). RM input × TILE gamma × sharded is INVALID in the spec and stays skipped.
 
 **Done when**: HEIGHT_SHARDED `xfail_expected` cells pass; dataflow check confirms no `TensorAccessor` read of the local shard.
+
+### [ ] Refinement 4a — ROW_MAJOR HEIGHT_SHARDED (in-place stick shards)
+
+**Goal**: lift the `{layout: ROW_MAJOR, memory_layout: HEIGHT_SHARDED}` EXCLUSION. Blockers measured: RM shard sticks are not tile-row aligned (flat `S = shard_h` sticks, ragged last tile-row), the shard page is `shard_w*es` (< `Wt*32*es` when W%32 != 0) so `tilize` over a shard-backed `cb_x_rm` would read the next stick into the pad columns, and `untilize` has no partial-row mode so a shard-backed `cb_out_rm` would be overrun past the shard end. Next lever: shard-flat tile-row grouping (32 sticks per tile-row regardless of image), tilize with `total_input_pages` for the partial tail, and a W-pad zeroing/untilize tail path.
+
+**Done when**: RM HEIGHT_SHARDED `xfail_expected` cells pass.
 
 ### [ ] Refinement 5 — WIDTH_SHARDED and BLOCK_SHARDED with cross-core Σx² combine
 

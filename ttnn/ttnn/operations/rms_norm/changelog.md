@@ -33,3 +33,11 @@
 - Golden test progress: not run (no functional change)
 - Issues encountered: None. Finding: remaining levers (gamma mcast, ragged-tail Sb for prime Wt, fused scale chain) target non-binding stages for these shapes.
 - Tests added: test_rms_norm_perf_r3.py
+
+## Refinement 4 — HEIGHT_SHARDED in place + output `memory_config`
+- Date: 2026-11-17
+- What was done: `HEIGHT_SHARDED` added to SUPPORTED["memory_layout"] (TILE layout). Sharded input: `cb_x` is backed by the input shard (`cb_descriptor_from_sharded_tensor`), the reader publishes the whole shard with one reserve/push (no NoC read, no accessor; W pad zeroed in place); blocking is forced resident. Sharded output: `cb_out_tiles` is backed by the output shard, compute packs straight into it and the writer does nothing. Core plan comes from the shard grid (core i owns tile-rows [i*sh, (i+1)*sh), ragged last shard handled by rows=0/partial); W-split is off. `memory_config` is honored (default: sharded input -> output inherits its spec, otherwise DRAM); input-sharded/output-interleaved and the reverse also work. Under L1 pressure (in+out shards > 900KB, e.g. Wt=344) the compute window cap drops to 2 tiles. ROW_MAJOR x HEIGHT_SHARDED is in EXCLUSIONS (follow-up 4a).
+- Accuracy achieved: golden TILE HEIGHT cells (fp32/bf16/bf8b, gamma variants, W/H non-aligned, 3D/2D, prime tile counts, wide 11008) pass at the harness tolerances.
+- Golden test progress: targeted slices only (64x128, ragged/non-aligned/wide resilience shapes) all PASSED; RM cells XFAIL (excluded).
+- Issues encountered: remote JIT precompile server fails to compile (env), ran with --no-precompile; wide shards (Wt=344) clashed CBs with the two resident shards until the window cap was reduced.
+- Tests added: tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_height_sharded.py

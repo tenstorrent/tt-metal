@@ -78,7 +78,8 @@ void kernel_main() {
     constexpr uint32_t cb_gamma_rm = get_compile_time_arg_val(16);
     constexpr bool GAMMA_TILE = get_compile_time_arg_val(17) != 0;
     constexpr uint32_t Wt_full = get_compile_time_arg_val(18);  // Wt is the per-core slice width
-    constexpr auto x_args = TensorAccessorArgs<19>();
+    constexpr bool IN_SHARDED = get_compile_time_arg_val(19) != 0;  // x shard resident in cb_x (zero-copy)
+    constexpr auto x_args = TensorAccessorArgs<20>();
     constexpr auto g_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t num_seg = Wt / Sb;
@@ -102,6 +103,9 @@ void kernel_main() {
 
     // ---- one x segment: rb tile-rows x Sb tiles, pushed to cb_x (TILE) / cb_x_rm (RM) ----
     auto load_x_segment = [&](uint32_t tr0, uint32_t rb, uint32_t seg) {
+        if constexpr (IN_SHARDED) {
+            return;  // the whole shard was published once up front
+        }
         if constexpr (IS_RM) {
             for (uint32_t rr = 0; rr < rb; ++rr) {
                 const uint32_t tr = tr0 + rr;
@@ -220,6 +224,27 @@ void kernel_main() {
             for (uint32_t seg = 0; seg < num_seg; ++seg) {
                 load_gamma_segment(seg);
             }
+        }
+    }
+
+    if constexpr (IN_SHARDED) {
+        // Native sharding: cb_x is backed by this core's input shard. Publish it in place (no NoC read);
+        // zero the W pad of the last tile column in place so it cannot enter the reduction.
+        const uint32_t total = rows_core * Wt;
+        if (total > 0) {
+            dfb_x.reserve_back(total);
+            if constexpr (!IS_RM && valid_w_last < TILE_DIM) {
+                const uint32_t base = dfb_x.get_write_ptr();
+                for (uint32_t rr = 0; rr < rows_core; ++rr) {
+                    const uint32_t t = base + (rr * Wt + Wt - 1) * x_tile_bytes;
+                    if constexpr (ES_X == 2) {
+                        zero_w_pad_of_tile<uint16_t>(t, valid_w_last);
+                    } else {
+                        zero_w_pad_of_tile<uint32_t>(t, valid_w_last);
+                    }
+                }
+            }
+            dfb_x.push_back(total);
         }
     }
 

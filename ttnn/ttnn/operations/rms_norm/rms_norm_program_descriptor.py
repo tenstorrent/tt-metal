@@ -17,6 +17,8 @@ G_CAP = 16  # max tiles in a compute window (Rb * Sb)
 X_BUDGET = 512 * 1024  # bytes of cb_x
 GAMMA_BUDGET = 128 * 1024  # bytes of resident gamma tiles
 RM_DEPTH = 2  # tile-rows of RM sticks buffered in cb_x_rm
+SHARD_TIGHT_BYTES = 900 * 1024  # in+out resident shards beyond this leave too little L1 for full-size windows
+SHARD_TIGHT_G_CAP = 2  # compute window cap (tiles) under that pressure
 OUT_DEPTH = 2  # windows buffered in cb_out_tiles / cb_out_rm
 
 # Circular buffer slots (single source; passed to kernels as compile-time args)
@@ -56,17 +58,18 @@ class Blocking:
     gamma_resident: bool
 
 
-def pick_blocking(Wt, rows_core_max, in_tile_bytes, gamma_tile_bytes, has_gamma):
+def pick_blocking(Wt, rows_core_max, in_tile_bytes, gamma_tile_bytes, has_gamma, force_resident=False, g_cap=G_CAP):
     """Single source of every block knob; CB sizes and trip counts derive from this."""
     # Sb: largest divisor of Wt <= G_CAP (segments are uniform; no ragged tile-column tail).
-    Sb = max(d for d in range(1, min(Wt, G_CAP) + 1) if Wt % d == 0)
-    resident = Wt * in_tile_bytes <= X_BUDGET
+    Sb = max(d for d in range(1, min(Wt, g_cap) + 1) if Wt % d == 0)
+    # A resident input shard already lives in L1 (cb_x is backed by it), so the whole row is resident by construction.
+    resident = force_resident or Wt * in_tile_bytes <= X_BUDGET
     if resident:
         Wb = Wt
     else:
         Wb = max(Sb, (X_BUDGET // (2 * in_tile_bytes)) // Sb * Sb)
         Wb = min(Wb, Wt)
-    Rb = max(1, min(G_CAP // min(Wb, G_CAP), rows_core_max))
+    Rb = max(1, min(g_cap // min(Wb, g_cap), rows_core_max))
     if Rb > 1:
         assert Sb == Wt == Wb
     x_depth = 2 if (not resident or 2 * Rb * Wb * in_tile_bytes <= X_BUDGET) else 1
@@ -101,6 +104,12 @@ def _cb(index, dtype, page_size, num_pages, core_ranges):
         core_ranges=core_ranges,
         format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_size)],
     )
+
+
+def height_shard_spec(tensor):
+    """The HEIGHT_SHARDED shard spec of `tensor`, or None when it is not height-sharded."""
+    mc = tensor.memory_config()
+    return mc.shard_spec if mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else None
 
 
 def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compute_kernel_config):
@@ -142,10 +151,27 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     # Intermediates follow the DEST width: fp32 only when fp32 DEST accumulation is on.
     im_dtype = ttnn.float32 if compute_kernel_config.fp32_dest_acc_en else ttnn.bfloat16
     im_tile = ttnn.tile_size(im_dtype)
-    n_w, n_r = pick_w_split(Wt, total_tile_rows, grid.x * grid.y, im_tile)
+    in_spec = height_shard_spec(input_tensor)
+    out_spec = height_shard_spec(output_tensor)
+    shard_spec = in_spec if in_spec is not None else out_spec
+    if shard_spec is not None:
+        n_w, n_r = 1, 1  # each core owns whole rows of its shard: the reduction is local
+    else:
+        n_w, n_r = pick_w_split(Wt, total_tile_rows, grid.x * grid.y, im_tile)
     Wt_full = Wt
     Wt = Wt_full // n_w  # per-core slice width in tiles (every per-core CB / loop below is slice-sized)
-    if n_w == 1:
+    if shard_spec is not None:
+        # Core i of the shard grid (shard order) owns tile-rows [i*sh, (i+1)*sh) of the flattened tensor.
+        sh = shard_spec.shape[0] // TILE
+        core_plan = []
+        for i, core in enumerate(
+            ttnn.corerange_to_cores(shard_spec.grid, row_wise=shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR)
+        ):
+            first = min(i * sh, total_tile_rows)
+            core_plan.append((core, first, min(sh, total_tile_rows - first), 0))
+        rows_max = sh
+        all_cores = shard_spec.grid
+    elif n_w == 1:
         num_cores, all_cores, group1, group2, rows_g1, rows_g2 = ttnn.split_work_to_cores(
             grid, total_tile_rows, row_wise=True
         )
@@ -170,7 +196,12 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
                 core_plan.append((ttnn.CoreCoord(lin % grid.x, lin // grid.x), first, rows, j))
             first += rows
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c[0], c[0]) for c in core_plan])
-    blk = pick_blocking(Wt, rows_max, in_tile, g_tile, has_gamma)
+    g_cap = G_CAP
+    if shard_spec is not None:
+        shard_bytes = (shard_spec.shape[0] // TILE) * Wt * (in_tile + out_tile)
+        if shard_bytes > SHARD_TIGHT_BYTES:
+            g_cap = SHARD_TIGHT_G_CAP  # the shards leave little L1: shrink the per-window intermediates
+    blk = pick_blocking(Wt, rows_max, in_tile, g_tile, has_gamma, force_resident=in_spec is not None, g_cap=g_cap)
     Rb, Wb, Sb = blk.Rb, blk.Wb, blk.Sb
     G = Rb * Sb
     num_seg = Wt // Sb
@@ -179,7 +210,10 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     cbs = []
     if is_rm:
         cbs.append(_cb(CB_X_RM, in_dtype, Sb * TILE * es_x, RM_DEPTH * TILE, all_cores))
-    cbs.append(_cb(CB_X, in_dtype, in_tile, blk.x_depth * Rb * Wb, all_cores))
+    if in_spec is not None:
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X, input_tensor))  # zero-copy: the resident shard
+    else:
+        cbs.append(_cb(CB_X, in_dtype, in_tile, blk.x_depth * Rb * Wb, all_cores))
     cbs.append(_cb(CB_SCALER, ttnn.bfloat16, bf16_tile, 1, all_cores))
     if has_gamma:
         g_pages = Wt if blk.gamma_resident else 2 * Sb
@@ -192,7 +226,10 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     if n_w > 1:
         cbs.append(_cb(CB_PSEND, im_dtype, im_tile, Rb, all_cores))
         cbs.append(_cb(CB_PART, im_dtype, im_tile, 2 * Rb * n_w, all_cores))
-    cbs.append(_cb(CB_OUT_TILES, out_dtype, out_tile, OUT_DEPTH * G, all_cores))
+    if out_spec is not None:
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUT_TILES, output_tensor))  # pack into the out shard
+    else:
+        cbs.append(_cb(CB_OUT_TILES, out_dtype, out_tile, OUT_DEPTH * G, all_cores))
     if is_rm:
         cbs.append(_cb(CB_OUT_RM, out_dtype, out_tile, OUT_DEPTH * Sb, all_cores))
 
@@ -200,8 +237,13 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     reader_ct = [
         int(is_rm), es_x, Wt, Sb, Rb, int(blk.resident), int(has_gamma), es_g, int(blk.gamma_resident),
         W, H, Ht_img, CB_X_RM, CB_X, CB_SCALER, CB_GAMMA, CB_GAMMA_RM, int(g_is_tile), Wt_full,
+        int(in_spec is not None),
     ]  # fmt: skip
-    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct.extend(
+        ttnn.TensorAccessorArgs().get_compile_time_args()  # sharded input: consumed in place, no accessor
+        if in_spec is not None
+        else ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    )
     reader_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
         if has_gamma
@@ -210,9 +252,13 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
 
     writer_ct = [
         int(is_rm), es_x, Wt, Sb, Rb, W, H, Ht_img, CB_OUT_TILES, CB_OUT_RM, Wt_full, n_w, CB_PSEND, CB_PART,
-        SEM_PART[0], SEM_PART[1],
+        SEM_PART[0], SEM_PART[1], int(out_spec is not None),
     ]  # fmt: skip
-    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct.extend(
+        ttnn.TensorAccessorArgs().get_compile_time_args()
+        if out_spec is not None
+        else ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    )
 
     compute_ct = [
         int(is_rm), int(has_gamma), int(blk.resident), int(blk.gamma_resident), Wt, Sb, Rb, num_seg,
