@@ -2,8 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 namespace ckernel::sfpu::ttpoly::polygamma {
-using namespace ::sfpi;
+using ::sfpi::copysgn;
 using ::sfpi::DataLayout;
+using ::sfpi::exexp;
+using ::sfpi::ExponentMode;
+using ::sfpi::is_zero;
+using ::sfpi::setsgn;
+using ::sfpi::vFloat;
+using ::sfpi::vInt;
 template <class Config, class Reciprocal, class Tail>
 __attribute__((always_inline)) inline vFloat inverse_square_scalar(
     vFloat x, Reciprocal reciprocal, [[maybe_unused]] Tail tail) {

@@ -4,7 +4,6 @@
 #include "ckernel_sfpu_polygamma_bf16_replay_window.h"
 
 namespace ckernel::sfpu::ttpoly::polygamma {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <class Config, unsigned Hold, unsigned Advance>
 inline void inverse_square_replay() {
