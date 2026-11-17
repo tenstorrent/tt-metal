@@ -1434,7 +1434,9 @@ class TestJobOwnership:
         # --mca btl_tcp_if_include): MPI_Init fails on every rank and the launcher returns 14. tt-run says which
         # interface, which ones exist, and what to change, instead of the generic hint.
         with patch.object(ttrun_module, "get_local_network_interfaces", return_value={"eth0", "lo"}):
-            text = self._logged(lambda: log_phase2_exit_reason(14, ["--mca", "btl_tcp_if_include", "nosuchif"], "legacy"))
+            text = self._logged(
+                lambda: log_phase2_exit_reason(14, ["--mca", "btl_tcp_if_include", "nosuchif"], "legacy")
+            )
             assert "TCP interface 'nosuchif'" in text
             assert "eth0, lo" in text
             assert "golden" not in text.lower()
