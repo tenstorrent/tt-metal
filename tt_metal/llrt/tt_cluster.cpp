@@ -344,7 +344,21 @@ void Cluster::validate_harvesting_masks() const {
     }
 }
 
+namespace {
+// TT_METAL_DEVICE_OPEN_STOP_FILE (opt-in) names a file whose existence stops the device open: a
+// process that must hand its device to a job queued while it opened (ltx-server's warm-up and
+// kernel-capture passes) leaves before any chip starts.
+void throw_if_device_open_stopped(const char* where) {
+    if (const char* stop_file = std::getenv("TT_METAL_DEVICE_OPEN_STOP_FILE");
+        stop_file != nullptr && *stop_file != '\0' && ::access(stop_file, F_OK) == 0) {
+        TT_THROW("device open stopped {}: TT_METAL_DEVICE_OPEN_STOP_FILE {} exists", where, stop_file);
+    }
+}
+}  // namespace
+
 void Cluster::initialize_device_drivers() {
+    // Before the UMD cluster opens: its sysmem pin can take seconds and cannot be interrupted.
+    throw_if_device_open_stopped("before the driver opened");
     this->open_driver();
     this->generate_cluster_descriptor();
     this->get_metal_desc_from_tt_desc();
@@ -354,15 +368,9 @@ void Cluster::initialize_device_drivers() {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
     }
 
-    // TT_METAL_DEVICE_OPEN_STOP_FILE (opt-in) names a file whose existence stops the open here: a
-    // process that must hand its device to a job queued while it opened (ltx-server's warm-up and
-    // kernel-capture passes) leaves before any chip starts. The UMD cluster is open (sysmem mapped)
-    // but no firmware runs yet, so unwinding touches no chip state; after start_driver the only safe
-    // exit is a full open and close.
-    if (const char* stop_file = std::getenv("TT_METAL_DEVICE_OPEN_STOP_FILE");
-        stop_file != nullptr && *stop_file != '\0' && ::access(stop_file, F_OK) == 0) {
-        TT_THROW("device open stopped before the devices started: TT_METAL_DEVICE_OPEN_STOP_FILE {} exists", stop_file);
-    }
+    // The UMD cluster is open (sysmem mapped) but no firmware runs yet, so unwinding touches no chip
+    // state; after start_driver the only safe exit is a full open and close.
+    throw_if_device_open_stopped("before the devices started");
     umd::DeviceParams default_params;
     this->start_driver(default_params);
 
