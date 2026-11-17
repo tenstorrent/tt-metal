@@ -140,6 +140,7 @@ bool flat_write_two_chips() {
                       cluster.get_soc_desc(0).get_arch_descriptor().get_ip_variant() == tt::IpVariant::HORIZON;
     return is_horizon && std::getenv("TT_METAL_SIMULATOR") != nullptr && cluster.number_of_devices() >= 2;
 }
+}  // namespace
 
 // Sets the horizon_x2 chip mapping so get_fabric_node_id_from_physical_chip_id resolves
 // chips 0 and 1. Required because Horizon x2 has no Ethernet links and auto-discovery
@@ -180,8 +181,6 @@ protected:
         QuasarMeshDeviceSingleCardFixture::SetUp();
     }
 };
-
-}  // namespace
 
 // Chip 1's first access point is its NOC2AXI 0, at 0x20_...
 TEST_F(HorizonX2FlatWriteFixture, HorizonX2FlatWritePosted) { expect_flat_write_lands(*devices_[0], 0, 1, 0, true); }

@@ -50,6 +50,7 @@ bool flat_write_2dev_two_chips() {
                       cluster.get_soc_desc(0).get_arch_descriptor().get_ip_variant() == tt::IpVariant::HORIZON;
     return is_horizon && std::getenv("TT_METAL_SIMULATOR") != nullptr && cluster.number_of_devices() >= 2;
 }
+}  // namespace
 
 // Opens chip 0 and chip 1 as separate unit MeshDevices.
 // After SetUp: devices_[0] = chip 0, devices_[1] = chip 1.
@@ -64,6 +65,8 @@ protected:
         QuasarMeshDeviceSingleCardFixture::SetUp();
     }
 };
+
+namespace {
 
 // Sends FLAT_WRITE_2DEV_WORDS words from src_device (chip @p source) to tgt_device (chip @p target)
 // via flat address, then runs a checker kernel on the target to verify. Asserts checker result == 1u.

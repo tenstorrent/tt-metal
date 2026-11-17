@@ -57,6 +57,7 @@ bool fabric_unicast_2dev_available() {
     return std::getenv("TT_METAL_SIMULATOR") != nullptr &&
            MetalContext::instance().get_cluster().number_of_devices() >= 2;
 }
+}  // namespace
 
 class FabricUnicastWrite2DevBothChipsFixture : public QuasarMeshDeviceSingleCardFixture {
 protected:
@@ -79,6 +80,8 @@ protected:
 
     void TearDown() override { QuasarMeshDeviceSingleCardFixture::TearDown(); }
 };
+
+namespace {
 
 void expect_fabric_unicast_write_with_checker(
     distributed::MeshDevice& src_device,
