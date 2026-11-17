@@ -90,12 +90,13 @@ class SparseMoEEP(MoE):
             and mesh.axis_index("dp") == self.cluster_axis
         )
         if dp_gather:
-            x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
-            # The experts, the shared experts and the gate then see every dp rank's tokens, so the gradient the closing
-            # scatter hands them is that of the sum of the ranks' losses. Every other parameter gets its own rank's,
-            # which sync_gradients averages over dp. The gradient is divided by dp on its way into this region (at the
-            # scatter) and multiplied back here, so these parameters get the dp mean too and x its own rank's gradient.
+            # The gather runs this MoE on every dp rank's tokens, so the gradients of its experts, shared experts and
+            # gate are those of the sum of all ranks' losses: dp times the mean that sync_gradients gives every other
+            # parameter. In backward, the ScaleGrad after the closing scatter divides the gradient by dp and the one
+            # here multiplies it back, so these parameters get the mean and x gets its own rank's gradient. Both sit on
+            # this rank's side of the collectives, so they scale only its own rows. (ep_size is the dp size here.)
             x = ScaleGrad.apply(x, float(self.ep_size))
+            x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
 
         B, _, S, _dim = list(x.get_value().shape)
         x = self._memory_snapshot(x, "START")
@@ -191,10 +192,11 @@ class SparseMoEEP(MoE):
             output = self._memory_snapshot(output, "AFTER_ALL_REDUCE")
 
         # Re-shard the (replicated, full-batch) output back onto the DP axis so
-        # downstream layers stay data-parallel. Mirror of the entry all_gather.
+        # downstream layers stay data-parallel. Mirror of the entry all_gather;
+        # the ScaleGrad is explained there.
         if dp_gather:
-            output = ScaleGrad.apply(output, 1.0 / self.ep_size)
             output = ttml.ops.distributed.scatter(output, 0, self.cluster_axis)
+            output = ScaleGrad.apply(output, 1.0 / self.ep_size)
 
         output = self._memory_snapshot(output, "END")
         return output
