@@ -99,10 +99,9 @@ float get_pad_value(
     // Prod reduction is handled separately in prod.cpp.
     TT_FATAL(reduce_type != reduction_common::ReduceType::Prod, "Prod reduction is not supported");
 
-    // INT32 max/min: pad_value flows through float-typed pad APIs (transpose / permute /
-    // tilize_with_val_padding / fill_pad), and static_cast<uint32_t>(±inf) is UB.
-    // We therefore carry the int32 sentinel as the float's bit pattern; the data-movement
-    // ops use bit_cast<uint32_t> on the INT32 branch to recover the original int32 bits.
+    // INT32 max/min: static_cast<uint32_t>(±inf) is UB, so the int32 sentinel is carried as the float's bit
+    // pattern and handed to fill_pad through PadValue's integer arm. Transpose and permute convert an INT32 pad
+    // value numerically, which turns this sentinel into 0, so their padding is refilled afterwards.
     if (dtype == tt::tt_metal::DataType::INT32) {
         if (reduce_type == reduction_common::ReduceType::Max) {
             // SFPU int32 MAX reduce can return an incorrect maximum when the INT32_MIN bit pattern (0x80000000)
@@ -210,6 +209,13 @@ static Tensor reduce_impl(
                     int reduce_dim = i_dim;
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
+                        if (output_tensor.dtype() == DataType::INT32) {
+                            output_tensor = ttnn::fill_implicit_tile_padding(
+                                output_tensor,
+                                ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)},
+                                std::nullopt,
+                                sub_core_grids);
+                        }
                         reduce_dim = rank - 2;
                     }
                     // Only the smallest-axis sub-step ends the chain; earlier sub-steps stay in fp32.
