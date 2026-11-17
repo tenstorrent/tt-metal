@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -634,9 +635,11 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     [
         pytest.param(
             (8, 4),
+            # (GLM-5.3's MoE is the MoE block - tt/moe_impl.py: a fabric payload of one combine row)
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=moe_block_fabric_payload_size(GLM53Config, moe_fabric_payload(GLM53Config)),
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                l1_small_size=GLM53Config.L1_SMALL_SIZE,
             ),
             2,
             0,
@@ -648,8 +651,9 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
         pytest.param(
             (4, 4),
             torus_x_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=moe_block_fabric_payload_size(GLM53Config, moe_fabric_payload(GLM53Config)),
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                l1_small_size=GLM53Config.L1_SMALL_SIZE,
             ),
             2,
             1,
@@ -777,6 +781,7 @@ def test_glm_prefill_block(
         f"[glm block {layer_type}] building TtPrefillBlock layer_idx={layer_idx} seq_len={seq_len} mesh={mesh_shape}"
     )
     block = TtPrefillBlock(
+        # (GLM-5.3's default MoE: the MoE block, its weights from this state dict's random host weights)
         mesh_device=mesh_device,
         config=config,
         model_cfg=GLM53Config,
