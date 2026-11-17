@@ -144,6 +144,12 @@ def _run(
                 n = slice(j * n_per_device, (j + 1) * n_per_device)
                 passed, pcc = comp_pcc(expected[m, n], actual[m, n], 0.9999)
                 assert passed, f"call {call}, rows {i}, ring position {j}: {pcc}"
+    # The gathered buffer holds the last call's whole input, this device's own K range included.
+    rows, last_input = rows_per_call[-1], torch_inputs[-1].to(torch.bfloat16)
+    for index, device_buffer in enumerate(ttnn.get_device_tensors(gathered)):
+        i = divmod(index, shape[1])[1 - gather_axis]
+        actual = ttnn.to_torch(device_buffer).reshape(-1, K)[:rows]
+        assert torch.equal(actual, last_input[i * rows : (i + 1) * rows]), f"device {index}: gathered buffer"
     return mesh_device.num_program_cache_entries() - programs_before
 
 
