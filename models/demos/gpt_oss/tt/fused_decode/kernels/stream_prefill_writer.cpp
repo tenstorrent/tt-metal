@@ -7,7 +7,9 @@
 // -> weight group -> column -> DST block of rows -> row) to tile (row, col[c]) of the [.., M, NT * 32] output, col[c]
 // the logical output column of the core's slot c (the stream's slot order undone). The compute pushes one tile at a
 // time; the writer takes a DST block's tiles (at most RT) together and waits for their writes once per block. cb_out
-// holds CB_PAGES = 2 RT pages (stream_prefill_linear.py), so a block's tiles may wrap around the CB's end.
+// holds CB_PAGES = 2 RT pages (stream_prefill_linear.py). A block whose tiles would wrap around the CB's end is taken
+// in two parts, the tiles up to the end and then the rest: taking it in one piece across the end wrote wrong tiles
+// (cores with 3, 5, 6 or 7 rows per column; 8K prefill and the all-position LM head gave NaN / garbage logits).
 //
 // common runtime args: [out_addr]
 // runtime args: [m0, m_cnt, cols, z0, z1, col[0], ..., col[cols - 1]]
@@ -61,19 +63,20 @@ void kernel_main() {
             const uint32_t gc = cols - g * G < G ? cols - g * G : G;
             for (uint32_t c = 0; c < gc; ++c) {
                 const uint32_t col = get_arg_val<uint32_t>(COL_ARG + g * G + c);
-                for (uint32_t r0 = 0; r0 < rows; r0 += RT) {  // the compute's DST blocks of rows, in row order
-                    const uint32_t rt = rows - r0 < RT ? rows - r0 : RT;
+                for (uint32_t r0 = 0; r0 < rows;) {  // the compute's DST blocks of rows, in row order
+                    // at most RT tiles, and never past the CB's end (the next part starts at its first page)
+                    const uint32_t to_end = (cb_end - get_read_ptr(cb_out)) / tile;
+                    uint32_t rt = rows - r0 < RT ? rows - r0 : RT;
+                    rt = rt < to_end ? rt : to_end;
                     cb_wait_front(cb_out, rt);
                     uint32_t l1 = get_read_ptr(cb_out);
                     for (uint32_t r = r0; r < r0 + rt; ++r) {
                         noc_async_write(l1, s_out.get_noc_addr((m0 + mb + r) * NT + col), tile);
                         l1 += tile;
-                        if (l1 >= cb_end) {
-                            l1 = cb_base;
-                        }
                     }
                     noc_async_writes_flushed();
                     cb_pop_front(cb_out, rt);
+                    r0 += rt;
                 }
             }
         }
