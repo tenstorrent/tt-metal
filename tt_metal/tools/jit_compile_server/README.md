@@ -266,8 +266,11 @@ all build keys, until free space reaches `..._TARGET_FREE_PCT`.
   `$HOME/.cache/tt-metal-cache/` or `$TT_METAL_CACHE/tt-metal-cache/` — because a client's
   cache has the same layout and the pruner would delete ELFs the client is loading.
 - **An unreachable target does not mean constant rescanning.** After a run that frees
-  nothing, the wait before the next check doubles, up to an hour, and resets once a run frees
-  space again.
+  nothing, the wait before the next scan doubles, up to an hour, and resets once a run frees
+  space again. Free space is still checked every `..._CHECK_INTERVAL_S` seconds during that
+  wait, so a disk that keeps filling is not missed: the server scans early once free space
+  falls a full percentage point below what the last run left, and returns to the normal
+  interval once free space is back above `..._MIN_FREE_PCT`.
 
 Each run logs a `Cache prune:` line with what it deleted and why anything idle was skipped.
 A malformed or out-of-range value in any of these variables stops the server at startup
@@ -506,7 +509,7 @@ local ELF.
 | `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` | Enables pruning: when free space on the cache filesystem drops below this percentage, delete least recently used kernels. Unset or 0 leaves pruning off. Requires an explicit, server-only `..._CACHE_ROOT`. |
 | `TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT` | A run stops once free space reaches this percentage. Must not be below `..._MIN_FREE_PCT`. |
 | `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` | Kernels used more recently than this are never pruned. |
-| `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` | How often to check free space. Backs off to at most an hour while runs free nothing. |
+| `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` | How often to check free space. Scans back off to at most an hour while runs free nothing; the free-space check does not. |
 
 ---
 

@@ -244,6 +244,11 @@ std::chrono::seconds next_prune_delay(
     return config.check_interval_seconds;
 }
 
+bool backoff_should_end(double free_pct_now, double free_pct_after_last_run, const CachePruneConfig& config) {
+    return free_pct_now >= config.start_below_free_pct ||
+           free_pct_now <= free_pct_after_last_run - kBackoffRescanDropPct;
+}
+
 DiskSpace disk_space_from_counts(
     std::uint64_t blocks, std::uint64_t free_blocks, std::uint64_t available_blocks, std::uint64_t block_size) {
     // Like df: used space plus what an unprivileged user may still allocate.
@@ -505,20 +510,42 @@ CachePruneResult ServerCachePruner::prune_once() {
 }
 
 void ServerCachePruner::run() {
-    std::chrono::seconds delay_seconds = config_.check_interval_seconds;
+    using Clock = std::chrono::steady_clock;
+    std::chrono::seconds scan_delay_seconds = config_.check_interval_seconds;
+    Clock::time_point next_scan = Clock::now();  // check at startup
+    double free_pct_after_last_run = 100.0;
     while (!stopping()) {
-        CachePruneResult result;
-        try {
-            result = prune_once();
-        } catch (const std::exception& e) {
-            log(std::string("Cache prune failed: ") + e.what());
+        bool scan = Clock::now() >= next_scan;
+        if (!scan) {
+            // Scans are backing off after a run that freed nothing. One statvfs still shows whether
+            // the disk has filled further since, which a full back-off would miss for up to an hour.
+            try {
+                scan = backoff_should_end(free_pct(disk_space_(root_)), free_pct_after_last_run, config_);
+            } catch (const std::exception& e) {
+                log(std::string("Cache prune: free space check failed: ") + e.what());
+            }
         }
-        delay_seconds = next_prune_delay(delay_seconds, result, config_);
-        if (delay_seconds > config_.check_interval_seconds) {
-            log("Cache prune: freed nothing; next check in " + std::to_string(delay_seconds.count()) + " s");
+        if (scan) {
+            CachePruneResult result;
+            try {
+                result = prune_once();
+            } catch (const std::exception& e) {
+                log(std::string("Cache prune failed: ") + e.what());
+            }
+            if (result.ran) {
+                free_pct_after_last_run = result.free_pct_after;
+            }
+            scan_delay_seconds = next_prune_delay(scan_delay_seconds, result, config_);
+            next_scan = Clock::now() + scan_delay_seconds;
+            if (scan_delay_seconds > config_.check_interval_seconds) {
+                log("Cache prune: freed nothing; next scan in " + std::to_string(scan_delay_seconds.count()) +
+                    " s, or sooner if free space falls below " +
+                    percent(std::max(0.0, free_pct_after_last_run - kBackoffRescanDropPct)) + " (checked every " +
+                    std::to_string(config_.check_interval_seconds.count()) + " s)");
+            }
         }
         std::unique_lock lock(stop_mutex_);
-        if (stop_cv_.wait_for(lock, delay_seconds, [this] { return stopping(); })) {
+        if (stop_cv_.wait_for(lock, config_.check_interval_seconds, [this] { return stopping(); })) {
             return;
         }
     }

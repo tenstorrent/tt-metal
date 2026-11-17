@@ -57,8 +57,12 @@ inline constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
 // threshold. The gap is how much of the disk each run frees, so it sets how often the cache is
 // scanned: a wider gap means fewer, larger runs.
 inline constexpr double kDefaultPruneTargetGapPct = 15.0;
-// After a run that frees nothing, checks back off exponentially up to this.
+// After a run that frees nothing, scans back off exponentially up to this. Free space is still
+// checked every check_interval_seconds during the back-off.
 inline constexpr std::chrono::seconds kMaxPruneBackoffSeconds{3600};
+// During a back-off, a check that finds free space this many percentage points below what the
+// last run left scans anyway: the cache is growing, and older directories may have gone idle.
+inline constexpr double kBackoffRescanDropPct = 1.0;
 
 struct CachePruneConfig {
     // Pruning starts when free space falls below this percentage of the filesystem; 0 disables it.
@@ -115,11 +119,16 @@ struct CachePruneResult {
     bool interrupted = false;              // stop() was called mid-run
 };
 
-// How long to wait before the next check: the configured interval, doubled after each run that
+// How long to wait before the next scan: the configured interval, doubled after each run that
 // had to prune but freed nothing (so an unreachable target does not rescan the cache every few
 // minutes), capped at kMaxPruneBackoffSeconds.
 std::chrono::seconds next_prune_delay(
     std::chrono::seconds previous_delay_seconds, const CachePruneResult& result, const CachePruneConfig& config);
+
+// Whether a free-space check made while scans are backing off should end the back-off: free space
+// is back above the start threshold (nothing to do, so return to the normal interval), or it has
+// fallen kBackoffRescanDropPct or more below what the last run left.
+bool backoff_should_end(double free_pct_now, double free_pct_after_last_run, const CachePruneConfig& config);
 
 class ServerCachePruner {
 public:
@@ -172,8 +181,9 @@ public:
     // last-use times are already right when pruning is turned on, and returns an empty lease then.
     Lease acquire(const std::filesystem::path& kernel_dir);
 
-    // Starts the background thread. It checks free space immediately and then as next_prune_delay
-    // says.
+    // Starts the background thread. It checks free space immediately and then every
+    // check_interval_seconds. While scans back off (next_prune_delay), a check only measures free
+    // space, and scans early when backoff_should_end says so.
     void start();
     // Stops the background thread, interrupting a run in progress between directories.
     void stop();

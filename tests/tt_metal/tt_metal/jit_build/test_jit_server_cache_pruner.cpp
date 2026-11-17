@@ -428,6 +428,20 @@ TEST(CachePruneDelayTest, BacksOffOnlyAfterRunsThatFreeNothing) {
     EXPECT_EQ(next_prune_delay(delay_seconds, useful, config).count(), 300);
 }
 
+TEST(CachePruneDelayTest, BackOffEndsWhenTheDiskFillsFurtherOrRecovers) {
+    CachePruneConfig config;
+    config.start_below_free_pct = 25.0;
+    // The last run left 24% free and freed nothing.
+    EXPECT_FALSE(backoff_should_end(24.0, 24.0, config));
+    // Less than kBackoffRescanDropPct of further filling is not worth a scan...
+    EXPECT_FALSE(backoff_should_end(24.0 - kBackoffRescanDropPct / 2, 24.0, config));
+    // ...but this much is: the cache is growing, and older directories may have gone idle.
+    EXPECT_TRUE(backoff_should_end(24.0 - kBackoffRescanDropPct, 24.0, config));
+    EXPECT_TRUE(backoff_should_end(0.0, 24.0, config));
+    // Back above the start threshold: return to the normal interval.
+    EXPECT_TRUE(backoff_should_end(25.0, 24.0, config));
+}
+
 TEST(CachePruneDiskSpaceTest, MatchesDfByLeavingOutRootReservedBlocks) {
     // 100 blocks, 10 free, of which only 5 are available to non-root users.
     const DiskSpace space = disk_space_from_counts(100, 10, 5, 4096);
