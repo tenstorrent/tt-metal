@@ -1081,6 +1081,76 @@ class TtLlamaAttention(LightweightModule):
 
         return dense_out_reduced
 
+    def _prefill_qkv_seqsplit_enabled(self, seq_len, batch_size, chunk_start_idx):
+        """LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT=1 (opt-in, read at call time): cold batch-1 ring prefill on Wormhole."""
+        if os.environ.get("LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT", "0") != "1":
+            return False
+        ring = self.mesh_device.shape[1]
+        return (
+            self.use_prefetcher
+            and not self.is_blackhole
+            and not self.qk_norm
+            and batch_size == 1
+            and (chunk_start_idx is None or chunk_start_idx == 0)
+            and seq_len >= 2048
+            and seq_len % (ring * 32) == 0
+        )
+
+    def _prefill_qkv_seqsplit_rot(self, rot_mats, seq_len):
+        """This device's seqlen/4 rows of the prefill cos/sin tables (row block = position along cluster_axis 1).
+        Built once per (seqlen, table) and shared by every layer through tt_ccl."""
+        cache = self.tt_ccl.__dict__.setdefault("_qkv_seqsplit_rot_cache", {})
+        key = (seq_len, id(rot_mats[0]), id(rot_mats[1]))
+        if key not in cache:
+            parts = []
+            for t in rot_mats[:2]:
+                t_s = ttnn.slice(t, [0, 0, 0, 0], [1, 1, seq_len, t.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                parts.append(ttnn.mesh_partition(t_s, dim=2, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+                t_s.deallocate(True)
+            cache[key] = (parts[0], parts[1], rot_mats[0], rot_mats[1])  # keep the sources alive: ids stay unique
+        return cache[key][0], cache[key][1]
+
+    def _prefill_qkv_seqsplit_heads_rope(self, xqkv, rot_mats, seq_len):
+        """QKV all-reduce over cluster_axis 1 as a reduce-scatter on the sequence (dim 2): each device of a mesh row
+        keeps seqlen/4 rows of all 1280 QKV columns, splits heads, casts and rotates only those rows, then gathers
+        Q, K and V back to the full sequence (dim 2). Same CCL bytes as the RS+AG on dim 3, 1/4 of the eltwise work.
+        Returns full-length bf8 (Q, K, V) heads."""
+        xqkv_local = self.tt_ccl.prefill_seq_reduce_scatter(xqkv, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(xqkv)
+        q_pre, k_pre, v_loc = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv_local,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(xqkv_local)
+        cos_loc, sin_loc = self._prefill_qkv_seqsplit_rot(rot_mats, seq_len)
+        out = []
+        for t_pre in (q_pre, k_pre):
+            if t_pre.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+                t16 = ttnn.typecast(t_pre, dtype=ttnn.bfloat16)
+                ttnn.deallocate(t_pre)
+            else:
+                t16 = t_pre
+            t_rot = ttnn.experimental.rotary_embedding_llama(
+                t16, cos_loc, sin_loc, self.transformation_mats["prefill"], is_decode_mode=False
+            )
+            ttnn.deallocate(t16)
+            t8 = ttnn.typecast(t_rot, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(t_rot)
+            out.append(t8)
+        if v_loc.dtype != ttnn.bfloat8_b:
+            v8 = ttnn.typecast(v_loc, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(v_loc)
+            v_loc = v8
+        out.append(v_loc)
+        full = []
+        for t in out:
+            full.append(self.tt_ccl.prefill_seq_all_gather(t, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            ttnn.deallocate(t)
+        return full[0], full[1], full[2]
+
     def forward_prefill(
         self,
         x_11SH,
@@ -1144,92 +1214,105 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(x_11SH)
 
-        xqkv_fused = self.tt_ccl.line_all_reduce(
-            xqkv,
-            cluster_axis=1,
-            num_links=prefill_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="QKV",
-            batch_size=batch_size,
-        )
-        ttnn.deallocate(xqkv)
-
-        if seq_len > 2048:
-            xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
-
-        if batch_size > 1:
-            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
-
-        # split qkv into heads
-        (
-            q_heads_1QSD_pre_rot,
-            k_heads_1KSD_pre_rot,
-            v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv_fused,
-            num_heads=self.n_local_heads,
-            num_kv_heads=self.n_local_kv_heads,
-            transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # ttnn.deallocate(xqkv_fused)
-
-        ###
-        # Rotary embeddings
-        ###
-
-        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
-            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-            ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
-
-        if self.qk_norm:
-            q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
-
-        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-        )
-        ttnn.deallocate(q_heads_1QSD_pre_rot)
-
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
-            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
-            ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
-
-        if self.qk_norm:
-            k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
-
-        # k_heads_1KSD = k_heads_1KSD_pre_rot
-        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-        )
-        ttnn.deallocate(k_heads_1KSD_pre_rot)
-
-        # Fill KV-Cache
-        if kv_cache:
-            keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
+        # LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT: heads, RoPE and the dtype casts on seqlen/4 rows per device.
+        qkv_seqsplit = self._prefill_qkv_seqsplit_enabled(seq_len, batch_size, chunk_start_idx)
+        if qkv_seqsplit:
+            q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b = self._prefill_qkv_seqsplit_heads_rope(
+                xqkv, rot_mats, seq_len
+            )
+            k_fill = k_heads_1KSD_8b
+            v_fill = v_heads_1VSD_8b
+            if kv_cache:
+                keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
+            else:
+                keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
         else:
-            keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
+            xqkv_fused = self.tt_ccl.line_all_reduce(
+                xqkv,
+                cluster_axis=1,
+                num_links=prefill_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="QKV",
+                batch_size=batch_size,
+            )
+            ttnn.deallocate(xqkv)
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(k_heads_1KSD)
+            if seq_len > 2048:
+                xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        k_fill = k_heads_1KSD_8b
+            if batch_size > 1:
+                xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+            # split qkv into heads
+            (
+                q_heads_1QSD_pre_rot,
+                k_heads_1KSD_pre_rot,
+                v_heads_1VSD,
+            ) = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_fused,
+                num_heads=self.n_local_heads,
+                num_kv_heads=self.n_local_kv_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        ttnn.deallocate(v_heads_1VSD)
+            # ttnn.deallocate(xqkv_fused)
 
-        v_fill = v_heads_1VSD_8b
+            ###
+            # Rotary embeddings
+            ###
+
+            if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+                q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
+                q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+                ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
+
+            if self.qk_norm:
+                q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+
+            q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
+                q_heads_1QSD_pre_rot,
+                rot_mats[0],
+                rot_mats[1],
+                self.transformation_mats["prefill"],
+                is_decode_mode=False,
+            )
+            ttnn.deallocate(q_heads_1QSD_pre_rot)
+
+            if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+                k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
+                k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+                ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
+
+            if self.qk_norm:
+                k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+
+            # k_heads_1KSD = k_heads_1KSD_pre_rot
+            k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
+                k_heads_1KSD_pre_rot,
+                rot_mats[0],
+                rot_mats[1],
+                self.transformation_mats["prefill"],
+                is_decode_mode=False,
+            )
+            ttnn.deallocate(k_heads_1KSD_pre_rot)
+
+            # Fill KV-Cache
+            if kv_cache:
+                keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
+            else:
+                keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
+
+            k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(k_heads_1KSD)
+
+            k_fill = k_heads_1KSD_8b
+
+            v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+
+            ttnn.deallocate(v_heads_1VSD)
+
+            v_fill = v_heads_1VSD_8b
 
         if batch_size > 1:
             k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
@@ -1262,8 +1345,9 @@ class TtLlamaAttention(LightweightModule):
             )
 
         # SDPA
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
+        if not qkv_seqsplit:
+            q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(q_heads_1QSD)
 
         # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
         # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
