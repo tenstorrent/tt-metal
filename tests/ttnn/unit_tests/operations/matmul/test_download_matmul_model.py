@@ -8,6 +8,7 @@ registry: no device, no network."""
 import hashlib
 import io
 import json
+import os
 import re
 import stat
 import urllib.error
@@ -58,7 +59,9 @@ def test_downloads_the_pinned_blob(registry, tmp_path):
     path = tmp_path / "models" / "model.blob"
     assert dl.download(path) == path
     assert path.read_bytes() == BLOB
-    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+    umask = os.umask(0)
+    os.umask(umask)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o666 & ~umask
     assert list(path.parent.iterdir()) == [path]
     # Once there, it isn't downloaded again; a damaged file is
     registry["urls"].clear()

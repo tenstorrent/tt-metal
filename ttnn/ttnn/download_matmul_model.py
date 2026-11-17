@@ -91,7 +91,6 @@ def download(path=None):
                 out.write(chunk)
         if digest.hexdigest() != sha256:
             raise ValueError(f"downloaded blob is sha256:{digest.hexdigest()}, expected sha256:{sha256}")
-        os.chmod(partial, 0o644)
         os.replace(partial, path)
     finally:
         partial.unlink(missing_ok=True)
