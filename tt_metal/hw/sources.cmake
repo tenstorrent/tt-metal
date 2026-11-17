@@ -184,6 +184,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/semaphore_compute_impl.h
     inc/api/compute/experimental/sinkhorn.h
     inc/api/compute/experimental/softmax_k.h
+    inc/api/compute/experimental/srca_forced_exp.h
     inc/api/compute/experimental/sum_reduce_scalar.h
     inc/api/compute/experimental/tile_move_copy_custom.h
     inc/api/compute/experimental/topk_xl.h
