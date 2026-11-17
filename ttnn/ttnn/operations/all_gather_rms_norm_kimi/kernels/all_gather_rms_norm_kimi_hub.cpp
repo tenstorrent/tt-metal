@@ -20,6 +20,8 @@ constexpr uint32_t slot_bytes = get_compile_time_arg_val(1);
 constexpr uint32_t sem_own_partials = get_compile_time_arg_val(2);
 constexpr uint32_t sem_stats_tx = get_compile_time_arg_val(3);
 constexpr uint32_t sem_stats_ready = get_compile_time_arg_val(4);
+constexpr uint32_t sem_gamma_go = get_compile_time_arg_val(5);
+constexpr bool gamma_after_own = get_compile_time_arg_val(6) != 0;
 
 void kernel_main() {
     size_t a = 0;
@@ -33,6 +35,7 @@ void kernel_main() {
     const uint32_t sfwd_addr = get_arg_val<uint32_t>(a++);
     const uint32_t sbwd_addr = get_arg_val<uint32_t>(a++);
     const uint32_t n_rects = get_arg_val<uint32_t>(a++);  // then x0, y0, x1, y1, n_cores (virtual, NoC0 order)
+    const size_t rects_idx = a;
 
     volatile tt_l1_ptr uint32_t* own_partials =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_own_partials));
@@ -55,6 +58,22 @@ void kernel_main() {
     if (kb > 0) {
         hand_over(p, bwd_xy);
     }
+    if constexpr (gamma_after_own) {  // every own x is loaded: the remote cores may read gamma now
+        const uint32_t go_addr = get_semaphore(sem_gamma_go);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_addr) = 1;
+        for (uint32_t r = 0; r < n_rects; ++r) {
+            const size_t ri = rects_idx + 5 * r;
+            noc_semaphore_set_multicast(
+                go_addr,
+                get_noc_multicast_addr(
+                    get_arg_val<uint32_t>(ri),
+                    get_arg_val<uint32_t>(ri + 1),
+                    get_arg_val<uint32_t>(ri + 2),
+                    get_arg_val<uint32_t>(ri + 3),
+                    go_addr),
+                get_arg_val<uint32_t>(ri + 4));
+        }
+    }
     for (uint32_t i = 1; i < kf; ++i) {  // the forward port relays P_{p-1}, ..., P_{p-kf+1}
         noc_semaphore_wait_min(sfwd, i);
         hand_over((p + G - i) % G, fwd_xy);
@@ -69,7 +88,6 @@ void kernel_main() {
     // ---- broadcast_stats ----
     const uint32_t ready_addr = get_semaphore(sem_stats_ready);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr) = 1;
-    const size_t rects_idx = a;
     for (uint32_t r = 0; r < n_rects; ++r) {
         const uint32_t x0 = get_arg_val<uint32_t>(rects_idx + 5 * r + 0);
         const uint32_t y0 = get_arg_val<uint32_t>(rects_idx + 5 * r + 1);

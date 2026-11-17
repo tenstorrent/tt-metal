@@ -46,6 +46,9 @@ PORT_BATCH_CHUNKS = 2  # chunks per port batch (cb_port_chunks holds 2 batches);
 PORT_BATCH_CHUNKS_MAX = 8  # packet-header pool cap
 INC_EVERY = 8  # fused arrival increment every this many chunks (+ every entry end)  [TRANSPORT]
 OUT_DEPTH_CHUNKS = 2  # cb_out depth in chunks
+# Remote-slice cores hold their gamma DRAM reads until the hub has every own partial (one multicast semaphore set),
+# so the 960 small gamma reads stop contending with the own x loads at the head of the stats chain. [OVERLAP]
+GAMMA_AFTER_OWN = True
 STATS_SCRATCH_CAP_BYTES = 64 * 1024
 STATS_ROW_BYTES = 32 * 4  # 32 fp32 row sums per tile row (kernels/..._common.hpp mirrors it)
 
@@ -73,7 +76,8 @@ SEM_RELAY_READY = 2  # port: relay blocks landed (one ordered sender: the matchi
 SEM_LANDED = 3  # compute: landed chunks of this core's block (one ordered sender: one receiver)
 SEM_STATS_READY = 4  # compute: hub multicast of the stats landed
 SEM_OWN_PARTIALS = 5  # hub: own partial rows exported (fan-in, waited for its total)
-NUM_LOCAL_SEMS = 6
+SEM_GAMMA_GO = 6  # compute: the hub has every own partial, remote cores may read gamma (GAMMA_AFTER_OWN)
+NUM_LOCAL_SEMS = 7
 
 
 def _crs(cores):
@@ -483,6 +487,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 PORT_BATCH_CHUNKS,
                 INC_EVERY,
                 OUT_DEPTH_CHUNKS,
+                GAMMA_AFTER_OWN,
                 gamma_page,
             )
             program.semaphores = [
@@ -530,6 +535,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 SEM_LANDED,
                 tile_bytes,
                 gamma_page,
+                SEM_GAMMA_GO,
+                int(GAMMA_AFTER_OWN),
             ]
             reader_ct += list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
             reader_ct += list(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
@@ -705,7 +712,15 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 ttnn.KernelDescriptor(
                     kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_kimi_hub.cpp"),
                     core_ranges=hub_crs,
-                    compile_time_args=[G, geo.slot_bytes, SEM_OWN_PARTIALS, SEM_STATS_TX, SEM_STATS_READY],
+                    compile_time_args=[
+                        G,
+                        geo.slot_bytes,
+                        SEM_OWN_PARTIALS,
+                        SEM_STATS_TX,
+                        SEM_STATS_READY,
+                        SEM_GAMMA_GO,
+                        int(GAMMA_AFTER_OWN),
+                    ],
                     runtime_args=hub_rt,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0

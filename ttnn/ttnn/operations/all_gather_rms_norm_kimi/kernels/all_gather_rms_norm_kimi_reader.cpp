@@ -31,7 +31,9 @@ constexpr uint32_t sem_stats_ready = get_compile_time_arg_val(C + 5);
 constexpr uint32_t sem_landed = get_compile_time_arg_val(C + 6);
 constexpr uint32_t tile_bytes = get_compile_time_arg_val(C + 7);
 constexpr uint32_t gamma_page = get_compile_time_arg_val(C + 8);
-constexpr auto in_args = TensorAccessorArgs<C + 9>();
+constexpr uint32_t sem_gamma_go = get_compile_time_arg_val(C + 9);
+constexpr bool gamma_after_own = get_compile_time_arg_val(C + 10) != 0;
+constexpr auto in_args = TensorAccessorArgs<C + 11>();
 constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
 void kernel_main() {
@@ -76,6 +78,11 @@ void kernel_main() {
 
     // ---- prepare_gamma_block: stick n -> row 0 of tile j (face 0 row 0 = elements 0..15, face 1 row 0 = 16..31) ----
     {
+        if (gamma_after_own && !own) {
+            // keep DRAM quiet for the own x loads (the head of the stats chain); gamma is needed only after the
+            // stats round, so the remote cores read it once the hub has every own partial
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_gamma_go)), 1);
+        }
         const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_page);
         cb_reserve_back(cb_gamma, block_w);
         const uint32_t base = get_write_ptr(cb_gamma);
