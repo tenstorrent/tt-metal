@@ -114,6 +114,7 @@ struct StreamPlacementInputs {
     std::array<uint32_t, builder_config::MAX_NUM_VCS> max_receiver_counts;  // FabricBuilderContext
     bool vc2_present;           // IntermeshVCConfig::requires_vc2 -- config, not per router
     bool tensix_relay_present;  // UDM mode -- config, not per router
+    bool vc2_forwards = false;  // inter-domain: VC2's forwarding senders and downstreams
 };
 
 // What one fabric configuration needs, derived from the placement inputs (the fabric's family
@@ -140,6 +141,7 @@ struct StreamRequirements {
     // re-derive the upstream exclusivity.
     bool vc2_present = false;
     bool tensix_relay_present = false;
+    bool vc2_forwards = false;
 
     // The credit plan this need was derived from, carried so the assignment stays one object.
     CreditTransportPlan plan;
@@ -182,6 +184,7 @@ private:
     std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_flat_base_{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_counts_{};
     bool vc2_present_ = false;
+    bool vc2_forwards_ = false;
     bool tensix_relay_present_ = false;
     CreditTransportPlan plan_;
 

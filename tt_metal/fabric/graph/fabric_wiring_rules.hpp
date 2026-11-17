@@ -39,6 +39,11 @@ struct WiringOptions {
     std::set<MeshId> wrap_around_meshes;
 };
 
+// What the stock helpers see for an edge: a perimeter port is wired like a cardinal one facing the same way.
+inline EdgeCapability stock_capability(EdgeCapability c) {
+    return c == EdgeCapability::INTERDOMAIN ? EdgeCapability::INTRAMESH_CARDINAL : c;
+}
+
 // Same routers, VCs and turns as the stock builder: the turn sets come from turn_set_for_router.
 std::unique_ptr<WiringRules> stock_wiring_rules(const std::vector<Port>& ports, const WiringOptions& options);
 

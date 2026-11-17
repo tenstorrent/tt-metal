@@ -117,7 +117,12 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
     }
     const auto& control_plane = env_impl.get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
-    const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+    auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+    for (const auto& port : control_plane.get_fabric_context().get_builder_context().get_inter_domain_ports()) {
+        if (port.node == fabric_node_id && port.has_router) {
+            router_chans_and_direction.insert({port.eth_chan, eth_chan_directions::COUNT});
+        }
+    }
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
@@ -140,6 +145,11 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
             router_config.sender_channels_bookkeeping_start,
             sender_bookkeeping_zeros,
             CoreType::ETH);
+        if (router_config.inter_domain_ctrl_address != 0) {
+            std::vector<uint32_t> ctrl_zeros(sizeof(InterDomainRouterControl) / sizeof(uint32_t), 0);
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device, router_logical_core, router_config.inter_domain_ctrl_address, ctrl_zeros, CoreType::ETH);
+        }
     }
 }
 

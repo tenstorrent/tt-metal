@@ -926,5 +926,103 @@ TEST(FabricGraphPerimeter, NoLinksNoPorts) {
     EXPECT_TRUE(perimeter("single_bh_galaxy_mesh_graph_descriptor.textproto", kGalaxy, {}).empty());
 }
 
+// ---------------------------------------------------------------- inter-domain lowering
+
+const auto kP300 = tt::tt_metal::ClusterType::P300;
+
+// a P300's 1x2 mesh with each chip's north links leaving the domain (QuietBox 2 split into two domains)
+Lowered lower_with_perimeter(const std::vector<UnusedLink>& links) {
+    MeshGraph mesh_graph(kP300, metal_mgd("p300_mesh_graph_descriptor.textproto").string());
+    auto ports = ports_from_mesh_graph(mesh_graph, {});
+    const auto open = ports_from_perimeter(perimeter_ports(links, ports, mesh_graph, Topology::Mesh));
+    ports.insert(ports.end(), open.begin(), open.end());
+    auto vc_config = vc2_only();
+    vc_config.vc2_forwards = true;  // as inter-domain sets it
+    const WiringOptions options{.topology = Topology::Mesh, .vc_config = vc_config};
+    std::shared_ptr<WiringRules> rules = stock_wiring_rules(ports, options);
+    auto graph = lower_to_logical(ports, *rules);
+    validate(graph, *rules, ValidationLimits{});
+    return Lowered{std::move(ports), std::move(graph), std::move(rules)};
+}
+
+const std::vector<UnusedLink> kQuietBoxSplit = {unused(0, 8, 7), unused(0, 9, 7), unused(1, 8, 9), unused(1, 9, 9)};
+
+// a perimeter router: dynamic peer, every sender on a dynamic edge, a VC2 receiver, every other local router feeding
+// its VC0, and nothing fed from its VC0 receiver
+TEST(FabricGraphInterDomain, PerimeterRouterShape) {
+    const auto [ports, g, rules] = lower_with_perimeter(kQuietBoxSplit);
+    for (uint32_t chip = 0; chip < 2; ++chip) {
+        for (uint32_t plane = 0; plane < 2; ++plane) {
+            const std::string id = "m0.c" + std::to_string(chip) + ".N.p" + std::to_string(plane);
+            const auto r = g.find_router(id);
+            ASSERT_TRUE(r.has_value()) << id;
+            const auto& router = g.routers[*r];
+            EXPECT_FALSE(router.peer.has_value());
+            EXPECT_TRUE(router.capabilities.dynamic_connect);
+            EXPECT_TRUE(router.capabilities.rt_lookup);
+            EXPECT_TRUE(g.receiver(*r, 2).has_value()) << id;
+            for (const auto& e : g.edges) {
+                if (g.channels[e.from].router == *r && e.transport != Transport::Noc) {
+                    EXPECT_EQ(e.transport, Transport::Dynamic) << id;
+                }
+            }
+            const std::string side = chip == 0 ? "E" : "W";
+            const std::string mesh_router = "m0.c" + std::to_string(chip) + "." + side + ".p" + std::to_string(plane);
+            // leaving on VC0: the in-domain router turns into it, even off the X axis; nothing comes in on VC0
+            EXPECT_EQ(forwarding(g, id), (Names{side}));
+            EXPECT_TRUE(forwarding(g, mesh_router).empty());
+            // coming in on VC2: it lands and feeds the in-domain router; nothing leaves on VC2
+            EXPECT_EQ(forwarding(g, mesh_router, 2), (Names{"N"}));
+            EXPECT_TRUE(forwarding(g, id, 2).empty());
+        }
+    }
+    // the mesh link still links
+    EXPECT_TRUE(g.routers[*g.find_router("m0.c0.E.p0")].peer.has_value());
+}
+
+// a dead perimeter link is recorded but gets no router
+TEST(FabricGraphInterDomain, DeadLinkNoRouter) {
+    const auto [ports, g, rules] =
+        lower_with_perimeter({unused(0, 8, 7), unused(0, 9, 7, /*in_domain=*/false, /*trained=*/false)});
+    EXPECT_TRUE(g.find_router("m0.c0.N.p0").has_value());
+    EXPECT_FALSE(g.find_router("m0.c0.N.p1").has_value());
+}
+
+// dynamic edges belong to perimeter routers only
+TEST(FabricGraphInterDomain, ValidationRejectsDynamicEdgeOffThePerimeter) {
+    auto [ports, g, rules] = lower_with_perimeter(kQuietBoxSplit);
+    EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{}).empty());
+    const auto mesh_router = *g.find_router("m0.c0.E.p0");
+    for (auto& e : g.edges) {
+        if (e.transport == Transport::Eth && g.channels[e.from].router == mesh_router) {
+            e.transport = Transport::Dynamic;
+            break;
+        }
+    }
+    EXPECT_FALSE(find_problems(g, *rules, ValidationLimits{}).empty());
+}
+
+// no perimeter ports: the graph is the stock one
+TEST(FabricGraphInterDomain, EmptyPerimeterIsANoOp) {
+    MeshGraph mesh_graph(kP300, metal_mgd("p300_mesh_graph_descriptor.textproto").string());
+    auto vc_config = vc2_only();
+    vc_config.vc2_forwards = true;
+    const auto with = lower_with_perimeter({});
+    const auto without =
+        lower_mesh_graph(mesh_graph, WiringOptions{.topology = Topology::Mesh, .vc_config = vc_config});
+    ASSERT_EQ(with.graph.routers.size(), without.graph.routers.size());
+    EXPECT_EQ(with.graph.channels.size(), without.graph.channels.size());
+    EXPECT_EQ(with.graph.edges.size(), without.graph.edges.size());
+}
+
+// the channel graph gives a perimeter router stock-indexed slots: worker 0, forwarding by arrival side
+TEST(FabricGraphInterDomain, ChannelIndexing) {
+    const auto cg = lower_to_channels(lower_with_perimeter(kQuietBoxSplit).graph, Topology::Mesh);
+    EXPECT_EQ(index_of(cg, "m0.c0.N.p0", 0, "worker"), 0u);
+    EXPECT_NE(index_of(cg, "m0.c0.N.p0", 0, "E"), 0u);
+    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "worker"), 0u);  // VC2 forwards after its worker, as VC0 does
+    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "N"), 2u);       // 1 + N's compact index on an E-facing router (W, N, S)
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric::graph

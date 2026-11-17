@@ -22,7 +22,7 @@ public:
     StockWiringRules(const std::vector<Port>& ports, const WiringOptions& options) :
         options_(options), is_2d_(is_2D_topology(options.topology)) {
         for (const auto& p : ports) {
-            chips_[p.node].at(*p.direction) = p.capability;
+            chips_[p.node].at(*p.direction) = stock_capability(p.capability);
         }
     }
 
@@ -43,8 +43,22 @@ public:
     bool has_worker(const Port&, uint32_t vc) const override { return vc != 1; }
 
     bool wires(const Port& in, const Port& out, uint32_t vc) const override {
-        if (in.direction == out.direction || vc == 2 || options_.topology == Topology::NeighborExchange) {
+        const bool vc2_forwards = vc == 2 && options_.vc_config.vc2_forwards;
+        if (in.direction == out.direction || (vc == 2 && !vc2_forwards) ||
+            options_.topology == Topology::NeighborExchange) {
             return false;
+        }
+        // Inter-domain, like an intermesh boundary: traffic leaves on VC0 (every other router feeds a perimeter
+        // router's VC0) and comes in on VC2 (a perimeter router's VC2 lands and feeds any direction). Nothing comes in
+        // on VC0, nothing leaves on VC2, and domains don't route through.
+        const bool from_perimeter = in.capability == EdgeCapability::INTERDOMAIN;
+        const bool to_perimeter = out.capability == EdgeCapability::INTERDOMAIN;
+        if (from_perimeter || to_perimeter) {
+            return vc != 1 && from_perimeter != to_perimeter && (vc == 0 ? to_perimeter : from_perimeter);
+        }
+        // in the domain VC2 forwards as VC0 does
+        if (vc2_forwards) {
+            vc = 0;
         }
         const auto turns = turn_set_for_router(
             options_.topology, *in.direction, chips_.at(in.node), axis_of(in.node.mesh_id), &options_.vc_config);

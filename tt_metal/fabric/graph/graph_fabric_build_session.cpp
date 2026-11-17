@@ -93,7 +93,7 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
 
     // logical: topology and turns
     const auto mgd_ports = ports_from_mesh_graph(control_plane.get_mesh_graph(), express_axis);
-    const auto ports = with_live_planes(mgd_ports, control_plane);
+    auto ports = with_live_planes(mgd_ports, control_plane);
     if (inter_domain) {
         // this host's perimeter; other hosts add theirs
         perimeter_ = perimeter_ports(
@@ -107,6 +107,27 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
         const auto down =
             std::count_if(perimeter_.begin(), perimeter_.end(), [](const auto& p) { return !p.link_trained; });
         log_info(tt::LogFabric, "fabric graph: {} perimeter ports, {} untrained", perimeter_.size(), down);
+        for (const auto& p : perimeter_) {
+            if (*p.direction == RoutingDirection::Z) {
+                log_warning(
+                    tt::LogFabric, "fabric graph: no inter-domain router on Z yet: {} chan {}", p.node, p.eth_chan);
+            }
+        }
+        const auto open_ports = ports_from_perimeter(perimeter_);
+        ports.insert(ports.end(), open_ports.begin(), open_ports.end());
+        std::vector<experimental::InterDomainPort> api_ports;
+        for (const auto& p : perimeter_) {
+            api_ports.push_back(experimental::InterDomainPort{
+                .node = p.node,
+                .eth_chan = p.eth_chan,
+                .direction = *p.direction,
+                .plane = p.plane,
+                .link_trained = p.link_trained,
+                .has_router = p.link_trained && *p.direction != RoutingDirection::Z,
+                .peer_asic = p.peer_asic,
+                .peer_chan = p.peer_chan});
+        }
+        fabric_context.get_builder_context().set_inter_domain_ports(std::move(api_ports));
     }
     const WiringOptions options{
         .topology = topology,
@@ -133,8 +154,15 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
             return FabricStaticSizedChannelsAllocator(reference, sender_counts).get_layout();
         },
         [local = local_meshes(control_plane)](const FabricNodeId& node) { return local.contains(node.mesh_id); });
-    graph_->eth_chans = bind_eth_channels(graph_->logical, [&control_plane](const FabricNodeId& node, RoutingDirection d) {
-        return control_plane.get_active_fabric_eth_routing_planes_in_direction(node, d);
+    // perimeter routers sit on the perimeter's links, the rest on the control plane's
+    std::map<std::pair<FabricNodeId, RoutingDirection>, std::vector<chan_id_t>> perimeter_chans;
+    for (const auto& p : perimeter_) {
+        perimeter_chans[{p.node, *p.direction}].push_back(p.eth_chan);
+    }
+    graph_->eth_chans = bind_eth_channels(graph_->logical, [&](const FabricNodeId& node, RoutingDirection d) {
+        const auto it = perimeter_chans.find({node, d});
+        return it != perimeter_chans.end() ? it->second
+                                           : control_plane.get_active_fabric_eth_routing_planes_in_direction(node, d);
     });
     check_link_peers(*graph_, control_plane);
     graph_->links = legacy_link_pairings(graph_->logical, topology, wrap_around_meshes);

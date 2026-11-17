@@ -44,6 +44,8 @@ struct PerimeterPort {
     PortDirection direction{RoutingDirection::N};
     uint32_t plane = 0;
     bool link_trained = true;  // false: the link was down at build, connect on it will fail
+    uint64_t peer_asic = 0;    // the chip and chan across the link, as discovery saw them
+    chan_id_t peer_chan = 0;
 };
 
 using RouterIndex = uint32_t;
