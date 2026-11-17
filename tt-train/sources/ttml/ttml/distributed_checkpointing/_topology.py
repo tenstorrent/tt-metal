@@ -119,6 +119,13 @@ def global_shape(label: Label, local_shape: Sequence[int]) -> tuple[int, ...]:
     return tuple(int(n) * label.shard_count(d) for d, n in enumerate(local_shape))
 
 
+def tp_split(label: Label, fsdp_axis: int | None, rank: int) -> tuple[int, ...]:
+    """Per dim of a rank-``rank`` tensor, how many shards the mesh axes other than ``fsdp_axis`` split it into: the TP
+    split, which decides a fused weight's row order. FSDP splits rows that are already in canonical order, so it is
+    left out."""
+    return tuple(prod(label.dist_shape[a] for a in label.shard_axes(d) if a != fsdp_axis) for d in range(rank))
+
+
 @dataclass(frozen=True)
 class Chunk:
     """One device's box of a tensor's global array."""

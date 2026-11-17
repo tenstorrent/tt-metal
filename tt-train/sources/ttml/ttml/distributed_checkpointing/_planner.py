@@ -68,6 +68,7 @@ class TensorInfo:
     live_keys: tuple[str, ...] = ()
     param_ref: str | None = None
     state_path: tuple[str, ...] = ()
+    tp_split: tuple[int, ...] = field(kw_only=True)  # recorded in the index entry; see ``Entry.tp_split``
 
     @property
     def itemsize(self) -> int:
@@ -146,6 +147,7 @@ class SavePlan:
                 chunks=chunks,
                 param_ref=info.param_ref,
                 state_path=info.state_path,
+                tp_split=info.tp_split,
             )
         return entries
 
