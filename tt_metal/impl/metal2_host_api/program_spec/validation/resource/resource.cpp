@@ -13,6 +13,7 @@ void ValidateResourceBindings(const KernelSpec& kernel, const ValidationContext&
     ValidateTensorBindings(kernel);
     ValidatePrefetcherPipeBindings(kernel);
     ValidateGlobalSemaphoreBindings(kernel);
+    ValidateFabricConnectionBindings(kernel);
 }
 
 void ValidateResourceSpecs(
@@ -40,6 +41,9 @@ void ValidateResourceSpecs(
     for (const auto& parameter : spec.advanced_options.global_semaphore_parameters) {
         ValidateGlobalSemaphoreParameter(parameter);
     }
+    for (const auto& connection : spec.advanced_options.fabric_connections) {
+        ValidateFabricConnectionSpec(connection);
+    }
 }
 
 void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
@@ -56,6 +60,7 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     ValidatePrefetcherPipesUsed(ctx);
     experimental::ValidateSRAMArenaParametersUsed(ctx);
     ValidateGlobalSemaphoreParametersUsed(ctx);
+    ValidateFabricConnectionUsage(ctx);
 }
 
 }  // namespace tt::tt_metal

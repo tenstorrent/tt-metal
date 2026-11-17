@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <array>
 #include <unordered_map>
 #include <vector>
 
@@ -204,6 +205,20 @@ struct ScratchpadBindingHandle {
     std::optional<SRAMArenaSource> allocation_override;
 };
 
+// Metal 2.0: per-kernel resolved fabric connection binding (KernelAdvancedOptions::FabricConnectionBinding).
+// Emitted as a constexpr token in the `fabric::` namespace. On each node of the kernel, the binding owns
+// kNumRtaWords RTA words: [connected (0 or 1), router channel, teardown semaphore id, buffer index semaphore id].
+struct FabricConnectionBindingHandle {
+    static constexpr uint32_t kNumRtaWords = 4;
+    // The args after the "connected" word: [router channel, teardown semaphore id, buffer index semaphore id].
+    using ConnectionArgs = std::array<uint32_t, kNumRtaWords - 1>;
+
+    std::string accessor_name;  // user-facing identifier (kernel symbol in `fabric::`)
+    uint32_t rta_word = 0;      // word index of the binding's first RTA word, on every node
+    // The connection args of each node that has a connection. Other nodes get zeros.
+    std::unordered_map<CoreCoord, ConnectionArgs> connection_args_by_node;
+};
+
 // Metal 2.0: per-kernel resolved GlobalSemaphore binding (KernelAdvancedOptions::GlobalSemaphoreBinding).
 // Emitted as a constexpr token in the `global_sem::` namespace.
 struct GlobalSemaphoreBindingHandle {
@@ -388,6 +403,16 @@ public:
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
     }
+    // Fabric connection binding handles are set post-construction (before compile: they are part of
+    // the kernel cache key and of kernel_bindings_generated.h).
+    void process_fabric_connection_binding_handles(
+        const std::function<void(const std::string& accessor_name, uint32_t rta_word)>&) const override;
+    const std::vector<FabricConnectionBindingHandle>& fabric_connection_binding_handles() const {
+        return fabric_connection_binding_handles_;
+    }
+    void set_fabric_connection_binding_handles(std::vector<FabricConnectionBindingHandle> handles) {
+        fabric_connection_binding_handles_ = std::move(handles);
+    }
     // GlobalSemaphore binding handles are set post-construction (before compile: they are part of
     // the kernel cache key and of kernel_bindings_generated.h).
     // Non-const accessor lets run-arg binding fill each handle's bound_address.
@@ -547,6 +572,8 @@ protected:
     std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
     // Metal 2.0: GlobalSemaphore bindings (set post-construction, like scratchpads; run args fill bound_address).
     std::vector<GlobalSemaphoreBindingHandle> global_semaphore_binding_handles_;
+    // Metal 2.0: fabric connection bindings (set post-construction; immutable connection args per node).
+    std::vector<FabricConnectionBindingHandle> fabric_connection_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
     // Metal 2.0: array arguments (set post-construction, like scratchpads).

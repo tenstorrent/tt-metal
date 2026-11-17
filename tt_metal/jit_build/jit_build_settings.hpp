@@ -142,15 +142,18 @@ struct KernelCrtaLayout {
 };
 
 // Metal 2.0: layout of each node's runtime-args (RTA) buffer, the per-node counterpart of KernelCrtaLayout:
-//   [ user-named RTAs | per-node TensorBinding section | vararg RTAs ]
+//   [ user-named RTAs | per-node TensorBinding section | fabric connection section | vararg RTAs ]
 // Section 2 holds one base-address word per per-node tensor binding.
+// Section 3 holds a fixed-size block of connection args per fabric connection binding.
 struct KernelRtaLayout {
     // Section 1 size, in words. The user-named RTAs: one word per scalar, then the RTA arrays
     // (see KernelArrayArgs), in declaration order.
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the number of per-node tensor bindings.
     uint32_t binding_section_words = 0;
-    // Start offset of section 3 (varargs), in words.
+    // Section 3 size, in words. Equals the number of fabric connection bindings times the block size.
+    uint32_t fabric_connection_section_words = 0;
+    // Start offset of section 4 (varargs), in words.
     uint32_t vararg_section_offset = 0;
 };
 
@@ -292,6 +295,12 @@ public:
                                                         uint32_t size_bytes,
                                                         uint32_t addr_crta_word,
                                                         const std::optional<LLKMetadata>&)>&) const {}
+
+    // Fabric connection binding callback (Metal 2.0):
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `fabric::` namespace
+    //  - rta_word: word index, within each node's RTA buffer, of the first word of the binding's connection args
+    virtual void process_fabric_connection_binding_handles(
+        const std::function<void(const std::string& accessor_name, uint32_t rta_word)>&) const {}
 
     // GlobalSemaphore binding callback (Metal 2.0):
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `global_sem::` namespace

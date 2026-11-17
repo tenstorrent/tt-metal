@@ -78,6 +78,11 @@ void ValidateSRAMArenaAllocation(
     uint32_t l1_alignment);
 }  // namespace experimental
 
+// fabric_connection.cpp
+void ValidateFabricConnectionSpec(const experimental::FabricConnectionSpec& connection);
+void ValidateFabricConnectionBindings(const KernelSpec& kernel);
+void ValidateFabricConnectionUsage(const ValidationContext& ctx);
+
 // global_semaphore.cpp
 void ValidateGlobalSemaphoreParameter(const experimental::GlobalSemaphoreParameter& parameter);
 void ValidateGlobalSemaphoreBindings(const KernelSpec& kernel);

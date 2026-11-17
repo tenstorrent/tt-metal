@@ -391,6 +391,15 @@ LoweredKernel LowerKernel(
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
     ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
 
+    // Resolve fabric connection bindings: their per-node RTA section follows the per-node TensorBinding
+    // section and precedes the RTA varargs.
+    FabricConnectionBindingsForKernel fc_bindings = ResolveFabricConnectionBindingsForKernel(
+        kernel_spec,
+        resources.fabric_connections,
+        /*fabric_connection_base_rta_word=*/ta_bindings.rta_layout.vararg_section_offset);
+    ta_bindings.rta_layout.fabric_connection_section_words = fc_bindings.section_words;
+    ta_bindings.rta_layout.vararg_section_offset += fc_bindings.section_words;
+
     // Resolve GlobalSemaphore bindings: their section follows the scratchpad section and precedes varargs.
     GlobalSemaphoreBindingsForKernel gs_bindings = ResolveGlobalSemaphoreBindingsForKernel(
         kernel_spec, /*global_semaphore_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
@@ -493,6 +502,9 @@ LoweredKernel LowerKernel(
     // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
     // or SRAMArena argument binding will later fill each handle's allocated_address.
     kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
+
+    // Attach the fabric connection bindings (part of the kernel cache key). Run args write their connection args.
+    kernel->set_fabric_connection_binding_handles(std::move(fc_bindings.handles));
 
     // Attach the GlobalSemaphore bindings (part of the kernel cache key). Run args fill each handle's bound_address.
     kernel->set_global_semaphore_binding_handles(std::move(gs_bindings.handles));

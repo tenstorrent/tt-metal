@@ -953,6 +953,23 @@ void PatchPerNodeBindingRtas(
     }
 }
 
+// Write each fabric connection binding's per-node RTA words: [1, connection args...] on a node with a
+// connection, zeros elsewhere.
+// precondition: every node of the kernel has an RTA buffer that covers the fabric connection section.
+void PatchFabricConnectionRtas(Kernel& kernel) {
+    for (const auto& handle : kernel.fabric_connection_binding_handles()) {
+        for (const auto& node : kernel.logical_cores()) {
+            RuntimeArgsData& rta = kernel.runtime_args_data(node);
+            const auto args = handle.connection_args_by_node.find(node);
+            const bool connected = args != handle.connection_args_by_node.end();
+            rta[handle.rta_word] = connected ? 1u : 0u;
+            for (uint32_t i = 0; i + 1 < FabricConnectionBindingHandle::kNumRtaWords; ++i) {
+                rta[handle.rta_word + 1 + i] = connected ? args->second[i] : 0u;
+            }
+        }
+    }
+}
+
 uint32_t ResolveBorrowedDFBTensorAddress(
     const experimental::dfb::detail::DataflowBufferImpl& dfb,
     const TensorParamName& tensor_name,
@@ -1120,15 +1137,18 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
     };
 
     // Patch every per-node RTA section that the framework (not the user) fills: the per-node
-    // TensorBinding section. Shared by the main kernel_run_args loop and the binding-only second pass.
+    // TensorBinding section, then the fabric connection section. Shared by the main kernel_run_args loop
+    // and the binding-only second pass.
     auto patch_framework_rtas = [&](Kernel& kernel, const std::string& kernel_name) {
         PatchPerNodeBindingRtas(kernel, tensor_by_param, kernel_name, /*require_all=*/true);
+        PatchFabricConnectionRtas(kernel);
     };
 
     // True if the kernel has a framework-filled section in its CRTA or RTA buffers.
     auto has_framework_arg_sections = [](const Kernel& kernel) {
         return !kernel.tensor_binding_handles().empty() || !kernel.scratchpad_binding_handles().empty() ||
-               !kernel.global_semaphore_binding_handles().empty();
+               !kernel.global_semaphore_binding_handles().empty() ||
+               !kernel.fabric_connection_binding_handles().empty();
     };
 
     // Install a kernel's assembled CRTA buffer. set_common_runtime_args allocates storage but fatals

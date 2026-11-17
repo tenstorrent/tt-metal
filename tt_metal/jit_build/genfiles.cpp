@@ -321,6 +321,21 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     });
     sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
+    // Fabric connection bindings: sorted by name for a deterministic header (Kernel::compute_hash hashes
+    // them in binding order; both orders carry the same set, so the cache key is stable).
+    struct FabricConnectionEntry {
+        string name;
+        uint32_t rta_word;
+    };
+    vector<FabricConnectionEntry> fabric_connection_entries;
+    settings.process_fabric_connection_binding_handles(
+        [&fabric_connection_entries](const string& name, uint32_t rta_word) {
+            fabric_connection_entries.push_back({name, rta_word});
+        });
+    sort(fabric_connection_entries.begin(), fabric_connection_entries.end(), [](const auto& a, const auto& b) {
+        return a.name < b.name;
+    });
+
     // GlobalSemaphore bindings: sorted by name for a deterministic header (Kernel::compute_hash hashes
     // them in binding order; both orders carry the same set, so the cache key is stable).
     struct GlobalSemaphoreEntry {
@@ -379,6 +394,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         // Defines PrefetcherPipeBindingToken. Header-only and dependency-free (the token is just
         // the slot id); the kernel includes api/dataflow/prefetcher_pipe.h itself to use it.
         content << "#include \"api/dataflow/prefetcher_pipe_binding_token.h\"\n";
+    }
+
+    if (!fabric_connection_entries.empty()) {
+        // Defines FabricConnectionBindingToken. Header-only and dependency-free; the kernel includes the
+        // fabric worker adapter header itself to build a fabric sender from it.
+        content << "#include \"api/dataflow/fabric_connection_binding_token.h\"\n";
     }
 
     if (!global_semaphore_entries.empty()) {
@@ -473,6 +494,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                     << static_cast<uint32_t>(entry.prefetcher_pipe_id) << "};\n";
         }
         content << "}  // namespace pipe\n";
+    }
+
+    // Emit fabric connection bindings: one token per accessor, carrying the first RTA word of its connection args.
+    if (!fabric_connection_entries.empty()) {
+        content << "namespace fabric {\n";
+        for (const auto& entry : fabric_connection_entries) {
+            content << "constexpr FabricConnectionBindingToken " << entry.name << "{" << entry.rta_word << "u};\n";
+        }
+        content << "}  // namespace fabric\n";
     }
 
     // Emit GlobalSemaphore bindings: one token per accessor, carrying the CRTA word of the bound address.

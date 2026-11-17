@@ -218,6 +218,33 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     size_t scratchpad_base_crta_word);
 
 // ----------------------------------------------------------------------------
+// Fabric connections (fabric_connection.cpp)
+// ----------------------------------------------------------------------------
+
+// The connection args of each node of a FabricConnectionSpec that has a target.
+using FabricConnectionArgsByNode = std::unordered_map<NodeCoord, FabricConnectionBindingHandle::ConnectionArgs>;
+using FabricConnectionArgsBySpec =
+    std::unordered_map<experimental::FabricConnectionSpecName, FabricConnectionArgsByNode>;
+
+// Register fabric connections with the Program: resolve each target's fabric router, and allocate the
+// connection's two L1 cells (semaphores) on its node.
+// precondition: if the spec has fabric connections, the fabric of `mesh_device` is configured.
+FabricConnectionArgsBySpec RegisterFabricConnections(
+    distributed::MeshDevice& mesh_device, const ProgramSpec& spec, detail::ProgramImpl& program_impl);
+
+// Register fabric connection bindings with a Kernel.
+// Per-kernel resolved fabric connection bindings:
+//  - FabricConnectionBindingHandle::kNumRtaWords RTA words per binding, on every node, in declaration order
+//  - the section sits right after the per-node TensorBinding section and before the RTA varargs.
+struct FabricConnectionBindingsForKernel {
+    std::vector<FabricConnectionBindingHandle> handles;
+    uint32_t section_words = 0;
+};
+
+FabricConnectionBindingsForKernel ResolveFabricConnectionBindingsForKernel(
+    const KernelSpec& kernel, const FabricConnectionArgsBySpec& args_by_spec, size_t fabric_connection_base_rta_word);
+
+// ----------------------------------------------------------------------------
 // GlobalSemaphores (global_semaphore.cpp)
 // ----------------------------------------------------------------------------
 
@@ -258,6 +285,7 @@ struct ProgramResources {
     DataflowBufferHandles dfbs;
     PrefetcherPipeHandlesByKernel prefetcher_pipes;
     SemaphoreHandles semaphores;
+    FabricConnectionArgsBySpec fabric_connections;
     WatcherNodeRanges watcher_node_ranges;
 };
 

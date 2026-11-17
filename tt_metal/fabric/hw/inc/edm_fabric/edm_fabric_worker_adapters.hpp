@@ -18,6 +18,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "api/alignment.h"
 #include "api/debug/assert.h"
+#include "api/dataflow/fabric_connection_binding_token.h"
 
 #include <cstdint>
 #include <array>
@@ -92,6 +93,15 @@ struct WorkerToFabricEdmSenderBase {
     // the core-specific address space used while resolving runtime arguments.
     // sem_args_are_l1_addresses selects whether the teardown and producer-cursor arguments
     // are program-semaphore IDs (default) or L1 addresses supplied directly.
+    // Build the sender of a Metal 2.0 fabric connection binding (KernelAdvancedOptions::FabricConnectionBinding).
+    // precondition: has_fabric_connection(token) on this node.
+    static WorkerToFabricEdmSenderBase build_from_binding(FabricConnectionBindingToken token) {
+        ASSERT(get_arg_val<uint32_t>(token.rta_word()) != 0);
+        // The connection args follow the binding's "connected" word, in the layout build_from_args reads.
+        std::size_t arg_idx = token.rta_word() + 1;
+        return build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+    }
+
     template <ProgrammableCoreType my_core_type, bool sem_args_are_l1_addresses = false>
     static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
@@ -812,5 +822,10 @@ namespace fabric_detail{
         conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
     }
 } // namespace fabric_detail
+
+// True if the Metal 2.0 fabric connection binding has a connection on this node.
+FORCE_INLINE bool has_fabric_connection(FabricConnectionBindingToken token) {
+    return get_arg_val<uint32_t>(token.rta_word()) != 0;
+}
 
 }  // namespace tt::tt_fabric

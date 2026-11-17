@@ -99,6 +99,7 @@ ProgramResources RegisterResources(
 
     WireDFBAliases(spec, resources.dfbs.id, program_impl);
     resources.semaphores = RegisterSemaphores(spec, collected, metal_env, program_impl);
+    resources.fabric_connections = RegisterFabricConnections(mesh_device, spec, program_impl);
     resources.watcher_node_ranges = MakeWatcherNodeRanges(mesh_device, spec, collected, metal_env);
     return resources;
 }

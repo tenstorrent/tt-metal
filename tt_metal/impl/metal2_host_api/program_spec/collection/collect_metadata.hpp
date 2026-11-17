@@ -33,6 +33,8 @@ struct CollectedSpecData {
         prefetcher_pipe_by_name;
     std::unordered_map<experimental::GlobalSemaphoreParamName, const experimental::GlobalSemaphoreParameter*>
         global_semaphore_parameter_by_name;
+    std::unordered_map<experimental::FabricConnectionSpecName, const experimental::FabricConnectionSpec*>
+        fabric_connection_by_name;
 
     // ------------------------------------------------------------------------
     // Resource -> Users lookups.
@@ -71,6 +73,18 @@ struct CollectedSpecData {
     // - Every pointer k is the registered kernel: kernel_by_name[k->unique_id] == k.
     // - Every kernel in a vector has a GlobalSemaphore binding naming this key.
     std::unordered_map<experimental::GlobalSemaphoreParamName, std::vector<const KernelSpec*>> global_semaphore_binders;
+
+    // Fabric connection binders (derived from kernel fabric connection bindings).
+    // Tracks which kernels bind a given FabricConnectionSpec.
+    //
+    // Invariants:
+    // - Every key is a key in fabric_connection_by_name.
+    // - Every vector is non-empty.
+    // - Every pointer is non-nullptr.
+    // - Every pointer k is the registered kernel: kernel_by_name[k->unique_id] == k.
+    // - Every kernel in a vector has a fabric connection binding naming this key.
+    std::unordered_map<experimental::FabricConnectionSpecName, std::vector<const KernelSpec*>>
+        fabric_connection_binders;
 
     // DFB endpoint info (derived from kernel bindings).
     //

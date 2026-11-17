@@ -405,6 +405,13 @@ void Kernel::process_scratchpad_binding_handles(const std::function<void(
     }
 }
 
+void Kernel::process_fabric_connection_binding_handles(
+    const std::function<void(const std::string& accessor_name, uint32_t rta_word)>& callback) const {
+    for (const auto& handle : this->fabric_connection_binding_handles_) {
+        callback(handle.accessor_name, handle.rta_word);
+    }
+}
+
 void Kernel::process_global_semaphore_binding_handles(
     const std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>& callback) const {
     for (const auto& handle : this->global_semaphore_binding_handles_) {
@@ -803,6 +810,13 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
         hash_llk_metadata(handle.llk_metadata);
+    }
+    // Fabric connection binding handles: the accessor name and its first RTA word are baked into the generated
+    // `fabric::` token. The connection args are runtime args, so they are not part of the cache key.
+    hasher.update(static_cast<uint64_t>(this->fabric_connection_binding_handles_.size()));
+    for (const auto& handle : this->fabric_connection_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.rta_word));
     }
     // GlobalSemaphore binding handles: the accessor name and its CRTA word are baked into the generated
     // `global_sem::` token. The bound address is a run arg, so it is not part of the cache key.
