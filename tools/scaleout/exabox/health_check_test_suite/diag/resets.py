@@ -21,10 +21,11 @@ from .snapshot_checks import validate_snapshot
 # The tt-smi flags a tier's reset plan may name.
 RESET_FLAGS = ("-r", "-glx_reset")
 
-# tt-smi prints this banner before attempting `-r` on Galaxy units when the CPLD
-# FW is older than v1.16. The PCIe-level reset path is unreliable on those CPLDs
-# (chips re-enumerate but UMD's post-reset register reads return 0xffffffff).
-# Workaround per the banner: use `-glx_reset` instead.
+# tt-smi prints this banner before every `-r` on a Galaxy without reading the
+# CPLD FW version, so it identifies a Galaxy, not old firmware. On CPLD FW older
+# than v1.16 the PCIe-level reset path is unreliable (chips re-enumerate but
+# UMD's post-reset register reads return 0xffffffff); the workaround is
+# `-glx_reset`.
 CPLD_OLD_BANNER_RE = re.compile(r"CPLD FW v1\.16 or higher is required to use tt-smi -r", re.IGNORECASE)
 
 
@@ -111,16 +112,6 @@ def reset_loop(
             )
         )
         cpld_old = flag == "-r" and not dry_run and cp.stdout and CPLD_OLD_BANNER_RE.search(cp.stdout)
-        if cpld_old:
-            phase.add(
-                Check(
-                    name="cpld_fw_old",
-                    status=WARN,
-                    details="CPLD FW < v1.16 detected — `tt-smi -r` unreliable on this system; "
-                    "use `tt-smi -glx_reset` instead and request a CPLD update from the sysadmin",
-                    ip="other",
-                )
-            )
         # Auto-recover: -r on CPLD < v1.16 doesn't just fail, it leaves chips in a
         # bad state (UMD reads 0xffffffff on subsequent calls) until -glx_reset is
         # run. Recover so we don't strand the system.
