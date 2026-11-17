@@ -588,10 +588,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         return_indices,
         in_h,
         in_w,
-        output_layout,
-        // Symmetric lanes: one multi-threaded reader (not split readers) so STRIDED pairs reader
-        // thread i with compute thread i. MPWI keeps its asymmetric reader0/reader1 structure.
-        /*single_reader_stream=*/!return_indices);
+        output_layout);
     // Host-side record of the lane count programmed (TT_LOGGER_LEVEL=Debug), observable without a
     // kernel probe.
     log_debug(
