@@ -26,7 +26,7 @@ void bind_permute(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`: an interleaved input keeps its memory configuration, and for a sharded input the output's memory configuration is derived from the input's. A ROW_MAJOR WIDTH_SHARDED or BLOCK_SHARDED input whose last two dims are not both multiples of 32 gives an L1 interleaved output when ``dims`` moves any dimension.
-            pad_value (float, optional): value used to fill the tile padding that a permute exposes on ``BFLOAT16``, ``FLOAT32`` and ``UINT32`` TILE tensors. Defaults to `0.0`.
+            pad_value (float, optional): value used to fill the tile padding that a permute exposes on ``BFLOAT16``, ``FLOAT32``, ``INT32`` and ``UINT32`` TILE tensors. Defaults to `0.0`.
 
         Returns:
             ttnn.Tensor: the output tensor, with the same dtype and layout as the input.
