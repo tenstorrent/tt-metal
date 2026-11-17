@@ -49,24 +49,4 @@ std::vector<ChannelIndex> LogicalGraph::channels_of(RouterIndex router, ChannelK
     return out;
 }
 
-std::vector<const LogicalEdge*> LogicalGraph::edges_from(ChannelIndex channel) const {
-    std::vector<const LogicalEdge*> out;
-    for (const auto& e : edges) {
-        if (e.from == channel) {
-            out.push_back(&e);
-        }
-    }
-    return out;
-}
-
-std::vector<const LogicalEdge*> LogicalGraph::edges_into(ChannelIndex channel) const {
-    std::vector<const LogicalEdge*> out;
-    for (const auto& e : edges) {
-        if (e.to == channel) {
-            out.push_back(&e);
-        }
-    }
-    return out;
-}
-
 }  // namespace tt::tt_fabric::graph

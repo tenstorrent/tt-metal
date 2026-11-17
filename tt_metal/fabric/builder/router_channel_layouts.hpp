@@ -29,6 +29,7 @@ struct RouterChannelLayout {
     struct Channel {
         uint32_t base_address = 0;
         uint32_t num_slots = 0;
+        bool operator==(const Channel&) const = default;
     };
     std::array<std::vector<Channel>, builder_config::MAX_NUM_VCS> senders;
     std::array<std::vector<Channel>, builder_config::MAX_NUM_VCS> receivers;

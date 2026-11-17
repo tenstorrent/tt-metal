@@ -859,7 +859,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_FABRIC_GRAPH_BUILDER
         // EXPERIMENTAL: Builds fabric routers from the fabric graph (tt_metal/fabric/graph) instead of the
-        // stock builder. Tensix mux/UDM fabrics still use the stock builder. A registered plugin session wins.
+        // stock builder. Tensix mux/UDM fabrics still use the stock builder.
         // Default: false
         // Usage: export TT_METAL_FABRIC_GRAPH_BUILDER=1
         case EnvVarID::TT_METAL_FABRIC_GRAPH_BUILDER: this->fabric_graph_builder = true; break;

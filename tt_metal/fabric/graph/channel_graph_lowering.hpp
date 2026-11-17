@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <vector>
 
 #include "fabric_graph_types.hpp"
@@ -30,6 +31,7 @@ struct ChannelGraph {
     std::vector<uint32_t> index_in_vc;                 // [channel]
     std::vector<bool> enters_ring;                     // [channel] sender that acquires a protected ring
     std::vector<LegacySlot> legacy_slots;
+    std::map<FabricNodeId, PerDirectionCapabilities> chips;  // each chip's port capabilities
 };
 
 // The slot the kernel expects this channel in: the worker's, or the one stock gives the producer's direction.

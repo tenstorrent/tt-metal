@@ -44,6 +44,83 @@ std::filesystem::path metal_mgd(const std::string& name) {
 const PortDirection kE{RoutingDirection::E};
 const PortDirection kS{RoutingDirection::S};
 
+// packet comes in on `ingress` and leaves on `egress`
+struct Transit {
+    PortDirection ingress;
+    PortDirection egress;
+    auto operator<=>(const Transit&) const = default;
+};
+
+// Next direction a packet at `at` takes toward `dst`. On device: ControlPlane::get_forwarding_direction.
+class RouteOracle {
+public:
+    virtual ~RouteOracle() = default;
+    virtual std::optional<PortDirection> next_hop(const FabricNodeId& at, const FabricNodeId& dst) const = 0;
+};
+
+// `rules` minus the VC0 transits between cardinals no route takes.
+class NarrowedRules : public WiringRules {
+public:
+    NarrowedRules(std::unique_ptr<WiringRules> base, std::set<Transit> used) :
+        base_(std::move(base)), used_(std::move(used)) {}
+
+    std::vector<Vc> vcs() const override { return base_->vcs(); }
+    bool carries(const Port& port, uint32_t vc) const override { return base_->carries(port, vc); }
+    bool has_worker(const Port& port, uint32_t vc) const override { return base_->has_worker(port, vc); }
+    bool folds_corners(MeshId mesh) const override { return base_->folds_corners(mesh); }
+    bool wires(const Port& in, const Port& out, uint32_t vc) const override {
+        const bool cardinals =
+            in.capability == EdgeCapability::INTRAMESH_CARDINAL && out.capability == EdgeCapability::INTRAMESH_CARDINAL;
+        return base_->wires(in, out, vc) &&
+               (vc != 0 || !cardinals || used_.contains(Transit{.ingress = in.direction, .egress = out.direction}));
+    }
+
+private:
+    std::unique_ptr<WiringRules> base_;
+    std::set<Transit> used_;
+};
+
+std::set<Transit> transits_from_routes(const std::vector<Port>& ports, const RouteOracle& oracle) {
+    std::map<std::pair<FabricNodeId, PortDirection>, FabricNodeId> link;
+    std::map<MeshId, std::set<FabricNodeId>> nodes;
+    for (const auto& p : ports) {
+        if (p.capability != EdgeCapability::INTRAMESH_CARDINAL) {
+            continue;
+        }
+        nodes[p.node.mesh_id].insert(p.node);
+        if (p.plane == 0) {
+            link.emplace(std::pair{p.node, p.direction}, p.peer);
+        }
+    }
+
+    std::set<Transit> transits;
+    for (const auto& [mesh, members] : nodes) {
+        for (const auto& src : members) {
+            for (const auto& dst : members) {
+                FabricNodeId at = src;
+                std::optional<PortDirection> arrived;
+                for (size_t hops = 0; at != dst; ++hops) {
+                    TT_FATAL(hops <= members.size(), "fabric graph: route {} -> {} does not converge", src, dst);
+                    const auto leave = oracle.next_hop(at, dst);
+                    TT_FATAL(leave.has_value(), "fabric graph: no next hop at {} toward {}", at, dst);
+                    if (arrived) {
+                        transits.insert(Transit{.ingress = *arrived, .egress = *leave});
+                    }
+                    const auto it = link.find({at, *leave});
+                    TT_FATAL(it != link.end(), "fabric graph: route leaves {} by a direction with no port", at);
+                    at = it->second;
+                    arrived = PortDirection{get_opposite_direction(**leave)};
+                }
+            }
+        }
+    }
+    return transits;
+}
+
+std::unique_ptr<WiringRules> narrowed_to_routes(std::unique_ptr<WiringRules> rules, std::set<Transit> used) {
+    return std::make_unique<NarrowedRules>(std::move(rules), std::move(used));
+}
+
 // Test fixture only: dimension-order routing (dim 0 before dim 1, the shorter way round a wrapped
 // axis), the rule RoutingTableGenerator applies. Product code takes routes from the control plane.
 class DimensionOrderOracle : public RouteOracle {

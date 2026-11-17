@@ -69,72 +69,10 @@ private:
     bool two_d_ = false;
 };
 
-class NarrowedRules : public WiringRules {
-public:
-    NarrowedRules(std::unique_ptr<WiringRules> base, std::set<Transit> used) :
-        base_(std::move(base)), used_(std::move(used)) {}
-
-    std::vector<Vc> vcs() const override { return base_->vcs(); }
-    bool carries(const Port& port, uint32_t vc) const override { return base_->carries(port, vc); }
-    bool has_worker(const Port& port, uint32_t vc) const override { return base_->has_worker(port, vc); }
-    bool folds_corners(MeshId mesh) const override { return base_->folds_corners(mesh); }
-    bool wires(const Port& in, const Port& out, uint32_t vc) const override {
-        const bool cardinals = in.capability == EdgeCapability::INTRAMESH_CARDINAL &&
-                               out.capability == EdgeCapability::INTRAMESH_CARDINAL;
-        return base_->wires(in, out, vc) &&
-               (vc != 0 || !cardinals || used_.contains(Transit{.ingress = in.direction, .egress = out.direction}));
-    }
-
-private:
-    std::unique_ptr<WiringRules> base_;
-    std::set<Transit> used_;
-};
-
 }  // namespace
 
 std::unique_ptr<WiringRules> stock_wiring_rules(const std::vector<Port>& ports, const WiringOptions& options) {
     return std::make_unique<StockWiringRules>(ports, options);
-}
-
-std::unique_ptr<WiringRules> narrowed_to_routes(std::unique_ptr<WiringRules> rules, std::set<Transit> used) {
-    return std::make_unique<NarrowedRules>(std::move(rules), std::move(used));
-}
-
-std::set<Transit> transits_from_routes(const std::vector<Port>& ports, const RouteOracle& oracle) {
-    std::map<std::pair<FabricNodeId, PortDirection>, FabricNodeId> link;
-    std::map<MeshId, std::set<FabricNodeId>> nodes;
-    for (const auto& p : ports) {
-        if (p.capability != EdgeCapability::INTRAMESH_CARDINAL) {
-            continue;
-        }
-        nodes[p.node.mesh_id].insert(p.node);
-        if (p.plane == 0) {
-            link.emplace(std::pair{p.node, p.direction}, p.peer);
-        }
-    }
-
-    std::set<Transit> transits;
-    for (const auto& [mesh, members] : nodes) {
-        for (const auto& src : members) {
-            for (const auto& dst : members) {
-                FabricNodeId at = src;
-                std::optional<PortDirection> arrived;
-                for (size_t hops = 0; at != dst; ++hops) {
-                    TT_FATAL(hops <= members.size(), "fabric graph: route {} -> {} does not converge", src, dst);
-                    const auto leave = oracle.next_hop(at, dst);
-                    TT_FATAL(leave.has_value(), "fabric graph: no next hop at {} toward {}", at, dst);
-                    if (arrived) {
-                        transits.insert(Transit{.ingress = *arrived, .egress = *leave});
-                    }
-                    const auto it = link.find({at, *leave});
-                    TT_FATAL(it != link.end(), "fabric graph: route leaves {} by a direction with no port", at);
-                    at = it->second;
-                    arrived = PortDirection{get_opposite_direction(**leave)};
-                }
-            }
-        }
-    }
-    return transits;
 }
 
 }  // namespace tt::tt_fabric::graph

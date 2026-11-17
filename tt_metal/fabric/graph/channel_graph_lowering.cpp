@@ -83,20 +83,20 @@ ChannelGraph lower_to_channels(LogicalGraph logical, bool two_d) {
             counts[vc.id] = std::max(counts[vc.id], 1u);
         }
     }
+    cg.chips = chip_capabilities(logical);
     cg.logical = std::move(logical);
     return cg;
 }
 
 void legacy_stock_sender_counts(ChannelGraph& cg, const WiringOptions& options) {
     const auto& g = cg.logical;
-    const auto chips = chip_capabilities(g);
     for (RouterIndex r = 0; r < g.routers.size(); ++r) {
         const auto& port = g.routers[r].port;
         const auto axis = options.express_axis.find(port.node.mesh_id);
         const auto shape = router_vc_shape(
             options.topology,
             *port.direction,
-            chips.at(port.node),
+            cg.chips.at(port.node),
             axis == options.express_axis.end() ? ExpressAxis::NONE : axis->second,
             &options.vc_config);
         auto& counts = cg.sender_counts[r];
@@ -117,14 +117,13 @@ void legacy_stock_sender_counts(ChannelGraph& cg, const WiringOptions& options) 
 
 void mark_ring_entries(ChannelGraph& cg, const WiringOptions& options, const RingQueries& ring_queries) {
     const auto& g = cg.logical;
-    const auto chips = chip_capabilities(g);
     std::map<RouterIndex, std::vector<LegacySlot*>> legacy;
     for (auto& slot : cg.legacy_slots) {
         legacy[slot.router].push_back(&slot);
     }
     for (RouterIndex r = 0; r < g.routers.size(); ++r) {
         const auto& port = g.routers[r].port;
-        const auto& caps = chips.at(port.node);
+        const auto& caps = cg.chips.at(port.node);
         const auto facing = builder::routing_direction_to_eth_direction(*port.direction);
         const bool express = options.express_axis.contains(port.node.mesh_id);
         const auto queries = express ? ring_queries(port.node) : ProtectedRingQueries{};

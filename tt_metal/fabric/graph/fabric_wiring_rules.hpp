@@ -42,17 +42,4 @@ struct WiringOptions {
 // Same routers, VCs and turns as the stock builder: the turn sets come from turn_set_for_router.
 std::unique_ptr<WiringRules> stock_wiring_rules(const std::vector<Port>& ports, const WiringOptions& options);
 
-// Next direction a packet at `at` takes toward `dst`. On device: ControlPlane::get_forwarding_direction.
-class RouteOracle {
-public:
-    virtual ~RouteOracle() = default;
-    virtual std::optional<PortDirection> next_hop(const FabricNodeId& at, const FabricNodeId& dst) const = 0;
-};
-
-// Transits the routes actually take, over every (src, dst) pair in each mesh.
-std::set<Transit> transits_from_routes(const std::vector<Port>& ports, const RouteOracle& oracle);
-
-// Cleanup pass, off by default: `rules` minus the VC0 transits between cardinals no route takes.
-std::unique_ptr<WiringRules> narrowed_to_routes(std::unique_ptr<WiringRules> rules, std::set<Transit> used);
-
 }  // namespace tt::tt_fabric::graph

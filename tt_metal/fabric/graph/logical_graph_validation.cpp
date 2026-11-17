@@ -21,6 +21,16 @@ std::vector<std::string> find_problems(
         return g.routers[ch.router].id + ".vc" + std::to_string(ch.vc) + "." + channel_name(ch);
     };
 
+    std::vector<std::vector<const LogicalEdge*>> eth_out(g.channels.size());
+    std::vector<bool> noc_fed(g.channels.size(), false);
+    for (const auto& e : g.edges) {
+        if (e.transport == Transport::Eth) {
+            eth_out[e.from].push_back(&e);
+        } else {
+            noc_fed[e.to] = true;
+        }
+    }
+
     std::map<std::pair<RouterIndex, uint32_t>, std::pair<uint32_t, uint32_t>> counts;  // -> (senders, receivers)
     for (ChannelIndex c = 0; c < g.channels.size(); ++c) {
         const auto& ch = g.channels[c];
@@ -31,28 +41,17 @@ std::vector<std::string> find_problems(
             continue;
         }
         ++senders;
-        size_t eth = 0;
-        for (const auto* e : g.edges_from(c)) {
-            if (e->transport != Transport::Eth) {
-                continue;
-            }
-            ++eth;
+        for (const auto* e : eth_out[c]) {
             const auto& to = g.channels[e->to];
             if (to.kind != ChannelKind::Receiver || to.vc != ch.vc || !router.peer || to.router != *router.peer) {
                 problems.push_back(where(c) + ": eth edge does not reach the peer's receiver on its VC");
             }
         }
-        if (eth != 1) {
-            problems.push_back(where(c) + ": expected one eth edge, found " + std::to_string(eth));
+        if (eth_out[c].size() != 1) {
+            problems.push_back(where(c) + ": expected one eth edge, found " + std::to_string(eth_out[c].size()));
         }
-        if (!ch.injection) {
-            bool fed = false;
-            for (const auto* e : g.edges_into(c)) {
-                fed |= e->transport == Transport::Noc;
-            }
-            if (!fed) {
-                problems.push_back(where(c) + ": forwarding sender with no inbound noc edge");
-            }
+        if (!ch.injection && !noc_fed[c]) {
+            problems.push_back(where(c) + ": forwarding sender with no inbound noc edge");
         }
     }
 

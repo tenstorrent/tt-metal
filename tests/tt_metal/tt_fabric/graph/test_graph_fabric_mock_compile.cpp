@@ -34,7 +34,8 @@ protected:
 
     void SetUp() override {
         if (std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
-            GTEST_SKIP() << "no mock cluster set";
+            GTEST_SKIP() << "needs a mock cluster: set TT_METAL_MOCK_CLUSTER_DESC_PATH, or run under tt-run with a "
+                            "mock rank binding";
         }
     }
     void TearDown() override { SetFabricConfig(FabricConfig::DISABLED); }

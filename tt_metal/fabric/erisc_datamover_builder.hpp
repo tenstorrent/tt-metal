@@ -345,11 +345,10 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
 // What a fabric graph already knows about a router, handed in instead of worked out by the builder.
 // Sender vectors are by flat sender channel (VC0's, then VC1's, then VC2's).
 struct RouterGraphInputs {
-    RouterChannelLayout layout;                      // this router's channels
-    std::optional<RouterChannelLayout> peer_layout;  // the router across the link, if it has one yet
-    std::vector<bool> injection;                     // acquires a protected ring (bubble flow control)
-    std::vector<bool> serviced;                      // a channel, or a slot stock services anyway
-    std::vector<bool> static_peer;                   // fed by another router on this chip
+    RouterChannelLayout layout;       // this router's channels
+    RouterChannelLayout peer_layout;  // the router across the link
+    std::vector<bool> injection;      // acquires a protected ring (bubble flow control)
+    std::vector<bool> serviced;       // a channel, or a slot stock services anyway
 };
 
 /*

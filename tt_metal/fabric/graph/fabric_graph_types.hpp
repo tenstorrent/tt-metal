@@ -22,13 +22,6 @@ namespace tt::tt_fabric::graph {
 // N/E/S/W/Z only, never C or NONE
 using PortDirection = ttsl::StrongType<RoutingDirection, struct PortDirectionTag>;
 
-// packet comes in on `ingress` and leaves on `egress`
-struct Transit {
-    PortDirection ingress;
-    PortDirection egress;
-    auto operator<=>(const Transit&) const = default;
-};
-
 // One port of a chip: a direction and routing plane, linked to `peer`.
 struct Port {
     FabricNodeId node{MeshId{0}, 0};
@@ -92,8 +85,6 @@ struct LogicalGraph {
     std::optional<RouterIndex> find_router(std::string_view id) const;
     std::optional<ChannelIndex> receiver(RouterIndex router, uint32_t vc) const;
     std::vector<ChannelIndex> channels_of(RouterIndex router, ChannelKind kind) const;
-    std::vector<const LogicalEdge*> edges_from(ChannelIndex channel) const;
-    std::vector<const LogicalEdge*> edges_into(ChannelIndex channel) const;
 };
 
 // "m<mesh>.c<chip>.<direction>.p<plane>"

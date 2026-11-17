@@ -5,7 +5,6 @@
 #pragma once
 
 #include <map>
-#include <set>
 
 #include "physical_graph_lowering.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
@@ -40,7 +39,6 @@ private:
 
     const PhysicalGraph& graph_;
     std::map<chan_id_t, RouterIndex> on_chip_;  // this chip's routers by eth channel
-    std::set<ChannelIndex> fed_;                // senders another router feeds over the noc
 };
 
 }  // namespace tt::tt_fabric::graph

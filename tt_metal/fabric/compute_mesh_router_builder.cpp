@@ -364,34 +364,37 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     std::vector<bool> router_injection_flags;
     router_injection_flags.reserve(total_router_channels);
 
-    // Express routing derives each producer's effect from the protected-ring facts. The cardinal
-    // axis-turn heuristic cannot express it: at an express node the same Z output is transit when fed
-    // by the ring and an acquisition when fed by a leaf attachment, and both share one axis pair.
-    // Non-express meshes keep the heuristic untouched.
-    // This router's producer-slot mapping, shared by every VC's derivation.
-    const builder::RouterProducerSlots producer_slots(
-        builder::routing_direction_to_eth_direction(location.direction), vc_shape.sender_counts);
-    // The policy is a per-router fact: express enablement is mesh-wide, so it is selected once,
-    // not per VC. Its facts arrive bound from the chip scope (the queries were bound in the
-    // FabricBuilder constructor; the capabilities were classified at discovery).
-    const NonExpressInjectionPolicy non_express_policy(topology, eth_direction);
-    const ExpressInjectionPolicy express_policy(
-        chip_facts.protected_ring_queries,
-        chip_facts.per_direction_capabilities,
-        chip_z_role,
-        location.direction,
-        edge_capability);
-    const InjectionPolicy& injection_policy = express_enabled ? static_cast<const InjectionPolicy&>(express_policy)
-                                                              : static_cast<const InjectionPolicy&>(non_express_policy);
-
     if (graph_inputs) {
         TT_FATAL(
-            graph_inputs->injection.size() == total_router_channels,
-            "Router graph inputs have {} injection flags for {} sender channels",
+            graph_inputs->injection.size() == total_router_channels &&
+                graph_inputs->serviced.size() == total_router_channels,
+            "Router graph inputs have {} injection and {} serviced flags for {} sender channels",
             graph_inputs->injection.size(),
+            graph_inputs->serviced.size(),
             total_router_channels);
         router_injection_flags = graph_inputs->injection;
     } else {
+        // Express routing derives each producer's effect from the protected-ring facts. The cardinal
+        // axis-turn heuristic cannot express it: at an express node the same Z output is transit when fed
+        // by the ring and an acquisition when fed by a leaf attachment, and both share one axis pair.
+        // Non-express meshes keep the heuristic untouched.
+        // This router's producer-slot mapping, shared by every VC's derivation.
+        const builder::RouterProducerSlots producer_slots(
+            builder::routing_direction_to_eth_direction(location.direction), vc_shape.sender_counts);
+        // The policy is a per-router fact: express enablement is mesh-wide, so it is selected once,
+        // not per VC. Its facts arrive bound from the chip scope (the queries were bound in the
+        // FabricBuilder constructor; the capabilities were classified at discovery).
+        const NonExpressInjectionPolicy non_express_policy(topology, eth_direction);
+        const ExpressInjectionPolicy express_policy(
+            chip_facts.protected_ring_queries,
+            chip_facts.per_direction_capabilities,
+            chip_z_role,
+            location.direction,
+            edge_capability);
+        const InjectionPolicy& injection_policy = express_enabled
+                                                      ? static_cast<const InjectionPolicy&>(express_policy)
+                                                      : static_cast<const InjectionPolicy&>(non_express_policy);
+
         for (uint32_t vc = 0; vc < num_vcs; ++vc) {
             uint32_t num_channels_in_vc = vc_shape.sender_counts[vc];
             // A policy answers whether a slot acquires a protected ring; whether that acquisition is
