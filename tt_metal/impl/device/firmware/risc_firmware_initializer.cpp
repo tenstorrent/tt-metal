@@ -38,6 +38,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
+#include "hostdev/keraunos_spa_routes.h"
 #include "hostdev/mimir_cce_spa_routes.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/math.hpp>
@@ -106,6 +107,36 @@ MimirCceSpaRoutes mimir_cce_spa_routes_for_channel(const metal_SocDescriptor& so
     routes.sram_tile_stride = windows.dram_l1_stride;
     for (uint32_t dest = 0; dest < MIMIR_CCE_SPA_ROUTES_MAX_INSTANCES; ++dest) {
         routes.gddr_d2d[dest] = gddr_cce_port(soc, channel, sender, dest);
+    }
+    return routes;
+}
+
+// Package SPA of HSIO 0's CCE0 SRAM: identity DMRISC windows over HSIO SPA 0x12_0400_0000 + n * tile_stride, with the
+// CCE SRAM 0x280_0000 into each tile (bringup_mmk.py programs them).
+constexpr uint64_t kKeraunosHsioSramSpaBase = 0x12'0680'0000ULL;
+
+// The routes a kernel on one Keraunos HSIO CCE uses, filled from the descriptor's keraunos and mimir_channels
+// blocks. Keraunos sits on the D2D1 lane of the package ATT, so its Mimir GDDR windows are the D2D1 ones.
+KeraunosSpaRoutes keraunos_spa_routes_for_core(const metal_SocDescriptor& soc, const tt::umd::KeraunosCore& core) {
+    const auto& arch = soc.get_arch_descriptor();
+    const auto& keraunos = arch.get_keraunos();
+    const tt::umd::GrendelAddressWindows windows{};
+    KeraunosSpaRoutes routes{};
+    routes.hsio_sram_base = kKeraunosHsioSramSpaBase;
+    routes.hsio_tile_stride = keraunos.tile_stride.value_or(0);
+    routes.eth_cce_sram_size = arch.get_eth_l1_size();
+    routes.mimir_cce_sram_base = windows.dram_l1_base;
+    routes.mimir_cce_sram_stride = windows.dram_l1_stride;
+    const size_t channels = arch.get_mimir_channels().size();
+    const uint32_t num_mimirs = static_cast<uint32_t>(std::min<size_t>(channels == 0 ? 2 : channels, KERAUNOS_SPA_ROUTES_MAX_MIMIRS));
+    routes.num_mimirs = num_mimirs;
+    for (uint32_t mimir = 0; mimir < num_mimirs; ++mimir) {
+        routes.mimir_gddr_base[mimir] =
+            windows.dram_base + (MIMIR_CCE_GDDR_D2D_LANE_INSTANCES + mimir) * windows.dram_stride;
+    }
+    routes.hsio = core.hsio;
+    for (const auto& c : keraunos.cores) {
+        routes.num_hsio += c.eth_cce == 0 ? 1 : 0;
     }
     return routes;
 }
@@ -1465,6 +1496,23 @@ void RiscFirmwareInitializer::initialize_firmware(
                         sizeof(unknown_stage),
                         tt_cxy_pair(device_id, virtual_core),
                         fw_stage_addr + (slot * sizeof(uint32_t)));
+                }
+            }
+            if (quasar_ethernet && is_idle_eth) {
+                const auto& soc_k = cluster_.get_soc_desc(device_id);
+                const auto& keraunos = soc_k.get_arch_descriptor().get_keraunos();
+                const tt_xy_pair noc0 = soc_k.translate_coord_to(
+                    tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+                for (const auto& keraunos_core : keraunos.cores) {
+                    if (keraunos_core.coord == noc0) {
+                        // After the bank-to-NOC scratch, the same place the Mimir routes use. CCE-relative address.
+                        const KeraunosSpaRoutes routes = keraunos_spa_routes_for_core(soc_k, keraunos_core);
+                        const uint64_t routes_addr =
+                            hal_.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
+                            hal_.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+                        cluster_.write_core(&routes, sizeof(routes), tt_cxy_pair(device_id, virtual_core), routes_addr);
+                        break;
+                    }
                 }
             }
             if (quasar_ethernet) {

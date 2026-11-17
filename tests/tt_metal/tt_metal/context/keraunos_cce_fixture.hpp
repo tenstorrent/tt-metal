@@ -21,7 +21,9 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
 #include "dev_mem_map.h"
 #include <tt-metalium/distributed.hpp>
