@@ -14,6 +14,7 @@
 - NoC interface counters (event tables, metal option): [noc_counters.md](noc_counters.md)
 - NoC router counters (per port and virtual channel packet and flit counts, metal option): [router_counters.md](router_counters.md)
 - DRAM tile traffic counters (NIU registers, metal option, decode): [dram_counters.md](dram_counters.md)
+- Ethernet link counters (queue registers, firmware link counters, metal option, decode): [eth_counters.md](eth_counters.md)
 - Host-side counter readback: [tests/python_tests/helpers/counters.py](../../tests/python_tests/helpers/counters.py)
 - Host-side derived metrics adapter: [tests/python_tests/helpers/metrics.py](../../tests/python_tests/helpers/metrics.py)
 - Test driver: [tests/python_tests/helpers/perf/core.py](../../tests/python_tests/helpers/perf/core.py)

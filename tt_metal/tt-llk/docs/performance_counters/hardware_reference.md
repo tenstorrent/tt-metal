@@ -22,6 +22,7 @@ The counter inventory is defined once, in tt-llk, and metal consumes it too. The
 
 The RISC-V core performance monitor has its own headers (`riscv_pmc_*.h`) and reference: [riscv_pmc.md](riscv_pmc.md). The NoC interface counters have their own headers (`noc_counters_*.h`) and reference: [noc_counters.md](noc_counters.md). The NoC router counters have theirs too (`router_counters_*.h`): [router_counters.md](router_counters.md).
 The counters of the DRAM channel tiles have their own headers (`dram_counters_*.h`) and reference: [dram_counters.md](dram_counters.md).
+The counters of the ethernet cores have their own headers (`eth_counters_*.h`) and reference: [eth_counters.md](eth_counters.md).
 
 The host side is the stdlib-only package `tools/python/tt_llk_perf/`: `headers.py` parses `types.h` (`counter_type_names()`, ordinal to name) and the arch tables (`bank_tables(arch)`, bank to `[CounterEntry(name, select, l1_mux)]`); `metrics.py` is the derived-metric engine (`compute_metrics(view)`, `METRIC_LABELS`).
 

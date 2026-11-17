@@ -37,6 +37,10 @@ change.
 - `dram_counters.py` decodes `dram_traffic.csv` and `dram_idle.csv` of `TT_METAL_PROFILE_DRAM_COUNTERS` into bytes per DRAM tile
   and per program (`per_program`), subtracting the idle drift model; `headers.dram_counter_table(arch)` and
   `headers.dram_layout(arch)` parse `dram_counters_*.h`. Reference: `docs/performance_counters/dram_counters.md`.
+- `eth_counters.py` decodes `eth_traffic.csv`, `eth_run.csv` and `eth_idle.csv` of `TT_METAL_PROFILE_ETH_COUNTERS` into bytes,
+  resends and drops per ethernet core and per program (`per_program`) or per device run (`per_run`), subtracting the
+  idle rate of the queue registers; `headers.eth_tx_queue_table(arch)`, `eth_rx_queue_table`, `eth_l1_table` and
+  `eth_layout` parse `eth_counters_*.h`. Reference: `docs/performance_counters/eth_counters.md`.
 
 NoC router counters: `headers.router_counter_table(arch)`, `router_option(arch, option)` and `router_constants()` parse the
 `router_counters_*.h` tables and the option mask layout; `router_counters.py` decodes the profiler markers 9120 to 9136
