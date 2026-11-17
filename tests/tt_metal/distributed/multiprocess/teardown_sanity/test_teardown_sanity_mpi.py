@@ -15,6 +15,7 @@ tt-run fix in this PR is in the tt-run on PATH (the launcher in the CI image is 
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import signal
@@ -34,6 +35,7 @@ from sanity_common import (
     clean,
     ended,
     fault_delivered,
+    mpi_cmd,
     mpirun_path,
     nonzero,
     run_case,
@@ -230,8 +232,8 @@ def _mpi_bin(name: str) -> str:
     return str(cand) if cand.exists() else (shutil.which(name) or name)
 
 
-def _run(cmd: list, timeout: int = 30) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def _run(cmd: list, timeout: int = 30, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
 
 
 def test_mpi_build_is_open_mpi_5_plus():
@@ -260,25 +262,14 @@ def test_required_mca_components_available():
 
 
 def test_production_transport_line_runs_clean():
-    """The exact transport line tt-run adds (pml ob1, --mca btl self,tcp) must run on this install: a trivial
-    two-rank job under that line completes, so the line tt-run builds is not just present but working."""
-    r = _run(
-        [
-            mpirun_path(),
-            "--allow-run-as-root",
-            "--oversubscribe",
-            "-np",
-            "2",
-            "--mca",
-            "pml",
-            "ob1",
-            "--mca",
-            "btl",
-            "self,tcp",
-            "true",
-        ]
-    )
-    assert r.returncode == 0, f"the self,tcp / ob1 line failed on this install: {r.stderr[:200]}"
+    """The exact transport line tt-run adds (pml ob1, --mca btl self,tcp) must not just be present but actually
+    carry traffic. Run the probe's clean two-rank scenario (MPI_Init, a barrier, MPI_Finalize) over that line, so
+    ob1/TCP is initialised and the ranks exchange a collective: the line tt-run builds is proven working, not
+    merely accepted. (A bare ``true`` never calls MPI_Init and would pass even with an unusable transport.)"""
+    cmd = mpi_cmd(ulfm=False, extra="--mca pml ob1", btl="self,tcp", np=2)
+    env = {**os.environ, "PROBE_SCENARIO": "clean", "PROBE_NP": "2"}
+    r = _run(cmd, env=env)
+    assert r.returncode == 0, f"the self,tcp / ob1 line failed on this install: {r.stderr[:300]}"
 
 
 def test_ulfm_launcher_available():
