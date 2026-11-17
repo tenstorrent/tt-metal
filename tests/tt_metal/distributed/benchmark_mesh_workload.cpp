@@ -6,10 +6,10 @@
 // host-bound, the time per call is the gap between ops.
 //
 // Glm52 follows GLM-5.2 chunked prefill on an 8x4 Blackhole Galaxy, measured with TT_METAL_DISPATCH_STATS
-// (#57586). Every enqueue covers the whole mesh, as one program over all devices (63%) or one program per device
-// (35%), with 6.1 KB of command stream per device at the median and 14 KB at p90. The host spends 63 us between
-// enqueues at the median. Kimi K2.7 looks the same. Command bytes depend on the device's core grid, so shapes name
-// a target size per device, and the runtime-arg count that reaches it is found on the device at hand.
+// (#57586). Every enqueue covers the whole mesh: 63% of enqueues are one program over all devices, 35% one program
+// per device, with 6.1 KB of command stream per device at the median and 14 KB at p90. The host spends 63 us
+// between enqueues at the median. Kimi K2.7 looks the same. Command bytes depend on the device's core grid, so shapes
+// name a target size per device, and the runtime-arg count that reaches it is found on the device at hand.
 //
 // The kernels do no work, so the device keeps up with the host. Several distinct workloads are cycled so that each
 // call dispatches a program the host has not just dispatched, and like TTNN, every dispatch gets a fresh runtime id.
