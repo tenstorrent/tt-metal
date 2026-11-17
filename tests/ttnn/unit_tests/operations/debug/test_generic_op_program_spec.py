@@ -1021,6 +1021,85 @@ def test_a_range_over_a_device_without_a_tensor_is_rejected(mesh_device, expect_
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expect_error):
+    """Per-device views of one tensor share its MeshTensor, which is all Metal binds, so on each device a program runs
+    on it reads that device's part of the tensor. A tensor argument that is a view missing one of those devices is
+    rejected."""
+    torch.manual_seed(23)
+    torch_input = torch.rand([2, 1, 32, 32]).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    )
+    output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
+    first_input, second_input = ttnn.get_device_tensors(input_tensor)
+    first_output, second_output = ttnn.get_device_tensors(output_tensor)
+
+    # The program runs on the first device, and the run args name the second device's view of the input.
+    message = "tensor parameter 'input' is bound to a view of a tensor on devices"
+    spec, run_args = exp_program(second_input, first_output)
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, first_output], spec, run_args)
+    with expect_error(RuntimeError, message):
+        E.prepare_generic_op([first_input, first_output], spec, run_args)
+    mesh_spec = E.MeshProgramSpec(programs=[(one_device(0), spec)])
+    mesh_run_args = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
+    with expect_error(RuntimeError, message):
+        E.generic_op([input_tensor, output_tensor], mesh_spec, mesh_run_args)
+    with expect_error(RuntimeError, message):
+        E.prepare_generic_op([input_tensor, output_tensor], mesh_spec, mesh_run_args)
+    # A run args taken back from a MeshProgramRunArgs keeps its tensors, views included.
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, first_output], spec, mesh_run_args.programs[0][1])
+    # Every program of a MeshProgramSpec is checked: here the second device's program names the first device's view.
+    first_spec, first_run_args = exp_program(first_input, first_output)
+    other_spec, other_run_args = exp_program(first_input, second_output)
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), other_run_args)]),
+        )
+    # generic_op pairs run args with the spec's programs by range, so run args in another order are checked too.
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(1), other_run_args), (one_device(0), first_run_args)]),
+        )
+
+    # A call that generic_op rejects for another reason keeps generic_op's own message: a tensor under a name the spec
+    # does not declare, and run args for a range the spec has no program on.
+    spec, run_args = exp_program(first_input, first_output)
+    run_args.tensor_args = {"input": first_input, "output": first_output, "extra": second_input}
+    with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
+        E.generic_op([first_input, first_output], spec, run_args)
+    spec, run_args = exp_program(second_input, first_output)
+    with expect_error(RuntimeError, "has no run args for mesh range"):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(1), spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(0), run_args)]),
+        )
+
+    # A view, or the whole tensor, that holds the program's device reads that device's part.
+    for input_view in (first_input, input_tensor):
+        spec, run_args = exp_program(input_view, first_output)
+        result = E.generic_op([first_input, first_output], spec, run_args)
+        assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
+
+    # Each device's program may name that device's views while io_tensors lists the whole tensors.
+    first_spec, first_run_args = exp_program(first_input, first_output)
+    second_spec, second_run_args = exp_program(second_input, second_output)
+    E.generic_op(
+        [input_tensor, output_tensor],
+        E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), second_spec)]),
+        E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), second_run_args)]),
+    )
+    result = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert_close(torch.exp(torch_input), result)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_mesh_form_runs_a_program_of_its_own_on_each_device(mesh_device):
     """Each range runs its own program with its own run args, on a cache hit too, and the ranges are part of the key."""
     first, second = one_device(0), one_device(1)
