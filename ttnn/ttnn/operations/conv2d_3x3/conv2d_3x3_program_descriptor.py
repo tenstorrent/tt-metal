@@ -6,6 +6,10 @@
 Regime R0 (interleaved-slab): output pixels M are split over the grid in contiguous tile ranges;
 each core runs `num_m_blocks_this_core` M-blocks of `block_m_tiles` tile-rows x all C_out, walking
 K in `num_k_blocks` blocks of `block_k_tiles` that never straddle a kernel row (kh).
+
+Regime R3 (TILE input) keeps that blocking. The reader streams the M-block's footprint tile-rows
+into `cb_input_tiles` and compute untilizes them into `cb_halo_slab` (bf16 RM, one tile-row = 32
+pixels), from which the reader gathers exactly as on the ROW_MAJOR path.
 """
 
 from __future__ import annotations
@@ -37,11 +41,14 @@ CB_WEIGHTS = 3
 CB_BIAS = 4
 CB_MATMUL_PARTIALS = 5
 CB_OUTPUT_TILES = 6
+CB_INPUT_TILES = 7
 
 # Buffer-depth knobs (Blocking Model depth table).
 IM2COL_RM_DEPTH_ROWS = 2
 WEIGHT_DEPTH = 2
 OUT_DEPTH_ROW_GROUPS = 2
+# cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b.
+INPUT_TILE_DEPTH_BATCHES = 2
 
 # Slab-fill start offset per core index (op_design lamp P9): consecutive pixels rotate over DRAM banks,
 # so offsetting each core's first read spreads the cores over the banks. 0 disables the stagger.
@@ -67,6 +74,8 @@ class Conv3x3Geometry:
     dilation: int
     output_height: int
     output_width: int
+    c_in: int
+    tile_input: bool
     in0_tile_bytes: int
     weight_tile_bytes: int
     out_tile_bytes: int
@@ -83,6 +92,14 @@ class Conv3x3Geometry:
     @property
     def tensor_n_tiles(self):
         return _div_up(self.c_out, TILE)
+
+    @property
+    def num_in_px(self):
+        return self.input_height * self.input_width
+
+    @property
+    def c_in_tiles(self):
+        return self.c_in_p // TILE
 
     @property
     def tensor_kkh_tiles(self):
@@ -105,6 +122,8 @@ class Conv3x3Blocking:
     max_m_blocks_per_core: int
     band_len_px: int
     band_stride_px: int
+    slab_tile_rows: int
+    untilize_batch_rows: int
     out_subblock_h: int
     out_subblock_w: int
     im2col_rm_depth_rows: int
@@ -114,6 +133,8 @@ class Conv3x3Blocking:
 
     @property
     def slab_px(self):
+        if self.slab_tile_rows:
+            return self.slab_tile_rows * TILE
         return 2 * self.band_stride_px + self.band_len_px
 
 
@@ -142,26 +163,66 @@ def _block_band_len(g: Conv3x3Geometry, o_first, o_last):
     return (ho1 - ho0) * g.stride * g.input_width + (wo1 - wo0) * g.stride + 2 * g.dilation + 1
 
 
-def _max_band_len(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
-    worst = 0
+def _block_first_tap(g: Conv3x3Geometry, o_first):
+    """Flat input index of tap (0, 0) of output pixel o_first (negative inside the top/left padding)."""
+    ho0, wo0 = divmod(o_first, g.output_width)
+    return (ho0 * g.stride - g.padding) * g.input_width + wo0 * g.stride - g.padding
+
+
+def _tile_slab_rows(g: Conv3x3Geometry, f, band_len):
+    """Tile-rows the reader's TILE slab plan places for one M-block (mirror of the reader kernel).
+    Band kh is its in-image pixels rounded out to whole 32-pixel input tile-rows; a band that starts
+    inside the previous band's tile-rows shares them, otherwise it is placed after them."""
+    next_free = 0
+    prev = None  # (t_lo, t_hi, slab_row) of the last non-empty band
+    for kh in range(3):
+        v_lo = f + kh * g.dilation * g.input_width
+        lo, hi = max(v_lo, 0), min(v_lo + band_len, g.num_in_px)
+        if lo >= hi:
+            continue
+        t_lo, t_hi = lo // TILE, _div_up(hi, TILE)
+        slab_row = prev[2] + (t_lo - prev[0]) if prev is not None and t_lo < prev[1] else next_free
+        next_free = slab_row + (t_hi - t_lo)
+        prev = (t_lo, t_hi, slab_row)
+    return next_free
+
+
+def _block_extents(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
+    """(max band_len_px, max TILE slab tile-rows) over every M-block of every core."""
+    worst_band, worst_slab_rows = 0, 0
     for start, actual in _core_m_ranges(g.tensor_m_tiles, core_m_tiles):
         for block_start in range(0, actual, block_m_tiles):
             tiles = min(block_m_tiles, actual - block_start)
             o_first = (start + block_start) * TILE
             o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
-            worst = max(worst, _block_band_len(g, o_first, o_last))
-    return worst
+            band_len = _block_band_len(g, o_first, o_last)
+            worst_band = max(worst_band, band_len)
+            if g.tile_input:
+                worst_slab_rows = max(worst_slab_rows, _tile_slab_rows(g, _block_first_tap(g, o_first), band_len))
+    return worst_band, worst_slab_rows
 
 
 def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn):
     num_k_blocks = g.tensor_k_tiles // bk
     max_m_blocks = _div_up(core_m_tiles, bm)
     weight_depth = 1 if num_k_blocks * max_m_blocks == 1 else WEIGHT_DEPTH
-    band_len = _max_band_len(g, core_m_tiles, bm)
+    band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
     band_stride = min(g.dilation * g.input_width, band_len)
     sb_h, sb_w = _out_subblock(bm, bn)
+    if g.tile_input:
+        # One untilize batch = the tile-rows one band can touch, so the reader fences about once per band.
+        # The slab is a whole number of batches: every reader push and compute untilize has one quantum.
+        ub = max(1, min(raw_slab_rows, _div_up(band_len, TILE) + 1))
+        slab_tile_rows = _div_up(max(raw_slab_rows, 1), ub) * ub
+        slab_bytes = slab_tile_rows * g.c_in_tiles * TILE_BYTES_BF16
+        input_tile_bytes = INPUT_TILE_DEPTH_BATCHES * ub * g.c_in_tiles * g.in0_tile_bytes
+    else:
+        ub, slab_tile_rows = 1, 0
+        slab_bytes = (2 * band_stride + band_len) * g.c_in_p * BF16_BYTES
+        input_tile_bytes = 0
     total = (
-        (2 * band_stride + band_len) * g.c_in_p * BF16_BYTES
+        slab_bytes
+        + input_tile_bytes
         + IM2COL_RM_DEPTH_ROWS * bk * TILE_BYTES_BF16
         + bm * bk * g.in0_tile_bytes
         + weight_depth * bk * bn * g.weight_tile_bytes
@@ -175,6 +236,8 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn):
         weight_depth=weight_depth,
         band_len_px=band_len,
         band_stride_px=band_stride,
+        slab_tile_rows=slab_tile_rows,
+        untilize_batch_rows=ub,
         out_subblock_h=sb_h,
         out_subblock_w=sb_w,
         footprint_bytes=total,
@@ -260,21 +323,29 @@ def create_program_descriptor(
     geometry: Conv3x3Geometry,
     blocking: Conv3x3Blocking,
     compute_kernel_config,
+    apply_relu: bool,
 ) -> ttnn.ProgramDescriptor:
     g, b = geometry, blocking
     has_bias = bias_tensor is not None
     pixel_bytes = g.c_in_p * BF16_BYTES
-    if input_tensor.buffer_aligned_page_size() != pixel_bytes:
+    input_page_bytes = g.in0_tile_bytes if g.tile_input else pixel_bytes
+    if input_tensor.buffer_aligned_page_size() != input_page_bytes:
         raise ValueError(
-            f"conv2d_3x3: input page stride {input_tensor.buffer_aligned_page_size()} B != slab row {pixel_bytes} B"
+            f"conv2d_3x3: input page stride {input_tensor.buffer_aligned_page_size()} B != expected "
+            f"{input_page_bytes} B"
         )
 
     num_cores = b.num_m_groups
     cores = _core_range_set(num_cores, b.grid_x)
     bm, bk, bn = b.block_m_tiles, b.block_k_tiles, b.block_n_tiles
 
+    if g.tile_input:
+        # Untilized footprint tile-rows: one bf16 tile page holds 32 slab pixels of 32 channels.
+        slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16, b.slab_tile_rows * g.c_in_tiles, cores)
+    else:
+        slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, pixel_bytes, b.slab_px, cores)
     cbs = [
-        _cb(CB_HALO_SLAB, ttnn.bfloat16, pixel_bytes, b.slab_px, cores),
+        slab_cb,
         _cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, b.im2col_rm_depth_rows * bk, cores),
         _cb(CB_IM2COL_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores),
         _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * bk * bn, cores),
@@ -289,14 +360,19 @@ def create_program_descriptor(
     ]
     if has_bias:
         cbs.append(_cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, bn, cores))
+    if g.tile_input:
+        input_tile_pages = INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows * g.c_in_tiles
+        cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
 
     reader_ct_args = [
         CB_HALO_SLAB,
         CB_IM2COL_RM,
+        CB_INPUT_TILES,
         g.input_height,
         g.input_width,
         g.output_width,
         g.num_out_px,
+        g.c_in,
         g.c_in_p,
         g.padding,
         g.stride,
@@ -306,6 +382,11 @@ def create_program_descriptor(
         g.tensor_kkh_tiles,
         b.num_k_blocks,
         b.band_stride_px,
+        int(g.tile_input),
+        input_page_bytes,
+        b.slab_tile_rows,
+        b.untilize_batch_rows,
+        b.im2col_rm_depth_rows,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -323,6 +404,12 @@ def create_program_descriptor(
         b.out_subblock_h,
         b.out_subblock_w,
         int(has_bias),
+        int(apply_relu),
+        CB_INPUT_TILES,
+        CB_HALO_SLAB,
+        int(g.tile_input),
+        g.c_in_tiles,
+        b.slab_tile_rows,
     ]
 
     writer_ct_args = [

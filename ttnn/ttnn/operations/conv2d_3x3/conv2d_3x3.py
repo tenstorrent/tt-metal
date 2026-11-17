@@ -7,7 +7,8 @@
     output [1, 1, H_out*W_out, C_out]  (always TILE, dtype = input dtype)
 
 One device program per call: im2col gather (reader) -> tilize + K-blocked matmul with fp32
-L1 accumulation (+ row-broadcast bias) (compute) -> output tiles (writer). The weights come from
+L1 accumulation (+ row-broadcast bias, + ReLU on the final value) (compute) -> output tiles
+(writer). A TILE input is untilized in-kernel into the reader's halo slab first. The weights come from
 prepare_conv2d_weights (rows ordered (kh, kw, c), each kh block padded to a tile multiple).
 """
 
@@ -26,6 +27,10 @@ from .conv2d_3x3_program_descriptor import (
 
 TILE = 32
 _ML = ttnn.TensorMemoryLayout
+
+# The gather copies a pixel's C_in real channels L1->L1 and leaves its padding lanes at zero; an L1
+# NoC transfer moves whole 16 B words, so C_in must fill them (8 bf16 channels).
+C_IN_GRANULE = 8
 
 
 # ---------------------------------------------------------------------------
@@ -129,14 +134,14 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    "layout": [ttnn.ROW_MAJOR_LAYOUT],
+    "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     "memory_layout": [_ML.INTERLEAVED],
     "fp32_dest_acc_en": [True],
     "bias_mode": ["with_bias", "no_bias"],
-    "activation": ["none"],
-    "channel_alignment": ["tile_aligned"],
+    "activation": ["none", "relu"],
+    "channel_alignment": ["tile_aligned", "c_in_unaligned"],
     "hw_alignment": ["hw_aligned"],
     "stride_mode": ["unit", "strided"],
     "dilation_mode": ["unit", "dilated"],
@@ -218,6 +223,7 @@ def prepare_conv2d_weights(
     if torch_weight.dim() != 4 or tuple(torch_weight.shape[2:]) != (3, 3):
         raise ValueError(f"conv2d_3x3: weight must be [C_out, C_in, 3, 3], got {list(torch_weight.shape)}")
     c_out, c_in = int(torch_weight.shape[0]), int(torch_weight.shape[1])
+    _check_c_in_granule(c_in)
     axes = _prepare_axes(
         input_dtype=input_dtype,
         input_layout=input_layout,
@@ -294,6 +300,13 @@ def prepare_conv2d_bias(
 # ---------------------------------------------------------------------------
 
 
+def _check_c_in_granule(c_in):
+    if c_in % C_IN_GRANULE != 0:
+        raise ValueError(
+            f"conv2d_3x3: C_in={c_in} must be a multiple of {C_IN_GRANULE} (pad input channels with zeros on the host)"
+        )
+
+
 def _check_contract(
     input_tensor, weight_tensor, bias, *, input_height, input_width, padding, stride, dilation, activation
 ):
@@ -316,6 +329,7 @@ def _check_contract(
         raise ValueError(f"conv2d_3x3: output extent {h_out}x{w_out} is empty")
 
     c_in = shape[3]
+    _check_c_in_granule(c_in)
     w_shape = list(weight_tensor.shape)
     k_p = padded_k(c_in, input_tensor.layout, input_tensor.memory_config())
     if len(w_shape) != 4 or w_shape[0] != 1 or w_shape[1] != 1 or w_shape[2] != k_p:
@@ -431,6 +445,8 @@ def conv2d_3x3(
         dilation=dilation,
         output_height=h_out,
         output_width=w_out,
+        c_in=c_in,
+        tile_input=input_tensor.layout == ttnn.TILE_LAYOUT,
         in0_tile_bytes=ttnn.tile_size(input_tensor.dtype),
         weight_tile_bytes=ttnn.tile_size(weight_tensor.dtype),
         out_tile_bytes=ttnn.tile_size(input_tensor.dtype),
@@ -454,6 +470,7 @@ def conv2d_3x3(
         geometry=geometry,
         blocking=blocking,
         compute_kernel_config=config,
+        apply_relu=activation == "relu",
     )
     io_tensors = [input_tensor, weight_tensor] + ([bias] if bias is not None else []) + [output_tensor]
     return ttnn.generic_op(io_tensors, descriptor)

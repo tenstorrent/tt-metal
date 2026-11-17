@@ -1,9 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// conv2d_3x3 compute: per M-block, tilize_matmul_block (matmul_block with tilize as its PreKBlockFn,
-// fp32 packer-L1 accumulation over the K walk) then finalize_block (row-broadcast bias add).
-// No bias: the last K-block packs straight to the output CB and finalize_block is empty.
+// conv2d_3x3 compute: per M-block, [untilize_footprint (TILE input)] then tilize_matmul_block
+// (matmul_block with tilize as its PreKBlockFn, fp32 packer-L1 accumulation over the K walk) then
+// finalize_block (row-broadcast bias add). No bias: the last K-block packs straight to the output CB
+// and finalize_block is empty. ReLU applies only to the final value: the bias-add pack, or the last
+// K-block's pack without bias.
+//
+// matmul_block leaves packer L1 accumulation on and (OutWithRelu) PACK_RELU on; every later pack
+// (untilize, tilize, bias add) first restores the state it needs.
 
 #include <cstdint>
 
@@ -13,6 +18,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
 
@@ -22,15 +28,29 @@ namespace {
 
 // Tilizes one K-block (block_m_tiles tile-rows x block_k_tiles) of gathered im2col rows. The matmul
 // restores its own state afterwards (InitMode::ShortAfterPreKBlock).
-template <uint32_t block_k_tiles, uint32_t block_m_tiles, uint32_t cb_im2col_rm, uint32_t cb_im2col_tiles>
+template <
+    uint32_t block_k_tiles,
+    uint32_t block_m_tiles,
+    uint32_t cb_im2col_rm,
+    uint32_t cb_im2col_tiles,
+    bool relu_on_last_matmul_pack>
 struct TilizeIm2colKBlock {
     DataflowBuffer* rm;
     DataflowBuffer* tiles;
 
-    ALWI void operator()(uint32_t /*block*/, uint32_t /*num_k_blocks*/, bool /*is_last*/) const {
+    ALWI void operator()(uint32_t /*block*/, uint32_t /*num_k_blocks*/, bool is_last) const {
         // The previous K-block's pack left packer L1 accumulation on; the tilize pack must overwrite.
         pack_reconfig_l1_acc(0);
+        if constexpr (relu_on_last_matmul_pack) {
+            // OutWithRelu turns PACK_RELU on before this hook; activations must not be clamped.
+            pack_relu_config(ReluConfig::none());
+        }
         ckl::tilize<block_k_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
+        if constexpr (relu_on_last_matmul_pack) {
+            if (is_last) {
+                pack_relu_config(ReluConfig::zero());
+            }
+        }
     }
 };
 
@@ -50,6 +70,12 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);
     constexpr bool has_bias = get_compile_time_arg_val(12) != 0;
+    constexpr bool apply_relu = get_compile_time_arg_val(13) != 0;
+    constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_halo_slab = get_compile_time_arg_val(15);
+    constexpr bool tile_input = get_compile_time_arg_val(16) != 0;
+    constexpr uint32_t c_in_tiles = get_compile_time_arg_val(17);
+    constexpr uint32_t slab_tile_rows = get_compile_time_arg_val(18);
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
 
@@ -61,12 +87,23 @@ void kernel_main() {
         in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks);
     constexpr auto bias_shape =
         ckl::BiasAddShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_n_tiles);
+    // kernel_main is not a template, so the TILE-only untilize is instantiated on the ROW_MAJOR path too.
+    constexpr uint32_t untilize_width_tiles = tile_input ? c_in_tiles : 1;
+    constexpr bool relu_on_last_matmul_pack = apply_relu && !has_bias;
     constexpr ckl::LastBlockTarget last_block_target =
-        has_bias ? ckl::LastBlockTarget::Interm : ckl::LastBlockTarget::Out;
+        has_bias ? ckl::LastBlockTarget::Interm
+                 : (apply_relu ? ckl::LastBlockTarget::OutWithRelu : ckl::LastBlockTarget::Out);
 
-    // The first op is the tilize, so startup matches its operands; every later phase reconfigures itself.
-    compute_kernel_hw_startup(cb_im2col_rm, cb_im2col_tiles);
+    // Startup matches the first op (untilize for TILE input, else tilize); every later phase
+    // reconfigures itself.
+    if constexpr (tile_input) {
+        compute_kernel_hw_startup(cb_input_tiles, cb_halo_slab);
+    } else {
+        compute_kernel_hw_startup(cb_im2col_rm, cb_im2col_tiles);
+    }
 
+    DataflowBuffer input_tiles_dfb(cb_input_tiles);
+    DataflowBuffer halo_slab_dfb(cb_halo_slab);
     DataflowBuffer im2col_rm_dfb(cb_im2col_rm);
     DataflowBuffer im2col_tiles_dfb(cb_im2col_tiles);
     CircularBuffer im2col_tiles(cb_im2col_tiles);
@@ -75,7 +112,8 @@ void kernel_main() {
     CircularBuffer output_tiles(cb_output_tiles);
     CircularBuffer bias(cb_bias);
 
-    using TilizeFn = TilizeIm2colKBlock<block_k_tiles, block_m_tiles, cb_im2col_rm, cb_im2col_tiles>;
+    using TilizeFn =
+        TilizeIm2colKBlock<block_k_tiles, block_m_tiles, cb_im2col_rm, cb_im2col_tiles, relu_on_last_matmul_pack>;
     const TilizeFn tilize_k_block{&im2col_rm_dfb, &im2col_tiles_dfb};
 
     if constexpr (has_bias) {
@@ -83,6 +121,13 @@ void kernel_main() {
     }
 
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+        if constexpr (tile_input) {
+            // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
+            pack_reconfig_l1_acc(0);
+            ckl::untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>(
+                input_tiles_dfb, halo_slab_dfb, slab_tile_rows);
+        }
+
         ckl::matmul_block<
             /*transpose=*/false,
             /*packer_l1_acc=*/true,
@@ -106,8 +151,14 @@ void kernel_main() {
         if constexpr (has_bias) {
             // matmul_block leaves packer L1 accumulation on after its last K-block.
             pack_reconfig_l1_acc(0);
+            if constexpr (apply_relu) {
+                pack_relu_config(ReluConfig::zero());
+            }
             ckl::add_bias_bcast_rows<ckl::BiasBroadcast::RowBroadcast, ckl::OutputCBLayout::TileRowMajor>(
                 partials, bias, output_tiles, bias_shape);
+        }
+        if constexpr (apply_relu) {
+            pack_relu_config(ReluConfig::none());
         }
     }
 

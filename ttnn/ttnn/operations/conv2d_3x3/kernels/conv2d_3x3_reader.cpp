@@ -8,22 +8,32 @@
 // K padding. A "gather rows by index list with zero-fill into tilize-layout pages" dataflow helper
 // would close the gap. Fencing uses the local_copy helpers' transaction-id calls.
 //
-// Slab layout: band kh (kernel row kh's input pixels for this block) sits at slab pixel
-// kh * band_stride_px. A pixel with flat index v of band kh lives at slab pixel
-// v + kh * band_stride_px - (f + kh * dilation * W), f = flat index of tap (0, 0) of the block's
-// first output. With band_stride_px == dilation * W the bands coincide where they overlap, so each
-// input pixel is read once.
+// Slab layout: a pixel with flat index v of band kh (kernel row kh's input pixels for this block)
+// lives at slab pixel v + slab_x_base[kh].
+//   ROW_MAJOR: the reader fills the slab from DRAM pages; band kh starts at slab pixel
+//     kh * band_stride_px. With band_stride_px == dilation * W the bands coincide where they overlap,
+//     so each input pixel is read once.
+//   TILE: the reader streams the band's input tile-rows to compute, which untilizes them into the
+//     slab (compute -> reader CB). A band starting inside the previous band's tile-rows shares them.
+//
+// Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
+// NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
+// zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
+// layout, so data never lands where another K-block keeps lanes or K padding) or from per-row
+// zero-fills.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 
 namespace {
 
 constexpr uint32_t TILE_DIM = 32;
-constexpr uint32_t ELEM_BYTES = 2;   // bf16 slab and im2col rows
-constexpr uint32_t TRID_GATHER = 4;  // bands use trids 1..3
+constexpr uint32_t ELEM_BYTES = 2;        // bf16 slab and im2col rows
+constexpr uint32_t TRID_GATHER = 4;       // ROW_MAJOR bands use trids 1..3
+constexpr uint32_t TRID_INPUT_TILES = 5;  // TILE footprint batches
 
 // The NIU counts outstanding reads per transaction id in a counter capped at
 // NOC_MAX_TRANSACTION_ID_COUNT; long batches are throttled to stay well below it.
@@ -59,40 +69,64 @@ struct TaggedReads {
 void kernel_main() {
     constexpr uint32_t cb_halo_slab = get_compile_time_arg_val(0);
     constexpr uint32_t cb_im2col_rm = get_compile_time_arg_val(1);
-    constexpr int32_t input_height = get_compile_time_arg_val(2);
-    constexpr int32_t input_width = get_compile_time_arg_val(3);
-    constexpr uint32_t output_width = get_compile_time_arg_val(4);
-    constexpr uint32_t num_out_px = get_compile_time_arg_val(5);
-    constexpr uint32_t c_in_p = get_compile_time_arg_val(6);
-    constexpr int32_t padding = get_compile_time_arg_val(7);
-    constexpr int32_t stride = get_compile_time_arg_val(8);
-    constexpr int32_t dilation = get_compile_time_arg_val(9);
-    constexpr uint32_t block_m_tiles = get_compile_time_arg_val(10);
-    constexpr uint32_t block_k_tiles = get_compile_time_arg_val(11);
-    constexpr uint32_t tensor_kkh_tiles = get_compile_time_arg_val(12);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(13);
-    constexpr int32_t band_stride_px = get_compile_time_arg_val(14);
-    constexpr auto input_args = TensorAccessorArgs<15>();
+    constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(2);
+    constexpr int32_t input_height = get_compile_time_arg_val(3);
+    constexpr int32_t input_width = get_compile_time_arg_val(4);
+    constexpr uint32_t output_width = get_compile_time_arg_val(5);
+    constexpr uint32_t num_out_px = get_compile_time_arg_val(6);
+    constexpr uint32_t c_in = get_compile_time_arg_val(7);
+    constexpr uint32_t c_in_p = get_compile_time_arg_val(8);
+    constexpr int32_t padding = get_compile_time_arg_val(9);
+    constexpr int32_t stride = get_compile_time_arg_val(10);
+    constexpr int32_t dilation = get_compile_time_arg_val(11);
+    constexpr uint32_t block_m_tiles = get_compile_time_arg_val(12);
+    constexpr uint32_t block_k_tiles = get_compile_time_arg_val(13);
+    constexpr uint32_t tensor_kkh_tiles = get_compile_time_arg_val(14);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(15);
+    constexpr int32_t band_stride_px = get_compile_time_arg_val(16);
+    constexpr bool tile_input = get_compile_time_arg_val(17) != 0;
+    constexpr uint32_t input_page_bytes = get_compile_time_arg_val(18);
+    constexpr uint32_t slab_tile_rows = get_compile_time_arg_val(19);
+    constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(20);
+    constexpr uint32_t im2col_rm_depth_rows = get_compile_time_arg_val(21);
+    constexpr auto input_args = TensorAccessorArgs<22>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
     const uint32_t actual_m_tiles = get_arg_val<uint32_t>(2);
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(3);
-    const uint32_t read_rotation = get_arg_val<uint32_t>(4);
+    [[maybe_unused]] const uint32_t read_rotation = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     constexpr int32_t num_in_px = input_height * input_width;
     constexpr uint32_t block_k_cols = block_k_tiles * TILE_DIM;
     constexpr uint32_t im2col_row_bytes = block_k_cols * ELEM_BYTES;
     constexpr uint32_t tap_cols = 3 * c_in_p;
+    constexpr bool lanes_padded = c_in < c_in_p;
+    constexpr bool k_padded = tensor_kkh_tiles * TILE_DIM > tap_cols;
+    // One K-block per kernel row: every K-block puts taps, lanes and K padding at the same row offsets.
+    constexpr bool one_k_block_per_kh = block_k_tiles == tensor_kkh_tiles;
+    constexpr bool zero_im2col_once = one_k_block_per_kh && (lanes_padded || k_padded);
+    constexpr uint32_t c_in_tiles = c_in_p / TILE_DIM;
     static_assert((tensor_kkh_tiles % block_k_tiles) == 0, "a K-block never straddles a kernel row");
     static_assert(num_k_blocks * block_k_tiles == 3 * tensor_kkh_tiles, "K-blocks tile the kh blocks exactly");
+    static_assert((c_in * ELEM_BYTES) % 16 == 0, "per-tap copies move whole 16 B L1 words");
+    static_assert(!tile_input || (c_in_p % TILE_DIM) == 0, "TILE slab rows are whole tile columns");
+    static_assert(!tile_input || (slab_tile_rows % untilize_batch_rows) == 0, "slab is whole untilize batches");
 
-    const auto input = TensorAccessor(input_args, input_addr, pixel_bytes);
-    const uint32_t slab_l1 = get_write_ptr(cb_halo_slab);
+    const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
+    // TILE: compute pushes exactly slab_tile_rows tile-rows per M-block and the reader pops them all,
+    // so the slab always starts at the CB base.
+    const uint32_t slab_l1 = tile_input ? get_read_ptr(cb_halo_slab) : get_write_ptr(cb_halo_slab);
     const uint64_t slab_noc = get_noc_addr(slab_l1);
     const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
     TaggedReads reads;
+
+    if constexpr (zero_im2col_once) {
+        const uint32_t im2col_rm_bytes = im2col_rm_depth_rows * block_k_tiles * get_tile_size(cb_im2col_rm);
+        reads.noc.async_write_zeros(CircularBuffer(cb_im2col_rm), im2col_rm_bytes);
+        reads.noc.write_zeros_l1_barrier();
+    }
 
     auto zero_fill = [&](uint32_t dst_l1, uint32_t bytes) {
         while (bytes > 0) {
@@ -103,8 +137,8 @@ void kernel_main() {
         }
     };
 
-    // Slab pixels [x_from, x_to) are flat input pixels x + v_minus_x.
-    auto read_slab_pixels = [&](int32_t x_from, int32_t x_to, int32_t v_minus_x) {
+    // ROW_MAJOR: slab pixels [x_from, x_to) are flat input pixels x + v_minus_x.
+    [[maybe_unused]] auto read_slab_pixels = [&](int32_t x_from, int32_t x_to, int32_t v_minus_x) {
         const uint32_t end_page = x_to + v_minus_x;
         for (int32_t x = x_from; x < x_to;) {
             const uint32_t page = x + v_minus_x;
@@ -131,22 +165,87 @@ void kernel_main() {
         const int32_t band_len =
             (ho_last - ho_first) * stride * input_width + (wo_last - wo_first) * stride + 2 * dilation + 1;
 
-        // ---- fill_halo_slab: band kh tagged trid kh + 1; overlapping bands read only their new tail.
-        for (int32_t kh = 0; kh < 3; ++kh) {
-            const int32_t seg_lo = kh == 0 ? 0
-                                           : ((kh - 1) * band_stride_px + band_len > kh * band_stride_px
-                                                  ? (kh - 1) * band_stride_px + band_len
-                                                  : kh * band_stride_px);
-            const int32_t seg_hi = kh * band_stride_px + band_len;
-            const int32_t v_minus_x = f + kh * dilation * input_width - kh * band_stride_px;
-            const int32_t x_lo = seg_lo > -v_minus_x ? seg_lo : -v_minus_x;
-            const int32_t x_hi = seg_hi < num_in_px - v_minus_x ? seg_hi : num_in_px - v_minus_x;
-            reads.begin(kh + 1);
-            if (x_lo < x_hi) {
-                // Each core starts its band at a different pixel so the cores do not all open on one bank.
-                const int32_t x_split = x_lo + static_cast<int32_t>(read_rotation % static_cast<uint32_t>(x_hi - x_lo));
-                read_slab_pixels(x_split, x_hi, v_minus_x);
-                read_slab_pixels(x_lo, x_split, v_minus_x);
+        int32_t slab_x_base[3];
+        [[maybe_unused]] uint32_t slab_ready_pages[3];  // TILE: slab pages that hold band kh once compute pushed them
+
+        if constexpr (tile_input) {
+            // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab order.
+            uint32_t seg_first[3];
+            uint32_t seg_count[3];
+            uint32_t num_segs = 0;
+            int32_t next_free = 0;
+            bool have_prev = false;
+            int32_t prev_t_lo = 0, prev_t_hi = 0, prev_row = 0;
+            for (int32_t kh = 0; kh < 3; ++kh) {
+                const int32_t v_lo = f + kh * dilation * input_width;
+                const int32_t lo = v_lo > 0 ? v_lo : 0;
+                const int32_t hi = v_lo + band_len < num_in_px ? v_lo + band_len : num_in_px;
+                if (lo >= hi) {
+                    slab_x_base[kh] = 0;
+                    slab_ready_pages[kh] = next_free * c_in_tiles;
+                    continue;
+                }
+                const int32_t t_lo = lo / static_cast<int32_t>(TILE_DIM);
+                const int32_t t_hi = (hi + static_cast<int32_t>(TILE_DIM) - 1) / static_cast<int32_t>(TILE_DIM);
+                const bool shares = have_prev && t_lo < prev_t_hi;
+                const int32_t row = shares ? prev_row + (t_lo - prev_t_lo) : next_free;
+                const int32_t first_new = shares ? prev_t_hi : t_lo;
+                if (t_hi > first_new) {
+                    seg_first[num_segs] = first_new;
+                    seg_count[num_segs] = t_hi - first_new;
+                    ++num_segs;
+                }
+                slab_x_base[kh] = static_cast<int32_t>(TILE_DIM) * (row - t_lo);
+                next_free = row + (t_hi - t_lo);
+                slab_ready_pages[kh] = next_free * c_in_tiles;
+                have_prev = true;
+                prev_t_lo = t_lo;
+                prev_t_hi = t_hi;
+                prev_row = row;
+            }
+
+            // Slab rows past the plan's last row are pushed unread: compute untilizes a fixed count.
+            constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
+            uint32_t seg = 0;
+            uint32_t seg_row = 0;
+            for (uint32_t batch = 0; batch < slab_tile_rows / untilize_batch_rows; ++batch) {
+                cb_reserve_back(cb_input_tiles, batch_pages);
+                uint32_t l1 = get_write_ptr(cb_input_tiles);
+                reads.begin(TRID_INPUT_TILES);
+                for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs; ++r) {
+                    const uint32_t page0 = (seg_first[seg] + seg_row) * c_in_tiles;
+                    for (uint32_t c = 0; c < c_in_tiles; ++c, l1 += input_page_bytes) {
+                        reads.read(input.get_noc_addr(page0 + c), l1, input_page_bytes);
+                    }
+                    if (++seg_row == seg_count[seg]) {
+                        ++seg;
+                        seg_row = 0;
+                    }
+                }
+                reads.wait(TRID_INPUT_TILES);
+                cb_push_back(cb_input_tiles, batch_pages);
+            }
+        } else {
+            // ---- fill_halo_slab (ROW_MAJOR): band kh tagged trid kh + 1; overlapping bands read only their
+            // new tail.
+            for (int32_t kh = 0; kh < 3; ++kh) {
+                const int32_t seg_lo = kh == 0 ? 0
+                                               : ((kh - 1) * band_stride_px + band_len > kh * band_stride_px
+                                                      ? (kh - 1) * band_stride_px + band_len
+                                                      : kh * band_stride_px);
+                const int32_t seg_hi = kh * band_stride_px + band_len;
+                const int32_t v_minus_x = f + kh * dilation * input_width - kh * band_stride_px;
+                slab_x_base[kh] = -v_minus_x;
+                const int32_t x_lo = seg_lo > -v_minus_x ? seg_lo : -v_minus_x;
+                const int32_t x_hi = seg_hi < num_in_px - v_minus_x ? seg_hi : num_in_px - v_minus_x;
+                reads.begin(kh + 1);
+                if (x_lo < x_hi) {
+                    // Each core starts its band at a different pixel so the cores do not all open on one bank.
+                    const int32_t x_split =
+                        x_lo + static_cast<int32_t>(read_rotation % static_cast<uint32_t>(x_hi - x_lo));
+                    read_slab_pixels(x_split, x_hi, v_minus_x);
+                    read_slab_pixels(x_lo, x_split, v_minus_x);
+                }
             }
         }
 
@@ -157,12 +256,18 @@ void kernel_main() {
             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
             const uint32_t col_hi = col_lo + block_k_cols;
             if (col_lo == 0) {
-                reads.wait(kh + 1);
+                if constexpr (tile_input) {
+                    if (slab_ready_pages[kh] > 0) {
+                        cb_wait_front(cb_halo_slab, slab_ready_pages[kh]);
+                    }
+                } else {
+                    reads.wait(kh + 1);
+                }
             }
             const uint32_t data_hi = col_hi < tap_cols ? col_hi : tap_cols;
             const int32_t kw_first = col_lo < tap_cols ? col_lo / c_in_p : 3;
             const int32_t kw_last = data_hi > col_lo ? (data_hi - 1) / c_in_p : -1;
-            const int32_t slab_x_base = kh * band_stride_px - (f + kh * dilation * input_width);
+            const int32_t slab_x_base_kh = slab_x_base[kh];
 
             uint32_t o = o_first;
             for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
@@ -177,12 +282,12 @@ void kernel_main() {
                     const int32_t h_in = ho * stride + kh * dilation - padding;
                     const int32_t w_in0 = wo * stride - padding;
                     const bool row_in_image = h_in >= 0 && h_in < input_height;
-                    const int32_t slab_x0 = slab_x_base + h_in * input_width + w_in0;
+                    const int32_t slab_x0 = slab_x_base_kh + h_in * input_width + w_in0;
 
-                    const bool combined = dilation == 1 && row_in_image && w_in0 + kw_first >= 0 &&
+                    const bool combined = !lanes_padded && dilation == 1 && row_in_image && w_in0 + kw_first >= 0 &&
                                           w_in0 + kw_last < input_width && kw_first <= kw_last;
                     if (combined) {
-                        // d = 1: the touched taps are consecutive slab pixels, so one read covers them.
+                        // d = 1, no lanes: the touched taps are consecutive slab pixels, so one read covers them.
                         reads.read(
                             slab_noc + slab_x0 * pixel_bytes + col_lo * ELEM_BYTES,
                             row_l1,
@@ -192,21 +297,34 @@ void kernel_main() {
                             const uint32_t tap_lo = kw * c_in_p;
                             const uint32_t seg_lo = col_lo > tap_lo ? col_lo : tap_lo;
                             const uint32_t seg_hi = data_hi < tap_lo + c_in_p ? data_hi : tap_lo + c_in_p;
+                            const uint32_t real_hi = seg_hi < tap_lo + c_in ? seg_hi : tap_lo + c_in;
                             const uint32_t dst = row_l1 + (seg_lo - col_lo) * ELEM_BYTES;
-                            const uint32_t bytes = (seg_hi - seg_lo) * ELEM_BYTES;
                             const int32_t w_in = w_in0 + kw * dilation;
                             if (row_in_image && w_in >= 0 && w_in < input_width) {
                                 const int32_t slab_x = slab_x0 + kw * dilation;
-                                reads.read(
-                                    slab_noc + slab_x * pixel_bytes + (seg_lo - tap_lo) * ELEM_BYTES, dst, bytes);
+                                if (real_hi > seg_lo) {
+                                    reads.read(
+                                        slab_noc + slab_x * pixel_bytes + (seg_lo - tap_lo) * ELEM_BYTES,
+                                        dst,
+                                        (real_hi - seg_lo) * ELEM_BYTES);
+                                }
+                                if constexpr (lanes_padded && !zero_im2col_once) {
+                                    const uint32_t lane_lo = real_hi > seg_lo ? real_hi : seg_lo;
+                                    if (seg_hi > lane_lo) {
+                                        zero_fill(
+                                            row_l1 + (lane_lo - col_lo) * ELEM_BYTES, (seg_hi - lane_lo) * ELEM_BYTES);
+                                    }
+                                }
                             } else {
-                                zero_fill(dst, bytes);
+                                zero_fill(dst, (seg_hi - seg_lo) * ELEM_BYTES);
                             }
                         }
                     }
-                    if (col_hi > tap_cols) {
-                        const uint32_t pad_lo = col_lo > tap_cols ? col_lo : tap_cols;
-                        zero_fill(row_l1 + (pad_lo - col_lo) * ELEM_BYTES, (col_hi - pad_lo) * ELEM_BYTES);
+                    if constexpr (!zero_im2col_once) {
+                        if (col_hi > tap_cols) {
+                            const uint32_t pad_lo = col_lo > tap_cols ? col_lo : tap_cols;
+                            zero_fill(row_l1 + (pad_lo - col_lo) * ELEM_BYTES, (col_hi - pad_lo) * ELEM_BYTES);
+                        }
                     }
 
                     if (++wo == static_cast<int32_t>(output_width)) {
@@ -219,6 +337,12 @@ void kernel_main() {
                 reads.wait(TRID_GATHER);
                 cb_push_back(cb_im2col_rm, block_k_tiles);
             }
+        }
+
+        if constexpr (tile_input) {
+            constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
+            cb_wait_front(cb_halo_slab, slab_pages);
+            cb_pop_front(cb_halo_slab, slab_pages);
         }
     }
     dataflow_kernel_lib::set_read_trid(reads.noc, 0);
