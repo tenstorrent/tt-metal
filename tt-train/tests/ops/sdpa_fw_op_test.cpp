@@ -319,6 +319,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(Dh_qk));
     std::vector<float> scores_row(S);
+    std::vector<float> weights_row(S);
 
     for (std::size_t b = 0; b < B; ++b) {
         for (std::size_t h = 0; h < q_heads; ++h) {
@@ -346,12 +347,19 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                 // Store intermediate: logsumexp = max + log(sum_exp)
                 Intermediates(b, h, i, 0) = rmax + std::log(denom);
 
+                // The row's softmax weights, formed once instead of once per output column: exp ran
+                // B * H * S^2 * Dh_v times when it sat in the column loop below, which is what made this
+                // reference the cost of the long-sequence tests. Each weight is still exp(s - max) / denom,
+                // so the sums below are unchanged value for value.
+                for (std::size_t j = 0; j < S; ++j) {
+                    weights_row[j] = std::exp(scores_row[j] - rmax) / denom;
+                }
+
                 // out_i[h] = sum_j softmax_ij * V[j] - store in SPLIT format (B, H, S, Dh_v)
                 for (std::size_t t = 0; t < Dh_v; ++t) {
                     float acc = 0.0F;
                     for (std::size_t j = 0; j < S; ++j) {
-                        float w = std::exp(scores_row[j] - rmax) / denom;
-                        acc += w * V_split(b, g, j, t);
+                        acc += weights_row[j] * V_split(b, g, j, t);
                     }
                     Out(b, h, i, t) = acc;  // Store in split format (B, H, S, Dh_v)
                 }
