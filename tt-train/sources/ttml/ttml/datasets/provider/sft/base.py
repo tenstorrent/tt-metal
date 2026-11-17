@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import TYPE_CHECKING, Any, ClassVar, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Optional
 
 import numpy as np
 
@@ -43,9 +43,6 @@ class DatasetProvider:
     # Sources with only a train split carve validation out of it with this ratio; None means the source
     # has the requested split natively.
     train_val_split_ratio: Optional[float] = None
-    # Tokenized single-split sources, so one is tokenized once for both splits of a run. Keyed by all the
-    # tokens depend on; the run's owner clears it (`clear_cache`).
-    _shared_datasets: ClassVar[dict[tuple, Any]] = {}
 
     def __init__(self, config: SFTTrainerConfig, split: str, tokenizer: Any) -> None:
         self.config = config
@@ -130,22 +127,10 @@ class DatasetProvider:
         if self.train_val_split_ratio is None:
             return self._tokenize_and_filter(self._load_raw_dataset())
 
-        key = self._cache_key()
-        if key not in DatasetProvider._shared_datasets:
-            full = self._tokenize_and_filter(self._load_raw_dataset())
-            DatasetProvider._shared_datasets[key] = full.shuffle(seed=self.config.seed)
-        full = DatasetProvider._shared_datasets[key]
+        full = self._tokenize_and_filter(self._load_raw_dataset()).shuffle(seed=self.config.seed)
         train_end = int(self.train_val_split_ratio * len(full))
         if self.split == "train":
             return full.select(range(0, train_end))
         if self.split == "validation":
             return full.select(range(train_end, len(full)))
         raise ValueError(f"{type(self).__name__} has the splits 'train' and 'validation', not {self.split!r}")
-
-    def _cache_key(self) -> tuple:
-        return (type(self), self.config.model.name, self.config.max_length, self.config.seed)
-
-
-def clear_cache() -> None:
-    """Drop the tokenized sources cached for a run (call when the run is cleaned up)."""
-    DatasetProvider._shared_datasets.clear()

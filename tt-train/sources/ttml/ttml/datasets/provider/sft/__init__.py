@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ...utils.sft.collate import IGNORED_INDEX
 from .alpaca import AlpacaProvider
-from .base import DatasetProvider, clear_cache
+from .base import DatasetProvider
 from .custom import CustomProvider
 from .sst2 import SST2Provider
 
@@ -54,7 +54,6 @@ __all__ = [
     "CustomProvider",
     "DatasetProvider",
     "SST2Provider",
-    "clear_cache",
     "get_provider",
     "load_tokenizer",
     "providers",
