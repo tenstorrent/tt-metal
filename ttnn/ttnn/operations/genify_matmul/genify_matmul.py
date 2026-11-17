@@ -26,6 +26,9 @@ from .genify_matmul_program_descriptor import (
     block_sharded_topology,
     create_program_descriptor,
     dram_sharded_output_memory_config,
+    height_sharded_output_memory_config,
+    height_sharded_topology,
+    shard_rows,
 )
 
 _ML = ttnn.TensorMemoryLayout
@@ -91,7 +94,9 @@ SUPPORTED = {
     # bank, A broadcast from its own width-shard cores, output in place in an op-built L1 width shard).
     # Refinement 5: block_sharded = regime R3 (A's K-slices exchanged along each grid row -- own shard
     # zero-copy, peers over a rotating-sender row multicast; B from DRAM; output in place in its shard).
-    "placement": ["interleaved", "dram_sharded", "block_sharded"],
+    # Refinement 7: height_sharded = regime R2 (each core's resident A shard holds all of K for its rows:
+    # consumed in place through cb_act_shard, B from DRAM, output in place in its L1 height shard).
+    "placement": ["interleaved", "dram_sharded", "block_sharded", "height_sharded"],
     # Refinement 2: every epilogue runs inside the same program on the accumulated block
     # (matmul_block -> cb_partials -> add_bias_bcast_rows / eltwise_chain -> cb_output_tiles).
     "epilogue": ["none", "bias", "bias_relu", "swiglu", "addcmul"],
@@ -99,7 +104,9 @@ SUPPORTED = {
     # table): M is tiled with ceil per image, every image is tile-padded on its own, and padded A rows
     # only feed padded output rows. K / N non-aligned are outside TARGET.
     "alignment": ["tile_aligned", "m_non_aligned"],
-    "weight_batch": ["single"],
+    # Refinement 7: batched = regime R1d (grid_b > 1, weight_batch_stride, MatmulBlockShape.batch =
+    # block_batches) on interleaved A; R2 / R3 map each A shard onto whole batches or one batch's rows.
+    "weight_batch": ["single", "batched"],
 }
 
 
@@ -191,6 +198,8 @@ def validate(
         _validate_dram_sharded(input_tensor, weight, activation, memory_config)
     elif axes["placement"] == "block_sharded":
         _validate_block_sharded(input_tensor, weight, activation, memory_config)
+    elif axes["placement"] == "height_sharded":
+        _validate_height_sharded(input_tensor, weight, activation, memory_config)
     else:
         # R1 / R1a read B and write the output through interleaved accessors.
         if weight.memory_config().memory_layout != _ML.INTERLEAVED:
@@ -247,9 +256,42 @@ def _validate_block_sharded(input_tensor, weight, activation, memory_config):
     n_out = weight.shape[-1] // 2 if activation == "swiglu" else weight.shape[-1]
     try:
         out_mc = _block_sharded_output_mc(input_tensor, weight, activation, memory_config)
-        block_sharded_topology(input_tensor, out_mc, swiglu=activation == "swiglu", out_n=n_out)
+        topo = block_sharded_topology(input_tensor, out_mc, swiglu=activation == "swiglu", out_n=n_out)
+        _check_shard_batches(input_tensor, weight, topo.shard_m_tiles)
     except BlockShardedLayoutError as e:
         raise UnsupportedAxisValue(f"genify_matmul: {e}") from e
+
+
+def _height_sharded_output_mc(input_tensor, weight, activation, memory_config):
+    if memory_config is not None:
+        return memory_config
+    return height_sharded_output_memory_config(input_tensor, weight, swiglu=activation == "swiglu")
+
+
+def _validate_height_sharded(input_tensor, weight, activation, memory_config):
+    """R2 layout gate: A L1 HEIGHT_SHARDED (whole-tile shards holding all of K), B interleaved; the output is
+    L1 HEIGHT_SHARDED on A's cores with A's shard height and the whole output width (the requested spec, or
+    the op's default when memory_config is None). A batched weight needs every shard inside one batch or
+    holding whole batches."""
+    if weight.memory_config().memory_layout != _ML.INTERLEAVED:
+        raise UnsupportedAxisValue("genify_matmul: placement 'height_sharded' needs an interleaved weight")
+    n_out = weight.shape[-1] // 2 if activation == "swiglu" else weight.shape[-1]
+    try:
+        out_mc = _height_sharded_output_mc(input_tensor, weight, activation, memory_config)
+        topo = height_sharded_topology(input_tensor, out_mc, swiglu=activation == "swiglu", out_n=n_out)
+        _check_shard_batches(input_tensor, weight, topo.shard_m_tiles)
+    except BlockShardedLayoutError as e:
+        raise UnsupportedAxisValue(f"genify_matmul: {e}") from e
+
+
+def _check_shard_batches(input_tensor, weight, shard_m_tiles):
+    """Batched weight on a row-sharded A (R2 / R3): BlockShardedLayoutError unless no block can straddle
+    two batches (shard_rows is the descriptor's own mapping)."""
+    lead = 1
+    for d in list(input_tensor.shape)[:-2]:
+        lead *= d
+    if tag_weight_batch((list(input_tensor.shape), list(weight.shape)), {}) == "batched":
+        shard_rows(lead, -(-list(input_tensor.shape)[-2] // TILE), shard_m_tiles)
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +381,8 @@ def genify_matmul(
     elif placement == "block_sharded":
         # Exactly the requested shard spec (validated), or the op's default block-shard placement.
         out_mc = _block_sharded_output_mc(input_tensor, weight, activation, memory_config)
+    elif placement == "height_sharded":
+        out_mc = _height_sharded_output_mc(input_tensor, weight, activation, memory_config)
     else:
         out_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 

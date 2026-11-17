@@ -56,6 +56,13 @@
 //                the sender's own slot address) the sender also reserves / pushes its slot on its own
 //                turn (it receives the loopback copy); compute retires that slot unread.
 // B's K-block reads are issued before the A round (they do not depend on it); one barrier per K-block.
+//
+// Regime R2 `height_sharded` (Refinement 7) is the same walk with ONE K shard (`block_sharded` = 1,
+// bs_mcast = 0, own_kb = 0): every K-block is the core's own resident shard (pushed into cb_act_shard,
+// which compute reads directly -- no cb_act_tiles exists), B's column range from DRAM.
+// Batched B (R2 / R3): the host maps each shard onto (b0, row0) so no block straddles a batch; a shard
+// holding whole images walks them as the block's batch slices (block_batches), pushing the resident
+// shard image by image, i.e. sequentially.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -331,7 +338,9 @@ void kernel_main() {
                             }
                         } else if constexpr (block_sharded) {
                             cb_reserve_back(cb_weight_tiles, weight_block_tiles);
-                            read_weight(get_write_ptr(cb_weight_tiles), b_base, k0, k_valid, blk_cols);
+                            if (batch_valid) {  // a shard's padded batch slots (batched B) read no weight
+                                read_weight(get_write_ptr(cb_weight_tiles), b_base, k0, k_valid, blk_cols);
+                            }
                             const bool own = kb == own_kb;
                             if (own) {
                                 // The block rows of this core's own shard are resident: hand them over.

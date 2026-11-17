@@ -383,3 +383,50 @@
 - Tests added:
   - `test_genify_matmul_dram_sharded.py::test_cores_per_bank_split` (4 knob sets on N = 704 with bias: C = 3 with padding-only slices / C = 1, A rounds on writer / reader, B ring T = 1 / 2 / 3).
   - `test_plan_blocking` now pins the PERF FOCUS 2 split (C = 5, 4-column slices, 40 distinct workers, primaries first).
+
+## Refinement 7 — height_sharded placement + batched weights (local shards, independent batch split)
+- Date: 2026-11-17
+- What was done:
+  - **height_sharded = regime R2, built as R3's single-K-shard case.** `height_sharded_topology()` validates A (L1 HEIGHT_SHARDED, whole-tile shards holding all of K) and the requested output (L1 HEIGHT_SHARDED on A's cores, A's shard height and orientation, the whole output width; `height_sharded_output_memory_config()` is the default when `memory_config` is None). It returns a `BlockShardedTopology` with `cols = 1`, `shard_k = K` and an explicit `core_list` (the shard cores in shard order through `ttnn.corerange_to_cores` with the shard orientation), so any core set works, e.g. PDL's 103 cores = 9 full grid rows plus a partial one. The R3 descriptor (`create_block_sharded_program_descriptor`, now `placement`-aware) runs it unchanged otherwise.
+    - **A is consumed in place.** With a single K shard (`topo.act_resident`) the compute kernel's A operand is `cb_act_shard` itself (compute CT arg 0), backed on the resident shard by `cb_descriptor_from_sharded_tensor`. The reader only `cb_push_back`s it, with no NoC read and no TensorAccessor on the own shard, and `cb_act_tiles` is not allocated (`_footprint(..., act_cb=False)`).
+    - **Block.** `shard_m_tiles × out_n` with `block_k = tensor_k_tiles` (one K-block). The output is packed in place into `cb_output_shard`. Fallback when B's whole-K × whole-N block does not fit L1: the shard rows with N split, the output streamed through `cb_output_tiles` and the writer's local accessor writes.
+    - **`cb_weight_tiles` depth** is 1 when the core's whole walk is one K-block (`_weight_depth`): the second slot could never fill. This frees L1 for the coarser in-place block.
+  - **Batched weights = regime R1d.** Interleaved A needed no kernel change: `grid_b > 1` in the factorization (flat placement), `weight_batch_stride` in the reader, `MatmulBlockShape.batch = block_batches` were all already plumbed. SUPPORTED and the gate are widened; B must be interleaved TILE (the existing gate).
+    - On R2 / R3, `ShardRows` / `shard_rows()` maps each A shard onto (batch, rows) so that no block straddles two batches. Either the shard lies inside one image (`img_m % shard_m == 0`: per-shard b0 / row0), or it holds whole images (`shard_m % img_m == 0`: `block_batches = shard_m / img_m`, `block_m = img_m`, pushed image by image). Any other shard height is refused through validate().
+    - The reader skips B reads for a shard's padded batch slots.
+  - **Reused**: R3's topology / blocking solve / descriptor / reader `block_sharded` walk / compute `In0SourceFn` path / writer in-place and accessor paths, R1's batch walk. **Added**: `BlockShardedTopology.core_list` / `core_set` / `act_resident`, `height_sharded_topology`, `height_sharded_output_memory_config`, `ShardRows` + `shard_rows`, `_weight_depth`, `_footprint(act_cb=)`, `plan_block_sharded(placement=)`; one `batch_valid` guard in the reader; op-file `_validate_height_sharded`, `_check_shard_batches`.
+- Accuracy achieved (PCC / rel-RMS against gate):
+  - PDL HS res2 shortcut 32768×128×256 bias (bf8b, LoFi): 0.99982 / 0.0169 (gate 0.999 / 0.06).
+  - PDL HS res2 reduce bias_relu: 0.99916 / 0.0175.
+  - PERF FOCUS 3 (batched, bf8b, 16-bit DEST): 0.99939 / 0.0172 (gate 0.997 / 0.15).
+  - Batched (1,4,128,128)×(1,4,128,256) bf16: 1.000000 / 0.0017 (fp32 DEST), 0.99998 / 0.0064 (16-bit) on HS, interleaved and block_sharded alike.
+  - HS M=1 K=2048 with 16-bit DEST: 0.99964 / 0.039. The one-K-block walk keeps a 64-tile chain in DEST; the gate is 0.15.
+- Golden test progress:
+  - Cartesian `height_sharded`: 450 passed, 90 xfailed (the permanent fp32 × 16-bit-DEST EXCLUSION).
+  - Cartesian batched on interleaved + block_sharded: 150 passed. The batched dram_sharded cells xfail as the permanent EXCLUSION.
+  - Loose: 12/12 PDL height-sharded cases plus PERF FOCUS 3.
+  - Translated `-k batched`: 2/2 (true bmm cell, batched row-vector bias). `-k "sd_matmul or bert"`: 15 passed, as before.
+  - Unit regression net (`test_genify_matmul`, `_epilogue`, `_extended`, `_block_sharded`): 78/78.
+- Perf (device ns, one fresh run each; new perf-guard rows `test_perf_height_sharded`, `test_perf_batched`):
+
+  | case | genify | stock |
+  |---|---|---|
+  | PDL res2 shortcut 32768×128×256, 103 cores | 14.6 µs | 9.8 µs |
+  | PDL res3 expand 8192×128×512, 86 cores | 18.7 µs | 8.2 µs |
+  | PDL res3 reduce 8192×512×128 bias_relu | 20.2 µs | 6.9 µs |
+  | PDL res2 reduce 32768×256×64 bias_relu | 9.7 µs | 5.0 µs |
+  | PERF FOCUS 3 batched 32×512×128×1024 | 70.8 µs | 123.0 µs |
+
+  - Finding: R2 is bound by B's DRAM traffic. Every shard core reads the whole K×N B, so res3 reduce moves ≈ 6 MB, ≈ 13 µs at 460 GB/s, against 20.2 µs measured. The fix is the deferred R2a `height_sharded_mcast_b` (B once from DRAM, multicast to the shard cores), which the verifier keeps as a report note (no PDL height-sharded case is perf-flagged).
+  - PERF FOCUS 3 already beats `achievable_ns`. That is Refinement 8's baseline.
+- Issues encountered: None. Every new case passed on its first device run.
+- Tests added:
+  - `test_genify_matmul_height_sharded.py`, 15 cases:
+    - cartesian-shaped HS cells across dtypes and epilogues;
+    - PDL HS on 103 and 86 cores (ragged last shard, bf16 → bf8b output);
+    - batched B with one image per shard, and with whole images per shard (ragged, plus addcmul);
+    - batched B on block_sharded swiglu, and on interleaved none / swiglu / addcmul with bf8b and 16-bit DEST;
+    - COL_MAJOR orientation together with the default output placement;
+    - the N-split fallback under a forced L1 budget;
+    - the shard → batch mapping rules.
+  - Perf guard: `test_perf_height_sharded` (4 PDL shapes) and `test_perf_batched` (PERF FOCUS 3).

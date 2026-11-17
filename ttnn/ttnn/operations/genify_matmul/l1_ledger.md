@@ -52,6 +52,14 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
 - **Output**: `cb_output_shard` (in place) when `block_n` is the whole output shard width, with `block_m` the largest divisor of the shard rows that fits. Fallback when no such block fits: `block_m = shard_m`, the N range split, `cb_output_tiles` streamed and written by the writer through the output's sharded accessor (every page is local).
 - `_footprint(..., out_in_place)` prices it; `l1_cb_budget` already deducts A's and the output's resident shards. The 16-bit-DEST chain cap is NOT applied to R3 (`block_k` is the shard width; every golden cell has `shard_k ≤ 8`).
 
+**Refinement 7 (R2 `height_sharded`, batched weights) as built.** R2 is R3's single-K-shard case (`cols = 1`, `block_k = tensor_k_tiles`) on A's shard cores in shard order (`ttnn.corerange_to_cores` with the shard orientation; any core set, not only a rectangle):
+- **`cb_act_shard` (index 5)** is the compute kernel's A operand outright (compute CT arg 0 = `CB_ACT_SHARD`), backed on the core's resident A shard (0 CB bytes). The reader pushes `block_m · K` tiles per block: with `nb_m > 1` the pushes walk the shard row-block by row-block; with `nb_n > 1` (only when `nb_m == 1`) each N-block pass wraps the whole shard.
+- **`cb_act_tiles` is not allocated** whenever the walk has a single K shard (R2, and R3 with a one-column grid): there are no peer K-slices to land. `_footprint(..., act_cb=False)` drops its `depth_act · block_m · block_k` term. Shares with / why not: nothing left to share — it no longer exists.
+- **`cb_weight_tiles` depth** = `DEPTH_WEIGHT` when the core's walk has more than one K-block (`nb_m · nb_n · num_k_blocks · block_batches > 1`: the second slot prefetches the next block's B), else **1** (`_weight_depth`): a whole-shard, whole-K walk is ONE K-block, whose second slot could never fill (same finding as Refinement 3's folded one). Applies to R3 too; R3's multi-shard walks keep depth 2.
+- **Output**: `cb_output_shard` in place when the block spans the whole output shard width (the default; R2's output shard is the whole output width), with `block_m` the largest divisor of the shard's batch-slice rows that fits; fallback `block_m` = those rows, N split, `cb_output_tiles` streamed and written through the output's sharded accessor (local pages).
+- **Batched B on R2 / R3** (`ShardRows`): a shard either lies inside one image (`img_m % shard_m == 0`: `block_batches = 1`, b0 / row0 per shard) or holds whole images (`shard_m % img_m == 0`: `block_batches = shard_m / img_m`, `block_m = img_m`, `nb_m = 1`, so the pushes walk the shard image by image = sequentially). No CB changes: the batch slices reuse the per-batch CBs (the matmul helper's batch loop; the epilogue path calls it per slice). Any other shard height is refused (no block may straddle two batches).
+- **R1d (batched B, interleaved A)**: no CB change; `block_batches = core_batches` as the S1 row already says (`grid_b > 1`, flat placement).
+
 ## Symbol table (non-block parameters and their bounds)
 
 | Symbol | Bound | Predicate establishing it |
@@ -148,3 +156,17 @@ PERF FOCUS 2 (1×4352 @ 4352×5120 bf4b): DRAM = B once = 12.5 MB (the roofline'
 | residual | 1 | streamed with the epilogue | none |
 
 PDL res5 expand (2048×512 @ 512×2048 bf8b, grid 8×10): DRAM = B ×10 ≈ 11 MB (the bound: 45.6 µs vs stock 24.2 µs); NoC = each 7×2-tile A shard multicast to 7 row peers. The next lever is R3a's B column multicast (B once from DRAM).
+
+**R2 `height_sharded` as built (Refinement 7)** — DRAM / NoC crossings per tensor (`C_A` = A's shard cores):
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | 0 | resident L1 height shards holding all of K, consumed in place (`cb_act_shard` is compute's A operand; no NoC read at all) | none |
+| B | `C_A · nb_m` (`nb_m = 1` when the whole shard block fits) | each core reads its whole `K × N` B range from DRAM — no reuse across cores yet | none |
+| output | 0 | packed in place into the core's own L1 height shard | none (fallback: local writes through the sharded accessor) |
+| bias / gate | 1 per core block | per-block row read | none |
+| residual | 1 | streamed with the epilogue | none |
+
+PDL res3 reduce (8192×512 @ 512×128 bf8b, 86 cores): DRAM = B × 86 ≈ 6.0 MB (≈ 13 µs at 460 GB/s — the bound: 20.2 µs measured vs stock 6.9 µs). The next lever is the deferred R2a `height_sharded_mcast_b`: B once from DRAM, multicast to the shard cores.
+
+**R1d batched (Refinement 7)**: DRAM crossings as R1 per batch (A and B of batch b never cross batches); PERF FOCUS 3 (32 × 512×128 @ 128×1024 bf8b, B in L1): 96 cores, 70.8 µs (stock 123.0 µs).

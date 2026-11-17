@@ -252,3 +252,65 @@ def test_perf_block_sharded(case, exchange, device, monkeypatch):
     )
     out = genify_matmul(ta, tb, compute_kernel_config=cfg, memory_config=o_mc, **kwargs)
     ttnn.synchronize_device(device)
+
+
+# Refinement 7: regime R2 `height_sharded` (A L1 height-sharded on `cores` cores laid out row-major,
+# consumed in place; B from DRAM per core; output in place in its L1 height shard) at PDL's own config
+# (bf8b x bf8b, LoFi, fp32 DEST, bf8b bias). (m, k, n, shard height, cores, epilogue)
+HEIGHT_SHARDED_CASES = [
+    (32768, 128, 256, 320, 103, "none"),  # res2 shortcut
+    (8192, 128, 512, 96, 86, "none"),  # res3 expand
+    (8192, 512, 128, 96, 86, "bias_relu"),  # res3 reduce
+    (32768, 256, 64, 320, 103, "bias_relu"),  # res2 reduce
+]
+
+
+@pytest.mark.parametrize(
+    "case", HEIGHT_SHARDED_CASES, ids=[f"{m}-{k}-{n}-c{c}-{e}" for m, k, n, _, c, e in HEIGHT_SHARDED_CASES]
+)
+def test_perf_height_sharded(case, device):
+    m, k, n, shard_h, cores, epilogue = case
+    torch.manual_seed(0)
+    A = torch.randn(1, 1, m, k)
+    B = torch.randn(k, n) / math.sqrt(k)
+    grid = ttnn.num_cores_to_corerangeset(cores, device.compute_with_storage_grid_size(), True)
+    a_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [shard_h, k], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    o_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [shard_h, n], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ta = create_ttnn_input_tensor(A, device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=a_mc)
+    tb = create_ttnn_input_tensor(B, device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    kwargs = {}
+    if epilogue == "bias_relu":
+        kwargs["bias"] = create_ttnn_input_tensor(
+            torch.randn(1, n), device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        )
+        kwargs["activation"] = "relu"
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
+    )
+    out = genify_matmul(ta, tb, compute_kernel_config=cfg, memory_config=o_mc, **kwargs)
+    ttnn.synchronize_device(device)
+
+
+# Refinement 7: batched weight (R1d), PERF FOCUS 3 at its own config: PDL bilinear upsample H pass,
+# A (1, 32, 512, 128) bf8b DRAM x B (1, 32, 128, 1024) bf8b in L1, LoFi, 16-bit DEST.
+def test_perf_batched(device):
+    torch.manual_seed(0)
+    A = torch.randn(1, 32, 512, 128)
+    B = torch.randn(1, 32, 128, 1024) / math.sqrt(128)
+    ta = create_ttnn_input_tensor(A, device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tb = create_ttnn_input_tensor(
+        B, device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, math_approx_mode=False
+    )
+    out = genify_matmul(ta, tb, compute_kernel_config=cfg)
+    ttnn.synchronize_device(device)

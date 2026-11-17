@@ -237,7 +237,7 @@ No SUPPORTED change.
 
 **Outcome**: PERF FOCUS 2 measured **42.8 → 29.2 µs** device time (one fresh run each; target `achievable_ns` 36.9 µs beaten, 7% above the 27.2 µs roofline); precision unchanged (PCC 0.999993, rel-RMS 0.0050 vs the 0.9995 / 0.03 gate). The ablation at the start showed the one-worker-per-bank R4 was **compute-bound**, not B-bound: matmul alone 38.7 µs, B stream alone ~28 µs. Levers: (1) a `cores_per_bank` split (`DS_CORES_PER_BANK`, auto: 5 workers × 4 columns per bank, 40 compute cores) — 42.8 → 34.8 µs, compute down to 10.6 µs, DM now binding; (2) the A rounds moved to the writer RISC (BRISC / NoC1, `DS_ACT_ON_WRITER`, `split_reader`) so they stop sitting between the reader's B issues and barriers — 35.0 → 28.9 µs, A now fully hidden (A-stubbed run 29.7 µs ≈ full); (3) a trid-tagged B ring (`DS_B_AHEAD` / `DS_DEPTH_WEIGHT`, `trid_double_issue`) — correct but measured flat to +3% at depth 2–3 once 5 slice readers share each bank, so parked at 1 / 2 as a live knob. Same levers on the other R4 shapes: LM head 1×5120×16384 148.5 → 105.8 µs (stock 127.0), gate_up 32×5120×9216 swiglu 103.4 → 63.1 µs (stock 64.0); the 1-tile-shard cartesian shape (C = 1) is unchanged; the rest of the guard set is within ±1% (block_sharded res5 shortcut re-measured 3×: +0.8%). **Bottleneck now**: the B stream (compute-stubbed 28.8 µs ≈ full; B alone 27.9 µs vs the 27.2 µs roofline, ~97% of DRAM peak). **Next**: what is left is ~1.5 µs of fixed cost — the first K-block's exposed B latency before compute starts and the output tail — e.g. a smaller first K-block (split A shard 0's round) to start compute earlier. Not done: it is within ~6% of the DRAM roofline and each remaining µs needs a structural change of its own.
 
-### [ ] Refinement 7 — height_sharded placement + batched weights (local shards, independent batch split)
+### [x] Refinement 7 — height_sharded placement + batched weights (local shards, independent batch split)
 
 **Goal**: two independent axes, bundled into one refinement.
 
@@ -264,6 +264,8 @@ No SUPPORTED change.
 - **Follow-up candidate (not a refinement).** The B multicast across A's cores (R2a) is the perf successor for PDL height-sharded shapes. No PDL height-sharded case is perf-flagged, so it stays a report note.
 
 **Done when**: every height_sharded and every batched-weight golden cell passes (cartesian INPUTS and the PDL loose cases, including PERF FOCUS 3), except the permanent `dram_sharded × batched` EXCLUSION. The requested output shard spec is honoured, and all earlier cells stay green.
+
+**Outcome**: SUPPORTED placement += `height_sharded` (R2, built as R3's single-K-shard case on A's shard cores: the resident shard is compute's A operand via `cb_act_shard`, no `cb_act_tiles`, no NoC read of the own shard; output in place in its L1 height shard, N-split streamed fallback), weight_batch += `batched` (R1d on interleaved; R2 / R3 shards mapped onto whole images or one image's rows by `ShardRows`). Golden: 450/450 cartesian HS, 150/150 batched interleaved + block_sharded, 12/12 PDL HS loose, PERF FOCUS 3; unit net green. Perf finding: R2 is B-DRAM-bound (each shard core reads all of B: PDL res3 reduce 20.2 µs vs stock 6.9 µs); the lever is the deferred R2a B multicast. PERF FOCUS 3 baseline 70.8 µs (stock 123.0 µs).
 
 ### [ ] Refinement 8 — Speed up PERF FOCUS 3 (PDL bilinear upsample, H pass: batched weight)
 
