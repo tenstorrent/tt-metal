@@ -160,8 +160,9 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # clean -- posterior mean, no fp16 round trip, no noise augmentation -- unlike the visual
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
-# `prepare_modulation`'s stacked timestep rows are padded to a multiple of this, so its programs (and the per-step
-# row lookup's) are the same for every step count up to it: the warmup's short denoise compiles them.
+# `prepare_modulation`'s stacked timestep rows are padded to this, so its programs (and the per-step row lookup's)
+# are the same for every step count that fits: the warmup's short denoise compiles them, and a request that needs
+# more rows is rejected instead of compiling new ones.
 ADALN_PREPARED_ROWS = 256
 
 # Read from the two scheduler_config.json files, which hold nothing else. Distillation adapters may
@@ -3238,18 +3239,24 @@ class MiniMaxH3Pipeline:
 
         upload_levels(step_levels(0))
         # Every step's adaLN tables in one projection a block (one FSDP gather of its weight a denoise, not a step);
-        # each forward then picks its step's rows by an embedding lookup. The stacked rows are padded to a multiple
-        # of ADALN_PREPARED_ROWS so the programs do not depend on the step count (the warmup compiles them). The
+        # each forward then picks its step's rows by an embedding lookup. The stacked rows are padded to
+        # ADALN_PREPARED_ROWS so the programs do not depend on the step count (the warmup compiles them). The
         # prepared table is freed after every request, which a trace replay cannot follow, so a trace_denoise
         # config projects once a step on every request, its untraced first one included.
         precompute_modulation = not self.trace_denoise and self.adaln_once_per_denoise
         if precompute_modulation:
             levels = [step_levels(i) for i in range(len(timesteps))]
             num_slots = levels[0][0].numel()
+            if len(levels) * num_slots > ADALN_PREPARED_ROWS:
+                raise ValueError(
+                    f"{len(levels)} denoising steps x {num_slots} adaLN slots need {len(levels) * num_slots} prepared "
+                    f"rows, more than the {ADALN_PREPARED_ROWS} the warmup compiles for; use at most "
+                    f"{ADALN_PREPARED_ROWS // num_slots} steps or adaln_once_per_denoise=False"
+                )
 
             def stacked(k: int) -> ttnn.Tensor:
                 rows = torch.cat([lv[k].reshape(-1) for lv in levels])
-                rows = torch.nn.functional.pad(rows, (0, -rows.numel() % ADALN_PREPARED_ROWS))
+                rows = torch.nn.functional.pad(rows, (0, ADALN_PREPARED_ROWS - rows.numel()))
                 return from_torch(rows.reshape(1, 1, -1, 1), device=self.mesh_device, dtype=ttnn.float32)
 
             def modulation_rows(i: int) -> dict:
