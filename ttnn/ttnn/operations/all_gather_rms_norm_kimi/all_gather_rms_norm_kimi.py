@@ -418,8 +418,9 @@ def _build(mesh_device, plan, st, x, gamma, out, epsilon, cfg):
             ttnn.cb_descriptor_from_sharded_tensor(CB_LAND, st["land"]),
             cb(CB_GAMMA, Wt, ttnn.bfloat16, TILE_BF16, row_set),
             cb(CB_SCALER, 1, ttnn.bfloat16, TILE_BF16, row_set),
-            cb(CB_PART, 2, ttnn.float32, TILE_FP32, row_set),
-            cb(CB_GATHER, rows_per * G, ttnn.float32, TILE_FP32, row_set),
+            # S tiles travel with a tag right after the tile: page = tile + 64 B
+            cb(CB_PART, 2, ttnn.float32, TILE_FP32 + 64, row_set),
+            cb(CB_GATHER, rows_per * G, ttnn.float32, TILE_FP32 + 64, row_set),
             cb(CB_INV, 2, ttnn.float32, TILE_FP32, row_set),
             cb(CB_XG, Wt, ttnn.float32, TILE_FP32, row_set),
             cb(CB_OUT, Wt, ttnn.bfloat16, TILE_BF16, row_set),
@@ -465,7 +466,15 @@ def _build(mesh_device, plan, st, x, gamma, out, epsilon, cfg):
                         rd += [len(dl)] + [w for xy, idx in dl for w in (xy, idx)]
                 rd_rt[cx][cy] = rd
                 cm_rt[cx][cy] = [ctr_addr]
-                wr_rt[cx][cy] = [out_addr, ctr_addr, SEM_GATHER, p, b * rows_per * G * Wt + p * Wt, G * Wt] + peers
+                wr_rt[cx][cy] = [
+                    out_addr,
+                    ctr_addr,
+                    SEM_GATHER,
+                    p,
+                    b * rows_per * G * Wt + p * Wt,
+                    G * Wt,
+                    st["salt"],
+                ] + peers
 
         # ---- port cores ----
         ps_rt, pr_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
