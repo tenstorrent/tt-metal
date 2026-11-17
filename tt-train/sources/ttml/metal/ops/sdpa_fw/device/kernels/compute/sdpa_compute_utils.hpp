@@ -509,8 +509,10 @@ void send_partial(uint32_t Wt, uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_
     cb_pop_front(cb_sum_exp, rows);
 }
 
-// block_size: output tiles per DST pass (divides Wt, leaves one DST slot for alpha).
-template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t rows, uint32_t block_size>
+// block_size: output tiles per DST pass of the scale-in-DST fold, which keeps one slot for alpha.
+// fpu_block: output tiles per DST pass of the partial's multiply, which broadcasts its factor from srcB
+// and so needs no slot of its own -- the whole DST, with a tail when it does not divide Wt.
+template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t rows, uint32_t block_size, uint32_t fpu_block>
 void merge_partial(
     uint32_t Wt,
     uint32_t cb_prev_mm_out,
@@ -572,14 +574,15 @@ void merge_partial(
         // The sum update above ends on an SFPU add; the broadcast multiply below gets its own init rather than
         // relying on the FPU program the sum update left behind.
         mul_bcast_cols_init(cb_partial_in, cb_alpha_p);
-        for (uint32_t t0 = 0; t0 < Wt; t0 += block_size) {
+        for (uint32_t t0 = 0; t0 < Wt; t0 += fpu_block) {
+            const uint32_t n = (Wt - t0 < fpu_block) ? (Wt - t0) : fpu_block;
             tile_regs_acquire();
-            for (uint32_t i = 0; i < block_size; ++i) {
+            for (uint32_t i = 0; i < n; ++i) {
                 mul_tiles_bcast_cols(cb_partial_in, cb_alpha_p, kPartialFirstOutTile + t0 + i, r, i);
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < block_size; ++i) {
+            for (uint32_t i = 0; i < n; ++i) {
                 pack_tile</* out_of_order */ true>(i, cb_cur_mm_out, r * Wt + t0 + i);
             }
             tile_regs_release();
@@ -588,18 +591,18 @@ void merge_partial(
         //     the FPU's 19-bit inputs on every fold, so it is scaled in DST like the in-loop rescale and
         //     the packer adds it onto (2) in L1.
         reconfig_data_format(cb_prev_mm_out, cb_prev_mm_out);  // srcA for the passes below; (2) left it elsewhere
+        pack_reconfig_l1_acc(1U);  // once around the loop, as matmul_qk_by_v does, not once per pass
         for (uint32_t t0 = 0; t0 < Wt; t0 += block_size) {
             tile_regs_acquire();
             scale_block_in_dst(cb_prev_mm_out, Wt, r, t0, /* block_h */ 1U, block_size, cb_alpha_own);
             tile_regs_commit();
             tile_regs_wait();
-            pack_reconfig_l1_acc(1U);
             for (uint32_t i = 0; i < block_size; ++i) {
                 pack_tile</* out_of_order */ true>(i, cb_cur_mm_out, r * Wt + t0 + i);
             }
-            pack_reconfig_l1_acc(0U);
             tile_regs_release();
         }
+        pack_reconfig_l1_acc(0U);
         cb_pop_front(cb_partial_in, tiles_per_row);
     }
     cb_push_back(cb_cur_mm_out, rows * Wt);
