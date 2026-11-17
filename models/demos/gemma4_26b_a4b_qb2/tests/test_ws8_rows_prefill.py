@@ -85,7 +85,12 @@ def test_rows_continuation(generator, monkeypatch, start, suffix):
     assert pcc(rows, serial) >= 0.99
     assert pcc(rows, cold) >= pcc(serial, cold) - 0.01
     assert int(rows.argmax()) == int(serial.argmax())
-    assert pcc(rows_next, serial_next) >= 0.999
+    # Next step after the continuation: checks the suffix K/V writes. Strict when both paths share the MoE
+    # arithmetic (WS5 fused decode off); with WS5 on, the serial reference writes K/V through the merged-MoE
+    # weights and the rows path through the batched MoE (B measured 0.9974 page-aligned), so >= 0.995.
+    fused = __import__("os").environ.get("GEMMA4_26B_WS5_FUSED", "1") != "0"
+    assert pcc(rows_next, serial_next) >= (0.995 if fused else 0.999)
+    assert int(rows_next.argmax()) == int(serial_next.argmax())
 
 
 def cold_prefill(generator, tokens):

@@ -464,7 +464,7 @@ class Gemma4Generator:
             rows_suffix = (
                 WS8_ROWS
                 and start > 0
-                and suffix_length >= 2
+                and suffix_length >= 1
                 and not return_all_logits
                 and all(isinstance(t, torch.Tensor) and t.shape[0] > row for t in self._tables(page_table))
             )
