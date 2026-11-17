@@ -1058,8 +1058,8 @@ public:
         static std::shared_ptr<const ttnn::command_list::CmdListBindings> make_cmd_list_bindings(
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
-            const tt::tt_metal::experimental::ProgramSpec& spec,
-            const tt::tt_metal::experimental::ProgramRunArgs& run_params) {
+            const tt::tt_metal::ProgramSpec& spec,
+            const tt::tt_metal::ProgramRunArgs& run_params) {
             if constexpr (requires { &Factory::map_cmd_list_parameters; }) {
                 auto bindings = Factory::map_cmd_list_parameters(attrs, tensor_args, spec, run_params);
                 bindings.factory_name = ttsl::long_type_name<Factory>;

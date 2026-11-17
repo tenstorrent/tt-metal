@@ -246,42 +246,44 @@ namespace ttnn::command_list {
 
 namespace metal = tt::tt_metal::experimental;
 
-metal::ArgValue encode_uint32(const CmdListScalar& scalar) {
+tt::tt_metal::ArgValue encode_uint32(const CmdListScalar& scalar) {
     return static_cast<uint32_t>(integer_in(scalar, 0, std::numeric_limits<uint32_t>::max(), "encode_uint32"));
 }
 
-metal::ArgValue encode_int32_bits(const CmdListScalar& scalar) {
+tt::tt_metal::ArgValue encode_int32_bits(const CmdListScalar& scalar) {
     return static_cast<uint32_t>(integer_in(
         scalar, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max(), "encode_int32_bits"));
 }
 
-metal::ArgValue encode_float32_bits(const CmdListScalar& scalar) {
+tt::tt_metal::ArgValue encode_float32_bits(const CmdListScalar& scalar) {
     return std::bit_cast<uint32_t>(float32_of(scalar, "encode_float32_bits"));
 }
 
-metal::ArgValue encode_bfloat16_pair(const CmdListScalar& scalar) {
+tt::tt_metal::ArgValue encode_bfloat16_pair(const CmdListScalar& scalar) {
     const uint32_t bits = bfloat16_of(scalar, "encode_bfloat16_pair");
     return (bits << 16) | bits;
 }
 
-metal::ArgValue encode_bfloat16_low(const CmdListScalar& scalar) { return bfloat16_of(scalar, "encode_bfloat16_low"); }
+tt::tt_metal::ArgValue encode_bfloat16_low(const CmdListScalar& scalar) {
+    return bfloat16_of(scalar, "encode_bfloat16_low");
+}
 
-metal::ArgValue encode_bfloat16_high(const CmdListScalar& scalar) {
+tt::tt_metal::ArgValue encode_bfloat16_high(const CmdListScalar& scalar) {
     return bfloat16_of(scalar, "encode_bfloat16_high") << 16;
 }
 
-metal::ArgValue encode_uint16_pair(const CmdListScalar& scalar) {
+tt::tt_metal::ArgValue encode_uint16_pair(const CmdListScalar& scalar) {
     const uint32_t bits = uint16_of(scalar, "encode_uint16_pair");
     return (bits << 16) | bits;
 }
 
-metal::ArgValue encode_uint16_low(const CmdListScalar& scalar) { return uint16_of(scalar, "encode_uint16_low"); }
+tt::tt_metal::ArgValue encode_uint16_low(const CmdListScalar& scalar) { return uint16_of(scalar, "encode_uint16_low"); }
 
-metal::ArgValue encode_uint16_high(const CmdListScalar& scalar) {
+tt::tt_metal::ArgValue encode_uint16_high(const CmdListScalar& scalar) {
     return uint16_of(scalar, "encode_uint16_high") << 16;
 }
 
-metal::ArgValue encode_float8_e4m3_quad(const CmdListScalar& scalar) {
+tt::tt_metal::ArgValue encode_float8_e4m3_quad(const CmdListScalar& scalar) {
     constexpr float float8_e4m3_max = 448.0f;
     const float real = float32_of(scalar, "encode_float8_e4m3_quad");
     // float8_e4m3 clamps infinities and overflow to float8_e4m3_max; E4M3 has no infinity.
@@ -322,10 +324,10 @@ void CmdListBindScope::finish() {
     pop_cmd_list_binds(true);
 }
 
-CmdListBinder::CmdListBinder(const metal::ProgramSpec& spec, const metal::ProgramRunArgs& run_params) :
+CmdListBinder::CmdListBinder(const tt::tt_metal::ProgramSpec& spec, const tt::tt_metal::ProgramRunArgs& run_params) :
     spec_(spec), run_params_(run_params) {}
 
-void CmdListBinder::tensor(std::string_view invoke_name, const metal::TensorParamName& program_spec_param_name) {
+void CmdListBinder::tensor(std::string_view invoke_name, const tt::tt_metal::TensorParamName& program_spec_param_name) {
     TT_FATAL(!invoke_name.empty(), "CmdListBinder::tensor: invoke_name must not be empty");
     const bool declared =
         std::any_of(spec_.tensor_parameters.begin(), spec_.tensor_parameters.end(), [&](const auto& parameter) {
@@ -361,9 +363,9 @@ CmdListBinder::Param CmdListBinder::param(
 }
 
 CmdListBinder::Param& CmdListBinder::Param::runtime(
-    const metal::KernelSpecName& kernel_name,
+    const tt::tt_metal::KernelSpecName& kernel_name,
     std::string arg_name,
-    std::optional<std::vector<metal::NodeCoord>> nodes) {
+    std::optional<std::vector<tt::tt_metal::NodeCoord>> nodes) {
     const auto& names = binder_.kernel_spec(kernel_name).runtime_arg_schema.runtime_arg_names;
     TT_FATAL(
         std::find(names.begin(), names.end(), arg_name) != names.end(),
@@ -372,7 +374,7 @@ CmdListBinder::Param& CmdListBinder::Param::runtime(
         arg_name);
     binder_.claim_arg(false, kernel_name, arg_name);
 
-    const metal::ProgramRunArgs::KernelRunArgs::RuntimeArgValues::mapped_type* values = nullptr;
+    const tt::tt_metal::ProgramRunArgs::KernelRunArgs::RuntimeArgValues::mapped_type* values = nullptr;
     for (const auto& kernel_run_args : binder_.run_params_.kernel_run_args) {
         if (kernel_run_args.kernel == kernel_name) {
             const auto it = kernel_run_args.runtime_arg_values.find(arg_name);
@@ -382,7 +384,7 @@ CmdListBinder::Param& CmdListBinder::Param::runtime(
             break;
         }
     }
-    std::vector<metal::NodeCoord> resolved;
+    std::vector<tt::tt_metal::NodeCoord> resolved;
     if (nodes.has_value()) {
         for (const auto& node : *nodes) {
             TT_FATAL(
@@ -409,7 +411,7 @@ CmdListBinder::Param& CmdListBinder::Param::runtime(
 }
 
 CmdListBinder::Param& CmdListBinder::Param::common_runtime(
-    const metal::KernelSpecName& kernel_name, std::string arg_name) {
+    const tt::tt_metal::KernelSpecName& kernel_name, std::string arg_name) {
     const auto& names = binder_.kernel_spec(kernel_name).runtime_arg_schema.common_runtime_arg_names;
     TT_FATAL(
         std::find(names.begin(), names.end(), arg_name) != names.end(),
@@ -432,7 +434,7 @@ CmdListBindings CmdListBinder::finish() {
     return std::move(bindings_);
 }
 
-const metal::KernelSpec& CmdListBinder::kernel_spec(const metal::KernelSpecName& kernel_name) const {
+const tt::tt_metal::KernelSpec& CmdListBinder::kernel_spec(const tt::tt_metal::KernelSpecName& kernel_name) const {
     const auto it = std::find_if(spec_.kernels.begin(), spec_.kernels.end(), [&](const auto& kernel) {
         return kernel.unique_id == kernel_name;
     });
@@ -440,7 +442,7 @@ const metal::KernelSpec& CmdListBinder::kernel_spec(const metal::KernelSpecName&
     return *it;
 }
 
-void CmdListBinder::claim_arg(bool common, const metal::KernelSpecName& kernel_name, const std::string& arg) {
+void CmdListBinder::claim_arg(bool common, const tt::tt_metal::KernelSpecName& kernel_name, const std::string& arg) {
     TT_FATAL(
         bound_args_.emplace(common, kernel_name.get(), arg).second,
         "CmdListBinder: {} argument '{}' of kernel '{}' is already bound",
@@ -622,7 +624,7 @@ void CommandList::update_args(const std::unordered_map<std::string, CmdListValue
         const auto* scalar = std::get_if<CmdListScalar>(&value);
         TT_FATAL(scalar != nullptr, "TTNN command-list parameter '{}' is a scalar", name);
         for (const auto& metal_scalar : it->second.metal_scalars) {
-            const metal::ArgValue word = metal_scalar.encode(*scalar);
+            const tt::tt_metal::ArgValue word = metal_scalar.encode(*scalar);
             if (metal_scalar.has_runtime) {
                 patch.runtime_args.emplace(metal::CmdListRuntimeArgName(metal_scalar.metal_cmd_list_param_name), word);
             }

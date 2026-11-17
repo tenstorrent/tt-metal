@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
@@ -108,7 +108,7 @@ bool has_active_cmd_list_binds();
 struct CmdListProgramBindings {
     const tt::tt_metal::Program* program;
     const ttnn::command_list::CmdListBindings* bindings;
-    std::vector<std::pair<tt::tt_metal::experimental::TensorParamName, const tt::tt_metal::MeshTensor*>> bound_tensors;
+    std::vector<std::pair<tt::tt_metal::TensorParamName, const tt::tt_metal::MeshTensor*>> bound_tensors;
 };
 
 // Adds `workload` to the CommandListBuilder recording on the calling thread instead of enqueueing it, recording as

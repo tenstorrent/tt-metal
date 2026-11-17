@@ -70,8 +70,8 @@ struct SoftmaxDeviceOperation {
         static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
             const operation_attributes_t&,
             const tensor_args_t&,
-            const tt::tt_metal::experimental::ProgramSpec&,
-            const tt::tt_metal::experimental::ProgramRunArgs&);
+            const tt::tt_metal::ProgramSpec&,
+            const tt::tt_metal::ProgramRunArgs&);
     };
 
     using program_factory_t = std::variant<

@@ -16,12 +16,12 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/utils/arg_value.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -39,19 +39,19 @@ struct CmdListScalar {
 using CmdListValue = std::variant<Tensor, CmdListScalar>;
 
 // Encodes a scalar as the word written to the kernel arguments it is bound to.
-using CmdListEncodeFn = std::function<tt::tt_metal::experimental::ArgValue(const CmdListScalar&)>;
+using CmdListEncodeFn = std::function<tt::tt_metal::ArgValue(const CmdListScalar&)>;
 
 // Default encoders. Layouts are [high 16 bits | low 16 bits].
-tt::tt_metal::experimental::ArgValue encode_uint32(const CmdListScalar&);            // integer -> unchanged
-tt::tt_metal::experimental::ArgValue encode_int32_bits(const CmdListScalar&);        // int32 -> two's complement
-tt::tt_metal::experimental::ArgValue encode_float32_bits(const CmdListScalar&);      // float -> IEEE-754 bits
-tt::tt_metal::experimental::ArgValue encode_bfloat16_pair(const CmdListScalar&);     // float -> [bf16 | bf16]
-tt::tt_metal::experimental::ArgValue encode_bfloat16_low(const CmdListScalar&);      // float -> [zero | bf16]
-tt::tt_metal::experimental::ArgValue encode_bfloat16_high(const CmdListScalar&);     // float -> [bf16 | zero]
-tt::tt_metal::experimental::ArgValue encode_uint16_pair(const CmdListScalar&);       // uint16 -> [uint16 | uint16]
-tt::tt_metal::experimental::ArgValue encode_uint16_low(const CmdListScalar&);        // uint16 -> [zero | uint16]
-tt::tt_metal::experimental::ArgValue encode_uint16_high(const CmdListScalar&);       // uint16 -> [uint16 | zero]
-tt::tt_metal::experimental::ArgValue encode_float8_e4m3_quad(const CmdListScalar&);  // float -> four FP8 E4M3 bytes
+tt::tt_metal::ArgValue encode_uint32(const CmdListScalar&);            // integer -> unchanged
+tt::tt_metal::ArgValue encode_int32_bits(const CmdListScalar&);        // int32 -> two's complement
+tt::tt_metal::ArgValue encode_float32_bits(const CmdListScalar&);      // float -> IEEE-754 bits
+tt::tt_metal::ArgValue encode_bfloat16_pair(const CmdListScalar&);     // float -> [bf16 | bf16]
+tt::tt_metal::ArgValue encode_bfloat16_low(const CmdListScalar&);      // float -> [zero | bf16]
+tt::tt_metal::ArgValue encode_bfloat16_high(const CmdListScalar&);     // float -> [bf16 | zero]
+tt::tt_metal::ArgValue encode_uint16_pair(const CmdListScalar&);       // uint16 -> [uint16 | uint16]
+tt::tt_metal::ArgValue encode_uint16_low(const CmdListScalar&);        // uint16 -> [zero | uint16]
+tt::tt_metal::ArgValue encode_uint16_high(const CmdListScalar&);       // uint16 -> [uint16 | zero]
+tt::tt_metal::ArgValue encode_float8_e4m3_quad(const CmdListScalar&);  // float -> four FP8 E4M3 bytes
 
 // One op argument recorded as a TTNN command-list parameter.
 struct CmdListBind {
@@ -88,17 +88,17 @@ private:
 // program-cache miss and matched against the active binds when the program is recorded.
 struct CmdListTensorBinding {
     std::string invoke_name;
-    tt::tt_metal::experimental::TensorParamName program_spec_param_name;
+    tt::tt_metal::TensorParamName program_spec_param_name;
 };
 
 struct CmdListRuntimeArgBinding {
-    tt::tt_metal::experimental::KernelSpecName kernel_name;
+    tt::tt_metal::KernelSpecName kernel_name;
     std::string arg_name;
-    std::vector<tt::tt_metal::experimental::NodeCoord> nodes;
+    std::vector<tt::tt_metal::NodeCoord> nodes;
 };
 
 struct CmdListCommonRuntimeArgBinding {
-    tt::tt_metal::experimental::KernelSpecName kernel_name;
+    tt::tt_metal::KernelSpecName kernel_name;
     std::string arg_name;
 };
 
@@ -124,25 +124,22 @@ struct CmdListBindings {
 //   return binder.finish();
 class CmdListBinder {
 public:
-    CmdListBinder(
-        const tt::tt_metal::experimental::ProgramSpec& spec,
-        const tt::tt_metal::experimental::ProgramRunArgs& run_params);
+    CmdListBinder(const tt::tt_metal::ProgramSpec& spec, const tt::tt_metal::ProgramRunArgs& run_params);
 
     // Binds op keyword `invoke_name` to TensorParameter `program_spec_param_name`. A keyword may bind several.
-    void tensor(
-        std::string_view invoke_name, const tt::tt_metal::experimental::TensorParamName& program_spec_param_name);
+    void tensor(std::string_view invoke_name, const tt::tt_metal::TensorParamName& program_spec_param_name);
 
     // One Metal parameter: one encoding, bound to one or more kernel arguments of either kind.
     class Param {
     public:
         // Binds runtime argument `arg_name` of `kernel_name`. nodes defaults to every node run_params sets it on.
         Param& runtime(
-            const tt::tt_metal::experimental::KernelSpecName& kernel_name,
+            const tt::tt_metal::KernelSpecName& kernel_name,
             std::string arg_name,
-            std::optional<std::vector<tt::tt_metal::experimental::NodeCoord>> nodes = std::nullopt);
+            std::optional<std::vector<tt::tt_metal::NodeCoord>> nodes = std::nullopt);
 
         // Binds common runtime argument `arg_name` of `kernel_name`.
-        Param& common_runtime(const tt::tt_metal::experimental::KernelSpecName& kernel_name, std::string arg_name);
+        Param& common_runtime(const tt::tt_metal::KernelSpecName& kernel_name, std::string arg_name);
 
     private:
         friend class CmdListBinder;
@@ -162,12 +159,11 @@ public:
     CmdListBindings finish();
 
 private:
-    const tt::tt_metal::experimental::KernelSpec& kernel_spec(
-        const tt::tt_metal::experimental::KernelSpecName& kernel_name) const;
-    void claim_arg(bool common, const tt::tt_metal::experimental::KernelSpecName& kernel_name, const std::string& arg);
+    const tt::tt_metal::KernelSpec& kernel_spec(const tt::tt_metal::KernelSpecName& kernel_name) const;
+    void claim_arg(bool common, const tt::tt_metal::KernelSpecName& kernel_name, const std::string& arg);
 
-    const tt::tt_metal::experimental::ProgramSpec& spec_;
-    const tt::tt_metal::experimental::ProgramRunArgs& run_params_;
+    const tt::tt_metal::ProgramSpec& spec_;
+    const tt::tt_metal::ProgramRunArgs& run_params_;
     CmdListBindings bindings_;
     std::unordered_set<std::string> bound_tensors_;
     std::unordered_set<std::string> declared_params_;

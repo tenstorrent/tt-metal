@@ -18,8 +18,8 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <internal/mesh_device.hpp>
 
@@ -203,7 +203,7 @@ TEST_F(CommandListTest, PushRejectsInvalidBinds) {
     EXPECT_ANY_THROW(pop_cmd_list_binds(false));
 }
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 m2::KernelSpec make_kernel(const std::string& name, tt::tt_metal::DataMovementProcessor processor) {
     m2::KernelSpec kernel{
