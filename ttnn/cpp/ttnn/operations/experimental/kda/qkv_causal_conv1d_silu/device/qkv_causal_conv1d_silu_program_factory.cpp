@@ -177,7 +177,12 @@ void add_history_exchange(
         if (sp_size > 1) {
             const std::vector<uint32_t> unbound_semaphores(route.neighbors.size(), 0);
             varargs = tt::tt_metal::internal::compute_fabric_connection_rt_args(
-                device.get_fabric_node_id(coordinate), route.neighbors, {0}, unbound_semaphores, unbound_semaphores);
+                device,
+                device.get_fabric_node_id(coordinate),
+                route.neighbors,
+                {0},
+                unbound_semaphores,
+                unbound_semaphores);
             varargs.insert(varargs.end(), convolution_core_xy.begin(), convolution_core_xy.end());
             varargs.insert(varargs.end(), route.peer_args.begin(), route.peer_args.end());
         }
@@ -234,7 +239,7 @@ void add_history_exchange(
         };
         if (sp_size > 1) {
             // The fabric API-type defines; lowering adds only the control plane's routing and header-size ones.
-            for (const auto& [name, value] : tt::tt_metal::internal::get_fabric_kernel_defines()) {
+            for (const auto& [name, value] : tt::tt_metal::internal::get_fabric_kernel_defines(device)) {
                 kernel.compiler_options.defines.insert({name, value});
             }
         }
