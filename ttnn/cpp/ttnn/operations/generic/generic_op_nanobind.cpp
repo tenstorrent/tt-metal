@@ -38,7 +38,10 @@ void bind_generic_operation(nb::module_& mod) {
                 MeshProgramDescriptor for explicit per-device control.
 
         Returns:
-            ttnn.Tensor: Handle to the output tensor.
+            ttnn.Tensor: Handle to the output tensor. Its mesh topology is inferred from the tensors in io_tensors,
+                as for other ops. If the program writes something else, such as the same data on every device from
+                a sharded input, relabel it with output.update_tensor_topology(topology), for example with the
+                topology of a tensor laid out that way on the same devices.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
@@ -175,7 +178,10 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the
                 same devices, only its parts on the devices of the tensor in io_tensors that is on the fewest
-                devices.
+                devices. Its mesh topology is inferred from the tensors in io_tensors, as for other ops. If the
+                program writes something else, such as the same data on every device from a sharded input,
+                relabel it with output.update_tensor_topology(topology), for example with the topology of a
+                tensor laid out that way on the same devices.
 
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or
