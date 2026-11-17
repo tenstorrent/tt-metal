@@ -43,6 +43,7 @@ def _ci_unsupported_param_combos(**params):
     [(PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 1e-6, 1)],
     ids=["isl_5k"],
 )
+@pytest.mark.parametrize("fp32_dest_acc", [False, True], ids=["default_acc", "fp32_acc"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, tp_axis",
     [
@@ -80,7 +81,9 @@ def _ci_unsupported_param_combos(**params):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_rmsnorm_distributed(mesh_device, device_params, tp_axis, isl_per_chip, emb_dim, epsilon, num_links):
+def test_rmsnorm_distributed(
+    mesh_device, device_params, tp_axis, isl_per_chip, emb_dim, epsilon, num_links, fp32_dest_acc
+):
     """
     Test distributed RMSNorm against PyTorch reference.
 
@@ -139,6 +142,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, tp_axis, isl_per_chip, 
         cluster_axis=tp_axis,
         num_links=num_links,
         topology=topology,
+        fp32_dest_acc=fp32_dest_acc,
     )
 
     # Shard input across devices along width dimension (dim=3) over the TP axis

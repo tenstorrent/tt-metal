@@ -95,6 +95,9 @@ class TtKimiK3Block(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            # KDA layers only (a KDA layer writes no KV). The recurrence state sums the normed input over the
+            # whole sequence, so the about 1% shrink of the norm without FP32 accumulation shows up in the state.
+            fp32_dest_acc=not attention.writes_kv,
         )
 
         if kv_only:

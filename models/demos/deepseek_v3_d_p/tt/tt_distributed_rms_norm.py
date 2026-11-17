@@ -164,6 +164,7 @@ class TtDistributedRmsNorm(LightweightModule):
         output_memcfg: ttnn.MemoryConfig = None,
         use_fused: bool = False,
         post_use_2d_core_grid: bool = False,
+        fp32_dest_acc: bool = False,
     ):
         """
         Initialize TtDistributedRmsNorm module.
@@ -181,6 +182,10 @@ class TtDistributedRmsNorm(LightweightModule):
             stats_memcfg: Optional memory config for gathered stats (e.g., L1 sharded)
             output_memcfg: Optional memory config for the normalized output
             use_fused: Use the fused distributed op; unsupported tensor shapes raise in the op.
+            fp32_dest_acc: Accumulate in FP32 in both the pre-all-gather and the post-all-gather step.
+                Without it the sum of squares of the pre step comes out about 2% too large on a real
+                hidden state, so the normalized output is about 1% too small. It applies only to the
+                non-fused TP > 1 path.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -197,6 +202,18 @@ class TtDistributedRmsNorm(LightweightModule):
         # Split the post-all-gather normalize over tile rows AND width (one row per core) instead of
         # rows only. Measured per shape, so opt-in: at [640, 1024] per device it is 17.9 us vs 33.9.
         self.post_use_2d_core_grid = post_use_2d_core_grid
+        # None keeps the defaults of the two ops (HiFi4, approximate mode on, no FP32 dest accumulation).
+        self.compute_kernel_config = (
+            ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+            if fp32_dest_acc
+            else None
+        )
         self.sharded_progcfg = sharded_progcfg
         self.stats_memcfg = stats_memcfg
         self.weight_cache_path = weight_cache_path
@@ -341,6 +358,7 @@ class TtDistributedRmsNorm(LightweightModule):
             x,
             dtype=ttnn.bfloat16,
             program_config=self.sharded_progcfg,
+            compute_kernel_config=self.compute_kernel_config,
         )
         logger.debug(f"Pre-all-gather stats shape: {tt_stats.shape}")
 
@@ -395,6 +413,7 @@ class TtDistributedRmsNorm(LightweightModule):
             memory_config=self.output_memcfg,
             program_config=self.sharded_progcfg,
             use_2d_core_grid=self.post_use_2d_core_grid or None,
+            compute_kernel_config=self.compute_kernel_config,
         )
         if not use_high_bw_all_gather:
             ttnn.deallocate(tt_gathered_stats)

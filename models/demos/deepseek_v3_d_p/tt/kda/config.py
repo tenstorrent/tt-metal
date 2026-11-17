@@ -251,7 +251,9 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
-        input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # HiFi4, not HiFi2: at HiFi2 the q, k, v projections come out about 0.28% too small (measured on the real
+        # layer 0 input), and the recurrence state carries that loss through the whole sequence.
+        input_projection_math_fidelity=ttnn.MathFidelity.HiFi4,
         # HiFi3 for the same SrcB truncation.
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi3,
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
