@@ -1,0 +1,45 @@
+/data/mvasiljev/gemma26-agentic/ws8-4ca81a2/smoke-swe5: 4/5 resolved = 80.0%  exceptions 0
+   1 astropy__astropy-12907
+   0 astropy__astropy-13398
+   1 astropy__astropy-13453
+   1 astropy__astropy-14096
+   1 astropy__astropy-14309
+/data/mvasiljev/gemma26-agentic/ws8-4ca81a2/smoke-tb5: 1/5 resolved = 20.0%  exceptions 0
+   1 adaptive-rejection-sampler
+   0 bn-fit-modify
+   0 break-filter-js-from-html
+   0 build-cython-ext
+   0 build-pmars
+/data/mvasiljev/gemma26-agentic/ws8-4ca81a2/swe32: 17/32 resolved = 53.1%  exceptions 0
+   1 astropy__astropy-12907
+   0 astropy__astropy-13398
+   1 astropy__astropy-13453
+   0 astropy__astropy-14096
+   1 astropy__astropy-14309
+   0 astropy__astropy-14365
+   0 astropy__astropy-14369
+   1 astropy__astropy-7166
+   1 django__django-11099
+   1 django__django-11119
+   0 django__django-11138
+   1 django__django-11179
+   1 django__django-11206
+   0 django__django-11211
+   1 django__django-11239
+   1 django__django-11299
+   0 django__django-11433
+   0 django__django-11477
+   0 django__django-11532
+   0 django__django-11728
+   1 django__django-11815
+   0 django__django-11820
+   0 django__django-11848
+   1 django__django-11880
+   0 django__django-11964
+   1 django__django-12050
+   1 django__django-13109
+   1 django__django-13315
+   0 django__django-13344
+   0 django__django-14011
+   1 django__django-14089
+   1 django__django-14122

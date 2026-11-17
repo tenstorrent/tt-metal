@@ -1,0 +1,22 @@
+{
+ "prefix": 8192,
+ "last_logits": {
+  "suffix": 32,
+  "text": true,
+  "rows_vs_serial": {
+   "pcc": 0.982246,
+   "top1_equal": true,
+   "top5_overlap": 4
+  },
+  "rows_vs_cold": {
+   "pcc": 0.945231,
+   "top1_equal": true,
+   "top5_overlap": 3
+  },
+  "serial_vs_cold": {
+   "pcc": 0.945834,
+   "top1_equal": true,
+   "top5_overlap": 4
+  }
+ }
+}
