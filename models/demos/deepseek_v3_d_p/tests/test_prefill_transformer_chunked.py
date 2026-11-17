@@ -73,6 +73,10 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.moe_impl import (
+    k3_moe_block_device_params,
+    moe_block_enabled,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -109,6 +113,27 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
 # sync with the glm_5_3 runner adapter.
 GLM_L1_SMALL_SIZE = 1536
+
+
+# K3's fabric: the XY torus when the MoE block is K3's MoE (the default; on the 2D mesh fabric the block's first call
+# hangs); Fabric2D on TtMoe (K3_MOE_IMPL=ttmoe).
+K3_TORUS = moe_block_enabled(KimiK3Config)
+
+
+def _k3_device_params():
+    """K3's fabric (K3_TORUS) plus what the MoE block needs when it is K3's MoE: its combine's fabric payload and
+    L1_SMALL (tt/moe_impl.py)."""
+    fabric = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if K3_TORUS else ttnn.FabricConfig.FABRIC_2D
+    return k3_moe_block_device_params(
+        fabric2d_device_params(
+            fabric_payload_size=moe_fabric_payload(KimiK3Config),
+            l1_small_size=KimiK3Config.L1_SMALL_SIZE,
+            trace_region_size=256 * 1024 * 1024,
+            fabric_config=fabric,
+        )
+    )
+
+
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
@@ -2935,14 +2960,10 @@ def test_kimi_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(KimiK3Config),
-                l1_small_size=KimiK3Config.L1_SMALL_SIZE,
-                trace_region_size=256 * 1024 * 1024,
-            ),
+            _k3_device_params(),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-8x4",
+            id="torus-xy-8x4" if K3_TORUS else "fabric2d-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
