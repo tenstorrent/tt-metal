@@ -12,15 +12,14 @@ constexpr uint32_t cb_e = get_compile_time_arg_val(0);
 constexpr uint32_t cb_b = get_compile_time_arg_val(1);
 constexpr uint32_t cb_ein = get_compile_time_arg_val(2);
 constexpr uint32_t cb_chron = get_compile_time_arg_val(3);
-constexpr uint32_t sp_rank = get_compile_time_arg_val(4);
-constexpr uint32_t sp_size = get_compile_time_arg_val(5);
-constexpr uint32_t local_rows = get_compile_time_arg_val(6);
-constexpr uint32_t kt = get_compile_time_arg_val(7);  // key tiles; the state is kt x kt tiles
+constexpr uint32_t sp_size = get_compile_time_arg_val(4);
+constexpr uint32_t local_rows = get_compile_time_arg_val(5);
+constexpr uint32_t kt = get_compile_time_arg_val(6);  // key tiles; the state is kt x kt tiles
 // cb_ein's storage again, as compute's exact (UnpackToDest) view of the entry state.
-constexpr uint32_t cb_ein_exact = get_compile_time_arg_val(8);
+constexpr uint32_t cb_ein_exact = get_compile_time_arg_val(7);
 // One BF16 32x32 identity tile, for compute's exact I @ B.
-constexpr uint32_t cb_identity = get_compile_time_arg_val(9);
-constexpr auto packed_args = TensorAccessorArgs<10>();
+constexpr uint32_t cb_identity = get_compile_time_arg_val(8);
+constexpr auto packed_args = TensorAccessorArgs<9>();
 constexpr auto init_args = TensorAccessorArgs<packed_args.next_compile_time_args_offset()>();
 constexpr auto start_args = TensorAccessorArgs<init_args.next_compile_time_args_offset()>();
 constexpr uint32_t state_tiles = kt * kt;
@@ -34,6 +33,7 @@ void kernel_main() {
     const uint32_t start_address = get_common_arg_val<uint32_t>(2);
     const uint32_t head = get_arg_val<uint32_t>(arg++);
     const uint32_t arrival_semaphore = get_arg_val<uint32_t>(arg++);
+    const uint32_t sp_rank = get_arg_val<uint32_t>(arg++);
 
     cb_reserve_back(cb_chron, 1);
     const auto start = TensorAccessor(start_args, start_address);
