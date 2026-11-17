@@ -100,6 +100,27 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t min_active_tokens = 0;
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
 
+    // L1 address the circular buffers must end below (0: the whole L1). A caller that keeps
+    // buffers resident in L1 passes the lowest such address so the CB blocking is fitted to the
+    // L1 left free instead of clashing with them. It sizes the CBs, so it is part of the
+    // program-cache key: a program fitted under one L1 layout is never replayed under another.
+    uint32_t l1_end = 0;
+
+    // x_row_index given (row-major x only): x is the token-ordered input and buffer row r of an expert region reads
+    // x row x_row_index[r] instead of x row r, so no dispatch gather has to build the [rows, emb] buffer first.
+    // Changes the reader program, so it is part of the program-cache key.
+    bool x_indexed = false;
+
+    // Output written ROW_MAJOR bf16 (row-major x only): the down matmul's final pack untilizes each output tile-row
+    // in the compute kernel and the writer stores it as 32 row segments, so a consumer that gathers rows needs no
+    // separate untilize of the whole buffer. Changes the compute and writer programs (part of the cache key).
+    bool output_row_major = false;
+
+    // Row-major output only: one output row the writer sets to zeros (UINT32_MAX: none). Rows outside every expert
+    // region are left uninitialized; a caller whose combine reads such a row (gpt-oss: the spare row its non-local
+    // pairs point at) names it here instead of zeroing it with a separate op.
+    uint32_t zero_output_row = std::numeric_limits<uint32_t>::max();
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -107,10 +128,24 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "min_active_tokens",
-        "max_active_tokens");
+        "max_active_tokens",
+        "l1_end",
+        "x_indexed",
+        "output_row_major",
+        "zero_output_row");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            min_active_tokens,
+            max_active_tokens,
+            l1_end,
+            x_indexed,
+            output_row_major,
+            zero_output_row);
     }
 };
 
@@ -157,6 +192,9 @@ struct UnifiedRoutedExpertFfnInputs {
     std::vector<Tensor> gate_biases;
     std::vector<Tensor> up_biases;
     std::vector<Tensor> down_biases;
+    // Optional dispatch row index (x_indexed): UINT32 ROW_MAJOR, one page, one entry per buffer row (the output's
+    // row count): the x row each buffer row holds. Rows no pair writes may hold any valid x row; they are never read.
+    std::optional<Tensor> x_row_index;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
