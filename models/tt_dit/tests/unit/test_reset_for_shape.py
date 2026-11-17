@@ -318,7 +318,7 @@ class PipelineResetForShape(unittest.TestCase):
     def test_releases_everything_before_freeing_ccl_and_warms_at_the_new_shape(self):
         log = []
         names = ["_ccl_managers", "_shape_state_tensors", "_release_ccl", "_clear_program_caches", "release_shape_buffers",
-                 "reset_for_shape"]
+                 "_drop_shape_slots", "reset_for_shape"]
         ttnn = SimpleNamespace(synchronize_device=lambda m: log.append("sync"))
         ns = _lift(
             "pipelines/ltx/pipeline_ltx.py",
@@ -337,7 +337,8 @@ class PipelineResetForShape(unittest.TestCase):
         )
 
         class P:
-            pass
+            _shape_slots = None
+            _shape_suffix = ""
 
         for k in names:
             setattr(P, k, ns[k])
@@ -399,6 +400,78 @@ class PipelineResetForShape(unittest.TestCase):
         self.assertEqual(stats["dram_warm"], {"allocated": 1})
         log.clear()
         self.assertEqual(p.release_shape_buffers(), 4)  # an int: ltx-server reads it as ccl_freed
+
+
+class ShapeSlots(unittest.TestCase):
+    """select_shape swaps the frame-baked modules, stage-transition I/O and trace-key suffix by pointer;
+    _drop_shape_slots frees every parked slot and ends slot mode."""
+
+    def _pipeline(self, log):
+        names = ["_SHAPE_SLOT_ATTRS", "warm_shape", "resident_shapes", "_shape_key_suffix", "select_shape",
+                 "_open_shape_slot", "_drop_shape_slots"]
+        ns = _lift(
+            "pipelines/ltx/pipeline_ltx.py",
+            names,
+            {
+                "StateTensor": FakeState,
+                "logger": SimpleNamespace(info=lambda *_: None),
+                "release_traced_functions": lambda m: log.append(("traced", m.name)) or 1,
+            },
+            cls="LTXPipeline",
+        )
+
+        class P:
+            _shape_slots = None
+            _shape_suffix = ""
+
+        for k in names:
+            setattr(P, k, staticmethod(ns[k]) if k == "_shape_key_suffix" else ns[k])
+        p = P()
+        p._init_num_frames, p._init_height, p._init_width = 145, 704, 1280
+        p.upsampler, p.vae_decoder = FakeModule(log, "ups145"), FakeModule(log, "vae145")
+        p._upsampler_nf = p._vae_decoder_nf = 145
+        p._t12_io = {"noise": FakeState(log, "noise145")}
+        p._new_upsampler = lambda nf: FakeModule(log, f"ups{nf}")
+        p._new_vae_decoder = lambda nf: FakeModule(log, f"vae{nf}")
+        p._register_coresident_exclusions = lambda: log.append("excl")
+        return p
+
+    def test_open_select_and_drop(self):
+        log = []
+        p = self._pipeline(log)
+        p._shape_slots, p._shape_suffix = {}, "@145x704x1280"
+        p._open_shape_slot(241, 704, 1280)
+        self.assertEqual(p.warm_shape(), (241, 704, 1280))
+        self.assertEqual(p._shape_suffix, "@241x704x1280")
+        self.assertEqual((p.upsampler.name, p.vae_decoder.name, p._t12_io), ("ups241", "vae241", None))
+        self.assertEqual(p.resident_shapes(), [(241, 704, 1280), (145, 704, 1280)])
+        self.assertNotIn("dealloc ups145", log)  # the parked shape keeps its weights
+
+        self.assertTrue(p.select_shape(145, 704, 1280))
+        self.assertEqual((p.upsampler.name, p._shape_suffix, p._t12_io["noise"].name),
+                         ("ups145", "@145x704x1280", "noise145"))
+        self.assertTrue(p.select_shape(145, 704, 1280))  # already active: no swap
+        self.assertFalse(p.select_shape(121, 704, 1280))
+        self.assertTrue(p.select_shape(241, 704, 1280))
+        self.assertEqual(p.vae_decoder.name, "vae241")
+
+        log.clear()
+        self.assertEqual(p._drop_shape_slots(), 2)
+        self.assertEqual(sorted(map(str, log)), sorted(map(str, ["free noise145", ("traced", "ups145"), ("traced", "vae145"),
+                                              "dealloc ups145", "dealloc vae145"])))
+        self.assertIsNone(p._shape_slots)
+        self.assertEqual((p._shape_suffix, p.resident_shapes(), p.upsampler.name), ("", [], "ups241"))
+
+
+class FakeModule:
+    def __init__(self, log, name):
+        self.log, self.name = log, name
+
+    def is_loaded(self):
+        return True
+
+    def deallocate_weights(self):
+        self.log.append(f"dealloc {self.name}")
 
 
 class FakeState:

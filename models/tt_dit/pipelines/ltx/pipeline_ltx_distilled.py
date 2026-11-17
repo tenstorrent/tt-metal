@@ -976,7 +976,7 @@ class LTXDistilledPipeline(LTXPipeline):
                     name="warmup audio decode",
                     stall_s=float(os.environ.get("LTX_AUDIO_WARMUP_STALL_S", "600")),
                 )
-                if self._traced:
+                if self._traced and not getattr(self, "_defer_audio_capture", False):
                     logger.info("warmup audio decode (capture pass)")
                     self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=self.fps)
             # Programs are now compiled
@@ -1047,6 +1047,9 @@ class LTXDistilledPipeline(LTXPipeline):
                     kf_anchors=kf_anchors,
                     i2v_families=i2v_families,
                     skip_scalar=skip_scalar,
+                    # warm_shapes defers each shape's audio capture to _capture_warmup_traces.
+                    audio_capture=getattr(self, "_defer_audio_capture", False)
+                    and not (video_only or denoise_only or iter_fast or in_capture_pass),
                 )
             ]
             if _env_on("LTX_WARMUP_CAPTURE", "1") if warmup_capture is None else warmup_capture:
@@ -1065,7 +1068,19 @@ class LTXDistilledPipeline(LTXPipeline):
             return
         eager = {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",") if s.strip()}
         t0 = time.time()
+        # Resident shape slots (warm_shapes): every shape's audio trace first, the way a single-shape
+        # warmup captures audio before its DiT families; each record's captures run in its own slot.
         for w in pending:
+            if w.get("audio_capture"):
+                self.select_shape(w["num_frames"], w["height"], w["width"])
+                als = AudioLatentShape.from_video_pixel_shape(
+                    VideoPixelShape(batch=1, frames=w["num_frames"], height=w["height"], width=w["width"], fps=self.fps)
+                )
+                logger.info(f"warmup audio decode (capture pass) {w['num_frames']}f")
+                self.decode_audio(torch.zeros(1, als.frames, self.in_channels), w["num_frames"], fps=self.fps)
+        for w in pending:
+            if getattr(self, "_shape_slots", None):
+                self.select_shape(w["num_frames"], w["height"], w["width"])
             stages = w["stages"]
             families = []
             if not w.get("skip_scalar"):
@@ -1333,13 +1348,13 @@ class LTXDistilledPipeline(LTXPipeline):
         raw = os.environ.get("LTX_KF_TRACE_ANCHORS", "").strip()
         return [int(x) for x in raw.split(",") if x.strip()] if raw else []
 
-    @staticmethod
-    def _trace_variant_key(trace_key, per_token):
+    def _trace_variant_key(self, trace_key, per_token):
         """A pinned (per-token) gen replays a different graph than a scalar gen, so each stage key
-        names two trace + state families; the per-token one carries the ``_i2v`` suffix."""
-        if trace_key is None or not per_token:
-            return trace_key
-        return f"{trace_key}_i2v"
+        names two trace + state families; the per-token one carries the ``_i2v`` suffix. With resident
+        shape slots (``warm_shapes``) every key also carries the active slot's ``@FxHxW`` suffix."""
+        if trace_key is None:
+            return None
+        return (f"{trace_key}_i2v" if per_token else trace_key) + getattr(self, "_shape_suffix", "")
 
     def _assert_trace_family_warmed(self, trace_key, traced):
         """Refuse a traced gen whose trace family a warmup skipped, before any denoise upload. Capturing
@@ -1349,7 +1364,7 @@ class LTXDistilledPipeline(LTXPipeline):
         warmed, or whose traces were released, still captures at gen time."""
         if not traced or trace_key is None or trace_key in self._trace_state:
             return
-        if getattr(self, "_warmup_t2v_only", False) and trace_key.endswith("_i2v"):
+        if getattr(self, "_warmup_t2v_only", False) and "_i2v" in trace_key:
             raise RuntimeError(
                 f"trace family {trace_key} was not captured: warmup ran with LTX_WARMUP_T2V_ONLY=1, "
                 "so this worker serves plain t2v only (unset it to serve image-conditioned gens)"
@@ -2201,7 +2216,7 @@ class LTXDistilledPipeline(LTXPipeline):
             sigma=float(STAGE_2_DISTILLED_SIGMA_VALUES[0]),
             sp_axis=sp_axis,
             traced=traced,
-            tracer_trace_key="t12",
+            tracer_trace_key="t12" + getattr(self, "_shape_suffix", ""),
             tracer_blocking_execution=_env_on("LTX_STEP_SYNC"),
         )
         if traced and io["weights"] is None:
@@ -2323,6 +2338,13 @@ class LTXDistilledPipeline(LTXPipeline):
         assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
 
         fps = self._resolve_fps(fps)
+        # Resident shape slots (warm_shapes): a gen at another resident shape swaps in that slot's
+        # frame-baked modules and trace keys; a shape no slot holds needs reset_for_shape first.
+        if getattr(self, "_shape_slots", None) and not self.select_shape(num_frames, height, width):
+            raise RuntimeError(
+                f"shape {num_frames}x{height}x{width} is not resident (resident: {self.resident_shapes()}); "
+                "reset_for_shape it first"
+            )
 
         s1_height = height // 2
         s1_width = width // 2

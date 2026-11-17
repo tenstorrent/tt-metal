@@ -280,6 +280,17 @@ class LTXPipeline:
     # be the last one taken, or a later capture reclaims its activation region. See
     # ``GemmaTokenizerEncoderPair.defer_trace_capture``.
     DEFERS_ENCODE_TRACE: bool = False
+    # Resident shape slots (``warm_shapes``). The active shape's frame-baked modules and stage-transition
+    # I/O live on the pipeline's own attributes; every other resident shape's are kept in
+    # ``_shape_slots`` and swapped in by ``select_shape``. Its DiT traces and trace state stay keyed by
+    # the slot's ``@FxHxW`` suffix, so a switch between resident shapes rebuilds and captures nothing.
+    _SHAPE_SLOT_ATTRS = (
+        "upsampler", "_upsampler_nf", "vae_decoder", "_vae_decoder_nf", "_t12_io",
+        "_init_num_frames", "_init_height", "_init_width", "_shape_suffix",
+    )
+    _shape_suffix: str = ""
+    _shape_slots: dict | None = None
+    _defer_audio_capture: bool = False
 
     def __init__(
         self,
@@ -513,7 +524,7 @@ class LTXPipeline:
                 # component (denoise/VAE/vocoder) while warm -- gen then replays instead of doing a
                 # first-time capture that would write device statics an iter_fast warmup never initialized
                 # (vocoder prep_run=False). Warm runs keep the normal iter_fast warmup.
-                self.warmup_buffers(num_frames=num_frames, height=height, width=width, capture_all=_cold)
+                self._create_time_warmup(num_frames, height, width, capture_all=_cold)
             elif traced:
                 logger.warning(
                     f"traced=True but invalid shape ({num_frames=}, {height=}, {width=}); "
@@ -531,8 +542,9 @@ class LTXPipeline:
                 tracer.release_trace()
         if self._audio_adapter is not None:
             self._audio_adapter.release_traces()
-        if self.vae_decoder is not None:
-            self.vae_decoder.release_trace()
+        for decoder in [self.vae_decoder, *(slot["vae_decoder"] for slot in (getattr(self, "_shape_slots", None) or {}).values())]:
+            if decoder is not None:
+                decoder.release_trace()
         if self.vae_encoder is not None:
             self.vae_encoder.release_trace()
         self._trace_state.clear()
@@ -552,8 +564,8 @@ class LTXPipeline:
         """The StateTensors sized by the warm shape: per-stage trace I/O, prompts, stage-transition I/O."""
         out = [v for s in self._trace_state.values() for k, v in vars(s).items() if isinstance(v, StateTensor)]
         out += [self._prompt_v, self._prompt_a]
-        io = getattr(self, "_t12_io", None)
-        out += [v for v in io.values() if isinstance(v, StateTensor)] if isinstance(io, dict) else []
+        ios = [getattr(self, "_t12_io", None), *(slot["_t12_io"] for slot in (getattr(self, "_shape_slots", None) or {}).values())]
+        out += [v for io in ios if isinstance(io, dict) for v in io.values() if isinstance(v, StateTensor)]
         return out
 
     def _release_ccl(self) -> tuple[int, int]:
@@ -582,11 +594,146 @@ class LTXPipeline:
         """One chip's DRAM by category (see utils.dram_accounting); the audio submesh's CCL is not counted."""
         roots = [s.model for s in self.transformer_states]
         roots += [m for m in (self.vae_decoder, self.vae_encoder, self.upsampler, self._audio_adapter) if m is not None]
+        for slot in (getattr(self, "_shape_slots", None) or {}).values():
+            roots += [m for m in (slot["vae_decoder"], slot["upsampler"]) if m is not None]
         roots.append(self.gemma_encoder_pair)
         managers = [m for m in self._ccl_managers() if m.mesh_device is self.mesh_device]
         return dram_by_category(
             self.mesh_device, weight_roots=roots, ccl_managers=managers, state_tensors=self._shape_state_tensors()
         )
+
+    def _create_time_warmup(self, num_frames: int, height: int, width: int, **warmup_kw) -> None:
+        """The create-time warmup: one shape, or every shape LTX_RESIDENT_SHAPES lists ("FxHxW,FxHxW";
+        the create shape is always first) resident at once through ``warm_shapes``."""
+        extra = []
+        for item in os.environ.get("LTX_RESIDENT_SHAPES", "").replace(";", ",").split(","):
+            if item.strip():
+                f, h, w = (int(v) for v in item.strip().lower().split("x"))
+                extra.append((f, h, w))
+        shapes = list(dict.fromkeys([(num_frames, height, width), *extra]))
+        ok, why = self.shape_slots_supported()
+        if len(shapes) > 1 and ok:
+            logger.info(f"create: warming {len(shapes)} resident shapes {shapes}")
+            self.warm_shapes(shapes, **warmup_kw)
+            return
+        if len(shapes) > 1:
+            logger.warning(f"LTX_RESIDENT_SHAPES ignored: {why}")
+        self.warmup_buffers(num_frames=num_frames, height=height, width=width, **warmup_kw)
+
+    def warm_shape(self) -> tuple[int, int, int]:
+        """The active (num_frames, height, width): the one the frame-baked modules and trace keys use."""
+        return (self._init_num_frames, self._init_height, self._init_width)
+
+    def resident_shapes(self) -> list[tuple[int, int, int]]:
+        """Every shape a gen can run at without a reset: the active one first. Empty without slots."""
+        return [self.warm_shape(), *self._shape_slots] if self._shape_slots is not None else []
+
+    @staticmethod
+    def _shape_key_suffix(num_frames: int, height: int, width: int) -> str:
+        return f"@{num_frames}x{height}x{width}"
+
+    def shape_slots_supported(self) -> tuple[bool, str]:
+        """Whether this pipeline can keep several shapes resident, and why not. Slots need static,
+        traced weights (a dynamic_load pipeline evicts per request) and refuse the keyframe worker's
+        tail-padded trace (LTX_KF_TRACE_PAD bakes num_frames + TEMPORAL_COMPRESSION)."""
+        if not self._traced or self.dynamic_load:
+            return False, "needs a traced, static-weight pipeline"
+        if not hasattr(self, "_capture_warmup_traces"):
+            return False, "pipeline has no deferred warmup capture"
+        if os.environ.get("LTX_KF_TRACE_PAD", "0") in ("1", "true", "True"):
+            return False, "LTX_KF_TRACE_PAD keyframe worker"
+        return True, ""
+
+    def select_shape(self, num_frames: int, height: int, width: int) -> bool:
+        """Make a resident shape the active one: a pointer swap of its frame-baked modules, stage-transition
+        I/O and trace-key suffix (no device work). False when no slot holds it."""
+        key = (num_frames, height, width)
+        if key == self.warm_shape():
+            return True
+        if not self._shape_slots or key not in self._shape_slots:
+            return False
+        current = {a: getattr(self, a, None) for a in self._SHAPE_SLOT_ATTRS}
+        for a, v in self._shape_slots.pop(key).items():
+            setattr(self, a, v)
+        self._shape_slots[(current["_init_num_frames"], current["_init_height"], current["_init_width"])] = current
+        self._register_coresident_exclusions()
+        logger.info(f"select_shape: {num_frames}x{height}x{width} (resident: {self.resident_shapes()})")
+        return True
+
+    def _open_shape_slot(self, num_frames: int, height: int, width: int) -> None:
+        """Park the active shape in a slot and make (num_frames, height, width) active with fresh frame-baked
+        modules (built here, weights loaded by the warmup) and no stage-transition I/O yet."""
+        current = {a: getattr(self, a, None) for a in self._SHAPE_SLOT_ATTRS}
+        self._shape_slots[self.warm_shape()] = current
+        self._init_num_frames, self._init_height, self._init_width = num_frames, height, width
+        self._shape_suffix = self._shape_key_suffix(num_frames, height, width)
+        self._t12_io = None
+        if self.upsampler is not None:
+            self.upsampler = self._new_upsampler(num_frames)
+            self._upsampler_nf = num_frames
+        if self.vae_decoder is not None:
+            self.vae_decoder = self._new_vae_decoder(num_frames)
+            self._vae_decoder_nf = num_frames
+        self._register_coresident_exclusions()
+
+    def _drop_shape_slots(self) -> int:
+        """Free every parked slot's frame-baked modules and stage-transition I/O and end slot mode: the
+        active shape becomes the only one, keyed without a suffix. Only once no trace is live (reset_for_shape
+        released them). Returns the traced functions released."""
+        released = 0
+        for slot in (getattr(self, "_shape_slots", None) or {}).values():
+            io = slot.get("_t12_io")
+            for v in io.values() if isinstance(io, dict) else ():
+                if isinstance(v, StateTensor):
+                    v.release()
+            for module in (slot["upsampler"], slot["vae_decoder"]):
+                if module is None:
+                    continue
+                released += release_traced_functions(module)
+                if module.is_loaded():
+                    module.deallocate_weights()
+        self._shape_slots = None
+        self._shape_suffix = ""
+        return released
+
+    def warm_shapes(self, shapes, **warmup_kw) -> dict:
+        """Warm several (num_frames, height, width) shapes resident at once, the first one active after.
+
+        Each shape gets its own frame-baked upsampler and VAE decoder, stage-transition I/O, CCL buffers
+        and DiT trace families (keys suffixed ``@FxHxW``). Every shape's eager warmup and persistent
+        allocations run first and all traces are captured once at the end (audio, then DiT, then Gemma and
+        the image encoders), so no capture bakes an address a later allocation reuses. A gen at any of
+        these shapes then only swaps pointers (``select_shape``). The pipeline must be cold: just created
+        without its warmup, or after ``reset_for_shape(shapes[0], warmup=False)``. Returns per-shape
+        warmup seconds and the DRAM rows."""
+        ok, why = self.shape_slots_supported()
+        assert ok, f"warm_shapes: {why}"
+        shapes = list(dict.fromkeys(tuple(int(v) for v in s) for s in shapes))
+        assert shapes and shapes[0] == self.warm_shape(), f"warm_shapes: {shapes[:1]} is not the active shape {self.warm_shape()}"
+        assert not self._trace_state, "warm_shapes: release the warm traces first (reset_for_shape(..., warmup=False))"
+        clock = time.monotonic
+        t0 = clock()
+        stats = {"shapes": shapes, "warmup_s": {}}
+        self._shape_slots = {}
+        self._shape_suffix = self._shape_key_suffix(*shapes[0])
+        self._defer_audio_capture = True
+        try:
+            for i, shape in enumerate(shapes):
+                t = clock()
+                if i:
+                    self._open_shape_slot(*shape)
+                self.warmup_buffers(num_frames=shape[0], height=shape[1], width=shape[2], warmup_capture=False, **warmup_kw)
+                stats["warmup_s"]["%dx%dx%d" % shape] = round(clock() - t, 3)
+            t = clock()
+            self._capture_warmup_traces()
+            stats["capture_s"] = round(clock() - t, 3)
+        finally:
+            self._defer_audio_capture = False
+        self.select_shape(*shapes[0])
+        stats["dram_warm"] = self.dram_by_category()
+        logger.info(format_dram_row(f"warm {len(shapes)} shapes {shapes}", stats["dram_warm"]))
+        stats["took_s"] = round(clock() - t0, 3)
+        return stats
 
     def reset_for_shape(self, num_frames: int, height: int, width: int, *, warmup: bool = True) -> dict:
         """Make the pipeline warm at a new (num_frames, height, width) in-process.
@@ -607,6 +754,7 @@ class LTXPipeline:
         contexts = [self, *(s.model for s in self.transformer_states), self.gemma_encoder_pair]
         contexts += [m for m in (self.vae_decoder, self.vae_encoder, self.upsampler) if m is not None]
         traces = sum(release_traced_functions(c) for c in contexts)
+        traces += self._drop_shape_slots()
         # Gemma's encode trace goes back to its load-time state: captured last, by capture_trace(). Left
         # marked captured with its gate open, the warmup's first encode re-captured it before any trace
         # I/O or CCL buffer existed; those later took its freed activations, the first gen's encode replay
@@ -1060,7 +1208,13 @@ class LTXPipeline:
             return
         if self.vae_decoder.is_loaded():
             self.vae_decoder.deallocate_weights()
-        self.vae_decoder = LTXVideoDecoder(
+        self.vae_decoder = self._new_vae_decoder(num_frames)
+        self._vae_decoder_nf = num_frames
+        self._register_coresident_exclusions()
+
+    def _new_vae_decoder(self, num_frames: int) -> LTXVideoDecoder:
+        """The VAE decoder at the active H/W, baked for ``num_frames``; no device weights yet."""
+        return LTXVideoDecoder(
             decoder_blocks=self._vae_decoder_blocks,
             causal=self._vae_causal,
             base_channels=self._vae_base_channels,
@@ -1071,8 +1225,6 @@ class LTXPipeline:
             height=self._init_height or None,
             width=self._init_width or None,
         )
-        self._vae_decoder_nf = num_frames
-        self._register_coresident_exclusions()
 
     def _instantiate_modules(
         self, extra_variants: list[tuple[str, list[LoraSpec]]], *, audio_only: bool = False
