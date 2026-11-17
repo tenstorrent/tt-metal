@@ -86,9 +86,8 @@ PLAIN = ((1, 1, 256, 1024), (1, 1, 1024, 512), ttnn.bfloat8_b, D, D)
 
 
 # How far below the flag-off PCC the flag-on PCC may be. The model may use other K blocking than the default, which
-# changes how partial sums are rounded (README, "Precision"): on a Blackhole Galaxy the largest drop on these cases is
-# 1.0e-4 (32x1024x2048, bfp8 B), and 1.2e-4 on 1024^3 bf16 (HiFi2, packer L1 accumulation). A fixed PCC bar loose
-# enough for every case would miss a regression of that size.
+# changes how partial sums are rounded (README, "Precision"), so a small drop is expected; a fixed PCC bar loose enough
+# for every case would miss a regression of that size.
 PCC_MARGIN = 2e-4
 
 

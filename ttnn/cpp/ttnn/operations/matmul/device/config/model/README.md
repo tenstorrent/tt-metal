@@ -16,10 +16,17 @@ or from Python, before the first matmul:
 ttnn.CONFIG.matmul_model_config = True
 ```
 
-The model is the blob that `ttnn.CONFIG.matmul_model_path` names. The build fetches it (see "The model blob" below)
-to `runtime/matmul_model/matmul_model.blob` under the runtime root, and `import ttnn` sets `matmul_model_path` to it
-unless the path is already set. A C++ program that does not import ttnn's Python package must set `matmul_model_path`
-itself: while it is unset, a matmul with the flag on logs that the model can't be loaded and uses the default configs.
+The model is the blob that `ttnn.CONFIG.matmul_model_path` names. Unless that path is already set, `import ttnn`
+sets it to the blob a source build fetched (`runtime/matmul_model/matmul_model.blob` under the runtime root, see "The
+model blob" below), or, when there is none (a wheel, or a build configured with `-DTT_MATMUL_MODEL_FETCH=OFF`), to
+`<ttnn.CONFIG.cache_path>/matmul_model/<sha256>.blob`. ttnn downloads the blob to that cache path when the flag is on
+at `import ttnn` or when a device is opened (`ttnn.open_device`, `ttnn.open_mesh_device`) and the file isn't there
+yet. It tries once per process: if the download fails, a warning is logged and matmul uses the default configs. Turned
+on after the device is open, or to download ahead of time (say, into a container image), run
+`python -m ttnn.download_matmul_model` or call `ttnn.download_matmul_model.download()`. Nothing is downloaded while
+the flag is off, or to a `matmul_model_path` set to another file. A C++ program that does not import ttnn's Python
+package must set `matmul_model_path` itself: while it is unset, a matmul with the flag on logs that the model can't be
+loaded and uses the default configs.
 
 When the flag is off nothing here runs and nothing is loaded. When it is on, the blob at `matmul_model_path` is
 loaded on the first matmul the model is eligible for, and loaded again on the first eligible matmul after
@@ -65,15 +72,15 @@ It decides once per matmul, in `bound_matmul`, on the inputs, bias and attribute
      per core, a prime).
    - Each candidate fits the L1 left for circular buffers. That budget is `get_max_l1_space`, less an interleaved L1
      output and 16 KiB.
-2. **Scores.** `matmul_model_features.{hpp,cpp}` computes an analytic base latency and 57 features per candidate.
+2. **Scores.** `matmul_model_features.{hpp,cpp}` computes an analytic base latency and the model's features per
+   candidate.
    `gbdt_model.{hpp,cpp}` evaluates the LightGBM residual. The prediction is `base_ns * exp(gbdt(features))`.
 3. **Precision.** The model changes only the program config: output dtype, math fidelity and accumulation stay what
    the caller asked for. Its K blocking (`in0_block_w`) can differ from the default's, and the K blocking changes how
    partial sums are rounded: between K blocks they leave DST and are summed in L1 (packer L1 accumulation) or kept in
    the output format, in 16 bits or fewer without fp32 accumulation. So a result with the flag on can differ slightly
-   from the default's, in either direction. On 303 matmuls from current models (Blackhole Galaxy, random inputs, PCC
-   against an fp32 reference) the change was within ±1e-5 on 149, better on 23, worse by up to 1e-4 on 101, by 1e-4
-   to 1e-3 on 29 and by 1.3e-3 on one; with fp32 accumulation it was never worse. One case is bounded: with a bfp8_b
+   from the default's, in either direction; with fp32 accumulation the difference is smallest. One case is bounded:
+   with a bfp8_b
    or bfp4_b output and neither packer L1 nor fp32 accumulation, partial sums are re-quantized to the output format at
    every K block, so only candidates with no more K blocks than the default's config are kept. The default's K
    blocking depends on live L1, so a cached pick is checked against it again when that changes.
@@ -89,7 +96,8 @@ It decides once per matmul, in `bound_matmul`, on the inputs, bias and attribute
 
 The pick can depend on live L1, like the default selection's. With trace capture, warm up each matmul shape once, in
 the same allocation state as the capture, before capturing: the first call of a shape also does the selection's host
-work (model load, candidate enumeration, validation).
+work (model load, candidate enumeration, validation). Have the blob in place before warming up too: a model that loads
+mid-run (its file appeared at `matmul_model_path`) changes the picks from then on.
 
 Validation is a backstop, not a filter. The enumerator emits only configs that pass the device op's checks (the
 `MatmulModelCandidates.AllPassTheDeviceOpRules` and `MatmulModelMockDevice.*` gtests), so a rejection is a selector bug:
@@ -99,23 +107,23 @@ and never moves on to the next candidate.
 
 ## The model blob
 
-`matmul_model.blob` (12 MB: 3000 GBDT trees of 255 leaves) is not in the repository. It is a one-layer OCI artifact,
-`ghcr.io/tenstorrent/tt-metal/matmul-model`, and CMake fetches it at configure time by its sha256 (an OCI layer's digest
-is the sha256 of its content, so the download is pinned and verified) into `runtime/matmul_model/`, like the SFPI
-toolchain; it is installed and packaged in the wheel at the same path under the runtime root. A failed fetch fails
-configure; `-DTT_MATMUL_MODEL_FETCH=OFF` builds without the blob, and then turning the model on logs a warning and keeps
-the default configs. A file at the target path with a different sha256 is deleted before fetching. To use a local blob
-instead, set `matmul_model_path` (or `TT_MATMUL_MODEL_BLOB` for the tests).
+`matmul_model.blob` is not in the repository. It is a one-layer OCI artifact, `ghcr.io/tenstorrent/tt-metal/matmul-model`,
+pinned by its sha256 in `matmul_model.json` (an OCI layer's digest is the sha256 of its content, so the pin also
+verifies the download). CMake fetches it at configure time into `runtime/matmul_model/`, like the SFPI toolchain, and
+installs it at the same path under the runtime root. A failed fetch fails configure; `-DTT_MATMUL_MODEL_FETCH=OFF`
+builds without the blob. A file at the target path with a different sha256 is deleted before fetching. The wheel leaves
+the blob out, to stay within PyPI's file size limit, and carries `matmul_model.json`: `ttnn/download_matmul_model.py`
+downloads the same artifact into ttnn's cache ("Turning it on" above). To use a local blob instead, set
+`matmul_model_path` (or `TT_MATMUL_MODEL_BLOB` for the tests).
 
 Replace it only with a retrained model; the analytic constants below must match the model it was trained with. The blob
 is a LightGBM model exported to the format `gbdt_model.cpp` reads. It carries the GBDT trees, the feature names (checked against `kFeatureNames` at load, so a blob trained on
-other features is refused) and the sha256 of the LightGBM model it was exported from. The current blob: file sha256
-`7dc37af22b6ae0d2ecb4f415a14cdc7e9b6e0208ee2ac2c2aacd049576ee9ae2`, model sha256
-`46dc43100ba9d1bdd6d30e408d23c7012a5e535cefab4d32ddb04910f1ba73a5` (logged at load), trained on device-time
+other features is refused) and the sha256 of the LightGBM model it was exported from, which is logged at load. It is trained on device-time
 measurements of matmul program configs on Blackhole p150 (11x10 grid). The analytic part (`matmul_model_features.cpp`,
 `matmul_model_device_params.cpp`) is code. Its constants must match the model the blob was trained with.
 
-To publish a new blob, push it as a new tag and update the sha256 in `../../../CMakeLists.txt` (the matmul op's):
+To publish a new blob, push it as a new tag, update the sha256 in `matmul_model.json` (the build and ttnn's Python
+package both read it), and update the predictions the `MatmulModelSelector.GoldenPredictions` gtest pins:
 
 ```
 oras push ghcr.io/tenstorrent/tt-metal/matmul-model:<tag> --artifact-type application/vnd.tenstorrent.matmul-model.v1 \

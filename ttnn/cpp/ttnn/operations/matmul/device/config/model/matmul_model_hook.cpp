@@ -87,7 +87,8 @@ std::shared_ptr<LoadedModel> loaded_model(const std::filesystem::path& path) {
         log_warning(
             tt::LogOp,
             "matmul_model_config is on but the matmul config model could not be loaded ({}); matmul keeps its default "
-            "program configs until a model loads from matmul_model_path",
+            "program configs until a model loads from matmul_model_path (python -m ttnn.download_matmul_model "
+            "downloads it)",
             error);
     }
     loaded = std::move(next);
