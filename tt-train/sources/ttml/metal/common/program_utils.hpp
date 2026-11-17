@@ -368,9 +368,9 @@ inline WorkSplit compute_work_split(const tt::tt_metal::CoreCoord& grid, uint32_
     return WorkSplit{
         .num_cores = counts.num_cores,
         .num_cores_y = static_cast<uint32_t>(grid.y),
-        .num_group_1_cores = counts.num_cores_group_1,
-        .units_per_core_group_1 = counts.units_per_core_group_1,
-        .units_per_core_group_2 = counts.units_per_core_group_2,
+        .num_group_1_cores = counts.num_leading_cores,
+        .units_per_core_group_1 = counts.units_per_leading_core,
+        .units_per_core_group_2 = counts.units_per_trailing_core,
     };
 }
 

@@ -348,17 +348,17 @@ WorkSplitCounts split_work_to_cores_counts(const uint32_t max_num_cores, const u
     }
     TT_FATAL(max_num_cores > 0, "Core grid must contain at least one core");
     counts.num_cores = std::min(units_to_divide, max_num_cores);
-    counts.units_per_core_group_1 = units_to_divide / counts.num_cores;
+    counts.units_per_leading_core = units_to_divide / counts.num_cores;
     const uint32_t num_cores_with_more_work = units_to_divide % counts.num_cores;
     // Evenly divided units to all target cores
     if (num_cores_with_more_work == 0) {
-        counts.num_cores_group_1 = counts.num_cores;
+        counts.num_leading_cores = counts.num_cores;
     }
     // Uneven division of units across cores: the first cores of the walk take one unit more than the rest
     else {
-        counts.num_cores_group_1 = num_cores_with_more_work;
-        counts.units_per_core_group_2 = counts.units_per_core_group_1;
-        counts.units_per_core_group_1++;
+        counts.num_leading_cores = num_cores_with_more_work;
+        counts.units_per_trailing_core = counts.units_per_leading_core;
+        counts.units_per_leading_core++;
     }
     return counts;
 }
@@ -384,7 +384,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     CoreRangeSet core_group_1;
     CoreRangeSet core_group_2;
     // Evenly divided units to all target cores
-    if (counts.num_cores_group_1 == counts.num_cores) {
+    if (counts.num_leading_cores == counts.num_cores) {
         core_group_1 = all_cores;
     }
     // Uneven division of units across cores
@@ -392,7 +392,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     // which is implicitly assumed in the following logic
     else {
         // Group of cores that do more work
-        uint32_t num_core_group_1_cores = counts.num_cores_group_1;
+        uint32_t num_core_group_1_cores = counts.num_leading_cores;
         uint32_t num_core_group_2_cores = counts.num_cores - num_core_group_1_cores;
         core_group_1 = num_cores_to_corerangeset(num_core_group_1_cores, grid_size, row_wise);
         const auto& last_core_group_1 = (*core_group_1.ranges().rbegin()).end_coord;
@@ -426,8 +426,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         all_cores,
         core_group_1,
         core_group_2,
-        counts.units_per_core_group_1,
-        counts.units_per_core_group_2);
+        counts.units_per_leading_core,
+        counts.units_per_trailing_core);
 }
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
@@ -450,7 +450,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     CoreRangeSet core_group_1;
     CoreRangeSet core_group_2;
     // Evenly divided units to all target cores
-    if (counts.num_cores_group_1 == counts.num_cores) {
+    if (counts.num_leading_cores == counts.num_cores) {
         core_group_1 = all_cores;
     }
     // Uneven division of units across cores
@@ -458,7 +458,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     // which is implicitly assumed in the following logic
     else {
         // Group of cores that do more work
-        uint32_t num_core_group_1_cores = counts.num_cores_group_1;
+        uint32_t num_core_group_1_cores = counts.num_leading_cores;
         uint32_t num_core_group_2_cores = counts.num_cores - num_core_group_1_cores;
         core_group_1 =
             num_cores_to_corerangeset_in_subcoregrids(start_core, num_core_group_1_cores, core_grid, row_wise);
@@ -512,8 +512,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         all_cores,
         core_group_1,
         core_group_2,
-        counts.units_per_core_group_1,
-        counts.units_per_core_group_2);
+        counts.units_per_leading_core,
+        counts.units_per_trailing_core);
 }
 
 }  // namespace tt::tt_metal

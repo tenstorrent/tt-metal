@@ -26,13 +26,13 @@ void expect_counts_match(const WorkSplitCounts& counts, const SplitWorkToCoresRe
         split;
     EXPECT_EQ(counts.num_cores, num_cores);
     EXPECT_EQ(counts.num_cores, all_cores.num_cores());
-    EXPECT_EQ(counts.num_cores_group_1, core_group_1.num_cores());
-    EXPECT_EQ(counts.num_cores - counts.num_cores_group_1, core_group_2.num_cores());
-    EXPECT_EQ(counts.units_per_core_group_1, units_per_core_group_1);
-    EXPECT_EQ(counts.units_per_core_group_2, units_per_core_group_2);
+    EXPECT_EQ(counts.num_leading_cores, core_group_1.num_cores());
+    EXPECT_EQ(counts.num_cores - counts.num_leading_cores, core_group_2.num_cores());
+    EXPECT_EQ(counts.units_per_leading_core, units_per_core_group_1);
+    EXPECT_EQ(counts.units_per_trailing_core, units_per_core_group_2);
     EXPECT_EQ(
-        (counts.num_cores_group_1 * counts.units_per_core_group_1) +
-            ((counts.num_cores - counts.num_cores_group_1) * counts.units_per_core_group_2),
+        (counts.num_leading_cores * counts.units_per_leading_core) +
+            ((counts.num_cores - counts.num_leading_cores) * counts.units_per_trailing_core),
         units_to_divide);
 }
 
@@ -69,7 +69,7 @@ TEST(WorkSplit, CountsMatchSplitWorkToCoresOnCoreRangeSet) {
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> counts_tuple(const WorkSplitCounts& counts) {
-    return {counts.num_cores, counts.num_cores_group_1, counts.units_per_core_group_1, counts.units_per_core_group_2};
+    return {counts.num_cores, counts.num_leading_cores, counts.units_per_leading_core, counts.units_per_trailing_core};
 }
 
 TEST(WorkSplit, KnownCounts) {
