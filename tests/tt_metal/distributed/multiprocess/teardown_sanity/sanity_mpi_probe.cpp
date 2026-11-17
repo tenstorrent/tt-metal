@@ -196,6 +196,17 @@ int main(int argc, char** argv) {
 
     if (rc != MPI_SUCCESS) {
         if (!strcmp(survivor_action, "abort")) {
+            // KNOWN LAUNCHER BUG: when a peer was killed and the survivors reach here together and call
+            // MPI_Abort within a millisecond of each other, the PRRTE this image ships can INTERMITTENTLY fail to
+            // tear the job down — prterun stays up with all its daemons after every rank is gone, because a rank
+            // re-activated by the launcher's own kill path is never counted as terminated (a race in PRRTE's
+            // CALLED_ABORT accounting), so the job never completes. The matching test row is a non-strict xfail.
+            //   bug:   https://github.com/openpmix/prrte/issues/2815
+            //   fixed: https://github.com/open-mpi/ompi/pull/14590 (main, 2026-10-23) and
+            //          https://github.com/open-mpi/ompi/pull/14713 (v6.0.x, 2026-10-26); NOT in the 5.0.x series.
+            //          This image is PRRTE 3.0.8 inside Open MPI 5.0.7rc2, before the fix.
+            // (A second shape — prterun exits 0 though ranks aborted — is ULFM-only; tt-run launches the plain
+            //  mpirun to avoid it: https://github.com/tenstorrent/tt-metal/pull/60468.)
             mark("survivor MPI_Abort");
             MPI_Abort(MPI_COMM_WORLD, 9);
         } else if (!strcmp(survivor_action, "exit_nofinalize")) {
