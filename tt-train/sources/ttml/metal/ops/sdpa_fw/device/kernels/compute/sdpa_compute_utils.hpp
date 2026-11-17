@@ -201,13 +201,15 @@ void init_unary_bcast_col(uint32_t cb_col_vec) {
 
 // DST[i * block_w + j] = cb_in[(row0 + i) * Wt + col0 + j] * alpha[row0 + i] for a block_h x block_w block
 // of tiles, at full fp32: cb_in unpacks straight to DST (UnpackToDestFp32) and the SFPU multiplies by the
-// row's alpha, broadcast into the spare DST slot block_h * block_w. Used by the merge of split units (the
-// K/V loop's rescale is the packer's L1-accumulate pass in matmul_qk_by_v); not inlined or cloned, since
-// the unpacker inits it carries are most of its text and the compute kernel is close to its size cap.
+// row's alpha, broadcast into the spare DST slot block_h * block_w. One copy for both rescales of the
+// accumulator: the K/V loop's (matmul_qk_by_v, block_h = 1, the packer then adds the block onto P @ V in
+// L1) and the merge of split units'. The caller sets srcA to cb_in before its first pass -- the only
+// unpacker this reprograms afterwards is srcB, for the alpha broadcast -- and owns the packer's
+// L1-accumulate mode. Not inlined or cloned, since the unpacker inits it carries are most of its text and
+// the compute kernel is close to its size cap.
 __attribute__((noinline, noclone)) void scale_block_in_dst(
     uint32_t cb_in, uint32_t Wt, uint32_t row0, uint32_t col0, uint32_t block_h, uint32_t block_w, uint32_t cb_alpha) {
     const uint32_t alpha_dst = block_h * block_w;
-    reconfig_data_format(cb_in, cb_in);
     copy_init(cb_in);
     for (uint32_t i = 0; i < block_h; ++i) {
         for (uint32_t j = 0; j < block_w; ++j) {
@@ -292,18 +294,9 @@ void matmul_qk_by_v(
         for (uint32_t r = 0; r < rows; ++r) {
             for (uint32_t col0 = 0; col0 < Wt; col0 += rescale_block) {
                 tile_regs_acquire();
-                // DST[j] = O_prev[r][col0 + j] * alpha[r]; the copy and the broadcast reprogram the same
-                // unpacker MOP, so each pass sets both up again.
-                copy_init(cb_prev_mm_out);
-                for (uint32_t j = 0; j < rescale_block; ++j) {
-                    copy_tile(cb_prev_mm_out, r * Wt + col0 + j, j);
-                }
-                init_unary_bcast_col(cb_exp_max_diff);
-                unary_bcast<BroadcastType::COL>(cb_exp_max_diff, r, rescale_block);
-                mul_binary_tile_init();
-                for (uint32_t j = 0; j < rescale_block; ++j) {
-                    mul_binary_tile(j, rescale_block, j);
-                }
+                // DST[j] = O_prev[r][col0 + j] * alpha[r], one row of the accumulator per pass.
+                scale_block_in_dst(
+                    cb_prev_mm_out, Wt, r, col0, /* block_h */ 1U, rescale_block, cb_exp_max_diff);
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t j = 0; j < rescale_block; ++j) {
@@ -594,6 +587,7 @@ void merge_partial(
         // (3) O += O_own * alpha_own in DST: the merger's accumulator is fp32 and must not pass through
         //     the FPU's 19-bit inputs on every fold, so it is scaled in DST like the in-loop rescale and
         //     the packer adds it onto (2) in L1.
+        reconfig_data_format(cb_prev_mm_out, cb_prev_mm_out);  // srcA for the passes below; (2) left it elsewhere
         for (uint32_t t0 = 0; t0 < Wt; t0 += block_size) {
             tile_regs_acquire();
             scale_block_in_dst(cb_prev_mm_out, Wt, r, t0, /* block_h */ 1U, block_size, cb_alpha_own);
