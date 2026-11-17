@@ -81,8 +81,12 @@ inline void llk_unpack_AB_matmul_impl(
         0,
         auto_ttsync,
         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
-        unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>(),
-        // an unkeyed caller (kt_per_section 0) masks the low byte of the context 1 zmask as main does; the keyed forms keep the full mask for rows of 9 to 16 tiles
+        // an unkeyed call (run-time block) computes its row invariants once: the per-row offset multiply sits on the
+        // unpack thread
+        kt_per_section == 0 ||
+            unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>(),
+        // an unkeyed caller (kt_per_section 0) masks the low byte of the context 1 zmask as main does; the keyed forms
+        // keep the full mask for rows of 9 to 16 tiles
         kt_per_section == 0 ? 8u : get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
         stream_z,
         reuse_dir>(
