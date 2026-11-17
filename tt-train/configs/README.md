@@ -2,7 +2,7 @@
 
 This directory contains YAML configuration files for training transformer models with TT-Metal. This README explains all valid parameters for each configuration type based on the actual implementation.
 
-The recipes in `training_configs/unified_trainer/` are not in this format: they are flat configs for `python -m ttml.unified_trainer`, described in [UNIFIED_TRAINER.md](../docs/UNIFIED_TRAINER.md#configuration).
+The recipes in `training_configs/unified_trainer/` are not in this format: they are configs for `python -m ttml.unified_trainer`, described in [UNIFIED_TRAINER.md](../docs/UNIFIED_TRAINER.md#configuration).
 
 ## Configuration Types
 

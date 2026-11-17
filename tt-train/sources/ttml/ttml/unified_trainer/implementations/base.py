@@ -83,17 +83,16 @@ class Trainer(ABC):
     def _train_lifecycle(self) -> Iterator[None]:
         """``on_train_start`` before the loop and ``on_train_end`` after it.
 
-        Any exception, also from ``on_train_start``, goes to every callback's ``on_train_error`` and is
-        re-raised, so ``on_train_end`` never sees a half-trained model.
+        Any exception, also from ``on_train_start`` or ``on_train_end``, goes to every callback's ``on_train_error``
+        and is re-raised, so ``on_train_end`` never sees a half-trained model.
         """
         try:
             self.callback_handler("on_train_start")
             yield
+            self.callback_handler("on_train_end")
         except Exception as exception:
             self.callback_handler("on_train_error", exception)
             raise
-        else:
-            self.callback_handler("on_train_end")
         finally:
             # After the callbacks, which may still log.
             self.logger.finish()

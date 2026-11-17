@@ -1,8 +1,7 @@
-# LoRA fine-tuning of Llama 3.1 8B Instruct on SST-2, on a single chip: the run tt-inference-server's
-# ttml-training-lora runner makes, as a recipe.
+# LoRA fine-tuning of Llama 3.1 8B Instruct on Alpaca, on a single chip.
 #
 #   python -m ttml.unified_trainer \
-#     --config tt-train/configs/training_configs/unified_trainer/llama_3_1_8b_sst2_lora.yaml
+#     --config tt-train/configs/training_configs/unified_trainer/llama_3_1_8b_alpaca_lora.yaml
 model:
   name: meta-llama/Llama-3.1-8B-Instruct
   lora:
@@ -12,7 +11,7 @@ model:
   gradient_checkpointing: true
 
 dataset:
-  id: sst2
+  id: alpaca
 
 optimizer:
   type: adamw
@@ -22,8 +21,8 @@ optimizer:
 device:
   mesh: [1, 1]
 
-max_length: 64
-batch_size: 8
+max_length: 256
+batch_size: 4
 seed: 0
 stopping_criteria:
   type: step
@@ -39,4 +38,4 @@ checkpoint:
   save_strategy:
     type: step
     frequency: 100
-  project_dir: runs/llama_3_1_8b_sst2_lora
+  project_dir: runs/llama_3_1_8b_alpaca_lora

@@ -55,7 +55,11 @@ class Callback:
         pass
 
     def on_train_end(self, trainer: Any) -> None:
-        """Only after the loop completes; a failed or stopped run calls ``on_train_error`` instead."""
+        """Only after the loop completes; a failed or stopped run calls ``on_train_error`` instead.
+
+        If an ``on_train_end`` raises, every callback then gets ``on_train_error``, also those whose ``on_train_end``
+        already ran.
+        """
 
     def on_validation_start(self, trainer: Any) -> None:
         pass

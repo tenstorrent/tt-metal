@@ -365,8 +365,20 @@ epoch is over; iterating it, which takes the batches left in the epoch; `len()`,
 ## Adding a trainer
 
 A trainer subclasses `Trainer` in `ttml/unified_trainer/implementations/base.py`, which runs the training loop, and
-implements its abstract methods: loading the data, the model and the optimizer, and the forward, backward and optimizer
-steps. It sets `config_class` to its config, a subclass of `TrainerConfig`, which a recipe for it validates as.
+implements its abstract methods:
+
+- Setup: `_load_dataloaders()`, the train and validation batches (`None` without validation data);
+  `_create_device_manager()`, which opens the device; `_load_model()`, the model with its pretrained weights and those
+  of `checkpoint.init_strategy`; and `_load_optimizer()`, over the trainable weights.
+- Steps: `_prepare_batch(batch)`, which moves a batch to the device; `_forward(batch)`, the batch's unscaled loss, in
+  training and validation alike; `_backward(loss)`; `_accumulate_loss(running, loss)`, a running sum of losses,
+  detached from the graph; `_clip_gradients(max_norm)`; `_optimizer_step()`, which also zeroes the gradients; and
+  `_zero_grad()`.
+- Modes: `_train_mode()`, `_eval_mode()`, and `_no_grad()`, a context manager that disables gradient tracking.
+- For callbacks and hosts: `loss_to_float(loss)`, `parameter_counts()`, `current_learning_rate()` and
+  `save_checkpoint(path, metadata)`, as [Running inside a service](#running-inside-a-service) describes.
+
+It sets `config_class` to its config, a subclass of `TrainerConfig`, which a recipe for it validates as.
 
 Write it in `ttml/unified_trainer/implementations/<trainer>.py` and add it to `TRAINERS` in
 `ttml/unified_trainer/implementations/__init__.py`, keyed by the name `--trainer` takes. `SFTTrainer` in
