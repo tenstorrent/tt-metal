@@ -11,9 +11,9 @@ import ttnn
 
 import ttml
 from ttml.common.utils import no_grad, validate_clip_grad_norm
-from ttml.datasets.provider import DatasetProvider, clear_cache, load_tokenizer
-from ttml.datasets.provider import get_provider as get_dataset_provider
-from ttml.datasets.provider import providers as dataset_providers
+from ttml.datasets.provider.sft import DatasetProvider, clear_cache, load_tokenizer
+from ttml.datasets.provider.sft import get_provider as get_dataset_provider
+from ttml.datasets.provider.sft import providers as dataset_providers
 from ttml.models.provider import UnsupportedTrainingConfig
 from ttml.models.provider import get_provider as get_model_provider
 from ttml.models.utils.hub import model_revision
@@ -36,9 +36,9 @@ class SFTTrainer(Trainer):
     fine-tuning (every weight) is not supported yet, and a config without ``model.lora`` is rejected.
 
     The model comes from a model provider (``ttml.models.provider``), which also decides whether the config can be
-    trained at all, and loads and exports its weights; the batches come from dataset providers
-    (``ttml.datasets.provider``), one per split. Checkpoints are saved in the format ``checkpoint.format`` picks (see
-    ``save_checkpoint``).
+    trained at all, and loads and exports its weights; the batches come from SFT dataset providers
+    (``ttml.datasets.provider.sft``), one per split. Checkpoints are saved in the format ``checkpoint.format`` picks
+    (see ``save_checkpoint``).
 
     Losses are read back to host floats once per micro-batch, as ttml's other trainers do.
     """

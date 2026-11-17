@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..utils.templates.alpaca import ALPACA_PROMPT_TEMPLATE, ALPACA_PROMPT_TEMPLATE_NO_INPUT
+from ...utils.sft.templates.alpaca import ALPACA_PROMPT_TEMPLATE, ALPACA_PROMPT_TEMPLATE_NO_INPUT
 from .base import DatasetProvider
 
 

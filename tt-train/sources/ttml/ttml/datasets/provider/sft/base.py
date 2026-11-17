@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Iterator, Optional
 
 import numpy as np
 
-from ..hf_dataloader import InMemoryDataloader
-from ..utils.collate import IGNORED_INDEX, collate_causal_lm
+from ...hf_dataloader import InMemoryDataloader
+from ...utils.sft.collate import IGNORED_INDEX, collate_causal_lm
 
 if TYPE_CHECKING:
     from ttml.unified_trainer.configs import SFTTrainerConfig

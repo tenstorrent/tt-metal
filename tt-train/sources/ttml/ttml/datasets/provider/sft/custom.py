@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..utils.templates.custom import custom_prompt_and_response, resolve_column_mapping
+from ...utils.sft.templates.custom import custom_prompt_and_response, resolve_column_mapping
 from .base import DatasetProvider
 
 if TYPE_CHECKING:

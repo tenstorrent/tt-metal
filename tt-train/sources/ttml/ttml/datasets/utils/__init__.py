@@ -2,8 +2,4 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""What the dataset providers share: batching (``collate``) and each dataset's prompt templates (``templates``)."""
-
-from .collate import IGNORED_INDEX, collate_causal_lm
-
-__all__ = ["IGNORED_INDEX", "collate_causal_lm"]
+"""What the dataset providers share, one subpackage per training strategy: ``sft`` for supervised fine-tuning."""

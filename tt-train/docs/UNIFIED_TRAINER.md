@@ -331,9 +331,12 @@ the entry. `LlamaProvider` in `ttml/models/provider/llama.py` is the reference.
 
 ## Adding a dataset
 
-A dataset provider serves one split of a dataset as batches: the trainer builds one for training and one for
-validation, and asks each for its next batch. It subclasses `DatasetProvider` in `ttml/datasets/provider/base.py`,
-which tokenizes the examples, masks the prompt, drops the examples longer than `max_length`, and batches them. The
+Dataset providers are grouped by training strategy: `ttml/datasets/provider/<strategy>/`, with what they share in
+`ttml/datasets/utils/<strategy>/`. SFT, the only strategy so far, is in `sft/`.
+
+An SFT dataset provider serves one split of a dataset as batches: the trainer builds one for training and one for
+validation, and asks each for its next batch. It subclasses `DatasetProvider` in
+`ttml/datasets/provider/sft/base.py`, which tokenizes the examples, masks the prompt, drops the examples longer than `max_length`, and batches them. The
 subclass adds what is the dataset's own:
 
 - `_load_raw_dataset()`: the HF dataset of `self.split`.
@@ -342,9 +345,9 @@ subclass adds what is the dataset's own:
   for validation.
 - `has_split(config, split)`, for a source that may lack a split: the trainer then runs without it.
 
-Write it in `ttml/datasets/provider/<dataset>.py`, with its prompt templates in
-`ttml/datasets/utils/templates/<dataset>.py`, and add it to `providers()` in `ttml/datasets/provider/__init__.py`,
-keyed by its `dataset.id`. `SST2Provider` in `ttml/datasets/provider/sst2.py` is the reference.
+Write it in `ttml/datasets/provider/sft/<dataset>.py`, with its prompt templates in
+`ttml/datasets/utils/sft/templates/<dataset>.py`, and add it to `providers()` in
+`ttml/datasets/provider/sft/__init__.py`, keyed by its `dataset.id`. `SST2Provider` in `ttml/datasets/provider/sft/sst2.py` is the reference.
 
 What a trainer uses of a provider: `next_batch()`, the next batch of the epoch as host arrays, or `None` once the
 epoch is over; iterating it, which takes the batches left in the epoch; `len()`, the batches of an epoch; and
