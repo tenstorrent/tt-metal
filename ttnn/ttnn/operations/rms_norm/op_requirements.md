@@ -76,7 +76,7 @@ Cells that fail out of the box go to `EXCLUSIONS`, not their own refinement.
 
 **Done when**: RM HEIGHT_SHARDED `xfail_expected` cells pass.
 
-### [ ] Refinement 5 — WIDTH_SHARDED and BLOCK_SHARDED with cross-core Σx² combine
+### [x] Refinement 5 — WIDTH_SHARDED and BLOCK_SHARDED with cross-core Σx² combine
 
 **Goal**: add `WIDTH_SHARDED` and `BLOCK_SHARDED` to `SUPPORTED["memory_layout"]`. The reduced axis is cut across cores, so reuse Refinement 2's partial-combine topology with the slice pre-placed in L1 (CB backed by the shard); block-sharded combines along each grid row. Output inherits the shard spec.
 
