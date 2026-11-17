@@ -46,7 +46,7 @@ namespace {
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
 
-MeshDevice& mesh_device() { return test::benchmark_mesh_device(); }
+MeshDevice& mesh_device() { return distributed::test::benchmark_mesh_device(); }
 
 // Workloads with the same program layout. target_bytes_per_device sets the runtime args so that one enqueue writes
 // about that many command bytes to each device; 0 uses the shape's runtime_args.
@@ -147,10 +147,16 @@ std::unique_ptr<MeshWorkload> make_workload(
     return workload;
 }
 
-// Command bytes one re-enqueue of the workload writes to the device at the start of the first range.
-uint32_t cmd_bytes_per_device(MeshWorkload& workload, const MeshCoordinateRange& first_range) {
+// Issue queue of the first device this host owns. Every workload covers the whole mesh, so each call writes to it.
+SystemMemoryManager& measured_sysmem() {
+    const auto coord = mesh_device().get_view().get_local_mesh_coord_range().start_coord();
+    return tt::tt_metal::internal::get_device(mesh_device(), coord)->sysmem_manager();
+}
+
+// Command bytes one re-enqueue of the workload writes to the measured device.
+uint32_t cmd_bytes_per_device(MeshWorkload& workload) {
     auto& cq = mesh_device().mesh_command_queue();
-    auto& sysmem = tt::tt_metal::internal::get_device(mesh_device(), first_range.start_coord())->sysmem_manager();
+    auto& sysmem = measured_sysmem();
     const auto cq_id = static_cast<uint8_t>(cq.id());
     // The first enqueue also writes the binaries.
     EnqueueMeshWorkload(cq, workload, false);
@@ -177,7 +183,7 @@ uint32_t runtime_args_for_bytes(
     }
     auto bytes_with = [&](uint32_t num_runtime_args) {
         auto workload = make_workload(ranges, num_cbs, num_runtime_args, cores);
-        return cmd_bytes_per_device(*workload, ranges.front());
+        return cmd_bytes_per_device(*workload);
     };
     uint32_t lo = 0;
     uint32_t hi = max_runtime_args;
@@ -256,8 +262,7 @@ void BM_EnqueueMeshWorkload(benchmark::State& state, const WorkloadShape& shape)
     Finish(cq);
 
     // Command bytes written to one device per call; calls where the issue queue wrapped are skipped.
-    auto& sysmem =
-        tt::tt_metal::internal::get_device(mesh_device(), part_ranges.front().front().start_coord())->sysmem_manager();
+    auto& sysmem = measured_sysmem();
     const auto cq_id = static_cast<uint8_t>(cq.id());
     std::vector<double> call_us, bytes_per_device, programs;
     uint32_t next = 0;
