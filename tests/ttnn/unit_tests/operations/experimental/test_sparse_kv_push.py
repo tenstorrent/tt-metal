@@ -24,6 +24,8 @@ SENTINEL = 0xFFFFFFFF
 FILL = 0x5A5A5A5A
 N_DEV = 32
 TOPK = 2048
+# The mesh axis the cache's blocks stripe along first; the xy4 test sets it (and N_DEV) for its 4x4 mesh.
+SP_AXIS = 0
 
 
 def _device_params():
@@ -61,12 +63,22 @@ def _row_words(rows, slot, width):
     return words.astype(np.int32)
 
 
+def _owner_of_rank(mesh_device, sp_axis):
+    """Owner index (the stripe a chip holds) of each chip, in row-major rank order: the chip at position s on the SP
+    axis and t on the other holds stripe s * tp + t."""
+    rows, cols = mesh_device.shape[0], mesh_device.shape[1]
+    ranks = np.arange(rows * cols)
+    return ranks if sp_axis == 0 else (ranks % cols) * rows + ranks // cols
+
+
 def _cache(mesh_device, slots, max_rows, sc, width):
-    """Block-cyclic cache: global row n lives on chip (n / sc) % N at local row (n / sc / N) * sc + n % sc."""
+    """Block-cyclic cache: global row n lives on owner (n / sc) % N at local row (n / sc / N) * sc + n % sc, and the
+    owner's chip is the one holding that stripe (see _owner_of_rank)."""
     per_chip = max_rows // N_DEV
     p = np.arange(max_rows)
-    chip, local = p // per_chip, p % per_chip
-    global_row = ((local // sc) * N_DEV + chip) * sc + local % sc
+    rank, local = p // per_chip, p % per_chip
+    owner = _owner_of_rank(mesh_device, SP_AXIS)[rank]
+    global_row = ((local // sc) * N_DEV + owner) * sc + local % sc
     host = np.stack([_row_words(global_row, s, width) for s in range(slots)])[:, None]
     return ttnn.from_torch(
         torch.from_numpy(host),
@@ -163,6 +175,7 @@ class Push:
             max_rows=self.max_rows,
             part=part,
             num_links=self.links,
+            sp_axis=SP_AXIS,
             ready_semaphore=self.sems[0],
             done_semaphore=self.sems[1],
             **slot,
@@ -363,6 +376,26 @@ def test_sparse_kv_push_configs(mesh_device, page_bytes, sc, links, slot_tensor)
         else dict(batch_index=3)
     )
     _run_parts(mesh_device, push, slot=3, chunk_start=start, tag=f"{page_bytes}B sc{sc} {links}L", **slot_args)
+
+
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], ids=["xy4"], indirect=True)
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
+@pytest.mark.parametrize("pattern", ["random", "one_owner", "local_only", "run_lengths", "edges"])
+def test_sparse_kv_push_xy4(mesh_device, monkeypatch, sp_axis, pattern):
+    """A 4x4 [RING, RING] mesh, with the cache striped SP-major along either axis. The chip at SP position s and TP
+    position t holds stripe s * tp + t, so with SP on axis 1 the owner index is not the row-major rank."""
+    module = globals()
+    monkeypatch.setitem(module, "N_DEV", 16)
+    monkeypatch.setitem(module, "SP_AXIS", sp_axis)
+    sc, page_bytes, max_rows = 160, 704, 92160
+    rng = np.random.default_rng(zlib.crc32(f"{pattern}{sp_axis}".encode()))
+    start = max_rows - sc * 16
+    rows = _pattern(pattern, rng, sc=sc, end=max_rows, start=start)
+    idx = _mask(_lay_out(rows, sc, rng), rng)
+    cache = _cache(mesh_device, 2, max_rows, sc, page_bytes // 4)
+    push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start)
+    _run_parts(mesh_device, push, slot=1, chunk_start=start, tag=f"xy4 sp{sp_axis} {pattern}", batch_index=1)
 
 
 @galaxy
