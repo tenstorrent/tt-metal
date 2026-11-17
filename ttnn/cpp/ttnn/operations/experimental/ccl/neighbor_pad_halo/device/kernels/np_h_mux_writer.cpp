@@ -18,6 +18,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include <cstdint>
 
 using address_t = uint32_t;
@@ -172,12 +173,14 @@ void kernel_main() {
                         for (uint32_t ww = w; g < H_COALESCE && ww < num_sticks_to_read; ww += NP_NUM_DRAM_BANKS) {
                             g++;
                         }
+                        // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
                         fabric_unicast_noc_unicast_write_with_state<
                             UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                             &mux_connection,
                             pkt_hdr,
                             row_l1 + m * stick_size,
-                            tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(base_row + w, dst_accessor)},
+                            tt::tt_fabric::NocUnicastCommandHeader{
+                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_accessor, base_row + w)},
                             static_cast<uint16_t>(g * stick_size));
                         // The payload copy (send_cb -> mux slot) is non-blocking and pkt_hdr is reused for the next
                         noc_async_writes_flushed();
