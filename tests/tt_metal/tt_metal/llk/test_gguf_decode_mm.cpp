@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute API of the Blackhole GGUF decoders and the DEST-fed matmul (api/compute/experimental/gguf_decode.h,
-// dest_srca_mm.h), through test_kernels/compute/gguf_decode_mm.cpp. The decoders' arithmetic is tested bit for bit in
-// tt-llk; these tests check the API around it on Q8_0 and Q4_0 pages whose codes are one value per page and whose
-// scales are one value per column, so the expected weights need no page layout beyond the scale row's column order.
+// Compute API of the Blackhole GGUF decoders and dest_srca_mm (test_kernels/compute/gguf_decode_mm.cpp) on pages with
+// one code per page and one scale per column; the decoders' arithmetic is tested bit for bit in tt-llk.
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -28,6 +28,8 @@ namespace {
 
 constexpr std::uint32_t kQ8_0 = ckernel::gguf::Q8_0;
 constexpr std::uint32_t kQ4_0 = ckernel::gguf::Q4_0;
+constexpr std::uint32_t kMXFP4 = ckernel::gguf::MXFP4;
+constexpr std::uint32_t kQ4_K = ckernel::gguf::Q4_K;
 
 struct Case {
     std::uint32_t fmt = kQ8_0;
@@ -36,6 +38,8 @@ struct Case {
     bool mm = true;
     bool overlap = false;
     bool split = true;
+    bool full_sync = true;
+    bool group_copy = false;
 };
 
 float bits_to_float(std::uint32_t bits) {
@@ -62,51 +66,105 @@ struct Inputs {
     std::vector<float> activations;    // [32][k_tiles * 32]
 };
 
-// Page bytes and code bytes of the two formats (Q8_0 2 KiB with 1 KiB of codes, Q4_0 1 KiB with 512 bytes); the scale
-// row (fp16 d of column 16 p + 2 c + b at half b of word 2 c + p) follows the codes.
-std::uint32_t page_bytes(std::uint32_t fmt) {
-    return ckernel::gguf::page_layout(static_cast<ckernel::gguf::Format>(fmt)).rows * 64;
+ckernel::gguf::PageLayout layout(std::uint32_t fmt) {
+    return ckernel::gguf::page_layout(static_cast<ckernel::gguf::Format>(fmt));
 }
-std::uint32_t code_bytes(std::uint32_t fmt) {
-    return ckernel::gguf::page_layout(static_cast<ckernel::gguf::Format>(fmt)).code_bytes;
+
+// c_0 page bytes: MXFP4's records as two pages of 576 bytes (the second takes the first's scale row), else the page.
+std::uint32_t page_bytes(std::uint32_t fmt) {
+    return fmt == kMXFP4 ? layout(fmt).scale_offset + 64 : layout(fmt).rows * 64;
+}
+
+// Scale-row word w holds columns lane_col(w) and lane_col(w) + 1.
+std::uint32_t lane_col(std::uint32_t w) { return 16 * (w % 2) + 2 * (w / 2); }
+
+// fp16 bits of a normal value with exponent field exp and a random mantissa and sign; and its value.
+std::uint32_t random_fp16(std::mt19937& rng, std::uint32_t exp, float& value) {
+    const std::uint32_t h = (rng() & 0x8000u) | (exp << 10) | (rng() & 0x3FFu);
+    value = std::ldexp((h & 0x8000u) ? -1.0f : 1.0f, static_cast<int>(exp) - 25) * (1024 + (h & 0x3FFu));
+    return h;
+}
+
+// MXFP4 pages: E2M1 code q (sign bit 3) as the page's block-float code, and its value.
+std::uint32_t fp4_page_code(std::uint32_t q) { return (q & 8) | std::array<std::uint32_t, 8>{0, 1, 4, 5, 6, 7, 2, 3}[q & 7]; }
+float fp4_value(std::uint32_t q) {
+    return ((q & 8) ? -1.0f : 1.0f) * std::array<float, 8>{0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f}[q & 7];
 }
 
 Inputs make_inputs(const Case& c, std::mt19937& rng) {
     Inputs in;
-    const std::uint32_t words = page_bytes(c.fmt) / 4;
+    const auto L = layout(c.fmt);
+    const std::uint32_t words = page_bytes(c.fmt) / 4, code_words = L.code_bytes / 4, scale_word = L.scale_offset / 4;
     const std::uint32_t k = c.k_tiles * 32;
     in.pages.assign(c.k_tiles * words, 0);
     in.weights.assign(k * 32, 0.0f);
-    std::vector<std::uint32_t> d(32);
-    std::vector<float> d_value(32);
-    for (std::uint32_t n = 0; n < 32; n++) {
-        // Normal fp16, 2^-6 .. 2^5, random sign and mantissa.
-        const std::uint32_t exp = 9 + rng() % 12;
-        d[n] = (rng() & 0x8000u) | (exp << 10) | (rng() & 0x3FFu);
-        d_value[n] = std::ldexp((d[n] & 0x8000u) ? -1.0f : 1.0f, static_cast<int>(exp) - 25) * (1024 + (d[n] & 0x3FFu));
-    }
+    // Per column: Q8_0 / Q4_0 d; Q4_K d and dmin; MXFP4 the E8M0 scales of the group's two K tiles.
+    std::vector<std::uint32_t> d(32), dmin(32), e(64);
+    std::vector<float> d_value(32), dmin_value(32);
+    std::uint32_t sc = 0, m = 0;
     for (std::uint32_t kt = 0; kt < c.k_tiles; kt++) {
+        const std::uint32_t t = kt % L.group_tiles;
+        if (t == 0) {
+            for (std::uint32_t n = 0; n < 32; n++) {
+                d[n] = random_fp16(rng, c.fmt == kQ4_K ? 13 + rng() % 3 : 9 + rng() % 12, d_value[n]);
+                dmin[n] = random_fp16(rng, 13 + rng() % 3, dmin_value[n]);
+                e[n] = 120 + rng() % 15;
+                e[32 + n] = 120 + rng() % 15;
+            }
+            sc = 1 + rng() % 15;
+            m = rng() % 16;
+        }
         std::uint32_t* page = in.pages.data() + kt * words;
-        std::uint32_t code_byte;
-        float code_value;
+        std::uint32_t code_byte = 0;
+        std::vector<float> value(32);
         if (c.fmt == kQ8_0) {
             code_byte = 1 + rng() % 255;  // no zero codes: the decoder's sign of a zero is not ggml's
-            code_value = static_cast<float>(static_cast<std::int8_t>(code_byte));
-        } else {
+            for (std::uint32_t n = 0; n < 32; n++) {
+                value[n] = static_cast<float>(static_cast<std::int8_t>(code_byte)) * d_value[n];
+            }
+        } else if (c.fmt == kQ4_0) {
             const std::uint32_t q = (9 + rng() % 15) & 0xFu;  // not 8 (zero)
             code_byte = q | q << 4;
-            code_value = static_cast<float>(static_cast<int>(q) - 8);
+            for (std::uint32_t n = 0; n < 32; n++) {
+                value[n] = static_cast<float>(static_cast<int>(q) - 8) * d_value[n];
+            }
+        } else if (c.fmt == kQ4_K) {
+            const std::uint32_t q = 1 + rng() % 15;
+            code_byte = q | q << 4;
+            for (std::uint32_t n = 0; n < 32; n++) {
+                value[n] = static_cast<float>(
+                    static_cast<double>(d_value[n]) * sc * q - static_cast<double>(dmin_value[n]) * m);
+            }
+        } else {  // MXFP4: no zero magnitudes
+            const std::uint32_t q = (rng() & 8) | (1 + rng() % 7);
+            const std::uint32_t pc = fp4_page_code(q);
+            code_byte = pc | pc << 4;
+            for (std::uint32_t n = 0; n < 32; n++) {
+                value[n] = std::ldexp(fp4_value(q), static_cast<int>(e[32 * t + n]) - 127);
+            }
         }
-        for (std::uint32_t w = 0; w < code_bytes(c.fmt) / 4; w++) {
+        for (std::uint32_t w = 0; w < code_words; w++) {
             page[w] = code_byte * 0x01010101u;
         }
         for (std::uint32_t w = 0; w < 16; w++) {
-            const std::uint32_t col = 16 * (w % 2) + 2 * (w / 2);
-            page[code_bytes(c.fmt) / 4 + w] = d[col] | d[col + 1] << 16;
+            const std::uint32_t col = lane_col(w);
+            if (c.fmt == kMXFP4) {
+                if (t == 0) {  // the record's scale row, after the first page's codes
+                    page[scale_word + w] = e[col] | e[col + 1] << 8 | e[32 + col] << 16 | e[32 + col + 1] << 24;
+                }
+            } else if (c.fmt == kQ4_K) {  // 12 scale bytes per column (rows 0..2, next column 3..5), d, dmin
+                for (std::uint32_t r = 0; r < 6; r++) {
+                    page[scale_word + 16 * r + w] = (r % 3 == 0 ? sc : r % 3 == 1 ? m : sc | m << 4) * 0x01010101u;
+                }
+                page[scale_word + 16 * 6 + w] = d[col] | d[col + 1] << 16;
+                page[scale_word + 16 * 7 + w] = dmin[col] | dmin[col + 1] << 16;
+            } else {
+                page[scale_word + w] = d[col] | d[col + 1] << 16;
+            }
         }
         for (std::uint32_t r = 0; r < 32; r++) {
             for (std::uint32_t n = 0; n < 32; n++) {
-                in.weights[(kt * 32 + r) * 32 + n] = code_value * d_value[n];
+                in.weights[(kt * 32 + r) * 32 + n] = value[n];
             }
         }
     }
@@ -136,7 +194,8 @@ std::vector<std::uint32_t> run(distributed::MeshDevice& mesh, const Case& c, con
     const CoreCoord core{0, 0};
     Program program = CreateProgram(mesh);
     const std::uint32_t pbytes = page_bytes(c.fmt);
-    const Tile page_tile(pbytes == 1024 ? std::array<uint32_t, 2>{16, 16} : std::array<uint32_t, 2>{16, 32});
+    const Tile page_tile(
+        layout(c.fmt).rows == 16 ? std::array<uint32_t, 2>{16, 16} : std::array<uint32_t, 2>{16, 32});
     const Tile in0_tile(c.in0_rows == 32 ? std::array<uint32_t, 2>{32, 32} : std::array<uint32_t, 2>{16, 32});
     const Tile out_tile;
     const std::uint32_t in0_bytes = in0_tile.get_tile_size(tt::DataFormat::Float16_b);
@@ -150,8 +209,9 @@ std::vector<std::uint32_t> run(distributed::MeshDevice& mesh, const Case& c, con
     auto page_buffer = buffer(c.k_tiles * pbytes);
     auto in0_buffer = buffer(c.k_tiles * in0_bytes);
     auto out_buffer = buffer(out_tiles * 4096);
-    auto make_cb = [&](tt::CBIndex index, tt::DataFormat format, const Tile& tile, std::uint32_t depth) {
-        const auto bytes = tile.get_tile_size(format);
+    auto make_cb = [&](tt::CBIndex index, tt::DataFormat format, const Tile& tile, std::uint32_t depth,
+                       std::uint32_t page = 0) {
+        const auto bytes = page ? page : tile.get_tile_size(format);
         CreateCircularBuffer(
             program,
             core,
@@ -159,12 +219,12 @@ std::vector<std::uint32_t> run(distributed::MeshDevice& mesh, const Case& c, con
                 .set_page_size(index, bytes)
                 .set_tile_dims(index, tile));
     };
-    make_cb(tt::CBIndex::c_0, tt::DataFormat::UInt32, page_tile, c.k_tiles);
+    make_cb(tt::CBIndex::c_0, tt::DataFormat::UInt32, page_tile, c.k_tiles, pbytes);
     make_cb(tt::CBIndex::c_1, tt::DataFormat::Float16_b, in0_tile, c.k_tiles);
     make_cb(tt::CBIndex::c_16, tt::DataFormat::Float32, out_tile, 2);
     auto reader = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/gguf_pages_reader.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     auto writer = CreateKernel(
@@ -179,17 +239,18 @@ std::vector<std::uint32_t> run(distributed::MeshDevice& mesh, const Case& c, con
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = true,
-            .dst_full_sync_en = true,
+            .dst_full_sync_en = c.full_sync,
             .defines = {
                 {"GGUF_FMT", std::to_string(c.fmt)},
                 {"GGUF_IN0_ROWS", std::to_string(c.in0_rows)},
                 {"GGUF_MM", std::to_string(c.mm)},
                 {"GGUF_OVERLAP", std::to_string(c.overlap)},
-                {"GGUF_SPLIT", std::to_string(c.split)}}});
+                {"GGUF_SPLIT", std::to_string(c.split)},
+                {"GGUF_GROUP_COPY", std::to_string(c.group_copy)}}});
     auto& cq = mesh.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, page_buffer, in.pages, true);
     distributed::EnqueueWriteMeshBuffer(cq, in0_buffer, in.in0, true);
-    SetRuntimeArgs(program, reader, core, {page_buffer->address(), 0, in0_buffer->address(), 0, c.k_tiles});
+    SetRuntimeArgs(program, reader, core, {page_buffer->address(), c.k_tiles * pbytes, in0_buffer->address(), c.k_tiles});
     SetRuntimeArgs(program, writer, core, {out_buffer->address(), 0, out_tiles});
     SetRuntimeArgs(program, compute, core, {c.k_tiles});
     distributed::MeshWorkload workload;
@@ -203,30 +264,53 @@ std::vector<std::uint32_t> run(distributed::MeshDevice& mesh, const Case& c, con
 }
 
 std::string name(const Case& c) {
-    return std::string(c.fmt == kQ8_0 ? "Q8_0" : "Q4_0") + " k_tiles=" + std::to_string(c.k_tiles) +
-           " in0_rows=" + std::to_string(c.in0_rows) + " overlap=" + std::to_string(c.overlap) +
-           " split=" + std::to_string(c.split);
+    const std::string fmt = c.fmt == kQ8_0 ? "Q8_0" : c.fmt == kQ4_0 ? "Q4_0" : c.fmt == kMXFP4 ? "MXFP4" : "Q4_K";
+    return fmt + " k_tiles=" + std::to_string(c.k_tiles) + " in0_rows=" + std::to_string(c.in0_rows) +
+           " overlap=" + std::to_string(c.overlap) + " split=" + std::to_string(c.split) +
+           " full_sync=" + std::to_string(c.full_sync) + " group_copy=" + std::to_string(c.group_copy);
+}
+
+// Each decoded tile equals its weights exactly (a zero of either sign).
+void check_decoded(const Case& c, const Inputs& in, const std::vector<std::uint32_t>& result) {
+    ASSERT_EQ(result.size(), c.k_tiles * 1024u);
+    for (std::uint32_t kt = 0; kt < c.k_tiles; kt++) {
+        for (std::uint32_t r = 0; r < 32; r++) {
+            for (std::uint32_t n = 0; n < 32; n++) {
+                const std::uint32_t got = result[kt * 1024 + face_index(r, n)];
+                const float want = in.weights[(kt * 32 + r) * 32 + n];
+                if (want == 0.0f) {
+                    ASSERT_EQ(got & 0x7FFFFFFFu, 0u) << "k tile " << kt << " row " << r << " column " << n;
+                } else {
+                    ASSERT_EQ(got, float_to_bits(want)) << "k tile " << kt << " row " << r << " column " << n;
+                }
+            }
+        }
+    }
 }
 
 }  // namespace
 
-// Each decoded tile equals code * d, exactly.
+// Each decoded tile equals its weights exactly: plain pages, codes pages (MXFP4's paired pages and words_shift) and
+// the group step (Q4_K).
 TEST_F(LLKBlackholeSingleCardFixture, GgufDecodeTileExact) {
     std::mt19937 rng(1);
-    for (const auto fmt : {kQ8_0, kQ4_0}) {
-        const Case c{.fmt = fmt, .k_tiles = 3, .mm = false};
+    for (const auto [fmt, k_tiles] : std::vector<std::pair<std::uint32_t, std::uint32_t>>{
+             {kQ8_0, 3}, {kQ4_0, 3}, {kMXFP4, 4}, {kQ4_K, 16}}) {
+        const Case c{.fmt = fmt, .k_tiles = k_tiles, .mm = false};
         SCOPED_TRACE(name(c));
         const Inputs in = make_inputs(c, rng);
-        const auto result = run(*devices_.at(0), c, in);
-        ASSERT_EQ(result.size(), c.k_tiles * 1024u);
-        for (std::uint32_t kt = 0; kt < c.k_tiles; kt++) {
-            for (std::uint32_t r = 0; r < 32; r++) {
-                for (std::uint32_t n = 0; n < 32; n++) {
-                    ASSERT_EQ(result[kt * 1024 + face_index(r, n)], float_to_bits(in.weights[(kt * 32 + r) * 32 + n]))
-                        << "k tile " << kt << " row " << r << " column " << n;
-                }
-            }
-        }
+        check_decoded(c, in, run(*devices_.at(0), c, in));
+    }
+}
+
+// The same in a half-sync DEST: every other K tile decodes in the upper half.
+TEST_F(LLKBlackholeSingleCardFixture, GgufDecodeTileHalfSync) {
+    std::mt19937 rng(3);
+    for (const auto fmt : {kQ4_0, kMXFP4}) {
+        const Case c{.fmt = fmt, .k_tiles = 4, .mm = false, .full_sync = false};
+        SCOPED_TRACE(name(c));
+        const Inputs in = make_inputs(c, rng);
+        check_decoded(c, in, run(*devices_.at(0), c, in));
     }
 }
 
@@ -234,8 +318,8 @@ TEST_F(LLKBlackholeSingleCardFixture, GgufDecodeTileExact) {
 // error; the pack-thread decode (overlap) and the one-step page copy give the same bits as the reference run.
 TEST_F(LLKBlackholeSingleCardFixture, GgufDestSrcaMatmul) {
     std::mt19937 rng(2);
-    for (const auto fmt : {kQ8_0, kQ4_0}) {
-        for (const std::uint32_t k_tiles : {1u, 2u, 8u}) {
+    for (const auto fmt : {kQ8_0, kQ4_0, kMXFP4, kQ4_K}) {
+        for (const std::uint32_t k_tiles : {fmt == kQ4_K ? 8u : 1u, fmt == kMXFP4 ? 4u : 2u, 16u}) {
             for (const std::uint32_t in0_rows : {8u, 16u, 32u}) {
                 const Case c{.fmt = fmt, .k_tiles = k_tiles, .in0_rows = in0_rows};
                 SCOPED_TRACE(name(c));
@@ -266,6 +350,11 @@ TEST_F(LLKBlackholeSingleCardFixture, GgufDestSrcaMatmul) {
                     Case whole = c;
                     whole.split = false;
                     EXPECT_EQ(run(*devices_.at(0), whole, in), result) << "page_to_dest vs split copy";
+                }
+                if (fmt == kQ4_K) {
+                    Case copy = c;
+                    copy.group_copy = true;
+                    EXPECT_EQ(run(*devices_.at(0), copy, in), result) << "group_copy vs group to both sets";
                 }
             }
         }
