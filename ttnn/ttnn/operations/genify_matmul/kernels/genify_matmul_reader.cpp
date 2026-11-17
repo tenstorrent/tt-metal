@@ -140,6 +140,41 @@ FORCE_INLINE void line_deliver(Pipe& pipe, uint32_t l1, uint32_t bytes) {
     }
 }
 
+// R2a / R3a B channel faces (std::nullopt where this core has no such role); 0 when the channel is off, so
+// a channel serving another regime (R1a's B line) never gets a second pipe constructed over it.
+template <bool ON, bool SENDER, typename Channel>
+FORCE_INLINE auto make_bs_face(const Channel& channel, const Noc& noc) {
+    if constexpr (!ON) {
+        return 0;
+    } else if constexpr (SENDER) {
+        return channel.optional_sender(noc);
+    } else {
+        return channel.optional_receiver(noc);
+    }
+}
+
+template <bool ON, typename Face>
+FORCE_INLINE bool bs_has_face(const Face& face) {
+    if constexpr (ON) {
+        return face.has_value();
+    } else {
+        return false;
+    }
+}
+
+// One B chunk over the group: the injector multicasts its slot range to the same address on every receiver;
+// a receiver acks its reserved slot and waits for the data.
+template <bool ON, typename Sender, typename Receiver>
+FORCE_INLINE void bs_b_deliver(bool injector, Sender& sender, Receiver& receiver, uint32_t l1, uint32_t bytes) {
+    if constexpr (ON) {
+        if (injector) {
+            sender->send(l1, l1, bytes);
+        } else {
+            receiver->receive();
+        }
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -183,7 +218,12 @@ void kernel_main() {
     constexpr bool block_sharded = get_compile_time_arg_val(33) != 0;      // regime R3
     constexpr bool bs_mcast = get_compile_time_arg_val(34) != 0;           // R3a: rotating row multicast
     constexpr uint32_t cb_act_shard = get_compile_time_arg_val(35);        // R3: A's resident shard (zero-copy)
-    constexpr auto a_args = TensorAccessorArgs<36>();
+    // R2a / R3a weight multicast (Refinement 10): one injector per B-sharing group (R3: a grid column; R2: all
+    // shard cores) reads each B K-block once and multicasts it in `b_chunks` K-row chunks of `b_chunk_k` rows.
+    constexpr bool bs_b_mcast = get_compile_time_arg_val(36) != 0;
+    constexpr uint32_t b_chunks = get_compile_time_arg_val(37);
+    constexpr uint32_t b_chunk_k = get_compile_time_arg_val(38);
+    constexpr auto a_args = TensorAccessorArgs<39>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto row_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto res_args = TensorAccessorArgs<row_args.next_compile_time_args_offset()>();
@@ -215,7 +255,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("weight_rt_offset")>();
     static_assert(
         mc_act.active == (operand_mcast || (dram_sharded && ds_reader_act) || bs_mcast) &&
-        mc_weight.active == operand_mcast);
+        mc_weight.active == (operand_mcast || bs_b_mcast));
+    static_assert(
+        !bs_b_mcast || (block_sharded && b_chunks >= 1 && b_chunks <= 8 && b_chunks * b_chunk_k >= block_k_tiles));
     static_assert(operand_mode <= 2 && int(operand_mode != 0) + int(dram_sharded) + int(block_sharded) <= 1);
     static_assert(!bs_mcast || block_sharded);
     static_assert(ds_b_ahead >= 1 && ds_b_ahead <= ds_weight_depth);
@@ -332,6 +374,10 @@ void kernel_main() {
     // they run on the reader) and R3a's rotating row multicast.
     [[maybe_unused]] auto a_sender = mc_act.optional_sender(noc);
     [[maybe_unused]] auto a_receiver = mc_act.optional_receiver(noc);
+    // R2a / R3a: the B group's injector (sender face) or a receiver of its multicast.
+    [[maybe_unused]] auto b_sender = make_bs_face<bs_b_mcast, true>(mc_weight, noc);
+    [[maybe_unused]] auto b_receiver = make_bs_face<bs_b_mcast, false>(mc_weight, noc);
+    [[maybe_unused]] const bool b_injector = bs_has_face<bs_b_mcast>(b_sender);
     constexpr uint32_t act_block_bytes = act_block_tiles * a_tile_bytes;
     [[maybe_unused]] const genify_ds::ActKBlocks<block_m_tiles, block_k_tiles, k_blocks_per_round, a_tile_bytes> ds_act{
         a_addr};
@@ -464,8 +510,26 @@ void kernel_main() {
                         } else if constexpr (block_sharded) {
                             MaybeDeviceZoneScope("rd_bs_kblock");
                             cb_reserve_back(cb_weight_tiles, weight_block_tiles);
-                            if (batch_valid) {  // a shard's padded batch slots (batched B) read no weight
-                                read_weight(get_write_ptr(cb_weight_tiles), b_base, k0, k_valid, blk_cols);
+                            const uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
+                            constexpr uint32_t chunk_row_bytes = block_n_tiles * b_tile_bytes;
+                            if constexpr (bs_b_mcast) {
+                                // R2a / R3a: only the injector reads B, chunk c tagged with trid c + 1 so each
+                                // chunk goes on the wire as soon as its own reads land (stall-shadow: issued
+                                // before the A round, which does not depend on B).
+                                if (b_injector) {
+                                    for (uint32_t c = 0; c < b_chunks; ++c) {
+                                        const uint32_t r0 = c * b_chunk_k;
+                                        if (r0 >= k_valid) {
+                                            break;
+                                        }
+                                        const uint32_t rows = (k_valid - r0) < b_chunk_k ? (k_valid - r0) : b_chunk_k;
+                                        dataflow_kernel_lib::set_read_trid(noc, c + 1);
+                                        read_weight(weight_l1 + r0 * chunk_row_bytes, b_base, k0 + r0, rows, blk_cols);
+                                    }
+                                    dataflow_kernel_lib::set_read_trid(noc, 0);  // the A round's reads stay untagged
+                                }
+                            } else if (batch_valid) {  // a shard's padded batch slots (batched B) read no weight
+                                read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
                             }
                             const bool own = kb == own_kb;
                             if (own) {
@@ -486,6 +550,23 @@ void kernel_main() {
                                     cb_reserve_back(cb_act_tiles, act_block_tiles);
                                     read_act(
                                         get_write_ptr(cb_act_tiles), a_row_base, k0, blk_rows, k_valid, block_k_tiles);
+                                }
+                            }
+                            if constexpr (bs_b_mcast) {
+                                // B round(s) after the A round on every core (fixed order: no channel deadlock).
+                                for (uint32_t c = 0; c < b_chunks; ++c) {
+                                    const uint32_t r0 = c * b_chunk_k;
+                                    const uint32_t rows =
+                                        (block_k_tiles - r0) < b_chunk_k ? (block_k_tiles - r0) : b_chunk_k;
+                                    if (b_injector) {
+                                        dataflow_kernel_lib::async_read_barrier_with_trid(noc, c + 1);
+                                    }
+                                    bs_b_deliver<bs_b_mcast>(
+                                        b_injector,
+                                        b_sender,
+                                        b_receiver,
+                                        weight_l1 + r0 * chunk_row_bytes,
+                                        rows * chunk_row_bytes);
                                 }
                             }
                             noc_async_read_barrier();  // one barrier per K-block, both operands

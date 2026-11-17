@@ -202,6 +202,19 @@ DS_ACT_WRITER_NOC = ttnn.NOC.NOC_1
 # every A shard crosses the NoC once per grid row. False (R3 stepping stone): every core unicast-reads
 # its row peers' shards through A's sharded TensorAccessor (each shard is read cols - 1 times).
 BS_ROW_MCAST = True
+# R2a / R3a weight multicast (Refinement 10). B does not vary along the shard rows, so every core of a
+# B-sharing group (R3: a grid column, which owns one output column slice; R2: all of A's shard cores) needs
+# the same B K-blocks. True: one fixed injector per group reads each K-block from DRAM once and multicasts
+# it to the group (B crosses DRAM once instead of once per grid row / per core). False: the R2 / R3 stepping
+# stone, every core reads its own B. Single (non-batched) B and groups of > 1 core only; an R2 core set the
+# multicast cannot cover (> 3 rectangles) keeps the per-core reads.
+SHARDED_B_MCAST = True
+# The injector's in-group index; staggered by group so R3's column injectors sit on different grid rows.
+SHARDED_B_INJECTOR = 0
+# A K-block's B multicast goes out in K-row chunks of >= this many bytes (at most SHARDED_B_MAX_CHUNKS,
+# each read under its own transaction id), so chunk c is on the wire while chunk c + 1 is still landing.
+SHARDED_B_CHUNK_BYTES = 16 * 1024
+SHARDED_B_MAX_CHUNKS = 8
 # own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
 NO_OWN_KB = 0xFFFFFFFF
 
@@ -814,8 +827,9 @@ _DS_ROLE_ABSENT = (0, 0, 1, DEPTH_ACT, 0, DEPTH_WEIGHT, 1, 1)
 # Writer CT args [8, 16): the R4 A-round role when it runs on the writer (ds_act, worker, cb_act_tiles,
 # block_k, num_k_blocks, K-blocks per round, A tile bytes, act CB depth). Every other writer: absent.
 _DS_WRITER_ACT_ABSENT = (0, 0, CB_ACT_TILES, 1, 1, 1, 0, DEPTH_ACT)
-# Reader CT args [32, 35): regime R3 role (block_sharded, row multicast, cb_act_shard id).
-_BS_ROLE_ABSENT = (0, 0, CB_ACT_SHARD)
+# Reader CT args [33, 39): regime R3 / R2 role (block_sharded, row multicast, cb_act_shard id) and the
+# R2a / R3a weight multicast (on, chunks per K-block, K rows per chunk).
+_BS_ROLE_ABSENT = (0, 0, CB_ACT_SHARD, 0, 1, 1)
 
 
 def _reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t):
@@ -1806,6 +1820,32 @@ def choose_block_sharded_blocking(geom: Geometry, topo: BlockShardedTopology, bu
     raise RuntimeError(f"genify_matmul: even the minimum block_sharded block does not fit the L1 CB budget of {budget}")
 
 
+def sharded_b_chunks(geom: Geometry, blk: Blocking):
+    """R2a / R3a: (chunks, K rows per chunk) of one K-block's B multicast."""
+    bk = blk.block_k_tiles
+    kblock_bytes = bk * blk.block_n_tiles * geom.b_tile_bytes
+    chunks = max(1, min(SHARDED_B_MAX_CHUNKS, bk, kblock_bytes // SHARDED_B_CHUNK_BYTES))
+    chunk_k = _cdiv(bk, chunks)
+    return _cdiv(bk, chunk_k), chunk_k
+
+
+def _sharded_b_channel(device, geom: Geometry, topo: BlockShardedTopology):
+    """R2a / R3a: the weight channel (an unattached ttnn.Mcast), or None where the per-core reads stay: the
+    knob is off, B is batched (it varies along the rows), a group is a single core, or the receiver set is
+    not multicastable (an R2 core list of more than three rectangles)."""
+    if not SHARDED_B_MCAST or geom.tensor_batches != 1 or topo.rows < 2:
+        return None
+    staggered = ttnn.McastFixedSenderConfig(
+        sender_index=SHARDED_B_INJECTOR, placement=ttnn.McastSenderPlacement.Staggered
+    )
+    # Groups = grid columns (R3; R2 is a single column of `rows` shard cores).
+    order = ttnn.McastCoreOrder.ColumnMajor if topo.core_list == () else ttnn.McastCoreOrder.RowMajor
+    try:
+        return ttnn.Mcast(device, ttnn.McastConfig(handshake=True), topo.core_set, topo.rows, staggered, order)
+    except RuntimeError:
+        return None
+
+
 def _weight_depth(walk_k_blocks):
     """cb_weight_tiles depth in K-blocks for the R2 / R3 walk: DEPTH_WEIGHT (prefetch the next K-block)
     unless the core's whole walk is a single K-block, whose second slot could never fill."""
@@ -1848,6 +1888,8 @@ def create_block_sharded_program_descriptor(
     cb_row = CB_GATE_ROW if epilogue == "addcmul" else CB_BIAS_ROW
     cb_out = CB_OUTPUT_SHARD if in_place else CB_OUTPUT_TILES
     row_mcast = BS_ROW_MCAST and topo.cols > 1
+    mc_weight = _sharded_b_channel(device, geom, topo)
+    b_chunks, b_chunk_k = sharded_b_chunks(geom, blk) if mc_weight is not None else (1, 1)
     out_div = 2 if geom.swiglu else 1
     bn_full = topo.out_w_tiles * out_div  # B columns per grid column
     # Every core of a row walks the same nominal block sequence (lockstep CB pointers for the multicast).
@@ -1902,6 +1944,9 @@ def create_block_sharded_program_descriptor(
         1,  # block_sharded (R3 / R2 walk)
         int(row_mcast),
         CB_ACT_SHARD,
+        int(mc_weight is not None),
+        b_chunks,
+        b_chunk_k,
         *_reader_accessor_ct(a, b, row_t, res_t),
     ]
     writer_ct = _writer_ct(cb_out, blk, out_block_n_tiles, geom, out, out_in_place=in_place)
@@ -1969,9 +2014,15 @@ def create_block_sharded_program_descriptor(
             ttnn.McastCoreOrder.RowMajor,
         )
         mc.attach(descriptor, "act", [reader], 0)
+        next_sem = mc.next_semaphore_id()
     else:
         ttnn.attach_absent_mcast(reader, "act")
-    ttnn.attach_absent_mcast(reader, "weight")
+        next_sem = 0
+    if mc_weight is not None:
+        # R2a / R3a: B down each grid column (R2: to every shard core) from the group's fixed injector.
+        mc_weight.attach(descriptor, "weight", [reader], next_sem)
+    else:
+        ttnn.attach_absent_mcast(reader, "weight")
     ttnn.attach_absent_mcast(writer, "act")  # the writer's R4 A-round role is absent
     descriptor.kernels = [reader, writer, compute]
     return descriptor
