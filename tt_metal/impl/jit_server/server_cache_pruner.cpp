@@ -538,8 +538,8 @@ void ServerCachePruner::log(const std::string& message) const {
 std::string ServerCachePruner::summary(const CachePruneResult& result) const {
     std::string text = "Cache prune: free space " + percent(result.free_pct_before) + " < " +
                        percent(config_.start_below_free_pct) + "; deleted " + std::to_string(result.deleted) +
-                       " kernel directories (" + megabytes(result.freed_bytes) + " MB); free space now " +
-                       percent(result.free_pct_after);
+                       (result.deleted == 1 ? " kernel directory (" : " kernel directories (") +
+                       megabytes(result.freed_bytes) + " MB); free space now " + percent(result.free_pct_after);
     std::vector<std::string> skipped;
     if (result.skipped_in_use > 0) {
         skipped.push_back(std::to_string(result.skipped_in_use) + " in use by a request");

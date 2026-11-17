@@ -325,6 +325,8 @@ TEST_F(ServerCachePrunerTest, ReachedTargetComesFromMeasuredFreeSpace) {
     // Deleting one small kernel does not get a 1%-free disk to 40%, whatever the estimate says.
     EXPECT_FALSE(result.reached_target);
     EXPECT_GT(result.still_needed_bytes, 0u);
+    ASSERT_EQ(logs_.size(), 1u);
+    EXPECT_NE(logs_[0].find("deleted 1 kernel directory ("), std::string::npos) << logs_[0];
 }
 
 TEST_F(ServerCachePrunerTest, IgnoresNonBuildKeyEntriesAndSymlinks) {
