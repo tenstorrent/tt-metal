@@ -51,7 +51,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t head_dim_v = operation_attributes.head_dim_v.value_or(0);
     const auto& cur_pos_ids = operation_attributes.cur_pos;
     const float scale =
-        operation_attributes.scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
+        operation_attributes.scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));
     const uint32_t sliding_window_size = operation_attributes.sliding_window_size.value_or(0);
     // capacity_t is in TILE rows (= cache_position_modulo / TILE_HEIGHT); 0 = unbounded.
     // Validator enforces cache_position_modulo % effective_block_size == 0, so the
