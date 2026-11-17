@@ -134,10 +134,14 @@ def attach_traces(reqs, path):
     traces = {}
     with open(path) as f:
         for line in f:
+            # The corpus is large: read each entry's id from the text and parse only the entries the run used.
             i = line.find('"id"')
-            if line[i : i + 80].split('"')[3] in want:
+            head = line[i : i + 80].split('"') if i >= 0 else []
+            if len(head) > 3 and head[3] in want:
                 t = json.loads(line)
                 traces[t["id"]] = t["requests"]
+    if missing := sorted(want - traces.keys()):
+        raise SystemExit(f"{path}: no entry for {len(missing)} trace ids of the run, e.g. {', '.join(missing[:3])}")
     # AIPerf renders an :aux: sidecar so that it shares no prefix with any other conversation (the router saw zero
     # overlap for them on silicon), whatever its hash ids say: it gets a session of its own.
     keys = sorted(want | {r["conv"] for r in reqs if ":aux:" in r["conv"]})

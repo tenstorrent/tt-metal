@@ -152,6 +152,12 @@ def test_attach_traces_gives_aux_sidecars_their_own_session_and_picks_the_closes
     assert len({r["sess"] for r in reqs}) == 3, "the sidecar's session is its own"
 
 
+def test_attach_traces_names_the_trace_ids_a_wrong_corpus_lacks(tmp_path):
+    path = write(tmp_path / "traces.jsonl", ["\n", '{"models": []}\n', json.dumps({"id": "t1", "requests": []}) + "\n"])
+    with pytest.raises(SystemExit, match="no entry for 1 trace ids of the run, e.g. t9"):
+        attach_traces([dict(trace="t9", outer=0, kind="weka_main", conv="t9", isl=1)], path)
+
+
 class _OneSecondSteps:
     def __call__(self, batch, C, budget):
         self.seen = getattr(self, "seen", []) + [batch[0][1]]
