@@ -40,3 +40,7 @@ set(X86_64_ONLY_TESTS
     dispatch/test_dispatcher.cpp
     3_pcie_transfer/test_pull_from_pcie.cpp
 )
+
+if(TT_UMD_BUILD_GRENDEL_JTAG)
+    list(APPEND PERF_MICROBENCH_TESTS_SRCS keraunos/test_keraunos_ubench.cpp)
+endif()

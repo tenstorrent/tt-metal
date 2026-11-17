@@ -30,20 +30,22 @@ Port the X280 bandwidth and latency microbenchmarks (tt-metal PR #60692, `kzhao/
 | `.../keraunos_ubench/latency.cpp` | Ping-pong initiator and responder; transport is CpuStore, Idma or Eth |
 | `.../keraunos_ubench/transport_bw.cpp` | Per-hart bandwidth: IdmaMetal, IdmaLean or CpuStore64; start gate across harts |
 | `.../keraunos_ubench/eth_bw_sender.cpp`, `eth_bw_receiver.cpp` | Streamed Ethernet sends with a handshake and a closing flag |
-| `tests/tt_metal/tt_metal/context/test_keraunos_ubench.cpp` | Host side: `Session` (one device open for the whole binary), sweeps, statistics, data checks, JSONL records. Its header comment lists every environment knob |
-| `tests/tt_metal/tt_metal/context/sources.cmake` | Adds the test to `unit_tests_context`, under `TT_UMD_BUILD_GRENDEL_JTAG` |
+| `tests/tt_metal/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench.cpp` | Host side: `Session` (one device open for the whole binary), one parameterized test per sweep point, statistics, data checks, JSONL records. Its header comment lists the run filters and the environment variables |
+| `tests/tt_metal/tt_metal/perf_microbenchmark/sources.cmake`, `CMakeLists.txt` | Builds the `test_keraunos_ubench` executable under `TT_UMD_BUILD_GRENDEL_JTAG`, with the quasar include dir for `dev_mem_map.h` |
 
 ## Tests
 
-All tests are in `unit_tests_context` and match `--gtest_filter='KeraunosUbench*'`. All of them are skipped unless `KERAUNOS_UBENCH=1` is set.
+The tests build into their own executable, `build/test/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench`, like the other metal perf microbenchmarks. Each sweep point is its own gtest case (`INSTANTIATE_TEST_SUITE_P`), so `--gtest_filter` picks what runs; there are no opt-in variables. Parameterized names carry the `KeraunosUbench/` prefix, e.g. `KeraunosUbench/KeraunosUbenchTransportBw.Run/IdmaLean_Tile_8Harts_4096B`.
 
-| Test | Measures | Needs |
-|---|---|---|
-| `KeraunosUbench.TimerCheck` | rdcycle monotonicity, bracket min and max, cycles per add, cycles per dependent uncached load (own SRAM and another tile) | CCE0 on HSIO 0 (1 for the remote chain) |
-| `KeraunosUbench/KeraunosUbenchLatency.PingPong/{SameCore,CrossTile}{CpuStore,Idma}` | RTT and TURN at p50/p90/p99, plus the rendezvous exchange | Cross-tile needs the HSIO firewalls open (see below) |
-| `KeraunosUbench.TransportBandwidth` | mech × dst {local, tile} × harts × size. Reports INJECTION and DRAINED per hart, and the run rate over the slowest hart | Same as above for `tile` |
-| `KeraunosUbench.EthLatency` | RTT and TURN over HSIO0.eth0↔HSIO1.eth0, sweeping payload size | `KERAUNOS_ETH_LOOPBACK=1`, loopback up in packet mode |
-| `KeraunosUbench.EthBandwidth` | size × TX queues. Reports INJECTION, ACKED and DELIVERED, the idle handshake RTT, and TX-queue busy polls | Same as above |
+| Suite | Cases | Measures | Needs |
+|---|---|---|---|
+| `KeraunosUbench.TimerCheck` | 1 | rdcycle monotonicity, bracket min and max, cycles per add, cycles per dependent uncached load (own SRAM and another tile) | CCE0 on HSIO 0 (1 for the remote chain) |
+| `KeraunosUbenchLatency.PingPong` | `{SameCore,CrossTile}{CpuStore,Idma}` | RTT and TURN at p50/p90/p99, plus the rendezvous exchange | Cross-tile needs the HSIO firewalls open (see below) |
+| `KeraunosUbenchTransportBw.Run` | `{IdmaMetal,IdmaLean,CpuStore64}_{Local,Tile}_{1,8}Harts_{256,4096,65536}B` | INJECTION and DRAINED per hart, and the run rate over the slowest hart | Same as above for `Tile` |
+| `KeraunosUbenchEthLatency.PingPong` | `{0,64,1024,4096}B` | RTT and TURN over HSIO0.eth0↔HSIO1.eth0 | Loopback up in packet mode |
+| `KeraunosUbenchEthBandwidth.Run` | `{256,4096,65536}B_{1,4}Txq` | INJECTION, ACKED and DELIVERED, the idle handshake RTT, and TX-queue busy polls | Same as above |
+
+The `KeraunosUbenchEth*` suites have no loopback check: without the loopback their kernels hang until the 1800 s host timeout. Leave them out of the filter unless bring-up started it.
 
 **Measurement rules** (taken from the X280 suite's `design.md`):
 - A kernel reads only its own hart's rdcycle, and never subtracts another hart's timestamps.
@@ -69,9 +71,11 @@ Bring-up must also open the HSIO fabric firewalls (`disable_ker_hsio_filters` pe
 ```
 export TT_METAL_EMU_SERVER=<host>:<port>
 export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/tests/soc_descs/mmk.yaml
-export TT_METAL_SLOW_DISPATCH_MODE=1 KERAUNOS_UBENCH=1 KERAUNOS_ETH_LOOPBACK=1
-./build/test/tt_metal/unit_tests_context --gtest_filter='KeraunosUbench.TimerCheck'   # first
-./build/test/tt_metal/unit_tests_context --gtest_filter='KeraunosUbench*'
+export TT_METAL_SLOW_DISPATCH_MODE=1
+B=./build/test/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench
+$B --gtest_filter='KeraunosUbench.TimerCheck'     # first
+$B --gtest_filter='-*KeraunosUbenchEth*'          # every on-chip case
+$B --gtest_filter='*KeraunosUbenchEth*'           # Ethernet, once the loopback is up
 ```
 
 If the host times out, a kernel is hung. The test prints every result block and exits, and the emulator job needs a reset before the next run.

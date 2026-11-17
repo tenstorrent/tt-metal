@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Layout, result block and device helpers shared by the Keraunos CCE microbenchmark kernels and their host test
-// (tests/tt_metal/tt_metal/context/test_keraunos_ubench.cpp).
+// (tests/tt_metal/tt_metal/perf_microbenchmark/keraunos/test_keraunos_ubench.cpp).
 //
 // Every offset is relative to a per-core base the host passes as runtime arg 0: a 64-byte-aligned flat offset in CCE
 // SRAM at or above MEM_IERISC_ROUTER_UNRESERVED_BASE, so the Ethernet-link slot and router regions below it stay
