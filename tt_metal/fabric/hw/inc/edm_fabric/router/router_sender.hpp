@@ -1163,7 +1163,7 @@ FORCE_INLINE bool drain() {
 // CONNECT: the peer's metadata, then the Ethernet handshake with it (the lower domain id sends). The peer's VC2
 // receiver must be where this router's senders send, with the same packet size; domain ids must differ. False (then
 // DRAIN) on a mismatch, the host's ABORT or termination.
-__attribute__((noinline)) bool connect() {
+__attribute__((noinline, cold)) bool connect() {
     using namespace erisc::datamover::handshake;
     using Remote = RemoteReceiverChannel<0>;
     auto* c = inter_domain_control();
@@ -1218,7 +1218,7 @@ FORCE_INLINE bool start_disconnect() {
 }
 
 // DISCONNECT, healthy: this router's marker to the peer, then the peer's (the host may force it on). Forced: none.
-__attribute__((noinline)) void exchange_markers() {
+__attribute__((noinline, cold)) void exchange_markers() {
     auto* c = inter_domain_control();
     if (inter_domain_command() == InterDomainCommand::DISCONNECT) {
         c->marker[0] = c->connects;  // nonzero after a connect
@@ -1238,11 +1238,25 @@ __attribute__((noinline)) void exchange_markers() {
 }
 
 // After the markers: the sender's link-facing state back to its start (the remote receiver's credits, the worker
-// channels).
-__attribute__((noinline)) void reset_link(const RuntimeArgs& args) {
+// channels). The forwarding channels keep their slots, but their counts start over with the new peer's credits: slots
+// the old peer never credited go back to the upstream router.
+__attribute__((noinline, cold)) void reset_link(const RuntimeArgs& args) {
     zero_credit_counters(to_sender_remote_ack_counters_base_address);
     zero_credit_counters(to_sender_remote_completion_counters_base_address);
     restart_worker_channels(args.connection_semaphores, args.producer_cursors);
+    for_each_index<NUM_SENDER_CHANNELS>([](auto i) {
+        constexpr size_t CH = decltype(i)::value;
+        if constexpr (((SenderChannels::forwarding_channels >> CH) & 1u) != 0) {
+            auto& state = carried_forwarding.template get<CH>();
+            auto& progress = state.progress;
+            const uint32_t returned =
+                SenderChannel<CH>::first_level_ack ? progress.first_level_acked : progress.completed;
+            if (progress.sent != returned) {
+                ForwardingChannel<CH>::credit(state.upstream_free_slots_addr, progress.sent - returned);
+            }
+            progress.sent = progress.completed = progress.first_level_acked = 0;
+        }
+    });
 }
 
 }  // namespace fabric_router::sender

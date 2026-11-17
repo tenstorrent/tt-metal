@@ -842,7 +842,7 @@ FORCE_INLINE void drain() {
 
 // After the markers: the receiver's link-facing state back to its start (its credit counts, packets-received
 // registers).
-__attribute__((noinline)) void reset_link() {
+__attribute__((noinline, cold)) void reset_link() {
     zero_credit_counters(local_receiver_ack_counters_base_address);
     zero_credit_counters(local_receiver_completion_counters_base_address);
     init_channel_streams();
