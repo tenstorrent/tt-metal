@@ -250,9 +250,9 @@ void MetalContext::initialize(
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
         dprint_server_ = std::make_unique<DPrintServer>(this, *this->env_, num_hw_cqs, dispatch_core_config_);
     }
-    // Emulated devices have no firmware for the watcher to poll; skip it. A null
+    // Mock and emulated devices have no firmware for the watcher to poll; skip it. A null
     // watcher is handled downstream (kernel registration, teardown).
-    if (get_cluster().get_target_device_type() != tt::TargetDevice::Emule) {
+    if (!get_cluster().is_mock_or_emulated()) {
         watcher_server_ = std::make_unique<WatcherServer>(*this->env_);
     }
     noc_debug_state_ = std::make_unique<NOCDebugState>();

@@ -1332,51 +1332,55 @@ void FDMeshCommandQueue::reset_worker_state(
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
-    const auto devices = mesh_device_->impl().get_devices();
-    auto cached =
-        std::find_if(sub_device_setup_commands_.begin(), sub_device_setup_commands_.end(), [&](const auto& entry) {
-            return entry.devices == devices && entry.reset_launch_msg_state == reset_launch_msg_state &&
-                   std::equal(
-                       entry.workers.begin(),
-                       entry.workers.end(),
-                       workers_per_sub_device.begin(),
-                       workers_per_sub_device.end()) &&
-                   entry.core_mapping == core_go_message_mapping;
-        });
-    if (cached == sub_device_setup_commands_.end()) {
-        SubDeviceSetupCommands entry{
-            .devices = devices,
-            .workers = {workers_per_sub_device.begin(), workers_per_sub_device.end()},
-            .core_mapping = core_go_message_mapping,
-            .reset_launch_msg_state = reset_launch_msg_state,
-            .device_batches = {}};
-        entry.device_batches.reserve(devices.size());
-        for (auto* device : devices) {
-            entry.device_batches.push_back(program_dispatch::build_sub_device_setup_commands(
-                static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
-                workers_per_sub_device,
-                core_go_message_mapping,
-                reset_launch_msg_state));
+    // Mock and emulated devices have no issue queue: only the host-side state below is reset.
+    if (this->get_target_device_type() != tt::TargetDevice::Mock &&
+        this->get_target_device_type() != tt::TargetDevice::Emule) {
+        const auto devices = mesh_device_->impl().get_devices();
+        auto cached =
+            std::find_if(sub_device_setup_commands_.begin(), sub_device_setup_commands_.end(), [&](const auto& entry) {
+                return entry.devices == devices && entry.reset_launch_msg_state == reset_launch_msg_state &&
+                       std::equal(
+                           entry.workers.begin(),
+                           entry.workers.end(),
+                           workers_per_sub_device.begin(),
+                           workers_per_sub_device.end()) &&
+                       entry.core_mapping == core_go_message_mapping;
+            });
+        if (cached == sub_device_setup_commands_.end()) {
+            SubDeviceSetupCommands entry{
+                .devices = devices,
+                .workers = {workers_per_sub_device.begin(), workers_per_sub_device.end()},
+                .core_mapping = core_go_message_mapping,
+                .reset_launch_msg_state = reset_launch_msg_state,
+                .device_batches = {}};
+            entry.device_batches.reserve(devices.size());
+            for (auto* device : devices) {
+                entry.device_batches.push_back(program_dispatch::build_sub_device_setup_commands(
+                    static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+                    workers_per_sub_device,
+                    core_go_message_mapping,
+                    reset_launch_msg_state));
+            }
+            if (sub_device_setup_commands_.size() == max_sub_device_setup_cache_entries) {
+                sub_device_setup_commands_.pop_back();
+            }
+            sub_device_setup_commands_.push_back(std::move(entry));
+            cached = std::prev(sub_device_setup_commands_.end());
         }
-        if (sub_device_setup_commands_.size() == max_sub_device_setup_cache_entries) {
-            sub_device_setup_commands_.pop_back();
+        std::rotate(sub_device_setup_commands_.begin(), cached, std::next(cached));
+        cached = sub_device_setup_commands_.begin();
+        for (size_t i = 0; i < devices.size(); ++i) {
+            // Old-manager completion counts remain dynamic. The cached tail still resets GO mailboxes
+            // and retains all barriers; batching changes only host submission granularity.
+            program_dispatch::reset_worker_dispatch_state_on_device(
+                mesh_device_,
+                devices[i]->sysmem_manager(),
+                id_,
+                expected_num_workers_completed_,
+                cq_shared_state_->worker_launch_message_buffer_state,
+                reset_launch_msg_state,
+                cached->device_batches[i]);
         }
-        sub_device_setup_commands_.push_back(std::move(entry));
-        cached = std::prev(sub_device_setup_commands_.end());
-    }
-    std::rotate(sub_device_setup_commands_.begin(), cached, std::next(cached));
-    cached = sub_device_setup_commands_.begin();
-    for (size_t i = 0; i < devices.size(); ++i) {
-        // Old-manager completion counts remain dynamic. The cached tail still resets GO mailboxes
-        // and retains all barriers; batching changes only host submission granularity.
-        program_dispatch::reset_worker_dispatch_state_on_device(
-            mesh_device_,
-            devices[i]->sysmem_manager(),
-            id_,
-            expected_num_workers_completed_,
-            cq_shared_state_->worker_launch_message_buffer_state,
-            reset_launch_msg_state,
-            cached->device_batches[i]);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         mesh_device_->impl().metal_env().get_hal(),
