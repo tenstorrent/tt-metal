@@ -44,6 +44,12 @@ INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 # the DistributedContext instead (the per-call operation timeout, plan P16).
 PRTE_TIMEOUT_EXIT_CODE = 241
 
+# How long the launcher may outlive ALL of its ranks before tt-run decides it is hung and ends it. The PRRTE this
+# image ships can leave prterun up with every rank already gone after a killed peer + the survivors' MPI_Abort
+# (openpmix/prrte#2815); without this, tt-run's wait() would block forever. Generous, because a healthy launcher
+# exits within a second of its last rank, so a real job never reaches it.
+LAUNCHER_HANG_GRACE_S = 20.0
+
 
 def remove_stale_launcher_leftovers() -> int:
     """Remove this user's leftovers from a killed job that no live owner claims (teardown plan P11, P25). The
@@ -189,9 +195,43 @@ class LaunchedJob:
                 continue
 
     def wait(self) -> int:
-        """Wait for the launcher; return its exit code, a death by signal normalized to the shell's 128 + signum."""
-        rc = self.proc.wait()
-        return 128 - rc if rc < 0 else rc
+        """Wait for the launcher; return its exit code, a death by signal normalized to the shell's 128 + signum.
+
+        Failsafe for the PRRTE hang (openpmix/prrte#2815): a killed peer plus the survivors' MPI_Abort can leave
+        prterun up with every rank already gone, so a plain blocking wait would never return. We poll, and once
+        the job's ranks have been seen and then ALL vanish while the launcher is still alive for
+        LAUNCHER_HANG_GRACE_S, we end the launcher (``_shutdown_launcher``) and return — the job's work is done,
+        only the hung launcher remains. The watchdog arms only after ranks have run (``seen_ranks``), so a slow
+        multi-host startup, where no rank exists yet, never trips it; a healthy job returns the instant the
+        launcher exits, adding only a 1 s poll.
+        """
+        seen_ranks = False
+        hang_since = None
+        while True:
+            try:
+                rc = self.proc.wait(timeout=1.0)
+                return 128 - rc if rc < 0 else rc
+            except subprocess.TimeoutExpired:
+                pass
+            if self._survivors():  # ranks are running: the launcher is doing its job
+                seen_ranks = True
+                hang_since = None
+                continue
+            if not seen_ranks:  # the job has not started its ranks yet — do not arm the watchdog
+                continue
+            now = time.time()
+            if hang_since is None:
+                hang_since = now
+            elif now - hang_since >= LAUNCHER_HANG_GRACE_S:
+                logger.error(
+                    f"{TT_RUN_PREFIX} the launcher (pid {self.proc.pid}) is still up {LAUNCHER_HANG_GRACE_S:.0f}s "
+                    "after every rank of its job is gone; this is the PRRTE hang (openpmix/prrte#2815). Ending it."
+                )
+                self._shutdown_launcher()
+                rc = self.proc.poll()
+                if rc is None:
+                    return 1
+                return 128 - rc if rc < 0 else rc
 
     def _survivors(self) -> List[int]:
         """Live pids of this job on this host — session id catches the ranks, process group catches a re-sessioned
