@@ -154,7 +154,7 @@ if __name__ == "__main__":
   - `run_per_core_check(fn(risc_debug), block_filter=..., core_filter=...)`
 - `fn` returns `None` (no row), one dataclass (one row) or a list (several rows). The Dev / Loc / RiscV / NEO columns are prepended for you.
 - It handles errors so check functions don't have to:
-  - `TimeoutDeviceRegisterError` marks the device broken (and its remote devices) and skips it from then on. The rows already collected for that device in that `run_per_*` call are dropped.
+  - `TimeoutDeviceRegisterError` marks the device broken (and its remote devices) and skips it from then on. The rows from the blocks that finished before the timeout are kept; in `run_per_core_check`, the rows from earlier cores of the block that timed out are not.
   - `RiscHaltError` marks the core broken.
   - Any other exception becomes a "Skipping: ..." warning for that item.
 - So don't wrap reads in try/except. If you must catch something to add context, `except Exception` is enough. `TimeoutDeviceRegisterError` derives from `HardwareError` → `BaseException` (tt-exalens 0.4.1), so it still reaches run_checks; older scripts' `except TimeoutDeviceRegisterError: raise` is redundant.
