@@ -35,6 +35,9 @@ template <Dst Slot = Dst::D0>
 struct Digamma;
 
 // Where — ternary y = where(cond, a, b).
+// DF must match the Dest width, not the input dtype: Float16_b addresses 16-bit halves of each Dest word, so
+// under a 32-bit Dest (DST_ACCUM_MODE) a bf16 input needs Float32 — use get_where_data_format_for_bf16_input()
+// (dest_helpers.hpp); Where<Float16_b> under a 32-bit Dest is rejected at compile time on Wormhole/Blackhole.
 template <DataFormat DF, Dst Cond = Dst::D0, Dst A = Dst::D1, Dst B = Dst::D2, Dst Out = Dst::D0>
 struct Where;
 
