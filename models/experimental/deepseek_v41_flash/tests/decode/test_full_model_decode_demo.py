@@ -226,9 +226,11 @@ def _construct_model(
     persistent_moe: bool = False,
     moe_server=None,
     moe_requester: int = 0,
+    drafter_on_stage: bool = False,
 ):
     """Build ``DeepSeekV41Model`` + ``lm_head`` and attach the prefetcher session (``verify_rows``,
-    ``prefill_layer_submesh_ids``, ``persistent_moe``, ``moe_server`` and ``moe_requester``: see the model)."""
+    ``prefill_layer_submesh_ids``, ``persistent_moe``, ``moe_server``, ``moe_requester`` and ``drafter_on_stage``: see
+    the model)."""
     if loader is None:
         loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     if config is None:
@@ -260,6 +262,7 @@ def _construct_model(
         persistent_moe=persistent_moe,
         moe_server=moe_server,
         moe_requester=moe_requester,
+        drafter_on_stage=drafter_on_stage,
     )
     lm_head = DeepSeekV41LMHead(
         dequantized(loader, "lm_head.weight", translate=True),

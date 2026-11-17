@@ -45,6 +45,9 @@
 
 constexpr uint32_t kFeStopBit = 0x80000000u;
 
+// Orders staged L1 stores before an MMIO register write (such as starting a NoC transfer) or a cross-RISC handoff.
+FORCE_INLINE void fe_store_fence() { asm volatile("fence" ::: "memory"); }
+
 // The most experts one group runs per iteration (the program factory's kMaxGroupExperts bound): 1 unless the
 // persistent op takes several-row requests.
 #ifndef FE_GROUP_EXPERTS
@@ -233,6 +236,7 @@ FORCE_INLINE bool fe_begin_iteration(uint32_t iter, uint32_t cb_input_id, uint32
 
 // The writer's end of an iteration: lets the reader report the core ready.
 FORCE_INLINE void fe_writer_done(uint32_t iter) {
+    fe_store_fence();
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_WRITER_DONE)) = iter + 1u;
 }
 #endif

@@ -528,7 +528,7 @@ void kernel_main() {
                             }
                             const uint16_t e = static_cast<uint16_t>(run_id[b * top_k + j]);
                             router_score_bits[b * top_k + j] = run_score[b * top_k + j];
-                            if (j < row_k) {
+                            if (j < row_k && e < num_weights) {
                                 sel_ids[b * top_k + j] = e;
                                 bitmap[e >> 5] |= 1u << (e & 31u);
                             } else {
@@ -792,6 +792,7 @@ void kernel_main() {
                 constexpr uint32_t kMinHits = num_active < 6u ? num_active : 6u;
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hits_l1) =
                     ((iter + 1u) << 8) | (union_hits > kMinHits ? union_hits : kMinHits);
+                fe_store_fence();
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(hits_l1),
                     MulticastEndpoint{},
@@ -809,6 +810,7 @@ void kernel_main() {
 #endif
 
             // ---- 2. Broadcast the ids to all other cores' L1 (same cb_bcast address). ----
+            fe_store_fence();
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(bcast_l1),
                 MulticastEndpoint{},
@@ -834,6 +836,7 @@ void kernel_main() {
         {
             DeviceZoneScopedN("FE_ROUTE_WEIGHTS_LATE");
             compute_weights();
+            fe_store_fence();
             const uint32_t weights_l1 = bcast_l1 + num_weights * 4u;
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(weights_l1),

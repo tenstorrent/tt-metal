@@ -208,7 +208,6 @@ class DeepseekV4WeightLoader:
         shard = self.shard_of(name, translate=translate)
         handle = self._open_shard(str(shard))
         ckpt_name = hf_to_checkpoint_name(name) if translate else name
-        print("Loading tensor: ", ckpt_name)
         return handle.get_tensor(ckpt_name)
 
     def get_scale(self, name: str, *, translate: bool = True) -> Optional[torch.Tensor]:

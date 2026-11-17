@@ -67,24 +67,26 @@ void d2d_send(
     uint32_t y,
     uint32_t dst) {
     namespace fabric_api = tt::tt_fabric::mesh::experimental;
+    using tt::tt_fabric::common::experimental::UnicastWriteUpdateMask;
     for (uint32_t left = size; left > 0;) {
         const uint32_t chunk = left > max_payload ? max_payload : left;
-        // The header is rewritten in place, so the previous packet's must have left.
-        noc_async_writes_flushed();
         const tt::tt_fabric::NocUnicastCommandHeader cmd{safe_get_noc_addr(x, y, dst, 0)};
         if (route.multicast) {
-            fabric_api::fabric_multicast_noc_unicast_write(
-                sender, header, route.dst_chip, route.dst_mesh, route.range, src, chunk, cmd);
-        } else if (route.steer != kD2DNoSteer) {
-            using tt::tt_fabric::common::experimental::UnicastWriteUpdateMask;
+            fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::All>(
+                header, route.dst_chip, route.dst_mesh, route.range, cmd, chunk);
+        } else {
             fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::All>(
                 header, route.dst_chip, route.dst_mesh, cmd, chunk);
-            steer_d2d_unicast(header, route);
-            fabric_api::fabric_unicast_noc_unicast_write_with_state(sender, header, src);
-        } else {
-            fabric_api::fabric_unicast_noc_unicast_write(
-                sender, header, route.dst_chip, route.dst_mesh, src, chunk, cmd);
+            if (route.steer != kD2DNoSteer) {
+                steer_d2d_unicast(header, route);
+            }
         }
+        // Order header L1 stores and the EDM slot's L1 writes before the EDM stream-register credit on
+        // write_at_cmd_buf.
+        asm volatile("fence" ::: "memory");
+        sender->wait_for_empty_write_slot();
+        sender->send_payload_without_header_non_blocking_from_address(src, chunk);
+        sender->send_payload_blocking_from_address(reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
         src += chunk;
         dst += chunk;
         left -= chunk;
@@ -102,20 +104,21 @@ void d2d_send_word(
     uint32_t addr,
     uint32_t value) {
     namespace fabric_api = tt::tt_fabric::mesh::experimental;
-    noc_async_writes_flushed();
+    using tt::tt_fabric::common::experimental::UnicastInlineWriteUpdateMask;
     const tt::tt_fabric::NocUnicastInlineWriteCommandHeader cmd{safe_get_noc_addr(x, y, addr, 0), value};
     if (route.multicast) {
-        fabric_api::fabric_multicast_noc_unicast_inline_write(
-            sender, header, route.dst_chip, route.dst_mesh, route.range, cmd);
-    } else if (route.steer != kD2DNoSteer) {
-        using tt::tt_fabric::common::experimental::UnicastInlineWriteUpdateMask;
+        fabric_api::fabric_multicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::All>(
+            header, route.dst_chip, route.dst_mesh, route.range, cmd);
+    } else {
         fabric_api::fabric_unicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::All>(
             header, route.dst_chip, route.dst_mesh, cmd);
-        steer_d2d_unicast(header, route);
-        fabric_api::fabric_unicast_noc_unicast_inline_write_with_state(sender, header);
-    } else {
-        fabric_api::fabric_unicast_noc_unicast_inline_write(sender, header, route.dst_chip, route.dst_mesh, cmd);
+        if (route.steer != kD2DNoSteer) {
+            steer_d2d_unicast(header, route);
+        }
     }
+    asm volatile("fence" ::: "memory");
+    sender->wait_for_empty_write_slot();
+    sender->send_payload_blocking_from_address(reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
 }
 
 // A ring of packet headers, so a burst of packets does not wait for each one to leave L1 before building the
@@ -168,38 +171,40 @@ void d2d_send_flagged(
         const uint32_t chunk = left > max_payload ? max_payload : left;
         auto* header = ring.take();
         if (chunk == left) {
-            // No flush at the destination: like the separate flag packet this replaces (and ar_sender's fused
-            // packets), the increment follows the write from the same router to the same core in order; a flush
-            // there would hold the router for each write's ack and serialize the burst.
+            // Flush at the destination router: local writes and atomics leave the router on separate command
+            // buffers, so without a flush the increment can overtake this packet's (or an earlier chunk's) write.
             const tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader cmd{
-                safe_get_noc_addr(x, y, dst, 0), safe_get_noc_addr(x, y, flag, 0), inc, false};
+                safe_get_noc_addr(x, y, dst, 0), safe_get_noc_addr(x, y, flag, 0), inc, true /*flush*/};
             if (route.multicast) {
-                fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                    sender, header, route.dst_chip, route.dst_mesh, route.range, src, chunk, cmd);
-            } else if (route.steer != kD2DNoSteer) {
+                fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
+                    UnicastFusedAtomicIncUpdateMask::All>(
+                    header, route.dst_chip, route.dst_mesh, route.range, cmd, chunk);
+            } else {
                 fabric_api::fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<
                     UnicastFusedAtomicIncUpdateMask::All>(header, route.dst_chip, route.dst_mesh, cmd, chunk);
-                steer_d2d_unicast(header, route);
-                fabric_api::fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(sender, header, src);
-            } else {
-                fabric_api::fabric_unicast_noc_fused_unicast_with_atomic_inc(
-                    sender, header, route.dst_chip, route.dst_mesh, src, chunk, cmd);
+                if (route.steer != kD2DNoSteer) {
+                    steer_d2d_unicast(header, route);
+                }
             }
         } else {
             const tt::tt_fabric::NocUnicastCommandHeader cmd{safe_get_noc_addr(x, y, dst, 0)};
             if (route.multicast) {
-                fabric_api::fabric_multicast_noc_unicast_write(
-                    sender, header, route.dst_chip, route.dst_mesh, route.range, src, chunk, cmd);
-            } else if (route.steer != kD2DNoSteer) {
+                fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::All>(
+                    header, route.dst_chip, route.dst_mesh, route.range, cmd, chunk);
+            } else {
                 fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::All>(
                     header, route.dst_chip, route.dst_mesh, cmd, chunk);
-                steer_d2d_unicast(header, route);
-                fabric_api::fabric_unicast_noc_unicast_write_with_state(sender, header, src);
-            } else {
-                fabric_api::fabric_unicast_noc_unicast_write(
-                    sender, header, route.dst_chip, route.dst_mesh, src, chunk, cmd);
+                if (route.steer != kD2DNoSteer) {
+                    steer_d2d_unicast(header, route);
+                }
             }
         }
+        // Order header L1 stores and the EDM slot's L1 writes before the EDM stream-register credit on
+        // write_at_cmd_buf.
+        asm volatile("fence" ::: "memory");
+        sender->wait_for_empty_write_slot();
+        sender->send_payload_without_header_non_blocking_from_address(src, chunk);
+        sender->send_payload_blocking_from_address(reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
         src += chunk;
         dst += chunk;
         left -= chunk;

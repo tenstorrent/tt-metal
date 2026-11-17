@@ -67,7 +67,11 @@ import ttnn
 
 from models.experimental.deepseek_v41_flash.tt.config import dspark_expert_provider, dspark_weights
 from models.experimental.deepseek_v41_flash.tt.decode.attention import DECODE_LAYOUTS as ATTENTION_LAYOUTS
-from models.experimental.deepseek_v41_flash.tt.decode.attention import _rope_tail, _rows_on_one_core
+from models.experimental.deepseek_v41_flash.tt.decode.attention import (
+    _SELECT_DRAM_STREAM_BYTES,
+    _rope_tail,
+    _rows_on_one_core,
+)
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import _gain_block
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DECODE_LAYOUTS as MOE_LAYOUTS
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
@@ -280,9 +284,14 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers=None,
         block_rows: int = 0,
+        shares_row: bool = False,
     ):
         cache = _as_cache(cache)
         tp = experts.tp_size
+        # On a row whose L1 a decode model holds (DeepSeekV41DSpark's server_only): the block hyper-connections' bias
+        # tiles go to DRAM (6 KB of every core's L1 a module otherwise) and the projections read their DRAM weights
+        # in K-blocks rather than staging a core's whole slab in L1 (see the end of __init__).
+        self.shares_row = shares_row
         self.device = device
         self.tp_size = tp
         self.rot = rot
@@ -485,6 +494,13 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         self.server_layer = None
         if block_rows:
             self._init_block(config, weights, cache, tag, weight_dtype)
+        if shares_row:
+            # Without its prefetcher rings a projection would stage its core's whole DRAM slab in L1 (wq_a's ~870 KB),
+            # which a row holding a decode model does not have: stream the slab in K-blocks, as the model's own
+            # projections do where their L1 is short.
+            for layer in vars(self).values():
+                if isinstance(layer, LinearDecode):
+                    layer.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
 
     # ------------------------------------------------------------------ block mode
     def _init_block(self, config, weights, cache, tag, weight_dtype) -> None:
@@ -504,6 +520,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
                 device,
                 cache=cache.sub(name),
                 row_major_streams=True,
+                bias_in_l1=not self.shares_row,
                 fused_fn=True,
             )
 
@@ -597,6 +614,16 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         probs = ttnn.typecast(ttnn.softmax(scores, dim=-1, compute_kernel_config=_HIFI4), ttnn.bfloat16)
         o = ttnn.matmul(probs, keys, compute_kernel_config=_HIFI4)
         o = _rope_tail(o, q_cos, q_neg_sin, self.rot)
+        if self.shares_row:
+            # Beside a decode model the batched o_a's circular buffers (a core's whole weight slab, already one tile
+            # column wide) do not fit: o_a as the per-row path runs it (a generic matmul on the DRAM weight), o_b on
+            # the rows' replica, all-reduced into DRAM rows, then the (rows, 32) DRAM block the block HCs mix in (as
+            # the server-less FFN hands them).
+            o = ttnn.reshape(o, [1, t, self.local_groups, -1])
+            o = ttnn.matmul(ttnn.permute(o, (0, 2, 1, 3)), self.wo_a, compute_kernel_config=_HIFI4)
+            o = ttnn.reshape(ttnn.permute(o, (0, 2, 1, 3)), [1, 1, t, -1])
+            out = self._all_reduce(self.wo_b(_decode_activation(self.wo_b, o)), layout=ttnn.ROW_MAJOR_LAYOUT)
+            return self.to_block(out)
         # [t * H, Dh] row t * H + h is [t, H * Dh] row t: the (rows, 32) block o_a's gather reads on core (0, 0).
         o = ttnn.reshape(ttnn.to_layout(o, ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, self.local_heads * self.head_dim])
         o = self.to_block(o, self.o_block_config)
@@ -811,6 +838,10 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
     from it to ``device``: :meth:`send_main` gathers the staged rows there and sends them, and
     :meth:`write_main` receives them.
 
+    ``server_only`` (with ``moe_server``) builds no routed experts on ``device``: the drafter then drafts greedy
+    blocks only (``draft(greedy=True)``), every FFN on the persistent server. That is how it shares a decode stage's
+    row (``DeepSeekV41Model(drafter_on_stage=True)``), with ``use_prefetcher`` off and the stage's ``lm_head``.
+
     ``sessions`` is the decode model's session slots. Each has its own rows of every ring (:meth:`ring_row`),
     so a session's rings hold its own positions whatever the others decode between its rounds, and a draft
     reads the slot :meth:`set_block` names. The rest is one draft's: the stash (every step's, whichever its
@@ -841,6 +872,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         block_mode: bool = DSPARK_BLOCK,
         moe_server=None,
         moe_requester: int = 1,
+        server_only: bool = False,
     ):
         if sessions < 1:
             raise ValueError(f"sessions must be at least 1, got {sessions}")
@@ -889,17 +921,26 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             _interleaved_rotate_matrix(self.rope_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         moe_config = dspark_moe_config(config)
+        # server_only: every FFN goes to moe_server (greedy block drafts only), so no routed experts on this device --
+        # their fused_experts would also need ~700 KB of L1 a core, which a decode stage beside it does not leave.
+        if server_only and moe_server is None:
+            raise ValueError("server_only drafts with the persistent MoE's experts: pass moe_server")
+        self.server_only = bool(server_only)
         self.stages = []
         weights = [dspark_weights(loader, s) for s in range(config.num_nextn_predict_layers)]
         for s, w in enumerate(weights):
             stage_cache = cache.sub(f"mtp.{s}")
-            experts = DeepSeekV41PreloadedExperts(
-                moe_config,
-                dspark_expert_provider(loader, s),
-                device,
-                dtype=expert_dtype,
-                cache=stage_cache.sub("ffn"),
-                tp_size=tp_size,
+            experts = (
+                SimpleNamespace(tp_size=tp_size)
+                if server_only
+                else DeepSeekV41PreloadedExperts(
+                    moe_config,
+                    dspark_expert_provider(loader, s),
+                    device,
+                    dtype=expert_dtype,
+                    cache=stage_cache.sub("ffn"),
+                    tp_size=tp_size,
+                )
             )
             self.stages.append(
                 DeepSeekV41DSparkStage(
@@ -917,6 +958,8 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
                     use_prefetcher=use_prefetcher,
                     prefetch_buffers=prefetch_buffers,
                     block_rows=self.block_rows if self.block_mode else 0,
+                    # Beside a decode model (server_only): no L1 of its own to spare (see the stage's shares_row).
+                    shares_row=server_only,
                 )
             )
         # The block draft's FFNs on the target's persistent MoE server (see DSPARK_SERVER_MOE): 4-row requests.
@@ -1323,6 +1366,8 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         ``logits`` as they were: it skips the noise and the logits rows, and with a TP ``lm_head`` runs the Markov
         steps on each rank's slice of the vocabulary (see :attr:`head_tp`).
         """
+        if self.server_only and not greedy:
+            raise NotImplementedError("a server_only drafter has no routed experts of its own: draft(greedy=True)")
         f = _packet_fields(self.inputs["block"], self._block_fields)
         ids, pos, q_pos = (ttnn.typecast(f[name], ttnn.uint32) for name in ("ids", "pos", "q_pos"))
         scalar = [1, 1, 1, 1]
@@ -1555,8 +1600,14 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
                 )
             # Over the whole [MARKOV_GROUPS, V / MARKOV_GROUPS] row: its flat index is the vocabulary id. ROW_MAJOR, the
             # row is already in vocabulary order, and argmax over one [1, V] row runs ~3x faster than over 32 rows.
-            flat = ttnn.reshape(ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, wide * MARKOV_GROUPS])
-            best = ttnn.argmax(flat)
+            row = ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT)
+            if self.server_only:
+                # Beside a decode model (server_only), one vocabulary-wide page (258 KB) does not fit the L1 that the
+                # flattening reshape and the argmax would each stage it in: argmax the [MARKOV_GROUPS, V /
+                # MARKOV_GROUPS] rows as they are (a row's page each), whose flat index is the same vocabulary id.
+                best = ttnn.argmax(row)
+            else:
+                best = ttnn.argmax(ttnn.reshape(row, [1, 1, 1, wide * MARKOV_GROUPS]))
             ids.append(ttnn.reshape(best, [1, 1, 1]))
             token = ttnn.reshape(best, [1, 1])
         return ids, embeds
