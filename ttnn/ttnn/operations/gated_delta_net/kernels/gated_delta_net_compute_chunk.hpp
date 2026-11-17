@@ -504,11 +504,21 @@ ALWI void chunk_state(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint
 // R-PREP state core: the state part on the prescaled inbox operands (head_block), no broadcasts:
 //   [beta exp(c) Rk; exp(c) Rq] = [kq] x S,  U = M (beta V - beta exp(c) Rk),  O = exp(c) Rq + QD x U,
 //   S <- exp(c_last) S + (kn^T (*) exp(c_last - c)^T) x U.
+// Host SEQ_SPLIT (see the reader): SEGS segments; a state core of a segment 1.. steps the H half of [P | H] and holds
+// its tile rows of Oh in cb_reads, a P core (sequences SEGS..) steps its piece of P without the v terms.
+constexpr uint32_t SEGS = GDN_SEQ_SPLIT;
+constexpr bool SPLIT = SEGS > 1;
+static_assert(!SPLIT || !STATE || FOLD, "SEQ_SPLIT runs the folded step");
+constexpr uint32_t cb_seg_in = GDN_CB_SEG_IN;
+constexpr uint32_t cb_seg_row = GDN_CB_SEG_ROW;
+constexpr uint32_t SEG_S = Kt * Kt;  // cb_seg_in: P (Kt x Kt), then the entering state's piece
+
 // STATE_FOLD: column tiles [vt0, vt0 + n) of U (part 0) or O (part 1) onto DEST slots d0.., on the folded operands.
-ALWI void fold_part(uint32_t s_mm, uint32_t part, uint32_t vt0, uint32_t n, uint32_t d0) {
+// p_half (SEQ_SPLIT): no v terms.
+ALWI void fold_part(uint32_t s_mm, uint32_t part, uint32_t vt0, uint32_t n, uint32_t d0, bool p_half) {
     reconfig_data_format(cb_in_v, cb_in_mat);
     matmul_init(cb_in_mat, cb_in_v);
-    for (uint32_t i = 0; i < n; ++i) {
+    for (uint32_t i = 0; !p_half && i < n; ++i) {
         matmul_tiles(cb_in_mat, cb_in_v, part == 0 ? IN_MAT_M : IN_MAT_QD, vt0 + i, d0 + i);
     }
     reconfig_data_format(s_mm, cb_in_kq);
@@ -520,8 +530,8 @@ ALWI void fold_part(uint32_t s_mm, uint32_t part, uint32_t vt0, uint32_t n, uint
     }
 }
 
-// STATE_FOLD: U -> cb_u and O -> cb_o_acc, one window when both fit a DEST half.
-ALWI void state_fold(uint32_t s_mm) {
+// STATE_FOLD: U -> cb_u and O -> o_cb, one window when both fit a DEST half.
+ALWI void state_fold(uint32_t s_mm, bool p_half, uint32_t o_cb) {
     constexpr bool ONE = 2 * Vb <= ckl::DEST_AUTO_LIMIT;
     cb_wait_front(cb_in_mat, GDN_IN_MAT_PAGES);
     cb_wait_front(cb_in_v, Vb);
@@ -529,17 +539,17 @@ ALWI void state_fold(uint32_t s_mm) {
     cb_reserve_back(cb_u_f32, Vb);
     if constexpr (ONE) {
         tile_regs_acquire();
-        fold_part(s_mm, 0, 0, Vb, 0);
-        fold_part(s_mm, 1, 0, Vb, Vb);
+        fold_part(s_mm, 0, 0, Vb, 0, p_half);
+        fold_part(s_mm, 1, 0, Vb, Vb, p_half);
         tile_regs_commit();
         tile_regs_wait();
         pack_first(0, cb_u, 0);
         for (uint32_t i = 1; i < Vb; ++i) {
             pack_at(i, cb_u, i);
         }
-        pack_first(Vb, cb_o_acc, 0);
+        pack_first(Vb, o_cb, 0);
         for (uint32_t i = 1; i < Vb; ++i) {
-            pack_at(Vb + i, cb_o_acc, i);
+            pack_at(Vb + i, o_cb, i);
         }
         tile_regs_release();
         cb_push_back(cb_u, Vb);
@@ -552,16 +562,16 @@ ALWI void state_fold(uint32_t s_mm) {
         for (uint32_t vt0 = 0; vt0 < Vb; vt0 += ckl::DEST_AUTO_LIMIT) {
             const uint32_t n = (Vb - vt0) < ckl::DEST_AUTO_LIMIT ? (Vb - vt0) : ckl::DEST_AUTO_LIMIT;
             tile_regs_acquire();
-            fold_part(s_mm, part, vt0, n, 0);
+            fold_part(s_mm, part, vt0, n, 0, p_half);
             if (HOLD && part == 0) {
                 commit_stay();
             } else {
                 tile_regs_commit();
             }
             tile_regs_wait();
-            pack_first(0, part == 0 ? cb_u : cb_o_acc, vt0);
+            pack_first(0, part == 0 ? cb_u : o_cb, vt0);
             for (uint32_t i = 1; i < n; ++i) {
-                pack_at(i, part == 0 ? cb_u : cb_o_acc, vt0 + i);
+                pack_at(i, part == 0 ? cb_u : o_cb, vt0 + i);
             }
             if (HOLD && part == 0) {
                 release_stay();
@@ -579,14 +589,87 @@ ALWI void state_fold(uint32_t s_mm) {
     GDN_MARK("m_st_o");
 }
 
-ALWI void chunk_state_prepped(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint32_t decay_bits) {
+// SEQ_SPLIT, a state core of a segment 1.. after its last step (H in cb_state): once P and the entering state S_in
+// are in cb_seg_in, the final state P x S_in + H -> cb_state_out, then per tile row O = Oh_P x S_in + Oh_H (Oh_H held
+// in cb_reads, Oh_P landing in cb_seg_row) -> cb_o_acc.
+ALWI void seg_finish(uint32_t rows) {
+    cb_wait_front(cb_seg_in, SEG_S + n_state);
+    cb_wait_front(cb_state, n_state);
+    cb_reserve_back(cb_state_out, n_state);
+    for (uint32_t b = 0; b < n_state; b += UPDATE_BATCH) {
+        const uint32_t n = (n_state - b) < UPDATE_BATCH ? (n_state - b) : UPDATE_BATCH;
+        tile_regs_acquire();
+        begin_loads(cb_state);
+        for (uint32_t i = 0; i < n; ++i) {
+            load(cb_state, b + i, i);
+        }
+        reconfig_data_format(cb_seg_in, cb_seg_in);
+        matmul_init(cb_seg_in, cb_seg_in);
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t t = b + i;
+            for (uint32_t k = 0; k < Kt; ++k) {
+                matmul_tiles(cb_seg_in, cb_seg_in, (t / Vb) * Kt + k, SEG_S + k * Vb + t % Vb, i);
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_first(i, cb_state_out, b + i);
+        }
+        tile_regs_release();
+    }
+    cb_push_back(cb_state_out, n_state);
+    cb_pop_front(cb_state, n_state);
+    cb_pop_front(cb_state_mm, n_state);
+#pragma GCC unroll 1
+    for (uint32_t r = 0; r < rows; ++r) {
+        cb_wait_front(cb_seg_row, Kt);
+        cb_wait_front(cb_reads, Vb);
+        cb_reserve_back(cb_o_acc, Vb);
+        for (uint32_t vt0 = 0; vt0 < Vb; vt0 += ckl::DEST_AUTO_LIMIT) {
+            const uint32_t n = (Vb - vt0) < ckl::DEST_AUTO_LIMIT ? (Vb - vt0) : ckl::DEST_AUTO_LIMIT;
+            tile_regs_acquire();
+            begin_loads(cb_reads);
+            for (uint32_t i = 0; i < n; ++i) {
+                load(cb_reads, vt0 + i, i);
+            }
+            reconfig_data_format(cb_seg_in, cb_seg_row);
+            matmul_init(cb_seg_row, cb_seg_in);
+            for (uint32_t i = 0; i < n; ++i) {
+                for (uint32_t k = 0; k < Kt; ++k) {
+                    matmul_tiles(cb_seg_row, cb_seg_in, k, SEG_S + k * Vb + vt0 + i, i);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_first(0, cb_o_acc, vt0);
+            for (uint32_t i = 1; i < n; ++i) {
+                pack_at(i, cb_o_acc, vt0 + i);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_o_acc, Vb);
+        cb_pop_front(cb_seg_row, Kt);
+        cb_pop_front(cb_reads, Vb);
+    }
+    cb_pop_front(cb_seg_in, SEG_S + n_state);
+}
+
+// p_half, o_cb: SEQ_SPLIT (the P half's step; where the row's o goes).
+ALWI void chunk_state_prepped(
+    Buffers& bufs,
+    bool first_in_pair,
+    bool last_in_pair,
+    uint32_t decay_bits,
+    bool p_half = false,
+    uint32_t o_cb = cb_o_acc) {
     // The state as a matmul operand (as read_state takes it).
     const uint32_t s_mm = first_in_pair ? cb_state_in_mm : cb_state_mm;
     if constexpr (FOLD) {
         cb_wait_front(first_in_pair ? cb_state_in : cb_state, n_state);
         cb_wait_front(s_mm, n_state);
         cb_wait_front(cb_in_kq, 2 * Kt);
-        state_fold(s_mm);
+        state_fold(s_mm, p_half, o_cb);
         update_state<cb_in_knt>(first_in_pair, last_in_pair, cb_u, decay_bits);
         cb_pop_front(cb_u, Vb);
         cb_pop_front(cb_u_f32, Vb);

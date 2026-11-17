@@ -239,3 +239,43 @@ def test_prep_state_fold(device, monkeypatch, inputs, fold, hold):
     expected = reference(*(tensors[name] for name in ORDER))
     returned = gated_delta_net(*to_device(tensors, device), compute_kernel_config=compute_config())
     check_call(returned, expected, inputs)
+
+
+@pytest.mark.parametrize(
+    "inputs, segs, token_dtype",
+    [
+        pytest.param(((1, 128, 320), (1, 3, 64, 64)), 2, ttnn.float32, id="t128_s2"),
+        pytest.param(((1, 192, 320), (1, 3, 64, 64)), 3, ttnn.float32, id="t192_s3"),
+        pytest.param(((1, 512, 320), (1, 3, 64, 64)), 4, ttnn.float32, id="t512_s4"),
+        pytest.param(((1, 256, 2560), (1, 12, 128, 128)), 2, ttnn.bfloat16, id="chip_t256_s2"),
+        pytest.param(((1, 1024, 2560), (1, 12, 128, 128)), 2, ttnn.bfloat16, id="chip_t1024_s2"),
+    ],
+)
+def test_prep_seq_split(device, monkeypatch, tmp_path, inputs, segs, token_dtype):
+    """SEQ_SPLIT: the token axis in segments whose state chains run in parallel (segments 1.. on [P | H], then the
+    combine and the output correction). fp32 tokens against the reference; bf16 tokens (the plans of the model's
+    shapes) against the unsplit call. The layout dump shows that the split plan ran."""
+    import json
+
+    from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net_perf import _to_device
+
+    layout = tmp_path / "layout.json"
+    monkeypatch.setenv("GDN_LAYOUT_DUMP", str(layout))
+    monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)
+    torch.manual_seed(31)
+    tensors = make_inputs(inputs)
+    results = {}
+    for split in (1, segs):
+        monkeypatch.setattr(gdn_pd, "SEQ_SPLIT", split)
+        returned = gated_delta_net(*_to_device(tensors, device, token_dtype), compute_kernel_config=compute_config())
+        assert json.loads(layout.read_text())["batch"] == 2 * split - 1, "the call fell back to the unsplit plan"
+        results[split] = [ttnn.to_torch(t).to(torch.float32) for t in returned]
+        if token_dtype == ttnn.float32:
+            check_call(returned, reference(*(tensors[name] for name in ORDER)), inputs)
+    out, cs, state = results[segs]
+    out_1, cs_1, state_1 = results[1]
+    assert torch.equal(cs, cs_1), "conv_state_out differs from the unsplit call's"
+    state_rms = float((state - state_1).pow(2).mean().sqrt() / state_1.std())
+    out_rms = float((out - out_1).pow(2).mean().sqrt() / out_1.std())
+    print(f"\nSPLIT_ERR inputs={inputs} segs={segs} state_rms={state_rms:.3e} out_rms={out_rms:.3e}")
+    assert state_rms < 5e-3 and out_rms < 2e-2

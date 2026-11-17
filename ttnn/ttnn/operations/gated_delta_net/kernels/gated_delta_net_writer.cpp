@@ -70,6 +70,15 @@ constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: multicasts its key head's qn or kn, nothing else
 constexpr bool PREP_QK = ROLE == GDN_ROLE_PREP_QK;  // R-PREP q / k core: writes qn or kn to its prep cores (RATIO)
 constexpr bool NORM_SPLIT = GDN_PREP_NORM_SPLIT != 0;  // R-PREP: a row's o goes to its norm core (see prep_writer)
+// Host SEQ_SPLIT (see the reader): a segment's final state goes to the next segment's state core of the piece
+// (cb_seg_in behind P), the last segment's to DRAM; a P core sends its piece of P to the head's state cores of its
+// segment and then, row by row on their credits, the Oh_P it held in cb_reads.
+constexpr uint32_t SEGS = GDN_SEQ_SPLIT;
+constexpr bool SPLIT = SEGS > 1;
+constexpr uint32_t cb_seg_in = GDN_CB_SEG_IN;
+constexpr uint32_t cb_seg_row = GDN_CB_SEG_ROW;
+constexpr uint32_t cb_reads = GDN_CB_READS;
+constexpr uint32_t SEG_SEM_ID = GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS;
 constexpr bool HOLD_QK = GDN_HOLD_QK != 0;     // compute holds the landed q/k rows for every unit (see compute)
 constexpr bool QK_RAW = GDN_QK_RAW != 0;       // q / k cores send y, then the inverse norms (host QK_RAW_HANDOFF)
 constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;   // compute normalizes unit u after unit u + 1's token step
@@ -214,9 +223,12 @@ void prep_writer(
     constexpr uint32_t T_BYTES = STATE_TILE_BYTES;
     constexpr uint32_t VEC_PAGES = GDN_IN_VEC_PAGES;
     constexpr uint32_t HEAD_PAGES = VEC_PAGES + GDN_IN_MAT_PAGES + 3 * Kt + Vt;
-    uint32_t cons_x[GROUP];
-    uint32_t cons_y[GROUP];
-    for (uint32_t c = 0; c < GROUP; ++c) {
+    // SEQ_SPLIT: a segment 1..'s rows go to the P half's cores as well (after the group's: no v for them).
+    constexpr uint32_t MAX_CONS = SPLIT ? 2 * GROUP : GROUP;
+    const uint32_t n_cons = SPLIT ? get_arg_val<uint32_t>(arg++) : GROUP;
+    uint32_t cons_x[MAX_CONS];
+    uint32_t cons_y[MAX_CONS];
+    for (uint32_t c = 0; c < n_cons; ++c) {
         cons_x[c] = get_arg_val<uint32_t>(arg++);
         cons_y[c] = get_arg_val<uint32_t>(arg++);
     }
@@ -350,11 +362,11 @@ void prep_writer(
         // Every state core of the group grants each of its rows once, in order; this core's next row is granted
         // only after this one has landed (stride >= inbox slots), so the cumulative count identifies the row.
         if constexpr (NORM_SPLIT) {
-            while (*granted_count < (sent + 1) * GROUP) {
+            while (*granted_count < (sent + 1) * n_cons) {
                 serve_norms();
             }
         }
-        granted.wait_min((sent + 1) * GROUP);
+        granted.wait_min((sent + 1) * n_cons);
         GDN_MARK("m_wr_granted");
         // The row's o slot is free (compute has normalized the row that used it), so the row may be sent.
         // NORM_SPLIT: a norm core's cb_o_in holds every row it normalizes (host), so no row waits for a slot.
@@ -390,13 +402,15 @@ void prep_writer(
             GDN_MARK("m_wr_head");
             if constexpr (GDN_PREP_HEAD_UP != 0) {
                 // The head's pieces step the row as soon as their block is in, not after the row's last head.
-                for (uint32_t c = j * PIECES; c < (j + 1) * PIECES; ++c) {
-                    Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
-                    landed.up(noc, cons_x[c], cons_y[c], 1);
+                for (uint32_t c0 = j * PIECES; c0 < n_cons; c0 += GROUP) {
+                    for (uint32_t c = c0; c < c0 + PIECES; ++c) {
+                        Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
+                        landed.up(noc, cons_x[c], cons_y[c], 1);
+                    }
                 }
             }
         }
-        for (uint32_t c = 0; GDN_PREP_HEAD_UP == 0 && c < GROUP; ++c) {
+        for (uint32_t c = 0; GDN_PREP_HEAD_UP == 0 && c < n_cons; ++c) {
             Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
             landed.up(noc, cons_x[c], cons_y[c], 1);
         }
@@ -617,6 +631,18 @@ void kernel_main() {
     // u = i * RATIO + head goes to slot u / norm_count of prep core norm_first + u % norm_count.
     const uint32_t norm_first = STATE ? get_arg_val<uint32_t>(arg++) : 0;
     const uint32_t norm_count = STATE ? get_arg_val<uint32_t>(arg++) : 1;
+    // SEQ_SPLIT: the other half's cores of the head (a P core's destinations), then the next segment's core.
+    uint32_t seg_peer_x[PIECES];
+    uint32_t seg_peer_y[PIECES];
+    uint32_t seg_next_x = 0, seg_next_y = 0;
+    if constexpr (STATE && SPLIT) {
+        for (uint32_t p = 0; p < PIECES; ++p) {
+            seg_peer_x[p] = get_arg_val<uint32_t>(arg++);
+            seg_peer_y[p] = get_arg_val<uint32_t>(arg++);
+        }
+        seg_next_x = get_arg_val<uint32_t>(arg++);
+        seg_next_y = get_arg_val<uint32_t>(arg++);
+    }
     // STATE_SPLIT: the reader's final-state tiles (gdn::state_tile_on_reader).
     constexpr bool split_args_role = !QK_CORE && !PREP && !PREP_QK && !STATE;  // R-QKCORE pair / local cores
     const bool split_args = STATE_SPLIT && split_args_role;
@@ -838,13 +864,79 @@ void kernel_main() {
         const uint32_t pair = unit / PIECES;
         const uint32_t piece = unit % PIECES;
         const uint32_t v_first = piece * Vb;
-        const uint32_t seq = pair / Hv;
+        const bool p_half = SPLIT && pair / Hv >= SEGS;
+        const uint32_t seq = p_half ? pair / Hv - (SEGS - 1) : pair / Hv;
         const uint32_t head = pair % Hv;
         const uint32_t gate_col = head % TILE_ROWS;
         const uint32_t seq_lo = seq * T;
         const uint32_t seq_hi = seq_lo + T;
         const uint32_t first_tr = seq_lo / TILE_ROWS;
         const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
+        // SEQ_SPLIT: the final state of a state core (a segment 1..'s after its combine, before its corrected rows).
+        auto seg_store = [&]() {
+            if (seq + 1 == SEGS) {
+                store_state<Kt, Vt, Vb>(state_out, head * Kt * Vt + v_first, unit_idx, reader_units, reader_share);
+            } else {
+                const auto& in_if = get_local_cb_interface(cb_seg_in);
+                const uint32_t dst = in_if.fifo_limit - in_if.fifo_size + Kt * Kt * STATE_TILE_BYTES;
+                cb_wait_front(cb_state_out, n_state);
+                noc_async_write(
+                    get_read_ptr(cb_state_out), get_noc_addr(seg_next_x, seg_next_y, dst), n_state * STATE_TILE_BYTES);
+                noc_async_write_barrier();
+                Noc noc;
+                Semaphore<>(SEG_SEM_ID).up(noc, seg_next_x, seg_next_y, 1);
+            }
+            noc_async_write_barrier();
+            pop_state(n_state, reader_writes);
+        };
+        if constexpr (STATE && SPLIT) {
+            if (p_half) {
+                // The piece of P (state columns [v_first, v_first + Vb) of the Kt x Kt tiles), then Oh_P row by row.
+                const auto& in_if = get_local_cb_interface(cb_seg_in);
+                const auto& row_if = get_local_cb_interface(cb_seg_row);
+                const uint32_t in_base = in_if.fifo_limit - in_if.fifo_size;
+                const uint32_t row_base = row_if.fifo_limit - row_if.fifo_size;
+                Noc noc;
+                cb_wait_front(cb_state_out, n_state);
+                const uint32_t p_src = get_read_ptr(cb_state_out);
+                for (uint32_t q = 0; q < PIECES; ++q) {
+                    for (uint32_t kt = 0; kt < Kt; ++kt) {
+                        noc_async_write(
+                            p_src + kt * Vb * STATE_TILE_BYTES,
+                            get_noc_addr(
+                                seg_peer_x[q], seg_peer_y[q], in_base + (kt * Kt + v_first) * STATE_TILE_BYTES),
+                            Vb * STATE_TILE_BYTES);
+                    }
+                }
+                noc_async_write_barrier();
+                for (uint32_t q = 0; q < PIECES; ++q) {
+                    Semaphore<>(SEG_SEM_ID).up(noc, seg_peer_x[q], seg_peer_y[q], 1);
+                }
+                cb_pop_front(cb_state_out, n_state);
+                for (uint32_t i = 0; i <= last_tr - first_tr; ++i) {
+                    for (uint32_t q = 0; q < PIECES; ++q) {
+                        Semaphore<>(SEG_SEM_ID + q).wait_min(i + 1);
+                    }
+                    cb_wait_front(cb_reads, Vb);
+                    const uint32_t dst = row_base + ((i % GDN_SEG_ROW_DEPTH) * Kt + v_first) * STATE_TILE_BYTES;
+                    for (uint32_t q = 0; q < PIECES; ++q) {
+                        noc_async_write(
+                            get_read_ptr(cb_reads),
+                            get_noc_addr(seg_peer_x[q], seg_peer_y[q], dst),
+                            Vb * STATE_TILE_BYTES);
+                    }
+                    noc_async_write_barrier();
+                    for (uint32_t q = 0; q < PIECES; ++q) {
+                        Semaphore<>(SEG_SEM_ID + 1 + piece).up(noc, seg_peer_x[q], seg_peer_y[q], 1);
+                    }
+                    cb_pop_front(cb_reads, Vb);
+                }
+                continue;
+            }
+            if (seq > 0) {
+                seg_store();
+            }
+        }
 
         for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride) {
             const uint32_t base_row = tr * TILE_ROWS;
@@ -985,6 +1077,12 @@ void kernel_main() {
             }
         }
         if constexpr (STATE) {
+            if (SPLIT) {
+                if (seq == 0) {
+                    seg_store();
+                }
+                continue;
+            }
             store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first, unit_idx, reader_units, reader_share);
             noc_async_write_barrier();
             pop_state(n_state, reader_writes);

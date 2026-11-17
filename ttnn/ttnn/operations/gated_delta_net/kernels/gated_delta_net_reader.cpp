@@ -77,6 +77,15 @@ constexpr bool STATE = ROLE == GDN_ROLE_STATE;  // R-PREP state core: inbox, S0,
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;   // R-QKCORE: q or k columns of one key head, every decode sequence
 constexpr bool PREP_QK = ROLE == GDN_ROLE_PREP_QK;  // R-PREP q / k core: window of its q or k columns, nothing else
 constexpr bool NORM_SPLIT = PREP && GDN_PREP_NORM_SPLIT != 0;  // z of the rows it normalizes, after its prep rows
+// Host SEQ_SPLIT: the sequence in SEGS segments (sequences 0 .. SEGS - 1 of the plan); sequences SEGS.. are the P
+// halves of segments 1.. (state cores only). A state core of a segment 1.. starts from 0 (its P half from I), takes P
+// and the entering state in cb_seg_in once they have landed (SEG_SEM_ID counts them) and then the tile rows of Oh_P
+// from the P cores of its head (credits to them, landings counted per P core on SEG_SEM_ID + 1 + piece).
+constexpr uint32_t SEGS = GDN_SEQ_SPLIT;
+constexpr bool SPLIT = SEGS > 1;
+constexpr uint32_t cb_seg_in = GDN_CB_SEG_IN;
+constexpr uint32_t cb_seg_row = GDN_CB_SEG_ROW;
+constexpr uint32_t SEG_SEM_ID = GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS;
 // PREP_SHARE_QK semaphores after the inbox's: qn / kn tile rows landed on a prep core (cumulative each).
 constexpr uint32_t QN_LANDED_SEM_ID = GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 2;
 constexpr uint32_t KN_LANDED_SEM_ID = QN_LANDED_SEM_ID + 1;
@@ -337,6 +346,15 @@ void kernel_main() {
             producer_y[q] = get_arg_val<uint32_t>(arg++);
         }
     }
+    uint32_t seg_peer_x[PIECES];
+    uint32_t seg_peer_y[PIECES];
+    if constexpr (STATE && SPLIT) {
+        for (uint32_t p = 0; p < PIECES; ++p) {
+            seg_peer_x[p] = get_arg_val<uint32_t>(arg++);
+            seg_peer_y[p] = get_arg_val<uint32_t>(arg++);
+        }
+        arg += 2;  // the next segment's piece (writer)
+    }
     if (kq_landing) {
         for (uint32_t i = 0; i < 4; ++i) {
             kq_src[i] = get_arg_val<uint32_t>(arg++);
@@ -528,7 +546,8 @@ void kernel_main() {
             GDN_ZONE("gdn_rd_unit");
             const uint32_t pair = unit / PIECES;
             const uint32_t v_first = PREP || PREP_QK ? 0 : (unit % PIECES) * Vb;  // first v / state column of the piece
-            const uint32_t seq = pair / Hv;
+            const bool p_half = SPLIT && pair / Hv >= SEGS;
+            const uint32_t seq = p_half ? pair / Hv - (SEGS - 1) : pair / Hv;
             const uint32_t head = pair % Hv;
             const uint32_t key_head = head / ratio;
             // Column tiles of the unit in channel-group order: q (Kt), k (Kt), v (Vb).
@@ -648,6 +667,8 @@ void kernel_main() {
                 const uint32_t seq_hi = seq_lo + T;
                 const uint32_t first_tr = seq_lo / TILE_ROWS;
                 const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
+                // SEQ_SPLIT: a segment's history rows are the previous segment's last token rows.
+                const uint32_t hist_lo = SPLIT && seq > 0 ? 0 : seq_lo;
                 // ---- z columns [first, first + count) of the unit, one tile row ----
                 auto read_z = [&](uint32_t tr, uint32_t first, uint32_t count) {
                     const uint32_t base_row = tr * TILE_ROWS;
@@ -681,7 +702,7 @@ void kernel_main() {
                             get_semaphore(GDN_LANDED_FIRST_SEM_ID + i % INBOX_SLOTS));
                         Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
                         auto grant_free_slots = [&]() {
-                            while (granted_rows < n_rows &&
+                            while (granted_rows < n_rows && granted_rows - i < GDN_GRANT_DEPTH &&
                                    cb_pages_reservable_at_back(cb_in_v, (granted_rows - i + 1) * Vb)) {
                                 granted.up(
                                     noc, producer_x[granted_rows % producers], producer_y[granted_rows % producers], 1);
@@ -696,7 +717,23 @@ void kernel_main() {
                             grant_free_slots();
                             cb_reserve_back(cb_state_in, n_state);
                             cb_reserve_back(cb_state_in_mm, n_state);
-                            read_s0(get_write_ptr(cb_state_in), pair, v_first);
+                            if (SPLIT && (p_half || seq > 0)) {
+                                // [P | H] starts from [I | 0]: the P piece holds columns [v_first, v_first + Vb) of I.
+                                CircularBuffer s0_buf(cb_state_in);
+                                noc.async_write_zeros(s0_buf, n_state * STATE_TILE_BYTES, {.offset_bytes = 0});
+                                noc.write_zeros_l1_barrier();
+                                volatile tt_l1_ptr uint32_t* s0 =
+                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_state_in));
+                                for (uint32_t c = 0; p_half && c < Vb; ++c) {
+                                    const uint32_t tile = (v_first + c) * Vb + c;
+                                    for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+                                        s0[tile * (STATE_TILE_BYTES / 4) + (r >> 4) * 768 + (r & 15) * 17] =
+                                            0x3f800000u;
+                                    }
+                                }
+                            } else {
+                                read_s0(get_write_ptr(cb_state_in), pair, v_first);
+                            }
                             noc_async_read_barrier();
                             cb_push_back(cb_state_in, n_state);
                             cb_push_back(cb_state_in_mm, n_state);
@@ -786,7 +823,7 @@ void kernel_main() {
                             // [HISTORY * seq, HISTORY * seq + HISTORY): read that span once per column into a staging
                             // tile in place (one aligned read per face half) and copy rows out after the flush. A span
                             // crossing a tile row is read row by row instead.
-                            const bool hist_needed = lo < seq_lo + GDN_HISTORY;
+                            const bool hist_needed = lo < hist_lo + GDN_HISTORY;
                             const bool hist_staged = hist_needed && unit_hist_staged;
                             // The HISTORY token rows before lo, when all are rows of mixed_qkv inside one tile row (a
                             // tile row continuing its sequence): read once per column as one aligned span into the same
@@ -838,7 +875,7 @@ void kernel_main() {
                                     for (uint32_t row = lo; row < remote_hi; ++row) {
                                         const uint32_t p = row - base_row;
                                         const uint32_t tap_tile = col_win + tap * TILE_BYTES;
-                                        if (row >= seq_lo + shift) {
+                                        if (row >= hist_lo + shift) {
                                             const uint32_t src = row - shift;
                                             rows.read(mixed, (src / TILE_ROWS) * Mt + ct, src % TILE_ROWS, tap_tile, p);
                                         } else if (!hist_staged) {
@@ -987,6 +1024,33 @@ void kernel_main() {
                         GDN_MARK("m_rd_s0");
                     }
 
+                    if constexpr (STATE && SPLIT) {
+                        if (tr == last_tr && !p_half && seq > 0) {
+                            // P and the entering state, then the tile rows of Oh_P (SEG_ROW_DEPTH in flight).
+                            const uint32_t n_rows = last_tr - first_tr + 1;
+                            Semaphore<>(SEG_SEM_ID).wait_min(PIECES + 1);
+                            cb_reserve_back(cb_seg_in, Kt * Kt + n_state);
+                            cb_push_back(cb_seg_in, Kt * Kt + n_state);
+                            uint32_t credits = 0;
+                            for (uint32_t i = 0; i < n_rows; ++i) {
+                                if (credits == i) {
+                                    cb_reserve_back(cb_seg_row, Kt);
+                                }
+                                while (credits < n_rows &&
+                                       cb_pages_reservable_at_back(cb_seg_row, (credits - i + 1) * Kt)) {
+                                    for (uint32_t p = 0; p < PIECES; ++p) {
+                                        Semaphore<>(SEG_SEM_ID + v_first / Vb).up(noc, seg_peer_x[p], seg_peer_y[p], 1);
+                                    }
+                                    ++credits;
+                                }
+                                for (uint32_t p = 0; p < PIECES; ++p) {
+                                    Semaphore<>(SEG_SEM_ID + 1 + p).wait_min(i + 1);
+                                }
+                                cb_reserve_back(cb_seg_row, Kt);
+                                cb_push_back(cb_seg_row, Kt);
+                            }
+                        }
+                    }
                     if constexpr (STATE || PREP_QK) {
                         continue;
                     }
@@ -1021,6 +1085,10 @@ void kernel_main() {
             // ---- copy_conv_state_block: conv_state_out[3b + n] = xx[b, T + n] ----
             // Columns are staged HISTORY rows apiece in the rows of one scratch tile: one read flush and one
             // write barrier per CS_COLS_PER_FLUSH columns.
+            if (SPLIT && (p_half || seq + 1 != SEGS)) {
+                continue;  // SEQ_SPLIT: the last segment's rows are the sequence's last
+            }
+            const uint32_t cs_seq = SPLIT ? 0 : seq;
             const uint32_t scratch = get_write_ptr(cb_scratch);
             const uint32_t seq_lo = seq * T;
             // q/k columns are written by one unit per key head (first head, first piece).
@@ -1033,7 +1101,7 @@ void kernel_main() {
                     const uint32_t slot_row = (idx - flush_first) * GDN_HISTORY;
                     for (uint32_t n = 0; n < GDN_HISTORY; ++n) {
                         if (T + n < GDN_HISTORY) {
-                            const uint32_t src = GDN_HISTORY * seq + T + n;
+                            const uint32_t src = GDN_HISTORY * cs_seq + T + n;
                             rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, scratch, slot_row + n);
                         } else {
                             const uint32_t src = seq_lo + T + n - GDN_HISTORY;
@@ -1046,7 +1114,7 @@ void kernel_main() {
                     const uint32_t ct = pair_col(idx);
                     const uint32_t slot_row = (idx - flush_first) * GDN_HISTORY;
                     for (uint32_t n = 0; n < GDN_HISTORY; ++n) {
-                        const uint32_t dst = GDN_HISTORY * seq + n;
+                        const uint32_t dst = GDN_HISTORY * cs_seq + n;
                         write_row(conv_state_out, scratch, slot_row + n, (dst / TILE_ROWS) * Ct + ct, dst % TILE_ROWS);
                     }
                 }

@@ -10,7 +10,13 @@ static_assert(STATE, "R-PREP state-role kernel");
 
 // R-PREP state core: the chunk step's state part per tile row on its inbox slot; o goes to the row's prep core.
 ALWI void state_main(Buffers& bufs, uint32_t first_unit, uint32_t T) {
-    const uint32_t seq_lo = (first_unit / PIECES / Hv) * T;
+    // SEQ_SPLIT: sequences SEGS.. are the P halves of segments 1..; a segment 1.. holds its rows' o for seg_finish.
+    const uint32_t vseq = first_unit / PIECES / Hv;
+    const bool p_half = SPLIT && vseq >= SEGS;
+    const uint32_t seq = p_half ? vseq - (SEGS - 1) : vseq;
+    const bool held = SPLIT && seq > 0;
+    const uint32_t o_cb = held ? cb_reads : cb_o_acc;
+    const uint32_t seq_lo = seq * T;
     const uint32_t seq_hi = seq_lo + T;
     const uint32_t first_tr = seq_lo / TILE_ROWS;
     const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
@@ -19,21 +25,28 @@ ALWI void state_main(Buffers& bufs, uint32_t first_unit, uint32_t T) {
         const uint32_t base_row = tr * TILE_ROWS;
         const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
         const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
-        cb_reserve_back(cb_o_acc, Vb);
+        cb_reserve_back(o_cb, Vb);
         cb_wait_front(cb_in_vec, GDN_IN_VEC_PAGES);
         cb_wait_front(cb_in_knt, Kt);
         const uint32_t decay_bits = read_tile_value(cb_in_vec, 0, elem_index(hi - 1 - base_row, 0));  // exp(c_last)
         {
             GDN_ZONE("gdn_step");
-            chunk_state_prepped(bufs, token == 0, token + (hi - lo) == T, decay_bits);
+            // A segment 1..'s H stays in cb_state after the last step: the combine's operand.
+            const bool last = token + (hi - lo) == T && !(held && !p_half);
+            chunk_state_prepped(bufs, token == 0, last, decay_bits, p_half, o_cb);
         }
         token += hi - lo;
-        cb_push_back(cb_o_acc, Vb);
+        cb_push_back(o_cb, Vb);
         cb_pop_front(cb_in_kq, 2 * Kt);
         cb_pop_front(cb_in_knt, Kt);
         cb_pop_front(cb_in_mat, GDN_IN_MAT_PAGES);
         cb_pop_front(cb_in_vec, GDN_IN_VEC_PAGES);
         cb_pop_front(cb_in_v, Vb);  // last: the reader grants a row's slots on a free cb_in_v slot
+    }
+    if constexpr (SPLIT) {
+        if (held && !p_half) {
+            seg_finish(last_tr - first_tr + 1);
+        }
     }
 }
 
