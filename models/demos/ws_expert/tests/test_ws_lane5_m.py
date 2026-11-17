@@ -381,6 +381,8 @@ def test_ws_lane5_glx_yrm(mesh_device):
             del sts
         del mpd, io, st
     chips = [int(c) for c in os.environ.get("WSW_PCC_CHIPS", f"0,{N - 1}").split(",")]
+    if os.environ.get("WSW_NOPCC", "0") == "1":  # (timing-only variants whose rows are not the outputs' layout)
+        chips = []
     outs = ttnn.get_device_tensors(res_t)
     pcs = {}
     for ci in chips:
@@ -392,4 +394,4 @@ def test_ws_lane5_glx_yrm(mesh_device):
         f"WL5Y SUMMARY dest {mode}: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz, end to end (slowest "
         f"chip) median {statistics.median(e2e):.1f} us (samples {[round(v, 1) for v in e2e]}), pcc {pcs}"
     )
-    assert min(pcs.values()) > 0.999
+    assert not pcs or min(pcs.values()) > 0.999

@@ -58,6 +58,9 @@ class L5Cfg:
     yrm: int = 0
     remap_row: int = 0  # yrm: DEST's untilize remap only around each down row (WL5_REMAP_ROW), not for the whole kernel
     yt: int = 0  # yrm: plain tiles from the compute, transposed to rows by the BRISC into a staging slot (WL5_YT)
+    # the compute's pack-untilize of the down rows (WL_Y_RM on the compute only) regardless of the output path: -1 with
+    # yrm (and not yt), 0 never, 1 always (diagnostics: untilize cost with tile writes, row writes without untilize)
+    cu: int = -1
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -334,7 +337,7 @@ def build_lane5(
                         compile_time_args=[ksl, KTD, dc, DB, cnt_base, K, NW, l5.FL, l5.TL, own, tab_base + 64],
                         named_compile_time_args=[("expert_activation", 0)],
                         defines=act_defs
-                        + ([("WL_Y_RM", "1")] if l5.yrm and not l5.yt else [])
+                        + ([("WL_Y_RM", "1")] if (l5.cu == 1 or (l5.cu < 0 and l5.yrm and not l5.yt)) else [])
                         + ([("WL5_REMAP_ROW", "1")] if l5.yrm and l5.remap_row else []),
                         runtime_args=cp_rt[own],
                         config=ccfg,
