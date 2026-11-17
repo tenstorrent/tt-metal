@@ -223,22 +223,20 @@ jobs:
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
   cmake-version:
-    # Floor check for cmake_minimum_required(VERSION 3.25...4.2). CI images ship
-    # CMake 4.2.3, so this installs ~3.25 with lukka/get-cmake and configures on
-    # a bare runner. Configure only searches for a GCC >= 12, Ninja, Python
-    # headers, libnuma, libhwloc, and an MPI (ENABLE_DISTRIBUTED defaults ON),
-    # all in the Ubuntu archive.
-    # install_dependencies.sh also adds apt.llvm.org and the toolchain PPA. This
-    # configure does not use those, and those servers intermittently refuse
-    # connections.
-    # Pinned to 24.04: its default g++ is 13, which meets the GCC 12 floor in
-    # cmake/compilers.cmake. ubuntu-latest is 26.04.
+    # Floor check for cmake_minimum_required(VERSION 3.25...4.2). The CI image
+    # ships CMake 4.2.3, so configure runs inside ubuntu-24.04 ci-build-light
+    # (toolchain, Python headers, libnuma, libhwloc, ULFM MPI already installed)
+    # with a CMake ~3.25 binary ahead of /usr/local/bin/cmake. No apt.
+    # The image tag is the content hash, so a CMake-only change pulls an image
+    # that already exists. A PR that also changes the Dockerfile or
+    # install_dependencies.sh gets a new hash that may not be pushed yet.
     # A workflow-only edit still runs the configure: find-changed-files treats
-    # workflow changes as cmake-changed.
+    # workflow changes as cmake-changed. The pull is skipped otherwise.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
+      packages: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -247,35 +245,47 @@ jobs:
       - name: Look for changed CMake files
         id: find-changes
         uses: ./.github/actions/find-changed-files
+      - name: Resolve ci-build-light image
+        id: image
+        if: steps.find-changes.outputs.cmake-changed == 'true'
+        run: |
+          set -euo pipefail
+          DATA=$(.github/scripts/compute-platform-data.sh 24.04 "${{ github.repository }}" --no-check-exists)
+          IMAGE=$(echo "$DATA" | jq -er .ci_build_light_tag)
+          echo "tag=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Using $IMAGE"
+      - name: Log in to GHCR
+        if: steps.find-changes.outputs.cmake-changed == 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull ci-build-light image
+        if: steps.find-changes.outputs.cmake-changed == 'true'
+        run: docker pull "${{ steps.image.outputs.tag }}"
       - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60 # v3.30.5
         if: steps.find-changes.outputs.cmake-changed == 'true'
         with:
           cmakeVersion: "~3.25.0"
-      - name: Check CMake version
-        if: steps.find-changes.outputs.cmake-changed == 'true'
-        run: cmake --version
-      - name: Install configure dependencies
-        if: steps.find-changes.outputs.cmake-changed == 'true'
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential \
-            ninja-build \
-            pkg-config \
-            python3-dev \
-            libhwloc-dev \
-            libnuma-dev \
-            libopenmpi-dev \
-            openmpi-bin
       - name: Check CMake compatibility
         if: steps.find-changes.outputs.cmake-changed == 'true'
         env:
           ARCH_NAME: wormhole_b0
           CMAKE_GENERATOR: Ninja
-        # TODO: Use a lukka/run-cmake with a preset after upgrading to a more modern CMake
         run: |
-          echo "Checking compatibility with $(cmake --version)"
-          cmake -D BUILD_PROGRAMMING_EXAMPLES=ON -D TT_METAL_BUILD_TESTS=ON -B build .
+          set -euo pipefail
+          CMAKE_DIR=$(dirname "$(command -v cmake)")
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME="${{ github.workspace }}" \
+            -v "${{ github.workspace }}:${{ github.workspace }}" \
+            -w "${{ github.workspace }}" \
+            -v "$CMAKE_DIR:/opt/cmake-3.25:ro" \
+            -e ARCH_NAME \
+            -e CMAKE_GENERATOR \
+            "${{ steps.image.outputs.tag }}" \
+            bash -c 'export PATH="/opt/cmake-3.25:$PATH"; echo "Checking compatibility with $(cmake --version)"; cmake --version | grep -q "cmake version 3.25"; cmake -D BUILD_PROGRAMMING_EXAMPLES=ON -D TT_METAL_BUILD_TESTS=ON -B build .'
   check-docker-bake-ci:
     runs-on: ubuntu-latest
     steps:
