@@ -152,14 +152,15 @@ inline void calculate_comp() {
     }
 }
 
-// Each mode stores the constant that the untaken side would have produced up front and
-// keeps only the taken arm under a v_if, stored straight to Dest. That drops the SFPCOMPC
-// the v_else compiles to and the two SFPMOVs a result register would need: the default
-// comes from LCONST_0, and the 1 is loaded once outside the loop.
+// The SignMagToTwosComp load (mode 12) maps every Dest word into [-(2^31 - 1), 2^31 - 1]
+// (sign-magnitude -0 reads as 0), so -v and v - 1 cannot overflow. Five modes are a sign
+// bit or an SFPLZ test, extracted with a logical shift to exactly 0 or 1 and no lane
+// predication: eqz = lz(v) >> 5 (SFPLZ returns 32 only for 0), ltz = v >> 31,
+// gez = ~v >> 31, gtz = -v >> 31, lez = (v - 1) >> 31. nez has no form shorter than the
+// predicated one, so it stores 1 and overwrites the zero lanes under the v_if. Two rows
+// share one TTINCRWC (see calculate_comp_unary_int).
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
-    // res is pre-set below, so an unhandled COMP_MODE would silently zero the whole tile
-    // instead of falling through to the identity copy the v/v_else form used to give.
     // SfpuType has dozens of enumerators and a mistyped one would otherwise compile clean.
     static_assert(
         (COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero) or
@@ -168,53 +169,33 @@ inline void calculate_comp_int() {
         "calculate_comp_int supports only the six comparison-to-zero modes");
     const vInt zero = 0;
     const vInt one = 1;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
 
-        // a[i] == 0
+    auto row = [&](const int r) __attribute__((always_inline)) {
+        vInt v = dst_reg[r];
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            dst_reg[0] = zero;
-            v_if(v == zero) { dst_reg[0] = one; }
+            vUInt z = lz(v);
+            dst_reg[r] = sfpi::as<vInt>(z >> 5);
+        } else if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
+            dst_reg[r] = one;
+            v_if(v == zero) { dst_reg[r] = zero; }
             v_endif;
+        } else if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+            dst_reg[r] = sfpi::as<vInt>(sfpi::as<vUInt>(v) >> 31);
+        } else if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+            dst_reg[r] = sfpi::as<vInt>(sfpi::as<vUInt>(zero - v) >> 31);
+        } else if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
+            dst_reg[r] = sfpi::as<vInt>(sfpi::as<vUInt>(v - 1) >> 31);
+        } else {
+            dst_reg[r] = sfpi::as<vInt>(sfpi::as<vUInt>(~v) >> 31);
         }
+    };
 
-        // a[i] != 0
-        if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
-            dst_reg[0] = one;
-            v_if(v == zero) { dst_reg[0] = zero; }
-            v_endif;
-        }
-
-        // a[i] < 0
-        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
-            dst_reg[0] = zero;
-            v_if(v < zero) { dst_reg[0] = one; }
-            v_endif;
-        }
-
-        // a[i] > 0
-        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            dst_reg[0] = zero;
-            v_if(v > zero) { dst_reg[0] = one; }
-            v_endif;
-        }
-
-        // a[i] <= 0
-        if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            dst_reg[0] = zero;
-            v_if(v <= zero) { dst_reg[0] = one; }
-            v_endif;
-        }
-
-        // a[i] >= 0
-        if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-            dst_reg[0] = zero;
-            v_if(v >= zero) { dst_reg[0] = one; }
-            v_endif;
-        }
-
-        dst_reg++;
+    static_assert(ITERATIONS % 2 == 0, "calculate_comp_int processes two rows per iteration");
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        row(0);
+        row(1);
+        dst_reg += 2;
     }
 }
 
@@ -223,22 +204,26 @@ inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
     // UInt16 values live in the low 16 bits of the dest word; DataLayout::U16 loads/stores them
     // directly (SFPLOAD/SFPSTORE mod = UINT16), matching the InstrModLoadStore::UINT16 path.
-    // Default stored first, taken arm stored under the predicate (see calculate_comp_int).
+    // The loaded value is in [0, 65535], so eqz = lz(v) >> 5 and nez = -v >> 31 with no lane
+    // predication (see calculate_comp_int).
     const vUInt zero = 0;
-    const vUInt one = 1;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U16>();
+
+    auto row = [&](const int r) __attribute__((always_inline)) {
+        vUInt v = dst_reg[r].mode<sfpi::DataLayout::U16>();
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            dst_reg[0].mode<sfpi::DataLayout::U16>() = zero;
-            v_if(v == 0) { dst_reg[0].mode<sfpi::DataLayout::U16>() = one; }
-            v_endif;
+            vUInt z = lz(v);
+            dst_reg[r].mode<sfpi::DataLayout::U16>() = z >> 5;
         } else {
-            dst_reg[0].mode<sfpi::DataLayout::U16>() = one;
-            v_if(v == 0) { dst_reg[0].mode<sfpi::DataLayout::U16>() = zero; }
-            v_endif;
+            dst_reg[r].mode<sfpi::DataLayout::U16>() = (zero - v) >> 31;
         }
-        dst_reg++;
+    };
+
+    static_assert(ITERATIONS % 2 == 0, "calculate_comp_uint16 processes two rows per iteration");
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        row(0);
+        row(1);
+        dst_reg += 2;
     }
 }
 
@@ -246,31 +231,41 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_eqz_uint32() {
     // UInt32 values occupy the full dest word; DataLayout::U32 loads/stores them
     // directly (SFPLOAD/SFPSTORE mod = UINT32). eqz/nez are representation-agnostic
-    // (only a compare against the all-zero word), so a plain unsigned compare works.
-    // Default stored first, taken arm stored under the predicate (see calculate_comp_int).
-    const vUInt zero = 0;
-    const vUInt one = 1;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
-        dst_reg[0].mode<sfpi::DataLayout::U32>() = zero;
-        v_if(v == 0) { dst_reg[0].mode<sfpi::DataLayout::U32>() = one; }
-        v_endif;
-        dst_reg++;
+    // (only a compare against the all-zero word), so eqz = lz(v) >> 5 (see calculate_comp_int).
+    auto row = [&](const int r) __attribute__((always_inline)) {
+        vUInt v = dst_reg[r].mode<sfpi::DataLayout::U32>();
+        vUInt z = lz(v);
+        dst_reg[r].mode<sfpi::DataLayout::U32>() = z >> 5;
+    };
+
+    static_assert(ITERATIONS % 2 == 0, "calculate_eqz_uint32 processes two rows per iteration");
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        row(0);
+        row(1);
+        dst_reg += 2;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_nez_uint32() {
+    // Default stored first, taken arm stored under the predicate (see calculate_comp_int).
     const vUInt zero = 0;
     const vUInt one = 1;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
-        dst_reg[0].mode<sfpi::DataLayout::U32>() = one;
-        v_if(v == 0) { dst_reg[0].mode<sfpi::DataLayout::U32>() = zero; }
+
+    auto row = [&](const int r) __attribute__((always_inline)) {
+        vUInt v = dst_reg[r].mode<sfpi::DataLayout::U32>();
+        dst_reg[r].mode<sfpi::DataLayout::U32>() = one;
+        v_if(v == 0) { dst_reg[r].mode<sfpi::DataLayout::U32>() = zero; }
         v_endif;
-        dst_reg++;
+    };
+
+    static_assert(ITERATIONS % 2 == 0, "calculate_nez_uint32 processes two rows per iteration");
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        row(0);
+        row(1);
+        dst_reg += 2;
     }
 }
 
