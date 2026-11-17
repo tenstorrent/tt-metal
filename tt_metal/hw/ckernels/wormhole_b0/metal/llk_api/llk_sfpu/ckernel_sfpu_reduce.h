@@ -1422,12 +1422,23 @@ inline void park_manual_col_partial(bool lower_face, std::uint32_t lreg) {
  *        LREG4-7, dead here), so row group r of every partial lands in LREG r; the 3-swap chain reduces them into
  *        LREG0, and the second SFPTRANSP returns partial k's result to row 0 of LREG k. The swaps read the direction at
  *        issue time.
+ * @tparam swap_order The map of mapped partials (Int32 / UInt32), undone once on LREG0 while it holds all four
+ *         results; NONE for the formats SFPSWAP orders directly.
  */
+template <SwapOrder swap_order>
 inline void emit_manual_col_reduce() {
     TTI_SFPTRANSP(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
     TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    if constexpr (swap_order != SwapOrder::NONE) {
+        from_swap_order<swap_order, p_sfpu::LREG0>();
+        // LREG1-3 become rows 1-3 of the stored rows, which a following reduce of the same tile reads (e.g. multidim
+        // ColRowCol), so they must not stay mapped: fill them with the results.
+        TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG1, 0 /*instr_mod1*/);
+        TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG2, 0 /*instr_mod1*/);
+        TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG3, 0 /*instr_mod1*/);
+    }
     TTI_SFPTRANSP(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
 }
 
@@ -1503,7 +1514,7 @@ inline void calculate_reduce_max_min_uint16() {
     }
 
     // Reduce the 4 row groups of all four column partials at once, in place on LREG0-3.
-    emit_manual_col_reduce();
+    emit_manual_col_reduce<SwapOrder::NONE>();
 
     for (std::uint32_t j = 0; j < 2; j++) {
         std::uint32_t top_face_addr = FACE_ADDRS[j][0];  // face 0 & 1 row-0 dst index
@@ -1567,15 +1578,9 @@ inline void calculate_reduce_max_min_int32_uint32_col() {
         }
     }
 
-    // Reduce the 4 row groups of all four (mapped) column partials at once, in place on LREG0-3, inline: this init's
-    // window maps instead.
-    emit_manual_col_reduce();
-
-    // Map the four results back to the stored Int32 / UInt32 bits.
-    from_swap_order<swap_order, p_sfpu::LREG0>();
-    from_swap_order<swap_order, p_sfpu::LREG1>();
-    from_swap_order<swap_order, p_sfpu::LREG2>();
-    from_swap_order<swap_order, p_sfpu::LREG3>();
+    // Reduce the 4 row groups of all four (mapped) column partials at once, in place on LREG0-3, and map the results
+    // back to the stored Int32 / UInt32 bits; inline: this init's window maps instead.
+    emit_manual_col_reduce<swap_order>();
 
     for (std::uint32_t j = 0; j < 2; j++) {
         std::uint32_t top_face_addr = FACE_ADDRS[j][0];  // face 0 & 1 row-0 dst index
