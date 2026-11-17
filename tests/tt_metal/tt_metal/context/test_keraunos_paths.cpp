@@ -22,6 +22,9 @@ using namespace keraunos_test;
 
 class KeraunosPaths : public KeraunosCceTest {
 protected:
+    // The CCE of each HSIO tile that issues the traffic: 0 for the KeraunosPaths suite, 1 for KeraunosPathsCce1.
+    uint32_t k_cce_ = 0;
+
     // Global index of the first CCE on Mimir `mimir`, in the numbering the SRAM SPA window uses.
     std::optional<uint32_t> first_cce_on_mimir(uint32_t mimir) const {
         for (uint32_t mimir_cce = 0; mimir_cce < num_mimir_cces_on(device_); ++mimir_cce) {
@@ -96,8 +99,8 @@ protected:
 
     // HSIO `from` reads HSIO `to`'s SRAM into its own (read) or writes its own into `to`'s (write).
     void expect_tile_to_tile(Engine engine, uint32_t from, uint32_t to, bool read, uint32_t tag) {
-        const auto a = hsio_core(from);
-        const auto b = hsio_core(to);
+        const auto a = hsio_core(from, k_cce_);
+        const auto b = hsio_core(to, k_cce_);
         ASSERT_TRUE(a.has_value() && b.has_value());
         constexpr uint32_t kBytes = 256;
         const auto data = pattern(tag, kBytes);
@@ -116,7 +119,7 @@ protected:
         if (num_mimirs_on(device_) <= mimir) {
             GTEST_SKIP() << "Descriptor has no Mimir " << mimir;
         }
-        const auto k = hsio_core(2);
+        const auto k = hsio_core(2, k_cce_);
         const auto mimir_cce = first_cce_on_mimir(mimir);
         ASSERT_TRUE(k.has_value() && mimir_cce.has_value());
         const CoreCoord mimir_core = logical_mimir_cce_core(soc_desc_of(device_), *mimir_cce);
@@ -143,7 +146,7 @@ protected:
 
     // HSIO 2 CCE 0 and one Mimir CCE's SRAM, named by its global CCE index (the SRAM SPA window numbering).
     void expect_mimir_cce_index(Engine engine, uint32_t mimir_cce, bool read, uint32_t tag) {
-        const auto k = hsio_core(2);
+        const auto k = hsio_core(2, k_cce_);
         ASSERT_TRUE(k.has_value());
         const CoreCoord mimir_core = logical_mimir_cce_core(soc_desc_of(device_), mimir_cce);
         constexpr uint32_t kBytes = 256;
@@ -191,7 +194,7 @@ protected:
         if (num_mimirs_on(device_) <= mimir) {
             GTEST_SKIP() << "Descriptor has no Mimir " << mimir;
         }
-        const auto k = hsio_core(2);
+        const auto k = hsio_core(2, k_cce_);
         ASSERT_TRUE(k.has_value());
         const auto& hal = MetalContext::instance().hal();
         const uint32_t gddr_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
@@ -243,7 +246,7 @@ protected:
     // One GDDR copy from HSIO 2 CCE 0 to `mimir`'s DRAM view `view` at `extra` bytes into it. The package address
     // of the view's start is its address_offset; the host reaches the same bytes through the view.
     void expect_mimir_gddr_at(Engine engine, uint32_t mimir, uint32_t view, uint64_t extra, bool read, uint32_t tag) {
-        const auto k = hsio_core(2);
+        const auto k = hsio_core(2, k_cce_);
         ASSERT_TRUE(k.has_value());
         const auto& hal = MetalContext::instance().hal();
         const metal_SocDescriptor& soc = soc_desc_of(device_);
@@ -359,7 +362,7 @@ protected:
         if (num_mimirs_on(device_) <= mimir) {
             GTEST_SKIP() << "Descriptor has no Mimir " << mimir;
         }
-        const auto k = hsio_core(hsio);
+        const auto k = hsio_core(hsio, k_cce_);
         const auto mimir_cce = first_cce_on_mimir(mimir);
         ASSERT_TRUE(k.has_value() && mimir_cce.has_value());
         const CoreCoord mimir_core = logical_mimir_cce_core(soc_desc_of(device_), *mimir_cce);
@@ -412,6 +415,46 @@ TEST_F(KeraunosFromMimir, M1CceReadsHsio0Sram) { expect_mimir_to_hsio(1, 0, /*re
 // M0 is two hops from K0, behind M1.
 TEST_F(KeraunosFromMimir, M0CceWritesHsio2Sram) { expect_mimir_to_hsio(0, 2, /*read=*/false, 0xF5); }
 TEST_F(KeraunosFromMimir, M0CceReadsHsio2Sram) { expect_mimir_to_hsio(0, 2, /*read=*/true, 0xF6); }
+
+
+// --- Phase 4: the same paths issued from CCE1 of each tile ----------------------------------------------
+// CCE1 has its own DMRISC remapper and command buffers, so each path is repeated with CCE1 as the issuer, and
+// as the target of the Mimir CCE's stores.
+class KeraunosPathsCce1 : public KeraunosPaths {
+protected:
+    void SetUp() override {
+        KeraunosPaths::SetUp();
+        k_cce_ = 1;
+    }
+};
+
+TEST_F(KeraunosPathsCce1, IdmaWritesEveryTileCce1Sram) { expect_tile_matrix(Engine::Idma, /*read=*/false, 0x110); }
+TEST_F(KeraunosPathsCce1, IdmaReadsEveryTileCce1Sram) { expect_tile_matrix(Engine::Idma, /*read=*/true, 0x130); }
+TEST_F(KeraunosPathsCce1, CpuWritesEveryTileCce1Sram) { expect_tile_matrix(Engine::Cpu, /*read=*/false, 0x150); }
+TEST_F(KeraunosPathsCce1, CpuReadsEveryTileCce1Sram) { expect_tile_matrix(Engine::Cpu, /*read=*/true, 0x170); }
+
+TEST_F(KeraunosPathsCce1, IdmaWritesEveryMimirCceSram) { expect_every_mimir_cce(Engine::Idma, /*read=*/false, 0x190); }
+TEST_F(KeraunosPathsCce1, IdmaReadsEveryMimirCceSram) { expect_every_mimir_cce(Engine::Idma, /*read=*/true, 0x1A0); }
+TEST_F(KeraunosPathsCce1, CpuWritesEveryMimirCceSram) { expect_every_mimir_cce(Engine::Cpu, /*read=*/false, 0x1B0); }
+TEST_F(KeraunosPathsCce1, CpuReadsEveryMimirCceSram) { expect_every_mimir_cce(Engine::Cpu, /*read=*/true, 0x1C0); }
+
+TEST_F(KeraunosPathsCce1, IdmaWritesM1GddrViews) { expect_mimir_gddr_views(Engine::Idma, 1, /*read=*/false, 0x1D0); }
+TEST_F(KeraunosPathsCce1, IdmaReadsM1GddrViews) { expect_mimir_gddr_views(Engine::Idma, 1, /*read=*/true, 0x1D8); }
+TEST_F(KeraunosPathsCce1, CpuWritesM1GddrViews) { expect_mimir_gddr_views(Engine::Cpu, 1, /*read=*/false, 0x1E0); }
+TEST_F(KeraunosPathsCce1, CpuReadsM1GddrViews) { expect_mimir_gddr_views(Engine::Cpu, 1, /*read=*/true, 0x1E8); }
+TEST_F(KeraunosPathsCce1, IdmaWritesM0GddrThroughM1) { expect_mimir_gddr_views(Engine::Idma, 0, /*read=*/false, 0x1F0); }
+TEST_F(KeraunosPathsCce1, IdmaReadsM0GddrThroughM1) { expect_mimir_gddr_views(Engine::Idma, 0, /*read=*/true, 0x1F8); }
+
+class KeraunosFromMimirCce1 : public KeraunosFromMimir {
+protected:
+    void SetUp() override {
+        KeraunosFromMimir::SetUp();
+        k_cce_ = 1;
+    }
+};
+
+TEST_F(KeraunosFromMimirCce1, M1CceWritesHsio2Cce1Sram) { expect_mimir_to_hsio(1, 2, /*read=*/false, 0x1A1); }
+TEST_F(KeraunosFromMimirCce1, M1CceReadsHsio2Cce1Sram) { expect_mimir_to_hsio(1, 2, /*read=*/true, 0x1A2); }
 
 }  // namespace
 }  // namespace tt::tt_metal

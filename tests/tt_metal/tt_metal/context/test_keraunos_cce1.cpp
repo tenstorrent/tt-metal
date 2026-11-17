@@ -135,5 +135,74 @@ TEST_F(KeraunosCce1, Cce0Cce1PingPong) {
     EXPECT_EQ(read_words(*cce0, kFlags, 2), (std::vector<uint32_t>{kRounds, kRounds}));
 }
 
+
+// Each of CCE1's eight harts runs its own kernel in one program, writing its own word of CCE1's SRAM.
+TEST_F(KeraunosCce1, AllCce1HartsWriteOwnSram) {
+    const auto cce1 = hsio_core(0, 1);
+    ASSERT_TRUE(cce1.has_value());
+    constexpr uint32_t kHarts = 8;
+    write_words(*cce1, rel(kScratch), std::vector<uint32_t>(kHarts, 0));
+    Program program = CreateProgram();
+    std::vector<uint32_t> expected(kHarts);
+    for (uint32_t hart = 0; hart < kHarts; hart++) {
+        expected[hart] = 0xCE1B0000u + hart;
+        CreateKernel(
+            program,
+            std::string(kKernelDir) + "keraunos_cce_write_one_uint32.cpp",
+            cce1->logical,
+            EthernetConfig{
+                .eth_mode = Eth::IDLE,
+                .noc = NOC::NOC_0,
+                .processor = static_cast<DataMovementProcessor>(hart),
+                .compile_args = {kScratch + hart * static_cast<uint32_t>(sizeof(uint32_t)), expected[hart]}});
+    }
+    launch(program, *cce1);
+    EXPECT_EQ(read_words(*cce1, rel(kScratch), kHarts), expected);
+}
+
+// The same one-word store on CCE1 of every HSIO tile.
+TEST_F(KeraunosCce1, EveryCce1CoreWritesOwnSram) {
+    bool any = false;
+    for (uint32_t hsio = 0; hsio < 8; hsio++) {
+        const auto cce1 = hsio_core(hsio, 1);
+        if (!cce1) {
+            continue;
+        }
+        any = true;
+        const uint32_t magic = 0xCE1C0000u | hsio;
+        write_words(*cce1, rel(kScratch), {0});
+        Program program = CreateProgram();
+        CreateKernel(
+            program,
+            std::string(kKernelDir) + "keraunos_cce_write_one_uint32.cpp",
+            cce1->logical,
+            EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0, .compile_args = {kScratch, magic}});
+        launch(program, *cce1);
+        EXPECT_EQ(read_words(*cce1, rel(kScratch), 1), std::vector<uint32_t>{magic}) << "HSIO " << hsio << " CCE1";
+    }
+    EXPECT_TRUE(any);
+}
+
+// CCE0 and CCE1 of one tile run different kernels at the same time and neither disturbs the other's SRAM.
+TEST_F(KeraunosCce1, BothCcesRunTogether) {
+    const auto cce0 = hsio_core(1, 0);
+    const auto cce1 = hsio_core(1, 1);
+    ASSERT_TRUE(cce0.has_value() && cce1.has_value());
+    write_words(*cce0, rel(kScratch), {0});
+    write_words(*cce1, rel(kScratch), {0});
+    Program program = CreateProgram();
+    uint32_t magic = 0xCE0D0000;
+    for (const Hsio* core : {&*cce0, &*cce1}) {
+        CreateKernel(
+            program,
+            std::string(kKernelDir) + "keraunos_cce_write_one_uint32.cpp",
+            core->logical,
+            EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0, .compile_args = {kScratch, magic + core->eth_cce}});
+    }
+    launch(program, *cce0);
+    EXPECT_EQ(read_words(*cce0, rel(kScratch), 1), std::vector<uint32_t>{magic});
+    EXPECT_EQ(read_words(*cce1, rel(kScratch), 1), std::vector<uint32_t>{magic + 1});
+}
+
 }  // namespace
 }  // namespace tt::tt_metal
