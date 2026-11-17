@@ -640,9 +640,14 @@ class MiniMaxH3Transformer3DModel(Module):
             ep = None if endpoint_timesteps is None else ttnn.slice(endpoint_timesteps, [0, 0, r, 0], [1, 1, end, 1])
             chunks.append(self._temb(ts, ep))
         temb = ttnn.concat(chunks, dim=2) if len(chunks) > 1 else chunks[0]
-        for block in self.transformer_blocks:
-            block.prepare_modulation(temb)
-        ttnn.deallocate(temb)
+        try:
+            for block in self.transformer_blocks:
+                block.prepare_modulation(temb)
+        except BaseException:
+            self.release_modulation()
+            raise
+        finally:
+            ttnn.deallocate(temb)
 
     def release_modulation(self) -> None:
         for block in self.transformer_blocks:

@@ -3252,13 +3252,6 @@ class MiniMaxH3Pipeline:
                 rows = torch.nn.functional.pad(rows, (0, -rows.numel() % ADALN_PREPARED_ROWS))
                 return from_torch(rows.reshape(1, 1, -1, 1), device=self.mesh_device, dtype=ttnn.float32)
 
-            stacked_ts = stacked(0)
-            stacked_ep = None if endpoints is None else stacked(1)
-            transformer.prepare_modulation(stacked_ts, stacked_ep)
-            ttnn.deallocate(stacked_ts)
-            if stacked_ep is not None:
-                ttnn.deallocate(stacked_ep)
-
             def modulation_rows(i: int) -> dict:
                 rows = torch.arange(i * num_slots, (i + 1) * num_slots, dtype=torch.int32)
                 self._tt_modulation_rows.update(self._replicated_indices(rows), traced=False)
@@ -3275,6 +3268,15 @@ class MiniMaxH3Pipeline:
         )
         with transient:
             try:
+                if precompute_modulation:
+                    # Inside the scope, so the FSDP gather pair of the projection is freed with the steps' pairs;
+                    # inside the try, so a failed prepare releases the tables already built.
+                    stacked_ts = stacked(0)
+                    stacked_ep = None if endpoints is None else stacked(1)
+                    transformer.prepare_modulation(stacked_ts, stacked_ep)
+                    ttnn.deallocate(stacked_ts)
+                    if stacked_ep is not None:
+                        ttnn.deallocate(stacked_ep)
                 for i, t in enumerate(
                     tqdm.tqdm(
                         timesteps,
