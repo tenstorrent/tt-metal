@@ -79,6 +79,63 @@ constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
 std::string g_server_cache_root = kDefaultServerCacheRoot;
 
+// This server's tree, with a trailing slash; empty if it could not be found. Found the way the client finds its
+// own: TT_METAL_RUNTIME_ROOT, then TT_METAL_HOME, then the working directory if it holds tt_metal/.
+std::string g_server_root;
+
+std::string find_server_root() {
+    for (const char* name : {"TT_METAL_RUNTIME_ROOT", "TT_METAL_HOME"}) {
+        const char* value = std::getenv(name);
+        if (value != nullptr && *value != '\0') {
+            return (fs::path(value) / "").string();
+        }
+    }
+    const fs::path cwd = fs::current_path();
+    return fs::is_directory(cwd / "tt_metal") ? (cwd / "").string() : std::string();
+}
+
+// The request names paths in the client's tree: the toolchain, include directories, firmware sources, the linker
+// script and link objects, and the kernel source that generated files #include. A client whose tree is at another
+// path than the server's gets each of them moved to the server's tree, which must hold the same checkout.
+void replace_root(std::string& text, const std::string& client_root) {
+    for (std::size_t pos = text.find(client_root); pos != std::string::npos;
+         pos = text.find(client_root, pos + g_server_root.size())) {
+        text.replace(pos, client_root.size(), g_server_root);
+    }
+}
+
+void reroot_request(tt::tt_metal::jit_server::CompileRequest& request) {
+    const std::string& client_root = request.client_root;
+    if (client_root.empty() || g_server_root.empty() || client_root == g_server_root) {
+        return;
+    }
+    replace_root(request.gpp, client_root);
+    for (auto& target : request.targets) {
+        for (std::string* field :
+             {&target.cflags,
+              &target.includes,
+              &target.pch_umbrella,
+              &target.lflags,
+              &target.extra_link_objs,
+              &target.linker_script}) {
+            replace_root(*field, client_root);
+        }
+        for (auto& define : target.defines) {
+            replace_root(define, client_root);
+        }
+        for (auto& src : target.srcs) {
+            replace_root(src, client_root);
+        }
+        // Debug info and __FILE__ name the client's tree, as they would in a local build.
+        target.cflags += " -ffile-prefix-map=" + g_server_root + "=" + client_root;
+    }
+    for (auto& file : request.generated_files) {
+        std::string content(file.content.begin(), file.content.end());
+        replace_root(content, client_root);
+        file.content.assign(content.begin(), content.end());
+    }
+}
+
 // Reject paths that could escape the cache root: absolute paths, ".." components, or
 // empty strings.  Throws on violation.
 void validate_safe_relative_path(const std::string& path, const char* field_name) {
@@ -359,8 +416,11 @@ void build_target(
     response.elf_blobs.push_back(std::move(blob));
 }
 
-tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::jit_server::CompileRequest& request) {
+tt::tt_metal::jit_server::CompileResponse compile_callback(
+    const tt::tt_metal::jit_server::CompileRequest& client_request) {
     tt::tt_metal::jit_server::CompileResponse response;
+    tt::tt_metal::jit_server::CompileRequest request = client_request;
+    reroot_request(request);
     auto request_start = std::chrono::steady_clock::now();
     int outstanding = g_outstanding_compiles.fetch_add(1) + 1;
 
@@ -490,6 +550,7 @@ int main() {
     const std::string endpoint = endpoint_env != nullptr ? endpoint_env : kDefaultEndpoint;
     const char* cache_root_env = std::getenv(kServerCacheRootEnv);
     g_server_cache_root = normalize_cache_root(cache_root_env != nullptr ? cache_root_env : kDefaultServerCacheRoot);
+    g_server_root = find_server_root();
 
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
@@ -498,6 +559,13 @@ int main() {
     server.start(endpoint);
     log_info(tt::LogMetal, "JIT compile server listening on {}", endpoint);
     log_info(tt::LogMetal, "JIT compile server cache root: {}", g_server_cache_root);
+    if (g_server_root.empty()) {
+        log_warning(
+            tt::LogMetal,
+            "JIT compile server tree not found (set TT_METAL_HOME); only clients whose tree is at the same path work");
+    } else {
+        log_info(tt::LogMetal, "JIT compile server tree: {}", g_server_root);
+    }
 
     while (g_keep_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
