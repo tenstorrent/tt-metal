@@ -7,7 +7,7 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     assert_equal,

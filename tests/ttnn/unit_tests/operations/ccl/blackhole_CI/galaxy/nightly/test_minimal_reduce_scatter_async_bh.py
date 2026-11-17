@@ -886,3 +886,74 @@ def test_reduce_scatter_async_sharded_to_interleaved(
         ones_tensor=ones_tensor,
         mem_config_intermediate=mem_config_intermediate,
     )
+
+
+# ---- row-free line reduce-scatter ----
+
+# Per-device tile rows H3 serves on a 4x8: 5 s, 2.5 s, 10 s, 15 s, capacity.
+H3_TILE_ROWS = [148, 74, 287, 427, 470]
+H3_FF2_WIDTH = 5376
+
+
+def _line_reduce_scatter_h3_case(mesh_device, tile_rows, width):
+    """One [1, 1, rows, width] bf16 plane per device, uploaded before the flat-cache window, and the expected result."""
+    rows = tile_rows * 32
+    tp, sp = tuple(mesh_device.shape)
+    torch_input = torch.randn(tp, sp, rows, width, dtype=torch.bfloat16)
+    host_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(tp, sp), dims=(0, 1)),
+    )
+    tt_input = ttnn.to_device(host_input, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    summed = torch_input.float().sum(dim=0)  # [8, rows, width]: the TP reduction of each column's planes
+    slice_width = width // tp
+    expected = torch.stack([summed[:, :, i * slice_width : (i + 1) * slice_width] for i in range(tp)], dim=0)
+    return {"rows": rows, "width": width, "input": tt_input, "expected": expected}
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 65536}],
+    indirect=True,
+)
+def test_reduce_scatter_line_h3_rows_flat_cache(mesh_device):
+    """One program serves every H3 row count of the pinned dim-3 line reduce-scatter; a new width compiles its own."""
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+    )
+    semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3)]
+    barrier = ttnn.create_global_semaphore(mesh_device, cores, 0)
+    cases = [_line_reduce_scatter_h3_case(mesh_device, rows, H3_FF2_WIDTH) for rows in H3_TILE_ROWS]
+    cases.append(_line_reduce_scatter_h3_case(mesh_device, H3_TILE_ROWS[0], 2688))
+
+    def run(case):
+        tt_output = ttnn.experimental.reduce_scatter_minimal_async(
+            case["input"],
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=semaphores,
+            barrier_semaphore=barrier,
+            num_links=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=0,
+            chunks_per_sync=2,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+        ttnn.synchronize_device(mesh_device)
+        output = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, 1)),
+        ).float()
+        assert output.shape == case["expected"].shape, (output.shape, case["expected"].shape)
+        torch.testing.assert_close(output, case["expected"], rtol=1.6e-2, atol=1e-1)
+
+    entries = assert_program_cache_flat(mesh_device, run, cases, miss_indices=(len(cases) - 1,))
+    assert entries == 2, f"expected one program per width, got {entries} entries"

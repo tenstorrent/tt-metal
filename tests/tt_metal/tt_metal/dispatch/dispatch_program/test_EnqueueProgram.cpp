@@ -42,9 +42,9 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/span.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "buffer_types.hpp"
 #include "command_queue_fixture.hpp"
@@ -642,7 +642,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 
     std::vector<KernelHandle> kernels;
     // Gen2 kernel names, indexed [core range][result base].
-    std::vector<std::vector<experimental::KernelSpecName>> gen2_kernels;
+    std::vector<std::vector<KernelSpecName>> gen2_kernels;
 
     if (is_quasar) {
         using namespace tt::tt_metal::experimental;
@@ -1122,7 +1122,7 @@ Program make_gen2_program(
     const std::string& kernel_path,
     const CoreRangeSet& cr_set,
     HalProcessorClassType processor_class,
-    tt::tt_metal::experimental::KernelSpec::CompileTimeArgs compile_time_args = {}) {
+    KernelSpec::CompileTimeArgs compile_time_args = {}) {
     using namespace tt::tt_metal::experimental;
 
     std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
