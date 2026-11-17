@@ -900,7 +900,8 @@ class Qwen3VlMlp(Module):
         self._row_capacity = ctx.row_capacity
         # A persistent reduce-scatter pair is keyed on the live shape.
         self._use_persistent_ccl_buffers = ctx.use_persistent_ccl_buffers and not ctx.dynamic_length
-        # Only the line reduce-scatter program is free of the row count.
+        # Workaround: the ring reduce-scatter program is keyed on the row count, the line one is not (#65051).
+        # TODO: give the ring program the same runtime rows and drop this override.
         self._reduce_scatter_topology = ttnn.Topology.Linear if ctx.dynamic_length else None
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -956,6 +957,34 @@ def dynamic_length_warm_rows(row_capacity: int) -> tuple[int, ...]:
     the attention chunk's limit, and the capacity."""
     short = min(max(MAX_1D_MATMUL_ROWS, SEQ_BUCKET_SIZE), row_capacity)
     return (*range(ttnn.TILE_SIZE, short + 1, ttnn.TILE_SIZE), *((row_capacity,) if row_capacity > short else ()))
+
+
+def prompt_warm_walk(
+    spans: Sequence[tuple[int, int]], alignment: int, lengths: Sequence[int] | None = None
+) -> list[tuple[int, int]]:
+    """`(unit, padded length)` encodes for the prompt-encoder warm-up: every unit and every length at least once.
+
+    `spans[unit]` is the `(first, last)` padded prompt length that warm unit reaches; a unit with no room for
+    text (`last < first`) is skipped. The text decoder's programs are keyed on the padded length and the vision
+    tower's on the unit, so the cross product of the two is not needed. `lengths` narrows the lengths that need
+    an encode (default: all reachable).
+    """
+    reachable = {length for first, last in spans for length in range(first, last + 1, alignment)}
+    pending = reachable if lengths is None else reachable & set(lengths)
+    walk: list[tuple[int, int]] = []
+    for unit, (first, last) in enumerate(spans):
+        if last < first:
+            continue
+        candidates = (length for length in range(last, first - 1, -alignment) if length in pending)
+        length = next(candidates, first)
+        walk.append((unit, length))
+        pending.discard(length)
+    for unit, (first, last) in enumerate(spans):
+        for length in range(first, last + 1, alignment):
+            if length in pending:
+                walk.append((unit, length))
+                pending.discard(length)
+    return walk
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rotate_half) -> ttnn.Tensor:

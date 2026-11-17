@@ -71,6 +71,7 @@ from ...encoders.qwen3vl.model_qwen3vl import (
     create_rope_tensors,
     dynamic_length_warm_rows,
     mrope_position_ids,
+    prompt_warm_walk,
     vision_token_runs,
 )
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp
@@ -138,7 +139,6 @@ from .policy import (
     align_num_frames,
     decodable_canvases,
     get_num_frames,
-    prompt_warm_walk,
     served_canvases,
     served_envelope,
     served_reference_image_sizes,
