@@ -21,9 +21,12 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 EPS = 1e-5
+# PCC ignores a constant scale, so the relative Frobenius error is checked too. HiFi2 with bf16 gives 0.007 to 0.009
+# on BH for W = 4096 to 8192; a doubled output gives about 1.0.
+FROBENIUS = 0.02
 
 
 def norm_reference(op, x, weight, bias):
@@ -64,7 +67,9 @@ def run_norm_model_width(device, op, w, h):
     # Compare a sample of rows that spans all cores, so the reference stays cheap.
     rows = torch.arange(0, h, 17)
     golden = norm_reference(op, torch_input[:, rows], torch_weight, torch_bias)
-    assert_with_pcc(golden, output[:, rows], 0.999)
+    assert_numeric_metrics(
+        golden, output[:, rows], pcc_threshold=0.999, frobenius_threshold=FROBENIUS, check_allclose=False
+    )
 
 
 @pytest.mark.parametrize("op", ["layer_norm", "rms_norm"])
@@ -161,4 +166,5 @@ def test_pre_then_post_all_gather_with_weight(device, op, w):
         )
     output = ttnn.to_torch(tt_output).float()
 
-    assert_with_pcc(norm_reference(op, torch_input, torch_weight, torch_bias), output, 0.999)
+    golden = norm_reference(op, torch_input, torch_weight, torch_bias)
+    assert_numeric_metrics(golden, output, pcc_threshold=0.999, frobenius_threshold=FROBENIUS, check_allclose=False)
