@@ -35,11 +35,9 @@ from ._errors import (
     CheckpointError,
     CoverageError,
     DtypeMismatchError,
-    MissingKeyError,
     RoleMismatchError,
     ShapeMismatchError,
     TopologyError,
-    UnexpectedKeyError,
 )
 from ._index import ChunkRecord, Entry, Index
 from ._layouts import Compose, Pad, Transform
@@ -337,8 +335,12 @@ class _ChunkLookup:
         return found
 
 
-def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
-    """The reads and fills that build every destination shard of one key from the saved chunks."""
+def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] | None = None) -> KeyPlan:
+    """The reads and fills that build every destination shard of one key from the saved chunks.
+
+    With ``local_coords`` (a multi-rank world), only the replica groups with a coordinate this rank holds are
+    planned; the other ranks plan theirs.
+    """
     if entry.dtype != info.dtype:
         raise DtypeMismatchError(f"{info.key}: checkpoint holds {entry.dtype} but the live tensor is {info.dtype}")
     dest_global = info.global_shape
@@ -351,6 +353,8 @@ def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
         )
     same_layout = entry.transform == info.transform and tuple(entry.global_shape) == tuple(dest_global)
     groups = _checked_groups(info)
+    if local_coords is not None:
+        groups = {g: cs for g, cs in groups.items() if any(c.mesh_coord in local_coords for c in cs)}
     boxes = {group: chunks[0].box for group, chunks in groups.items()}
     reads: list[ReadItem] = []
     fills: list[FillItem] = []
@@ -402,14 +406,19 @@ def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
 
 
 def create_load_plan(
-    index: Index, infos: Iterable[TensorInfo], strict: bool = True, roles: Iterable[str] | None = None
+    index: Index,
+    infos: Iterable[TensorInfo],
+    roles: Iterable[str] | None = None,
+    local_coords: set[tuple[int, ...]] | None = None,
 ) -> LoadPlan:
     """A ``KeyPlan`` per live tensor. Live names resolve through the entries' recorded live keys.
 
-    What is restored is decided by ``infos``: every live tensor passed is planned. ``roles`` only scopes the
-    unexpected-key report: entries whose role is not in it ("param", "buffer", "optimizer_state") are not reported
-    as unexpected, so a model alone loads from a checkpoint that also holds optimizer state. ``None`` means every
-    role. A live tensor that resolves to an entry of another role is a ``RoleMismatchError``.
+    What is restored is decided by ``infos``: every live tensor passed is planned. The plan lists the live tensors
+    without an entry (``missing``) and the entries without a live tensor (``unexpected``); ``load`` judges them under
+    ``strict``, over the union of the ranks for the unexpected ones. ``roles`` only scopes the unexpected-key report:
+    entries whose role is not in it ("param", "buffer", "optimizer_state") are not reported as unexpected, so a model
+    alone loads from a checkpoint that also holds optimizer state. ``None`` means every role. A live tensor that
+    resolves to an entry of another role is a ``RoleMismatchError``.
     """
     infos = list(_by_key(infos, "loaded").values())
     live_map = index.live_key_map()
@@ -434,12 +443,11 @@ def create_load_plan(
                 f"{info.role!r}"
             )
         used.add(entry_key)
-        plans[info.key] = plan_key(entry, info)
-    unexpected = [
-        key for key, entry in index.entries.items() if key not in used and (wanted is None or entry.role in wanted)
-    ]
-    if strict and missing:
-        raise MissingKeyError(f"{len(missing)} live tensor(s) have no entry in the checkpoint: {missing[:5]}")
-    if strict and unexpected:
-        raise UnexpectedKeyError(f"{len(unexpected)} checkpoint entr(ies) have no live tensor: {unexpected[:5]}")
-    return LoadPlan(plans, missing, unexpected)
+        plans[info.key] = plan_key(entry, info, local_coords)
+    return LoadPlan(plans, missing, unexpected_keys(index, used, wanted))
+
+
+def unexpected_keys(index: Index, used: set[str], wanted: set[str] | None) -> list[str]:
+    """The entries of the wanted roles no live tensor claimed. A multi-rank load judges this over the union of
+    the ranks' claims."""
+    return [key for key, entry in index.entries.items() if key not in used and (wanted is None or entry.role in wanted)]

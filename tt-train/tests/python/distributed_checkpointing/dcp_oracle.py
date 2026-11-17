@@ -119,10 +119,10 @@ class FakeCheckpoint:
         self.index = Index(checkpoint_id="fake", world={"group_size": 1}, files=records, entries=plan.entries(crcs))
         return self.index
 
-    def load(self, dests: dict[str, tuple[Label, object, tuple]], strict=True):
+    def load(self, dests: dict[str, tuple[Label, object, tuple]]):
         """``dests[key] = (label, transform, global shape)``; returns the plan and ``{key: {group: shard array}}``."""
         infos = [info(key, label, global_shape, transform) for key, (label, transform, global_shape) in dests.items()]
-        plan = create_load_plan(self.index, infos, strict=strict)
+        plan = create_load_plan(self.index, infos)
         shards: dict[str, dict[tuple, np.ndarray]] = {}
         for key, kplan in plan.keys.items():
             out = {group: np.full(box.sizes, np.nan, dtype=np.float32) for group, box in kplan.boxes.items()}

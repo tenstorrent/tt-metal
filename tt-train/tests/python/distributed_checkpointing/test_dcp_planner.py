@@ -35,11 +35,9 @@ from ttml.distributed_checkpointing._errors import (
     CheckpointError,
     CoverageError,
     DtypeMismatchError,
-    MissingKeyError,
     RoleMismatchError,
     ShapeMismatchError,
     TopologyError,
-    UnexpectedKeyError,
 )
 from ttml.distributed_checkpointing._index import ChunkRecord, data_file_name
 from ttml.distributed_checkpointing._layouts import Compose, Identity, Pad, fused_segments
@@ -300,15 +298,36 @@ def test_mismatches_are_refused_before_any_read(expect_error):
         from ttml.distributed_checkpointing._planner import create_load_plan
 
         create_load_plan(ckpt.index, dests)
-    with expect_error(MissingKeyError, "no entry"):
-        ckpt.load({"other": (SINGLE, Identity(), (1, 1, 64, 32))})
-    plan, _ = ckpt.load(
-        {"other": (SINGLE, Identity(), (1, 1, 64, 32)), "w": (SINGLE, Identity(), (1, 1, 64, 32))}, strict=False
-    )
+    # The plan lists what is missing and unexpected; load judges them under strict.
+    plan, _ = ckpt.load({"other": (SINGLE, Identity(), (1, 1, 64, 32))})
+    assert plan.missing == ["other"] and plan.unexpected == ["w"]
+    plan, _ = ckpt.load({"other": (SINGLE, Identity(), (1, 1, 64, 32)), "w": (SINGLE, Identity(), (1, 1, 64, 32))})
     assert plan.missing == ["other"] and plan.unexpected == []
-    with expect_error(UnexpectedKeyError, "no live tensor"):
-        ckpt.save({"w": (canonical, TP8_DP4, Identity()), "extra": (canonical, TP8_DP4, Identity())})
-        ckpt.load({"w": (SINGLE, Identity(), (1, 1, 64, 32))})
+    ckpt.save({"w": (canonical, TP8_DP4, Identity()), "extra": (canonical, TP8_DP4, Identity())})
+    plan, _ = ckpt.load({"w": (SINGLE, Identity(), (1, 1, 64, 32))})
+    assert plan.missing == [] and plan.unexpected == ["extra"]
+
+
+def test_a_rank_plans_only_the_shards_of_the_coordinates_it_holds():
+    """With local_coords (a multi-rank load) only the replica groups with a coordinate this rank holds are planned;
+    the ranks' parts together are the plan of one process."""
+    canonical = arange((1, 1, 64, 32))
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (canonical, TP8_DP4, Identity())})
+    dest = info("w", FSDP32_ROWS, canonical.shape, Identity())
+    whole = create_load_plan(ckpt.index, [dest]).keys["w"]
+    halves = [set(FSDP32_ROWS.mesh_coords[:16]), set(FSDP32_ROWS.mesh_coords[16:])]
+    parts = [create_load_plan(ckpt.index, [dest], local_coords=coords).keys["w"] for coords in halves]
+    assert [len(part.boxes) for part in parts] == [16, 16] and {**parts[0].boxes, **parts[1].boxes} == whole.boxes
+
+    def by_group(reads):
+        return sorted(reads, key=lambda r: (r.group, r.chunk))
+
+    assert by_group(parts[0].reads + parts[1].reads) == by_group(whole.reads)
+    # A replicated group is planned by every rank holding one of its coordinates: DP row 0 holds one of each.
+    row0 = {c for c in TP8_DP4.mesh_coords if c[0] == 0}
+    replicated = create_load_plan(ckpt.index, [info("w", TP8_DP4, canonical.shape, Identity())], local_coords=row0)
+    assert len(replicated.keys["w"].boxes) == 8
 
 
 def test_a_missing_chunk_is_a_coverage_error(expect_error):
@@ -356,7 +375,7 @@ def test_chunks_that_are_not_one_grid_are_found_by_scanning():
     assert_shards_equal(shards["w"], expected_shards(canonical, tp2))
 
 
-def test_roles_scope_the_unexpected_keys_of_a_load(expect_error):
+def test_roles_scope_the_unexpected_keys_of_a_load():
     ckpt = FakeCheckpoint()
     ckpt.save(
         {"w": (arange((1, 1, 64, 32)), SINGLE, Identity()), "opt/w": (arange((1, 1, 64, 32)), SINGLE, Identity())}
@@ -367,10 +386,8 @@ def test_roles_scope_the_unexpected_keys_of_a_load(expect_error):
             "w", "param", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",), tp_split=tp_split_of(SINGLE, 4)
         )
     ]
-    assert create_load_plan(ckpt.index, model_only, strict=False).unexpected == ["opt/w"]
-    with expect_error(UnexpectedKeyError, "opt/w"):
-        create_load_plan(ckpt.index, model_only, strict=True)
-    plan = create_load_plan(ckpt.index, model_only, strict=True, roles=["param"])
+    assert create_load_plan(ckpt.index, model_only).unexpected == ["opt/w"]
+    plan = create_load_plan(ckpt.index, model_only, roles=["param"])
     assert plan.unexpected == [] and list(plan.keys) == ["w"], "optimizer state is out of a model-only load's scope"
 
 
