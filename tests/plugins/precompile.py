@@ -75,6 +75,7 @@ import importlib.abc
 import importlib.machinery
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -835,6 +836,11 @@ class _FakeBudgetStop(BaseException):
     so that neither a test's ``except Exception`` nor a soft assert swallows it."""
 
 
+def _names_meta_tensor(e):
+    """True for an error raised because a meta tensor (fake data) reached code that needs values."""
+    return re.search(r"\bmeta\b", str(e), re.IGNORECASE) is not None
+
+
 def _programs_added():
     return _SESSION.stats().programs_added
 
@@ -1100,12 +1106,17 @@ def _child_runtest_call_wrapper(item):
                     rerun = str(e)
                 except Exception as e:
                     # Fake data a consumer couldn't take (a meta tensor reaching C++, a data-dependent shape). Skips
-                    # and xfails are BaseExceptions and pass through.
-                    if _programs_added() != mode.programs0:
+                    # and xfails are BaseExceptions and pass through. After the body's first program an exception
+                    # usually comes from a check on meaningless values, and the body just stops there; one that names a
+                    # meta tensor is fake data that slipped past the mode (a helper thread runs without it), and the
+                    # body's later programs would be lost, so it runs again with real data too.
+                    after = _programs_added() != mode.programs0
+                    if after and not _names_meta_tensor(e):
                         raise
                     frame = traceback.extract_tb(e.__traceback__)[-1]
                     where = f"{os.path.basename(frame.filename)}:{frame.lineno}"
-                    rerun = f"{type(e).__name__} at {where} before the first program: {str(e).splitlines()[0][:100] if str(e) else ''}"
+                    when = "after" if after else "before"
+                    rerun = f"{type(e).__name__} at {where} {when} the first program: {str(e).splitlines()[0][:100] if str(e) else ''}"
                 if rerun is not None:
                     # The fake attempt's tensors went with its traceback, so the real attempt's buffers get the
                     # addresses the real run gives them.
