@@ -19,8 +19,10 @@ Analyze branch changes to determine affected build products, trace which tests/s
    - `runtime-sanity-tests-impl.yaml`
    - `blackhole-multi-card-sanity-tests-impl.yaml`
    - `models-sanity-tests-impl.yaml`
-   - `llk-smoke-impl.yaml`
-   - `llk-ttsim-pr-gate-impl.yaml`
+   - `llk-smoke-impl.yaml` (opt-in, see below)
+   - `llk-ttsim-pr-gate-impl.yaml` (opt-in, see below)
+
+   The two LLK workflows only run when `run-llk-sanity-tests=true` is passed; it defaults to false.
 
    **Run `sanity-tests.yaml` instead of the above individual workflows when:**
    - `conftest.py` changed (affects all pytest-based tests)
@@ -32,6 +34,12 @@ Analyze branch changes to determine affected build products, trace which tests/s
 
    ```bash
    gh workflow run sanity-tests.yaml --ref $(git branch --show-current)
+   ```
+
+   Add `-f run-llk-sanity-tests=true` when the change touches LLK (`tt_metal/tt-llk/` or the LLK APIs):
+
+   ```bash
+   gh workflow run sanity-tests.yaml --ref $(git branch --show-current) -f run-llk-sanity-tests=true
    ```
 
    **Important:** Still continue analysis for workflows NOT covered by sanity tests, such as:
