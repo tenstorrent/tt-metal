@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "nlp_concat_heads_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -21,7 +21,7 @@ struct NLPConcatHeadsRuntimeRowsProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const NlpConcatHeadsParams& operation_attributes, const Tensor& input, Tensor& output);
 
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const NlpConcatHeadsParams& operation_attributes,
         const Tensor& input,
         Tensor& output,

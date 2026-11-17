@@ -25,7 +25,7 @@ inline void _moe_gate_test_seed_indices_()
         TTI_SFPIADD(first_id, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0x8055);
         TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::UINT16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset);
         _moe_gate_test_seed_indices_<offset + 2>();
     }
     else

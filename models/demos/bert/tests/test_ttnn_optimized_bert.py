@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.bert.reference import torch_bert
 from models.demos.bert.tt import ttnn_optimized_sharded_bert
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

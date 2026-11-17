@@ -48,6 +48,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     RELU_CONFIG,
+    RELU_TYPE,
     TILE_COUNT,
     TILIZE,
     generate_input_dim,
@@ -200,6 +201,7 @@ def test_pack(
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(),
             DEST_SYNC(dest_sync),
+            RELU_TYPE(relu_type),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
