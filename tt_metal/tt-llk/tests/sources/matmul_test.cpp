@@ -790,7 +790,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #define PACK_API_SHIM_SFPU
 #endif
 #include "pack_api_shim.h"
-#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && defined(LLK_PACK_SHAPE_MARKS)
+// a run-time-block key (MATMUL_PACK_TILES: minimal_matmul, all_gather) sets no pack shape mark, as production's run-time ct / rt set none
+#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && defined(LLK_PACK_SHAPE_MARKS) && !defined(MATMUL_PACK_TILES)
 // production's plain matmul_block_init with the constant block marks its shape for the pack (matmul.h MATMUL_FE_PACK_SHAPE)
 inline constexpr auto matmul_pack_shape_mark = sizeof(ckernel::packer::llk_pack_shape_set<(MATMUL_PK_RT >= 4 && MATMUL_PK_CT <= 2) ? 6 : 5>);
 inline constexpr auto matmul_pack_row_mark = sizeof(ckernel::packer::llk_pack_shape_set<(MATMUL_PK_RT == 1 && MATMUL_PK_CT >= 2) ? 9 : 10>);
