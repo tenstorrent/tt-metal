@@ -37,7 +37,10 @@ constexpr uint32_t core_chunks = get_compile_time_arg_val(18);
 // Interleaved terms, streamed a chunk row of F(0) and F(I) at a time; otherwise they are in place in the core's shard.
 constexpr bool streamed = get_compile_time_arg_val(19);
 constexpr uint32_t landed_semaphore_id = get_compile_time_arg_val(20);
-constexpr auto packed_args = TensorAccessorArgs<21>();
+// The cores are the compute grid's first heads x cores_per_head in row-major order, head by head.
+constexpr uint32_t cores_per_head = get_compile_time_arg_val(21);
+constexpr uint32_t grid_x = get_compile_time_arg_val(22);
+constexpr auto packed_args = TensorAccessorArgs<23>();
 constexpr auto init_args = TensorAccessorArgs<packed_args.next_compile_time_args_offset()>();
 constexpr auto start_args = TensorAccessorArgs<init_args.next_compile_time_args_offset()>();
 constexpr auto fe_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
@@ -53,15 +56,16 @@ constexpr uint32_t num_chunks = local_rows / tt::constants::TILE_HEIGHT;
 // copies the landed entry state to the head's cores as their seed; on the first rank, the relayed final state P as
 // well, which the final carry and a separated tail start from.
 void kernel_main() {
-    size_t arg = 0;
-    const uint32_t head = get_arg_val<uint32_t>(arg++);
-    const uint32_t first_chunk = get_arg_val<uint32_t>(arg++);
-    const bool relay_head = get_arg_val<uint32_t>(arg++);
-    const uint32_t arrival_semaphore = get_arg_val<uint32_t>(arg++);
-    const uint32_t final_semaphore = get_arg_val<uint32_t>(arg++);
-    const uint32_t sp_rank = get_arg_val<uint32_t>(arg++);
-    const uint32_t head_cores = get_arg_val<uint32_t>(arg++);  // then each NoC x | y << 16, this core first
-    const size_t head_core_args = arg;
+    // Every core takes the same args (common, per device): its head and share follow from its place in the grid.
+    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
+    const uint32_t head = core / cores_per_head;
+    const uint32_t first_chunk = core % cores_per_head * core_chunks;
+    const bool relay_head = core % cores_per_head == 0;
+    const uint32_t arrival_semaphore = get_common_arg_val<uint32_t>(7);
+    const uint32_t final_semaphore = get_common_arg_val<uint32_t>(8);
+    const uint32_t sp_rank = get_common_arg_val<uint32_t>(9);
+    // Then every core's NoC x | y << 16, in order: this head's from head * cores_per_head.
+    const size_t head_core_args = 10 + head * cores_per_head;
 
     // The bounds, each into its own page (a DRAM read keeps its source's alignment).
     cb_reserve_back(cb_chron, 1);
@@ -131,8 +135,8 @@ void kernel_main() {
     const uint32_t state_tile = get_tile_size(cb_seed);
     const uint32_t landed = get_semaphore(landed_semaphore_id);
     const auto distribute = [&](uint32_t source, uint32_t seed) {
-        for (uint32_t d = 0; d < head_cores; ++d) {
-            const uint32_t xy = get_arg_val<uint32_t>(head_core_args + d);
+        for (uint32_t d = 0; d < cores_per_head; ++d) {
+            const uint32_t xy = get_common_arg_val<uint32_t>(head_core_args + d);
             for (uint32_t i = 0; i < state_tiles; ++i) {
                 noc_async_write(
                     source + (i % kt * kt + i / kt) * state_tile,
@@ -141,8 +145,8 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        for (uint32_t d = 0; d < head_cores; ++d) {
-            const uint32_t xy = get_arg_val<uint32_t>(head_core_args + d);
+        for (uint32_t d = 0; d < cores_per_head; ++d) {
+            const uint32_t xy = get_common_arg_val<uint32_t>(head_core_args + d);
             noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, landed), 1);
         }
         noc_async_atomic_barrier();

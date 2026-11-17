@@ -102,6 +102,14 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         "{}: the cores must be distinct",
         operation_name);
     const auto grid = mesh->compute_with_storage_grid_size();
+    // Each correction kernel finds its head and share from its place in the grid.
+    for (uint32_t i = 0; i < heads * cores_per_head; ++i) {
+        TT_FATAL(
+            attrs.cores[i] == CoreCoord(i % grid.x, i / grid.x),
+            "{}: the heads' cores must be the compute grid's first {} cores in row-major order",
+            operation_name,
+            heads * cores_per_head);
+    }
     for (const auto& core : attrs.cores) {
         TT_FATAL(
             core.x < grid.x && core.y < grid.y,
