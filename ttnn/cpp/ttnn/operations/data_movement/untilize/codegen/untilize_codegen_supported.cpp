@@ -77,6 +77,9 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     // is codegen_cb_plan_fits_live_l1's business (routing) and the program factory's (CB tier).
     auto column_parallel_plan_fits = [&](uint32_t wt) {
         auto* device = input.device();
+        if (device == nullptr) {
+            return false;
+        }
         auto grid = device->compute_with_storage_grid_size();
         auto split = tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
         uint32_t max_tiles_per_core =
