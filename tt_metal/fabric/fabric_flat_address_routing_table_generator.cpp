@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/fabric/fabric_over_noc_routing_table_generator.hpp>
+#include "fabric_flat_address_routing_table_generator.hpp"
 
 #include <vector>
 
@@ -32,11 +32,11 @@ void verify_core_coordinates(const std::vector<tt::umd::CoreCoord>& cores, uint3
 
 }  // namespace
 
-FabricOverNocRoutingTableGenerator::FabricOverNocRoutingTableGenerator(
+FabricFlatAddressRoutingTableGenerator::FabricFlatAddressRoutingTableGenerator(
     const TopologyMapper& topology_mapper, const tt::Cluster& cluster) :
     topology_mapper_(topology_mapper), cluster_(cluster) {}
 
-void FabricOverNocRoutingTableGenerator::generate_routing_table() {
+void FabricFlatAddressRoutingTableGenerator::generate_routing_table() {
     const auto mapping = this->topology_mapper_.get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
 
     // Horizon x2 supports exactly one physical mesh (AXI crossbar, not Ethernet links).
@@ -95,7 +95,7 @@ void FabricOverNocRoutingTableGenerator::generate_routing_table() {
     }
 }
 
-void FabricOverNocRoutingTableGenerator::fill_local_entries_(FlatAddrEntry& entry) const {
+void FabricFlatAddressRoutingTableGenerator::fill_local_entries_(FlatAddrEntry& entry) const {
     // Every core on this device gets the same table, so no core can be treated as "self": every core, the
     // writer's own included, is reached through the REMOTE window. A REMOTE write with a core's own selector
     // reaches that core too.
@@ -108,7 +108,7 @@ void FabricOverNocRoutingTableGenerator::fill_local_entries_(FlatAddrEntry& entr
     }
 }
 
-size_t FabricOverNocRoutingTableGenerator::select_cross_chip_access_point_(
+size_t FabricFlatAddressRoutingTableGenerator::select_cross_chip_access_point_(
     ChipId src_phys, ChipId dst_phys, tt::umd::TTDevice& dst_device) const {
     const auto access_points = dst_device.get_access_points();
     // Select the first Access Point whose flat address falls outside LOCAL and REMOTE windows.
@@ -143,7 +143,7 @@ size_t FabricOverNocRoutingTableGenerator::select_cross_chip_access_point_(
     return selected_ap_idx;
 }
 
-void FabricOverNocRoutingTableGenerator::fill_cross_chip_entries_(
+void FabricFlatAddressRoutingTableGenerator::fill_cross_chip_entries_(
     FlatAddrEntry& entry, ChipId dst_phys, tt::umd::TTDevice& dst_device, size_t ap_idx) const {
     const auto access_points = dst_device.get_access_points();
     // The flat address to reach core (x, y) on a destination chip is the same regardless of which source chip is

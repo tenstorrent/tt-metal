@@ -28,6 +28,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "fabric_flat_address_routing_table_generator.hpp"
 #include "core_coord.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
@@ -526,8 +527,8 @@ void ControlPlane::init_control_plane(
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
 
     if (this->fabric_uses_flat_addressing() && this->get_fabric_config() != FabricConfig::DISABLED) {
-        this->fabric_over_noc_routing_table_generator_ =
-            std::make_unique<FabricOverNocRoutingTableGenerator>(*this->topology_mapper_, this->cluster_.get());
+        this->fabric_flat_address_routing_table_generator_ =
+            std::make_unique<FabricFlatAddressRoutingTableGenerator>(*this->topology_mapper_, this->cluster_.get());
     }
 
     this->generate_intermesh_connectivity();
@@ -1647,8 +1648,8 @@ tt::tt_fabric::fabric_flat_address_routing_l1_info_t ControlPlane::init_fabric_f
 void ControlPlane::configure_routing_tables_for_fabric_flat_address() {
     this->fabric_flat_address_routing_tables_.clear();
 
-    this->fabric_over_noc_routing_table_generator_->generate_routing_table();
-    const auto& flat_addr_table = this->fabric_over_noc_routing_table_generator_->get_routing_table();
+    this->fabric_flat_address_routing_table_generator_->generate_routing_table();
+    const auto& flat_addr_table = this->fabric_flat_address_routing_table_generator_->get_routing_table();
 
     for (const auto& [src_node, src_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         auto routing_table = this->init_fabric_flat_address_routing_table_(src_node);

@@ -21,7 +21,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <vector>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -81,10 +80,6 @@ void expect_flat_write_lands(
         tt::umd::IoOrdering::Posted,
         offset);
     ASSERT_TRUE(flat.has_value()) << "chip " << target << " has no flat address";
-    std::cout << "[FLAT] chip " << source << " -> chip " << target << ": access point "
-              << static_cast<uint32_t>(access_points[access_point_index]) << ", offset 0x" << std::hex << offset
-              << ", flat address 0x" << *flat << ", src 0x" << src->address() << std::dec
-              << (posted ? ", posted" : ", non-posted") << std::endl;
 
     const NodeCoord node{0, 0};
     const KernelSpecName KERNEL{"flat_write"};
@@ -116,7 +111,6 @@ void expect_flat_write_lands(
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(device.shape()), std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
-    std::cout << "[FLAT] kernel done" << std::endl;
 
     // A posted write may still be in flight when the kernel ends: poll briefly.
     for (int attempt = 0; attempt < 20; attempt++) {
@@ -125,12 +119,10 @@ void expect_flat_write_lands(
             break;
         }
     }
-    std::cout << "[FLAT] chip " << target << " word 0 now 0x" << std::hex << readback[0] << std::dec << std::endl;
     EXPECT_EQ(readback, pattern) << "the write did not land on chip " << target;
 
     std::vector<uint32_t> local;
     distributed::EnqueueReadMeshBuffer(cq, local, guard, true);
-    std::cout << "[FLAT] chip " << source << " guard word 0 0x" << std::hex << local[0] << std::dec << std::endl;
     EXPECT_EQ(local, zeros) << "the write landed on chip " << source << " itself";
 }
 

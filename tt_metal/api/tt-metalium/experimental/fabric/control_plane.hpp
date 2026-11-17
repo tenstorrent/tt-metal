@@ -15,7 +15,6 @@
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
-#include <tt-metalium/experimental/fabric/fabric_over_noc_routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -61,6 +60,7 @@ class PhysicalSystemDescriptor;
 namespace tt::tt_fabric {
 
 class TopologyMapper;
+class FabricFlatAddressRoutingTableGenerator;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {
@@ -456,7 +456,7 @@ private:
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> fsd_physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
-    std::unique_ptr<FabricOverNocRoutingTableGenerator> fabric_over_noc_routing_table_generator_;
+    std::unique_ptr<FabricFlatAddressRoutingTableGenerator> fabric_flat_address_routing_table_generator_;
     std::unique_ptr<MeshGraph> mesh_graph_;
     // The live view re-discovered by refresh_connectivity_diff(). Held as a member because
     // link_health_ keeps a pointer to it between refreshes; physical_system_descriptor_ cannot be

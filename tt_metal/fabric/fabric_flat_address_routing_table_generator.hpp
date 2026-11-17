@@ -30,9 +30,9 @@ struct FlatAddrEntry {
 using FlatAddrRoutingTable =
     RoutingTableT<FlatAddrEntry>;  // [mesh_id][src_chip][dst_chip], indexed by physical chip id
 
-class FabricOverNocRoutingTableGenerator {
+class FabricFlatAddressRoutingTableGenerator {
 public:
-    FabricOverNocRoutingTableGenerator(const TopologyMapper& topology_mapper, const tt::Cluster& cluster);
+    FabricFlatAddressRoutingTableGenerator(const TopologyMapper& topology_mapper, const tt::Cluster& cluster);
 
     // Builds the table from the topology mapper's chips. Safe to call more than once.
     void generate_routing_table();
