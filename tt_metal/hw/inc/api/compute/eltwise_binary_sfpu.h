@@ -41,17 +41,6 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-#ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::DIV, is_fp32_dest_acc_en),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
-#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -61,22 +50,10 @@ ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
-#endif
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-#ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::MUL, is_fp32_dest_acc_en),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
-#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -86,7 +63,6 @@ ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
-#endif
 }
 
 /**
@@ -101,17 +77,6 @@ template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-#ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::ADD, is_fp32_dest_acc_en, dst_rounding_mode),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
-#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -121,7 +86,6 @@ ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
-#endif
 }
 
 /// @tparam dst_rounding_mode, is_fp32_dest_acc_en See add_binary_tile.
@@ -129,17 +93,6 @@ template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-#ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::SUB, is_fp32_dest_acc_en, dst_rounding_mode),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
-#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -149,7 +102,6 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
-#endif
 }
 
 /// @tparam dst_rounding_mode, is_fp32_dest_acc_en See add_binary_tile.
@@ -157,17 +109,6 @@ template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-#ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::RSUB, is_fp32_dest_acc_en, dst_rounding_mode),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
-#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -177,7 +118,6 @@ ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
-#endif
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>

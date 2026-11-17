@@ -26,20 +26,23 @@ namespace sfpu {
  *   - x / 0 -> ±inf, sign of x
  *   - x / x -> 1.0 (forced exact, regardless of reciprocal rounding)
  *
+ * The template parameters follow the BH order, so one Compute API call compiles on every arch;
+ * TILE_SHAPE is Quasar-only and comes last.
+ *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
  * @tparam BINOP: selects which binary op to compute (ADD, SUB, RSUB = in1 - in0, MUL or DIV)
+ * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB, RSUB)
  * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB/RSUB results (no-op if is_fp32_dest_acc_en).
  *         DIV ignores this and always rounds RNE, to match BH semantics.
- * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
  */
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
     BinaryOp BINOP,
+    int ITERATIONS,
     bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
-    int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -120,6 +123,50 @@ inline void calculate_sfpu_binary(
         }
         sfpi::dst_reg++;
     }
+}
+
+/**
+ * @brief MUL entry point with the BH name and signature, so mul_binary_tile is one call on every arch.
+ * @tparam BINOP: must be MUL; kept to match the BH signature
+ */
+template <
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    int ITERATIONS,
+    bool is_fp32_dest_acc_en,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline void calculate_sfpu_binary_mul(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    static_assert(BINOP == BinaryOp::MUL, "calculate_sfpu_binary_mul computes MUL only");
+    calculate_sfpu_binary<
+        APPROXIMATION_MODE,
+        BinaryOp::MUL,
+        ITERATIONS,
+        is_fp32_dest_acc_en,
+        DstRoundingMode::Default,
+        TILE_SHAPE>(dst_index_in0, dst_index_in1, dst_index_out);
+}
+
+/**
+ * @brief DIV entry point with the BH name and signature, so div_binary_tile is one call on every arch.
+ * @tparam BINOP: must be DIV; kept to match the BH signature
+ */
+template <
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    int ITERATIONS,
+    bool is_fp32_dest_acc_en,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline void calculate_sfpu_binary_div(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    static_assert(BINOP == BinaryOp::DIV, "calculate_sfpu_binary_div computes DIV only");
+    calculate_sfpu_binary<
+        APPROXIMATION_MODE,
+        BinaryOp::DIV,
+        ITERATIONS,
+        is_fp32_dest_acc_en,
+        DstRoundingMode::Default,
+        TILE_SHAPE>(dst_index_in0, dst_index_in1, dst_index_out);
 }
 
 /**
