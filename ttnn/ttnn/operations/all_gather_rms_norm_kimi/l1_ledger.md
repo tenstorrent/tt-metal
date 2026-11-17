@@ -83,3 +83,24 @@ Totals per device:
 - On-chip NoC: ~1.5 MiB of L1 → port reads + 10 KiB multicast + 1.875 MiB of DRAM writes.
 
 > Cheapest-traffic split considered: W-split by slice × rows with L1 landing and fp32 stats (R1). It is tied on bytes with the rows-only split (R5): same DRAM and fabric bytes, minus nothing. Implemented: R1. It **is** the cheapest-traffic split. The tie with R5 is broken by occupancy (80 vs 20 cores) and the per-core tail, as `op_design.md` states.
+
+## Implementation notes (ttnn-implementer, Phase 0)
+
+The Phase 0 kernels allocate the compute-core CBs **without** the three planned shares. Every CB still has
+exactly one producer and one consumer; only the "Shares with" column changes:
+
+| Planned share | As built | Why not (yet) |
+|---------------|----------|---------------|
+| `cb_gamma` / `cb_out` (one allocation, two indices) | two allocations: `cb_gamma` `block_w` pages, `cb_out` `OUT_DEPTH_CHUNKS·chunk_tiles` pages | Two CB indices on one allocation keep independent FIFO pointers. The alias is legal by the lifetimes above, but it was not needed to fit: Phase 0 compute cores use ~170 KiB of ~1.5 MB. Candidate for a later L1 refinement. |
+| `cb_xsq_sum` / `cb_rstd` | two allocations of `block_h` fp32 pages | as above (+`4096·block_h` B) |
+| `cb_partial` / `cb_rstd_full` | two allocations of `block_h` fp32 pages | as above (+`4096·block_h` B) |
+
+Footprint as built, compute core: 132 KiB (planned) + `2048·max(0, 2·chunk_tiles)` + `2·4096·block_h` ≈ **164 KiB**
+at Phase 0 (block 1 × 12, chunk 6); tall regime (block 3 × 12, chunk 6) ≈ **330 KiB**. Port core unchanged (106 KiB).
+`cb_xsq_sum` and `cb_partials` are tagged `UnpackToDestFp32` (lossless fp32 reload through `copy_tile`; neither is
+ever an FPU operand).
+
+Placement as built: the 2L ports, 2L receivers and the hub sit on logical row 0 (ports centred), compute cores fill
+rows 1.. in row-major order (rectangles: full rows + one partial row). No Ethernet-probe placement: the probe is a
+second device dispatch on the first call, which the one-dispatch-per-invocation rule forbids. The data-movement
+budget above is unchanged (placement moves no bytes, only NoC hop counts).
