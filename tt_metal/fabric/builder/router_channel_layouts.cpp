@@ -21,9 +21,9 @@ void RouterChannelLayouts::begin_launch() {
     ++launch_generation_;
 }
 
-void RouterChannelLayouts::publish(FabricNodeId node, chan_id_t eth_chan, RouterChannelLayout layout) {
+void RouterChannelLayouts::publish(FabricNodeId node, chan_id_t eth_chan, const RouterChannelLayout& layout) {
     std::lock_guard lock(mutex_);
-    const bool inserted = layouts_.try_emplace({node, eth_chan}, std::move(layout)).second;
+    const bool inserted = layouts_.try_emplace({node, eth_chan}, layout).second;
     TT_FATAL(inserted, "Router {} channel {} published its channel layout twice", node, eth_chan);
 }
 
@@ -112,6 +112,7 @@ void RouterChannelLayouts::exchange(
 
     // ranks publish different numbers of routers: pad every rank's records to the largest count
     std::vector<uint32_t> num_records;
+    num_records.reserve(headers.size());
     for (const auto& h : headers) {
         num_records.push_back(h.num_records);
     }

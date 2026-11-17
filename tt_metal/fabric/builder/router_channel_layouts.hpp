@@ -69,7 +69,7 @@ public:
 
     // Start of each fabric launch.
     void begin_launch();
-    void publish(FabricNodeId node, chan_id_t eth_chan, RouterChannelLayout layout);
+    void publish(FabricNodeId node, chan_id_t eth_chan, const RouterChannelLayout& layout);
     // Collective over `context`: every rank calls it once per launch, after its devices have published. A rank with a
     // nonzero status sends no records; `check` decides what that means.
     void exchange(

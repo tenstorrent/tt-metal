@@ -174,8 +174,8 @@ public:
     // ============ Router Channel Layouts ============
     // See RouterChannelLayouts.
     void clear_router_channel_layouts() { router_channel_layouts_.begin_launch(); }
-    void publish_router_channel_layout(FabricNodeId node, chan_id_t eth_chan, RouterChannelLayout layout) {
-        router_channel_layouts_.publish(node, eth_chan, std::move(layout));
+    void publish_router_channel_layout(FabricNodeId node, chan_id_t eth_chan, const RouterChannelLayout& layout) {
+        router_channel_layouts_.publish(node, eth_chan, layout);
     }
     void exchange_router_channel_layouts(
         const tt::tt_metal::distributed::multihost::DistributedContext& context,

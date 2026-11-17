@@ -80,7 +80,7 @@ void check_fabric_launch_headers(const std::vector<RouterChannelLayouts::LaunchH
     TT_FATAL(!mismatch, "fabric launch: ranks disagree on the launch:{}", launches);
 }
 
-void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl, std::exception_ptr phase1_error) {
+void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl, const std::exception_ptr& phase1_error) {
     const RouterChannelLayouts::LaunchHeader header{
         .status = phase1_error ? 1u : 0u, .fabric_config = static_cast<uint32_t>(env_impl.get_fabric_config())};
     const auto& context = env_impl.full_world_distributed_context();

@@ -46,7 +46,7 @@ std::optional<FabricDeviceBuild> build_fabric_routers(
 // of the router across its link. Also the launch's gate: pass phase 1's exception here rather than throwing it, and
 // every rank fails together. A single rank just rethrows it.
 // Follow-ups: gate where every rank runs (fabric-disabled or managed-mode ranks skip this), a phase-2 gate, error text.
-void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl, std::exception_ptr phase1_error);
+void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl, const std::exception_ptr& phase1_error);
 
 // The gate's rule, run on every rank's headers: any failed rank, or ranks on different launches, is fatal on every
 // rank. Fabric configs may differ by mesh; the control plane validates them.
