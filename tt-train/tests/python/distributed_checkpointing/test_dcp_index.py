@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 
+import numpy as np
 import pytest
 
 
@@ -25,6 +26,7 @@ from ttml.distributed_checkpointing._index import (
     FileRecord,
     Index,
     begin_staging,
+    check_json,
     data_file_name,
     finalize_staging,
     find_latest,
@@ -34,6 +36,7 @@ from ttml.distributed_checkpointing._index import (
     read_header_json,
     read_index,
     read_user_header,
+    staging_dir,
     step_dir_name,
     write_header,
     write_index,
@@ -251,6 +254,16 @@ def test_a_header_save_would_not_write_is_refused(tmp_path, expect_error):
             read_user_header(ckpt)
 
 
+def test_a_staging_directory_is_named_by_its_nonce_and_only_a_shared_one_may_exist(tmp_path):
+    final = str(tmp_path / "step_0000010")
+    staging = begin_staging(final, nonce=42, shared=False)
+    assert staging == staging_dir(final, 42) == final + ".partial-42" and os.path.isdir(os.path.join(staging, "data"))
+    # Every rank of a multi-rank save creates the directory its ranks agreed on; a lone save's must be new.
+    assert begin_staging(final, nonce=42, shared=True) == staging
+    with pytest.raises(FileExistsError):
+        begin_staging(final, nonce=42, shared=False)
+
+
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=100, shared=False)
@@ -438,3 +451,19 @@ def test_an_overwrite_warns_when_the_previous_checkpoint_cannot_be_removed(tmp_p
     with pytest.warns(UserWarning, match="could not be removed"):
         finalize_staging(staging2, final, overwrite=True)
     assert is_complete(final), "the new checkpoint is in place"
+
+
+def test_check_json_returns_plain_json_and_names_what_would_not_read_back(expect_error):
+    assert check_json("header", {"step": 3, "lr": 1e-3, "shape": (1, 2), "tags": ["a"], "none": None}) == {
+        "step": 3,
+        "lr": 1e-3,
+        "shape": [1, 2],
+        "tags": ["a"],
+        "none": None,
+    }
+    with expect_error(CheckpointError, "dataloader at /per_shard: key 0 is a int"):
+        check_json("dataloader", {"per_shard": {0: 7}})
+    with expect_error(CheckpointError, r"scheduler at /eta_min: inf is not finite"):
+        check_json("scheduler", {"eta_min": float("inf")})
+    with expect_error(CheckpointError, r"header at /steps\[1\]: a int64 has no JSON form"):
+        check_json("header", {"steps": [1, np.int64(2)]})
