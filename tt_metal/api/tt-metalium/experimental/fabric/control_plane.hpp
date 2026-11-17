@@ -17,7 +17,6 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/link_health.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
@@ -101,7 +100,7 @@ public:
         const ::tt::llrt::RunTimeOptions& rtoptions,
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
-        const tt_metal::FabricConfigDescriptor& config = {});
+        const tt_metal::FabricSettings& config = {});
 
     // Create control plane with custom mesh graph descriptor
     explicit ControlPlane(
@@ -110,7 +109,7 @@ public:
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
-        const tt_metal::FabricConfigDescriptor& config = {});
+        const tt_metal::FabricSettings& config = {});
 
     // Create control plane with custom mesh graph descriptor and logical mesh chip id to physical chip id mapping
     explicit ControlPlane(
@@ -120,7 +119,7 @@ public:
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        const tt_metal::FabricConfigDescriptor& config = {});
+        const tt_metal::FabricSettings& config = {});
 
     ~ControlPlane();
 
@@ -408,7 +407,7 @@ private:
     void init_control_plane_auto_discovery();
 
     // Validates this process's own mesh binding (config_.mesh_id / host_rank) against the mesh graph descriptor and
-    // checks the FabricConfigDescriptor of every rank: that each rank's mesh_id / host_rank exist in the mesh graph
+    // checks the FabricSettings of every rank: that each rank's mesh_id / host_rank exist in the mesh graph
     // descriptor, that ranks of a logical mesh share one FabricConfig, and that all other settings are identical on
     // every rank (only fabric_config, mesh_id and host_rank may differ). The local-binding checks emit the TT_MESH_ID /
     // TT_MESH_HOST_RANK diagnostics that tt-run users and tests rely on, and run on every init path. The cross-rank
@@ -417,7 +416,7 @@ private:
     // routing tables or FabricContext use the binding.
     void validate_fabric_config_compatibility();
 
-    // All-gather every rank's FabricConfigDescriptor into gathered_fabric_configs_. Done once, up front in
+    // All-gather every rank's FabricSettings into gathered_fabric_configs_. Done once, up front in
     // init_control_plane, so both the per-mesh MeshGraph build and validate_fabric_config_compatibility() share one
     // collective instead of each issuing its own.
     void gather_fabric_config_descriptors();
@@ -434,11 +433,11 @@ private:
     // Fabric settings. Strict system health mode (reliability_mode) requires (expects) all links/devices to be
     // live: any downed devices/links result in an error. Otherwise the control plane is free to instantiate
     // fewer routing planes according to which links are available.
-    tt_metal::FabricConfigDescriptor config_;
+    tt_metal::FabricSettings config_;
 
-    // Every rank's FabricConfigDescriptor, gathered once in gather_fabric_config_descriptors(). Indexed by rank.
+    // Every rank's FabricSettings, gathered once in gather_fabric_config_descriptors(). Indexed by rank.
     // Used to build each mesh's config in MeshGraph and to cross-check compatibility, without a second all-gather.
-    std::vector<tt_metal::FabricConfigDescriptor> gathered_fabric_configs_;
+    std::vector<tt_metal::FabricSettings> gathered_fabric_configs_;
 
     // Coordinate along that ring's axis of the neighbor reached by `direction`.
     std::optional<int> ring_coord_of_neighbor(

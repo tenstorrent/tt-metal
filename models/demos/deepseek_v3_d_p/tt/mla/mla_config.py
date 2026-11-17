@@ -496,7 +496,7 @@ MLA_MATMUL_CONFIG = {
             "out_dtype": ttnn.bfloat8_b,
         },
     },
-    # GLM DSA indexer: Q is TP-sequence-sharded before projection (160 rows at SP8/TP4, chunk5120).
+    # GLM DSA indexer: Q is TP-sequence-sharded before projection (chunk / (SP * TP) rows per chip, 160 at the tuned chunk).
     # The 640-row entries remain useful for larger chunks / smaller TP and the unchanged K stem (k_hadamard).
     "indexer.wq_b": {
         160: [
@@ -692,6 +692,24 @@ MLA_MATMUL_CONFIG = {
 }
 
 
+# The chunked-prefill 5k-chunk candidates, shared by every SP that splits a 5120 chunk (see 640 / 1280).
+_CHUNKED_5K_SDPA = [
+    {
+        "q_chunk_size": 32,
+        "k_chunk_size": 640,
+        "num_heads": None,
+        "dense_head_cap_non_dsa": 64,
+        "chunked_only": True,
+    },
+    {
+        "q_chunk_size": 32,
+        "k_chunk_size": 640,
+        "num_heads": 96,
+        "chunked_only": True,
+    },
+]
+
+
 MLA_SDPA_CONFIG = {
     # Tuned for the Galaxy balanced MLA PCC path. The 8x4 max-sl cases hit the issue #45521 fallback.
     # 128k total seq_len → 16384 per device on 8x4
@@ -714,7 +732,7 @@ MLA_SDPA_CONFIG = {
         "q_chunk_size": 160,
         "k_chunk_size": 320,
     },
-    # 5k total seq_len → 640 per device on 8x4.
+    # 5k total seq_len → 640 per device on 8x4 (SP=8), 1280 on a 4x4 prefill stage (SP=4).
     # Two candidates (first tag match wins, see ttMLA._select_cfg):
     #   1. the original catch-all, kept exactly as-is, with its empirical non-DSA head cap;
     #   2. Kimi-K3 at 96 heads, which the cap would otherwise send to the k=32 default.
@@ -731,22 +749,91 @@ MLA_SDPA_CONFIG = {
     # k_chunk=640 at 24 heads/device over 56320 tokens with no L1 OOM. Note the sweep test itself
     # cannot corroborate that on a wider mesh -- it forces FABRIC_1D_RING, which does not map beyond
     # 2 SP for any variant (K2.6's case fails identically), so the sweep is small-mesh-only.
-    640: [
-        {
-            "q_chunk_size": 32,
-            "k_chunk_size": 640,
-            "num_heads": None,
-            "dense_head_cap_non_dsa": 64,
-            "chunked_only": True,
-        },
-        {
-            "q_chunk_size": 32,
-            "k_chunk_size": 640,
-            "num_heads": 96,
-            "chunked_only": True,
-        },
-    ],
+    640: _CHUNKED_5K_SDPA,
+    # SP=4 keeps the SP=8 tiling (k=640, two k-chunks per slab): at the k=32 default ring_mla's output
+    # scale drifts with every prior chunk, on SP=4 and SP=8 alike, and fails the chunked-prefill gate.
+    1280: _CHUNKED_5K_SDPA,
 }
+
+
+def _glm_tuned_entry(weight_name: str, seq_len_local: int) -> dict:
+    """The GLM-5.3 (64 heads, q_lora_rank 2048) candidate in an existing slot."""
+    slot = MLA_MATMUL_CONFIG[weight_name][seq_len_local]
+    candidates = slot if isinstance(slot, list) else [slot]
+    return next(c for c in candidates if c.get("num_heads") == 64 and c.get("q_lora_rank") == 2048)
+
+
+def _mm2d(in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N):
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=COMPUTE_GRID,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fuse_batch=False,
+        fused_activation=None,
+    )
+
+
+def _mm_batched(in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N):
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=COMPUTE_GRID,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+    )
+
+
+def _mm1d(in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, mcast_in0):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=COMPUTE_GRID,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        mcast_in0=mcast_in0,
+    )
+
+
+# GLM-5.3 at PREFILL_CHUNK_SIZE 4096 and 2048 (SP=8 x TP=4): 512 / 256 rows per chip for the MLA stem and the
+# indexer K stem, 128 / 64 for the TP-split indexer Q stem. Each entry is the GLM tuning at 640 / 160 rows with
+# its tiling refitted to the smaller M; tags, memory configs and output dtypes are copied from that entry.
+# Without them these shapes fall back to TTNN's auto configs, which measured 2-12x slower per matmul. A sweep of
+# in0_block_w, subblocks, per_core_N and 1D/2D variants around each kept them, except wq_b's narrower K block.
+# Per-chip device time of the seven matmuls (Blackhole 8x4, warm sparse layer): 4096 484 -> 197 us,
+# 2048 434 -> 168 us; the GLM 640-row ones are 213 us.
+_GLM_SMALL_CHUNK_PROGRAMS = {
+    # (weight, tuned slot it derives from, new slot): program config
+    ("q_b_proj", 640, 512): _mm2d(8, 1, 6, 2, 12),
+    ("q_b_proj", 640, 256): _mm2d(8, 1, 6, 1, 12),
+    ("wkv_b1", 640, 512): _mm_batched(6, 1, 8, 4, 16),
+    ("wkv_b1", 640, 256): _mm_batched(6, 1, 8, 2, 16),
+    ("kv_a_proj_with_mqa", 640, 512): _mm2d(8, 2, 1, 2, 2),
+    ("kv_a_proj_with_mqa", 640, 256): _mm2d(8, 1, 2, 1, 2),
+    ("wkv_b2", 640, 512): _mm_batched(2, 1, 8, 4, 8),
+    ("wkv_b2", 640, 256): _mm_batched(2, 1, 8, 2, 8),
+    ("indexer.k_hadamard", 640, 512): _mm2d(4, 2, 1, 2, 1),
+    ("indexer.k_hadamard", 640, 256): _mm2d(4, 1, 1, 1, 1),
+    ("indexer.wq_b", 160, 128): _mm1d(8, 1, 2, 4, 2, mcast_in0=True),
+    ("indexer.wq_b", 160, 64): _mm1d(4, 1, 2, 2, 2, mcast_in0=True),
+    ("indexer.q_hadamard", 160, 128): _mm1d(2, 2, 4, 2, 4, mcast_in0=False),
+    ("indexer.q_hadamard", 160, 64): _mm1d(2, 1, 4, 1, 4, mcast_in0=False),
+}
+
+for (_weight, _tuned_slot, _slot), _program in _GLM_SMALL_CHUNK_PROGRAMS.items():
+    _existing = MLA_MATMUL_CONFIG[_weight].get(_slot)
+    _existing = [] if _existing is None else (_existing if isinstance(_existing, list) else [_existing])
+    # First: GLM's tags are its own, so it cannot shadow another model's entry in the same slot.
+    MLA_MATMUL_CONFIG[_weight][_slot] = [
+        {**_glm_tuned_entry(_weight, _tuned_slot), "program_config": _program},
+        *_existing,
+    ]
 
 
 def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | None:
