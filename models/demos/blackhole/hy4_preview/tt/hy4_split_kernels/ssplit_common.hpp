@@ -108,6 +108,9 @@ enum : uint32_t {
     QLAY,
     KSPLIT,
     IDX_MOD,
+    QLAND,  // B29: q comes from the push landing tensor (page = src*4*SU + r/2, 2 rows per page), flag-gated
+    SU,     // user rows per step (owner layout), QLAND only
+    QRP,    // q rows per landing page (QLAND)
     END,
 };
 }  // namespace reader_ct_arg

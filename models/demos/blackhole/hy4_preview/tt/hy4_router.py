@@ -96,7 +96,12 @@ class Hy4Gate:
 
     def route_words(self, tt_x):
         """TP32 route tensor int32 RM [1,1,1,16 T] straight from the skinny router (select merge writes the packed words), or None when this gate has no skinny router / T > 8."""
-        if self._sk is not None and self._sk.ksplit and self._sk.fsel and int(tt_x.shape[2]) <= 8:
+        if (
+            self._sk is not None
+            and self._sk.ksplit
+            and self._sk.fsel
+            and int(tt_x.shape[2]) <= (16 if os.environ.get("HY4_B30_ROUTE16", "0") == "1" else 8)
+        ):
             return self._sk.route(tt_x, int(tt_x.shape[2]))
         return None
 

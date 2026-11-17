@@ -81,6 +81,12 @@ void kernel_main() {
     constexpr uint32_t q_rows_r = get_compile_time_arg_val(ssplit::reader_ct_arg::QROWS_R);
     constexpr bool q_tok_major = get_compile_time_arg_val(ssplit::reader_ct_arg::QLAY) !=
                                  0;  // q [1,S,H,D]: page = tok*H+h (else [1,H,S,D]: page = h*S+tok)
+    constexpr bool q_land = get_compile_time_arg_val(ssplit::reader_ct_arg::QLAND) != 0;
+    constexpr uint32_t SU =
+        get_compile_time_arg_val(ssplit::reader_ct_arg::SU) ? get_compile_time_arg_val(ssplit::reader_ct_arg::SU) : 1;
+    constexpr uint32_t QRP =
+        get_compile_time_arg_val(ssplit::reader_ct_arg::QRP) ? get_compile_time_arg_val(ssplit::reader_ct_arg::QRP) : 2;
+    constexpr uint32_t QNP = (8 * SU + QRP - 1) / QRP;  // landing pages (packets) per source
     const uint32_t tok_start = get_arg_val<uint32_t>(0);
     const uint32_t split_g = get_arg_val<uint32_t>(1);
     const uint32_t tok_count = 1;
@@ -117,7 +123,7 @@ void kernel_main() {
             noc.async_read_barrier();
             q_in_cb.push_back(16);
         }
-        if constexpr (q_in_reader) {
+        if constexpr (q_in_reader && !q_land) {
             DeviceZoneScopedN("R_Q");
             q_cb.reserve_back(H);
             for (uint32_t h = 0; h < q_rows_r; ++h) {
@@ -205,6 +211,46 @@ void kernel_main() {
         }
         kreq_cb.push_back(1);
 
+        // B29 QLAND: q rows of owner j = tok / SU, user s = tok % SU: wait for the push flag of source j (count never
+        // reset: target = this core's launch counter), then read the 8 head rows from the landing tensor
+        auto land_q = [&]() {
+            DeviceZoneScopedN("R_QL");
+            const uint32_t j = tok / SU, su = tok % SU;
+            const uint32_t fx = get_arg_val<uint32_t>(2), fy = get_arg_val<uint32_t>(3);
+            const uint32_t flag_addr = get_arg_val<uint32_t>(4 + j);
+            const uint32_t cnt_addr = get_arg_val<uint32_t>(12);
+            volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cnt_addr);
+            const uint32_t target = *cnt + QNP;
+            *cnt = target;
+            q_cb.reserve_back(H);
+            const uint32_t qw = q_cb.get_write_ptr();
+            const uint32_t scr = qw + 8 * q_row_bytes;  // rows 8.. are zero-filled below: free scratch
+            volatile tt_l1_ptr uint32_t* scr_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr);
+            const uint64_t flag_noc = get_noc_addr(fx, fy, flag_addr);
+            do {
+                noc_async_read(flag_noc, scr, 4);
+                noc_async_read_barrier();
+            } while ((int32_t)(scr_p[0] - target) < 0);
+            for (uint32_t h = 0; h < q_rows_r; ++h) {
+                const uint32_t r = h * SU + su;
+                noc_async_read(
+                    q.get_noc_addr(j * QNP + r / QRP, (r % QRP) * q_row_bytes), qw + h * q_row_bytes, q_row_bytes);
+            }
+            noc_async_read_barrier();
+            if (q_rows_r < H) {
+                noc.async_write_zeros(q_cb, (H - q_rows_r) * q_row_bytes, {.offset_bytes = q_rows_r * q_row_bytes});
+            }
+            noc.write_zeros_l1_barrier();
+            q_cb.push_back(H);
+        };
+        bool q_done = false;
+        if constexpr (q_land) {
+            if (my_cnt == 0) {
+                land_q();
+                q_done = true;
+            }
+        }
+
         for (uint32_t chunk = c0; chunk < c0 + my_cnt; ++chunk) {
             DeviceZoneScopedN("R_CHUNK");
             const uint32_t base = chunk * k_chunk;
@@ -265,6 +311,13 @@ void kernel_main() {
                     ssplit::clear_scale_rows<scale_blocks>(scale_write_ptr, rows, tt::constants::TILE_HEIGHT);
                     k_cb.push_back(tt::constants::TILE_HEIGHT);
                     scale_bcast_cb.push_back(scale_blocks);
+                    if constexpr (q_land) {  // the slab FIFO holds 2 slabs: q must be pushed before the reader blocks
+                                             // on the 3rd (compute needs q first)
+                        if (!q_done && row_tile == (row_tiles > 1 ? 1u : 0u)) {
+                            land_q();
+                            q_done = true;
+                        }
+                    }
                 }
             } else {
                 // K chunk rows -> cb_k_rm: read the `valid` real keys, zero-fill the sentinel suffix.
@@ -307,6 +360,12 @@ void kernel_main() {
                 k_cb.push_back(k_chunk);
             }
 
+            if constexpr (q_land) {
+                if (!q_done) {
+                    land_q();
+                    q_done = true;
+                }
+            }
             // Boundary mask: only the LAST active chunk can have sentinels. Its key tile that straddles
             // `valid` (tile valid/32) needs cols >= valid%32 set to -inf; the tiles after it are fully
             // masked (compute bcast-adds the persistent cb_neginf there). Build the single partial-boundary

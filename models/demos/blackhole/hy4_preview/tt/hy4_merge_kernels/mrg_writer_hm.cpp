@@ -18,6 +18,7 @@ void kernel_main() {
     const uint32_t j0 = get_arg_val<uint32_t>(1);
     const auto oa = TensorAccessor(o_args, o_addr, TILE_B);
     CircularBuffer o(CB_OUT);
+    DeviceZoneScopedN("XW_ALL");
     o.wait_front(TPC);
     uint32_t p = o.get_read_ptr();
     uint32_t scr =

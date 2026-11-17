@@ -25,6 +25,8 @@ ROWS = 4
 def bfuse(name):
     """HY4_BOUNDARY_FUSE (B18, default off): '1'/'all' or a comma list of {fold, ...}."""
     v = os.environ.get("HY4_BOUNDARY_FUSE", "")
+    if name == "fold" and os.environ.get("HY4_B30_RPFOLD", "0") == "1":
+        return True  # B30 RPFOLD is the same rows-reduce fold as B18 (product13 merge): alias
     return v in ("1", "all") or name in v.split(",")
 
 

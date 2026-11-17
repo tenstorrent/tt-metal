@@ -26,7 +26,7 @@ def _cores(lst):
 
 
 class XMerge:
-    def __init__(self, md, S, nsplit=None, links=2, compact=None, lanes=None):
+    def __init__(self, md, S, nsplit=None, links=2, compact=None, lanes=None, users=0):
         nsplit = nsplit or int(
             os.environ.get("HY4_XM_NSPLIT", "4" if int(os.environ.get("HY4_XM_COMPACT", "0")) else "2")
         )
@@ -36,6 +36,19 @@ class XMerge:
         assert tuple(md.shape)[1] == RING and 16 % nsplit == 0 and (16 // nsplit) % 2 == 0
         self.md, self.S, self.nsplit, self.links, self.compact = md, S, nsplit, links, compact
         self.tb = 512 if compact else 2048
+        # B26 (default OFF): HY4_XM_V4=1 -> xm_comm_v4 / xm_reader_v4 (NH rotating headers, flush every NH packets); HY4_XM_HALF=1 -> only faces 0+1 (1 KiB) of every tile are exchanged, landing pitch 1 KiB (needs TPC == 2)
+        # users > 0 (B26 HY4_B26_XCOMPACT): S = tile rows TR of the COMPACT verify layout (4 users x 8 head rows per tile), the merge writer scatters into the persistent head-major [1,8,users,512] (hy4_merge.hm_out)
+        self.users = users
+        self.half = int(os.environ.get("HY4_XM_HALF", "0")) == 1 and not compact and not users
+        self.v4 = (int(os.environ.get("HY4_XM_V4", "0")) == 1 or self.half or users > 0) and not compact
+        self.nh = (
+            min(8, int(os.environ.get("HY4_XM_NH", "8"))) if self.v4 else 1
+        )  # NH > 8 exhausts the per-RISC packet header pool: the device kernel then loops forever (hang, triage b26/logs/triage_uh16.log)
+        self.ltb = 1024 if self.half else self.tb  # landing page pitch (bytes)
+        self.slotsem = (
+            self.v4 and int(os.environ.get("HY4_XM_SLOTSEM", "0")) == 1
+        )  # one global semaphore per source slot: the merge compute starts on the early slots while the late ones are still in flight
+        assert not self.half or (16 // nsplit) == 2, "HY4_XM_HALF needs HY4_XM_NSPLIT=8 (TPC == 2)"
         # communication lanes per ring direction (one comm core each); lane L -> fabric link L % links
         self.lanes = lanes or int(os.environ.get("HY4_XM_LANES", str(links)))
         self.tpc = 16 // nsplit
@@ -43,38 +56,70 @@ class XMerge:
         grid = md.compute_with_storage_grid_size()
         self.grid = grid
         n_m = S * nsplit
-        self.mcores = [(i % grid.x, i // grid.x) for i in range(n_m)]
+        self.mc0 = (
+            int(os.environ.get("HY4_XM_MC0", "0")) if self.v4 else 0
+        )  # B26: first merge core index (1 = skip core (0,0): its persistent L1 budget is the tightest of the grid)
+        self.mcores = [((i + self.mc0) % grid.x, (i + self.mc0) // grid.x) for i in range(n_m)]
         self.comm = {(d, l): (self.lanes * d + l, grid.y - 1) for d in (0, 1) for l in range(self.lanes)}
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-        self.gsem = ttnn.create_global_semaphore(md, all_cores, 0)
         mset = _cores(self.mcores)
         self.mset = mset
-        w = NC * self.lt * self.tb // 2  # bf16 elements per merge core: 8 slots x (tpc + 2) tiles
-        mc = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(mset, [1, w], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        self.land = ttnn.from_torch(
-            torch.zeros(n_m, w, dtype=torch.bfloat16),
-            device=md,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=mc,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
-        )
+        # B26 users mode (compact S > 1 exchange): the landing buffer lives in DRAM (interleaved, 4 KiB pages = one fabric packet each): the persistent L1 budget (ring 128 KB: 78 KB above the largest static CB region) has no room for 64 KB
+        self.dramland = users > 0 and int(os.environ.get("HY4_XM_DRAML", "1")) == 1
+        assert not self.dramland or self.tpc == 2, "DRAM landing needs HY4_XM_NSPLIT=8"
+        self.gsem = ttnn.create_global_semaphore(md, all_cores, 0)
+        self.gsems = [ttnn.create_global_semaphore(md, all_cores, 0) for _ in range(NC)] if self.slotsem else []
+        if self.dramland:
+            self.land = ttnn.from_torch(
+                torch.zeros(n_m * NC * 2, 2048, dtype=torch.bfloat16),
+                device=md,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            )
+        else:
+            w = NC * self.lt * self.ltb // 2 + (
+                512 if self.half else 0
+            )  # bf16 elements per merge core: 8 slots x (tpc + 2) tiles (+1 KiB pad: the last half tile is unpacked as a full tile)
+            mc = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(mset, [1, w], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self.land = ttnn.from_torch(
+                torch.zeros(n_m, w, dtype=torch.bfloat16),
+                device=md,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=mc,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            )
+        if os.environ.get("HY4_XM_LOG", "0") == "1":
+            print(
+                f"B26_XM init S={S} users={users} half={self.half} v4={self.v4} slotsem={self.slotsem} dramland={self.dramland} land_addr={self.land.buffer_address()}",
+                flush=True,
+            )
         # HY4_ATTN_HM=1 (S == 1, non-compact): the writer scatters the 8 head rows into the head-major tensor [1,8,1,512] (no to_layout/slice/permute/to_layout glue after the merge)
-        self.hm = int(os.environ.get("HY4_ATTN_HM", "0")) == 1 and S == 1 and not compact
-        self.out = ttnn.from_torch(
-            torch.zeros(1, 8, 1, 512, dtype=torch.bfloat16)
-            if self.hm
-            else torch.zeros(1, S, 32, 512, dtype=torch.bfloat16),
-            device=md,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
-        )  # zero-initialised: the compact writer only fills rows 0..7 of every tile
+        self.hm = int(os.environ.get("HY4_ATTN_HM", "0")) == 1 and S == 1 and not compact and not users
+        self.outl1 = (
+            int(os.environ.get("HY4_XM_OUTL1", "0")) == 1
+        )  # B26: merged output in L1 interleaved instead of DRAM (the writer's tail is the DRAM write latency)
+        if users:
+            from models.demos.blackhole.hy4_preview.tt import hy4_merge
+
+            self.out = hy4_merge.hm_out(md, users)
+        else:
+            self.out = ttnn.from_torch(
+                torch.zeros(1, 8, 1, 512, dtype=torch.bfloat16)
+                if self.hm
+                else torch.zeros(1, S, 32, 512, dtype=torch.bfloat16),
+                device=md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG if self.outl1 else ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            )  # zero-initialised: the compact writer only fills rows 0..7 of every tile
         ttnn.synchronize_device(md)
 
     def _phys(self, x, y):
@@ -87,11 +132,12 @@ class XMerge:
         bf = ttnn.bfloat16
         T = 2048
         ST, A, W, R, ONE, OUT, PKT = range(7)
-        npk_g = 1 if self.compact else (tpc // 2 + 1)  # packets per (owner, user, merge core)
+        npk_g = 1 if (self.compact or self.half) else (tpc // 2 + 1)  # packets per (owner, user, merge core)
         gper = max(len(range(ln, ns, self.lanes)) for ln in range(self.lanes))
         pk_max = S * 4 * gper * npk_g
         gsem_addr = ttnn.get_global_semaphore_address(self.gsem)
-        dev_land = ttnn.get_device_tensors(self.land)
+        sem_addrs = [ttnn.get_global_semaphore_address(g) for g in self.gsems]
+        dev_land = None if self.dramland else ttnn.get_device_tensors(self.land)
         m_xy = [self._phys(*c) for c in self.mcores]
         mpd = ttnn.MeshProgramDescriptor()
         rows, cols = tuple(md.shape)
@@ -102,15 +148,24 @@ class XMerge:
                 fwd_n = md.get_fabric_node_id(ttnn.MeshCoordinate(r, (col + 1) % RING))
                 bwd_n = md.get_fabric_node_id(ttnn.MeshCoordinate(r, (col - 1) % RING))
                 idx = r * cols + col
-                cb_land = ttnn.cb_descriptor_from_sharded_tensor(A, dev_land[idx])
-                cb_land.core_ranges = self.mset
                 tdesc = ttnn.TileDescriptor(8, 32) if self.compact else None
-                cb_land.total_size = NC * LT * self.tb
-                cb_land.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=A, data_format=bf, page_size=self.tb, **({"tile": tdesc} if tdesc else {})
+                if self.dramland:  # plain CB (the slots are read from the DRAM landing after their semaphore)
+                    cb_land = ttnn.CBDescriptor(
+                        total_size=NC * LT * self.ltb,
+                        core_ranges=self.mset,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(buffer_index=A, data_format=bf, page_size=self.ltb)
+                        ],
                     )
-                ]
+                else:
+                    cb_land = ttnn.cb_descriptor_from_sharded_tensor(A, dev_land[idx])
+                    cb_land.core_ranges = self.mset
+                    cb_land.total_size = NC * LT * self.ltb
+                    cb_land.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=A, data_format=bf, page_size=self.ltb, **({"tile": tdesc} if tdesc else {})
+                        )
+                    ]
 
                 def cb(i, n_, cores, page=None, tiny=True):
                     page = page or self.tb
@@ -136,36 +191,43 @@ class XMerge:
                 rt_r, rt_w, rt_c = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
                 for m, (cx, cy) in enumerate(self.mcores):
                     s, g = m // ns, m % ns
-                    rt_r[cx][cy] = [s, g, col]
+                    rt_r[cx][cy] = [s, g, col] + sem_addrs
                     rt_w[cx][cy] = [s, g * tpc]
                     rt_c[cx][cy] = []
                 kernels = [
                     ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/{'xm_reader' if self.compact else 'xm_reader_v1'}.cpp",
+                        kernel_source=f"{KDIR}/{'xm_reader' if self.compact else ('xm_reader_v4' if self.v4 else 'xm_reader_v1')}.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=self.mset,
                         compile_time_args=[S, tpc, ST, A, ONE, min(1, int(os.environ.get("HY4_XM_DBG", "0")))]
                         + ([self.compact] if self.compact else [])
+                        + ([int(self.half), int(self.slotsem), int(self.dramland)] if self.v4 else [])
                         + _acc(x)
-                        + _acc(sink),
+                        + _acc(sink)
+                        + (_acc(self.land) if self.dramland else (_acc(sink) if self.v4 else [])),
                         runtime_args=rt_r,
-                        common_runtime_args=[x.buffer_address(), sink.buffer_address(), gsem_addr],
+                        common_runtime_args=[x.buffer_address(), sink.buffer_address(), gsem_addr]
+                        + ([self.land.buffer_address()] if self.dramland else []),
                         config=ttnn.ReaderConfigDescriptor(),
                     ),
                     ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/{'xm_writer' if self.compact else ('mrg_writer_hm' if self.hm else 'mrg_writer')}.cpp",
+                        kernel_source=f"{KDIR}/{'xm_writer' if self.compact else ('mrg_writer_hmc' if self.users else (('mrg_writer_hm_v4' if self.v4 else 'mrg_writer_hm') if self.hm else 'mrg_writer'))}.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=self.mset,
-                        compile_time_args=[tpc, OUT] + ([self.compact] if self.compact else []) + _acc(self.out),
+                        compile_time_args=[tpc, OUT]
+                        + ([self.compact] if self.compact else [])
+                        + ([self.users] if self.users else [])
+                        + _acc(self.out),
                         runtime_args=rt_w,
                         common_runtime_args=[self.out.buffer_address()],
                         config=ttnn.WriterConfigDescriptor(),
                     ),
                     ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/mrg2_compute.cpp",
+                        kernel_source=f"{KDIR}/{'mrg2_compute_v4' if self.v4 else 'mrg2_compute'}.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=self.mset,
-                        compile_time_args=[tpc, ST, A, W, R, ONE, OUT],
+                        compile_time_args=[tpc, ST, A, W, R, ONE, OUT]
+                        + ([int(self.slotsem), int(self.users > 2)] if self.v4 else []),
                         runtime_args=rt_c,
                         common_runtime_args=[],
                         config=ttnn.ComputeConfigDescriptor(
@@ -178,11 +240,11 @@ class XMerge:
                     for lk in range(self.lanes):
                         cx, cy = self.comm[(dr, lk)]
                         rt = ttnn.RuntimeArgs()
-                        rt[cx][cy] = [col] + [v for xy in m_xy for v in xy]
-                        fab_base = 1 + 2 * len(m_xy)
+                        rt[cx][cy] = [col] + [v for xy in m_xy for v in xy] + sem_addrs
+                        fab_base = 1 + 2 * len(m_xy) + len(sem_addrs)
                         kernels.append(
                             ttnn.KernelDescriptor(
-                                kernel_source=f"{KDIR}/{'xm_comm' if self.compact else 'xm_comm_v1'}.cpp",
+                                kernel_source=f"{KDIR}/{'xm_comm' if self.compact else ('xm_comm_v4' if self.v4 else 'xm_comm_v1')}.cpp",
                                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                                 core_ranges=_cores([(cx, cy)]),
                                 compile_time_args=[
@@ -198,7 +260,13 @@ class XMerge:
                                     int(os.environ.get("HY4_XM_DBG", "0")),
                                 ]
                                 + ([self.compact] if self.compact else [])
-                                + _acc(x),
+                                + (
+                                    [int(self.half), self.nh, int(self.slotsem), 1 + 2 * len(m_xy), int(self.dramland)]
+                                    if self.v4
+                                    else []
+                                )
+                                + _acc(x)
+                                + (_acc(self.land) if self.dramland else (_acc(x) if self.v4 else [])),
                                 runtime_args=rt,
                                 common_runtime_args=[x.buffer_address(), self.land.buffer_address(), gsem_addr],
                                 config=ttnn.WriterConfigDescriptor(),
@@ -222,6 +290,13 @@ class XMerge:
                             self.lanes,
                             self.compact,
                             self.hm,
+                            self.v4,
+                            self.half,
+                            self.nh,
+                            self.slotsem,
+                            self.outl1,
+                            self.users,
+                            self.dramland,
                             col,
                             os.environ.get("HY4_XM_DBG", "0"),
                             tuple(_acc(x)),

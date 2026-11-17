@@ -112,6 +112,10 @@ class Case:
 
 def result_to_heads(md, out, S, tile=False):
     r = from_mesh(md, out).float()
+    if (
+        tile and S == 1 and os.environ.get("HY4_ATTN_HM", "0") == "1" and r.numel() == NC * 8 * 512
+    ):  # B26: head-major [8c,8,1,512] (HM writer)
+        return r.reshape(NC * 8, 1, 512)
     if tile:  # [8c,S,32,512] (8 real head rows)
         return r.reshape(NC, S, 32, 512)[:, :, :8].permute(0, 2, 1, 3).reshape(64, S, 512)
     return r.reshape(NC, 8, S, 512).reshape(64, S, 512)  # [8c,1,8S,512] rows (h,s)

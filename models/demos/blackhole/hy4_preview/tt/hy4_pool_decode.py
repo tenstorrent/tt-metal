@@ -46,6 +46,10 @@ _POOL_AG_LINKS = int(
 )  # links of the pool path's all_gather_async (q gather, key gather); see slot-diag/DIAG.md
 
 
+_XMC = {}  # B26: one compact exchange object per (mesh, S)
+_QP = {}  # B29: one q push object per (mesh, S)
+
+
 class PoolCtx:
     """Process-wide state of the pool decode path: persistent per-step device tensors, the shared XMerge, the split-kernel module, the select-pipeline parameters."""
 
@@ -122,6 +126,24 @@ class PoolCtx:
         self.hm_compact = (
             self.compact and os.environ.get("HY4_ATTN_HM", "0") == "1" and S <= 16
         )  # HY4_ATTN_HM=1: head-major merge output (no post-merge layout glue)
+        # B26 (default OFF): HY4_B26_XCOMPACT=1: the compact verify layout goes through the fabric exchange + merge program (XMerge users=S) instead of all_to_all + A1 merge
+        self.xmc = None
+        if self.compact and self.hm_compact and int(os.environ.get("HY4_B26_XCOMPACT", "0")) == 1:
+            key = (id(md), S)
+            if key not in _XMC:
+                from models.demos.blackhole.hy4_preview.tt import hy4_xmerge
+
+                _XMC[key] = hy4_xmerge.XMerge(md, self.TR, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "8")), users=S)
+            self.xmc = _XMC[key]
+        # B29 (default OFF): HY4_B29_QPUSH=1: the q all-gather is a push-only program + a flag wait in the split reader (hy4_qpush); owner layout (S_user rows) only
+        self.qpush = None
+        if int(os.environ.get("HY4_B29_QPUSH", "0")) == 1 and self.compact:
+            key = (id(md), S)
+            if key not in _QP:
+                from models.demos.blackhole.hy4_preview.tt import hy4_qpush
+
+                _QP[key] = hy4_qpush.QPush(md, S)
+            self.qpush = _QP[key]
         self.ids8 = {}  # index-source layer -> idx8 tensor of the current step
         self.ids8_dense = None
         self.step_pos = None
@@ -218,7 +240,10 @@ class PoolCtx:
         """qfull [1,8,S,576] TILE bf16 (the column's 8 heads; q_rm=True: already ROW_MAJOR, B17 fused q-prep) -> o_lat [1,8,S,512] TILE bf16 (merged over the 8 columns, sink included)."""
         S = self.S
         q_rm = qfull if q_rm else ttnn.to_layout(qfull, ttnn.ROW_MAJOR_LAYOUT)
-        qg = self.gather_q(q_rm)  # [1,8,8S,576]
+        if self.qpush is not None:
+            qg = self.qpush(q_rm)  # persistent landing tensor (flag-gated read in the split reader)
+        else:
+            qg = self.gather_q(q_rm)  # [1,8,8S,576]
         ttnn.deallocate(q_rm)
         out = self.mod.sparse_sdpa_split(
             qg,
@@ -233,9 +258,13 @@ class PoolCtx:
             emit_stats=3,
             owner_s=S,
             compact=self.compact and self.xm is None,
+            **({"qland": (self.qpush, S)} if self.qpush is not None else {}),
         )
-        ttnn.deallocate(qg)
+        if self.qpush is None:
+            ttnn.deallocate(qg)
         if self.compact and self.xm is None:
+            if self.xmc is not None:
+                return self.xmc(out, sink)  # head-major [1,8,S,512] TILE (persistent) from the exchange + merge program
             from models.demos.blackhole.hy4_preview.tt import hy4_merge
 
             TR = self.TR

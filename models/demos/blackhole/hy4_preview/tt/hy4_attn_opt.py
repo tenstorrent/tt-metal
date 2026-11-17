@@ -269,11 +269,34 @@ class Hy4AttentionOpt(Hy4Attention):
             if self.has_indexer:
                 d["ik"] = self._lin(o, h, ix.w_k, "idx_wk", ckc=ix.ckc)
                 d["iw"] = self._lin(o, h, ix.w_p, "idx_wp", ckc=ix.ckc)
-        qa_g = self.mesh_config.allgather(qa_c, self.ccl, axis=1, dim=3, **({"memory_config": mc} if mc else {}))
-        ttnn.deallocate(qa_c)
         from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as _FN
 
-        if (
+        use_qp = (
+            os.environ.get("HY4_B29_QAPUSH", "0") == "1"
+            and _FN.norm_enabled()
+            and 1 <= S <= 8
+            and qa_c.layout == ttnn.TILE_LAYOUT
+            and kv.layout == ttnn.TILE_LAYOUT
+            and qa_c.dtype == ttnn.bfloat16
+            and kv.dtype == ttnn.bfloat16
+            and not qa_c.memory_config().is_sharded()
+            and not kv.memory_config().is_sharded()
+            and tuple(qa_c.shape)[3] == 256
+        )  # HY4_B29_QAPUSH=1 (needs HY4_NORM_FUSE=1): the q_a all-gather becomes a push program + flag wait in the fused norm readers
+        if use_qp:
+            qa_g = None
+        else:
+            qa_g = self.mesh_config.allgather(qa_c, self.ccl, axis=1, dim=3, **({"memory_config": mc} if mc else {}))
+            ttnn.deallocate(qa_c)
+        if use_qp:
+            qa, lat, k_pe_raw = _FN.fused_norms(
+                None, kv, self.q_a_norm, self.kv_a_norm, cfg.rms_norm_eps, mc, push=_FN.qa_push(self.md), qa_src=qa_c
+            )
+            ttnn.deallocate(qa_c)
+            ttnn.deallocate(kv)
+            d["qa"] = qa
+            k_pe = self._rope(o, k_pe_raw, cos, sin)
+        elif (
             _FN.norm_enabled()
             and 1 <= S <= 8
             and qa_g.layout == ttnn.TILE_LAYOUT

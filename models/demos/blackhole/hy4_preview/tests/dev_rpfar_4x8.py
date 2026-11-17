@@ -45,6 +45,12 @@ try:
         P = torch.randn(rows, cols, Tt, D, generator=g).to(torch.bfloat16)
         tot_col = P.float().sum(0)  # [cols, Tt, D]: group sum per column
         part = up(P)
+        if os.environ.get("RP_FOLD") == "1":  # B30: fold [T rows] per chip added to the own block inside the reducer
+            F = torch.randn(rows, cols, T, D, generator=g).to(torch.bfloat16)
+            rr.fold = up(F)
+            for r_ in range(rows):
+                for c_ in range(cols):
+                    tot_col[c_][r_ * T : (r_ + 1) * T] += F[r_, c_].float()
         if "rp" in WHAT:
             o = rr(part)
             ttnn.synchronize_device(md)

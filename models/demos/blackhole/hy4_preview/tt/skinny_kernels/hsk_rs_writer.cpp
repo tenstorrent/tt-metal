@@ -37,6 +37,14 @@ void kernel_main() {
         get_compile_time_arg_val(15);  // 1: the index output is the TP32 route tensor int32 [1,1,1,16 T] (token t: 8
                                        // ids, 8 bf16 score words, 64 B at +64 t of page 0), the weight output is unused
     constexpr uint32_t K = 8;
+    // B30: TT > 8 (route mode, TT <= 16): fp32 score/rank/partial tiles are [16, 32] (TR = 16 rows: face 0 at +0, face
+    // 1 at +64 TR bytes), token t is merged by core t % NC (slot (t / NC) * NC + b of cb_sel), so each merge core owns
+    // NT = ceil(TT / NC) tokens; for TT <= 8 everything is as before (TR = 8, NT = 1)
+    constexpr uint32_t TR = TT > 8 ? 16 : 8;
+    constexpr uint32_t TBY = 128 * TR;  // fp32 tile bytes
+    constexpr uint32_t FB = 64 * TR;    // fp32 face bytes (16 cols)
+    constexpr uint32_t NTK = (TT + NC - 1) / NC;
+    constexpr uint32_t SCR = 128 * (TT > 8 ? TT : 8);  // scratch offset in cb_stg
     constexpr auto x_args = TensorAccessorArgs<16>();
     constexpr auto b_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto s_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
@@ -78,8 +86,8 @@ void kernel_main() {
             }
         }
         // bias: std fp32 tile page -> fp32 tiny [8, 32] tile (face 0 rows 0..7 at +0, face 1 rows 0..7 at +512), the same format as the partial / score tiles
-        noc.async_read(b_acc, cbb, 512, {.page_id = me, .offset_bytes = 0}, {.offset_bytes = 0});
-        noc.async_read(b_acc, cbb, 512, {.page_id = me, .offset_bytes = 1024}, {.offset_bytes = 512});
+        noc.async_read(b_acc, cbb, FB, {.page_id = me, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read(b_acc, cbb, FB, {.page_id = me, .offset_bytes = 1024}, {.offset_bytes = FB});
         noc.async_read_barrier();
         cbx.push_back(KL);
         cbb.push_back(1);
@@ -90,7 +98,7 @@ void kernel_main() {
         const uint32_t src = cbp.get_read_ptr();
         for (uint32_t j = 0; j < PW; ++j) {
             const uint32_t n = pass * PW + j;
-            noc_async_write(src + j * 1024, get_noc_addr(nx(n), ny(n), red_base + me * 1024), 1024);
+            noc_async_write(src + j * TBY, get_noc_addr(nx(n), ny(n), red_base + me * TBY), TBY);
         }
         noc_async_write_barrier();
         for (uint32_t j = 0; j < PW; ++j) {
@@ -120,30 +128,37 @@ void kernel_main() {
         DeviceZoneScopedN("S_LOCAL");
         for (uint32_t t = 0; t < TT; ++t) {
             // fp32 [8, 32] tiny tile: face 0 = 8 rows x 16 x 4 B at +0, face 1 at +512: element (row t, col c) at word (c < 16 ? 16 t + c : 128 + 16 t + c - 16)
-            uint32_t bk[K], bi[K];
-            for (uint32_t j = 0; j < K; ++j) {
-                bk[j] = 0;
-                bi[j] = 0;
-            }
+            uint32_t k0 = 0, k1 = 0, k2 = 0, k3 = 0, k4 = 0, k5 = 0, k6 = 0,
+                     k7 = 0;  // B30: the sorted top-8 list in registers (unrolled insertion chain)
+            uint32_t i0 = 0, i1 = 0, i2 = 0, i3 = 0, i4 = 0, i5 = 0, i6 = 0, i7 = 0;
+#define B30_STEP(kv, iv)                 \
+    if (ck > kv) {                       \
+        const uint32_t tk = kv, ti = iv; \
+        kv = ck;                         \
+        iv = ci;                         \
+        ck = tk;                         \
+        ci = ti;                         \
+    }
+#pragma GCC unroll 32
             for (uint32_t c = 0; c < 32; ++c) {
-                const uint32_t w = (c < 16) ? 16 * t + c : 128 + 16 * t + c - 16;
+                const uint32_t w = (c < 16) ? 16 * t + c : 16 * TR + 16 * t + c - 16;
                 const uint32_t b = rk[w];
-                const uint32_t key = (b & 0x80000000u) ? ~b : (b | 0x80000000u);
-                if (key > bk[K - 1]) {
-                    uint32_t p = K - 1;
-                    while (p > 0 && key > bk[p - 1]) {
-                        bk[p] = bk[p - 1];
-                        bi[p] = bi[p - 1];
-                        --p;
-                    }
-                    bk[p] = key;
-                    bi[p] = c;
+                uint32_t ck = (b & 0x80000000u) ? ~b : (b | 0x80000000u);
+                uint32_t ci = c;
+                if (ck > k7) {
+                    B30_STEP(k0, i0)
+                    B30_STEP(k1, i1)
+                    B30_STEP(k2, i2)
+                    B30_STEP(k3, i3) B30_STEP(k4, i4) B30_STEP(k5, i5) B30_STEP(k6, i6) B30_STEP(k7, i7)
                 }
             }
+#undef B30_STEP
+            const uint32_t bk[K] = {k0, k1, k2, k3, k4, k5, k6, k7};
+            const uint32_t bi[K] = {i0, i1, i2, i3, i4, i5, i6, i7};
             volatile tt_l1_ptr uint32_t* rec = stg + t * 32;  // 128 B record: keys[8], global idx[8], score bits[8]
             for (uint32_t j = 0; j < K; ++j) {
                 const uint32_t c = bi[j];
-                const uint32_t w = (c < 16) ? 16 * t + c : 128 + 16 * t + c - 16;
+                const uint32_t w = (c < 16) ? 16 * t + c : 16 * TR + 16 * t + c - 16;
                 rec[j] = bk[j];
                 rec[8 + j] = 32 * me + c;
                 rec[16 + j] = sc[w];
@@ -153,82 +168,97 @@ void kernel_main() {
         {
         DeviceZoneScopedN("S_SEND");
         for (uint32_t t = 0; t < TT; ++t) {
-            noc_async_write(cbstg.get_write_ptr() + t * 128, get_noc_addr(nx(t), ny(t), sel_base + me * 128), 96);
+            const uint32_t dc = t % NC;
+            noc_async_write(
+                cbstg.get_write_ptr() + t * 128,
+                get_noc_addr(nx(dc), ny(dc), sel_base + ((t / NC) * NC + me) * 128),
+                96);
         }
         noc_async_write_barrier();
         for (uint32_t t = 0; t < TT; ++t) {
-            noc_semaphore_inc(get_noc_addr(nx(t), ny(t), sem_sel_addr), 1);
+            noc_semaphore_inc(get_noc_addr(nx(t % NC), ny(t % NC), sem_sel_addr), 1);
         }
         noc_async_atomic_barrier();
         }
-        if (me < TT) {
+        if (me < (TT < NC ? TT : NC)) {
+            const uint32_t nmine = (TT - me + NC - 1) / NC;  // tokens me, me + NC, ... < TT
             {
             DeviceZoneScopedN("S_WAIT");
-            noc_semaphore_wait(sem_sel, NC);
+            noc_semaphore_wait(sem_sel, NC * nmine);
             }
             DeviceZoneScopedN("S_MERGE");
             *sem_sel = 0;
-            volatile tt_l1_ptr uint32_t* rv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sel_base);
-            uint32_t bk[K], bi[K], bs[K];
-            for (uint32_t j = 0; j < K; ++j) {
-                bk[j] = 0;
-                bi[j] = 0;
-                bs[j] = 0;
-            }
-            for (uint32_t b = 0; b < NC; ++b) {  // ascending core = ascending expert index: strictly-greater insertion keeps the lowest index on ties
+            for (uint32_t q = 0; q < nmine; ++q) {
+                const uint32_t tok = me + q * NC;
+                volatile tt_l1_ptr uint32_t* rv =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sel_base + q * NC * 128);
+                uint32_t bk[K], bi[K], bs[K];
                 for (uint32_t j = 0; j < K; ++j) {
-                    const uint32_t key = rv[b * 32 + j];
-                    if (key > bk[K - 1]) {
-                        uint32_t p = K - 1;
-                        while (p > 0 && key > bk[p - 1]) {
-                            bk[p] = bk[p - 1];
-                            bi[p] = bi[p - 1];
-                            bs[p] = bs[p - 1];
-                            --p;
+                    bk[j] = 0;
+                    bi[j] = 0;
+                    bs[j] = 0;
+                }
+                for (uint32_t b = 0; b < NC; ++b) {  // ascending core = ascending expert index: strictly-greater
+                                                     // insertion keeps the lowest index on ties
+                    for (uint32_t j = 0; j < K; ++j) {
+                        const uint32_t key = rv[b * 32 + j];
+                        if (key > bk[K - 1]) {
+                            uint32_t p = K - 1;
+                            while (p > 0 && key > bk[p - 1]) {
+                                bk[p] = bk[p - 1];
+                                bi[p] = bi[p - 1];
+                                bs[p] = bs[p - 1];
+                                --p;
+                            }
+                            bk[p] = key;
+                            bi[p] = rv[b * 32 + 8 + j];
+                            bs[p] = rv[b * 32 + 16 + j];
                         }
-                        bk[p] = key;
-                        bi[p] = rv[b * 32 + 8 + j];
-                        bs[p] = rv[b * 32 + 16 + j];
                     }
                 }
-            }
-            union {
-                uint32_t u;
-                float f;
-            } cv;
-            float den = 0.0f;
-            float sv[K];
-            for (uint32_t j = 0; j < K; ++j) {
-                cv.u = bs[j];
-                sv[j] = cv.f;
-                den += sv[j];
-            }
-            cv.u = EPS_BITS;
-            const float inv_den = cv.f + den;
-            cv.u = SCALE_BITS;
-            const float qf = cv.f / inv_den;  // ONE division: w = bf16(s * (scale / (sum + eps))) (within 1 fp32 ulp of the router_select (s / (sum + eps)) * scale before the bf16 rounding)
-            if constexpr (ROUTE) {
-                volatile tt_l1_ptr uint32_t* rw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    cbstg.get_write_ptr() + 1024);  // 16 words: scratch after the records
+                union {
+                    uint32_t u;
+                    float f;
+                } cv;
+                float den = 0.0f;
+                float sv[K];
                 for (uint32_t j = 0; j < K; ++j) {
-                    cv.f = sv[j] * qf;
-                    const uint32_t b = cv.u;
-                    rw[8 + j] = (uint32_t)((uint16_t)((b + 0x7fffu + ((b >> 16) & 1u)) >> 16));
-                    rw[j] = bi[j];
+                    cv.u = bs[j];
+                    sv[j] = cv.f;
+                    den += sv[j];
                 }
-                noc.async_write(cbstg, r_acc, 64, {.offset_bytes = 1024}, {.page_id = 0, .offset_bytes = me * 64});
-            } else {
-                volatile tt_l1_ptr uint16_t* ow = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                    cbstg.get_write_ptr() + 1024);  // scratch after the records
-                volatile tt_l1_ptr uint16_t* oi = ow + 32;
-                for (uint32_t j = 0; j < K; ++j) {
-                    cv.f = sv[j] * qf;
-                    const uint32_t b = cv.u;
-                    ow[j] = (uint16_t)((b + 0x7fffu + ((b >> 16) & 1u)) >> 16);
-                    oi[j] = (uint16_t)bi[j];
+                cv.u = EPS_BITS;
+                const float inv_den = cv.f + den;
+                cv.u = SCALE_BITS;
+                const float qf =
+                    cv.f / inv_den;  // ONE division: w = bf16(s * (scale / (sum + eps))) (within 1 fp32 ulp of the
+                                     // router_select (s / (sum + eps)) * scale before the bf16 rounding)
+                if constexpr (ROUTE) {
+                    volatile tt_l1_ptr uint32_t* rw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        cbstg.get_write_ptr() + SCR + 64 * q);  // 16 words: scratch after the records
+                    for (uint32_t j = 0; j < K; ++j) {
+                        cv.f = sv[j] * qf;
+                        const uint32_t b = cv.u;
+                        rw[8 + j] = (uint32_t)((uint16_t)((b + 0x7fffu + ((b >> 16) & 1u)) >> 16));
+                        rw[j] = bi[j];
+                    }
+                    noc.async_write(
+                        cbstg, r_acc, 64, {.offset_bytes = SCR + 64 * q}, {.page_id = 0, .offset_bytes = tok * 64});
+                } else {
+                    volatile tt_l1_ptr uint16_t* ow = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                        cbstg.get_write_ptr() + SCR + 128 * q);  // scratch after the records
+                    volatile tt_l1_ptr uint16_t* oi = ow + 32;
+                    for (uint32_t j = 0; j < K; ++j) {
+                        cv.f = sv[j] * qf;
+                        const uint32_t b = cv.u;
+                        ow[j] = (uint16_t)((b + 0x7fffu + ((b >> 16) & 1u)) >> 16);
+                        oi[j] = (uint16_t)bi[j];
+                    }
+                    noc.async_write(
+                        cbstg, s_acc, K * 2, {.offset_bytes = SCR + 128 * q}, {.page_id = tok, .offset_bytes = 0});
+                    noc.async_write(
+                        cbstg, r_acc, K * 2, {.offset_bytes = SCR + 128 * q + 64}, {.page_id = tok, .offset_bytes = 0});
                 }
-                noc.async_write(cbstg, s_acc, K * 2, {.offset_bytes = 1024}, {.page_id = me, .offset_bytes = 0});
-                noc.async_write(cbstg, r_acc, K * 2, {.offset_bytes = 1024 + 64}, {.page_id = me, .offset_bytes = 0});
             }
             noc.async_write_barrier();
         }
