@@ -20,30 +20,22 @@ namespace {
 void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
     auto params = model.parameters();
     auto* device = &autograd::ctx().get_device();
-    // Shard along the ParallelismContext's TP axis, like the blocks and the LM head.
-    const auto& pctx = autograd::ctx().get_parallelism_context();
     TT_FATAL(
-        pctx.is_tp_enabled(), "Pipeline-parallel tensor-parallel Llama requires a ParallelismContext with TP enabled");
-    const auto tp_axis = pctx.get_tp_axis();
-    const auto tp_size = pctx.get_tp_size();
+        autograd::ctx().get_parallelism_context().is_tp_enabled(),
+        "Pipeline-parallel tensor-parallel Llama requires a ParallelismContext with TP enabled");
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
-            // By value: set_value below replaces the tensor `tensor` refers to.
-            const auto topology = tensor.tensor_topology();
-            auto tensor_shape = tensor.logical_shape();
-            tensor_shape[0] *= tp_size;
-            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
-            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, tp_axis);
-            auto value = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-                weight_xtensor, device, ttnn::Layout::TILE, mapper.get());
-            // The dim-0 mapper labels every weight Shard(0). A tensor-parallel weight gets back the label its module
-            // gave it, which names the dim it is sharded along: a linear labels its output from it, and dropout seeds
-            // from that label. Each device's shape is unchanged.
-            if (core::distributed::has_shard(topology)) {
-                value.update_tensor_topology(topology);
+            auto placements = core::distributed::placements_per_axis(tensor);
+            auto shape = tensor.logical_shape();
+            for (size_t axis = 0; axis < placements.size(); ++axis) {
+                if (const auto dim = core::distributed::shard_dim(placements[axis], static_cast<int>(shape.rank()))) {
+                    shape[*dim] *= device->shape()[axis];
+                }
             }
-            tensor_ptr->set_value(value);
+            const auto mapper = ttnn::distributed::TensorToMesh::create(*device, {.placements = std::move(placements)});
+            tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+                init::normal_init(shape, {0.F, 0.02F}), device, ttnn::Layout::TILE, &mapper));
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
         }

@@ -68,13 +68,6 @@ bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
     return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
 }
 
-bool has_shard(const tt::tt_metal::TensorTopology& topology) {
-    const auto& placements = topology.placements();
-    return std::any_of(placements.begin(), placements.end(), [](const auto& placement) {
-        return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement);
-    });
-}
-
 std::optional<int> shard_dim(const tt::tt_metal::distributed::MeshMapperConfig::Placement& placement, int rank) {
     const auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placement);
     if (shard == nullptr) {
