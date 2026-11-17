@@ -153,13 +153,13 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                 : (packet_cap < geo.max_packet_bytes && busiest_link_packets >= three_worker_packets ? 3 : 2);
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
         // 2 workers cannot keep up with a ring's link (3 are 1.4-7% faster at 256 KB - 9 MB); on a line 2 are 10%
-        // faster at 121 packets on the busiest link-direction, 3 as fast or faster from 242.
-        constexpr uint64_t line_three_worker_packets = 160;
-        workers_per_dir = (is_ring || busiest_link_packets >= line_three_worker_packets) ? 3 : 2;
-        // Not applied: with short packets (packet_cap < max_packet_bytes) a 4th worker is 9-19% faster when it cuts
-        // each worker's slots per iteration (BH Galaxy at 200G, 256 B row segments at 16 MB), but 2-5% slower when it
-        // does not, and up to 36% slower with full packets. It would need packets_per_slot before this choice, and
-        // w + 1 free cores per row so group_by_row still holds.
+        // faster at 121 packets on the busiest link-direction, 3 as fast or faster from 242. With the mux in the middle
+        // and the writer on NOC1 (below), 4 are up to 11% faster than 3 (8 devices, 2 links, 4-100 MB); packets of 4 KB
+        // or less (short row segments) take a 5th, up to 9% faster than 4 at 4-12 KB payloads, while 5 are up to 12%
+        // slower with full 8 KB packets.
+        constexpr uint64_t line_more_worker_packets = 160;
+        const uint32_t more_workers = packet_cap <= 4096 ? 5 : 4;
+        workers_per_dir = (is_ring || busiest_link_packets >= line_more_worker_packets) ? more_workers : 2;
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
@@ -241,6 +241,12 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         }
     };
     group_by_row();
+    // BH: the mux in the middle of its direction's cores instead of first, 2-6% faster (2 links, 4-100 MB).
+    if (!is_wormhole) {
+        for (size_t g = 0; g + cores_per_dir <= all_cores.size(); g += cores_per_dir) {
+            std::swap(all_cores[g], all_cores[g + (cores_per_dir / 2)]);
+        }
+    }
 
     // Helpers to index into the flat core vector (dir: 0 = forward, 1 = backward).
     auto core_at = [&](uint32_t link, uint32_t dir, uint32_t idx_in_dir) -> const CoreCoord& {
@@ -270,11 +276,12 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const CoreRangeSet worker_core_range(worker_core_set);
 
     // Fabric mux config. One worker per direction needs 4 buffers per channel to keep the link busy (2 are 12-14%
-    // slower); from 2 workers, 2 buffers are within 3% of 4. The mux map goes in program-local L1 (a circular buffer
-    // on the mux cores), so it stays clear of persistent L1 there and the program's L1 validation keeps it below L1
-    // buffers; its addresses are offsets until the mux publishes the map's base. It must be placed before
-    // add_fabric_mux_v2_to_program and append_client_connection_rt_args, which read its CB index and semaphore id.
-    const uint8_t num_buffers_per_channel = workers_per_dir == 1 ? 4 : 2;
+    // slower); from 2 workers, 2 buffers are within 3% of 4, except on BH, where 3 are 1-3% faster than 2 (2 links,
+    // 25-100 MB) and more gain nothing. The mux map goes in program-local L1 (a circular buffer on the mux cores), so
+    // it stays clear of persistent L1 there and the program's L1 validation keeps it below L1 buffers; its addresses
+    // are offsets until the mux publishes the map's base. It must be placed before add_fabric_mux_v2_to_program and
+    // append_client_connection_rt_args, which read its CB index and semaphore id.
+    const uint8_t num_buffers_per_channel = workers_per_dir == 1 ? 4 : (is_wormhole ? 2 : 3);
     tt::tt_fabric::FabricMuxV2Config mux_config(
         *mesh_device,
         static_cast<uint8_t>(workers_per_dir),
@@ -297,10 +304,10 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // WH, one link: a ring fills at least 4 slots per worker iteration, so a short one still pipelines (1 MB, 6144 B
     // payload: 2 packets per slot instead of 5 are 11% faster; 4352 B, 1-1.5 MB: 3-4%); a line keeps 2 (at 4352 B
     // it was 4-10% slower with 4 at 512 KB - 1 MB). From two links one packet per slot is 3-8% faster (4 links,
-    // 16 MB), while with one link it is 3-7% slower.
+    // 16 MB), while with one link it is 3-7% slower. BH fills 4 slots too (4-6 MB: 2-11% faster).
     const bool wh_multi_link = is_wormhole && num_links >= 2;
     const uint32_t read_bytes_per_barrier = wh_multi_link ? 1 : default_read_bytes_per_barrier;
-    const uint32_t min_slots = (is_wormhole && is_ring) ? 4 : all_gather_walk::kNumSlots;
+    const uint32_t min_slots = (is_ring || !is_wormhole) ? 4 : all_gather_walk::kNumSlots;
     const uint32_t packets_per_slot = compute_packets_per_slot(
         geo, packet_cap, total_slices, packet_header_size, input_tensor, read_bytes_per_barrier, min_slots);
     const uint32_t cb_page_size =
@@ -319,11 +326,11 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     });
 
     // KERNEL CREATION
-    // NOCs: the writer on NOC0 is 5-10% faster on a ring, 3-8% slower on a line (BH); the reader takes the other. WH
-    // from two links keeps the writer on NOC1 on a ring too: on NOC0, with 2 * links mux forwarders, it holds a 4-link
-    // ring to ~7 GB/s per link-direction and slows as workers are added (13-18% slower from 16 MB at 3 workers); with
-    // one link NOC1 is 1-3% slower.
-    const bool writer_on_noc0 = is_ring && !wh_multi_link;
+    // NOCs: the writer on NOC1 except on a one-link WH ring (NOC1 is 1-3% slower there); the reader takes the other.
+    // BH: on NOC0 the writer is 11-13% slower on a line, and NOC1 is 3-5% faster on a ring too (2 links). WH from two
+    // links keeps the writer on NOC1 on a ring: on NOC0, with 2 * links mux forwarders, it holds a 4-link ring to
+    // ~7 GB/s per link-direction and slows as workers are added (13-18% slower from 16 MB at 3 workers).
+    const bool writer_on_noc0 = is_wormhole && is_ring && !wh_multi_link;
     const auto writer_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
     const auto reader_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
@@ -408,13 +415,13 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         }
     }
 
-    // Data_valid cadence: about 4 signals per worker iteration, every 2 to 16 packets. Each signal is a packet: fewer
+    // Data_valid cadence: about 2 signals per worker iteration, every 2 to 64 packets. Each signal is a packet: fewer
     // save link time, more start the downstream relay sooner (BH: 1-packet cadence up to 1.5x slower at 8-26 MB).
-    // WH: every 2 to 64 packets (ring, 8-42 MB: 1.5-4% faster), 2 signals per iteration on a ring or from two links
-    // (4 links: 8-13% faster at 4 MB). A one-link line keeps 4: its slots are half an iteration, and 2 signals were
-    // 16% slower at 1 MB.
-    const uint64_t signals_per_iter = (is_wormhole && (is_ring || wh_multi_link)) ? 2 : 4;
-    const uint64_t max_cadence_packets = is_wormhole ? 64 : 16;
+    // BH, 2 links: 1-8% faster at 6-100 MB than 4 signals every 2 to 16 packets. WH: 64 packets (ring, 8-42 MB:
+    // 1.5-4% faster than 16), 2 signals (4 links: 8-13% faster at 4 MB than 4). A one-link WH line keeps 4: its slots
+    // are half an iteration, and 2 signals were 16% slower at 1 MB.
+    const uint64_t signals_per_iter = (!is_wormhole || is_ring || wh_multi_link) ? 2 : 4;
+    constexpr uint64_t max_cadence_packets = 64;
     constexpr uint64_t min_cadence_packets = 2;
 
     for (uint32_t link = 0; link < num_links; ++link) {
