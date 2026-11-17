@@ -48,6 +48,8 @@ class L5Cfg:
     # (l5h_writer.cpp / l5h_reader.cpp WL5_HMC2) NOC0 also for the transfers that stay inside the group's rectangle
     hmc: int = 0
     mux_noc: int = -1  # the mux kernels' NoC: -1 NOC1 with hmc, else NOC0; 0 / 1 force it (diagnostics)
+    mux_mask: int = -1  # >= 0: group g's muxes on NOC1 iff bit g (overrides mux_noc; diagnostics)
+    gather0: int = 0  # hmc 2: the x gather from the BRISC on NOC0 (WL5_GATHER0; outside the NoC rule, diagnostics)
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -243,6 +245,7 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
                             + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args())
                             + ([hcons.buffer_address(), hcolf.buffer_address()] if l5.hmc == 2 else []),
+                            defines=[("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else [],
                             runtime_args=wr_rt,
                             config=dm(0),
                         )
@@ -268,7 +271,9 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                             + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args())
                             + hmc_ct,
                             runtime_args=rd_rt,
-                            defines=FAB_DEFS + ([("WL5_HMC2", "1")] if l5.hmc == 2 else []),
+                            defines=FAB_DEFS
+                            + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
+                            + ([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else []),
                             config=dm(1),
                         )
                     )
@@ -325,35 +330,39 @@ def build_lane5(mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t
                 cb(16, cfg.h_dt, 2, cset),
                 ttnn.cb_descriptor_from_sharded_tensor(18, pring),
             ]
-            mux_idx = len(kernels)
-            mrt = ttnn.RuntimeArgs()
-            for m in muxes:
-                mrt[m[0]][m[1]] = []
-            kernels.append(
-                ttnn.KernelDescriptor(
-                    kernel_source="tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                    core_ranges=crs(muxes),
-                    compile_time_args=list(mcfg.kernel_compile_time_args()),
-                    runtime_args=mrt,
-                    defines=FAB_DEFS,
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0,
-                        noc=(
-                            ttnn.NOC.RISCV_1_default
-                            if (l5.mux_noc == 1 or (l5.mux_noc < 0 and l5.hmc))
-                            else ttnn.NOC.RISCV_0_default
-                        ),
-                    ),
-                    opt_level=fabric_mux.KernelBuildOptLevel.O3,
-                )
+            mux_n1 = lambda g: (
+                (l5.mux_mask >> g) & 1 if l5.mux_mask >= 0 else (l5.mux_noc == 1 or (l5.mux_noc < 0 and l5.hmc))
             )
+            mux_idx = {}
+            for n1 in (0, 1):
+                ms = [(l5.mux_cols[g], l5.mux_rows[g][d]) for g in range(G) for d in range(2) if bool(mux_n1(g)) == bool(n1)]
+                if not ms:
+                    continue
+                mrt = ttnn.RuntimeArgs()
+                for m in ms:
+                    mrt[m[0]][m[1]] = []
+                    mux_idx[m] = len(kernels)
+                kernels.append(
+                    ttnn.KernelDescriptor(
+                        kernel_source="tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                        core_ranges=crs(ms),
+                        compile_time_args=list(mcfg.kernel_compile_time_args()),
+                        runtime_args=mrt,
+                        defines=FAB_DEFS,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0,
+                            noc=ttnn.NOC.RISCV_1_default if n1 else ttnn.NOC.RISCV_0_default,
+                        ),
+                        opt_level=fabric_mux.KernelBuildOptLevel.O3,
+                    )
+                )
             sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(2)]
             p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
             for g, gr in enumerate(groups):
                 cyc, link = ln[g]
                 for d in range(2):
                     m = (l5.mux_cols[g], l5.mux_rows[g][d])
-                    p.kernels[mux_idx].runtime_args[m[0]][m[1]].extend(
+                    p.kernels[mux_idx[m]].runtime_args[m[0]][m[1]].extend(
                         mcfg.kernel_runtime_args(
                             source_node_id=node(mesh, me_rc),
                             destination_node_id=node(mesh, nxt[g][d]),

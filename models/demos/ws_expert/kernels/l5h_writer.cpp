@@ -14,7 +14,8 @@
 //      this core's h ring (HFLAGS) and every core of the group consumed row q - NS (HCONS): the slot to the same slot
 //      of the 25 cores, then its flag (HCOLF word 5 s = q + 1) through the same command buffer; rows sent -> scratch
 //      word 3.
-// The counts and the slot table are loaded by the NCRISC (counts word 0 set once they are in).
+// The counts and the slot table are loaded by the NCRISC (counts word 0 set once they are in). WL5_GATHER0 (diagnostic,
+// outside the NoC rule: DRAM read responses enter the rectangle on NOC0): the x gather from here, as l5_writer.cpp.
 // CT: as l5_writer.cpp (0-34), then 35 HCONS, 36 HCOLF; RT: as l5_writer.cpp (0-20), then 21-24 the group's NOC0
 //     rectangle (x0, y0, x1, y1). Scratch words (16 B): 0 x flag, 1 partial flag, 2 hub flag, 3 rows multicast,
 //     4 PAVAIL, 5 PDONE, 8 XAVAIL, 9 XADDR, 10 XDONE.
@@ -59,6 +60,11 @@ void kernel_main() {
 
     const uint32_t J = get_arg_val<uint32_t>(0), nexp_g = get_arg_val<uint32_t>(2);
     volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(6));
+#if defined(WL5_GATHER0)
+    const auto xs = TensorAccessor(xargs, get_arg_val<uint32_t>(3), xrow);
+    const auto is = TensorAccessor(iargs, get_arg_val<uint32_t>(4), RMAX * 32 * 4);
+    const uint32_t K0 = get_arg_val<uint32_t>(7);
+#endif
     uint32_t cx[NCOL], ry[NR];
     for (uint32_t i = 0; i < NCOL; ++i) {
         cx[i] = get_arg_val<uint32_t>(11 + i);
@@ -81,6 +87,54 @@ void kernel_main() {
         total_rows += rows_of(n);
     }
 
+#if defined(WL5_GATHER0)
+    // ---- Q1: gather state machine (0 idle, 1 ids requested, 2 rows requested)
+    const uint32_t koff = K0 * 64;
+    uint32_t g_n = 0, g_r = 0, g_q = 0, g_state = 0;
+    auto q1 = [&]() -> bool {
+        if (g_state == 1) {
+            if (!ncrisc_noc_reads_flushed(noc_index)) {
+                return false;
+            }
+            volatile tt_l1_ptr uint32_t* idx = W(idx_l1);
+            cb_reserve_back(xrm_cb, KSL);
+            uint32_t l1 = get_write_ptr(xrm_cb);
+            for (uint32_t i = 0; i < 32; ++i, l1 += KSL * 64) {
+                noc_async_read(xs.get_noc_addr(idx[i]) + koff, l1, KSL * 64);
+            }
+            g_state = 2;
+            return true;
+        }
+        if (g_state == 2) {
+            if (!ncrisc_noc_reads_flushed(noc_index)) {
+                return false;
+            }
+            cb_push_back(xrm_cb, KSL);
+            ++g_r;
+            ++g_q;
+            g_state = 0;
+            return true;
+        }
+        while (true) {
+            while (g_n < nexp_g && g_r >= rows_of(g_n)) {
+                ++g_n;
+                g_r = 0;
+            }
+            if (g_n >= nexp_g || g_q % NCOL == C) {
+                break;
+            }
+            ++g_r;
+            ++g_q;
+        }
+        if (g_n >= nexp_g || !cb_pages_reservable_at_back(xrm_cb, KSL)) {
+            return false;
+        }
+        noc_async_read(is.get_noc_addr(order[g_n] & 0xFFFF) + g_r * 32 * 4, idx_l1, 32 * 4);
+        g_state = 1;
+        return true;
+    };
+
+#endif
     // ---- QX: own rows to the cores of the row at and east of this column (the NCRISC sends the rest westwards)
     uint32_t xq = C;
     bool x_pub = false;
@@ -223,8 +277,13 @@ void kernel_main() {
         t[0] = wall();
         did[0] = qx();
         t[1] = wall();
+#if defined(WL5_GATHER0)
+        did[1] = q1();
+        t[2] = wall();
+#else
         did[1] = false;
         t[2] = t[1];
+#endif
         did[2] = qp();
         t[3] = wall();
         did[3] = qc();
@@ -240,7 +299,12 @@ void kernel_main() {
                 any = true;
             }
         }
-        if (!any && xq >= total_rows && pq >= total_rows && (!OWN || cr_sent >= total_rows) &&
+#if defined(WL5_GATHER0)
+        const bool gathered = g_n >= nexp_g && g_state == 0;
+#else
+        const bool gathered = true;
+#endif
+        if (!any && gathered && xq >= total_rows && pq >= total_rows && (!OWN || cr_sent >= total_rows) &&
             (J != 0 || m_q >= total_rows)) {
             break;
         }

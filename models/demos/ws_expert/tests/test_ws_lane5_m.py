@@ -182,3 +182,52 @@ def test_ws_lane5_glx_soak(mesh_device):
         f"WL5S SUMMARY: {n} launches in {time.time() - t0:.0f} s, {checks} checks (chips 0, {N - 1}, every expert), "
         f"min pcc {worst:.5f}, e2e at the checks median {statistics.median(e2es):.1f} us"
     )
+
+
+def group_report(cfg, st_chip, tag):
+    """Per group of one chip (stamps of the last launch, K cycles): the latest compute end and NCRISC loop end from the
+    chip's earliest loop start, and the cores' mean waits (tilize / x / weights / h / landing), MATH (gate/up / fold /
+    down / tilize), BRISC busy (x / gather / partials / credits / multicast / -) and NCRISC busy (weights / x ring /
+    landing / partials up / h ring / y)."""
+    import torch
+
+    NC = cfg.G * cfg.GC
+    s = (ttnn.to_torch(st_chip).to(torch.int64) & 0xFFFFFFFF).reshape(NC, -1)
+    rel = ((s - int(s[0, 0]) + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
+    t0 = int(min(rel[:, 0].min(), rel[:, 485].min(), rel[:, 496].min()))
+    for g in range(cfg.G):
+        r = slice(g * cfg.GC, (g + 1) * cfg.GC)
+        k = lambda a, b: (s[r, a:b].double().mean(0) / 1000).round().tolist()
+        logger.info(
+            f"WL5G {tag} group {g}: compute end {(int(rel[r, 63].max()) - t0) / 1000:.0f} K, NCRISC end "
+            f"{(int((rel[r, 485] + s[r, 484]).max()) - t0) / 1000:.0f} K; waits {k(40, 45)}; MATH {k(45, 49)}; "
+            f"BRISC {k(50, 56)}; NCRISC {k(470, 476)}"
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [TORUS], indirect=True)
+def test_ws_lane5_glx_g(mesh_device):
+    """test_ws_lane5_glx_m with a per-group report of chips 0 and the last after the last launch."""
+    M = int(os.environ["WSW_M"])
+    nexp, T_tok = int(os.environ.get("WSW_NEXP", "640")), int(os.environ.get("WSW_T", "31250"))
+    cfg, lc, l5 = L5.configs(nexp, 4, T_tok)
+    lc.cycles = torus_cycles(*tuple(mesh_device.shape))
+    L5.make_inputs5 = make_inputs5_lean
+    L5.chip_pcc = chip_pcc_some
+    build0, n, last = L5.build_lane5, [0], {}
+    warm, meas = int(os.environ.get("WS_WARM", "20")), int(os.environ.get("WS_MEAS", "5"))
+
+    def build_kept(*a, **k):
+        out = build0(*a, **k)
+        n[0] += 1
+        if n[0] == warm + meas:
+            last["st"] = out[2]
+        return out
+
+    L5.build_lane5 = build_kept
+    L5.run5(mesh_device, cfg, lc, l5, [M] * cfg.nexp, f"glx {nexp} experts M {M}")
+    sts = ttnn.get_device_tensors(last["st"])
+    N = mesh_device.get_num_devices()
+    for ci in (0, N - 1):
+        group_report(cfg, sts[ci], f"chip {ci}")

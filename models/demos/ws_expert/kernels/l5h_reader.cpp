@@ -77,6 +77,11 @@ void kernel_main() {
     constexpr auto targs = TensorAccessorArgs<cargs.next_compile_time_args_offset()>();
     constexpr auto wargs = TensorAccessorArgs<targs.next_compile_time_args_offset()>();
     static_assert(RD >= 1 && RD <= 8);
+#if defined(WL5_GATHER0)
+    constexpr bool GATHER0 = true;  // (the BRISC gathers x on NOC0: diagnostic)
+#else
+    constexpr bool GATHER0 = false;
+#endif
     constexpr uint32_t GTRID = 15;  // (the x gather's reads; the own chunk reads use 1 .. RD)
     constexpr uint32_t NR = 5, NCOL = 5, NOWN = 4, PC = 4, NW = 8, LT = 2 * NR, NH = NOWN * NCOL;
     constexpr uint32_t WGU = KSL * NW, WDN = KTD * DCOLS;
@@ -754,7 +759,11 @@ void kernel_main() {
         u[0] = t[7];
         dib[0] = qx();
         u[1] = wall();
+#if defined(WL5_GATHER0)
+        dib[1] = false;
+#else
         dib[1] = q1();
+#endif
         u[2] = wall();
         dib[2] = false;
         u[3] = u[2];
@@ -780,7 +789,7 @@ void kernel_main() {
         if (!any && w_n >= nexp_g && w_dn >= nexp_g && freed >= nexp_g && slots_done() && b_s >= total_rows &&
             x_cred >= total_rows && (!OWN || (l_q >= total_rows && l_cons >= total_rows && a_q >= total_rows)) &&
             pq >= total_rows && h_q >= total_rows && h_cons >= total_rows && (J != 0 || z_sent >= total_rows) &&
-            drained >= total_rows && g_n >= nexp_g && g_state == 0 && xq >= total_rows && qo_done()) {
+            drained >= total_rows && (GATHER0 || (g_n >= nexp_g && g_state == 0)) && xq >= total_rows && qo_done()) {
             break;
         }
     }
