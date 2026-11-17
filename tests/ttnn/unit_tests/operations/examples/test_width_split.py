@@ -411,7 +411,8 @@ _REGIMES = [
     # reduce case (x - mean_W(x)): params = (R_t tile-rows, Wt tiles, split factor k).
     # helps: 1 tile-row on 1 -> 8 Tensix cores, 4 tiles per slice.            BH p150b 2.27-2.30x
     # (2.34-2.36x before the combine signalled after a write barrier instead of a flush)
-    ("reduce_helps_rt1_wt32_k8", "reduce", (1, 32, 8), "helps", {"bh": (2.27, 2.30)}),
+    # WH B0 n150 (8x8 grid) 1.99-2.03x: bgd-lab-22, 20 passes, 2026-11-16, with the barrier.
+    ("reduce_helps_rt1_wt32_k8", "reduce", (1, 32, 8), "helps", {"wh": (1.99, 2.03), "bh": (2.27, 2.30)}),
     # does not help: 64 tile-rows already on 64 of 130 Tensix cores (DRAM ~60% of its ceiling);
     # doubling to 128 Tensix cores (8 tiles per slice) buys nothing.               BH p150b 0.98x
     ("reduce_does_not_help_rt64_wt16_k2", "reduce", (64, 16, 2), "does_not_help", {"bh": 0.98}),
@@ -421,7 +422,8 @@ _REGIMES = [
     # each Tensix core reads / writes 32 pieces of stick / k B per tile-row whatever k is.
     # helps: 1 tile-row of 4096 B sticks on 1 -> 4 Tensix cores, 1024 B pieces.   BH p150b 1.83-1.84x
     # (1.86-1.88x with the flush)
-    ("reduce_rm_helps_rt1_w2048_k4", "reduce_rm", (1, 64, 4), "helps", {"bh": (1.83, 1.84)}),
+    # WH B0 n150 (8x8 grid) 2.39-2.41x: bgd-lab-22, 20 passes, 2026-11-16, with the barrier.
+    ("reduce_rm_helps_rt1_w2048_k4", "reduce_rm", (1, 64, 4), "helps", {"wh": (2.39, 2.41), "bh": (1.83, 1.84)}),
     # does not help: 64 tile-rows of 512 B sticks (2048 x 256) on 64 -> 128 Tensix cores, 256 B
     # pieces: 2x the DRAM transfers, ~1 ns each across the grid.                  BH p150b 0.65x
     ("reduce_rm_does_not_help_rt64_w256_k2", "reduce_rm", (64, 8, 2), "does_not_help", {"bh": 0.65}),
