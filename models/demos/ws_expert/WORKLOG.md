@@ -842,3 +842,17 @@ direction with the lane's non-blocking send; no schedule, slots, credits or cut-
 - Budget, lane 0 at 4 slots: 50 raw -> 39.6 (both directions, 13.8 KB packets, per-packet incs) -> 32 (its slow
   link) -> x 0.87 schedule = 27.9 predicted vs 26.0 measured; lane 1: 37.4 x 0.87 = 32.5 vs 27.5. The rest (7-15%) is
   protocol latency the lock-step model does not see (cut-through hops, credit round trips).
+- Reference: high_bw_all_gather on this box (realtime profiler, effective receive GB/s a chip; 14 KB payload, the
+  op's perf helper insists on it). 1 x 4 row line, 2 links (test_high_bw_all_gather_512k[fabric_2d], 65536 rows a
+  chip): 79.3-80.7 GB/s for all four formats = 40 GB/s a link direction on the end edges (1.5 shards a link
+  direction). Whole tray, cluster_axis None = the lanes' 8-chip cycle x 2 links (tests/test_hbag_tray.py):
+| rows a chip (bf16 / bfp8 tiles) | shard | time | receive a chip | a link direction (1.75 shards each) |
+|---|---|---|---|---|
+| 8192 | 9.4 MB | 0.487 / 0.281 ms | 135.7 / 124.9 GB/s | 33.9 / 31.2 |
+| 14400 (= one lane launch: 4 own experts) | 16.6 MB | 0.811 / 0.447 ms | 143.2 / 137.9 GB/s | 35.8 / 34.5 |
+| 65536 | 75.5 MB | 3.603 / 1.914 ms | 146.7 / 146.7 GB/s | 36.7 |
+  The lanes move the same 116 MB into a chip in 1.06-1.12 ms (104-110 GB/s): hbag is 1.38x faster on the same cycle
+  and links. Its differences: whole-shard store-and-forward into a DRAM output (no slot limit, so no schedule bubbles
+  or slot credits), one inc a shard instead of a packet, one dedicated worker a (ring, direction, link) beside its
+  ethernet core, no mux. Mux placement is not it for us: the lane fabric bench with muxes at rows 0-1 or 8-9 gives
+  the same 39.6 median / 32-33 on the slow link-0 vertical edges.
