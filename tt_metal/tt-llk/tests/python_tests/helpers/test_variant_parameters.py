@@ -16,6 +16,7 @@ from .llk_params import (
     FPU_BINARY_OPERATIONS,
     REDUCE_OPERATIONS,
     SFPU_BINARY_OPERATIONS,
+    SFPU_TERNARY_OPERATIONS,
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
@@ -233,6 +234,10 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
         constants.append(
             f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
         )
+    elif mathop in SFPU_TERNARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
+        )
     elif mathop in FPU_BINARY_OPERATIONS:
         constants.append(
             f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};"
@@ -280,21 +285,6 @@ class MATH_OP(TemplateParameter):
             )
 
         return "\n".join(temp_header)
-
-
-@dataclass
-class SFPU_TERNARY_OP(TemplateParameter):
-    """Select the ternary SFPU op at compile time.
-
-    Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
-    ``sfpu_operations.h``. ``ternary_mathop.cpp_enum_value`` must match the
-    ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
-    """
-
-    ternary_mathop: MathOperation = None
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
 
 
 @dataclass

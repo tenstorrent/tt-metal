@@ -165,7 +165,6 @@ DB_SCHEMA = [
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("sfploadmacro", "string", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
-    Column("ternary_mathop", "string", True, "configuration"),
     Column("ternary_scalar_bits", "int64", True, "configuration"),
     Column("throttle_level", "int64", True, "configuration"),
     Column("tilize", "string", True, "configuration"),
