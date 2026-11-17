@@ -1535,7 +1535,14 @@ inline void _llk_math_matmul_uninit_()
  *       function, and @ref _llk_math_matmul_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_AB_matmul_ must feed the operand tiles into SrcA/SrcB.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false>
+template <
+    MathFidelity math_fidelity,
+    int THROTTLE_LEVEL      = 0,
+    bool row_mop            = false,
+    bool tile_mop           = false,
+    std::uint32_t reuse_dir = 0,
+    bool row_end_fold       = false,
+    bool half_base          = false>
 inline void _llk_math_matmul_(
     std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1, const std::uint32_t held_a = matmul_held_a_init)
 {
@@ -1643,7 +1650,16 @@ inline void _llk_math_matmul_(
     {
         for (std::uint32_t rut = 0; rut < rut_dim; rut++)
         {
-            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
+            const std::uint32_t tile = dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim);
+            if constexpr (half_base)
+            {
+                // dest_offset_id is 0 or 1: the half base without a branch (the caller keys it to LoFi half sync outside size mode)
+                TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (tile << DstTileSizeLog2[DstTileShape::Tile32x32]) + dest_offset_id * DEST_REGISTER_HALF_SIZE);
+            }
+            else
+            {
+                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(tile);
+            }
 
             if constexpr (matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>())
             {

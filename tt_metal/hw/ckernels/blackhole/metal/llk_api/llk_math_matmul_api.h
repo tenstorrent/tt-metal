@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "llk_size_mode.h"
 #include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
@@ -265,5 +266,9 @@ inline void llk_math_matmul(
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
         StateDiscard<uint>(dst_index)));
 
-    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, reuse_dir, row_end_fold>(dst_index, ct_dim, rt_dim, held_a);
+    // the branchless DEST half base read faster on LoFi half one-tile blocks (-7 cy/block), slower at full sync and in run-time direction
+    // calls, and it grows size-mode kernels
+    constexpr bool half_base =
+        math_fidelity == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf && reuse_dir != 3 && !LLK_SIZE_MODE;
+    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, reuse_dir, row_end_fold, half_base>(dst_index, ct_dim, rt_dim, held_a);
 }
