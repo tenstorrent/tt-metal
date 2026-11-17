@@ -278,7 +278,9 @@ class MATMUL_PRODUCTION(TemplateParameter):
         )
         path = os.environ.get("LLK_MATMUL_KERNEL_FORMATS_MAP")
         partials = (
-            "Float32" if dest_acc == DestAccumulation.Yes else formats.output_format.name
+            "Float32"
+            if dest_acc == DestAccumulation.Yes
+            else formats.output_format.name
         )
         if not path:
             return own + (partials,) + extra
