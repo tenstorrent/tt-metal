@@ -149,14 +149,10 @@ void validate_router_config(tt::ARCH arch, const std::unordered_map<std::string,
 // This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
 // and if we are not building with the tensix mux extension (due to stack size issue).
 bool is_fabric_two_erisc_enabled(const FabricContext& fabric_context) {
-    // Force-disable if the override is present. Inter-domain routers run on one ERISC for now.
-    bool force_disable_2_erisc = fabric_context.get_rtoptions().get_disable_fabric_2_erisc_mode() ||
-                                 fabric_context.get_rtoptions().get_fabric_inter_domain();
+    // Force-disable if the override is present
+    bool force_disable_2_erisc = fabric_context.get_rtoptions().get_disable_fabric_2_erisc_mode();
     if (force_disable_2_erisc) {
-        log_debug(
-            tt::LogFabric,
-            "Disabling fabric 2-ERISC mode fabric-wide: {}",
-            fabric_context.get_rtoptions().get_fabric_inter_domain() ? "inter-domain fabric" : "force disable");
+        log_debug(tt::LogFabric, "Disabling fabric 2-ERISC mode due to force disable");
         return false;
     }
 
@@ -327,6 +323,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     next_l1_addr += 2 * eth_channel_sync_size;
 
     if (rtoptions.get_fabric_inter_domain()) {
+        TT_FATAL(
+            is_fabric_two_erisc_enabled(fabric_context),
+            "inter-domain fabric needs two-ERISC routers (Blackhole, 2-ERISC mode on)");
         this->inter_domain_ctrl_address = next_l1_addr;
         next_l1_addr += tt::align(sizeof(tt::tt_fabric::InterDomainRouterControl), eth_word_l1_alignment);
     }
