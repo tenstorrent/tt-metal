@@ -168,12 +168,15 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
             input_num_pages,
             ::hal::get_l1_alignment());
 
-    const uint32_t packet_page_dim =
-        packet_size_bytes / tt::datum_size(datatype_to_dataformat_converter(input_tensor.dtype()));
+    // The intermediate tensor is a byte buffer with one page per packet, in every input layout.
+    Shape intermediate_shape{total_packets, packet_size_bytes};
 
-    Shape intermediate_shape{total_packets, packet_page_dim};
-
-    tt::tt_metal::TensorSpec intermediate_spec(intermediate_shape, final_output_spec.tensor_layout());
+    tt::tt_metal::TensorSpec intermediate_spec(
+        intermediate_shape,
+        tt::tt_metal::TensorLayout(
+            DataType::UINT8,
+            tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+            final_output_spec.tensor_layout().get_memory_config()));
 
     return {intermediate_spec, final_output_spec};
 }
