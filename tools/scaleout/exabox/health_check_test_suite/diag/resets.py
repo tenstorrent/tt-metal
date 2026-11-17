@@ -187,7 +187,10 @@ def fold_post_reset_snapshots(report: dict, post_reset_phases: list[tuple[str, P
         # between snapshots without being a status concern. Status
         # changes are the signal — a chip dropping out, GDDR un-training,
         # FW versions going inconsistent — those all flip a check's status.
-        return tuple(sorted((c.get("name", ""), c.get("status", "")) for c in checks))
+        # host_fru_info is left out: only the first snapshot collects it.
+        return tuple(
+            sorted((c.get("name", ""), c.get("status", "")) for c in checks if c.get("name") != "host_fru_info")
+        )
 
     initial_sig = _check_sig(report["phases"]["snapshot"]["checks"])
     matched, differed = [], []
