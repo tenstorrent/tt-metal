@@ -761,10 +761,10 @@ inline void _record_scalar_normalize_band_replay_(std::uint32_t out_rel) {
     TTI_SFPMUL(LREG_DATA2, LREG_SCALAR_INV_STD, p_sfpu::LCONST_0, LREG_DATA2, 0);
     TTI_SFPMUL(LREG_DATA3, LREG_SCALAR_INV_STD, p_sfpu::LCONST_0, LREG_DATA3, 0);
 
-    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, (out_rel + COL_GROUP_OFFSETS[0]) & DEST_ADDR_MASK);
-    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, (out_rel + COL_GROUP_OFFSETS[1]) & DEST_ADDR_MASK);
-    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, (out_rel + COL_GROUP_OFFSETS[2]) & DEST_ADDR_MASK);
-    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, (out_rel + COL_GROUP_OFFSETS[3]) & DEST_ADDR_MASK);
+    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[0]));
+    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[1]));
+    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[2]));
+    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, dest_addr_wrap(out_rel + COL_GROUP_OFFSETS[3]));
 }
 
 inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
@@ -780,9 +780,9 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index_data);
     math::clear_dst_reg_addr();
 
-    const std::uint32_t mean_rel = ((dst_index_mean - dst_index_data) * DEST_TILE_SIZE_RAW) & DEST_ADDR_MASK;
-    const std::uint32_t inv_std_rel = ((dst_index_inv_std - dst_index_data) * DEST_TILE_SIZE_RAW) & DEST_ADDR_MASK;
-    const std::uint32_t out_rel = ((dst_index_out - dst_index_data) * DEST_TILE_SIZE_RAW) & DEST_ADDR_MASK;
+    const std::uint32_t mean_rel = dest_addr_wrap((dst_index_mean - dst_index_data) * DEST_TILE_SIZE_RAW);
+    const std::uint32_t inv_std_rel = dest_addr_wrap((dst_index_inv_std - dst_index_data) * DEST_TILE_SIZE_RAW);
+    const std::uint32_t out_rel = dest_addr_wrap((dst_index_out - dst_index_data) * DEST_TILE_SIZE_RAW);
 
     // The statistics are scalar and invariant across all eight row bands.
     // Broadcast each once and retain -mean/inv_std in LREG6/LREG7 for the
@@ -794,21 +794,21 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
 
     // Upper half (faces 0/1): band 0 records + executes, bands 1..3 replay.
     _record_scalar_normalize_band_replay_(out_rel);
-    TTI_INCRWC(0, ROW_BAND_STRIDE, 0, 0);
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ ROW_BAND_STRIDE, /*rwc_b*/ 0, /*rwc_a*/ 0);
     for (std::uint32_t band = 1; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
         lltt::replay(REPLAY_SLOT_SCALAR_NORM_BAND, REPLAY_LEN_SCALAR_NORM_BAND);
-        TTI_INCRWC(0, ROW_BAND_STRIDE, 0, 0);
+        TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ ROW_BAND_STRIDE, /*rwc_b*/ 0, /*rwc_a*/ 0);
     }
 
     // RWC.Dst: FACE1_BASE -> FACE2_BASE (INCRWC's increment is 4 bits wide).
-    static_assert(FACE2_BASE - FACE1_BASE == 16, "two 8-step INCRWCs span one face");
-    TTI_INCRWC(0, 8, 0, 0);
-    TTI_INCRWC(0, 8, 0, 0);
+    static_assert(FACE2_BASE - FACE1_BASE == 2 * INCRWC_FACE_HALF_STEP, "two INCRWCs span one face");
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
 
     // Lower half (faces 2/3): bands 0..3 replay.
     for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
         lltt::replay(REPLAY_SLOT_SCALAR_NORM_BAND, REPLAY_LEN_SCALAR_NORM_BAND);
-        TTI_INCRWC(0, ROW_BAND_STRIDE, 0, 0);
+        TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ ROW_BAND_STRIDE, /*rwc_b*/ 0, /*rwc_a*/ 0);
     }
 }
 
