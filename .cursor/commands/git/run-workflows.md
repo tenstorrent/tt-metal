@@ -24,8 +24,9 @@ Analyze branch changes to determine affected build products, trace which tests/s
 
    The two LLK workflows only run when `run-llk-sanity-tests=true` is passed; it defaults to false.
 
-   All of these are internal `workflow_call`-only workflows, so `gh workflow run` cannot start them on their own;
-   `sanity-tests.yaml` is the only way to run them.
+   All of these are internal `workflow_call`-only workflows, so `gh workflow run` cannot start them on their own.
+   `sanity-tests.yaml` is the wrapper that runs them together; some are also reachable through other wrappers
+   (for example `runtime-sanity-tests.yaml`, `tt-metal-l2-nightly.yaml`, `pr-gate.yaml`).
 
    **Run `sanity-tests.yaml` when:**
    - `conftest.py` changed (affects all pytest-based tests)
