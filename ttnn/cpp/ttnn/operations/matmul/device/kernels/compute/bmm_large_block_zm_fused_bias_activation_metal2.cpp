@@ -17,11 +17,7 @@
 #include "api/compute/bcast.h"
 #endif
 #ifdef FUSE_BIAS_SFPU
-#include "api/compute/compute_kernel_api.h"
-#ifdef TRISC_PACK
-#include "ckernel_sfpu_binary_bcast.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
-#endif
+#include "api/compute/sfpu_binary_bcast.h"
 #endif
 
 #include "api/compute/eltwise_binary.h"
@@ -180,27 +176,6 @@ inline void reblock_and_untilize(
     }
     interm_dfb.pop_front(static_cast<uint16_t>(num_tiles_in_row_of_subblocks));
 }
-
-#ifdef FUSE_BIAS_SFPU
-// DEST[dst_data] += row 0 of DEST[dst_row] in FP32, from the pack thread. The fused activation also runs on the pack
-// thread, and the SFPU's registers are shared: running the add on the math thread would let it overlap the previous
-// tiles' activation.
-FORCE_INLINE void sfpu_add_bcast_row_init_pack() {
-    PACK((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
-}
-
-FORCE_INLINE void sfpu_add_bcast_row_pack(uint32_t dst_data, uint32_t dst_row) {
-    PACK((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW),
-        dst_data,
-        dst_row,
-        dst_data,
-        VectorMode::None)));
-}
-#endif
 
 void kernel_main() {
 // RUNTIME ARGS
@@ -639,7 +614,8 @@ void kernel_main() {
                 // FP32 bias on FP32 partials: an FPU add reads both through SrcA/SrcB as TF32, which drops the
                 // bias's low 13 mantissa bits, a per-column error that does not average out. Both buffers
                 // unpack to DEST unchanged instead, and the SFPU adds the bias's row 0 to every row in FP32.
-                // Each output tile takes two of the four FP32 DEST tiles (its partials and its bias tile).
+                // Each output tile takes two DEST tiles (its partials and its bias tile), so an acquire uses four:
+                // all of FP32 DEST in half sync, half of it in full sync.
                 static_assert(row_broadcast_bias, "FUSE_BIAS_SFPU takes a row-broadcast bias");
                 constexpr uint32_t sfpu_bias_tiles_per_acquire = 2;
                 reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
@@ -648,6 +624,10 @@ void kernel_main() {
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                         const bool is_last_in1_subblock_padded =
                             last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
+                        // Unlike the FPU path, the output is reserved before the partials are popped: the chunks
+                        // below unpack and pack one at a time. The two buffers keep separate counters, so neither
+                        // wait depends on the other; when they share L1, chunk i packs over partials that chunk i
+                        // has already unpacked to DEST.
                         mm_partials_dfb.wait_front(out_subblock_num_tiles);
                         untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
                         for (uint32_t first = 0; first < out_subblock_num_tiles; first += sfpu_bias_tiles_per_acquire) {

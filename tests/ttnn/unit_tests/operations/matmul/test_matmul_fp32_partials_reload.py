@@ -23,13 +23,14 @@ import ttnn
 REL_TOL = 2e-4
 
 
-def _compute_config(device, packer_l1_acc):
+def _compute_config(device, packer_l1_acc, dst_full_sync_en=False):
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=packer_l1_acc,
+        dst_full_sync_en=dst_full_sync_en,
     )
 
 
@@ -304,8 +305,11 @@ def test_matmul_fp32_partials_reload_fused_bias(device, factory, packer_l1_acc, 
 # bias would be truncated to TF32 (10 mantissa bits): an offset of ~1000 then loses up to 2^-1, a per-column error
 # that the matmul's own ~1e-4 does not hide. A 3-tile subblock leaves an odd tile after the SFPU's pairs.
 @pytest.mark.parametrize("activation", [None, "sigmoid"])
-@pytest.mark.parametrize("in0_block_w, packer_l1_acc", [(8, False), (2, False), (2, True)])
-def test_matmul_2d_mcast_fp32_bias_added_in_fp32(device, in0_block_w, packer_l1_acc, activation):
+@pytest.mark.parametrize(
+    "in0_block_w, packer_l1_acc, dst_full_sync_en",
+    [(8, False, False), (2, False, False), (2, True, False), (2, False, True)],
+)
+def test_matmul_2d_mcast_fp32_bias_added_in_fp32(device, in0_block_w, packer_l1_acc, dst_full_sync_en, activation):
     if device.arch() == ttnn.device.Arch.QUASAR:
         pytest.skip("the matmul's FP32 SFPU bias add is not built for Quasar")
     torch.manual_seed(0)
@@ -341,7 +345,7 @@ def test_matmul_2d_mcast_fp32_bias_added_in_fp32(device, in0_block_w, packer_l1_
         bias=bias_tt,
         program_config=program_config,
         dtype=ttnn.float32,
-        compute_kernel_config=_compute_config(device, packer_l1_acc),
+        compute_kernel_config=_compute_config(device, packer_l1_acc, dst_full_sync_en),
     )
     output = ttnn.to_torch(output).double().reshape(1, 1, m, n)
     logits = torch.matmul(a.double(), b.double()) + bias.double()
@@ -357,7 +361,7 @@ def test_matmul_2d_mcast_fp32_bias_added_in_fp32(device, in0_block_w, packer_l1_
             bias=bias_tt,
             program_config=program_config,
             dtype=ttnn.float32,
-            compute_kernel_config=_compute_config(device, packer_l1_acc),
+            compute_kernel_config=_compute_config(device, packer_l1_acc, dst_full_sync_en),
         )
         unfused = ttnn.to_torch(ttnn.sigmoid(unfused)).double().reshape(1, 1, m, n)
         assert torch.equal(output, unfused)
