@@ -286,7 +286,9 @@ TEST_F(ServerCachePrunerTest, RemovesTrashOnlyFromExitedProcesses) {
     const fs::path kernel = make_kernel("1", "reader", "11", 0);
     // No process can have this pid (it is above the kernel's pid_max).
     const fs::path dead = kernel.parent_path() / ".jit-prune-trash.12.999999999.1";
-    const fs::path live = kernel.parent_path() / (".jit-prune-trash.13." + std::to_string(::getppid()) + ".1");
+    // pid 1 is alive in every pid namespace. getppid() is not: under `docker exec` the parent is
+    // outside the container's namespace and getppid() returns 0.
+    const fs::path live = kernel.parent_path() / ".jit-prune-trash.13.1.1";
     const fs::path outside_build_key = root_ / "notakey" / "kernels" / "reader" / ".jit-prune-trash.14.999999999.1";
     for (const auto& trash : {dead, live, outside_build_key}) {
         write_file(trash / "brisc" / "brisc.elf", 64 * 1024);
