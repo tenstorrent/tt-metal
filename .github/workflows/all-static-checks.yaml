@@ -223,10 +223,17 @@ jobs:
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
   cmake-version:
-    # Pinned, not ubuntu-latest: this job runs install_dependencies.sh, which only
-    # handles jammy and noble and adds apt.llvm.org repos for clang 17/20 that do
-    # not exist for ubuntu-26.04 (resolute), so apt-get update exits 100. Only
-    # fires when cmake-changed is true, so a workflow-only PR is what trips it.
+    # Floor check for cmake_minimum_required(VERSION 3.25...4.2). CI images ship
+    # CMake 4.2.3, so this installs ~3.25 with lukka/get-cmake and configures on
+    # a bare runner. Configure only searches for a GCC >= 12, Ninja, Python
+    # headers, libnuma, and libhwloc, all in the Ubuntu archive.
+    # install_dependencies.sh also adds apt.llvm.org and the toolchain PPA. This
+    # configure does not use those, and those servers intermittently refuse
+    # connections.
+    # Pinned to 24.04: its default g++ is 13, which meets the GCC 12 floor in
+    # cmake/compilers.cmake. ubuntu-latest is 26.04.
+    # A workflow-only edit still runs the configure: find-changed-files treats
+    # workflow changes as cmake-changed.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -246,9 +253,17 @@ jobs:
       - name: Check CMake version
         if: steps.find-changes.outputs.cmake-changed == 'true'
         run: cmake --version
-      - name: Install Build Dependencies
+      - name: Install configure dependencies
         if: steps.find-changes.outputs.cmake-changed == 'true'
-        run: sudo ./install_dependencies.sh --docker
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            ninja-build \
+            pkg-config \
+            python3-dev \
+            libhwloc-dev \
+            libnuma-dev
       - name: Check CMake compatibility
         if: steps.find-changes.outputs.cmake-changed == 'true'
         env:
