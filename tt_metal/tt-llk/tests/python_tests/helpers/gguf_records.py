@@ -305,6 +305,24 @@ def _pair16(t, b, off):
     ]
 
 
+def _nvfp4_page_scale(u: int) -> int:
+    """NVFP4's page scale byte (gguf_host_packing.cpp): the fp16 bits of S = UE4M3(u) / 2 shifted right by 7, exact
+    since S has four significant bits and lies in [2^-10, 224]; 0 / 1 for UE4M3 0 / 0x7F, where S is 0.
+    """
+    assert u < 128, "UE4M3 scales have bit 7 clear"
+    if u == 0:
+        return 0
+    if u == 0x7F:
+        return 1
+    e, m = u >> 3, u & 7
+    s = m * 2.0**-10 if e == 0 else (1 + m / 8) * 2.0 ** (e - 8)
+    return int(np.array(s, dtype=np.float16).view(np.uint16)) >> 7
+
+
+def _nvfp4_page_scales(word: int) -> int:
+    return sum(_nvfp4_page_scale((word >> (8 * i)) & 0xFF) << (8 * i) for i in range(4))
+
+
 def _quad8(t, b0, o0, b1, o1):
     row = []
     for w in range(16):
@@ -505,7 +523,12 @@ def _scale_page_planes(fmt, t, g):
     elif name == "MXFP4":
         S = [_quad8(t, 2 * g, 0, 2 * g + 1, 0)]
     elif name == "NVFP4":
-        S = [_quad8(t, g // 2, 2 * (g % 2), g // 2, 2 * (g % 2) + 1)]
+        S = [
+            [
+                _nvfp4_page_scales(x)
+                for x in _quad8(t, g // 2, 2 * (g % 2), g // 2, 2 * (g % 2) + 1)
+            ]
+        ]
     elif name in ("Q6_K", "Q2_K"):
         sc = 192 if name == "Q6_K" else 0
         S = [_quad8(t, g, sc + 2 * i, g, sc + 2 * i + 1) for i in range(8)]

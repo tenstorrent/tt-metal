@@ -29,14 +29,6 @@ sfpi_inline vFloat e8m0_half(const vUInt e)
     return sfpi::as<vFloat>(v);
 }
 
-// Unsigned E4M3 (low 7 bits of x) times 0.5 (ggml's ue4m3 conversion) for x other than 0x7F, which decodes to 0.
-sfpi_inline vFloat ue4m3_half(const vUInt x7)
-{
-    const vFloat b = sfpi::as<vFloat>((x7 << 20u) + sfpi::as<vUInt>(sfpi::vConstIntPrgm1));
-    const vFloat a = sfpi::addexp(b, 1) + -0.0078125f;
-    return sfpi::min_max(a, b).first;
-}
-
 // The page's codes are BFP4 datums (sign in bit 3, magnitude code c in bits 0..2) in the [K][N] tile's face order,
 // the E2M1 magnitudes permuted so that c / 4 falls on SFPLUTFP32's segments: c = 0..7 hold 0, 0.5, 4, 6, 1, 1.5,
 // 2, 3. The unpacker reads them with the exponent forced to 15 (dest_srca_mm codes) into the 16-bit DEST rows that the
@@ -59,14 +51,14 @@ constexpr unsigned BFP_K1 = 0x0C000800u; // 8 S | 4 S
 constexpr unsigned BFP_K5 = 0x8C008400u; // -8 S | -2 S
 
 // t and z of the four row groups' S (k-half h) into the page tile's entries 2 h, 2 h + 1 (rows 0..7, before the
-// scale row).
+// scale row). x is the page's scale byte: the fp16 bits of S shifted right by 7, or 0 / 1 where S is 0 (UE4M3 0 / 0x7F,
+// gguf_host_packing.cpp), where z makes the table read 0.
 template <int H>
-sfpi_inline void bfp_scale(const vUInt x7)
+sfpi_inline void bfp_scale(const vUInt x)
 {
-    const vFloat s = ue4m3_half(x7);
-    vUInt b        = (sfpi::as<vUInt>(s) >> 13u) - vUInt(112u << 10);
-    vUInt z        = 0u;
-    v_if (((x7 + 1u) & 0x7Eu) == 0u) // x7 = 0 or 0x7F: S = 0
+    const vUInt b = x << 7u;
+    vUInt z       = 0u;
+    v_if (sfpi::as<vInt>(x) < 0x28)
     {
         z = vUInt(0x7C007C00u);
     }
@@ -94,14 +86,13 @@ sfpi_inline void bfp_words(const C& add)
     sfpi::dst_reg[BFP_PS + 3 * pidx(1, 1, 1) + K].mode<sfpi::DataLayout::U32>() = b3;
 }
 
-// Phase 1 of NVFP4: the table words of the tile's eight groups. S of (a, b, h) is byte 2h + b of the scale row, word
-// parity a. A transpose gives row group g = 2b + a the word of parity a and a per-lane shift picks byte b, so one
+// Phase 1 of NVFP4: the table words of the tile's eight groups. S of (a, b, h) is page byte 2h + b of the scale row,
+// word parity a. A transpose gives row group g = 2b + a the word of parity a and a per-lane shift picks byte b, so one
 // conversion per k-half yields the S of all four row groups; a transpose of four copies then broadcasts row group g's
 // word to every lane.
 sfpi_inline void fp4_bfp_params()
 {
     sfpi::vConstIntPrgm0 = static_cast<int>(BFP_K0);
-    sfpi::vConstIntPrgm1 = 0x3B800000; // ue4m3_half
     sfpi::vConstIntPrgm2 = static_cast<int>(BFP_K1);
     vUInt w0             = ldu(CO + scale_row<NVFP4>() / 2);
     vUInt w1             = ldu(CO + scale_row<NVFP4>() / 2 + 1);
@@ -109,8 +100,8 @@ sfpi_inline void fp4_bfp_params()
     vUInt w3             = w1;
     transp4(w0, w1, w2, w3);
     const vUInt sh = vUInt(25) - ((sfpi::as<vUInt>(sfpi::vConstTileId) >> 5u) << 3u);
-    bfp_scale<0>((w0 << sh) >> 25u);
-    bfp_scale<1>((w0 << (sh - 16u)) >> 25u);
+    bfp_scale<0>((w0 << (sh - 1u)) >> 24u);
+    bfp_scale<1>((w0 << (sh - 17u)) >> 24u);
     bfp_words<0>(sfpi::as<vUInt>(sfpi::vConstIntPrgm0));
     bfp_words<1>(sfpi::as<vUInt>(sfpi::vConstIntPrgm2));
     bfp_words<2>(vUInt(BFP_K5));

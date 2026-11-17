@@ -115,7 +115,7 @@ sfpi_inline vUInt byte_bits(const int base, const int B, const int lsb, const in
     return bits(ldu(base + B / 4), 8 * (B % 4) + lsb, width);
 }
 
-// f16_at and ue4m3_half: b rebias-adds the field into the fp32 exponent (exact for normals), a = 2 b - smallest normal
+// f16_at: b rebias-adds the field into the fp32 exponent (exact for normals), a = 2 b - smallest normal
 // (exact for subnormals), the value is min(a, b). Programmable constants 0 = 112 << 23 (fp16), 1 = 119 << 23 (UE4M3).
 // PRGM1 = false: constant 1 unused (Q8_0, Q4_0, Q5_0, Q4_1, Q5_1).
 template <bool PRGM1 = true>
