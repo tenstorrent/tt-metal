@@ -3,7 +3,7 @@
 
 """Which MoE a prefill block builds: TtMoe or the MoE block's C++ ops (ttnn.experimental.moe_block).
 
-Kimi-K3 defaults to the MoE block (tt/kimi_k3/moe_block_ffn.py): the gate / shared expert (K3: and the
+GLM-5.3 and Kimi-K3 default to the MoE block (tt/kimi_k3/moe_block_ffn.py): the gate / shared expert (K3: and the
 latent pair) from the checkpoint, the routed experts from the TtMoe tensorbin cache. Every other model stays on TtMoe.
 Order: the caller's ``moe_impl`` ("block" / "ttmoe"), then $MOE_IMPL (Kimi-K3: $K3_MOE_IMPL first), then the model's
 default.
@@ -17,7 +17,6 @@ build) pass moe_impl="ttmoe".
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Optional
 
 import ttnn
@@ -26,7 +25,7 @@ moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
 BLOCK = "block"
 TTMOE = "ttmoe"
-_BLOCK_DEFAULT = ("KimiK3Config",)  # model config classes whose MoE is the block by default
+_BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose MoE is the block by default
 
 # The model's own L1_SMALL use a bank next to the block (its other ops' semaphores and words, allocated before the
 # block's slab), where the model's l1_small_size is not that figure:
@@ -38,9 +37,12 @@ _BLOCK_DEFAULT = ("KimiK3Config",)  # model config classes whose MoE is the bloc
 #   test that followed the untraced one ran out of L1_SMALL. KimiK3Config.L1_SMALL_SIZE (4096) is inherited, not
 #   measured, and still floors the mesh open. L1_SMALL is carved from the top of L1 and MLA's chunked attention
 #   (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (both tests pass at 5504 B a bank).
+# - GLM-5.3: 3328 B (the GLM chunked-accuracy CI job, Nov 6: the 576 B its 3904 B mesh left the block), with
+#   matmul_reduce_scatter_prefill's semaphores and mailbox. Was 1536 B, its runner adapter's l1_small_size.
 # Every other model: its l1_small_size.
 _MODEL_L1_SMALL = {
     "KimiK3Config": 3328,
+    "GLM53Config": 3328,
 }
 _L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model's last buffer)
 
@@ -115,23 +117,14 @@ def moe_block_mesh_params(
 
 def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> dict:
     """A Kimi-K3 mesh's device_params with what the MoE block needs when it is K3's MoE: a fabric payload holding one
-    combine row of the latent (2 x 3584 + 32 B), L1_SMALL room for its persistent words and semaphores
-    (model_l1_small_with_block) and the XY torus fabric (a pinned TT_MESH_GRAPH_DESC_PATH must be a torus-XY one: on the 2D
-    mesh fabric the block's first call hangs). Unchanged on TtMoe."""
+    combine row of the latent (2 x 3584 + 32 B) and L1_SMALL room for its persistent words and semaphores
+    (model_l1_small_with_block). The fabric config is the caller's. Unchanged on TtMoe."""
     if not moe_block_enabled("KimiK3Config", moe_impl):
         return params
-    import ttnn
     from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 
     out = dict(params)
-    mgd = os.environ.get("TT_MESH_GRAPH_DESC_PATH", "")
-    assert not mgd or "torus_xy" in Path(mgd).name, (
-        f"Kimi-K3 on the MoE block runs on the XY torus (on the 2D mesh fabric its first call hangs): "
-        f"TT_MESH_GRAPH_DESC_PATH={mgd} is not a torus-XY descriptor - use single_bh_galaxy_torus_xy_graph_descriptor"
-        f".textproto, or K3_MOE_IMPL=ttmoe"
-    )
-    out["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     payload = moe_block_fabric_payload(KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE)
     router = out.get("fabric_router_config")
     if router is None or router.max_packet_payload_size_bytes < payload:
