@@ -118,7 +118,7 @@ void PerDeviceRuntimeArgsChecks::unique_and_common_fields_eager() {
     const CoreCoord plain_core{0, 0}, field_core{1, 0};
     const uint32_t results = results_addr();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const auto kernel = create_kernel(
         program, CoreRangeSet(CoreRange(plain_core, field_core)), results, DataMovementProcessor::RISCV_0);
     for (const auto& core : {plain_core, field_core}) {
@@ -194,7 +194,7 @@ void PerDeviceRuntimeArgsChecks::same_values_keep_version() {
     const CoreCoord core{0, 0};
     const uint32_t results = results_addr();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
     SetRuntimeArgs(program, kernel, core, default_args(core));
     SetCommonRuntimeArgs(program, kernel, default_common_args());
@@ -282,7 +282,7 @@ void PerDeviceRuntimeArgsChecks::legacy_program_moved_away_and_back() {
     const CoreCoord core{0, 0};
     const uint32_t results = results_addr();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
     SetRuntimeArgs(program, kernel, core, default_args(core));
     SetCommonRuntimeArgs(program, kernel, default_common_args());
@@ -319,7 +319,7 @@ void PerDeviceRuntimeArgsChecks::own_args_change_between_enqueues() {
     const CoreCoord core{0, 0};
     const uint32_t results = results_addr();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
     SetRuntimeArgs(program, kernel, core, default_args(core));
     SetCommonRuntimeArgs(program, kernel, default_common_args());
@@ -365,7 +365,7 @@ void PerDeviceRuntimeArgsChecks::trace_replays_capture_time_values() {
     const CoreCoord core{0, 0};
     const uint32_t results = results_addr();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
     SetRuntimeArgs(program, kernel, core, default_args(core));
     SetCommonRuntimeArgs(program, kernel, default_common_args());
@@ -430,7 +430,7 @@ void PerDeviceRuntimeArgsChecks::field_after_kernel_without_args_on_core() {
     const uint32_t results_a = results_addr();
     const uint32_t results_b = results_a + 8192;
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const CoreRangeSet cores(CoreRange(core0, core1));
     // A reads no args on core1 (logical y >= 1).
     const auto kernel_a = create_kernel(
@@ -478,7 +478,7 @@ void PerDeviceRuntimeArgsChecks::field_after_kernel_without_args_on_core() {
 void PerDeviceRuntimeArgsChecks::rejects_invalid_fields() {
     const MeshCoordinateRange range(mesh_device_->shape());
     const CoreCoord core{0, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const auto kernel =
         create_kernel(program, CoreRangeSet(CoreRange(core)), results_addr(), DataMovementProcessor::RISCV_0);
     SetRuntimeArgs(program, kernel, core, default_args(core));
@@ -547,7 +547,7 @@ void PerDeviceRuntimeArgsChecks::program_on_sub_range() {
     const CoreCoord core{0, 0};
     const uint32_t results = results_addr();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
     SetRuntimeArgs(program, kernel, core, default_args(core));
     SetCommonRuntimeArgs(program, kernel, default_common_args());
@@ -579,7 +579,7 @@ void PerDeviceRuntimeArgsChecks::trace_node_in_several_partitions() {
     const CoreCoord core{0, 0}, other_core{1, 0};
     const uint32_t results = results_addr();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
     SetRuntimeArgs(program, kernel, core, default_args(core));
     SetCommonRuntimeArgs(program, kernel, default_common_args());
@@ -594,7 +594,7 @@ void PerDeviceRuntimeArgsChecks::trace_node_in_several_partitions() {
         idx++;
     }
     // A plain program on the first device only, on another core.
-    Program other = CreateProgram();
+    Program other = CreateProgram(*mesh_device_);
     const auto other_kernel =
         create_kernel(other, CoreRangeSet(CoreRange(other_core)), results, DataMovementProcessor::RISCV_0);
     SetRuntimeArgs(other, other_kernel, other_core, default_args(other_core));
@@ -652,7 +652,7 @@ void PerDeviceRuntimeArgsChecks::command_sequence_beyond_one_fetch() {
         return (k << 28) | (core_idx << 12) | word;
     };
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     std::array<KernelHandle, 2> kernels{};
     for (uint32_t k = 0; k < 2; k++) {
         kernels[k] = create_kernel(

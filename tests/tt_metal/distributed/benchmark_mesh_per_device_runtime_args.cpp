@@ -94,7 +94,7 @@ void BM_OneProgram(benchmark::State& state) {
     const bool with_fields = state.range(0) != 0;
     const int64_t reset = state.range(1);
     const MeshCoordinateRange range(mesh_device().shape());
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device());
     const auto kernels = add_kernels(program);
     MeshWorkload workload;
     workload.add_program(range, std::move(program));
@@ -198,7 +198,7 @@ void kernel_main() {
 void BM_ProgramPerDevice(benchmark::State& state) {
     MeshWorkload workload;
     for (const auto& coord : MeshCoordinateRange(mesh_device().shape())) {
-        Program program = CreateProgram();
+        Program program = CreateProgram(mesh_device());
         add_kernels(program);
         workload.add_program(MeshCoordinateRange(coord), std::move(program));
     }
