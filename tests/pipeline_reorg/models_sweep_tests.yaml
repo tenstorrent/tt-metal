@@ -420,9 +420,9 @@
   owner_id: U03PUAKE719
   team: models
   budget_type: sweep
-- name: Trace allocation - Qwen3.6-27B e2e tests
-  cmd: python .github/scripts/utils/model_trace_tests.py run --test-name 'Qwen3.6-27B e2e tests' --sku {sku}
-  model: qwen3.6-27b
+- name: Trace allocation - Qwen3.8-27B e2e tests
+  cmd: python .github/scripts/utils/model_trace_tests.py run --test-name 'Qwen3.8-27B e2e tests' --sku {sku}
+  model: qwen3.8-27b
   model_family: Qwen
   skus:
     bh_quietbox_2:

@@ -87,6 +87,31 @@ class Qwen36RoPESetup:
             device=device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
+        # ROW_MAJOR [max_seq_len, head_dim] tables for the device-resident decode loop's ttnn.embedding RoPE lookup
+        # (decode_rm_tables); built lazily so models that never run that loop do not pay the DRAM.
+        self._decode_rm_tables = None
+
+    def decode_rm_tables(self):
+        """Replicated bf16 ROW_MAJOR DRAM (cos, sin) tables [max_seq_len, head_dim] for an on-device RoPE lookup:
+        ``ttnn.embedding(rope_idx, table, layout=TILE)`` gives the row of position ``rope_idx`` (= KV position +
+        rope_delta) as a [1, 1, head_dim] TILE tensor. Rows are the host decode values bit for bit: the same float32
+        cat([f, f]) cos/sin as prepare_decode_inputs_host, rounded to bf16 by torch (round-to-nearest-even) before the
+        upload.
+        Built on first use (outside any trace) and kept for the model's lifetime."""
+        if self._decode_rm_tables is None:
+            mapper = ttnn.ReplicateTensorToMesh(self.device)
+            self._decode_rm_tables = tuple(
+                ttnn.from_torch(
+                    table.to(torch.bfloat16).contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                )
+                for table in (self.cos_cpu, self.sin_cpu)
+            )
+        return self._decode_rm_tables
 
     def get_rot_mats(self, position_ids: torch.Tensor):
         """Get cos/sin matrices for given positions.

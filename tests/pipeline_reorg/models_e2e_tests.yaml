@@ -506,9 +506,9 @@
   team: models
   budget_type: e2e
 
-- name: Qwen3.6-27B e2e tests
+- name: Qwen3.8-27B e2e tests
   cmd: |
-    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.8-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.8-27B MESH_DEVICE=P150x4
     export QWEN36_SPEC=0  # e2e measures plain decode; MTP spec decode is covered by unit tests until batch>1 lands
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
@@ -516,11 +516,35 @@
     # Same model load + prefill trace capture as traced_128, so it gets the same ceiling.
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "accuracy_512"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
-  model: qwen3.6-27b
+  model: qwen3.8-27b
   model_family: Qwen
   skus:
     bh_quietbox_2:
       timeout: 45
+      tier: 1
+      release_ready: false
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+  budget_type: e2e
+
+- name: Qwen3.8-27B serving tests (Galaxy)
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.8-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.8-27B
+    # One 8-chip ring of the Galaxy: the serving tests below are written for the (1, 8) TP mesh.
+    export MESH_DEVICE=P150x8 TT_VISIBLE_DEVICES=0,1,2,3,27,26,25,24 QWEN36_FABRIC_RING=1
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_serve_decode_host.py
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_vllm_decode_contract.py -k "test_serving_decode_modes_agree"
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_prefill_batched_short.py
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_prefill_trace_any_len.py
+    pytest --timeout 900 models/demos/blackhole/qwen36/tests/test_prefix_cache.py
+    pytest --timeout 900 models/demos/blackhole/qwen36/tests/test_chunked_prefill.py
+    pytest --timeout 1200 models/demos/blackhole/qwen36/tests/test_vllm_batched_mm.py
+  model: qwen3.8-27b
+  model_family: Qwen
+  skus:
+    bh_galaxy:
+      # 27 min measured with a cold kernel cache on one P150x8 ring (five full-model builds dominate).
+      timeout: 33
       tier: 1
       release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
