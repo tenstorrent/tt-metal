@@ -36,6 +36,10 @@ class GLM53Config:
     # Whether to use the fabric2d-optimized dispatch and combine ops in MoE
     # True = use them if the mesh allows, False = use older ops
     MOE_FABRIC2D_TRANSPORT = True
+    # Open the fabric at 8 KB instead of a whole 12352 B token: dispatch_fabric2d then sends each routed token as
+    # two packets (see moe_fabric2d_split_tokens and moe_fabric_payload_size).
+    MOE_FABRIC2D_SPLIT_TOKENS = True
+    MOE_FABRIC_PAYLOAD_FLOOR = 8 * 1024
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
