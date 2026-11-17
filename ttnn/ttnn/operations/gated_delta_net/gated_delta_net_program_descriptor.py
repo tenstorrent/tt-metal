@@ -184,6 +184,10 @@ PREP_NORM_MAX_ROWS = 4
 # have freed its slot, and its next row's head blocks wait for that send. It normalizes this many of its norm units
 # between the conv and the heads of each later row (the time it would wait), where their o precedes its own rows.
 PREP_NORM_MID = 1
+# R-PREP prep cores (bf16 tokens): silu through the bf16 arm of the SFPU sigmoid (exp to one bf16 ULP, one reciprocal
+# iteration) instead of the fp32 one, in the fp32 DEST. 1: the gate factor silu(z) of the bf16 output; 2: also the
+# conv (q, k, v of bf16 tokens).
+PREP_SILU_BF16 = 1
 # R-PREP state step: the prep core sends -(beta exp(c)) (*) kn, so the state core accumulates the k read onto beta V in
 # DEST (the rhs of M in one window: no packed reads, no subtraction window) and starts the output's window with the q
 # read. Same operands and fp32 accumulation as the separate read.
@@ -1918,6 +1922,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_DECAY_ONE_PASS", str(int(DECAY_ONE_PASS))),
             ("GDN_RMS_ONE_COPY", str(int(RMS_ONE_COPY and prep is None and unit_lag(unit_depth)))),
             ("GDN_PREP_NORM_SPLIT", str(int(norm_split))),
+            ("GDN_SILU_BF16", str(int(PREP_SILU_BF16) if prep is not None and conv_on_fpu else 0)),
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),
             ("GDN_PREP_SCALE_FPU", str(int(PREP_SCALE_FPU) if prep is not None else 0)),
             ("GDN_FPU_UNBIAS_BITS", f"{PREP_FPU_UNBIAS_BITS:#x}u"),

@@ -349,6 +349,22 @@ ALWI void silu_scoped(uint32_t dst, RowScope scope) {
     }
 }
 
+// GDN_SILU_BF16 (prep role): the whole tile through the bf16 arm of the SFPU silu (see the host knob).
+#ifndef GDN_SILU_BF16
+#define GDN_SILU_BF16 0
+#endif
+ALWI void silu_tile_bf16(uint32_t dst) {
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (false, 8), dst, VectorMode::RC));
+}
+
+ALWI void silu_conv(uint32_t dst, RowScope scope) {
+    if constexpr (GDN_SILU_BF16 >= 2 && PREP) {
+        silu_tile_bf16(dst);
+    } else {
+        silu_scoped(dst, scope);
+    }
+}
+
 // Row-local unary SFPU ops on the scope's rows (full-tile API call when unscoped).
 ALWI void softplus_scoped(uint32_t dst, RowScope scope) {
     if (scope.full()) {
@@ -737,7 +753,7 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
         }
         silu_tile_init();
         for (uint32_t i = 0; i < n; ++i) {
-            silu_scoped(i, scope);
+            silu_conv(i, scope);
         }
         tile_regs_commit();
         tile_regs_wait();

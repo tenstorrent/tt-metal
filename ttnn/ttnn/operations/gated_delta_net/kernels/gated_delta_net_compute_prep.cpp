@@ -22,7 +22,11 @@ ALWI void zw_block() {
         load(cb_z, vt, 0);
         load(cb_norm_w, vt % W, 1);
         silu_tile_init();
-        silu_tile(0);
+        if constexpr (GDN_SILU_BF16 >= 1) {
+            silu_tile_bf16(0);
+        } else {
+            silu_tile(0);
+        }
         sfpu_bcast_row_init();
         sfpu_mul_bcast_row(0, 1);
         tile_regs_commit();
