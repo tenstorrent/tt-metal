@@ -20,7 +20,8 @@
 //   SCALAR_ITER_VAL (1..8), SCALAR_MODE_VAL (0 = RC, 1 = R, 2 = C), DST_DATA_VAL, DST_SCALAR_VAL, DST_COLDATA_VAL
 //   and SCALAR_VARIANT_VAL : form 3. Variants: 0 the scalar form alone; 1 also the column form on a second copy of
 //   the data (output tile 1); 2 the column-broadcast op runs between the load and the scalar multiply (output tile 1
-//   is the column form); 3 exp_tile_init runs after the load, then the init and the load repeat.
+//   is the column form); 3 exp_tile_init runs after the load, then the init and the load repeat; 4 the load and the
+//   multiply sit in two different acquire groups (the parked value must survive tile_regs_release / acquire).
 //   NUM_OUT_TILES_VAL : 1 or 2 output tiles.
 //
 // DST layout: forms 0..2: dst[0] = data tile (in place, the output), dst[1] = the broadcast tile. Form 3:
@@ -110,6 +111,33 @@ void kernel_main() {
     input_a_cb.wait_front(NUM_IN_TILES);
     input_b_cb.wait_front(NUM_IN_TILES);
     out_cb.reserve_back(kNumOutTiles);
+
+    if constexpr (kForm == 3 && kScalarVariant == 4) {
+        // The parked value against an acquire boundary: the load runs in its own acquire group, which is committed
+        // and released, and the multiply in the next one reads LREG14 without reloading it. DEST does not survive
+        // the boundary (the halves flip), so the data tile is copied again in the second group.
+        tile_regs_acquire();
+        copy_init(input_a_cb_id);
+        copy_tile(input_b_cb_id, 0, kDstBcast);
+        sfpu_bcast_scalar_load(kDstBcast);
+        tile_regs_commit();
+        tile_regs_wait();
+        tile_regs_release();
+
+        tile_regs_acquire();
+        copy_init(input_a_cb_id);
+        copy_tile(input_a_cb_id, 0, kDstData);
+        sfpu_mul_bcast_scalar<kScalarIterations>(kDstData, kScalarMode);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(kDstData, out_cb_id, 0);
+        tile_regs_release();
+
+        input_a_cb.pop_front(NUM_IN_TILES);
+        input_b_cb.pop_front(NUM_IN_TILES);
+        out_cb.push_back(kNumOutTiles);
+        return;
+    }
 
     tile_regs_acquire();
 

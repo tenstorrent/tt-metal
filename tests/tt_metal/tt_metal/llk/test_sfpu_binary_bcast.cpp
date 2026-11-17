@@ -509,7 +509,8 @@ enum class ScalarLayout : uint8_t { LONE, COLUMN };
 
 struct ScalarCase {
     std::string name;
-    uint32_t variant;  // the kernel's SCALAR_VARIANT_VAL: 0 scalar form, 1 plus the column form, 2 survive, 3 re-init
+    uint32_t variant;  // the kernel's SCALAR_VARIANT_VAL: 0 scalar form, 1 plus the column form, 2 survive, 3 re-init,
+                       // 4 the load and the multiply in two different acquire groups
     int iterations;    // SFPU vectors per face, 8 or 2 (4 is fine too; odd counts cover one column parity)
     uint32_t mode;     // 0 RC, 1 R, 2 C
     uint32_t dst_data;
@@ -668,6 +669,12 @@ std::vector<ScalarCase> all_scalar_cases() {
         {"survives_bcast_op", 2, 8, 0, 0, 1, 2, f(0.5f), ScalarLayout::COLUMN, false, true},
         {"survives_bcast_op_r2", 2, 2, 1, 0, 1, 2, f(0.5f), ScalarLayout::COLUMN, false, true},
         {"reload_after_exp_init", 3, 8, 0, 0, 1, 2, f(1.5f), ScalarLayout::LONE, false, true},
+        // The scalar is loaded in one acquire and used in the next, so it must stay in LREG14 across
+        // tile_regs_release / tile_regs_acquire (half-sync and full-sync DEST). This is what allows a kernel to load
+        // it once before a loop of acquires instead of once in every acquire, as the GDN update pass does.
+        {"survives_acquire", 4, 8, 0, 0, 1, 2, f(1.25f), ScalarLayout::LONE, false, true},
+        {"survives_acquire_r2", 4, 2, 1, 0, 1, 2, f(0.5f), ScalarLayout::LONE, false, true},
+        {"survives_acquire_full_sync", 4, 8, 0, 0, 1, 2, f(1.25f), ScalarLayout::LONE, true, true},
         {"slots_3_2", 0, 8, 0, 3, 2, 0, f(1.25f), ScalarLayout::LONE, false, true},
         {"slots_7_4_full_sync", 1, 8, 0, 7, 4, 5, f(0.75f), ScalarLayout::COLUMN, true, true},
         {"slots_6_1_full_sync_r2", 0, 2, 1, 6, 1, 0, f(1.25f), ScalarLayout::LONE, true, true},
