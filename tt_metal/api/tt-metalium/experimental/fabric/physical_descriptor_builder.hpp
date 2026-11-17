@@ -61,11 +61,19 @@ struct FilterReport {
 //
 // allocation (optional): after the host filter, keep only the ASICs at these addresses -- see
 // filter_factory_descriptor_to_allocation. Empty = keep every ASIC of the retained hosts.
+//
+// is_bh_galaxy_rev_c is taken from the first retained host's node_type, as live discovery takes it from the
+// local host's board id.
 ::tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(
     const std::string& fsd_path,
     const std::vector<std::string>& host_filter = {},
     FilterReport* report = nullptr,
     const std::set<::tt::tt_metal::experimental::PhysicalNodeId>& allocation = {});
+
+// build_physical_descriptor_from_file for a system that is not there: the descriptor discovery would build on
+// the mock cluster descriptors generate_cluster_descriptor_from_fsd writes for this FSD, run as the first host.
+// On top of the plain build it numbers every ASIC's umd_unique_id as those descriptors number the chips.
+::tt::tt_metal::PhysicalSystemDescriptor build_offline_physical_descriptor_from_file(const std::string& fsd_path);
 
 // Parse a Factory System Descriptor textproto file from disk.
 // Throws std::runtime_error if the file cannot be read or parsed.

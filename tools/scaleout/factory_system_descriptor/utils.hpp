@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <string>
 #include <set>
 #include <optional>
 #include <cabling_generator/cabling_generator.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <vector>
 #include <tuple>
 
@@ -93,5 +96,15 @@ std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
 // along with a mapping file that maps each rank to its corresponding cluster descriptor file.
 std::string generate_cluster_descriptor_from_fsd(
     const std::string& fsd_filename, const std::string& output_dir, const std::string& base_filename);
+
+// (host_id, tray_id, asic_location) of an ASIC in an FSD
+using FsdAsicKey = std::tuple<uint32_t, uint32_t, uint32_t>;
+
+// The chip ids generate_cluster_descriptor_from_fsd gives each host's ASICs, which UMD then reports: every ASIC on
+// every board of the host, numbered from 0 in (tray_id, asic_location) order.
+std::map<FsdAsicKey, ChipId> fsd_local_chip_ids(const fsd::proto::FactorySystemDescriptor& fsd);
+
+// Whether an FSD Host.node_type names a BH Galaxy rev C. Accepts the torus-suffixed names older FSDs use.
+bool is_bh_galaxy_rev_c_node_type(const std::string& node_type);
 
 }  // namespace tt::scaleout_tools

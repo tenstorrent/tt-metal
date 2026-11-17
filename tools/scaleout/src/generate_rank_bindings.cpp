@@ -103,7 +103,7 @@ PhysicalSystemDescriptor run_psd_discovery() {
 /**
  * @brief Write one mock cluster descriptor per FSD host into `output_dir`/mock_cluster_desc.
  *
- * @return FSD host index -> descriptor path. Host i is the PSD rank build_physical_descriptor_from_file gives it.
+ * @return FSD host index -> descriptor path. Host i is PSD rank i in build_offline_physical_descriptor_from_file.
  */
 std::map<int, std::string> write_offline_mock_cluster_descriptors(
     const std::string& fsd_path, const std::filesystem::path& output_dir) {
@@ -120,44 +120,6 @@ std::map<int, std::string> write_offline_mock_cluster_descriptors(
         rank_to_desc[entry.first.as<int>()] = entry.second.as<std::string>();
     }
     return rank_to_desc;
-}
-
-/**
- * @brief The PSD that Phase 1 discovery builds with one rank per FSD host on the --offline descriptors.
- *
- * Built from the FSD; MetalContext has the first host's descriptor open, and discovery on it supplies what
- * is read off the board ids.
- */
-PhysicalSystemDescriptor build_offline_psd(
-    const std::string& fsd_path, const std::map<int, std::string>& rank_to_desc) {
-    const bool is_bh_galaxy_rev_c = run_psd_discovery().is_bh_galaxy_rev_c();
-    PhysicalSystemDescriptor psd = build_physical_descriptor_from_file(fsd_path);
-
-    // UMD chip ids as the generated descriptors number them: each host's chips in (tray, ASIC location) order.
-    std::map<std::string, std::vector<ASICDescriptor*>> host_to_asics;
-    for (auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        host_to_asics[descriptor.host_name].push_back(&descriptor);
-    }
-    for (auto& [host_name, asics] : host_to_asics) {
-        std::sort(asics.begin(), asics.end(), [](const ASICDescriptor* a, const ASICDescriptor* b) {
-            return std::make_pair(*a->tray_id, *a->asic_location) < std::make_pair(*b->tray_id, *b->asic_location);
-        });
-        const std::string& desc_path = rank_to_desc.at(static_cast<int>(psd.get_rank_for_hostname(host_name)));
-        const std::size_t desc_chips = YAML::LoadFile(desc_path)["arch"].size();
-        TT_FATAL(
-            asics.size() == desc_chips,
-            "FSD host '{}' has {} connected chips but its mock cluster descriptor {} has {}",
-            host_name,
-            asics.size(),
-            desc_path,
-            desc_chips);
-        for (std::size_t i = 0; i < asics.size(); ++i) {
-            asics[i]->umd_unique_id = static_cast<tt::ChipId>(i);
-        }
-    }
-    psd.set_discovery_data(psd.get_hostname_for_rank(0), 0, /*all_hostnames_unique=*/true);
-    psd.set_is_bh_galaxy_rev_c(is_bh_galaxy_rev_c);
-    return psd;
 }
 
 /**
@@ -729,7 +691,7 @@ int main(int argc, char** argv) {
         // Stage: Run PSD discovery
         log_info(tt::LogFabric, "Stage: Running Physical System Descriptor discovery...");
         PhysicalSystemDescriptor psd = args.offline_fsd.has_value()
-                                           ? build_offline_psd(*args.offline_fsd, offline_rank_to_desc)
+                                           ? build_offline_physical_descriptor_from_file(*args.offline_fsd)
                                            : run_psd_discovery();
         log_info(tt::LogFabric, "PSD discovery complete");
 

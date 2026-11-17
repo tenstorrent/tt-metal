@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
+#include <map>
+#include <string>
+#include <vector>
 #include <google/protobuf/text_format.h>
 #include <yaml-cpp/yaml.h>
 
@@ -291,6 +294,10 @@ TEST(Cluster, TestNodeTypeArchitectureAndBoardRevision) {
     EXPECT_EQ(get_node_type_board_revision(NodeType::N300_LB), BoardRevision::UNSPECIFIED);
     EXPECT_EQ(try_get_node_type_from_string("bh_galaxy_rev_c"), NodeType::BH_GALAXY_REV_C);
     EXPECT_FALSE(try_get_node_type_from_string("1x_bh_quietbox").has_value());
+    EXPECT_TRUE(is_bh_galaxy_rev_c_node_type("BH_GALAXY_REV_C"));
+    EXPECT_TRUE(is_bh_galaxy_rev_c_node_type("BH_GALAXY_REV_C_XY_TORUS"));
+    EXPECT_FALSE(is_bh_galaxy_rev_c_node_type("BH_GALAXY_REV_AB_Y_TORUS"));
+    EXPECT_FALSE(is_bh_galaxy_rev_c_node_type(""));
 }
 
 TEST(Cluster, TestGenerateNodeTypeRevisionClusterDescriptorFromFSD) {
@@ -351,10 +358,30 @@ TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
 
     const YAML::Node mapping = YAML::LoadFile(result_file)["rank_to_cluster_mock_cluster_desc"];
     ASSERT_EQ(mapping.size(), static_cast<size_t>(fsd.hosts_size()));
+    std::vector<YAML::Node> cluster_descs;
     for (int host_idx = 0; host_idx < fsd.hosts_size(); ++host_idx) {
         const YAML::Node cluster_desc = YAML::LoadFile(mapping[host_idx].as<std::string>());
         ASSERT_TRUE(cluster_desc["cluster_id"]) << "host " << host_idx;
         EXPECT_EQ(cluster_desc["cluster_id"].as<std::string>(), fsd.hosts(host_idx).hostname());
+        cluster_descs.push_back(cluster_desc);
+    }
+
+    // The descriptors number each host's chips as fsd_local_chip_ids says. UBB Wormhole tray t sits on bus
+    // {0xC0, 0x80, 0x00, 0x40}[t - 1], with the ASIC location in the low bits.
+    const std::vector<uint32_t> tray_bus_ids = {0xC0, 0x80, 0x00, 0x40};
+    std::map<uint32_t, size_t> chips_per_host;
+    for (const auto& [asic, chip_id] : fsd_local_chip_ids(fsd)) {
+        const auto& [host_id, tray_id, asic_location] = asic;
+        const YAML::Node& cluster_desc = cluster_descs.at(host_id);
+        EXPECT_EQ(cluster_desc["asic_locations"][chip_id].as<uint32_t>(), asic_location) << "host " << host_id;
+        EXPECT_EQ(
+            std::stoul(cluster_desc["chip_to_bus_id"][chip_id].as<std::string>(), nullptr, 16),
+            tray_bus_ids.at(tray_id - 1) | asic_location)
+            << "host " << host_id << " tray " << tray_id;
+        ++chips_per_host[host_id];
+    }
+    for (int host_idx = 0; host_idx < fsd.hosts_size(); ++host_idx) {
+        EXPECT_EQ(cluster_descs[host_idx]["arch"].size(), chips_per_host[host_idx]) << "host " << host_idx;
     }
 }
 
