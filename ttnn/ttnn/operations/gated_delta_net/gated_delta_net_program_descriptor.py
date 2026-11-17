@@ -199,6 +199,13 @@ PREP_VEC_COL0 = True
 # R-PREP prep core's RMS norm: o^2 and (o (*)col rinv) (*) (norm_weight silu(z)) as FPU products, four tiles per window
 # and no loads, instead of fp32 SFPU products one tile per window. The output is bf16; o passes the FPU's operands.
 PREP_NORM_FPU = True
+# R-PREP prep core with its own q / k columns: the L2 norm's squares and the scalings q (*)col rinv, k (*)col rinv as
+# FPU products (Kt tiles per window, no loads) instead of fp32 SFPU passes. kn and qn are read only as FPU operands;
+# PREP_L2_UNBIAS (fp32 factor on both inverse norms) scales the mean loss of the added truncations back: the smallest
+# of the scan (1 + 0 / 0.375 / 0.75 / 1 / 1.25 / 1.5 units of 2^-10) at which no gate case's state error is above the
+# SFPU norm's.
+PREP_L2_FPU = True
+PREP_L2_UNBIAS = 1.0 + 1.5 * 2**-10
 # PREP_NORM_SPLIT: a prep core whose stride position is past the inbox depth sends a row only when the state cores
 # have freed its slot, and its next row's head blocks wait for that send. It normalizes this many of its norm units
 # between the conv and the heads of each later row (the time it would wait), where their o precedes its own rows.
@@ -2090,6 +2097,7 @@ def create_program_descriptor(
             rts[2][core.x, core.y] = [hk, batch, tokens, v_eps_bits, role] + rows
         roles[ROLE_QK] = ([core for core, _, _ in qk_cores], *rts)
 
+    l2_fpu = prep is not None and not shared and conv_on_fpu and bool(PREP_L2_FPU)
     compute_kernel_config = _copy_compute_config(compute_kernel_config)  # never mutate the caller's
     modes = list(getattr(compute_kernel_config, "unpack_to_dest_mode", []) or [])
     if len(modes) < NUM_CB_SLOTS:
@@ -2097,6 +2105,8 @@ def create_program_descriptor(
     for idx in U2D_CBS:
         if idx == CB_IN_V and fold:
             continue  # v is a matmul operand of the folded step
+        if idx in (CB_Y_QK, CB_RINV) and l2_fpu:
+            continue  # FPU operands of the prep cores' L2 norm
         if idx in (CB_O_IN, CB_ZW, CB_RINV_O) and prep is not None and PREP_NORM_FPU:
             continue  # FPU operands of the prep cores' norm
         fp32_cb = idx not in TOKEN_CBS or token_dtype == ttnn.float32
@@ -2138,6 +2148,9 @@ def create_program_descriptor(
             ("GDN_GATES_LEFT", str(int(PREP_GATES_LEFT and value_heads <= 16))),
             ("GDN_VEC_COL0", str(int(PREP_VEC_COL0))),
             ("GDN_NORM_FPU", str(int(prep is not None and PREP_NORM_FPU))),
+            ("GDN_L2_FPU", str(int(l2_fpu))),
+            ("GDN_L2_UNBIAS_BITS", f"{_float_bits(PREP_L2_UNBIAS):#x}u"),
+            ("GDN_L2_Q_SCALE_BITS", f"{_float_bits(key_dim**-0.5 * PREP_L2_UNBIAS):#x}u"),
             ("GDN_SILU_BF16", str(int(PREP_SILU_BF16) if prep is not None and conv_on_fpu else 0)),
             ("GDN_SILU_MID", str(int(PREP_SILU_MID) if prep is not None and conv_on_fpu else 0)),
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),

@@ -395,6 +395,11 @@ ALWI void silu_tile_bf16(uint32_t dst) {
 }
 
 // GDN_SILU_MID: x / (1 + exp(-x)) with the bf16 arm's exp, two reciprocal iterations, no rounding to bf16.
+#ifndef GDN_L2_FPU
+#define GDN_L2_FPU 0
+#define GDN_L2_UNBIAS_BITS 0x3f800000u
+#define GDN_L2_Q_SCALE_BITS 0x3f800000u
+#endif
 #ifndef GDN_NORM_FPU
 #define GDN_NORM_FPU 0
 #endif
@@ -1018,6 +1023,59 @@ ALWI void kn_transpose_block(Buffers& bufs);
 // rinv_q = K^-1/2 rsqrt(sum q^2 + 1e-6), rinv_k = rsqrt(sum k^2 + 1e-6);
 // kn -> cb_kq_rows[0, Kt), qn -> cb_kq_rows[Kt, 2Kt), kn^T -> cb_knT, then d (kn_transpose_block).
 ALWI void l2norm_block(Buffers& bufs, RowScope scope) {
+    if constexpr (PREP && GDN_L2_FPU != 0) {
+        // Host PREP_L2_FPU: the squares and q (*)col rinv_q, k (*)col rinv_k as FPU products, Kt tiles per window, no
+        // loads. kn and qn are read only as FPU operands; GDN_L2_UNBIAS_BITS scales the truncations' mean loss back.
+        static_assert(Kt <= ckl::DEST_AUTO_LIMIT);
+        cb_wait_front(cb_y_qk, 2 * Kt);
+        cb_reserve_back(cb_kq_rows, 2 * Kt);
+#pragma GCC unroll 1
+        for (uint32_t part = 0; part < 2; ++part) {
+            cb_reserve_back(cb_sq, Kt);
+            tile_regs_acquire();
+            reconfig_data_format(cb_y_qk, cb_y_qk);
+            mul_init(cb_y_qk, cb_y_qk);
+            for (uint32_t kt = 0; kt < Kt; ++kt) {
+                mul_tiles(cb_y_qk, cb_y_qk, part * Kt + kt, part * Kt + kt, kt);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_first(0, cb_sq, 0);
+            for (uint32_t kt = 1; kt < Kt; ++kt) {
+                pack_at(kt, cb_sq, kt);
+            }
+            tile_regs_release();
+            cb_push_back(cb_sq, Kt);
+            GDN_MARK("m_sq");
+            row_sum<cb_sq, cb_rinv>(
+                bufs,
+                bufs.sq,
+                bufs.rinv,
+                Kt,
+                RsqrtPost{
+                    L2_EPS_BITS, part == 0 ? uint32_t{GDN_L2_Q_SCALE_BITS} : uint32_t{GDN_L2_UNBIAS_BITS}, scope});
+            GDN_MARK("m_rowsum");
+            cb_wait_front(cb_rinv, part + 1);
+            tile_regs_acquire();
+            reconfig_data_format(cb_y_qk, cb_rinv);
+            mul_bcast_cols_init(cb_y_qk, cb_rinv);
+            for (uint32_t kt = 0; kt < Kt; ++kt) {
+                mul_tiles_bcast_cols(cb_y_qk, cb_rinv, part * Kt + kt, part, kt);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_first(0, cb_kq_rows, (1 - part) * Kt);
+            for (uint32_t kt = 1; kt < Kt; ++kt) {
+                pack_at(kt, cb_kq_rows, (1 - part) * Kt + kt);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_kq_rows, 2 * Kt);
+        cb_pop_front(cb_rinv, 2);
+        cb_pop_front(cb_y_qk, 2 * Kt);
+        kn_transpose_block(bufs);
+        return;
+    }
     // q then k: one loop body keeps a single expansion of the square chain and the reduce.
 #pragma GCC unroll 1
     for (uint32_t part = 0; part < 2; ++part) {

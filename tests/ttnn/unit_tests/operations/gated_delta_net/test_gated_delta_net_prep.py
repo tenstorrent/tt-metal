@@ -178,6 +178,7 @@ def test_prep_shared_qk(device, monkeypatch, inputs, token_dtype):
     monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)
     monkeypatch.setattr(gdn_pd, "PREP_HEADS", 1)
     monkeypatch.setattr(gdn_pd, "STATE_FOLD", True)  # "auto" would differ between the two plans
+    monkeypatch.setattr(gdn_pd, "PREP_L2_FPU", False)  # the q / k cores keep the SFPU norm
     torch.manual_seed(17)
     tensors = make_inputs(inputs)
     expected = reference(*(tensors[name] for name in ORDER))
