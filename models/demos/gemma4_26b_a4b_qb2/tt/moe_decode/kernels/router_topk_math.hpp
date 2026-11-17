@@ -96,11 +96,13 @@ inline void topk_softmax_at(Logit logit, volatile tt_l1_ptr uint16_t* pes, volat
         e[i] = exp2_q30(((to_q16(logit(id[i])) - top) * log2e_q30) >> 30);
         sum += e[i];
     }
-    const int64_t inv_sum = (1LL << 60) / sum;  // Q30 sum -> Q30 reciprocal; one 64-bit division
+    // 1 / sum with one 32-bit (hardware) division: the Q30 sum (<= k * 2^30) as Q16 fits 32 bits, inv = 2^32 / sum16
+    const uint32_t sum16 = static_cast<uint32_t>(sum >> 14);
+    const uint32_t inv = 0xFFFFFFFFu / sum16;
     for (uint32_t i = 0; i < k; ++i) {
         const int64_t scale = to_q16(static_cast<uint32_t>(pes[id[i]]) << 16);
-        const int64_t share = (e[i] * inv_sum) >> 30;  // Q30
-        row[i] = q16_to_bf16((share * scale) >> 30);
+        const uint64_t share = (static_cast<uint64_t>(static_cast<uint32_t>(e[i] >> 14)) * inv) >> 16;  // Q16
+        row[i] = q16_to_bf16((static_cast<int64_t>(share) * scale) >> 16);
         row[k + i] = uint_to_bf16(id[i]);
     }
 }
