@@ -258,6 +258,8 @@ class RunTimeOptions {
     uint32_t profiler_riscv_pmc_event4 = 0;
     uint32_t profiler_riscv_pmc_dm_event3 = 0;
     uint32_t profiler_riscv_pmc_dm_event4 = 0;
+    uint32_t profiler_riscv_pmc_dm_event5 = 0;
+    uint32_t profiler_riscv_pmc_dm_event6 = 0;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
@@ -738,6 +740,10 @@ public:
                 compile_hash_str +=
                     fmt::format("_dm{:x}_{:x}", profiler_riscv_pmc_dm_event3, profiler_riscv_pmc_dm_event4);
             }
+            if (profiler_riscv_pmc_dm_event5 != 0 || profiler_riscv_pmc_dm_event6 != 0) {
+                compile_hash_str +=
+                    fmt::format("_dmu{:x}_{:x}", profiler_riscv_pmc_dm_event5, profiler_riscv_pmc_dm_event6);
+            }
         }
         return compile_hash_str;
     }
@@ -775,6 +781,8 @@ public:
     uint32_t get_profiler_riscv_pmc_event4() const { return profiler_riscv_pmc_event4; }
     uint32_t get_profiler_riscv_pmc_dm_event3() const { return profiler_riscv_pmc_dm_event3; }
     uint32_t get_profiler_riscv_pmc_dm_event4() const { return profiler_riscv_pmc_dm_event4; }
+    uint32_t get_profiler_riscv_pmc_dm_event5() const { return profiler_riscv_pmc_dm_event5; }
+    uint32_t get_profiler_riscv_pmc_dm_event6() const { return profiler_riscv_pmc_dm_event6; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }

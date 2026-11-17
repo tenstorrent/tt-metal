@@ -9,7 +9,7 @@ Reference for the performance monitor inside the RISC-V cores of a Tensix tile a
 | Blackhole | BRISC, NCRISC, TRISC0, TRISC1, TRISC2 | yes: `mcycle`, `minstret`, `mhpmcounter3/4` | yes |
 | Blackhole | active ethernet tile ERISC0 | yes: same core and CSRs as the baby cores | yes |
 | Quasar | TRISC0..3 of each Neo | yes: same CSR set and event layout, two extra IF events (section 6) | yes |
-| Quasar | data-movement cores DM0..DM7 | yes: `mcycle`, `minstret`, `mhpmcounter3..6`, set-and-mask event selects (section 7) | yes, DM0 and the DMs that run a kernel (DM2..DM7) |
+| Quasar | data-movement cores DM0..DM7 | yes: `mcycle`, `minstret`, four programmable counters `mhpmcounter3..6`, set-and-mask event selects (section 7) | yes, DM0 and the DMs that run a kernel (DM2..DM7) |
 | Wormhole | all RISC-V cores | no: the cores implement no performance counter CSRs | no |
 | Blackhole | idle ethernet tile, subordinate ERISC1, DRAM tile RISC | same core design | no, see below |
 
@@ -43,13 +43,13 @@ The hardware description is in tt-llk, next to the Tensix counter headers (`tool
 | `riscv_pmc_types.h` | `CoreKind` (`BABY`, `TRISC`, `DM`: how the select is encoded), `PmcEvent` (event names, append only), `Entry` = `{event, select}` |
 | `riscv_pmc_blackhole.h`, `riscv_pmc_quasar.h`, `riscv_pmc_wormhole.h` | The per-core-kind select tables: `baby_events` (Blackhole), `trisc_events` and `dm_events` (Quasar), an empty `baby_events` on Wormhole, which has no counters. The Quasar tables carry `LLK_PERF_TABLE_SECTION` like `quasar.h` |
 | `riscv_pmc_inventory.h` | Picks the arch header from `ARCH_*` and exposes `events_for(CoreKind)` |
-| `riscv_pmc_hw.h` | The CSR addresses and the primitives `select(event3, event4)`, `zero_counters()`, `read_mcycle()`, `read_minstret()`, `read_counter3()`, `read_counter4()`. Not available on Wormhole (`#error`) |
+| `riscv_pmc_hw.h` | The CSR addresses and the primitives `select(event3, event4)`, `zero_counters()`, `read_mcycle()`, `read_minstret()`, `read_counter3()`, `read_counter4()`, plus `select_upper(event5, event6)`, `zero_counters_upper()`, `read_counter5()`, `read_counter6()` for the Quasar data-movement cores. Not available on Wormhole (`#error`) |
 
 The metal consumer is `tt_metal/hw/inc/internal/profiler/riscv_pmc.hpp`: marker ids, payload layout and emission only. The host side is `tools/python/tt_llk_perf/`: `headers.py` parses the tables (`riscv_event_tables(arch)`, `riscv_select_events(arch, kind, select)`, `riscv_event_select`), `riscv_pmc.py` decodes the marker payloads and `riscv_metrics.py` derives IPC, stall and per-instruction metrics. `tools/tracy/perf_counter_analysis.py` has `decode_riscv_pmc_markers`.
 
 Unlike the Tensix counters, a record carries the raw `mhpmevent` select, not an enumerator ordinal, because the select format is the hardware's own and a run may OR several events. The host decodes names by looking selects up in the tables, so `PmcEvent` has no wire-format constraint beyond being append only for stable names.
 
-The firmware hooks are in `tt_metal/hw/firmware/src/tt-1xx/{brisc,ncrisc,trisc}.cc` and `tt-2xx/{trisc,dm}.cc`; the option is parsed in `tt_metal/llrt/rtoptions.cpp` and turned into `-DPROFILE_RISCV_PMC{,_EV3,_EV4,_DM_EV3,_DM_EV4}` in `tt_metal/jit_build/build.cpp`. Nothing was added to the memory map, `dev_msgs.h` or the HAL: the markers use the existing per-RISC profiler buffer. The hash suffix is added only when the option is on.
+The firmware hooks are in `tt_metal/hw/firmware/src/tt-1xx/{brisc,ncrisc,trisc}.cc` and `tt-2xx/{trisc,dm}.cc`; the option is parsed in `tt_metal/llrt/rtoptions.cpp` and turned into `-DPROFILE_RISCV_PMC{,_EV3,_EV4,_DM_EV3,_DM_EV4,_DM_EV5,_DM_EV6}` in `tt_metal/jit_build/build.cpp`. Nothing was added to the memory map, `dev_msgs.h` or the HAL: the markers use the existing per-RISC profiler buffer. The hash suffix is added only when the option is on.
 
 Adding an event: append the enumerator to `PmcEvent`, add one `{PmcEvent::NAME, select}` entry to the right table and bump the array size. The host parsers read the headers, so nothing else changes.
 
@@ -61,12 +61,12 @@ export TT_METAL_PROFILE_RISCV_PMC=0x10110111,0xA0000000   # mhpmevent3, mhpmeven
 
 One or two selects, hex or decimal, comma separated; `mhpmevent4` defaults to 0. The selects use the
 nibble layout of section 5 and apply to every core except the Quasar data-movement cores, which take
-their own pair in `TT_METAL_PROFILE_RISCV_PMC_DM` (section 7). Left unset, the DM counters stay idle and
+their own one to four selects in `TT_METAL_PROFILE_RISCV_PMC_DM` (section 7). Left unset, the DM counters stay idle and
 only `mcycle` and `minstret` are captured on those cores. Setting the option
 forces the device profiler on. The selects are compile-time constants of the baby-core firmware and are
 part of the firmware build key, so changing them rebuilds the firmware. Both selects zero is rejected.
 
-Each core emits three `TS_DATA` markers per kernel launch, all payload in the `data` column of
+Each core emits three `TS_DATA` markers per kernel launch (five on a Quasar data-movement core with counter 5 or 6 armed), all payload in the `data` column of
 `profile_log_device.csv`:
 
 | Marker id | `data` |
@@ -74,6 +74,8 @@ Each core emits three `TS_DATA` markers per kernel launch, all payload in the `d
 | 9092 | `(mhpmcounter4 delta << 32) \| mhpmcounter3 delta` |
 | 9093 | `(minstret delta << 32) \| mcycle delta` |
 | 9094 | `(mhpmevent4 << 32) \| mhpmevent3` |
+| 9095 | `(mhpmcounter6 delta << 32) \| mhpmcounter5 delta`, Quasar data-movement cores with a non-zero select 5 or 6 only |
+| 9096 | `(mhpmevent6 << 32) \| mhpmevent5`, same cores |
 
 The deltas cover the kernel invocation in the firmware (waypoint `R` to `D`). On an ethernet core they cover the kernel call only. On Quasar DM0, which runs no kernel itself, they cover the window from the TRISC launch to the end of the dataflow-buffer drain. On Blackhole BRISC the
 bracket also covers `wait_for_go_message()` when BRISC has no kernel. The selects are re-emitted every
@@ -86,7 +88,7 @@ TRISCs by about 215 B, the Quasar TRISCs by 256 to 276 B and the Quasar DM image
 of 12288 B). The Blackhole BRISC region is 9472 B so that the hook still links next to the five Tensix
 counter groups (9336 B worst case).
 
-Only one event pair is captured per run; a sweep over several pairs needs one run per pair. Without
+Only one event pair is captured per run (two pairs on a Quasar data-movement core); a sweep over several pairs needs one run per pair. Without
 the option the hooks compile to nothing and the firmware images are byte-identical to a build without
 this feature.
 
@@ -98,12 +100,14 @@ this feature.
 | `0xB02` / `0xB82` | `minstret` / `minstreth` | Counts dispatched instructions; not gated by `mcountinhibit`. `0xC02` is an alias. |
 | `0xB03` / `0xB83` | `mhpmcounter3` / `3h` | Programmable counter. |
 | `0xB04` / `0xB84` | `mhpmcounter4` / `4h` | Programmable counter. |
+| `0xB05`, `0xB06` | `mhpmcounter5`, `mhpmcounter6` | Programmable counters of the Quasar data-movement cores only. |
 | `0x323`, `0x324` | `mhpmevent3`, `mhpmevent4` | Event selects, section 5. |
+| `0x325`, `0x326` | `mhpmevent5`, `mhpmevent6` | Event selects of the Quasar data-movement cores only, section 7. |
 | `0x320` | `mcountinhibit` | Only bits 3 and 4 are implemented. Not written by tt-metal. |
 | `0x7C0` | `cfg` (custom) | Bit 8 clear-on-read, bit 7 saturate instead of wrap. Firmware programs other bits of it at boot; the capture reads deltas and never touches it. |
 
 CSRs that are not implemented read as zero; there is no illegal-instruction trap. `mhpmevent5..8`
-exist as addresses only and read zero.
+exist as addresses only and read zero on the baby cores; on the Quasar data-movement cores `mhpmevent5` and `mhpmevent6` are live.
 
 ## 5. Programming model
 
@@ -279,11 +283,14 @@ Quasar TRISC only:
 ## 7. Quasar data-movement cores
 
 The DM cores use the standard 64-bit counters at the same CSR addresses as above (`mcycle`, `minstret`,
-`mhpmcounter3..6`, `mhpmevent3..6`). `mhpmcounter3` and `mhpmcounter4` are captured, so the markers keep
-the same format. Differences from the baby cores:
+`mhpmcounter3..6`, `mhpmevent3..6`), four programmable counters instead of two. Counters 3 and 4 use
+markers 9092 and 9094 like every other core; counters 5 and 6 use markers 9095 and 9096, emitted only when
+select 5 or 6 is non-zero, so a run that arms two counters has the three-marker format. Differences from the
+baby cores:
 
 - `mhpmevent` is `(event mask << 8) | event set`. The counter advances when any masked event of the set
-  fires. Set it with `TT_METAL_PROFILE_RISCV_PMC_DM=<mhpmevent3>[,<mhpmevent4>]`.
+  fires. Set them with `TT_METAL_PROFILE_RISCV_PMC_DM=<mhpmevent3>[,<mhpmevent4>[,<mhpmevent5>[,<mhpmevent6>]]]`.
+  A missing select leaves its counter idle.
 - `mcycle` does not count while the core waits in WFI.
 - The HPM counters are 40 bits and are not reset: the capture zeroes them at the start of each launch.
 - A counter increments one cycle after its event.
@@ -320,6 +327,9 @@ Event sets (the select of one event is `((1 << bit) << 8) | set`; OR the masks o
 Bits 3 to 5 of set 2 are TLB events, which read zero because there is no virtual memory, and are not in the table. Examples:
 `0x201` counts long-latency interlocks, `0x801` instruction cache blocked cycles, `0x1001` data cache
 blocked cycles, `0x202` data cache misses.
+
+Four counters let a run read two event sets at once, for example `0x201,0x801,0x202,0x402` counts long-latency
+interlocks, instruction cache blocked cycles, data cache misses and data cache releases in one launch.
 
 Which DMs are captured: DM0 (window above) and every DM that runs a kernel. DM1 only configures the
 dataflow-buffer remapper and is not captured. The Quasar dispatch firmware is not captured.
@@ -382,7 +392,7 @@ kind = riscv_pmc.core_kind("blackhole", "TRISC_1")        # "baby"
 riscv_pmc.decode_launch("blackhole", kind, launch)         # event names, mcycle, minstret, derived metrics
 ```
 
-`riscv_metrics.compute_riscv_metrics(cycles, instret, counts)` gives `riscv_ipc_ratio`, `riscv_stall_pct`, `riscv_mem_stall_per_tti_push_ratio` (needs `MEM_STALL_ANY` and `MEM_INS_BUF_WRITE` armed in the same run) and, per armed event, `riscv_<event>_pct` (per cycle) and `riscv_<event>_per_instr_ratio`. Absent inputs read `None`. The metrics live apart from `metrics.py` because that module's keys are the warehouse metric catalog. `perf_counter_analysis.decode_riscv_pmc_markers(rows, arch)` pairs the three streams of every core and returns a dataframe; it takes marker rows from a device log and is not part of the ops report, which only carries the Tensix counter markers (id 9090).
+`unpack_launch` takes the two upper payloads as optional fourth and fifth arguments and `decode_launch` then also names `event5` and `event6` on data-movement cores. `riscv_metrics.compute_riscv_metrics(cycles, instret, counts)` gives `riscv_ipc_ratio`, `riscv_stall_pct`, `riscv_mem_stall_per_tti_push_ratio` (needs `MEM_STALL_ANY` and `MEM_INS_BUF_WRITE` armed in the same run) and, per armed event, `riscv_<event>_pct` (per cycle) and `riscv_<event>_per_instr_ratio`. Absent inputs read `None`. The metrics live apart from `metrics.py` because that module's keys are the warehouse metric catalog. `perf_counter_analysis.decode_riscv_pmc_markers(rows, arch)` pairs the three streams of every core and returns a dataframe; it takes marker rows from a device log and is not part of the ops report, which only carries the Tensix counter markers (id 9090).
 
 ## 12. Measured on Blackhole
 
@@ -394,6 +404,6 @@ riscv_pmc.decode_launch("blackhole", kind, launch)         # event names, mcycle
 
 ## 13. Open questions
 
-- Quasar TRISC and DM capture on silicon or an emulator.
+- Quasar TRISC and DM capture on silicon or an emulator, including counters 5 and 6.
 - Idle ethernet and ERISC1 capture need the host profiler to read those cores first.
 - The meaning of individual per-stage events comes from the hardware description; only the union counter, `mcycle`, `EX_INST_RET` and the TRISC-only `MEM_INS_BUF_WRITE` were validated on silicon.

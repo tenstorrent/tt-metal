@@ -117,8 +117,12 @@ def test_csr_addresses_in_the_hw_header():
         "MINSTRET": 0xB02,
         "MHPMCOUNTER3": 0xB03,
         "MHPMCOUNTER4": 0xB04,
+        "MHPMCOUNTER5": 0xB05,
+        "MHPMCOUNTER6": 0xB06,
         "MHPMEVENT3": 0x323,
         "MHPMEVENT4": 0x324,
+        "MHPMEVENT5": 0x325,
+        "MHPMEVENT6": 0x326,
     }
 
 
@@ -148,7 +152,30 @@ def test_decode_launch_dm_with_idle_counters():
     launch = riscv_pmc.unpack_launch(0, (300 << 32) | 600, 0)
     decoded = riscv_pmc.decode_launch("quasar", "dm", launch)
     assert decoded["event3"] == "DISABLED" and decoded["event4"] == "DISABLED"
+    assert decoded["event5"] == "DISABLED" and decoded["event6"] == "DISABLED"
     assert decoded["metrics"]["riscv_ipc_ratio"] == 0.5
+    assert "event5" not in riscv_pmc.decode_launch(
+        "blackhole", "baby", riscv_pmc.unpack_launch(0, 0, 0)
+    )
+
+
+def test_decode_launch_dm_with_four_counters():
+    launch = riscv_pmc.unpack_launch(
+        (40 << 32) | 30,
+        (300 << 32) | 600,
+        (0x801 << 32) | 0x201,
+        (60 << 32) | 50,
+        (0x402 << 32) | 0x202,
+    )
+    assert launch.pmc5 == 50 and launch.pmc6 == 60
+    assert launch.event5 == 0x202 and launch.event6 == 0x402
+    decoded = riscv_pmc.decode_launch("quasar", "dm", launch)
+    assert decoded["event5"] == "DM_MEM_DCACHE_MISS"
+    assert decoded["event6"] == "DM_MEM_DCACHE_RELEASE"
+    m = decoded["metrics"]
+    assert m["riscv_dm_mem_dcache_miss_pct"] == pytest.approx(50 / 600 * 100)
+    assert m["riscv_dm_mem_dcache_release_per_instr_ratio"] == 0.2
+    assert m["riscv_dm_pipe_long_latency_pct"] == pytest.approx(30 / 600 * 100)
 
 
 def test_mem_stall_per_tti_push_needs_both_counters():
@@ -257,6 +284,39 @@ def test_tracy_decoder_names_blackhole_ethernet_events():
     assert list(df["risc_type"]) == ["ERISC"]
     assert df["event3"][0].startswith("BP_PC_STALL_ANY|")
     assert df["mcycle"][0] == 1000 and df["riscv_ipc_ratio"][0] == 0.4
+
+
+def test_tracy_decoder_pairs_the_upper_dm_markers():
+    analysis = _tracy_analysis()
+    rows = []
+    for n in range(2):
+        t = 100 * (n + 1)
+        rows += [
+            _marker(5, "QUASAR_DM2", 9092, t, (n << 32) | 3),
+            _marker(5, "QUASAR_DM2", 9093, t + 1, (300 << 32) | 600),
+            _marker(5, "QUASAR_DM2", 9094, t + 2, (0x801 << 32) | 0x201),
+            _marker(5, "QUASAR_DM2", 9095, t + 3, ((7 + n) << 32) | 9),
+            _marker(5, "QUASAR_DM2", 9096, t + 4, (0x402 << 32) | 0x202),
+        ]
+    df = analysis.decode_riscv_pmc_markers(rows, "quasar")
+    assert len(df) == 2
+    assert set(df["event5"]) == {"DM_MEM_DCACHE_MISS"}
+    assert set(df["event6"]) == {"DM_MEM_DCACHE_RELEASE"}
+    assert list(df["riscv_dm_mem_dcache_release_pct"]) == [
+        pytest.approx(7 / 6),
+        pytest.approx(8 / 6),
+    ]
+
+
+def test_tracy_decoder_without_upper_markers_leaves_them_idle():
+    analysis = _tracy_analysis()
+    rows = [
+        _marker(1, "QUASAR_DM3", 9092, 10, 3),
+        _marker(1, "QUASAR_DM3", 9093, 11, (300 << 32) | 600),
+        _marker(1, "QUASAR_DM3", 9094, 12, 0x201),
+    ]
+    df = analysis.decode_riscv_pmc_markers(rows, "quasar")
+    assert df["event5"][0] == "DISABLED" and df["event6"][0] == "DISABLED"
 
 
 def test_tracy_decoder_short_stream_pairs_what_it_can():

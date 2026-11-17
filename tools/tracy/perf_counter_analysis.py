@@ -234,29 +234,32 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
 
 
 def decode_riscv_pmc_markers(rows: List[Dict[str, Any]], device_arch: str) -> Optional[pd.DataFrame]:
-    """One row per core launch from the RISC-V monitor markers (ids 9092, 9093, 9094) of a device log.
+    """One row per core launch from the RISC-V monitor markers (ids 9092 to 9096) of a device log.
 
-    Each row is a dict with run_host_id, core_x, core_y, risc_type, marker_id, record_time and data. The three
-    streams of a core are paired in time order, so a stream cut short by a full profiler buffer yields fewer rows.
-    The result has the named events of both counters, mcycle, minstret and the derived RISC-V metrics.
+    Each row is a dict with run_host_id, core_x, core_y, risc_type, marker_id, record_time and data. The streams of a
+    core are paired in time order, so a stream cut short by a full profiler buffer yields fewer rows. The upper pair
+    (ids 9095, 9096) exists only for Quasar data-movement cores with a programmed counter 5 or 6.
+    The result has the named events of every counter, mcycle, minstret and the derived RISC-V metrics.
     """
+    all_ids = _riscv_pmc.MARKER_IDS + _riscv_pmc.UPPER_MARKER_IDS
     streams: Dict[Tuple, Dict[int, List[Tuple[int, int]]]] = {}
     for row in rows:
         marker_id = int(row["marker_id"])
-        if marker_id not in _riscv_pmc.MARKER_IDS:
+        if marker_id not in all_ids:
             continue
         key = (row["run_host_id"], row["core_x"], row["core_y"], row["risc_type"])
-        streams.setdefault(key, {i: [] for i in _riscv_pmc.MARKER_IDS})[marker_id].append(
-            (int(row["record_time"]), int(row["data"]))
-        )
+        streams.setdefault(key, {i: [] for i in all_ids})[marker_id].append((int(row["record_time"]), int(row["data"])))
     out = []
     for (run_host_id, core_x, core_y, risc_type), by_id in streams.items():
         kind = _riscv_pmc.core_kind(device_arch, risc_type)
         if kind is None:
             continue
         counts, cycles, events = (sorted(by_id[i]) for i in _riscv_pmc.MARKER_IDS)
-        for (time, c), (_, y), (_, e) in zip(counts, cycles, events):
-            decoded = _riscv_pmc.decode_launch(device_arch, kind, _riscv_pmc.unpack_launch(c, y, e))
+        counts_upper, events_upper = (sorted(by_id[i]) for i in _riscv_pmc.UPPER_MARKER_IDS)
+        for n, ((time, c), (_, y), (_, e)) in enumerate(zip(counts, cycles, events)):
+            cu = counts_upper[n][1] if n < len(counts_upper) else 0
+            eu = events_upper[n][1] if n < len(events_upper) else 0
+            decoded = _riscv_pmc.decode_launch(device_arch, kind, _riscv_pmc.unpack_launch(c, y, e, cu, eu))
             out.append(
                 {
                     "run_host_id": run_host_id,
@@ -266,6 +269,7 @@ def decode_riscv_pmc_markers(rows: List[Dict[str, Any]], device_arch: str) -> Op
                     "record time": time,
                     "event3": decoded["event3"],
                     "event4": decoded["event4"],
+                    **{k: decoded[k] for k in ("event5", "event6") if k in decoded},
                     "mcycle": decoded["mcycle"],
                     "minstret": decoded["minstret"],
                     **decoded["metrics"],

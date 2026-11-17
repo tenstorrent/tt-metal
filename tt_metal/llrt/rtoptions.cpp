@@ -6,6 +6,7 @@
 #include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <cstdio>
@@ -1277,26 +1278,36 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         }
 
         // TT_METAL_PROFILE_RISCV_PMC_DM
-        // Quasar data-movement cores only: their mhpmevent3/4 selects, (event mask << 8) | event set, comma
-        // separated. Only read together with TT_METAL_PROFILE_RISCV_PMC. Unset leaves both counters idle,
-        // so only mcycle and minstret are captured on those cores.
-        // Usage: export TT_METAL_PROFILE_RISCV_PMC_DM=0x201,0x801
+        // Quasar data-movement cores only: their mhpmevent3 to mhpmevent6 selects, (event mask << 8) | event set,
+        // comma separated, one to four values. Only read together with TT_METAL_PROFILE_RISCV_PMC. Unset leaves
+        // the counters idle, so only mcycle and minstret are captured on those cores.
+        // Usage: export TT_METAL_PROFILE_RISCV_PMC_DM=0x201,0x801,0x202,0x402
         case EnvVarID::TT_METAL_PROFILE_RISCV_PMC_DM: {
+            std::array<unsigned long, 4> ev{};
             char* end = nullptr;
-            const unsigned long ev3 = std::strtoul(value, &end, 0);
-            unsigned long ev4 = 0;
-            if (end != nullptr && *end == ',') {
-                ev4 = std::strtoul(end + 1, &end, 0);
+            const char* cursor = value;
+            size_t parsed = 0;
+            bool ok = true;
+            while (ok && parsed < ev.size()) {
+                ev[parsed] = std::strtoul(cursor, &end, 0);
+                ok = end != cursor && ev[parsed] <= std::numeric_limits<uint32_t>::max();
+                ++parsed;
+                if (ok && *end == ',' && parsed < ev.size()) {
+                    cursor = end + 1;
+                } else {
+                    break;
+                }
             }
-            if (end == value || (end != nullptr && *end != '\0') || ev3 > std::numeric_limits<uint32_t>::max() ||
-                ev4 > std::numeric_limits<uint32_t>::max()) {
+            if (!ok || *end != '\0') {
                 TT_THROW(
-                    "TT_METAL_PROFILE_RISCV_PMC_DM=\"{}\" could not be parsed. Expected one or two 32-bit "
-                    "integers (hex accepted), e.g. 0x201,0x801.",
+                    "TT_METAL_PROFILE_RISCV_PMC_DM=\"{}\" could not be parsed. Expected one to four 32-bit "
+                    "integers (hex accepted), e.g. 0x201,0x801,0x202,0x402.",
                     value);
             }
-            this->profiler_riscv_pmc_dm_event3 = static_cast<uint32_t>(ev3);
-            this->profiler_riscv_pmc_dm_event4 = static_cast<uint32_t>(ev4);
+            this->profiler_riscv_pmc_dm_event3 = static_cast<uint32_t>(ev[0]);
+            this->profiler_riscv_pmc_dm_event4 = static_cast<uint32_t>(ev[1]);
+            this->profiler_riscv_pmc_dm_event5 = static_cast<uint32_t>(ev[2]);
+            this->profiler_riscv_pmc_dm_event6 = static_cast<uint32_t>(ev[3]);
             break;
         }
 
