@@ -36,7 +36,7 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 CB_LAND, CB_GAMMA, CB_SCALER, CB_SQ, CB_PART, CB_GATHER, CB_INV, CB_XG, CB_OUT, CB_STAGE = range(10)
 SEM_GATHER = 0
 SEM_TOKEN = 1
-PUSH_AHEAD = 2  # local row cores of a link that may push ahead of the token chain
+PUSH_AHEAD = 3  # local row cores of a link that may push ahead of the token chain
 TILE_BF16 = 2048
 TILE_FP32 = 4096
 
@@ -237,7 +237,7 @@ def _row_layout(G, Wt, P):
     return a, Wt + npk, slot_of
 
 
-RELAY_LAG = 2  # a relay of tile-row t is sent after this port's own packets of tile-row t + RELAY_LAG
+RELAY_LAG = 3  # a relay of tile-row t is sent after this port's own packets of tile-row t + RELAY_LAG
 FAR_LEAD = 0  # an own relay-bound half of tile-row t is sent with the own direct halves of tile-row t - FAR_LEAD
 
 
@@ -348,6 +348,7 @@ def _state(mesh_device, plan, key):
 # ---------------------------------------------------------------------------------------------------------------------
 
 PKT_GROUP = 4  # packets between sender header flushes
+PORT_FETCH = 2  # own packets each port reads from DRAM itself (its first sends)
 
 
 def _crs(cores):
@@ -437,10 +438,17 @@ def _build(mesh_device, plan, st, x, gamma, out, epsilon, cfg):
                 token[b] = (int(t >= PUSH_AHEAD), vxy(plan["row_cores"][(nxt, q)]) if nxt is not None else 0)
 
         # where each packet held by a row core of this chip goes next: (b, s, landing slot) -> [(port core, item)]
+        # (the first PORT_FETCH own packets of each port are read from DRAM by the port itself)
         fwd = {}
+        self_fetch = {}
         for (n, l), core in ch["ports"].items():
             sgn = +1 if n == "next" else -1
+            own_seen = 0
             for idx, it in enumerate(sched["sends"][(q, sgn, l)]):
+                if not it["relay"] and own_seen < PORT_FETCH:
+                    own_seen += 1
+                    self_fetch.setdefault((n, l), []).append((idx, it["row"] * Wt + it["c"], it["n"]))
+                    continue
                 fwd.setdefault((it["b"], it["s"], it["off"]), []).append((vxy(core), idx))
 
         # ---- row cores ----
@@ -460,7 +468,7 @@ def _build(mesh_device, plan, st, x, gamma, out, epsilon, cfg):
                 wr_rt[cx][cy] = [out_addr, ctr_addr, SEM_GATHER, p, b * rows_per * G * Wt + p * Wt, G * Wt] + peers
 
         # ---- port cores ----
-        ps_rt = ttnn.RuntimeArgs()
+        ps_rt, pr_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for (n, l), core in ch["ports"].items():
             sgn = +1 if n == "next" else -1
             items = sched["sends"][(q, sgn, l)]
@@ -475,6 +483,8 @@ def _build(mesh_device, plan, st, x, gamma, out, epsilon, cfg):
                 )
             )
             ps_rt[core[0]][core[1]] = args
+            sf = self_fetch.get((n, l), [])
+            pr_rt[core[0]][core[1]] = [in_addr, ctr_addr, st["salt"], len(sf)] + [w for e in sf for w in e]
 
         program.kernels = [
             ttnn.KernelDescriptor(
@@ -500,6 +510,14 @@ def _build(mesh_device, plan, st, x, gamma, out, epsilon, cfg):
                 runtime_args=cm_rt,
                 defines=zones,
                 config=ccfg,
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "port_reader.cpp"),
+                core_ranges=port_set,
+                compile_time_args=[TILE_BF16, stage_slot_bytes] + in_ct,
+                runtime_args=pr_rt,
+                defines=zones,
+                config=dm("RISCV_1", NOC0),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "port_sender.cpp"),

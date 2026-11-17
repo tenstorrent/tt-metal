@@ -67,7 +67,6 @@ void kernel_main() {
         cb_wait_front(CB_LAND, rows);  // the reader publishes one page per tile-row once all of it is here
     }
     cb_wait_front(CB_SCALER, 1);
-    cb_wait_front(CB_GAMMA, Wt);
 
     for (uint32_t r = 0; r < rows; ++r) {
         const uint32_t rb = base + r * RL::slots;
@@ -88,8 +87,13 @@ void kernel_main() {
             pack_tile(0, CB_PART);
             tile_regs_release();
             cb_push_back(CB_PART, 1);
-
+        }
+        {
+            AGRN_ZONE("rc_xg");
             // ---- xg_j = x_j * gamma_j ----
+            if (r == 0) {
+                cb_wait_front(CB_GAMMA, Wt);
+            }
             reconfig_data_format(CB_LAND, CB_GAMMA);
             pack_reconfig_data_format(CB_XG);
             mul_bcast_rows_init(CB_LAND, CB_GAMMA);

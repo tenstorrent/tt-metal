@@ -40,7 +40,7 @@ void kernel_main() {
     const uint32_t g_stick0 = get_arg_val<uint32_t>(a++);      // first gamma stick (= first output tile column)
     const uint32_t salt = get_arg_val<uint32_t>(a++);
     const uint32_t token_sem = get_semaphore(get_arg_val<uint32_t>(a++));
-    const uint32_t token_wait = get_arg_val<uint32_t>(a++);  // local: wait for a push token before pushing
+    const uint32_t token_wait = get_arg_val<uint32_t>(a++);  // local: wait for the token before reading my slice
     const uint32_t token_next = get_arg_val<uint32_t>(a++);  // local: (x << 16) | y of the core to pass it to, or 0
     const uint32_t fwd_idx = a;  // per packet (row-major, RowLayout order): count, then count x ((x << 16) | y, slot)
 
@@ -53,6 +53,13 @@ void kernel_main() {
     const uint32_t land = get_write_ptr(CB_LAND) + parity * blk * tile_bytes;
     const auto in = TensorAccessor(in_args, in_addr, tile_bytes);
     if (is_local) {
+        // The ports take this chip's packets in tile-row order. Only the first rows of each link read DRAM right away
+        // (few readers: their reads are fast); the others wait for the token of the row PUSH_AHEAD before them, so the
+        // reads and pushes stream in send order instead of 20 cores contending for DRAM and the ports' NoC ingress.
+        if (token_wait) {
+            AGRN_ZONE("rr_token_wait");
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_sem), 1);
+        }
         AGRN_ZONE("rr_local_issue");
         for (uint32_t r = 0; r < rows; ++r) {
             for (uint32_t j = 0; j < Wt; ++j) {
@@ -72,10 +79,6 @@ void kernel_main() {
             noc_async_read(g.get_noc_addr(g_stick0 + j), gbase + j * tile_bytes, 64);
         }
     };
-    if (!is_local) {
-        read_gamma();
-    }
-
     // packet k of my block: its landing address and forward list
     uint32_t pk_addr[npk], pk_bytes[npk], pk_fwd[npk];
     {
@@ -108,12 +111,6 @@ void kernel_main() {
             noc_async_read_barrier();
         }
         AGRN_ZONE("rr_local_push");
-        // the ports take this chip's packets in tile-row order and their NoC ingress is shared by every local row core:
-        // push in order (a token chain over the local row cores of a link, a few rows ahead), so the packet a port
-        // needs next is not queued behind ones it needs later
-        if (token_wait) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_sem), 1);
-        }
         for (uint32_t i = 0; i < npk; ++i) {
             write_tag(pk_addr[i] + pk_bytes[i], tag, salt);
             forward(i);
@@ -138,18 +135,26 @@ void kernel_main() {
         }
         cb_push_back(CB_SCALER, 1);
     }
-    noc_async_read_barrier();  // gamma (and my own slice)
-    for (uint32_t j = 0; j < Wt; ++j) {
-        volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gbase + j * tile_bytes);
-        for (uint32_t i = 0; i < 8; ++i) {
-            t[128 + i] = t[8 + i];  // elements 16..31 -> face 1 row 0
+    auto finish_gamma = [&]() {
+        noc_async_read_barrier();
+        for (uint32_t j = 0; j < Wt; ++j) {
+            volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gbase + j * tile_bytes);
+            for (uint32_t i = 0; i < 8; ++i) {
+                t[128 + i] = t[8 + i];  // elements 16..31 -> face 1 row 0
+            }
         }
+        cb_push_back(CB_GAMMA, Wt);
+    };
+    if (is_local) {
+        finish_gamma();
     }
-    cb_push_back(CB_GAMMA, Wt);
     if (!is_local) {
         AGRN_ZONE("rr_arrive_wait");
         // forward every packet the moment it lands (in whatever order they come)
+        // gamma is read once the first packet is here: 60 row cores x Wt tiny reads at the start of the call would
+        // queue in DRAM in front of the reads this chip's first packets wait for
         uint32_t pending = (npk == 32) ? 0xFFFFFFFFu : ((1u << npk) - 1);
+        bool gamma_issued = false;
         while (pending) {
             invalidate_l1_cache();
             for (uint32_t i = 0; i < npk; ++i) {
@@ -157,10 +162,15 @@ void kernel_main() {
                     if (tag_ok(pk_addr[i] + pk_bytes[i], tag, salt)) {
                         pending &= ~(1u << i);
                         forward(i);
+                        if (!gamma_issued) {
+                            read_gamma();
+                            gamma_issued = true;
+                        }
                     }
                 }
             }
         }
+        finish_gamma();
     }
     cb_push_back(CB_LAND, rows);
 
