@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// GGUF page helpers (experimental/gguf_page.h) on a data movement core, for test_gguf_page_helpers.cpp. Pages from
-// DRAM land in c_0.
-//   GGUF_LOOKUP_RVV = 0: prepare_page<GGUF_FMT, GGUF_BRANCH_FREE> on each page in place, the pages back to DRAM.
-//   GGUF_LOOKUP_RVV = 1: the pages go to the compute kernel gguf_lookup_rvv.cpp; its two results (c_16 scalar, c_17
-//                        vector) go back to DRAM.
-// Runtime args: src address, dst address, dst2 address (RVV only), page count. DRAM bank 0.
+// For test_gguf_page_helpers.cpp: prepare_page on each page of c_0 (or, GGUF_LOOKUP_RVV, gguf_lookup_rvv.cpp's two
+// results) back to DRAM. Runtime args: src, dst, dst2 (RVV) addresses in bank 0, page count.
 
 #include <cstdint>
 

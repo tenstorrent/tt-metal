@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The GGUF page helpers (tt_metal/hw/inc/experimental/gguf_page.h, gguf_lookup_rvv.h) on random pages, bit for bit
-// against a host reference written from the page layout's description:
-//   - prepare_page on a data movement core, for every format, both scale conversions;
-//   - lookup_grid and lookup_grid_rvv on the pack thread (ComputeConfig::enable_trisc2_rvv), for the codebook formats.
+// The GGUF page helpers (experimental/gguf_page.h, gguf_lookup_rvv.h) on random pages against a host reference: on a
+// data movement core and on the pack thread (scalar and vector lookups), and lookup_grid's splits on the host.
 
 #include <cmath>
 #include <cstdint>
@@ -23,6 +21,7 @@
 
 #include "device_fixture.hpp"
 #include "tt_metal/hw/inc/experimental/gguf_level_tables.h"
+#include "tt_metal/hw/inc/experimental/gguf_page.h"
 #include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/experimental/ckernel_gguf_page.h"
 
 namespace tt::tt_metal {
@@ -150,6 +149,8 @@ std::vector<std::uint32_t> random_pages(std::uint32_t fmt, std::mt19937& rng) {
     return pages;
 }
 
+}  // namespace
+
 class GgufPageHelpersFixture : public UnitMeshAnyDispatchFixture {
 protected:
     void SetUp() override {
@@ -215,8 +216,6 @@ protected:
     }
 };
 
-}  // namespace
-
 TEST_F(GgufPageHelpersFixture, PreparePageAllFormats) {
     std::mt19937 rng(3);
     for (std::uint32_t fmt = 1; fmt <= 25; fmt++) {
@@ -254,6 +253,46 @@ TEST_F(GgufPageHelpersFixture, LookupGridRvvMatchesScalar) {
             }
         }
     }
+}
+
+// lookup_grid's splits: shares of whole 8-word batches (lookup_split_ok), which together give the whole lookup; an
+// uneven split (rejected on the device) still stays inside the page's level codes.
+template <Format FMT>
+void check_splits(std::mt19937& rng) {
+    namespace gg = ::experimental::gguf;
+    const PageLayout L = layout_of(FMT);
+    const std::uint32_t words = L.rows * 16, levels = 2 * gg::index_words<FMT>();
+    std::vector<std::uint32_t> page(words);
+    for (auto& w : page) {
+        w = rng();
+    }
+    const auto* indices = page.data() + gg::index_offset<FMT>() / 4;
+    std::vector<std::uint32_t> whole(words + 16, 0xA5A5A5A5u);
+    gg::lookup_grid<FMT>(indices, gg::level_table<FMT>(), whole.data());
+    for (const std::uint32_t parts : {1u, 2u, 3u, 4u, 8u}) {
+        SCOPED_TRACE("parts " + std::to_string(parts));
+        EXPECT_EQ(gg::lookup_split_ok<FMT>(parts), (gg::index_words<FMT>() / 8) % parts == 0);
+        std::vector<std::uint32_t> split(words + 16, 0xA5A5A5A5u);
+        for (std::uint32_t part = 0; part < parts; part++) {
+            gg::lookup_grid<FMT>(indices, gg::level_table<FMT>(), split.data(), part, parts);
+        }
+        EXPECT_EQ(split, whole);
+        for (std::uint32_t w = levels; w < split.size(); w++) {
+            ASSERT_EQ(split[w], 0xA5A5A5A5u) << "word " << w << " past the level codes";
+        }
+    }
+}
+
+TEST(GgufPageHelpersHost, LookupGridSplits) {
+    std::mt19937 rng(5);
+    check_splits<Format::IQ2_XXS>(rng);
+    check_splits<Format::IQ2_XS>(rng);
+    check_splits<Format::IQ1_S>(rng);
+    check_splits<Format::IQ3_S>(rng);
+    check_splits<Format::IQ3_XXS>(rng);
+    EXPECT_FALSE(::experimental::gguf::lookup_split_ok<Format::IQ2_XXS>(3));
+    EXPECT_FALSE(::experimental::gguf::lookup_split_ok<Format::IQ2_XXS>(8));
+    EXPECT_TRUE(::experimental::gguf::lookup_split_ok<Format::IQ3_S>(8));
 }
 
 }  // namespace tt::tt_metal

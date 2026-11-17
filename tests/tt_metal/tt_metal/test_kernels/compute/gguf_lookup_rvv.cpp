@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// GGUF grid lookups on the pack thread (TRISC2), for test_gguf_page_helpers.cpp and test_trisc2_rvv.cpp: each page of
-// c_0 through lookup_grid into c_16 and, with ComputeConfig::enable_trisc2_rvv, through lookup_grid_rvv into c_17.
-// The unpack thread waits for the pages and sends their address. Runtime arg: page count. Define: GGUF_FMT.
+// Grid lookups on the pack thread for test_gguf_page_helpers.cpp / test_trisc2_rvv.cpp: c_0's pages through
+// lookup_grid into c_16 and (enable_trisc2_rvv) lookup_grid_rvv into c_17. Runtime arg: page count.
 
 #include <cstdint>
 

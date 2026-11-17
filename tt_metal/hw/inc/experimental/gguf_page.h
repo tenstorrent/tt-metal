@@ -15,14 +15,12 @@
 #if defined(__riscv)
 #include "internal/risc_attribs.h"
 #endif
+#if defined(KERNEL_BUILD)
+#include "api/debug/assert.h"
+#endif
 
-// RISC-V side of the Blackhole GGUF decoders (tt-llk sfpu/experimental/ckernel_sfpu_gguf_decode.h): the steps a data
-// movement core or a TRISC runs on a GGUF page in L1 before it is unpacked to DEST. The page layout and the format ids
-// are the LLK's (experimental/ckernel_gguf_page.h).
-//   prepare_scales: fp32 copies of the page's fp16 scale fields, so the SFPU needs no fp16 conversion for them;
-//   lookup_grid:    the codebook formats' grid indices to level codes, through the format's level table.
-// The host uses lookup_grid too (from_gguf / to_gguf of the expanded layouts); prepare_scales and prepare_page are
-// RISC-V only.
+// Steps a RISC-V core runs on a GGUF page in L1 before its unpack (page layout: experimental/ckernel_gguf_page.h).
+// lookup_grid also runs on the host; prepare_scales and prepare_page are RISC-V only.
 
 namespace experimental::gguf {
 
@@ -72,11 +70,8 @@ inline std::uint32_t fp16_to_fp32(const std::uint32_t h) {
 }
 
 #if defined(__riscv)
-// The fp32 copies of a page's fp16 scale rows: fp16 row raw_rows + f, half b (column 16p + 2c + b of word 2c + p) goes
-// to rows R + 8f + 4b .. R + 8f + 4b + 3 (raw_rows = scale_rows - fp16_rows), R = scale_rows rounded up to 4, the same
-// 16 words in each of the four rows, so that one SFPU load gives every lane its column's value. `scales` points at the
-// page's scale fields. branch_free: a row of normal values converts with integer ops only; a row with a zero,
-// subnormal, inf or NaN converts again through fp16_to_fp32. Both give the same bits.
+// fp32 copies of the page's fp16 scale rows, four rows per fp16 half-row (ckernel_gguf_page.h); branch_free converts
+// normal rows with integer ops and the others through fp16_to_fp32, with the same bits.
 template <Format FMT, bool branch_free = true>
 inline void prepare_scales(volatile tt_l1_ptr std::uint32_t* scales) {
     constexpr PageLayout L = page_layout<FMT>();
@@ -136,15 +131,14 @@ constexpr const std::uint16_t* level_table() {
     }
 }
 
-// Index words of a codebook page, four grid indices each.
-// MXFP4: c_0 holds a record whole as two pages of scale_offset + 64 bytes (gguf_matmul_reader.cpp): K tile 2g's codes
-// with the group's scale row, then K tile 2g + 1's codes. The second page's scale row is the first page's, 64 bytes
-// before the second page: K tile t's words_shift (dest_srca_mm_page_unpack_codes).
+// MXFP4 pages in pairs per record: K tile t's words_shift (dest_srca_mm_page_unpack_codes); an odd tile reads the
+// scale row of the page before it.
 template <Format FMT>
 constexpr std::int32_t paired_words_shift(const std::uint32_t t) {
     return FMT == Format::MXFP4 && t % 2 == 1 ? -static_cast<std::int32_t>(page_layout<FMT>().scale_offset + 64) : 0;
 }
 
+// Index words of a codebook page, four grid indices each.
 template <Format FMT>
 constexpr std::uint32_t index_words() {
     return FMT == Format::IQ3_S || FMT == Format::IQ3_XXS ? 64 : 32;
@@ -156,18 +150,14 @@ constexpr std::uint32_t index_offset() {
     return page_layout<FMT>().code_offset + (FMT == Format::IQ1_S || FMT == Format::IQ1_M ? 0 : 128);
 }
 
-// Codebook formats: the level codes of a page's grid indices, two 16-bit codes per output word, element i of a grid
-// entry at bits w i (level_table). `indices` points at the page's index words, `levels` at the page's first byte.
-//   IQ2_XXS, IQ3_XXS: 32 / 64 index words of four 8-bit indices.
-//   IQ1_S, IQ1_M, IQ2_S: 32 index words of four low index bytes; 32-bit word j after them holds the high bits of
-//     index words 2j (bytes 0..3 at bits 8, 8 + w, 24, 24 + w) and 2j + 1 (at 0, w, 16, 16 + w), w = 3 (IQ1_*) or 2
-//     (IQ2_S); its other bits are the decoder's.
-//   IQ2_XS: 32 index words of low index bytes; the ninth bit of index word m = 8l + c's byte k is bit 8k + 7 of word
-//     16 (l / 2) + 2c + l % 2 of the 32 sign words before them.
-//   IQ3_S: 64 index words of low index bytes; word k < 8 of the 12 after them holds the high bits of index words
-//     8k + i, bytes 0..3 at bits i, 8 + i, 16 + i, 24 + i; byte 8 (m / 32) + m % 8 of words 8..11 is ORed into bits
-//     12..15 of index word m's two codes when (m / 8) % 4 == 0 (low nibble into the first): the columns' scales.
-// part / parts: this call looks up part `part` of `parts` equal shares of the index words.
+// Whether lookup_grid can split FMT's index words into `parts` equal shares of whole 8-word batches.
+template <Format FMT>
+constexpr bool lookup_split_ok(const std::uint32_t parts) {
+    return parts > 0 && (index_words<FMT>() / 8) % parts == 0;
+}
+
+// Codebook formats: a page's grid indices to level codes through level_table, two per output word, for share `part`
+// of `parts` of the index words (lookup_split_ok).
 template <Format FMT, typename Out>
 inline __attribute__((always_inline)) void lookup_grid(
     const std::uint32_t* indices,
@@ -176,9 +166,12 @@ inline __attribute__((always_inline)) void lookup_grid(
     const std::uint32_t part = 0,
     const std::uint32_t parts = 1) {
     static_assert(is_codebook<FMT>(), "lookup_grid: not a codebook format");
-    constexpr std::uint32_t words = index_words<FMT>();
-    const std::uint32_t m_begin = part * words / parts;
-    const std::uint32_t m_end = (part + 1) * words / parts;
+    constexpr std::uint32_t batches = index_words<FMT>() / 8;
+#if defined(KERNEL_BUILD)
+    ASSERT(lookup_split_ok<FMT>(parts) && part < parts);
+#endif
+    const std::uint32_t m_begin = 8 * (part * batches / parts);
+    const std::uint32_t m_end = 8 * ((part + 1) * batches / parts);
     if constexpr (FMT == Format::IQ3_S || FMT == Format::IQ3_XXS) {
         constexpr bool high = FMT == Format::IQ3_S;
         const std::uint32_t* hi = indices + 64;

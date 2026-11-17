@@ -14,11 +14,8 @@
 
 namespace experimental::gguf {
 
-// lookup_grid (gguf_page.h) on the RISC-V vector unit of Blackhole's TRISC2 (ComputeConfig::enable_trisc2_rvv), with
-// the same arguments and results: 32 level codes per indexed load (vluxei16) from the same table. A page's level codes
-// in order are the table entries of its index bytes, high bits added: code 4m + k from byte k of index word m.
-// IQ2_XXS / IQ3_XXS widen the bytes to table offsets; the others build the scalar path's two 16-bit index pairs per
-// index word on 32-bit lanes and interleave them as 16-bit lanes (a + 0x10000 b by a widening add and multiply-add).
+// lookup_grid (gguf_page.h) on TRISC2's vector unit (ComputeConfig::enable_trisc2_rvv): same arguments and results,
+// 32 level codes per indexed load.
 template <Format FMT, typename Out>
 inline __attribute__((always_inline)) void lookup_grid_rvv(
     const std::uint32_t* indices,
@@ -27,9 +24,12 @@ inline __attribute__((always_inline)) void lookup_grid_rvv(
     const std::uint32_t part = 0,
     const std::uint32_t parts = 1) {
     static_assert(is_codebook<FMT>(), "lookup_grid_rvv: not a codebook format");
-    constexpr std::uint32_t words = index_words<FMT>();
-    const std::uint32_t m_begin = part * words / parts;
-    const std::uint32_t m_end = (part + 1) * words / parts;
+    constexpr std::uint32_t batches = index_words<FMT>() / 8;
+#if defined(KERNEL_BUILD)
+    ASSERT(lookup_split_ok<FMT>(parts) && part < parts);
+#endif
+    const std::uint32_t m_begin = 8 * (part * batches / parts);
+    const std::uint32_t m_end = 8 * ((part + 1) * batches / parts);
     auto* out = reinterpret_cast<std::uint16_t*>(const_cast<std::uint32_t*>(levels));
     constexpr std::size_t VL8 = 8, VL32 = 32;
     if constexpr (FMT == Format::IQ2_XXS || FMT == Format::IQ3_XXS) {
