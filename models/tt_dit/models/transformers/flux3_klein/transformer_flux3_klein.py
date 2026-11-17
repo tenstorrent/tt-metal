@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -397,45 +398,45 @@ class Flux3KleinEarlyStacks(Module):
 
 
 @dataclass
-class Flux3KleinPlan:
-    """Device-side per-request constants: RoPE tables, modulation row indices, row gathers and the attended lengths of
-    the text and reference stacks and of the single stage (device tensors on a ring: ring SDPA compiles once per bucket,
-    not per prompt or reference size). A plan serves every request of its mode lengths and image / text ids: the parts
-    that follow the text and reference lengths and the reference ids are rebuilt in place (update_plan).
-    """
+class Flux3KleinPlanParts:
+    """The plan constants that follow the request: the reference's RoPE, the single stage's RoPE, modulation rows and
+    row gather, and the attended lengths (device tensors on a ring: ring SDPA compiles once per bucket, not per prompt
+    or reference size). Built as host tensors (plan_parts) off the request path, then uploaded (upload_plan_parts)."""
 
     layout: Flux3KleinSequenceLayout
-    early_rope: dict[str, tuple[ttnn.Tensor, ttnn.Tensor]]
-    early_mod: dict[str, tuple[ttnn.Tensor, ...]]
-    image_out: ttnn.Tensor
-    cond_ids: torch.Tensor | None = None
+    cond_rope: tuple[ttnn.Tensor, ...] = ()
     single_rope: tuple[ttnn.Tensor, ...] = ()
     single_mod: tuple[ttnn.Tensor, ...] = ()
     assembly: ttnn.Tensor | None = None
     early_logical_n: dict[str, int | ttnn.Tensor] = field(default_factory=dict)
     single_logical_n: int | ttnn.Tensor = 0
 
-    def serves(self, layout: Flux3KleinSequenceLayout, ids: dict[str, torch.Tensor]) -> bool:
-        cond = ids.get("image_cond")
-        return layout == self.layout and (cond is None or torch.equal(cond, self.cond_ids))
-
-    def _request_tensors(self) -> list[ttnn.Tensor]:
+    def tensors(self) -> list[ttnn.Tensor]:
         lengths = (n for n in (*self.early_logical_n.values(), self.single_logical_n) if isinstance(n, ttnn.Tensor))
-        cond_rope = self.early_rope.get("image_cond", ())
-        return [
-            *cond_rope,
-            *self.single_rope,
-            *self.single_mod,
-            *(t for t in (self.assembly,) if t is not None),
-            *lengths,
-        ]
+        return [*self.cond_rope, *self.single_rope, *self.single_mod, self.assembly, *lengths]
 
     def deallocate(self) -> None:
+        for t in self.tensors():
+            ttnn.deallocate(t)
+
+
+@dataclass
+class Flux3KleinPlan:
+    """Device-side constants of one set of mode lengths and image / text ids: the image and text RoPE, the early
+    modulation rows and the image output gather. ``parts`` holds the request's (Flux3KleinPlanParts)."""
+
+    layout: Flux3KleinSequenceLayout
+    early_rope: dict[str, tuple[ttnn.Tensor, ttnn.Tensor]]
+    early_mod: dict[str, tuple[ttnn.Tensor, ...]]
+    image_out: ttnn.Tensor
+    parts: Flux3KleinPlanParts | None = None
+
+    def deallocate(self) -> None:
+        """The plan's own tensors; its parts belong to the caller's parts cache."""
         for t in (
-            *(t for m, pair in self.early_rope.items() if m != "image_cond" for t in pair),
+            *(t for pair in self.early_rope.values() for t in pair),
             *(t for idx in self.early_mod.values() for t in idx),
             self.image_out,
-            *self._request_tensors(),
         ):
             ttnn.deallocate(t)
 
@@ -461,6 +462,7 @@ class Flux3KleinTransformer(Module):
         self._tp_axis = tp_axis
         self._sp_axis = parallel_config.sequence_parallel.mesh_axis
         self._rope_rows_cache: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
+        self._rope_rows_lock = threading.Lock()
 
         def embedding(mode: str) -> ColParallelLinear:
             return ColParallelLinear(
@@ -509,22 +511,25 @@ class Flux3KleinTransformer(Module):
         for src, dst in STATE_PREFIXES:
             rename_substate(state, src, dst)
 
-    def _rope(self, cos: torch.Tensor, sin: torch.Tensor, padded: int) -> tuple[ttnn.Tensor, ...]:
+    def _rope(self, cos: torch.Tensor, sin: torch.Tensor, padded: int, *, on_host: bool = False) -> tuple:
         return tuple(
-            tensor.from_torch(t, device=self._device, dtype=ttnn.float32, mesh_axes=[None, None, self._sp_axis, None])
+            tensor.from_torch(
+                t, device=self._device, dtype=ttnn.float32, mesh_axes=[None, None, self._sp_axis, None], on_host=on_host
+            )
             for t in pad_rope(cos, sin, padded)
         )
 
-    def _indices(self, idx: torch.Tensor) -> ttnn.Tensor:
+    def _indices(self, idx: torch.Tensor, *, on_host: bool = False) -> ttnn.Tensor:
         return tensor.from_torch(
             idx.to(torch.int32)[None],
             device=self._device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
             mesh_axes=[None, self._sp_axis],
+            on_host=on_host,
         )
 
-    def _logical_n(self, n: int) -> int | ttnn.Tensor:
+    def _logical_n(self, n: int, *, on_host: bool = False) -> int | ttnn.Tensor:
         if self.sp_factor == 1:
             return n
         return tensor.from_torch(
@@ -533,20 +538,25 @@ class Flux3KleinTransformer(Module):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_axes=[None, None, None, None],
+            on_host=on_host,
         )
 
     def _rope_rows(self, ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # the image and text ids repeat across requests: their host rows are kept (a few shapes and text buckets)
         key = ids_digest(ids)
-        rows = self._rope_rows_cache.pop(key, None) or rope_rows(ids)
-        self._rope_rows_cache[key] = rows
-        while len(self._rope_rows_cache) > ROPE_ROWS_CACHE_SIZE:
-            self._rope_rows_cache.pop(next(iter(self._rope_rows_cache)))
+        with self._rope_rows_lock:
+            rows = self._rope_rows_cache.pop(key, None)
+        rows = rows or rope_rows(ids)
+        with self._rope_rows_lock:
+            self._rope_rows_cache[key] = rows
+            while len(self._rope_rows_cache) > ROPE_ROWS_CACHE_SIZE:
+                self._rope_rows_cache.pop(next(iter(self._rope_rows_cache)))
         return rows
 
     def prepare_plan(self, layout: Flux3KleinSequenceLayout, ids: dict[str, torch.Tensor]) -> Flux3KleinPlan:
+        """The constants of ``layout``'s mode lengths and ``ids``' image / text ids; set ``parts`` before forward."""
         modes = layout.modes
-        plan = Flux3KleinPlan(
+        return Flux3KleinPlan(
             layout=layout,
             early_rope={
                 m: self._rope(*self._rope_rows(ids[m][: layout.lengths[m]]), layout.padded[m])
@@ -556,27 +566,42 @@ class Flux3KleinTransformer(Module):
             early_mod={m: tuple(map(self._indices, modulation_indices(layout.mode_ids(m), "early"))) for m in modes},
             image_out=self._indices(layout.image_out_indices()),
         )
-        self.update_plan(plan, layout, ids)
-        return plan
 
-    def update_plan(self, plan: Flux3KleinPlan, layout: Flux3KleinSequenceLayout, ids: dict[str, torch.Tensor]) -> None:
-        """Rebuild the parts of ``plan`` that follow the text and reference lengths and the reference ids: a new prompt
-        length or reference size costs a few host ops and uploads, no RoPE of the image."""
-        assert layout.lengths == plan.layout.lengths
-        for t in plan._request_tensors():
-            ttnn.deallocate(t)
+    def plan_parts(self, layout: Flux3KleinSequenceLayout, ids: dict[str, torch.Tensor]) -> Flux3KleinPlanParts:
+        """The request's plan parts as host tensors: no device access, so it runs on a helper thread while the
+        encoders run (vectorised; the image and text RoPE rows come from the host cache)."""
         rows = {m: self._rope_rows(ids[m][: layout.lengths[m]]) for m in layout.modes if m != "image_cond"}
+        parts = Flux3KleinPlanParts(layout=layout)
         if "image_cond" in layout.modes:
             rows["image_cond"] = rope_rows(ids["image_cond"][: layout.lengths["image_cond"]])
-            plan.early_rope["image_cond"] = self._rope(*rows["image_cond"], layout.padded["image_cond"])
+            parts.cond_rope = self._rope(*rows["image_cond"], layout.padded["image_cond"], on_host=True)
         single = (torch.cat([rows[m][k][start:stop] for m, start, stop in layout.single_ranges()]) for k in (0, 1))
-        plan.layout = layout
-        plan.cond_ids = ids.get("image_cond")
-        plan.single_rope = self._rope(*single, layout.total_padded)
-        plan.single_mod = tuple(map(self._indices, modulation_indices(layout.mode_ids(), "single")))
-        plan.assembly = self._indices(layout.assembly_indices())
-        plan.early_logical_n = {m: self._logical_n(layout.attended(m)) for m in layout.modes if m in VARIABLE_MODES}
-        plan.single_logical_n = self._logical_n(layout.attended())
+        parts.single_rope = self._rope(*single, layout.total_padded, on_host=True)
+        parts.single_mod = tuple(
+            self._indices(i, on_host=True) for i in modulation_indices(layout.mode_ids(), "single")
+        )
+        parts.assembly = self._indices(layout.assembly_indices(), on_host=True)
+        parts.early_logical_n = {
+            m: self._logical_n(layout.attended(m), on_host=True) for m in layout.modes if m in VARIABLE_MODES
+        }
+        parts.single_logical_n = self._logical_n(layout.attended(), on_host=True)
+        return parts
+
+    def upload_plan_parts(self, parts: Flux3KleinPlanParts) -> Flux3KleinPlanParts:
+        def up(t):
+            if not isinstance(t, ttnn.Tensor):
+                return t
+            return ttnn.to_device(t, self._device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        return Flux3KleinPlanParts(
+            layout=parts.layout,
+            cond_rope=tuple(map(up, parts.cond_rope)),
+            single_rope=tuple(map(up, parts.single_rope)),
+            single_mod=tuple(map(up, parts.single_mod)),
+            assembly=up(parts.assembly),
+            early_logical_n={m: up(n) for m, n in parts.early_logical_n.items()},
+            single_logical_n=up(parts.single_logical_n),
+        )
 
     def embed_text(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         return self.txt_in(tokens, parallel_config=self._parallel_config)
@@ -595,7 +620,8 @@ class Flux3KleinTransformer(Module):
         plan: Flux3KleinPlan,
         cache=None,
     ) -> ttnn.Tensor:
-        layout = plan.layout
+        parts = plan.parts
+        layout = parts.layout
         table, (final_shift, final_scale_plus_one) = self.modulation(t_embed, t_ref_embed)
 
         x = {"image": self.emb_in_image(image_tokens, parallel_config=self._parallel_config), "text": text_embedded}
@@ -604,19 +630,20 @@ class Flux3KleinTransformer(Module):
         for mode in layout.modes:
             mod = tuple(gather_rows(table, idx) for idx in plan.early_mod[mode])
             # the image stack's length is fixed per size; the text and reference stacks' follow the request
-            length = plan.early_logical_n.get(mode, layout.attended(mode))
-            x[mode] = self.early(mode, x[mode], rope=plan.early_rope[mode], mod=mod, logical_length=length)
+            length = parts.early_logical_n.get(mode, layout.attended(mode))
+            rope = parts.cond_rope if mode == "image_cond" else plan.early_rope[mode]
+            x[mode] = self.early(mode, x[mode], rope=rope, mod=mod, logical_length=length)
 
         parts = [x[m] for m in layout.modes]
         local = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=1)
-        h = gather_rows_over_sp(local, plan.assembly, ccl_manager=self._ccl_manager, sp_axis=self._sp_axis)
+        h = gather_rows_over_sp(local, parts.assembly, ccl_manager=self._ccl_manager, sp_axis=self._sp_axis)
         for part in parts:
             ttnn.deallocate(part)
 
-        mod = tuple(gather_rows(table, idx) for idx in plan.single_mod)
+        mod = tuple(gather_rows(table, idx) for idx in parts.single_mod)
 
         def run_block(block: Flux3KleinTransformerBlock, h: ttnn.Tensor) -> ttnn.Tensor:
-            return block(h, rope=plan.single_rope, mod=mod, logical_length=plan.single_logical_n)
+            return block(h, rope=parts.single_rope, mod=mod, logical_length=parts.single_logical_n)
 
         if cache is not None:
             h = cache(self.single_blocks, h, run_block, layout=layout, sp_axis=self._sp_axis)

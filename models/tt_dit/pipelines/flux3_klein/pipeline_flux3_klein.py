@@ -26,6 +26,7 @@ from ...models.transformers.flux3_klein.transformer_flux3_klein import (
     IN_CHANNELS,
     SINGLE_DEPTH,
     Flux3KleinPlan,
+    Flux3KleinPlanParts,
     Flux3KleinSequenceLayout,
     Flux3KleinTransformer,
     ids_digest,
@@ -69,6 +70,9 @@ MATCH_MAX_PIXELS = 4 * 1024 * 1024
 MIN_SIDE, MAX_SIDE = 64, 4096
 REFERENCE_TOKEN_BUCKETS = (4096, MATCH_MAX_PIXELS // DOWNSAMPLING_RATIO**2)
 PLAN_CACHE_SIZE = 64
+# the request parts of the most recent (prompt length, reference size and ids) per plan, so a repeat uploads nothing
+# (4096^2 with a 4 MP reference: ~3.3 MB per device each)
+PLAN_PARTS_CACHE_SIZE = 64
 # The media server's 1 / 4 MP reference choice (reference_size) predates BFL's fit and is ignored: every shape takes
 # any reference; kept so its callers keep working.
 REFERENCE_SIZES = {shape: (1024, 2048) for shape in SHAPES}
@@ -87,6 +91,17 @@ class Flux3KleinRequest:
     reference_size: int | None = None  # ignored (REFERENCE_SIZES)
     cache: DBCacheConfig | None = None
     return_final_tokens: bool = False
+
+
+@dataclass
+class _PlanSample:
+    """One denoise branch's plan: its cache keys, layout and ids, and its parts as host tensors unless cached."""
+
+    key: tuple
+    parts_key: tuple
+    layout: Flux3KleinSequenceLayout
+    ids: dict[str, torch.Tensor]
+    parts: Flux3KleinPlanParts | None
 
 
 @dataclass
@@ -275,6 +290,7 @@ class Flux3KleinPipeline:
         # Device constants that depend only on the request's layout (RoPE tables, modulation and row-gather indices,
         # the latent row mask), kept across requests instead of rebuilt and uploaded each time.
         self._plan_cache: dict[tuple, Flux3KleinPlan] = {}
+        self._plan_parts_cache: dict[tuple, Flux3KleinPlanParts] = {}
         self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
 
     @classmethod
@@ -353,20 +369,22 @@ class Flux3KleinPipeline:
             buckets = layout_buckets(self._text_buckets, width, height, len(request.images))
             text_rows = text_bucket(self._prompt_encoder.tokenize(prompt, self._text_length)[2], buckets)
         text = self._prompt_encoder.encode(prompt, text_rows)
+        # the reference's own latent shape: h, w stay the generated image's (the pre-step helper's noise uses them)
+        cond_ids = None if reference is None else reference_ids(*latent_shape(reference.height, reference.width), 0)
+        # a new prompt length or reference size: its plan parts are built on the helper thread while the encoders run
+        plan_job = self._prestep_pool().submit(
+            self._plan_samples, request.model, h, w, text, cond_ids, guidance is not None
+        )
         timings["encode"] = time.time() - t0
 
         t0 = time.time()
-        image_cond = None
-        if reference is not None:
-            # the reference's own latent shape: h, w stay the generated image's (the pre-step helper's noise uses them)
-            rh, rw = latent_shape(reference.height, reference.width)
-            image_cond = (self._vae.encode_canvas(reference), reference_ids(rh, rw, 0))
+        cond_tokens = None if reference is None else self._vae.encode_canvas(reference)
         timings["encode_reference"] = time.time() - t0
 
         t0 = time.time()
         noise, x_host = latent_job.result()
         state, cached_steps = self._denoise(
-            request.model, noise, image_ids(h, w), text, image_cond, steps, guidance, request.cache, x_host=x_host
+            request.model, noise, plan_job.result(), text, cond_tokens, steps, guidance, request.cache, x_host=x_host
         )
         ttnn.deallocate(text[0])
         timings["denoise"] = time.time() - t0
@@ -449,13 +467,47 @@ class Flux3KleinPipeline:
     def _scalar(self, value: torch.Tensor) -> ttnn.Tensor:
         return tensor.from_torch(value, device=self._device, dtype=ttnn.float32, mesh_axes=[None, None])
 
+    def _plan_samples(
+        self, model: str, h: int, w: int, text: tuple, cond_ids: torch.Tensor | None, guided: bool
+    ) -> list[_PlanSample]:
+        """The plan of each denoise branch (conditional, null text with guidance). No device access: runs on the helper
+        thread; parts already in the parts cache are not built."""
+        sp = self._transformers[model].sp_factor
+        ids = image_ids(h, w)
+        # the reference's tokens pad to their bucket: every reference size of a bucket runs the same programs
+        cond_valid = 0 if cond_ids is None else cond_ids.shape[0]
+        cond_rows = 0 if cond_ids is None else reference_bucket(cond_valid)
+        samples = []
+        for branch, (text_rows, text_ids, text_valid) in enumerate([text, self._null_text] if guided else [text]):
+            lengths = {"image": h * w, "image_cond": cond_rows, "text": text_rows.shape[-2]}
+            layout = Flux3KleinSequenceLayout(sp, lengths, text_valid, cond_valid)
+            sample_ids = {"image": ids, "text": text_ids}
+            if cond_ids is not None:
+                sample_ids["image_cond"] = pad_rows(cond_ids, cond_rows)
+            # one plan per branch, mode lengths and image / text ids (the branch keeps the conditional and null-text
+            # samples apart); its parts per prompt length and reference size and ids
+            key = (model, branch, sp, tuple(sorted(lengths.items())), _ids_digest({"image": ids, "text": text_ids}))
+            parts_key = (
+                key,
+                text_valid,
+                cond_valid,
+                _ids_digest({k: v for k, v in sample_ids.items() if k == "image_cond"}),
+            )
+            parts = (
+                None
+                if parts_key in self._plan_parts_cache
+                else self._transformers[model].plan_parts(layout, sample_ids)
+            )
+            samples.append(_PlanSample(key, parts_key, layout, sample_ids, parts))
+        return samples
+
     def _denoise(
         self,
         model: str,
         noise: torch.Tensor,
-        ids: torch.Tensor,
+        plans: list[_PlanSample],
         text: tuple[torch.Tensor, torch.Tensor, int],
-        image_cond: tuple[torch.Tensor, torch.Tensor] | None,
+        cond_tokens: torch.Tensor | None,
         steps: int,
         guidance: float | None,
         cache_config: DBCacheConfig | None,
@@ -463,43 +515,33 @@ class Flux3KleinPipeline:
     ) -> tuple[ttnn.Tensor, int]:
         transformer = self._transformers[model]
         sp = transformer.sp_factor
-        # the reference's tokens pad to their bucket: every reference size of a bucket runs the same programs
-        cond_valid = 0 if image_cond is None else image_cond[0].shape[0]
-        cond_rows = 0 if image_cond is None else reference_bucket(cond_valid)
         cond_embedded = None
-        if image_cond is not None:
-            image_cond = tuple(pad_rows(t, cond_rows) for t in image_cond)
-            tokens = self._upload_rows(image_cond[0], sp)
+        if cond_tokens is not None:
+            tokens = self._upload_rows(pad_rows(cond_tokens, plans[0].layout.lengths["image_cond"]), sp)
             cond_embedded = transformer.embed_image_cond(tokens)
             ttnn.deallocate(tokens)
 
-        def sample(branch: int, text_rows: ttnn.Tensor, text_ids: torch.Tensor, text_valid: int):
-            lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[-2]}
-            layout = Flux3KleinSequenceLayout(sp, lengths, text_valid, cond_valid)
-            sample_ids = {"image": ids, "text": text_ids}
-            if image_cond is not None:
-                sample_ids["image_cond"] = image_cond[1]
+        def sample(spec: _PlanSample, text_rows: ttnn.Tensor):
             tokens = self._upload_rows(text_rows, sp)
             embedded = transformer.embed_text(tokens)
             ttnn.deallocate(tokens)
-            # one plan per sample branch, mode lengths and image / text ids; the prompt length and the reference's
-            # size and ids are written into it when they change. The branch keeps the conditional and null-text
-            # samples apart, so a request never rewrites a plan it already holds.
-            key = (model, branch, sp, tuple(sorted(lengths.items())), _ids_digest({"image": ids, "text": text_ids}))
-            plan = self._plan_cache.pop(key, None)
-            if plan is None:
-                plan = transformer.prepare_plan(layout, sample_ids)
-            elif not plan.serves(layout, sample_ids):
-                transformer.update_plan(plan, layout, sample_ids)
-            # least recently used first
-            self._plan_cache[key] = plan
+            # least recently used first in both caches
+            plan = self._plan_cache.pop(spec.key, None) or transformer.prepare_plan(spec.layout, spec.ids)
+            self._plan_cache[spec.key] = plan
             while len(self._plan_cache) > PLAN_CACHE_SIZE:
                 self._plan_cache.pop(next(iter(self._plan_cache))).deallocate()
+            parts = self._plan_parts_cache.pop(spec.parts_key, None)
+            if parts is None:
+                parts = transformer.upload_plan_parts(spec.parts or transformer.plan_parts(spec.layout, spec.ids))
+            self._plan_parts_cache[spec.parts_key] = parts
+            while len(self._plan_parts_cache) > PLAN_PARTS_CACHE_SIZE:
+                self._plan_parts_cache.pop(next(iter(self._plan_parts_cache))).deallocate()
+            plan.parts = parts
             return plan, embedded
 
-        samples = [sample(0, *text)]
+        samples = [sample(plans[0], text[0])]
         if guidance is not None:
-            samples.append(sample(1, *self._null_text))
+            samples.append(sample(plans[1], self._null_text[0]))
         image_axes = [None, self._sp_axis, None]
         rows, rows_padded = noise.shape[0], padded_length(noise.shape[0], sp)
         if x_host is not None:
@@ -579,6 +621,9 @@ class Flux3KleinPipeline:
     def clear_constant_caches(self) -> None:
         for plan in self._plan_cache.values():
             plan.deallocate()
+        for parts in self._plan_parts_cache.values():
+            parts.deallocate()
+        self._plan_parts_cache.clear()
         for mask in self._mask_cache.values():
             ttnn.deallocate(mask)
         self._plan_cache.clear()
