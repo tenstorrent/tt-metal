@@ -23,6 +23,8 @@ target architecture before editing:
 - [references/perf-facts.md](references/perf-facts.md): run types, build
   kinds, CSV normalization, schema and `tile_cnt` accounting, report paths,
   determinism, CI. Every perf skill links here.
+- [references/examples.md](references/examples.md): worked cases behind the
+  rules below.
 
 Related skills, in the order work usually needs them:
 
@@ -71,7 +73,7 @@ alone: it reads only `@parametrize`. Values set inside the test body
 | Loop shape | isolates iterate differently from `L1_TO_L1`: other block sizes, `MAX_TILES_DEST` chunks instead of `NUM_BLOCKS × NUM_TILES_IN_BLOCK`, a hard-coded dst index |
 | Parameters | the kernel picks values by build kind, such as `#ifdef LLK_PROFILER` stand-in zeros |
 | Build kinds | normal and speed-of-light builds assign different semantic values to the same point, or distinct sweep points collapse to one generated build |
-| Fixed values | a value fixed in the test body or a literal in the kernel (`DstSync::SyncHalf`, `num_faces = 4`, `LOOP_FACTOR` in the body) that no axis or CSV column records |
+| Fixed values | a value fixed in the test body or a literal in the kernel (`DstSync::SyncHalf`) that no axis or CSV column records |
 | Init calls | an init the functional loop repeats per block runs inside `TILE_LOOP` |
 
 ## 2. Python: one sweep, one runner
@@ -125,20 +127,19 @@ Rules:
   lacks a field such as `INPUT_DIMENSIONS`, pass it; do not make the kernel
   guess.
 - Make fixed values explicit. A constant set in the test body becomes a
-  single-value axis (`loop_factor=[32]`, `dest_sync=[DestSync.Half]`), and the
-  kernel reads `DEST_SYNC`, `NUM_FACES`, `VECTOR_MODE` or `REUSE_DEST_TYPE`
-  from the config instead of a literal, so the CSV records what was measured.
-- On Wormhole and Blackhole, sweep the tile shape as a `tile_dimensions` axis
-  (`[[32, 32], [16, 32]]`), as Quasar does, not `num_faces` or `tile_rows`.
-  Derive faces and face rows with `get_tile_params`. Pytest ids change, so
-  update ids hard-coded elsewhere (`hardware_free/kernels/test_gathering_config.py`,
-  `ttnop/FOCUS.md`).
+  single-value axis (`loop_factor=[32]`), and every parameter the kernel
+  reads comes from the config instead of a literal, so the CSV records what
+  was measured.
+- Sweep the tile shape the way the architecture's existing tests do, and
+  derive faces and face rows from it rather than sweeping them separately.
+  When an axis change renames pytest ids, find and update every place that
+  hard-codes those ids.
 - Build `templates` and `runtimes` in a form `perf/perf_schema_derive.py`
   can read statically: list literals, `+`, conditional expressions, and local
   helpers that return a list. It does not follow `.extend()` or `.append()`;
   write `templates = templates + ([...] if is_perf else [])`.
-- Keep one arch-aware helper per sweep policy in `helpers/constraints.py`
-  (`get_valid_math_fidelities`), and delete wrappers that only forward to it.
+- Keep one arch-aware helper per sweep constraint in `helpers/constraints.py`,
+  and delete wrappers that only forward to it.
   Drop variants that differ only in their id and build the same kernel.
 - Prove a refactor that should not change the sweep: collected counts per
   architecture before and after, quoted in the commit. Every intermediate
@@ -197,17 +198,17 @@ thread's isolate call the same helper with the same `NUM_BLOCKS`,
 times. The two branches then differ only in sync, plus the Dest bookkeeping
 that pack's section done carries (below the table):
 
-Inventory every instruction added inside `TILE_LOOP` for harness setup rather
-than the operation itself. Move one-time setup and clears to `INIT`. Before
-adding `set_dst_write_addr`, `ZEROACC` or another Dest clear, account for
-implicit work in `_llk_pack_dest_section_done_`; redundant clears and their
-stalls are measured as operation cost. A required per-iteration harness step
-must also be present in the functional loop and called out in the PR.
+Everything inside `TILE_LOOP` is measured as the operation's cost. Inventory
+every instruction there that is harness setup rather than the operation, and
+move one-time setup and clears to `INIT`. Before adding a Dest clear or
+address reset, account for the implicit work the release path already does
+(architecture reference, "Dest clearing in the measured loop"). A required
+per-iteration harness step must also be present in the functional loop and
+called out in the PR.
 
 The same holds for init calls. When the functional loop repeats an init per
 block and production calls it once, separately from the tile call, move it to
-`INIT` in both modes rather than carrying it into `TILE_LOOP`. In the
-bcast-col-custom kernel, the per-block math init tripled `MATH_ISOLATE`.
+`INIT` in both modes rather than carrying it into `TILE_LOOP`.
 
 | Run type | Unpack | Math | Pack |
 |---|---|---|---|
@@ -301,8 +302,7 @@ still compile. Every name it uses must exist in every build.
   same value as a template.
 - A normal build reads trip counts and tile geometry from the runtime struct,
   so its loops may not unroll, and that cost is part of the normal-build
-  number (bcast col custom: about twice the `MATH_ISOLATE` per-tile cost).
-  Use the speed-of-light build to measure code cost without it.
+  number. Use the speed-of-light build to measure code cost without it.
 - If a field is missing in one mode, fix the Python side, not the kernel.
 - Use sources of truth such as `get_dest_max_tiles<...>()` and
   `TILE_WIDTH * TILE_HEIGHT`. Label literal arguments (`false /*untilize*/`)
@@ -340,11 +340,10 @@ when the column set differs from main: if main already bumped the entry to
 the same columns, keep its version.
 
 To record a value the kernel does not read, use a `TemplateParameter` whose
-`convert_to_cpp` returns `""` (`RELU_TYPE`, `SFPLOADMACRO`). Never add it as a
-field of a runtime parameter: `write_runtimes_to_L1` serializes every
-runtime field, and a report-only `Optional[Enum]` field broke `test_pack`.
-A column takes its name from the dataclass field, so name the field after
-the quantity (`num_guard_tiles`, not `count`).
+`convert_to_cpp` returns `""`. Never add it as a field of a runtime
+parameter: `write_runtimes_to_L1` serializes every runtime field, so the
+kernel's struct layout changes. A column takes its name from the dataclass
+field, so name the field after the quantity it holds.
 
 After a rebase, check `wide_schema.py` and `wide_schema_quasar.py` for a
 column added twice, once by each side.
@@ -355,8 +354,8 @@ schema for the target architecture:
 
 - put every test-emitted configuration column above `_TIMING_COLUMNS`;
 - add a shared column once, never once per module;
-- use an operation-qualified name when a generic name such as `capacity` or
-  `dest_tiles` would be ambiguous in the shared warehouse;
+- qualify a generic name with the operation when it would be ambiguous in
+  the shared warehouse;
 - keep configuration, timing and provenance columns in their existing
   sections.
 
@@ -395,22 +394,19 @@ Run device and simulator tests through `run-test`; perf sweeps take `--perf`.
    only measurement axes ignored.
 6. **Host-only suite**, which includes the schema header gate:
    `tests/run_hardware_free.sh`.
-7. **Against main**: `perf-regression-check`. When the sweep or run types
-   changed, few points match. A new schema/configuration column can make every
-   point new and hide a regression; require matched old points or explicitly
-   state that the baseline must be re-pinned. Read deltas with its "Layout
+7. **Against main**: `perf-regression-check`. Check match coverage first
+   (its "Interpreting results"), and read deltas with its "Layout
    sensitivity" section before calling anything a regression.
 8. **CI cost**: when the build count changes a lot, update the split costs
    ([references/perf-facts.md](references/perf-facts.md), "CI").
 9. **Attribute every move.** For each published number that changes, report
    every run type, not only `L1_TO_L1` and the one that moved most. Confirm
    each cause by experiment: revert the suspected change, re-measure, and
-   restore it. A plausible mechanism is not a cause: a `PACK_ISOLATE` +5% was
-   first blamed on buffer addresses, but runtime trip counts caused it.
-   Quote exact deltas in commits and the PR, not a rounded bound.
+   restore it. A plausible mechanism is not a cause. Quote exact deltas in
+   commits and the PR, not a rounded bound.
 10. **After a rebase** onto a main that changed the same test, re-measure
-    against the new main, drop commits main already contains, and update the
-    commit messages and PR numbers to the new base.
+    against the new main, drop commits main already contains, and re-derive
+    the commit and PR text from the new base.
 
 ## PR description
 

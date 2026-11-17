@@ -79,10 +79,11 @@ work unless the measured operation itself requires it.
 - Run the coverage comparer once per architecture: the same file imports
   differently under each `CHIP_ARCH`.
 - Two-face tiles (16x32) need the pack tile size computed as
-  `FACE_R_DIM * FACE_C_DIM * num_faces`, not `TILE_WIDTH * TILE_HEIGHT`. The
-  multi-tile pack MOP supports only four-face tiles (`LLK_ASSERT` in
-  `_llk_pack_mop_config_`), so a two-face pack issues one tile per call, as
-  `pack_dest_bank_test.cpp` does.
+  `FACE_R_DIM * FACE_C_DIM * num_faces`, not `TILE_WIDTH * TILE_HEIGHT`. On
+  Wormhole, `_llk_pack_mop_config_` asserts four faces when `num_tiles > 1`;
+  on Blackhole it ignores `num_tiles`, so there is no multi-tile pack MOP. On
+  both, a two-face pack issues one tile per call, as `pack_dest_bank_test.cpp`
+  does.
 
 ## Measured relations (pack dest bank, Wormhole)
 

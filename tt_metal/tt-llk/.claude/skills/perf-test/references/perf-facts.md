@@ -30,12 +30,8 @@ comparison.
   of light; the PR, merge and `llk-perf-gate.yaml` nightly gates build the
   normal kind. A gate refuses to compare the two kinds ("CI" below). Normal
   builds also load the runtime-parameter struct, so they move more under
-  layout changes.
-  Both kinds must still describe the same semantic sweep point: each runtime
-  parameter in the normal build maps to the same-valued generated constant in
-  the speed-of-light build. In particular, a non-default tile shape must not
-  compile as the default full tile. Inspect representative generated
-  `build.h` files when adding or changing this mapping.
+  layout changes. Both kinds describe the same sweep point (`perf-test`,
+  "Parameters that compile in every build").
 - **Asserts.** Wormhole and Blackhole CI build perf with
   `TT_LLK_DISABLE_ASSERTS=1`, which drops `-DENABLE_LLK_ASSERT`; Quasar perf
   CI keeps asserts. `run_test.sh --perf` matches that default per
@@ -66,10 +62,8 @@ comparison.
   (`tests/hardware_free/perf/test_perf_header_gate.py`) fails on drift.
 - The warehouse schema is chosen per architecture by `schema_for_arch` in
   `helpers/perf/parquet.py`: `helpers/perf/wide_schema.py` for Wormhole and
-  Blackhole, `helpers/perf/wide_schema_quasar.py` for Quasar. In the target
-  architecture's schema, test-emitted configuration columns belong above
-  `_TIMING_COLUMNS`; provenance stays below timing. Generic names must be
-  globally meaningful, otherwise qualify them with the operation.
+  Blackhole, `helpers/perf/wide_schema_quasar.py` for Quasar. Column
+  placement and naming rules are in `perf-test`, "Perf schema".
 
 ## Accounting and comparability
 
@@ -87,10 +81,8 @@ comparison.
   section-done traffic.
 - Compare like with like: architecture, build kind, `loop_factor`, marker,
   schema version, and report kind.
-- A new schema or configuration column can leave zero matched historical
-  points even when the generated kernels are comparable. A green gate with
-  only "new points" is not evidence of no regression; preserve matched points
-  or explicitly re-pin the baseline after validating the code-cost change.
+- A comparison with few or no matched points is inconclusive
+  (`perf-regression-check`, "Interpreting results").
 
 ## Where reports land
 
