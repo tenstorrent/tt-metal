@@ -20,10 +20,10 @@ tests pin that down device against device, so they need the TTNN weight cache bu
   match the same chunks each alone in its own forward, and those must match a model built for one chunk per
   forward.
 * test_k3_packed_pad_rows_skip_the_moe: a partial chunk ahead of a full one, at a chunk-aligned and at a rotated
-  (mid-slab) start. Every MoE layer must route each real row and give each pad row the sentinel (no expert), and the
+  (mid-slab) start. Every MoE layer's planner must count exactly the real rows' picks, and the
   real rows' output, KDA carries and KV must not depend on what the pad rows hold.
 * test_k3_packed_traced_matches_eager: the same schedule through TtKimiK3Runtime.prefill_forward with use_trace
-  (one capture, replayed per forward; each chunk position's slot and bounds and the MoE padding config read on
+  (one capture, replayed per forward; each chunk position's slot and bounds read on
   device) must leave the same KDA carries and KV as the eager packed forward.
 * test_k3_packed_pipeline_matches_one_rank: the model split over two pipeline ranks on one mesh, packed forwards
   handed rank to rank, must match one rank: bit-exact with the plain residual stream, at PIPELINE_PCC under AttnRes;
@@ -58,29 +58,25 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    moe_fabric_payload,
-    torus_x_device_params,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import resolve_checkpoint
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, deallocate_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import PlainResidualStream
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_device_params
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import KimiK3KvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntimeConfig
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
-from models.demos.minimax_m3.tt.packed_rows import packed_real_row_mask, packed_routed_pad_rows
 from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 NUM_LAYERS = 4
@@ -117,14 +113,13 @@ TEST_L1_SMALL_SIZE = KimiK3Config.L1_SMALL_SIZE + 512
 MESH_PARAMS = [
     pytest.param(
         (8, 4),
-        fabric2d_device_params(
-            fabric_payload_size=moe_fabric_payload(KimiK3Config),
-            l1_small_size=TEST_L1_SMALL_SIZE,
-            trace_region_size=K3_TRACE_REGION_SIZE,
+        moe_block_device_params(
+            KimiK3Config,
+            torus_xy_device_params(l1_small_size=TEST_L1_SMALL_SIZE, trace_region_size=K3_TRACE_REGION_SIZE),
         ),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-8x4",
+        id="torus-xy-8x4",
     ),
 ]
 # Kimi-K3's serving stage, one 4x4 tray half: SP=4 on the axis-1 ring, TP=4 on axis 0, at its 2,560-token chunk (640
@@ -133,10 +128,9 @@ MESH_PARAMS = [
 MESH_PARAMS_4X4 = [
     pytest.param(
         (4, 4),
-        torus_x_device_params(
-            fabric_payload_size=moe_fabric_payload(KimiK3Config),
-            l1_small_size=TEST_L1_SMALL_SIZE,
-            trace_region_size=K3_TRACE_REGION_SIZE,
+        moe_block_device_params(
+            KimiK3Config,
+            torus_x_device_params(l1_small_size=TEST_L1_SMALL_SIZE, trace_region_size=K3_TRACE_REGION_SIZE),
         ),
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
@@ -183,6 +177,14 @@ def _cache_path(mesh_device, weight_cache_path, num_layers=NUM_LAYERS):
         first_k_dense=KimiK3Config.NUM_DENSE_LAYERS,
     ), f"TTNN cache incomplete for {num_layers} layers at {path}"
     return path
+
+
+def _log_l1(mesh_device, what: str) -> None:
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+    logger.info(
+        f"[L1] {what}: {view.total_bytes_allocated_per_bank} B allocated a bank, largest free block "
+        f"{view.largest_contiguous_bytes_free_per_bank} B"
+    )
 
 
 def _build(
@@ -474,6 +476,7 @@ def test_k3_packed_forward_matches_one_chunk_forwards(
     num_slots = 2 * num_users
     mesh_device.enable_program_cache()
     config = _config(config_only, chunk)
+    _log_l1(mesh_device, "before the packed model")
     model, kvpe = _build(
         mesh_device,
         config,
@@ -540,7 +543,14 @@ def test_k3_packed_forward_matches_one_chunk_forwards(
     finally:
         model.release_sub_device_managers()
     del model, kvpe
-    gc.collect()  # free the packed model's device buffers before the second model allocates
+    gc.collect()  # free the packed model's device buffers (its MoE block's with them) before the second model allocates
+    _log_l1(mesh_device, "packed model freed")
+    # The program cache keeps the packed model's programs, and with them the global semaphores their ops took (AttnRes's
+    # among them), in the top of L1, where the second model's ring-MLA programs need their static CBs. A second model on
+    # the mesh compiles its own programs: start it on an empty cache.
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    _log_l1(mesh_device, "program cache cleared")
 
     single, single_kvpe = _build(
         mesh_device, config, device_params, num_links, weight_cache_path, num_users, forward_chunks=1, residual=residual
@@ -563,25 +573,26 @@ def test_k3_packed_forward_matches_one_chunk_forwards(
         single.release_sub_device_managers()
 
 
-def _capture_packed_routing(monkeypatch, mesh_device):
-    """Patch TtMoe's routing-dump hook to read every eager packed MoE layer's top-k ids back: a list, one entry per MoE
-    call, of per-SP-chip [rows, k] tensors (TP replicas checked equal)."""
-    sp_axis = _placement(mesh_device)[0]
-    cols = tuple(mesh_device.shape)[1]
+def _capture_packed_counts(monkeypatch):
+    """Wrap the MoE block FFN to read, after every eager packed MoE call, how many (row, expert) picks its planner
+    counted: each chip's slice of the head's per-expert counts (its own experts), summed over the mesh. A list, one
+    total per MoE call."""
     calls = []
+    call = TtK3MoEBlockFfn.__call__
 
-    def capture(self, indices, scores, actual_start, cache_user_id, traced, packed=False):
-        assert packed and not traced, "this hook reads eager packed forwards only"
-        per_chip = {}
-        for i, t in enumerate(ttnn.get_device_tensors(indices)):
-            chip = i // cols if sp_axis == 0 else i % cols
-            ids = ttnn.to_torch(t).to(torch.int64).reshape(-1, indices.shape[-1])
-            if chip in per_chip:
-                assert torch.equal(per_chip[chip], ids), f"TP replicas of chip {chip} routed differently"
-            per_chip[chip] = ids
-        calls.append([per_chip[c] for c in range(len(per_chip))])
+    def capture(self, x, *args, chunks=None, forward_chunks=None, **kwargs):
+        assert chunks is not None, "this hook reads eager packed forwards only"
+        y = call(self, x, *args, chunks=chunks, forward_chunks=forward_chunks, **kwargs)
+        R = tuple(self.mesh.shape)[self.options.sp_axis]
+        block = self._block(int(x.shape[-2]) * R, forward_chunks if forward_chunks is not None else len(chunks))
+        epc = KimiK3Config.NUM_ROUTED_EXPERTS // self.mesh.get_num_devices()
+        total = 0
+        for i, d in enumerate(ttnn.get_device_tensors(block.last_head.counts)):
+            total += int(ttnn.to_torch(d).reshape(-1)[i * epc : (i + 1) * epc].to(torch.int64).sum())
+        calls.append(total)
+        return y
 
-    monkeypatch.setattr(TtMoe, "_dump_routing", capture)
+    monkeypatch.setattr(TtK3MoEBlockFfn, "__call__", capture)
     return calls
 
 
@@ -589,19 +600,18 @@ def _capture_packed_routing(monkeypatch, mesh_device):
 def test_k3_packed_pad_rows_skip_the_moe(
     variant, config_only, mesh_device, device_params, num_links, weight_cache_path, monkeypatch
 ):
-    """A partial chunk ahead of a full one in a packed forward: its pad rows fall inside the MoE padding config's one
-    leading real-row count per chip, so only the per-row mask (PackedPadding.real_rows) keeps them out of the experts.
+    """A partial chunk ahead of a full one in a packed forward: its pad rows sit between two chunks' real rows on every
+    chip, so only the forward's chunk bounds (MoEBlockPacking) keep them out of the experts.
 
     Forward 0 puts user A's first chunk (896 tokens) ahead of user B's full one; forward 1 puts A's second turn, which
     starts mid-slab at 896 (a rotated chunk: each chip's real rows are a prefix of its block, but which rows those are
-    depends on the start), ahead of B's second chunk. Every MoE layer must give each pad row the sentinel on all its
-    picks and each real row real experts (packed_real_row_mask). Then the same forwards run in fresh slots with random
+    depends on the start), ahead of B's second chunk. Every MoE layer's planner must count exactly the real rows'
+    picks (real rows x NUM_EXPERTS_PER_TOKEN): a routed pad row or a dropped real row changes the total. Then the same forwards run in fresh slots with random
     tokens in the pad rows, and every real row's output, KDA carry and KV must be bit-exact (plain residual stream,
     which a packed forward keeps bit-exact): nothing a pad row holds may reach a real row."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
     sp_axis, _, chunk = _placement(mesh_device)
     sp = mesh_device.shape[sp_axis]
-    chunk_local = chunk // sp
     first, second = 896, 1600  # A's two turns; second starts at 896, mid-slab
     forwards = [
         [PrefillChunk(0, 0, first), PrefillChunk(1, 0, chunk)],
@@ -620,7 +630,7 @@ def test_k3_packed_pad_rows_skip_the_moe(
         forward_chunks=FORWARD_CHUNKS,
         residual="plain",
     )
-    calls = _capture_packed_routing(monkeypatch, mesh_device)
+    calls = _capture_packed_counts(monkeypatch)
     try:
         for chunks in forwards:
             validate_chunks(
@@ -630,36 +640,25 @@ def test_k3_packed_pad_rows_skip_the_moe(
                 num_users=num_slots,
                 max_seq_len=N_CHUNKS * chunk,
             )
-            partial_len = chunks[0].actual_end - chunks[0].actual_start
-            assert packed_routed_pad_rows(chunks, sp, chunk_local) == chunk - partial_len
         ids = _token_ids(config, num_users, 2 * chunk)
         ids_by_slot = {s: ids[s % num_users] for s in range(num_slots)}
-        n_experts = KimiK3Config.NUM_ROUTED_EXPERTS
+        k = KimiK3Config.NUM_EXPERTS_PER_TOKEN
 
         failures = []
         outputs = []
         for f, chunks in enumerate(forwards):
             calls.clear()
             hidden = _run_forward(model, kvpe, mesh_device, chunks, ids_by_slot)
-            outputs.append([_chunk_real_rows(hidden, k, FORWARD_CHUNKS, c, sp, chunk) for k, c in enumerate(chunks)])
-            mask = packed_real_row_mask(chunks, sp, chunk_local)
+            outputs.append([_chunk_real_rows(hidden, j, FORWARD_CHUNKS, c, sp, chunk) for j, c in enumerate(chunks)])
+            real = sum(c.actual_end - c.actual_start for c in chunks)
             assert calls, "no MoE layer ran"
-            for layer, per_chip in enumerate(calls):
-                for c in range(sp):
-                    real = torch.tensor(mask[c], dtype=torch.bool)
-                    got = per_chip[c]
-                    assert got.shape[0] == real.numel(), (got.shape, real.numel())
-                    pad_routed = int((got[~real] != n_experts).any(dim=-1).sum())
-                    real_dropped = int((got[real] >= n_experts).any(dim=-1).sum())
-                    logger.info(
-                        f"[pad rows] forward {f} MoE call {layer} chip {c}: {int((~real).sum())} pad rows, "
-                        f"{pad_routed} routed; {int(real.sum())} real rows, {real_dropped} unrouted"
-                    )
-                    if pad_routed or real_dropped:
-                        failures.append(
-                            f"forward {f} MoE call {layer} chip {c}: {pad_routed} pad rows routed, "
-                            f"{real_dropped} real rows given the sentinel"
-                        )
+            for layer, total in enumerate(calls):
+                logger.info(
+                    f"[pad rows] forward {f} MoE call {layer}: planner counted {total} picks, "
+                    f"{real} real rows x {k} = {real * k}"
+                )
+                if total != real * k:
+                    failures.append(f"forward {f} MoE call {layer}: {total} picks counted, want {real * k}")
         assert not failures, f"[pad rows] {len(failures)} routing error(s):\n" + "\n".join(failures)
         monkeypatch.undo()
 

@@ -132,6 +132,15 @@ _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
 # orders calls, not layers).
 _tp_gathers: dict[tuple[int, int, int], dict] = {}
 
+# The fused TP gather's mux buffers are tuned as 24 of the default payload's channel buffer (4352 B + its header):
+# its bytes in flight a channel are 24 x this, whatever the payload the fabric was opened with.
+_TP_GATHER_MUX_SLOT_BYTES = 4608
+
+
+def _fabric_channel_buffer_bytes(mesh_device: ttnn.MeshDevice) -> int:
+    """The opened fabric's channel buffer (its max payload + packet header)."""
+    return int(ttnn.experimental.fabric_mux.channel_buffer_size_bytes(mesh_device))
+
 
 def _tp_gather(mesh_device: ttnn.MeshDevice, rows: int, width: int) -> dict:
     key = (mesh_device.id(), rows, width)
@@ -335,6 +344,11 @@ class ttKDA:
             )
         if fuse:
             links = max(1, min(self._tp_num_links, self._matmul_grid.y // 2))
+            # The mux's map (workers x buffers x the fabric's channel buffer) sits in L1 on the mux cores. 24 buffers
+            # is the tuning at the default 4352 B payload; a mesh opened with a larger payload (the MoE block's: one
+            # combine row, K3's latent ~7.2 KB) keeps the same bytes in flight with fewer buffers, else the map
+            # outgrows L1 (10 workers x 24 x 7.2 KB = 1.74 MB).
+            buffers = min(24, max(4, 24 * _TP_GATHER_MUX_SLOT_BYTES // _fabric_channel_buffer_bytes(mesh_device)))
             self._tp_gather_kwargs = dict(
                 _tp_gather(mesh_device, self.active_seq_len_local, config.hidden_size),
                 config=ttnn.MinimalMatmulConfig(
@@ -349,7 +363,7 @@ class ttKDA:
                 cluster_axis=self.tensor_parallel_axis,
                 num_links=links,
                 num_workers_per_link=-(-self._matmul_grid.y // links),
-                num_buffers_per_channel=24,
+                num_buffers_per_channel=buffers,
                 force_transpose=False,
                 use_mcast=True,
             )

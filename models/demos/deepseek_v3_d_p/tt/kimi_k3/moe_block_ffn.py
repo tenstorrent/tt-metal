@@ -103,6 +103,25 @@ class MoEBlockFfnOptions:
     sp_axis: int = 0
 
 
+@dataclass
+class MoEBlockPacking:
+    """A packed forward's MoE padding for the MoE block - TtMoe's PackedPadding (moe/tt_moe_gate_prefill.py) for the
+    block, built once a forward and shared by every MoE layer. Eager: the forward's chunks (PrefillChunks, empty ones
+    at the tail); traced: its metadata words on device (common/prefill/prefill_chunk.py forward_metadata_words - the
+    runtime's persistent record, rewritten before every replay). The block's planner reads each chunk's real rows from
+    them and skips the pad rows (a partial chunk's, ahead of a full one too); nothing else is built."""
+
+    chunks: Optional[list] = None
+    forward_metadata: Optional[ttnn.Tensor] = None
+
+    def ffn_kwargs(self) -> dict:
+        assert (self.chunks is None) != (self.forward_metadata is None), "MoEBlockPacking: chunks or forward_metadata"
+        return dict(chunks=self.chunks) if self.chunks is not None else dict(forward_metadata=self.forward_metadata)
+
+    def deallocate(self) -> None:  # (as PackedPadding's; the runtime owns forward_metadata)
+        pass
+
+
 def _combine_config(opts: "MoEBlockFfnOptions"):
     """The combine's CombineConfig for these options (None: MoEBlock's default)."""
     if opts.combine_landing is None:
