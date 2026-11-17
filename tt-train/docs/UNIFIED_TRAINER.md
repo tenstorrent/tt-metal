@@ -308,8 +308,8 @@ finally:
 ## Adding a model
 
 A model provider builds the ttml model for an HF `model_type`, and loads and exports its weights. It subclasses
-`ModelProvider` in `ttml/models/provider/base.py`, with the config as `self.config` and the model's HF `config.json`
-as `self.hf_config`, and implements its four methods:
+`ModelProvider` in `ttml/models/provider/base.py`, which takes the config, as `self.config`, and implements its four
+methods:
 
 - `check()`: raise `UnsupportedTrainingConfig` for anything the model can't be built or trained with, including a
   `device.mesh` it can't be built on. It must not download weights or open the device.
@@ -318,7 +318,8 @@ as `self.hf_config`, and implements its four methods:
 - `export_weights(model, directory)`: reads the weights from the device and writes them to `directory`.
 
 What a checkpoint holds and how it is laid out is the provider's: `LlamaProvider` writes the layouts in the table under
-[Checkpoints](#checkpoints), with the shared helpers of `ttml/models/utils/` for PEFT adapters.
+[Checkpoints](#checkpoints). Anything else a provider needs it reads itself: `LlamaProvider` reads the model's HF
+`config.json` from `model.name`. `ttml/models/utils/` has shared helpers for HF hub models and PEFT adapters.
 
 Write it in `ttml/models/provider/<model>.py` and add it to `providers()` in `ttml/models/provider/__init__.py`, keyed
 by the `model_type`. `LlamaProvider` in `ttml/models/provider/llama.py` is the reference.

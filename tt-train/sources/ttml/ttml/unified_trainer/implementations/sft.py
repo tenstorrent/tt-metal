@@ -14,8 +14,9 @@ from ttml.common.utils import no_grad, validate_clip_grad_norm
 from ttml.datasets.provider import DatasetProvider, clear_cache, load_tokenizer
 from ttml.datasets.provider import get_provider as get_dataset_provider
 from ttml.datasets.provider import providers as dataset_providers
-from ttml.models.provider import UnsupportedTrainingConfig, model_revision
+from ttml.models.provider import UnsupportedTrainingConfig
 from ttml.models.provider import get_provider as get_model_provider
+from ttml.models.utils.hub import model_revision
 
 from ..configs import SFTTrainerConfig
 from ..managers.device import DeviceManager

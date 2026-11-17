@@ -2,5 +2,5 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""What the model providers share: the files of checkpoint directories (``checkpoint``), LoRA adapters in HF PEFT's
-form (``peft``), and the error for a config a model can't train (``errors``)."""
+"""What the model providers share: HF models by name (``hub``), the files of checkpoint directories (``checkpoint``),
+LoRA adapters in HF PEFT's form (``peft``), and the error for a config a model can't train (``errors``)."""

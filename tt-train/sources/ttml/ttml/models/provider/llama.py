@@ -28,8 +28,9 @@ import numpy as np
 
 from ..utils.checkpoint import TT_CHECKPOINT, AdapterState, PathLike, read_adapter, write_adapter
 from ..utils.errors import UnsupportedTrainingConfig
+from ..utils.hub import load_hf_config, model_dir, model_revision, same_model
 from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
-from .base import ModelProvider, model_dir, model_revision, same_model
+from .base import ModelProvider
 
 if TYPE_CHECKING:
     from ttml.unified_trainer.configs import LoraConfig, SFTTrainerConfig
@@ -106,6 +107,11 @@ class LlamaProvider(ModelProvider):
     """Provider for HF Llama checkpoints."""
 
     config: SFTTrainerConfig
+
+    def __init__(self, config: SFTTrainerConfig) -> None:
+        super().__init__(config)
+        # The model's HF config.json.
+        self.hf_config = load_hf_config(config.model.name)
 
     def check(self) -> None:
         config = self.config

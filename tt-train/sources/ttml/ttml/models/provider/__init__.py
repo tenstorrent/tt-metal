@@ -13,7 +13,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..utils.errors import UnsupportedTrainingConfig
-from .base import ModelProvider, load_hf_config, model_dir, model_revision, same_model
+from ..utils.hub import load_hf_config
+from .base import ModelProvider
 from .llama import LlamaProvider
 
 if TYPE_CHECKING:
@@ -27,15 +28,14 @@ def providers() -> dict[str, type[ModelProvider]]:
 
 def get_provider(config: TrainerConfig) -> ModelProvider:
     """The provider of the family of ``config.model.name``, for the run ``config`` describes."""
-    hf_config = load_hf_config(config.model.name)
-    model_type = hf_config.get("model_type")
+    model_type = load_hf_config(config.model.name).get("model_type")
     provider = providers().get(model_type)
     if provider is None:
         raise UnsupportedTrainingConfig(
             f"model.name: no provider for model_type {model_type!r} ({config.model.name}); "
             f"available: {sorted(providers())}"
         )
-    return provider(config, hf_config)
+    return provider(config)
 
 
 __all__ = [
@@ -43,9 +43,5 @@ __all__ = [
     "ModelProvider",
     "UnsupportedTrainingConfig",
     "get_provider",
-    "load_hf_config",
-    "model_dir",
-    "model_revision",
     "providers",
-    "same_model",
 ]
