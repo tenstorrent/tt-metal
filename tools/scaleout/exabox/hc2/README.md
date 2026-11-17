@@ -52,6 +52,12 @@ Run folders go to `$TT_METAL_HOME/generated/hc2/`, or to `HC2_OUT_DIR` if it is 
 - The Python is tt-metal's own `python_env` (`PYTHON_ENV_DIR` moves it). hc2 runs no pip install and uses no pinned wheel.
 - `HC_SETUP` is `glue/check_env.sh`. It passes only when `import ttnn` resolves to a file inside `TT_METAL_HOME`.
 - `HC_HOLDFILE`, `HC_HOLD` and `HC_SITE_FILE` stay unset, so hold scripts and site data are off. A site may set them.
+- `glx_reset` without root: the core runs it only as root, or on a host whose short hostname matches the `glx_hosts`
+  regex of the site file (`HC_SITE_FILE`, plain `key=value` lines). hc2 ships no site data, so on a box without root
+  the start reset, the tray-drop reset and the end reset print `NO RESET`, links left down by an earlier run stay down,
+  and the run fails on them. To get the same verdict as tray-test there, point `HC_SITE_FILE` at a file such as
+  `glx_hosts=bh-glx-120-b0[1-9]u0[0-9]` (a regex for the hosts whose galaxy reset you may run). Keep that file out of
+  the tree: this repo holds no site data.
 - The glue refuses a core without the `HC_SETUP` hook (outside `--stub`), because such a core installs ttnn itself.
 - Synthetic H3 runs on this checkout, through a view at `<out dir>/.h3-build`, not on a pinned tt-metal sha.
 - max-util runs the core's pinned prebuilt archive (`core/fleet/maxutil.pin`), the same build and load tray-test runs.
