@@ -122,3 +122,51 @@ def test_ragged_last_bank_and_output_placement(device):
     got = ttnn.to_torch(out).float()
     pcc = torch.corrcoef(torch.stack([got.flatten(), ref.flatten()]))[0, 1].item()
     assert pcc > 0.9999, pcc
+
+
+def _plan(device, a_shape, b_shape, a_cores, a_dtype=_BF16, w_dtype=_BFP4, acc=True, swiglu=False):
+    """R4 blocking for an allocated (uninitialized) A width-sharded over `a_cores` and B bank-sharded."""
+    m_pad = math.prod(a_shape[:-2]) * (-(-a_shape[-2] // 32) * 32)
+    k, n = a_shape[-1], b_shape[-1]
+    grid = ttnn.num_cores_to_corerangeset(a_cores, device.compute_with_storage_grid_size(), True)
+    a_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [m_pad, k // a_cores], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    banks = device.dram_grid_size().x
+    granule = 64 if swiglu else 32
+    b_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
+            [k, -(-n // (granule * banks)) * granule],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    a = ttnn.allocate_tensor_on_device(ttnn.Shape(list(a_shape)), a_dtype, ttnn.TILE_LAYOUT, device, a_mc)
+    b = ttnn.allocate_tensor_on_device(ttnn.Shape(list(b_shape)), w_dtype, ttnn.TILE_LAYOUT, device, b_mc)
+    out_mc = pd.dram_sharded_output_memory_config(a, b, swiglu)
+    n_out = n // 2 if swiglu else n
+    o = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(a_shape[:-1]) + [n_out]), a_dtype, ttnn.TILE_LAYOUT, device, out_mc
+    )
+    geom, topo, blk = pd.plan_dram_sharded(a, b, o, acc, epilogue="swiglu" if swiglu else "none")
+    for t in (a, b, o):
+        ttnn.deallocate(t)
+    return geom, topo, blk
+
+
+def test_plan_blocking(device):
+    """The R4 extent knobs: one A shard per round unless L1 or the 16-bit-DEST chain cap splits it."""
+    # PERF FOCUS 2: 8 shards of 17 K tiles, 20 bank columns, one block row, one K-block per shard.
+    geom, topo, blk = _plan(device, (1, 1, 1, 4352), (4352, 5120), 8)
+    assert (topo.num_shards, topo.shard_k_tiles, topo.bank_n_tiles) == (8, 17, 20)
+    assert (blk.block_m_tiles, blk.block_n_tiles, blk.block_k_tiles, blk.num_k_blocks) == (1, 20, 17, 8)
+    # 16-bit DEST caps the in-DEST K chain at DEST16_BLOCK_K_MAX: a 32-tile shard is split in 4.
+    geom, topo, blk = _plan(device, (1, 1, 32, 1024), (1024, 512), 1, w_dtype=_BF16, acc=False)
+    assert topo.num_shards == 1 and blk.block_k_tiles == pd.DEST16_BLOCK_K_MAX and blk.num_k_blocks == 4
+    # fp32 A, 64 tile rows: the whole-row block does not fit L1 next to the resident shards -> M split.
+    geom, topo, blk = _plan(device, (1, 1, 2048, 256), (256, 512), 8, a_dtype=_FP32, w_dtype=_BF16)
+    assert blk.block_m_tiles < geom.tensor_m_tiles and geom.tensor_m_tiles % blk.block_m_tiles == 0

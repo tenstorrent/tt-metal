@@ -33,6 +33,12 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
 - **No new CB.** Under R1a the line injector reads its K-block into its own `cb_act_tiles` / `cb_weight_tiles` slot and multicasts it to the same slot address on the line's receivers (the grid-uniform walk keeps every core's write pointer in lockstep). The receivers' slot is the landing zone; the handshake is "slot reserved". Producer and consumer per CB are unchanged (reader → compute). Two `ttnn.Mcast` channels add 2 + 2 L1 semaphores per core, no CB bytes.
 - **Folded finding resolved (dead second slot / no read-compute overlap).** When a core's whole walk would be ONE K-block (S1, `core_batches == 1`), the solve now splits K into `SINGLE_WALK_K_BLOCKS = 2` K-blocks (when `tensor_k_tiles ≥ 2·block_k_floor` and the split fits with `cb_partials`). The two halves occupy exactly the old single-slot bytes, so the depth-2 operand CBs now hold two live K-blocks and compute starts on the first while the second lands. Measured: 384×1536×1024 43.4 → 34.2 µs, 32×1024×2048 26.6 → 24.5 µs, neutral elsewhere. Shapes with `tensor_k_tiles < 16` keep the unsplit S1 block.
 
+**Refinement 4 (R4 `dram_sharded`) as built.**
+- **Per bank worker** (one per DRAM bank holding a valid B column; `get_optimal_dram_bank_to_logical_worker_assignment(NOC_0)`): `cb_act_tiles`, `cb_weight_tiles`, `cb_partials`, and the epilogue rows as in R1, with `block_n_tiles = sw` (the bank shard width), `block_k_tiles = kw / s` (`kw` = A shard width; `s` = the smallest divisor of `kw` that fits L1 and the 16-bit-DEST chain cap; `s > 1` only with `block_m_tiles == 1`), `block_m_tiles` = the largest divisor of the padded rows that fits.
+- **`cb_output_shard` (index 17) replaces `cb_output_tiles`**: backed on the worker's own L1 output shard (`cb_descriptor_from_sharded_tensor`), so it adds 0 CB bytes (`_footprint(..., out_in_place=True)` drops the `depth_out` term). The op builds that shard spec (shard w on bank w's worker, `[padded rows, out_sw·32]`), so `out_block_n == out shard width` always holds and the compute packs in place; the writer only retires row groups.
+- **`cb_act_tiles` is also allocated on every non-worker core the A broadcast writes** (A's shard cores and the rest of the workers' bounding rectangle), at the same address: it is the multicast landing zone there, never pushed or popped. A sender-only core addresses the workers' slot as `base + (K-block % depth_act) · slot bytes` (CT `act_cb_blocks = DEPTH_ACT`).
+- One `ttnn.Mcast` channel (`act`) adds 2 L1 semaphores per participating core; the B line channel is absent.
+
 ## Symbol table (non-block parameters and their bounds)
 
 | Symbol | Bound | Predicate establishing it |
@@ -103,3 +109,15 @@ Prefill gate_up (grid 11×10, block 6×28, `nb = 1`): DRAM ≈ 21 MB (A) + 25 MB
 > Cheapest-traffic split considered: `R1a interleaved_2d_mcast` (and `R1b interleaved_stream_mcast_a` for 1-D grids). Delta for prefill: DRAM 504 MB → 64 MB (−440 MB), adding NoC multicasts of each A K-block to `grid_n'−1` receivers per row and each B K-block to `grid_m'−1` per column. Delta for the 1-D example: DRAM 113 MB → 75.5 MB (−37.7 MB), adding a broadcast of A (≤ 0.4 MB) to 96 cores.
 > Implemented: `R1 interleaved_out_split`.
 > Deferred because R1 is the stepping stone both successors are built on. They keep R1's per-core region, CB inventory (no new CB: the multicast lands in `cb_act_tiles` / `cb_weight_tiles`), compute kernel and block walk; only the reader's source for one operand changes from DRAM to an injector. R1's factorization already maps the logical `(grid_m', grid_n')` onto a physical rectangle, so the multicast groups (grid rows and columns) exist unchanged.
+
+**R4 `dram_sharded` as built (Refinement 4)** — DRAM / NoC crossings per tensor:
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | 0 | resident L1 width shards, read where they live (no reshard, no interleaved copy) | each A K-block multicast once from its owning core to the workers' bounding rectangle, `nb_m` times (1 for decode) |
+| B | `nb_m` (1 for decode) | each bank worker streams its own bank's column shard, one coalesced read per K-block (`k_valid · sw` contiguous tiles) | none |
+| output | 0 | packed in place into the worker's own L1 shard | none |
+| bias / gate | 1 per worker block (`sw` tiles) | per-block row read | none |
+| residual | 1 | streamed with the epilogue | none |
+
+PERF FOCUS 2 (1×4352 @ 4352×5120 bf4b): DRAM = B once = 12.5 MB (the roofline's traffic); NoC = 8 A shards × 34 KB multicast.

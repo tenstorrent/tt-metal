@@ -258,3 +258,45 @@
     - the single-walk K split.
   - `perf/test_genify_matmul_perf_guard.py::test_perf_l1_resident`: L1-resident A/output on the
     R1a path.
+
+## Refinement 4 — dram_sharded placement (regime R4: weight streaming from the DRAM banks)
+- Date: 2026-11-17
+- What was done:
+  - **Op file.** `SUPPORTED["placement"]` now includes `dram_sharded`. `validate()` checks the R4 layout through `dram_sharded_topology()`: A is L1 WIDTH_SHARDED with all padded rows per shard and shards in core order; B is DRAM WIDTH_SHARDED, one column shard per bank (even width for swiglu); a requested output config is L1 WIDTH_SHARDED with no shard spec, or exactly the op's. The entry point allocates the output on the op-built spec, `dram_sharded_output_memory_config()`. The batched EXCLUSION stays.
+  - **Host (`create_dram_sharded_program_descriptor`).**
+    - Workers: bank w's optimal worker, `get_optimal_dram_bank_to_logical_worker_assignment(device, NOC_0)`, for every bank with a valid column.
+    - Blocking (`choose_dram_sharded_blocking`): `block_n` = the bank shard width; `block_k = kw / s`, where `s` is the smallest divisor of the A shard width that fits L1 and the 16-bit-DEST chain cap; `block_m` is the largest divisor of the rows that fits; `s > 1` only with `block_m == 1`, so a sender's K-block is one contiguous run of its shard.
+    - CBs: `cb_output_shard` (17) is backed on the output shard, 0 CB bytes. `cb_act_tiles` is also placed on every non-worker core the broadcast writes.
+    - The A broadcast is one `ttnn.Mcast` channel: rotating senders = A's shard cores in shard order (one shard: explicit fixed sender); receivers = the workers' bounding rectangle; `handshake_cores` = the workers.
+  - **Reused vs added.**
+    - Reused: the reader, compute and writer kernels and their CB protocol; the R1 CT-arg lists, now factored into `_reader_ct` / `_writer_ct` / `_compute_ct`; `_footprint`, which gained an `out_in_place` term; `choose_subblock`; `l1_cb_budget`.
+    - Added: the R4 descriptor branch; the reader's `dram_sharded` path (one coalesced bank read per K-block issued before the A round, the round's send/receive, and a sender-only path for non-worker A cores); compute `swiglu_natural_pairs` (a flat Strided walk, row stride 2, over natural (gate, up) bank columns); writer `out_in_place` (retire only).
+- Accuracy achieved:
+  - PERF FOCUS 2, 1×4352×5120 bf16×bf4b LoFi: PCC 0.999994, rel-RMS 0.0047 (gate 0.9995 / 0.03).
+  - gate_up 32×5120×9216 swiglu: PCC 0.999988, rel-RMS 0.0085.
+  - LM head 1×5120×16384: PCC 0.999994, rel-RMS 0.0047.
+  - cartesian 384×1536×1024 bf16 HiFi4: PCC 0.999999, rel-RMS 0.0017 (gate 0.9999 / 0.01).
+- Golden test progress:
+  - dram_sharded cartesian (single weight): 310/310 pass, plus 60 xfail on the permanent fp32 × acc=False EXCLUSION.
+  - dram_sharded batched: 90/90 xfail on the permanent EXCLUSION.
+  - Qwen decode / LM-head loose cases: 10/10 pass.
+  - Translated DRAM-sharded tests (`test_served_shapes_blackhole`, `test_cores_per_bank`, `test_program_cache_reuses_the_program`): 57/57 pass.
+  - Regression net, unit files `test_genify_matmul`, `_epilogue`, `_extended`, `_mcast`: 73/73 pass.
+- Perf, first R4 build (device ns, one fresh run each):
+  - PERF FOCUS 2: 42.7 µs (achievable 36.9, roofline 27.2);
+  - LM head 1×5120×16384: 147.8 µs (127.0);
+  - gate_up 32×5120×9216 swiglu: 102.6 µs (64.0);
+  - cartesian 384×1536×1024 (48 one-tile A shards, 48 serialized rounds): 136.5 µs.
+  - Finding for Refinement 6: the B stream runs at ~64% of DRAM peak on PERF FOCUS 2, because each K-block's bank read waits its own barrier before the next is issued (the trid double-issue lever). Tiny A shards make the run round-latency-bound (one handshake per shard).
+- Issues encountered:
+  - The mcast helper's rotating sender needs a rectangular receiver group, and its irregular multicast is capped at 3 rectangles. The Blackhole bank workers are 8 scattered single cores (columns 0 and 6), so the receivers are their bounding rectangle with the handshake restricted to the workers.
+  - `run_safe_pytest.sh --profile` splits a `-k` "or" expression; profile through the perf guard file instead.
+- Tests added:
+  - `test_genify_matmul_dram_sharded.py` (11 cases):
+    - decode with 8 / 10 rotating senders;
+    - 64 and 32 one-tile shards (M = 1, bias, addcmul);
+    - multi-row A (12 and 64 rows; an fp32 M split; swiglu);
+    - a single shard (fixed sender) with the 16-bit-DEST K split;
+    - a ragged last bank (N = 704) with the output shard order checked;
+    - a host plan test pinning the K and M splits.
+  - Perf guard `test_perf_dram_sharded` (4 R4 representatives, among them PERF FOCUS 2).

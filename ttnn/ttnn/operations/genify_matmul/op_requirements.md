@@ -154,7 +154,7 @@ No SUPPORTED change.
 
 **Outcome**: PERF FOCUS 1 measured **1673 → 463.5 µs** device time (one fresh run each; target `achievable_ns` 564.5 µs beaten, 8% above the 428.7 µs roofline). Precision is unchanged: PCC 0.99992, rel-RMS 0.0085 against the 0.03 gate. Levers: R1a row/column operand multicast (1673 → 494 µs, 110 cores, DRAM 504 → 64 MB); staggered line injectors so no core injects both operands (494 → 464 µs); single-walk K split (resolves the folded L1 finding, 0.79× on 384×1536×1024); an R1a gate `MCAST_MIN_KBLOCK_BYTES = 32 KB` (64×16384×256 16-bit DEST was +11% under R1a with 16 KB K-blocks, now R1 again). Guard set: every 2-D shape is 0.22–0.56×, nothing slower beyond ±1% noise. Measured null, kept as a knob: the 2×2 subblock, 477.8 µs vs 463.7 µs for 1×4 (`SUBBLOCK_MIN_UNPACK = False`). **Bottleneck now**, by ablation: the matmul + partials floor is 413 µs (reader and epilogue stubbed); the serialized swiglu epilogue costs ~35 µs and exposed data movement ~16 µs. **Next**: (1) fold silu·up into the last K-block's pack, or overlap the epilogue; this needs a matmul_block helper change to pack half a subblock. (2) The design's injector stall-shadow (trid-tagged read of K-block kb+1 issued before multicasting kb), which would also let R1a win on the tiny-K-block shapes now gated to R1. Neither was done here: the target is met, and each is a structural change of its own.
 
-### [ ] Refinement 4 — dram_sharded placement (regime R4: weight streaming from the DRAM banks)
+### [x] Refinement 4 — dram_sharded placement (regime R4: weight streaming from the DRAM banks)
 
 **Goal**: Add `"dram_sharded"` to `SUPPORTED["placement"]`:
 - A is L1 width-sharded over **K**;
@@ -176,6 +176,20 @@ Required topology (op_design.md R4):
 - **swiglu.** The decode gate_up cases need it, from Refinement 2.
 
 **Done when**: every dram_sharded golden cell (cartesian INPUTS and the Qwen decode / LM-head loose cases) passes, except the permanent EXCLUSION. The requested placement and the op-chosen shard spec are honoured, and all earlier cells stay green.
+
+**Outcome**: `dram_sharded` is in SUPPORTED as regime R4. Topology:
+- one worker per bank (optimal NOC_0 assignment), each streaming its bank shard with one coalesced read per K-block, issued before the K-block's A round;
+- every A shard multicast once from its own core in its K turn (rotating senders via `ttnn.Mcast` + `McastArgs`). The receiver group is the workers' bounding rectangle with the handshake restricted to the workers, because the helper's rotating mode needs a rectangle and the 8 scattered bank workers exceed its 3-rectangle irregular multicast;
+- the output packed in place into an op-built L1 width shard (shard w on bank w's worker).
+
+Golden: 310/310 single-weight cartesian dram_sharded cells plus the 10 Qwen decode / LM-head loose cases pass; 60 + 90 xfail on the two permanent EXCLUSIONs. The 57 translated DRAM-sharded tests pass, among them program-cache reuse. Earlier suites are green.
+
+Baseline device time, for Refinement 6:
+- PERF FOCUS 2: 42.7 µs (target 36.9, roofline 27.2), B-stream-bound at ~64% of DRAM peak. Each of the 8 K-blocks waits its own read barrier before the next bank read is issued.
+- LM head 1×5120×16384: 147.8 µs (127.0 stock).
+- gate_up 32×5120×9216 swiglu: 102.6 µs (64.0 stock).
+
+Next levers are Refinement 6's: trid-pipelined B stream depth 3–4, and a larger A round per handshake.
 
 ### [ ] Refinement 5 — block_sharded placement (regime R3: cross-core A K-slice exchange)
 
