@@ -480,6 +480,18 @@ TEST_F(DevicePrintOutputFixture, PrintBasicTypes) {
     TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_basic_types.cpp", messages);
 }
 
+// Known issue: DEVICE_PRINT evaluates each argument three times, so today this prints "Evaluated once: 2 2" and
+// "Evaluated once: 3". Disabled until that is fixed.
+TEST_F(DevicePrintOutputFixture, DISABLED_PrintArgumentsEvaluatedOnce) {
+    std::vector<std::string> messages = {
+        "Evaluated once: 0 0",
+        "Evaluated once: 1",
+    };
+
+    TestOutputOnEveryRisc(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_arguments_evaluated_once.cpp", messages);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintWithFormatSpecified) {
     std::vector<std::string> messages = {
         "int8_t:         -8",
@@ -866,6 +878,17 @@ TEST_F(DevicePrintOutputFixture, PrintBuiltinTypes) {
     };
 
     TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", messages);
+}
+
+// Known issue: plain char prints as a number, so today this prints "97" and "c=97 [ 97] 97 0x61 a sc=97 uc=97".
+// Disabled until that is fixed.
+TEST_F(DevicePrintOutputFixture, DISABLED_PrintCharTypes) {
+    std::vector<std::string> messages = {
+        "a",
+        "c=a [a  ] 97 0x61 a sc=97 uc=97",
+    };
+
+    TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_char_types.cpp", messages);
 }
 
 TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
