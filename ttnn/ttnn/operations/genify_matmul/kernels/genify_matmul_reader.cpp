@@ -61,6 +61,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
 
 namespace {
 
@@ -130,10 +132,14 @@ void kernel_main() {
     constexpr bool ds_worker = get_compile_time_arg_val(24) != 0;      // R4 bank worker (else sender / lander)
     constexpr uint32_t k_blocks_per_round = get_compile_time_arg_val(25);  // R4: K-blocks per A shard
     constexpr uint32_t act_cb_blocks = get_compile_time_arg_val(26);       // cb_act_tiles depth in K-blocks
-    constexpr bool block_sharded = get_compile_time_arg_val(27) != 0;      // regime R3
-    constexpr bool bs_mcast = get_compile_time_arg_val(28) != 0;           // R3a: rotating row multicast
-    constexpr uint32_t cb_act_shard = get_compile_time_arg_val(29);        // R3: A's resident shard (zero-copy)
-    constexpr auto a_args = TensorAccessorArgs<30>();
+    constexpr bool ds_row_reads = get_compile_time_arg_val(27) != 0;       // R4: column slice, one read per K row
+    constexpr uint32_t ds_weight_depth = get_compile_time_arg_val(28);     // R4: cb_weight_tiles depth in K-blocks
+    constexpr uint32_t ds_b_ahead = get_compile_time_arg_val(29);          // R4: B K-blocks in flight (trids)
+    constexpr bool ds_reader_act = get_compile_time_arg_val(30) != 0;      // R4: A rounds here (else the writer)
+    constexpr bool block_sharded = get_compile_time_arg_val(31) != 0;      // regime R3
+    constexpr bool bs_mcast = get_compile_time_arg_val(32) != 0;           // R3a: rotating row multicast
+    constexpr uint32_t cb_act_shard = get_compile_time_arg_val(33);        // R3: A's resident shard (zero-copy)
+    constexpr auto a_args = TensorAccessorArgs<34>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto row_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto res_args = TensorAccessorArgs<row_args.next_compile_time_args_offset()>();
@@ -157,9 +163,12 @@ void kernel_main() {
     constexpr auto mc_weight = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("weight_ct_offset"),
         get_named_compile_time_arg_val("weight_rt_offset")>();
-    static_assert(mc_act.active == (operand_mcast || dram_sharded || bs_mcast) && mc_weight.active == operand_mcast);
+    static_assert(
+        mc_act.active == (operand_mcast || (dram_sharded && ds_reader_act) || bs_mcast) &&
+        mc_weight.active == operand_mcast);
     static_assert(int(operand_mcast) + int(dram_sharded) + int(block_sharded) <= 1);
     static_assert(!bs_mcast || block_sharded);
+    static_assert(ds_b_ahead >= 1 && ds_b_ahead <= ds_weight_depth);
 
     uint32_t arg = 0;
     const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
@@ -190,33 +199,16 @@ void kernel_main() {
     [[maybe_unused]] auto act_pipe = make_line_pipe<a_sends, operand_mcast>(mc_act, noc);
     [[maybe_unused]] auto weight_pipe = make_line_pipe<b_sends, operand_mcast>(mc_weight, noc);
 
-    // R4 A broadcast faces (std::nullopt where this core has no such role) and the A K-block source:
-    // K-block (row block mb, K-block kb) of the sender's row-major shard (rows x a_shard_k_tiles) starts
-    // at row mb*block_m, column (kb % k_blocks_per_round) * block_k -- one contiguous run, because the
-    // host splits a shard (k_blocks_per_round > 1) only when block_m == 1.
+    // A broadcast faces (std::nullopt where this core has no such role): R4's rotating A rounds (when
+    // they run on the reader) and R3a's rotating row multicast.
     [[maybe_unused]] auto a_sender = mc_act.optional_sender(noc);
     [[maybe_unused]] auto a_receiver = mc_act.optional_receiver(noc);
-    constexpr uint32_t a_shard_k_tiles = block_k_tiles * k_blocks_per_round;
     constexpr uint32_t act_block_bytes = act_block_tiles * a_tile_bytes;
-    [[maybe_unused]] auto a_shard_src = [&](uint32_t mb, uint32_t kb) {
-        return a_addr +
-               (mb * block_m_tiles * a_shard_k_tiles + (kb % k_blocks_per_round) * block_k_tiles) * a_tile_bytes;
-    };
+    [[maybe_unused]] const genify_ds::ActKBlocks<block_m_tiles, block_k_tiles, k_blocks_per_round, a_tile_bytes> ds_act{
+        a_addr};
     if constexpr (dram_sharded && !ds_worker) {
-        // A shard core that is not a bank worker: send this core's rounds into the workers' slots. The
-        // workers' cb_act_tiles write pointer visits slot (K-block % depth) in lockstep from its base.
-        if (a_sender) {
-            const uint32_t act_base = get_write_ptr(cb_act_tiles);
-            uint32_t slot = 0;
-            for (uint32_t mb = 0; mb < nb_m; ++mb) {
-                for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-                    if (mc_act.should_send(kb / k_blocks_per_round)) {
-                        a_sender->send(a_shard_src(mb, kb), act_base + slot * act_block_bytes, act_block_bytes);
-                    }
-                    slot = (slot + 1 == act_cb_blocks) ? 0 : slot + 1;
-                }
-            }
-        }
+        // Non-worker cores of the broadcast run the reader only when the A rounds live here.
+        genify_ds::send_only(ds_act, mc_act, a_sender, get_write_ptr(cb_act_tiles), act_cb_blocks, nb_m, num_k_blocks);
         return;
     }
 
@@ -254,6 +246,42 @@ void kernel_main() {
         }
     };
 
+    // R4 B stream (Refinement 6): a ring of `ds_b_ahead` K-blocks in flight, each tagged with its own
+    // transaction id, so retiring K-block s waits only its own reads while s+1 .. s+T-1 stay on the wire
+    // (a plain read barrier would drain the bank pipe once per K-block). B does not depend on the block
+    // row, so the stream runs over the linear K-block sequence s = mb * num_k_blocks + kb. The CB write
+    // pointer sits at K-block s's slot until it is pushed, so K-block j >= s lands (j - s) slots past it:
+    // reserve (j - s + 1) blocks, address base + (j % depth) * block bytes (the CB is exactly `depth`
+    // blocks). The ring needs no counters: K-block j's id (j % T) + 1 was freed by retiring j - T.
+    [[maybe_unused]] uint32_t ds_seq = 0;
+    [[maybe_unused]] const uint32_t ds_total = nb_m * num_k_blocks;
+    constexpr uint32_t weight_block_bytes = weight_block_tiles * b_tile_bytes;
+    [[maybe_unused]] const uint32_t weight_base = get_write_ptr(cb_weight_tiles);
+    [[maybe_unused]] auto ds_issue_weight = [&](uint32_t j) {
+        cb_reserve_back(cb_weight_tiles, (j - ds_seq + 1) * weight_block_tiles);
+        const uint32_t kbj = j % num_k_blocks;
+        const uint32_t k0j = kbj * block_k_tiles;
+        const uint32_t kvj = (kbj == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
+        const uint32_t l1 = weight_base + (j % ds_weight_depth) * weight_block_bytes;
+        dataflow_kernel_lib::set_read_trid(noc, j % ds_b_ahead + 1);
+        if constexpr (ds_row_reads) {
+            // cores_per_bank split: this worker's slice of each K row is one run (the rows are not
+            // adjacent). A slice wholly in the last bank's padding reads nothing (its page ids would
+            // alias the next row).
+            if (cols_valid != 0) {
+                for (uint32_t k = 0; k < kvj; ++k) {
+                    noc_async_read(
+                        b_acc.get_noc_addr((k0j + k) * tensor_n_tiles + col0),
+                        l1 + k * block_n_tiles * b_tile_bytes,
+                        block_n_tiles * b_tile_bytes);
+                }
+            }
+        } else {
+            // One worker per bank: rows [k0, k0 + k_valid) of the bank's column shard are one run.
+            noc_async_read(b_acc.get_noc_addr(k0j * tensor_n_tiles + col0), l1, kvj * block_n_tiles * b_tile_bytes);
+        }
+    };
+
     for (uint32_t bb = 0; bb < nb_b; ++bb) {
         const uint32_t blk_b0 = bb * block_batches;
         const uint32_t blk_b_valid =
@@ -275,25 +303,32 @@ void kernel_main() {
                         const uint32_t k0 = kb * block_k_tiles;
 
                         if constexpr (dram_sharded) {
-                            // B (stall-shadow: issued before the A round it does not depend on): rows
-                            // [k0, k0 + k_valid) of this bank's column shard are one contiguous run.
-                            cb_reserve_back(cb_weight_tiles, weight_block_tiles);
-                            noc_async_read(
-                                b_acc.get_noc_addr(k0 * tensor_n_tiles + col0 + blk_c0),
-                                get_write_ptr(cb_weight_tiles),
-                                k_valid * block_n_tiles * b_tile_bytes);
-                            // A round: the owner of A shard `round` multicasts this K-block to every
-                            // worker's reserved slot (the receiver acks the slot, then waits the data).
-                            cb_reserve_back(cb_act_tiles, act_block_tiles);
-                            const uint32_t round = kb / k_blocks_per_round;
-                            if (mc_act.should_send(round)) {
-                                a_sender->send(a_shard_src(mb, kb), get_write_ptr(cb_act_tiles), act_block_bytes);
-                            } else {
-                                a_receiver->receive(round);
+                            // B (stall-shadow: issued before the A round it does not depend on), kept
+                            // ds_b_ahead K-blocks ahead (the ring above; nb_b = nb_n = block_batches = 1).
+                            if (ds_seq == 0) {
+                                for (uint32_t j = 0; j + 1 < ds_b_ahead && j < ds_total; ++j) {
+                                    ds_issue_weight(j);
+                                }
                             }
-                            noc_async_read_barrier();
-                            cb_push_back(cb_act_tiles, act_block_tiles);
+                            if (ds_seq + ds_b_ahead - 1 < ds_total) {
+                                ds_issue_weight(ds_seq + ds_b_ahead - 1);
+                            }
+                            // A round (here, or on the writer: DS_ACT_ON_WRITER): the owner of A shard
+                            // `round` multicasts this K-block to every worker's reserved slot.
+                            if constexpr (ds_reader_act) {
+                                cb_reserve_back(cb_act_tiles, act_block_tiles);
+                                genify_ds::worker_round(
+                                    ds_act, mc_act, a_sender, a_receiver, mb, kb, get_write_ptr(cb_act_tiles));
+                            }
+                            dataflow_kernel_lib::async_read_barrier_with_trid(noc, ds_seq % ds_b_ahead + 1);
+                            if constexpr (ds_reader_act) {
+                                cb_push_back(cb_act_tiles, act_block_tiles);
+                            }
                             cb_push_back(cb_weight_tiles, weight_block_tiles);
+                            ++ds_seq;
+                            if (ds_seq == ds_total) {
+                                dataflow_kernel_lib::set_read_trid(noc, 0);  // restore untagged reads
+                            }
                         } else if constexpr (block_sharded) {
                             cb_reserve_back(cb_weight_tiles, weight_block_tiles);
                             read_weight(get_write_ptr(cb_weight_tiles), b_base, k0, k_valid, blk_cols);

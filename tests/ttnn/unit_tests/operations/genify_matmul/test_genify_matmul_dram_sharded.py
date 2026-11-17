@@ -124,6 +124,41 @@ def test_ragged_last_bank_and_output_placement(device):
     assert pcc > 0.9999, pcc
 
 
+# (cores_per_bank, A rounds on the writer, B K-blocks in flight, weight CB depth)
+_R6_KNOBS = [(3, True, 1, 2), (1, True, 1, 2), (3, False, 3, 4), (1, False, 2, 3)]
+
+
+@pytest.mark.parametrize(
+    "knobs", _R6_KNOBS, ids=[f"cpb{c}-{'wact' if w else 'ract'}-t{t}-d{d}" for c, w, t, d in _R6_KNOBS]
+)
+def test_cores_per_bank_split(device, monkeypatch, knobs):
+    """Refinement 6's knobs forced on N = 704 (8 banks of 3 columns, the last bank holds one valid column).
+    cores_per_bank = 3: two slices of the last bank lie wholly in padding (no B reads, no output writes)
+    and every slice lands in the bank's output shard on its primary worker; 1 = the Refinement 4 in-place
+    topology. The A rounds run on the writer (default) or the reader; the B ring keeps 1-3 K-blocks in
+    flight on transaction ids (32 one-K-block rounds each). bias exercises the per-slice epilogue row."""
+    cores_per_bank, act_on_writer, b_ahead, depth = knobs
+    monkeypatch.setattr(pd, "DS_CORES_PER_BANK", cores_per_bank)
+    monkeypatch.setattr(pd, "DS_ACT_ON_WRITER", act_on_writer)
+    monkeypatch.setattr(pd, "DS_B_AHEAD", b_ahead)
+    monkeypatch.setattr(pd, "DS_DEPTH_WEIGHT", depth)
+    k, n = 2048, 704
+    a, w, ta, tw = _ds_tensors(device, k, n, _BFP8, a_cores=32, a_shard_w_tiles=2)
+    bias = torch.randn(1, n)
+    tbias = create_ttnn_input_tensor(bias, device, dtype=_BF16, layout=ttnn.TILE_LAYOUT)
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True)
+    out = genify_matmul(
+        ta, tw, bias=tbias, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, compute_kernel_config=cfg
+    )
+    workers = ttnn.get_optimal_dram_bank_to_logical_worker_assignment(device, pd.DS_READ_NOC)
+    shard_cores = ttnn.corerange_to_cores(out.memory_config().shard_spec.grid, None, True)
+    assert [(c.x, c.y) for c in shard_cores] == [(c.x, c.y) for c in workers[: len(shard_cores)]]
+    ref = a.float() @ ttnn.to_torch(tw).float() + bias.float()
+    got = ttnn.to_torch(out).float()
+    pcc = torch.corrcoef(torch.stack([got.flatten(), ref.flatten()]))[0, 1].item()
+    assert pcc > 0.9999, pcc
+
+
 def _plan(device, a_shape, b_shape, a_cores, a_dtype=_BF16, w_dtype=_BFP4, acc=True, swiglu=False):
     """R4 blocking for an allocated (uninitialized) A width-sharded over `a_cores` and B bank-sharded."""
     m_pad = math.prod(a_shape[:-2]) * (-(-a_shape[-2] // 32) * 32)
@@ -160,10 +195,13 @@ def _plan(device, a_shape, b_shape, a_cores, a_dtype=_BF16, w_dtype=_BFP4, acc=T
 
 def test_plan_blocking(device):
     """The R4 extent knobs: one A shard per round unless L1 or the 16-bit-DEST chain cap splits it."""
-    # PERF FOCUS 2: 8 shards of 17 K tiles, 20 bank columns, one block row, one K-block per shard.
+    # PERF FOCUS 2: 8 shards of 17 K tiles, 20 bank columns split over 5 cores per bank (Refinement 6:
+    # 4-column slices), one block row, one K-block per shard.
     geom, topo, blk = _plan(device, (1, 1, 1, 4352), (4352, 5120), 8)
     assert (topo.num_shards, topo.shard_k_tiles, topo.bank_n_tiles) == (8, 17, 20)
-    assert (blk.block_m_tiles, blk.block_n_tiles, blk.block_k_tiles, blk.num_k_blocks) == (1, 20, 17, 8)
+    assert (topo.cores_per_bank, topo.core_n_tiles, len(topo.workers)) == (5, 4, 40)
+    assert len({(c.x, c.y) for c in topo.workers}) == 40 and topo.workers[::5] == topo.primaries
+    assert (blk.block_m_tiles, blk.block_n_tiles, blk.block_k_tiles, blk.num_k_blocks) == (1, 4, 17, 8)
     # 16-bit DEST caps the in-DEST K chain at DEST16_BLOCK_K_MAX: a 32-tile shard is split in 4.
     geom, topo, blk = _plan(device, (1, 1, 32, 1024), (1024, 512), 1, w_dtype=_BF16, acc=False)
     assert topo.num_shards == 1 and blk.block_k_tiles == pd.DEST16_BLOCK_K_MAX and blk.num_k_blocks == 4
