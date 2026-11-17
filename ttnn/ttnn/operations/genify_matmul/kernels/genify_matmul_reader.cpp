@@ -76,12 +76,23 @@
 // holding whole images walks them as the block's batch slices (block_batches), pushing the resident
 // shard image by image, i.e. sequentially.
 
+// Per-stage device zones (Perf 1, PERMANENT -- free with the profiler off; never remove, extend instead).
+// One zone per question, per K-block (<= 5 executions per K-block; the 125-zone budget covers ~25 K-blocks
+// per core, beyond which later zones are dropped SILENTLY -- check the span before trusting a breakdown):
+//   rd_reserve   cb_reserve_back on the operand slots   (back-pressure: compute not popping)
+//   rd_issue     the NoC read issue loop (address gen + command-buffer writes; RISC-serial)
+//   rd_barrier   noc_async_read_barrier                 (waiting on DRAM / NoC)
+//   rd_mcast_a   R1a A-line delivery (injector: send incl. receivers' slot acks; receiver: wait for data)
+//   rd_mcast_b   R1a B-line delivery
+//   rd_ds_kblock / rd_bs_kblock   one zone per R4 / R3 K-block (B issue + A round + barrier)
+//   rd_row / rd_residual          epilogue operand reads
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 
@@ -332,6 +343,7 @@ void kernel_main() {
                         const uint32_t k0 = kb * block_k_tiles;
 
                         if constexpr (dram_sharded) {
+                            MaybeDeviceZoneScope("rd_ds_kblock");
                             // B (stall-shadow: issued before the A round it does not depend on), kept
                             // ds_b_ahead K-blocks ahead (the ring above; nb_b = nb_n = block_batches = 1).
                             if (ds_seq == 0) {
@@ -359,6 +371,7 @@ void kernel_main() {
                                 dataflow_kernel_lib::set_read_trid(noc, 0);  // restore untagged reads
                             }
                         } else if constexpr (block_sharded) {
+                            MaybeDeviceZoneScope("rd_bs_kblock");
                             cb_reserve_back(cb_weight_tiles, weight_block_tiles);
                             if (batch_valid) {  // a shard's padded batch slots (batched B) read no weight
                                 read_weight(get_write_ptr(cb_weight_tiles), b_base, k0, k_valid, blk_cols);
@@ -398,30 +411,42 @@ void kernel_main() {
                             // A residency (the twin): the M-block's A is read on its first N-block only.
                             // R1b: cb_act_tiles has its own producer (the writer's A stream).
                             const bool load_act = !act_on_writer && (!act_resident || nbk == 0);
-                            if (load_act) {
-                                cb_reserve_back(cb_act_tiles, act_block_tiles);
-                            }
-                            if (load_weight) {
-                                cb_reserve_back(cb_weight_tiles, weight_block_tiles);
+                            {
+                                MaybeDeviceZoneScope("rd_reserve");
+                                if (load_act) {
+                                    cb_reserve_back(cb_act_tiles, act_block_tiles);
+                                }
+                                if (load_weight) {
+                                    cb_reserve_back(cb_weight_tiles, weight_block_tiles);
+                                }
                             }
                             const uint32_t act_l1 = get_write_ptr(cb_act_tiles);
                             const uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
-                            if (batch_valid && reads_act && load_act) {
-                                read_act(act_l1, a_row_base, k0, blk_rows, k_valid);
-                            }
-                            if (batch_valid && reads_weight && load_weight) {
-                                read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
-                            }
                             if constexpr (reads_act || reads_weight) {
+                                {
+                                    MaybeDeviceZoneScope("rd_issue");
+                                    if (batch_valid && reads_act && load_act) {
+                                        read_act(act_l1, a_row_base, k0, blk_rows, k_valid);
+                                    }
+                                    if (batch_valid && reads_weight && load_weight) {
+                                        read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
+                                    }
+                                }
+                                MaybeDeviceZoneScope("rd_barrier");
                                 noc_async_read_barrier();  // one barrier per K-block, both operands
                             }
                             // R1a: A over its line, then B over its line (fixed order on every core).
-                            if (load_act) {
-                                line_deliver<operand_mcast, a_sends>(act_pipe, act_l1, act_block_tiles * a_tile_bytes);
-                            }
-                            if (load_weight) {
-                                line_deliver<operand_mcast, b_sends>(
-                                    weight_pipe, weight_l1, weight_block_tiles * b_tile_bytes);
+                            if constexpr (operand_mcast) {
+                                if (load_act) {
+                                    MaybeDeviceZoneScope("rd_mcast_a");
+                                    line_deliver<operand_mcast, a_sends>(
+                                        act_pipe, act_l1, act_block_tiles * a_tile_bytes);
+                                }
+                                if (load_weight) {
+                                    MaybeDeviceZoneScope("rd_mcast_b");
+                                    line_deliver<operand_mcast, b_sends>(
+                                        weight_pipe, weight_l1, weight_block_tiles * b_tile_bytes);
+                                }
                             }
                             if (load_act) {
                                 cb_push_back(cb_act_tiles, act_block_tiles);
@@ -435,6 +460,7 @@ void kernel_main() {
                     if constexpr (has_row) {
                         // bias / gate row of this N-block: once per block, after the first K-walk.
                         if (bi == 0) {
+                            MaybeDeviceZoneScope("rd_row");
                             cb_reserve_back(cb_row, block_n_tiles);
                             uint32_t l1 = get_write_ptr(cb_row);
                             const uint32_t page = col0 + blk_c0;
@@ -449,6 +475,7 @@ void kernel_main() {
                     if constexpr (has_residual) {
                         // residual rows of this batch, in row groups of sb_h (epilogue order).
                         for (uint32_t g = 0; g < num_row_groups; ++g) {
+                            MaybeDeviceZoneScope("rd_residual");
                             cb_reserve_back(cb_residual_tiles, residual_group_tiles);
                             if (batch_valid) {
                                 const uint32_t res_l1 = get_write_ptr(cb_residual_tiles);

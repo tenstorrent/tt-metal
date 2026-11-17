@@ -1,0 +1,62 @@
+test_perf[9472-5120-3456-fid=HiFi4]                                            2683.9    2685.9   +0.1%
+test_perf[9472-5120-3456-fid=HiFi2]                                            1525.8    1525.7   -0.0%
+test_perf[9472-3456-5120-fid=HiFi4]                                            2522.8    2526.5   +0.1%
+test_perf[9472-3456-5120-fid=HiFi2]                                            1511.4    1512.1   +0.0%
+test_perf[4096-4096-4096-fid=HiFi4]                                            1293.5    1293.8   +0.0%
+test_perf[4096-4096-4096-fid=HiFi2]                                             735.9     737.9   +0.3%
+test_perf[2048-9216-6144-fid=HiFi4]                                            1796.3    1796.5   +0.0%
+test_perf[2048-9216-6144-fid=HiFi2]                                             989.3     990.3   +0.1%
+test_perf[2048-5120-8704-fid=HiFi4]                                            1612.5    1611.1   -0.1%
+test_perf[2048-5120-8704-fid=HiFi2]                                             912.0     909.0   -0.3%
+test_perf[256-6144-9216-fid=HiFi4]                                              382.8     392.1   +2.4%
+test_perf[256-6144-9216-fid=HiFi2]                                              320.5     321.8   +0.4%
+test_perf[256-9216-6144-fid=HiFi4]                                              366.5     358.2   -2.3%
+test_perf[256-9216-6144-fid=HiFi2]                                              325.1     323.3   -0.5%
+test_perf[256-15360-3072-fid=HiFi4]                                             352.1     355.0   +0.8%
+test_perf[256-15360-3072-fid=HiFi2]                                             350.7     349.3   -0.4%
+test_perf[1-6144-6144-fid=HiFi4]                                                215.5     201.6   -6.5%  <-- WIN
+test_perf[1-6144-6144-fid=HiFi2]                                                204.7     212.3   +3.7%  <-- SLOWER
+test_perf[384-1536-1024-fid=HiFi4]                                               34.3      34.8   +1.4%
+test_perf[384-1536-1024-fid=HiFi2]                                               29.8      30.3   +1.8%
+test_perf[2048-128-3072-fid=HiFi4]                                               51.6      51.2   -0.8%
+test_perf[2048-128-3072-fid=HiFi2]                                               48.5      48.3   -0.3%
+test_perf[2048-3072-128-fid=HiFi4]                                              171.7     169.0   -1.6%
+test_perf[2048-3072-128-fid=HiFi2]                                              165.1     164.4   -0.4%
+test_perf[32-1024-2048-fid=HiFi4]                                                13.2      13.2   +0.1%
+test_perf[32-1024-2048-fid=HiFi2]                                                13.2      13.0   -1.7%
+test_perf[2048-256-512-fid=HiFi4]                                                13.5      13.9   +2.4%
+test_perf[2048-256-512-fid=HiFi2]                                                12.7      12.9   +1.7%
+test_perf_formats[2048-5120-4160-bfloat16-bfloat4_b-LoFi-acc1]                  268.0     267.7   -0.1%
+test_perf_formats[512-5120-3072-bfloat16-bfloat8_b-HiFi2-acc1]                  232.2     232.8   +0.3%
+test_perf_formats[1-6144-6144-float32-bfloat16-HiFi2-acc1]                      203.7     210.3   +3.2%  <-- SLOWER
+test_perf_formats[2048-256-512-bfloat8_b-bfloat8_b-LoFi-acc0]                     8.9       9.1   +2.1%
+test_perf_formats[4096-256-1024-bfloat8_b-bfloat8_b-LoFi-acc0]                   21.8      22.0   +0.7%
+test_perf_formats[64-16384-256-bfloat16-bfloat16-HiFi4-acc0]                    108.0     108.9   +0.8%
+test_perf_epilogues[2048-5120-8704-bfloat16-bfloat4_b-LoFi-acc1-swiglu-fused]     465.7     418.1  -10.2%  <-- WIN
+test_perf_epilogues[2048-5120-8704-bfloat16-bfloat4_b-LoFi-acc1-swiglu-none]     480.9     481.6   +0.2%
+test_perf_epilogues[2048-6144-3072-bfloat16-bfloat16-HiFi2-acc1-addcmul-fused]     439.2     414.1   -5.7%  <-- WIN
+test_perf_epilogues[2048-6144-3072-bfloat16-bfloat16-HiFi2-acc1-addcmul-none]     410.3     410.9   +0.1%
+test_perf_epilogues[2048-256-512-bfloat8_b-bfloat8_b-LoFi-acc0-bias_relu-fused]       9.6      10.0   +4.5%  <-- SLOWER
+test_perf_epilogues[2048-256-512-bfloat8_b-bfloat8_b-LoFi-acc0-bias_relu-none]       8.8       9.3   +5.0%  <-- SLOWER
+test_perf_epilogues[384-1536-1024-bfloat16-bfloat16-HiFi4-acc1-bias-fused]       35.8      36.1   +0.8%
+test_perf_epilogues[384-1536-1024-bfloat16-bfloat16-HiFi4-acc1-bias-none]        34.6      34.8   +0.5%
+test_perf_l1_resident[128-5120-8704-bfloat4_b-LoFi-swiglu]                      116.0     107.9   -6.9%  <-- WIN
+test_perf_l1_resident[384-1536-1024-bfloat16-HiFi4-none]                         30.9      31.1   +0.7%
+test_perf_dram_sharded[1-4352-5120-c8-bfloat4_b-LoFi-none]                       30.0      29.6   -1.3%
+test_perf_dram_sharded[1-5120-16384-c10-bfloat4_b-LoFi-none]                    106.3     106.4   +0.1%
+test_perf_dram_sharded[32-5120-9216-c10-bfloat4_b-LoFi-swiglu]                   63.1      62.2   -1.4%
+test_perf_dram_sharded[384-1536-1024-c48-bfloat16-HiFi4-none]                   137.0     137.2   +0.2%
+test_perf_block_sharded[2048-1024-2048-8x10-none-exchange=mcast]                 79.2      78.7   -0.6%
+test_perf_block_sharded[2048-1024-2048-8x10-none-exchange=unicast]               90.8      92.8   +2.3%
+test_perf_block_sharded[8192-512-256-8x8-bias_relu-exchange=mcast]               18.7      18.9   +0.7%
+test_perf_block_sharded[8192-512-256-8x8-bias_relu-exchange=unicast]             46.2      46.3   +0.3%
+test_perf_block_sharded[2048-512-2048-8x10-none-exchange=mcast]                  44.6      46.8   +4.9%  <-- SLOWER
+test_perf_block_sharded[2048-512-2048-8x10-none-exchange=unicast]                47.8      47.6   -0.3%
+test_perf_block_sharded[2048-2048-256-8x8-bias_relu-exchange=mcast]              19.8      20.1   +1.6%
+test_perf_block_sharded[2048-2048-256-8x8-bias_relu-exchange=unicast]            51.9      52.7   +1.6%
+test_perf_height_sharded[32768-128-256-c103-none]                                14.6      14.8   +1.2%
+test_perf_height_sharded[8192-128-512-c86-none]                                  18.8      18.7   -0.5%
+test_perf_height_sharded[8192-512-128-c86-bias_relu]                             20.4      20.2   -0.6%
+test_perf_height_sharded[32768-256-64-c103-bias_relu]                             9.8      10.1   +2.5%
+test_perf_batched                                                                68.6      69.0   +0.7%
+test_perf_upsample_w_pass                                                        12.9      12.5   -3.3%  <-- WIN

@@ -23,12 +23,19 @@
 // injector (the channel's fixed sender) reading each A K-block from DRAM / L1 into its slot and
 // multicasting it to every core's same slot, the others acking and waiting. The reader streams only B.
 
+// Per-stage device zones (Perf 1, PERMANENT -- free with the profiler off; never remove, extend instead):
+//   wr_wait_out   cb_wait_front on a row-group batch   (starved: compute has not packed it yet)
+//   wr_write      the batch's NoC write issue + flush
+//   wr_final_barrier  the closing noc_async_write_barrier
+//   wr_ds_round   one R4 A round (reserve + round + push), per K-block
+//   wr_a_inject / wr_a_receive   one R1b A K-walk (injector: reads + multicasts; receiver: acks + waits)
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
@@ -130,6 +137,7 @@ void kernel_main() {
             if constexpr (ds_act) {
                 // This block row's K-walk of A (R4: nb_b = nb_n = block_batches = 1).
                 for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+                    MaybeDeviceZoneScope("wr_ds_round");
                     cb_reserve_back(cb_act_tiles, act_block_tiles);
                     genify_ds::worker_round(
                         ds_blocks, mc_act, a_sender, a_receiver, mb, kb, get_write_ptr(cb_act_tiles));
@@ -145,6 +153,7 @@ void kernel_main() {
                     // lockstep and the injector multicasts its own freshly read slot to the same address.
                     if (!act_resident || nbk == 0) {
                         if (a_sender) {
+                            MaybeDeviceZoneScope("wr_a_inject");
                             // Injector: K-block j lands (j - kb) slots past the write pointer (the CB is
                             // exactly act_cb_blocks slots); its reads carry trid (j % act_ahead) + 1, freed by
                             // retiring j - act_ahead, so retiring kb leaves kb+1 .. kb+ahead-1 on the wire.
@@ -182,6 +191,7 @@ void kernel_main() {
                             }
                             dataflow_kernel_lib::set_read_trid(noc, 0);  // restore untagged reads
                         } else {
+                            MaybeDeviceZoneScope("wr_a_receive");
                             for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
                                 cb_reserve_back(cb_act_tiles, act_block_tiles);
                                 a_receiver->receive();
@@ -194,8 +204,12 @@ void kernel_main() {
                     const bool batch_valid = bi < blk_b_valid;
                     const uint32_t batch = b0 + blk_b0 + bi;
                     for (uint32_t g = 0; g < num_row_groups; g += write_batch) {
-                        cb_wait_front(cb_output_tiles, batch_tiles);
+                        {
+                            MaybeDeviceZoneScope("wr_wait_out");
+                            cb_wait_front(cb_output_tiles, batch_tiles);
+                        }
                         if (!out_in_place && batch_valid) {
+                            MaybeDeviceZoneScope("wr_write");
                             const uint32_t l1_base = get_read_ptr(cb_output_tiles);
                             for (uint32_t r = 0; r < batch_rows; ++r) {
                                 const uint32_t blk_row = g * sb_h + r;
@@ -218,5 +232,6 @@ void kernel_main() {
             }
         }
     }
+    MaybeDeviceZoneScope("wr_final_barrier");
     noc_async_write_barrier();
 }

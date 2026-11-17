@@ -580,3 +580,144 @@
   - The B stream itself: 550 µs vs the 508.6 µs roofline. Interleaved 2 KB tile reads from all banks on NoC0 reach ~411 GB/s. A split reader would put half of B on BRISC / NoC1 under a local slot handshake, since the CB still has one producer. It is a structural change, and the gain depends on NoC0 link saturation, which was not measured.
   - The ~55 µs of compute / stream non-overlap at the ends of the walk.
   - A rotating injector for A-heavy shapes, so A reads spread over cores. The helper's rotating mode needs a rectangular receiver set, so it would mean a bounding-rectangle landing zone as in R4.
+
+## Perf 1 — perf tournament round 1 (PERF FOCUS 1: Qwen3.8 prefill gate_up + SwiGLU, 2048 tokens)
+- Date: 2026-11-17
+- **Focus config (exact golden case):** A 1×2048×5120 bf16 @ B 5120×8704 bfloat4_b, LoFi, fp32_dest_acc_en=True,
+  math_approx_mode=False, DRAM interleaved, swiglu, bf16 out. Every knob is in SUPPORTED. Plan: R1a, rect_t 11×10,
+  one block per core of 6×28 B-tiles (84 output tiles), subblock 1×4, 14 K-blocks of 12 (last 4).
+- **Result: 466.4 → 418.4 µs (−10.3%)**, PCC 0.999917 → 0.999919, rel-RMS 0.00846 → 0.00829. Now below the
+  #65148 roofline (428.7 µs) and stock (564.5 µs). All 3 ideas were measured: 2 graduated, 1 null. No regression.
+  SUPPORTED is unchanged.
+
+### Instrumentation (permanent)
+- `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` is restored as-is from the shared branch
+  (`MaybeDeviceZoneScope` = `DeviceZoneScopedN`; compiled out when the profiler is off).
+- Zones (one per question; per K-block at most, so the 250-marker budget covers about 25 K-blocks per core):
+  - reader: `rd_reserve` / `rd_issue` / `rd_barrier` / `rd_mcast_a` / `rd_mcast_b` (R1 / R1a, per K-block);
+    `rd_ds_kblock` (R4) and `rd_bs_kblock` (R3 / R2), per K-block; `rd_row`, `rd_residual`;
+  - compute: `cmp_matmul` and `cmp_epilogue`, per block;
+  - writer: `wr_wait_out`, `wr_write`, `wr_final_barrier`, `wr_ds_round` (R4), `wr_a_inject` / `wr_a_receive` (R1b).
+- The focus run peaks at 144 markers per RISC (under the cap).
+- Measurement cost: with the profiler on, the zones add about 0.3 µs on 9–13 µs kernels, which shows up as
+  +3 to 5% there. With the zones compiled out those cells are flat (see the guard set below). On the focus shape
+  the cost is under 0.2%.
+- Tooling:
+  - focus bench `tests/.../genify_matmul/perf/test_genify_matmul_perf_focus.py` (`GENIFY_MATMUL_PERF=1`,
+    `GENIFY_MATMUL_CHECK=1`);
+  - zone parser `agent_logs/perf1_zones.py`;
+  - ablation hooks in `agent_logs/perf1_ablation_hooks.patch`, a `GENIFY_ABLATE` env var taking
+    reads / mcast / writes / matmul / epi. Perf-only; never commit it applied.
+
+### Measured breakdown (focus, before; device ns, one fresh run each)
+- Ablation, peeled cumulatively:
+
+  | run | µs |
+  |---|---|
+  | full | 466.4 |
+  | writes stubbed | 456.8 |
+  | swiglu chain stubbed | 428.5 |
+  | chain + writes | 370.1 |
+  | chain + writes + reads + mcast (matmul only) | 354.8 |
+  | everything stubbed (sync / pack-L1-acc floor) | 117.8 |
+  | compute only, with the epilogue | 441.5 |
+  | data movement only | 284.6 |
+
+- Zones (p50 over 110 cores, sums):
+  - compute: `cmp_matmul` 369 µs, then `cmp_epilogue` 85–87 µs;
+  - writer: `wr_write` 32 µs (max 58), all at the tail;
+  - reader: the kernel ends at 344 µs, after 111 µs blocked in `rd_reserve`.
+- **Ranked:**
+  1. **Post-matmul tail, ~96 µs.** The swiglu epilogue's own compute is 87 µs, about 1400 cycles per output tile,
+     serialized on the math thread. The 17.8 MB output write stream (~58 µs when exposed) is bunched at the end,
+     because every core has one block.
+  2. **Matmul K-walk.** 354.8 µs against the 318.6 µs FPU floor (168 × 160 tile-K × 16 cycles), plus ~15 µs of
+     exposed head read.
+  3. **Reader.** Not on the critical path: DM-only is 284.6 µs, and the reader waits on full CBs for 111 µs.
+     Roofline gate: no reader-bandwidth idea was floated.
+
+### Portfolio and verdicts (artifacts under `perf_experiments/<slug>/` + `tests/.../genify_matmul/perf_experiments/<slug>/`)
+| idea | verdict | before → after (device ns) | domain |
+|---|---|---|---|
+| `swiglu_epilogue_sfpu`: fused one-pass silu(g)·u SFPU element | **WIN** | isolated focus epilogue 85.3 → 61.8 µs; fp32 out 116.9 → 75.6 µs | every swiglu path (R4 natural pairs 86.6 → 63.7, 16-bit DEST 117.1 → 62.7, bf8b out 85.5 → 61.7); no exceptions; Blackhole only (SFPARECIP) |
+| `matmul_kwalk_efficiency`: raw K-walk, DEST advance by address modifier, one partials reserve / push | **WIN** | whole op 466.3 → 441.5 µs; isolated 353.9 → 330.6 µs (16.61 cycles per tile-K, was 17.77); bit-identical | faster on every config measured: HiFi2 −6.3%, HiFi4 −3.3%, 16-bit DEST −7.0%, block_k 8, bfp8 B, 4×8 block |
+| `progressive_output_multiblock`: nb > 1 blocks per core so writes overlap the K-walk | NULL | focus 466.6 → 473.4 µs (N2, operand depth 4; flat). Only with the epilogue stubbed: 429.8 → 410.1 | measured regressions: 2048×5120×4160 +20% (N2) / +5.5% (M2), 2048×6144×3072 addcmul +11%, R1b FF1 +5% (N3), focus M2 +5%, M3 +26%. Not graduated |
+
+- **Swiglu menu, also measured** (isolated ns; precision in bf16 ULP):
+  - stock-math fusion: 74.3 µs;
+  - degree-2 polynomial: 56.2 µs, max ULP 2.72 against 2.39 (baseline) and 2.03 (graduated);
+  - `UnpackToDestFp32` on `cb_partials`: 72.0 µs, max ULP 0.53;
+  - no-Newton: 68.1 µs, worse precision than baseline.
+  - The graduated bf16 grade is the fastest option that is at least as precise as the old chain on every metric.
+- **Swiglu, recorded options not graduated:**
+  - `UnpackToDestFp32`: a precision gain at +10 µs. The tf32 truncation of the fp32 partials through srcA
+    dominates the residual error.
+  - The bf16-grade element on fp32 outputs: −14 µs, but +1.5% mean error.
+- **Progressive split:** the epilogue already hides all but ~10 µs of the write stream. The split forces a 2×2
+  subblock, which costs about as much as it saves. An M-split re-delivers bf4b B and makes the reader the
+  bottleneck. It is worth revisiting only if the tail becomes write-bound.
+
+### What graduated (one path; replaced code deleted)
+- **`SwiGluMul`** (`kernels/genify_matmul_swiglu_sfpu.hpp`) is the swiglu epilogue's only SFPU step on every
+  regime.
+  - The precision grade is the existing `silu_fp32_precision && DST_ACCUM_MODE`: fp32 grade for fp32 output on a
+    32-bit DEST, bf16 grade otherwise.
+  - The local `Silu` element and `MulBinary` in the swiglu chain are deleted. No carve-out.
+- **`kw::matmul_accumulate_interm`** (`kernels/genify_matmul_kwalk.hpp`) is the K-walk of every epilogue block
+  (LastBlockTarget::Interm).
+  - The narrow carve-out, which keeps the helper, covers only what the raw walk cannot express:
+    - sb_h > 1 subblocks (e.g. R1b's 2×2 on PERF FOCUS 4);
+    - operand residency (`WaitAndRetainOnLastBlock`).
+  - The epilogue-none path (LastBlockTarget::Out with the partials reload) also stays on the helper. The raw
+    walk has no reload, so it is inexpressible there as written. Extending the walk to that path is the next
+    lever: it is the same SETC16 cost on every epilogue-none matmul.
+- The zones are extended to the new path (`cmp_matmul` wraps both walks).
+
+### Whole op before / after and guard set
+- Focus: **466.4 → 418.4 µs** (zones compiled out: 417.4 µs).
+- Guard set: the full `perf/test_genify_matmul_perf_guard.py` (62 cells: every regime × layout × placement
+  representative) and `perf/test_genify_matmul_perf_flux.py` (16 cells), new vs the pre-round kernels, one fresh
+  run each. Tables: `agent_logs/perf1_guard_cmp.txt`, `agent_logs/perf1_flux_cmp.txt`.
+- Wins:
+  - FLUX addcmul 2048×6144×3072: 439.2 → 414.1 µs (−5.7%);
+  - Qwen prefill-128 gate_up with A in L1: 116.0 → 107.9 (−6.9%; FLUX-file twin 114.4 → 108.4);
+  - FLUX attn-out 128×6144×3072 addcmul: 123.0 → 118.0 (−4.1%);
+  - PERF FOCUS 4 FF1 (R1b, helper walk + `SwiGluMul`): 636.6 → 624.4 (−1.9%, within noise);
+  - W pass: 12.9 → 12.5.
+- Every epilogue-none and sharded cell is unchanged within noise.
+- Cells over +3% in one run were re-measured 3× (medians):
+
+  | cell | before | after | note |
+  |---|---|---|---|
+  | 1×6144×6144 HiFi2 | 206.9 | 205.6 | |
+  | fp32 1×6144×6144 | 210.9 | 208.2 | |
+  | block_sharded res5 expand | 45.7 | 45.3 | |
+  | bias_relu 2048×256×512 fused | 9.66 | 9.73 | zones off |
+  | bias_relu twin (epilogue none) | 8.81 | 8.79 | zones off |
+  | 256×6144×9216 none | 322.4 | 321.9 | zones off |
+  | fp32 1×256×6144 | 10.13 | 10.23 | zones off |
+  | 32×1024×2048 | 13.11 | 13.42 | zones off; +2.4%, noise band |
+
+- No material regression, so no carve-out was earned by measurement.
+
+### Golden suite
+- `test_golden.py`, all 1887 cells in four placement chunks: 1512 passed, 375 xfailed (the permanent
+  EXCLUSIONs), 0 failed.
+- `test_translated.py` + `test_regression.py`: 212 passed, 20 skipped, 80 xfailed, 14 failed.
+  - The 14 failures are all `test_matmul_1d_multiple_output_blocks_per_core`: `num_program_cache_entries` delta 0
+    instead of 1. Its parametrizations differ only in reference-op knobs that genify_matmul ignores, so later
+    cases hit the program cache.
+  - They are pre-existing: the same 14 fail on the pre-round kernels. They are not numerical, and not caused by
+    this round.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::matmul_block` (and the LLK `matmul_block` / `matmul_block_no_mop` / `llk_math_matmul` under it) | capability | (1) Every flavour writes the DEST offset (SETC16 via `set_dst_write_addr`) before each output tile's MVMUL sequence. That is ~1 FPU cycle on a 16-cycle LoFi tile-K, and no API offers a multi-tile matmul that advances DEST with an address modifier on the last MVMUL. (2) With `packer_l1_acc` + TileRowMajor + Interm, the helper drains `cb_partials` per K-block on the UNPACK thread (wait / pop per row group), so the unpacker waits for the packer every K-block. Its `caller_owns_pack_target` mode fixes (2) alone (−3.9 µs). | 466300 (whole op); 353910 (isolated K-walk) | 441500; 330641 | `kernels/genify_matmul_compute.cpp:313` → `kernels/genify_matmul_kwalk.hpp:126` |
+| no helper covers this (eltwise_chain SFPU binary elements: no `silu(a)*b`) | capability | No fused silu(a)·b element. The chain's binary SFPU path (`SFPU_BINARY_CALL`) passes DEST indices at runtime, but the fully unrolled body with two rows interleaved needs compile-time row offsets from the gate slot. The best pure fusion with the stock sigmoid math was 74307 ns. The chain itself is kept (init / DEST / CB / reconfig). | 85317 (isolated, `silu_tile` + `MulBinary`) | 61810 | `kernels/genify_matmul_compute.cpp:252` → `kernels/genify_matmul_swiglu_sfpu.hpp:202` |
+
+### Next levers (not done)
+- Extend the raw K-walk to the epilogue-none `Out` target (add a reload, or a final partials → output pass),
+  and to sb_h > 1 subblocks (R1b).
+- With the epilogue at 62 µs, the focus tail is the epilogue plus the write stream again (~1:1). A
+  progressive split becomes interesting only once the tail is write-bound.

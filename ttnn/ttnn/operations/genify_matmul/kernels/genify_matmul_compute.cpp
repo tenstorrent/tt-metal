@@ -15,19 +15,30 @@
 // K-block into cb_partials (LastBlockTarget::Interm, the whole block stays fronted there), then ONE
 // epilogue block op reads it and packs cb_output_tiles row by row:
 //   bias / bias_relu  add_bias_bcast_rows<RowBroadcast, TileRowMajor> (+ PACK_RELU for bias_relu)
-//   swiglu            eltwise_chain over (block_m, block_n/2): gate (Strided base 0) -> Silu,
-//                     up (Strided base block_n/2), MulBinary; the reader permuted B so all gate tiles
+//   swiglu            eltwise_chain over (block_m, block_n/2): gate (Strided base 0) -> D0,
+//                     up (Strided base block_n/2) -> D1, SwiGluMul (one fused SFPU pass, Perf 1,
+//                     genify_matmul_swiglu_sfpu.hpp); the reader permuted B so all gate tiles
 //                     of the N-block precede all up tiles. R4 keeps B in natural (gate, up) pair
 //                     order instead and walks the block flat with row stride 2 (swiglu_natural_pairs).
 //   addcmul           eltwise_chain over (block_m, block_n): FPU Mul with the row-broadcast gate, then
 //                     SFPU AddBinary of the streamed residual (no DEST reuse ahead of an FPU op).
 // The bias / gate row is waited once before the first batch's epilogue and popped after the last.
 //
-// Silu: the chain library has no Silu element, so a local one is declared below through the chain's
-// documented UnaryOp CRTP extension point (silu_tile / silu_tile_init). It replaces the design's
-// Sigmoid + MulBinary composition (one SFPU pass and one DEST copy fewer per output tile); it is a
-// chain element, not a raw-LLK bypass of the chain (the chain still owns init, DEST sync, CB sync and
-// data-format reconfig).
+// SwiGluMul (Perf 1): the chain library has no silu(a)*b element, so the op declares one through the chain's
+// documented BinaryOp CRTP extension point (genify_matmul_swiglu_sfpu.hpp): out = silu(gate) * up in ONE raw-SFPI
+// pass (branch-free sigmoid, Newton step folded into the product, rows software-pipelined in pairs). It replaced
+// a local Silu element (silu_tile) + MulBinary: isolated focus epilogue 85.3 -> 61.8 us (bf16 grade), fp32
+// output 116.9 -> 75.6 us (fp32 grade), with lower error on every measured metric. It is a chain element, not a
+// bypass of the chain (the chain still owns init, DEST sync, CB sync and data-format reconfig).
+//
+// K-walk under an epilogue (Perf 1): kw::matmul_accumulate_interm (genify_matmul_kwalk.hpp) replaces
+// compute_kernel_lib::matmul_block<..., LastBlockTarget::Interm, ...>. RAW-LLK, justified by measurement
+// (PERF FOCUS 1 whole op 466.3 -> 441.5 us, output bit-identical): every matmul_block flavour writes the
+// DEST offset (SETC16) before each output tile, ~1 FPU cycle per 16-cycle LoFi tile-K; the raw walk advances
+// DEST with an address modifier on the last MVMUL instead, and reserves / pushes cb_partials once per block
+// (no per-K-block drain on the unpack thread). Do NOT "fix" it back to the helper. The helper keeps the
+// cases the raw walk cannot express: sb_h > 1 subblocks, operand residency, and the epilogue-none
+// LastBlockTarget::Out reload path.
 //
 // Regime R3 `block_sharded` (Refinement 5): K-block `own_kb` (this core's grid column) is its own resident
 // A shard, pushed by the reader into cb_act_shard (backed on the shard, zero-copy); the helper's
@@ -50,7 +61,18 @@
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"  // MulBinary, AddBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"  // AddBinary (addcmul)
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_swiglu_sfpu.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kwalk.hpp"
+
+// Per-stage device zones (Perf 1, PERMANENT -- free with the profiler off; never remove, extend instead).
+// One execution per block (per batch slice under an epilogue). Each is recorded on all three TRISCs and
+// is OCCUPANCY: cmp_matmul includes the helper's per-K-block cb_wait_front on A / B (unpack thread) and
+// the reserve on cb_partials / cb_output_tiles (pack thread); cmp_epilogue includes the writer's
+// back-pressure on cb_output_tiles. Ablate (SKIP_COMPUTE / CKL_ELTWISE_CHAIN_SKIP_COMPUTE) before ranking.
+//   cmp_matmul     the block's whole K-walk (matmul_block)
+//   cmp_epilogue   the fused epilogue over the accumulated block (bias / swiglu / addcmul)
 
 namespace ckl = compute_kernel_lib;
 
@@ -78,8 +100,8 @@ constexpr bool silu_fp32_precision = get_compile_time_arg_val(18) != 0;
 // swiglu B-column order inside the block: 0 = gate half then up half (the R1 / R1a reader permutes per
 // tile); 1 = natural (gate, up) tile pairs (R4 reads whole bank-shard rows in one coalesced read).
 constexpr bool swiglu_natural_pairs = get_compile_time_arg_val(19) != 0;
-constexpr uint32_t cb_act_shard = get_compile_time_arg_val(20);     // R3: A's resident shard (zero-copy)
-constexpr bool own_round_slot = get_compile_time_arg_val(21) != 0;  // R3a: retire the own round's slot
+constexpr uint32_t cb_act_shard = get_compile_time_arg_val(20);      // R3: A's resident shard (zero-copy)
+constexpr bool own_round_slot = get_compile_time_arg_val(21) != 0;   // R3a: retire the own round's slot
 constexpr bool weight_resident = get_compile_time_arg_val(22) != 0;  // B fronted once, reused per block
 constexpr bool act_resident = get_compile_time_arg_val(23) != 0;     // A fronted once per M-block
 static_assert(!(weight_resident || act_resident) || (num_k_blocks == 1 && block_batches == 1));
@@ -133,19 +155,15 @@ struct RetireOwnRoundSlot {
     }
 };
 
-// silu(x) = x * sigmoid(x) in one SFPU pass (see the file header). `fp32_precision` selects the
-// sigmoid algorithm (silu_tile's template arg); DEST is read and written in its configured width either way.
-template <bool fp32_precision, ckl::Dst Slot = ckl::Dst::D0>
-struct Silu : ckl::UnaryOp<Silu<fp32_precision, Slot>, Slot> {
-    static ALWI void init() { silu_tile_init(); }
-    static ALWI void exec_impl(uint32_t slot_offset) {
-        silu_tile<fp32_precision && DST_ACCUM_MODE>(ckl::to_u32(Slot) + slot_offset);
-    }
-};
-
 // Epilogue none: no accumulator CB when there is a single K-block; the helper only needs a
 // same-format placeholder. Any epilogue always lands the last K-block in cb_partials.
 constexpr uint32_t cb_interm = (has_epilogue || num_k_blocks > 1) ? cb_partials : cb_output_tiles;
+
+// The raw K-walk (kw::matmul_accumulate_interm) is the epilogue path's walk wherever it can be expressed: it is
+// written for 1 x sb_w subblocks over a whole block, with both operands waited / popped per K-block. Carve-outs
+// (helper): sb_h > 1, and operand residency (WaitAndRetainOnLastBlock).
+constexpr bool kwalk_expressible = sb_h == 1 && !act_resident && !weight_resident &&
+                                   block_m_tiles == in0_num_subblocks && block_n_tiles == in1_num_subblocks * sb_w;
 
 template <ckl::LastBlockTarget target>
 ALWI void run_matmul(
@@ -208,6 +226,8 @@ ALWI void run_epilogue(
         }
     } else if constexpr (is_swiglu) {
         // Strided addressing requires caller-managed (None, None) lifecycles on cb_partials.
+        // SwiGluMul grade: fp32 (degree-4 2^f, two Newton steps) for an fp32 output on 32-bit DEST, else bf16.
+        constexpr bool swiglu_fp32_grade = silu_fp32_precision && DST_ACCUM_MODE;
         partials_buf.wait_front(block_tiles);
         eltwise_chain(
             IterationShape::grid(swiglu_rows, swiglu_cols).block_size(epilogue_block_tiles),
@@ -220,7 +240,6 @@ ALWI void run_epilogue(
                     DataFormatReconfig::Enabled,
                     TileAddressing::Strided),
                 Dst::D0>{partials_dfb, StridedTileRange{0, swiglu_stride}},
-            Silu<silu_fp32_precision, Dst::D0>{},
             CopyTile<
                 input(
                     cb_partials,
@@ -230,7 +249,7 @@ ALWI void run_epilogue(
                     DataFormatReconfig::Enabled,
                     TileAddressing::Strided),
                 Dst::D1>{partials_dfb, StridedTileRange{swiglu_up_base, swiglu_stride}},
-            MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
+            SwiGluMul<swiglu_fp32_grade, Dst::D0, Dst::D1, Dst::D0>{},
             PackTile<output(cb_output_tiles, ReservePolicy::PerOuter, PushPolicy::PerOuter)>{out_dfb});
         partials_buf.pop_front(block_tiles);
     } else if constexpr (is_addcmul) {
@@ -265,7 +284,10 @@ void kernel_main() {
             in0_num_subblocks, in1_num_subblocks, sb_h, sb_w, block_k_tiles, num_k_blocks, block_batches);
         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
             const bool act_last_use = !act_resident || (block_idx + 1) % nb_n == 0;
-            run_matmul<ckl::LastBlockTarget::Out>(act_buf, weight_buf, out_buf, interm_buf, shape, own_kb);
+            {
+                MaybeDeviceZoneScope("cmp_matmul");
+                run_matmul<ckl::LastBlockTarget::Out>(act_buf, weight_buf, out_buf, interm_buf, shape, own_kb);
+            }
             if constexpr (act_resident) {
                 if (act_last_use) {
                     act_buf.pop_front(block_m_tiles * block_k_tiles);  // the M-block's A, after its last N-block
@@ -282,7 +304,26 @@ void kernel_main() {
             residual_dfb(is_addcmul ? cb_residual_tiles : cb_partials), out_dfb(cb_output_tiles);
         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
             for (uint32_t bi = 0; bi < block_batches; ++bi) {
-                run_matmul<ckl::LastBlockTarget::Interm>(act_buf, weight_buf, out_buf, interm_buf, shape, own_kb);
+                {
+                    MaybeDeviceZoneScope("cmp_matmul");
+                    if constexpr (!kwalk_expressible) {
+                        run_matmul<ckl::LastBlockTarget::Interm>(
+                            act_buf, weight_buf, out_buf, interm_buf, shape, own_kb);
+                    } else {
+                        kw::matmul_accumulate_interm<
+                            sb_w,
+                            in0_num_subblocks,
+                            in1_num_subblocks,
+                            block_k_tiles,
+                            num_k_blocks,
+                            last_block_k_tiles>(
+                            cb_act_tiles,
+                            cb_weight_tiles,
+                            cb_partials,
+                            OwnShardSource{own_kb},
+                            RetireOwnRoundSlot{own_kb});
+                    }
+                }
                 // The helper leaves packer L1 accumulation on after a multi-K-block walk; the
                 // epilogue packs fresh tiles (bias helper prerequisite: caller disables L1_ACC).
                 pack_reconfig_l1_acc(0);
@@ -291,7 +332,10 @@ void kernel_main() {
                         row_buf.wait_front(block_n_tiles);
                     }
                 }
-                run_epilogue(interm_buf, row_buf, out_buf, partials_dfb, row_dfb, residual_dfb, out_dfb);
+                {
+                    MaybeDeviceZoneScope("cmp_epilogue");
+                    run_epilogue(interm_buf, row_buf, out_buf, partials_dfb, row_dfb, residual_dfb, out_dfb);
+                }
             }
             if constexpr (has_row) {
                 row_buf.pop_front(block_n_tiles);
