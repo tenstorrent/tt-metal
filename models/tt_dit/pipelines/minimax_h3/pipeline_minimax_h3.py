@@ -82,6 +82,7 @@ from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_mini
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
+from ...models.transformers.minimax_h3.agmm_config import AgmmMode, resolve_agmm_mode
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.length_classes import uncovered_class_lengths
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
@@ -662,10 +663,13 @@ class MiniMaxH3Pipeline:
         dynamic_length: bool | None = None,
         max_sequence_length: int | None = None,
         encoder_dynamic_length: bool | None = None,
+        agmm_mode: AgmmMode | str | None = None,
     ) -> None:
         """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
         length class (eager only). It is the 4x8 presets' default on both architectures; `_resolve_denoise_path` has
         the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path.
+        `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks that path's
+        all-gather matmul pins.
 
         `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` where
         the mesh preset enables it (the Blackhole 4x8 and 4x32), for t2va/fl2va only."""
@@ -699,6 +703,7 @@ class MiniMaxH3Pipeline:
         self.trace_denoise = path.trace_denoise
         self.bucket_denoise = path.bucket_denoise
         self.dynamic_length = path.dynamic_length
+        self.agmm_mode = resolve_agmm_mode(agmm_mode)
         self.dit_fsdp, fsdp_source = _resolve_dit_fsdp(
             preset, dit_fsdp=dit_fsdp, task=task, dynamic_length=self.dynamic_length
         )
@@ -958,6 +963,7 @@ class MiniMaxH3Pipeline:
         dynamic_length: bool | None = None,
         max_sequence_length: int | None = None,
         encoder_dynamic_length: bool | None = None,
+        agmm_mode: AgmmMode | str | None = None,
         **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -970,6 +976,8 @@ class MiniMaxH3Pipeline:
         presets' default; kwarg > MINIMAX_H3_DYNAMIC_LENGTH=0|1 > preset) replaces the bucket ladder by the live
         padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path. `dit_fsdp`
         (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
+        `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks the dynamic-length
+        path's all-gather matmul pins.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
@@ -1005,6 +1013,7 @@ class MiniMaxH3Pipeline:
             dynamic_length=dynamic_length,
             max_sequence_length=max_sequence_length,
             encoder_dynamic_length=encoder_dynamic_length,
+            agmm_mode=agmm_mode,
             **subclass_kwargs,
         )
 
@@ -1583,6 +1592,7 @@ class MiniMaxH3Pipeline:
             # Bucketed rungs each pin their own K/V gather pair; size one at the longest length for all.
             kv_gather_capacity=self.kv_gather_capacity,
             dynamic_length=self.dynamic_length,
+            agmm_mode=self.agmm_mode,
         )
 
     @property
