@@ -11,6 +11,10 @@ words. It runs in slow dispatch, once with the option off and once with it on, t
   python dram_validate.py --example build/programming_examples/metal_example_eltwise_binary \
       --expect-read-bytes 262144 --expect-write-bytes 131072
 
+Wormhole check: same example and expectations, add --arch wormhole (the word is assumed to be 32 B). The script prints
+the word size implied by the measured words, expected bytes / measured words, which should be 32 on Wormhole and 64
+on Blackhole; a different value means the assumed word size is wrong, not the capture.
+
 Run it on an otherwise idle card, from the tt-metal root. The device is opened only by the example.
 """
 
