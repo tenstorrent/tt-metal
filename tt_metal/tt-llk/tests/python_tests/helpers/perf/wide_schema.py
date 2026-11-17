@@ -73,6 +73,8 @@ DB_SCHEMA = [
     Column("formats.sfpu_dst", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
+    Column("scale_bf16", "int64", True, "configuration"),
+    Column("sdpa_fw_op", "string", True, "configuration"),
     Column("speed_of_light", "bool", True, "flags"),
     Column("unpack_to_dest", "string", True, "flags"),
     # key
