@@ -36,6 +36,7 @@ if ttnn.get_arch_name() != "blackhole":
 SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED, "l1_small_size": 16384}, id="single-chip")]
 H, N, K, GLOBAL_EXPERTS = 2816, 704, 8, 128
 HS = 4
+MOE_KERNEL_ENV = "TT_METAL_MOE_COMPUTE_KERNEL"
 
 
 def _bf4_round(w):
@@ -125,27 +126,37 @@ class Setup:
         )
 
     def shared_op(self, compute_only, output=None):
-        return ttnn.experimental.moe_compute(
-            self.tt_tokens,
-            self.tt_idx,
-            self.tt_sc,
-            self.tt_mapping,
-            self.tt_w01,
-            self.tt_w2,
-            layer_id=0,
-            output_height_shard_dim=HS,
-            intermediate_size=N,
-            has_bias=False,
-            cluster_axis=None,
-            topology=None,
-            num_links=None,
-            mux_core_range_set=self.mux,
-            output_memory_config=None,
-            optional_output_tensor=output,
-            optional_cross_device_semaphore=None,
-            activation_type=MoEActivationFunction.GELU,
-            compute_only=compute_only,
-        )
+        # The custom op ports the shared op's ring path. On Blackhole the shared op otherwise takes its expert rows
+        # path, whose activation table is not bitwise equal to the ring's (padding words, not-routed k slots).
+        old = os.environ.get(MOE_KERNEL_ENV)
+        os.environ[MOE_KERNEL_ENV] = "ring"
+        try:
+            return ttnn.experimental.moe_compute(
+                self.tt_tokens,
+                self.tt_idx,
+                self.tt_sc,
+                self.tt_mapping,
+                self.tt_w01,
+                self.tt_w2,
+                layer_id=0,
+                output_height_shard_dim=HS,
+                intermediate_size=N,
+                has_bias=False,
+                cluster_axis=None,
+                topology=None,
+                num_links=None,
+                mux_core_range_set=self.mux,
+                output_memory_config=None,
+                optional_output_tensor=output,
+                optional_cross_device_semaphore=None,
+                activation_type=MoEActivationFunction.GELU,
+                compute_only=compute_only,
+            )
+        finally:
+            if old is None:
+                os.environ.pop(MOE_KERNEL_ENV)
+            else:
+                os.environ[MOE_KERNEL_ENV] = old
 
     def custom(self, dev, layout, **kw):
         return MoeComputeCustom(
