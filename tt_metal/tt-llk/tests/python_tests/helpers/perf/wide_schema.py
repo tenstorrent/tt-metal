@@ -159,6 +159,7 @@ DB_SCHEMA = [
     Column("rmsnorm_num_faces", "int64", True, "configuration"),
     Column("rmsnorm_num_tiles", "int64", True, "configuration"),
     Column("rmsnorm_preserve_src_zero_flag", "bool", True, "configuration"),
+    Column("sdpa_bcast_num_tiles", "int64", True, "configuration"),
     Column("sfpu_bcast_dim", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
