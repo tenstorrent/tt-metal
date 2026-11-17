@@ -54,6 +54,30 @@ def test_full_int(device, input_shape, fill_value, layout):
     assert torch.equal(torch_output, tt_output_cpu)
 
 
+# Python ints above INT32_MAX used to drop into the float overload and wrap uint32 fills.
+@pytest.mark.parametrize("input_shape", [[32, 64], [5, 17, 31]])
+@pytest.mark.parametrize(
+    "fill_value",
+    [
+        2147483648,  # INT32_MAX + 1
+        3000000001,  # between INT32_MAX and UINT32_MAX, not representable as float32
+        4294967295,  # UINT32_MAX
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_full_uint32_large(device, input_shape, fill_value, layout):
+    expected = torch.full(input_shape, fill_value, dtype=torch.int64)
+
+    tt_out = ttnn.full(input_shape, fill_value, dtype=ttnn.uint32, layout=layout, device=device)
+    got = ttnn.to_torch(tt_out).to(torch.int64)
+    assert torch.equal(expected, got)
+
+    template = ttnn.full(input_shape, 0, dtype=ttnn.uint32, layout=layout, device=device)
+    tt_out_like = ttnn.full_like(template, fill_value)
+    got_like = ttnn.to_torch(tt_out_like).to(torch.int64)
+    assert torch.equal(expected, got_like)
+
+
 @pytest.mark.parametrize(
     "input_shape",
     [

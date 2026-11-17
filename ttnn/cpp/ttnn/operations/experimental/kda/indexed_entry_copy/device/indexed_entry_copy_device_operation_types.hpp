@@ -24,6 +24,10 @@ struct IndexedEntryCopyInputs {
     Tensor index;
     // Read on device like `index`: 0 fills the destination entry with zeros instead of the source's.
     std::optional<Tensor> zero_fill_at_zero;
+    // A second (source, destination) pair copied by the same program with the same entry, e.g. a carry's two parts:
+    // one dispatch instead of two.
+    std::optional<Tensor> paired_source;
+    std::optional<Tensor> paired_destination;
 };
 
 }  // namespace ttnn::experimental::prim

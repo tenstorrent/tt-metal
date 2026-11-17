@@ -5,7 +5,7 @@ import pytest
 import torch
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
-    get_valid_eltwise_binary_math_fidelities,
+    get_valid_math_fidelities,
 )
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -42,6 +42,7 @@ from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
     EN_DEST_REUSE,
+    ENABLE_DIRECT_INDEXING,
     IN_FACE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
@@ -472,6 +473,9 @@ def _run_eltwise_binary_test(
             DEST_SYNC(dest_sync),
             REUSE_DEST_TYPE(reuse_dest_type=EltwiseBinaryReuseDestType.NONE),
             ACC_TO_DEST(acc_to_dest),
+            # Direct indexing is a Quasar-only feature; recorded as off so the perf CSV carries
+            # the same column as the Quasar side.
+            ENABLE_DIRECT_INDEXING(False),
         ],
         "runtimes": [
             generate_input_dim(
@@ -543,9 +547,7 @@ def _run_eltwise_binary_test(
     unpack_to_dest=[False],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
     math_op=lambda formats: get_eltwise_binary_math_ops(formats),
-    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
-        formats, math_op
-    ),
+    math_fidelity=lambda formats, math_op: get_valid_math_fidelities(formats, math_op),
     transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
         transpose_srca, BroadcastType.None_
@@ -591,7 +593,7 @@ def test_eltwise_binary(
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=get_bfp4_formats(),
-    math_fidelity=lambda formats: get_valid_eltwise_binary_math_fidelities(formats),
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     transpose_srca=Transpose.No,
     math_op=BFP4_MATH_OPS,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
@@ -981,6 +983,7 @@ def _run_eltwise_binary_dest_reuse_test(
             EN_DEST_REUSE(),
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
             ACC_TO_DEST(False),
+            ENABLE_DIRECT_INDEXING(False),
         ],
         "runtimes": [
             generate_input_dim(
@@ -1060,9 +1063,7 @@ def _run_eltwise_binary_dest_reuse_test(
     dest_acc=[DestAccumulation.No],
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
-    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
-        formats, math_op
-    ),
+    math_fidelity=lambda formats, math_op: get_valid_math_fidelities(formats, math_op),
     tile_dimensions=DEST_REUSE_TILE_DIMENSIONS,
     input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_dest_reuse_input_dimensions(
         dest_acc, dest_sync, formats, tile_dimensions
