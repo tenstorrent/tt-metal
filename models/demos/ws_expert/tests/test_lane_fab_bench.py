@@ -28,7 +28,16 @@ fabric_mux = ttnn.experimental.fabric_mux
 PB = 24 * 576
 
 
-def launch(mesh, groups_on, dmask, NPKT, flush, nbuf=2, PB=PB, inc=1):
+MUX_ROWS_K = [(4, 5), (2, 7), (0, 9), (3, 6)]  # mux rows (direction 0, direction 1) of mux set k
+
+
+def mux_at(g, d, k, G=2):
+    """Mux core of group g, direction d, set k (set 0 is the lane's own mux_core)."""
+    return (mux_core(g, d, G)[0], MUX_ROWS_K[k][d])
+
+
+def launch(mesh, groups_on, dmask, NPKT, flush, nbuf=2, PB=PB, inc=1, nmux=1):
+    """nmux muxes a (group, direction), all on the lane's link: group core j uses mux set j // (20 / nmux)."""
     """One launch; returns per (chip, group, direction) the receiving span (cycles) and per chip the longest send loop
     and the mean full-mux polls a core."""
     R, Cn = tuple(mesh.shape)
@@ -36,14 +45,15 @@ def launch(mesh, groups_on, dmask, NPKT, flush, nbuf=2, PB=PB, inc=1):
     ln = lanes((R, Cn), LCfg())
     groups = {g: lane_cores(g, G) for g in groups_on}
     C = [c for g in groups_on for c in groups[g]]
-    muxes = [mux_core(g, d, G) for g in groups_on for d in range(2)]
+    per = 20 // nmux
+    muxes = [mux_at(g, d, k) for g in groups_on for d in range(2) for k in range(nmux)]
     words = lambda n: sharded_l1(mesh, C, [n, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     src = words(PB // 16)
     slots = words(4 * PB // 16)
     cnt = words(2)
     st = words(4)
     mcfg = fabric_mux.Config(
-        num_full_size_channels=20,
+        num_full_size_channels=per,
         num_header_only_channels=0,
         num_buffers_per_full_size_channel=nbuf,
         num_buffers_per_header_only_channel=0,
@@ -51,7 +61,7 @@ def launch(mesh, groups_on, dmask, NPKT, flush, nbuf=2, PB=PB, inc=1):
         base_l1_address=ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1),
     )
     ctype = fabric_mux.ChannelType.FULL_SIZE
-    client_ct = list(fabric_mux.client_compile_time_args(num_clients=20, channel_type=ctype, config=mcfg))
+    client_ct = list(fabric_mux.client_compile_time_args(num_clients=per, channel_type=ctype, config=mcfg))
     mesh_id = int(node(mesh, (0, 0)).mesh_id)
     dm = lambda risc: ttnn.DataMovementConfigDescriptor(
         processor=ttnn.DataMovementProcessor.RISCV_0 if risc == 0 else ttnn.DataMovementProcessor.RISCV_1,
@@ -129,36 +139,38 @@ def launch(mesh, groups_on, dmask, NPKT, flush, nbuf=2, PB=PB, inc=1):
             for g in groups_on:
                 link = ln[g][1]
                 for d in range(2):
-                    m = mux_core(g, d, G)
-                    p.kernels[mux_idx].runtime_args[m[0]][m[1]].extend(
-                        mcfg.kernel_runtime_args(
-                            source_node_id=node(mesh, me_rc),
-                            destination_node_id=node(mesh, nxt[g][d]),
-                            link_index=link,
-                            program_descriptor=p,
-                            mux_logical_core=ttnn.CoreCoord(*m),
+                    for k in range(nmux):
+                        m = mux_at(g, d, k)
+                        p.kernels[mux_idx].runtime_args[m[0]][m[1]].extend(
+                            mcfg.kernel_runtime_args(
+                                source_node_id=node(mesh, me_rc),
+                                destination_node_id=node(mesh, nxt[g][d]),
+                                link_index=link,
+                                program_descriptor=p,
+                                mux_logical_core=ttnn.CoreCoord(*m),
+                            )
                         )
-                    )
                 for d in range(2):
-                    m = mux_core(g, d, G)
-                    mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
-                    master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*groups[g][0]))
-                    term_sem = None
+                    term_sem = {}
                     for j, (x, y) in enumerate(groups[g]):
+                        k = j // per
+                        m = mux_at(g, d, k)
+                        mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
+                        master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*groups[g][k * per]))
                         args = fabric_mux.client_runtime_args(
                             connection_valid=True,
-                            is_termination_master=j == 0,
+                            is_termination_master=j % per == 0,
                             channel_type=ctype,
                             mux_virtual_core=mux_vc,
-                            client_index=j,
+                            client_index=j % per,
                             client_logical_core=ttnn.CoreCoord(x, y),
                             config=mcfg,
                             program_descriptor=p,
                             termination_master_virtual_core=master_vc,
-                            termination_master_semaphore_id=term_sem,
+                            termination_master_semaphore_id=term_sem.get(k),
                         )
-                        if j == 0:
-                            term_sem = args[10]
+                        if j % per == 0:
+                            term_sem[k] = args[10]
                         p.kernels[cl_idx[g]].runtime_args[x][y].extend(args)
             mc = ttnn.MeshCoordinate(r, c)
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
@@ -229,6 +241,31 @@ def fab(payload):
 
 # (router max payload, packet bytes, mux buffers a channel, atomic inc every INC packets); the lane pattern (2 lanes,
 # both directions, all chips), the same bytes a core a direction in every case (300 x 13,824 B)
+# (muxes a group and direction, buffers a channel). nmux 2 (two muxes on one link) HANGS: the router takes one worker
+# connection a direction, both muxes sit in forward_data waiting for router space (triage 2026-11-17)
+SWEEP_MUX = [(1, 2), (1, 4)]
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+@pytest.mark.parametrize("nmux,nbuf", SWEEP_MUX, ids=[f"mux{m}_buf{b}" for m, b in SWEEP_MUX])
+def test_lane_fab_nmux(mesh_device, nmux, nbuf):
+    """The lane's load with nmux muxes a (group, direction) on the same link."""
+    NPKT = 300
+    clk = aiclk_mhz(0)
+    runs = [launch(mesh_device, (0, 1), 3, NPKT, 0, nbuf=nbuf, nmux=nmux) for _ in range(WARM + MEAS)][WARM:]
+    nb = 20 * NPKT * PB
+    keys = [k for k in runs[0] if isinstance(k[1], int)]
+    gbs = {k: statistics.median(nb / (r[k] / clk * 1e3) for r in runs) for k in keys}
+    vals = sorted(gbs.values())
+    lane = {g: min(v for k, v in gbs.items() if k[1] == g) for g in (0, 1)}
+    logger.info(
+        f"LFM {nmux} muxes a group and direction, {nbuf} buffers: GB/s a link direction median "
+        f"{statistics.median(vals):.1f} (min {vals[0]:.1f}, max {vals[-1]:.1f}); slowest link a lane "
+        f"{lane[0]:.1f} / {lane[1]:.1f}"
+    )
+
+
 SWEEP = [
     (15232, 13824, 2, 1),
     (15232, 13824, 2, 15),

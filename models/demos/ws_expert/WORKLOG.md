@@ -856,3 +856,19 @@ direction with the lane's non-blocking send; no schedule, slots, credits or cut-
   or slot credits), one inc a shard instead of a packet, one dedicated worker a (ring, direction, link) beside its
   ethernet core, no mux. Mux placement is not it for us: the lane fabric bench with muxes at rows 0-1 or 8-9 gives
   the same 39.6 median / 32-33 on the slow link-0 vertical edges.
+
+## More L1 buffering for the weights (tray, 2026-11-17)
+- Lane model (C 0 weights only / C 7; lock-step and random timing): slots 3 / 4 / 5 / 6 / 7 / 8 -> lock-step 0.58 /
+  0.89 / 1.0 / 1.0 / 1.0 / 1.0 of the link floor, random 0.51 / 0.72 / 0.82 / 0.76 / 0.74 / 0.74. Beyond 5 whole-slice
+  slots nothing to gain (random timing even loses: the static order is planned lock-step).
+- Device, weights only (M 0, compute rings shrunk: ks_nxr 2, ks_d 1, NS 1, XRM 1, dn_lag 1), NCRISC end lane 0 /
+  lane 1: 4 slots 1112 / 1055 us; 5 slots 1071 / 1000; 6 slots 1069 / 998; 4 slots + mux nbuf 4 1091 / 1015;
+  5 slots + nbuf 4 1060 / 951 (best: lane 1 30.5 GB/s a link direction, -10%); 5 slots + nbuf 6 does not fit the
+  mux core (20 channels x 6 x 15.3 KB).
+- With compute (20 + 5, util / end to end): final 4 slots nbuf 2 M 586 63.7% / 2190 us, M 2048 69.0% / 6448 us;
+  nbuf 4 61.5% / 2220, 67.8% / 6565; 5 slots (ks_d 3, nxr 6, tl 5, NS 3, XRM 3) nbuf 4 61.3% / 2243, 68.2% / 6548;
+  nbuf 2 62.6% / 2204, 69.0% / 6480. No gain: at M >= ~500 the weights (1.1 ms) arrive faster than compute needs
+  them (2.2 ms); buffering only matters in the weight-bound range (M < ~400).
+- More muxes: two muxes a (group, direction) on the same link (10 clients each, test_lane_fab_nmux) hang - every mux
+  in forward_data waiting for router space, clients waiting on their mux: the router takes one worker connection a
+  direction. Extra muxes need extra links; on the tray only the two middle vertical edges (1-5, 2-6) are unused.
