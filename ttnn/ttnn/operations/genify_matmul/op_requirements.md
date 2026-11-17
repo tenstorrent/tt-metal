@@ -403,3 +403,214 @@ Likely levers:
 - **Levers** (all host knobs, one source of truth each): (1) `SPLIT_COST_MODEL` — `choose_split` blocks every candidate and ranks by `split_cost` = max(padded K-walk × fidelity tile-K cost, DRAM stream, busiest core's reads, busiest core's writes), with `q_n_min` candidates and a padding-aware S3 block search; (2) `MIN_K_BLOCKS = 8` — R1a helper walks re-split into ≥ 8 K-blocks (shorter pipeline fill; Qwen M = 512 −4..−12%); (3) `R1A_INJECTOR_AHEAD = 2` — R1a injector reads K-block kb+1 under its own trid while multicasting kb, depth-3 rings, gated to injector-bound walks (proj_out 66.6 → 58.5; it loses 4–8% where the K-walk is as long as the injector stream, so it is path-gated there); (4) `NONE_RAW_WALK` — the Perf 1 raw K-walk + an identity copy for epilogue-none multi-K-block walks, gated to compute-bound splits (−4..−5% on FLUX single QKV / out and Qwen M = 4096; +2–4% on DM-bound ones, so gated).
 - **Guard set** (140 cells, every perf file incl. PERF FOCUS 1–4, sharded): geomean 0.93×, no cell slower beyond +2.9% (R1b / M = 1 cells with identical plans, noise band); PERF FOCUS 1 391.1 → 391.4, 2 29.8 → 29.9, 3 66.6 → 66.0, 4 617.5 → 616.8. Golden interleaved slice 429 passed / 75 xfailed; translated + regression unchanged (212 passed, the 14 pre-existing cache-count failures).
 - **Next** (not done): move the R1a B-line injection onto the writer RISC (BRISC / NoC1, as R1b does for A) so B reads overlap the A-line rounds — the only lever that moves the te_o / te_down DM floor; the in-RISC prefetch cannot, because its read issue blocks the same RISC that multicasts. Not done here: it is a reader / writer topology restructure of its own, and both remaining gaps are within 9% of stock with a measured floor.
+
+### [ ] Refinement 12 — Hang: bf16 batched-weight matmul (PDL upsample H pass in bf16)
+
+*Filed by the run operator for the #65150 follow-up (the model integration on tt-metal branch `avelickov/65150-matmul-integration`). Refinements 12–18 aim the op at the roofline: `extras.roofline_ns` is now set on every golden model case. Device times below are from run 1137's last golden run, with the roofline in brackets.*
+
+**Goal**: no SUPPORTED change. A supported cell hangs. Fix it first: until it is fixed, every golden run stops at it.
+- `genify_matmul(A (1, 32, 512, 128) bf16, B (1, 32, 128, 1024) bf16 batched, out bf16)`, HiFi2, `fp32_dest_acc_en=False`, every tensor in DRAM: dispatch timeout. It hangs with B in L1 too. In bfp8 (the model's dtype, PERF FOCUS 4) the same call runs.
+- Golden cases:
+  - `test_op_loose[A1x32x512x128_B1x32x128x1024-...-dtype=BFLOAT16-...-fp32_dest_acc_en=False-...]`
+  - `test_op_feature[A1x32x512x128_B1x32x128x1024_weight_l1-...]`
+- `--dev` triage in #65150 had the writer's tail split (`tail_split.hpp`) waiting on the reader's K-walk, in regime R1d (batched weight).
+
+Find the root cause and fix it for every shape and dtype it can reach. A guard on this one shape does not count. A bf16 tile is 2048 B against bfp8's 1088 B, so CB page counts and K-block sizes differ between the two dtypes. Check the K-walk / tail-split handshake for every block-size combination the split chooser can produce.
+
+**Implementation skill**: /debug-ttnn-op
+
+**Done when**:
+- Both golden cases pass, with and without `--dev`.
+- A focused test in `tests/ttnn/unit_tests/operations/genify_matmul/` pins it: bf16 and bfp8, B in DRAM and in L1.
+- Golden is otherwise green, and PERF FOCUS 4 (the bfp8 H pass) is no slower.
+
+### [ ] Refinement 13 — Split output: `chunks` (FLUX.2 QKV ×3, time_mod ×17)
+
+*Filed by the run operator for the #65150 follow-up.*
+
+**Goal**: implement `chunks > 1`. The entry point already takes it and raises UnsupportedAxisValue. Today FLUX.2 runs genify at full N and splits the result with `ttnn.chunk`. Together with the concat of Refinement 14, those extra ops cost 25.7 ms per denoising step, 8% of the step.
+
+Contract: `genify_matmul(A, B, ..., chunks=c)` returns a list of `c` tensors.
+- Output i is columns [i·w, (i+1)·w) of epilogue(A @ B), where w = N_out / c (N_out = N, or N / 2 for swiglu).
+- N_out % c == 0 and w % 32 == 0; otherwise ValueError.
+- Every chunk gets `memory_config` and `dtype`.
+- The program writes each chunk directly: no full-width intermediate, no extra op. The writer picks the destination tensor by output tile column (one TensorAccessor per chunk, or an address table in the runtime args). The tiles each core computes do not change, so the split choice and the compute kernel stay as they are.
+
+Scope: interleaved placement, every epilogue (FLUX.2 needs none and bias). Sharded placements with `chunks` may raise UnsupportedAxisValue.
+
+Golden: the six `test_op_feature[..._chunksN-...]` cases:
+- FLUX.2 double QKV, img and txt;
+- FLUX.2 single QKV;
+- time_mod ×17 (fp32 A + bias, bf16 out);
+- two small ones.
+
+**Done when**:
+- The six cases pass.
+- Each FLUX.2 `chunks` case runs within 2% of the same call without `chunks`; LOOSE_CASES has each one. The split is free.
+- Golden is green, and nothing else is slower.
+
+### [ ] Refinement 14 — A as a list of K segments (FLUX.2 single-block out = [attention | MLP])
+
+*Filed by the run operator for the #65150 follow-up.*
+
+**Goal**: implement a list `input_tensor`. The entry point raises UnsupportedAxisValue for one today. FLUX.2's single-block out projection multiplies concat([attn (M, 3072), mlp (M, 9216)], dim=-1) by a (12288, 6144) weight. Today the model builds that concatenation with `ttnn.concat`, the other part of the 25.7 ms per step.
+
+Contract: `genify_matmul([A_0, ..., A_{s-1}], B, ...)`.
+- Every A_i is (..., M, K_i), with the same leading dims, dtype, layout and placement.
+- K_i % 32 == 0 and Σ K_i == B.shape[-2]; otherwise ValueError.
+- Result = epilogue(concat(A_i, dim=-1) @ B), without building the concatenation. The reader maps K tile kt to its segment and local tile (one TensorAccessor per segment, or a segment table in the runtime args).
+
+Scope: interleaved A (DRAM or L1), every epilogue, any number of segments from 1 up (FLUX.2 uses 2). Sharded segments may raise UnsupportedAxisValue.
+
+Golden: the three `test_op_feature[..._concatK...]` cases.
+
+**Done when**:
+- The three cases pass.
+- Both FLUX.2 cases run within 2% of the single-tensor call of the same shape; LOOSE_CASES has the single out.
+- Golden is green, and nothing else is slower.
+
+### [ ] Refinement 15 — Small-M weight streaming at the DRAM roofline (Qwen3.8 M = 128, FLUX.2 prompt stream, M = 1)
+
+**Type**: perf
+
+*Filed by the run operator for the #65150 follow-up.*
+
+**Goal**: no SUPPORTED change. These interleaved calls are DRAM-bound on the weight: `roofline_ns` is their DRAM bytes at 460.8 GB/s, and they sit 1.2–2.9× off it. Genify µs, roofline in brackets:
+- Qwen3.8 prefill, M = 128 (bf16 × bfp4, LoFi; A in L1 in the GDN layers), 16–64 calls per prefill each:
+  - MLP gate_up + SwiGLU 128×5120×8704: 109.9 (56.8). This is PERF FOCUS 2.
+  - GDN in_proj 128×5120×4160: 64.2 (28.3)
+  - MLP down 128×4352×5120: 56.1 (30.0)
+  - out_proj 128×1536×5120: 23.2 (12.4)
+  - full-attention qkvg 128×5120×3584, A in DRAM: 80.1 (27.2). Stock is 52.9 µs, so this one is slower than stock.
+- FLUX.2 prompt stream, M = 256 (bf16 × bf16, HiFi2), 8 calls per step each:
+  - QKV 256×6144×9216: 326.7 (262.8)
+  - attention out + addcmul 256×6144×3072: 145.0 (96.0)
+  - FF1 + SwiGLU 256×6144×18432: 643.2 (508.6)
+  - FF2 256×9216×6144: 327.5 (262.8)
+  - context_embedder 256×15360×3072, once per image: 349.3 (225.3)
+- FLUX.2 at M = 1 (fp32 or bf16 A):
+  - timestep and guidance linear_2 1×6144×6144: 200.1 / 201.6 (167.3 / 165.5)
+  - time_mod 1×6144×52224 + bias: 1603 (1409)
+  - guidance linear_1 1×256×6144: 14.1 (7.7)
+- Narrow N or short K at M = 2048:
+  - x_embedder 2048×128×3072: 47.9 (30.2)
+  - proj_out 2048×3072×128: 57.0 (30.2)
+
+At these M the whole job is streaming B from the 8 DRAM banks once, at full bandwidth, with compute and the A broadcast hidden underneath. Start with a measured breakdown of the M = 128 gate_up case (/perf-measure: DM-only and compute-only ablations, bytes read per core, which banks each core reads). Then apply levers such as:
+- Every core streams a disjoint slice of B: no B multicast, no B re-read. Each core keeps enough reads in flight to cover DRAM latency, and the slices spread evenly over the banks.
+- A (at most 1.3 MB here) is multicast once, or read in place where it already lives in L1.
+- Split-K with a cross-core reduction where N is too narrow to give every core a column slice (qkvg, proj_out, M = 1).
+- The bank-local streaming of the dram_sharded regime (R4), applied to an interleaved B: each core reads the pages of its nearest bank.
+
+**Implementation skill**: /perf-measure, /perf-ceiling-dm
+
+**Done when**:
+- Each listed case is within 1.15× of its `roofline_ns`, or its remaining gap is explained by a measured floor.
+- Golden is green.
+- No other model case in LOOSE_CASES or FEATURE_CASES is slower beyond ±3%.
+
+### [ ] Refinement 16 — Mid-M compute efficiency (text encoder at 512 tokens, Qwen3.8 prefill M = 512 / 1024)
+
+**Type**: perf
+
+*Filed by the run operator for the #65150 follow-up.*
+
+**Goal**: no SUPPORTED change. At M = 512–1024 the roofline is compute: 70% of the 110-core FPU peak at the call's fidelity. These calls are 1.25–2.2× off it. Genify µs, roofline in brackets:
+- Text encoder, M = 512 (bf16 × bfp8, HiFi2), 40 calls per image each (gate and up are separate calls, 80 together):
+  - gate / up 512×5120×16384: 502.6 (403.5). This is PERF FOCUS 1.
+  - down 512×16384×5120: 522.6 (403.5)
+  - qkv_proj 512×5120×3072: 111.9 (75.7)
+  - o_proj 512×4096×2560: 85.4 (50.4)
+- Qwen3.8 prefill, M = 512 (bf16 × bfp4, LoFi):
+  - GDN in_proj: 100.7 (51.2)
+  - MLP gate_up + SwiGLU: 194.2 (107.2)
+  - MLP down: 100.5 (53.6)
+  - full-attention qkvg: 95.1 (44.1)
+  - out_proj: 52.2 (24.4)
+- Qwen3.8 prefill, M = 1024:
+  - out_proj 1024×1536×5120: 75.6 (39.2)
+  - qkvg: 119.9 (88.3)
+  - in_proj: 137.4 (102.4)
+  - down: 133.2 (107.2)
+- out_proj (K = 1536) at M = 2048 / 4096: 135.6 / 225.0 (75.7 / 151.3)
+
+Refinement 11's outcome measured the text-encoder o_proj and down as bound by the R1a line injectors' serial read → multicast chain: B lines of 1.1 MB / 8.4 MB per injector on an 8-row grid, with M = 16 tiles capping the split at 80–88 cores. The lever it named but did not build is moving the R1a B-line injection onto the writer RISC (BRISC / NoC1, as R1b does for A), so B reads overlap the A-line rounds. Levers:
+- That writer-RISC B injection.
+- A split that keeps all 110 cores busy at M = 16 tiles: 2-D, or split-K.
+- Subblock and K-block sizes against DEST at HiFi2 and LoFi: bigger blocks, fewer packs.
+- Reads overlapped with compute along the K-walk: deeper CBs where L1 allows.
+
+**Implementation skill**: /perf-measure
+
+**Done when**:
+- Each listed case is within 1.15× of its `roofline_ns`, or its remaining gap is explained by a measured floor.
+- Golden is green.
+- No other model case is slower beyond ±3%.
+
+### [ ] Refinement 17 — Decode weight streaming (dram_sharded) at the DRAM roofline
+
+**Type**: perf
+
+*Filed by the run operator for the #65150 follow-up.*
+
+**Goal**: no SUPPORTED change. Qwen3.8 decode (bf16 × bfp4, LoFi, M = 1 and batch 16 / 32) streams each bank's weight shard, so the roofline is the weight bytes at 460.8 GB/s. Per token these matmuls take 9.3 ms in the model against an 8.2 ms roofline. Genify µs, roofline in brackets:
+- full-attention qkvg 1×5120×3584, 16 calls per token: 32.1 (22.4). This is PERF FOCUS 3, and stock is faster at 29.2 µs.
+- LM head, last vocab chunk 1×5120×12928: 99.8 (80.8)
+- GDN in_proj 1×5120×4608, 48 calls: 32.2 (28.8)
+- out_proj 1×1536×5120, 64 calls: 11.0 (9.6)
+- MLP down 1×4352×5120, 64 calls: 29.6 (27.2)
+- MLP gate_up + SwiGLU 1×5120×9216, 64 calls: 62.3 (57.6)
+- LM head 1×5120×16384, 3 calls: 106.3 (102.4)
+
+Start with qkvg: N = 3584 is 112 tiles, 14 per bank, so the banks are balanced, yet it is the furthest off. Measure the per-bank stream time against the A broadcast and the output tail. Levers:
+- More than one worker per bank: split a bank's shard by K or by N between two cores.
+- Larger DRAM reads, more of them in flight.
+- The A broadcast overlapped with the first B reads.
+- The ragged last bank of the LM head's 12928-wide chunk (404 tiles).
+
+**Implementation skill**: /perf-measure, /perf-ceiling-dm
+
+**Done when**:
+- Every decode case is within 1.10× of its `roofline_ns`, or its remaining gap is explained by a measured floor.
+- Golden is green.
+- Nothing else is slower beyond ±3%.
+
+### [ ] Refinement 18 — PDL: sharded 1×1 convs and the bilinear upsample
+
+**Type**: perf
+
+*Filed by the run operator for the #65150 follow-up.*
+
+**Goal**: no SUPPORTED change. PDL's 55 matmuls take 0.97 ms per inference against a 0.33 ms roofline. They are small, so fixed costs dominate, and most of the sharded ones are slower than stock. Genify µs (roofline, stock):
+- Height-sharded (R2):
+  - res2 shortcut 32768×128×256: 11.0 (5.0, 9.8)
+  - res2 reduce 128→64: 4.9 (1.3, 4.0)
+  - res2 expand 64→256, ×3: 9.1 (2.5, 8.7)
+  - res3 expand 128→512, ×4: 10.0 (2.5, 8.2)
+  - res3 reduce 512→128, ×3: 8.7 (2.5, 6.9)
+  - res3 shortcut (bf16 A): 15.8 (5.0, 13.1)
+  - decoder and head projections: 4.4–5.9 (0.2–1.3, 3.5–4.7)
+- Block-sharded (R3):
+  - res4 reduce 1024→256, ×5: 12.0 (2.5, 9.4)
+  - res4 reduce 512→256: 18.8 (5.0, 16.6)
+  - res5 reduce 2048→512, ×2: 22.3 (10.1, 16.1)
+  - res5 reduce 1024→512: 14.6 (5.0, 10.6)
+  - ASPP 1×1, ×2: 17.6 (5.0, 13.8)
+  - ASPP projection, ×2: 18.4 (3.2, 16.8)
+  - ASPP image pool (M = 1), ×2: 9.1 (1.2, 6.9)
+- Upsample (interleaved, batched weight):
+  - H pass, ×3: 66.6 (43.5, 123.0). This is PERF FOCUS 4.
+  - W pass, ×3: 12.4 (5.0, 15.4)
+
+Measure the fixed cost first: ablate the smallest case, the center head 32768×32×32 (4.4 µs against stock 3.5). Refinement 10's outcome holds the costs it measured for the sharded regimes. Then remove what is not the matmul:
+- fewer synchronization rounds;
+- fewer CB and semaphore setup steps;
+- B read once per core group;
+- less per-core runtime-arg traffic.
+
+**Implementation skill**: /perf-measure
+
+**Done when**:
+- Every PDL case is at or under its stock `achievable_ns`, and the H pass is within 1.2× of its `roofline_ns`; otherwise the remaining gap is explained by a measured floor.
+- Golden is green.
+- Nothing else is slower beyond ±3%.

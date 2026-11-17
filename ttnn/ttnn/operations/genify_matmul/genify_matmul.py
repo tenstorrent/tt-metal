@@ -347,7 +347,7 @@ def _check_contract(input_tensor, weight, bias, activation, residual, gate):
 
 
 def genify_matmul(
-    input_tensor: ttnn.Tensor,
+    input_tensor,
     weight: ttnn.Tensor,
     *,
     bias: ttnn.Tensor = None,
@@ -357,8 +357,19 @@ def genify_matmul(
     dtype: ttnn.DataType = None,
     memory_config: ttnn.MemoryConfig = None,
     compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
-) -> ttnn.Tensor:
-    """out = epilogue(A @ B) in one device program. See op_design.md."""
+    chunks: int = 1,
+):
+    """out = epilogue(A @ B) in one device program. See op_design.md.
+
+    input_tensor: one tensor A (..., M, K), or a list [A_0, A_1, ...] of K segments read as
+    concat(A_i, dim=-1) without materializing the concatenation (K = the segments' K summed).
+    chunks: > 1 returns the output split along its last dim into `chunks` equal tensors, as a list.
+    Neither is implemented yet: both raise UnsupportedAxisValue (see op_requirements.md).
+    """
+    if isinstance(input_tensor, (list, tuple)):
+        raise UnsupportedAxisValue("genify_matmul: A as a list of K segments (concat over K) is not implemented yet")
+    if chunks != 1:
+        raise UnsupportedAxisValue("genify_matmul: chunks > 1 (split output) is not implemented yet")
     _check_contract(input_tensor, weight, bias, activation, residual, gate)
     axes = validate(
         input_tensor,
