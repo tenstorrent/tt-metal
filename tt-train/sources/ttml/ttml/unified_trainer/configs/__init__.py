@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pydantic configs of the unified trainer. Importing them needs no device."""
-
 from .checkpoint import (
     BestRotation,
     CheckpointConfig,

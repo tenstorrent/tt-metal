@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""What the trainers share: writing checkpoint directories, and several optimizers stepped as one."""
-
 from .checkpoint import TRAINER_STATE, staged_directory, write_trainer_state
 from .optimizer import CombinedOptimizer, assign_parameters
 

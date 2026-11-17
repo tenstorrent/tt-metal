@@ -2,21 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fine-tuning of HF models on ttml, driven by one validated config, for scripts and services alike.
-
-A host builds a trainer once with its callbacks and runs any number of jobs on it::
-
-    trainer = SFTTrainer(callbacks=[MetricsCallback(), CheckpointCallback()])
-    try:
-        trainer.setup(load_config("recipe.yaml"))
-        trainer.train()
-    finally:
-        trainer.cleanup()
-
-``python -m ttml.unified_trainer --config recipe.yaml`` does the same from the command line. See
-``tt-train/docs/UNIFIED_TRAINER.md``.
-"""
-
 from ttml.models.provider import UnsupportedTrainingConfig
 
 from .callbacks import Callback, CallbackHandler, CheckpointCallback, MetricsCallback
