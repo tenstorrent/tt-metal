@@ -64,6 +64,15 @@ KNOBS = {
     # 45-layer step at 1 M 31.73 -> 29.83 ms (8 rows) / 36.07 -> 34.16 ms (16 rows); ids identical at 32 K x 4 spec and
     # the 1 M warm turn (B attached == B_cold); served 1 M x 2 / 4 / 8 decode +4.3 / +6.4 / +7.1 %, 1-user text unchanged
     "GLM53_DSA_SHARD_RS1_SPLIT": "1",
+    # the speculative verify (8 x 1 / 4 x 3 on 16 rows, AgentX at 8 users): ix_dm1 MLA_DSA_BATON_GROUPS keeps the ring /
+    # pooled-key write order only inside each user row group (rows of different users are different slots), the
+    # mesh-wide NOC-0-aware DRAM reader placement (reader_place.py), and the pipelined kda_pre verify reader
+    # (KDA_VERIFY_PIPE: the units of a group are pushed as soon as they are built). Metal 32 K x 8 (8 x 1) in-loop step
+    # 39.3 -> 36.3 -> 34.7 -> 33.7 ms, 32 K x 4 (4 x 3) 42.4 -> 39.7 -> 38.9 ms, ids identical; served AgentX c8 device
+    # step 37.9 -> 33.5 ms, decode 34.2 -> 38.1 tok/s/u
+    "GLM53_MLA_DSA_BATON_GROUPS": "1",
+    "GLM53_MK_READER_PLACE": "row",
+    "GLM53_KDA_VERIFY_PIPE": "1",
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",
