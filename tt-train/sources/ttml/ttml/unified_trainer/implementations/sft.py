@@ -16,16 +16,20 @@ from ttml.common.utils import no_grad, validate_clip_grad_norm
 from ttml.datasets.provider import DatasetProvider, clear_cache, load_tokenizer
 from ttml.datasets.provider import get_provider as get_dataset_provider
 from ttml.datasets.provider import providers as dataset_providers
-from ttml.models.provider import UnsupportedTrainingConfig
+from ttml.models.provider import UnsupportedTrainingConfig, model_revision, same_model
 from ttml.models.provider import get_provider as get_model_provider
 
 from ..configs import SFTTrainerConfig
 from ..managers.device import DeviceManager
 from ..utils import (
-    OPTIMIZER_STATE,
+    ADAPTER_CONFIG,
+    BASE_MODEL_DIR,
+    TT_CHECKPOINT,
     CombinedOptimizer,
     assign_parameters,
+    is_adapter_dir,
     is_model_dir,
+    is_tt_checkpoint,
     read_adapter,
     read_trainer_state,
     staged_directory,
@@ -47,8 +51,8 @@ class SFTTrainer(Trainer):
     fine-tuning (every weight) is not supported yet, and a config without ``model.lora`` is rejected.
 
     The model comes from a model provider (``ttml.models.provider``), which also decides whether the config can be
-    trained at all, and the batches from dataset providers (``ttml.datasets.provider``), one per split. A checkpoint
-    is a PEFT adapter directory.
+    trained at all, and the batches from dataset providers (``ttml.datasets.provider``), one per split. Checkpoints
+    are saved in the format ``checkpoint.format`` picks (see ``save_checkpoint``).
 
     Losses are read back to host floats once per micro-batch, as ttml's other trainers do.
     """
@@ -108,10 +112,9 @@ class SFTTrainer(Trainer):
 
     # ------------------------------------------------------------------ steps
 
-    def _train_batches(self, epoch: int, start: int) -> DatasetProvider:
-        # The shuffled order is a function of the seed and the epoch, so a resumed run trains on the batches the
-        # run it continues would have, without collating the ones before `start`.
-        self.train_dataloader.seek(epoch, start)
+    def _train_batches(self, epoch: int) -> DatasetProvider:
+        # The shuffled order is a function of the seed and the epoch.
+        self.train_dataloader.seek(epoch)
         return self.train_dataloader
 
     def _prepare_batch(self, batch: dict[str, np.ndarray]) -> dict[str, Any]:
@@ -176,45 +179,88 @@ class SFTTrainer(Trainer):
     def current_learning_rate(self) -> list[float]:
         return [float(lr) for lr in self.optimizer.get_group_lrs()]
 
-    def save_checkpoint(self, path: str, metadata: Optional[dict] = None, optimizer: bool = False) -> None:
-        """A PEFT adapter directory, with ``trainer_state.json``, and with ``optimizer`` ``optimizer_state.pkl``."""
+    def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
+        """A checkpoint directory in the format ``checkpoint.format`` picks, with ``trainer_state.json``.
+
+        ``hf`` with ``trainable``: a LoRA run's PEFT adapter, or for full fine-tuning the HF model. ``hf`` with ``all``
+        also holds a LoRA run's frozen base model, in ``base_model/``. ``tt``: every parameter in ``checkpoint.pkl``.
+        """
+        checkpoint_format = self.config.checkpoint.format
         with staged_directory(path) as directory:
-            write_adapter(directory, self.provider.export_adapter(self.model, self.config))
-            write_trainer_state(directory, metadata or {})
-            if optimizer:
-                # Also the trained weights and the RNG of dropout: what a resumed run needs to continue as this
-                # one would.
+            if checkpoint_format.type == "tt":
                 checkpointing.save_checkpoint(
-                    str(directory / OPTIMIZER_STATE),
-                    header={"rng": ttml.autograd.AutoContext.get_instance().get_generator_state()},
-                    model_params=self._trainable_parameters(),
-                    optimizer=self.optimizer,
+                    str(directory / TT_CHECKPOINT), header=self._tt_header(), model_params=self.model.parameters()
                 )
+            elif self.config.model.lora is None:
+                self.provider.export_model(self.model, self.config, directory)
+            else:
+                write_adapter(directory, self.provider.export_adapter(self.model, self.config))
+                if checkpoint_format.set == "all":
+                    self.provider.export_model(self.model, self.config, directory / BASE_MODEL_DIR)
+            write_trainer_state(
+                directory,
+                {**(metadata or {}), "format": checkpoint_format.model_dump(), "base_model": self._base_model()},
+            )
 
-    def load_checkpoint(self, path: str, optimizer: bool = False) -> dict:
-        """Loads the PEFT adapter directory ``save_checkpoint`` wrote; a full model directory is an error."""
-        if is_model_dir(path):
+    def load_checkpoint(self, path: str) -> dict:
+        """Loads the weights of a checkpoint directory ``save_checkpoint`` wrote, in the format it finds there.
+
+        A ``tt`` checkpoint loads every parameter, a PEFT adapter the LoRA adapters. Either must be for this run's
+        model, with its LoRA settings. A full model directory is an error: a run starts from one as its
+        ``model.name``.
+        """
+        directory = Path(path)
+        if is_tt_checkpoint(directory):
+            file = str(directory / TT_CHECKPOINT)
+            self._check_tt_header(directory, checkpointing.read_header(file))
+            checkpointing.load_checkpoint(file, model_params=self.model.parameters())
+        elif is_adapter_dir(directory):
+            adapter = read_adapter(directory)
+            self._check_base_model(directory, adapter.config.get("base_model_name_or_path"))
+            self.provider.import_adapter(self.model, adapter, self.config)
+        elif is_model_dir(directory):
             raise UnsupportedTrainingConfig(
-                f"checkpoint: {path} is a full model, not a LoRA adapter; to train adapters on it, make it "
-                "the model.name"
+                f"checkpoint: {path} is a full model directory; to train on it, make it the model.name"
             )
-        self.provider.import_adapter(self.model, read_adapter(path), self.config)
-        if optimizer:
-            state_path = Path(path) / OPTIMIZER_STATE
-            if not state_path.is_file():
-                raise FileNotFoundError(f"{path} has no optimizer state: it was saved without checkpoint.save_optim")
-            header = checkpointing.load_checkpoint(
-                str(state_path), model_params=self._trainable_parameters(), optimizer=self.optimizer
+        else:
+            raise FileNotFoundError(
+                f"{path} is not a checkpoint: it holds neither {TT_CHECKPOINT} nor {ADAPTER_CONFIG}"
             )
-            ttml.autograd.AutoContext.get_instance().set_generator_state(header["rng"])
-        return read_trainer_state(path)
+        return read_trainer_state(directory)
 
-    def _trainable_parameters(self) -> Any:
-        trainable = ttml.NamedParameters()
-        for name, tensor in self.model.parameters().items():
-            if tensor.get_requires_grad():
-                trainable[name] = tensor
-        return trainable
+    def _base_model(self) -> dict:
+        """The model the run trains, as a checkpoint records it: its name, and its hub commit."""
+        return {"name_or_path": self.config.model.name, "revision": model_revision(self.config.model.name)}
+
+    def _lora_settings(self) -> Optional[dict]:
+        """What a ``tt`` checkpoint's LoRA adapters must share with the run that loads it."""
+        lora = self.config.model.lora
+        if lora is None:
+            return None
+        return {"r": lora.r, "alpha": lora.alpha, "target_modules": sorted(set(lora.target_modules))}
+
+    def _tt_header(self) -> dict:
+        return {
+            "base_model": self._base_model(),
+            "model_type": self.hf_config.get("model_type"),
+            "lora": self._lora_settings(),
+        }
+
+    def _check_tt_header(self, directory: Path, header: dict) -> None:
+        self._check_base_model(directory, (header.get("base_model") or {}).get("name_or_path"))
+        expected = {"model_type": self.hf_config.get("model_type"), "lora": self._lora_settings()}
+        mismatched = {key: (header.get(key), want) for key, want in expected.items() if header.get(key) != want}
+        if mismatched:
+            details = ", ".join(f"{key}: checkpoint {got!r}, run {want!r}" for key, (got, want) in mismatched.items())
+            raise UnsupportedTrainingConfig(f"checkpoint: {directory} doesn't match this run's model ({details})")
+
+    def _check_base_model(self, directory: Path, base: Optional[str]) -> None:
+        """Raise unless a checkpoint's base model is this run's ``model.name``, or the checkpoint's own
+        ``base_model/``, which a LoRA run saved with every weight can train from."""
+        name = self.config.model.name
+        if same_model(base, name) or Path(name).resolve() == (directory / BASE_MODEL_DIR).resolve():
+            return
+        raise UnsupportedTrainingConfig(f"checkpoint: {directory} is for {base!r}, this run trains {name!r}")
 
     def cleanup(self) -> None:
         # The tokenized-dataset cache is process-wide; the next run may use another model or length.

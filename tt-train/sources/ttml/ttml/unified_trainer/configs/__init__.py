@@ -7,6 +7,7 @@
 from .checkpoint import (
     BestRotation,
     CheckpointConfig,
+    CheckpointFormat,
     EpochSave,
     InitStrategy,
     LastRotation,
@@ -30,6 +31,7 @@ __all__ = [
     "AdamWConfig",
     "BestRotation",
     "CheckpointConfig",
+    "CheckpointFormat",
     "CustomDatasetConfig",
     "DatasetConfig",
     "DeviceConfig",

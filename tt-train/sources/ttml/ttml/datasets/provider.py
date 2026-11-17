@@ -34,8 +34,7 @@ class DatasetProvider:
             ...
 
     A batch is ``config.batch_size`` examples as host arrays (``collate_causal_lm``); a last partial batch is dropped.
-    The train split is shuffled, in an order that depends only on the seed and the epoch, so ``seek`` continues a run
-    where another one stopped.
+    The train split is shuffled, in an order that depends only on the seed and the epoch, which ``seek`` sets.
 
     Each example is ``input_ids`` (prompt, response and EOS) and ``labels``, which are ``input_ids`` with the
     prompt masked to ``IGNORED_INDEX``: only the response is trained on. Examples longer than ``max_length``
@@ -111,9 +110,9 @@ class DatasetProvider:
         while (batch := self.next_batch()) is not None:
             yield batch
 
-    def seek(self, epoch: int, batch: int = 0) -> None:
-        """Continue with batch ``batch`` of epoch ``epoch``, without collating the ones before it."""
-        self._dataloader.set_state_dict({"seed": self.config.seed, "epoch": epoch, "position": batch})
+    def seek(self, epoch: int) -> None:
+        """Continue with the first batch of epoch ``epoch``."""
+        self._dataloader.set_state_dict({"seed": self.config.seed, "epoch": epoch, "position": 0})
         self._epoch_batches = None
 
     # ------------------------------------------------------------------ examples

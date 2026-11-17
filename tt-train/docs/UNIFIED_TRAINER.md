@@ -47,8 +47,7 @@ as model providers (see [Adding a model](#adding-a-model)).
 
 **LoRA only.** A run trains the LoRA adapters its `model.lora` section describes, and nothing else. Full fine-tuning
 (every weight) is not supported yet: a config without `model.lora` is rejected. `target_modules` uses HF projection
-names. ttml's Llama fuses some projections into one layer, which has one LoRA pair, so a fused group is targeted whole
-or not at all:
+names, and takes any of them. ttml's Llama fuses some projections into one layer:
 
 | HF projections | ttml Llama layer |
 |---|---|
@@ -57,8 +56,11 @@ or not at all:
 | `gate_proj`, `up_proj` | `mlp.w_gate_up` |
 | `down_proj` | `mlp.w2` |
 
-`[q_proj, k_proj, v_proj, o_proj]` trains attention, and adding `gate_proj, up_proj, down_proj` trains every projection.
-`[q_proj, v_proj]` is rejected, because LoRA on `qkv_linear` also updates `k_proj`.
+Each targeted projection still gets its own adapter, as in PEFT. A fused layer stacks the `lora_A` of its targeted
+projections in one weight, and holds each one's `lora_B` in that projection's rows of another; the rows of a projection
+that isn't targeted stay zero. So `[q_proj, v_proj]` trains adapters on q and v and leaves k as it is, and
+`[q_proj, k_proj, v_proj, o_proj]` trains attention. The one difference from PEFT is that the projections of a fused
+layer share a dropout mask.
 
 **Optimizer.** AdamW at a constant learning rate; it is the only optimizer supported so far.
 
@@ -122,8 +124,8 @@ stopping_criteria:
 | `epoch` | `limit` passes over the train data. |
 | `step` | `limit` optimizer steps, over as many epochs as they take. It ends in the middle of an epoch if the limit falls there. |
 
-A resumed run counts the steps and epochs of the run it continues. A step limit needs every epoch to make an optimizer
-step, so `setup` rejects one on train data with fewer batches than `gradient_accumulation_steps`.
+A step limit needs every epoch to make an optimizer step, so `setup` rejects one on train data with fewer batches than
+`gradient_accumulation_steps`.
 
 ### Metrics and validation
 
@@ -169,13 +171,41 @@ and so on, in list order.
 
 ## Checkpoints
 
-A checkpoint holds what the run trains, the LoRA adapters, as a PEFT adapter directory: `adapter_config.json` and
-`adapter_model.safetensors`, which `PeftModel.from_pretrained(base_model, path)` loads.
+A checkpoint is a directory holding the model's weights in the format `checkpoint.format` picks, and
+`trainer_state.json`: the step, epoch and metrics at the save, the format, and the base model the run trains
+(`name_or_path`, and `revision`: the hub commit it was downloaded at, `null` for a local directory).
 
-It also holds `trainer_state.json`: the step, epoch and metrics at the save. With `save_optim`, it holds
-`optimizer_state.pkl` too: the optimizer state, the trained weights and the RNG state, which a resumed run needs. The
-adapter of a fused layer is written per HF projection, with the projections sharing one `lora_A` and splitting `lora_B`
-by rows.
+```yaml
+checkpoint:
+  format:
+    type: hf        # hf or tt
+    set: trainable  # trainable or all
+```
+
+| `type` | `set` | The directory holds |
+|---|---|---|
+| `hf` | `trainable` | The LoRA adapters as a PEFT adapter: `adapter_config.json` and `adapter_model.safetensors`. |
+| `hf` | `all` | The PEFT adapter, and the frozen base model in `base_model/`. |
+| `tt` | `all` | Every parameter, the base model's and the adapters', in `checkpoint.pkl`. |
+
+`hf` is HuggingFace's layout. The adapter of a fused layer is written per HF projection, so the PEFT adapter is the one
+PEFT would have trained. `base_model/` is laid out as `save_pretrained` writes a model: `config.json`, the tokenizer
+files, and the bf16 weights in `model.safetensors`, or in shards of at most 5 GB listed in
+`model.safetensors.index.json`.
+
+`tt` is ttml's own layout, the file GRPO saves with `ttml.checkpointing`: the weights as the model holds them, with q,
+k and v fused, the q and k rows permuted for RoPE, and the vocabulary padded. It holds every parameter, so it takes
+`set: all` only.
+
+A checkpoint with every weight takes as much space as the model: about 16 GB for Llama 3.1 8B. The base model comes
+back from what the checkpoint records:
+
+- A PEFT adapter names it in `adapter_config.json`, as `base_model_name_or_path` and `revision`, so
+  `AutoPeftModelForCausalLM.from_pretrained(path)` loads the adapter on the model it was trained on. With
+  `set: all`, `PeftModel.from_pretrained(AutoModelForCausalLM.from_pretrained(f"{path}/base_model"), path)` downloads
+  nothing.
+- A `tt` checkpoint names it in the header of `checkpoint.pkl`, with the LoRA `r`, `alpha` and `target_modules`. A run
+  starting from it builds the model from `model.name` and then loads every weight from the file.
 
 The `checkpoint` section:
 
@@ -184,9 +214,9 @@ The `checkpoint` section:
 | `save_strategy` | `type: none` | When to save; see below. Unless `none`, the final checkpoint is also saved at the end. |
 | `rotation_strategy` | `type: last` | Which checkpoints to keep; see below. |
 | `init_strategy` | unset | A checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). Unset starts from the pretrained weights. |
+| `format` | `type: hf`, `set: trainable` | How a checkpoint stores the model; see above. |
 | `project_dir` | `runs/unified_trainer` | Checkpoints go in `<project_dir>/checkpoints/`. |
 | `final_checkpoint_name` | `final` | |
-| `save_optim` | `false` | Also save the optimizer state, so a run can resume from the checkpoint. |
 
 Each strategy is a section whose `type` picks it, and with it the other fields it takes:
 
@@ -201,7 +231,6 @@ checkpoint:
   rotation_strategy:
     type: best
     keep_n: 2
-  save_optim: true
   project_dir: runs/my_run
 ```
 
@@ -221,7 +250,7 @@ A field another `type` doesn't take is an error, so to change the type with `--s
 | `none` | Every checkpoint. |
 
 Rotation never deletes the checkpoint just saved, and only deletes checkpoints of the same run: an earlier run's in the
-same `project_dir`, such as the one a run resumed from, are kept. `<project_dir>/checkpoints/checkpoint_history.json`
+same `project_dir`, such as the one a run started from, are kept. `<project_dir>/checkpoints/checkpoint_history.json`
 lists the run's checkpoints that are kept, with their step, epoch and metrics. A checkpoint is written to a staging
 directory and moved into place when complete, so a failed save leaves the previous one intact.
 
@@ -233,21 +262,20 @@ the run starts from the pretrained weights of `model.name`.
 ```yaml
 checkpoint:
   init_strategy:
-    type: resume
+    type: init
     path: runs/my_run/checkpoints/final
 ```
 
-Its `type` is one of:
-
-- `init`: the trained weights only. Training starts at step 0 with a fresh optimizer.
-- `resume`: also the optimizer state, which the checkpoint holds if it was saved with `save_optim`. Training continues
-  after the checkpoint's step, on the batches the run would have trained on next, so keep `batch_size`,
-  `gradient_accumulation_steps`, `optimizer`, the data and the `seed` as they were.
+`init`, the only `type` so far, loads the checkpoint's weights: training starts at step 0 with a fresh optimizer. The
+checkpoint may be in either format, which is told from its files: with `checkpoint.pkl` it's a `tt` checkpoint, and
+every weight is loaded; with `adapter_config.json` it's a PEFT adapter, and its adapters are loaded onto the pretrained
+weights. Either must be of the run's `model.name`, with the run's LoRA `r`, `alpha` and `target_modules`.
 
 It takes effect only in a run with `CheckpointCallback`. A host that saves with callbacks of its own starts from a
-checkpoint by calling `trainer.load_checkpoint(path)` or `trainer.resume_from_checkpoint(path)` between `setup` and
-`train`. A checkpoint that doesn't load fails `train`. A full model directory is not a checkpoint a run can start
-from: to train adapters on it, make it the `model.name` instead.
+checkpoint by calling `trainer.load_checkpoint(path)` between `setup` and `train`. A checkpoint that doesn't load fails
+`train`. A full model directory is not a checkpoint a run can start from: to train adapters on it, make it the
+`model.name` instead. That includes the `base_model/` of a checkpoint saved with `set: all`, which its own adapter then
+loads onto.
 
 ---
 
@@ -282,9 +310,8 @@ finally:
 - **Reading the run.** `trainer.loss_to_float(loss)`, `trainer.current_learning_rate()` (a list, one LR per
   optimizer in `optimizer` order), `trainer.parameter_counts()` (total, trainable), `trainer.global_step` and
   `trainer.epoch`.
-- **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint, and
-  `trainer.load_checkpoint(path)` loads one. With `optimizer=True` both also cover the optimizer state, and
-  `trainer.resume_from_checkpoint(path)`, before `train`, continues the run of a checkpoint saved that way.
+- **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint in the format
+  `checkpoint.format` picks, and `trainer.load_checkpoint(path)` loads one in either format.
 
 ---
 
@@ -297,6 +324,7 @@ A model provider builds the ttml model for an HF `model_type` and maps its weigh
   `device.mesh` it can't be built on. It runs before the device opens.
 - `build(config, hf_config)`: the model with pretrained weights, wrapped in LoRA as `config.model.lora` describes.
 - `export_adapter` / `import_adapter`: the LoRA weights as PEFT tensors and adapter config, and back.
+- `export_model`: the model's weights, without the LoRA adapters, as an HF model directory; for `set: all`.
 
 Write it in `ttml/models/<model>/provider.py` and add it to `providers()` in `ttml/models/provider.py`, keyed by the
 `model_type`. `LlamaProvider` in `ttml/models/llama/provider.py` is the reference.
@@ -321,7 +349,7 @@ Write it in `ttml/datasets/<dataset>.py` and add it to `providers()` in `ttml/da
 
 What a trainer uses of a provider: `next_batch()`, the next batch of the epoch as host arrays, or `None` once the
 epoch is over; iterating it, which takes the batches left in the epoch; `len()`, the batches of an epoch; and
-`seek(epoch, batch)`, with which a resumed run continues where the run before it stopped.
+`seek(epoch)`, which starts epoch `epoch`, in the order that epoch shuffles the train split in.
 
 ---
 

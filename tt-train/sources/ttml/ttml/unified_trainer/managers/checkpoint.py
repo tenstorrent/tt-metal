@@ -20,8 +20,8 @@ class CheckpointManager:
     """When a run saves checkpoints, and which of them it keeps.
 
     Owns ``<project_dir>/checkpoints/``: the history file and the rotation ``rotation_strategy`` picks. Writing a
-    checkpoint directory is delegated to ``save(path, metadata, optimizer=...)``, which
-    ``Trainer.create_checkpoint_manager`` binds to the trainer's ``save_checkpoint``.
+    checkpoint directory is delegated to ``save(path, metadata)``, which ``Trainer.create_checkpoint_manager`` binds
+    to the trainer's ``save_checkpoint``.
     """
 
     def __init__(self, config: CheckpointConfig, save: Callable[..., None], logger: Any = None) -> None:
@@ -33,7 +33,7 @@ class CheckpointManager:
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         self.history_file = os.path.join(self.checkpoint_dir, HISTORY_FILE)
         # A run only rotates away the checkpoints it saved itself: an earlier run's in the same project_dir, such as
-        # the one a resumed run started from, are never deleted.
+        # the one this run started from, are never deleted.
         if os.path.exists(self.history_file):
             self.logger.warning(f"Starting a new checkpoint history; {self.history_file} is replaced on the first save")
         # The checkpoints of this run that rotation kept, oldest first.
@@ -67,7 +67,7 @@ class CheckpointManager:
         path = os.path.join(self.checkpoint_dir, name)
         metadata = {"step": step, "epoch": epoch, "metrics": metrics, "timestamp": timestamp.isoformat()}
 
-        self._save(path, metadata, optimizer=self.config.save_optim)
+        self._save(path, metadata)
 
         # Saving under a name that is already tracked overwrote that checkpoint.
         self.history = [entry for entry in self.history if entry["path"] != path]

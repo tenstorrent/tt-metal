@@ -5,15 +5,14 @@
 """LoRA adapters between ttml's layers and HF PEFT's. NumPy only.
 
 A ttml layer may hold several HF projections as row blocks of one weight (Llama's ``qkv_linear`` holds q, k
-and v), with some blocks' rows permuted for RoPE (``W = P @ W_hf``). Its adapter ``(A, B)`` is exactly one
-PEFT adapter per projection:
+and v), with some blocks' rows permuted for RoPE (``W = P @ W_hf``). Each adapted projection has its own adapter
+(``ttml.modules.LoraBlocks``), so the layer's ``(A, B)`` is exactly one PEFT adapter per adapted projection:
 
-- the projections share ``A``, since they share the layer's input;
-- ``B`` splits into the same row blocks, and a permuted block's rows are permuted back, since
-  ``P @ W_hf + s * B @ A == P @ (W_hf + s * P^-1 @ B @ A)``.
+- ``A`` (``[n*r, in]``) stacks the ``A_i`` of the ``n`` adapted projections, in order;
+- ``B`` (``[out, r]``) holds each ``B_i`` in its projection's rows, zero for a projection that isn't adapted,
+  and a permuted block's rows are permuted back, since ``P @ W_hf + s * B @ A == P @ (W_hf + s * P^-1 @ B @ A)``.
 
-The way back needs the projections' ``A`` to be identical: independent adapters have no rank-r fused
-equivalent. The blocks come from the model's layout (``ttml.models.llama.hf_layout``).
+The blocks come from the model's layout (``ttml.models.llama.hf_layout``).
 """
 
 from __future__ import annotations
@@ -43,47 +42,71 @@ def peft_keys(block: HfBlock) -> tuple[str, str]:
     return f"{module}.lora_A.weight", f"{module}.lora_B.weight"
 
 
-def lora_to_peft(a: np.ndarray, b: np.ndarray, blocks: Sequence[HfBlock]) -> dict[str, np.ndarray]:
-    """One ttml LoRA layer (``a`` ``[r, in]``, ``b`` ``[out, r]``) -> the PEFT tensors of the HF projections it holds."""
+def lora_to_peft(
+    a: np.ndarray, b: np.ndarray, blocks: Sequence[HfBlock], adapted: Sequence[bool]
+) -> dict[str, np.ndarray]:
+    """One ttml LoRA layer (``a`` ``[n*r, in]``, ``b`` ``[out, r]``) -> the PEFT tensors of the HF projections it
+    adapts: the ``n`` of ``blocks`` that ``adapted`` flags."""
     rows = [block.shape[0] for block in blocks]
+    rank = b.shape[1]
     if b.shape[0] != sum(rows):
         raise ValueError(f"lora_B has {b.shape[0]} rows; {[block.name for block in blocks]} have {sum(rows)}")
+    if a.shape[0] != sum(adapted) * rank:
+        raise ValueError(f"lora_A has {a.shape[0]} rows for {sum(adapted)} adapted blocks of rank {rank}")
     tensors = {}
-    start = 0
-    for block, count in zip(blocks, rows):
+    start, slot = 0, 0
+    for block, count, has_adapter in zip(blocks, rows, adapted):
         b_block = b[start : start + count]
         start += count
+        if not has_adapter:
+            continue
         if block.rope_heads is not None:
             b_block = permute_proj_rows(b_block, block.rope_heads)
         key_a, key_b = peft_keys(block)
-        tensors[key_a] = np.ascontiguousarray(a)
+        tensors[key_a] = np.ascontiguousarray(a[slot * rank : (slot + 1) * rank])
         tensors[key_b] = np.ascontiguousarray(b_block)
+        slot += 1
     return tensors
 
 
-def peft_to_lora(tensors: Mapping[str, np.ndarray], blocks: Sequence[HfBlock]) -> tuple[np.ndarray, np.ndarray]:
-    """The PEFT tensors of the HF projections one ttml layer holds -> that layer's ``(a, b)``."""
-    a_values, b_blocks = [], []
-    for block in blocks:
-        key_a, key_b = peft_keys(block)
-        a_values.append(np.asarray(tensors[key_a]))
-        b_block = np.asarray(tensors[key_b])
-        if block.rope_heads is not None:
-            b_block = unpermute_proj_rows(b_block, block.rope_heads)
-        b_blocks.append(b_block)
-    for block, a in zip(blocks[1:], a_values[1:]):
-        if a.shape != a_values[0].shape or not np.array_equal(a, a_values[0]):
-            raise UnsupportedTrainingConfig(
-                f"checkpoint: {block.name} has another lora_A than {blocks[0].name}; ttml holds "
-                f"{', '.join(b.name for b in blocks)} in one layer, which loads only adapters that share lora_A "
-                "(as ttml saves them)"
-            )
-    return a_values[0], np.concatenate(b_blocks, axis=0)
+def peft_to_lora(
+    tensors: Mapping[str, np.ndarray], blocks: Sequence[HfBlock], adapted: Sequence[bool], rank: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """The PEFT tensors of the HF projections one ttml layer adapts -> that layer's ``(a, b)`` (float32).
+
+    ``adapted`` flags the ``blocks`` that have an adapter, of rank ``rank``; the rows of the others are zero in ``b``.
+    """
+    in_features = blocks[0].shape[1]
+    a = np.zeros((sum(adapted) * rank, in_features), dtype=np.float32)
+    b = np.zeros((sum(block.shape[0] for block in blocks), rank), dtype=np.float32)
+    start, slot = 0, 0
+    for block, has_adapter in zip(blocks, adapted):
+        count = block.shape[0]
+        if has_adapter:
+            key_a, key_b = peft_keys(block)
+            a_block, b_block = np.asarray(tensors[key_a]), np.asarray(tensors[key_b])
+            for key, value, shape in ((key_a, a_block, (rank, in_features)), (key_b, b_block, (count, rank))):
+                if value.shape != shape:
+                    raise UnsupportedTrainingConfig(f"checkpoint: {key} has shape {value.shape}, expected {shape}")
+            if block.rope_heads is not None:
+                b_block = unpermute_proj_rows(b_block, block.rope_heads)
+            a[slot * rank : (slot + 1) * rank] = a_block
+            b[start : start + count] = b_block
+            slot += 1
+        start += count
+    return a, b
 
 
-def check_peft_keys(tensors: Mapping[str, Any], layers: Iterable[Sequence[HfBlock]]) -> None:
-    """Raise unless ``tensors`` are exactly the adapters of ``layers`` (the HF blocks of each LoRA layer)."""
-    expected = {key for blocks in layers for block in blocks for key in peft_keys(block)}
+def check_peft_keys(tensors: Mapping[str, Any], layers: Iterable[tuple[Sequence[HfBlock], Sequence[bool]]]) -> None:
+    """Raise unless ``tensors`` are exactly the adapters of ``layers``: the HF blocks of each LoRA layer, with the
+    flags of the ones it adapts."""
+    expected = {
+        key
+        for blocks, adapted in layers
+        for block, has_adapter in zip(blocks, adapted)
+        if has_adapter
+        for key in peft_keys(block)
+    }
     missing, unexpected = sorted(expected - tensors.keys()), sorted(tensors.keys() - expected)
     if missing or unexpected:
 
@@ -108,13 +131,15 @@ def peft_adapter_config(
     dropout: float,
     target_modules: Sequence[str],
     task_type: str,
+    revision: Optional[str] = None,
 ) -> dict[str, Any]:
-    """The ``adapter_config.json`` ``PeftModel.save_pretrained`` writes for this adapter."""
+    """The ``adapter_config.json`` ``PeftModel.save_pretrained`` writes for this adapter, of ``base_model`` at the hub
+    commit ``revision`` (None for a local directory)."""
     return {
         "peft_type": "LORA",
         "task_type": task_type,
         "base_model_name_or_path": base_model,
-        "revision": None,
+        "revision": revision,
         "r": r,
         "lora_alpha": alpha,
         "lora_dropout": dropout,

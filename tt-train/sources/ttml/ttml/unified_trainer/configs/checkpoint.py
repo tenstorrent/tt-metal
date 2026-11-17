@@ -4,7 +4,7 @@
 
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StepSave(BaseModel):
@@ -68,12 +68,31 @@ class InitStrategy(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # "init" loads the trained weights only: training starts at step 0 with a fresh optimizer. "resume" also loads
-    # the optimizer state, which a checkpoint holds only if saved with `save_optim`, and continues the run after the
-    # checkpoint's step, on the batches it would have trained on next.
-    type: Literal["init", "resume"]
-    # A checkpoint directory.
+    # "init" loads the checkpoint's weights: training starts at step 0 with a fresh optimizer.
+    type: Literal["init"] = "init"
+    # A checkpoint directory, in either format.
     path: str = Field(min_length=1)
+
+
+class CheckpointFormat(BaseModel):
+    """How a checkpoint stores the model.
+
+    ``hf`` writes HF layouts: a LoRA run saves a PEFT adapter, and with ``set: all`` also its frozen base model in
+    ``base_model/``, as ``save_pretrained`` lays one out; full fine-tuning saves the model that way. ``tt`` writes
+    every parameter in ttml's layout to one ``checkpoint.pkl``, as GRPO does.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["hf", "tt"] = "hf"
+    # "trainable" saves the weights the run trains, "all" every weight of the model.
+    set: Literal["trainable", "all"] = "trainable"
+
+    @model_validator(mode="after")
+    def _check_set(self) -> "CheckpointFormat":
+        if self.type == "tt" and self.set != "all":
+            raise ValueError("set: a tt checkpoint holds every parameter, so set it to all")
+        return self
 
 
 # `type` picks one, and with it the other fields it takes.
@@ -82,10 +101,10 @@ RotationStrategy = Annotated[Union[LastRotation, BestRotation, NoRotation], Fiel
 
 
 class CheckpointConfig(BaseModel):
-    """The checkpoint ``CheckpointCallback`` starts the run from, when it saves, and which checkpoints
-    ``CheckpointManager`` keeps.
+    """The checkpoint ``CheckpointCallback`` starts the run from, when it saves, which checkpoints
+    ``CheckpointManager`` keeps, and how they store the model.
 
-    A checkpoint is a directory holding what the model trains, as a PEFT adapter.
+    A checkpoint is a directory holding the model's weights, in the layout ``format`` picks.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -95,10 +114,9 @@ class CheckpointConfig(BaseModel):
     rotation_strategy: RotationStrategy = Field(default_factory=LastRotation)
     # Unset starts from the pretrained weights.
     init_strategy: Optional[InitStrategy] = None
+    format: CheckpointFormat = Field(default_factory=CheckpointFormat)
 
     # Checkpoints go to <project_dir>/checkpoints/.
     project_dir: str = "runs/unified_trainer"
     # Saved at the end of the run unless save_strategy is "none".
     final_checkpoint_name: str = "final"
-    # Also save the optimizer state, which a run resuming from the checkpoint needs.
-    save_optim: bool = False

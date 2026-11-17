@@ -8,7 +8,6 @@ model:
   lora:
     r: 4
     alpha: 8
-    # ttml fuses q, k and v into one layer, and gate and up into another: target all of a group or none.
     target_modules: [q_proj, k_proj, v_proj, o_proj]
   gradient_checkpointing: true
 

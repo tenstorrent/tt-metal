@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from contextlib import ExitStack
@@ -476,38 +477,75 @@ _HF_CONFIG_FILES = (
 )
 
 
-def export_hf_model(model: Llama, out_dir: str | os.PathLike, hf_source_dir: str | os.PathLike | None = None) -> Path:
+_WEIGHTS_NAME = "model.safetensors"
+_WEIGHTS_INDEX_NAME = "model.safetensors.index.json"
+_BF16_BYTES = 2
+
+
+def export_hf_model(
+    model: Llama,
+    out_dir: str | os.PathLike,
+    hf_source_dir: str | os.PathLike | None = None,
+    max_shard_size: int | str = "5GB",
+) -> Path:
     """Write *model* as a HuggingFace Llama model directory, the inverse of ``load_from_safetensors``.
 
-    Writes ``model.safetensors`` (bf16, HF tensor names): q/k rows are permuted back, fused parameters
-    split, vocab padding dropped, and a tied embedding written once. The config and tokenizer files of
-    *hf_source_dir* (the checkpoint *model* was loaded from) are copied alongside, so the directory loads
-    with ``AutoModelForCausalLM.from_pretrained``.
+    The weights are bf16, with HF tensor names: q/k rows are permuted back, fused parameters split, vocab
+    padding dropped, and a tied embedding written once. They're laid out as ``save_pretrained`` lays them out:
+    one ``model.safetensors``, or shards of at most *max_shard_size* (``model-00001-of-00004.safetensors``, ...)
+    with ``model.safetensors.index.json``. Each shard is written as soon as its tensors are read, so the host holds
+    about one shard. The config and tokenizer files of *hf_source_dir* (the checkpoint *model* was loaded from) are
+    copied alongside, so the directory loads with ``AutoModelForCausalLM.from_pretrained``.
 
     Raises:
         NotImplementedError: a parameter is sharded (TP or FSDP); only replicated models are exported.
     """
+    from huggingface_hub import split_state_dict_into_shards_factory
     from safetensors.numpy import save_file
 
     parameters = model.parameters()
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-    tensors: dict[str, np.ndarray] = {}
-    for name, held in hf_layout(model).items():
-        param = parameters[name]
-        if not ttml.Sharding.from_tensor(param).is_fully_replicated:
+    layout = hf_layout(model)
+    for name in layout:
+        if not ttml.Sharding.from_tensor(parameters[name]).is_fully_replicated:
             raise NotImplementedError(f"{name}: sharded; export_hf_model reads replicated parameters only")
-        # Replicated: every device holds the same values, concatenated along dim 0 by the composer.
-        values = param.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
-        tensors.update(split_hf_tensors(values.reshape(-1, *values.shape[-2:])[0], held))
+    shapes = {tensor.name: tensor.shape for held in layout.values() for tensor in held}
+    split = split_state_dict_into_shards_factory(
+        shapes,
+        get_storage_size=lambda shape: int(np.prod(shape)) * _BF16_BYTES,
+        filename_pattern="model{suffix}.safetensors",
+        max_shard_size=max_shard_size,
+    )
 
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    save_file(
-        {name: value.astype(ml_dtypes.bfloat16) for name, value in tensors.items()},
-        str(out_path / "model.safetensors"),
-        metadata={"format": "pt"},
-    )
+    # A previous export's shards would be loaded alongside these.
+    stale = [out_path / _WEIGHTS_NAME, out_path / _WEIGHTS_INDEX_NAME, *out_path.glob("model-*-of-*.safetensors")]
+    for path in stale:
+        path.unlink(missing_ok=True)
+
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+    shards = iter(split.filename_to_tensors.items())
+    shard = next(shards, None)
+    pending: dict[str, np.ndarray] = {}
+    for name, held in layout.items():
+        # Replicated: every device holds the same values, concatenated along dim 0 by the composer.
+        values = parameters[name].to_numpy(ttnn.DataType.FLOAT32, composer=composer)
+        for hf_name, value in split_hf_tensors(values.reshape(-1, *values.shape[-2:])[0], held).items():
+            pending[hf_name] = value.astype(ml_dtypes.bfloat16)
+        del values
+        # Tensors come in shard order, so a shard is complete once its last tensor is read.
+        while shard is not None and all(tensor in pending for tensor in shard[1]):
+            filename, names = shard
+            tensors = {tensor: pending.pop(tensor) for tensor in names}
+            save_file(tensors, str(out_path / filename), metadata={"format": "pt"})
+            shard = next(shards, None)
+    if split.is_sharded:
+        index = {
+            "metadata": {"total_parameters": sum(int(np.prod(shape)) for shape in shapes.values()), **split.metadata},
+            "weight_map": split.tensor_to_filename,
+        }
+        (out_path / _WEIGHTS_INDEX_NAME).write_text(json.dumps(index, indent=2, sort_keys=True) + "\n")
     if hf_source_dir is not None:
         for file_name in _HF_CONFIG_FILES:
             source = Path(hf_source_dir) / file_name

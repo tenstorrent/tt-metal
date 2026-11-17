@@ -12,7 +12,8 @@ from .callback import Callback
 class CheckpointCallback(Callback):
     """Starts the run from a checkpoint and saves checkpoints, as ``config.checkpoint`` says.
 
-    Checkpoints hold what the model trains (``Trainer.save_checkpoint``): the LoRA adapter.
+    Checkpoints hold the model's weights in the layout ``config.checkpoint.format`` picks
+    (``Trainer.save_checkpoint``).
     """
 
     def __init__(self) -> None:
@@ -27,13 +28,9 @@ class CheckpointCallback(Callback):
         init = config.init_strategy
         if init is None:
             return
-        if init.type == "resume":
-            trainer.resume_from_checkpoint(init.path)
-            trainer.logger.info(f"Resuming after step {trainer.global_step} from {init.path}")
-        else:
-            # Weights only: training still starts at step 0, so the stored step, epoch and metrics are unused.
-            trainer.load_checkpoint(init.path)
-            trainer.logger.info(f"Initialized the trained weights from {init.path}")
+        # Weights only: training still starts at step 0, so the stored step, epoch and metrics are unused.
+        trainer.load_checkpoint(init.path)
+        trainer.logger.info(f"Initialized the weights from {init.path}")
 
     def on_validation_end(self, trainer: Any, val_loss: Any) -> None:
         # Runs before that step's `on_step_end`, so the step's checkpoint carries it (for best rotation).

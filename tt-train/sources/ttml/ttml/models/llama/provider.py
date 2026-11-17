@@ -4,20 +4,21 @@
 
 """HF ``model_type: llama`` checkpoints (Llama 3.x) on ttml's Python ``Llama``, with LoRA adapters.
 
-ttml's Llama fuses q, k and v into one ``qkv_linear``, and gate and up into one ``w_gate_up``. A fused layer
-has one LoRA adapter, so LoRA targets all of its projections or none of them; a partly targeted layer is
-rejected rather than silently widened.
+ttml's Llama fuses q, k and v into one ``qkv_linear``, and gate and up into one ``w_gate_up``. Each targeted
+projection still gets its own adapter, as in PEFT: a fused layer holds the adapters of the projections it fuses
+(``ttml.modules.LoraBlocks``), so any of them can be targeted on their own.
 """
 
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Iterator, Sequence
+import re
+from typing import TYPE_CHECKING, Any, Iterator, Sequence, Union
 
 import numpy as np
 
 from ..peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
-from ..provider import AdapterState, UnsupportedTrainingConfig, model_dir
+from ..provider import AdapterState, UnsupportedTrainingConfig, model_dir, model_revision
 
 if TYPE_CHECKING:
     from ttml.unified_trainer.configs import LoraConfig, SFTTrainerConfig
@@ -41,11 +42,10 @@ def _fail(field: str, reason: str) -> None:
     raise UnsupportedTrainingConfig(f"{field}: {reason}")
 
 
-def lora_layers(target_modules: Sequence[str]) -> list[tuple[tuple[str, ...], str]]:
-    """The ``LORA_LAYERS`` entries the HF ``target_modules`` select.
+def lora_layers(target_modules: Sequence[str]) -> list[tuple[tuple[str, ...], str, tuple[bool, ...]]]:
+    """The ``LORA_LAYERS`` entries the HF ``target_modules`` select, each with a flag per projection: targeted or not.
 
-    Raises ``UnsupportedTrainingConfig`` for a name that isn't a Llama projection, and for a fused layer
-    only some of whose projections are targeted.
+    Raises ``UnsupportedTrainingConfig`` for a name that isn't a Llama projection.
     """
     targets = set(target_modules)
     known = {name for projections, _ in LORA_LAYERS for name in projections}
@@ -54,32 +54,21 @@ def lora_layers(target_modules: Sequence[str]) -> list[tuple[tuple[str, ...], st
         _fail("model.lora.target_modules", f"{unknown} are not Llama projections; choose from {sorted(known)}")
     selected = []
     for projections, pattern in LORA_LAYERS:
-        chosen = targets.intersection(projections)
-        if chosen and len(chosen) != len(projections):
-            _fail(
-                "model.lora.target_modules",
-                f"{', '.join(projections)} are one fused layer in ttml's Llama, so LoRA targets all of them or "
-                f"none; got only {sorted(chosen)}",
-            )
-        if chosen:
-            selected.append((projections, pattern))
+        adapted = tuple(name in targets for name in projections)
+        if any(adapted):
+            selected.append((projections, pattern, adapted))
     return selected
 
 
 def hf_target_modules(lora: LoraConfig) -> list[str]:
     """The HF projections the adapters cover, as PEFT lists them in ``adapter_config.json``."""
-    return sorted(name for projections, _ in lora_layers(lora.target_modules) for name in projections)
+    return sorted(set(lora.target_modules))
 
 
-def _same_model(adapter_base: Any, model_name: str) -> bool:
-    """Whether an adapter's ``base_model_name_or_path`` names ``model_name``; a hub id and a local copy of it match."""
-    if not adapter_base:
-        return True
-
-    def tail(name: str) -> str:
-        return os.path.basename(os.path.normpath(name))
-
-    return adapter_base == model_name or tail(adapter_base) == tail(model_name)
+def _layer_name(parameter: str) -> str:
+    """The name ``LoraModel`` matches a weight's layer by: "Llama/blocks/3/attention/qkv_linear/weight" ->
+    "blocks.3.attention.qkv_linear"."""
+    return parameter.split("/", 1)[1].removesuffix("/weight").replace("/", ".")
 
 
 def _lora_named_layers(module: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
@@ -146,11 +135,13 @@ class LlamaProvider:
         model = Llama(llama_config)
         load_from_safetensors(model, weights)
         lora = config.model.lora
+        layers = lora_layers(lora.target_modules)
         lora_config = TtmlLoraConfig(
             rank=lora.r,
             # Scaling alpha / r, as in PEFT.
             alpha=float(lora.alpha),
-            target_modules=[pattern for _, pattern in lora_layers(lora.target_modules)],
+            target_modules=[pattern for _, pattern, _ in layers],
+            target_blocks=self._target_blocks(model, layers),
             lora_dropout=lora.dropout,
         )
         try:
@@ -158,20 +149,43 @@ class LlamaProvider:
         except (ValueError, RuntimeError) as e:
             raise UnsupportedTrainingConfig(f"model.lora.target_modules: {e}") from e
 
-    def _adapted_layers(self, model: Any) -> Iterator[tuple[Any, tuple[Any, ...]]]:
-        """``(LoraLinear, the HF tensors its weight holds)`` for each LoRA layer of a ``LoraModel``."""
+    def _target_blocks(self, llama: Any, layers: Sequence[tuple[tuple[str, ...], str, tuple[bool, ...]]]) -> dict:
+        """The ``LoraBlocks`` of each selected fused layer: the rows of its projections, as ``hf_layout`` places them,
+        and which of them are targeted."""
+        from ttml.models.llama import hf_layout
+        from ttml.modules import LoraBlocks
+
+        layout = hf_layout(llama)
+        blocks = {}
+        for projections, pattern, adapted in layers:
+            if len(projections) == 1:
+                continue
+            rows = {
+                tuple(tensor.shape[0] for tensor in held)
+                for parameter, held in layout.items()
+                if re.search(pattern, _layer_name(parameter))
+            }
+            # Every transformer block has the same shapes.
+            (block_rows,) = rows
+            blocks[pattern] = LoraBlocks(rows=block_rows, adapted=adapted)
+        return blocks
+
+    def _adapted_layers(self, model: Any) -> Iterator[tuple[Any, tuple[Any, ...], tuple[bool, ...]]]:
+        """``(LoraLinear, the HF tensors its weight holds, which of them it adapts)`` for each LoRA layer of a
+        ``LoraModel``."""
         from ttml.models.llama import hf_layout
 
         llama = model.model
         layout = hf_layout(llama)
         root = next(iter(llama.parameters())).split("/", 1)[0]
         for name, layer in _lora_named_layers(llama):
-            yield layer, layout[f"{root}/{name.replace('.', '/')}/weight"]
+            held = layout[f"{root}/{name.replace('.', '/')}/weight"]
+            yield layer, held, layer.blocks.adapted if layer.blocks is not None else (True,) * len(held)
 
     def export_adapter(self, model: Any, config: SFTTrainerConfig) -> AdapterState:
         tensors: dict[str, np.ndarray] = {}
-        for layer, blocks in self._adapted_layers(model):
-            tensors.update(lora_to_peft(_read(layer.lora_A.tensor), _read(layer.lora_B.tensor), blocks))
+        for layer, held, adapted in self._adapted_layers(model):
+            tensors.update(lora_to_peft(_read(layer.lora_A.tensor), _read(layer.lora_B.tensor), held, adapted))
         lora = config.model.lora
         return AdapterState(
             tensors=tensors,
@@ -182,6 +196,7 @@ class LlamaProvider:
                 dropout=lora.dropout,
                 target_modules=hf_target_modules(lora),
                 task_type=lora.task_type,
+                revision=model_revision(config.model.name),
             ),
         )
 
@@ -205,19 +220,19 @@ class LlamaProvider:
         if mismatched:
             details = ", ".join(f"{key}: adapter {got!r}, run {want!r}" for key, (got, want) in mismatched.items())
             _fail("checkpoint", f"the adapter doesn't match this run's LoRA ({details})")
-        if not _same_model(adapter.get("base_model_name_or_path"), config.model.name):
-            _fail(
-                "checkpoint",
-                f"the adapter is for {adapter['base_model_name_or_path']!r}, this run trains {config.model.name!r}",
-            )
 
         tensors = with_peft_prefix(state.tensors)
         layers = list(self._adapted_layers(model))
-        check_peft_keys(tensors, (blocks for _, blocks in layers))
-        for layer, blocks in layers:
-            for parameter, value in zip((layer.lora_A, layer.lora_B), peft_to_lora(tensors, blocks)):
-                shape = tuple(parameter.tensor.shape()[-2:])
-                if value.shape != shape:
-                    _fail("checkpoint", f"adapter tensor of shape {value.shape} for a {shape} LoRA weight")
+        check_peft_keys(tensors, ((held, adapted) for _, held, adapted in layers))
+        for layer, held, adapted in layers:
+            for parameter, value in zip((layer.lora_A, layer.lora_B), peft_to_lora(tensors, held, adapted, lora.r)):
                 # Keeps the parameter's dtype (bf16) and layout.
-                ttml.autograd.assign_numpy(parameter.tensor, value.reshape(1, 1, *shape).astype(np.float32))
+                ttml.autograd.assign_numpy(parameter.tensor, value.reshape(1, 1, *value.shape))
+
+    def export_model(self, model: Any, config: SFTTrainerConfig, directory: Union[str, os.PathLike]) -> None:
+        from ttml.models.llama import export_hf_model
+        from ttml.modules import LoraModel
+
+        # A LoRA model's Llama holds its frozen base weights, and the adapters, which have no HF tensors.
+        llama = model.model if isinstance(model, LoraModel) else model
+        export_hf_model(llama, directory, hf_source_dir=model_dir(config.model.name, local_only=True))

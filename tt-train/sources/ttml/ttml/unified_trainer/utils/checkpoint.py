@@ -4,9 +4,12 @@
 
 """Reading and writing checkpoint directories.
 
-A checkpoint is a PEFT adapter directory (``PeftModel.from_pretrained`` loads it). It holds a
-``trainer_state.json`` with the step, epoch and metrics, and may hold ``optimizer_state.pkl``, which the trainer
-writes with ``ttml.checkpointing`` for a run to resume from.
+A checkpoint holds the model's weights in the format ``checkpoint.format`` picks, and a ``trainer_state.json`` with
+the step, epoch and metrics, the format, and the base model:
+
+- ``hf``: a LoRA run's checkpoint is a PEFT adapter directory (``PeftModel.from_pretrained`` loads it), which holds
+  its frozen base model in ``base_model/`` if every weight is saved; full fine-tuning's is an HF model directory.
+- ``tt``: ``checkpoint.pkl``, every parameter as ``ttml.checkpointing`` writes it.
 """
 
 from __future__ import annotations
@@ -24,9 +27,10 @@ from ttml.models.provider import AdapterState
 
 ADAPTER_CONFIG = "adapter_config.json"
 ADAPTER_WEIGHTS = "adapter_model.safetensors"
+BASE_MODEL_DIR = "base_model"
 MODEL_CONFIG = "config.json"
-OPTIMIZER_STATE = "optimizer_state.pkl"
 TRAINER_STATE = "trainer_state.json"
+TT_CHECKPOINT = "checkpoint.pkl"
 
 PathLike = Union[str, os.PathLike]
 
@@ -90,6 +94,10 @@ def is_adapter_dir(path: PathLike) -> bool:
 
 
 def is_model_dir(path: PathLike) -> bool:
-    """Whether ``path`` is an HF model directory: what a run trains adapters on, not a checkpoint."""
+    """Whether ``path`` is an HF model directory, as ``save_pretrained`` writes one."""
     path = Path(path)
     return (path / MODEL_CONFIG).is_file() and any(path.glob("*.safetensors"))
+
+
+def is_tt_checkpoint(path: PathLike) -> bool:
+    return (Path(path) / TT_CHECKPOINT).is_file()
