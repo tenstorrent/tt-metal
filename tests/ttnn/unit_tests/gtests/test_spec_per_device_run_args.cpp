@@ -319,6 +319,141 @@ using FixedMeshOp = ttnn::device_operation::MeshDeviceOperationAdapter<FixedPerD
 using FixedAdapter = FixedMeshOp::MeshWorkloadSpecFactoryAdapter<PerDeviceRunArgsOp::FixedFactory>;
 static_assert(!Adapter::fixed_per_device_run_args() && FixedAdapter::fixed_per_device_run_args());
 
+// A tensor-backed op: its kernel writes [salt, bias] into page 0 of the output tensor, which every call allocates
+// anew. A cache hit must rebind that tensor on every device and keep (fixed) or refresh (override) the per-device
+// values.
+constexpr const char* kTensorSource = R"(
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+void kernel_main() {
+    const uint32_t staging = get_arg(args::address);
+    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
+    TensorAccessor out(tensor::out);
+    const uint32_t page_size = out.get_aligned_page_size();
+    for (uint32_t i = 0; i < page_size / sizeof(uint32_t); ++i) {
+        words[i] = 0;
+    }
+    words[0] = get_arg(args::salt);
+    words[1] = get_arg(args::bias);
+    noc_async_write(staging, out.get_noc_addr(0), page_size);
+    noc_async_write_barrier();
+}
+)";
+
+uint32_t tensor_salt(uint32_t index, uint32_t call) { return 1000 * (index + 1) + call; }
+uint32_t tensor_bias(uint32_t index, uint32_t call) { return 50000 + 100 * index + call; }
+
+struct TensorPerDeviceRunArgsOp {
+    struct operation_attributes_t {
+        uint32_t call = 0;    // hash-excluded: the per-device values this call sets
+        uint32_t ranges = 0;  // hashed: as PerDeviceRunArgsOp::operation_attributes_t::ranges
+    };
+    using tensor_args_t = PerDeviceRunArgsOp::tensor_args_t;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+
+    static m2::ProgramSpec spec(const Tensor& output) {
+        auto kernel = dm_kernel(kMain, kTensorSource, tt::tt_metal::DataMovementProcessor::RISCV_0);
+        kernel.runtime_arg_schema = {.runtime_arg_names = {"address", "bias"}, .common_runtime_arg_names = {"salt"}};
+        kernel.tensor_bindings = {
+            m2::KernelSpec::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"out"}, .accessor_name = "out"}};
+        return m2::ProgramSpec{
+            .name = "per_device_run_args_tensor_test",
+            .kernels = {kernel},
+            .tensor_parameters = {m2::TensorParameter{
+                .unique_id = m2::TensorParamName{"out"}, .spec = output.tensor_spec()}},
+            .work_units = {m2::WorkUnitSpec{
+                .name = "core", .kernels = {m2::KernelSpecName{kMain}}, .target_nodes = kCores.front()}},
+        };
+    }
+
+    static m2::ProgramRunArgs base(const Tensor& output) {
+        m2::ProgramRunArgs::KernelRunArgs main{.kernel = m2::KernelSpecName{kMain}};
+        main.runtime_arg_values["address"][kCores.front()] = kAddress;
+        main.runtime_arg_values["bias"][kCores.front()] = kBaseBias;
+        main.common_runtime_arg_values = {{"salt", kBaseSalt}};
+        m2::ProgramRunArgs args;
+        args.kernel_run_args.push_back(std::move(main));
+        args.tensor_args = {{m2::TensorParamName{"out"}, m2::ProgramRunArgs::TensorArgument{output.mesh_tensor()}}};
+        return args;
+    }
+
+    static std::vector<DeviceRunArgs> per_device(
+        const operation_attributes_t& attrs, const ttnn::MeshCoordinateRange& range, const ttnn::MeshShape& shape) {
+        std::vector<DeviceRunArgs> out;
+        for (const auto& coord : range) {
+            const uint32_t index = PerDeviceRunArgsOp::index_of(coord, shape);
+            m2::ProgramRunArgs::KernelRunArgs main{.kernel = m2::KernelSpecName{kMain}};
+            main.common_runtime_arg_values = {{"salt", tensor_salt(index, attrs.call)}};
+            main.runtime_arg_values["bias"][kCores.front()] = tensor_bias(index, attrs.call);
+            m2::ProgramRunArgs values;
+            values.kernel_run_args.push_back(std::move(main));
+            out.push_back({coord, std::move(values)});
+        }
+        return out;
+    }
+
+    struct Factory {
+        static constexpr bool uses_per_device_run_args = true;
+
+        static MeshWorkloadArtifacts create_mesh_workload_artifacts(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+            const auto shape = tensor_args.input.device()->shape();
+            MeshWorkloadArtifacts artifacts;
+            for (const auto& range : PerDeviceRunArgsOp::factory_ranges(
+                     PerDeviceRunArgsOp::operation_attributes_t{.ranges = attrs.ranges}, tensor_coords)) {
+                artifacts.programs.push_back({
+                    .range = range,
+                    .spec = spec(output),
+                    .run_params = base(output),
+                    .per_device_run_params = per_device(attrs, range, shape),
+                });
+            }
+            return artifacts;
+        }
+
+        static RangeRunArgs override_runtime_arguments(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output,
+            const ttnn::MeshCoordinateRange& range) {
+            return {.base = base(output), .per_device = per_device(attrs, range, tensor_args.input.device()->shape())};
+        }
+    };
+    struct FixedFactory {
+        static constexpr bool uses_per_device_run_args = true;
+        static constexpr bool fixed_per_device_run_args = true;
+
+        static MeshWorkloadArtifacts create_mesh_workload_artifacts(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+            return Factory::create_mesh_workload_artifacts(attrs, tensor_args, output, tensor_coords);
+        }
+    };
+    using program_factory_t = std::variant<Factory>;
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {}
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t& tensor_args) {
+        return tensor_args.input.tensor_spec();
+    }
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+        return ttnn::create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input.device());
+    }
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t& attrs, const tensor_args_t&) {
+        return ttsl::hash::hash_objects_with_default_seed(attrs.ranges);
+    }
+};
+
+struct FixedTensorPerDeviceRunArgsOp : TensorPerDeviceRunArgsOp {
+    using program_factory_t = std::variant<TensorPerDeviceRunArgsOp::FixedFactory>;
+};
+
 class SpecPerDeviceRunArgsTest : public tt::tt_metal::MeshDeviceFixtureBase {
 protected:
     SpecPerDeviceRunArgsTest() :
@@ -471,6 +606,54 @@ protected:
             expected_programs);
     }
 
+    // Each device's shard of `output` holds the [salt, bias] of `call`.
+    void expect_tensor_values(const Tensor& output, uint32_t call) {
+        const auto shape = mesh_device_->shape();
+        const auto shards = ttnn::distributed::get_device_tensors(output);
+        ASSERT_EQ(shards.size(), shape.mesh_size());
+        for (const auto& shard : shards) {
+            const auto coords = shard.device_storage().get_coords();
+            ASSERT_EQ(coords.size(), 1u);
+            const uint32_t index = PerDeviceRunArgsOp::index_of(coords.front(), shape);
+            const auto words = shard.to_vector<uint32_t>();
+            ASSERT_GE(words.size(), 2u);
+            EXPECT_EQ(
+                (std::vector<uint32_t>{words[0], words[1]}),
+                (std::vector<uint32_t>{tensor_salt(index, call), tensor_bias(index, call)}))
+                << "device " << coords.front() << ", call " << call;
+        }
+    }
+
+    // Two calls on one cache entry, the first call's output kept alive so the hit's output lands at a new address:
+    // the hit writes the new tensor on every device, with the miss's per-device values (fixed) or its own (override).
+    template <typename Op>
+    void run_tensor_hit(bool fixed, uint32_t ranges, size_t expected_programs) {
+        using Attrs = TensorPerDeviceRunArgsOp::operation_attributes_t;
+        const Tensor first = ttnn::device_operation::launch<Op>(Attrs{.call = 0, .ranges = ranges}, input());
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        expect_tensor_values(first, 0);
+        const Tensor second = ttnn::device_operation::launch<Op>(Attrs{.call = 1, .ranges = ranges}, input());
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1u);
+        ASSERT_NE(first.mesh_buffer().address(), second.mesh_buffer().address());
+        expect_tensor_values(second, fixed ? 0 : 1);
+        expect_tensor_values(first, 0);  // the hit did not write the miss's tensor
+        using TensorAdapter = typename ttnn::device_operation::MeshDeviceOperationAdapter<
+            Op>::template MeshWorkloadSpecFactoryAdapter<std::variant_alternative_t<0, typename Op::program_factory_t>>;
+        const auto args = input();
+        const auto lookup = ttnn::device_operation::detail::look_up_program_cache<
+            ttnn::device_operation::MeshDeviceOperationAdapter<Op>>(
+            Attrs{.call = 1, .ranges = ranges}, args, mesh_device_.get());
+        ASSERT_TRUE(lookup.hit);
+        EXPECT_EQ(
+            mesh_device_->get_program_cache()
+                .get(lookup.key)
+                .cached_program.template get<typename TensorAdapter::cached_mesh_workload_t>()
+                .workload.get_programs()
+                .size(),
+            expected_programs);
+    }
+
     // A sequence of calls on one cache entry: per-device values change, a core and an array start and stop being set
     // per device, the per-device lists go empty and come back.
     void run_sequence(bool with_extra, uint32_t ranges, size_t expected_programs) {
@@ -529,6 +712,28 @@ TEST_F(SpecPerDeviceRunArgsTest, WithoutOverrideHitKeepsMissValues) {
 TEST_F(SpecPerDeviceRunArgsTest, WithoutOverrideSplitKeepsMissValues) {
     ttnn::device_operation::per_device_run_args::ScopedForceSplit split(*mesh_device_);
     run_fixed(/*ranges=*/0, /*expected_programs=*/mesh_device_->shape().mesh_size());
+}
+
+// A hit with a new output tensor on every device of a 2x4 mesh: the tensor is rebound, merged or split, and the
+// per-device values are the miss's (`fixed_per_device_run_args`) or the hit's own (override).
+TEST_F(SpecPerDeviceRunArgsTest, FixedHitRebindsTensor) {
+    run_tensor_hit<FixedTensorPerDeviceRunArgsOp>(/*fixed=*/true, /*ranges=*/2, /*expected_programs=*/3);
+}
+
+TEST_F(SpecPerDeviceRunArgsTest, FixedSplitHitRebindsTensor) {
+    ttnn::device_operation::per_device_run_args::ScopedForceSplit split(*mesh_device_);
+    run_tensor_hit<FixedTensorPerDeviceRunArgsOp>(
+        /*fixed=*/true, /*ranges=*/0, /*expected_programs=*/mesh_device_->shape().mesh_size());
+}
+
+TEST_F(SpecPerDeviceRunArgsTest, OverrideHitRebindsTensor) {
+    run_tensor_hit<TensorPerDeviceRunArgsOp>(/*fixed=*/false, /*ranges=*/2, /*expected_programs=*/3);
+}
+
+TEST_F(SpecPerDeviceRunArgsTest, OverrideSplitHitRebindsTensor) {
+    ttnn::device_operation::per_device_run_args::ScopedForceSplit split(*mesh_device_);
+    run_tensor_hit<TensorPerDeviceRunArgsOp>(
+        /*fixed=*/false, /*ranges=*/0, /*expected_programs=*/mesh_device_->shape().mesh_size());
 }
 
 // Per-device values metal would reject (an array of the wrong length on one device, an arg the kernel does not
