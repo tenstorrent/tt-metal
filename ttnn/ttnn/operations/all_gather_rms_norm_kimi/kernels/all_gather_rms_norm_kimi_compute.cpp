@@ -10,7 +10,9 @@
 //   gamma_block         xg = x * gamma (row broadcast, fp32 DEST, exact bf16 x bf16 product) -> cb_xg, per landed
 //                       chunk; needs no stats, so it runs BEFORE the combine for the whole own block and for the first
 //                       xg_ahead landed chunks of a remote block (the stall shadow)
-//   normalize_block     out = xg * rstd (col broadcast of the row's rstd) -> cb_out, per chunk
+//   expand_rstd_block   unary_bcast<Col> -> cb_rstd_full (one tile per block row)
+//   normalize_block     per chunk: out = xg * rstd_full -> cb_out; a chunk not done ahead runs x * gamma * rstd_full
+//                       as one chain (DEST reused as srcA, FUSE_LATE_CHUNKS)
 // After the stats only the combine and one multiply per tile stand between the landed chunks and their DRAM store,
 // so the stores (DRAM-bound, ~4 us for the whole output) start right after the combine instead of after a whole-
 // block scale. Each chunk is one (rows x cols) window of the block: a run inside one block row, or whole rows.
@@ -22,6 +24,7 @@
 #include "api/compute/common.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
@@ -47,6 +50,8 @@ constexpr uint32_t cb_partial = get_compile_time_arg_val(C + 8);
 constexpr uint32_t cb_xg = get_compile_time_arg_val(C + 9);
 constexpr uint32_t cb_scaler = get_compile_time_arg_val(C + 10);
 constexpr uint32_t xg_ahead = get_compile_time_arg_val(C + 11);  // remote cores: xg chunks before the combine
+constexpr uint32_t cb_rstd_full = get_compile_time_arg_val(C + 12);
+constexpr bool fuse_late = get_compile_time_arg_val(C + 13) != 0;  // x * gamma * rstd in one chain for late chunks
 
 static_assert(block_w % chunk_tiles == 0 || chunk_tiles % block_w == 0, "a chunk is a run in one row or whole rows");
 
@@ -89,7 +94,16 @@ ALWI void gamma_chunk(uint32_t k) {
         PackTile<output(cb_xg, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
 }
 
-// out chunk k = xg chunk k (front of cb_xg) * rstd of its rows (col broadcast, caller-held cb_rstd) -> cb_out
+// rstd_full tile of a chunk row: caller-held cb_rstd_full, one tile per block row (Col mapping), offset to the chunk
+constexpr InputSpec rstd_full_in = input(
+    cb_rstd_full,
+    WaitPolicy::None,
+    PopPolicy::None,
+    InputTileMapping::Col,
+    DataFormatReconfig::Enabled,
+    TileAddressing::Offset);
+
+// out chunk k = xg chunk k (front of cb_xg) * rstd_full of its rows -> cb_out
 ALWI void normalize_chunk(uint32_t k) {
     const ChunkWindow w = chunk_window(k);
     eltwise_chain(
@@ -97,14 +111,34 @@ ALWI void normalize_chunk(uint32_t k) {
         BinaryFpu<
             BinaryFpuOp::Mul,
             input(cb_xg, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+            rstd_full_in>{0u, w.r0},
+        PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
+}
+
+// out chunk k = (x chunk k * gamma) * rstd_full in one chain: the product stays in DEST (fp32) and is reused as srcA
+ALWI void fused_chunk(uint32_t k) {
+    const ChunkWindow w = chunk_window(k);
+    cb_wait_front(cb_x_block, (k + 1) * chunk_tiles);
+    eltwise_chain(
+        IterationShape::grid(w.rows, w.cols).block_size(chunk_tiles),
+        BinaryFpu<
+            BinaryFpuOp::Mul,
             input(
-                cb_rstd,
-                BroadcastDim::Col,
+                cb_x_block,
                 WaitPolicy::None,
                 PopPolicy::None,
-                InputTileMapping::Col,
+                InputTileMapping::Block,
                 DataFormatReconfig::Enabled,
-                TileAddressing::Offset)>{0u, w.r0},
+                TileAddressing::Offset),
+            input(
+                cb_gamma,
+                BroadcastDim::Row,
+                WaitPolicy::None,
+                PopPolicy::None,
+                InputTileMapping::Row,
+                DataFormatReconfig::Enabled,
+                TileAddressing::Offset)>{k * chunk_tiles, w.c0},
+        DestReuseBinary<BinaryFpuOp::Mul, rstd_full_in, DestReuseType::DEST_TO_SRCA>{w.r0},
         PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
 }
 
@@ -179,7 +213,9 @@ void kernel_main() {
 
     // ---- gamma_block ahead of the stats: the whole own block, the first xg_ahead landed chunks of a remote one ----
     const uint32_t n_chunks = h * block_w / chunk_tiles;
-    const uint32_t ahead = b.q == p ? n_chunks : (xg_ahead < n_chunks ? xg_ahead : n_chunks);
+    // Every member must produce bit-identical output for a slice, so all cores of a slice use one arithmetic: with
+    // fuse_late no chunk goes through cb_xg (the fused chain keeps x * gamma in DEST, the cb_xg path rounds it via L1).
+    const uint32_t ahead = fuse_late ? 0 : (b.q == p ? n_chunks : (xg_ahead < n_chunks ? xg_ahead : n_chunks));
     cb_wait_front(cb_gamma, block_w);  // held for every chunk (Row-mapped, offset per chunk)
     for (uint32_t k = 0; k < ahead; ++k) {
         gamma_chunk(k);
@@ -190,15 +226,22 @@ void kernel_main() {
     combine_stats_block(h, std::make_integer_sequence<uint32_t, G - 1>{});
     cb_pop_front(cb_partials, G * h);
 
-    // ---- normalize_block: per chunk, out = xg * rstd (xg first for the chunks not done ahead) ----
-    cb_wait_front(cb_rstd, h);  // held for every chunk (Col-mapped, offset per chunk)
+    // ---- expand_rstd_block: column-broadcast rstd over the tile (one tile per block row) ----
+    unary_bcast<BroadcastDim::Col, input(cb_rstd), output(cb_rstd_full)>(IterationShape::tiles(h));
+
+    // ---- normalize_block: per chunk, out = xg * rstd (x * gamma * rstd for the chunks not done ahead) ----
+    cb_wait_front(cb_rstd_full, h);  // held for every chunk (Col-mapped, offset per chunk)
     for (uint32_t k = 0; k < n_chunks; ++k) {
-        if (k >= ahead) {
+        if (k < ahead) {
+            normalize_chunk(k);
+        } else if constexpr (fuse_late) {
+            fused_chunk(k);
+        } else {
             gamma_chunk(k);
+            normalize_chunk(k);
         }
-        normalize_chunk(k);
     }
-    cb_pop_front(cb_rstd, h);
+    cb_pop_front(cb_rstd_full, h);
     cb_pop_front(cb_gamma, block_w);
     cb_pop_front(cb_x_block, h * block_w);
 }

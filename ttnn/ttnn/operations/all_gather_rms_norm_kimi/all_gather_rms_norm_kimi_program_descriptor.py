@@ -50,6 +50,9 @@ OUT_DEPTH_CHUNKS = 2  # cb_out depth in chunks
 # their block). After the stats only out = xg * rstd is left per chunk, so the first stores start right after the
 # combine; a chunk that lands after the combine pays both multiplies on its tail.  [OVERLAP]
 XG_AHEAD_CHUNKS = 0
+# A chunk whose xg was not computed ahead runs x * gamma * rstd as ONE chain (x * gamma into DEST, then * rstd_full
+# with DEST reused as srcA): one unpack/pack pass on the landing tail instead of an fp32 round trip through cb_xg.
+FUSE_LATE_CHUNKS = False
 # gamma source: True = the hub reads the Wt sticks once per chip and multicasts them into every compute core's
 # stats-scratch tail (op_design.md regime R6); False = every compute core reads its block_w sticks from DRAM. The
 # per-core reads (20 cores per slice on the same 12 pages) took ~4.5 us and held up the stats chain.  [OVERLAP]
@@ -69,6 +72,7 @@ CB_PARTIALS = 3  # G * block_h fp32 col tiles (UnpackToDestFp32)
 CB_XSQ_SUM = 4  # fp32, UnpackToDestFp32
 CB_RSTD = 5
 CB_PARTIAL = 6
+CB_RSTD_FULL = 7  # rstd column-broadcast over the tile (shares cb_partial's allocation)
 CB_XG = 8  # x * gamma (fp32), computed before the stats land; out = xg * rstd after
 CB_SCALER = 9
 # ---- port-core CB ----
@@ -511,6 +515,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 OUT_DEPTH_CHUNKS,
                 GAMMA_HUB_MCAST,
                 XG_AHEAD_CHUNKS,
+                FUSE_LATE_CHUNKS,
                 gamma_page,
             )
             program.semaphores = [
@@ -539,7 +544,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 cb(CB_OUT, ttnn.bfloat16, OUT_DEPTH_CHUNKS * chunk, comp_crs),
                 cb(CB_PARTIALS, ttnn.float32, G * bh, comp_crs),
                 cb([CB_XSQ_SUM, CB_RSTD], ttnn.float32, bh, comp_crs),  # xsq popped by the reduce before combine
-                cb(CB_PARTIAL, ttnn.float32, bh, comp_crs),
+                cb([CB_PARTIAL, CB_RSTD_FULL], ttnn.float32, bh, comp_crs),  # partial exported before the stats land
                 cb(CB_XG, ttnn.float32, bh * bw, comp_crs),  # own cores hold the whole block of xg
                 cb(CB_SCALER, ttnn.bfloat16, 1, comp_crs),
                 cb(CB_PORT_CHUNKS, ttnn.bfloat16, 2 * batch * chunk, port_crs),
@@ -569,7 +574,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             compute_common = [p] + geo.row_base
             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
             compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_XG]
-            compute_ct += [CB_SCALER, XG_AHEAD_CHUNKS]
+            compute_ct += [CB_SCALER, XG_AHEAD_CHUNKS, CB_RSTD_FULL, int(FUSE_LATE_CHUNKS)]
 
             ccfg = ttnn.ComputeConfigDescriptor()
             ccfg.math_fidelity = cfg.math_fidelity
