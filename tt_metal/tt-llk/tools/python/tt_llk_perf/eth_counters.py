@@ -17,6 +17,7 @@ RUN_LOG = "eth_run.csv"
 IDLE_LOG = "eth_idle.csv"
 FLAG_OVERLAPPED = 1
 FLAG_RESET = 2
+FLAG_STALE = 4
 NO_QUEUE = headers.NO_QUEUE
 
 
@@ -111,6 +112,11 @@ class ProgramTraffic(NamedTuple):
     @property
     def reset(self) -> bool:
         return bool(self.flags & FLAG_RESET)
+
+    @property
+    def stale(self) -> bool:
+        """The firmware link counters (FW_ names) did not refresh in the window and are not in the rows."""
+        return bool(self.flags & FLAG_STALE)
 
     @property
     def tx_gbps(self) -> float:

@@ -193,6 +193,12 @@ def test_flags_decode():
     assert p.overlapped and p.reset
 
 
+def test_stale_flag_decodes():
+    rows = _rows(((25, 25), "TXQ_WORD_CNT", 0, 1), flags=eth_counters.FLAG_STALE)
+    (p,) = eth_counters.per_program(rows, "blackhole")
+    assert p.stale and not p.reset
+
+
 def test_quasar_has_no_word_size():
     with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error in LLK suite
         eth_counters.per_program(_rows(((25, 25), "TXQ_WORD_CNT", 0, 1)), "quasar")

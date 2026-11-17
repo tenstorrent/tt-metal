@@ -315,8 +315,22 @@ std::vector<Delta> diff(const Plan& plan, const Reading& before, const Reading& 
     std::vector<Delta> out;
     const size_t n = std::min(before.values.size(), after.values.size());
     const size_t per_core = plan.items.size();
+    bool stale = false;
+    for (size_t i = 0; i < per_core; i++) {
+        if (plan.items[i].counter == ec::EthCounter::FW_LINK_POLL_ALIVE_COUNT) {
+            for (size_t v = i; v < n; v += per_core) {
+                stale = stale || uint32_t(after.values[v] - before.values[v]) == 0;
+            }
+        }
+    }
+    if (stale) {
+        *flags |= FLAG_STALE;
+    }
     for (size_t v = 0; v < n; v++) {
         const Item& item = plan.items[v % per_core];
+        if (stale && item.kind == Kind::L1) {
+            continue;
+        }
         uint64_t count = 0;
         if (item.words == 1) {
             count = uint32_t(after.values[v] - before.values[v]);
