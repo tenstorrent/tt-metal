@@ -1130,12 +1130,19 @@ def test_fused_pool_transport_bit_exact(device, hk, hv, nv, pool, nc, kwargs):
 def test_fused_pool_cache_identity(device):
     """producer_pool and pool_extra_share must reach the hashed attributes: per-head -> pool compiles one
     program, a different share another, and every revisit is a cache hit. Pinning the model's own pool
-    size (every core the receivers leave) is the same program as leaving num_producers free."""
+    size (every core the receivers leave) is the same program as leaving num_producers free. The share
+    exists only in a pool with extras: where the model's pool has none (12x10 and larger grids), a share
+    must not recompile it, and the share's hashing is checked on the largest pool that has extras."""
     from ttnn._ttnn.operations import transformer as _t
 
     hk, hv = NP_BH_KV_HEADS
     nc, nv = 8, 2
     grid = device.compute_with_storage_grid_size()
+
+    def _extras(p):  # the extras of a pool of p (0 when p has no home producer per head)
+        nph = _t.chunk_gdn_fused_pool_home_producers(grid.x, grid.y, hv, nv, p)
+        return p - hv * nph if nph else 0
+
     pool = min(grid.x * grid.y - hv * nv, hv * nc)
     _skip_unless_pool_fits(device, hv, nv, pool, nc)
     _skip_unless_geometry_fits(device, hv, nv, 3, nc, placement=1)
@@ -1151,11 +1158,28 @@ def test_fused_pool_cache_identity(device):
     n2 = device.num_program_cache_entries()
     # The share only exists when the pool has extras: a pool of home producers only (the 96 cores a 12x10
     # grid leaves for hv=12, nc=8 are 8 per head) has none, and every share is the same program.
-    nx = pool - hv * _t.chunk_gdn_fused_pool_home_producers(grid.x, grid.y, hv, nv, pool)
+    nx = _extras(pool)
     assert n2 - n1 == (1 if nx else 0), (
         f"pool_extra_share compiled {n2 - n1} programs with {nx} extras "
         f"(expected {1 if nx else 0}: the share must be hashed when the pool has extras)"
     )
+    if not nx:
+        # Check the share's hashing on the largest pool that has extras instead (95 on 12x10 and larger: 7 home
+        # producers per head + 11 extras). The model's share there is at most NX/P, so 0.5 is a different program.
+        pool_x = next(p for p in range(pool - 1, hv - 1, -1) if _extras(p))
+        o_x, fs_x = _run_op(device, tensors, const_tiles, s0, _fused(nv, pool_x, producer_pool=True))
+        n_x = device.num_program_cache_entries()
+        assert n_x - n2 == 1, f"pool of {pool_x} compiled {n_x - n2} programs (expected 1)"
+        o_xs, fs_xs = _run_op(
+            device, tensors, const_tiles, s0, _fused(nv, pool_x, producer_pool=True, pool_extra_share=0.5)
+        )
+        n2 = device.num_program_cache_entries()
+        assert n2 - n_x == 1, (
+            f"pool_extra_share at P={pool_x} ({_extras(pool_x)} extras) compiled {n2 - n_x} programs "
+            "(expected 1: the share must be hashed)"
+        )
+        for tag, (o_b, fs_b) in ((f"P={pool_x}", (o_x, fs_x)), (f"P={pool_x}, share 0.5", (o_xs, fs_xs))):
+            assert torch.equal(o_h, o_b) and torch.equal(fs_h, fs_b), f"the pool ({tag}) differs from per-head"
     o_f, fs_f = _run_op(device, tensors, const_tiles, s0, _fused(nv, producer_pool=True))  # the model's P == pool
     o_h2, fs_h2 = _run_op(device, tensors, const_tiles, s0, _fused(nv, 3))
     o_p2, fs_p2 = _run_op(device, tensors, const_tiles, s0, _fused(nv, pool, producer_pool=True))
