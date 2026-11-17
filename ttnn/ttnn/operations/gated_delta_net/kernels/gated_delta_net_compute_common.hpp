@@ -1173,9 +1173,10 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
 // o_cb holds the unit's Vb columns of o for HEADS value heads (a prep core's r heads, else one head or one piece).
 // R-VSPLIT: this piece's partial sum o^2 of cb_o_acc -> cb_osum_part (the writer all-gathers it over the pieces).
 // squared: the token step already pushed o^2 to cb_sq_o.
+template <uint32_t o_cb = cb_o_acc>
 ALWI void osum_partial(Buffers& bufs, RowScope scope, bool squared) {
     if (!squared) {
-        square_block<cb_o_acc, cb_sq_o>(0, Vb, scope);
+        square_block<o_cb, cb_sq_o>(0, Vb, scope);
     }
     DataflowBuffer osum_part{cb_osum_part};
     row_sum<cb_sq_o, cb_osum_part>(bufs, bufs.sq_o, osum_part, Vb, ckl::NoOp{});
@@ -1197,7 +1198,7 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
         }
     } else {
         if constexpr (!PARTIAL_DONE) {
-            osum_partial(bufs, scope, squared);
+            osum_partial<o_cb>(bufs, scope, squared);
         }
         cb_wait_front(cb_osum_gather, PIECES);
         cb_reserve_back(cb_rinv_o, 1);
@@ -1260,7 +1261,11 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
         sfpu_bcast_row_init();
         bcast_row_scoped<ckernel::BinaryOp::MUL>(0, 2, scope);
         silu_tile_init();
-        silu_scoped(3, scope);
+        if constexpr (STATE && (GDN_SILU_BF16 & 1) != 0) {
+            silu_tile_bf16(3);  // as the prep cores' gate factor (PREP_SILU_BF16)
+        } else {
+            silu_scoped(3, scope);
+        }
         mul_binary_tile_init();
         binary_scoped<ckernel::BinaryOp::MUL>(0, 3, 0, scope);
         tile_regs_commit();

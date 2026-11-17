@@ -86,6 +86,8 @@ constexpr bool SPLIT = SEGS > 1;
 constexpr uint32_t cb_seg_in = GDN_CB_SEG_IN;
 constexpr uint32_t cb_seg_row = GDN_CB_SEG_ROW;
 constexpr uint32_t SEG_SEM_ID = GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS;
+// Host STATE_NORM_TAIL: tile rows per sequence whose RMS norm the state cores run (z and norm_weight read here).
+constexpr uint32_t TAIL = GDN_NORM_TAIL;
 // PREP_SHARE_QK semaphores after the inbox's: qn / kn tile rows landed on a prep core (cumulative each).
 constexpr uint32_t QN_LANDED_SEM_ID = GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 2;
 constexpr uint32_t KN_LANDED_SEM_ID = QN_LANDED_SEM_ID + 1;
@@ -684,7 +686,7 @@ void kernel_main() {
                     cb_push_back(cb_z, count);
                     GDN_MARK("m_rd_z");
                 };
-                const uint32_t norm_units = (last_tr - first_tr + 1) * PREP_HEADS;
+                const uint32_t norm_units = (last_tr - first_tr + 1 - TAIL) * PREP_HEADS;
                 uint32_t z_unit = norm_offset;  // NORM_SPLIT: next norm unit whose z is read
                 for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride) {
                     const uint32_t base_row = tr * TILE_ROWS;
@@ -1024,6 +1026,20 @@ void kernel_main() {
                         GDN_MARK("m_rd_s0");
                     }
 
+                    if constexpr (STATE && TAIL != 0) {
+                        if (tr == last_tr) {
+                            // The piece's norm_weight columns, then z of the rows the state core normalizes.
+                            cb_reserve_back(cb_norm_w, Vb);
+                            for (uint32_t vt = 0; vt < Vb; ++vt) {
+                                read_row_span(norm_w, v_first + vt, 0, 1, get_write_ptr(cb_norm_w) + vt * TILE_BYTES);
+                            }
+                            noc_async_read_barrier();
+                            cb_push_back(cb_norm_w, Vb);
+                            for (uint32_t t2 = last_tr + 1 - TAIL; t2 <= last_tr; ++t2) {
+                                read_z(t2, 0, Vb);
+                            }
+                        }
+                    }
                     if constexpr (STATE && SPLIT) {
                         if (tr == last_tr && !p_half && seq > 0) {
                             // P and the entering state, then the tile rows of Oh_P (SEG_ROW_DEPTH in flight).

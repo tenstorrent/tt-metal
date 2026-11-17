@@ -116,9 +116,12 @@ def test_l1_output(device, inputs):
         pytest.param(chip(4096), 300, id="prefill_t4096"),
     ],
 )
-def test_static_buffers_shrink_below_l1_input(device, inputs, low_kb):
+def test_static_buffers_shrink_below_l1_input(device, monkeypatch, inputs, low_kb):
     """The packed rows allocated under low_kb KB of other L1 data per core, which is then freed: the input's address
     is far below L1_CB_REGION_END and the program's static buffers must end below it."""
+    # The two calls run different plans and are compared to the bit: the state cores' norm of the last rows
+    # (STATE_NORM_TAIL "auto") would be in one of them only.
+    monkeypatch.setattr(gdn_pd, "STATE_NORM_TAIL", 0)
     torch.manual_seed(9)
     tensors = make_inputs(inputs)
     want = run(device_args(tensors, device, ttnn.bfloat16))
@@ -175,3 +178,27 @@ def test_cache_keys_do_not_collide(device):
         for form in forms:
             assert_same(run(device_args(tensors, device, ttnn.bfloat16, **form)), want, f"round {rnd} {form}")
     assert gdn_pd.program_cache_size() == len(forms)
+
+
+@pytest.mark.parametrize("batch", [1, 16], ids=["decode_b1", "decode_b16"])
+def test_packed_width_sharded(device, batch):
+    """The packed rows as a decode projection leaves them: one tile row, width sharded in L1 over 12 cores, the
+    logical rows and columns a view of the padded shards."""
+    torch.manual_seed(12)
+    tensors = make_inputs(chip(batch, batch))
+    want = run(device_args(tensors, device, ttnn.bfloat16))
+    args = device_args(tensors, device, ttnn.bfloat16, packed=True)
+    rows = pack(tensors)
+    width, cores = rows.shape[-1], 12
+    shard_w = -(-width // 32 // cores) * 32
+    padded = torch.zeros(1, 1, 32, cores * shard_w)
+    padded[0, 0, :batch, :width] = rows[0]
+    grid = ttnn.num_cores_to_corerangeset(cores, device.compute_with_storage_grid_size(), row_wise=True)
+    memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [32, shard_w], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    sharded = ttnn.to_memory_config(upload(padded, device, ttnn.bfloat16), memory)
+    args[0] = ttnn.reshape(sharded, [1, batch, width], [1, 32, cores * shard_w])
+    assert_same(run(args), want, "packed, width sharded in L1")

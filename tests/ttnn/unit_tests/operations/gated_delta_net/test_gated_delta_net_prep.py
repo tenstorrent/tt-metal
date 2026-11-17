@@ -279,3 +279,25 @@ def test_prep_seq_split(device, monkeypatch, tmp_path, inputs, segs, token_dtype
     out_rms = float((out - out_1).pow(2).mean().sqrt() / out_1.std())
     print(f"\nSPLIT_ERR inputs={inputs} segs={segs} state_rms={state_rms:.3e} out_rms={out_rms:.3e}")
     assert state_rms < 5e-3 and out_rms < 2e-2
+
+
+@pytest.mark.parametrize("tail", [1, 3, 8])
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        pytest.param(((1, 200, 256), (1, 3, 32, 64)), id="t200"),
+        pytest.param(((1, 66, 256), (2, 3, 32, 64)), id="batched_b2_t33"),
+        pytest.param(((1, 70, 2560), (1, 12, 128, 128)), id="chip_t70"),
+        pytest.param(((1, 1056, 2560), (1, 12, 128, 128)), id="chip_t1056"),
+    ],
+)
+def test_prep_norm_tail(device, monkeypatch, inputs, tail):
+    """STATE_NORM_TAIL: the state cores normalize the last tile rows of a sequence themselves (clamped below the
+    sequence's rows; t200 has a partial last tile row), against the reference."""
+    monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)
+    monkeypatch.setattr(gdn_pd, "STATE_NORM_TAIL", tail)
+    torch.manual_seed(37)
+    tensors = make_inputs(inputs)
+    expected = reference(*(tensors[name] for name in ORDER))
+    returned = gated_delta_net(*to_device(tensors, device), compute_kernel_config=compute_config())
+    check_call(returned, expected, inputs)

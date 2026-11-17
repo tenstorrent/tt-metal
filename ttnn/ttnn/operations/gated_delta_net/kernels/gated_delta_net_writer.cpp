@@ -79,6 +79,9 @@ constexpr uint32_t cb_seg_in = GDN_CB_SEG_IN;
 constexpr uint32_t cb_seg_row = GDN_CB_SEG_ROW;
 constexpr uint32_t cb_reads = GDN_CB_READS;
 constexpr uint32_t SEG_SEM_ID = GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS;
+// Host STATE_NORM_TAIL: the state cores normalize the last TAIL tile rows of a sequence themselves (partial sums
+// gathered over the pieces, output rows stored here); the prep cores' norm units end before those rows.
+constexpr uint32_t TAIL = GDN_NORM_TAIL;
 constexpr bool HOLD_QK = GDN_HOLD_QK != 0;     // compute holds the landed q/k rows for every unit (see compute)
 constexpr bool QK_RAW = GDN_QK_RAW != 0;       // q / k cores send y, then the inverse norms (host QK_RAW_HANDOFF)
 constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;   // compute normalizes unit u after unit u + 1's token step
@@ -279,7 +282,7 @@ void prep_writer(
     };
     // NORM_SPLIT: the norm units' o landings and output stores are served while a prep row waits for its grant or for
     // compute, and after the last prep row.
-    const uint32_t all_units = (last_tr - first_tr + 1) * RATIO;
+    const uint32_t all_units = (last_tr - first_tr + 1 - TAIL) * RATIO;
     const uint32_t norm_units = norm_offset < all_units ? (all_units - 1 - norm_offset) / norm_stride + 1 : 0;
     uint32_t landed_units = 0;
     uint32_t stored_units = 0;
@@ -995,7 +998,14 @@ void kernel_main() {
             // the peers' counters. cb_osum_gather holds two tile rows: a peer can be at most one tile
             // row ahead, because it cannot finish row i+1 without this core's partial of row i+1, which
             // compute produces only after it has consumed row i's slots.
-            if constexpr (STATE) {
+            const bool tail_row = STATE && tr + TAIL > last_tr;
+            if (tail_row && tr + TAIL == last_tr + 1) {
+                // The final state first: the tail rows' norm follows the chain.
+                store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first, unit_idx, reader_units, reader_share);
+                noc_async_write_barrier();
+                pop_state(n_state, reader_writes);
+            }
+            if (STATE && !tail_row) {
                 // ---- R-PREP: o of the piece into its place in slot k % GDN_O_IN_DEPTH of the row's prep core ----
                 const uint32_t i = tr - first_tr;
                 const uint32_t head_in_group = head % RATIO;
@@ -1037,6 +1047,10 @@ void kernel_main() {
                 osum_landed.wait_min(rows_combined * (PIECES - 1));
                 cb_push_back(cb_osum_gather, PIECES);
                 GDN_MARK("m_wr_osum");
+            }
+            if constexpr (STATE) {
+                store_rows(out_acc, Vb, tr * out_width_tiles + head * Vt + v_first, base_row, lo, hi);
+                continue;
             }
 
             // The state is final after the last tile row's update, before compute's RMS norm produces the output
@@ -1081,6 +1095,9 @@ void kernel_main() {
                 if (seq == 0) {
                     seg_store();
                 }
+                continue;
+            }
+            if (TAIL != 0) {
                 continue;
             }
             store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first, unit_idx, reader_units, reader_share);

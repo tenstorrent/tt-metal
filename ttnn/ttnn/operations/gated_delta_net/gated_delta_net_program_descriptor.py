@@ -244,6 +244,13 @@ STATE_FOLD_M_UNBIAS_Q = 4
 # plan; (2 S - 1) Hv pieces state cores, else the call runs unsplit. 1: off. 2 at Hv = 12: T=512 134.3 -> 261.4 us,
 # T=1024 209.2 -> 475.5 (the prep cores bind and it leaves 32 of the 84); no plan fits at T >= 2048 or for 3 segments.
 SEQ_SPLIT = 1
+# R-PREP norm-split plans with the folded step: the last STATE_NORM_TAIL tile rows of a sequence are normalized by the
+# state cores themselves after the chain (held o, partial sums gathered over the pieces as in R-VSPLIT, z and
+# norm_weight read by their readers, output rows stored by their writers), so the prep cores' norm backlog after the
+# chain is shorter. A row costs a state core 6.4 us after the chain. T=4096 (128 tile rows): 0 rows 672.4 us, 8 661.8,
+# 12 654.7, 16 660.9, 24 711.0; T=2048: 4 rows 343.9 against 338.3, T=1024: 1 row 210.4 against 209.3 (the chain binds
+# there). "auto": 3 rows per 32 from 128 tile rows on, else none.
+STATE_NORM_TAIL = "auto"
 SEG_ROW_DEPTH = 2  # SEQ_SPLIT: tile rows of Oh_P in flight from the P cores to a segment's state core
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 # Per-unit inputs (S0, conv / gate / norm weights) in flight on a core that runs several units: the next unit's reads
@@ -688,7 +695,7 @@ def _state_fold(shared, rows, per_group):
     return int(bool(STATE_FOLD and ok))
 
 
-def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_units=0, fold=0, hold=0):
+def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_units=0, fold=0, hold=0, tail=0):
     """R-PREP plans as (state, prep, q / k) lists of (indices, pages): the role's remotely written buffers first (the
     inbox buffers are exactly `inbox` slots, so tile row i lands in slot i % inbox; cb_kq_rows exactly PREP_KQ_DEPTH
     rows), then its own buffers. The q / k plan (PREP_SHARE_QK, else empty) starts with cb_qk_stage, its region base."""
@@ -719,6 +726,9 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_
     for idx, pages in _inbox_pages(Kt, Vb).items():
         state[idx] = inbox * pages
     state[CB_V] = 0  # the state core reads v from its inbox
+    if tail:  # STATE_NORM_TAIL: the held rows' o, then the RMS norm's buffers of one piece
+        state.update({CB_READS: tail * Vb, CB_Z: Vb * ROW_DEPTH, CB_NORM_W: Vb, CB_OUT_ROWS: Vb * ROW_DEPTH})
+        state.update({CB_SQ_O: Vb, CB_RINV_O: 1, CB_OSUM_PART: 1, CB_OSUM_GATHER: 2 * pieces})
     if hold:  # SEQ_SPLIT: Oh of every tile row of a segment, P and the entering state, Oh_P rows in flight
         state.update({CB_READS: hold * Vb, CB_SEG_IN: Kt * Kt + Kt * Vb, CB_SEG_ROW: SEG_ROW_DEPTH * Kt})
     qk = {}
@@ -952,7 +962,20 @@ def _prep_head_options(batch, value_heads, key_heads, tokens, Vb, spare_cores):
 
 
 def _prep_layout(
-    batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, dtype, spare_cores, budget, shrink=False, hold=0
+    batch,
+    value_heads,
+    key_heads,
+    tokens,
+    Kt,
+    Vt,
+    pieces,
+    chunked,
+    dtype,
+    spare_cores,
+    budget,
+    shrink=False,
+    hold=0,
+    tail=0,
 ):
     """R-PREP plan, or None to keep prep and state on the same core: (prep cores per group cap, inbox depth, value
     heads per group). A group is (sequence, key head, subset of `heads` of its value heads). Needs one unit per core
@@ -986,7 +1009,9 @@ def _prep_layout(
             inbox = min(max(inbox, heads * pieces), MAX_SEMAPHORES - LANDED_FIRST_SEM_ID - 1 - pieces)
         fold = _state_fold(shared, max(_seq_tile_rows(seq, tokens) for seq in range(batch)), per_group)
         while inbox >= 1:
-            plans = _prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox, shared, fold=fold, hold=hold)
+            plans = _prep_cb_plan(
+                Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox, shared, fold=fold, hold=hold, tail=tail
+            )
             if _prep_plan_bytes(plans, dtype) <= budget:
                 return per_group, inbox, heads, shared
             inbox -= 1
@@ -1273,7 +1298,7 @@ def _mcast_rects(device, cores):
 
 
 def create_program_descriptor(
-    inputs, outputs, *, epsilon, compute_kernel_config, packed=False, l1_end=None, seq_split=None
+    inputs, outputs, *, epsilon, compute_kernel_config, packed=False, l1_end=None, seq_split=None, norm_tail=None
 ):
     """packed: z, b and a of `inputs` are mixed_qkv itself, whose rows hold [x | z | a | b]. l1_end: l1_region_end() of
     the call's tensors."""
@@ -1293,6 +1318,12 @@ def create_program_descriptor(
     if split:
         seqs, tokens, batch = segs, tokens // segs, 2 * segs - 1
     hold = tokens // TILE if split else 0  # tile rows of Oh a state core of a segment 1.. holds
+    # STATE_NORM_TAIL: tile rows per sequence the state cores normalize (every sequence keeps a row for the prep cores).
+    tail = STATE_NORM_TAIL if norm_tail is None else norm_tail
+    seq_rows_min = min(_seq_tile_rows(seq, tokens) for seq in range(batch))
+    if tail == "auto":
+        tail = seq_rows_min * 3 // 32 if seq_rows_min >= 128 else 0
+    tail = 0 if split else max(0, min(int(tail), seq_rows_min - 1))
     key_heads = (channels - value_heads * value_dim) // (2 * key_dim)
     Ct = channels // TILE
     Gt = (value_heads + TILE - 1) // TILE
@@ -1328,6 +1359,7 @@ def create_program_descriptor(
                 budget,
                 l1_end is not None,
                 hold,
+                tail,
             )
             if plan:
                 cost = _prep_estimate(seqs, value_heads, key_heads, tokens, Vt // option, plan[2], spare_cores, plan[3])
@@ -1432,6 +1464,7 @@ def create_program_descriptor(
         budget,
         l1_end is not None,
         hold,
+        tail,
     )
     heads = ratio  # R-PREP: value heads per prep group
 
@@ -1484,7 +1517,7 @@ def create_program_descriptor(
     else:
         per_group, inbox, heads, shared = prep
         fold = _state_fold(shared, max(_seq_tile_rows(seq, tokens) for seq in range(batch)), per_group)
-        prep_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared, fold=fold, hold=hold)
+        prep_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared, fold=fold, hold=hold, tail=tail)
         groups_per_kh = ratio // heads
         qk_extra = 2 if shared else 0  # q / k cores per (sequence, key head) and stride position
         # Group first units: heads value heads (each `pieces` units) from value head h0.
@@ -1495,15 +1528,27 @@ def create_program_descriptor(
             # group: its tile rows times its heads.
             group_rows = [_seq_tile_rows(first // pieces // value_heads, tokens) for first in groups]
             units = max(
-                -(-rows * heads // (stride - rows % stride)) for rows, stride in zip(group_rows, strides)
+                -(-(rows - tail) * heads // (stride - rows % stride)) for rows, stride in zip(group_rows, strides)
             )  # per norm core, at most
-            split_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared, units, fold, hold)
+            split_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared, units, fold, hold, tail)
             if (
                 units <= PREP_NORM_MAX_ROWS * heads
                 and heads * pieces <= inbox  # one landing counter per (head, piece), on the inbox ids
                 and _prep_plan_bytes(split_plans, token_dtype) <= budget
             ):
                 norm_split, prep_plans = True, split_plans
+    if tail and not (prep is not None and norm_split and fold):
+        # The tail needs the norm units' routing and the folded step: without them, no tail.
+        return create_program_descriptor(
+            inputs,
+            outputs,
+            epsilon=epsilon,
+            compute_kernel_config=compute_kernel_config,
+            packed=packed,
+            l1_end=l1_end,
+            seq_split=seq_split,
+            norm_tail=0,
+        )
     if split and not (prep is not None and norm_split and fold and not shared and PREP_CLUSTER):
         # No plan the split can run on (its o arrive after the chain, its step is the folded one): the unsplit call.
         return create_program_descriptor(
@@ -1965,8 +2010,9 @@ def create_program_descriptor(
             # PREP_NORM_SPLIT: the norm units (tile row * heads + head) it normalizes: offset, stride (none on the first
             # rows % stride cores), and their count.
             extra = seq_rows % stride if norm_split else 0
-            norm = [q - extra if q >= extra else seq_rows * heads, stride - extra]
-            norm_rows = len(range(norm[0], seq_rows * heads, norm[1]))
+            norm_units = (seq_rows - tail) * heads  # the tail rows' units stay on the state cores
+            norm = [q - extra if q >= extra else norm_units, stride - extra]
+            norm_rows = len(range(norm[0], norm_units, norm[1]))
             # PREP_NORM_MID: unit m (before row m // mid + 1's heads) must not wait for a row this core still holds.
             mid = PREP_NORM_MID if norm_split and q >= inbox and not split else 0  # SEQ_SPLIT: o after the chain
             mid_rows = [((norm[0] + m * norm[1]) // heads, q + (m // mid) * stride) for m in range(mid * (my_rows - 1))]
@@ -2084,6 +2130,7 @@ def create_program_descriptor(
             ("GDN_M_BETA_UNBIAS_Q", str(int(STATE_FOLD_M_UNBIAS_Q if fold else PREP_M_BETA_UNBIAS_Q))),
             ("GDN_STATE_FOLD", str(fold)),
             ("GDN_SEQ_SPLIT", str(segs if split else 1)),
+            ("GDN_NORM_TAIL", str(tail)),
             ("GDN_SEG_ROW_DEPTH", str(SEG_ROW_DEPTH)),
             ("GDN_GRANT_DEPTH", str(min([inbox] + strides) if split else inbox)),
             ("GDN_FOLD_UNBIAS_BITS", f"{STATE_FOLD_UNBIAS_BITS:#x}u"),
