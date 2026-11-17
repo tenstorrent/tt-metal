@@ -130,3 +130,16 @@ def test_split_cost_model_r1a(a_shape, b_shape, grid_n, device):
     if grid_n is not None:
         assert grid.grid_n == grid_n, f"{grid}"
     _run((a_shape, b_shape), "none", device)
+
+
+@pytest.mark.parametrize("raw_walk", [True, False], ids=["raw_walk", "helper_walk"])
+def test_none_raw_walk(raw_walk, device, monkeypatch):
+    """Refinement 11: a compute-bound epilogue-none multi-K-block walk runs the raw K-walk into cb_partials plus an
+    identity copy (NONE_RAW_WALK); both walks stay within tolerance."""
+    monkeypatch.setattr(pd, "NONE_RAW_WALK", raw_walk)
+    a_shape, b_shape = (1, 2048, 4096), (4096, 2048)
+    geom, grid, blk = _plan(device, a_shape, b_shape)
+    walk, *streams = pd.split_cost_terms(geom, grid, blk)
+    assert blk.num_k_blocks > 1 and blk.sb_h == 1, f"{grid} {blk}"
+    assert walk >= pd.NONE_RAW_WALK_MIN_RATIO * max(streams), f"not compute-bound: {walk} {streams}"
+    _run((a_shape, b_shape), "none", device)

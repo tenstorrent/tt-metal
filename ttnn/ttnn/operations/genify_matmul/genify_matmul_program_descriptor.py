@@ -106,6 +106,15 @@ MIN_K_BLOCKS = 8
 R1A_INJECTOR_AHEAD = 2
 R1A_PREFETCH_DEPTH = 3
 R1A_PREFETCH_MIN_RATIO = 2.0
+# Epilogue-none K-walk (Refinement 11): True runs an R1 / R1a / R1b epilogue-none multi-K-block walk with 1 x sb_w
+# subblocks on the raw K-walk (kw::matmul_accumulate_interm, Perf 1: no per-tile DEST-offset write) into
+# cb_partials, then an identity copy to the output, instead of matmul_block<Out>'s last-K-block partials reload.
+# False: the helper walk. Measured: FLUX single QKV / out 1176 -> 1121 / 1492 -> 1428 us, Qwen prefill qkvg
+# M = 4096 390 -> 374 us; on walks whose data movement binds, the copy tail (serialized after the walk, where the
+# helper's reload overlapped its last K-block) loses 2-4% (text-encoder qkv / o_proj, Qwen M = 512 in_proj), so
+# it is gated to compute-bound splits: split_cost's K-walk >= NONE_RAW_WALK_MIN_RATIO x every other term.
+NONE_RAW_WALK = True
+NONE_RAW_WALK_MIN_RATIO = 1.25
 # Operand residency knob (Refinement 8). A per-core walk that is ONE block with ONE K-block that K cannot
 # split (S1, K < SINGLE_WALK_K_BLOCKS * BLOCK_K_FLOOR: short-K shapes, whose output is many times their
 # inputs, so the output write stream binds) reads its whole A and B before compute starts, and the
@@ -1292,6 +1301,9 @@ def create_program_descriptor(
         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
     _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
     _attach_k_head_ramp(readers, compute, blk, mode, epilogue)
+    walk, *streams = split_cost_terms(geom, grid, blk)
+    if NONE_RAW_WALK and epilogue == "none" and walk >= NONE_RAW_WALK_MIN_RATIO * max(streams):
+        compute.defines = list(compute.defines) + [("GM_NONE_RAW_WALK", "1")]
     if r1a_prefetch(geom, grid, blk):
         defs = [("GM_R1A_AHEAD", str(R1A_INJECTOR_AHEAD)), ("GM_R1A_DEPTH", str(min(blk.depth_act, blk.depth_weight)))]
         for k in readers:

@@ -172,6 +172,14 @@ constexpr uint32_t cb_interm = (has_epilogue || num_k_blocks > 1) ? cb_partials 
 // (helper): sb_h > 1, and operand residency (WaitAndRetainOnLastBlock).
 constexpr bool kwalk_expressible = sb_h == 1 && !act_resident && !weight_resident &&
                                    block_m_tiles == in0_num_subblocks && block_n_tiles == in1_num_subblocks * sb_w;
+// Refinement 11 (host NONE_RAW_WALK -> GM_NONE_RAW_WALK): an epilogue-none multi-K-block walk takes the raw
+// K-walk too -- it accumulates the whole block in cb_partials exactly as under an epilogue, and an identity
+// epilogue (one CopyTile -> PackTile chain, row by row) moves it to cb_output_tiles. That copy replaces the
+// helper's last-K-block reload of the partials, so the walk saves the helper's per-tile DEST-offset write.
+#ifndef GM_NONE_RAW_WALK
+#define GM_NONE_RAW_WALK 0
+#endif
+constexpr bool none_raw_walk = GM_NONE_RAW_WALK != 0 && !has_epilogue && num_k_blocks > 1 && kwalk_expressible;
 // A compaction (head ramp) needs the raw walk: compute_kernel_lib::matmul_block strides A rows by block_k.
 static_assert(!gm_ks::compact_a || (has_epilogue && kwalk_expressible), "GM_COMPACT_A needs the raw K-walk");
 
@@ -291,7 +299,34 @@ void kernel_main() {
 
     CircularBuffer act_buf(cb_act_tiles), weight_buf(cb_weight_tiles), out_buf(cb_output_tiles), interm_buf(cb_interm);
 
-    if constexpr (!has_epilogue) {
+    if constexpr (none_raw_walk) {
+        DataflowBuffer partials_dfb(cb_partials), out_dfb(cb_output_tiles);
+        for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            {
+                MaybeDeviceZoneScope("cmp_matmul");
+                kw::matmul_accumulate_interm<
+                    sb_w,
+                    in0_num_subblocks,
+                    in1_num_subblocks,
+                    block_k_tiles,
+                    num_k_blocks,
+                    last_block_k_tiles>(
+                    cb_act_tiles, cb_weight_tiles, cb_partials, OwnShardSource{own_kb}, RetireOwnRoundSlot{own_kb});
+            }
+            pack_reconfig_l1_acc(0);  // the copy packs fresh tiles
+            {
+                MaybeDeviceZoneScope("cmp_epilogue");
+                using namespace ckl;
+                interm_buf.wait_front(block_tiles);
+                eltwise_chain(
+                    IterationShape::grid(block_m_tiles, block_n_tiles),
+                    CopyTile<input(cb_partials, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{
+                        partials_dfb},
+                    PackTile<output(cb_output_tiles, ReservePolicy::PerOuter, PushPolicy::PerOuter)>{out_dfb});
+                interm_buf.pop_front(block_tiles);
+            }
+        }
+    } else if constexpr (!has_epilogue) {
         const auto shape = ckl::MatmulBlockShape::of(
             in0_num_subblocks, in1_num_subblocks, sb_h, sb_w, block_k_tiles, KS::n, block_batches);
         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
