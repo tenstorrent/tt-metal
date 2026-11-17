@@ -573,7 +573,8 @@ void kernel_main() {
             const bool prefetch = DECODE && !STATE && pass == 0;
             // SMALL_MCAST: slots awaiting their landed small inputs (0: none).
             uint32_t small_norm_w_dst = 0, small_gate_w_dst = 0, small_gate_in_dst = 0;
-            const bool early_s0 = EARLY_S0 && !PREP && prefetch && !s0_by_writer;
+            const bool early_s0 =
+                EARLY_S0 && (GDN_EARLY_S0 == 1 || unit_idx > 0) && !PREP && prefetch && !s0_by_writer;
             if (prefetch) {
                 noc_async_read_set_trid(WINDOW_TRID);
                 for (uint32_t col = 0; col < group_cols; ++col) {

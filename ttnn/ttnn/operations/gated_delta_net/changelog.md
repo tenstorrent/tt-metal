@@ -404,3 +404,11 @@
 - State relative RMS, whole tensor / worst pair, before -> after (gate order): state_carry_bf16 5.815e-4 / 1.551e-3 -> 5.991e-4 / 1.598e-3; prod_prefill_2048 1.280e-3 / 1.603e-3 -> 1.383e-3 / 1.739e-3; model_prefill_4096 1.362e-3 / 1.596e-3 -> 1.443e-3 / 1.590e-3; packed_l1_prefill_4096 1.340e-3 / 1.805e-3 -> 1.421e-3 / 1.610e-3; the fp32-token cases unchanged (SFPU conv).
 - Timing-only bounds at T=4096 (results wrong, code not kept; base 769.4): the RMS norm's two SFPU products per tile removed 733.9 (so products on the FPU, which keep one broadcast and need srcA / srcB aliases of cb_o_in and cb_zw in the reader, writer and compute, can gain less than 35 us; not built); the gate factor's silu removed 708.0 (the bf16 arm still costs 61 us there, 0.63 us per tile: near what the SFPU needs for an exp and a reciprocal on 32 rows); its broadcast product removed 761.3 (so fusing the zw pass into the norm, which saves that pass's load and pack but not the product, is worth less than about 8 us; not built).
 - Golden test progress: full suite 121 passed (27 loose); unit files 124 / 82 / 52 / 135, packed tests 32.
+
+## Refinement 37 - Decode B=16: S0 issued with the window rows on two-unit cores
+- Date: 2026-11-17
+- Timeline before (GDN_PROFILE_ZONES=2, B=16, 69.2 us): a core whose first S0 lands early (p10 9.8 us) gets its second unit's small inputs only at 16.7 us, behind the other cores' S0 at the banks, and issues the second S0 after them; the second S0 lands at 32.7 us median, 37.4 at the latest.
+- Kept, `EARLY_S0` "auto": on for R-QKCORE pair cores with two units. Kernel us (one chip, median of launches 2..12, 6 interleaved pairs on two chips): B=16 69.03 -> 67.15. Off elsewhere: B=8 35.6 -> 37.9 with it (4 runs each; the q / k chain's window rows queue behind the S0), B=32 151.5 -> 154.5 (2 pairs).
+- Rejected: early S0 only for the units after a core's first (`EARLY_S0` 2): B=16 69.0 against 69.0 (6 pairs), B=32 157.8 against 151.9; with 16-tile barriers 71.1.
+- Rejected, code not kept: the exp_21f silu (PREP_SILU_MID's) on the decode builds' conv and gate factor: B=1 11.88 -> 11.77, B=8 35.74 -> 35.63, B=16 68.99 -> 69.31 (3 pairs each), pair role text 49.2 -> 49.0 kB.
+- Golden test progress: full suite 121 passed (27 loose); unit files 124 / 82 / 52 / 135, packed tests 32; state relative RMS unchanged.

@@ -255,7 +255,10 @@ UNIT_LAG_MIN_UNITS = 3
 STATE_STAGGER = 3
 # Decode: a unit's S0 read issued with its window rows (own transaction id) instead of after the weights / gate rows.
 # Measured with the NoC swap at B=8 / B=16: 44.7 / 75 us on vs 42.8 / 74.4 off, so off (0).
-EARLY_S0 = 0
+# "auto" (refinement 37): on for R-QKCORE pair cores with two units (decode B=16 69.03 -> 67.15 us, 6 interleaved
+# pairs: the second unit's S0 no longer waits for its small inputs behind the other cores' S0); off elsewhere (B=8
+# 35.6 -> 37.9, B=32 151.5 -> 154.5). 2: the units after a core's first only (B=16 69.0: no gain).
+EARLY_S0 = "auto"
 # R-QKCORE pair cores whose every unit's S0 fits cb_state_in (STATE_IN_DEPTH): the writer RISC, idle until the first
 # gates, reads S0 (every unit's at once, one transaction id each) on its NoC instead of the reader after each unit's
 # window, weights and gate rows. Off: it moves S0 to the other NoC, which the SWAP_NOC_ROWS tuning picked against.
@@ -489,7 +492,6 @@ def _kernel_defines():
         "ROLE_QK",
         "ROLE_PREP_QK",
         "PREP_KQ_DEPTH",
-        "EARLY_S0",
         "CS_READ_SEM_ID",
         "MAX_CS_SIGNAL_TARGETS",
     ]
@@ -1905,6 +1907,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
 
     # SMALL_INPUTS_MCAST's defines only where it runs (gated_delta_net_qk_rows.hpp defaults them off).
     small_defines = [("GDN_SMALL_MCAST", "1")] + [(f"GDN_{n}", str(globals()[n])) for n in SMALL_MCAST_NAMES]
+    early_s0 = EARLY_S0
+    if early_s0 == "auto":
+        early_s0 = int(bool(qk_cores) and pieces == 1 and prep is None and core_units == 2)
     # "auto": R-VSPLIT pieces, and pair cores whose several units run without UNIT_LAG.
     fused_vector = pieces > 1 or (prep is None and bool(qk_cores) and unit_depth > 1 and not unit_lag(unit_depth))
     defines = (
@@ -1924,6 +1929,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_PROFILE_ZONES", str(0 if _noc_tracing() else int(PROFILE_ZONES))),
             ("GDN_TOKEN_VECTOR_FUSED", str(int(fused_vector if TOKEN_VECTOR_FUSED == "auto" else TOKEN_VECTOR_FUSED))),
             ("GDN_DECAY_ONE_PASS", str(int(DECAY_ONE_PASS))),
+            ("GDN_EARLY_S0", str(int(early_s0))),
             ("GDN_RMS_ONE_COPY", str(int(RMS_ONE_COPY and prep is None and unit_lag(unit_depth)))),
             ("GDN_PREP_NORM_SPLIT", str(int(norm_split))),
             ("GDN_SILU_BF16", str(int(PREP_SILU_BF16) if prep is not None and conv_on_fpu else 0)),
