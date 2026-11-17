@@ -44,10 +44,26 @@ static_assert(
     (TILED_PROD_REPLAYS + 1) * TILED_PROD_ELEMENTS_PER_REPLAY + TILED_PROD_TAIL_STORES == TILED_PROD_STEPS,
     "calculate_tiled_prod: the recording, the replays and the tail must store every element once");
 
+// The MM_THROTTLE > 0 body (see calculate_tiled_prod) records TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY
+// elements and one dst_reg advance, and leaves the same TILED_PROD_TAIL_STORES to its tail.
+constexpr int TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY = 3;
+constexpr std::uint32_t TILED_PROD_THROTTLED_REPLAY_LEN =
+    TILED_PROD_INSTRUCTIONS_PER_ELEMENT * static_cast<std::uint32_t>(TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY) + 1;
+static_assert(
+    TILED_PROD_REPLAY_SLOT + TILED_PROD_THROTTLED_REPLAY_LEN <= ckernel::math::replay_buf_offset,
+    "calculate_tiled_prod: the recorded window must stay in the SFPU half of the replay buffer");
+constexpr int TILED_PROD_THROTTLED_REPLAYS =
+    (TILED_PROD_STEPS - TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY - TILED_PROD_TAIL_STORES) /
+    TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY;
+static_assert(
+    (TILED_PROD_THROTTLED_REPLAYS + 1) * TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY + TILED_PROD_TAIL_STORES ==
+        TILED_PROD_STEPS,
+    "calculate_tiled_prod: the recording, the replays and the tail must store every element once");
+
 #if defined(MM_THROTTLE) && MM_THROTTLE > 0
 // A throttled matmul (MM_THROTTLE > 0) programs ADDR_MOD_6 itself in matmul_init, which fused
-// matmul kernels run between the activation's init and its call, so there the kernel walks Dest
-// with dst_reg++ and leaves ADDR_MOD_6 alone.
+// matmul kernels run between the activation's init and its call, so there the kernel advances Dest
+// with dst_reg += (TTINCRWC) and leaves ADDR_MOD_6 alone.
 constexpr bool TILED_PROD_STORE_ADVANCES_DEST = false;
 #else
 constexpr bool TILED_PROD_STORE_ADVANCES_DEST = true;
@@ -62,9 +78,9 @@ inline void tiled_prod_init() {
         // (comparison, unary max/min, typecast, ...) programs its own increment in its init, and
         // llk_math_eltwise_unary_sfpu_init runs that init on every op switch.
         addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = SFP_DESTREG_STRIDE}}.set(ADDR_MOD_6);
-        // The product's 1.0 seed, read by the first SFPMUL (see calculate_tiled_prod).
-        vConstFloatPrgm0 = 1.0f;
     }
+    // The product's 1.0 seed, read by the first SFPMUL (see calculate_tiled_prod).
+    vConstFloatPrgm0 = 1.0f;
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 /**
@@ -80,7 +96,7 @@ inline void tiled_prod_init() {
  * which belongs to another tile of the batch or to the packer's half.
  * @note Call @ref tiled_prod_init after any other SFPU init: the stores advance Dest through
  * ADDR_MOD_6, the first multiply reads 1.0 from vConstFloatPrgm0, and the body overwrites replay
- * slots [0, TILED_PROD_REPLAY_LEN).
+ * slots [0, TILED_PROD_REPLAY_LEN) ([0, TILED_PROD_THROTTLED_REPLAY_LEN) under MM_THROTTLE > 0).
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_tiled_prod() {
@@ -93,14 +109,30 @@ inline void calculate_tiled_prod() {
     constexpr int STEPS = static_cast<int>(TILE_NUM_FACES) * ITERATIONS;  // 32 elements per lane
     static_assert(STEPS == TILED_PROD_STEPS, "calculate_tiled_prod: one call covers one tile");
     if constexpr (!TILED_PROD_STORE_ADVANCES_DEST) {
-        vFloat result = 1.0f;
-#pragma GCC unroll 8
-        for (int d = 0; d < STEPS; d++) {
-            vFloat v = dst_reg[0];
+        // The same LOAD ; STORE ; MUL chain as below, with the stores at fixed offsets and one
+        // dst_reg advance (TTINCRWC) per TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY elements instead of
+        // ADDR_MOD_6. The recorded window holds those elements and the advance.
+        asm volatile("" ::: "memory");
+        vFloat v = dst_reg[0];
+        vFloat result = vConstFloatPrgm0 * v;
+        asm volatile("" ::: "memory");
+        lltt::record<lltt::Exec>(TILED_PROD_REPLAY_SLOT, TILED_PROD_THROTTLED_REPLAY_LEN);
+#pragma GCC unroll TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY
+        for (int k = 0; k < TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY; k++) {
+            v = dst_reg[k + 1];
+            dst_reg[k] = result;
             result *= v;
-            dst_reg[0] = result;
-            dst_reg++;
         }
+        dst_reg += TILED_PROD_THROTTLED_ELEMENTS_PER_REPLAY;
+#pragma GCC unroll TILED_PROD_THROTTLED_REPLAYS
+        for (int i = 0; i < TILED_PROD_THROTTLED_REPLAYS; i++) {
+            lltt::replay(TILED_PROD_REPLAY_SLOT, TILED_PROD_THROTTLED_REPLAY_LEN);
+        }
+        v = dst_reg[1];
+        dst_reg[0] = result;
+        result *= v;
+        dst_reg[1] = result;
+        asm volatile("" ::: "memory");
         return;
     }
     // Per element the chain is LOAD the next v ; STORE the product ; MUL (product *= v). The load
