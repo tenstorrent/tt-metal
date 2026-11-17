@@ -56,6 +56,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
 #include "dev_mem_map.h"
 #include "env_lib.hpp"
