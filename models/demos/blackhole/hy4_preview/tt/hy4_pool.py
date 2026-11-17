@@ -122,6 +122,122 @@ def id_filter(gids, colinfo, S, owners=COLS, out=None, perrow=False):
     return out
 
 
+def push_wait(push, S):
+    """B35: consumer half of a hy4_qpush.Push of bf16 RM rows [S,1,1,PB/2]: waits for the per-source flags and assembles [S,1,1,8*PB/2] exactly like all_gather_async(dim=3)."""
+    md = push.md
+    PB, RP, NP = push.pb, push.rp, push.np
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([S, 1, 1, 8 * PB // 2]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+    )
+    grid = md.compute_with_storage_grid_size()
+    cores = _cores(S, grid.x)
+    cs = _core_set(cores)
+    fx, fy = push._phys(*push.fcore)
+    extra = [fx, fy] + list(push.flag_addrs) + [push.cnt_addr]
+    rt = ttnn.RuntimeArgs()
+    for i, (x, y) in enumerate(cores):
+        rt[x][y] = [i] + extra
+    ct = [S, 0, PB, RP, NP] + _acc(push.land) + _acc(out)
+    k = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/pw_wait.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cs,
+        compile_time_args=ct,
+        runtime_args=rt,
+        common_runtime_args=[push.land.buffer_address(), out.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cb(cs, 8 * PB + 128)])
+    prog.custom_program_hash = _hash(0x9B7, S, PB, RP, NP, tuple(ct))
+    ttnn.generic_op([push.land, out], prog)
+    return out
+
+
+def gather_filter_own(pos, lids, colinfo, S, out, perrow=False, nq=None):
+    """B35: ``cs_gather`` + ``id_filter`` + the id all-gather as one multi-core program (nq cores per row), bit-identical to the stock chain given the layout invariant (candidate block c of the gathered row holds tokens of column c): pos u32 RM [S,1,1,K], lids u32 RM [S,1,1,KL]
+    (this chip's local candidate ids), colinfo / out as ``id_filter``."""
+    md = pos.device()
+    K, KL = int(pos.shape[-1]), int(lids.shape[-1])
+    nq = nq or int(os.environ.get("HY4_B35_NQ", "8"))
+    assert K % nq == 0
+    grid = md.compute_with_storage_grid_size()
+    assert nq <= grid.x and S <= grid.y
+    cores = [(q, s) for s in range(S) for q in range(nq)]
+    cs = _core_set(cores)
+    rt = ttnn.RuntimeArgs()
+    for s in range(S):
+        lc = md.worker_core_from_logical_core(ttnn.CoreCoord(0, s))
+        for q in range(nq):
+            rt[q][s] = [s, q, lc.x, lc.y]
+    total = (K // nq) * 4 * (1 + nq) + K * 4 + KL * 4 + 64 + nq * 16
+    ct = [K, S, COLS, 0, int(perrow), KL, nq] + _acc(pos) + _acc(lids) + _acc(colinfo) + _acc(out)
+    k = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/gf_own.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cs,
+        compile_time_args=ct,
+        runtime_args=rt,
+        common_runtime_args=[
+            pos.buffer_address(),
+            lids.buffer_address(),
+            colinfo.buffer_address(),
+            out.buffer_address(),
+        ],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    prog = ttnn.ProgramDescriptor(
+        kernels=[k], semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=cs, initial_value=0)], cbs=[_cb(cs, total)]
+    )
+    prog.custom_program_hash = _hash(0x9B6, K, S, nq, tuple(ct))
+    ttnn.generic_op([pos, lids, colinfo, out], prog)
+    return out
+
+
+def gather_filter(pos, cand, colinfo, S, out, perrow=False, push=None, own=False):
+    """B35: ``cs_gather`` + ``id_filter`` as one program (bit-identical). pos u32 RM [S,1,1,K] (top-k positions into the W candidates), cand u32 RM [S,1,1,W] (all-gathered ids) or, with ``push`` (a hy4_qpush.Push of the local id
+    rows, already launched), its landing tensor (the program waits for the per-source flags). colinfo / out as ``id_filter``.
+    """
+    md = pos.device()
+    K = int(pos.shape[-1])
+    owners = COLS
+    grid = md.compute_with_storage_grid_size()
+    cores = _cores(S, grid.x)
+    cs = _core_set(cores)
+    rt = ttnn.RuntimeArgs()
+    if push is None:
+        W = int(cand.shape[-1])  # own=True: cand = this chip's local ids [S,1,1,KL] (W = KL)
+        land, PB, RP, NP = (2 if own else 0), 0, 1, 1
+        extra = []
+    else:
+        PB, RP, NP = push.pb, push.rp, push.np
+        W = COLS * PB // 4
+        land = 1
+        fx, fy = push._phys(*push.fcore)
+        extra = [fx, fy] + list(push.flag_addrs) + [push.cnt_addr]
+    for i, (x, y) in enumerate(cores):
+        rt[x][y] = [i] + extra
+    total = 2 * K * 4 + W * 4 + 64 + 128
+    ct = [K, S, owners, 0, int(perrow), W, land, PB, RP, NP] + _acc(pos) + _acc(cand) + _acc(colinfo) + _acc(out)
+    k = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/gf_filter.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cs,
+        compile_time_args=ct,
+        runtime_args=rt,
+        common_runtime_args=[
+            pos.buffer_address(),
+            cand.buffer_address(),
+            colinfo.buffer_address(),
+            out.buffer_address(),
+        ],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cb(cs, total)])
+    prog.custom_program_hash = _hash(0x9B5, K, S, owners, tuple(ct))
+    ttnn.generic_op([pos, cand, colinfo, out], prog)
+    return out
+
+
 # ------------------------------------------------------------------ host geometry
 def locate(t):
     """token position -> (page, column, local row)."""

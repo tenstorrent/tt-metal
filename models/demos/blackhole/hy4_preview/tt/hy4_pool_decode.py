@@ -198,6 +198,26 @@ class PoolCtx:
             barrier_semaphore=self.ccl.get_barrier_semaphore(),
         )
 
+    def id_push(self, kloc):
+        """B35: Push object of the local candidate id rows [S,1,1,kloc] u32 (one per kloc, cached)"""
+        from models.demos.blackhole.hy4_preview.tt import hy4_qpush
+
+        c = self.__dict__.setdefault("_idp", {})
+        if kloc not in c:
+            pb = kloc * 4
+            c[kloc] = hy4_qpush.Push(self.md, self.S, pb, max(1, min(4352 // pb, 2)))
+        return c[kloc]
+
+    def val_push(self, kloc):
+        """B35: Push object of the local candidate score rows [S,1,1,kloc] bf16 (cached per kloc)"""
+        from models.demos.blackhole.hy4_preview.tt import hy4_qpush
+
+        c = self.__dict__.setdefault("_vp", {})
+        if kloc not in c:
+            pb = kloc * 2
+            c[kloc] = hy4_qpush.Push(self.md, self.S, pb, max(1, min(4352 // pb, 4)))
+        return c[kloc]
+
     def gather_q(self, q_rm):
         return ttnn.experimental.all_gather_async(
             q_rm,
@@ -326,7 +346,7 @@ def append_key_rows(ctx, key_pool4, k):
             ttnn.deallocate(kj)
 
 
-def select_global(ctx, qh, w32, key_view):
+def select_global(ctx, qh, w32, key_view, fin_out=None):
     """decode indexer chain on the key pool: score kernel (kv_len per column from ctx.kvcnt) -> select_v2 -> global top-2048 ids uint32 [S,1,1,2048] (identical on all columns).
     qh [S,1,32,128] TILE (heads = tile rows), w32 [1,1,32,32] TILE (row = query row, col = head), key_view [1,1,pages*64,128] bfp8 TILE.
     """
@@ -343,7 +363,22 @@ def select_global(ctx, qh, w32, key_view):
     score = IS.idx_score(
         qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n, kvt_rows=ctx.perrow, blocks=B if blk else 1
     )  # [1,1,S,n]
-    gids = select_v2(ctx.ag, ctx.colid, score, n, B, kb, kloc, K, sel["split"], False, None, blocked=blk)
+    fin = None
+    if (
+        fin_out is not None
+    ):  # B35: gather + id_filter fused (HY4_B35_GFILT=1), optionally with the id all-gather replaced by a push (HY4_B35_IDPUSH=1)
+        own = (
+            os.environ.get("HY4_B35_OWN", "0") == "1"
+        )  # no id all-gather at all (the filter keeps only this column's own block)
+        fin = dict(
+            colinfo=ctx.colinfo,
+            out=fin_out,
+            perrow=ctx.perrow,
+            own=own,
+            vpush=ctx.val_push(kloc) if os.environ.get("HY4_B35_VPUSH", "0") == "1" else None,
+            push=ctx.id_push(kloc) if (os.environ.get("HY4_B35_IDPUSH", "0") == "1" and not own) else None,
+        )
+    gids = select_v2(ctx.ag, ctx.colid, score, n, B, kb, kloc, K, sel["split"], False, None, blocked=blk, fin=fin)
     ttnn.deallocate(score)
     return gids
 
@@ -420,7 +455,16 @@ class Hy4AttentionPool(Hy4AttentionOpt):
         w32 = (
             d["iw"] if os.environ.get("HY4_IDX_QFAST", "0") == "1" else _pad_rows(d["iw"], 32)
         )  # QFAST: the score kernel reads tile pages and only rows r < S; the tile padding rows are never used
-        gids = select_global(ctx, qh, w32, self.key_view)
+        fin_out = (
+            self.idx8_buf
+            if (
+                (os.environ.get("HY4_B35_GFILT", "0") == "1" or os.environ.get("HY4_B35_OWN", "0") == "1")
+                and 1 < S <= 4
+                and ctx.mode != "dense"
+            )
+            else None
+        )
+        gids = select_global(ctx, qh, w32, self.key_view, fin_out)
         for t in (qh, w32):
             ttnn.deallocate(t)
         return gids
@@ -449,8 +493,11 @@ class Hy4AttentionPool(Hy4AttentionOpt):
                 idx8 = dense_ids8
             else:
                 gids = self.pool_select(d, o, tabs)
-                idx8 = HP.id_filter(gids, ctx.colinfo, ctx.S, out=self.idx8_buf, perrow=ctx.perrow)
-                ttnn.deallocate(gids)
+                if gids is self.idx8_buf:  # B35: already filtered (fused)
+                    idx8 = gids
+                else:
+                    idx8 = HP.id_filter(gids, ctx.colinfo, ctx.S, out=self.idx8_buf, perrow=ctx.perrow)
+                    ttnn.deallocate(gids)
             ctx.ids8[self.layer] = idx8
         else:
             idx8 = dense_ids8 if ctx.mode == "dense" else ctx.ids8[self.spec.indexer_source]
