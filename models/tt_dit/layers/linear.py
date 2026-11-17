@@ -512,7 +512,8 @@ class ColParallelLinear(Module):
             else:
                 output = outputs[0]
         else:
-            M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            # K from the weight: x may still be split over TP here and is gathered below.
+            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             core_grid = get_matmul_core_grid(self.mesh_device)
 
             # Gather if needed here. Helps cleanup upstream code
@@ -547,7 +548,7 @@ class ColParallelLinear(Module):
                     msg = "fused addcmul is not supported alongside a fused activation on the minimal_matmul path"
                     raise ValueError(msg)
                 matmul_config = matmul_config or get_matmul_config(
-                    M, x.padded_shape[-1], N, core_grid, default_block_size
+                    M, K, N, core_grid, default_block_size
                 )
                 output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
                     x,
