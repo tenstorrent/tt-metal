@@ -409,10 +409,10 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
             "completed on this device.");
     }
 
-#ifdef TT_METAL_USE_EMULE
-    if (metal_ctx.get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
-#endif
-    {
+    // An emulated chip without dispatch firmware launches the program itself (below), compiling it there.
+    const bool emulated_launch = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule &&
+                                 !metal_ctx.get_cluster().runs_dispatch_firmware();
+    if (!emulated_launch) {
         program.impl().compile(&device);
     }
     program.impl().finalize_dataflow_buffer_configs();
@@ -426,9 +426,8 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
     WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
 
 #ifdef TT_METAL_USE_EMULE
-    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
-        // Emulated mode always executes synchronously (slow dispatch only): all kernels complete before this
-        // function returns.
+    if (emulated_launch) {
+        // Slow dispatch on an emulated chip executes synchronously: all kernels complete before this returns.
         emule::execute_program_emulated(&device, program);
         return;
     }

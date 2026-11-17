@@ -66,9 +66,9 @@ void DispatchKernelInitializer::init(
 
     devices_ = devices;
 
-    // Mock and emulated devices run no dispatch firmware (tt-emule's command queue stands in for it)
+    // Mock devices run no dispatch firmware
     if (!cluster_.runs_dispatch_firmware()) {
-        log_info(tt::LogMetal, "Skipping dispatch firmware initialization for mock/emulated devices");
+        log_info(tt::LogMetal, "Skipping dispatch firmware initialization for mock devices");
         return;
     }
 
@@ -99,7 +99,7 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    // Mock and emulated devices have no dispatch firmware to tear down
+    // Mock devices have no dispatch firmware to tear down
     if (!cluster_.runs_dispatch_firmware()) {
         init_done.erase(key);
         return;

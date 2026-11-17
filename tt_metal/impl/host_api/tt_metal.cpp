@@ -342,7 +342,8 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
 
 #ifdef TT_METAL_USE_EMULE
-    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule &&
+        !metal_ctx.get_cluster().runs_dispatch_firmware()) {
         // Emule lazily JIT-compiles inside execute_program_emulated, so is_finalized()/is_compiled()
         // are never set — skip both asserts (HW-only) and run synchronously, mirroring LaunchProgram.
         // Configure before writing runtime args: ConfigureDeviceWithProgram allocates the ephemeral

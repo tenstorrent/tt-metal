@@ -938,12 +938,7 @@ void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue*
 MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return last_used_command_queue_; }
 
 namespace {
-// Emulated devices launch each program through the slow-dispatch path (tt-emule's queue), as slow dispatch does,
-// so their workloads carry per-program configs rather than the FD workload finalization.
-bool uses_fd_program_configs(MetalEnvImpl& env) {
-    return env.get_rtoptions().get_fast_dispatch() &&
-           !env.get_cluster().emulates_dispatch();
-}
+bool uses_fd_program_configs(MetalEnvImpl& env) { return env.get_rtoptions().get_fast_dispatch(); }
 }  // namespace
 
 ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index, bool using_fast_dispatch) {

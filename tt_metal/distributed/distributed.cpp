@@ -22,9 +22,6 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/tt_cluster.hpp"
-#ifdef TT_METAL_USE_EMULE
-#include "emule_mesh_command_queue.hpp"
-#endif
 
 namespace tt::tt_metal::distributed {
 
@@ -124,10 +121,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     }
 
     auto& env = mesh_impl.metal_env();
-    // Emulated devices have no dispatch firmware: tt-emule's queue compiles and launches each program itself
-    // through the slow-dispatch path, so the fast-dispatch compile, binary upload and command generation are skipped.
-    const bool emulated = env.get_cluster().emulates_dispatch();
-    if (env.get_rtoptions().get_fast_dispatch() && !emulated) {
+    if (env.get_rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
@@ -147,13 +141,6 @@ void EventSynchronize(const MeshEvent& event) {
         event.device()->mesh_command_queue(event.impl().mesh_cq_id()).enqueue_wait_for_event(event);
         return;
     }
-#ifdef TT_METAL_USE_EMULE
-    // tt-emule's queue tracks its events itself; there are no sysmem completion counters to poll.
-    if (event.device()->impl().metal_env().get_cluster().emulates_dispatch()) {
-        emule::event_synchronize(event);
-        return;
-    }
-#endif
     // The completion-queue reader thread advances the event counter; if it failed, the counter never moves.
     auto* mesh_cq = dynamic_cast<MeshCommandQueueBase*>(&event.device()->mesh_command_queue(event.impl().mesh_cq_id()));
     TT_FATAL(mesh_cq != nullptr, "MeshCommandQueue is not a MeshCommandQueueBase");
@@ -170,11 +157,6 @@ bool EventQuery(const MeshEvent& event) {
     if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return true;
     }
-#ifdef TT_METAL_USE_EMULE
-    if (event.device()->impl().metal_env().get_cluster().emulates_dispatch()) {
-        return emule::event_query(event);
-    }
-#endif
     bool event_completed = true;
     for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
