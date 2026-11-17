@@ -2258,10 +2258,14 @@ class MultichipDecoder(OptimizedDecoder):
 
             projection = layer.moe.router.projection_weight
             weight = ttnn.to_torch(ttnn.get_device_tensors(projection)[0]).float().reshape(hidden, -1)
-            scale = ttnn.typecast(source.source.per_expert_scale, ttnn.bfloat16)
-            pes = ttnn.to_memory_config(
-                ttnn.to_layout(ttnn.reshape(scale, (1, 1, 1, weight.shape[-1])), ttnn.ROW_MAJOR_LAYOUT),
-                ttnn.L1_MEMORY_CONFIG,
+            # per-expert scale: built on the host, DRAM (no L1 temporaries between persistent L1 buffers)
+            pes = ttnn.from_torch(
+                vec(source.source.per_expert_scale)[: weight.shape[-1]].reshape(1, 1, 1, -1).bfloat16(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=boundary.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(boundary.mesh),
             )
             self.fused.router = RouterB1(
                 boundary.mesh,

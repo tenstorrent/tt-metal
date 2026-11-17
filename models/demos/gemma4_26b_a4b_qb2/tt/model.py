@@ -18,6 +18,8 @@ from models.demos.gemma4.tt.model import _get_lm_head_program_config
 from models.demos.gemma4_26b_a4b_qb2.tt.multichip_decoder import (
     WS1_BATCHED,
     WS5_FUSED,
+    WS5_MERGED,
+    WS5_SHARED_B1,
     CollectiveBufferPool,
     DecodeRopeRows,
     MultichipDecoder,
@@ -60,6 +62,14 @@ class Gemma4Model:
         self.precision_config = resolve_precision_config(precision_config)
         self.precision_observations = {}
         self.config = AutoConfig.from_pretrained(MODEL_ID, revision=REVISION).text_config
+        # WS5: the fused boundaries' persistent L1 first, contiguous at the top of L1 (allocated later it lands
+        # below the holes the weight preparation leaves, and the prefill programs' static CBs reach that far)
+        self._early_boundary = self._new_boundary(self._boundary_options()) if WS5_FUSED else None
+        self._early_greedy = None
+        if WS5_FUSED:
+            from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.greedy import GreedyB1
+
+            self._early_greedy = GreedyB1(self.mesh, self.config.vocab_size // 4, softcap=self.softcap)
         if any(int(index) >= self.config.num_hidden_layers for index in self.precision_config["layer_overrides"]):
             raise ValueError("Precision layer override index exceeds model layer count")
         self.max_seq_len = max_seq_len or self.config.max_position_embeddings
@@ -140,6 +150,35 @@ class Gemma4Model:
         self.precision_summary()
         print("MODEL_READY", flush=True)
 
+    def _boundary_options(self, shared_bf16=True, flat_moe=None, merged=None):
+        if flat_moe is None:
+            flat_moe = os.environ.get("GEMMA4_26B_WS5_FLAT_MOE", "1") != "0"
+        if merged is None:  # the layers' setup confirms it (MultichipDecoder.moe_b1.merged)
+            merged = WS5_SHARED_B1 and WS5_MERGED
+        flat_router = flat_moe and os.environ.get("GEMMA4_26B_WS5_ROUTER", "1") != "0"
+        return dict(
+            shared_dtype=ttnn.bfloat16 if shared_bf16 else ttnn.float32,
+            flat_moe=flat_moe,
+            flat_router=flat_router,
+            alias_inputs=flat_router and merged,
+            round_n=os.environ.get("GEMMA4_26B_WS5_ROUND_N", "1") != "0",
+        )
+
+    def _new_boundary(self, options):
+        from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.boundary import GemmaBoundary
+
+        grid = self.mesh.compute_with_storage_grid_size()
+        boundary = GemmaBoundary(
+            self.mesh,
+            self.config.hidden_size,
+            self.config.rms_norm_eps,
+            # persistent L1 on the last core (~100 KB, lockstep: the address range is reserved on every core)
+            core=(grid.x - 1, grid.y - 1),
+            **options,
+        )
+        boundary.options = options
+        return boundary
+
     def _fused_setup(self, final_norm):
         """WS5: batch-1 decode through the fused layer boundaries (fused_decode/boundary.py) when every layer has the
         batch-1 moe_decode experts and the WS2 norm path; None otherwise (the WS2/WS4 path decodes batch 1)."""
@@ -151,7 +190,6 @@ class Gemma4Model:
             for layer in layers
         ):
             return None
-        from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.boundary import GemmaBoundary
 
         # The moe_decode shared MLP takes a BF16 input; the ttnn shared MLP the FP32 normed vector.
         shared_bf16 = all(
@@ -159,15 +197,15 @@ class Gemma4Model:
             for layer in layers
         )
         flat_moe = shared_bf16 and os.environ.get("GEMMA4_26B_WS5_FLAT_MOE", "1") != "0"
-        boundary = GemmaBoundary(
-            self.mesh,
-            self.config.hidden_size,
-            self.config.rms_norm_eps,
-            shared_dtype=ttnn.bfloat16 if shared_bf16 else ttnn.float32,
-            flat_moe=flat_moe,
-            flat_router=flat_moe and os.environ.get("GEMMA4_26B_WS5_ROUTER", "1") != "0",
-            round_n=os.environ.get("GEMMA4_26B_WS5_ROUND_N", "1") != "0",
-        )
+        merged = all(getattr(layer.moe_b1, "merged", None) is not None for layer in layers)
+        options = self._boundary_options(shared_bf16, flat_moe, merged)
+        boundary = self._early_boundary
+        self._early_boundary = None
+        if boundary is None or boundary.options != options:
+            # L1 holes are worse than a late allocation: only rebuild when the layers need other options
+            if boundary is not None:
+                boundary.deallocate()
+            boundary = self._new_boundary(options)
         hidden = self.config.hidden_size
 
         def input_gamma(layer):
@@ -182,7 +220,7 @@ class Gemma4Model:
         fused = SimpleNamespace(
             boundary=boundary,
             g_entry=boundary.gammas([input_gamma(layers[0])]),
-            greedy=GreedyB1(self.mesh, self.config.vocab_size // 4, softcap=self.softcap),
+            greedy=self._early_greedy or GreedyB1(self.mesh, self.config.vocab_size // 4, softcap=self.softcap),
             lmhead=None,
         )
         if os.environ.get("GEMMA4_26B_WS5_LMHEAD", "1") != "0" and self.head.dtype == ttnn.bfloat8_b:
