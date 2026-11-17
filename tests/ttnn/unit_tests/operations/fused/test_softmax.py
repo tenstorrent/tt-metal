@@ -412,13 +412,16 @@ def test_softmax_sharded_masked_subblock_w_zero(device, expect_error):
 @pytest.mark.parametrize("start", [(0, 0), (1, 0), (0, 1)])
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("masked", [False, True])
-def test_softmax_sharded_offset_grid(device, start, orientation, masked):
+@pytest.mark.parametrize("ranges", ["one", "per_row"])
+def test_softmax_sharded_offset_grid(device, start, orientation, masked, ranges):
     torch.manual_seed(0)
     grid_size = (2, 2)
     batch_size, h, w = grid_size[0] * grid_size[1], 32, 256
     x0, y0 = start
+    # The same 2x2 block as one range or as one range per row; the buffer places shards range by range.
+    rows = [(y0, y0 + grid_size[1] - 1)] if ranges == "one" else [(y, y) for y in range(y0, y0 + grid_size[1])]
     shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x0 + grid_size[0] - 1, y0 + grid_size[1] - 1))}
+        {ttnn.CoreRange(ttnn.CoreCoord(x0, ya), ttnn.CoreCoord(x0 + grid_size[0] - 1, yb)) for ya, yb in rows}
     )
     memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(shard_grid, [h, w], orientation)
