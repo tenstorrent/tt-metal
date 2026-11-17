@@ -88,8 +88,11 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.hardware.risc_debug import RiscLocation
 from ttexalens.elf import ElfVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
-from typing import Any, Callable, Iterable, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterable, TypeVar, cast
 from types import ModuleType
+
+if TYPE_CHECKING:
+    from sqlite_serializer import SqliteSerializer
 
 
 def _raise_open_file_limit(desired: int = 65536) -> None:
@@ -773,6 +776,7 @@ def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -
 
 _output_serializer: Any = None
 _output_serializer_initialized = False
+_sqlite_serializer: "SqliteSerializer | None" = None
 
 
 def get_output_serializer() -> Any:
@@ -783,6 +787,11 @@ def get_output_serializer() -> Any:
 
         _output_serializer = RichSerializer(ConsoleSink(console), utils, get_verbose_level)
     return _output_serializer
+
+
+def get_sqlite_serializer() -> "SqliteSerializer | None":
+    """Return the --sqlite-output-path writer, or None without one. A script can write rows with it during run()."""
+    return _sqlite_serializer
 
 
 def set_output_serializer(serializer: Any) -> None:
@@ -804,7 +813,7 @@ def init_output_serializer(args: ScriptArguments) -> None:
     back ends per script - reopening `FileSink` with mode "w" and truncating the
     report down to the last script alone.
     """
-    global _output_serializer_initialized
+    global _output_serializer_initialized, _sqlite_serializer
     if _output_serializer_initialized:
         return
     _output_serializer_initialized = True
@@ -832,7 +841,8 @@ def init_output_serializer(args: ScriptArguments) -> None:
         try:
             from sqlite_serializer import SqliteSerializer
 
-            serializers.append(SqliteSerializer(sqlite_path))
+            _sqlite_serializer = SqliteSerializer(sqlite_path)
+            serializers.append(_sqlite_serializer)
         except Exception as e:
             utils.WARN(f"Failed to open --sqlite-output-path={sqlite_path!r}: {e}. SQLite output will be skipped.")
 
@@ -1063,6 +1073,10 @@ def run_script(
             all_scripts.setdefault(path, script)
         args = parse_arguments(all_scripts, script_path, argv)
 
+    if not return_result:
+        # Before the scripts run, so a script can write rows to SQLite during run().
+        init_output_serializer(args)
+
     # Initialize context if not provided
     if context is None:
         _enforce_dependencies(args)
@@ -1080,7 +1094,6 @@ def run_script(
     result_script = scripts[script_path] if script_path in scripts else None
     if return_result:
         return result
-    init_output_serializer(args)
     serialize_result(result_script, result)
 
     if force_exit:

@@ -330,16 +330,18 @@ class RunChecks:
         return result
 
     def run_per_device_check(
-        self, check: Callable[[Device], object], print_broken_devices: bool = True
+        self,
+        check: Callable[[Device], object],
+        print_broken_devices: bool = True,
+        devices: list[Device] | None = None,
     ) -> list[PerDeviceCheckResult] | None:
-        """Run a check function on each device, collecting results."""
+        """Run a check function on each device, or on each of `devices`, collecting results."""
+        devices = self.devices if devices is None else devices
         result: list[PerDeviceCheckResult] = []
         with create_progress() as progress:
-            device_task = progress.add_task(
-                "Processing devices", total=len(self.devices), visible=len(self.devices) > 1
-            )
+            device_task = progress.add_task("Processing devices", total=len(devices), visible=len(devices) > 1)
             try:
-                for device in self.devices:
+                for device in devices:
                     # Skipping broken devices
                     if self._session.is_device_broken(device):
                         continue
@@ -378,9 +380,16 @@ class RunChecks:
                 progress.remove_task(device_task)
 
     def run_per_block_check(
-        self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
+        self,
+        check: Callable[[OnChipCoordinate], object],
+        block_filter: list[str] | str | None = None,
+        devices: list[Device] | None = None,
+        store_block_rows: Callable[[list[PerBlockCheckResult]], None] | None = None,
     ) -> list[PerBlockCheckResult] | None:
-        """Run a check function on each block location, collecting results."""
+        """Run a check function on each block location, or on the blocks of `devices`, collecting results.
+
+        With `store_block_rows`, each block's rows go to it as soon as the block is checked and are not returned.
+        """
         # block_filter strings are expected to be valid BlockType values.
         block_types_to_check: list[BlockType] = (
             BLOCK_TYPES
@@ -413,17 +422,21 @@ class RunChecks:
                                 check_result = None
                             progress.advance(device_task)
                             # Use the common result collection helper
-                            self._collect_results(
-                                result,
+                            block_rows = self._collect_results(
+                                [],
                                 check_result,
                                 PerBlockCheckResult,
                                 device_description=DeviceDescription(device, self._use_unique_id),
                                 location=location,
                             )
+                            if store_block_rows is None:
+                                result.extend(block_rows)
+                            elif block_rows:
+                                store_block_rows(block_rows)
                 finally:
                     progress.remove_task(device_task)
 
-        self.run_per_device_check(per_device_blocks_check)
+        self.run_per_device_check(per_device_blocks_check, devices=devices)
         return result if len(result) > 0 else None
 
     def run_per_core_check(
