@@ -62,8 +62,22 @@ sfpi_inline void _softsign_x2_(sfpi::vFloat& out0, sfpi::vFloat& out1, sfpi::vFl
     out1 = y1 * scale1;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_softsign_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated softsign kernel as one call over the whole tile.
+inline constexpr bool softsign_bf16_whole_tile = true;
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_softsign() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_softsign()) {
+            calculate_softsign_bf16<ITERATIONS>();
+            return;
+        }
+    }
     static_assert(ITERATIONS % 2 == 0, "calculate_softsign processes two rows per iteration");
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS / 2; d++) {
@@ -84,7 +98,7 @@ inline void calculate_softsign() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void init_softsign() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // sfpu_reciprocal_init's shared seed, rescaled for _softsign_x2_'s x = 2 * mantissa and
@@ -92,6 +106,9 @@ void init_softsign() {
     sfpi::vConstFloatPrgm0 = -RECIPROCAL_SEED_K0 / 8;
     sfpi::vConstFloatPrgm1 = RECIPROCAL_SEED_K1 / 4;
     sfpi::vConstFloatPrgm2 = -RECIPROCAL_SEED_K2 / 2;
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_softsign_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
