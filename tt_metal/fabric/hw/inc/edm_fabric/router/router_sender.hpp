@@ -30,6 +30,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 
 #include "router_common.hpp"
+#include "router_init.hpp"
 #include "router_round.hpp"
 #include "router_telemetry.hpp"
 
@@ -991,16 +992,24 @@ FORCE_INLINE void start_forwarding_channels(SenderChannelStates& states) {
     }
 }
 
+// Inter-domain: the forwarding channels' state between connects. Each connect's loop starts the link-facing state over
+// (the remote receiver's progress, the worker channels); the forwarding channels face this chip and carry over.
+decltype(SenderChannelStates::forwarding) carried_forwarding;
+
 // The sender loop: rounds of passes over the sender channels, with router commands between runs of rounds. A function
 // of its own: its code depends only on this body, and once-per-round work is out of line (router_round.hpp).
+// An inter-domain router runs it once per connect.
 __attribute__((noinline)) void run() {
     SenderChannelStates states;
+    if constexpr (is_inter_domain_router) {
+        states.forwarding = carried_forwarding;
+    }
     start_forwarding_channels(states);
     auto loop_copy = states.loop_local_progress();  // carried through the loop (SenderChannelStates)
     uint32_t channels_in_flight = 0;  // the channels kept in memory with packets not yet completed (or acked)
 
     SenderRound round;
-    while (!terminating()) {
+    while (!terminating() && !disconnect_requested()) {
         if (!start_running()) {
             continue;
         }
@@ -1012,6 +1021,9 @@ __attribute__((noinline)) void run() {
             }
             after_round<false>(round, loop_copy, states, [] { return false; });
         }
+    }
+    if constexpr (is_inter_domain_router) {
+        carried_forwarding = states.forwarding;
     }
 }
 
@@ -1120,6 +1132,117 @@ __attribute__((noinline)) void wait_for_upstream_routers() {
             }
         }
     });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Inter-domain: the sender ERISC (ERISC 0) drives the host's control block
+// ---------------------------------------------------------------------------------------------------------------------
+
+// The base firmware's routing every POLLS_PER_ROUTING_RUN polls while a step waits, as init's waits do.
+FORCE_INLINE void run_routing_now_and_then(uint32_t& polls) {
+    if (polls++ == POLLS_PER_ROUTING_RUN) {
+        polls = 0;
+        run_routing();
+    }
+}
+
+// DRAIN until the host's CONNECT (true) or termination (the receiver ERISC drops stray packets meanwhile).
+FORCE_INLINE bool drain() {
+    set_inter_domain_state(InterDomainState::DRAIN);
+    uint32_t polls = 0;
+    while (!terminating()) {
+        if (inter_domain_command() == InterDomainCommand::CONNECT) {
+            set_inter_domain_state(InterDomainState::CONNECT);
+            return true;
+        }
+        run_routing_now_and_then(polls);
+    }
+    return false;
+}
+
+// CONNECT: the peer's metadata, then the Ethernet handshake with it (the lower domain id sends). The peer's VC2
+// receiver must be where this router's senders send, with the same packet size; domain ids must differ. False (then
+// DRAIN) on a mismatch, the host's ABORT or termination.
+__attribute__((noinline)) bool connect() {
+    using namespace erisc::datamover::handshake;
+    using Remote = RemoteReceiverChannel<0>;
+    auto* c = inter_domain_control();
+    c->peer_marker = 0;
+    bool connected = c->peer_domain_id != c->local_domain_id && c->peer_vc2_receiver_addr == Remote::first_slot_addr &&
+                     c->peer_vc2_receiver_slots == Remote::num_slots &&
+                     c->peer_max_packet_size_bytes == channel_buffer_size;
+    if (connected) {
+        const auto& rt = l1_routing_table();
+        const auto aborted = [] { return terminating() || inter_domain_command() == InterDomainCommand::ABORT; };
+        if (c->local_domain_id < c->peer_domain_id) {
+            fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                handshake_addr,
+                rt.my_mesh_id,
+                rt.my_device_id,
+                termination_signal(),
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT,
+                aborted);
+        } else {
+            fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                handshake_addr,
+                rt.my_mesh_id,
+                rt.my_device_id,
+                termination_signal(),
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT,
+                aborted);
+        }
+        auto* info = reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_addr);
+        connected = info->local_value == MAGIC_HANDSHAKE_VALUE;
+        if (connected) {
+            telemetry_block()->static_info.neighbor_mesh_id = info->neighbor_mesh_id;
+            telemetry_block()->static_info.neighbor_device_id = info->neighbor_device_id;
+        }
+    }
+    if (connected) {
+        c->connects++;
+    } else {
+        c->connect_failures++;
+    }
+    c->command = InterDomainCommand::NONE;
+    set_inter_domain_state(connected ? InterDomainState::SERVICE_TRAFFIC : InterDomainState::DRAIN);
+    return connected;
+}
+
+// After the loop: true (DISCONNECT) unless terminating.
+FORCE_INLINE bool start_disconnect() {
+    if (terminating()) {
+        return false;
+    }
+    set_inter_domain_state(InterDomainState::DISCONNECT);
+    return true;
+}
+
+// DISCONNECT, healthy: this router's marker to the peer, then the peer's (the host may force it on). Forced: none.
+__attribute__((noinline)) void exchange_markers() {
+    auto* c = inter_domain_control();
+    if (inter_domain_command() == InterDomainCommand::DISCONNECT) {
+        c->marker[0] = c->connects;  // nonzero after a connect
+        SenderLinkTransport::send_with_context_switch(
+            reinterpret_cast<uint32_t>(&c->marker[0]),
+            reinterpret_cast<uint32_t>(&c->peer_marker),
+            PACKET_WORD_SIZE_BYTES);
+        set_inter_domain_state(InterDomainState::WAIT_PEER_MARKER);
+        uint32_t polls = 0;
+        while (c->peer_marker == 0 && inter_domain_command() != InterDomainCommand::FORCE_DISCONNECT &&
+               !terminating()) {
+            run_routing_now_and_then(polls);
+        }
+    }
+    c->peer_marker = 0;
+    c->command = InterDomainCommand::NONE;
+}
+
+// After the markers: the sender's link-facing state back to its start (the remote receiver's credits, the worker
+// channels).
+__attribute__((noinline)) void reset_link(const RuntimeArgs& args) {
+    zero_credit_counters(to_sender_remote_ack_counters_base_address);
+    zero_credit_counters(to_sender_remote_completion_counters_base_address);
+    restart_worker_channels(args.connection_semaphores, args.producer_cursors);
 }
 
 }  // namespace fabric_router::sender
