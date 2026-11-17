@@ -668,13 +668,13 @@ class MiniMaxH3Pipeline:
         max_sequence_length: int | None = None,
         encoder_dynamic_length: bool | None = None,
         agmm_mode: AgmmMode | str | None = None,
-        adaln_once_per_denoise: bool = True,
+        precompute_adaln_modulation: bool = True,
     ) -> None:
         """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
         length class (eager only). It is the 4x8 presets' default on both architectures; `_resolve_denoise_path` has
         the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path.
         `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks that path's
-        all-gather matmul pins. `adaln_once_per_denoise` projects every step's adaLN tables once at the start of a
+        all-gather matmul pins. `precompute_adaln_modulation` projects every step's adaLN tables once at the start of a
         denoise instead of once a step; `trace_denoise` configs always project once a step.
 
         `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` where
@@ -710,7 +710,7 @@ class MiniMaxH3Pipeline:
         self.bucket_denoise = path.bucket_denoise
         self.dynamic_length = path.dynamic_length
         self.agmm_mode = resolve_agmm_mode(agmm_mode)
-        self.adaln_once_per_denoise = adaln_once_per_denoise
+        self.precompute_adaln_modulation = precompute_adaln_modulation
         self.dit_fsdp, fsdp_source = _resolve_dit_fsdp(
             preset, dit_fsdp=dit_fsdp, task=task, dynamic_length=self.dynamic_length
         )
@@ -980,7 +980,7 @@ class MiniMaxH3Pipeline:
         max_sequence_length: int | None = None,
         encoder_dynamic_length: bool | None = None,
         agmm_mode: AgmmMode | str | None = None,
-        adaln_once_per_denoise: bool = True,
+        precompute_adaln_modulation: bool = True,
         **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -994,7 +994,7 @@ class MiniMaxH3Pipeline:
         padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path. `dit_fsdp`
         (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
         `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks the dynamic-length
-        path's all-gather matmul pins. `adaln_once_per_denoise` (default on) projects the adaLN tables once a
+        path's all-gather matmul pins. `precompute_adaln_modulation` (default on) projects the adaLN tables once a
         denoise instead of once a step; `trace_denoise` configs always project once a step.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
@@ -1032,7 +1032,7 @@ class MiniMaxH3Pipeline:
             max_sequence_length=max_sequence_length,
             encoder_dynamic_length=encoder_dynamic_length,
             agmm_mode=agmm_mode,
-            adaln_once_per_denoise=adaln_once_per_denoise,
+            precompute_adaln_modulation=precompute_adaln_modulation,
             **subclass_kwargs,
         )
 
@@ -3243,15 +3243,15 @@ class MiniMaxH3Pipeline:
         # ADALN_PREPARED_ROWS so the programs do not depend on the step count (the warmup compiles them). The
         # prepared table is freed after every request, which a trace replay cannot follow, so a trace_denoise
         # config projects once a step on every request, its untraced first one included.
-        precompute_modulation = not self.trace_denoise and self.adaln_once_per_denoise
-        if precompute_modulation:
+        precompute_adaln_modulation = not self.trace_denoise and self.precompute_adaln_modulation
+        if precompute_adaln_modulation:
             levels = [step_levels(i) for i in range(len(timesteps))]
             num_slots = levels[0][0].numel()
             if len(levels) * num_slots > ADALN_PREPARED_ROWS:
                 raise ValueError(
                     f"{len(levels)} denoising steps x {num_slots} adaLN slots need {len(levels) * num_slots} prepared "
                     f"rows, more than the {ADALN_PREPARED_ROWS} the warmup compiles for; use at most "
-                    f"{ADALN_PREPARED_ROWS // num_slots} steps or adaln_once_per_denoise=False"
+                    f"{ADALN_PREPARED_ROWS // num_slots} steps or precompute_adaln_modulation=False"
                 )
 
             def stacked(k: int) -> ttnn.Tensor:
@@ -3275,7 +3275,7 @@ class MiniMaxH3Pipeline:
         )
         with transient:
             try:
-                if precompute_modulation:
+                if precompute_adaln_modulation:
                     # Inside the scope, so the FSDP gather pair of the projection is freed with the steps' pairs;
                     # inside the try, so a failed prepare releases the tables already built.
                     stacked_ts = stacked(0)
@@ -3311,7 +3311,7 @@ class MiniMaxH3Pipeline:
                             traced=traced,
                             **tilerow_kwargs,
                             **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
-                            **(modulation_rows(i) if precompute_modulation else {}),
+                            **(modulation_rows(i) if precompute_adaln_modulation else {}),
                         )
                     except RuntimeError as err:
                         if "Out of Memory" in str(err):
@@ -3337,7 +3337,7 @@ class MiniMaxH3Pipeline:
                         t_steady += t_step
                     on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
             finally:
-                if precompute_modulation:
+                if precompute_adaln_modulation:
                     transformer.release_modulation()
             state.warm = True
             steady_steps = max(len(timesteps) - 1, 1)
