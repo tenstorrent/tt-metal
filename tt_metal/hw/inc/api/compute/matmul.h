@@ -429,8 +429,9 @@ constexpr bool matmul_fe_tile_mop() {
         return false;
     } else if constexpr (
         !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf &&
-        matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<7, K>(0) && !matmul_fe_mark::is_used_d<13, K>(0)) {
-        // LoFi half sync: the row form where every plain block is constant and none is one tile, whose call it slows
+        matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<13, K>(0)) {
+        // LoFi half sync: the row form in a kernel with a constant block and no constant one-tile block, whose call it slows (bmm's
+        // reload init passes its constant block through a helper's parameters, so tag 7 does not tell a run-time-block kernel)
         return false;
     } else {
         return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>();
