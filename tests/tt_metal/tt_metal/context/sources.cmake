@@ -18,6 +18,7 @@ if(TT_UMD_BUILD_GRENDEL_JTAG)
         test_keraunos_overlay.cpp
         test_keraunos_paths.cpp
         test_keraunos_api.cpp
+        test_keraunos_fabric.cpp
         test_mimir_backend.cpp
     )
 endif()

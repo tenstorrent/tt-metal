@@ -96,25 +96,27 @@ A kernel that touches another HSIO tile reads a host-written table, filled from 
 
 Check: every listed core on the MMK model, including a write from one HSIO tile into another's SRAM. The Mimir GDDR and CCE suites on `mimir_2x_package.yaml` stay on their own bring-up.
 
-### Later. The Keraunos D2D path
+### The Keraunos D2D path (done)
 
-This waits until the local kernels are green.
+`bringup_mmk_fw.py` brings the package up with SysEng's K2M-remap SMC firmware (see `mimir_setup.md`). With the D2D links up, a Keraunos CCE reaches, from either CCE of any HSIO tile:
 
-`bringup_mmk.py` can stage M1 D2D1 and K0 D2D2 and release them with `MMK_KLINK_RELEASE`. Releasing M1 D2D1 alone leaves `CopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition2` passing. Releasing K0 D2D2, alone or with M1 D2D1, stalls that copy on Mimir 0 CCE0. The stalled access is M0 D2D1 → M1 D2D0 → M1 GDDR. Keraunos fabric init and the CCE SRAM remap are in the passing `none` and `m1` runs, so they are not the stall.
+- every HSIO tile's SRAM (both CCEs) through the identity windows over HSIO SPA `0x12_0400_0000 + n * 0x400_0000`;
+- every Mimir CCE's SRAM (M0 and M1, CCE0 and CCE1) over the D2D BAR1 window `0x12_8000_0000 + cce * 4 MiB`;
+- Mimir GDDR: M1 directly (`0x1_0022_...`, the D2D1 lane) and M0 through M1 (`0x1_0020_...`), across every DRAM view and several offsets.
 
-The host helper programs Keraunos BARs, the endpoint table, and the ATT, then the HSIO2 NOC2AXI remap after `initialize_fabrics`. That remap is the nine-window table from `set_ker_noc2axi_remappers()`. The emulator's `qsr1_boot` table for HSIO2 is five entries and includes `0x8_0000_0000_0000` → HSIO2 SRAM at `0x2A80_0000`. The nine-window table does not. The next D2D experiment is to program the emulator's per-tile table, then release K0 D2D2 again.
+CPU loads and stores and IDMA copies work in both directions on all of them. Mimir CCEs reach HSIO SRAM (CCE0 and CCE1) with plain loads and stores through the same package address: M1 directly, M0 through M1. The tests are `KeraunosPaths.*`, `KeraunosPathsCce1.*`, `KeraunosFromMimir.*`, `KeraunosFromMimirCce1.*`. The original CPU-load hang through D2D2 does not reproduce with the current bring-up.
 
-Check: the cross-Mimir GDDR copy still passes with K0 D2D2 released, and a Keraunos ↔ Mimir access uses that link.
+Not working or not verified: remote atomics (`KeraunosAtomics.*` are `DISABLED_`, the accumulate op acks but acts as a plain copy), and the watcher, whose reader asks UMD for an address the Keraunos resolver rejects.
 
-### Later. CCE1 addresses
+### CCE1 (done): one idle-ethernet core per CCE
 
-This waits until the D2D path is green.
+Each HSIO tile has two CCEs, and each is its own ethernet core with eight harts. `mmk.yaml` lists CCE0 as descriptor core `(4, hsio)` and CCE1 as `(5, hsio)`. Each CCE sees both SRAMs at fixed native addresses: CCE0's at `[0, 4 MiB)` and CCE1's at `[4, 8 MiB)`, each with an uncached alias 8 MiB above. The host and the HAL use CCE-relative offsets, so a caller never adds the 4 MiB.
 
-Each HSIO tile has a second CCE. Its SRAM is the next 4 MiB of the tile, and the current CPU map puts that core's instructions, mailbox, and reset vector at local +4 MiB. A caller should not have to add that offset. CCE1 should take the same local addresses as CCE0. The host names the core, and the resolver plus `bringup_mmk.py` place that core's window. `mmk.yaml` then lists `5-y` beside `4-y`.
+tt-metal treats the two CCEs as separate entities. There is a CCE0 `idle_erisc` firmware (`erisc`) and a CCE1 firmware (`eth_cce1`). A kernel compiled for both CCEs builds two binaries, one per CCE, linked at that CCE's native base. The build defines `ETH_CCE_LOCAL_BASE` and `ETH_CCE_PEER_BASE` (0 and 4 MiB, or the reverse), so `MEM_L1_UNCACHED_BASE` is the CCE's own uncached alias and `MEM_IERISC_PEER_CCE_BASE` is the sibling's SRAM. A user can multi-thread within a CCE but not across CCEs. The HAL records this as build variants: idle-eth has eight processors per core and two kernel build variants.
 
-Until then the ethernet list is the four CCE0 cores, the idle-ethernet image addresses local 0, and the reset vector is the host-supplied value with no CCE term added.
+The host writes a `KeraunosSpaRoutes` table into each Keraunos core during firmware load (`hostdev/keraunos_spa_routes.h`, filled from the `keraunos:` and `mimir_channels` blocks), so device code holds no package constants. `experimental/keraunos_cce.h` is the device API on top of it.
 
-Check: a kernel on CCE1 writes its own SRAM at the same local offset a CCE0 kernel uses, and the host reads that word from CCE1's window.
+Checks: `KeraunosCce1.*`, `KeraunosPathsCce1.*`, `KeraunosApi.*`, `KeraunosFabric.*`.
 
 ### Step 7. JTAG
 
@@ -131,3 +133,5 @@ Check: the step 5 case on JTAG with `mmk.yaml`.
 - **Who owns bring-up.** `bringup_mmk.py` releases the uncore and brings up the link and D2D. Metal resets the ethernet processors.
 - **Address space.** Chippy uses the chiplet-local window. `keraunos_address_map.hpp` is the package SPA table for a later `full_package` path.
 - **Dispatch.** `TT_METAL_SLOW_DISPATCH_MODE` still chooses. A Keraunos case on a package with no Tensix cores skips while that variable is unset.
+- **One core per CCE.** Descriptor cores `(4, y)` are CCE0 and `(5, y)` are CCE1. Per-CCE firmware images and kernel binaries, with the local and peer SRAM bases set by build defines. UMD accepts both the CCE-relative and the native view of an address on a CCE core.
+- **Device API.** `experimental/keraunos_cce.h` (identity, own and peer SRAM, package addresses from the host-written route table, IDMA `async_write`/`async_read` with trids and barriers, `write32`/`read32`, `peer_signal`/`peer_wait`). There is no remote atomic: credits use monotonic counters written with `write32`.

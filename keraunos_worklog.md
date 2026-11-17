@@ -137,7 +137,7 @@ Plan: `keraunos_plan.md`. Each entry records what was tried, what happened, and 
   - No new `RiscType` bits were added: per-hart control of CCE1 is not needed by tt-metal today.
 
 ### tt-metal
-- **Processor layout: interleaved.** Processor `2*hart + cce`: DM0 = CCE0 hart 0, DM1 = CCE1 hart 0, and so on.
+- **(Superseded 2026-11-14 by the per-CCE model below.) Processor layout: interleaved.** Processor `2*hart + cce`: DM0 = CCE0 hart 0, DM1 = CCE1 hart 0, and so on.
   - **This deviates from the "harts 0–7 = CCE0, 8–15 = CCE1" wording in the plan.** Two reasons:
     - `EthernetConfig.processor` is the public `DataMovementProcessor` enum, which stops at `RISCV_7`. A block layout would make CCE1 unreachable from a kernel config without changing that public enum. With interleaving, RISCV_0/RISCV_1 are CCE0/CCE1 hart 0, exactly like Blackhole erisc0/erisc1.
     - The JIT picks firmware image `processor % num_fw_binaries`. That fits interleaving with no build-system change.
@@ -200,3 +200,34 @@ So the 16-hart firmware (two images, interleaved processors, shared mailbox) boo
   - **Question for SysEng:** which fmt/op is an int32 add?
   - Until then, Keraunos credits use monotonic counters written with `write32` (Blackhole's counter-mode credits).
 - Dropped the old uncommitted GDDR attempt: the `test_mimir_emu.cpp` WritesMimirGddr/ReadsMimirGddr tests and the `eth_{read,write}_mimir_gddr.cpp` kernels. `KeraunosPaths` and the chippy repro supersede them. Patch saved at `scratchpad/old_gddr_attempt.patch`.
+
+## Per-CCE model and Phases 2-5 (2026-11-14 to 2026-11-17)
+
+**Design change (user-directed).** The 16-hart interleaved model is gone. CCE0 is descriptor core `(4, y)` and CCE1 is `(5, y)`, each its own idle-ethernet core with eight harts. CCE0 has its base at 0 and CCE1 at 4 MiB, both add 8 MiB for the uncached alias. tt-metal builds a separate firmware image per CCE (`erisc`, `eth_cce1`) and a separate binary per CCE for every kernel, with `ETH_CCE_LOCAL_BASE` and `ETH_CCE_PEER_BASE` set per build. The HAL has two kernel build variants for idle-eth (`get_build_variants`). A user multi-threads only within a CCE. The own-view-at-0 remap tried first made CCE1 firmware init time out and was dropped.
+
+**The CCE1 bug.** CCE1 kernels launched but ran with all runtime args 0. `firmware_config_init` added `ETH_CCE_LOCAL_BASE` to the kernel config base and the DM path then added `MEM_L1_UNCACHED_BASE`, which already carries it: 4 MiB counted twice. Found by dumping the launch message, runtime args and kernel binary from the host, then the kernel's own SRAM writes. Fix: tt-metal `c7c46f8d364`. The watcher's `0x18407e0` UMD error came from the same double count.
+
+**Results on mmk (all pass):**
+
+| Suite | Tests |
+|---|---|
+| `KeraunosEmu.*`, `KeraunosCce1.*` | 4 + 7 |
+| `KeraunosOverlay.*`, `KeraunosPaths.*` (Phase 2, 3: tile matrix, CPU writes over D2D, M1 GDDR views and offsets, M0 GDDR through M1, every Mimir CCE SRAM) | 8 + 28 |
+| `KeraunosFromMimir.*` (Phase 3: Mimir CCE loads and stores into HSIO SRAM, M1 direct and M0 two hops) | 6 |
+| `KeraunosPathsCce1.*`, `KeraunosFromMimirCce1.*` (Phase 4: every path issued from CCE1) | 14 + 2 |
+| `KeraunosApi.*` (Phase 5: device API and routes table, both CCEs) | 12 |
+| `KeraunosFabric.*` (Phase 5: worker -> router -> destination, CCE0/CCE1 sender/receiver) | 4 |
+| `Mimir*` (the whole Mimir contract) | 103 |
+
+UMD: baremetal 543/543, `api_tests` 17 pass + 9 skipped (`EmuTTDevice.*` need the emulator).
+
+**Mimir -> K address.** A Mimir CCE reaches HSIO SRAM with a plain 64-bit load or store to the same package address the Keraunos CCEs use. No SysEng document gives the Mimir-side map; found by trying it. Open: the Mimir CCE API (`gddr_cce.h`) has no `keraunos_hsio_sram_addr` yet, because `MimirCceSpaRoutes` has no K entries. The fabric tests pass the address in as a runtime arg.
+
+**Parked / not done.**
+- **Remote atomics.** Still `DISABLED_` (see the atomics probe above). Question for SysEng: which fmt/op is an int32 add?
+- **Watcher and host NOC sanitizer.** Both reject native CCE1 addresses (`bad write eth address noc{5-3, 0x00408080}`) and the watcher reader asks UMD for an address it rejects. Predates this work.
+- **Fast dispatch.** Per-CCE kernel text offsets are handled in slow dispatch only.
+- **UMD `eth_cces_per_core`** is unused by `mmk.yaml` and could be removed.
+- **chippy.** `bringup_mmk_fw.py` uses SysEng's firmware, so the ad-hoc `bringup_mmk.py` CCE1 steps are not on the main path. `probe/keraunos_cce1` was removed.
+
+**Process note.** UMD changes were committed locally at the user's explicit request on 2026-11-13 (the UMD `CLAUDE.md` default is to leave them unstaged). `PR_DRAFT_keraunos_cce1.md` in UMD is still untracked. Nothing has been pushed from any repo.
