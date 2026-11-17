@@ -554,14 +554,18 @@ def test_dram_group_norm_core_grid_none() -> None:
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("group_count", "input_shape"),
+    ("group_count", "input_shape", "offset"),
     [
         # NCHW; H must be divisible by cluster width. C % 32 == 0 for fused v1.
-        (32, (1, 128, 64, 64)),
-        (32, (1, 256, 128, 128)),
-        (8, (1, 64, 64, 64)),
+        (32, (1, 128, 64, 64), 0.0),
+        (32, (1, 256, 128, 128), 0.0),
+        (8, (1, 64, 64, 64), 0.0),
+        # Each device's H*W is not whole tiles, so the last tile row holds padding rows: 23 of 64
+        # rows on 8 devices (1 x 41), 24 of 352 on one. The offset makes padding counted as data
+        # shift the statistics well beyond the bfloat16 error.
+        (32, (1, 128, 8, 41), 1.0),
     ],
-    ids=["c128_h64", "c256_h128", "c64_g8"],
+    ids=["c128_h64", "c256_h128", "c64_g8", "c128_h8w41_padded"],
 )
 @pytest.mark.parametrize("activation_fn", [None, "silu"], ids=["no_act", "silu"])
 def test_distributed_group_norm(
@@ -570,6 +574,7 @@ def test_distributed_group_norm(
     cluster_axis: int,
     input_shape: tuple[int, int, int, int],
     group_count: int,
+    offset: float,
     activation_fn: str | None,
 ) -> None:
     """Spatially shard H on cluster_axis; match torch GroupNorm on the full tensor."""
@@ -585,7 +590,7 @@ def test_distributed_group_norm(
     torch.nn.init.normal_(torch_model.bias)
     torch_model.eval()
 
-    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    torch_input = torch.randn(input_shape, dtype=torch_dtype) + offset
     with torch.no_grad():
         torch_output = torch_model(torch_input)
         if activation_fn == "silu":
@@ -608,6 +613,99 @@ def test_distributed_group_norm(
     tt_output = tt_model(tt_input)
 
     tt_torch = _gather_group_norm_output(tt_output, mesh_device, cluster_axis, torch_output.shape[0])
+
+    assert_quality(torch_output, tt_torch, pcc=0.999_300)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, device_params",
+    [
+        pytest.param(
+            (2, 4),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh2x4_h1w0",
+        ),
+        pytest.param(
+            (2, 4),
+            0,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh2x4_h0w1",
+        ),
+        pytest.param(
+            (4, 8),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh4x8_h1w0",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("group_count", "input_shape", "offset"),
+    [
+        (32, (1, 128, 64, 64), 0.0),
+        (32, (1, 512, 128, 96), 0.0),
+        # Each device's H*W is not whole tiles: 2 x 42 or 4 x 21 (12 of 96 rows padding) on 2x4,
+        # 1 x 21 (11 of 32) on 4x8.
+        (32, (1, 128, 8, 84), 1.0),
+    ],
+    ids=["c128_h64w64", "c512_h128w96", "c128_h8w84_padded"],
+)
+@pytest.mark.parametrize("activation_fn", [None, "silu"], ids=["no_act", "silu"])
+def test_distributed_group_norm_2d(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    h_axis: int,
+    input_shape: tuple[int, int, int, int],
+    group_count: int,
+    offset: float,
+    activation_fn: str | None,
+) -> None:
+    """Shard H on h_axis and W on the other mesh axis; match torch GroupNorm on the full tensor."""
+    torch.manual_seed(0)
+    w_axis = 1 - h_axis
+
+    torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=input_shape[1])
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
+    torch_model.eval()
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16) + offset
+    with torch.no_grad():
+        torch_output = torch_model(torch_input)
+        if activation_fn == "silu":
+            torch_output = torch.nn.functional.silu(torch_output)
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+    tt_model = DistributedGroupNorm.from_torch(
+        torch_ref=torch_model,
+        mesh_device=mesh_device,
+        cluster_axis=h_axis,
+        second_cluster_axis=w_axis,
+        mesh_axis=None,
+        ccl_manager=ccl_manager,
+        activation_fn=activation_fn,
+    )
+
+    # NHWC; mesh axis h_axis shards H (dim 1), w_axis shards W (dim 2).
+    dims = [None, None]
+    dims[h_axis] = 1
+    dims[w_axis] = 2
+    nhwc = torch_input.permute(0, 2, 3, 1).contiguous()
+    tt_input = ttnn.from_torch(
+        nhwc,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+    )
+
+    tt_output = tt_model(tt_input)
+    tt_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=dims, mesh_shape=tuple(mesh_device.shape)),
+    ).permute(0, 3, 1, 2)
 
     assert_quality(torch_output, tt_torch, pcc=0.999_300)
 

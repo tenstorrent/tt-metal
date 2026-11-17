@@ -53,16 +53,16 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
     TT_FATAL(args.num_groups >= 1, "num_groups must be >= 1");
     TT_FATAL(C % args.num_groups == 0, "C ({}) must be divisible by num_groups ({})", C, args.num_groups);
     TT_FATAL(C % TILE_WIDTH == 0, "C ({}) must be divisible by TILE_WIDTH ({})", C, TILE_WIDTH);
-    // The welford compute accumulates every one of the 32 rows in each tile; the per-group count is
-    // derived from the (padded) HW. Require tile-aligned H*W so the padded HW equals the logical HW
-    // (padded_HW == true count) — there is no row mask.
+    // H*W need not be whole tiles: the readers zero the padding rows of the last tile row, and the
+    // statistics, which cover the padded H*W, are corrected for those zeros. Every device of the
+    // mesh must hold the same H*W, which the even spatial split guarantees. Only the last tile row
+    // may hold padding: the kernels zero padding rows in that row only.
     TT_FATAL(
-        shape[2] % TILE_HEIGHT == 0,
-        "H*W ({}) must be divisible by TILE_HEIGHT ({}) so there are no padded rows inflating "
-        "the per-group count; got H*W={}.",
-        shape[2],
+        input.padded_shape()[2] == tt::round_up(shape[2], TILE_HEIGHT),
+        "H*W is padded to {} rows, but only padding up to the next multiple of {} ({}) is supported",
+        input.padded_shape()[2],
         TILE_HEIGHT,
-        shape[2]);
+        tt::round_up(shape[2], TILE_HEIGHT));
     // The reused welford GroupNorm kernels require an input_mask to zero sub-tile group padding.
     TT_FATAL(
         tensor_args.input_mask.has_value(),
@@ -128,6 +128,19 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
         TT_FATAL(
             !args.multi_device_global_semaphore.empty(),
             "multi_device_global_semaphore must be non-empty when ring_size > 1");
+    }
+    if (args.second_ring_size > 1) {
+        TT_FATAL(
+            args.ring_size > 1, "a second cluster axis needs a first cluster axis wider than 1 (swap the two axes)");
+        TT_FATAL(
+            args.second_cluster_axis < 2 && args.second_cluster_axis != args.cluster_axis,
+            "second_cluster_axis ({}) must be the other mesh axis than cluster_axis ({})",
+            args.second_cluster_axis,
+            args.cluster_axis);
+        TT_FATAL(
+            args.multi_device_global_semaphore.size() >= 2,
+            "a second cluster axis needs two global semaphores, got {}",
+            args.multi_device_global_semaphore.size());
     }
 
     const auto sizing = compute_sizing(args, input);
@@ -210,6 +223,9 @@ ttsl::hash::hash_t DitFusedDistributedGroupnormDeviceOperation::compute_program_
         args.cluster_axis,
         args.ring_size,
         args.topology,
+        args.second_cluster_axis,
+        args.second_ring_size,
+        args.second_topology,
         args.compute_kernel_config,
         subdevice_core_range_set,
         tensor_args);
@@ -234,18 +250,31 @@ Tensor dit_fused_distributed_groupnorm(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& persistent_output_buffer,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation) {
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    std::optional<uint32_t> second_cluster_axis) {
     using OperationType = ttnn::experimental::prim::DitFusedDistributedGroupnormDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
         mesh_device.arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, false, true, false);
 
     const auto& mesh_view = mesh_device.get_view();
-    const std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const auto axis_width = [&](uint32_t axis) -> uint32_t {
+        return static_cast<uint32_t>((axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols());
+    };
+    const std::size_t num_devices = axis_width(cluster_axis);
 
     tt::tt_fabric::Topology topology_ = (num_devices > 1)
                                             ? ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis)
                                             : tt::tt_fabric::Topology::Linear;
+    TT_FATAL(
+        !second_cluster_axis.has_value() || (*second_cluster_axis < 2 && *second_cluster_axis != cluster_axis),
+        "second_cluster_axis must be the other mesh axis than cluster_axis ({})",
+        cluster_axis);
+    const uint32_t second_ring_size = second_cluster_axis.has_value() ? axis_width(*second_cluster_axis) : 1u;
+    const uint32_t second_axis = second_cluster_axis.value_or(0);
+    tt::tt_fabric::Topology second_topology =
+        (second_ring_size > 1) ? ::ttnn::ccl::get_usable_topology(input_tensor, topology, second_axis)
+                               : tt::tt_fabric::Topology::Linear;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .eps = epsilon,
@@ -256,6 +285,9 @@ Tensor dit_fused_distributed_groupnorm(
         .cluster_axis = cluster_axis,
         .ring_size = static_cast<uint32_t>(num_devices),
         .topology = topology_,
+        .second_cluster_axis = second_axis,
+        .second_ring_size = second_ring_size,
+        .second_topology = second_topology,
         .multi_device_global_semaphore = multi_device_global_semaphore,
         .sub_device_id = subdevice_id,
     };

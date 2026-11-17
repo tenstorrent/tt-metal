@@ -29,8 +29,7 @@ namespace {
 // translation unit, where every anonymous namespace merges into a single scope.
 const KernelSpecName MCI_READER{"mci_reader"};
 const KernelSpecName MCI_WRITER{"mci_writer"};
-const KernelSpecName MCI_COMPUTE_FULL{"mci_compute_full"};
-const KernelSpecName MCI_COMPUTE_CLIFF{"mci_compute_cliff"};
+const KernelSpecName MCI_COMPUTE{"mci_compute"};
 const DFBSpecName MCI_IN{"mci_in"};
 const DFBSpecName MCI_OUT{"mci_out"};
 const TensorParamName MCI_INPUT{"mci_input"};
@@ -155,23 +154,22 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
 
     /** compute
      */
-    KernelSpec::CompilerOptions::Defines compute_kernel_defines;
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
     if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
         compute_hw_config.unpack_modes = {{MCI_IN, UnpackMode::UnpackToDest}};
     }
-    const std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp");
 
-    // One compute KernelSpec per core group, each keeping its group's block count as a compile-time
-    // arg (the groups cover disjoint node sets, so each node still sees exactly one instance).
-    auto make_compute = [&](const KernelSpecName& unique_id, uint32_t per_core_block_cnt) {
-        return KernelSpec{
-            .unique_id = unique_id,
-            .source = compute_kernel,
+    // One compute kernel for the full and the cliff cores: the block count per core is a runtime
+    // arg, so the groups differ only in their runtime args and the binary does not depend on the
+    // height.
+    Group<KernelSpec> kernels = {
+        std::move(reader),
+        KernelSpec{
+            .unique_id = MCI_COMPUTE,
+            .source = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp",
             .compiler_options =
                 {
-                    .defines = compute_kernel_defines,
+                    .defines = {{"UNTILIZE_RUNTIME_BLOCK_CNT", "1"}},
                     .opt_level = KernelBuildOptLevel::O3,
                 },
             .dfb_bindings =
@@ -185,28 +183,23 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
                      .accessor_name = "out",
                      .endpoint_type = DFBEndpointType::PRODUCER,
                  }},
-            .compile_time_args =
-                {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_tile_cnt", num_tiles_per_row}},
+            .compile_time_args = {{"per_core_block_tile_cnt", num_tiles_per_row}},
+            .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
             .hw_config = compute_hw_config,
-        };
-    };
-
+        }};
     // The writer joins after the core loop below, which fills in its per-node vararg counts.
-    Group<KernelSpec> kernels = {std::move(reader)};
     Group<WorkUnitSpec> work_units;
     if (!core_range.empty()) {
-        kernels.push_back(make_compute(MCI_COMPUTE_FULL, nblocks_per_core));
         work_units.push_back(WorkUnitSpec{
             .name = "full",
-            .kernels = {MCI_READER, MCI_WRITER, MCI_COMPUTE_FULL},
+            .kernels = {MCI_READER, MCI_WRITER, MCI_COMPUTE},
             .target_nodes = core_range,
         });
     }
     if (has_cliff) {
-        kernels.push_back(make_compute(MCI_COMPUTE_CLIFF, nblocks_per_core_cliff));
         work_units.push_back(WorkUnitSpec{
             .name = "cliff",
-            .kernels = {MCI_READER, MCI_WRITER, MCI_COMPUTE_CLIFF},
+            .kernels = {MCI_READER, MCI_WRITER, MCI_COMPUTE},
             .target_nodes = core_range_cliff,
         });
     }
@@ -221,8 +214,13 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
     const auto& cores = corerange_to_cores(available_grid);
     KernelRunArgs reader_run_args{.kernel = MCI_READER};
     KernelRunArgs writer_run_args{.kernel = MCI_WRITER};
+    KernelRunArgs compute_run_args{.kernel = MCI_COMPUTE};
     for (uint32_t i = 0; i < ncores; ++i) {
         const auto& core = cores[i];
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values,
+            core,
+            {{"per_core_block_cnt", core_range_cliff.contains(core) ? nblocks_per_core_cliff : nblocks_per_core}});
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
         // writer runtime args. This core's first stick is the running total from the cores before
@@ -289,7 +287,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
     };
 
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
     run_args.tensor_args = {
         {MCI_INPUT, input_mesh_tensor},
         {MCI_OUTPUT, output_mesh_tensor},

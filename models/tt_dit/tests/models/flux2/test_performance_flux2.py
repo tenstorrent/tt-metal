@@ -62,11 +62,11 @@ _STEP_TO_METRIC = {
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, device_params",
+    "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_w_axis, topology, num_links, is_fsdp, dynamic_load, device_params",
     [
         # Without dynamic_load the encoder OOMs during weight conversion on 4 chips.
         [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, line_params_flux2_perf],
-        [(2, 4), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_flux2_perf],
+        [(2, 4), 0, 1, 1, 0, ttnn.Topology.Linear, 2, False, False, line_params_flux2_perf],
         [(4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2_perf],
         [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2_perf],
         [(4, 8), 1, 0, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2_perf],
@@ -88,7 +88,7 @@ def test_flux2_performance(
     sp_axis: int,
     tp_axis: int,
     encoder_tp_axis: int,
-    vae_tp_axis: int,
+    vae_w_axis: int,
     topology: ttnn.Topology,
     num_links: int,
     is_fsdp: bool,
@@ -117,9 +117,8 @@ def test_flux2_performance(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         encoder_tp_axis=encoder_tp_axis,
-        vae_tp_axis=vae_tp_axis,
-        vae_h_axis=1 - vae_tp_axis,
-        vae_w_axis=None,  # 1-vae_tp_axis,
+        vae_h_axis=1 - vae_w_axis,
+        vae_w_axis=vae_w_axis,
         num_links=num_links,
         topology=topology,
         width=width,

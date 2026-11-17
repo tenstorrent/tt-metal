@@ -39,29 +39,26 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 # The image sizes (width, height) a pipeline supports by default: the square sizes the inference
-# server offers. Other aspect ratios would need padding the latents to whole tiles per device.
+# server offers. Other sizes work where the fused group norm accepts each device's share of the
+# latents, a whole number of tiles of pixels.
 _DEFAULT_RESOLUTIONS = ((1024, 1024), (2048, 2048))
 
+# The prompt's token count, padded to it whatever the prompt.
+_PROMPT_SEQUENCE_LENGTH = 512
+
 # The parallel layout per mesh shape: the DiT's SP and TP axes, the text encoder's TP axis, the VAE's
-# channel (TP) and row (H) axes, and the CCL links and topology.
+# row (H) and column (W) axes, and the CCL links and topology. The VAE splits the image only, not the
+# channels: a channel split adds a reduce-scatter and all-gathers whose programs compile at every new
+# image size. Rows go on the longer mesh axis.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
-    (1, 8): {
-        "sp_axis": 0,
-        "tp_axis": 1,
-        "encoder_tp_axis": 1,
-        "vae_tp_axis": 1,
-        "vae_h_axis": 0,
-        "num_links": 1,
-        "topology": ttnn.Topology.Linear,
-    },
-    # SP4/TP2 denoised Klein 1% faster than SP2/TP4 at 1024². TP2 + H4 decoded faster than H2xW4 or H4xW2
-    # without TP (0.47 s against 0.78 and 0.56).
+    # SP4/TP2 denoised Klein 1% faster than SP2/TP4 at 1024². H4xW2 decoded faster than H2xW4 (0.56 s
+    # against 0.78); a channel split TP2 + H4 was faster still (0.47 s).
     (2, 4): {
         "sp_axis": 1,
         "tp_axis": 0,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 0,
         "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 1,
         "topology": ttnn.Topology.Linear,
     },
@@ -72,8 +69,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 1,
         "vae_h_axis": 0,
+        "vae_w_axis": 1,
         "num_links": 2,
         "topology": ttnn.Topology.Linear,
     },
@@ -81,8 +78,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 1,
-        "vae_h_axis": 0,
+        "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 2,
         "topology": ttnn.Topology.Linear,
     },
@@ -90,8 +87,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 0,
         "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 2,
         "topology": ttnn.Topology.Linear,
     },
@@ -241,6 +238,7 @@ class Flux2Pipeline:
             is_fsdp=self.is_fsdp,
             shard_prompt=self._shard_prompt,
             guidance_embeds=self._guidance_embeds,
+            row_capacity=self._transformer_row_capacity(),
         )
 
         self._pos_embed = self._torch_transformer.pos_embed
@@ -311,7 +309,7 @@ class Flux2Pipeline:
         self.ts = Flux2TransformerState()
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
-        text_ids = _prepare_ids(text_sequence_length=512)  # matches sequence_length=512 in encode
+        text_ids = _prepare_ids(text_sequence_length=_PROMPT_SEQUENCE_LENGTH)
         prompt_rope_cos, prompt_rope_sin = self._pos_embed.forward(text_ids)
         # Store rope tensors pre-shaped as (1, 1, seq, head_dim) so attention blocks never
         # need to reshape per-call (2800 ops per inference). SP sharding is on dim 2 (seq).
@@ -468,8 +466,8 @@ class Flux2Pipeline:
         num_links = from_preset("num_links", num_links)
         topology = from_preset("topology", topology)
         if vae_tp_axis is None and vae_h_axis is None and vae_w_axis is None:
-            vae_tp_axis = from_preset("vae_tp_axis", vae_tp_axis)
             vae_h_axis = from_preset("vae_h_axis", vae_h_axis)
+            vae_w_axis = from_preset("vae_w_axis", vae_w_axis)
 
         dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[tp_axis]), mesh_axis=tp_axis),
@@ -566,7 +564,7 @@ class Flux2Pipeline:
             prompt_embeds, _mask = self._prompt_encoder.encode(
                 prompts,
                 num_images_per_prompt=num_images_per_prompt,
-                sequence_length=512,
+                sequence_length=_PROMPT_SEQUENCE_LENGTH,
                 traced=traced,
             )
             _, prompt_sequence_length, _ = prompt_embeds.shape
@@ -604,7 +602,7 @@ class Flux2Pipeline:
         image_ids = _prepare_ids(height=latents_height // self._patch_size, width=latents_width // self._patch_size)
         rope_cos, rope_sin = self._pos_embed.forward(image_ids)
 
-        state.latents.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
+        state.latents.update(self._to_device(latents, mesh_axes=[None, sp_axis, None]), traced)
 
         # Each device runs the transformer on its shard of the latents followed by its shard of the
         # reference tokens, so the RoPE is arranged the same way. The attention does not depend on
@@ -614,13 +612,13 @@ class Flux2Pipeline:
             reference_rope_cos, reference_rope_sin = self._pos_embed.forward(reference_ids)
             rope_cos = _interleave_shards(rope_cos, reference_rope_cos, sp_factor)
             rope_sin = _interleave_shards(rope_sin, reference_rope_sin, sp_factor)
-            state.reference.update(reference, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
+            state.reference.update(self._to_device(reference, mesh_axes=[None, sp_axis, None]), traced)
 
         # Store rope tensors pre-shaped as (1, 1, seq, head_dim) so attention blocks never
         # need to reshape per-call. SP sharding is on dim 2 (seq).
         rope_mesh_axes = [None, None, sp_axis, None]
-        state.rope_cos.update(rope_cos[None, None], traced, mesh_axes=rope_mesh_axes, device=self._mesh_device)
-        state.rope_sin.update(rope_sin[None, None], traced, mesh_axes=rope_mesh_axes, device=self._mesh_device)
+        state.rope_cos.update(self._to_device(rope_cos[None, None], mesh_axes=rope_mesh_axes), traced)
+        state.rope_sin.update(self._to_device(rope_sin[None, None], mesh_axes=rope_mesh_axes), traced)
         # The single blocks run on the concatenated [spatial | prompt] sequence and need the matching
         # rope. It is constant across the denoising steps, so concat once here.
         state.combined_rope_cos.update(ttnn.concat([state.rope_cos.data, self.ts.tt_prompt_rope_cos], dim=2), traced)
@@ -680,10 +678,14 @@ class Flux2Pipeline:
             # Latents arrive SP-sharded on dim=1 (patchified token dim). Redistribute to
             # whatever spatial sharding the VAE conv pyramid expects before unpatchifying.
             #
-            # H (token dim=1): gather SP, then re-shard to H axis if on a different axis.
+            # H (token dim=1): if the VAE rows are on the SP axis, the SP shards are already bands of
+            #   rows. Otherwise gather SP, and preprocess_and_unpatchify re-splits over the H axis.
             # W (spatial dim=2): can only be applied after unpatchify since H/W are interleaved
-            #   in patchified tokens; mesh_partition is applied right after the reshape below.
-            if self._vae_parallel.h_parallel is not None and self._vae_parallel.h_parallel.mesh_axis == sp_axis:
+            #   in patchified tokens; preprocess_and_unpatchify splits it.
+            rows_on_sp = (
+                self._vae_parallel.h_parallel is not None and self._vae_parallel.h_parallel.mesh_axis == sp_axis
+            )
+            if rows_on_sp:
                 tt_latents = state.latents.data
             else:
                 tt_latents = self._ccl_manager.all_gather(
@@ -692,25 +694,10 @@ class Flux2Pipeline:
                     mesh_axis=sp_axis,
                     use_hyperparams=True,
                 )
-                if self._vae_parallel.h_parallel is not None:
-                    tt_latents = ttnn.mesh_partition(
-                        tt_latents,
-                        dim=1,
-                        cluster_axis=self._vae_parallel.h_parallel.mesh_axis,
-                        memory_config=tt_latents.memory_config(),
-                    )
 
             tt_latents = self._vae_decoder.preprocess_and_unpatchify(
-                tt_latents, height=latents_height, width=latents_width
+                tt_latents, height=latents_height, width=latents_width, split_height=not rows_on_sp
             )
-
-            if self._vae_parallel.w_parallel is not None:
-                tt_latents = ttnn.mesh_partition(
-                    tt_latents,
-                    dim=2,
-                    cluster_axis=self._vae_parallel.w_parallel.mesh_axis,
-                    memory_config=tt_latents.memory_config(),
-                )
 
             tracer = self._vae_decoder_tracers.get((width, height))
             if tracer is None:
@@ -720,7 +707,7 @@ class Flux2Pipeline:
             decoded_output = fast_device_to_host(
                 tt_decoded_output,
                 self._mesh_device,
-                [None, None],
+                self._vae_decoder.output_concat_dims(),
                 ccl_manager=self._vae_ccl_manager,
                 pre_transfer_fn=float_to_uint8,
             )
@@ -737,6 +724,37 @@ class Flux2Pipeline:
             self._denoise_states[width, height, edit] = state
         return state
 
+    def _to_device(self, x: torch.Tensor, *, mesh_axes: Sequence[int | None]) -> ttnn.Tensor:
+        """Convert a tensor whose size follows the image size to bfloat16 tiles on the host, then move
+        it to the device. Converting on the device, as ttnn.from_torch does when it can, runs a
+        tilize and a typecast whose programs compile at every new size."""
+        host = from_torch(x, device=self._mesh_device, mesh_axes=mesh_axes, on_host=True)
+        return ttnn.to_device(host, self._mesh_device)
+
+    def _reference_size(self, *, width: int, height: int) -> tuple[int, int]:
+        """The size (width, height) a reference image is encoded at for an output of the given size:
+        the output size scaled down to at most one megapixel, rounded down to whole tokens."""
+        scale = min(1.0, math.sqrt(1024 * 1024 / (width * height)))
+        multiple = self._vae_scale_factor * self._patch_size
+        return int(width * scale) // multiple * multiple, int(height * scale) // multiple * multiple
+
+    def _transformer_row_capacity(self) -> int:
+        """The most tokens per device the transformer sees over all resolutions, rounded up to whole
+        tiles: the single blocks' spatial, reference and prompt tokens of an edit, or without a
+        reference when dynamic loading rules out editing."""
+        sp_factor = self._parallel_config.sequence_parallel.factor
+        token_size = self._vae_scale_factor * self._patch_size
+        prompt_rows = -(-_PROMPT_SEQUENCE_LENGTH // sp_factor) if self._shard_prompt else _PROMPT_SEQUENCE_LENGTH
+        rows = 0
+        for width, height in self._resolutions:
+            reference_width, reference_height = self._reference_size(width=width, height=height)
+            spatial_tokens = (height // token_size) * (width // token_size)
+            reference_tokens = (
+                0 if self.dynamic_load else (reference_height // token_size) * (reference_width // token_size)
+            )
+            rows = max(rows, -(-spatial_tokens // sp_factor) + -(-reference_tokens // sp_factor) + prompt_rows)
+        return -(-rows // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
     def _encode_reference(
         self, image: Image.Image, *, width: int, height: int, traced: bool
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -747,10 +765,8 @@ class Flux2Pipeline:
         """
         assert self._vae_encoder is not None
 
-        scale = min(1.0, math.sqrt(1024 * 1024 / (width * height)))
         multiple = self._vae_scale_factor * self._patch_size
-        reference_width = int(width * scale) // multiple * multiple
-        reference_height = int(height * scale) // multiple * multiple
+        reference_width, reference_height = self._reference_size(width=width, height=height)
 
         image = image.convert("RGB")
         crop_width = min(image.width, round(image.height * width / height))

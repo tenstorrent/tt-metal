@@ -67,9 +67,13 @@ class ParallelFeedForward(Module):
         pin_output_bf16=False,
         ff1_compute_kernel_config=None,
         ff2_compute_kernel_config=None,
+        row_independent_matmul_config: bool = False,
     ):
         """`ff1_compute_kernel_config` / `ff2_compute_kernel_config` are each projection's compute config (None: the
-        linear's default); a `compute_kernel_config` passed to `forward` overrides both."""
+        linear's default); a `compute_kernel_config` passed to `forward` overrides both.
+
+        `row_independent_matmul_config`: one matmul config for every row count (see
+        `get_matmul_config`), for input whose row count follows the input size."""
         super().__init__()
 
         if inner_dim is None:
@@ -105,6 +109,7 @@ class ParallelFeedForward(Module):
             activation_dtype=activation_dtype,
             pin_output_bf16=pin_output_bf16,
             compute_kernel_config=ff1_compute_kernel_config,
+            row_independent_matmul_config=row_independent_matmul_config,
         )
         self.ff2 = RowCls(
             inner_dim,
@@ -116,6 +121,7 @@ class ParallelFeedForward(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
             compute_kernel_config=ff2_compute_kernel_config,
+            row_independent_matmul_config=row_independent_matmul_config,
         )
 
     def forward(

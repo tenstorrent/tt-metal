@@ -19,7 +19,8 @@ void kernel_main() {
     const uint32_t end_output_page = get_arg(args::end_output_page);
 
     constexpr uint32_t Tile_size_bytes = get_arg(args::Tile_size_bytes);
-    constexpr uint32_t Max_Map_Entries = get_arg(args::Max_Map_Entries);
+    // Depends on the shapes, so a runtime arg: the binary does not depend on them.
+    const uint32_t Max_Map_Entries = get_arg(args::Max_Map_Entries);
     constexpr uint8_t element_sz_bytes = get_arg(args::element_sz_bytes);
 
     const auto output_addrgen = TensorAccessor(tensor::output);

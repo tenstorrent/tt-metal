@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <limits>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -64,6 +65,10 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
 
     const bool is_local = (args.ring_size <= 1);
     const bool use_mux = !is_local;
+    // Input sharded on both mesh axes: a second forwarder exchanges the merged stats over the
+    // second axis.
+    const bool two_axes = use_mux && args.second_ring_size > 1;
+    const uint32_t num_forwarders = use_mux ? (two_axes ? 2u : 1u) : 0u;
 
     TT_FATAL(input_mask.has_value(), "dit_fused_distributed_groupnorm requires an input_mask (welford GroupNorm)");
 
@@ -106,9 +111,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // input is too short — the per-device shard height Ht may be small (H is sharded across the
     // cluster). Pick the largest num_virtual_rows that (a) divides Ht, (b) factors as
     // col_replication × num_actual_rows within the grid (col_replication ≤ grid.x/num_virtual_cols,
-    // num_actual_rows ≤ grid.y), and (c) leaves a core free for the fabric forwarder. This maximizes
+    // num_actual_rows ≤ grid.y), and (c) leaves a core free for each fabric forwarder. This maximizes
     // the reduction parallelism while keeping per_core_Mt integral. vr==1 is always feasible.
-    const uint32_t reduction_core_budget = max_cores - (use_mux ? 1u : 0u);
+    const uint32_t reduction_core_budget = max_cores - num_forwarders;
     uint32_t num_virtual_rows = 1, num_actual_rows = 1, col_replication = 1;
     for (uint32_t cr = 1; cr <= col_rep_max; ++cr) {
         for (uint32_t nr = 1; nr <= grid_size.y; ++nr) {
@@ -204,37 +209,55 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const uint32_t groupnorm_mode = static_cast<uint32_t>(ttnn::prim::GroupNormMode::TWO_PASS);
 
     // ------------------------------------------------------------------------
-    // Ring topology (unchanged from CCL scaffold)
+    // Ring topology, one line per exchanged mesh axis: forwarder 0 exchanges over cluster_axis,
+    // forwarder 1 (two_axes only) over second_cluster_axis.
     // ------------------------------------------------------------------------
-    std::optional<ttnn::MeshCoordinate> forward_coord = std::nullopt;
-    std::optional<ttnn::MeshCoordinate> backward_coord = std::nullopt;
-    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
-    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
-    uint32_t device_index = 0;
+    struct AxisExchange {
+        uint32_t cluster_axis = 0;
+        uint32_t ring_size = 1;
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
+        std::optional<ttnn::MeshCoordinate> forward_coord;
+        std::optional<ttnn::MeshCoordinate> backward_coord;
+        std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id;
+        std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id;
+        uint32_t device_index = 0;
+        uint32_t num_targets_forward = 0;
+        uint32_t num_targets_backward = 0;
+        // First stats page this axis's forwarder writes; it gets this as its forwarder_index, so
+        // its pages are page_offset + device_index (num_chunks_per_device == 1, max_rounds == 1).
+        uint32_t page_offset = 0;
+    };
+    std::vector<AxisExchange> exchanges;
     if (use_mux) {
-        forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            input_tensor, mesh_coordinate, /*offset=*/1, args.topology, args.cluster_axis);
-        backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            input_tensor, mesh_coordinate, /*offset=*/-1, args.topology, args.cluster_axis);
-        device_index =
-            ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, mesh_coordinate, args.cluster_axis);
-        if (forward_coord.has_value()) {
-            forward_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+        exchanges.push_back(
+            {.cluster_axis = args.cluster_axis, .ring_size = args.ring_size, .topology = args.topology});
+    }
+    if (two_axes) {
+        exchanges.push_back(
+            {.cluster_axis = args.second_cluster_axis,
+             .ring_size = args.second_ring_size,
+             .topology = args.second_topology,
+             .page_offset = args.ring_size});
+    }
+    for (auto& ex : exchanges) {
+        ex.forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensor, mesh_coordinate, /*offset=*/1, ex.topology, ex.cluster_axis);
+        ex.backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensor, mesh_coordinate, /*offset=*/-1, ex.topology, ex.cluster_axis);
+        ex.device_index =
+            ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, mesh_coordinate, ex.cluster_axis);
+        if (ex.forward_coord.has_value()) {
+            ex.forward_fabric_node_id = mesh_device->get_fabric_node_id(ex.forward_coord.value());
         }
-        if (backward_coord.has_value()) {
-            backward_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+        if (ex.backward_coord.has_value()) {
+            ex.backward_fabric_node_id = mesh_device->get_fabric_node_id(ex.backward_coord.value());
         }
+        std::tie(ex.num_targets_forward, ex.num_targets_backward) = ttnn::ccl::get_forward_backward_line_mcast_distance(
+            ex.ring_size, ex.device_index, ex.topology, /*static_alternate=*/true);
     }
 
-    uint32_t num_targets_forward = 0;
-    uint32_t num_targets_backward = 0;
-    if (use_mux) {
-        std::tie(num_targets_forward, num_targets_backward) = ttnn::ccl::get_forward_backward_line_mcast_distance(
-            args.ring_size, device_index, args.topology, /*static_alternate=*/true);
-    }
-
     // ------------------------------------------------------------------------
-    // Cores: reduction grid (num_actual_cols × num_actual_rows) + 1 forwarder when distributed.
+    // Cores: reduction grid (num_actual_cols × num_actual_rows) + 1 forwarder per exchanged axis.
     // ------------------------------------------------------------------------
     const std::vector<CoreCoord> core_coords =
         grid_to_cores(num_reduction_cores, num_actual_cols, num_actual_rows, /*row_wise=*/false);
@@ -247,10 +270,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     }
     const CoreRangeSet all_reduction_cores(reduction_core_ranges);
 
-    // Forwarder: one spare core outside the reduction grid. When the reduction layout leaves a
-    // spare column/row (num_virtual_cols not dividing grid.x, the common case), it is free; if the
-    // reduction grid exactly fills the device this shape can't host a forwarder → clear FATAL.
-    const uint32_t num_forwarders = use_mux ? 1u : 0u;
+    // Forwarders: spare cores outside the reduction grid, one per exchanged axis. The reduction
+    // grid was sized to leave them free (reduction_core_budget).
     std::vector<CoreCoord> forwarder_cores;
     if (use_mux) {
         std::unordered_set<uint32_t> reduction_lookup;
@@ -259,18 +280,22 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         }
         const auto grid_cores = corerange_to_cores(core_grid, max_cores, /*row_wise=*/true);
         for (const auto& c : grid_cores) {
+            if (forwarder_cores.size() == num_forwarders) {
+                break;
+            }
             if (!reduction_lookup.contains(c.y * grid_size.x + c.x)) {
                 forwarder_cores.push_back(c);
-                break;
             }
         }
         TT_FATAL(
-            !forwarder_cores.empty(),
-            "distributed dit_fused_distributed_groupnorm needs a spare core for the fabric forwarder, but the "
-            "reduction grid ({}x{}={}) fills the whole device ({} cores).",
+            forwarder_cores.size() == num_forwarders,
+            "distributed dit_fused_distributed_groupnorm needs {} spare cores for the fabric forwarders, but the "
+            "reduction grid ({}x{}={}) leaves {} of the device's {} cores.",
+            num_forwarders,
             num_actual_cols,
             num_actual_rows,
             num_reduction_cores,
+            forwarder_cores.size(),
             max_cores);
     }
 
@@ -420,13 +445,17 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // fp32 is a byte container here; the payload is bf16 [mean, var] pairs (see stick_bytes).
     constexpr uint32_t stats_local_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t stats_gathered_cb_id = tt::CBIndex::c_10;
+    // Both forwarders use this one packet CB: each is its own core with its own copy of it.
     constexpr uint32_t packet_cb_id = tt::CBIndex::c_7;
     constexpr uint32_t reserved_packet_header_cb_id = tt::CBIndex::c_11;
     if (use_mux) {
         create_cb(stats_local_cb_id, program, mcast_sender_cores, stick_bytes, 2, fp32_df);
-        create_cb(stats_gathered_cb_id, program, mcast_sender_cores, stick_bytes, args.ring_size, fp32_df);
+        // The second exchange's sticks follow the first's: a reserve cannot wrap, so the CB holds
+        // both back to back.
+        const uint32_t gathered_pages = args.ring_size + (two_axes ? args.second_ring_size : 0u);
+        create_cb(stats_gathered_cb_id, program, mcast_sender_cores, stick_bytes, gathered_pages, fp32_df);
         // One coalesced packet = num_masters sub-sticks; ping-ponged (depth 2). Created on the whole
-        // grid so masters and the forwarder see the same L1 base address.
+        // grid so masters and the forwarders see the same L1 base address.
         const uint32_t packet_bytes = num_masters * stick_bytes;
         create_cb(packet_cb_id, program, CoreRangeSet({core_grid}), packet_bytes, 2, fp32_df);
         const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -434,17 +463,25 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     }
 
     // ------------------------------------------------------------------------
-    // Semaphores: reduce_sender (id 0) + reduce_receiver (id 1); fabric arrival / go on full grid.
+    // Semaphores: reduce_sender (id 0) + reduce_receiver (id 1); fabric arrival / go on full grid,
+    // one pair per forwarder.
     // ------------------------------------------------------------------------
     const uint32_t reduce_sender_semaphore_id = CreateSemaphore(program, all_reduction_cores, 0u);
     const uint32_t reduce_receiver_semaphore_id = CreateSemaphore(program, all_reduction_cores, 0u);
-    const uint32_t arrival_sem_id = use_mux ? CreateSemaphore(program, CoreRangeSet({core_grid}), 0u) : 0u;
-    const uint32_t go_sem_id = use_mux ? CreateSemaphore(program, CoreRangeSet({core_grid}), 0u) : 0u;
+    std::vector<uint32_t> arrival_sem_ids;
+    std::vector<uint32_t> go_sem_ids;
+    for (uint32_t f = 0; f < num_forwarders; f++) {
+        arrival_sem_ids.push_back(CreateSemaphore(program, CoreRangeSet({core_grid}), 0u));
+        go_sem_ids.push_back(CreateSemaphore(program, CoreRangeSet({core_grid}), 0u));
+    }
+    const uint32_t arrival_sem_id = use_mux ? arrival_sem_ids[0] : 0u;
+    const uint32_t go_sem_id = use_mux ? go_sem_ids[0] : 0u;
 
     // Kernels are the stock welford GroupNorm kernels plus the shared fused-norm CCL forwarder. The
-    // only fused-specific behaviour lives behind GN_DISTRIBUTED_AG in the two reader kernels; the
-    // compute/writer kernels are used verbatim. At ring_size == 1 the define is not set, so the
-    // fused op compiles the exact stock kernel text.
+    // fused-specific behaviour lives behind two defines: GN_DISTRIBUTED_AG (the cross-device stats
+    // exchange in the two reader kernels, set when ring_size > 1) and GN_RUNTIME_SIZE_ARGS (the
+    // input-size-dependent values as common runtime args, set on all four kernels). The arithmetic
+    // is the stock one.
     const std::string gn_kernel_base = "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/";
     const std::string ccl_kernel_base = "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/";
 
@@ -460,7 +497,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // src0 (the stock reader only declares src0, so the extra block is inert unless
     // GN_DISTRIBUTED_AG is set).
     // ------------------------------------------------------------------------
-    const std::unordered_map<std::string, uint32_t> reader_named_ct = {
+    std::unordered_map<std::string, uint32_t> reader_named_ct = {
         {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
         {"reduce_sender_semaphore_id", reduce_sender_semaphore_id},
         {"num_cores_per_mcast_group", num_cores_per_mcast_group},
@@ -500,10 +537,56 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         reader_defines["FUSE_BETA"] = "1";
     }
     // Only the cross-device path enables the fabric AG + batched handshake. ring_size == 1 leaves
-    // the stock per-group lock-step untouched, so the local path is bit-exact with ttnn.group_norm.
+    // the stock per-group lock-step untouched.
     if (use_mux) {
         reader_defines["GN_DISTRIBUTED_AG"] = "1";
     }
+
+    // Values that depend on the input's spatial size go to the kernels as common runtime args
+    // (gn_runtime_size_args.h) instead of compile-time args, so a new input size reuses the compiled
+    // kernels. The kernels support this with bf16 stats only, which cb_data_format pins.
+    TT_FATAL(!stats_is_fp32, "dit_fused_distributed_groupnorm requires bf16 stats");
+    const uint32_t two_pass_reciprocal = std::bit_cast<uint32_t>(
+        1.0f / static_cast<float>(std::max(1U, num_channels_per_group * num_rows_per_group / tile_w)));
+    // A spatial extent that is not whole tiles leaves padding rows in the last tile row. The readers
+    // zero them and the sender corrects the statistics, which cover the padded extent, for the zeros.
+    const uint32_t logical_H = input_tensor.logical_shape()[2];
+    const bool has_pad_rows = logical_H != H;
+    const uint32_t pad_row_first_page = has_pad_rows ? (Ht - 1) * Wt : std::numeric_limits<uint32_t>::max();
+    const uint32_t pad_row_valid_rows = has_pad_rows ? logical_H - ((Ht - 1) * tile_h) : tile_h;
+    const uint32_t pad_stats_scale = std::bit_cast<uint32_t>(static_cast<float>(H) / static_cast<float>(logical_H));
+    const std::vector<uint32_t> size_args = {
+        per_core_Mt,                              // PER_CORE_M
+        block_ht,                                 // BLOCK_H
+        num_out_blocks,                           // NUM_OUT_BLOCKS
+        per_core_Mt * Wt / num_batches_per_core,  // NUM_TILES_PER_BATCH
+        num_cores_per_mcast_group,                // NUM_MCAST_CORES
+        two_pass_reciprocal,                      // TWO_PASS_RECIPROCAL
+        per_core_Mt * per_core_Nt,                // PER_CORE_MN
+        num_rows_per_group,                       // NUM_ROWS_PER_GROUP
+        pad_row_first_page,                       // PAD_ROW_FIRST_PAGE
+        pad_row_valid_rows,                       // PAD_ROW_VALID_ROWS
+        pad_stats_scale,                          // PAD_STATS_SCALE
+    };
+    // The kernels read these from size_args instead; zero them so they don't enter the kernel hash.
+    const auto zero_size_args = [](std::unordered_map<std::string, uint32_t>& named_ct) {
+        for (const char* name :
+             {"per_core_M",
+              "block_h",
+              "block_hw",
+              "num_out_blocks",
+              "num_tiles_per_batch",
+              "num_cores_per_mcast_group",
+              "num_rows_per_group",
+              "per_core_MN",
+              "sfpu_two_pass_reciprocal"}) {
+            if (auto it = named_ct.find(name); it != named_ct.end()) {
+                it->second = 0;
+            }
+        }
+    };
+    reader_defines["GN_RUNTIME_SIZE_ARGS"] = "1";
+    zero_size_args(reader_named_ct);
 
     // Master / sender reader (fabric AG when distributed).
     std::unordered_map<std::string, uint32_t> sender_reader_named_ct = reader_named_ct;
@@ -517,6 +600,14 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         sender_reader_named_ct.emplace("stats_local_cb_id", stats_local_cb_id);
         sender_reader_named_ct.emplace("stats_gathered_cb_id", stats_gathered_cb_id);
     }
+    // Only the master runs the exchanges, so only it gets the second one.
+    std::map<std::string, std::string> sender_reader_defines = reader_defines;
+    if (two_axes) {
+        sender_reader_defines["GN_DISTRIBUTED_AG_2D"] = "1";
+        sender_reader_named_ct.emplace("second_ring_size", args.second_ring_size);
+        sender_reader_named_ct.emplace("second_arrival_sem_id", arrival_sem_ids[1]);
+        sender_reader_named_ct.emplace("second_go_sem_id", go_sem_ids[1]);
+    }
     std::vector<uint32_t> sender_reader_ct;
     TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_ct);
     TensorAccessorArgs(use_mux ? stats_dram_buffer : input_tensor.buffer()).append_to(sender_reader_ct);
@@ -525,7 +616,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         program,
         gn_kernel_base + "dataflow/welford_reader_mcast_sender_unary_gn.cpp",
         mcast_sender_cores,
-        ReaderDataMovementConfig(sender_reader_ct, reader_defines, sender_reader_named_ct));
+        ReaderDataMovementConfig(sender_reader_ct, sender_reader_defines, sender_reader_named_ct));
 
     // Receiver reader (signal + wait; no fabric).
     KernelHandle receiver_reader_kernel_id = 0;
@@ -541,9 +632,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
 
     // ------------------------------------------------------------------------
     // Writer (stock welford GN gamma/beta + output) — identical on every reduction core.
-    // Runtime args and CB indices already match stock, so this kernel is used unmodified.
+    // Runtime args and CB indices match stock; only GN_RUNTIME_SIZE_ARGS is added.
     // ------------------------------------------------------------------------
-    const std::unordered_map<std::string, uint32_t> writer_named_ct = {
+    std::unordered_map<std::string, uint32_t> writer_named_ct = {
         {"is_mcast_sender", 1u},  // stock hardcodes 1 on all cores
         {"fuse_gamma", static_cast<uint32_t>(has_gamma)},
         {"fuse_beta", static_cast<uint32_t>(has_beta)},
@@ -574,41 +665,51 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     TensorAccessorArgs(has_beta ? beta->buffer() : nullptr).append_to(writer_ct);
     TensorAccessorArgs(input_mask->buffer()).append_to(writer_ct);
 
+    const std::map<std::string, std::string> writer_defines = {{"GN_RUNTIME_SIZE_ARGS", "1"}};
+    zero_size_args(writer_named_ct);
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         gn_kernel_base + "dataflow/welford_writer_unary_gn_rm_gb.cpp",
         all_reduction_cores,
-        WriterDataMovementConfig(writer_ct, {}, writer_named_ct));
+        WriterDataMovementConfig(writer_ct, writer_defines, writer_named_ct));
 
     // ------------------------------------------------------------------------
-    // Forwarder (single fabric ring all-gather, coalescing all masters' sub-sticks).
+    // Forwarders, one per exchanged axis (fabric line all-gather, coalescing all masters' sub-sticks).
     // ------------------------------------------------------------------------
     std::vector<KernelHandle> forwarder_kernel_ids(num_forwarders, 0);
     for (uint32_t f = 0; f < num_forwarders; f++) {
+        const auto& ex = exchanges[f];
         std::vector<uint32_t> fwd_ct = {
             packet_cb_id,
             reserved_packet_header_cb_id,
-            args.ring_size,
-            device_index,
-            num_targets_forward,
-            num_targets_backward,
-            f,
-            num_forwarders,
+            ex.ring_size,
+            ex.device_index,
+            ex.num_targets_forward,
+            ex.num_targets_backward,
+            // forwarder_index: the kernel writes page device_index * num_chunks_per_device +
+            // forwarder_index * max_rounds, so this places the axis's pages at page_offset.
+            ex.page_offset,
+            1u,           // num_forwarders on this axis
             num_masters,  // group_size (masters coalesced by this forwarder)
             max_rounds,
             stick_bytes,
             num_chunks_per_device,
-            arrival_sem_id,
-            go_sem_id,
+            arrival_sem_ids[f],
+            go_sem_ids[f],
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
         // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
         TT_FATAL(
             !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
-                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
+                ttnn::ccl::is_axis_straight(*mesh_device, ex.cluster_axis),
             "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
         const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+            mesh_coordinate,
+            ex.forward_coord,
+            ex.backward_coord,
+            ex.num_targets_forward,
+            ex.num_targets_backward,
+            mesh_device);
         fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
         fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
         // The coalescing forwarder is fully parameterized by these CT args (stick_bytes,
@@ -623,7 +724,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // ------------------------------------------------------------------------
     // Compute (stock welford GroupNorm PRE/POST) — identical on every reduction core.
     // ------------------------------------------------------------------------
-    const std::unordered_map<std::string, uint32_t> compute_named_ct = {
+    std::unordered_map<std::string, uint32_t> compute_named_ct = {
         {"do_gamma", static_cast<uint32_t>(has_gamma)},
         {"do_beta", static_cast<uint32_t>(has_beta)},
         {"num_cores_per_mcast_group", num_cores_per_mcast_group},
@@ -648,9 +749,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         {"cb_ex_global_fp32", cb_ex_global_index},
         {"cb_ex2pe_fp32", cb_ex2pe_index},
         {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
-        {"sfpu_two_pass_reciprocal",
-         std::bit_cast<uint32_t>(
-             1.0f / static_cast<float>(std::max(1U, num_channels_per_group * num_rows_per_group / tile_w)))},
+        {"sfpu_two_pass_reciprocal", two_pass_reciprocal},
     };
     // Optional fused unary activation. "dst0" is the DEST index the final output tile lives in
     // when the compute kernel applies the activation (see welford_groupnorm.cpp).
@@ -662,6 +761,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             compute_defines[key] = val;
         }
     }
+    compute_defines["GN_RUNTIME_SIZE_ARGS"] = "1";
+    zero_size_args(compute_named_ct);
 
     ComputeConfig compute_config{
         .math_fidelity = math_fidelity,
@@ -681,6 +782,13 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     KernelHandle compute_kernel_id =
         CreateKernel(program, gn_kernel_base + "compute/welford_groupnorm.cpp", all_reduction_cores, compute_config);
 
+    SetCommonRuntimeArgs(program, sender_reader_kernel_id, size_args);
+    if (has_receivers) {
+        SetCommonRuntimeArgs(program, receiver_reader_kernel_id, size_args);
+    }
+    SetCommonRuntimeArgs(program, writer_kernel_id, size_args);
+    SetCommonRuntimeArgs(program, compute_kernel_id, size_args);
+
     // ------------------------------------------------------------------------
     // Runtime args
     // ------------------------------------------------------------------------
@@ -691,17 +799,19 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const uint32_t input_mask_addr = input_mask->mesh_buffer().address();
     const uint32_t stats_dram_addr = use_mux ? stats_dram_buffer->address() : 0u;
 
-    uint32_t out_ready_sem_bank_addr = 0;
-    if (use_mux) {
-        TT_FATAL(!args.multi_device_global_semaphore.empty(), "ring_size>1 requires a GlobalSemaphore");
-        out_ready_sem_bank_addr = args.multi_device_global_semaphore.at(0).address();
-    }
+    // Forwarder f's peers fuse-inc global semaphore f.
+    TT_FATAL(
+        args.multi_device_global_semaphore.size() >= num_forwarders,
+        "{} forwarders need {} GlobalSemaphores, got {}",
+        num_forwarders,
+        num_forwarders,
+        args.multi_device_global_semaphore.size());
 
     const tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
-    CoreCoord forwarder_virtual = {};
-    if (use_mux) {
-        forwarder_virtual = mesh_device->worker_core_from_logical_core(forwarder_cores[0]);
+    std::vector<CoreCoord> forwarder_virtual;
+    for (const auto& c : forwarder_cores) {
+        forwarder_virtual.push_back(mesh_device->worker_core_from_logical_core(c));
     }
 
     std::vector<size_t> stats_dram_addr_reader_arg_idx;
@@ -795,16 +905,20 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                         kernel_fabric_base);
                     TT_FATAL(
                         group.size() == num_cores_per_mcast_group,
-                        "mcast group {} has {} cores but the kernel is compiled with num_cores_per_mcast_group={}",
+                        "mcast group {} has {} cores but the kernels are given num_cores_per_mcast_group={}",
                         i,
                         group.size(),
                         num_cores_per_mcast_group);
                     stats_dram_addr_reader_arg_idx.push_back(rt.size());
                     rt.push_back(stats_dram_addr);
-                    rt.push_back(static_cast<uint32_t>(forwarder_virtual.x));
-                    rt.push_back(static_cast<uint32_t>(forwarder_virtual.y));
+                    rt.push_back(static_cast<uint32_t>(forwarder_virtual[0].x));
+                    rt.push_back(static_cast<uint32_t>(forwarder_virtual[0].y));
                     rt.push_back(static_cast<uint32_t>(i));  // my_slot = master index
-                    rt.push_back(0u);                        // my_forwarder_index (single forwarder)
+                    rt.push_back(0u);                        // my_forwarder_index (one forwarder per axis)
+                    if (two_axes) {
+                        rt.push_back(static_cast<uint32_t>(forwarder_virtual[1].x));
+                        rt.push_back(static_cast<uint32_t>(forwarder_virtual[1].y));
+                    }
                 }
                 SetRuntimeArgs(program, sender_reader_kernel_id, core, rt);
             } else {  // receiver reader
@@ -868,31 +982,33 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
         for (uint32_t f = 0; f < num_forwarders; f++) {
             const auto& core = forwarder_cores[f];
-            std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
+            const auto& ex = exchanges[f];
+            std::vector<uint32_t> fwd_rt = {stats_dram_addr, args.multi_device_global_semaphore.at(f).address()};
             for (uint32_t m = 0; m < num_masters; m++) {
                 CoreCoord mv = device->worker_core_from_logical_core(mcast_groups[m].front());
                 fwd_rt.push_back(static_cast<uint32_t>(mv.x));
                 fwd_rt.push_back(static_cast<uint32_t>(mv.y));
             }
             fwd_rt.push_back(num_masters);  // present_count[0]
-            fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
-            if (forward_fabric_node_id.has_value()) {
+            // Each forwarder uses link 0 of its own axis.
+            fwd_rt.push_back(ex.forward_fabric_node_id.has_value() ? 1u : 0u);
+            if (ex.forward_fabric_node_id.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     *mesh_device,
                     local_node_id,
-                    forward_fabric_node_id.value(),
-                    /*link_idx=*/f,
+                    ex.forward_fabric_node_id.value(),
+                    /*link_idx=*/0,
                     program,
                     {core},
                     fwd_rt);
             }
-            fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
-            if (backward_fabric_node_id.has_value()) {
+            fwd_rt.push_back(ex.backward_fabric_node_id.has_value() ? 1u : 0u);
+            if (ex.backward_fabric_node_id.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     *mesh_device,
                     local_node_id,
-                    backward_fabric_node_id.value(),
-                    /*link_idx=*/f,
+                    ex.backward_fabric_node_id.value(),
+                    /*link_idx=*/0,
                     program,
                     {core},
                     fwd_rt);
@@ -953,9 +1069,8 @@ void DitFusedDistributedGroupnormMeshWorkloadFactory::override_runtime_arguments
         tensor_args.input_mask.has_value() ? tensor_args.input_mask->mesh_buffer().address() : 0u;
     const uint32_t stats_dram_addr =
         tensor_return_value.size() > 1 ? tensor_return_value[1].mesh_buffer().address() : 0u;
-    const uint32_t out_ready_sem_addr = operation_attributes.multi_device_global_semaphore.empty()
-                                            ? 0u
-                                            : operation_attributes.multi_device_global_semaphore.at(0).address();
+    // Forwarder f uses global semaphore f.
+    const auto& global_semaphores = operation_attributes.multi_device_global_semaphore;
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared = cached_workload.shared_variables.at(range);
@@ -1002,7 +1117,7 @@ void DitFusedDistributedGroupnormMeshWorkloadFactory::override_runtime_arguments
             auto& fwd_args_by_core = GetRuntimeArgs(program, shared.forwarder_kernel_ids[f]);
             const auto& fc = shared.forwarder_cores[f];
             fwd_args_by_core.at(fc.x).at(fc.y)[0] = stats_dram_addr;
-            fwd_args_by_core.at(fc.x).at(fc.y)[1] = out_ready_sem_addr;
+            fwd_args_by_core.at(fc.x).at(fc.y)[1] = global_semaphores.at(f).address();
         }
     }
 }

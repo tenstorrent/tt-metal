@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from types import MappingProxyType
 
 import torch
@@ -81,23 +81,16 @@ def _all_gather_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
     return x
 
 
-def _partition_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
-    """Partition full spatial back to sharded: [N, H, W, C] → [N, H/h, W/w, C].
-
-    Restores the input layout (mesh_partition requires ROW_MAJOR internally).
-    No-op when both factors are 1.
-    """
+def _all_gather_tokens(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
+    """All-gather a token sequence [N, 1, T, C] over the H and W axes: [N, 1, T * h * w, C], in mesh
+    order rather than image order. No-op when both factors are 1."""
     if ctx.h_factor <= 1 and ctx.w_factor <= 1:
         return x
-    original_layout = x.layout
-    if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    assert ctx.ccl_manager is not None
     if ctx.h_factor > 1:
-        x = ttnn.mesh_partition(x, dim=1, cluster_axis=ctx.h_mesh_axis, memory_config=x.memory_config())
+        x = ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=ctx.h_mesh_axis, use_hyperparams=True)
     if ctx.w_factor > 1:
-        x = ttnn.mesh_partition(x, dim=2, cluster_axis=ctx.w_mesh_axis, memory_config=x.memory_config())
-    if original_layout != ttnn.ROW_MAJOR_LAYOUT:
-        x = ttnn.to_layout(x, original_layout)
+        x = ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=ctx.w_mesh_axis, use_hyperparams=True)
     return x
 
 
@@ -483,10 +476,9 @@ class VaeAttention(Module):
 
         linear_args = dict(mesh_axis=ctx.tp_axis, mesh_device=ctx.device, ccl_manager=ctx.ccl_manager)
 
-        # Norm runs on the AG'd full-spatial tensor inside forward(), so the inner norm should NOT
-        # AG/partition again. Bypass the _VaeSpatialGroupNorm wrap by handing _norm a TP-only ctx.
-        norm_ctx = replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
-        self.norm = _norm(norm, num_channels=num_channels, ctx=norm_ctx)
+        # The norm runs on the local spatial shard before the H+W all-gather, so a group norm takes
+        # the fused distributed path like the other VAE norms.
+        self.norm = _norm(norm, num_channels=num_channels, ctx=ctx)
         # Fused QKV: one ColParallelLinear with chunks=3 replaces three RowParallelLinear+RS+AG
         # round-trips. Each output is fractured on out_dim (channels) and gets AG'd before SDPA.
         self.to_qkv = ColParallelLinear(num_channels, 3 * num_channels, chunks=3, **linear_args)
@@ -569,17 +561,14 @@ class VaeAttention(Module):
         return qkv.squeeze(-1) if is_1d else qkv
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        identity = x  # [N, H/h, W/w, C/tp] when SP+TP active; identity captured pre-AG
+        identity = x  # [N, H/h, W/w, C/tp] when SP+TP active
 
-        # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
-        x = _all_gather_hw(self._ctx, x)
+        x = self.norm.forward(x)
 
-        n, h, w, _ = x.shape  # h, w are full-spatial after AG
+        n, h, w, _ = x.shape  # the local spatial extent when SP is active
 
         # convert to 1d sequence and insert head dimension; there is only one head
         x = x.reshape([n, 1, h * w, -1])
-
-        x = self.norm.forward(x)
 
         # ColParallelLinear expects replicated input on K. AG manually here (rather than
         # passing parallel_config and letting the linear gather) because on Ring topology
@@ -599,6 +588,14 @@ class VaeAttention(Module):
 
         del x
 
+        # Each device attends from its own tokens to all of them, so only K and V are gathered, as
+        # token rows. The attention does not depend on the order of the keys, and gathering rows keeps
+        # the gather's program independent of the image size.
+        k = _all_gather_tokens(self._ctx, k)
+        v = _all_gather_tokens(self._ctx, v)
+
+        # The token counts change with the image size; with runtime_seq_len a new size builds its
+        # program from the compiled kernels.
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -606,15 +603,13 @@ class VaeAttention(Module):
             is_causal=False,
             program_config=self._sdpa_program_config,
             compute_kernel_config=self._sdpa_compute_kernel_config,
+            runtime_seq_len=True,
         )
 
         x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
 
         # convert back to 2d
         x = x.reshape([n, h, w, -1])
-
-        # Re-partition H+W back to local so the residual add aligns with identity (no-op when SP inactive).
-        x = _partition_hw(self._ctx, x)
 
         return x + identity
 
@@ -739,10 +734,8 @@ class VaeDownBlock(Module):
 class _VaeSpatialGroupNorm(Module):
     """GroupNorm for spatially sharded VAE activations.
 
-    ``DistributedGroupNorm`` all-gathers Welford stats on one mesh axis (H if H is
-    sharded, otherwise W). Activations stay sharded on that axis. If both H and W
-    are sharded, activations are all-gathered on the *other* spatial dim only so the
-    fused stats reduction still sees the full spatial extent, then re-partitioned.
+    ``DistributedGroupNorm`` exchanges Welford stats over the sharded spatial mesh
+    axes (H and W if both are sharded), so activations stay sharded throughout.
 
     Channel TP is preserved via ``mesh_axis=ctx.tp_axis``. HiFi4 matches Wan/Mochi norms.
     """
@@ -759,10 +752,7 @@ class _VaeSpatialGroupNorm(Module):
         super().__init__()
         h_sp = ctx.h_factor > 1
         w_sp = ctx.w_factor > 1
-        # Stats AG prefers H when both are sharded (matches Flux2 H+TP).
         cluster_axis = ctx.h_mesh_axis if h_sp else ctx.w_mesh_axis
-        # 2-D SP: gather the non-cluster spatial dim of the activations, not both.
-        self._gather_w = h_sp and w_sp
         self.inner = DistributedGroupNorm(
             num_groups=num_groups,
             num_channels=num_channels,
@@ -770,10 +760,10 @@ class _VaeSpatialGroupNorm(Module):
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
             cluster_axis=cluster_axis,
+            second_cluster_axis=ctx.w_mesh_axis if h_sp and w_sp else None,
             ccl_manager=ctx.ccl_manager,
             activation_fn=activation_fn,
         )
-        self._ctx = ctx
         self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
             ctx.device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -789,21 +779,7 @@ class _VaeSpatialGroupNorm(Module):
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        if self._gather_w:
-            assert self._ctx.ccl_manager is not None
-            x = self._ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=self._ctx.w_mesh_axis, use_hyperparams=True)
-
-        x = self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
-
-        if self._gather_w:
-            original_layout = x.layout
-            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.mesh_partition(x, dim=2, cluster_axis=self._ctx.w_mesh_axis, memory_config=x.memory_config())
-            if original_layout != ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, original_layout)
-
-        return x
+        return self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
 
 
 def _norm(
@@ -819,7 +795,7 @@ def _norm(
     when that path is used and runs it separately otherwise. Callers just call ``forward``.
     """
     if isinstance(norm, VaeNormDescGroup):
-        # SP-active: fused DistributedGroupNorm (stats AG on one spatial axis).
+        # SP-active: fused DistributedGroupNorm (stats exchanged over the sharded spatial axes).
         if ctx.h_factor > 1 or ctx.w_factor > 1:
             return _VaeSpatialGroupNorm(
                 num_groups=norm.num_groups,

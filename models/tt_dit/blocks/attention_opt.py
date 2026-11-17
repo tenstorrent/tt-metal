@@ -94,10 +94,22 @@ class Attention(Module):
         per_head_norm: bool = False,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
+        row_capacity: int | None = None,
+        row_independent_matmul_config: bool = False,
     ) -> None:
+        """`row_independent_matmul_config` gives the `sequence_1` projections one matmul config for
+        every row count (see `get_matmul_config`), for a stream whose row count follows the input size.
+
+        `row_capacity` is the largest per-device row count of `sequence_1` (a multiple of 32). With
+        it, the Q/K norms and the head split and merge take the row count at run time, so one program
+        serves every row count up to it; None keeps one program per row count. Ring SDPA then takes
+        the token count at run time too, where the rows per device are whole tiles (see
+        `_ring_sdpa_dynamic`); with a sharded prompt, `row_capacity` must also hold the prompt's
+        shard, which ring SDPA folds into the sequence."""
         super().__init__()
 
         self.head_dim = head_dim
+        self.row_capacity = row_capacity
         self.pre_only = pre_only
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -146,6 +158,7 @@ class Attention(Module):
         )
 
         self.ring_sdpa_program_config = {}
+        self._logical_n_tensors: dict[int, ttnn.Tensor] = {}
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -162,7 +175,13 @@ class Attention(Module):
 
         # chunks=3 splits QKV inside minimal_matmul_split (faster than matmul + ttnn.chunk).
         self.to_qkv = ColParallelLinear(
-            query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
+            query_dim,
+            3 * padded_inner_dim,
+            bias=proj_bias,
+            mesh_axis=tp_axis,
+            chunks=3,
+            row_independent_matmul_config=row_independent_matmul_config,
+            **common_args,
         )
 
         # Fuses head-split + RMSNorm + RoPE. Weight is tiled per-head → [padded_inner_dim] in
@@ -183,7 +202,14 @@ class Attention(Module):
         )
 
         self.to_out = (
-            ColParallelLinear(padded_inner_dim, out_dim, bias=proj_bias, mesh_axis=tp_axis, **common_args)
+            ColParallelLinear(
+                padded_inner_dim,
+                out_dim,
+                bias=proj_bias,
+                mesh_axis=tp_axis,
+                row_independent_matmul_config=row_independent_matmul_config,
+                **common_args,
+            )
             if not self.pre_only
             else None
         )
@@ -295,6 +321,56 @@ class Attention(Module):
             return (full_grid.x, full_grid.y - 1)
         else:
             return (full_grid.x, full_grid.y - 1)
+
+    def _logical_n_tensor(self, logical_n: int) -> ttnn.Tensor:
+        """`logical_n` as the one-element uint32 device tensor that `dynamic_local_n` reads, one per value."""
+        tensor = self._logical_n_tensors.get(logical_n)
+        if tensor is None:
+            host = ttnn.from_torch(
+                torch.tensor([logical_n], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            tensor = ttnn.to_device(host, self.mesh_device)
+            self._logical_n_tensors[logical_n] = tensor
+        return tensor
+
+    def _ring_sdpa_dynamic(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, *, logical_n: int) -> ttnn.Tensor:
+        """Ring SDPA without a joint stream that takes the token count at run time.
+
+        `dynamic_local_n` leaves the rows per device out of the program, so one program serves every
+        token count up to `row_capacity` rows per device. Its masks cover only the global tail, so the
+        rows per device must be whole tiles, all real but the tail of the last device. The program
+        config and the gather buffers are the same for every token count.
+        """
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        capacity = self.row_capacity * self.parallel_config.sequence_parallel.factor
+        grid = self.get_ring_sdpa_core_grid(-1)
+        out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, capacity=capacity),
+            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, capacity=capacity),
+            joint_strategy="rear",
+            logical_n=self._logical_n_tensor(logical_n),
+            program_config=self.get_ring_sdpa_program_config(-1),
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(sp_axis),
+            num_links=self.ccl_manager.num_links,
+            cluster_axis=sp_axis,
+            mesh_device=self.mesh_device,
+            topology=self.ccl_manager.topology,
+            subdevice_id=self.ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=(0, grid[1]),
+            dynamic_local_n=True,
+        )
+        return out
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight, bias = self._reshape_and_merge_qkv(
@@ -525,10 +601,16 @@ class Attention(Module):
 
         shard_prompt = self.shard_prompt and self.parallel_config.sequence_parallel.factor > 1
 
+        runtime_rows = self.row_capacity is not None
+
         def _split_heads(x: ttnn.Tensor) -> ttnn.Tensor:
             # V only — Q/K head-split is fused inside DistributedRMSNorm.
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-                ttnn.unsqueeze(x, 0), num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
+                ttnn.unsqueeze(x, 0),
+                num_heads=self.n_local_heads,
+                num_kv_heads=0,
+                transpose_k_heads=False,
+                runtime_rows=runtime_rows,
             )
             return out
 
@@ -553,6 +635,7 @@ class Attention(Module):
             rope_sin=sequence_1_sin,
             trans_mat=trans_mat,
             per_head_norm=self.per_head_norm,
+            row_capacity=self.row_capacity,
         )
 
         k = self.norm_k(
@@ -562,6 +645,7 @@ class Attention(Module):
             rope_sin=sequence_1_sin,
             trans_mat=trans_mat,
             per_head_norm=self.per_head_norm,
+            row_capacity=self.row_capacity,
         )
 
         v = _split_heads(v_flat_c)  # [1, H, M_s+M_p, D]
@@ -608,7 +692,38 @@ class Attention(Module):
                 persistent_joint_k = self.ccl_manager.get_ag_ping_pong_buffer(add_k.shape, 2, sp_axis)
                 persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
 
-        if self.parallel_config.sequence_parallel.factor > 1:
+        has_prompt = self.add_qkv_proj is not None and sequence_2 is not None
+
+        def _whole_tiles(*tensors: ttnn.Tensor) -> bool:
+            return all(t.shape[2] == t.padded_shape[2] for t in tensors)
+
+        # A replicated prompt, folded here or concatenated by the single blocks, would repeat its keys
+        # on every device.
+        dynamic_sdpa = (
+            runtime_rows
+            and shard_prompt
+            and _whole_tiles(q, k, v)
+            and (not has_prompt or _whole_tiles(add_q, add_k, add_v))
+        )
+
+        if dynamic_sdpa and has_prompt:
+            # Attention is the same for any order of the keys, so the prompt shard is folded in front
+            # of each device's spatial shard; with whole tiles per device, nothing needs masking.
+            prompt_rows = add_q.shape[2]
+            out = self._ring_sdpa_dynamic(
+                ttnn.concat([add_q, q], dim=2),
+                ttnn.concat([add_k, k], dim=2),
+                ttnn.concat([add_v, v], dim=2),
+                logical_n=sequence_1_length + sequence_2_length,
+            )
+            heads, rows, head_dim = out.shape[1], out.shape[2], out.shape[3]
+            sequence_2 = ttnn.slice(out, [0, 0, 0, 0], [1, heads, prompt_rows, head_dim])
+            spatial = ttnn.slice(out, [0, 0, prompt_rows, 0], [1, heads, rows, head_dim])
+            ttnn.deallocate(out)
+        elif dynamic_sdpa:
+            spatial = self._ring_sdpa_dynamic(q, k, v, logical_n=sequence_1_length)
+            sequence_2 = None
+        elif self.parallel_config.sequence_parallel.factor > 1:
             spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -641,9 +756,7 @@ class Attention(Module):
                 persistent_output_buffer_joint_v=persistent_joint_v,
             )
         else:
-            assert (
-                sequence_1_length == spatial.shape[1]
-            ), "spatial sequence must not be padded without sequence parallelism"
+            assert sequence_1_length == q.shape[2], "spatial sequence must not be padded without sequence parallelism"
 
             spatial, sequence_2 = ttnn.transformer.joint_scaled_dot_product_attention(
                 q,
@@ -657,7 +770,7 @@ class Attention(Module):
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
 
-        spatial = ttnn.transformer.concatenate_heads(spatial)
+        spatial = ttnn.transformer.concatenate_heads(spatial, runtime_rows=runtime_rows)
         if self.to_out is not None:
             spatial = self.to_out(
                 x=spatial,
@@ -668,7 +781,7 @@ class Attention(Module):
             )
 
         if sequence_2 is not None and sequence_2.shape[2] > 0:
-            sequence_2 = ttnn.transformer.concatenate_heads(sequence_2)
+            sequence_2 = ttnn.transformer.concatenate_heads(sequence_2, runtime_rows=runtime_rows)
             if self.to_add_out is not None:
                 sequence_2 = self.to_add_out(
                     x=sequence_2,

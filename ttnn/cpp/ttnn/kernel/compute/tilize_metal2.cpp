@@ -23,6 +23,8 @@
 //   dfb::in  — row-major input DFB, bound CONSUMER
 //   dfb::out — tiled output DFB, bound PRODUCER
 //   args::per_core_block_cnt, args::per_core_block_tile_cnt — compile-time args
+//   (with TILIZE_RUNTIME_BLOCK_CNT defined, per_core_block_cnt is a runtime arg instead, so one
+//   binary serves every height)
 
 #include <cstdint>
 
@@ -35,7 +37,11 @@
 #endif
 
 void kernel_main() {
+#ifdef TILIZE_RUNTIME_BLOCK_CNT
+    const uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+#else
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+#endif
     constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
     compute_kernel_hw_startup(dfb::in, dfb::out);

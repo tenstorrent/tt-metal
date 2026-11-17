@@ -13,6 +13,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/gn_runtime_size_args.h"
 #if defined(MASK_SYNTHESIZE)
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
 #endif
@@ -59,16 +60,22 @@ void kernel_main() {
     constexpr uint32_t num_batches_per_core = get_named_compile_time_arg_val("num_batches_per_core");
 
     constexpr uint32_t num_cols_per_group = get_named_compile_time_arg_val("num_cols_per_group");
-    constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
     constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
     constexpr bool GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2") == 1;
     constexpr bool GROUP_SIZE_SMALLER_THAN_TILE_W =
         get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W") == 1;
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
-    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
+#ifdef GN_RUNTIME_SIZE_ARGS
+    const uint32_t num_tiles_per_batch = get_common_arg_val<uint32_t>(gn_size_args::NUM_TILES_PER_BATCH);
+    const uint32_t num_out_blocks = get_common_arg_val<uint32_t>(gn_size_args::NUM_OUT_BLOCKS);
+    const uint32_t block_h = get_common_arg_val<uint32_t>(gn_size_args::BLOCK_H);
+#else
+    constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
+    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
+#endif
     constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
     constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
@@ -137,11 +144,11 @@ void kernel_main() {
     constexpr uint32_t MASK_GROUP_SIZE_MOD_TILE_W = num_channels_per_group % MASK_TILE_W;
 #endif
 
-    constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
+    const uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
     bool extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
-    if constexpr (block_h % num_out_blocks != 0) {
+    if (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         const uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
         num_out_blocks_padded += (residual / out_block_h_normal + 1);

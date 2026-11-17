@@ -63,12 +63,15 @@ def prep_data(
     inp: torch.Tensor,
     mesh_device: ttnn.Device,
     tt_model: Flux2VaeDecoder,
+    split_height: bool = False,
 ) -> ttnn.Tensor:
     # inp: [B, C*p^2, H_t, W_t] patchified latent in torch.
     # Convert to patchified token format [B, H_t*W_t, C*p^2].
     inp_flat = inp.permute(0, 2, 3, 1).flatten(1, 2)
 
-    if vae_parallel_config.h_parallel is not None:
+    # With split_height the tokens arrive replicated, as the pipeline passes them when the VAE rows
+    # are not on the SP axis, and preprocess_and_unpatchify splits them.
+    if vae_parallel_config.h_parallel is not None and not split_height:
         tt_latents = tensor.from_torch(
             inp_flat,
             device=mesh_device,
@@ -85,17 +88,8 @@ def prep_data(
         tt_latents,
         height=height_for_unp,
         width=width_for_unp,
+        split_height=split_height,
     )
-
-    # W-sharding can only be applied after unpatchify because H and W are interleaved
-    # in the patchified token dimension.
-    if vae_parallel_config.w_parallel is not None:
-        tt_latents = ttnn.mesh_partition(
-            tt_latents,
-            dim=2,
-            cluster_axis=vae_parallel_config.w_parallel.mesh_axis,
-            memory_config=tt_latents.memory_config(),
-        )
 
     return tt_latents
 
@@ -106,33 +100,49 @@ def prep_data(
         [(1, 1), single_device_params_flux2],
         [(2, 2), line_params_flux2],
         [(1, 8), line_params_flux2],
+        [(2, 4), line_params_flux2],
         [(4, 8), line_params_flux2],
     ],
-    ids=["1x1", "2x2", "1x8", "4x8"],
+    ids=["1x1", "2x2", "1x8", "2x4", "4x8"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     ("batch_size", "height", "width"),
-    [(1, 1024, 1024)],
-    ids=["1024"],
+    # 1088x1184 gives 34 x 74 latent pixels per device on 2x4, not whole tiles for the group norm.
+    [(1, 1024, 1024), (1, 1024, 1184), (1, 1056, 1024), (1, 1088, 1184)],
+    ids=["1024", "1024x1184", "1056x1024", "1088x1184"],
 )
+# Rows on mesh axis 1, and channels (tp_h) or columns (h_w) on axis 0.
+@pytest.mark.parametrize("split", ["tp_h", "h_w"])
+# Tokens H-sharded on the host, or replicated and split by the decoder.
+@pytest.mark.parametrize("split_height", [False, True], ids=["host_rows", "device_rows"])
 def test_vae_flux2_decoder(
     *,
     mesh_device: ttnn.Device,
     batch_size: int,
     height: int,
     width: int,
+    split: str,
+    split_height: bool,
 ) -> None:
     torch.manual_seed(0)
 
-    tp_axis = 0
-    h_axis = 1 - tp_axis
-    w_axis = None
+    tp_axis = 0 if split == "tp_h" else None
+    h_axis = 1
+    w_axis = 0 if split == "h_w" else None
 
     torch_model = _load_pruned_torch_model()
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = Flux2VaeParallelConfig.from_axes(mesh_device, tp_axis=tp_axis, h_axis=h_axis, w_axis=w_axis)
+
+    # Host-split tokens need whole token rows (2 latent rows) per device, the decoder's split only
+    # whole latent rows. 1056x1024 has 132 latent rows: 66 token rows split over 2 devices but not
+    # over 4, and 132 latent rows split over 4 but not over 8.
+    h_factor = vae_parallel_config.h_parallel.factor if vae_parallel_config.h_parallel is not None else 1
+    rows_per_device_unit = 1 if split_height else 2
+    if (height // 8) % (rows_per_device_unit * h_factor) != 0:
+        pytest.skip(f"{height // 8} latent rows do not split into whole {'latent' if split_height else 'token'} rows")
 
     z_channels = torch_model.config.latent_channels
     patch_size = 2
@@ -155,11 +165,14 @@ def test_vae_flux2_decoder(
 
     torch_output = _torch_decode_reference(torch_model, inp)  # [B, 3, H, W]
 
-    tt_inp = prep_data(vae_parallel_config, inp, mesh_device, tt_model=tt_model)
+    tt_inp = prep_data(vae_parallel_config, inp, mesh_device, tt_model=tt_model, split_height=split_height)
     tt_out = tt_model.forward(tt_inp)
     ttnn.synchronize_device(mesh_device)
 
-    tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)  # [B, 3, H, W]
+    # The output stays split over the H and W axes.
+    h_mesh_axis = vae_parallel_config.h_parallel.mesh_axis if vae_parallel_config.h_parallel is not None else None
+    w_mesh_axis = vae_parallel_config.w_parallel.mesh_axis if vae_parallel_config.w_parallel is not None else None
+    tt_out_torch = tensor.to_torch(tt_out, mesh_axes=[None, h_mesh_axis, w_mesh_axis, None]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_out_torch, pcc=0.9978, relative_rmse=0.034)
 
 

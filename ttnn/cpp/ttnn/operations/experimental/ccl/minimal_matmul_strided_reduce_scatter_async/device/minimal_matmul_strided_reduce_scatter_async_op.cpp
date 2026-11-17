@@ -178,6 +178,12 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         attributes.topology == ttnn::ccl::Topology::Ring,
         "MinimalMatmulStridedReduceScatterAsync only supports Ring topology.");
     validate_operands_on_device(tensor_args);
+    // MinimalMatmulConfig::transpose_core_grid pins minimal_matmul's grid orientation; this op does not
+    // read it, so refuse it rather than silently run the other orientation.
+    TT_FATAL(
+        !(attributes.matmul_struct.config.has_value() &&
+          attributes.matmul_struct.config->transpose_core_grid.has_value()),
+        "MinimalMatmulStridedReduceScatterAsync ignores MinimalMatmulConfig::transpose_core_grid; it chooses its own");
 
     // Delegate matmul validation (dtype, layout, shape, tile alignment, config/subblock
     // constraints, etc.) — but NOT the ternary checks, because the ternary inputs belong to

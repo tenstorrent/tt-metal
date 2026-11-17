@@ -20,7 +20,21 @@ struct MinimalMatmulConfig {
     uint32_t subblock_w{};
 
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
+
+    // Grid orientation of minimal_matmul, minimal_matmul_split and dit_minimal_matmul_addcmul_fused:
+    // transposed puts M on the cores' x axis and N on y. Unset, the op transposes when M > N, so a matmul
+    // whose rows cross N compiles a second program. Setting it keeps one program for every row count.
+    // The fused CCL matmuls choose their own orientation and reject a set value.
+    std::optional<bool> transpose_core_grid = std::nullopt;
 };
+
+// The grid orientation a call runs with: the config's, or transposed when the output is taller than wide.
+inline bool resolve_transpose_core_grid(const std::optional<MinimalMatmulConfig>& config, uint32_t M, uint32_t N) {
+    if (config.has_value() && config->transpose_core_grid.has_value()) {
+        return *config->transpose_core_grid;
+    }
+    return M > N;
+}
 
 struct MinimalMatmulParams {
     std::optional<MinimalMatmulConfig> config;

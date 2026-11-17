@@ -49,7 +49,6 @@ argument left as `None`:
 
 | Mesh                | Transformer | VAE       |
 | ------------------- | ----------- | --------- |
-| WH 1x8              | SP 1, TP 8  | TP 8      |
 | WH 2x4 (T3K)        | SP 4, TP 2  | TP 2, H 4 |
 | BH 2x2 (QuietBox 2) | SP 2, TP 2  | TP 2, H 2 |
 | BH 2x4 (LoudBox)    | SP 2, TP 4  | TP 4, H 2 |
