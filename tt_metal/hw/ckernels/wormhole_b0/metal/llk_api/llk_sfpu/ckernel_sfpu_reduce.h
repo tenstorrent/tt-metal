@@ -567,8 +567,9 @@ inline void set_sfpswap_direction() {
  *        compare-and-swap: MAX inverts (bit 8 set), MIN is the default, the opposite of the row paths.
  *
  * Called on entry by calculate_reduce_max_min_uint16 (UInt16 in a 32-bit Dest, and every non-Int32 format
- * under DISABLE_SFPLOADMACRO) and calculate_reduce_max_min_int32_col, instead of trusting the init: under one
- * shared init a preceding row MAX/MIN leaves the row convention in place (tt-metal#58551).
+ * under DISABLE_SFPLOADMACRO) instead of trusting the init: under one shared init a preceding row MAX/MIN leaves
+ * the row convention in place (tt-metal#58551). calculate_reduce_max_min_int32_col applies the same convention,
+ * inverted once more for UInt32.
  */
 template <PoolType pool_type>
 inline void set_manual_col_swap_direction() {
