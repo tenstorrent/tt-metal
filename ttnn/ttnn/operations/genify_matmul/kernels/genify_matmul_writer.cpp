@@ -17,6 +17,11 @@
 // B on NCRISC / NoC0 -- the rounds no longer sit between the B stream's issues and barriers. Per block
 // row it produces cb_act_tiles for the K-walk (reserve, round, push), then drains that row's output.
 // Cores of the broadcast that are not bank workers (`ds_worker` = 0) send their own rounds and exit.
+//
+// Regime R1b A stream (`act_mode` = 2, Refinement 9): on a 1-D N split every core needs every A K-block,
+// so this RISC produces cb_act_tiles: before each block's output it walks the block's K-blocks, the
+// injector (the channel's fixed sender) reading each A K-block from DRAM / L1 into its slot and
+// multicasting it to every core's same slot, the others acking and waiting. The reader streams only B.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -44,7 +49,10 @@ void kernel_main() {
     constexpr uint32_t o_tile_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t o_page_bytes = get_compile_time_arg_val(6);
     constexpr bool out_in_place = get_compile_time_arg_val(7) != 0;
-    constexpr bool ds_act = get_compile_time_arg_val(8) != 0;  // R4: the A rounds run here
+    // A role of this RISC: 0 none, 1 = R4's A rounds (from resident shards), 2 = R1b's A stream (Refinement 9).
+    constexpr uint32_t act_mode = get_compile_time_arg_val(8);
+    constexpr bool ds_act = act_mode == 1;      // R4: the A rounds run here
+    constexpr bool act_stream = act_mode == 2;  // R1b: the A K-block broadcast runs here
     constexpr bool ds_worker = get_compile_time_arg_val(9) != 0;
     constexpr uint32_t cb_act_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t block_k_tiles = get_compile_time_arg_val(11);
@@ -55,7 +63,13 @@ void kernel_main() {
     // Write batching (Refinement 8): row groups drained per wait / flush / pop. The output CB holds
     // DEPTH_OUT batches, so compute fills one while the writer's NoC writes of the other are in flight.
     constexpr uint32_t write_batch = get_compile_time_arg_val(16);
-    constexpr auto out_args = TensorAccessorArgs<17>();
+    // R1b A stream (Refinement 9): the K-walk's ragged last K-block, A's page size, A residency.
+    constexpr uint32_t last_block_k_tiles = get_compile_time_arg_val(17);
+    constexpr uint32_t a_page_bytes = get_compile_time_arg_val(18);
+    constexpr bool act_resident = get_compile_time_arg_val(19) != 0;
+    constexpr auto out_args = TensorAccessorArgs<20>();
+    // A's accessor (R1b's injector reads A); every other writer passes the output's args as a stand-in.
+    [[maybe_unused]] constexpr auto a_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t row_group_tiles = sb_h * out_block_n_tiles;
     constexpr uint32_t num_row_groups = block_m_tiles / sb_h;
@@ -76,13 +90,17 @@ void kernel_main() {
     const uint32_t nb_n = get_arg_val<uint32_t>(arg++);
     const uint32_t tensor_m_tiles = get_arg_val<uint32_t>(arg++);
     const uint32_t out_n_tiles = get_arg_val<uint32_t>(arg++);
-    [[maybe_unused]] const uint32_t a_addr = ds_act ? get_arg_val<uint32_t>(arg++) : 0;  // R4 A rounds: A shard
+    // R4 A rounds: the A shard's L1 address. R1b: A's buffer address.
+    [[maybe_unused]] const uint32_t a_addr = act_mode != 0 ? get_arg_val<uint32_t>(arg++) : 0;
+    [[maybe_unused]] const uint32_t tensor_k_tiles = act_stream ? get_arg_val<uint32_t>(arg++) : 0;  // R1b
 
     const auto out_acc = TensorAccessor(out_args, out_addr, o_page_bytes);
+    [[maybe_unused]] const auto a_acc = TensorAccessor(a_args, a_addr, a_page_bytes);
 
     constexpr auto mc_act = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("act_ct_offset"), get_named_compile_time_arg_val("act_rt_offset")>();
-    static_assert(mc_act.active == ds_act);
+    static_assert(mc_act.active == (act_mode != 0));
+    static_assert(!act_stream || block_batches == 1);
     Noc noc;
     [[maybe_unused]] auto a_sender = mc_act.optional_sender(noc);
     [[maybe_unused]] auto a_receiver = mc_act.optional_receiver(noc);
@@ -114,6 +132,33 @@ void kernel_main() {
             for (uint32_t nbk = 0; nbk < nb_n; ++nbk) {
                 const uint32_t blk_c0 = nbk * out_block_n_tiles;
                 const uint32_t blk_cols = block_extent(cols_valid, blk_c0, out_block_n_tiles);
+                if constexpr (act_stream) {
+                    // R1b: this block's K-walk of A (once per M-block when A is resident across N-blocks).
+                    // Every core walks the same nominal sequence, so the cb_act_tiles write pointers are in
+                    // lockstep and the injector multicasts its own freshly read slot to the same address.
+                    if (!act_resident || nbk == 0) {
+                        for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+                            cb_reserve_back(cb_act_tiles, act_block_tiles);
+                            const uint32_t slot = get_write_ptr(cb_act_tiles);
+                            if (a_sender) {
+                                const uint32_t k_valid = (kb == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
+                                for (uint32_t r = 0; r < blk_rows; ++r) {
+                                    const uint32_t page = (row0 + blk_r0 + r) * tensor_k_tiles + kb * block_k_tiles;
+                                    uint32_t l1 = slot + r * block_k_tiles * a_tile_bytes;
+                                    for (uint32_t k = 0; k < k_valid; ++k) {
+                                        noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+                                        l1 += a_tile_bytes;
+                                    }
+                                }
+                                noc_async_read_barrier();
+                                a_sender->send(slot, slot, act_block_tiles * a_tile_bytes);
+                            } else {
+                                a_receiver->receive();
+                            }
+                            cb_push_back(cb_act_tiles, act_block_tiles);
+                        }
+                    }
+                }
                 for (uint32_t bi = 0; bi < block_batches; ++bi) {
                     const bool batch_valid = bi < blk_b_valid;
                     const uint32_t batch = b0 + blk_b0 + bi;

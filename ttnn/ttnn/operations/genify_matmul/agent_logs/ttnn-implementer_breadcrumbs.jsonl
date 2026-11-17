@@ -24,3 +24,4 @@
 {"event":"test_run","refinement":7,"result":"pass","detail":"HS 450/450 cartesian, batched 150/150, PDL HS loose 12/12, PERF FOCUS 3 pass; unit 78/78 + new 15/15","ts":"2026-11-17T07:00:15+00:00"}
 {"event":"test_run","refinement":8,"status":"pass","details":"PF3 70.3->65.2us median5; residency 14/14; unit net 115/115; golden slice 204 passed 30 xfailed","ts":"2026-11-17T08:22:43+00:00"}
 {"event":"hypothesis","refinement":8,"text":"PF3 bound by DRAM write stream (write-only 59.9us); A re-read 3x from DRAM (6.6MB) competes and reads form a whole-region prologue; L1 B reads are cheap for DRAM","ts":"2026-11-17T08:22:43+00:00"}
+{"event":"test_run","refinement":9,"result":"pass","detail":"R1b lands: stream_mcast 13/13; PERF FOCUS 4 1125->683us, twin 559->354, guidance M=1 308->212, timestep fp32 407->207","ts":"2026-11-17T09:01:49+00:00"}

@@ -132,6 +132,24 @@ MCAST_MIN_KBLOCK_BYTES = 32 * 1024
 # injectors are staggered along the lines (in-line index = offset + line index, wrapped) with offsets
 # chosen so no core injects both operands, and the DRAM readers spread over the grid.
 STAGGER_INJECTORS = True
+# Regime knob (Refinement 9): sub-select R1b `interleaved_stream_mcast_a` on a 1-D N split (grid_m == 1,
+# every core owns all rows, so A is reuse-shared by every core): every core streams its own B columns
+# from DRAM while ONE injector reads each A K-block and broadcasts it to all cores, on the writer RISC
+# (BRISC / NoC1) so the A handshake never stalls the B stream. Plain R1 re-reads A on every core
+# (FLUX timestep linear_2: 96 x 384 KB). False keeps plain R1 on 1-D N splits.
+ACT_STREAM_MCAST = True
+# R1b gate: the A K-block the injector broadcasts per round must reach this many bytes (each round is
+# one handshake with every core of the split; below it a core reading its own A is cheaper).
+ACT_STREAM_MIN_KBLOCK_BYTES = 32 * 1024
+# R1b injector: index of the broadcasting core in the split's row-wise core order.
+ACT_STREAM_INJECTOR = 0
+# R1b NoC: the writer RISC's (BRISC, WriterConfigDescriptor).
+ACT_STREAM_NOC = ttnn.NOC.NOC_1
+# N quantum on a 1-D N split (Refinement 9). Q_N_MAX makes a 4-wide subblock exist when a core owns one
+# tile row; when it owns all rows (grid_m == 1) a subblock of height h (the largest power of two <= 4
+# dividing core_m) needs only q_n = Q_N_MAX / h columns. FLUX FF1 256x6144x18432 swiglu: core_n 8 -> 6
+# (72 -> 96 cores), subblock 2x2. False: Q_N_MAX regardless of core_m.
+Q_N_ROW_AWARE = True
 # R4 `dram_sharded` (Refinement 4) uses DEPTH_ACT / DEPTH_WEIGHT / BLOCK_K caps above; its own knobs:
 # the NoC the bank workers read B on (the reader runs on NCRISC = NOC_0, the preferred DRAM-read NoC),
 # which also selects get_optimal_dram_bank_to_logical_worker_assignment's worker per bank.
@@ -323,6 +341,17 @@ def _placement_for(gb, gm, gn, gx, gy):
     return None
 
 
+def _row_subblock_h(geom: Geometry, gm: int, core_m: int):
+    """Q_N_ROW_AWARE: the subblock height a 1-D N split (gm == 1) contributes to the DEST area (the
+    largest power of two <= Q_N_MAX dividing core_m), so the N quantum only has to supply the rest."""
+    if not Q_N_ROW_AWARE or gm != 1 or geom.tensor_batches != 1:
+        return 1
+    h = 1
+    while h * 2 <= Q_N_MAX and core_m % (h * 2) == 0:
+        h *= 2
+    return h
+
+
 def grid_candidates(geom: Geometry, gx: int, gy: int):
     """Every legal (grid_b, grid_m, grid_n) factorization as a GridChoice (used grid, deduplicated)."""
     C = gx * gy
@@ -334,7 +363,7 @@ def grid_candidates(geom: Geometry, gx: int, gy: int):
                 core_b = _cdiv(tb, gb)
                 core_m = _cdiv(tm, gm)
                 n_per = _cdiv(tn, gn)
-                q_n = max(geom.q_n_min, min(Q_N_MAX, _pow2_floor(n_per)))
+                q_n = max(geom.q_n_min, min(Q_N_MAX // _row_subblock_h(geom, gm, core_m), _pow2_floor(n_per)))
                 core_n = _round_up(n_per, q_n)
                 ub, um, un = _cdiv(tb, core_b), _cdiv(tm, core_m), _cdiv(tn, core_n)
                 placement = _placement_for(ub, um, un, gx, gy)
@@ -358,6 +387,31 @@ def uses_operand_mcast(geom: Geometry, grid: GridChoice, blk: "Blocking"):
         and grid.placement in ("rect", "rect_t")
         and kblock_bytes >= MCAST_MIN_KBLOCK_BYTES
     )
+
+
+def uses_act_stream(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """Regime R1b predicate: a single-B, single-batch 1-D N split over more than one core (every core
+    owns all rows, so every core needs every A K-block), with an A K-block large enough to amortize the
+    per-round handshake with every core (ACT_STREAM_MIN_KBLOCK_BYTES)."""
+    return (
+        ACT_STREAM_MCAST
+        and geom.tensor_batches == 1
+        and grid.grid_b == 1
+        and grid.grid_m == 1
+        and grid.grid_n > 1
+        and blk.block_batches == 1
+        and blk.block_k_tiles * blk.block_m_tiles * geom.a_tile_bytes >= ACT_STREAM_MIN_KBLOCK_BYTES
+    )
+
+
+def operand_mode(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """The operand source of an R1 walk (reader CT arg): 0 = R1 (per-core reads), 1 = R1a (row / column
+    line multicast), 2 = R1b (A broadcast stream on the writer, B per core)."""
+    if uses_operand_mcast(geom, grid, blk):
+        return 1
+    if uses_act_stream(geom, grid, blk):
+        return 2
+    return 0
 
 
 def injector_offsets(grid: GridChoice):
@@ -393,9 +447,13 @@ def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     b_cost = L1_READ_COST if geom.b_in_l1 else 1.0
     a_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_m_tiles * geom.a_tile_bytes * nb_n * a_cost
     b_per_core = grid.core_batches * geom.tensor_k_tiles * grid.core_n_tiles * geom.b_tile_bytes * nb_m * b_cost
-    if uses_operand_mcast(geom, grid, blk):
+    mode = operand_mode(geom, grid, blk)
+    if mode == 1:
         # R1a: one A read per grid row-line, one B read per column-line.
         return a_per_core * grid.grid_m + b_per_core * grid.grid_n
+    if mode == 2:
+        # R1b: A read once (by the injector), B per core.
+        return a_per_core + b_per_core * grid.grid_n
     return (a_per_core + b_per_core) * grid.grid_b * grid.grid_m * grid.grid_n
 
 
@@ -564,9 +622,9 @@ def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
                 return _make_blocking(geom, block_b, cm, cn, bk)
         whole = _make_blocking(geom, block_b, cm, cn, tk)
         resident = _resident_split(geom, grid)
-        # The split must not cost the R1a operand multicast: a smaller K-block can drop under
+        # The split must not cost the R1a / R1b operand multicast: a smaller K-block can drop under
         # MCAST_MIN_KBLOCK_BYTES (2048x256x512 bf8b, 16-bit DEST: 52 -> 26 KB A rounds, +11% as plain R1).
-        if resident is not None and uses_operand_mcast(geom, grid, resident) == uses_operand_mcast(geom, grid, whole):
+        if resident is not None and operand_mode(geom, grid, resident) == operand_mode(geom, grid, whole):
             return resident
         return whole
 
@@ -709,7 +767,15 @@ def _reader_accessor_ct(a, b, row_t, res_t):
     return ct
 
 
-def _writer_ct(cb_out, blk, out_block_n_tiles, geom, out, out_in_place, ds_act_role=_DS_WRITER_ACT_ABSENT):
+def _writer_ct(
+    cb_out, blk, out_block_n_tiles, geom, out, out_in_place, ds_act_role=_DS_WRITER_ACT_ABSENT, act_stream_a=None
+):
+    """`ds_act_role`: the R4 A-round role (CT [8, 16)). `act_stream_a`: A, when this writer runs R1b's A
+    stream (CT 8 = 2 overrides the absent R4 role; A's accessor follows the output's)."""
+    role = list(ds_act_role)
+    if act_stream_a is not None:
+        role = [2, 1, CB_ACT_TILES, blk.block_k_tiles, blk.num_k_blocks, 1, geom.a_tile_bytes, DEPTH_ACT]
+    a_t = act_stream_a if act_stream_a is not None else out  # stand-in accessor (never dereferenced)
     return [
         cb_out,
         blk.block_batches,
@@ -719,9 +785,13 @@ def _writer_ct(cb_out, blk, out_block_n_tiles, geom, out, out_in_place, ds_act_r
         geom.o_tile_bytes,
         out.buffer_aligned_page_size(),
         int(out_in_place),  # the output CB is the output's own L1 shard: retire only, no NoC write
-        *ds_act_role,
+        *role,
         blk.write_batch,  # row groups per writer wait / flush / pop
+        blk.last_block_k_tiles,
+        a_t.buffer_aligned_page_size(),
+        int(blk.act_resident),
         *ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+        *ttnn.TensorAccessorArgs(a_t).get_compile_time_args(),
     ]
 
 
@@ -825,9 +895,13 @@ def create_program_descriptor(
     # [operand_mcast, a_sends, b_sends] + the R4 role args go between reader_ct and the accessors,
     # set per kernel group below.
     reader_accessor_ct = _reader_accessor_ct(a, b, row_t, res_t)
-    operand_mcast = uses_operand_mcast(geom, grid, blk)
+    mode = operand_mode(geom, grid, blk)
+    operand_mcast = mode == 1  # R1a
+    act_stream = mode == 2  # R1b
     act_offset, weight_offset = injector_offsets(grid)
-    writer_ct = _writer_ct(CB_OUTPUT_TILES, blk, out_block_n_tiles, geom, out, out_in_place=False)
+    writer_ct = _writer_ct(
+        CB_OUTPUT_TILES, blk, out_block_n_tiles, geom, out, out_in_place=False, act_stream_a=a if act_stream else None
+    )
     compute_ct = _compute_ct(CB_OUTPUT_TILES, blk, epilogue, cb_row, out, swiglu_natural_pairs=False)
 
     writer_rt = ttnn.RuntimeArgs()
@@ -846,14 +920,15 @@ def create_program_descriptor(
         col0 = j * grid.core_n_tiles
         cols_valid = min(grid.core_n_tiles, geom.tensor_n_tiles - col0)
         nb_b = _cdiv(batches_valid, blk.block_batches)
-        if operand_mcast:
-            # Every core of a line walks the same nominal block sequence (CB pointers in lockstep, one
+        if operand_mcast or act_stream:
+            # Every core of a line (R1b: of the split) walks the same nominal block sequence (CB pointers in lockstep, one
             # multicast per K-block); blocks in a ragged edge's padded tail run with 0 valid tiles.
             nb_m = _cdiv(grid.core_m_tiles, blk.block_m_tiles)
             nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
             reader_roles[(core.x, core.y)] = (
-                int(j == (act_offset + i) % grid.grid_n),
-                int(i == (weight_offset + j) % grid.grid_m),
+                (int(j == (act_offset + i) % grid.grid_n), int(i == (weight_offset + j) % grid.grid_m))
+                if operand_mcast
+                else (0, 0)
             )
         else:
             nb_m = _cdiv(rows_valid, blk.block_m_tiles)
@@ -874,7 +949,8 @@ def create_program_descriptor(
         ]
         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
-        writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
+        a_stream_rt = [a_addr, geom.tensor_k_tiles] if act_stream else []  # R1b: the writer reads A
+        writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles, *a_stream_rt]
         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
 
     # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
@@ -894,7 +970,7 @@ def create_program_descriptor(
                 core_ranges=group_cores,
                 compile_time_args=[
                     *reader_ct,
-                    int(operand_mcast),
+                    mode,
                     a_sends,
                     b_sends,
                     *_DS_ROLE_ABSENT,
@@ -921,9 +997,23 @@ def create_program_descriptor(
     )
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
     _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset, weight_offset)
-    ttnn.attach_absent_mcast(writer, "act")  # the writer's R4 A-round role is absent
+    if act_stream:
+        _attach_act_stream(descriptor, writer, core_ranges, device)
+    else:
+        ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
     descriptor.kernels = [*readers, writer, compute]
     return descriptor
+
+
+def _attach_act_stream(descriptor, writer, core_ranges, device):
+    """R1b: one channel over the whole split (one group: every core needs every A K-block), a fixed
+    in-group injector (ACT_STREAM_INJECTOR in row-wise order) on the writer RISC's NoC. A flat split's
+    core set (full rows + a partial row) is an irregular receiver set: one hardware multicast per
+    rectangle."""
+    config = ttnn.McastConfig(noc=ACT_STREAM_NOC, handshake=True)
+    sender = ttnn.McastFixedSenderConfig(sender_index=ACT_STREAM_INJECTOR)
+    mc = ttnn.Mcast(device, config, core_ranges, core_ranges.num_cores(), sender, ttnn.McastCoreOrder.RowMajor)
+    mc.attach(descriptor, "act", [writer], 0)  # the only channel of an R1b program (R1a's are absent)
 
 
 def _attach_operand_channels(

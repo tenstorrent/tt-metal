@@ -38,6 +38,11 @@
 // B: no core can block in B(kb) before every core has passed A(kb), so the two channels cannot
 // deadlock. The bias / gate row and the residual stay per-core reads (they are tiny or unshared).
 //
+// Regime R1b `interleaved_stream_mcast_a` (Refinement 9, `operand_mode` = 2): a 1-D N split (every core
+// owns all rows), so A is reuse-shared by every core. The writer RISC produces cb_act_tiles (one injector
+// reads each A K-block and broadcasts it, genify_matmul_writer.cpp); this reader streams only its own B
+// column slice (+ the epilogue operands), never waiting on the A handshake.
+//
 // Regime R4 `dram_sharded` (Refinement 4, `dram_sharded` = 1): one worker per DRAM bank owns the block
 // rows x (its bank's B column shard) and walks K one A shard per round (`k_blocks_per_round` K-blocks
 // per shard). Per K-block it (1) issues ONE coalesced read of the K-block's rows from its bank shard
@@ -141,7 +146,11 @@ void kernel_main() {
     constexpr uint32_t res_page_bytes = get_compile_time_arg_val(19);
     constexpr bool weight_resident = get_compile_time_arg_val(20) != 0;    // B read once per core (R1)
     constexpr bool act_resident = get_compile_time_arg_val(21) != 0;       // A read once per M-block (R1)
-    constexpr bool operand_mcast = get_compile_time_arg_val(22) != 0;      // regime R1a
+    // Operand source mode: 0 = R1 (every core reads both operands), 1 = R1a (line injectors multicast
+    // A and B), 2 = R1b (A K-blocks arrive on the WRITER's broadcast stream; this reader streams B only).
+    constexpr uint32_t operand_mode = get_compile_time_arg_val(22);
+    constexpr bool operand_mcast = operand_mode == 1;                      // regime R1a
+    constexpr bool act_on_writer = operand_mode == 2;                      // regime R1b
     constexpr bool a_sends = get_compile_time_arg_val(23) != 0;            // A-line injector (R1a)
     constexpr bool b_sends = get_compile_time_arg_val(24) != 0;            // B-line injector (R1a)
     constexpr bool dram_sharded = get_compile_time_arg_val(25) != 0;       // regime R4
@@ -169,8 +178,9 @@ void kernel_main() {
 
     constexpr uint32_t act_block_tiles = block_m_tiles * block_k_tiles;
     constexpr uint32_t weight_block_tiles = block_k_tiles * block_n_tiles;
-    // R1: every core reads both operands. R1a: only the line injectors read from DRAM.
-    constexpr bool reads_act = !operand_mcast || a_sends;
+    // R1: every core reads both operands. R1a: only the line injectors read from DRAM. R1b: B only (A is
+    // produced into cb_act_tiles by the writer).
+    constexpr bool reads_act = !act_on_writer && (!operand_mcast || a_sends);
     constexpr bool reads_weight = !operand_mcast || b_sends;
 
     // A rides the A-line channel, B the B-line channel (absent under R1).
@@ -182,7 +192,7 @@ void kernel_main() {
     static_assert(
         mc_act.active == (operand_mcast || (dram_sharded && ds_reader_act) || bs_mcast) &&
         mc_weight.active == operand_mcast);
-    static_assert(int(operand_mcast) + int(dram_sharded) + int(block_sharded) <= 1);
+    static_assert(operand_mode <= 2 && int(operand_mode != 0) + int(dram_sharded) + int(block_sharded) <= 1);
     static_assert(!bs_mcast || block_sharded);
     static_assert(ds_b_ahead >= 1 && ds_b_ahead <= ds_weight_depth);
     static_assert(
@@ -386,7 +396,8 @@ void kernel_main() {
                             // is read on the first M-block only; compute keeps it fronted for the rest.
                             const bool load_weight = !weight_resident || mb == 0;
                             // A residency (the twin): the M-block's A is read on its first N-block only.
-                            const bool load_act = !act_resident || nbk == 0;
+                            // R1b: cb_act_tiles has its own producer (the writer's A stream).
+                            const bool load_act = !act_on_writer && (!act_resident || nbk == 0);
                             if (load_act) {
                                 cb_reserve_back(cb_act_tiles, act_block_tiles);
                             }
