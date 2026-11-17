@@ -60,6 +60,21 @@ class LCfg:
     bcast: bool = False
     xf: int = 2  # funnel slots of x blocks on core 0 (WL_XF)
     own_read: bool = True  # own experts read from DRAM into their slots; False (WL_NO_OWN_READ): marked arrived unread
+    gather: bool = True  # token rows gathered from DRAM; False (WG_NO_GATHER, a diagnostic): x staged unread
+    mux_noc1: bool = False  # the fabric mux kernels on NOC1 (BRISC, writer NoC) instead of NOC0
+    # NOC0 for the group multicasts only (all from the BRISCs) and NOC1 for every DRAM read (moved to the NCRISCs) and
+    # the muxes, so nothing enters a group rectangle from outside on its multicasts' NoC (WL_NOC_SPLIT); with bcast,
+    # core 0's BRISC (NOC0's start corner) multicasts both the x blocks and the h rows, fed on NOC1
+    noc_split: bool = False
+    # one chip, no fabric (WL_NO_FABRIC): no mux kernels, every expert the chip's own and read from DRAM, nothing
+    # forwarded; with cycles of that one chip, the per-chip load of the lane design without its fabric traffic. On a
+    # mesh every chip runs the same one-chip program on its own inputs (the tables of the one-chip cycles on each)
+    nofab: bool = False
+    # row-major outputs (WL_Y_RM): each down row of each expert to its own row of a row-major [rows, H] output, the
+    # row given by the expert's destination list (build_lane's dest_t, the token lists' layout); needs noc_split or ucast
+    y_rm: bool = False
+    y_nowrite: bool = False  # (a diagnostic, WL_Y_NOWRITE) y_rm without the row writes: destinations read, rows dropped
+    y_posted: bool = True  # y_rm's row writes posted (no acks; WL_Y_POSTED)
     # no NoC multicasts (WL_UCAST): every x block and h row goes to the group's 20 cores as unicast writes, payloads then
     # flags (the group multicasts wedged the NoC under the lane design's other traffic); False: multicasts as before
     ucast: bool = True
@@ -156,7 +171,8 @@ def lanes(shape, lc: LCfg):
     cycles = [list(c) for c in (lc.cycles or [snake(shape)])]
     out = []
     for cyc in cycles:
-        assert sorted(cyc) == sorted((r, c) for r in range(R) for c in range(Cn)), "a cycle visits every chip once"
+        every = sorted((r, c) for r in range(R) for c in range(Cn))
+        assert lc.nofab or sorted(cyc) == every, "a cycle visits every chip once"
         for link in range(lc.NL):
             out.append((cyc, link))
     return out
@@ -265,16 +281,20 @@ def tables_tensor(mesh, tabs):
     )
 
 
-def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab_t, T, out_rows):
+def build_lane(
+    mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab_t, T, out_rows, dest_t=None, fence_row=None
+):
     """generic_op mesh program of the lane design; returns (mesh program, io tensors, stamps). T: make_tables();
-    out_rows: tile rows of an output block (a group's last expert, or with out_all a group's experts)."""
+    out_rows: tile rows of an output block (a group's last expert, or with out_all a group's experts); with y_rm, out_t
+    is row-major [rows, H] and dest_t the destination lists [nexp, RMAX 32] uint32 (out_rows unused); fence_row: the
+    first of out_t's spare rows (NUM_DRAM_BANKS of them) the posted row writes' fence rewrites."""
     R, Cn = tuple(mesh.shape)
     N, G, GC = R * Cn, cfg.G, cfg.GC
     assert GC == 20 and cfg.PAIRS == GC and cfg.DCOLS * GC == cfg.HT
     ln = lanes((R, Cn), lc)
     groups = [lane_cores(g, G) for g in range(G)]
     C = [c for gr in groups for c in gr]
-    muxes = [mux_core(g, d, G) for g in range(G) for d in range(2)]
+    muxes = [] if lc.nofab else [mux_core(g, d, G) for g in range(G) for d in range(2)]
     assert not set(muxes) & set(C)
     gx, gy = mesh.compute_with_storage_grid_size().x, mesh.compute_with_storage_grid_size().y
     assert all(x < gx and y < gy for x, y in C + muxes), f"core layout outside the {gx} x {gy} grid"
@@ -293,9 +313,14 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     warr, cred, freew, arr_stage = w16(K), w16(2 * K), w16(K), w16(2)
     hring = sharded_l1(mesh, C, [NS * KTD * 32, 32], cfg.h_dt, ttnn.TILE_LAYOUT)
     hflags = w16(NS * 2)
-    harrw = w16(GC // 2)  # h arrivals at a row leader, a word a producer row of its column (WL_HARRW)
-    hcred = w16(GC // 2 + 1)  # h ring credits: consumed h rows of the column's cores, then the partner (WL_HCRED)
-    ha2a_w, ha2a_f = w16(2), w16(NS * KTD)  # (WL_HA2A: BRISC rows forwarded + flag scratch; a flag a tile of a slot)
+    # (each only with its feature: the NoC-split lane's L1 tensors sit close above its circular buffers)
+    hchain_on = lc.ucast and lc.hchain and not lc.ha2a
+    # h arrivals at a row leader, a word a producer row of its column (WL_HARRW)
+    harrw = w16(GC // 2) if lc.ucast and lc.harrw else None
+    # h ring credits: consumed h rows of the column's cores, then the partner (WL_HCRED)
+    hcred = w16(GC // 2 + 1) if lc.hcred and (hchain_on or lc.ha2a) else None
+    # (WL_HA2A: BRISC rows forwarded + flag scratch; a flag a tile of a slot)
+    ha2a_w, ha2a_f = (w16(2), w16(NS * KTD)) if lc.ha2a else (None, None)
     if lc.ks:
         assert lc.ucast and lc.hchain and not lc.bcast, "the K split runs with the unicast h chain"
         KSL = KT // 10
@@ -311,6 +336,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         xflags = w16(NX)
     xprog = w16(GC)
     assert not (lc.bcast and lc.mc_noc1), "bcast and mc_noc1 place the multicasts differently"
+    assert not (lc.noc_split and lc.mc_noc1), "noc_split places every multicast on NOC0"
     hcnt = w16(NS) if lc.bcast else None  # core 19's h tiles arrived a ring slot (WL_BCAST)
     # core 0's x funnel slots and their filled flags (WL_XIN, WL_XINF)
     xin = sharded_l1(mesh, C, [lc.xf * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT) if lc.bcast else None
@@ -326,17 +352,26 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         a64(table_l1.buffer_address()),
     )
     st = stamps_tensor(mesh, C)
-    mcfg = fabric_mux.Config(
-        num_full_size_channels=GC,
-        num_header_only_channels=0,
-        num_buffers_per_full_size_channel=lc.nbuf,
-        num_buffers_per_header_only_channel=0,
-        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh),
-        base_l1_address=ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1),
-    )
-    ctype = fabric_mux.ChannelType.FULL_SIZE
-    client_ct = list(fabric_mux.client_compile_time_args(num_clients=GC, channel_type=ctype, config=mcfg))
-    mesh_id = int(node(mesh, (0, 0)).mesh_id)
+    # (y_rm: QY on the NCRISC's NOC1 reads the destination lists and posts the rows; no group multicast may use NOC1
+    # meanwhile: the NoC split, or the unicast chains)
+    assert not lc.y_rm or ((lc.noc_split or lc.ucast) and dest_t is not None), "y_rm: noc_split or ucast, and dest_t"
+    # (y_rm: the row writes need CB 17 64 B aligned)
+    ysh = sharded_l1(mesh, C, [lc.ydep * cfg.DCOLS * 32, 32], cfg.out_dt, ttnn.TILE_LAYOUT) if lc.y_rm else None
+    dest_t = dest_t if lc.y_rm else idx_t
+    if lc.nofab:
+        mcfg, ctype, client_ct, mesh_id = None, None, [0] * 5, 0  # (the reader's mux CT args are placeholders)
+    else:
+        mcfg = fabric_mux.Config(
+            num_full_size_channels=GC,
+            num_header_only_channels=0,
+            num_buffers_per_full_size_channel=lc.nbuf,
+            num_buffers_per_header_only_channel=0,
+            full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh),
+            base_l1_address=ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1),
+        )
+        ctype = fabric_mux.ChannelType.FULL_SIZE
+        client_ct = list(fabric_mux.client_compile_time_args(num_clients=GC, channel_type=ctype, config=mcfg))
+        mesh_id = int(node(mesh, (0, 0)).mesh_id)
     dm = lambda risc: ttnn.DataMovementConfigDescriptor(
         processor=ttnn.DataMovementProcessor.RISCV_0 if risc == 0 else ttnn.DataMovementProcessor.RISCV_1,
         noc=ttnn.NOC.RISCV_0_default if risc == 0 else ttnn.NOC.RISCV_1_default,
@@ -351,15 +386,21 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         ("EXPERT_ACTIVATION_ALPHA", "1.702f"),
     ]
     # (the x stream-order gate fixed starving concurrent multicasts; with the x chain it only costs: off)
-    xorder = 1 if lc.mc_noc1 or lc.bcast else (0 if lc.ucast and lc.xchain else cfg.xorder)
+    xorder = 1 if lc.mc_noc1 or lc.bcast or lc.noc_split else (0 if lc.ucast and lc.xchain else cfg.xorder)
     ydefs = [("WG_XORDER", str(xorder)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
     ydefs += [("WL_MC_NOC1", "1")] if lc.mc_noc1 else []
+    ydefs += [("WL_NOC_SPLIT", "1")] if lc.noc_split else []
     if lc.bcast:
         ydefs += [("WL_BCAST", str(hcnt.buffer_address())), ("WL_XIN", str(xin.buffer_address()))]
         ydefs += [("WL_XINF", str(xinf.buffer_address())), ("WL_XF", str(lc.xf))]
     ydefs += [("WL_OUT_ALL", "1")] if lc.out_all else []
+    ydefs += [("WL_Y_RM", "1")] if lc.y_rm else []
+    ydefs += [("WL_Y_NOWRITE", "1")] if lc.y_nowrite else []
+    ydefs += [("WL_Y_POSTED", "1")] if lc.y_rm and lc.y_posted else []
+    ydefs += [("WL_Y_FENCE", str(fence_row))] if lc.y_rm and lc.y_posted and fence_row is not None else []
     ydefs += [("WL_MCAST_LINKED", "1")] if lc.mcast_linked else []
     ydefs += [] if lc.own_read else [("WL_NO_OWN_READ", "1")]
+    ydefs += [] if lc.gather else [("WG_NO_GATHER", "1")]
     assert not (lc.ucast and lc.bcast), "WL_BCAST still multicasts its h rows: run it with ucast=0"
     ydefs += [("WL_UCAST", "1")] if lc.ucast else []
     # (the chains replace the unicast fan-out: without ucast, i.e. with multicasts, they do not apply)
@@ -414,9 +455,12 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
             nxt = {}
             for g, gr in enumerate(groups):
                 cyc, link = ln[g]
-                i = cyc.index(me_rc)
-                nxt[g] = (cyc[(i + 1) % N], cyc[(i - 1) % N])
-                nid = [int(node(mesh, nxt[g][d]).chip_id) for d in range(2)]
+                if lc.nofab:
+                    nxt[g] = (me_rc, me_rc)
+                else:
+                    i = cyc.index(me_rc)
+                    nxt[g] = (cyc[(i + 1) % N], cyc[(i - 1) % N])
+                nid = [0, 0] if lc.nofab else [int(node(mesh, nxt[g][d]).chip_id) for d in range(2)]
                 rs = noc_rects(mesh, gr)
                 assert len(rs) == 1, rs
                 r0 = list(rs[0][:4])
@@ -439,6 +483,12 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         nid[0],
                         nid[1],
                         xy[0] | xy[1] << 8,
+                        x_t.buffer_address(),
+                        idx_t.buffer_address(),
+                        counts_t.buffer_address(),
+                        tab_t.buffer_address(),
+                        ws_t.buffer_address(),
+                        dest_t.buffer_address(),
                     ]
                 kernels.append(
                     ttnn.KernelDescriptor(
@@ -473,10 +523,17 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         + [out_rows, cfg.HT, wgu_ring.buffer_address(), wd_ring.buffer_address()]
                         + [cred.buffer_address(), freew.buffer_address(), lc.CHT, wtile]
                         + client_ct
-                        + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args()),
+                        + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(x_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(idx_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(counts_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(dest_t).get_compile_time_args())
+                        + [cfg.RMAX, cfg.H * 2, cfg.nexp, TLW * 4, idx_addr, lc.D],
                         runtime_args=rd_rt,
                         defines=ydefs
-                        + FAB_DEFS
+                        + ([("WL_NO_FABRIC", "1")] if lc.nofab else FAB_DEFS)
                         + [("WL_WPOLL", str(lc.wpoll))]
                         + ([("WL_ARR_WRITE", str(arr_stage.buffer_address()))] if lc.arr_write else [])
                         + ([("WL_ARR_NF", "1")] if lc.arr_nf else []),
@@ -495,7 +552,8 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                             + ([("KS_OVL", "1")] if lc.ks_ovl else [])
                             + ([("KS_XDIRECT", str(lc.ks_nxr))] if lc.ks_xdirect else [])
                             + ([("KS_FOLD_FIRST", "1")] if lc.ks_ff else [])
-                            + ([("KS_FOLD_LAST", "1")] if lc.ks_fz else []),
+                            + ([("KS_FOLD_LAST", "1")] if lc.ks_fz else [])
+                            + ([("WL_Y_RM", "1")] if lc.y_rm else []),
                             runtime_args=cp_rt,
                             config=ccfg,
                         )
@@ -509,6 +567,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                             named_compile_time_args=[("expert_activation", 0)],
                             defines=act_defs
                             + [("DN_LAG", str(cfg.dn_lag)), ("WC_GLU", str(cfg.glu))]
+                            + ([("WL_Y_RM", "1")] if lc.y_rm else [])
                             + ([("WX_X_FMT_DIFFERS", "1")] if cfg.x_dt != cfg.h_dt else [])
                             + ([("WX_H_PACK_DIFFERS", "1")] if cfg.h_dt != cfg.out_dt else []),
                             runtime_args=cp_rt,
@@ -519,17 +578,23 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
             mrt = ttnn.RuntimeArgs()
             for m in muxes:
                 mrt[m[0]][m[1]] = []
-            kernels.append(
-                ttnn.KernelDescriptor(
-                    kernel_source="tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                    core_ranges=crs(muxes),
-                    compile_time_args=list(mcfg.kernel_compile_time_args()),
-                    runtime_args=mrt,
-                    defines=FAB_DEFS,
-                    config=dm(0),
-                    opt_level=fabric_mux.KernelBuildOptLevel.O3,
+            if not lc.nofab:
+                kernels.append(
+                    ttnn.KernelDescriptor(
+                        kernel_source="tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                        core_ranges=crs(muxes),
+                        compile_time_args=list(mcfg.kernel_compile_time_args()),
+                        runtime_args=mrt,
+                        defines=FAB_DEFS,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0,
+                            noc=(
+                                ttnn.NOC.RISCV_1_default if lc.mux_noc1 or lc.noc_split else ttnn.NOC.RISCV_0_default
+                            ),
+                        ),
+                        opt_level=fabric_mux.KernelBuildOptLevel.O3,
+                    )
                 )
-            )
             cbs = [
                 ttnn.cb_descriptor_from_sharded_tensor(0, xring),
                 ttnn.cb_descriptor_from_sharded_tensor(1, wgu_ring),
@@ -540,7 +605,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                 if lc.ks and lc.ks_xdirect
                 else cb(8, cfg.x_dt, XST * BK, cset),
                 cb(16, cfg.h_dt, 2, cset),
-                cb(17, cfg.out_dt, lc.ydep * DC, cset),
+                ttnn.cb_descriptor_from_sharded_tensor(17, ysh) if lc.y_rm else cb(17, cfg.out_dt, lc.ydep * DC, cset),
             ]
             if lc.ks:
                 cbs += [
@@ -550,45 +615,47 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
             # (0: the chains' down-forwarder progress, BRISC -> NCRISC)
             sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(6)]
             p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
-            for g, gr in enumerate(groups):
-                cyc, link = ln[g]
-                for d in range(2):
-                    m = mux_core(g, d, G)
-                    p.kernels[mux_idx].runtime_args[m[0]][m[1]].extend(
-                        mcfg.kernel_runtime_args(
-                            source_node_id=node(mesh, me_rc),
-                            destination_node_id=node(mesh, nxt[g][d]),
-                            link_index=link,
-                            program_descriptor=p,
-                            mux_logical_core=ttnn.CoreCoord(*m),
+            if not lc.nofab:
+                for g, gr in enumerate(groups):
+                    cyc, link = ln[g]
+                    for d in range(2):
+                        m = mux_core(g, d, G)
+                        p.kernels[mux_idx].runtime_args[m[0]][m[1]].extend(
+                            mcfg.kernel_runtime_args(
+                                source_node_id=node(mesh, me_rc),
+                                destination_node_id=node(mesh, nxt[g][d]),
+                                link_index=link,
+                                program_descriptor=p,
+                                mux_logical_core=ttnn.CoreCoord(*m),
+                            )
                         )
-                    )
-                for d in range(2):
-                    m = mux_core(g, d, G)
-                    mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
-                    master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
-                    term_sem = None
-                    for j, (x, y) in enumerate(gr):
-                        args = fabric_mux.client_runtime_args(
-                            connection_valid=True,
-                            is_termination_master=j == 0,
-                            channel_type=ctype,
-                            mux_virtual_core=mux_vc,
-                            client_index=j,
-                            client_logical_core=ttnn.CoreCoord(x, y),
-                            config=mcfg,
-                            program_descriptor=p,
-                            termination_master_virtual_core=master_vc,
-                            termination_master_semaphore_id=term_sem,
-                        )
-                        if j == 0:
-                            term_sem = args[10]
-                        p.kernels[rd_idx[g]].runtime_args[x][y].extend(args)
+                    for d in range(2):
+                        m = mux_core(g, d, G)
+                        mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
+                        master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
+                        term_sem = None
+                        for j, (x, y) in enumerate(gr):
+                            args = fabric_mux.client_runtime_args(
+                                connection_valid=True,
+                                is_termination_master=j == 0,
+                                channel_type=ctype,
+                                mux_virtual_core=mux_vc,
+                                client_index=j,
+                                client_logical_core=ttnn.CoreCoord(x, y),
+                                config=mcfg,
+                                program_descriptor=p,
+                                termination_master_virtual_core=master_vc,
+                                termination_master_semaphore_id=term_sem,
+                            )
+                            if j == 0:
+                                term_sem = args[10]
+                            p.kernels[rd_idx[g]].runtime_args[x][y].extend(args)
             mc = ttnn.MeshCoordinate(r, c)
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
     io = [x_t, idx_t, counts_t, ws_t, tab_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1, harrw]
     io += [hcred, ha2a_w, ha2a_f]
     io += [idx_l1, table_l1, warr, cred, freew, arr_stage] + ([hcnt, xin, xinf] if lc.bcast else [])
     io += [xcred, lflags, lcred, kscr, land, pring] if lc.ks else []
-    io += [st, out_t]
+    io += ([ysh, dest_t] if lc.y_rm else []) + [st, out_t]
+    io = [t for t in io if t is not None]
     return mpd, io, st

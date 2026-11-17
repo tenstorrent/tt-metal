@@ -10,6 +10,9 @@
 // RT: 0 stamps, 1 j, 2 g, 3 order length. CT: 0 KSL, 1 KTD, 2 DCOLS, 3 DB, 4 counts L1, 5 G, 6 GC, 7 FL, 8 TL,
 // 9 order table L1. Stamps: 256 + n the end of the n-th expert, 63 the end; waits 40 tilize, 41 x, 42 weights, 43 h,
 // 44 landing; MATH time 45 gate/up, 46 fold, 47 down, 48 tilize.
+// WL_Y_RM: the down row tile is pack-untilized into CB 17 (32 rows x DCOLS * 32 columns, row after row) for the
+// reader's row writes (wl_compute's scheme): DEST's untilize remap is enabled once at the start (the tilize, gate/up,
+// fold and SwiGLU work with it on); a down row only switches the packer's untilize init / uninit.
 #ifndef DN_LAG
 #define DN_LAG 1
 #endif
@@ -24,6 +27,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/expert_activation.hpp"
 #include "glu_fused.hpp"
+#ifdef WL_Y_RM
+#include "api/compute/pack_untilize.h"
+#endif
 
 constexpr uint32_t xr_cb = tt::CBIndex::c_0;
 constexpr uint32_t w_cb = tt::CBIndex::c_1;
@@ -127,6 +133,9 @@ FORCE_INLINE void down_row() {
     PACK(const uint32_t py = wall());
     cb_reserve_back(y_cb, dcols);
     PACK(p_yw += wall() - py);
+#ifdef WL_Y_RM
+    pack_untilize_dest_init<DB, dcols, false, TILE_C_DIM, false, false /*configure_remap*/>(y_cb);
+#endif
     for (uint32_t b = 0; b < dcols / DB; ++b) {
         tile_regs_acquire();
         for (uint32_t k = 0; k < ktd; ++k) {
@@ -134,11 +143,18 @@ FORCE_INLINE void down_row() {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef WL_Y_RM
+        pack_untilize_dest<DB, dcols>(y_cb, 1, b);
+#else
         for (uint32_t t = 0; t < DB; ++t) {
             pack_tile<true>(t, y_cb, b * DB + t);
         }
+#endif
         tile_regs_release();
     }
+#ifdef WL_Y_RM
+    pack_untilize_uninit(y_cb);
+#endif
     pack_reconfig_data_format(y_cb, p_cb);
     cb_pop_front(hr_cb, ktd);
     cb_push_back(y_cb, dcols);
@@ -233,6 +249,9 @@ void kernel_main() {
     g_ = get_arg_val<uint32_t>(2);
     nexp_g = get_arg_val<uint32_t>(3);
     compute_kernel_hw_startup<SrcOrder::Reverse>(xr_cb, w_cb, p_cb);
+#ifdef WL_Y_RM
+    MATH((llk_math_reconfig_remap(true)));
+#endif
     ws_glu::init<2>();
     while (counts[0] == 0) {
     }

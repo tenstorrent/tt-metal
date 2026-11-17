@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import torch
 import ttnn
 
-from models.demos.ws_expert.bench_util import TILE_BYTES, cb, crs, kpath, stamps_tensor
+from models.demos.ws_expert.bench_util import TILE_BYTES, cb, crs, kpath, stamps_tensor, zeroed_l1
 
 SEM_CONS, SEM_GRANT, SEM_ARR, SEM_SCR, SEM_CREDIT = range(5)
 
@@ -165,14 +165,8 @@ def _unused_rect_noc(device, cores):
 
 
 def sharded_l1(device, cores, shard_shape, dtype, layout, torch_dtype=torch.float32):
-    grid = crs(cores)
-    mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    t = torch.zeros([len(cores) * shard_shape[0], shard_shape[1]], dtype=torch_dtype)
-    return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device, memory_config=mem)
+    """A zeroed HEIGHT_SHARDED L1 tensor (bench_util.zeroed_l1: the zeros from the host, or from a device program)."""
+    return zeroed_l1(device, cores, shard_shape, dtype, layout, torch_dtype)
 
 
 def build(device, cfg: WsCfg, p: Plan, x_t, w_t, wd_t, out_t):

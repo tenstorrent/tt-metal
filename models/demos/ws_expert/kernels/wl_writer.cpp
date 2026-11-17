@@ -51,9 +51,19 @@ constexpr uint32_t K = WL_K;  // weight slots a core
 // funnel slots (WL_XIN, WL_XF slots, filled flags at WL_XINF), and core 0's BRISC multicasts every block on NOC0 in
 // stream order, one at a time. h: every core sends its tile of a row on NOC0 (east / south) to core GC - 1, whose
 // NCRISC multicasts the whole row on NOC1, one at a time. WL_BCAST: NS per-slot h arrival counters (16 B apart).
+// WL_BCAST with WL_NOC_SPLIT: core 0's BRISC (NOC0's multicast start corner) is the group's only multicaster, of the x
+// blocks (QX) and of the h rows (QM); the producers send their x blocks and h tiles to core 0 on NOC1 from their
+// NCRISCs (west / north, inside the group), so NOC0 carries nothing but core 0's multicasts, which never leave the
+// rectangle, and NOC1 carries no multicast.
 constexpr uint32_t X_COLS = 0, H_COLS = 0;
 #elif defined(WL_MC_NOC1)
 constexpr uint32_t X_COLS = 0, H_COLS = 0;  // (column 0's multicasts go out from its NCRISC on NOC1)
+#elif defined(WL_NOC_SPLIT)
+// WL_NOC_SPLIT: every group multicast from this BRISC on NOC0 (both columns, x in stream order, WG_XORDER 1), and NOC0
+// carries nothing else into the group rectangle: no DRAM reads here (the NCRISC reads the counts, the slot table, the
+// token rows and the own experts' weights on NOC1), the fabric muxes on NOC1. A multicast into a rectangle deadlocks
+// with traffic entering the same cores from outside on the same NoC (DRAM read responses, router landing writes).
+constexpr uint32_t X_COLS = 3, H_COLS = 3;
 #else
 constexpr uint32_t X_COLS = 1, H_COLS = 1;
 #endif
@@ -255,10 +265,16 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
     volatile tt_l1_ptr uint32_t* tab = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_l1);
     volatile tt_l1_ptr uint32_t* order = tab + 16;
+#ifdef WL_NOC_SPLIT
+    do {  // (the NCRISC loads the counts and this group's slot table on NOC1)
+        invalidate_l1_cache();
+    } while (counts[0] == 0);
+#else
     noc_async_read_page(0, cs, counts_l1 + 64);
     noc_async_read_page(g, ts, table_l1);
     noc_async_read_barrier();
     counts[0] = 1;
+#endif
     auto rows_of = [&](uint32_t n) { return (counts[16 + (order[n] & 0xFFFF)] + 31) / 32; };
     uint32_t total_rows = 0;
     for (uint32_t n = 0; n < nexp_g; ++n) {
@@ -341,7 +357,13 @@ void kernel_main() {
     // multicasts this RISC also sends (column 1) - they went out 11-27K cycles late
     const uint32_t L0 = 2 * (J % HALF) + J / HALF;
     uint32_t g_n = 0, g_l = L0, g_state = 0;
+#ifdef WL_NOC_SPLIT
+    g_n = nexp_g;  // (the NCRISC gathers the token rows)
+#endif
     auto q1 = [&]() -> bool {
+#ifdef WL_NOC_SPLIT
+        return false;  // (the NCRISC gathers the token rows)
+#else
         if (g_state == 1) {
             if (!ncrisc_noc_reads_flushed(noc_index)) {
                 return false;
@@ -381,6 +403,7 @@ void kernel_main() {
         noc_async_read(is.get_noc_addr(order[g_n] & 0xFFFF) + (g_l / BPR) * 32 * 4, idx_l1, 32 * 4);
         g_state = 1;
         return true;
+#endif
     };
 #endif
     // ---- QO: own experts' weights from DRAM into their slots (chunk reads with transaction ids 1..D, in order)
@@ -404,6 +427,9 @@ void kernel_main() {
         return false;
     };
     auto qo = [&]() -> bool {
+#ifdef WL_NOC_SPLIT
+        return false;  // (the NCRISC reads the own experts' weights)
+#else
         bool did = false;
         if (!o_busy) {
             if (!next_own()) {
@@ -446,8 +472,12 @@ void kernel_main() {
             o_s = (s + 1) % K;
         }
         return did;
+#endif
     };
     auto qo_done = [&]() {
+#ifdef WL_NOC_SPLIT
+        return true;
+#endif
         for (uint32_t s = 0; s < K; ++s) {
             if (o_k[s] < tab[1 + s]) {
                 return false;
@@ -457,6 +487,9 @@ void kernel_main() {
     };
     // ---- Q2: h tile -> column leader (WL_BCAST: -> core 0, counted in the row's ring slot)
     uint32_t sent = 0;
+#if defined(WL_BCAST) && defined(WL_NOC_SPLIT)
+    sent = total_rows;  // (the NCRISC sends this core's h tiles to core 0 on NOC1)
+#endif
     const uint32_t harr = get_semaphore(SEM_HARR);
     auto q2 = [&]() -> bool {
         if (sent >= total_rows || !cb_pages_available_at_front(h_cb, 1)) {
@@ -581,6 +614,44 @@ void kernel_main() {
         lq += HALF;
         return true;
     };
+    // ---- QM (WL_BCAST with WL_NOC_SPLIT, core 0): h row q once its GC tiles are in ring slot q % NS (the
+    // slot's arrival count, GC a use) and row q - 1's last flag has landed here (one h multicast in flight). The
+    // row goes to the other cores only (it is already in place here, and a loopback copy could land after a
+    // producer's next tile for the slot), unlinked; then both column flags to every core including this one, from
+    // the same command buffer, so each lands after the row.
+#if defined(WL_BCAST) && defined(WL_NOC_SPLIT)
+    const bool hm = J == 0;
+    uint32_t hq = 0;
+    auto qm = [&]() -> bool {
+        if (!hm || hq >= total_rows) {
+            return false;
+        }
+        invalidate_l1_cache();
+        if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_BCAST + (hq % NS) * 16) < GC * (hq / NS + 1)) {
+            return false;
+        }
+        if (hq > 0 &&
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hflags + (((hq - 1) % NS) * 2 + 1) * 16) < hq) {
+            return false;
+        }
+        const uint32_t row = hring + (hq % NS) * KTD * htile;
+        *scr = hq + 1;
+        noc_async_write_multicast(
+            row, get_noc_multicast_addr(gx0, gy0, gx1, gy1, row), KTD * htile, ngroup - 1, false);
+        for (uint32_t c = 0; c < 2; ++c) {
+            noc_async_write_multicast_loopback_src(
+                scr_addr, get_noc_multicast_addr(gx0, gy0, gx1, gy1, hflags + ((hq % NS) * 2 + c) * 16), 4, ngroup,
+                false);
+        }
+        noc_async_writes_flushed();
+        ++hq;
+        return true;
+    };
+#else
+    const bool hm = false;
+    const uint32_t hq = total_rows;
+    auto qm = []() -> bool { return false; };
+#endif
     // ---- Q4: down outputs
 #ifdef WG_Y_NCRISC
     // (the down outputs go to DRAM from the NCRISC on NOC1: this RISC's NOC0 only reads DRAM)
@@ -1092,7 +1163,7 @@ void kernel_main() {
         const bool c = q3();
         WL_FW();
         uint32_t t4 = wall();
-        const bool d = q4();
+        const bool d = q4() | qm();
         uint32_t t5 = wall();
         const bool kp = qp() | qc();
         if (kp) {
@@ -1112,7 +1183,8 @@ void kernel_main() {
         const bool mch = (H_COLS >> C) & 1;
         if (!fdw && fd_s >= total_xd && fd_pub >= total_xd && hd_i >= total_hd && hd_pub >= total_hd && !o && !x &&
             !a && !b && !c && !d && !kp && ks_done() && HB_DONE && g_n >= nexp_g && sent >= total_rows &&
-            (!mch || lq >= total_rows) && drained >= total_rows && x_done() && g_state == 0 && qo_done()) {
+            (!mch || lq >= total_rows) && drained >= total_rows && x_done() && g_state == 0 && qo_done() &&
+            (!hm || hq >= total_rows)) {
             break;
         }
 #ifdef WL_IDLE
@@ -1129,7 +1201,9 @@ void kernel_main() {
         st[50 + i] = tq[i];
         st[104 + i] = tmx[i];
     }
+#ifndef WL_NOC_SPLIT
     st[56] = n_own;
+#endif
     st[60] = t_fwd;
     st[61] = t_own;
     for (uint32_t i = 0; i < 5; ++i) {
