@@ -177,6 +177,17 @@ ALWI void token_step(
     cb_pop_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
 }
 
+// GDN_RMS_ONE_COPY: one copy of the RMS norm for the call sites of a UNIT_LAG build (kernel-config text).
+#if GDN_RMS_ONE_COPY
+[[gnu::noinline]] void rms_unit(Buffers& bufs, uint32_t v_eps_bits, RowScope scope, bool squared) {
+    rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(bufs, v_eps_bits, scope, squared);
+}
+#else
+ALWI void rms_unit(Buffers& bufs, uint32_t v_eps_bits, RowScope scope, bool squared) {
+    rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(bufs, v_eps_bits, scope, squared);
+}
+#endif
+
 }  // namespace
 
 void kernel_main() {
@@ -210,7 +221,7 @@ void kernel_main() {
     auto lagged_rms = [&](RowScope rms_scope) {
         GDN_ZONE("gdn_rmsnorm");
         cb_wait_front(cb_norm_w, Vb);
-        rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(bufs, v_eps_bits, rms_scope, QK_SHARED);
+        rms_unit(bufs, v_eps_bits, rms_scope, QK_SHARED);
         cb_pop_front(cb_norm_w, Vb);
     };
     for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
@@ -317,8 +328,7 @@ void kernel_main() {
                 continue;
             }
             GDN_ZONE("gdn_rmsnorm");
-            rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(
-                bufs, v_eps_bits, scope, QK_SHARED && hi - lo == 1);  // token_step's square_o
+            rms_unit(bufs, v_eps_bits, scope, QK_SHARED && hi - lo == 1);  // token_step's square_o
             GDN_MARK("m_rms");
         }
         cb_pop_front(cb_conv_w, conv_w_pages);

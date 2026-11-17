@@ -59,9 +59,11 @@ def test_qk_cores_match_own(device, monkeypatch, inputs, token_dtype, poison):
                 tensors[name] = tensors[name].to(torch.bfloat16).to(torch.float32)
     expected = reference(*(tensors[name] for name in ORDER))
     results = []
-    for share, raw in ((True, False), (False, False), (True, True)):
+    # The fused token vector (two units per core) is equal in accuracy, not bit-identical: off for the comparison.
+    for share, raw, fused in ((True, False, False), (False, False, False), (True, True, "auto")):
         monkeypatch.setattr(gdn_pd, "SHARE_QK_CORES", share)
         monkeypatch.setattr(gdn_pd, "QK_RAW_HANDOFF", raw)
+        monkeypatch.setattr(gdn_pd, "TOKEN_VECTOR_FUSED", fused)
         device_inputs = _to_device(tensors, device, poison, token_dtype)
         outs = gated_delta_net(*device_inputs, compute_kernel_config=compute_config())
         results.append([ttnn.to_torch(t).to(torch.float32) for t in outs])

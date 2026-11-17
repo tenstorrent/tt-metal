@@ -235,6 +235,11 @@ S0_READ_TILES = None
 # (UNIT_LAG), so the core's last state is final, and written, while the norms run.
 SHARE_QK_FINISH = True
 UNIT_LAG = True
+# Units per pair core from which UNIT_LAG applies. Two units (decode B=16) run without it and with the fused token
+# vector: kernel 69.8 against 70.0 us, pair role text 58.9 -> 48.6 kB (as B=8), so the trace allocator evicts older
+# binaries for it and the QB2 decode trace starts it 6.5 us after the previous program instead of 19.3 (median over
+# the layers). Four units (B=32) keep the lag: 150.8 against 156.1 us without.
+UNIT_LAG_MIN_UNITS = 3
 # R-QKCORE pair cores: pair p updates and writes its final state starting at tile (p * STATE_STAGGER) mod Kt Vt, so the
 # cores' simultaneous writes spread over the DRAM banks instead of all starting at the bank of tile 0 (0: in order).
 STATE_STAGGER = 3
@@ -293,6 +298,10 @@ DECAY_ONE_PASS = True
 # R-BCAST: a kernel group per qk role instead of one for all its cores. Smaller reader / writer binaries (the q / k
 # role compiled in), but the injector group stays the largest and decode B=1 host time per call rises 112 -> 166 us.
 SPLIT_BCAST_GROUPS = False
+# UNIT_LAG builds (decode pair cores with several units): the RMS norm as one function instead of inlined at its three
+# call sites. Pair role text at B=16 58.9 -> 51.9 kB: the op's binaries overlap the previous program's less often in
+# the kernel-config buffer, and a trace then need not wait for it before writing them.
+RMS_ONE_COPY = True
 # Per-block device profiler zones (GDN_ZONE in the kernels: compute blocks, reader / writer units and rows), on with
 # env GDN_PROFILE_ZONES=1, for --profile runs (never compiled under NoC tracing). Each zone execution spends 2 of a
 # RISC's ~250 markers per launch.
@@ -1358,7 +1367,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
 
         def unit_lag(depth):
             # The reader must run a unit ahead of the lagged norm: two units of inputs in flight.
-            return bool(qk_cores) and SHARE_QK_FINISH and UNIT_LAG and depth > 1
+            return bool(qk_cores) and SHARE_QK_FINISH and UNIT_LAG and depth > 1 and core_units >= UNIT_LAG_MIN_UNITS
 
         def local_plan(depth):
             plan = _cb_plan(Kt, v_block_tiles, conv_on_fpu, pieces, chunked, tokens, depth)
@@ -1883,6 +1892,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
 
     # SMALL_INPUTS_MCAST's defines only where it runs (gated_delta_net_qk_rows.hpp defaults them off).
     small_defines = [("GDN_SMALL_MCAST", "1")] + [(f"GDN_{n}", str(globals()[n])) for n in SMALL_MCAST_NAMES]
+    # "auto": R-VSPLIT pieces, and pair cores whose several units run without UNIT_LAG.
+    fused_vector = pieces > 1 or (prep is None and bool(qk_cores) and unit_depth > 1 and not unit_lag(unit_depth))
     defines = (
         _kernel_defines()
         + (small_defines if small_mcast else [])
@@ -1898,8 +1909,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_S0_WRITER_AFTER_INPUTS", str(int(S0_WRITER_AFTER_INPUTS))),
             ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
             ("GDN_PROFILE_ZONES", str(0 if _noc_tracing() else int(PROFILE_ZONES))),
-            ("GDN_TOKEN_VECTOR_FUSED", str(int(pieces > 1 if TOKEN_VECTOR_FUSED == "auto" else TOKEN_VECTOR_FUSED))),
+            ("GDN_TOKEN_VECTOR_FUSED", str(int(fused_vector if TOKEN_VECTOR_FUSED == "auto" else TOKEN_VECTOR_FUSED))),
             ("GDN_DECAY_ONE_PASS", str(int(DECAY_ONE_PASS))),
+            ("GDN_RMS_ONE_COPY", str(int(RMS_ONE_COPY and prep is None and unit_lag(unit_depth)))),
             ("GDN_PREP_NORM_SPLIT", str(int(norm_split))),
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),
             ("GDN_PREP_SCALE_FPU", str(int(PREP_SCALE_FPU) if prep is not None else 0)),
