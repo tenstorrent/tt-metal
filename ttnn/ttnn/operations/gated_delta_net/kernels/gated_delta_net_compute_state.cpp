@@ -26,8 +26,8 @@ ALWI void state_main(Buffers& bufs, uint32_t first_unit, uint32_t T, uint32_t v_
         const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
         // Host STATE_NORM_TAIL: the last rows' o stay here for this core's RMS norm after the chain.
         const uint32_t o_cb = held || tr + GDN_NORM_TAIL > last_tr ? cb_reads : cb_o_acc;
-        cb_reserve_back(o_cb, Vb);
-        cb_wait_front(cb_in_vec, GDN_IN_VEC_PAGES);
+        GDN_RESERVE("w_osp", o_cb, Vb);
+        GDN_WAIT_FRONT("w_row", cb_in_vec, GDN_IN_VEC_PAGES);
         cb_wait_front(cb_in_knt, Kt);
         const uint32_t decay_bits = read_tile_value(cb_in_vec, 0, elem_index(hi - 1 - base_row, 0));  // exp(c_last)
         {

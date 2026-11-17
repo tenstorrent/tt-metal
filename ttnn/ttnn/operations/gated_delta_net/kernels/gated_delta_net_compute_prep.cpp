@@ -15,7 +15,7 @@ template <uint32_t N>
 ALWI void zw_block() {
     constexpr uint32_t W = PREP ? Vb / RATIO : 1;  // columns of one head (norm_weight holds W tiles)
     GDN_ZONE("gdn_zw");
-    cb_wait_front(cb_z, N);
+    GDN_WAIT_FRONT("w_z", cb_z, N);
     cb_reserve_back(cb_zw, N);
     if constexpr (GDN_ZW_FPU != 0) {
         // Host PREP_ZW_FPU: silu(z) of the unit's tiles in one window; norm_weight enters in the norm's FPU product.

@@ -76,6 +76,12 @@ struct win {
 
 // R-PREP norm split (host PREP_NORM_SPLIT): a prep core preps all of its tile rows first and normalizes afterwards
 // the rows norm_offset, + norm_stride, ..., which need not be the rows it prepped.
+// A dataflow wait as its own zone (GDN_PROFILE_ZONES 3).
+#if GDN_PROFILE_ZONES >= 3
+#define GDN_WAIT_ZONE(name) GDN_SCOPE(name)
+#else
+#define GDN_WAIT_ZONE(name)
+#endif
 #ifndef GDN_START_STAGGER
 #define GDN_START_STAGGER 0
 #define GDN_START_STATE 0

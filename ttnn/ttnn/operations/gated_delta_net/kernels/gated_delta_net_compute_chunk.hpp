@@ -159,7 +159,7 @@ ALWI void head_prep_vectors(uint32_t row_last) {
     pack_at(1, cb_chunk_vec, CV_W - 2);
     pack_at(3, cb_chunk_vec, CV_BEC - 2);
     if constexpr (PREP) {
-        cb_reserve_back(cb_prep_send, HB_M);  // exp(c), QD
+        GDN_RESERVE("w_send", cb_prep_send, HB_M);  // exp(c), QD
         pack_at(0, cb_prep_send, HB_EC);
     }
     tile_regs_release();
@@ -372,7 +372,7 @@ ALWI void head_block(uint32_t head) {
         tile_regs_release();
     }
     cb_push_back(cb_prep_send, 2 * Kt);
-    GDN_MARK("m_hb_kq");
+    GDN_MARK_L2("m_hb_kq");
     cb_reserve_back(cb_prep_send, Kt);
     cb_wait_front(cb_chunk_vec, CV_WT + 1);
     constexpr uint32_t BATCH = ckl::DEST_AUTO_LIMIT - 1;  // data tiles per window beside the scaling tile
@@ -421,7 +421,7 @@ ALWI void head_block(uint32_t head) {
         tile_regs_release();
     }
     cb_push_back(cb_prep_send, Kt);
-    GDN_MARK("m_hb_knt");
+    GDN_MARK_L2("m_hb_knt");
     cb_reserve_back(cb_prep_send, HEAD_V_TILES);
     constexpr uint32_t V_BATCH = M_BETA ? ckl::DEST_AUTO_LIMIT : BATCH;  // M_BETA: v as it is
     for (uint32_t vt0 = 0; vt0 < HEAD_V_TILES; vt0 += V_BATCH) {

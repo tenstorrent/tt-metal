@@ -135,6 +135,34 @@ struct win {
 #define GDN_MARK(name)
 #endif
 
+// A mark of level 2 only: level 3's wait zones need its text in the largest prep build.
+#if GDN_PROFILE_ZONES == 2
+#define GDN_MARK_L2(name) GDN_MARK(name)
+#else
+#define GDN_MARK_L2(name)
+#endif
+// A blocking CB wait as its own zone (GDN_PROFILE_ZONES 3): w_in, the unpack thread's wait for input, and w_sp, the
+// pack thread's wait for space; the zone around it says which buffer. One out-of-line copy per thread: an inlined
+// zone per site does not fit the prep role's text.
+#if GDN_PROFILE_ZONES >= 3 && defined(TRISC_UNPACK)
+inline __attribute__((noinline)) void gdn_wait_front(uint32_t cb, uint32_t n) {
+    GDN_SCOPE("w_in");
+    ckernel::cb_wait_front(cb, n);
+}
+#define GDN_WAIT_FRONT(name, cb, n) gdn_wait_front(cb, n)
+#else
+#define GDN_WAIT_FRONT(name, cb, n) cb_wait_front(cb, n)
+#endif
+#if GDN_PROFILE_ZONES >= 3 && defined(TRISC_PACK) && !GDN_ZW_FPU  // the largest prep build has no room for it
+inline __attribute__((noinline)) void gdn_reserve(uint32_t cb, uint32_t n) {
+    GDN_SCOPE("w_sp");
+    ckernel::cb_reserve_back(cb, n);
+}
+#define GDN_RESERVE(name, cb, n) gdn_reserve(cb, n)
+#else
+#define GDN_RESERVE(name, cb, n) cb_reserve_back(cb, n)
+#endif
+
 namespace ckl = compute_kernel_lib;
 
 namespace {
@@ -877,7 +905,7 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
     static_assert(QK_CORE || PREP_QK || pair_cols % CONV_BATCH == 0, "window groups tile the unit's columns");
     for (uint32_t col0 = first; col0 < last; col0 += CONV_BATCH) {
         const uint32_t n = last - col0 < CONV_BATCH ? last - col0 : CONV_BATCH;
-        cb_wait_front(cb_window, GDN_CONV_TAPS * n);
+        GDN_WAIT_FRONT("w_win", cb_window, GDN_CONV_TAPS * n);
         tile_regs_acquire();
         reconfig_data_format(cb_window, cb_conv_w);
         mul_bcast_rows_init(cb_window, cb_conv_w);
@@ -1358,7 +1386,7 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
         // Host PREP_NORM_FPU: o^2 and (o (*)col rinv) (*) zw as FPU products, DEST_AUTO_LIMIT tiles per window and
         // no loads (the output is bf16; o passes the FPU's operands).
         constexpr uint32_t B = ckl::DEST_AUTO_LIMIT;
-        cb_wait_front(o_cb, N);
+        GDN_WAIT_FRONT("w_o", o_cb, N);
         cb_reserve_back(cb_sq_o, N);
         for (uint32_t first = 0; first < N; first += B) {
             const uint32_t n = (N - first) < B ? (N - first) : B;
@@ -1462,7 +1490,7 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
         if constexpr (!PARTIAL_DONE) {
             osum_partial<o_cb>(bufs, scope, squared);
         }
-        cb_wait_front(cb_osum_gather, PIECES);
+        GDN_WAIT_FRONT("w_sum", cb_osum_gather, PIECES);
         cb_reserve_back(cb_rinv_o, 1);
         tile_regs_acquire();
         begin_loads(cb_osum_gather);

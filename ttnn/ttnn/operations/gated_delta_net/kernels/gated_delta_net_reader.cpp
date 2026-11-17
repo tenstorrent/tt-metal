@@ -750,9 +750,12 @@ void kernel_main() {
                             cb_push_back(cb_state_in, n_state);
                             cb_push_back(cb_state_in_mm, n_state);
                         }
-                        do {
-                            grant_free_slots();
-                        } while (*landed < i / INBOX_SLOTS + 1);
+                        {
+                            GDN_WAIT_ZONE("w_land");
+                            do {
+                                grant_free_slots();
+                            } while (*landed < i / INBOX_SLOTS + 1);
+                        }
                         GDN_MARK("m_rd_landed");
                         cb_reserve_back(cb_in_kq, 2 * Kt);
                         cb_reserve_back(cb_in_knt, Kt);
@@ -812,7 +815,10 @@ void kernel_main() {
                         // size keeps every reservation contiguous in cb_window (its size is a multiple of a group).
                         const uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
                         for (uint32_t group_first = 0; group_first < unit_cols; group_first += group_cols) {
-                            cb_reserve_back(cb_window, group_tiles);
+                            {
+                                GDN_WAIT_ZONE("w_slot");
+                                cb_reserve_back(cb_window, group_tiles);
+                            }
                             const uint32_t win = get_write_ptr(cb_window);
                             if (zero_tokens != 0) {
                                 // The writer zeroes the buffer slot by slot at kernel start, off this RISC's critical

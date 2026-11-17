@@ -188,8 +188,8 @@ PREP_NORM_SLIM = True
 # row's last one.
 PREP_HEAD_UP = True
 # R-PREP start: the DRAM banks serve every core's first reads at once (about 8 us for the lot), and the chain starts
-# with tile row 0's. PREP_START_STAGGER_US: where no prep core has more than two tile rows, the prep (and q / k) cores
-# past stride position 0 hold their first reads back by this much (T=128 49.4 -> 46.5 us, T=256 72.0 -> 69.1; with
+# with tile row 0's. PREP_START_STAGGER_US: in the q / k cores' plans whose prep cores have at most two tile rows, the
+# prep and q / k cores past stride position 0 hold their first reads back by this much (T=128 49.4 -> 46.5 us, T=256 72.0 -> 69.1; with
 # more rows per core T=512 117.1 -> 117.5, T=1024 186.5 -> 186.7 at 1 us: not applied). STATE_START_US: in plans
 # without q / k cores the state cores hold their S0 read back, which is needed only when row 0 lands (T=1024 186.5 ->
 # 184.9, T=2048 289.4 -> 286.6, T=4096 548.7 -> 546.0; 12 to 45 us measure alike).
@@ -2118,7 +2118,8 @@ def create_program_descriptor(
         roles[ROLE_QK] = ([core for core, _, _ in qk_cores], *rts)
 
     l2_fpu = prep is not None and not shared and conv_on_fpu and bool(PREP_L2_FPU)
-    few_waves = prep is not None and all(_seq_tile_rows(seq, tokens) <= 2 * min(strides) for seq in range(seqs))
+    few_waves = prep is not None and shared
+    few_waves = few_waves and all(_seq_tile_rows(seq, tokens) <= 2 * min(strides) for seq in range(seqs))
     zw_fpu = prep is not None and norm_split and bool(PREP_NORM_FPU) and conv_on_fpu
     zw_fpu = zw_fpu and (seq_rows_min >= 128 if PREP_ZW_FPU == "auto" else bool(PREP_ZW_FPU))
     # PREP_NORM_FPU for the tail rows too (cb_reads then holds only them: the folded or fused step reads no cb_reads).
