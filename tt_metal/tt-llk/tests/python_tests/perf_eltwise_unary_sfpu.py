@@ -45,8 +45,9 @@ _OPS_WITHOUT_DEST_ACC = {
     MathOperation.ReluMin,
 }
 
+# The swept ops whose dispatcher reads FAST_MODE (sfpu_operations.h); for any other op,
+# fast_mode Yes and No build the same kernel.
 _OPS_WITH_FAST_MODE = {
-    MathOperation.Exp,
     MathOperation.Rsqrt,
     MathOperation.Sqrt,
 }

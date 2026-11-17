@@ -40,12 +40,16 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
     assert comp_pass
 
 
+# Every case fills the exponent tensor with one value, so the shapes only need to cover tile padding
+# and a higher rank. Positive bases are swept over all float32 inputs in
+# test_unary_category4_float32.py::test_rpow; the values here keep each sign and integer/non-integer
+# class of base and exponent, plus a zero exponent.
 @pytest.mark.parametrize(
     "input_shapes",
-    ([20, 20], [2, 32, 320], [1, 1, 32, 32], [1, 3, 320, 384], [1, 2, 32, 64, 64]),
+    ([20, 20], [1, 2, 32, 64, 64]),
 )
-@pytest.mark.parametrize("input", [10.0, 5.5, -5.0, -2.5, -10, -3, 9.5, -7.25, -6.15])
-@pytest.mark.parametrize("exponent", [2.75, 2.5, 1.5, 4, 5.75, 0, -1.5, -2.25, -3, -4.25, -5.5])
+@pytest.mark.parametrize("input", [10.0, 5.5, -3, -2.5])
+@pytest.mark.parametrize("exponent", [2.5, 4, 0, -1.5, -3, -5.5])
 # Both input and exponent are -ve and exponent is a non-integer, TT and Torch output = nan
 # input = non-zero and exponent = 0, TT and Torch output = 1
 # Both input and exponent are 0, TT = 1 and Torch output = 0
