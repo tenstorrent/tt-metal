@@ -73,6 +73,7 @@ class ThreadedWeightBridge:
         self._peer_closed = False
         self._version = 0
         self._events: List[Any] = []
+        self._read_events: List[Any] = []
         self._pads: Optional[Dict[str, ttnn.Tensor]] = None
         self._recv_pads: Optional[List[Dict[str, ttnn.Tensor]]] = None
 
@@ -132,6 +133,7 @@ class ThreadedWeightBridge:
             for event in self._events:
                 ttnn.wait_for_event(0, event)
             yield self._version, [dict(pads) for pads in self._recv_pads]
+            self._read_events = [ttnn.record_event(submesh, 0) for submesh in self._submeshes]
             self._pending = False
             self._cv.notify_all()
 
@@ -226,6 +228,9 @@ class ThreadedWeightBridge:
                     }
                     for submesh in self._submeshes
                 ]
+        with _capture_lock:
+            for event in self._read_events:
+                ttnn.wait_for_event(1, event)
         for e in entries:
             host = ttnn.from_torch(
                 _torch_load_bytes(self._recv_blob(_TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY)),

@@ -36,6 +36,7 @@ import contextlib
 import json
 import os
 import queue
+import struct
 import threading
 from types import SimpleNamespace
 
@@ -73,7 +74,7 @@ from ttml.trainers.grpo_trainer.remote_rollout import (
 from ttml.trainers.grpo_trainer.remote_rollout.async_remote_rollout_batch_source import AsyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.rollout_queue import RolloutQueue
 from ttml.trainers.grpo_trainer.remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
-from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK
+from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK, _torch_save_bytes
 from ttml.trainers.grpo_trainer.rollout_batch_source import (
     InProcessRolloutBatchSource,
     RolloutBatchSource,
@@ -1551,6 +1552,49 @@ def test_threaded_weight_bridge_receiver_locks_trace_capture_until_close(monkeyp
     receiver.close()
     assert ttnn.begin_trace_capture is threaded_weight_bridge._begin_trace_capture
     assert ttnn.end_trace_capture is threaded_weight_bridge._end_trace_capture
+
+
+def test_threaded_weight_bridge_receiver_waits_for_the_cq0_reads_before_the_next_writes(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ttnn, "begin_trace_capture", threaded_weight_bridge._begin_trace_capture)
+    monkeypatch.setattr(ttnn, "end_trace_capture", threaded_weight_bridge._end_trace_capture)
+    monkeypatch.setattr(ttnn, "allocate_tensor_on_device", lambda *a, **k: "pad")
+    monkeypatch.setattr(ttnn, "from_torch", lambda *a, **k: "host")
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, pad, cq_id: calls.append(("write", cq_id)))
+    monkeypatch.setattr(ttnn, "record_event", lambda mesh, cq_id: calls.append(("record", cq_id)) or f"E{cq_id}")
+    monkeypatch.setattr(ttnn, "wait_for_event", lambda cq_id, event: calls.append(("wait", cq_id, event)))
+    monkeypatch.setattr(threaded_weight_bridge, "exit_on_error", contextlib.nullcontext)
+    queues = collections.defaultdict(queue.Queue)
+    monkeypatch.setattr(
+        threaded_weight_bridge, "duplicate_distributed_context", lambda: _LoopbackContext(TTT_RANK, queues)
+    )
+    trainer = _LoopbackContext(TTML_RANK, queues)
+    receiver = threaded_weight_bridge.ThreadedWeightBridge.receiver(
+        peer_rank=TTML_RANK, mesh_device=None, submeshes=["submesh"]
+    )
+    receiver.connect()
+
+    def send(blob, len_tag, body_tag):
+        trainer.send(struct.pack("<Q", len(blob)), TTT_RANK, len_tag)
+        if blob:
+            trainer.send(blob, TTT_RANK, body_tag)
+
+    entry = {"key": "w", "shape": [1], "dtype": "BFLOAT16", "layout": "TILE"}
+    for version in (1, 2):
+        manifest = json.dumps({"weight_version": version, "entries": [entry]}).encode()
+        send(manifest, threaded_weight_bridge._TAG_MANIFEST_LEN, threaded_weight_bridge._TAG_MANIFEST_BODY)
+        send(
+            _torch_save_bytes(torch.zeros(1)),
+            threaded_weight_bridge._TAG_WEIGHT_LEN,
+            threaded_weight_bridge._TAG_WEIGHT_BODY,
+        )
+        with receiver.receive_weights(block=True) as (got, _):
+            assert got == version
+    send(b"", threaded_weight_bridge._TAG_MANIFEST_LEN, threaded_weight_bridge._TAG_MANIFEST_BODY)
+    receiver.close()
+
+    one_version = [("write", 1), ("record", 1), ("wait", 0, "E1"), ("record", 0)]
+    assert calls == one_version + [("wait", 1, "E0")] + one_version
 
 
 class _ScriptedBridge:
