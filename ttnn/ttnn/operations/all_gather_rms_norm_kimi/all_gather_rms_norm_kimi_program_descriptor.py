@@ -44,6 +44,9 @@ BLOCK_W = None  # tile columns of a slice per block; None = the whole slice (Wl_
 PORT_PLACEMENT = "eth_nearest"  # "eth_nearest" (each port next to its link's Ethernet core) | "centred"  [TRANSPORT]
 PORT_BATCH_CHUNKS = 2  # chunks per port batch (cb_port_chunks holds 2 batches); R1: 2 best of 1-4  [TRANSPORT]
 PORT_BATCH_CHUNKS_MAX = 8  # packet-header pool cap
+# While a port still owes stats slots, it keeps at most this many bulk packets queued in its router channel, so a
+# stats packet (the relay hop of the stats round) waits behind that many, not a full channel. 0 = off.  [OVERLAP]
+STATS_BULK_WINDOW = 2
 INC_EVERY = 8  # fused arrival increment every this many chunks (+ every entry end)  [TRANSPORT]
 OUT_DEPTH_CHUNKS = 2  # cb_out depth in chunks
 # Remote-slice cores compute xg = x * gamma for this many landed chunks before the stats combine (own cores: all of
@@ -512,6 +515,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 sorted((k, (c.x, c.y)) for k, c in pl.ports.items()),
                 PORT_BATCH_CHUNKS,
                 INC_EVERY,
+                STATS_BULK_WINDOW,
                 OUT_DEPTH_CHUNKS,
                 GAMMA_HUB_MCAST,
                 XG_AHEAD_CHUNKS,
@@ -656,6 +660,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 SEM_STATS_TX,
                 geo.slot_bytes,
                 geo.max_payload,
+                STATS_BULK_WINDOW,
             ]
             kernels += [
                 ttnn.KernelDescriptor(

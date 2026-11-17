@@ -9,7 +9,8 @@
 //              arrival counter (the receiver turns it into per-core landing notifications)       [TRANSPORT]
 //   stats      (link 0) whenever the hub has handed me a slot (stats_tx), send it into the peer hub's stats scratch,
 //              the last packet fused with an increment of the peer hub's stats_fwd / stats_bwd. Polled while waiting
-//              for bulk chunks and at every batch flush, so the stats never wait behind the bulk.  [OVERLAP]
+//              for bulk chunks and at every batch flush, so the stats never wait behind the bulk. While a slot is still
+//              owed, at most STATS_BULK_WINDOW bulk packets stay queued in the router channel.  [OVERLAP]
 
 #include <cstdint>
 
@@ -29,6 +30,7 @@ constexpr uint32_t inc_every = get_compile_time_arg_val(4);
 constexpr uint32_t sem_stats_tx = get_compile_time_arg_val(7);
 constexpr uint32_t slot_bytes = get_compile_time_arg_val(8);
 constexpr uint32_t max_payload = get_compile_time_arg_val(9);
+constexpr uint32_t stats_window = get_compile_time_arg_val(10);  // bulk packets queued while stats are owed; 0 = off
 constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
 
 // One hop: 2D fabrics route by destination fabric node, 1D fabrics by hop count (ROUTING_MODE from the build).
@@ -125,6 +127,14 @@ void kernel_main() {
         for (uint32_t k = 0; k < n; ++k) {
             while (!cb_pages_available_at_front(cb, chunk_tiles * (unflushed + 1))) {
                 try_stats();
+            }
+            if constexpr (stats_window > 0) {
+                // a stats slot still owed (the relay) would queue behind every bulk packet in the channel: keep at most
+                // stats_window of them queued until it has gone out
+                while (stats_sent < n_stats &&
+                       conn.num_buffers_per_channel - conn.get_num_free_write_slots() >= stats_window) {
+                    try_stats();
+                }
             }
             const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
             const uint64_t dst = get_noc_addr(xy >> 8, xy & 0xFF, landing_addr + k * chunk_bytes);
