@@ -226,7 +226,8 @@ jobs:
     # Floor check for cmake_minimum_required(VERSION 3.25...4.2). CI images ship
     # CMake 4.2.3, so this installs ~3.25 with lukka/get-cmake and configures on
     # a bare runner. Configure only searches for a GCC >= 12, Ninja, Python
-    # headers, libnuma, and libhwloc, all in the Ubuntu archive.
+    # headers, libnuma, libhwloc, and an MPI (ENABLE_DISTRIBUTED defaults ON),
+    # all in the Ubuntu archive.
     # install_dependencies.sh also adds apt.llvm.org and the toolchain PPA. This
     # configure does not use those, and those servers intermittently refuse
     # connections.
@@ -263,7 +264,9 @@ jobs:
             pkg-config \
             python3-dev \
             libhwloc-dev \
-            libnuma-dev
+            libnuma-dev \
+            libopenmpi-dev \
+            openmpi-bin
       - name: Check CMake compatibility
         if: steps.find-changes.outputs.cmake-changed == 'true'
         env:
