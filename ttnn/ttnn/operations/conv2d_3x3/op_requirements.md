@@ -219,7 +219,7 @@
   - res5.1/5.2: L1-solved `bk` 3 splits a 2-tile tap. A tap-aligned `bk` preference in `select_blocking` would enable it.
   - aspp: the last channel slice is short, and the one shared compute kernel fixes the tilize width. Per-slice-width compute kernels would enable it.
 
-### [ ] Refinement 6 — Speed up stem.conv1
+### [x] Refinement 6 — Speed up stem.conv1
 
 **Type**: perf
 
@@ -237,3 +237,20 @@
 - **Scope**: no SUPPORTED change.
 
 **Done when**: measured device-ns improves on stem.conv1 with the golden suite green and no regression across the guard set (Refinement 3's set).
+
+**Outcome**:
+- **Measured** (DEVICE KERNEL DURATION, Blackhole p150b): stem.conv1 214.5 -> 24.7 us (8.7x). The bound was per-pixel work, not bytes: 3648 x 48 B gather reads per core, a per-row loop and 114 one-tile tilizes. Stubbing the gather reads gave 128 us; matmul `SKIP_COMPUTE` changed nothing.
+- **Levers built**:
+  - face-direct im2col: stride * C_in_p == 16 makes each 16x16 face one contiguous slab run, so the reader writes in0 tiles directly and the tilize goes (99.5 us with P1);
+  - P1 whole-K K-block;
+  - a lean interior path (63.7 us);
+  - P7 stateful reads (60.6 us);
+  - the slab fill split by NoC, with the writer reading higher-index shards on NoC1 (53.2 us);
+  - the gather split across reader and writer (36.3 us);
+  - in0 streamed per 2-tile-row group, with the bias add per 5 groups (24.7 us).
+- **Not built**: P2 (no `cb_im2col_rm` on this path) and P8 (the slow cores' footprints lie in other shards).
+- **Guard set**: within noise of a same-session baseline. aspp.convs.1 +1.0%, center_head.1 -2%, every other shape within ±2%.
+- **Bottleneck now**: co-bound within ~2 us.
+  - Compute is 24.0 us with the face reads stubbed: HiFi4 matmul ~11 us, bias add 3.3 us, ~0.36 us fixed cost per streamed matmul call.
+  - The gather is ~17 us on two RISCs at ~84 cycles per 512 B face read, plus ~4 us of exposed slab fill.
+- **Next, not taken**: a progressive per-subblock in0 wait inside one `matmul_block` call (a shared-helper change) plus a bias fold into the matmul. Each alone moves the wall by at most ~2 us, because the other half then binds.

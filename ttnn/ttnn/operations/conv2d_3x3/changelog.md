@@ -321,3 +321,71 @@ Lamps measured (kept at design defaults):
   - One-tile-row M-blocks over 3 grid rows of 7-tile-row shards, 20 output tile-rows: rows 0-1 take 21 multicast rounds per column, interleaved with 7 combine rounds.
   - The ragged last row (6 M-blocks) must stay out of its column's channel.
   - W_out = 40, so tap-major runs straddle image rows.
+
+## Refinement 6 — Speed up stem.conv1
+- Date: 2026-11-17
+- What was done: stem.conv1 (HEIGHT RM bf16, C_in 8, stride 2, 108 working cores, bf8_b weights, bias + ReLU, HiFi4) went from 214.5 to 24.7 us. No SUPPORTED change.
+  - **Diagnosis** (DEVICE KERNEL DURATION + zones + ablations, Blackhole p150b).
+    - Stubbing the gather reads: 214 -> 128 us. Matmul `SKIP_COMPUTE` on top: no change, so math was not the bound.
+    - With reads stubbed, zones showed ~21-25 us per K-block of reader row loop and single-tile tilize, ping-ponging through the 2-deep `cb_im2col_rm`.
+    - The cost was per pixel: 3648 x 48 B gather reads per core (~57 ns each), a per-row address loop, and 114 one-tile tilizes, all paid 3 times per M-block (`tensor_kkh_tiles = 1`).
+  - **Face-direct im2col** (`FACE_DIRECT_IM2COL`; gated on `stride * C_in_p == 16`, bf16 RM activation, no padded lanes, one tap per face row unless d = 1).
+    - One output pixel steps the slab by exactly one 16-element tile-face row, so a face's 16 im2col rows are one contiguous 512 B slab run.
+    - The reader writes the bf16 in0 tiles itself, 4 reads per tile, and compute drops the tilize: no PreKBlockFn, Reverse-order startup.
+    - A face holding tap 2 also reads the next pixel into its K-padding lanes, against zero weight rows. That is real input read only inside the image; outside, those lanes are zero-filled. The band reaches one tap further (`band_last_tap`) so that pixel is in the slab.
+    - A face made only of K padding (C_in 16) is zeroed once, because every K-block starts at the CB base.
+    - The output matches the old path on all but < 0.001% of elements, which differ by at most 0.0039 (accumulation order).
+  - **P1: whole-K K-block** (`FACE_DIRECT_WHOLE_K_BLOCK`). `bk = tensor_k_tiles` is the first L1-solve candidate on face-direct shapes: one matmul init, no L1-acc passes. Under a K split face-direct also requires one K-block, because only the tilize ordered the L1-accumulating packs there.
+  - **Interior fast path.** One in-image test per 16-pixel row group, then fixed-offset reads; edge groups take the per-run/per-tap path. Top-padding rows zero whole faces.
+  - **P7: stateful reads** for the 512 B interior faces (`set_read_state` once, `read_with_state` per face).
+  - **Split slab fill by NoC** (`SLAB_SPLIT_NOCS`, HEIGHT RM).
+    - High-index cores' footprints lie 1-3 shards ahead. A NoC0 read response from a higher-index core wraps the ring, so band waits reached 20-25 us there against ~1.5 us on low cores.
+    - The reader reads runs owned by its own and lower shards. The writer reads higher shards' runs on NoC1 into the same slab: `slab_fwd_done` writer -> reader, `slab_free` reader -> writer per M-block.
+    - The writer issues these reads before its bias prefetch.
+  - **Split gather** (`GATHER_SPLIT_RISCS`). The gather is RISC-issue-bound (its trid wait was 0), so the writer gathers every odd row group on NoC1. The reader reserves the block, raises `gather_go`, gathers the even groups and pushes in order, waiting on `gather_done` for the writer's groups.
+  - **In0 streaming** (`IN0_STREAM_TILE_ROWS = 2`, whole subblocks, ragged last group allowed).
+    - The reader pushes in0 per row group, and compute runs one `matmul_block` call per group with the weights kept fronted (`WaitAndRetainOnLastBlock`, popped once).
+    - The bias add runs once per `BIAS_STREAM_GROUPS = 5` groups, so only the last chunk trails the gather.
+  - **Reused / added.**
+    - Reused: the slab/band plan (now the shared `conv2d_3x3_slab_dataflow.hpp`), the R1 weight channel, `matmul_block` and `add_bias_bcast_rows`, the shard-backed output.
+    - Added: `conv2d_3x3_gather_dataflow.hpp` (tagged reads + face gather, shared by reader and writer), four core-local semaphores on HEIGHT RM, and the knobs above.
+- Measured (DEVICE KERNEL DURATION, stem.conv1, one fresh-cache run per step):
+
+  | Step | us |
+  |------|----|
+  | before (Refinement 5 code) | 214.5 |
+  | face-direct im2col + whole-K block | 99.5 |
+  | + interior fast path | 63.7 |
+  | + stateful face reads | 60.6 |
+  | + slab fill split by NoC | 53.2 |
+  | + gather split reader / writer (halves) | 36.3 |
+  | + in0 streaming, alternating groups | 27.1 |
+  | + forward slab reads before the bias prefetch | 26.2 |
+  | + bias add per 5 groups | 24.7 |
+
+  Measured and not kept:
+  - Bias add per group: 29.1 us (compute fell behind). Per 3 groups: 24.8 us; per 10 groups: 25.5 us.
+  - `InitMode::None` + no reconfig between consecutive matmul calls: 24.4 us, inside noise, so the simpler single instantiation stays.
+  - 4- and 6-tile-row groups: 27.5 / 27.7 us.
+- Guard set, same-session baseline (Refinement 5 commit) -> now, us:
+  - aspp.convs.1 400.0 -> 404.1, aspp.convs.2 400.2 -> 401.9, aspp.convs.3 187.2 -> 186.5.
+  - res2.x 37.8 -> 38.0, center_head.1 45.4 -> 44.5, instance res2.fuse_conv.1 98.8 -> 100.1.
+  - 32x64x128 TILE bf8_b 24.3 -> 24.2.
+  - The other 33 perf-harness shapes are within ±2% of Refinement 5's numbers (32x64x128 RM 24.1, 8x16x2048 TILE bf16 290.6, res4.x LoFi 35.3, stem.conv2 / conv3 127.0 / 203.1 us).
+  - A first build that moved the reader's zero-fill address into the shared read struct cost aspp.convs.1 +1.8%, reproducible over 3 runs. The row-gather paths keep their kernel-local zero address.
+- **Bottleneck now**:
+  - Compute: with the face reads stubbed the op still takes 24.0 us. That is the HiFi4 matmul (228 tile-MACs, ~11 us), the bias add (3.3 us), and a ~0.36 us fixed cost per streamed matmul call (19 calls).
+  - Dataflow ends at ~22 us: ~4 us of slab fill exposed (`slab_fwd_done` wait), then ~17 us of gather on two RISCs at ~84 cycles per 512 B face read (cmd-buffer poll + 3 register writes + loop).
+- **Next, not taken**:
+  - A progressive per-subblock in0 wait inside one `matmul_block` call (helper change) would stream without the per-call cost.
+  - Folding the bias into the matmul would drop the 3.3 us bias pass.
+  - Both halves bind within ~2 us of each other, so either alone moves the wall by at most that.
+- Accuracy achieved: stem.conv1 Panoptic config, C_in 3 padded to 8: PCC > 0.999999, rel-RMS 0.0079, max abs 0.236 vs the fp32 torch reference with bf16 weights (bf8_b weight quantization dominates); same as the old path. Golden tolerances hold on every cell run.
+- Golden test progress:
+  - Target slice (every sharded ROW_MAJOR cell of 32x32x8 s2, 16x16x8, 16x16x16, HEIGHT RM d18 / 24x40 / 32x32 d2 s2, plus stem.conv1 LOOSE): 73 passed, 72 INVALID skipped.
+  - Cross-path slice (all 23 LOOSE cases plus every `test_op` cell of 32x64x128 p1 and 8x8x32): 167 passed, 48 skipped, 0 failed.
+- Issues encountered: none on device. One compile failure (division by a zero CT shard-row count in code compiled on every path) and test-side dataclass construction were fixed before the first device run.
+- Tests added:
+  - `test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct` (9 cases): C_in 8 s2 and C_in 16 s1 (K-padding-only faces), with an odd row-group count and a shorter last group, bias+ReLU / ReLU / bias. Each case asserts the face-direct, whole-K, streamed blocking.
+  - `::test_conv2d_3x3_height_sharded_face_direct_multi_m_block`: two M-blocks per shard, exercising the slab handshake across blocks.
+  - Disabling the writer's higher-shard reads fails these tests.
