@@ -39,7 +39,7 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 SLICES_PER_BLOCK = 1  # mechanism cap: a block never straddles slices
 BLOCK_W = None  # tile columns of a slice per block; None = the whole slice (Wl_t)
 PORT_PLACEMENT = "eth_nearest"  # "eth_nearest" (each port next to its link's Ethernet core) | "centred"  [TRANSPORT]
-PORT_BATCH_CHUNKS = 4  # chunks per port batch (cb_port_chunks holds 2 batches)  [TRANSPORT]
+PORT_BATCH_CHUNKS = 2  # chunks per port batch (cb_port_chunks holds 2 batches); R1: 2 best of 1-4  [TRANSPORT]
 PORT_BATCH_CHUNKS_MAX = 8  # packet-header pool cap
 INC_EVERY = 8  # fused arrival increment every this many chunks (+ every entry end)  [TRANSPORT]
 OUT_DEPTH_CHUNKS = 2  # cb_out depth in chunks
