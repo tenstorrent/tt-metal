@@ -7,7 +7,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tt-train/sources/ttml/metal/ops/all_gather_weight_minimal_matmul_async/device/kernels/all_gather_weight_minimal_matmul_async_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/kernels/all_gather_minimal_matmul_outer_dim_async_utils.hpp"
 
 // Copies only the real tiles of a partial block
 void copy_and_pack_block(

@@ -13,7 +13,7 @@
 #include "api/tensor/noc_traits.h"
 #include "dataflow_common.hpp"
 
-// in1 data mover: the injector reads the weight (its own stripe from the shard, the rest once the senders land
+// in1 data mover: the injector reads the gathered tensor (its own stripe from the shard, the rest once the senders land
 // them), the others get it from upstream, and every core but the last forwards it down the chain.
 void kernel_main() {
     Noc noc;
@@ -64,9 +64,9 @@ void kernel_main() {
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
-    constexpr auto pwb_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    const uint32_t pwb_addr = get_arg_val<uint32_t>(argidx++);
-    const auto pwb_reader = TensorAccessor(pwb_args, pwb_addr);
+    constexpr auto pgb_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    const uint32_t pgb_addr = get_arg_val<uint32_t>(argidx++);
+    const auto pgb_reader = TensorAccessor(pgb_args, pgb_addr);
     uint32_t stripe_sem_addrs[ring_size];
     for (uint32_t i = 0; i < ring_size; i++) {
         stripe_sem_addrs[i] = get_arg_val<uint32_t>(argidx++);
@@ -124,7 +124,7 @@ void kernel_main() {
                             cols, width, local_stripe, stripe_tiles, stripe_sem_addrs, k_block + 1, arrived);
                         read_in1_block_columns<K_block_tiles, N_block_tiles, transpose_b>(
                             in1_reader,
-                            pwb_reader,
+                            pgb_reader,
                             cb_in1_id,
                             in1_tile_size,
                             K_tiles,

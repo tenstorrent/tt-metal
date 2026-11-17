@@ -10,9 +10,9 @@
 // A block column that only pads a narrow chain up to piece_tiles.
 constexpr uint32_t kPaddingColumn = 0xFFFFFFFFu;
 
-// Page of weight tile (n, k), for a weight stored [N, K] (transpose_b) or [K, N].
+// Page of gathered tile (n, k), for a tensor stored [N, K] (transpose_b) or [K, N].
 template <bool transpose_b>
-inline uint32_t weight_page(uint32_t n, uint32_t k, uint32_t K_tiles, uint32_t n_cols) {
+inline uint32_t gathered_page(uint32_t n, uint32_t k, uint32_t K_tiles, uint32_t n_cols) {
     if constexpr (transpose_b) {
         return (n * K_tiles) + k;
     } else {

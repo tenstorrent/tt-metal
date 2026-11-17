@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_gather_weight_minimal_matmul_async_device_operation.hpp"
+#include "all_gather_minimal_matmul_outer_dim_async_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 
@@ -16,63 +16,64 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace {
-constexpr std::string_view kOp = "all_gather_weight_minimal_matmul_async";
+constexpr std::string_view kOp = "all_gather_minimal_matmul_outer_dim_async";
 }  // namespace
 
-namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
-AllGatherWeightMinimalMatmulAsyncDeviceOperation::program_factory_t
-AllGatherWeightMinimalMatmulAsyncDeviceOperation::select_program_factory(
+namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async {
+AllGatherMinimalMatmulOuterDimAsyncDeviceOperation::program_factory_t
+AllGatherMinimalMatmulOuterDimAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return AllGatherWeightMinimalMatmulAsyncProgramFactory{};
+    return AllGatherMinimalMatmulOuterDimAsyncProgramFactory{};
 }
 
-void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
+void AllGatherMinimalMatmulOuterDimAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& x = tensor_args.input_tensor;
-    const auto& w = tensor_args.weight_tensor;
-    const auto& pwb = tensor_args.persistent_weight_buffer;
+    const auto& g = tensor_args.gathered_tensor;
+    const auto& pgb = tensor_args.persistent_gather_buffer;
     const DeviceTensorRequirements req{.dtypes = {DataType::BFLOAT16}, .memory_layout = std::nullopt};
     check_device_tensor(x, kOp, "input", req);
-    check_device_tensor(w, kOp, "weight", req);
-    check_device_tensor(pwb, kOp, "persistent_weight_buffer", req);
+    check_device_tensor(g, kOp, "gathered", req);
+    check_device_tensor(pgb, kOp, "persistent_gather_buffer", req);
     check_tile_padding(x, kOp, "input");
-    check_tile_padding(w, kOp, "weight");
-    check_same_device(w, x, kOp, "weight", "input");
-    check_same_device(pwb, x, kOp, "persistent_weight_buffer", "input");
+    check_tile_padding(g, kOp, "gathered");
+    check_same_device(g, x, kOp, "gathered", "input");
+    check_same_device(pgb, x, kOp, "persistent_gather_buffer", "input");
 
     const auto& x_shape = x.logical_shape();
-    const auto& w_shape = w.logical_shape();
+    const auto& g_shape = g.logical_shape();
     TT_FATAL(
-        x_shape.rank() >= 2 && w_shape.rank() >= 2,
-        "{}: input and weight must have rank >= 2, got ranks {} and {}.",
+        x_shape.rank() >= 2 && g_shape.rank() >= 2,
+        "{}: input and gathered tensor must have rank >= 2, got ranks {} and {}.",
         kOp,
         x_shape.rank(),
-        w_shape.rank());
-    for (int i = 0; i < static_cast<int>(w_shape.rank()) - 2; ++i) {
+        g_shape.rank());
+    for (int i = 0; i < static_cast<int>(g_shape.rank()) - 2; ++i) {
         TT_FATAL(
-            w_shape[i] == 1,
-            "{}: the weight must be a matrix: every dim before the last two must be 1, but dim {} is {} (shape {}).",
+            g_shape[i] == 1,
+            "{}: the gathered tensor must be a matrix: every dim before the last two must be 1, but dim {} is {} "
+            "(shape {}).",
             kOp,
             i,
-            w_shape[i],
-            w_shape);
+            g_shape[i],
+            g_shape);
     }
     const int n_dim = attrs.transpose_b ? -2 : -1;
     const int k_dim = attrs.transpose_b ? -1 : -2;
     TT_FATAL(
-        x_shape[-1] == w_shape[k_dim],
-        "{}: inner dimensions must match: input K={} vs weight K={} (transpose_b={})",
+        x_shape[-1] == g_shape[k_dim],
+        "{}: inner dimensions must match: input K={} vs gathered K={} (transpose_b={})",
         kOp,
         x_shape[-1],
-        w_shape[k_dim],
+        g_shape[k_dim],
         attrs.transpose_b);
     TT_FATAL(
-        x_shape[-2] > 0 && x_shape[-1] > 0 && w_shape[n_dim] > 0,
+        x_shape[-2] > 0 && x_shape[-1] > 0 && g_shape[n_dim] > 0,
         "{}: matmul dims must be positive, got M={}, K={}, N={}.",
         kOp,
         x_shape[-2],
         x_shape[-1],
-        w_shape[n_dim]);
+        g_shape[n_dim]);
 
     TT_FATAL(
         attrs.topology == ttnn::ccl::Topology::Ring || attrs.topology == ttnn::ccl::Topology::Linear,
@@ -80,11 +81,11 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
         kOp,
         attrs.topology);
 
-    // The buffer holds the whole weight: the shard's shape with N grown by the ring size.
-    ttnn::Shape pwb_shape(w_shape);
-    pwb_shape[n_dim] = w_shape[n_dim] * attrs.ring_size;
-    check_shape(pwb, kOp, "persistent_weight_buffer", pwb_shape);
-    TT_FATAL(w_shape[n_dim] % TILE_WIDTH == 0, "{}: weight shard N ({}) must be tile-aligned", kOp, w_shape[n_dim]);
+    // The buffer holds the whole gathered tensor: the shard's shape with N grown by the ring size.
+    ttnn::Shape pgb_shape(g_shape);
+    pgb_shape[n_dim] = g_shape[n_dim] * attrs.ring_size;
+    check_shape(pgb, kOp, "persistent_gather_buffer", pgb_shape);
+    TT_FATAL(g_shape[n_dim] % TILE_WIDTH == 0, "{}: gathered shard N ({}) must be tile-aligned", kOp, g_shape[n_dim]);
     TT_FATAL(
         attrs.ring_size >= 2,
         "{}: the fabric gather needs a ring of at least 2 devices, got ring_size={}.",
@@ -129,7 +130,7 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
     }
     TT_FATAL(
         attrs.cluster_axis.has_value() || non_unit_dims <= 1,
-        "{}: cluster_axis must be set on a multi-dimensional mesh ({}): it names the axis the weight is gathered over",
+        "{}: cluster_axis must be set on a multi-dimensional mesh ({}): it names the axis the tensor is gathered over",
         kOp,
         mesh_shape);
     TT_FATAL(
@@ -211,42 +212,42 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
         available_links);
 }
 
-AllGatherWeightMinimalMatmulAsyncDeviceOperation::spec_return_value_t
-AllGatherWeightMinimalMatmulAsyncDeviceOperation::compute_output_specs(
+AllGatherMinimalMatmulOuterDimAsyncDeviceOperation::spec_return_value_t
+AllGatherMinimalMatmulOuterDimAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& x = tensor_args.input_tensor;
     ttnn::Shape output_shape(x.logical_shape());
-    output_shape[-1] = tensor_args.persistent_weight_buffer.logical_shape()[attrs.transpose_b ? -2 : -1];
+    output_shape[-1] = tensor_args.persistent_gather_buffer.logical_shape()[attrs.transpose_b ? -2 : -1];
     const auto& memory_config = attrs.output_mem_config.value_or(x.memory_config());
     const auto dtype = attrs.output_dtype.value_or(x.dtype());
     return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 }
 
-AllGatherWeightMinimalMatmulAsyncDeviceOperation::tensor_return_value_t
-AllGatherWeightMinimalMatmulAsyncDeviceOperation::create_output_tensors(
+AllGatherMinimalMatmulOuterDimAsyncDeviceOperation::tensor_return_value_t
+AllGatherMinimalMatmulOuterDimAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     return ttnn::create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input_tensor.device());
 }
 
-// Every device ends up with the whole output: the weight is gathered on cluster_axis, so there it counts as
+// Every device ends up with the whole output: the second operand is gathered on cluster_axis, so there it counts as
 // replicated, and the output takes the input's label combined with that.
-std::vector<TensorTopology> AllGatherWeightMinimalMatmulAsyncDeviceOperation::compute_output_topologies(
+std::vector<TensorTopology> AllGatherMinimalMatmulOuterDimAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& x = tensor_args.input_tensor;
-    const auto& w = tensor_args.weight_tensor;
-    const TensorTopology gathered_weight =
-        ttnn::operations::ccl::common::all_gather_output_topology(w, attrs.cluster_axis, attrs.transpose_b ? -2 : -1)
-            .value_or(w.tensor_topology());
+    const auto& g = tensor_args.gathered_tensor;
+    const TensorTopology gathered_label =
+        ttnn::operations::ccl::common::all_gather_output_topology(g, attrs.cluster_axis, attrs.transpose_b ? -2 : -1)
+            .value_or(g.tensor_topology());
     return {ttnn::operations::ccl::common::union_topology(
-        {std::cref(x.tensor_topology()), std::cref(gathered_weight)}, x.tensor_topology().mesh_coords())};
+        {std::cref(x.tensor_topology()), std::cref(gathered_label)}, x.tensor_topology().mesh_coords())};
 }
-}  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
+}  // namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async
 
 namespace ttnn::prim {
-ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
+ttnn::Tensor ttml_all_gather_minimal_matmul_outer_dim_async(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const ttnn::Tensor& persistent_weight_buffer,
+    const ttnn::Tensor& gathered_tensor,
+    const ttnn::Tensor& persistent_gather_buffer,
     const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
     std::optional<uint32_t> cluster_axis,
     ttnn::ccl::Topology topology,
@@ -257,7 +258,7 @@ ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
     uint32_t num_links,
     bool transpose_b) {
     using OperationType =
-        ttml::metal::ops::all_gather_weight_minimal_matmul_async::AllGatherWeightMinimalMatmulAsyncDeviceOperation;
+        ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async::AllGatherMinimalMatmulOuterDimAsyncDeviceOperation;
     // The ring size below comes from the input's mesh, before validation runs.
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE && input_tensor.is_allocated(),
@@ -290,7 +291,7 @@ ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
             .transpose_b = transpose_b},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
-            .weight_tensor = weight_tensor,
-            .persistent_weight_buffer = persistent_weight_buffer});
+            .gathered_tensor = gathered_tensor,
+            .persistent_gather_buffer = persistent_gather_buffer});
 }
 }  // namespace ttnn::prim

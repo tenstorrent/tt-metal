@@ -38,9 +38,9 @@ constexpr uint32_t kClusterAxis = 0;
 constexpr uint32_t kRingSize = 4;
 constexpr uint32_t kCalls = 4;
 
-class AllGatherWeightMinimalMatmulAsyncTest : public ttml::test_utils::MeshFixture {
+class AllGatherMinimalMatmulOuterDimAsyncTest : public ttml::test_utils::MeshFixture {
 protected:
-    AllGatherWeightMinimalMatmulAsyncTest() : MeshFixture(tt::tt_metal::distributed::MeshShape(kRingSize, 1)) {
+    AllGatherMinimalMatmulOuterDimAsyncTest() : MeshFixture(tt::tt_metal::distributed::MeshShape(kRingSize, 1)) {
     }
 
     void SetUp() override {
@@ -87,8 +87,8 @@ struct Block {
 struct Problem {
     Shape shape;
     std::vector<float> x;
-    std::vector<float> w_nk;
-    std::vector<float> w_kn;
+    std::vector<float> g_nk;
+    std::vector<float> g_kn;
     std::vector<std::array<uint32_t, 2>> tiles;
     xt::xarray<float> y;
 };
@@ -113,24 +113,24 @@ std::vector<std::array<uint32_t, 2>> spot_tiles(const Shape& s, uint32_t ring_si
 Problem make_problem(const Shape& s, uint32_t spot_ring_size = 0) {
     Problem p{.shape = s};
     p.x = ttml::test_utils::make_uniform_vector<float>(static_cast<size_t>(s.M) * s.K, -1.0F, 1.0F, 42);
-    p.w_nk = ttml::test_utils::make_uniform_vector<float>(static_cast<size_t>(s.N) * s.K, -1.0F, 1.0F, 43);
+    p.g_nk = ttml::test_utils::make_uniform_vector<float>(static_cast<size_t>(s.N) * s.K, -1.0F, 1.0F, 43);
     // The device sees bf16 inputs, so the reference does too: the bound then measures the op, not input rounding.
     for (float& v : p.x) {
         v = static_cast<float>(bfloat16(v));
     }
-    for (float& v : p.w_nk) {
+    for (float& v : p.g_nk) {
         v = static_cast<float>(bfloat16(v));
     }
     const xt::xarray<float> x = xt::adapt(p.x, std::vector<size_t>{s.M, s.K});
-    const xt::xarray<float> w = xt::adapt(p.w_nk, std::vector<size_t>{s.N, s.K});
+    const xt::xarray<float> g = xt::adapt(p.g_nk, std::vector<size_t>{s.N, s.K});
     if (spot_ring_size == 0) {
-        p.w_kn.resize(p.w_nk.size());
+        p.g_kn.resize(p.g_nk.size());
         for (uint32_t n = 0; n < s.N; ++n) {
             for (uint32_t k = 0; k < s.K; ++k) {
-                p.w_kn[(static_cast<size_t>(k) * s.N) + n] = p.w_nk[(static_cast<size_t>(n) * s.K) + k];
+                p.g_kn[(static_cast<size_t>(k) * s.N) + n] = p.g_nk[(static_cast<size_t>(n) * s.K) + k];
             }
         }
-        p.y = xt::linalg::dot(x, xt::transpose(w));
+        p.y = xt::linalg::dot(x, xt::transpose(g));
         return p;
     }
     p.tiles = spot_tiles(s, spot_ring_size);
@@ -138,8 +138,8 @@ Problem make_problem(const Shape& s, uint32_t spot_ring_size = 0) {
     for (size_t i = 0; i < p.tiles.size(); ++i) {
         const auto [m, n] = p.tiles[i];
         const xt::xarray<float> x_rows = xt::view(x, xt::range(m * 32, (m + 1) * 32), xt::all());
-        const xt::xarray<float> w_rows = xt::view(w, xt::range(n * 32, (n + 1) * 32), xt::all());
-        xt::view(p.y, i) = xt::linalg::dot(x_rows, xt::transpose(w_rows));
+        const xt::xarray<float> g_rows = xt::view(g, xt::range(n * 32, (n + 1) * 32), xt::all());
+        xt::view(p.y, i) = xt::linalg::dot(x_rows, xt::transpose(g_rows));
     }
     return p;
 }
@@ -162,7 +162,7 @@ void expect_close(const xt::xarray<float>& ref, const xt::xarray<float>& out) {
     EXPECT_LT(ttml::test_utils::relative_l2(out, ref), 1e-2);
 }
 
-// Stripe s of a full weight: rows of an [N, K] weight (transpose_b), columns of a [K, N] one.
+// Stripe s of the full gathered tensor: rows of an [N, K] one (transpose_b), columns of a [K, N] one.
 xt::xarray<float> stripe_of(const xt::xarray<float>& full, size_t s, size_t width, bool transpose_b) {
     if (transpose_b) {
         return xt::view(full, xt::range(s * width, (s + 1) * width), xt::all());
@@ -181,8 +181,8 @@ std::vector<tt::tt_metal::GlobalSemaphore> make_semaphores(ttnn::distributed::Me
     return semaphores;
 }
 
-// Calls that reuse a buffer get a different weight: call i multiplies it by kCallScales[i % 4]. Powers of two and -1
-// are exact in bf16, so the reference is the same factor times the CPU result, and a call that read a stripe an
+// Calls that reuse a buffer get a different gathered tensor: call i multiplies it by kCallScales[i % 4]. Powers of two
+// and -1 are exact in bf16, so the reference is the same factor times the CPU result, and a call that read a stripe an
 // earlier call left in its buffer would not match it.
 constexpr std::array<float, 4> kCallScales = {1.0F, -2.0F, 0.5F, -1.0F};
 
@@ -190,22 +190,22 @@ float call_scale(uint32_t call) {
     return kCallScales[call % kCallScales.size()];
 }
 
-ttnn::Tensor scaled_weight(const Problem& p, bool transpose_b, float scale) {
+ttnn::Tensor scaled_gathered(const Problem& p, bool transpose_b, float scale) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto& s = p.shape;
-    std::vector<float> w = transpose_b ? p.w_nk : p.w_kn;
-    for (float& v : w) {
+    std::vector<float> g = transpose_b ? p.g_nk : p.g_kn;
+    for (float& v : g) {
         v *= scale;
     }
     const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, transpose_b ? 0 : 1, kClusterAxis);
     const ttnn::Shape shape = transpose_b ? ttnn::Shape({s.N, s.K}) : ttnn::Shape({s.K, s.N});
-    return ttml::core::from_vector(w, shape, device, ttnn::Layout::TILE, shard.get());
+    return ttml::core::from_vector(g, shape, device, ttnn::Layout::TILE, shard.get());
 }
 
 void run_fabric_gather(
     const Problem& p,
     const ttnn::Tensor& x,
-    const ttnn::Tensor& w,
+    const ttnn::Tensor& g,
     uint32_t num_links,
     bool transpose_b,
     ttnn::ccl::Topology topology,
@@ -225,22 +225,22 @@ void run_fabric_gather(
     }
 
     const auto& s = p.shape;
-    const ttnn::Shape w_shape = transpose_b ? ttnn::Shape({s.N, s.K}) : ttnn::Shape({s.K, s.N});
+    const ttnn::Shape g_shape = transpose_b ? ttnn::Shape({s.N, s.K}) : ttnn::Shape({s.K, s.N});
     const std::array<ttnn::Tensor, 2> buffers = {
-        ttml::core::zeros(w_shape, device), ttml::core::zeros(w_shape, device)};
+        ttml::core::zeros(g_shape, device), ttml::core::zeros(g_shape, device)};
     const auto semaphores = make_semaphores(device);
-    std::vector<ttnn::Tensor> weights;
-    weights.reserve(num_calls);
+    std::vector<ttnn::Tensor> gathered;
+    gathered.reserve(num_calls);
     for (uint32_t i = 0; i < num_calls; ++i) {
-        weights.push_back(call_scale(i) == 1.0F ? w : scaled_weight(p, transpose_b, call_scale(i)));
+        gathered.push_back(call_scale(i) == 1.0F ? g : scaled_gathered(p, transpose_b, call_scale(i)));
     }
 
     std::vector<ttnn::Tensor> outputs;
     outputs.reserve(num_calls);
     for (uint32_t i = 0; i < num_calls; ++i) {
-        outputs.push_back(ttml::metal::all_gather_weight_minimal_matmul_async(
+        outputs.push_back(ttml::metal::all_gather_minimal_matmul_outer_dim_async(
             x,
-            weights[i],
+            gathered[i],
             buffers[i % 2],
             semaphores,
             kClusterAxis,
@@ -272,7 +272,7 @@ void run_fabric_gather(
         const uint32_t last = (((num_calls - 1 - b) / 2) * 2) + b;
         SCOPED_TRACE(testing::Message() << "buffer " << b << " after call " << last);
         std::vector<xt::xarray<float>> shards;
-        for (const auto& shard : ttnn::distributed::get_device_tensors(weights[last])) {
+        for (const auto& shard : ttnn::distributed::get_device_tensors(gathered[last])) {
             shards.push_back(ttml::core::to_xtensor(shard));
         }
         const auto gathered = ttnn::distributed::get_device_tensors(buffers[b]);
@@ -298,9 +298,9 @@ void sweep(const Shape& s) {
     const auto x = ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get());
     for (const bool transpose_b : {true, false}) {
         const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, transpose_b ? 0 : 1, kClusterAxis);
-        const ttnn::Shape w_shape = transpose_b ? ttnn::Shape({s.N, s.K}) : ttnn::Shape({s.K, s.N});
-        const auto w =
-            ttml::core::from_vector(transpose_b ? p.w_nk : p.w_kn, w_shape, device, ttnn::Layout::TILE, shard.get());
+        const ttnn::Shape g_shape = transpose_b ? ttnn::Shape({s.N, s.K}) : ttnn::Shape({s.K, s.N});
+        const auto g =
+            ttml::core::from_vector(transpose_b ? p.g_nk : p.g_kn, g_shape, device, ttnn::Layout::TILE, shard.get());
         for (const uint32_t num_links : {1U, 2U}) {
             for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
                 for (const auto& block : blocks) {
@@ -311,7 +311,7 @@ void sweep(const Shape& s) {
                                                                        std::to_string(block->subblock_h) + "x" +
                                                                        std::to_string(block->subblock_w)
                                                                  : std::string("default")));
-                    run_fabric_gather(p, x, w, num_links, transpose_b, topology, block);
+                    run_fabric_gather(p, x, g, num_links, transpose_b, topology, block);
                 }
             }
         }
@@ -319,14 +319,14 @@ void sweep(const Shape& s) {
 }
 }  // namespace
 
-TEST_F(AllGatherWeightMinimalMatmulAsyncTest, SharedSemaphoresAcrossShapes) {
+TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, SharedSemaphoresAcrossShapes) {
     auto* device = &ttml::autograd::ctx().get_device();
     const std::array<Shape, 3> shapes = {{{256, 512, 1024}, {256, 1024, 512}, {256, 512, 2048}}};
     constexpr uint32_t kRounds = 3;
     struct Layer {
         Problem p;
         ttnn::Tensor x;
-        std::array<ttnn::Tensor, kRounds> w;
+        std::array<ttnn::Tensor, kRounds> g;
         std::array<ttnn::Tensor, 2> buffers;
     };
     std::vector<Layer> layers;
@@ -335,15 +335,15 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, SharedSemaphoresAcrossShapes) {
     for (const auto& s : shapes) {
         Problem p = make_problem(s);
         auto x = ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get());
-        std::array<ttnn::Tensor, kRounds> w = {
-            scaled_weight(p, true, call_scale(0)),
-            scaled_weight(p, true, call_scale(1)),
-            scaled_weight(p, true, call_scale(2))};
+        std::array<ttnn::Tensor, kRounds> g = {
+            scaled_gathered(p, true, call_scale(0)),
+            scaled_gathered(p, true, call_scale(1)),
+            scaled_gathered(p, true, call_scale(2))};
         const ttnn::Shape full({s.N, s.K});
         layers.push_back(
             {std::move(p),
              std::move(x),
-             std::move(w),
+             std::move(g),
              {ttml::core::zeros(full, device), ttml::core::zeros(full, device)}});
     }
     const auto semaphores = make_semaphores(device);
@@ -356,9 +356,9 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, SharedSemaphoresAcrossShapes) {
             for (uint32_t l = 0; l < layers.size(); ++l) {
                 outputs.emplace_back(
                     l,
-                    ttml::metal::all_gather_weight_minimal_matmul_async(
+                    ttml::metal::all_gather_minimal_matmul_outer_dim_async(
                         layers[l].x,
-                        layers[l].w[round],
+                        layers[l].g[round],
                         layers[l].buffers[round % 2],
                         semaphores,
                         kClusterAxis,
@@ -381,7 +381,7 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, SharedSemaphoresAcrossShapes) {
     }
 }
 
-TEST_F(AllGatherWeightMinimalMatmulAsyncTest, CacheHitWithOtherSemaphores) {
+TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, CacheHitWithOtherSemaphores) {
     auto* device = &ttml::autograd::ctx().get_device();
     const Shape s{256, 512, 1024};
     const Problem p = make_problem(s);
@@ -391,7 +391,7 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, CacheHitWithOtherSemaphores) {
     const std::array<ttnn::Tensor, 2> xs = {
         ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get()),
         ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get())};
-    const auto w = ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+    const auto g = ttml::core::from_vector(p.g_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
     const std::array<ttnn::Tensor, 2> buffers = {
         ttml::core::zeros(ttnn::Shape({s.N, s.K}), device), ttml::core::zeros(ttnn::Shape({s.N, s.K}), device)};
     const std::array<std::vector<tt::tt_metal::GlobalSemaphore>, 2> semaphores = {
@@ -401,9 +401,9 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, CacheHitWithOtherSemaphores) {
         // Calls 0 and 1 share a program; call 2 uses one link instead of two, which is a new one.
         const uint32_t num_links = i < 2 ? 2 : 1;
         SCOPED_TRACE(testing::Message() << "call " << i);
-        const auto y = ttml::metal::all_gather_weight_minimal_matmul_async(
+        const auto y = ttml::metal::all_gather_minimal_matmul_outer_dim_async(
             xs[i % 2],
-            w,
+            g,
             buffers[i % 2],
             semaphores[i == 0 ? 0 : 1],
             kClusterAxis,
@@ -428,7 +428,39 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, CacheHitWithOtherSemaphores) {
     }
 }
 
-TEST_F(AllGatherWeightMinimalMatmulAsyncTest, NarrowStripes4D) {
+TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, SequenceParallelGathersTheActivation) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
+    struct Layer {
+        const char* name;
+        uint32_t weight_n;
+        uint32_t hidden;
+        uint32_t sequence;
+    };
+    for (const Layer& layer : {Layer{"wq", 4096, 4096, 2048}, Layer{"w1", 11008, 4096, 2048}}) {
+        SCOPED_TRACE(layer.name);
+        const Problem p = make_problem({layer.weight_n, layer.hidden, layer.sequence});
+        const ttnn::Shape weight_shape({layer.weight_n, layer.hidden});
+        const ttnn::Shape activation_shape({layer.sequence, layer.hidden});
+        const auto weight_t = ttml::core::from_vector(p.x, weight_shape, device, ttnn::Layout::TILE, shard.get());
+        const auto activation =
+            ttml::core::from_vector(p.g_nk, activation_shape, device, ttnn::Layout::TILE, shard.get());
+        const auto buffer = ttml::core::zeros(activation_shape, device);
+        const auto y_t = ttml::metal::all_gather_minimal_matmul_outer_dim_async(
+            weight_t, activation, buffer, make_semaphores(device), kClusterAxis, ttnn::ccl::Topology::Ring);
+
+        const size_t n_per_device = layer.weight_n / kRingSize;
+        const auto device_ys = ttnn::distributed::get_device_tensors(y_t);
+        ASSERT_EQ(device_ys.size(), kRingSize);
+        for (uint32_t d = 0; d < kRingSize; ++d) {
+            SCOPED_TRACE(testing::Message() << "device " << d);
+            const xt::xarray<float> ref = xt::view(p.y, xt::range(d * n_per_device, (d + 1) * n_per_device), xt::all());
+            expect_close(ref, ttml::core::to_xtensor(device_ys[d]));
+        }
+    }
+}
+
+TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, NarrowStripes4D) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
@@ -436,16 +468,16 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, NarrowStripes4D) {
         const Problem p = make_problem(s);
         const auto x = ttml::core::from_vector(
             p.x, ttnn::Shape({2, 1, s.M / 2, s.K}), device, ttnn::Layout::TILE, replicate.get());
-        const auto w =
-            ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+        const auto g =
+            ttml::core::from_vector(p.g_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
         for (const uint32_t num_links : {2U, 1U}) {
             SCOPED_TRACE(testing::Message() << "K=" << s.K << " N=" << s.N << " links=" << num_links);
-            run_fabric_gather(p, x, w, num_links, true, ttnn::ccl::Topology::Ring, std::nullopt);
+            run_fabric_gather(p, x, g, num_links, true, ttnn::ccl::Topology::Ring, std::nullopt);
         }
     }
 }
 
-TEST_F(AllGatherWeightMinimalMatmulAsyncTest, TinyShapes) {
+TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, TinyShapes) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
@@ -456,21 +488,21 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, TinyShapes) {
             const Problem p = make_problem(s);
             const auto x =
                 ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get());
-            const auto w =
-                ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+            const auto g =
+                ttml::core::from_vector(p.g_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
             for (const uint32_t num_links : {2U, 1U}) {
                 for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
                     const bool ring = topology == ttnn::ccl::Topology::Ring;
                     SCOPED_TRACE(
                         testing::Message() << "K=" << K << " N=" << N << " links=" << num_links << " ring=" << ring);
-                    run_fabric_gather(p, x, w, num_links, true, topology, std::nullopt);
+                    run_fabric_gather(p, x, g, num_links, true, topology, std::nullopt);
                 }
             }
         }
     }
 }
 
-TEST_F(AllGatherWeightMinimalMatmulAsyncTest, Small) {
+TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, Small) {
     sweep({256, 512, 1024});
 }
 
@@ -486,17 +518,20 @@ const LargeCase kLargeCases[] = {
     {"W2_2048x11008x4096", 1, {2048, 11008, 4096}},
     {"TransposedGrid_8192x1024x2048", 1, {8192, 1024, 2048}},
     {"Batch4_4x2048x4096x11008", 4, {8192, 4096, 11008}},
+    {"SequenceParallelWQ_1024x4096x8192", 1, {1024, 4096, 8192}},
+    {"SequenceParallelWKV_2048x4096x16384", 1, {2048, 4096, 16384}},
+    {"SequenceParallelW1_2752x4096x8192", 1, {2752, 4096, 8192}},
 };
 
-class AllGatherWeightMinimalMatmulAsyncLargeTest : public AllGatherWeightMinimalMatmulAsyncTest,
-                                                   public ::testing::WithParamInterface<LargeCase> {};
+class AllGatherMinimalMatmulOuterDimAsyncLargeTest : public AllGatherMinimalMatmulOuterDimAsyncTest,
+                                                     public ::testing::WithParamInterface<LargeCase> {};
 
 std::string CaseName(const ::testing::TestParamInfo<LargeCase>& info) {
     return info.param.name;
 }
 }  // namespace
 
-TEST_P(AllGatherWeightMinimalMatmulAsyncLargeTest, MatchesReference) {
+TEST_P(AllGatherMinimalMatmulOuterDimAsyncLargeTest, MatchesReference) {
     const LargeCase& c = GetParam();
     const Shape& s = c.shape;
     auto* device = &ttml::autograd::ctx().get_device();
@@ -505,7 +540,7 @@ TEST_P(AllGatherWeightMinimalMatmulAsyncLargeTest, MatchesReference) {
     const ttnn::Shape x_shape = c.batch == 1 ? ttnn::Shape({s.M, s.K}) : ttnn::Shape({c.batch, 1, s.M / c.batch, s.K});
     const auto x = ttml::core::from_vector(p.x, x_shape, device, ttnn::Layout::TILE, replicate.get());
     const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
-    const auto w = ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+    const auto g = ttml::core::from_vector(p.g_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
     const auto grid = device->compute_with_storage_grid_size();
     const size_t available_links = ttnn::operations::ccl::common::get_num_links(*device, kClusterAxis);
     bool ran = false;
@@ -516,7 +551,7 @@ TEST_P(AllGatherWeightMinimalMatmulAsyncLargeTest, MatchesReference) {
         for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
             SCOPED_TRACE(
                 testing::Message() << "ring=" << (topology == ttnn::ccl::Topology::Ring) << " links=" << num_links);
-            run_fabric_gather(p, x, w, num_links, true, topology, std::nullopt, 2);
+            run_fabric_gather(p, x, g, num_links, true, topology, std::nullopt, 2);
             ran = true;
         }
     }
@@ -526,4 +561,4 @@ TEST_P(AllGatherWeightMinimalMatmulAsyncLargeTest, MatchesReference) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    LlamaShapes, AllGatherWeightMinimalMatmulAsyncLargeTest, ::testing::ValuesIn(kLargeCases), CaseName);
+    LlamaShapes, AllGatherMinimalMatmulOuterDimAsyncLargeTest, ::testing::ValuesIn(kLargeCases), CaseName);

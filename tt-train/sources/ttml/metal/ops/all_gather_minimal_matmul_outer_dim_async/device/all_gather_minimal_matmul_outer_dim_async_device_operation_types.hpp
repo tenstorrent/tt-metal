@@ -14,13 +14,13 @@
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
+namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async {
 
 using ttnn::experimental::prim::MinimalMatmulConfig;
 
 inline constexpr uint32_t kDefaultBlockTiles = 8;
 
-struct AllGatherWeightMinimalMatmulAsyncParams {
+struct AllGatherMinimalMatmulOuterDimAsyncParams {
     std::optional<MinimalMatmulConfig> config;
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
@@ -33,9 +33,9 @@ struct AllGatherWeightMinimalMatmulAsyncParams {
     bool transpose_b = true;
 };
 
-struct AllGatherWeightMinimalMatmulAsyncInputs {
+struct AllGatherMinimalMatmulOuterDimAsyncInputs {
     ttnn::Tensor input_tensor;
-    ttnn::Tensor weight_tensor;
-    ttnn::Tensor persistent_weight_buffer;
+    ttnn::Tensor gathered_tensor;
+    ttnn::Tensor persistent_gather_buffer;
 };
-}  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
+}  // namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async

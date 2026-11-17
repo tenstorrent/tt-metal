@@ -11,7 +11,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "tt-train/sources/ttml/metal/ops/all_gather_weight_minimal_matmul_async/device/kernels/all_gather_weight_minimal_matmul_async_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/kernels/all_gather_minimal_matmul_outer_dim_async_utils.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
 // Global N columns of one N block for this chain (kPaddingColumn where the chain is narrower than a piece).
@@ -51,7 +51,7 @@ template <
     typename PwbAccessor>
 inline void read_in1_block_columns(
     const ShardAccessor& shard,
-    const PwbAccessor& pwb,
+    const PwbAccessor& pgb,
     uint32_t cb_id,
     uint32_t tile_bytes,
     uint32_t K_tiles,
@@ -79,14 +79,14 @@ inline void read_in1_block_columns(
                     shard,
                     CoreLocalMem<uint32_t>(ptr),
                     tile_bytes,
-                    {.page_id = weight_page<transpose_b>(cols[j] - local_first, k, K_tiles, stripe_tiles)},
+                    {.page_id = gathered_page<transpose_b>(cols[j] - local_first, k, K_tiles, stripe_tiles)},
                     {});
             } else {
                 noc.async_read(
-                    pwb,
+                    pgb,
                     CoreLocalMem<uint32_t>(ptr),
                     tile_bytes,
-                    {.page_id = weight_page<transpose_b>(cols[j], k, K_tiles, N_tiles)},
+                    {.page_id = gathered_page<transpose_b>(cols[j], k, K_tiles, N_tiles)},
                     {});
             }
         }

@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <vector>
 
-namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
-// The weight is split along N into one stripe per device. Every in1 chain owns the same slice (piece) of
+namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async {
+// The gathered tensor is split along N into one stripe per device. Every in1 chain owns the same slice (piece) of
 // each stripe and consumes the stripes in hop order: local first, then 1 hop, 2 hops, ...
 struct StripeLayout {
     uint32_t ring_size = 1;
@@ -46,4 +46,4 @@ struct RelayPlan {
 };
 
 RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool ring, uint32_t parity_unit);
-}  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
+}  // namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async

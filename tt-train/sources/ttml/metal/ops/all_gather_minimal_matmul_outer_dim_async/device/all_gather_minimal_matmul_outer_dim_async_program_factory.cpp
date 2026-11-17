@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_gather_weight_minimal_matmul_async_program_factory.hpp"
+#include "all_gather_minimal_matmul_outer_dim_async_program_factory.hpp"
 
 #include <algorithm>
 #include <array>
@@ -27,10 +27,10 @@
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
+namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async {
 namespace {
 constexpr const char* kKernelDir =
-    "tt-train/sources/ttml/metal/ops/all_gather_weight_minimal_matmul_async/device/kernels/";
+    "tt-train/sources/ttml/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/kernels/";
 // Runtime-arg slots that override_runtime_arguments patches on cache hits.
 constexpr uint32_t kRtInputAddrIdx = 0;
 constexpr uint32_t kRtOutputAddrIdx = 1;
@@ -116,15 +116,15 @@ CoreRole core_role(const ttnn::CoreCoord& core, bool transpose_core_grid, uint32
 }
 }  // namespace
 
-ttnn::device_operation::CachedProgram<AllGatherWeightMinimalMatmulAsyncProgramFactory::shared_variables_t>
-AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
-    const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
+ttnn::device_operation::CachedProgram<AllGatherMinimalMatmulOuterDimAsyncProgramFactory::shared_variables_t>
+AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
+    const AllGatherMinimalMatmulOuterDimAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
+    const AllGatherMinimalMatmulOuterDimAsyncInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     tt::tt_metal::Program program{};
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    const ttnn::Tensor& weight_tensor = tensor_args.weight_tensor;
+    const ttnn::Tensor& gathered_tensor = tensor_args.gathered_tensor;
     const ttnn::Tensor& output_tensor = tensor_return_value;
     const auto& config = operation_attributes.config;
     auto* device = input_tensor.device();
@@ -145,7 +145,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
 
     auto in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto in0_tile_size = tt::tile_size(in0_data_format);
-    auto in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(weight_tensor.dtype());
+    auto in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(gathered_tensor.dtype());
     auto in1_tile_size = tt::tile_size(in1_data_format);
     auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     auto out_tile_size = tt::tile_size(output_data_format);
@@ -157,7 +157,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const bool transpose_b = operation_attributes.transpose_b;
     const uint32_t K = input_tensor.padded_shape()[-1];
     const uint32_t M = input_tensor.physical_volume() / K;  // all leading dims of the input fold into M
-    const uint32_t N = tensor_args.persistent_weight_buffer.padded_shape()[transpose_b ? -2 : -1];
+    const uint32_t N = tensor_args.persistent_gather_buffer.padded_shape()[transpose_b ? -2 : -1];
     const uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     const uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     const uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
@@ -240,7 +240,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const uint32_t tiles_per_packet = send_tiles_per_packet(in1_tile_size);
     TT_FATAL(
         tiles_per_packet >= kMinTilesPerPacket,
-        "all_gather_weight_minimal_matmul_async: the fabric packet payload ({} B) must hold at least {} weight "
+        "all_gather_minimal_matmul_outer_dim_async: the fabric packet payload ({} B) must hold at least {} gathered "
         "tiles of {} B",
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
         kMinTilesPerPacket,
@@ -250,7 +250,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const uint64_t slot_bytes = slot_header_bytes + (static_cast<uint64_t>(tiles_per_packet) * in1_tile_size);
     TT_FATAL(
         slot_bytes % kSendSlotAlignBytes == 0,
-        "all_gather_weight_minimal_matmul_async: a send slot ({} B) must be a multiple of {} B to keep its payload "
+        "all_gather_minimal_matmul_outer_dim_async: a send slot ({} B) must be a multiple of {} B to keep its payload "
         "aligned for DRAM reads",
         slot_bytes,
         kSendSlotAlignBytes);
@@ -258,7 +258,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const uint64_t free_l1 = ttml::metal::available_l1_bytes(*device);
     TT_FATAL(
         matmul_cb_bytes + kSendSlotAlignBytes <= free_l1,
-        "all_gather_weight_minimal_matmul_async: the matmul's circular buffers take {} B of the {} B of L1 available "
+        "all_gather_minimal_matmul_outer_dim_async: the matmul's circular buffers take {} B of the {} B of L1 "
+        "available "
         "per core, which leaves no room for the fabric senders' packet slots on the sink row; use smaller blocks",
         matmul_cb_bytes,
         free_l1);
@@ -267,7 +268,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         static_cast<uint32_t>(std::min<uint64_t>(kMaxSendSlots, slot_room / slot_bytes)) & ~1U;
     TT_FATAL(
         grid_send_slots >= 2,
-        "all_gather_weight_minimal_matmul_async: {} B of L1 are left for the fabric senders' packet slots after the "
+        "all_gather_minimal_matmul_outer_dim_async: {} B of L1 are left for the fabric senders' packet slots after the "
         "matmul's circular buffers, but two slots need {} B; use smaller blocks",
         slot_room,
         2 * slot_bytes);
@@ -332,7 +333,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
 
     const std::string in0_source = std::string(kKernelDir) + "dataflow/dm_in0.cpp";
     const std::string in1_source = std::string(kKernelDir) + "dataflow/dm_in1.cpp";
-    const ttnn::Tensor& pwb = tensor_args.persistent_weight_buffer;
+    const ttnn::Tensor& pgb = tensor_args.persistent_gather_buffer;
 
     // Cores with the same (injector, sink row) role share one kernel.
     std::map<std::pair<bool, bool>, std::vector<ttnn::CoreCoord>> in0_groups;
@@ -392,8 +393,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                     sinks_in0,
                     in0_sender_semaphore_id,
                     in0_receiver_semaphore_id,
-                    weight_tensor,
-                    &pwb)});
+                    gathered_tensor,
+                    &pgb)});
     }
 
     std::map<std::string, std::string> compute_defines;
@@ -494,7 +495,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
             // override_runtime_arguments finds the persistent buffer and semaphores past these.
             TT_FATAL(
                 args.size() == kRtDmFixedArgs && layout.stripe_order.size() == operation_attributes.ring_size,
-                "all_gather_weight_minimal_matmul_async: the data-mover runtime args do not match kRtDmFixedArgs "
+                "all_gather_minimal_matmul_outer_dim_async: the data-mover runtime args do not match kRtDmFixedArgs "
                 "({} fixed args, expected {}) or the ring ({} stripes, ring size {})",
                 args.size(),
                 kRtDmFixedArgs,
@@ -505,9 +506,9 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         };
 
         std::vector<uint32_t> in1_args =
-            dm_runtime_args(weight_tensor.buffer()->address(), is_in1_sink, in1_next, in1_prev);
+            dm_runtime_args(gathered_tensor.buffer()->address(), is_in1_sink, in1_next, in1_prev);
         // in1 also gets the persistent buffer and one semaphore per stripe.
-        in1_args.push_back(pwb.buffer()->address());
+        in1_args.push_back(pgb.buffer()->address());
         in1_args.insert(in1_args.end(), stripe_sem_addrs.begin(), stripe_sem_addrs.end());
         std::vector<uint32_t> in0_args =
             dm_runtime_args(input_tensor.buffer()->address(), is_in0_sink, in0_next, in0_prev);
@@ -648,15 +649,15 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                 slot_header_bytes};
             const auto& route = dir == 0 ? forward_route : backward_route;
             send_ct.insert(send_ct.end(), route.begin(), route.end());
-            tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(send_ct);
-            tt::tt_metal::TensorAccessorArgs(*pwb.buffer()).append_to(send_ct);
+            tt::tt_metal::TensorAccessorArgs(*gathered_tensor.buffer()).append_to(send_ct);
+            tt::tt_metal::TensorAccessorArgs(*pgb.buffer()).append_to(send_ct);
             auto send_id = tt::tt_metal::CreateKernel(
                 program,
                 std::string(kKernelDir) + "dataflow/send_on_grid.cpp",
                 send_core,
                 tt::tt_metal::DataMovementConfig{
                     .processor = large_input_risc, .noc = large_input_noc, .compile_args = send_ct});
-            std::vector<uint32_t> send_rt = {weight_tensor.buffer()->address(), pwb.buffer()->address()};
+            std::vector<uint32_t> send_rt = {gathered_tensor.buffer()->address(), pgb.buffer()->address()};
             send_rt.insert(send_rt.end(), stripe_sem_addrs.begin(), stripe_sem_addrs.end());
             send_rt.insert(
                 send_rt.end(),
@@ -683,16 +684,16 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         std::move(program), shared_variables_t{.cores = std::move(core_kernel_list), .senders = std::move(senders)}};
 }
 
-void AllGatherWeightMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
+void AllGatherMinimalMatmulOuterDimAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
-    const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
+    const AllGatherMinimalMatmulOuterDimAsyncParams& operation_attributes,
+    const AllGatherMinimalMatmulOuterDimAsyncInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     // Only buffer and semaphore addresses change between cache hits.
     const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
+    const uint32_t in1_addr = tensor_args.gathered_tensor.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
-    const uint32_t pwb_addr = tensor_args.persistent_weight_buffer.buffer()->address();
+    const uint32_t pgb_addr = tensor_args.persistent_gather_buffer.buffer()->address();
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t in1_pwb_idx = kRtDmFixedArgs + ring_size;
 
@@ -727,16 +728,16 @@ void AllGatherWeightMinimalMatmulAsyncProgramFactory::override_runtime_arguments
                 auto& in1_args = core_args(*in1_kernel, core);
                 in1_args[kRtInputAddrIdx] = in1_addr;
                 in1_args[kRtOutputAddrIdx] = out_addr;
-                in1_args[in1_pwb_idx] = pwb_addr;
+                in1_args[in1_pwb_idx] = pgb_addr;
                 patch_semaphores(in1_args, in1_pwb_idx + 1);
             }
         }
         for (const auto& sender : vars.senders) {
             auto& sender_args = core_args(sender.kernel, sender.core);
             sender_args[kRtSenderShardAddrIdx] = in1_addr;
-            sender_args[kRtSenderPwbAddrIdx] = pwb_addr;
+            sender_args[kRtSenderPwbAddrIdx] = pgb_addr;
             patch_semaphores(sender_args, kRtSenderSemaphoresIdx);
         }
     }
 }
-}  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
+}  // namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async

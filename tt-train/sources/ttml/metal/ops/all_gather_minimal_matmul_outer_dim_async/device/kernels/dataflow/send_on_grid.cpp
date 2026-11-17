@@ -96,7 +96,7 @@ void kernel_main() {
     constexpr ccl_routing_utils::line_unicast_route_info_t route =
         ccl_routing_utils::get_line_unicast_route_info_from_args<9>();
     constexpr auto shard_args = TensorAccessorArgs<9 + ccl_routing_utils::num_line_unicast_args>();
-    constexpr auto pwb_args = TensorAccessorArgs<shard_args.next_compile_time_args_offset()>();
+    constexpr auto pgb_args = TensorAccessorArgs<shard_args.next_compile_time_args_offset()>();
     // Every packet is a scatter write, which takes 2 to 4 chunks.
     static_assert(tiles_per_packet >= NOC_SCATTER_WRITE_MIN_CHUNKS && tiles_per_packet <= NOC_SCATTER_WRITE_MAX_CHUNKS);
     constexpr bool trailing_incs = tiles_per_packet > kFusedIncMaxTiles;
@@ -104,7 +104,7 @@ void kernel_main() {
 
     size_t argidx = 0;
     const uint32_t shard_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t pwb_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t pgb_addr = get_arg_val<uint32_t>(argidx++);
     // One global semaphore per stripe, at the same L1 address on every core of every device.
     uint32_t stripe_sem_addrs[ring_size];
     for (uint32_t i = 0; i < ring_size; i++) {
@@ -119,7 +119,7 @@ void kernel_main() {
     const uint32_t schedule_arg_idx = argidx;
 
     const auto shard = TensorAccessor(shard_args, shard_addr, tile_size);
-    const auto pwb = TensorAccessor(pwb_args, pwb_addr, tile_size);
+    const auto pgb = TensorAccessor(pgb_args, pgb_addr, tile_size);
     using Slots = SendSlots<tile_size, tiles_per_packet, slot_header_bytes>;
     const Slots slots{.base = align(CircularBuffer(cb_id).get_write_ptr(), NOC_DRAM_READ_ALIGNMENT_BYTES)};
 
@@ -200,17 +200,17 @@ void kernel_main() {
             const uint32_t k_end = reader.k_start() + reader.chunk();
             const bool own_stripe = seg.distance == 0;
             for (uint32_t i = 0; i < count; ++i, l1 += tile_size) {
-                // The tile's weight-buffer page: its place on the neighbour (same address there) and a relay's source.
+                // The tile's gather-buffer page: its place on the neighbour (same address there) and a relay's source.
                 const uint32_t buffer_page =
-                    weight_page<transpose_b>((seg.stripe * stripe_tiles) + row, k, K_tiles, stripe_tiles * ring_size);
-                scatter.noc_address[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(pwb, buffer_page, 0);
+                    gathered_page<transpose_b>((seg.stripe * stripe_tiles) + row, k, K_tiles, stripe_tiles * ring_size);
+                scatter.noc_address[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(pgb, buffer_page, 0);
                 if (own_stripe) {
-                    const uint32_t page = weight_page<transpose_b>(row, k, K_tiles, stripe_tiles);
+                    const uint32_t page = gathered_page<transpose_b>(row, k, K_tiles, stripe_tiles);
                     noc.async_read<NocOptions::DEFAULT, tile_size>(
                         shard, CoreLocalMem<uint32_t>(l1), tile_size, {.page_id = page}, {});
                 } else {
                     noc.async_read<NocOptions::DEFAULT, tile_size>(
-                        pwb, CoreLocalMem<uint32_t>(l1), tile_size, {.page_id = buffer_page}, {});
+                        pgb, CoreLocalMem<uint32_t>(l1), tile_size, {.page_id = buffer_page}, {});
                 }
                 if (++k == k_end) {
                     k = reader.k_start();

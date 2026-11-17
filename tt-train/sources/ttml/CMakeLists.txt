@@ -149,10 +149,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp
     # All-gather weight + minimal matmul (FSDP)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_weight_minimal_matmul_async/all_gather_weight_minimal_matmul_async.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_weight_minimal_matmul_async/device/all_gather_weight_minimal_matmul_async_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_weight_minimal_matmul_async/device/all_gather_weight_minimal_matmul_async_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_weight_minimal_matmul_async/device/stripe_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_minimal_matmul_outer_dim_async/all_gather_minimal_matmul_outer_dim_async.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/all_gather_minimal_matmul_outer_dim_async_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/all_gather_minimal_matmul_outer_dim_async_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/stripe_layout.cpp
     # K-Split Gram Matmul (multicast)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/k_split_gram_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_device_operation.cpp

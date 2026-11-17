@@ -7,13 +7,13 @@
 #include <cstdint>
 #include <vector>
 
-#include "metal/ops/all_gather_weight_minimal_matmul_async/device/stripe_layout.hpp"
+#include "metal/ops/all_gather_minimal_matmul_outer_dim_async/device/stripe_layout.hpp"
 
 namespace {
-using ttml::metal::ops::all_gather_weight_minimal_matmul_async::make_relay_plan;
-using ttml::metal::ops::all_gather_weight_minimal_matmul_async::make_stripe_layout;
-using ttml::metal::ops::all_gather_weight_minimal_matmul_async::RelayPlan;
-using ttml::metal::ops::all_gather_weight_minimal_matmul_async::StripeLayout;
+using ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async::make_relay_plan;
+using ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async::make_stripe_layout;
+using ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async::RelayPlan;
+using ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async::StripeLayout;
 
 constexpr uint32_t kNBlockTiles = 8;
 
@@ -66,7 +66,7 @@ void expect_relay_delivers_every_piece_once(const StripeLayout& layout, bool rin
     }
 }
 
-TEST(AllGatherWeightStripeLayout, CoversEveryOutputTileOnce) {
+TEST(AllGatherMinimalMatmulOuterDimStripeLayout, CoversEveryOutputTileOnce) {
     for (const bool ring : {true, false}) {
         for (const uint32_t r : kRingSizes) {
             for (const uint32_t chains : kChainCounts) {
@@ -84,7 +84,7 @@ TEST(AllGatherWeightStripeLayout, CoversEveryOutputTileOnce) {
     }
 }
 
-TEST(AllGatherWeightStripeLayout, RelayDeliversEveryPieceOnce) {
+TEST(AllGatherMinimalMatmulOuterDimStripeLayout, RelayDeliversEveryPieceOnce) {
     for (const bool ring : {true, false}) {
         for (const uint32_t r : kRingSizes) {
             if (r < 2) {

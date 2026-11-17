@@ -7,11 +7,11 @@
 #include <optional>
 #include <vector>
 
-#include "all_gather_weight_minimal_matmul_async_device_operation_types.hpp"
+#include "all_gather_minimal_matmul_outer_dim_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
-struct AllGatherWeightMinimalMatmulAsyncProgramFactory {
+namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async {
+struct AllGatherMinimalMatmulOuterDimAsyncProgramFactory {
     struct shared_variables_t {
         struct CoreKernels {
             ttnn::CoreCoord core;
@@ -29,15 +29,15 @@ struct AllGatherWeightMinimalMatmulAsyncProgramFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
+        const AllGatherMinimalMatmulOuterDimAsyncParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
-        const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
+        const AllGatherMinimalMatmulOuterDimAsyncInputs& tensor_args,
         ttnn::Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
-        const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
+        const AllGatherMinimalMatmulOuterDimAsyncParams& operation_attributes,
+        const AllGatherMinimalMatmulOuterDimAsyncInputs& tensor_args,
         ttnn::Tensor& tensor_return_value);
 };
-}  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
+}  // namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async

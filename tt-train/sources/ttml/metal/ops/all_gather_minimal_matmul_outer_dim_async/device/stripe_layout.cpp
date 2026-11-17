@@ -9,9 +9,9 @@
 #include <tt_stl/assert.hpp>
 #include <utility>
 
-#include "kernels/all_gather_weight_minimal_matmul_async_utils.hpp"
+#include "kernels/all_gather_minimal_matmul_outer_dim_async_utils.hpp"
 
-namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
+namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async {
 
 namespace {
 
@@ -120,4 +120,4 @@ RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool 
     }
     return plan;
 }
-}  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
+}  // namespace ttml::metal::ops::all_gather_minimal_matmul_outer_dim_async
