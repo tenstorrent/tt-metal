@@ -745,7 +745,7 @@ def run_trace(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips, ntok):
             hd = layer_programs(mesh, lc, st, g, clocks=clocks)
             ttnn.end_trace_capture(mesh, tids[-1], cq_id=0)
             try:  # (the trace region's bytes so far: the captured command streams)
-                mv = ttnn.device.GetMemoryView(mesh, ttnn.BufferType.TRACE)
+                mv = ttnn._ttnn.device.GetMemoryView(mesh, ttnn.BufferType.TRACE)
                 logger.info(
                     f"WSY {tag} SUMMARY trace {len(tids)} {g} captured: trace region "
                     f"{mv.total_bytes_allocated_per_bank * mv.num_banks} B allocated ({mv.num_banks} banks)"
@@ -867,8 +867,13 @@ def run_soak(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips):
             "split": split_groups,
             "eager": [],
         }[mode]
+        # (warm-ups with the very phases the traces capture: every op - the barrier's all-gathers too - built and run
+        # once before a capture, which takes no host writes)
         for _ in range(WARM):
-            layer_programs(mesh, lc, st)
+            for g in groups or [None]:
+                layer_programs(mesh, lc, st, g)
+                if mode == "sync":
+                    ttnn.synchronize_device(mesh)
         ttnn.synchronize_device(mesh)
         for g in groups:
             tids.append(ttnn.begin_trace_capture(mesh, cq_id=0))

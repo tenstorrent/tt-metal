@@ -949,3 +949,20 @@ the expert-id-ordered outputs (out_eord) are gone.
   the cluster).
 - In the layer (head, stream, fold), 20 + 5: one chip 52.65 ms wall (56.46 unfolded), fold 9.06 ms device; Galaxy
   77.22 ms wall (83.19 unfolded), fold 9.05 ms device (shared + end 13.37 apart); y PCC 0.99988, routing exact.
+
+## Stage 17: soak (tests/test_ws_layer.py run_soak)
+- 10,000 layers on the Galaxy, T 31250 tokens a chip, the shared expert folded into the end pass, the whole layer one
+  trace with the device barrier before the routed stream (WSY_SOAK_MODE barrier). Every 500 layers y and the head's
+  outputs (counts, token lists, destination lists, w) on chips 0 and 31 against the first (eager) layer's.
+- All 20 checks bit-identical (y PCC 1.000000); no hang; wall per layer 73.8 ms over the first 500, 75.0-75.2 from
+  3,000 on. Total 16 minutes with setup.
+- A capture takes no host writes: the warm-ups run the very phases a trace captures (the barrier's all-gathers do
+  host writes the first time they are built).
+- Open:
+  - ~10-12 ms a layer between replays (one chip 62.3 ms a replay against 52.1 ms of programs inside it; the Galaxy
+    74.1 against 64.5): outside the programs and their dispatch (DRAM clocks between them). Suspect: the trace's
+    command stream fetched from DRAM before its first program runs; not measured yet.
+  - The barrier: the stream's segment in a replay 52.8 ms against the stream alone 49.4 (its zeros, the two
+    all-gathers and the dispatch: ~3.4 ms).
+  - The fold: 9.05 ms against the 7.5-8 target; its end cores wait ~1.8 ms for slot flags (each cluster sends its row
+    tiles in order, an end core holds one row tile of slots: a slow end core stalls its cluster).
