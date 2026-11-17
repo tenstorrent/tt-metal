@@ -389,6 +389,11 @@ class TtPrefillTransformer(LightweightModule):
 
         self.mtp_predictor = mtp_predictor
         self.num_mtp_levels = num_mtp_levels
+        # The MoE layers' implementation (tt/moe_impl.py; one for the whole model, the MTP layer's included): the MoE
+        # block takes a packed forward's padding as a MoEBlockPacking, TtMoe as a PackedPadding (forward_packed;
+        # TtPrefillRuntime's traced path).
+        mtp_layer = getattr(getattr(mtp_predictor, "module", None), "layer", None)
+        self.moe_is_block = any(getattr(layer, "moe_block", False) for layer in [*self.layers, mtp_layer])
         self._trace_controller = None
         if mtp_predictor is not None:
             assert is_last_rank and not kv_only_last_layer, (
@@ -867,11 +872,19 @@ class TtPrefillTransformer(LightweightModule):
         else:
             h = token_ids
 
-        # Eager: one MoE padding (PackedPadding) for every layer of the forward, not one per layer's gate.
+        # Eager: one MoE padding for every layer of the forward, not one per layer's gate: the MoE block's planner
+        # reads the chunks themselves (MoEBlockPacking), TtMoe takes a PackedPadding.
         owned_padding_config = None
         if metadata is None and padding_config is None:
-            sp = self.mesh_device.shape[self.sp_axis]
-            owned_padding_config = packed_padding(self.mesh_device, chunks, sp, h.shape[2] // n, sp_axis=self.sp_axis)
+            if self.moe_is_block:
+                from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import MoEBlockPacking
+
+                owned_padding_config = MoEBlockPacking(chunks=list(chunks))
+            else:
+                sp = self.mesh_device.shape[self.sp_axis]
+                owned_padding_config = packed_padding(
+                    self.mesh_device, chunks, sp, h.shape[2] // n, sp_axis=self.sp_axis
+                )
             padding_config = owned_padding_config
 
         reuse = self.indexer_types is not None

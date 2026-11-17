@@ -831,10 +831,10 @@
 
     glm_moe() (
       export MESH_DEVICE=TG
-      # GLM-5.3 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
+      # GLM-5.3's MoE, the MoE block (its C++ ops), vs the CPU MoE reference; random weights.
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py -k "glm53-8x4-5120 and not eager" -vvv --tb=short
       '
     )
 

@@ -24,6 +24,11 @@ class GLM53Config:
     # Callers can override this default with use_fused_rmsnorm at model initialization.
     USE_FUSED_PREFILL_RMSNORM = True
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # The one definition of GLM's l1_small pool, read by the runner adapter and the tests. 5696 = the model's own ops'
+    # 3328 B (routing, the sparse-MLA high-bandwidth-gather and all-gather semaphores, matmul_reduce_scatter_prefill's
+    # semaphores and mailbox; the GLM chunked-accuracy CI job, Nov 6) + the MoE block's persistent words' slab (2304 B,
+    # MoEBlockConfig.words_slab_bytes) + 64 B allocator alignment. Was 1536 on TtMoe.
+    L1_SMALL_SIZE = 5696
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The crossover is a function of the
