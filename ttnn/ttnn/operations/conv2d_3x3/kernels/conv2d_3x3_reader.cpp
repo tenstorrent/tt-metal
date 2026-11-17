@@ -18,6 +18,10 @@
 // Both fills read page runs through one TensorAccessor: on a HEIGHT-sharded input a run is the
 // contiguous part of one owner core's shard (own or remote), so a band costs one NoC read per shard it
 // crosses; on an interleaved input every page is its own read.
+// Channel slices (BLOCK_SHARDED, K split over the grid's columns): the core reads only its column's
+// slice of each input row (pixel or tile-row). Those pages are not consecutive page ids (the other
+// columns' slices sit between them), but one owner shard stores its rows of the slice back to back, so
+// a run is the part of a band inside one shard.
 //
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
@@ -92,13 +96,17 @@ void kernel_main() {
     constexpr uint32_t slab_tile_rows = get_compile_time_arg_val(19);
     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(20);
     constexpr uint32_t im2col_rm_depth_rows = get_compile_time_arg_val(21);
-    constexpr auto input_args = TensorAccessorArgs<22>();
+    constexpr bool channel_slice = get_compile_time_arg_val(22) != 0;
+    constexpr uint32_t input_shard_rows = get_compile_time_arg_val(23);
+    constexpr uint32_t row_page_stride = get_compile_time_arg_val(24);
+    constexpr auto input_args = TensorAccessorArgs<25>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
     const uint32_t actual_m_tiles = get_arg_val<uint32_t>(2);
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(3);
     [[maybe_unused]] const uint32_t read_rotation = get_arg_val<uint32_t>(4);
+    [[maybe_unused]] const uint32_t slice_page_offset = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     constexpr int32_t num_in_px = input_height * input_width;
@@ -117,6 +125,7 @@ void kernel_main() {
     static_assert(!tile_input || (c_in_p % TILE_DIM) == 0, "TILE slab rows are whole tile columns");
     static_assert(tile_input || input_page_bytes == pixel_bytes, "ROW_MAJOR: one input page is one slab pixel");
     static_assert(!tile_input || (slab_tile_rows % untilize_batch_rows) == 0, "slab is whole untilize batches");
+    static_assert(!channel_slice || input_shard_rows > 0, "a channel slice is read in owner-shard runs");
 
     const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
     // TILE: compute pushes exactly slab_tile_rows tile-rows per M-block and the reader pops them all,
@@ -152,9 +161,28 @@ void kernel_main() {
         }
     };
 
+    // Input rows [row, end_row) of this core's channels (pixels on ROW_MAJOR, tile-rows on TILE) into
+    // consecutive L1 from l1.
+    constexpr uint32_t pages_per_row = tile_input ? c_in_tiles : 1;
+    constexpr uint32_t row_bytes = pages_per_row * input_page_bytes;
+    auto read_rows = [&](uint32_t row, uint32_t end_row, uint32_t l1) {
+        if constexpr (channel_slice) {
+            while (row < end_row) {
+                const uint32_t shard_end = (row / input_shard_rows + 1) * input_shard_rows;
+                const uint32_t run_end = end_row < shard_end ? end_row : shard_end;
+                reads.read(
+                    input.get_noc_addr(row * row_page_stride + slice_page_offset), l1, (run_end - row) * row_bytes);
+                l1 += (run_end - row) * row_bytes;
+                row = run_end;
+            }
+        } else {
+            read_pages(row * pages_per_row, end_row * pages_per_row, l1);
+        }
+    };
+
     // ROW_MAJOR: slab pixels [x_from, x_to) are flat input pixels x + v_minus_x.
     [[maybe_unused]] auto read_slab_pixels = [&](int32_t x_from, int32_t x_to, int32_t v_minus_x) {
-        read_pages(x_from + v_minus_x, x_to + v_minus_x, slab_l1 + x_from * pixel_bytes);
+        read_rows(x_from + v_minus_x, x_to + v_minus_x, slab_l1 + x_from * pixel_bytes);
     };
 
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
@@ -224,9 +252,9 @@ void kernel_main() {
                     // The batch's rows of one segment are consecutive input tile-rows: consecutive pages.
                     const uint32_t seg_left = seg_count[seg] - seg_row;
                     const uint32_t rows = untilize_batch_rows - r < seg_left ? untilize_batch_rows - r : seg_left;
-                    const uint32_t page0 = (seg_first[seg] + seg_row) * c_in_tiles;
-                    read_pages(page0, page0 + rows * c_in_tiles, l1);
-                    l1 += rows * c_in_tiles * input_page_bytes;
+                    const uint32_t row0 = seg_first[seg] + seg_row;
+                    read_rows(row0, row0 + rows, l1);
+                    l1 += rows * row_bytes;
                     r += rows;
                     seg_row += rows;
                     if (seg_row == seg_count[seg]) {

@@ -8,7 +8,15 @@
 // K-block's pack without bias.
 //
 // matmul_block leaves packer L1 accumulation on and (OutWithRelu) PACK_RELU on; every later pack
-// (untilize, tilize, bias add) first restores the state it needs.
+// (untilize, tilize, combine, bias add) first restores the state it needs.
+//
+// K split (BLOCK_SHARDED, k_cols > 1): the matmul accumulates this core's channel slice into fp32
+// partials [bm, all C_out] that the WRITER consumes (it scatters N-slice y to grid column y of the row),
+// so compute owns that CB's reserve/push once per M-block instead of letting the helper drain it per
+// K-block (the helper's drain would make compute a second consumer). The K-blocks still serialize on the
+// packer: each one's tilize pushes cb_im2col_tiles between two L1-accumulating passes. Then, on a core
+// that owns output columns, combine_block sums the k_cols slices the row sent it (pairwise FPU adds into
+// fp32 DEST), adds the bias and packs into the output shard; ReLU is armed only for that last pack.
 
 #include <cstdint>
 
@@ -21,6 +29,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -76,8 +85,16 @@ void kernel_main() {
     constexpr bool tile_input = get_compile_time_arg_val(16) != 0;
     constexpr uint32_t c_in_tiles = get_compile_time_arg_val(17);
     constexpr uint32_t slab_tile_rows = get_compile_time_arg_val(18);
+    constexpr bool k_split = get_compile_time_arg_val(19) != 0;
+    constexpr uint32_t k_cols = get_compile_time_arg_val(20);
+    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_combine_slots = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_combined = get_compile_time_arg_val(23);
+    constexpr uint32_t combine_subblock_h = get_compile_time_arg_val(24);
+    constexpr uint32_t combine_subblock_w = get_compile_time_arg_val(25);
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
+    [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
 
     constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
     constexpr uint32_t in1_num_subblocks = block_n_tiles / out_subblock_w;
@@ -87,9 +104,21 @@ void kernel_main() {
         in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks);
     constexpr auto bias_shape =
         ckl::BiasAddShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_n_tiles);
+    static_assert(block_m_tiles % combine_subblock_h == 0 && out_n_tiles % combine_subblock_w == 0);
+    constexpr auto combine_bias_shape = ckl::BiasAddShape::of(
+        block_m_tiles / combine_subblock_h,
+        out_n_tiles / combine_subblock_w,
+        combine_subblock_h,
+        combine_subblock_w,
+        out_n_tiles);
+    constexpr uint32_t partials_tiles = block_m_tiles * block_n_tiles;
+    // The k_cols slots hold the row's contributions to this core's [bm, out_n_tiles] output block, one
+    // slot after another: a k_cols-row x slot-wide block whose column sums are the outputs.
+    constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
     // kernel_main is not a template, so the TILE-only untilize is instantiated on the ROW_MAJOR path too.
     constexpr uint32_t untilize_width_tiles = tile_input ? c_in_tiles : 1;
-    constexpr bool relu_on_last_matmul_pack = apply_relu && !has_bias;
+    // Under a K split the matmul packs partials, which ReLU must never touch.
+    constexpr bool relu_on_last_matmul_pack = apply_relu && !has_bias && !k_split;
     constexpr ckl::LastBlockTarget last_block_target =
         has_bias ? ckl::LastBlockTarget::Interm
                  : (apply_relu ? ckl::LastBlockTarget::OutWithRelu : ckl::LastBlockTarget::Out);
@@ -111,14 +140,52 @@ void kernel_main() {
     CircularBuffer partials(cb_matmul_partials);
     CircularBuffer output_tiles(cb_output_tiles);
     CircularBuffer bias(cb_bias);
+    CircularBuffer combined(cb_combined);
+    DataflowBuffer combine_slots_dfb(cb_combine_slots);
+    DataflowBuffer combined_dfb(cb_combined);
+    DataflowBuffer output_tiles_dfb(cb_output_tiles);
 
     using TilizeFn =
         TilizeIm2colKBlock<block_k_tiles, block_m_tiles, cb_im2col_rm, cb_im2col_tiles, relu_on_last_matmul_pack>;
     const TilizeFn tilize_k_block{&im2col_rm_dfb, &im2col_tiles_dfb};
 
     if constexpr (has_bias) {
-        bias.wait_front(block_n_tiles);
+        bias.wait_front(out_n_tiles);
     }
+
+    // Sum the row's k_cols contributions per output tile and pack them; with a bias the fp32 sum goes
+    // through cb_combined into the bias add, otherwise straight to the output shard.
+    auto combine_block = [&]() {
+        pack_reconfig_l1_acc(0);
+        if constexpr (apply_relu && !has_bias) {
+            pack_relu_config(ReluConfig::zero());
+        }
+        constexpr uint32_t sum_cb = has_bias ? cb_combined : cb_output_tiles;
+        // The cross-core inputs are raw partial sums, so only the cross-tile adds run (Skip). No scaler
+        // tile is read on this path; the scaler slot names the input CB.
+        ckl::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_COL,
+            cb_combine_slots,
+            cb_combine_slots,
+            sum_cb,
+            ckl::ReduceInputPolicy::BulkWaitBulkPop,
+            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            ReduceFp32Mode::Fast,
+            ckl::ReduceAlgorithm::AccumulateViaAdd,
+            ckl::ReduceWithinTile::Skip>(
+            combine_slots_dfb,
+            combine_slots_dfb,
+            has_bias ? combined_dfb : output_tiles_dfb,
+            ckl::ReduceInputBlockShape::of(k_cols, slot_tiles));
+        if constexpr (has_bias) {
+            if constexpr (apply_relu) {
+                pack_relu_config(ReluConfig::zero());
+            }
+            ckl::add_bias_bcast_rows<ckl::BiasBroadcast::RowBroadcast, ckl::OutputCBLayout::TileRowMajor>(
+                combined, bias, output_tiles, combine_bias_shape);
+        }
+    };
 
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         if constexpr (tile_input) {
@@ -128,27 +195,60 @@ void kernel_main() {
                 input_tiles_dfb, halo_slab_dfb, slab_tile_rows);
         }
 
-        ckl::matmul_block<
-            /*transpose=*/false,
-            /*packer_l1_acc=*/true,
-            last_block_target,
-            ckl::OutputCBLayout::TileRowMajor,
-            ckl::matmul_config::InitMode::ShortAfterPreKBlock,
-            ckl::InputPolicy::WaitAndPopPerKBlock,
-            ckl::InputPolicy::WaitAndPopPerKBlock,
-            ckl::NoPostCompute,
-            TilizeFn>(
-            im2col_tiles,
-            weights,
-            output_tiles,
-            partials,
-            mm_shape,
-            {},
-            tilize_k_block,
-            /*in1_per_core_w=*/block_n_tiles,
-            /*out_row_width=*/block_n_tiles);
+        if constexpr (k_split) {
+            partials.reserve_back(partials_tiles);
+            ckl::matmul_block<
+                /*transpose=*/false,
+                /*packer_l1_acc=*/true,
+                ckl::LastBlockTarget::Interm,
+                ckl::OutputCBLayout::TileRowMajor,
+                ckl::matmul_config::InitMode::ShortAfterPreKBlock,
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::NoPostCompute,
+                TilizeFn,
+                ckl::NoPostKBlock,
+                /*untilize_block_ct_dim=*/0,
+                ckl::NoKBlockInnerDimFn,
+                ckl::NoIn0Source,
+                ckl::NoIn1BaseOffset,
+                /*caller_owns_pack_target=*/true>(
+                im2col_tiles,
+                weights,
+                output_tiles,
+                partials,
+                mm_shape,
+                {},
+                tilize_k_block,
+                /*in1_per_core_w=*/block_n_tiles,
+                /*out_row_width=*/block_n_tiles);
+            partials.push_back(partials_tiles);
+            if (owns_output_columns) {
+                combine_block();
+            }
+        } else {
+            ckl::matmul_block<
+                /*transpose=*/false,
+                /*packer_l1_acc=*/true,
+                last_block_target,
+                ckl::OutputCBLayout::TileRowMajor,
+                ckl::matmul_config::InitMode::ShortAfterPreKBlock,
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::NoPostCompute,
+                TilizeFn>(
+                im2col_tiles,
+                weights,
+                output_tiles,
+                partials,
+                mm_shape,
+                {},
+                tilize_k_block,
+                /*in1_per_core_w=*/block_n_tiles,
+                /*out_row_width=*/block_n_tiles);
+        }
 
-        if constexpr (has_bias) {
+        if constexpr (has_bias && !k_split) {
             // matmul_block leaves packer L1 accumulation on after its last K-block.
             pack_reconfig_l1_acc(0);
             if constexpr (apply_relu) {
@@ -163,6 +263,6 @@ void kernel_main() {
     }
 
     if constexpr (has_bias) {
-        bias.pop_front(block_n_tiles);
+        bias.pop_front(out_n_tiles);
     }
 }

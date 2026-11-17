@@ -13,7 +13,10 @@ prepare_conv2d_weights (rows ordered (kh, kw, c), each kh block padded to a tile
 
 Placement: a DRAM-interleaved input gives a DRAM-interleaved output computed on the whole grid. An L1
 HEIGHT_SHARDED input gives an L1 HEIGHT_SHARDED output on the input's shard grid, shard
-[roundup32(ceil(M / n_cores)), roundup32(C_out)], packed in place.
+[roundup32(ceil(M / n_cores)), roundup32(C_out)], packed in place. An L1 BLOCK_SHARDED input (C_in split
+over the grid's columns) gives an L1 BLOCK_SHARDED output on the same grid, shard
+[roundup32(ceil(M / n_rows)), roundup32(ceil(C_out / n_cols))]; the column partial sums are combined
+across each grid row on device.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .conv2d_3x3_program_descriptor import (
     Conv3x3Geometry,
+    block_grid_shape,
     create_program_descriptor,
     l1_cb_budget_bytes,
     m_split,
@@ -75,14 +79,18 @@ def per_pixel_channels(c_in, input_layout, input_memory_config):
     return _round_up(c_in, ttnn.get_dram_alignment() // 2)
 
 
+def channel_slices(c_in, input_layout, input_memory_config):
+    """Channel slices K is split into: one per BLOCK shard column, else 1."""
+    if input_memory_config.memory_layout != _ML.BLOCK_SHARDED:
+        return 1
+    return -(-c_in // per_pixel_channels(c_in, input_layout, input_memory_config))
+
+
 def padded_k(c_in, input_layout, input_memory_config):
-    """K_p: im2col width. Each kh block (3 taps x C_in_p) is padded to a tile multiple on its own."""
+    """K_p: im2col width. Each kh block (3 taps x C_in_p) is padded to a tile multiple on its own; a
+    BLOCK-sharded input repeats that per channel slice."""
     c_in_p = per_pixel_channels(c_in, input_layout, input_memory_config)
-    k_per_column = 3 * _round_up(3 * c_in_p, TILE)
-    if input_memory_config.memory_layout == _ML.BLOCK_SHARDED:
-        n_cols = -(-c_in // c_in_p)
-        return n_cols * k_per_column
-    return k_per_column
+    return channel_slices(c_in, input_layout, input_memory_config) * 3 * _round_up(3 * c_in_p, TILE)
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +150,7 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-    "memory_layout": [_ML.INTERLEAVED, _ML.HEIGHT_SHARDED],
+    "memory_layout": [_ML.INTERLEAVED, _ML.HEIGHT_SHARDED, _ML.BLOCK_SHARDED],
     "fp32_dest_acc_en": [True],
     "bias_mode": ["with_bias", "no_bias"],
     "activation": ["none", "relu"],
@@ -225,8 +233,9 @@ def prepare_conv2d_weights(
     input_memory_config,
     device,
 ):
-    """[C_out, C_in, 3, 3] -> TILE [1, 1, K_p, C_out]; rows (kh, kw, c), c fastest, each kh block
-    of 3*C_in_p rows zero-padded to a multiple of 32."""
+    """[C_out, C_in, 3, 3] -> TILE [1, 1, K_p, C_out]; rows (slice, kh, kw, c), c fastest, each kh block
+    of 3*C_in_p rows zero-padded to a multiple of 32. A BLOCK-sharded input has one slice per shard
+    column (C_in_p = shard width); every other placement has one."""
     if torch_weight.dim() != 4 or tuple(torch_weight.shape[2:]) != (3, 3):
         raise ValueError(f"conv2d_3x3: weight must be [C_out, C_in, 3, 3], got {list(torch_weight.shape)}")
     c_out, c_in = int(torch_weight.shape[0]), int(torch_weight.shape[1])
@@ -246,12 +255,14 @@ def prepare_conv2d_weights(
     import torch
 
     c_in_p = per_pixel_channels(c_in, input_layout, input_memory_config)
+    slices = channel_slices(c_in, input_layout, input_memory_config)
     kh_rows = _round_up(3 * c_in_p, TILE)
     w = torch_weight.permute(2, 3, 1, 0)  # [kh, kw, c, C_out]
-    w = torch.nn.functional.pad(w, (0, 0, 0, c_in_p - c_in))
-    w = w.reshape(3, 3 * c_in_p, c_out)
+    w = torch.nn.functional.pad(w, (0, 0, 0, slices * c_in_p - c_in))
+    w = w.reshape(3, 3, slices, c_in_p, c_out).permute(2, 0, 1, 3, 4)  # [slice, kh, kw, c, C_out]
+    w = w.reshape(slices, 3, 3 * c_in_p, c_out)
     w = torch.nn.functional.pad(w, (0, 0, 0, kh_rows - 3 * c_in_p))
-    w = w.reshape(1, 1, 3 * kh_rows, c_out)
+    w = w.reshape(1, 1, slices * 3 * kh_rows, c_out)
     return ttnn.from_torch(
         w,
         dtype=weight_dtype,
@@ -330,6 +341,28 @@ def _check_height_shard(input_tensor):
         )
 
 
+def _check_block_shard(input_tensor):
+    memory_config = input_tensor.memory_config()
+    if memory_config.memory_layout != _ML.BLOCK_SHARDED:
+        return
+    if memory_config.buffer_type != ttnn.BufferType.L1:
+        raise ValueError("conv2d_3x3: a BLOCK_SHARDED input must be sharded in L1")
+    spec = memory_config.shard_spec
+    if spec is None:
+        raise ValueError("conv2d_3x3: BLOCK_SHARDED input carries no shard_spec")
+    if len(spec.grid.ranges()) != 1:
+        raise ValueError("conv2d_3x3: a BLOCK_SHARDED input's shard grid must be one rectangle")
+    # Every grid column must hold a channel slice: the K split runs over exactly the grid's columns.
+    _, grid_cols = block_grid_shape(spec)
+    c_in = int(input_tensor.shape[-1])
+    slices = channel_slices(c_in, input_tensor.layout, memory_config)
+    if slices != grid_cols:
+        raise ValueError(
+            f"conv2d_3x3: BLOCK shard width {spec.shape[1]} splits C_in={c_in} into {slices} slices, "
+            f"but the shard grid has {grid_cols} columns"
+        )
+
+
 def _check_contract(
     input_tensor, weight_tensor, bias, *, input_height, input_width, padding, stride, dilation, activation
 ):
@@ -354,6 +387,7 @@ def _check_contract(
     c_in = shape[3]
     _check_c_in_granule(c_in)
     _check_height_shard(input_tensor)
+    _check_block_shard(input_tensor)
     w_shape = list(weight_tensor.shape)
     k_p = padded_k(c_in, input_tensor.layout, input_tensor.memory_config())
     if len(w_shape) != 4 or w_shape[0] != 1 or w_shape[1] != 1 or w_shape[2] != k_p:
@@ -458,6 +492,8 @@ def conv2d_3x3(
     c_out = int(weight_tensor.shape[-1])
     c_in_p = per_pixel_channels(c_in, input_tensor.layout, input_tensor.memory_config())
     h_out, w_out = output_hw(input_height, input_width, padding=padding, stride=stride, dilation=dilation)
+    input_memory_config = input_tensor.memory_config()
+    block_sharded = input_memory_config.memory_layout == _ML.BLOCK_SHARDED
 
     geometry = Conv3x3Geometry(
         input_height=input_height,
@@ -475,16 +511,19 @@ def conv2d_3x3(
         weight_tile_bytes=ttnn.tile_size(weight_tensor.dtype),
         out_tile_bytes=ttnn.tile_size(input_tensor.dtype),
         has_bias=bias is not None,
-        sharded_output=input_tensor.memory_config().is_sharded(),
+        sharded_output=input_memory_config.is_sharded(),
+        k_cols=channel_slices(c_in, input_tensor.layout, input_memory_config),
     )
     if geometry.sharded_output:
-        # Same shard grid as the input; one work index per shard, shard i on shard core i.
-        in_spec = input_tensor.memory_config().shard_spec
-        work_grid = (in_spec.grid.num_cores(), 1)
-        core_m_tiles, _ = m_split(geometry, work_grid[0])
-        n_tiles = geometry.tensor_n_tiles
+        # Same shard grid and scheme as the input. HEIGHT: one M work index per shard, shard i on shard
+        # core i. BLOCK: one M work index per grid row, its output columns split over the grid columns.
+        in_spec = input_memory_config.shard_spec
+        m_work_cores = block_grid_shape(in_spec)[0] if block_sharded else in_spec.grid.num_cores()
+        work_grid = (m_work_cores, 1)
+        core_m_tiles, _ = m_split(geometry, m_work_cores)
+        n_tiles = geometry.out_n_tiles
         output_memory_config = ttnn.MemoryConfig(
-            _ML.HEIGHT_SHARDED,
+            input_memory_config.memory_layout,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(in_spec.grid, [core_m_tiles * TILE, n_tiles * TILE], in_spec.orientation),
         )

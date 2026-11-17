@@ -15,11 +15,24 @@
 // receiver; a receiver acks only after reserving that slot, so the slot is free. All participants
 // push the same quanta in the same order, so their cb_weights write pointers agree every round.
 // A core outside the channel (one with fewer M-blocks, or an absent channel) reads its own weights.
+//
+// K split (BLOCK_SHARDED, k_cols > 1; regime R4): every core of a grid row computes fp32 partials
+// [bm, all C_out] over its own channel slice, and grid column y owns output N-slice y. Per M-block the
+// writer runs one row-local reduce-scatter round:
+//   1. a core that owns output columns reserves its whole cb_combine_slots and gives every row peer
+//      (itself included) one credit: the slots are free;
+//   2. once compute pushed its partials and every owning column gave its credit, the core writes N-slice
+//      y of its partials into slot `my_col` of column y, flushes, and bumps column y's arrival count;
+//   3. after k_cols arrivals the owning core pushes the slots to compute, which sums them.
+// Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
+// the same base address is right on every core. The counters only grow, so round j waits for
+// (j + 1) x the per-round count.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
@@ -34,7 +47,14 @@ void kernel_main() {
     constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(8);
     constexpr bool has_bias = get_compile_time_arg_val(9) != 0;
     constexpr bool output_sharded = get_compile_time_arg_val(10) != 0;
-    constexpr auto weight_args = TensorAccessorArgs<11>();
+    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(11);
+    constexpr bool k_split = get_compile_time_arg_val(12) != 0;
+    constexpr uint32_t k_cols = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_partials = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_combine_slots = get_compile_time_arg_val(15);
+    constexpr uint32_t combine_credit_sem_id = get_compile_time_arg_val(16);
+    constexpr uint32_t combine_arrival_sem_id = get_compile_time_arg_val(17);
+    constexpr auto weight_args = TensorAccessorArgs<18>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     constexpr auto weight_mcast = dataflow_kernel_lib::McastArgs<
@@ -48,6 +68,11 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t actual_m_tiles = get_arg_val<uint32_t>(4);
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(5);
     const uint32_t n_tile_start = get_arg_val<uint32_t>(6);
+    const uint32_t weight_k_tile_start = get_arg_val<uint32_t>(7);
+    [[maybe_unused]] const uint32_t out_n_tile_start = get_arg_val<uint32_t>(8);
+    const uint32_t out_valid_tiles = get_arg_val<uint32_t>(9);
+    [[maybe_unused]] const uint32_t my_col = get_arg_val<uint32_t>(10);
+    constexpr uint32_t row_peer_coords_arg = 11;  // (x, y) of grid columns 0..k_cols-1 of this row
 
     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
@@ -55,17 +80,18 @@ void kernel_main() {
     const uint32_t weight_tile_bytes = get_tile_size(cb_weights);
     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
-    // ---- prefetch_bias: stays fronted in cb_bias for the whole kernel.
+    // ---- prefetch_bias: the core's output columns; stays fronted in cb_bias for the whole kernel. Slots
+    // past the last C_out tile (a short last N-slice) only feed output padding columns.
     if constexpr (has_bias) {
         const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
         const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
-        cb_reserve_back(cb_bias, block_n_tiles);
+        cb_reserve_back(cb_bias, out_n_tiles);
         uint32_t l1 = get_write_ptr(cb_bias);
-        for (uint32_t n = 0; n < block_n_tiles; ++n, l1 += bias_tile_bytes) {
-            noc_async_read_page(n_tile_start + n, bias, l1);
+        for (uint32_t n = 0; n < out_valid_tiles; ++n, l1 += bias_tile_bytes) {
+            noc_async_read_page(out_n_tile_start + n, bias, l1);
         }
         noc_async_read_barrier();
-        cb_push_back(cb_bias, block_n_tiles);
+        cb_push_back(cb_bias, out_n_tiles);
     }
 
     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
@@ -74,7 +100,7 @@ void kernel_main() {
     auto read_weight_k_block = [&](uint32_t l1) {
         const uint32_t k_tile0 = (k_blocks_issued % num_k_blocks) * block_k_tiles;
         for (uint32_t k = 0; k < block_k_tiles; ++k) {
-            const uint32_t row_page = (k_tile0 + k) * tensor_n_tiles + n_tile_start;
+            const uint32_t row_page = (weight_k_tile_start + k_tile0 + k) * tensor_n_tiles + n_tile_start;
             for (uint32_t n = 0; n < block_n_tiles; ++n, l1 += weight_tile_bytes) {
                 noc_async_read_page(row_page + n, weights, l1);
             }
@@ -100,9 +126,56 @@ void kernel_main() {
         ++k_blocks_issued;
     };
 
+    // ---- R4 row reduce-scatter (see the file comment).
+    constexpr uint32_t partials_tiles = block_m_tiles * block_n_tiles;
+    constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
+    constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
+    Semaphore<> combine_credit(combine_credit_sem_id);
+    Semaphore<> combine_arrival(combine_arrival_sem_id);
+    [[maybe_unused]] const uint32_t combine_base = get_write_ptr(cb_combine_slots);
+    auto peer_x = [](uint32_t col) { return get_arg_val<uint32_t>(row_peer_coords_arg + 2 * col); };
+    auto peer_y = [](uint32_t col) { return get_arg_val<uint32_t>(row_peer_coords_arg + 2 * col + 1); };
+    [[maybe_unused]] auto combine_round = [&](uint32_t m_block_idx) {
+        if (out_valid_tiles > 0) {
+            cb_reserve_back(cb_combine_slots, k_cols * slot_tiles);
+            for (uint32_t col = 0; col < k_cols; ++col) {
+                combine_credit.up(noc, peer_x(col), peer_y(col), 1);
+            }
+        }
+        cb_wait_front(cb_partials, partials_tiles);
+        combine_credit.wait_min((m_block_idx + 1) * num_owning_cols);
+        const uint32_t tile_bytes = get_tile_size(cb_partials);
+        const uint32_t partials_l1 = get_read_ptr(cb_partials);
+        const uint32_t my_slot_l1 = combine_base + my_col * slot_tiles * tile_bytes;
+        for (uint32_t col = 0; col < num_owning_cols; ++col) {
+            const uint32_t n0 = col * out_n_tiles;
+            const uint32_t cols_valid = tensor_n_tiles - n0 < out_n_tiles ? tensor_n_tiles - n0 : out_n_tiles;
+            const uint32_t x = peer_x(col);
+            const uint32_t y = peer_y(col);
+            for (uint32_t t = 0; t < block_m_tiles; ++t) {
+                noc_async_write(
+                    partials_l1 + (t * block_n_tiles + n0) * tile_bytes,
+                    get_noc_addr(x, y, my_slot_l1 + t * out_n_tiles * tile_bytes),
+                    cols_valid * tile_bytes);
+            }
+        }
+        noc_async_write_barrier();
+        for (uint32_t col = 0; col < num_owning_cols; ++col) {
+            combine_arrival.up(noc, peer_x(col), peer_y(col), 1);
+        }
+        cb_pop_front(cb_partials, partials_tiles);
+        if (out_valid_tiles > 0) {
+            combine_arrival.wait_min((m_block_idx + 1) * k_cols);
+            cb_push_back(cb_combine_slots, k_cols * slot_tiles);
+        }
+    };
+
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
             issue_weight_k_block();
+        }
+        if constexpr (k_split) {
+            combine_round(m_block_idx);
         }
         if constexpr (!output_sharded) {
             // ---- store_block: valid output tile-rows only; the ragged tail keeps nominal CB counts.
@@ -134,5 +207,8 @@ void kernel_main() {
     }
     if constexpr (!output_sharded) {
         noc_async_write_barrier();
+    }
+    if constexpr (k_split) {
+        noc_async_atomic_barrier();
     }
 }
