@@ -1550,7 +1550,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_unpack_A_custom": {
-        "version": 2,
+        "version": 1,
         "columns": [
             "dest_acc",
             "formats.input_A",
