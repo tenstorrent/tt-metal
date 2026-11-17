@@ -46,6 +46,13 @@ CHUNKED_PREFILL = os.environ.get("LLAMA_GALAXY_CHUNKED_PREFILL", "0") == "1"
 # same variable for its persistent buffers, so the padded lengths always have buffers and traces.
 PREFILL_EXTRA_SEQLENS = prefill_extra_seqlens()
 
+# LLAMA_GALAXY_PREFILL_CPF_RING: the cached prefix is rounded down to a multiple of this (the ring path's trace
+# key carries the prefix length, so this bounds the number of traces), and the prefix lengths warmed up.
+CPF_RING_ALIGN = 1024
+CPF_RING_WARM_PREFIXES = [
+    int(p) for p in os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_WARM", "2048").split(",") if p.strip()
+]
+
 
 def _as_list(value):
     if value is None:
@@ -110,6 +117,37 @@ def get_padded_prefill_len(seq_len: int) -> int:
     LLAMA_GALAXY_PREFILL_PAD length when that is smaller.
     """
     return padded_prefill_len(seq_len, PREFILL_EXTRA_SEQLENS)
+
+
+def _cpf_ring_on() -> bool:
+    """LLAMA_GALAXY_PREFILL_CPF_RING=1 (read at call time): prefill over a cached prefix runs ring SDPA on all
+    4 mesh columns (llama_attention._cpf_ring_kv) when the request is eligible (_cpf_ring_request)."""
+    return os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING", "0") == "1"
+
+
+def _cpf_ring_request(padded_new: int, num_cached: int) -> bool:
+    """Whether a cached-prefix request can take the CPF ring path. A superset of the attention-side check
+    (TtLlamaAttention._cpf_ring_enabled), so trace keys that carry the prefix length cover every ring trace."""
+    return (
+        _cpf_ring_on()
+        and num_cached > 0
+        and num_cached % CPF_RING_ALIGN == 0
+        and padded_new >= int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_MIN", "2048"))
+    )
+
+
+def _should_skip_prefix_caching_env(seq_len: int, num_cached: int) -> bool:
+    """LLAMA_GALAXY_PREFIX_SKIP (read at call time) selects the skip rule:
+    unset -> _should_skip_prefix_caching (default heuristic);
+    "0"   -> never skip: every cache hit runs the cached path;
+    "ring"-> keep the cache when the request takes the CPF ring path (LLAMA_GALAXY_PREFILL_CPF_RING=1),
+             otherwise the default heuristic."""
+    rule = os.environ.get("LLAMA_GALAXY_PREFIX_SKIP")
+    if rule == "0":
+        return False
+    if rule == "ring" and _cpf_ring_request(get_padded_prefill_len(seq_len - num_cached), num_cached):
+        return False
+    return _should_skip_prefix_caching(seq_len, num_cached)
 
 
 def _should_skip_prefix_caching(
@@ -453,6 +491,29 @@ class Generator(WarmupForwardMixin):
                 start_pos=[num_cached],
             )
 
+        # Phase 3 (LLAMA_GALAXY_PREFILL_CPF_RING=1): the ring path's traces for the warmed prefix lengths.
+        if _cpf_ring_on():
+            for prefix_len in CPF_RING_WARM_PREFIXES:
+                for supported_length in warmup_sequence_lengths:
+                    if not _cpf_ring_request(supported_length, prefix_len):
+                        continue
+                    total_seq_len = prefix_len + supported_length
+                    logger.info(
+                        f"Running warmup prefill for CPF ring: prefill_seq_len={supported_length}, "
+                        f"num_cached={prefix_len}, total_seq_len={total_seq_len}"
+                    )
+                    self.prefill_forward_text(
+                        torch.zeros(1, total_seq_len, dtype=torch.long),
+                        torch.zeros(1, num_blocks_in_seq(total_seq_len, block_size), dtype=torch.int32),
+                        kv_cache,
+                        torch.tensor([total_seq_len], dtype=torch.long),
+                        enable_trace,
+                        sampling_params,
+                        [0],
+                        tt_out_logits_all_users,
+                        start_pos=[prefix_len],
+                    )
+
     def prefill_forward_text(
         self,
         tokens: torch.Tensor,  # All tokens, including the cached ones
@@ -516,6 +577,9 @@ class Generator(WarmupForwardMixin):
                         f"-> {aligned} (aligned to {SDPA_CHUNK_ALIGN})"
                     )
                     num_cached_tokens_list[idx] = aligned
+                # CPF ring: round a prefix >= CPF_RING_ALIGN down to a multiple of it (recomputes the rest).
+                if _cpf_ring_on() and num_cached_tokens_list[idx] >= CPF_RING_ALIGN:
+                    num_cached_tokens_list[idx] = (num_cached_tokens_list[idx] // CPF_RING_ALIGN) * CPF_RING_ALIGN
 
         # Heuristic: revert to non-cached path when prefix-caching overhead
         # exceeds the compute savings (chunked-SDPA penalty, column masking,
@@ -526,7 +590,7 @@ class Generator(WarmupForwardMixin):
         # hit, and resetting a resume to 0 would recompute every earlier chunk.
         if not self.warming_up_prefill and not CHUNKED_PREFILL:
             for idx, seq_len in enumerate(prompt_lens):
-                if _should_skip_prefix_caching(int(seq_len), num_cached_tokens_list[idx]):
+                if _should_skip_prefix_caching_env(int(seq_len), num_cached_tokens_list[idx]):
                     logger.info(
                         f"Prefix-caching heuristic: skipping cache for user {idx} "
                         f"(seq_len={int(seq_len)}, cached={num_cached_tokens_list[idx]})"
@@ -1160,6 +1224,9 @@ class Generator(WarmupForwardMixin):
         # Required because the attention path differs (regular/ring SDPA vs chunked SDPA + fill table).
         use_start_pos = "sp1" if (chunk_start_idx is not None and chunk_start_idx > 0) else "sp0"
         trace_key = f"{prefill_seq_len}_{batch_size}_{use_start_pos}"
+        # The CPF ring path bakes the prefix length into its ops: one trace per (new length, prefix length).
+        if use_start_pos == "sp1" and batch_size == 1 and _cpf_ring_request(prefill_seq_len, chunk_start_idx):
+            trace_key += f"_cs{chunk_start_idx}"
 
         # For prefix caching, the model output has only prefill_seq_len positions (the chunk).
         # Relative index within the chunk (0..prefill_seq_len-1) for get_last_token and output processing.

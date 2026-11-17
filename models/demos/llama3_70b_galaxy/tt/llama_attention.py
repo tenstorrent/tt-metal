@@ -9,11 +9,18 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import WO_AG_MAX
+from models.demos.llama3_70b_galaxy.tt.model_config import ring_sdpa_q_chunk_size
 from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_minmm
 
 # Opt-in: prefill SDPA (ring, chunked/prefix-cached, regular) at HiFi2 instead of HiFi4.
 # Read once at import. Unset keeps the shared HiFi4 config object used before this change.
 PREFILL_SDPA_HIFI2 = os.environ.get("LLAMA_GALAXY_PREFILL_SDPA_HIFI2", "0") == "1"
+
+# LLAMA_GALAXY_PREFILL_CPF_RING: q/k chunk of the one-hot SDPA that gathers the owner's paged prefix K/V, and its
+# softmax scale (score gap between the matching row and any other row >= 2 * scale).
+CPF_RING_GATHER_Q_CHUNK = 32
+CPF_RING_GATHER_K_CHUNK = 256
+CPF_RING_GATHER_SCALE = 16.0
 
 
 class TtLlamaAttention(LightweightModule):
@@ -1101,6 +1108,172 @@ class TtLlamaAttention(LightweightModule):
             compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
         )
 
+    def _cpf_ring_enabled(self, seq_len, batch_size, chunk_start_idx, page_table):
+        """LLAMA_GALAXY_PREFILL_CPF_RING=1 (opt-in, read at call time): run prefill over a cached prefix
+        (chunk_start_idx = P > 0) as ring SDPA on all 4 mesh columns instead of chunked SDPA on the owning column.
+        Needs: new rows N >= LLAMA_GALAXY_PREFILL_CPF_RING_MIN (default 2048), P a TT_CCL prefill length (the K/V
+        broadcast uses its ATTN_REPLICATE buffers), and the ring op's chunk constraints."""
+        if os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING", "0") != "1":
+            return False
+        if batch_size != 1 or page_table is None or self.paged_attention_config is None or self.is_blackhole:
+            return False
+        P = int(chunk_start_idx)
+        block_size = self.paged_attention_config.block_size
+        q_chunk = ring_sdpa_q_chunk_size(seq_len)
+        return (
+            seq_len >= int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_MIN", "2048"))
+            and P in getattr(self.tt_ccl, "support_seqlens", ())
+            and P % 1024 == 0  # generator.CPF_RING_ALIGN: the generator's ring trace keys cover every ring call
+            and P % CPF_RING_GATHER_K_CHUNK == 0
+            and P % block_size == 0
+            and P % q_chunk == 0
+            and (P + seq_len) % 512 == 0  # SDPA_PROGCFG k_chunk_size for seq_len >= 2048
+            and seq_len % block_size == 0
+        )
+
+    def _cpf_ring_state(self, keys_BKSD):
+        """Per-model persistent tensors for the CPF ring path, shared by all layers (kept on tt_ccl):
+        code_cache [max_blocks, 1, block_size, head_dim] bfp8 (position codes written through the page table),
+        identity page table [1, max_blocks] int32, and the position-code queries per prefix length."""
+        st = getattr(self.tt_ccl, "_cpf_ring_state", None)
+        if st is None:
+            max_blocks, nkv, block_size, head_dim = (int(d) for d in keys_BKSD.shape)
+            rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
+            st = {
+                "code_cache": ttnn.from_torch(
+                    torch.zeros(max_blocks, nkv, block_size, head_dim),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=rep,
+                ),
+                "ident_pt": ttnn.from_torch(
+                    torch.arange(max_blocks, dtype=torch.int32).reshape(1, max_blocks),
+                    device=self.mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.int32,
+                    mesh_mapper=rep,
+                ),
+                "qcode": {},
+                "pcfg": ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(7, 10),
+                    exp_approx_mode=False,
+                    q_chunk_size=CPF_RING_GATHER_Q_CHUNK,
+                    k_chunk_size=CPF_RING_GATHER_K_CHUNK,
+                ),
+                "ckcfg": ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                ),
+            }
+            self.tt_ccl._cpf_ring_state = st
+        return st
+
+    def _cpf_ring_qcode(self, st, P, head_dim, period):
+        """[1, 1, P, head_dim] bfp8: row i holds the +-1 bits of (i mod period) in its first log2(period) columns."""
+        key = (P, period)
+        if key not in st["qcode"]:
+            nbits = max(1, (period - 1).bit_length())
+            pos = torch.arange(P) % period
+            code = torch.zeros(1, 1, P, head_dim)
+            for b in range(nbits):
+                code[0, 0, :, b] = ((pos >> b) & 1).float() * 2 - 1
+            st["qcode"][key] = ttnn.from_torch(
+                code,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return st["qcode"][key]
+
+    def _cpf_ring_kv(self, keys_BKSD, values_BKSD, k_new, v_new, page_table, P, num_links):
+        """K/V for ring SDPA over prefix + new rows on every column. Returns (K, V, page_table) with
+        K/V = [(P + N) / block_size, 1, block_size, head_dim] bfp8 (rows 0..P-1 = owner's cached prefix,
+        P..P+N-1 = this call's new K/V, which every column already has) and an identity page table.
+
+        Prefix gather on the owning column: no paged-gather op exists, so chunked SDPA does it. The code cache
+        holds +-1 bits of each prefix position (mod the gather group; written through the user's page table once
+        per forward, in layer 0); Q = the same bits, so score(i, j) = scale * (nbits - 2 * hamming(i, j)): j = i
+        wins by >= 2 * scale, softmax is one-hot and the output is row i of the paged cache (bfp8 in, bfp8 out,
+        same rows: bit-exact on device). Non-owning columns gather garbage (their page table rows are 0) that is
+        masked to 0 before a column all-reduce (ATTN_REPLICATE buffers) copies the owner's rows to all columns."""
+        st = self._cpf_ring_state(keys_BKSD)
+        block_size = int(keys_BKSD.shape[2])
+        head_dim = int(keys_BKSD.shape[3])
+        # grouped (default): the gather runs as P / G independent batch rows of G = 8 blocks each (page table
+        # [P / G, 8], the smallest 32-byte page-table row), so each query row scores G keys instead of up to P.
+        # full: one causal pass over all P rows (LLAMA_GALAXY_PREFILL_CPF_RING_GATHER=full).
+        grouped = os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_GATHER", "grouped") != "full"
+        group = 8 * block_size
+        grouped = grouped and P % group == 0
+        qcode = self._cpf_ring_qcode(st, P, head_dim, group if grouped else P)
+        if self.layer_num == 0:
+            ttnn.experimental.paged_fill_cache(st["code_cache"], qcode, page_table, batch_idx=0)
+        if grouped:
+            gather_q = ttnn.reshape(qcode, [P // group, 1, group, head_dim])
+            gather_pt = ttnn.reshape(ttnn.slice(page_table, [0, 0], [1, P // block_size]), [P // group, 8])
+        else:
+            gather_q, gather_pt = qcode, page_table
+        mask = ttnn.slice(self.tt_ccl._prefill_column_mask, [0, 0, 0, 0], [1, 1, 1, 1])
+        gathered = []
+        for cache in (keys_BKSD, values_BKSD):
+            g = ttnn.transformer.chunked_scaled_dot_product_attention(
+                gather_q,
+                st["code_cache"],
+                cache,
+                gather_pt,
+                chunk_start_idx=0,
+                scale=CPF_RING_GATHER_SCALE,
+                program_config=st["pcfg"],
+                compute_kernel_config=st["ckcfg"],
+            )
+            gathered.append(ttnn.reshape(g, [1, 1, P, head_dim]) if grouped else g)
+
+        def broadcast(t):
+            # Owner's rows to every column: zero the other columns, sum over the column axis. The result is a view
+            # of the persistent ATTN_REPLICATE buffer at this length: consume it (slice/concat copy) before the
+            # next all-reduce of the same length, and never deallocate it.
+            masked = ttnn.multiply(t, mask)
+            ttnn.deallocate(t)
+            reduced = self.tt_ccl.line_all_reduce(
+                masked,
+                cluster_axis=1,
+                num_links=num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="ATTN_REPLICATE",
+            )
+            ttnn.deallocate(masked)
+            return reduced
+
+        # K and V share one all-reduce of [1, 1, 2P, head_dim] when 2P has ATTN_REPLICATE buffers
+        # (LLAMA_GALAXY_PREFILL_CPF_RING_KVMERGE=0 keeps one all-reduce per tensor at length P).
+        merge = os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_KVMERGE", "1") == "1" and 2 * P in getattr(
+            self.tt_ccl, "support_seqlens", ()
+        )
+        fulls = []
+        if merge:
+            kv = ttnn.concat(gathered, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for g in gathered:
+                ttnn.deallocate(g)
+            reduced = broadcast(kv)
+            for lo, new in ((0, k_new), (P, v_new)):
+                prefix = ttnn.slice(reduced, [0, 0, lo, 0], [1, 1, lo + P, head_dim])
+                fulls.append(ttnn.concat([prefix, new], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+                ttnn.deallocate(prefix)
+        else:
+            for g, new in zip(gathered, (k_new, v_new)):
+                fulls.append(ttnn.concat([broadcast(g), new], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        out = [ttnn.reshape(f, [int(f.shape[2]) // block_size, 1, block_size, head_dim]) for f in fulls]
+        if grouped:
+            ttnn.deallocate(gather_pt)
+        out.append(st["ident_pt"])
+        return out
+
     def _prefill_qkv_seqsplit_enabled(self, seq_len, batch_size, chunk_start_idx):
         """LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT=1 (opt-in, read at call time): cold batch-1 ring prefill on Wormhole."""
         if os.environ.get("LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT", "0") != "1":
@@ -1386,18 +1559,30 @@ class TtLlamaAttention(LightweightModule):
         ring_distributed_sdpa = seq_len > 1024 and batch_size == 1 and (chunk_start_idx is None or chunk_start_idx == 0)
         use_chunked_sdpa = chunk_start_idx is not None and chunk_start_idx > 0
 
+        # LLAMA_GALAXY_PREFILL_CPF_RING=1: cached-prefix prefill as ring SDPA on all 4 mesh columns.
+        cpf_ring_kv = None
+        if use_chunked_sdpa and self._cpf_ring_enabled(seq_len, batch_size, chunk_start_idx, page_table):
+            cpf_ring_kv = self._cpf_ring_kv(
+                keys_BKSD, values_BKSD, k_fill, v_fill, page_table, int(chunk_start_idx), prefill_num_links
+            )
+            ring_distributed_sdpa = True
+            use_chunked_sdpa = False
+
         if ring_distributed_sdpa:
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
-                k_heads_1KSD_8b,
-                v_heads_1VSD_8b,
+                k_heads_1KSD_8b if cpf_ring_kv is None else cpf_ring_kv[0],
+                v_heads_1VSD_8b if cpf_ring_kv is None else cpf_ring_kv[1],
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
                 compute_kernel_config=self.prefill_sdpa_compute_kernel_config,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=0),
-                page_table=None,
-                chunk_start_idx=None,
+                page_table=None if cpf_ring_kv is None else cpf_ring_kv[2],
+                chunk_start_idx=None if cpf_ring_kv is None else int(chunk_start_idx),
             )
+            if cpf_ring_kv is not None:
+                ttnn.deallocate(cpf_ring_kv[0])
+                ttnn.deallocate(cpf_ring_kv[1])
         else:
             # When using prefix caching (chunk_start_idx provided), use chunked SDPA with KV cache tensors.
             # Flexible path: chunk_start_idx_tensor so one trace works for any chunk_start at replay.
