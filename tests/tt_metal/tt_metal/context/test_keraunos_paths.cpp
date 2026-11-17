@@ -349,5 +349,69 @@ TEST_F(KeraunosPaths, IdmaReadsEveryMimirCceSram) { expect_every_mimir_cce(Engin
 TEST_F(KeraunosPaths, CpuWritesEveryMimirCceSram) { expect_every_mimir_cce(Engine::Cpu, /*read=*/false, 0xB0); }
 TEST_F(KeraunosPaths, CpuReadsEveryMimirCceSram) { expect_every_mimir_cce(Engine::Cpu, /*read=*/true, 0xC0); }
 
+
+// --- Phase 3: Mimir CCE -> Keraunos HSIO SRAM (worker -> router direction) -------------------------------
+// A Mimir CCE kernel loads from or stores to a Keraunos HSIO SRAM through the package address the Keraunos
+// CCEs use for it. M1 is the Mimir on the D2D link to K0.
+class KeraunosFromMimir : public KeraunosPaths {
+protected:
+    void expect_mimir_to_hsio(uint32_t mimir, uint32_t hsio, bool read, uint32_t tag) {
+        if (num_mimirs_on(device_) <= mimir) {
+            GTEST_SKIP() << "Descriptor has no Mimir " << mimir;
+        }
+        const auto k = hsio_core(hsio);
+        const auto mimir_cce = first_cce_on_mimir(mimir);
+        ASSERT_TRUE(k.has_value() && mimir_cce.has_value());
+        const CoreCoord mimir_core = logical_mimir_cce_core(soc_desc_of(device_), *mimir_cce);
+        constexpr uint32_t kWords = 64;
+        const auto data = pattern(tag, kWords * sizeof(uint32_t));
+        const uint32_t local_offset = mimir_cce_offset() + 0x1000;
+        const uint32_t status_offset = mimir_cce_offset();
+        const uint64_t noc = mimir_cce_noc_addr();
+        const std::vector<uint32_t> zero_status(8, 0);
+        write_mimir_cce_sram(device_, mimir_core, noc, zero_status.data(), zero_status.size() * sizeof(uint32_t));
+        if (read) {
+            write_words(*k, kSrcOffset, data);
+            const std::vector<uint32_t> zero(kWords, 0);
+            write_mimir_cce_sram(device_, mimir_core, noc + 0x1000, zero.data(), kWords * sizeof(uint32_t));
+        } else {
+            write_words(*k, kDstOffset, std::vector<uint32_t>(kWords, 0));
+            write_mimir_cce_sram(device_, mimir_core, noc + 0x1000, data.data(), kWords * sizeof(uint32_t));
+        }
+        const uint64_t remote = global_addr(*k, read ? kSrcOffset : kDstOffset);
+        Program program = CreateProgram();
+        const KernelHandle kernel = CreateKernel(
+            program, std::string(kKernelDir) + "mimir_cce_ker_sram_copy.cpp", mimir_core, DramConfig{.noc = NOC::NOC_0});
+        std::vector<uint32_t> args = split(remote);
+        args.insert(args.end(), {kWords, local_offset, read ? 1u : 0u, status_offset});
+        SetRuntimeArgs(program, kernel, mimir_core, args);
+        try {
+            LaunchProgram(*mesh_, program);
+        } catch (const std::exception& e) {
+            std::vector<uint32_t> status(8, 0);
+            read_mimir_cce_sram(device_, mimir_core, noc, status.data(), status.size() * sizeof(uint32_t));
+            FAIL() << "launch failed: " << e.what() << "\nstatus: " << fmt::format("{:#010x}", fmt::join(status, " "));
+        }
+        std::vector<uint32_t> status(8, 0);
+        read_mimir_cce_sram(device_, mimir_core, noc, status.data(), status.size() * sizeof(uint32_t));
+        EXPECT_EQ(status[4], kAcked) << fmt::format("status: {:#010x}", fmt::join(status, " "));
+        if (read) {
+            std::vector<uint32_t> got(kWords, 0);
+            read_mimir_cce_sram(device_, mimir_core, noc + 0x1000, got.data(), kWords * sizeof(uint32_t));
+            EXPECT_EQ(got, data);
+        } else {
+            EXPECT_EQ(read_words(*k, kDstOffset, kWords), data);
+        }
+    }
+};
+
+TEST_F(KeraunosFromMimir, M1CceWritesHsio2Sram) { expect_mimir_to_hsio(1, 2, /*read=*/false, 0xF1); }
+TEST_F(KeraunosFromMimir, M1CceReadsHsio2Sram) { expect_mimir_to_hsio(1, 2, /*read=*/true, 0xF2); }
+TEST_F(KeraunosFromMimir, M1CceWritesHsio0Sram) { expect_mimir_to_hsio(1, 0, /*read=*/false, 0xF3); }
+TEST_F(KeraunosFromMimir, M1CceReadsHsio0Sram) { expect_mimir_to_hsio(1, 0, /*read=*/true, 0xF4); }
+// M0 is two hops from K0, behind M1.
+TEST_F(KeraunosFromMimir, M0CceWritesHsio2Sram) { expect_mimir_to_hsio(0, 2, /*read=*/false, 0xF5); }
+TEST_F(KeraunosFromMimir, M0CceReadsHsio2Sram) { expect_mimir_to_hsio(0, 2, /*read=*/true, 0xF6); }
+
 }  // namespace
 }  // namespace tt::tt_metal
