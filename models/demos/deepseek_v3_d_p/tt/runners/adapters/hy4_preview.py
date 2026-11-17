@@ -19,6 +19,8 @@ from its explicit ``indexer_types`` by ``full_indexer_rank``. What it changes:
     stays as the explicitly selected DEV / NUMERICS layout (``PREFILL_HY4_LAYOUT=glm_prefill_sp8_tp4``) on the same
     8x4 mesh. See ``tt/hy4/layout.py``. The weight cache is keyed by mesh and layout.
   * deltas the stack does not implement yet are refused unless a bring-up override is set (below).
+  * KV stripe: the caches are allocated as GLM-5.3's, but on a 32-chip mesh the prefill chunk must write
+    128-token blocks (chunk 4096), the layout decode reads (``tt/hy4/kv_cache.py``, #65886).
 """
 
 from __future__ import annotations
@@ -149,9 +151,21 @@ class Hy4Adapter(GLM53Adapter):
             f"Hy4: {ALLOW_PENDING_DELTAS_ENV}=1, running WITHOUT: " + "; ".join(pending) + ". Outputs are not Hy4's."
         )
 
+    def kv_stripe(self, params):
+        """The context-parallel KV stripe (#65886, ``tt/hy4/kv_cache.py``): 128-token blocks block-cyclic over the
+        mesh. On a 32-chip mesh it refuses a chunk size that would write any other block."""
+        from models.demos.deepseek_v3_d_p.tt.hy4.kv_cache import hy4_stripe
+
+        return hy4_stripe(params.mesh_shape, params.sp_axis, params.chunk_size)
+
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         self._check_layout(params)
         self._check_pending_deltas(hf_config)  # before the cache takes DRAM, not after
+        stripe = self.kv_stripe(params)
+        logger.info(
+            f"Hy4: KV cache context-parallel, {stripe.block}-token blocks over {stripe.num_chips} chips "
+            f"(SP {stripe.sp} on axis {stripe.sp_axis} x TP {stripe.tp}), period {stripe.period}"
+        )
         return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
 
     def build_runtime(self, *, mesh_device, hf_config, params):

@@ -25,13 +25,15 @@ Hooks for the sibling issues:
   the ``MODEL_CLS`` seam, the way Kimi-K3 swaps in ``TtKimiK3Transformer``.
 * The KV hooks (``build_kv_chunk_table``, ``kv_migration_stages``, ``set_layer_completion_sink``) are
   inherited. They already follow ``indexer_types``, so the index-key table has Hy4's 21 full layers and
-  completions carry global layer indices.
+  completions carry global layer indices. ``build_kv_chunk_table`` first checks the chunk writes the 128-token
+  stripe, and ``kv_layout`` describes the stripe and both caches for decode and serving (#65886).
 """
 
 from __future__ import annotations
 
 from loguru import logger
 
+from models.demos.deepseek_v3_d_p.tt.hy4.kv_cache import KvBudget, KvStripe, describe_layers, hy4_stripe
 from models.demos.deepseek_v3_d_p.tt.runners import hy4_checkpoint as hc
 from models.demos.deepseek_v3_d_p.tt.runners.hy4_checkpoint import load_hy4_trunk_state_dict
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
@@ -66,3 +68,40 @@ class TtHy4Runtime(TtPrefillRuntime):
         super()._build_model(state_dict)
         if cache:
             hc.stamp_mla_cache(cache, layers)
+
+    # --- context-parallel KV cache (#65886) ---
+    @property
+    def kv_stripe(self) -> KvStripe:
+        """Where each token's KVPE and index-key rows live; raises on a 32-chip mesh if the chunk size would not
+        write 128-token blocks."""
+        return hy4_stripe(self.config.mesh_shape, self.config.sp_axis, self.config.chunk_size)
+
+    def kv_layout(self, kv_caches=None) -> dict:
+        """JSON-able description of both caches for decode (#65888 / #65889) and serving (#65924): the stripe,
+        the slot formula, the layer -> index-key slot map and the per-token bytes. With ``kv_caches`` it also
+        records the allocated shapes and dtypes."""
+        types = list(getattr(self.hf_config, "indexer_types", None) or ["full"] * self.config.num_layers)
+        layers = describe_layers(types)
+        budget = KvBudget(num_layers=len(types), num_index_layers=len(layers["full_indexer_layers"]))
+        extra = {
+            "max_seq_len": self.config.max_seq_len,
+            "num_users": self.config.num_users,
+            "rows_per_chip": self.kv_stripe.rows_per_chip(self.config.max_seq_len),
+            "values_per_token": budget.values_per_token,
+            "bytes_per_token": budget.bytes_per_token,
+            **layers,
+        }
+        if kv_caches is not None:
+            extra["kvpe"] = {
+                "format": str(kv_caches.kvpe.format.value),
+                "shape": list(kv_caches.kvpe.storage.shape),
+                "dtype": str(kv_caches.kvpe.storage.dtype),
+            }
+            if kv_caches.index is not None:
+                extra["index"] = {"shape": list(kv_caches.index.shape), "dtype": str(kv_caches.index.dtype)}
+        return self.kv_stripe.descriptor(**extra)
+
+    def build_kv_chunk_table(self, kv_caches, path, **kwargs) -> str:
+        # The table's block-cyclic period is config.chunk_size; it describes the 128-token stripe only at 4096.
+        self.kv_stripe  # noqa: B018 -- raises on a chunk size decode could not address
+        return super().build_kv_chunk_table(kv_caches, path, **kwargs)
