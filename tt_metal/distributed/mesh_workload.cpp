@@ -17,6 +17,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/program/kernel_build_job.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -570,8 +571,11 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // programs are already compiled and laid out, so compile_program is a flag check per program;
     // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
     // first compile of a multi-program workload does enough to be worth parallelizing.
-    if (programs_.size() == 1 || this->is_finalized() || sinks_kernel_builds(mesh_device)) {
-        // Compile from main thread for homogeneous workloads
+    const bool sink = sinks_kernel_builds(mesh_device);
+    if (programs_.size() == 1 || this->is_finalized() || sink) {
+        // Compile from main thread for homogeneous workloads. With a build sink, also on this thread: the sink and
+        // its scope are per thread.
+        const tt::tt_metal::detail::BuildSinkScope sink_scope(sink);
         for (auto& [device_range, _] : programs_) {
             this->compile_program(device_range, mesh_device);
         }
@@ -585,7 +589,7 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     }
     // With a build sink on, a mock device's kernels are built in the background and their binaries never loaded,
     // so the offsets that depend on binary sizes stay unset; nothing reads them on a mock device.
-    if (sinks_kernel_builds(mesh_device)) {
+    if (sink) {
         return;
     }
     finalize_offsets(mesh_device);

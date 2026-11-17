@@ -19,11 +19,20 @@
 #include "impl/program/kernel_build_job.hpp"
 #include "impl/program/program_impl.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
-thread_local CompileSession* t_build_sink = nullptr;
+thread_local experimental::CompileSession* t_build_sink = nullptr;
+thread_local bool t_build_sink_scope = false;
 }  // namespace
+
+detail::BuildSinkScope::BuildSinkScope(bool active) : previous_(t_build_sink_scope) { t_build_sink_scope = active; }
+
+detail::BuildSinkScope::~BuildSinkScope() { t_build_sink_scope = previous_; }
+
+bool detail::BuildSinkScope::active() { return t_build_sink_scope; }
+
+namespace experimental {
 
 struct CompileSession::Impl {
     // Queues the jobs whose kernels were not queued before.
@@ -213,7 +222,7 @@ void CompileSession::set_build_sink(bool on) {
 CompileSession* CompileSession::build_sink() { return t_build_sink; }
 
 bool CompileSession::sink_kernel_builds(detail::ProgramImpl& program, IDevice* device) {
-    if (t_build_sink == nullptr) {
+    if (t_build_sink == nullptr || !detail::BuildSinkScope::active()) {
         return false;
     }
     // Resolves build inputs for every kernel; needs the device, so it runs on the caller's thread.
@@ -221,4 +230,5 @@ bool CompileSession::sink_kernel_builds(detail::ProgramImpl& program, IDevice* d
     return true;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace experimental
+}  // namespace tt::tt_metal

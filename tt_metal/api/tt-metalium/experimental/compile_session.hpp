@@ -47,12 +47,13 @@ struct CompileSessionStats {
 // Builds, in the background, the kernels of programs compiled for a mock device, so that a later run on the real
 // device finds them in the on-disk kernel cache.
 //
-// While the build sink is on for a thread (set_build_sink), a program that thread compiles for a mock device has
-// each kernel's build inputs resolved on that thread and counts as compiled at once; a mock device never loads
-// binaries. Each kernel is queued once, and a worker builds it into the kernel cache in the order queued, without
-// touching the device again; the device may be closed and reopened meanwhile. A normal compile of the same kernel
-// later in this process waits for a build that is running, and builds the kernel itself if no worker has reached it
-// yet.
+// While the build sink is on for a thread (set_build_sink), a workload that thread enqueues on a mock device has each
+// kernel's build inputs resolved on that thread, and its programs count as compiled at once; a mock device never
+// loads binaries. Programs compiled any other way (fabric router programs at mesh open, a direct CompileProgram) build
+// normally, since their callers read the binaries. Each kernel is queued once, and a worker builds it into the kernel
+// cache in the order queued, without touching the device again; the device may be closed and reopened meanwhile. A
+// normal compile of the same kernel later in this process waits for a build that is running, and builds the kernel
+// itself if no worker has reached it yet.
 //
 // The session only fills the kernel cache, so it never changes results. A failed build is counted and left to the
 // normal compile path. Remote builds that fail are retried locally. The device's MetalContext must outlive the
@@ -73,16 +74,17 @@ public:
 
     CompileSessionStats stats() const;
 
-    // While the build sink is on for the calling thread, a program compiled for a mock device queues its kernels
-    // in this session and counts as compiled at once: a mock device never loads binaries, so the run goes on
-    // without waiting for them. Programs are otherwise built, cached and enqueued as usual, so buffers get the
-    // addresses they get on the real device. Turn it off on every thread before destroying the session.
+    // While the build sink is on for the calling thread, a workload enqueued on a mock device queues its kernels in
+    // this session and counts as compiled at once: a mock device never loads binaries, so the run goes on without
+    // waiting for them. Programs are otherwise built, cached and enqueued as usual, so buffers get the addresses they
+    // get on the real device. Turn it off on every thread before destroying the session.
     void set_build_sink(bool on);
     static CompileSession* build_sink();
 
 private:
     friend class ::tt::tt_metal::detail::ProgramImpl;
-    // Queues program's kernels in the calling thread's build sink. False when no sink is on.
+    // Queues program's kernels in the calling thread's build sink. False when no sink is on, or outside the
+    // detail::BuildSinkScope a mock-device workload compile opens.
     static bool sink_kernel_builds(::tt::tt_metal::detail::ProgramImpl& program, IDevice* device);
 
     struct Impl;

@@ -43,6 +43,23 @@ enum class KernelBuildResult {
     BuildingElsewhere,  // another thread is building it right now
 };
 
+// Marks the calling thread as compiling a workload whose kernel binaries nobody will read: MeshWorkloadImpl::compile
+// for a mock device with a build sink on, which stops before finalizing offsets, and whose EnqueueMeshWorkload loads no
+// binaries. ProgramImpl::compile hands kernels to the build sink only inside this scope; every other compile on a mock
+// device (fabric router programs at mesh open, a direct CompileProgram) builds normally, since its caller goes on to
+// read the binaries.
+class BuildSinkScope {
+public:
+    explicit BuildSinkScope(bool active);
+    ~BuildSinkScope();
+    BuildSinkScope(const BuildSinkScope&) = delete;
+    BuildSinkScope& operator=(const BuildSinkScope&) = delete;
+    static bool active();
+
+private:
+    bool previous_;
+};
+
 // Builds the job's kernel into the on-disk kernel cache, through the compile server when remote_endpoints is
 // non-empty. Shares the in-process build-once table with ProgramImpl::compile, so the same kernel is never
 // built twice at once; it never waits for another thread's build. Throws on failure.
