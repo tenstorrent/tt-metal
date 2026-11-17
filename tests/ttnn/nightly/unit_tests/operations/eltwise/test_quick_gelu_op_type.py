@@ -115,7 +115,7 @@ def test_quick_gelu_sfpu_generated_specials(device):
 
 
 @pytest.mark.parametrize("case", ["float32_input", "chained", "other_board"])
-def test_quick_gelu_op_type_refuses_the_calls_its_kernel_does_not_serve(device, case):
+def test_quick_gelu_op_type_refuses_the_calls_its_kernel_does_not_serve(device, case, expect_error):
     """QUICK_GELU has no kernel but the generated one: a FLOAT32 input, a chain with another op, or a board without the
     kernel raises instead of building nothing."""
     if (case == "other_board") == is_blackhole():
@@ -125,5 +125,5 @@ def test_quick_gelu_op_type_refuses_the_calls_its_kernel_does_not_serve(device, 
     chain = [ttnn.UnaryWithParam(ttnn.UnaryOpType.QUICK_GELU)]
     if case == "chained":
         chain.append(ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU))
-    with pytest.raises(RuntimeError, match="QUICK_GELU runs only"):
+    with expect_error(RuntimeError, "QUICK_GELU runs only"):
         ttnn.unary_chain(tensor, chain)
