@@ -1034,19 +1034,27 @@ __attribute__((noinline)) void init_channel_streams() {
     });
 }
 
-// At init, first: each serviced channel's connection semaphore (its runtime arg's address) at 0, and its
-// producer-cursor block zeroed (the producer reads the whole block when it connects).
+// Channel CH's connection semaphore (its runtime arg's address) at 0, and its producer-cursor block zeroed (the
+// producer reads the whole block when it connects).
+template <size_t CH>
+FORCE_INLINE void reset_connection(
+    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
+    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
+    *reinterpret_cast<volatile uint32_t*>(connection_semaphores[CH]) = 0;
+    auto* cursor = reinterpret_cast<volatile uint32_t*>(producer_cursors[CH]);
+    for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
+        cursor[w] = 0;
+    }
+}
+
+// At init, first: each serviced channel's connection.
 FORCE_INLINE void reset_connections(
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
     for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
         constexpr size_t CH = decltype(i)::value;
         if constexpr (is_sender_channel_serviced[CH]) {
-            *reinterpret_cast<volatile uint32_t*>(connection_semaphores[CH]) = 0;
-            auto* cursor = reinterpret_cast<volatile uint32_t*>(producer_cursors[CH]);
-            for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
-                cursor[w] = 0;
-            }
+            reset_connection<CH>(connection_semaphores, producer_cursors);
         }
     });
 }
@@ -1059,11 +1067,7 @@ __attribute__((noinline)) void restart_worker_channels(
     for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
         constexpr size_t CH = decltype(i)::value;
         if constexpr (is_sender_channel_serviced[CH] && is_sender_channel_worker[CH]) {
-            *reinterpret_cast<volatile uint32_t*>(connection_semaphores[CH]) = 0;
-            auto* cursor = reinterpret_cast<volatile uint32_t*>(producer_cursors[CH]);
-            for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
-                cursor[w] = 0;
-            }
+            reset_connection<CH>(connection_semaphores, producer_cursors);
             init_ptr_val<SenderChannel<CH>::free_slots_stream>(SENDER_NUM_BUFFERS_ARRAY[CH]);
             SenderChannelInterfaces::start_one<CH>(connection_semaphores);
         }
