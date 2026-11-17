@@ -17,7 +17,7 @@
 #include "api/compute/bcast.h"
 #endif
 #ifdef FUSE_BIAS_SFPU
-#include "api/compute/sfpu_binary_bcast.h"
+#include "api/compute/experimental/sfpu_binary_bcast_pack.h"
 #endif
 
 #include "api/compute/eltwise_binary.h"
@@ -619,6 +619,9 @@ void kernel_main() {
                 static_assert(row_broadcast_bias, "FUSE_BIAS_SFPU takes a row-broadcast bias");
                 constexpr uint32_t sfpu_bias_tiles_per_acquire = 2;
                 reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
+                // One copy init serves both buffers: the factory gives the bias the partials' format (FP32) and
+                // tile shape (32x32), and nothing below changes the unpack or math state.
+                copy_init(mm_partials_dfb_id);
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
@@ -634,11 +637,9 @@ void kernel_main() {
                             const uint32_t count =
                                 std::min<uint32_t>(sfpu_bias_tiles_per_acquire, out_subblock_num_tiles - first);
                             tile_regs_acquire();
-                            copy_init(mm_partials_dfb_id);
                             for (uint32_t t = 0; t < count; t++) {
                                 copy_tile(mm_partials_dfb_id, first + t, t);
                             }
-                            copy_init(bias_dfb_id);
                             for (uint32_t t = 0; t < count; t++) {
                                 const uint32_t k = (first + t) % out_subblock_w;
                                 // Padded output columns of the last in1 subblock read bias tile 0; the
