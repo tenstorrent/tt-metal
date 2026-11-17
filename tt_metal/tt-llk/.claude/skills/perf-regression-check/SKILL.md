@@ -165,11 +165,6 @@ must be removed by hand.
   iterations are cached, so it resumes instead of starting over.
 - Missing header at compile time on an older commit: that commit's layout needs more than
   the default sparse checkout — re-run with `SPARSE_PATHS=` (empty) for a full checkout.
-- Missing `tests/sfpi-version` in a worktree: it is a symlink to `tt_metal/sfpi-version`,
-  outside the default sparse set. Add `tt_metal/sfpi-version tt_metal/sfpi-info.sh` to
-  `SPARSE_PATHS`.
-- `ModuleNotFoundError` from the worktree's `conftest.py`: the script runs the `pytest`
-  on `PATH`. Put the tests venv first (`PATH=<llk>/tests/.venv/bin:$PATH`).
 - "no perf CSV": the test may have been deselected — check the module name and that the
   test carries the `perf` marker.
 - "does not exist at <sha>": the test was added after that commit; pick a baseline that has it.
