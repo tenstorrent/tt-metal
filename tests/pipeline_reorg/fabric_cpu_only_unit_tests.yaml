@@ -179,7 +179,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-sanity-mpi
   skus:
     cpu_medium:
-      timeout: 10  # the group runs in ~2 min locally; 10 leaves generous CI margin
+      timeout: 10
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
