@@ -1062,7 +1062,7 @@ public:
             const tt::tt_metal::experimental::ProgramRunArgs& run_params) {
             if constexpr (requires { &Factory::map_cmd_list_parameters; }) {
                 auto bindings = Factory::map_cmd_list_parameters(attrs, tensor_args, spec, run_params);
-                bindings.factory_name = ttsl::get_type_name<Factory>();
+                bindings.factory_name = ttsl::long_type_name<Factory>;
                 return std::make_shared<const ttnn::command_list::CmdListBindings>(std::move(bindings));
             } else {
                 return nullptr;
