@@ -25,13 +25,14 @@ class Trace:
         self.mesh_device = mesh_device
         self.trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         try:
-            self.output = forward()
+            try:
+                self.output = forward()
+            finally:
+                ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
         except BaseException:
-            ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
             self.release()
             raise
-        ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device)
 
     def __enter__(self) -> "Trace":
         return self
