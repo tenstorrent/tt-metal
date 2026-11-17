@@ -332,9 +332,10 @@ def _topk_agreement(dev: torch.Tensor, gold: torch.Tensor, start: int) -> float:
     [
         # GLM-5.3's prefill layout (default): SP 8 x TP 4, 16 heads per chip for the projections.
         pytest.param((8, 4), torus_xy_device_params(l1_small_size=L1_SMALL), 0, id="sp8xtp4"),
-        # SC1's head split (#65884 / #65885): 8 heads per chip over the 8 columns. The rows carry sequence here
-        # (ttMLA's SP x TP), not SC1's 2D-TP hidden split, which ttMLA does not implement yet (#65885).
-        pytest.param((4, 8), torus_xy_device_params(l1_small_size=L1_SMALL), 0, id="sp4xtp8"),
+        # SC1's head split (#65884 / #65885): 8 heads per chip over the mesh's 8-chip axis (TP on axis 0 of the
+        # physical 8x4 torus; a logical (4, 8) view over the 8x4 fabric descriptor hangs in the TP all-to-all).
+        # The other axis carries sequence (ttMLA's SP x TP), not SC1's 2D-TP hidden split (#65885).
+        pytest.param((8, 4), torus_xy_device_params(l1_small_size=L1_SMALL), 1, id="sp4xtp8"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -364,12 +365,15 @@ def test_hy4_attention_sublayer_vs_hf(mesh_device, device_params, sp_axis, seq_l
     # TtIndexer all-gathers its TP-sharded index head dim, which must be whole tiles per chip: 128 / TP=8 = 16 is
     # not (#65887 layout item). There the full layer's attention runs as a shared layer fed the golden top-k
     # (or, without a golden, a sliding causal window), which still checks sparse MLA + sink + gate on that layout.
-    device_indexer = config.index_head_dim % (tp * ttnn.TILE_SIZE) == 0
+    # HY4_ATTN_INJECT_TOPK=1 forces the injected path on any layout (isolates the layout from the top-k source).
+    device_indexer = (
+        config.index_head_dim % (tp * ttnn.TILE_SIZE) == 0 and os.environ.get("HY4_ATTN_INJECT_TOPK") != "1"
+    )
     if device_indexer:
         run_cfg, inject0 = config, None
     else:
         logger.warning(
-            f"TP={tp}: TP-local index head dim {config.index_head_dim // tp} is not tile aligned; injecting top-k"
+            f"TP={tp}: injecting top-k (no device indexer: TP-local index head dim tile-aligned only at TP<=4)"
         )
         host_topk = gold_topk.long() if gold_topk is not None else sliding_topk(seq_len, config.index_topk)
         run_cfg = copy.copy(config)
