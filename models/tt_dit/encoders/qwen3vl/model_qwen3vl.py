@@ -70,6 +70,10 @@ class Qwen3VlContext:
             raise ValueError(f"sp_axis ({self.sp_axis}) must differ from tp_axis ({self.tp_axis})")
         if self.ccl_manager is None:
             raise ValueError("decoder SP needs a ccl_manager for the ring all-gather")
+        # Workaround: the ring reduce-scatter program is keyed on the row count, the line one is not (#65051).
+        # TODO: give the ring program the same runtime rows and drop this requirement.
+        if self.dynamic_length and self.ccl_manager.reduce_scatter_topology != ttnn.Topology.Linear:
+            raise ValueError("dynamic_length needs a ccl_manager with reduce_scatter_topology=ttnn.Topology.Linear")
 
     @property
     def row_capacity(self) -> int | None:
@@ -903,9 +907,6 @@ class Qwen3VlMlp(Module):
         self._row_capacity = ctx.row_capacity
         # A persistent reduce-scatter pair is keyed on the live shape.
         self._use_persistent_ccl_buffers = ctx.use_persistent_ccl_buffers and not ctx.dynamic_length
-        # Workaround: the ring reduce-scatter program is keyed on the row count, the line one is not (#65051).
-        # TODO: give the ring program the same runtime rows and drop this override.
-        self._reduce_scatter_topology = ttnn.Topology.Linear if ctx.dynamic_length else None
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         up_config = _above_1d_rows(self._up_config, x)
@@ -917,7 +918,6 @@ class Qwen3VlMlp(Module):
             x,
             use_persistent_buffer=self._use_persistent_ccl_buffers,
             matmul_config=down_config,
-            reduce_scatter_topology=self._reduce_scatter_topology,
         )
 
         if self._tp_axis is not None:

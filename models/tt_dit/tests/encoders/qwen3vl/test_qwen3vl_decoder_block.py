@@ -400,7 +400,10 @@ def test_decoder_block_dynamic_length(mesh_device, capacity, expect_error):
         block.load_torch_state_dict(state)
         return block
 
-    default, dynamic = build(ctx), build(dataclasses.replace(ctx, dynamic_length=True))
+    line_rs = CCLManager(
+        mesh_device, num_links=2, topology=ttnn.Topology.Ring, reduce_scatter_topology=ttnn.Topology.Linear
+    )
+    default, dynamic = build(ctx), build(dataclasses.replace(ctx, ccl_manager=line_rs, dynamic_length=True))
     added = []
     # Rows per chip: long, short (the K rotation's second program: its rows no longer exceed head_dim), then both
     # sides of that change (64 / 96), the 1D matmul's last length (128) and the capacity.

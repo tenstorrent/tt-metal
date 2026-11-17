@@ -15,7 +15,7 @@ class CCLManager:
     """
     Manages parallelization of DiT model.
 
-        - stores mesh device, num links, topology
+        - stores mesh device, num links, topology (`reduce_scatter_topology` sets the reduce-scatters' own)
         - caches ping pong buffers and semaphores
         - sets up one SubDevice spanning all compute cores
     """
@@ -25,10 +25,12 @@ class CCLManager:
         mesh_device,
         num_links=1,
         topology=None,
+        reduce_scatter_topology=None,
     ):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        self.reduce_scatter_topology = reduce_scatter_topology or topology
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
@@ -180,7 +182,7 @@ class CCLManager:
             # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
             # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            if self.topology == ttnn.Topology.Linear:
+            if self.reduce_scatter_topology == ttnn.Topology.Linear:
                 intermediate_buffer_shape[0] *= 2
             for _ in range(2):
                 # Device-native, uninitialized allocation: these scratch ping-pong
@@ -955,14 +957,9 @@ class CCLManager:
         dim: int,
         mesh_axis: int | None,
         use_persistent_buffer: bool = False,
-        topology: ttnn.Topology | None = None,
     ) -> ttnn.Tensor:
-        """`topology` overrides the manager's for this call (non-persistent only: the pair follows the manager's)."""
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
-        if topology is not None and use_persistent_buffer:
-            msg = "a per-call reduce-scatter topology needs use_persistent_buffer=False"
-            raise ValueError(msg)
 
         rank = len(tensor.shape)
         if dim < 0:
@@ -983,7 +980,7 @@ class CCLManager:
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            topology=topology or self.topology,
+            topology=self.reduce_scatter_topology,
             cluster_axis=mesh_axis,
             **self.get_rs_hyperparams(tensor.shape),
         )

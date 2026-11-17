@@ -881,7 +881,13 @@ class MiniMaxH3Pipeline:
         self._reduced_prompt_warm = _resolve_encoder_dynamic_length(None, preset, **where)
 
         self._host_log("building the Qwen3-VL text encoder")
-        self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+        # The `dynamic_length` encoder needs the line reduce-scatter (`Qwen3VlContext`): this manager serves it alone.
+        self.encoder_ccl_manager = CCLManager(
+            mesh_device=mesh_device,
+            num_links=num_links,
+            topology=topology,
+            reduce_scatter_topology=ttnn.Topology.Linear if self.encoder_dynamic_length else None,
+        )
         self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
             self.weights_dir / "text_encoder",
             mesh_device=self.mesh_device,
@@ -897,12 +903,14 @@ class MiniMaxH3Pipeline:
         yuv = self.vae_output_type == "yuv420"
         unit_pixels = self.vae_output_type in ("uint8", "yuv420")
         self._host_log("building the video VAE")
+        # Shared by the video VAE and the vision tower.
+        self.vae_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self._vae = MiniMaxH3Vae(
             self.vae_config,
             task=self.task,
             mesh_device=self.mesh_device,
             weight_loader=self._cache_submodel,
-            ccl_manager=self.encoder_ccl_manager,
+            ccl_manager=self.vae_ccl_manager,
             dtype=ttnn.bfloat16,
             device_stitch=yuv,
             pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
@@ -1294,7 +1302,7 @@ class MiniMaxH3Pipeline:
                         tensor_parallel=ParallelFactor(mesh_axis=self.tp_axis, factor=self.tp_factor),
                         sequence_parallel=ParallelFactor(mesh_axis=self.sp_axis, factor=self.sp_factor),
                     ),
-                    ccl_manager=self.encoder_ccl_manager,
+                    ccl_manager=self.vae_ccl_manager,
                     kv_gather_capacity=(
                         self.vision_patch_ladder[-1]
                         if self.vision_patch_ladder is not None
@@ -1332,9 +1340,12 @@ class MiniMaxH3Pipeline:
         Every call runs the encoder; with the default co-residency the weights are already on
         device, so this costs the ~2.8 s forward, not the 50 GB reload.
         """
-        # The conditioner's CCL manager caches a ping-pong pair per presentation length for the life of the
-        # process; the returned taps are fresh tensors, so the pairs can go the moment the encode is done.
-        with self.encoder_ccl_manager.transient_ping_pong_buffers():
+        # The conditioner's CCL managers (text encoder, vision tower) cache a ping-pong pair per presentation length
+        # for the life of the process; the returned taps are fresh tensors, so the pairs can go once the encode is done.
+        with (
+            self.encoder_ccl_manager.transient_ping_pong_buffers(),
+            self.vae_ccl_manager.transient_ping_pong_buffers(),
+        ):
             return self._encode_prompt_device(prompt, keyframes=keyframes, references=references)
 
     def _encode_prompt_device(
@@ -2250,7 +2261,7 @@ class MiniMaxH3Pipeline:
 
         with (
             self._track_cache_misses(on_event, "vae_encode"),
-            self.encoder_ccl_manager.transient_ping_pong_buffers(),
+            self.vae_ccl_manager.transient_ping_pong_buffers(),
             self._audio_ccl_transient(),
         ):
             condition_rows, audio_condition_rows = encode_references(
@@ -2960,7 +2971,10 @@ class MiniMaxH3Pipeline:
         host = _is_host_rank()
         if host:
             _tqdm_spacer()
-        with self.encoder_ccl_manager.transient_ping_pong_buffers():
+        with (
+            self.encoder_ccl_manager.transient_ping_pong_buffers(),
+            self.vae_ccl_manager.transient_ping_pong_buffers(),
+        ):
             self._warm_vision_merge_lengths(seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host)
 
     def _warm_vision_merge_lengths(self, seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host) -> None:

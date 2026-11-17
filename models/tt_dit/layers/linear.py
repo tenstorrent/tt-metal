@@ -659,7 +659,6 @@ class RowParallelLinear(Module):
         gather_output: bool = False,
         reduce_scatter_dim: int = -1,
         matmul_config=None,
-        reduce_scatter_topology: ttnn.Topology | None = None,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -668,7 +667,6 @@ class RowParallelLinear(Module):
 
         `reduce_scatter_dim` selects the reduce-scatter axis (default -1, hidden); -2 splits on the sequence dim.
         `matmul_config` is a frozen `MinimalMatmulConfig` that bypasses the shape-keyed table.
-        `reduce_scatter_topology` overrides the manager's topology for the reduce-scatter only.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -716,7 +714,6 @@ class RowParallelLinear(Module):
                 dim=dim,
                 mesh_axis=self.mesh_axis,
                 use_persistent_buffer=use_persistent_buffer,
-                topology=reduce_scatter_topology,
             )
             if gather_output:
                 output = self.ccl_manager.all_gather(

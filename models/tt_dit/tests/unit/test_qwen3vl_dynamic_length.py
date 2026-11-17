@@ -43,6 +43,15 @@ def test_context_dynamic_length_needs_sp_and_capacity(expect_error) -> None:
         Qwen3VlContext(device=None, tp_axis=0, ccl_manager=object(), sp_axis=1, dynamic_length=True)
 
 
+def test_context_dynamic_length_needs_line_reduce_scatter(expect_error) -> None:
+    blackhole = SimpleNamespace(arch=lambda: ttnn.device.Arch.BLACKHOLE)
+    ring = SimpleNamespace(reduce_scatter_topology=ttnn.Topology.Ring)
+    with expect_error(ValueError, "reduce_scatter_topology"):
+        Qwen3VlContext(
+            device=blackhole, tp_axis=0, ccl_manager=ring, sp_axis=1, kv_gather_capacity=5120, dynamic_length=True
+        )
+
+
 def test_context_dynamic_length_is_blackhole_only(expect_error) -> None:
     wormhole = SimpleNamespace(arch=lambda: ttnn.device.Arch.WORMHOLE_B0)
     with expect_error(ValueError, "Blackhole only"):
