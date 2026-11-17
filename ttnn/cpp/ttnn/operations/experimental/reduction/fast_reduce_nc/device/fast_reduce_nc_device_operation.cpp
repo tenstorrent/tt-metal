@@ -53,6 +53,16 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     // FLOAT32 is allowed so multi-stage Sum chains can carry FP32 between stages.
     operations::check_tensor(
         input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
+    if (input.layout() == Layout::TILE) {
+        const auto& tile = input.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "FastReduceNC TILE input requires tile shape {}x{}, got: {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+    }
     if (preallocated_output.has_value()) {
         operations::check_tensor(
             preallocated_output.value(),
