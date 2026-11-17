@@ -7,7 +7,13 @@ S + (E S + B) and forwards the result, and the last rank hands the final state t
 is one hop; on a line it crosses the SP axis (2D routing, or sp_size - 1 hops back on a 1D fabric). The first rank
 then forms the chunk's final carry from it and multicasts it to every rank.
 
-The relay's landing buffer is an L1 tensor sharded one head per head core, at the same address on every device. A
+The same program forms the chunk outputs from the summary's emitted terms (the entry correction): each head's chunks are
+spread over `cores_per_head` cores, the first of which runs the head's hop and copies the landed entry state (and, for a
+separated tail, the final state) to the head's other cores. The summary writes the terms sharded so each core's chunk
+rows, F(0) then F(I), are in its own L1 (terms_memory_config); when a core's share is over
+KDA_CORRECTION_TERMS_L1_BYTES_PER_CORE they stay in DRAM and each core streams its chunk rows.
+
+The relay's landing buffer is an L1 tensor sharded one head per head's first core, at the same address on every device. A
 rank's predecessor writes into it before the rank's own call starts, so a layer reserves it before its first program
 (reserve) and the call frees it once the relay has consumed it: between layers that L1 is free for the other
 attention layers (ring_mla's circular buffers span nearly all of L1 on the relay's head columns).
@@ -25,6 +31,10 @@ import ttnn
 
 # A sender core's count semaphores, one per head it serves (relay_affine_prefix_max_heads_per_link).
 _MAX_HEADS_PER_LINK = 14
+
+# A core's share of the emitted FP32 terms (F(0) and F(I) of its chunks) that stays in its L1; beyond it they stream
+# from DRAM (Kimi-K3: 320 KiB per core at 1280 rows per chip).
+KDA_CORRECTION_TERMS_L1_BYTES_PER_CORE = 320 * 1024
 
 
 # Every persistent counter per mesh id, for reset_persistent_semaphores.
@@ -81,6 +91,7 @@ class RelayAffinePrefix:
         value_dim,
         num_links,
         local_rows,
+        max_cores,
         math_fidelity=ttnn.MathFidelity.HiFi2,
     ):
         if key_dim != value_dim:
@@ -95,31 +106,56 @@ class RelayAffinePrefix:
         self.axis = sequence_parallel_axis
         self.num_links = num_links
         self.local_rows = local_rows
-        # One core per head, then two senders per link (the relay's and the final carry's second), in the grid's
-        # row-major order.
+        # Each head's cores, then two senders per link (the relay's and the final carry's second), in the grid's
+        # row-major order. Up to max_cores correct chunks: their products count toward the Blackhole di/dt bound.
         grid = mesh_device.compute_with_storage_grid_size()
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         senders = 2 * num_links
-        if batch_heads + senders > len(cores):
-            raise ValueError(f"relay prefix needs {batch_heads + senders} cores, has {len(cores)}")
-        self.cores = cores[: batch_heads + senders]
-        head_set = ttnn.CoreRangeSet([]).merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores[:batch_heads]]))
+        budget = min(max_cores, len(cores) - senders)
+        if budget < batch_heads:
+            raise ValueError(f"relay prefix needs {batch_heads} head cores and {senders} senders, has {len(cores)}")
+        # Cores per head: the most that divide the head's chunks evenly (so each core's chunk rows are one shard).
+        num_chunks = local_rows // ttnn.TILE_SIZE
+        self.cores_per_head = cores_per_head = max(
+            d for d in range(1, min(num_chunks, budget // batch_heads) + 1) if num_chunks % d == 0
+        )
+        correction = cores[: batch_heads * cores_per_head]
+        self.cores = correction + cores[len(correction) : len(correction) + senders]
+
+        def core_set(selected):
+            return ttnn.CoreRangeSet([]).merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in selected]))
+
         self._landing_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(head_set, (2 * key_dim, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(
+                core_set(correction[::cores_per_head]), (2 * key_dim, key_dim), ttnn.ShardOrientation.ROW_MAJOR
+            ),
         )
-        # Two K x K states per head core (the entry state, the final state) while reserved.
+        # Two K x K states per head (the entry state, the final state) while reserved.
         self._landing_shape = ttnn.Shape([2 * batch_heads * key_dim, key_dim])
         self._landing = None
         # A peer can bump the entry, final and carry arrival counters before this rank's call starts.
         self.semaphores = persistent_semaphores(mesh_device, 3)
-        # The hop's matmul runs at the affine prefix's fidelity, accumulating in an FP32 DST.
+        # The hop's and the correction's matmuls run at the affine prefix's fidelity, accumulating in an FP32 DST.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True
         )
-        # Every entry correction core reads its head's entry state: L1 spares those DRAM reads.
-        self.entry_memory_config = ttnn.L1_MEMORY_CONFIG
+        # The emitted terms land in the L1 of the core that consumes them: each core takes whole chunks, so a core's
+        # shard is its chunk rows of F(0) and F(I), and nothing is read over the NoC for them.
+        core_rows = num_chunks // cores_per_head * ttnn.TILE_SIZE
+        streamed = 2 * core_rows * key_dim * 4 > KDA_CORRECTION_TERMS_L1_BYTES_PER_CORE
+        self.terms_memory_config = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if streamed
+            else ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(core_set(correction), (2 * core_rows, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+        )
+        # Where the chunk outputs go.
+        self.output_memory_config = ttnn.DRAM_MEMORY_CONFIG if streamed else ttnn.L1_MEMORY_CONFIG
 
     def reserve(self):
         """Allocate the landing buffer for the next call, before any program of its layer (a no-op while reserved)."""
@@ -128,13 +164,14 @@ class RelayAffinePrefix:
                 self._landing_shape, ttnn.float32, ttnn.TILE_LAYOUT, self.mesh_device, self._landing_memory_config
             )
 
-    def __call__(self, packed, initial_state, final_e, final_b, actual_start, actual_end=None):
-        """Return this rank's entry states (in L1), the relayed final state and the chunk's final carry on every rank,
-        all [BH, K, K] FP32. Frees the landing buffer once the relay has run."""
+    def __call__(self, packed, terms, initial_state, final_e, final_b, actual_start, actual_end=None):
+        """Return the chunk outputs [BH, NC, 32, V] BF16 and the chunk's final carry [BH, K, K] FP32 on every rank.
+        Frees the landing buffer once the relay has run."""
         # Reserving here suffices only when no program of this rank runs between its predecessor's relay and its own.
         self.reserve()
         result = ttnn.experimental.kda.relay_affine_prefix(
             packed,
+            terms,
             initial_state,
             final_e,
             final_b,
@@ -146,11 +183,11 @@ class RelayAffinePrefix:
             cores=self.cores,
             actual_end=actual_end,
             sequence_parallel_axis=self.axis,
-            entry_memory_config=self.entry_memory_config,
+            memory_config=self.output_memory_config,
             compute_kernel_config=self.compute_config,
         )
         # Every write into it is consumed within the call: the predecessor's entry columns by this rank's heads, and
-        # the last rank's final state by the first rank's writer.
+        # the last rank's final state by the first rank.
         ttnn.deallocate(self._landing)
         self._landing = None
         return result
