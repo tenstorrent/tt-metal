@@ -819,6 +819,12 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _mllama_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
+        # rotary_embedding_llama needs bf16 inputs. On a 32-chip galaxy (TG) the fused QKV comes out in
+        # ccl_dtype (bfloat8_b), so the heads must be cast first, as the decode path already does.
+        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
+            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],

@@ -223,6 +223,10 @@ def minimal_prefill_matmul_blocks(num_devices: int, grid) -> Tuple[int, int]:
 
 
 def disables_batched_prefill(base_model_name: str, device_name: str) -> bool:
+    # 32-chip galaxies (TG, BHGLX): the prefill KV-cache fill selects the mesh column of a single user
+    # (Attention.prefill_prepare_tensor_for_kv_cache), so it cannot take the batched path's list of users.
+    if device_name in ("TG", "BHGLX"):
+        return True
     return (base_model_name == "Qwen3-32B" and device_name == "P150x4") or (
         base_model_name in ("Llama-3.1-8B", "Llama-3.2-1B", "Qwen3-0.6B")
         and device_name in ("P100", "P150", "P300", "P150x4", "P150x8")
@@ -845,6 +849,11 @@ class ModelArgs:
         # we also disable fused qk when using HF-style rotary embedding
         self.use_qk_fused = not self.is_multimodal and not self.use_hf_rope
         if self.prefetcher is not None:
+            self.use_qk_fused = False
+        # One model on a 32-chip galaxy shards the decode batch across mesh columns, but decode passes the
+        # full-batch positions, which the fused QK rope index path cannot take (32 positions doubled to 64
+        # vs 2 x 8 per device group). The unfused rope path handles the sharded batch.
+        if self.num_devices == 32:
             self.use_qk_fused = False
 
         if self.mesh_device is not None:  # Avoid issue with test_torch.py not having a device

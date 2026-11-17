@@ -1410,6 +1410,17 @@ targets:
               decode_t/s: 62.9
               prefill_time_to_first_token_tolerance: 0.3
             accuracy: {}
+      # One model on all 32 chips of a Blackhole galaxy (models/ttt_compat, MESH_DEVICE=BHGLX).
+      # Token matching measured on BH galaxy: top1 96.2% (accuracy) / 98.2% (performance), top5 100%.
+      bh_galaxy_perf:
+        entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 95
+              top5: 100
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation).
       p300x2:

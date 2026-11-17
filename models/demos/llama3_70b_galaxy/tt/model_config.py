@@ -612,6 +612,16 @@ class TtModelArgs:
             # Blackhole galaxy bring-up runs the no-prefetcher path (the prefetcher ring configs
             # assume Wormhole's 12 DRAM banks / wider tensix grid). Wormhole galaxy is unchanged.
             self.use_prefetcher = not self.is_blackhole
+            # Opt-in Blackhole prefetcher (BH ring: 8 DRAM readers x 3 receivers), as Qwen's QWEN_BH_PREFETCHER.
+            if self.is_blackhole and os.environ.get("LLAMA_BH_PREFETCHER", "0") == "1":
+                self.use_prefetcher = True
+        # On the Blackhole prefetcher path keep the ring matmuls but route the collectives through the stable
+        # ops, since the fused galaxy CCLs no-op on the 2D-torus fabric (same as the Qwen config).
+        self.use_unfused_ccl = (
+            getattr(self, "use_prefetcher", False)
+            and self.is_blackhole
+            and os.environ.get("LLAMA_BH_UNFUSED_CCL", "1") == "1"
+        )
 
         # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
         if self.is_blackhole:
@@ -1410,13 +1420,16 @@ class TtModelArgs:
             ##### Prefetcher stuff #####
             self.model_config["USE_PREFETCHER"] = self.use_prefetcher
             RING_SIZE = 24
+            # The ring matmuls' in0/in1 cores must lie inside the prefetcher's global CB: on Blackhole that is
+            # the 24-core BH ring (cols 1-3, rows 0-7), not Wormhole's NoC1 ring (as in qwen_model_config).
+            prefetcher_ring_grid = PREFETCHER_NOC1_GRID_BH if self.is_blackhole else PREFETCHER_NOC1_GRID
             ring_core_range_set = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
                         ttnn.CoreCoord(x, y),
                         ttnn.CoreCoord(x, y),
                     )
-                    for x, y in PREFETCHER_NOC1_GRID
+                    for x, y in prefetcher_ring_grid
                 ]
             )
             pf_mm_out_core_range_set = ttnn.CoreRangeSet(
@@ -1617,13 +1630,15 @@ class TtModelArgs:
             LM_HEAD_RING_SIZE = 24
             self.lm_head_shape = (8192 // 4, 128 * 1024 // 8)
 
+            # Blackhole: the lm_head all-reduce buffer is capped to rows 0-7, so use the BH grid (as in Qwen).
+            lm_head_32_grid = LM_HEAD_32_GRID_BH if self.is_blackhole else LM_HEAD_32_GRID
             lm_head_ring_core_range_set = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
                         ttnn.CoreCoord(x, y),
                         ttnn.CoreCoord(x, y),
                     )
-                    for x, y in LM_HEAD_32_GRID
+                    for x, y in lm_head_32_grid
                 ]
             )
 
@@ -1672,7 +1687,10 @@ class TtModelArgs:
             )
             self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 16896 // LM_HEAD_RING_SIZE),  # padded shape
-                core_grid=lm_head_ring_core_output_range_set,
+                # LM_HEAD_OUTPUT_GRID's permuted order encodes the WH DRAM-sharded in1 bank mapping. Blackhole
+                # reads the decode weight DRAM-interleaved (lm_head.py): ring core i computes global N slice i,
+                # so the output shards follow the input ring order (as in qwen_model_config).
+                core_grid=lm_head_ring_core_input_range_set if self.is_blackhole else lm_head_ring_core_output_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -2726,7 +2744,9 @@ class TtModelArgs:
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
 
-        hop_grid = [(3, 6)] if prefetch else []  # FIXME: Make not hard coded
+        # Blackhole ring (PREFETCHER_NOC1_GRID_BH): cols 1-3 x rows 0-7, 3 receivers per reader; the hop core
+        # must be a dummy receiver outside the ring, (3, 8). Wormhole keeps (3, 6) and 2 receivers.
+        hop_grid = ([(3, 8)] if self.is_blackhole else [(3, 6)]) if prefetch else []
         hop_core_range_set = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -2750,7 +2770,7 @@ class TtModelArgs:
             mcast_in0=False,
             gather_in0=True,
             hop_cores=hop_core_range_set,
-            num_global_cb_receivers=2 if prefetch else 1,
+            num_global_cb_receivers=(3 if self.is_blackhole else 2) if prefetch else 1,
             untilize_out=untilize_out,
         )
 
@@ -2784,7 +2804,7 @@ class TtModelArgs:
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
 
-        hop_grid = [(3, 6)]
+        hop_grid = [(3, 8)] if self.is_blackhole else [(3, 6)]
         hop_core_range_set = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(

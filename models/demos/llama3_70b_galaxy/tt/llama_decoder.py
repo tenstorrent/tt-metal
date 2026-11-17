@@ -154,7 +154,9 @@ class TtTransformerBlock(LightweightModule):
         # argmax to pick coherent tokens. Keep the residual adds in bf16 for both prefill and decode
         # so the running sum is not re-quantized each layer. The 70B prefetcher path is unchanged
         # (res_dtype=None -> op default).
-        res_dtype = ttnn.bfloat16 if self.blackhole_no_prefetcher else None
+        # Blackhole prefetcher path: same bf8 residual drift (token top-1 93.6% vs 96.0% with a bf16
+        # residual), so keep the residual adds in bf16 on Blackhole whether or not the prefetcher is on.
+        res_dtype = ttnn.bfloat16 if (self.blackhole_no_prefetcher or self.args.is_blackhole) else None
         if mode == "decode":
             # In no-prefetcher Blackhole demo runs, layer-0 decode input can remain DRAM/interleaved.
             # Let downstream norm path handle this instead of hard-failing at the boundary check.
@@ -203,7 +205,7 @@ class TtTransformerBlock(LightweightModule):
         if mode == "decode":
             if self.unfuse_res_add:
                 if self.args.use_prefetcher:
-                    h = ttnn.add(attn_out, h)
+                    h = ttnn.add(attn_out, h, dtype=res_dtype)
                 else:
                     # No-prefetcher decode may mix DRAM/interleaved residuals with sharded attn output.
                     # Align inputs for binary add; if sharded alignment fails, fall back to DRAM add.

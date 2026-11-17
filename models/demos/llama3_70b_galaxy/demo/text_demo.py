@@ -178,7 +178,7 @@ def load_demo_targets(filename, galaxy_type):
             logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
             return []
 
-    demo_targets = demo_targets["targets"][galaxy_type]
+    demo_targets = demo_targets["targets"][galaxy_type or "6U"]
 
     return demo_targets
 

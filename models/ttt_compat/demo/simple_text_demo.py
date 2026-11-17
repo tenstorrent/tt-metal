@@ -1702,6 +1702,7 @@ def test_demo_text(
     if token_accuracy:
         total_top1_acc = math.ceil(acc[0] * 100)
         total_top5_acc = math.ceil(acc[1] * 100)
+        logger.info(f"Token accuracy: top1={acc[0] * 100:.2f}% top5={acc[1] * 100:.2f}%")
 
         if not json_config_file:
             # Get accuracy thresholds from centralized model targets unless the config is loaded from json.
