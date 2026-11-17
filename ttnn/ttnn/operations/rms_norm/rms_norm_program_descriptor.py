@@ -12,6 +12,7 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE = 32
+BF16_DEST_MAX_WT = 64  # 16-bit DEST accumulation is accurate enough up to W=2048
 G_CAP = 16  # max tiles in a compute window (Rb * Sb)
 X_BUDGET = 512 * 1024  # bytes of cb_x
 GAMMA_BUDGET = 128 * 1024  # bytes of resident gamma tiles
@@ -84,6 +85,16 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         images *= d
     Wt = _div_up(W, TILE)
     Ht_img = _div_up(H, TILE)
+    # Accumulating Wt squared tiles sequentially in a 16-bit DEST loses ~6 mantissa bits once the running
+    # sum is >> one tile's partial (measured: 1.0 -> 0.859 output at W=5120, error grows with Wt, and is
+    # independent of segmenting / CB dtype / fidelity). Wide rows therefore use an fp32 DEST for the
+    # Sigma x^2 accumulation even when the caller asked for a 16-bit DEST.
+    if (not compute_kernel_config.fp32_dest_acc_en) and Wt > BF16_DEST_MAX_WT:
+        compute_kernel_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=compute_kernel_config.math_fidelity,
+            fp32_dest_acc_en=True,
+            math_approx_mode=compute_kernel_config.math_approx_mode,
+        )
     total_tile_rows = images * Ht_img
 
     is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
