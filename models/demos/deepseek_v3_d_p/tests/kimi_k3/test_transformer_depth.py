@@ -61,6 +61,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.tt.moe_impl import k3_moe_block_device_params, moe_block_enabled
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
@@ -101,14 +102,24 @@ DEEP_TRACE_FROM = 12
 # exists for full-depth bf8_b drift), so hold the tighter one and let a real regression show.
 KV_CACHE_PCC = 0.96
 
+# The MoE block (K3's default MoE) runs on the XY torus: on the 2D mesh fabric its first call hangs (tt/moe_impl.py).
+# TtMoe (K3_MOE_IMPL=ttmoe) keeps Fabric2D.
+K3_TORUS = moe_block_enabled(KimiK3Config)
+
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        # (the MoE block also raises the fabric payload and L1_SMALL - tt/moe_impl.py)
+        k3_moe_block_device_params(
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY if K3_TORUS else ttnn.FabricConfig.FABRIC_2D,
+                "l1_small_size": KimiK3Config.L1_SMALL_SIZE,
+            }
+        ),
         0,
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-8x4",
+        id="torus-xy-8x4" if K3_TORUS else "fabric2d-8x4",
     ),
     # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
     # L12 here is exactly one stage of the 8-stage layout. Needs the Galaxy narrowed to one tray half
@@ -116,7 +127,7 @@ PLACEMENTS = [
     # system mesh is 8x4 and requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
-        torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        k3_moe_block_device_params(torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE)),
         1,
         0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
@@ -124,7 +135,7 @@ PLACEMENTS = [
     ),
 ]
 # The full-Galaxy row alone, for the tests that reuse this file's helpers on 8x4 only.
-PLACEMENTS_8X4 = [p for p in PLACEMENTS if p.id == "fabric2d-8x4"]
+PLACEMENTS_8X4 = [p for p in PLACEMENTS if p.values[0] == (8, 4)]
 
 
 def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path | None = None) -> dict:
