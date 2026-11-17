@@ -265,6 +265,12 @@ def run_case(
     cmd = cmd or legacy_cmd()
     piddir = tempfile.mkdtemp(prefix="sanity_pids_")
     env = dict(os.environ, PROBE_PIDDIR=piddir, **env_over)
+    if MPI_PREFIX:
+        # Keep the whole stack on the one MPI install TT_SANITY_MPI_PREFIX selects: the probe is compiled with
+        # MPI_PREFIX/bin/mpicxx and the direct mpirun is MPI_PREFIX/bin/mpirun, so tt-run must resolve its own
+        # launcher (get_mpi_launcher, which looks on PATH) from there too. Prepend its bin so the probe is not
+        # compiled against one install and then run through another.
+        env["PATH"] = f"{Path(MPI_PREFIX) / 'bin'}:{env.get('PATH', '')}"
     before_shm = _shm()
     t0 = time.time()
     proc = subprocess.Popen(
