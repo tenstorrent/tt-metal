@@ -4,8 +4,6 @@
 
 #include "circular_buffer_config.hpp"
 
-#include <unordered_map>
-
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include "buffer.hpp"

@@ -24,7 +24,7 @@ import torch
 import ttnn
 from models.demos.audio.qwen3_asr.reference import audio_encoder_ref as ref
 from models.demos.audio.qwen3_asr.tt import audio_encoder as tt_enc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # conv2d frontend reserves an L1 scratch region; 32768 is validated for this model.
 QWEN3ASR_L1_SMALL_SIZE = 32768

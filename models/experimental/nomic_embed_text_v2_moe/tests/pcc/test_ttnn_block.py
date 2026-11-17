@@ -40,7 +40,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     to_device,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
@@ -74,8 +74,9 @@ def routing_agreement(config, reference, tt_block, x, x_tt, moe, rot_mats, attn_
 
     tt_attn = tt_block.attn(x_tt, rot_mats, attn_mask)
     tt_hidden = tt_block._norm(tt_attn, x_tt, tt_block.norm1)
-    _, _, indices = tt_block.mlp.router.select(flatten_tokens(tt_hidden))
-    selected = ttnn.to_torch(indices).long().reshape(batch * seqlen, config.moe_top_k)
+    routing = tt_block.mlp.router(flatten_tokens(tt_hidden))
+    selected = ttnn.to_torch(routing.indices).long().reshape(batch * seqlen, config.moe_top_k)
+    routing.deallocate()
 
     with torch.no_grad():
         ref_hidden = reference.norm1(reference.attn(x, attention_mask=ref_mask) + x)

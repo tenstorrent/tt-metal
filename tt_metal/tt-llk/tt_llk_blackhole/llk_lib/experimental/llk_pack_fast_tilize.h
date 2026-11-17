@@ -89,19 +89,29 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_configure_addrmod_()
 __attribute__((noinline)) void _llk_pack_fast_tilize_load_replay_()
 {
     // Tile replay [0..15]: 16 PACRs, Last=1 on final.
-    TTI_REPLAY(REPLAY_TILE_OFFSET, REPLAY_TILE_LEN, 0, 1);
-    EMIT_FACE_PACRS(ADDR_MOD_3, 0);
-    EMIT_FACE_PACRS(ADDR_MOD_2, 0);
-    EMIT_FACE_PACRS(ADDR_MOD_3, 0);
-    EMIT_FACE_PACRS(ADDR_MOD_1, 1); // face3: Last=1
+    ckernel::load_replay_buf(
+        REPLAY_TILE_OFFSET,
+        REPLAY_TILE_LEN,
+        []
+        {
+            EMIT_FACE_PACRS(ADDR_MOD_3, 0);
+            EMIT_FACE_PACRS(ADDR_MOD_2, 0);
+            EMIT_FACE_PACRS(ADDR_MOD_3, 0);
+            EMIT_FACE_PACRS(ADDR_MOD_1, 1); // face3: Last=1
+        });
 
     // Address-update replay [16..19]: advance L1_Dest_addr for next tile.
     // Same pattern as BH pack-untilize (llk_pack_untilize.h:94-108).
-    TTI_REPLAY(REPLAY_ADDR_UPDATE_OFFSET, REPLAY_ADDR_UPDATE_LEN, 0, 1);
-    TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
-    TTI_NOP;
+    ckernel::load_replay_buf(
+        REPLAY_ADDR_UPDATE_OFFSET,
+        REPLAY_ADDR_UPDATE_LEN,
+        []
+        {
+            TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+            TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+            TTI_NOP;
+        });
 }
 
 #undef EMIT_FACE_PACRS
@@ -137,7 +147,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t unit_dim,
     [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const std::uint32_t pack_src_format            = (std::uint32_t)DataFormat::Float16_b)
+    const std::uint32_t pack_src_format            = static_cast<std::uint32_t>(DataFormat::Float16_b))
 {
     // DEST remap (remap_addrs + swizzle_32b) is set by _llk_math_fast_tilize_init_
     // on the math thread (mirrors pack_untilize_dest_init; tracked by
@@ -270,7 +280,7 @@ inline void _llk_pack_fast_tilize_uninit_(
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t face_r_dim,
     [[maybe_unused]] const std::uint32_t num_faces,
-    const std::uint32_t pack_src_format = (std::uint32_t)DataFormat::Float16_b)
+    const std::uint32_t pack_src_format = static_cast<std::uint32_t>(DataFormat::Float16_b))
 {
     if constexpr (is_fp32_dest_acc_en)
     {

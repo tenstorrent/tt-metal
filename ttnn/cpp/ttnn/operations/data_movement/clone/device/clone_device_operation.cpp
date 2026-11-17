@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::data_movement::clone {
 void CloneOperation::validate_inputs(
@@ -15,7 +16,7 @@ void CloneOperation::validate_inputs(
         TT_FATAL(input.layout() == Layout::TILE, "Clone: data type conversion is only supported with tile layout");
     }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Clone: input must be allocated in buffer on device");
+    TT_FATAL(input.is_allocated(), "Clone: input must be allocated in buffer on device");
 
     auto input_memory_layout = input.memory_config().memory_layout();
     auto output_memory_layout = operation_attributes.memory_config.memory_layout();
@@ -53,7 +54,7 @@ CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
     const auto& input = tensor_args.input;
     return tt::tt_metal::TensorSpec(
         input.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             operation_attributes.dtype,
             tt::tt_metal::PageConfig(input.layout()),
             operation_attributes.memory_config,
@@ -84,13 +85,16 @@ ttnn::Tensor clone(
     const Tensor& input,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::data_movement::clone::CloneOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             dtype.value_or(input.dtype()),
             memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
+            init_device_compute_kernel_config(
+                input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
+            sub_core_grids,
         },
         OperationType::tensor_args_t{input});
 }

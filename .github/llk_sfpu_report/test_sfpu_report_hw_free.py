@@ -235,6 +235,7 @@ def test_detection_compiles_modules_and_kernels_that_exist(family):
         module,
         runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py",
         runner.PYTHON_TESTS / "test_eltwise_unary_sfpu.py",
+        runner.PYTHON_TESTS / "test_eltwise_unary_typecast.py",
     ]
     for source in detect.SOURCES[family]:
         assert (runner.TOOL_LLK / "tests" / "sources" / source).is_file()
@@ -292,10 +293,78 @@ def test_the_binary_accuracy_driver_hooks_names_that_exist():
     assert hooked | builders <= module_names(runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py")
 
 
-@pytest.mark.parametrize("exit_code, builds", [(0, True), (5, True), (1, False)])
-def test_the_skew_probe_reads_the_compile_exit_code(monkeypatch, exit_code, builds):
-    monkeypatch.setattr(detect, "compile_all", lambda *args, **kwargs: exit_code)
+def test_the_unary_accuracy_driver_builds_through_the_functional_builder():
+    """The driver lists no template or runtime of its own: a hand-written TestConfig
+    stopped compiling when eltwise_unary_sfpu_test.cpp gained parameters, and only
+    showed up on hardware, as a report with no accuracy. It calls the functional
+    driver's builder, with keywords that builder takes."""
+    import ast
+
+    driver = ast.parse(accuracy.DRIVER_SOURCE.read_text())
+    calls = [
+        node
+        for node in ast.walk(driver)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id.endswith("_config")
+    ]
+    assert [call.func.id for call in calls] == ["build_eltwise_unary_sfpu_config"]
+    assert not [
+        node
+        for node in ast.walk(driver)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "TestConfig"
+    ]
+    functional = ast.parse((runner.PYTHON_TESTS / "test_eltwise_unary_sfpu.py").read_text())
+    (builder,) = [
+        node
+        for node in functional.body
+        if isinstance(node, ast.FunctionDef) and node.name == "build_eltwise_unary_sfpu_config"
+    ]
+    accepted = {arg.arg for arg in builder.args.args + builder.args.kwonlyargs}
+    assert {keyword.arg for keyword in calls[0].keywords} <= accepted
+    assert len(calls[0].args) <= len(builder.args.args)
+
+
+@pytest.mark.parametrize(
+    "unary_exit,typecast_exit,builds",
+    [
+        (0, 0, True),
+        (runner.NO_TESTS_COLLECTED, 0, True),
+        (1, 0, False),
+        (0, runner.NO_TESTS_COLLECTED, False),
+        (0, 1, False),
+    ],
+)
+def test_the_skew_probe_reads_both_compile_exit_codes(monkeypatch, unary_exit, typecast_exit, builds):
+    calls = []
+
+    def compile_all(side, arch, family, log, jobs, **kwargs):
+        calls.append((family, kwargs))
+        return unary_exit if family == "unary" else typecast_exit
+
+    monkeypatch.setattr(detect, "compile_all", compile_all)
     assert cli._harness_compiles(None, "wormhole", None, 1) is builds
+    assert calls[0] == ("unary", {"only_ops": ("neg",)})
+    if unary_exit in (0, runner.NO_TESTS_COLLECTED):
+        assert calls[1] == ("typecast", {"extra_pytest_args": ("-k", "Float16_b and UInt16")})
+    else:
+        assert len(calls) == 1
+
+
+def test_typecast_harness_skew_falls_back_to_rebase_mode(monkeypatch):
+    monkeypatch.setattr(
+        detect,
+        "compile_all",
+        lambda side, arch, family, log, jobs, **kwargs: 0 if family == "unary" else 1,
+    )
+    seen = []
+    monkeypatch.setattr(cli, "_sides", lambda plan, work, mode: (seen.append(mode), ("base", "head"))[1])
+    notes = []
+    assert cli._choose_sides(None, None, "merge-base", "wormhole", None, 1, notes) == (
+        "rebase",
+        "base",
+        "head",
+    )
+    assert seen == ["merge-base", "rebase"]
+    assert notes
 
 
 @pytest.mark.parametrize(

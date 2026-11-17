@@ -15,12 +15,13 @@ from helpers.llk_params import (
     DestSync,
     MathOperation,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
+    generate_dest_depth_input_dimensions,
     generate_quasar_sfpu_format_variants,
     parametrize,
+    quasar_sfpu_fpu_route_variants,
     runtime,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -37,7 +38,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_constants import MAX_NUM_FACES
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Reuse the square input-prep and format list from the consolidated unary-SFPU
 # test (the standalone test_sfpu_square_quasar.py was folded into it).
@@ -61,13 +62,31 @@ def generate_sfpu_square_combinations(formats_list):
         MathOperation.Square, formats_list
     ):
         for dest_sync in dest_sync_modes:
-            for input_dimensions in input_dimension_options:
+            # Plus runs of 4 and 8 full Dest sections.
+            for input_dimensions in [
+                *input_dimension_options,
+                *generate_dest_depth_input_dimensions(
+                    format_variant.dest_acc, dest_sync
+                ),
+            ]:
                 combinations.append(
                     (
                         format_variant,
                         dest_sync,
                         runtime(input_dimensions),
                     )
+                )
+    # The FPU datacopy routes the dedup above drops, at the Dest-depth sizes.
+    same_formats = [
+        fmt for fmt in formats_list if fmt.input_format == fmt.output_format
+    ]
+    for format_variant in quasar_sfpu_fpu_route_variants(same_formats):
+        for dest_sync in dest_sync_modes:
+            for input_dimensions in generate_dest_depth_input_dimensions(
+                format_variant.dest_acc, dest_sync
+            ):
+                combinations.append(
+                    (format_variant, dest_sync, runtime(input_dimensions))
                 )
     return combinations
 
@@ -150,7 +169,5 @@ def test_sfpu_square_trisc3_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(golden_tensor)
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

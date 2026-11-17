@@ -29,6 +29,17 @@ DEFAULT_LTX_PROMPT = (
     "shallow depth of field, warm color grade emphasizing skin tones."
 )
 
+# https://www.pexels.com/photo/woman-playing-guitar-3914563/ (by Olly), downscaled to 1920x1280.
+DEFAULT_LTX_I2V_IMAGE = "models/sample_data/ltx_i2v_guitar_room.jpg"
+DEFAULT_LTX_I2V_PROMPT = (
+    "A young woman with dark curly hair tied up in a bun, wearing a white tank top, sits playing a "
+    "black acoustic guitar in a bright, sunlit room in front of a large window, with shelves, a "
+    "tripod and a softbox light beside her. She strums gently, looking directly at camera with "
+    'genuine warmth. Her mouth opens clearly as she sings "Doo-be-doo, doo-be-day, oh what a sunny '
+    'day" with precise lip sync and natural facial expressions. Her head moves subtly with the '
+    "rhythm. Simple chord progression underlies her melodic voice."
+)
+
 # Second prompt for the traced steady-state pass, so its encode is a real one rather than a hit on
 # the prompt-embedding cache that the first pass just populated.
 STEADY_STATE_LTX_PROMPT = (
@@ -88,6 +99,21 @@ def default_ltx_checkpoint(filename: str) -> str:
 
 def default_ltx_gemma() -> str:
     return os.environ.get("GEMMA_PATH") or "google/gemma-3-12b-it-qat-q4_0-unquantized"
+
+
+def missing_checkpoints_fail() -> bool:
+    """True in CI, where a test must fail rather than skip when its checkpoint is missing: a skip
+    leaves the job green with nothing tested (e.g. a runner host without the weights)."""
+    return os.environ.get("CI") == "true"
+
+
+def skip_without_checkpoint(reason: str):
+    """Skip a test whose checkpoint is missing, or fail it in CI (see `missing_checkpoints_fail`)."""
+    import pytest
+
+    if missing_checkpoints_fail():
+        pytest.fail(f"{reason}; CI fails instead of skipping, so a missing checkpoint is not a silent pass")
+    pytest.skip(reason)
 
 
 def print_ltx_timing_table(

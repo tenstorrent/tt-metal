@@ -108,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 is_fp32_dest_acc_en,
                 BroadcastType::NONE,
                 false /* is_int_fpu_en */,
-                PackMode::Default>(TILE_NUM_FACES, formats.math);
+                PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
             for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(

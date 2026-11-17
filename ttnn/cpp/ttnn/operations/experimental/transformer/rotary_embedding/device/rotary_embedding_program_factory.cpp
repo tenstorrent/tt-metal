@@ -800,9 +800,10 @@ ProgramDescriptor create_multi_tile_descriptor(
     compute_desc_g1.core_ranges = core_group_1;
     compute_desc_g1.compile_time_args = compute_kernel_args_group_1;
     compute_desc_g1.defines = compute_kernel_defines;
-    // NOTE: legacy create() left math_fidelity/fp32_dest_acc_en unset for the g1
-    // ComputeConfig in the multi-tile path; preserve those defaults here.
-    compute_desc_g1.config = ComputeConfigDescriptor{};
+    compute_desc_g1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    };
 
     std::optional<KernelDescriptor> compute_desc_g2;
     if (!core_group_2.ranges().empty()) {
@@ -926,8 +927,8 @@ void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
     const auto src_addr = static_cast<uint32_t>(src_buffer->address());
-    const auto cos_addr = static_cast<uint32_t>(tensor_args.cos.buffer()->address());
-    const auto sin_addr = static_cast<uint32_t>(tensor_args.sin.buffer()->address());
+    const auto cos_addr = static_cast<uint32_t>(tensor_args.cos.mesh_buffer().address());
+    const auto sin_addr = static_cast<uint32_t>(tensor_args.sin.mesh_buffer().address());
     const auto dst_addr = static_cast<uint32_t>(dst_buffer->address());
     const uint32_t reader_cos_sin_start_id_arg_idx = work.in_sharded ? 4 : 6;
 

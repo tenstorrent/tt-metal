@@ -19,13 +19,13 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/math.hpp>
@@ -35,7 +35,7 @@
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::SkipMcast;
@@ -208,7 +208,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     if (has_bias) {
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
-        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
+        TT_FATAL(bias.value().is_allocated(), "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -231,8 +231,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         a.storage_type() == ttnn::StorageType::DEVICE && b.storage_type() == ttnn::StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
-    TT_FATAL(
-        a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated() && b.is_allocated(), "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
         TT_FATAL(bias.value().storage_type() == ttnn::StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
@@ -328,7 +327,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         num_blocks_output_w,
         num_blocks_weight_w);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
     TT_FATAL(out_subblock_num_tiles <= 8, "Need to ensure that matmul partials fit in dst");
@@ -855,7 +854,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"num_cores_x", full_core_grid.x},
             });
         // X/Y mcast lookup tables as per-node varargs.
-        m2::AdvancedKernelRunArgs::Varargs varargs;
+        m2::experimental::AdvancedKernelRunArgs::Varargs varargs;
         varargs.reserve(act_mcast_noc_x.size() + act_mcast_noc_y.size());
         varargs.insert(varargs.end(), act_mcast_noc_x.begin(), act_mcast_noc_x.end());
         varargs.insert(varargs.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());

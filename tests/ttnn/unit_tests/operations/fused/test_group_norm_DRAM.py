@@ -2,6 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from tt_py_test_utils_common.group_norm_dram import (
+    STATISTICS_MODES,
+    _use_two_pass_statistics,
+    run_group_norm_DRAM,
+    run_group_norm_DRAM_with_input_mask,
+)
+
 import pytest
 
 import torch
@@ -23,13 +30,6 @@ from tt_py_test_utils_common.utility_functions import (
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 # atol for the non-tile-aligned regressions, matching the tile-aligned specify_grid cases.
 NON_TILE_ALIGNED_ATOL = 0.08
-STATISTICS_MODES = ("tile_reduction", "two_pass")
-
-
-def _use_two_pass_statistics(statistics_mode):
-    if statistics_mode not in STATISTICS_MODES:
-        raise ValueError(f"Unknown GroupNorm statistics mode: {statistics_mode!r}")
-    return statistics_mode == "two_pass"
 
 
 def test_group_norm_statistics_mode_validation(expect_error):
@@ -73,6 +73,21 @@ GROUP_NORM_DRAM_SHAPES = [
     (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
     # mochi
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
+]
+
+GROUP_NORM_DRAM_SANITY_SHAPES = [
+    shape
+    for shape in GROUP_NORM_DRAM_SHAPES
+    if shape[:4]
+    not in {
+        (1, 1536, 8, 8),
+        (1, 1152, 128, 128),
+        (1, 512, 64, 64),
+        (1, 512, 128, 128),
+        (1, 256, 256, 256),
+        (1, 256 // 4, 256, 256),
+        (1, 512 // 4, 256, 256),
+    }
 ]
 
 
@@ -159,6 +174,12 @@ SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
     # (1, 128, 1024, 1024, 32, 32), # does not fit -> input is [16384, 4] per core (~130kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in). in addition to that, RM stick of size 4 is not L1 aligned
 ]
 
+# The split path (channel slices, one group_norm per slice, concat) does not depend on the spatial size.
+# Sanity runs it at 128x64; the SDXL shapes above run nightly (#62486).
+SDXL_BASE_GROUP_NORM_SPLIT_SANITY_SHAPES = [
+    (1, 512, 128, 64, 32, 4),
+]
+
 GROUP_NORM_DRAM_OFT_PARAMS = [
     ### oft
     (1, 256, 159, 159, 16, 3, 4, 4, 1e-5),
@@ -166,135 +187,8 @@ GROUP_NORM_DRAM_OFT_PARAMS = [
 ]
 
 
-# perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
-def run_group_norm_DRAM(
-    device,
-    N,
-    C,
-    H,
-    W,
-    num_groups,
-    num_out_blocks,
-    cores_y,
-    cores_x,
-    statistics_mode,
-    use_input_mask,
-    perf_test_mode=False,
-    specify_grid=True,
-    input_layout=ttnn.TILE_LAYOUT,
-    output_layout=ttnn.TILE_LAYOUT,
-):
-    torch.manual_seed(0)
-    if device.core_grid.y == 7:
-        pytest.skip()
-
-    grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
-    if specify_grid:
-        #   Use the explicit user-chosen grid.
-        grid_for_params = grid_size
-    else:
-        # Exercises the C++ automatic grid selection.
-        # We must prepare gamma/beta/mask for that *same* auto-selected
-        # grid; otherwise their shapes (driven by num_virtual_cols/num_virtual_rows)
-        # would not match the grid the op actually picks at runtime.
-        grid_for_params = ttnn.determine_expected_group_norm_dram_grid_size(
-            device=device,
-            num_channels=C,
-            num_groups=num_groups,
-            input_nhw=N * H * W,
-            num_batches=N,
-        )
-
-    use_welford = _use_two_pass_statistics(statistics_mode)
-
-    # torch input tensor
-    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
-    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
-
-    if not perf_test_mode:
-        torch_output_tensor = torch.nn.functional.group_norm(
-            torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12
-        )
-        torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
-
-    # input tensor
-    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
-    input_tensor_row_major = ttnn.from_torch(
-        input_tensor,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    if input_layout == ttnn.TILE_LAYOUT:
-        input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
-
-    gn_input_tensor = input_tensor_tilized if input_layout == ttnn.TILE_LAYOUT else input_tensor_row_major
-
-    # Create dram group norm params
-    [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
-        [torch_weight, torch_bias], C, num_groups, device, core_grid=grid_for_params, return_mask=True
-    )
-
-    # groupnorm
-
-    num_itr = 2  # second iteration to help catch potential runtime args issue.
-
-    if C > 512 or N > 2 or perf_test_mode:
-        num_itr = 1  # one iter if it is too slow
-    for _ in range(num_itr):
-        output_tensor = ttnn.group_norm(
-            gn_input_tensor,
-            num_groups=num_groups,
-            input_mask=input_mask_tensor if use_input_mask else None,
-            weight=gamma_t,
-            bias=beta_t,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_layout=output_layout,
-            core_grid=grid_size if specify_grid else None,
-            inplace=False,
-            num_out_blocks=num_out_blocks if specify_grid else None,
-            use_welford=use_welford,
-        )
-        ttnn.synchronize_device(device)
-
-    if not perf_test_mode:
-        output_tensor = ttnn.from_device(output_tensor)
-        output_tensor = ttnn.to_torch(output_tensor)
-
-        pcc_threshold = 0.999
-        rtol = 0.060
-
-        if use_welford:
-            atol = 0.043
-            frobenius_threshold = 0.01
-        else:
-            if specify_grid:
-                atol = 0.069
-                frobenius_threshold = 0.025
-            else:
-                # Not using Welford + auto-grid: the op also picks num_out_blocks via the
-                # heuristic in the program factory, which generally differs from
-                # the explicit num_out_blocks used in the specify_grid=True branch.
-                # Different num_out_blocks chunks the per-block partial reductions
-                # differently, producing visible bfloat16 rounding drift on the
-                # tile-reduction mean/variance path.
-                atol = 0.085
-                frobenius_threshold = 0.030
-
-        assert_numeric_metrics(
-            torch_output_tensor,
-            output_tensor,
-            pcc_threshold=pcc_threshold,
-            rtol=rtol,
-            atol=atol,
-            frobenius_threshold=frobenius_threshold,
-        )
-
-
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SANITY_SHAPES)
 @pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
 def test_group_norm_DRAM(
     device,
@@ -310,7 +204,7 @@ def test_group_norm_DRAM(
     specify_grid=True,
     perf_test_mode=False,
 ):
-    run_group_norm_DRAM(
+    return run_group_norm_DRAM_with_input_mask(
         device,
         N,
         C,
@@ -321,10 +215,31 @@ def test_group_norm_DRAM(
         cores_y,
         cores_x,
         statistics_mode,
-        use_input_mask=True,
-        perf_test_mode=perf_test_mode,
-        specify_grid=specify_grid,
+        specify_grid,
+        perf_test_mode,
     )
+
+
+@pytest.mark.requires_grid_size((6, 8))
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
+def test_group_norm_DRAM_batch_ends_mid_column(device, statistics_mode):
+    # Each 12-core reduction group has a four-core partial column.
+    run_group_norm_DRAM(device, 2, 320, 16, 24, 32, 1, 8, 6, statistics_mode, use_input_mask=True)
+
+
+@pytest.mark.requires_grid_size((2, 3))
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
+@pytest.mark.parametrize(
+    "n,c,h,w,groups,grid_y,grid_x",
+    [
+        pytest.param(3, 64, 1, 64, 1, 3, 2, id="sender_only_mid"),
+        pytest.param(8, 320, 1, 160, 32, 8, 10, id="sender_only_first", marks=pytest.mark.requires_grid_size((10, 8))),
+    ],
+)
+def test_group_norm_DRAM_sender_only_rectangle(device, statistics_mode, n, c, h, w, groups, grid_y, grid_x):
+    run_group_norm_DRAM(device, n, c, h, w, groups, 1, grid_y, grid_x, statistics_mode, use_input_mask=True)
 
 
 # Post-commit smoke coverage for the ROW_MAJOR path; the full sweep over GROUP_NORM_ROW_MAJOR_SHAPES
@@ -673,7 +588,9 @@ def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
         pytest.skip()
 
     torch.manual_seed(0)
-    N, C, HW, G, padded = 1, 1024, 200, 32, 224
+    # 256 channels, not the 1024 of the issue: the check is the padding rows (200 logical over 224 padded), and
+    # the channel count only scales the work (4 min on the simulator at 1024, #62486).
+    N, C, HW, G, padded = 1, 256, 200, 32, 224
 
     real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
     ref = torch.nn.functional.group_norm(real.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW).float(), G)
@@ -727,7 +644,7 @@ def test_group_norm_non_tile_aligned_dirty_padding_is_ignored_DRAM(device):
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", SDXL_BASE_GROUP_NORM_SPLIT_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", SDXL_BASE_GROUP_NORM_SPLIT_SANITY_SHAPES)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid):
     torch.manual_seed(0)

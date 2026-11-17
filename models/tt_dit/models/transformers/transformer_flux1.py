@@ -171,8 +171,9 @@ class Flux1SingleTransformerBlock(Module):
         mlp_prompt = ttnn.squeeze(self.proj_mlp(ttnn.unsqueeze(norm_prompt, 0)), 0)
 
         # Fusing the activation function currently gives worse PCC
-        ttnn.gelu(mlp_spatial, output_tensor=mlp_spatial, fast_and_approximate_mode=False)
-        ttnn.gelu(mlp_prompt, output_tensor=mlp_prompt, fast_and_approximate_mode=False)
+        # Reference uses nn.GELU(approximate="tanh")
+        ttnn.gelu(mlp_spatial, output_tensor=mlp_spatial, variant=ttnn.GeluVariant.Tanh)
+        ttnn.gelu(mlp_prompt, output_tensor=mlp_prompt, variant=ttnn.GeluVariant.Tanh)
 
         attn_spatial, attn_prompt = self.attn.forward(
             spatial=norm_spatial,
@@ -305,6 +306,7 @@ class Flux1Transformer(Module):
                 num_heads=num_attention_heads,
                 head_dim=attention_head_dim,
                 context_pre_only=False,
+                ff_activation_fn="gelu_tanh",
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,

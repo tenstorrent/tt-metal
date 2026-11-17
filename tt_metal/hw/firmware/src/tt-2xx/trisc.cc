@@ -22,7 +22,7 @@
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
-#include "tt-metalium/circular_buffer_constants.h"
+#include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
 #if defined(UCK_CHLKC_MATH)
@@ -132,7 +132,76 @@ using namespace ckernel;
 #if defined(UCK_CHLKC_MATH)
 thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
     ckernel::math::DataFormatConfigSet::UNCONFIGURED;
+// Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
+thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
+
+// Called from trisc_irq_entry, which saves no vector registers, so built without the vector extension.
+extern "C" __attribute__((noinline, used, hot, target("arch=rv32im_zmmul_zaamo_zba_zbc_xtttensixqsr_xttzbkb"))) void
+handle_interrupt() {
+    uint32_t trisc_id = internal_::get_trisc_id();
+    uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
+    if (error_code == trisc_id || (35 - error_code) == trisc_id ||
+        (error_code > 3 && error_code < 32 && trisc_id == 0)) {
+        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
+        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt after handling the error
+        (void)hirv;
+    } else {
+        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt
+        (void)hirv;
+        return;
+    }
+#if !defined(WATCHER_ENABLED)  // hang anyway
+    while (1) {
+        ;
+    }
+#endif
+}
+
+// HW error interrupt entry: saves the caller-saved registers around handle_interrupt.
+// A TRISC skips an mret when a branch predictor entry for another PC matches it, and runs on at mret + 4. The
+// jump there retries the mret, which returns because the first attempt cleared that prediction (with branch
+// history off, CSR_CFG's reset value).
+extern "C" __attribute__((naked)) void trisc_irq_entry() {
+    asm volatile(
+        "addi sp, sp, -(16 * 4)\n"
+        "sw ra, 0 * 4(sp)\n"
+        "sw t0, 1 * 4(sp)\n"
+        "sw t1, 2 * 4(sp)\n"
+        "sw t2, 3 * 4(sp)\n"
+        "sw t3, 4 * 4(sp)\n"
+        "sw t4, 5 * 4(sp)\n"
+        "sw t5, 6 * 4(sp)\n"
+        "sw t6, 7 * 4(sp)\n"
+        "sw a0, 8 * 4(sp)\n"
+        "sw a1, 9 * 4(sp)\n"
+        "sw a2, 10 * 4(sp)\n"
+        "sw a3, 11 * 4(sp)\n"
+        "sw a4, 12 * 4(sp)\n"
+        "sw a5, 13 * 4(sp)\n"
+        "sw a6, 14 * 4(sp)\n"
+        "sw a7, 15 * 4(sp)\n"
+        "call handle_interrupt\n"
+        "lw ra, 0 * 4(sp)\n"
+        "lw t0, 1 * 4(sp)\n"
+        "lw t1, 2 * 4(sp)\n"
+        "lw t2, 3 * 4(sp)\n"
+        "lw t3, 4 * 4(sp)\n"
+        "lw t4, 5 * 4(sp)\n"
+        "lw t5, 6 * 4(sp)\n"
+        "lw t6, 7 * 4(sp)\n"
+        "lw a0, 8 * 4(sp)\n"
+        "lw a1, 9 * 4(sp)\n"
+        "lw a2, 10 * 4(sp)\n"
+        "lw a3, 11 * 4(sp)\n"
+        "lw a4, 12 * 4(sp)\n"
+        "lw a5, 13 * 4(sp)\n"
+        "lw a6, 14 * 4(sp)\n"
+        "lw a7, 15 * 4(sp)\n"
+        "addi sp, sp, 16 * 4\n"
+        "mret_loop: mret\n"
+        "j mret_loop\n");
+}
 
 void init_sync_registers() {
     // TODO: check if this is needed with transition to DFBs

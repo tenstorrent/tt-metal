@@ -17,9 +17,9 @@
 #include "impl/kernels/kernel.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
@@ -96,7 +96,7 @@ protected:
         const bool simple_kernel = false,
         KernelProperties kernel_properties = KernelProperties()) {
         if (device_->arch() != ARCH::QUASAR) {
-            Program program = CreateProgram();
+            Program program = CreateProgram(*device_);
             this->create_kernel(program, kernel_core_type, simple_kernel, kernel_properties);
             return program;
         }

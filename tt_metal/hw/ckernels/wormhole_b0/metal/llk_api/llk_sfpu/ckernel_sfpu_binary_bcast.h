@@ -53,8 +53,11 @@ namespace sfpu {
 //         After load, only "SFPU column 0" in each 8-lane sub-vector carries
 //         the useful value (the data broadcast target); the other 7 SFPU
 //         columns hold d[row][cols 1..7] which we must discard.
-//     (2) Zero out SFPU cols 1..7 in each 8-lane group by multiplying with a
-//         precomputed lane mask LREG_MASK (1.0 in col 0, 0.0 in cols 1..7).
+//     (2) Zero out SFPU cols 1..7 in each 8-lane group with one SFPAND against
+//         the precomputed lane mask LREG_MASK (all ones in col 0, zero in cols
+//         1..7). A bitwise AND keeps col 0 exactly and cannot turn an Inf or NaN
+//         sitting in a discarded column into NaN, which a multiply by a 0/1 mask
+//         would, and step (3) would then spread it across the whole row.
 //     (3) Broadcast col-0 value to all 8 SFPU columns via 3 stages of
 //         "rotate-by-k + add" using SFPSHFT2_MOD1_SUBVEC_SHFLROR1:
 //             stage 1: ROR by 1, ADD  -> col {0,1} filled
@@ -112,7 +115,7 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects col
 // ============================================================================
 //
 // BCAST_COL path:
-//   LREG_MASK  (LREG6)  - one-time lane mask: 1.0 in SFPU col 0, 0.0 elsewhere.
+//   LREG_MASK  (LREG6)  - one-time lane mask: all ones in SFPU col 0, zero elsewhere.
 //                         Built once in _sfpu_binary_bcast_init_().
 //   LREG_BCAST (LREG0)  - broadcast value (after load+mask+rotate-add).
 //   LREG_TMP   (LREG2)  - scratch for rotate-and-add inside the broadcast
@@ -154,7 +157,7 @@ constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM = 1;
 
 // Replay-buffer slots.
 constexpr std::uint32_t REPLAY_SLOT_BROADCAST = 0;  // col-0 -> all-cols broadcast
-constexpr std::uint32_t REPLAY_LEN_BROADCAST = 12;  // see _record_broadcast_replay_
+constexpr std::uint32_t REPLAY_LEN_BROADCAST = 11;  // see _record_broadcast_replay_
 
 // BCAST_ROW col-group offsets within a face pair (face N + face N+1), in
 // dest addr units. A "col group" is one 4-row x 8-col SFPLOAD/SFPSTORE slot.
@@ -171,15 +174,19 @@ constexpr std::uint32_t COL_GROUP_OFFSETS[4] = {
 // Helpers
 // ============================================================================
 
-// Build LREG_MASK = {1.0, 0, 0, 0, 0, 0, 0, 0} repeated across all 4 sub-rows
+// Build LREG_MASK = {~0, 0, 0, 0, 0, 0, 0, 0} repeated across all 4 sub-rows
 // of the register. LReg[15] contains 2*lane_id, so left-shifting it by 28
-// leaves zero only for SFPU col 0 in each 8-lane sub-vector.
+// leaves zero only for SFPU col 0 in each 8-lane sub-vector; those lanes get
+// all ones by predicated SFPLOADI. One SFPAND against it then zeroes cols 1..7
+// of a register bitwise, so an Inf or NaN in a discarded column stays out of
+// col 0 (a multiply by a 0/1 mask would make it NaN).
 inline void _build_lane_mask_col0_() {
     TTI_SFPMOV(0, p_sfpu::LTILEID, LREG_TMP, 0);
     TTI_SFPSHFT(28, 0, LREG_TMP, SFPSHFT_MOD1_ARG_IMM);
     TTI_SFPMOV(0, p_sfpu::LCONST_0, LREG_MASK, 0);
     TTI_SFPSETCC(0, LREG_TMP, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-    TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_UPPER, 0x3F80);
+    TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
+    TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_UPPER, 0xFFFF);
     TTI_SFPENCC(0, 0, 0, 0);
 }
 
@@ -190,25 +197,26 @@ inline void _build_lane_mask_col0_() {
 // combined, and because stage 3 interleaves per-slot SFPLOADs into its
 // SFPSHFT2 latency slots (data addresses are per-call so can't be recorded).
 //
-// Sequence recorded (12 SFPU ops):
-//    1  SFPMUL    LREG_BCAST *= LREG_MASK   (zero SFPU cols 1..7 in-place)
-//    2  SFPNOP
-//    3  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
-//    4  SFPNOP
-//    5  SFPADD    LREG_BCAST += LREG_TMP
-//    6  SFPNOP
-//    7  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
-//    8  SFPNOP
-//    9  SFPSHFT2  LREG_TMP = ROR1(LREG_TMP)
-//   10  SFPNOP
-//   11  SFPADD    LREG_BCAST += LREG_TMP
-//   12  SFPNOP
+// Sequence recorded (11 SFPU ops):
+//    1  SFPAND    LREG_BCAST &= LREG_MASK   (zero SFPU cols 1..7 bitwise)
+//    2  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
+//    3  SFPNOP
+//    4  SFPADD    LREG_BCAST += LREG_TMP
+//    5  SFPNOP
+//    6  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
+//    7  SFPNOP
+//    8  SFPSHFT2  LREG_TMP = ROR1(LREG_TMP)
+//    9  SFPNOP
+//   10  SFPADD    LREG_BCAST += LREG_TMP
+//   11  SFPNOP
+// No SFPNOP after step 1: SFPAND is a single-cycle op whose result the next
+// instruction reads directly (only the SFPMAD-class ops need the slot).
 inline void _record_broadcast_replay_() {
     lltt::record(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
 
-    // (1) Mask: zero out SFPU cols 1..7.
-    TTI_SFPMUL(LREG_BCAST, LREG_MASK, p_sfpu::LCONST_0, LREG_BCAST, 0);
-    TTI_SFPNOP;
+    // (1) Mask: zero out SFPU cols 1..7 bitwise, so an Inf or NaN in a
+    //     discarded column cannot reach col 0.
+    TTI_SFPAND(0, LREG_MASK, LREG_BCAST, 0);
 
     // Stage 1: ROR by 1, add.
     TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);

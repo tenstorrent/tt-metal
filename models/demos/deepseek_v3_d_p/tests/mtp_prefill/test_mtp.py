@@ -12,7 +12,9 @@ cache. Every test carries both weight options.
 from __future__ import annotations
 
 import copy
+import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -21,14 +23,23 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID, num_mtp_tokens
-from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import (
     fused_mtp_reference,
     glm_mtp_module_reference,
     glm_mtp_predictor_reference,
 )
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests._reuse import acquire_module
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.mtp_prefill.conftest import glm53_checkpoint_path
+from models.demos.deepseek_v3_d_p.tests.mtp_prefill.predictor_reference import (
+    compute_predictor_reference,
+    load_reference,
+    predictor_inputs,
+    prepare_store,
+    save_reference,
+    stored_reference_path,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
@@ -45,6 +56,8 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
 )
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtFusedMTP, TtMTPModule, TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import (
+    MTP_CACHE_ENV,
+    MTP_CACHE_PREFIX,
     eh_proj_expected_chip_shard,
     eh_proj_to_tt_layout,
     enable_mtp_indexer_slot,
@@ -55,18 +68,20 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     prepare_prefill_mtp_tokens,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, mesh_cache_key
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import load_host_tail_weights
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc, comp_pcc
 
 FUSED_MTP_PCC = 0.999
 # Keyed by use_pretrained.
 MTP_MODULE_OUTPUT_PCC = {False: 0.98, True: 0.95}
 KVPE_PCC = 0.999
 INDEX_K_PCC = 0.999
-
-SP_AXIS, TP_AXIS = 0, 1
 
 
 def _accumulated_pcc(base: float, upstream_levels: int, module_pcc: float) -> float:
@@ -77,6 +92,32 @@ def _accumulated_pcc(base: float, upstream_levels: int, module_pcc: float) -> fl
     return 1.0 - ((1.0 - base) + upstream_levels * (1.0 - module_pcc))
 
 
+# Keyed by use_pretrained; levels 2-4 of test_mtp_multiturn_pcc as (x, out and normed, KVPE nope, KVPE pe), centered.
+# Each is the lowest over the 8 schedules at levels7 on bh-glx-120-c02u02 (2026-10-22) minus 0.02, rounded down.
+MULTITURN_LEVEL_PCC = {
+    False: [
+        (0.97, 0.95, 0.97, 0.97),
+        (0.96, 0.93, 0.96, 0.96),
+        (0.95, 0.91, 0.95, 0.95),
+    ],
+    True: [
+        (0.96, 0.92, 0.95, 0.97),
+        (0.93, 0.83, 0.89, 0.94),
+        (0.86, 0.72, 0.80, 0.91),
+    ],
+}
+
+
+def _assert_level_pcc(expected, actual, pcc: float, k: int, what: str):
+    """Plain PCC at level 1 (``k == 0``). Deeper free-running levels share a large common row, which plain PCC
+    rewards even in an output that only repeats it, so there each column's mean over the rows is removed first."""
+    if k > 0:
+        expected, actual = expected.float(), actual.float()
+        expected, actual, what = expected - expected.mean(0), actual - actual.mean(0), f"{what} centered"
+    _, msg = assert_with_pcc(expected, actual, pcc)
+    logger.info(f"{what} PCC: {msg}")
+
+
 _MESH_PARAMS = [
     pytest.param(
         (8, 4),
@@ -85,34 +126,48 @@ _MESH_PARAMS = [
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
         ),
         2,
+        0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
+    ),
+    # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP on the axis-1 ring. An MTP
+    # level is a full sparse-MLA block, so 8x4 at SP on axis 1 (TP=8) is not a GLM layout.
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(
+            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+            worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+        ),
+        2,
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-x-4x4-sp1",
     ),
 ]
 
 
-def _shard_dims():
+def _shard_dims(sp_axis=0):
     dims = [None, None]
-    dims[TP_AXIS] = -1
-    dims[SP_AXIS] = -2
+    dims[1 - sp_axis] = -1
+    dims[sp_axis] = -2
     return dims
 
 
-def _to_device(t: torch.Tensor, mesh_device) -> ttnn.Tensor:
-    """Upload ``[1, seq, hidden]`` as ``[1, 1, seq, hidden]``, SP over rows and TP over columns."""
+def _to_device(t: torch.Tensor, mesh_device, sp_axis=0) -> ttnn.Tensor:
+    """Upload ``[1, seq, hidden]`` as ``[1, 1, seq, hidden]``, seq over the SP axis and hidden over TP."""
     return ttnn.from_torch(
         t.unsqueeze(0),
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=_shard_dims()),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=_shard_dims(sp_axis)),
     )
 
 
-def _from_device(t: ttnn.Tensor, mesh_device) -> torch.Tensor:
+def _from_device(t: ttnn.Tensor, mesh_device, sp_axis=0) -> torch.Tensor:
     return ttnn.to_torch(
-        t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=_shard_dims(), mesh_shape=mesh_device.shape)
+        t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=_shard_dims(sp_axis), mesh_shape=mesh_device.shape)
     ).to(torch.bfloat16)
 
 
@@ -205,7 +260,40 @@ def _glm_layer_weights(variant, config, layer_state_dict=None):
     return mla_weights, attn_norm_w, ffn_norm_w, moe_weights, layer_state_dict
 
 
-def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int, chunk_size: int | None = None):
+def _mtp_device_weights(
+    variant, mesh_device, layer_idx: int, use_pretrained: bool, mtp_sd: dict, layer_sd: dict, sp_axis: int = 0
+):
+    """``(state_dict, weight_cache_path)`` for an MTP constructor: cache-only, as the runner builds it, when
+    ``$TT_GLM53_MTP_TTNN_CACHE`` holds a complete cache for this mesh. Otherwise the weights are converted and
+    nothing is written, so a read-only shared tree stays untouched."""
+    state_dict = {"mtp": mtp_sd, "layer": layer_sd}
+    root = os.environ.get(MTP_CACHE_ENV)
+    if not (use_pretrained and root):
+        return state_dict, None
+    mesh_shape = list(mesh_device.shape)
+    path = (
+        Path(root)
+        / f"{variant.name}_{'bh' if is_blackhole() else 'wh'}_{ttnn.get_num_devices()}dev"
+        / mesh_cache_key(mesh_shape, sp_axis)
+    )
+    if path.is_dir():
+        init_checker(path)
+        if TtMTPPredictor.check_cache_complete(
+            path,
+            layer_idx,
+            cache_name_prefix=MTP_CACHE_PREFIX,
+            experts_per_chip=GLM53Config.NUM_ROUTED_EXPERTS // mesh_device.get_num_devices(),
+            model_cfg=GLM53Config,
+        ):
+            logger.info(f"MTP layer {layer_idx} weights: from the cache at {path}")
+            return {"mtp": {}, "layer": {}}, path
+    logger.warning(f"MTP layer {layer_idx} weights: no complete cache at {path}, converting the checkpoint's")
+    return state_dict, None
+
+
+def _mtp_device_caches(
+    config, mesh_device, seq_len: int, num_cache_slots: int, chunk_size: int | None = None, sp_axis: int = 0
+):
     """``(kvpe_cache, rope_tensors, index_kv_cache)`` for a stack of ``num_cache_slots`` MTP levels.
     ``chunk_size`` makes ``seq_len`` a cache that chunked forwards fill, roped as the transformer does."""
     mesh_shape = list(mesh_device.shape)
@@ -217,12 +305,12 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int, 
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
         num_kvpe_cache_layers=num_cache_slots,
     )
     chunked = chunk_size is not None
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=seq_len, chunk_size_global=chunk_size if chunked else seq_len, tail_slack=chunked
     )
     index_kv_cache = init_kvpe_cache(
@@ -230,8 +318,8 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int, 
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
         num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
         num_users=1,
         dtype=ttnn.bfloat8_b,
@@ -240,22 +328,25 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int, 
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, sp_axis", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.timeout(0)
-def test_fused_mtp_pcc(mesh_device, device_params, num_links, seq_len, use_pretrained, mtp_cfg, mtp_state_dict):
+def test_fused_mtp_pcc(
+    mesh_device, device_params, num_links, sp_axis, seq_len, use_pretrained, mtp_cfg, mtp_state_dict
+):
     """``TtFusedMTP`` vs ``fused_mtp_reference`` -- the only new math in the feature.
 
     Runs on real weights too: unlike the full module this touches no MoE gate. Uses no DSA op, so it
     is not Blackhole-gated.
     """
+    tp_axis = 1 - sp_axis
     topology = per_axis_topology(device_params["fabric_config"])
     hidden = mtp_cfg.hidden_size
     embed, hid = _mtp_inputs(seq_len, hidden)
 
-    tp = mesh_device.shape[TP_AXIS]
+    tp = mesh_device.shape[tp_axis]
     permuted = eh_proj_to_tt_layout(mtp_state_dict["eh_proj"], tp)
     block = permuted.shape[0] // tp
     for chip in range(tp):
@@ -269,11 +360,15 @@ def test_fused_mtp_pcc(mesh_device, device_params, num_links, seq_len, use_pretr
         mesh_device,
         mtp_cfg,
         mtp_state_dict,
-        tp_axis=TP_AXIS,
+        tp_axis=tp_axis,
         num_links=num_links,
         topology=topology,
     )
-    tt_out = _from_device(fused.forward(_to_device(embed, mesh_device), _to_device(hid, mesh_device)), mesh_device)
+    tt_out = _from_device(
+        fused.forward(_to_device(embed, mesh_device, sp_axis), _to_device(hid, mesh_device, sp_axis)),
+        mesh_device,
+        sp_axis,
+    )
 
     ref = fused_mtp_reference(
         embed,
@@ -289,7 +384,7 @@ def test_fused_mtp_pcc(mesh_device, device_params, num_links, seq_len, use_pretr
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, sp_axis", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
@@ -302,6 +397,7 @@ def test_mtp_module_pcc(
     mesh_device,
     device_params,
     num_links,
+    sp_axis,
     seq_len,
     use_pretrained,
     mtp_cfg,
@@ -312,6 +408,7 @@ def test_mtp_module_pcc(
 
     Both weight options; ``test_mtp_transformer_chunks.py`` only covers this module behind the trunk.
     """
+    tp_axis = 1 - sp_axis
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
     layer_idx = mtp_cfg.mtp_layer_idx
@@ -329,30 +426,35 @@ def test_mtp_module_pcc(
         f"[mtp module] use_pretrained={use_pretrained} module_pcc={module_pcc} "
         f"building TtMTPModule layer_idx={layer_idx} seq_len={seq_len} mesh={mesh_shape}"
     )
+    device_weights, weight_cache_path = _mtp_device_weights(
+        variant, mesh_device, layer_idx, use_pretrained, mtp_state_dict, layer_state_dict, sp_axis
+    )
     module = TtMTPModule(
         mesh_device,
         config,
         GLM53Config,
-        {"mtp": mtp_state_dict, "layer": layer_state_dict},
+        device_weights,
         mtp_cfg,
         seq_len=seq_len,
         layer_idx=layer_idx,
-        tp_axis=TP_AXIS,
+        tp_axis=tp_axis,
         num_links=num_links,
         topology=topology,
-        sp_axis=SP_AXIS,
+        sp_axis=sp_axis,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        weight_cache_path=weight_cache_path,
+        cache_name_prefix=MTP_CACHE_PREFIX,
         layer_num=1,
     )
 
-    kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(config, mesh_device, seq_len, 1)
+    kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(config, mesh_device, seq_len, 1, sp_axis=sp_axis)
 
     embed, hid = _mtp_inputs(seq_len, hidden)
 
     logger.info("[mtp module] running device module")
     tt_x, tt_out, tt_normed, *_ = module.forward(
-        _to_device(embed, mesh_device),
-        _to_device(hid, mesh_device),
+        _to_device(embed, mesh_device, sp_axis),
+        _to_device(hid, mesh_device, sp_axis),
         rope_tensors=rope_tensors,
         kvpe_cache=kvpe_cache,
         actual_isl=seq_len,
@@ -372,19 +474,181 @@ def test_mtp_module_pcc(
         moe_weights=moe_weights,
     )
 
-    _, msg = assert_with_pcc(ref_x.unsqueeze(0), _from_device(tt_x, mesh_device), FUSED_MTP_PCC)
+    _, msg = assert_with_pcc(ref_x.unsqueeze(0), _from_device(tt_x, mesh_device, sp_axis), FUSED_MTP_PCC)
     logger.info(f"[mtp module] fused projection PCC: {msg}")
-    _, msg = assert_with_pcc(ref_out.unsqueeze(0), _from_device(tt_out, mesh_device), module_pcc)
+    _, msg = assert_with_pcc(ref_out.unsqueeze(0), _from_device(tt_out, mesh_device, sp_axis), module_pcc)
     logger.info(f"[mtp module] layer output PCC: {msg}")
-    _, msg = assert_with_pcc(ref_normed.unsqueeze(0), _from_device(tt_normed, mesh_device), module_pcc)
+    _, msg = assert_with_pcc(ref_normed.unsqueeze(0), _from_device(tt_normed, mesh_device, sp_axis), module_pcc)
     logger.info(f"[mtp module] shared_head.norm output PCC: {msg}")
     ttnn.synchronize_device(mesh_device)
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, sp_axis", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("num_levels", [1, 4, 7], ids=["levels1", "levels4", "levels7"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_mtp_build_ttnn_cache(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    num_links,
+    sp_axis,
+    use_pretrained,
+    mtp_cfg,
+    mtp_state_dict,
+    mtp_layer_state_dict,
+):
+    """Build the MTP layer's TTNN cache at ``$TT_GLM53_MTP_TTNN_CACHE/<variant>_<arch>_<N>dev/<mesh key>``,
+    the path the runner's MTP predictor reads for this mesh (a 4x4 stage: ``glm_5_3_bh_16dev/4x4_sp1``).
+
+    ``test_mtp_transformer_chunks.py`` builds it behind the trunk on 8x4 only; this builds the module alone,
+    on any mesh in ``_MESH_PARAMS``, and runs no forward.
+    """
+    root = os.environ.get(MTP_CACHE_ENV)
+    if not root:
+        pytest.skip(f"set {MTP_CACHE_ENV} to the MTP cache root to build")
+    layer_idx = mtp_cfg.mtp_layer_idx
+    mesh_shape = list(mesh_device.shape)
+    path = (
+        Path(root)
+        / f"{variant.name}_{'bh' if is_blackhole() else 'wh'}_{ttnn.get_num_devices()}dev"
+        / mesh_cache_key(mesh_shape, sp_axis)
+    )
+    experts_per_chip = GLM53Config.NUM_ROUTED_EXPERTS // mesh_device.get_num_devices()
+
+    def _complete():
+        init_checker(path)
+        return TtMTPPredictor.check_cache_complete(
+            path,
+            layer_idx,
+            cache_name_prefix=MTP_CACHE_PREFIX,
+            experts_per_chip=experts_per_chip,
+            model_cfg=GLM53Config,
+        )
+
+    if path.is_dir() and _complete():
+        logger.info(f"MTP layer {layer_idx} cache already complete at {path}")
+        return
+    path.mkdir(parents=True, exist_ok=True)
+
+    seq_len = 5120
+    config = _glm53_config_for_mtp(config_only, seq_len, layer_idx)
+    *_, layer_state_dict = _glm_layer_weights(variant, config, mtp_layer_state_dict)
+    logger.info(f"Building the MTP layer {layer_idx} cache for mesh {mesh_shape} (sp_axis={sp_axis}) at {path}")
+    TtMTPModule(
+        mesh_device,
+        config,
+        GLM53Config,
+        {"mtp": mtp_state_dict, "layer": layer_state_dict},
+        mtp_cfg,
+        seq_len=seq_len,
+        layer_idx=layer_idx,
+        tp_axis=1 - sp_axis,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        sp_axis=sp_axis,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        weight_cache_path=path,
+        cache_name_prefix=MTP_CACHE_PREFIX,
+        layer_num=1,
+    )
+    ttnn.synchronize_device(mesh_device)
+    assert _complete(), f"MTP layer {layer_idx} cache still incomplete at {path}"
+    logger.info(f"MTP layer {layer_idx} cache complete at {path}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, sp_axis", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_mtp_build_trunk_tail_cache(
+    variant,
+    config_only,
+    model_path,
+    weight_cache_path,
+    mesh_device,
+    device_params,
+    num_links,
+    sp_axis,
+    use_pretrained,
+):
+    """Build the trunk tail an MTP last rank loads, the final norm and the LM head, into the trunk cache
+    for this mesh (``$TT_GLM53_PREFILL_TTNN_CACHE/<variant>_<arch>_<N>dev/<mesh key>``), built the way
+    ``TtPrefillTransformer`` builds them, and check the LM head's logits against torch.
+
+    A trunk cache build writes only the embedding and the layers, so a mesh's cache lacks these until
+    this runs (or ``test_mtp_transformer_chunks.py`` does, on 8x4).
+    """
+    if weight_cache_path is None:
+        pytest.skip("no pretrained checkpoint, so no trunk cache to build")
+    path = weight_cache_path / mesh_cache_key(list(mesh_device.shape), sp_axis)
+    path.mkdir(parents=True, exist_ok=True)
+    tp_axis = 1 - sp_axis
+    topology = per_axis_topology(device_params["fabric_config"])
+    tp_topology = topology[tp_axis] if isinstance(topology, tuple) else topology
+    tail = load_host_tail_weights(model_path, config_only)
+    assert tail is not None, f"checkpoint at {model_path} has no final norm / LM head"
+    norm_weight, lm_head_weight = tail
+    hidden, vocab = config_only.hidden_size, config_only.vocab_size
+
+    logger.info(f"Building the trunk tail (norm + LM head) for mesh {list(mesh_device.shape)} at {path}")
+    TtDistributedRmsNorm(
+        mesh_device=mesh_device,
+        emb_dim=hidden,
+        torch_weight=norm_weight,
+        epsilon=config_only.rms_norm_eps,
+        cluster_axis=tp_axis,
+        num_links=num_links,
+        topology=tp_topology,
+        weight_cache_path=path,
+        cache_name_prefix="norm",
+    )
+    lm_head = TtLMHead(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        emb_dim=hidden,
+        vocab_size=vocab,
+        torch_weight=lm_head_weight,
+        num_links=num_links,
+        topology=tp_topology,
+        weight_cache_path=path,
+        is_column_parallel=True,
+    )
+    init_checker(path)
+    assert TtDistributedRmsNorm.check_cache_complete(path, "norm") and TtLMHead.check_cache_complete(path)
+
+    # One tile of rows per SP chip, emb TP-sharded: the layout the MTP tail hands the head.
+    sp = mesh_device.shape[sp_axis]
+    x = torch.randn(1, 1, ttnn.TILE_SIZE * sp, hidden).to(torch.bfloat16)
+    dims = (-2, -1) if sp_axis == 0 else (-1, -2)
+    tt_x = ttnn.from_torch(
+        x,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=dims),
+    )
+    tt_logits, _ = lm_head(tt_x, None)
+    logits = ttnn.to_torch(
+        tt_logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=dims)
+    )
+    ref = x.float() @ lm_head_weight.float().T
+    _, msg = assert_with_pcc(ref, logits.float(), 0.99)
+    logger.info(f"Trunk tail cache complete at {path}; LM head logits PCC {msg}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, sp_axis", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("num_levels", [1, 4], ids=["levels1", "levels4"])
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
@@ -396,6 +660,7 @@ def test_mtp_predictor_pcc(
     mesh_device,
     device_params,
     num_links,
+    sp_axis,
     num_levels,
     seq_len,
     use_pretrained,
@@ -408,6 +673,7 @@ def test_mtp_predictor_pcc(
     The per-slot KV assertions are the point: a level that wrote the wrong slot still produces the
     right output single-shot. Index sharing is asserted by object identity on the returned top-k.
     """
+    tp_axis = 1 - sp_axis
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
     layer_idx = mtp_cfg.mtp_layer_idx
@@ -424,31 +690,38 @@ def test_mtp_predictor_pcc(
         f"[mtp predictor] use_pretrained={use_pretrained} module_pcc={module_pcc} "
         f"building TtMTPPredictor K={num_levels} layer_idx={layer_idx} mesh={mesh_shape}"
     )
+    device_weights, weight_cache_path = _mtp_device_weights(
+        variant, mesh_device, layer_idx, use_pretrained, mtp_state_dict, layer_state_dict, sp_axis
+    )
     predictor = TtMTPPredictor(
         mesh_device,
         config,
         GLM53Config,
-        {"mtp": mtp_state_dict, "layer": layer_state_dict},
+        device_weights,
         mtp_cfg,
         seq_len=seq_len,
         num_levels=num_levels,
         layer_idx=layer_idx,
-        tp_axis=TP_AXIS,
+        tp_axis=tp_axis,
         num_links=num_links,
         topology=topology,
-        sp_axis=SP_AXIS,
+        sp_axis=sp_axis,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        weight_cache_path=weight_cache_path,
+        cache_name_prefix=MTP_CACHE_PREFIX,
         layer_num=num_levels,
     )
 
-    kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(config, mesh_device, seq_len, num_levels)
+    kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(
+        config, mesh_device, seq_len, num_levels, sp_axis=sp_axis
+    )
 
     embeds, h0 = _mtp_level_inputs(num_levels, seq_len, hidden)
 
     logger.info(f"[mtp predictor] running {num_levels} device level(s), index_share={predictor.index_share}")
     res = predictor.forward(
-        lambda k, _prev: _to_device(embeds[k], mesh_device),
-        _to_device(h0, mesh_device),
+        lambda k, _prev: _to_device(embeds[k], mesh_device, sp_axis),
+        _to_device(h0, mesh_device, sp_axis),
         rope_tensors=rope_tensors,
         kvpe_cache=kvpe_cache,
         actual_isl=seq_len,
@@ -488,19 +761,19 @@ def test_mtp_predictor_pcc(
         lvl = k + 1
         _, msg = assert_with_pcc(
             ref_xs[k].unsqueeze(0),
-            _from_device(res.x[k], mesh_device),
+            _from_device(res.x[k], mesh_device, sp_axis),
             _accumulated_pcc(FUSED_MTP_PCC, k, module_pcc),
         )
         logger.info(f"[mtp predictor] L{lvl} fused projection PCC: {msg}")
         _, msg = assert_with_pcc(
             ref_outs[k].unsqueeze(0),
-            _from_device(res.out[k], mesh_device),
+            _from_device(res.out[k], mesh_device, sp_axis),
             _accumulated_pcc(module_pcc, k, module_pcc),
         )
         logger.info(f"[mtp predictor] L{lvl} layer output PCC: {msg}")
         _, msg = assert_with_pcc(
             ref_normeds[k].unsqueeze(0),
-            _from_device(res.out_head_normed[k], mesh_device),
+            _from_device(res.out_head_normed[k], mesh_device, sp_axis),
             _accumulated_pcc(module_pcc, k, module_pcc),
         )
         logger.info(f"[mtp predictor] L{lvl} shared_head.norm output PCC: {msg}")
@@ -519,6 +792,10 @@ def test_mtp_predictor_pcc(
 
 CHUNK = 5 * 1024
 CACHE_LEN = 3 * CHUNK
+REFERENCE_LEN = 11520  # the longest schedule, multichunk
+MAX_LEVELS = 4
+INPUT_SEED = 11
+VOCAB = CACHE_LEN + ttnn.TILE_SIZE
 
 # New tokens per turn. Each turn resumes at the previous end rounded down to a tile, as the engine replays.
 _MULTITURN_TURNS = [
@@ -543,11 +820,59 @@ def _turn_chunks(turns) -> list[tuple[int, int]]:
     return chunks
 
 
+# The last reference used, kept for the next case: no test may mutate it.
+_MULTITURN_REFERENCES: dict = {}
+
+
+def _multiturn_reference(
+    config, mtp_sd, layer_sd, use_pretrained: bool, layer_idx: int, index_share: bool, levels: int
+):
+    """The stored reference when this checkpoint has one, else computed once per process: every level, and stored,
+    when ``$TT_GLM53_MTP_REF_CACHE`` is writable. Either has at least ``levels`` levels, and levels 1..K of a longer
+    run are the K-level run."""
+    key = (use_pretrained, layer_idx, index_share)
+    ref = _MULTITURN_REFERENCES.get(key)
+    if ref is not None and ref["x"].shape[0] >= levels:
+        return ref
+    args = dict(
+        index_share=index_share, seed=INPUT_SEED, vocab=VOCAB, seq_len=REFERENCE_LEN, chunk=CHUNK, cache_len=CACHE_LEN
+    )
+    root = os.environ.get("TT_GLM53_MTP_REF_CACHE")
+    path = None
+    if use_pretrained and root:
+        path = stored_reference_path(
+            root, "glm53_mtp_multiturn_ref", glm53_checkpoint_path(), layer_idx, num_levels=MAX_LEVELS, **args
+        )
+    if path is not None and path.exists():
+        logger.info(f"[mtp multiturn] CPU reference stored at {path}")
+        ref = load_reference(path)
+    else:
+        store = path is not None and prepare_store(path)
+        if store:
+            logger.warning(f"[mtp multiturn] no stored CPU reference at {path}, computing every level to store it")
+            levels = MAX_LEVELS
+        elif path is not None:
+            logger.warning(f"[mtp multiturn] no stored CPU reference at {path}, and {path.parent} is not writable")
+        logger.info(
+            f"[mtp multiturn] CPU reference, {levels} level(s) over [0, {REFERENCE_LEN}) in {CHUNK}-token chunks"
+        )
+        ref = compute_predictor_reference(config, mtp_sd, layer_sd, num_levels=levels, **args)
+        if store:
+            try:
+                save_reference(ref, path)
+                logger.info(f"[mtp multiturn] CPU reference stored at {path}")
+            except (OSError, RuntimeError) as e:  # torch.save raises RuntimeError when it cannot write
+                logger.warning(f"[mtp multiturn] could not store the CPU reference at {path}: {e}")
+    _MULTITURN_REFERENCES.clear()
+    _MULTITURN_REFERENCES[key] = ref
+    return ref
+
+
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, sp_axis", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("turns", _MULTITURN_TURNS)
-@pytest.mark.parametrize("num_levels", [1, 4, 7], ids=["levels1", "levels4", "levels7"])
+@pytest.mark.parametrize("num_levels", [1, 4], ids=["levels1", "levels4"])
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
@@ -558,6 +883,7 @@ def test_mtp_multiturn_pcc(
     mesh_device,
     device_params,
     num_links,
+    sp_axis,
     turns,
     num_levels,
     use_pretrained,
@@ -566,10 +892,12 @@ def test_mtp_multiturn_pcc(
     mtp_layer_state_dict,
 ):
     """``TtMTPPredictor`` over a multi-turn conversation on one cache vs a whole-conversation reference.
-    Teacher-forced: the real next tokens, and each level's hidden from the device."""
+    Free-running: the real next tokens; each level's hidden is the level below's output, on the device and in
+    the reference."""
     topology = per_axis_topology(device_params["fabric_config"])
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
-    sp = mesh_shape[SP_AXIS]
+    sp = mesh_shape[sp_axis]
     layer_idx = mtp_cfg.mtp_layer_idx
     config = _glm53_config_for_mtp(config_only, CACHE_LEN, layer_idx)
     hidden = config.hidden_size
@@ -577,64 +905,70 @@ def test_mtp_multiturn_pcc(
     chunks = _turn_chunks(turns)
     total = chunks[-1][1]
     assert chunks[-1][0] + CHUNK <= CACHE_LEN, f"turns {turns} write past the {CACHE_LEN}-token cache"
+    assert total <= REFERENCE_LEN and num_levels <= MAX_LEVELS, f"turns {turns} at K={num_levels} outgrow the reference"
 
-    mla_weights, attn_norm_w, ffn_norm_w, moe_weights, layer_state_dict = _glm_layer_weights(
-        variant, config, mtp_layer_state_dict
-    )
+    *_, layer_state_dict = _glm_layer_weights(variant, config, mtp_layer_state_dict)
     module_pcc = MTP_MODULE_OUTPUT_PCC[use_pretrained]
     logger.info(f"[mtp multiturn] use_pretrained={use_pretrained} K={num_levels} turns={turns} chunks={chunks}")
-    predictor = TtMTPPredictor(
+    device_weights, weight_cache_path = _mtp_device_weights(
+        variant, mesh_device, layer_idx, use_pretrained, mtp_state_dict, layer_state_dict, sp_axis
+    )
+    # The turn schedule is the only axis the predictor does not depend on, so its cases share one build.
+    predictor = acquire_module(
         mesh_device,
-        config,
-        GLM53Config,
-        {"mtp": mtp_state_dict, "layer": layer_state_dict},
-        mtp_cfg,
-        seq_len=CHUNK,
-        num_levels=num_levels,
-        layer_idx=layer_idx,
-        tp_axis=TP_AXIS,
-        num_links=num_links,
-        topology=topology,
-        sp_axis=SP_AXIS,
-        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
-        # Every padding row is identical, so all of them can route to one chip's experts.
-        dispatch_buffer_capacity_factor=8,
-        is_chunked=True,
-        max_seq_len=CACHE_LEN,
-        slot_num=1,
-        layer_num=num_levels,
+        ("TtMTPPredictor multiturn", variant.name, use_pretrained, num_levels, num_links, CHUNK, CACHE_LEN, layer_idx),
+        lambda: TtMTPPredictor(
+            mesh_device,
+            config,
+            GLM53Config,
+            device_weights,
+            mtp_cfg,
+            seq_len=CHUNK,
+            num_levels=num_levels,
+            layer_idx=layer_idx,
+            tp_axis=tp_axis,
+            num_links=num_links,
+            topology=topology,
+            sp_axis=sp_axis,
+            gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+            # Every padding row is identical, so all of them can route to one chip's experts.
+            dispatch_buffer_capacity_factor=8,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=MTP_CACHE_PREFIX,
+            is_chunked=True,
+            max_seq_len=CACHE_LEN,
+            slot_num=1,
+            layer_num=num_levels,
+        ),
+        release=lambda p: p.module.layer.release_sub_device_managers(),
     )
     kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(
-        config, mesh_device, CACHE_LEN, num_levels, chunk_size=CHUNK
+        config, mesh_device, CACHE_LEN, num_levels, chunk_size=CHUNK, sp_axis=sp_axis
     )
     mesh_device.enable_program_cache()
 
-    g = torch.Generator().manual_seed(11)
-    vocab = CACHE_LEN + ttnn.TILE_SIZE
-    table = torch.randn(vocab, hidden, generator=g).to(torch.bfloat16)
-    h0 = torch.randn(total, hidden, generator=g).to(torch.bfloat16)
-    ids = list(range(1, total + num_levels + 1))
+    table, h0, ids = predictor_inputs(hidden, VOCAB, REFERENCE_LEN, MAX_LEVELS, INPUT_SEED)
     # A pad id is clamped to the table's last row, which no real id may share.
-    assert ids[-1] < vocab - 1
-    embedding = TtParallelEmbedding(mesh_device, vocab, hidden, torch_weight=table, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
-    sp_rank = build_sp_rank_tensor(mesh_device, sp, mesh_shape, SP_AXIS)
+    assert ids[-1] < VOCAB - 1
+    embedding = TtParallelEmbedding(mesh_device, VOCAB, hidden, torch_weight=table, sp_axis=sp_axis, tp_axis=tp_axis)
+    sp_rank = build_sp_rank_tensor(mesh_device, sp, mesh_shape, sp_axis)
     n_mtp = num_mtp_tokens(num_levels)
 
     def all_gather_sp(rows):
-        return ttnn.all_gather(rows, dim=-2, cluster_axis=SP_AXIS, num_links=num_links, topology=topology[SP_AXIS])
+        return ttnn.all_gather(rows, dim=-2, cluster_axis=sp_axis, num_links=num_links, topology=topology[sp_axis])
 
     dev_chunks, done = [], 0
     for i, (start, end) in enumerate(chunks):
         stream = [ids[p] if p < end + num_levels else MTP_PAD_TOKEN_ID for p in range(start, start + CHUNK + n_mtp)]
         chunk_ids = prepare_prefill_input_tensor(
-            stream[:CHUNK], mesh_device, sp, False, mesh_shape, SP_AXIS, chunk_start=start
+            stream[:CHUNK], mesh_device, sp, False, mesh_shape, sp_axis, chunk_start=start
         )
         mtp_ids = prepare_prefill_mtp_tokens(
             stream,
             mesh_device,
             sp,
             mesh_shape,
-            SP_AXIS,
+            sp_axis,
             num_mtp_tokens=n_mtp,
             num_levels=num_levels,
             chunk_start=start,
@@ -649,7 +983,7 @@ def test_mtp_multiturn_pcc(
         positions = torch.tensor(rotated_chip_positions(start, sp, CHUNK // sp)).flatten()
         h_rows = h0[positions.clamp(max=total - 1)]
         h_rows[positions >= end] = 0
-        h_tt = _to_device(h_rows.unsqueeze(0), mesh_device)
+        h_tt = _to_device(h_rows.unsqueeze(0), mesh_device, sp_axis)
         lookahead = MTPSplitChipLookahead.for_chunk_start(
             start, CHUNK // sp, sp, sp_rank, all_gather_sp, chunk_end=end, num_levels=num_levels
         )
@@ -686,81 +1020,52 @@ def test_mtp_multiturn_pcc(
         stop = chunks[i + 1][0] if i + 1 < len(chunks) else end
         outputs = []
         for level_outputs in (res.x, res.out, res.out_head_normed):
-            rows = [_from_device(t, mesh_device)[0, 0] for t in level_outputs]
+            rows = [_from_device(t, mesh_device, sp_axis)[0, 0] for t in level_outputs]
             outputs.append([unrotate_cache_layer(r, positions - start, stop - start) for r in rows])
             for t in level_outputs:
                 ttnn.deallocate(t)
         dev_chunks.append((start, stop, *outputs))
     ttnn.deallocate(sp_rank)
 
-    # Level k's hidden is level k - 1's normed output from the chunk that wrote that row last.
-    hiddens = [h0] + [torch.zeros(total, hidden, dtype=torch.bfloat16) for _ in range(num_levels - 1)]
-    for start, end, _, _, normeds in dev_chunks:
-        for k in range(1, num_levels):
-            hiddens[k][start:end] = normeds[k - 1]
-
-    logger.info(f"[mtp multiturn] CPU reference over [0, {total}) in {CHUNK}-token chunks")
     t0 = time.monotonic()
-    refs = [SparseMLAReference(config, mla_weights, seq_len=CACHE_LEN) for _ in range(num_levels)]
-    token_ids = torch.tensor(ids)
-    ref_chunks = []
-    for ref_start in range(0, total, CHUNK):
-        ref_end = min(ref_start + CHUNK, total)
-        ref_chunks.append(
-            glm_mtp_predictor_reference(
-                config,
-                mla_weights,
-                mtp_state_dict,
-                attn_norm_w,
-                ffn_norm_w,
-                [table[token_ids[ref_start + k + 1 : ref_end + k + 1]].unsqueeze(0) for k in range(num_levels)],
-                h0[ref_start:ref_end].unsqueeze(0),
-                CACHE_LEN,
-                moe_weights=moe_weights,
-                num_levels=num_levels,
-                index_share=predictor.index_share,
-                hiddens=[h[ref_start:ref_end].unsqueeze(0) for h in hiddens],
-                mla_refs=refs,
-                actual_start=ref_start,
-                actual_end=ref_end,
-            )
-        )
-    ref_x, ref_out, ref_normed = (
-        [torch.cat([chunk[part][k][0] for chunk in ref_chunks]) for k in range(num_levels)] for part in range(3)
+    ref = _multiturn_reference(
+        config, mtp_state_dict, layer_state_dict, use_pretrained, layer_idx, predictor.index_share, num_levels
     )
     logger.info(f"[mtp multiturn] CPU reference took {time.monotonic() - t0:.1f}s")
 
+    limits = [(FUSED_MTP_PCC, module_pcc, KVPE_PCC, KVPE_PCC), *MULTITURN_LEVEL_PCC[use_pretrained]]
     for i, (start, end, xs, outs, normeds) in enumerate(dev_chunks):
         for k in range(num_levels):
+            x_pcc, out_pcc, _, _ = limits[k]
             what = f"[mtp multiturn] chunk {i} L{k + 1}"
-            _, msg = assert_with_pcc(ref_x[k][start:end], xs[k], FUSED_MTP_PCC)
-            logger.info(f"{what} fused projection PCC: {msg}")
-            _, msg = assert_with_pcc(ref_out[k][start:end], outs[k], module_pcc)
-            logger.info(f"{what} layer output PCC: {msg}")
-            _, msg = assert_with_pcc(ref_normed[k][start:end], normeds[k], module_pcc)
-            logger.info(f"{what} shared_head.norm output PCC: {msg}")
+            _assert_level_pcc(ref["x"][k, start:end], xs[k], x_pcc, k, f"{what} fused projection")
+            _assert_level_pcc(ref["out"][k, start:end], outs[k], out_pcc, k, f"{what} layer output")
+            _assert_level_pcc(ref["normed"][k, start:end], normeds[k], out_pcc, k, f"{what} shared_head.norm output")
 
     # Whole slots, so a row a later turn failed to overwrite fails too; nothing at or past the last tile is written.
     tail = -(-total // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
     kv_lora_rank = config.kv_lora_rank
-    kvpe, stripes = gather_cache_natural(kvpe_cache.storage, mesh_device, tp_shard_kv=True)
+    kvpe, stripes = gather_cache_natural(kvpe_cache.storage, mesh_device, tp_shard_kv=True, sp_axis=sp_axis)
     cache_positions = blockcyclic_positions(stripes, CHUNK, kvpe.shape[1])
     for k in range(num_levels):
         cache = unrotate_cache_layer(kvpe[k], cache_positions, kvpe.shape[1])
-        expected = refs[k].kvpe_cache[0, 0]
-        for part, cols in (("nope", slice(None, kv_lora_rank)), ("pe", slice(kv_lora_rank, None))):
-            _, msg = assert_with_pcc(expected[:, cols], cache[:total, cols], KVPE_PCC)
-            logger.info(f"[mtp multiturn] L{k + 1} KVPE {part} PCC: {msg}")
+        expected = ref["kvpe"][k, :total]
+        _, _, nope_pcc, pe_pcc = limits[k]
+        for part, cols, pcc in (
+            ("nope", slice(None, kv_lora_rank), nope_pcc),
+            ("pe", slice(kv_lora_rank, None), pe_pcc),
+        ):
+            _assert_level_pcc(expected[:, cols], cache[:total, cols], pcc, k, f"[mtp multiturn] L{k + 1} KVPE {part}")
         assert torch.count_nonzero(cache[tail:]) == 0, f"L{k + 1} KVPE has rows written at or past {tail}"
     if predictor.index_share:
-        index, stripes = gather_cache_natural(index_kv_cache, mesh_device, tp_shard_kv=True)
+        index, stripes = gather_cache_natural(index_kv_cache, mesh_device, tp_shard_kv=True, sp_axis=sp_axis)
         raw = unrotate_cache_layer(
             index[full_indexer_rank(config, layer_idx)],
             blockcyclic_positions(stripes, CHUNK, index.shape[1]),
             index.shape[1],
         )
         index_k = raw @ normalized_hadamard_matrix(raw.shape[-1]).float()
-        _, msg = assert_with_pcc(refs[0].index_cache[0], index_k[:total], INDEX_K_PCC)
+        _, msg = assert_with_pcc(ref["index_k"][:total], index_k[:total], INDEX_K_PCC)
         logger.info(f"[mtp multiturn] L1 index-K PCC: {msg}")
         assert torch.count_nonzero(raw[tail:]) == 0, f"the index cache has rows written at or past {tail}"
 

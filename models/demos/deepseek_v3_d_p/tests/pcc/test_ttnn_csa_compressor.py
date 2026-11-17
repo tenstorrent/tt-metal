@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_csa_compressor import
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import V4_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tests.pcc.v4_test_utils import V4_SEED, v4_reference_config
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import CSA_STATE_ROWS, TtCSACompressor
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # PER-CHIP padded prompt length, not global.
 _LOCAL_SHAPES = [640]

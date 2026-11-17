@@ -28,6 +28,8 @@
 // renaming the CB calls for everything parsed after it, so what it reaches is exactly what
 // follows it.
 #include "hybrid_dataflow_cb_shims.hpp"
+// At file scope, ahead of both halves, so each finds the one table lookup unqualified.
+#include "hybrid_weight_table.hpp"
 
 // Only when the pass exists. A threshold of zero leaves every expert to the unified half, and this
 // body is the largest single thing in the binary -- the kernel config ring is what this op is
@@ -70,8 +72,15 @@
 // After both halves, so it sees the dataflow API they pulled in; compiles to nothing on a compute
 // kernel, which has no NoC of its own.
 #include "hybrid_pass_barrier.hpp"
+#include "hybrid_rt_expand.hpp"
 
 void kernel_main() {
+    // Before anything reads a runtime argument: the host sent only what differs between cores.
+    hybrid_expand_runtime_args();
+#ifdef HYB_WEIGHT_TABLE
+    // Before either pass: both read their per-expert weight addresses from this page.
+    hyb_load_weight_table();
+#endif
     // First pass: every expert above the threshold, on the whole grid.
     hyb_unified::kernel_main();
 #ifdef HYB_RUN_FUSED_PASS

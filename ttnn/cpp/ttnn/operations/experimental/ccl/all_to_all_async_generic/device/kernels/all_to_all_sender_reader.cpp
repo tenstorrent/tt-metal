@@ -108,6 +108,15 @@ void kernel_main() {
     Noc noc_obj;
     CircularBuffer cb0(cb0_id);
 
+    // Packets are read in pairs: the reader reserves two CB pages (one packet each), issues both packets' reads and
+    // waits once, so one DRAM round trip covers two packets. Pairs run on across destination ranges, so every pair
+    // starts on an even page and, with the host's even CB depth, never crosses the CB's end. Only the last packet
+    // this core reads can be alone.
+    constexpr uint32_t kPacketsPerPair = 2;
+    constexpr uint32_t packet_bytes = max_pages_per_packet * input_page_size;  // one CB page
+    uint32_t packets_in_pair = 0;
+    address_t pair_write_addr = 0;
+
     for (uint32_t did = 0; did < local_num_devices; ++did) {
         const int32_t device_offset = get_arg_val<int32_t>(arg_idx++);
         const uint32_t device_id = (current_device_id + device_offset + num_devices) % num_devices;
@@ -128,9 +137,30 @@ void kernel_main() {
         uint32_t block_idx = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t block_end_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t block_stride = get_arg_val<uint32_t>(arg_idx++);
+#ifdef TILIZE_INPUT
+        // Row-major input: fetch each tile row (32 input rows) for the tilize kernel, which fills the packet buffer.
+        // The host keeps every range on whole tile rows with stride 1.
+        constexpr uint32_t tile_height = 32;
+        CircularBuffer cb_rows(ROWS_CB);
+        const auto rows = TensorAccessor(input_tensor_args, input_address, ROW_BYTES);
+        for (; block_idx < block_end_id; block_idx += TILES_PER_ROW) {
+            const auto [split_idx, inner_idx, concat_idx, tile_id, payload_size] = calculate_tile(block_idx);
+            const uint32_t first_row = tile_id / TILES_PER_ROW * tile_height;
+            cb_rows.reserve_back(TILES_PER_ROW);
+            const uint32_t rows_l1 = cb_rows.get_write_ptr();
+            for (uint32_t row = 0; row < tile_height; ++row) {
+                noc_async_read(rows.get_noc_addr(first_row + row), rows_l1 + row * ROW_BYTES, ROW_BYTES);
+            }
+            noc_async_read_barrier();
+            cb_rows.push_back(TILES_PER_ROW);
+        }
+#else
         while (block_idx < block_end_id) {
-            cb0.reserve_back(1);
-            address_t l1_write_addr = cb0.get_write_ptr();
+            if (packets_in_pair == 0) {
+                cb0.reserve_back(kPacketsPerPair);
+                pair_write_addr = cb0.get_write_ptr();
+            }
+            address_t l1_write_addr = pair_write_addr + packets_in_pair * packet_bytes;
             uint32_t current_package_payload = 0;
             uint32_t current_tile = 0;
             while (current_tile < max_pages_per_packet) {
@@ -155,8 +185,16 @@ void kernel_main() {
                 current_tile++;
                 block_idx += block_stride;
             }
-            noc_obj.async_read_barrier();
-            cb0.push_back(1);
+            if (++packets_in_pair == kPacketsPerPair) {
+                noc_obj.async_read_barrier();
+                cb0.push_back(kPacketsPerPair);
+                packets_in_pair = 0;
+            }
         }
+#endif
+    }
+    if (packets_in_pair > 0) {
+        noc_obj.async_read_barrier();
+        cb0.push_back(packets_in_pair);
     }
 }

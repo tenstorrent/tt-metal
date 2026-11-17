@@ -6,11 +6,13 @@
 
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <optional>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "mla_kv_assemble_bw_device_operation.hpp"
 #include "mla_kv_assemble_bw_device_operation_types.hpp"
 
 namespace {
@@ -27,13 +29,18 @@ constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/mla_kv_assemble_bw/device/kernels/compute/"
     "mla_kv_assemble_bw_kernel.cpp";
 
-// reader runtime arg indices (for override_runtime_arguments)
-constexpr uint32_t kReaderArgDKAddr = 0;
-constexpr uint32_t kReaderArgDVAddr = 1;
+// Kernel push order into ProgramDescriptor::kernels: reader, writer, then the single compute kernel (it covers all
+// cores, since its per-core block count is a runtime arg).
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
+constexpr uint32_t kComputeKernelIdx = 2U;
 
-// writer runtime arg indices
-constexpr uint32_t kWriterArgDKVUpAddr = 0;
-constexpr uint32_t kWriterArgDKPeAddr = 1;
+// reader runtime args
+constexpr uint32_t kDKAddrIdx = 0U;
+constexpr uint32_t kDVAddrIdx = 1U;
+// writer runtime args
+constexpr uint32_t kDKvUpAddrIdx = 0U;
+constexpr uint32_t kDKpeAddrIdx = 1U;
 
 // CB indices
 constexpr auto kDKnopeCbIndex = tt::CBIndex::c_1;
@@ -56,13 +63,18 @@ namespace ttml::metal::ops::mla_kv_assemble_bw::device {
 
 using namespace tt::constants;
 
-struct MLAKVAssembleBwKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute;
-};
+namespace {
 
-MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::create(
+// dK's (batch, sequence tile row) blocks over the device's compute grid. create_descriptor() pins it against
+// split_work_to_cores, and override_runtime_arguments() walks the same cores from it.
+WorkSplit make_work_split(const ttnn::Tensor& dK) {
+    const auto& shape = dK.padded_shape();
+    return compute_work_split(dK.device()->compute_with_storage_grid_size(), shape[0] * (shape[2] / TILE_HEIGHT));
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor MLAKVAssembleBwProgramFactory::create_descriptor(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& dK = tensor_args.dK;
     const auto& dV = tensor_args.dV;
@@ -70,7 +82,7 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
     auto& dk_pe = output[1];
 
     auto* device = dK.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     // ── Tile geometry ──
     const auto dK_shape = dK.padded_shape();
@@ -101,10 +113,12 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
 
     // ── Work split ──
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
+    const WorkSplit split = make_work_split(dK);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2);
 
     // ── CBs ──
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dK.dtype());
@@ -116,14 +130,10 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
     const uint32_t io_cb_num_tiles = kCbDoubleBuffer * block_size;
     const uint32_t kpe_cb_num_tiles = kCbDoubleBuffer * Tr;
 
-    [[maybe_unused]] auto cb_dknope =
-        create_circular_buffer(program, all_cores, kDKnopeCbIndex, data_format, single_tile_size, io_cb_num_tiles);
-    [[maybe_unused]] auto cb_dv =
-        create_circular_buffer(program, all_cores, kDVCbIndex, data_format, single_tile_size, io_cb_num_tiles);
-    [[maybe_unused]] auto cb_dkpe_in =
-        create_circular_buffer(program, all_cores, kDKpeInCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
-    [[maybe_unused]] auto cb_dkpe_out =
-        create_circular_buffer(program, all_cores, kDKpeOutCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kDKnopeCbIndex, data_format, single_tile_size, io_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kDVCbIndex, data_format, single_tile_size, io_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kDKpeInCbIndex, data_format, single_tile_size, kpe_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kDKpeOutCbIndex, data_format, single_tile_size, kpe_cb_num_tiles));
 
     // ── Kernels ──
     auto* dK_buffer = dK.buffer();
@@ -143,89 +153,68 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
 
     const std::map<std::string, std::string> defines;
 
-    MLAKVAssembleBwKernels kernels;
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    desc.kernels.push_back(  // kReaderKernelIdx
+        make_reader_kernel_descriptor(all_cores, reader_compile_time_args, defines, kReaderKernelPath));
+    desc.kernels.push_back(  // kWriterKernelIdx
+        make_writer_kernel_descriptor(all_cores, writer_compile_time_args, defines, kWriterKernelPath));
     // fp32 dest accumulation: the dk_pe head-axis sum adds up to n_heads BF16 tiles, so accumulating in
     // fp32 (instead of BF16 dest) keeps the gradient accurate for large head counts.
-    kernels.compute = create_compute_kernel(
-        program, all_cores, compute_compile_time_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+    desc.kernels.push_back(  // kComputeKernelIdx
+        make_compute_kernel_descriptor(
+            all_cores, compute_compile_time_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
 
     // ── Runtime args ──
-    for_each_core_with_work(
-        num_cores,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_blocks_per_core_group_1,
-        num_blocks_per_core_group_2,
-        [&](const CoreWork& work) {
-            const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
-            const uint32_t b_start = start_block / Ts;
-            const uint32_t sb_start = start_block % Ts;
-            const uint32_t dK_block_base_start = b_start * H * k_HtWt + sb_start * Th;
-            const uint32_t dV_block_base_start = b_start * H * v_HtWt + sb_start * Tv;
-            const uint32_t dkv_up_block_base_start = start_block * H * (Tn + Tv);
-            const uint32_t dk_pe_block_base_start = start_block * Tr;
-            SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {dK_buffer->address(),
-                 dV_buffer->address(),
-                 num_blocks,
-                 sb_start,
-                 dK_block_base_start,
-                 dV_block_base_start});
-            SetRuntimeArgs(
-                program,
-                kernels.writer,
-                core,
-                {dkv_up_buffer->address(),
-                 dk_pe_buffer->address(),
-                 num_blocks,
-                 dkv_up_block_base_start,
-                 dk_pe_block_base_start});
-            SetRuntimeArgs(program, kernels.compute, core, {num_blocks});
-        });
+    // Slots as named at the top of the file; override_runtime_arguments() rewrites the addresses on every cache hit.
+    // Block counts and tile offsets follow from the hashed shapes and attributes.
+    auto& reader = desc.kernels[kReaderKernelIdx];
+    auto& writer = desc.kernels[kWriterKernelIdx];
+    auto& compute = desc.kernels[kComputeKernelIdx];
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
+        const uint32_t b_start = start_block / Ts;
+        const uint32_t sb_start = start_block % Ts;
+        const uint32_t dK_block_base_start = b_start * H * k_HtWt + sb_start * Th;
+        const uint32_t dV_block_base_start = b_start * H * v_HtWt + sb_start * Tv;
+        const uint32_t dkv_up_block_base_start = start_block * H * (Tn + Tv);
+        const uint32_t dk_pe_block_base_start = start_block * Tr;
+        reader.emplace_runtime_args(
+            core, {dK_buffer, dV_buffer, num_blocks, sb_start, dK_block_base_start, dV_block_base_start});
+        writer.emplace_runtime_args(
+            core, {dkv_up_buffer, dk_pe_buffer, num_blocks, dkv_up_block_base_start, dk_pe_block_base_start});
+        compute.emplace_runtime_args(core, {num_blocks});
+    });
 
-    return cached_program_t{
-        std::move(program),
-        {/* reader_kernel_id  = */ kernels.reader,
-         /* writer_kernel_id  = */ kernels.writer,
-         /* compute_kernel_id = */ kernels.compute,
-         /* num_cores         = */ num_cores,
-         /* num_cores_y       = */ num_cores_y}};
+    return desc;
 }
 
 void MLAKVAssembleBwProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*args*/,
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& shared = cached_program.shared_variables;
-    auto& program = cached_program.program;
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const WorkSplit split = make_work_split(tensor_args.dK);
 
-    auto* dK_buffer = tensor_args.dK.buffer();
-    auto* dV_buffer = tensor_args.dV.buffer();
-    auto* dkv_up_buffer = output[0].buffer();
-    auto* dk_pe_buffer = output[1].buffer();
+    const uint32_t dK_addr = tensor_args.dK.buffer()->address();
+    const uint32_t dV_addr = tensor_args.dV.buffer()->address();
+    const uint32_t dkv_up_addr = output[0].buffer()->address();
+    const uint32_t dk_pe_addr = output[1].buffer()->address();
 
-    auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
 
-    for_each_core(shared.num_cores, shared.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-        {
-            auto& ra = reader_runtime_args[core.x][core.y];
-            ra[kReaderArgDKAddr] = dK_buffer->address();
-            ra[kReaderArgDVAddr] = dV_buffer->address();
-        }
-        {
-            auto& ra = writer_runtime_args[core.x][core.y];
-            ra[kWriterArgDKVUpAddr] = dkv_up_buffer->address();
-            ra[kWriterArgDKPeAddr] = dk_pe_buffer->address();
-        }
+        auto& reader_args = reader_runtime_args[core.x][core.y];
+        reader_args[kDKAddrIdx] = dK_addr;
+        reader_args[kDVAddrIdx] = dV_addr;
+
+        auto& writer_args = writer_runtime_args[core.x][core.y];
+        writer_args[kDKvUpAddrIdx] = dkv_up_addr;
+        writer_args[kDKpeAddrIdx] = dk_pe_addr;
     });
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(MLAKVAssembleBwDeviceOperation, MLAKVAssembleBwProgramFactory);
 
 }  // namespace ttml::metal::ops::mla_kv_assemble_bw::device

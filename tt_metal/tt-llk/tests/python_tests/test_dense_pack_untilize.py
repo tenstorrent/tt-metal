@@ -22,7 +22,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, MAX_FACE_ELEMENTS, MAX_TILE_ELEMENTS
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def generate_specific_stimuli(input_dimensions, r_dim, data_format):
@@ -166,11 +166,7 @@ def test_pack_untilize(
         ]
     ).tolist()
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

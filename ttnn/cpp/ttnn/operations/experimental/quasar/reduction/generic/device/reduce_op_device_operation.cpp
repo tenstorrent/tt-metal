@@ -34,7 +34,7 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
-    TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.is_allocated(), "Operands to reduce need to be allocated in buffers on device!");
     // MIN reduce is lowered to math_op=MAX + negate=true, whose fused compute kernels rely on the
     // negative_tile LLK. That LLK is an unported empty stub on Quasar, so reject negate on ALL paths
     // before any factory is selected.
@@ -90,10 +90,13 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor_args.dtype() != DataType::INT32,
             "INT32 reduce uses the sfpu_reduce path which is unported on Quasar.");
+        // MX: unpacked to Float16_b, reduced on the FPU like bf16, packed back for an MX output.
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
-            "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}.",
+                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
+                is_mx(tensor_args.dtype()),
+            "Only FLOAT32, BFLOAT16, BFLOAT8_B, UINT32 and the MX formats are supported for generic reduction - got "
+            "{}.",
             tensor_args.dtype());
     }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");

@@ -5,7 +5,9 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
 #include <memory>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -136,6 +138,20 @@ public:
 
     Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
 
+    // Page placement chosen by the allocator. It doesn't depend on the device, so all device buffers share it.
+    // Each getter throws if none of the device buffers are local to this host.
+
+    /// Alignment of the buffer's memory type, in bytes.
+    uint32_t alignment() const;
+    /// Page size rounded up to the alignment.
+    DeviceAddr aligned_page_size() const;
+    /// Number of pages on each device, including padding pages of sharded buffers.
+    uint32_t num_dev_pages() const;
+    /// Total size of the pages on each device, aligned.
+    DeviceAddr aligned_size() const;
+    /// Size the allocation takes in each bank.
+    DeviceAddr aligned_size_per_bank() const;
+
     // TODO: Remove this method, once there is no need to interop MeshBuffer with Buffer.
     // The reference buffer allows "casting" the MeshBuffer to a buffer allocated on a
     // single device. This allows users of this object that only need to query single device
@@ -144,7 +160,16 @@ public:
     // The backing buffer represents the buffer object keeping the MeshBuffer alive/allocated
     // at its specific address. The backing buffer will not be populated if an address was passed
     // into the creation API.
+    [[deprecated(
+        "Use unique_id() to identify the allocation, get_device_buffer() for per-device attributes, or a MeshTensor "
+        "to bind a circular buffer. This API will be removed after 2026-12-03.")]]
     Buffer* get_backing_buffer() const;
+
+    // Identifies the device allocation this MeshBuffer owns. The Buffers holding the allocation share this ID, so the
+    // allocator and graph tracking report the allocation under it. Like Buffer::unique_id(), it stays the same after
+    // the MeshBuffer is deallocated.
+    // std::nullopt if the MeshBuffer never owned an allocation: it was created at an explicit address.
+    std::optional<std::uint64_t> unique_id() const { return unique_id_; }
 
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
@@ -166,7 +191,9 @@ private:
         address_(backing_buffer->address()),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
-        state_(OwnedBufferState{std::move(backing_buffer)}) {}
+        unique_id_(backing_buffer->unique_id()),
+        state_(OwnedBufferState{std::move(backing_buffer)}),
+        built_device_buffers_(std::make_unique<std::atomic<Buffer*>[]>(buffers_.shape().mesh_size())) {}
 
     // Creates a non-owning `MeshBuffer` as "view" over an existing `address`.
     MeshBuffer(
@@ -181,7 +208,8 @@ private:
         address_(address),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
-        state_(ExternallyOwnedState{}) {}
+        state_(ExternallyOwnedState{}),
+        built_device_buffers_(std::make_unique<std::atomic<Buffer*>[]>(buffers_.shape().mesh_size())) {}
 
     void initialize_device_buffers();
     MeshBufferConfig config_;
@@ -191,6 +219,7 @@ private:
     DeviceAddr device_local_size_ = 0;
 
     DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
+    std::optional<std::uint64_t> unique_id_;
 
     // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
     // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.
@@ -203,6 +232,11 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+    // The built entries of buffers_ by linear index, read by get_device_buffer() without its lock; cleared on
+    // deallocation.
+    std::unique_ptr<std::atomic<Buffer*>[]> built_device_buffers_;
+    // MeshDeviceImpl::close_count() when the entries were last checked against a live MeshDevice.
+    mutable std::atomic<uint64_t> cached_close_count_ = 0;
 
     friend tt::tt_metal::distributed::MeshBuffer
     tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(

@@ -24,7 +24,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/rtoptions.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "common/tt_backend_api_types.hpp"
@@ -48,7 +48,7 @@ namespace unit_tests_common::basic::test_device_init {
 /// @return
 bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     auto mesh_workload = distributed::MeshWorkload();
 
     CoreCoord compute_grid_size = mesh_device->compute_with_storage_grid_size();

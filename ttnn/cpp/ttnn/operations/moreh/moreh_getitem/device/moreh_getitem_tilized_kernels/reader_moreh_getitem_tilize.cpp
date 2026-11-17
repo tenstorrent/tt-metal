@@ -110,7 +110,10 @@ void kernel_main() {
         input_stick_idx_stride_w,
     };
 
-#define NOC_MINIMUM_READ_SIZE (NOC_DRAM_READ_ALIGNMENT_BYTES)
+// A DRAM read must start at the same offset within a read granule in DRAM and in L1. The granule is 32 B
+// on Wormhole and 64 B on Blackhole. On Quasar, the granule is 1 B, but DRAM_ALIGNMENT is 64 B.  A 1 B
+// read would copy only part of a 4 B index. A 64 B read holds the whole index.
+#define NOC_MINIMUM_READ_SIZE (DRAM_ALIGNMENT)
 #define INDEX_SIZE (4)
 
     Noc noc;

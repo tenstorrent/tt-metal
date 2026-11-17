@@ -29,7 +29,7 @@ namespace ttnn::prim {
 
 namespace {
 
-// Kernels were copied verbatim from the codegen builder into codegen/kernels/ in phase 3.
+// Verbatim copies of the codegen builder's kernel templates.
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/untilize/codegen/kernels";
 constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbOut = tt::CBIndex::c_16;
@@ -37,22 +37,18 @@ constexpr uint32_t kSeqIdentity = 0;  // mirrors common/templates/sequencers.h S
 
 std::string kernel_path(const char* name) { return std::string(kKernelDir) + "/" + name; }
 
-// Mirrors spec.py's _needs_dst_accum: 32-bit datums need 32-bit DEST accumulation in
-// pack_untilize. Always false for this port's supported_by_codegen scope (bf16/bf8_b only);
-// kept general to stay a faithful transliteration of the source builder.
-bool needs_dst_accum(DataType dtype) {
-    return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
-}
-
 using untilize_codegen_detail::CbPlan;
 using untilize_codegen_detail::choose_2d_ncol;
 using untilize_codegen_detail::compute_block_ct_dim;
+using untilize_codegen_detail::max_block_ct;
+using untilize_codegen_detail::needs_dst_accum;
 using untilize_codegen_detail::plan_cb_depths;
+using untilize_codegen_detail::planning_tile_size;
 
 // DRAM-interleaved tile CBs must step at the device's real DRAM page pitch, not the raw tile
-// byte size (a no-op for bf16/bf8_b tile sizes, both already multiples of every supported
-// arch's DRAM alignment, but computed from the real device per the porting guide rather than
-// a hardcoded arch constant).
+// byte size (a no-op for every in-scope tile size, each already a multiple of every supported
+// arch's DRAM alignment, but computed from the real device rather than a hardcoded arch
+// constant).
 uint32_t aligned_tile_page_size(uint32_t tile_bytes) {
     uint32_t align = tt::tt_metal::hal::get_dram_alignment();
     return ((tile_bytes + align - 1) / align) * align;
@@ -327,10 +323,10 @@ uint32_t count_valid_sticks(uint32_t start, uint32_t count, uint32_t batch_h, ui
 }
 
 // Interleaved TILE -> RM + unpadding (build_untilize_with_unpadding): the reference's path for any
-// non-tile-aligned bf16 logical shape. Same reader/compute as the aligned per-tile-row split; the
-// writer additionally skips physical pad sticks and writes only the unpadded row width, producing
-// the compact output UntilizeCodegenDeviceOperation::compute_output_specs's non-aligned branch
-// declares. Cliff-capable (two compute kernels), same as build_main_split.
+// non-tile-aligned logical shape of an RM-representable dtype. Same reader/compute as the aligned per-tile-row split;
+// the writer additionally skips physical pad sticks and writes only the unpadded row width, producing the compact
+// output UntilizeCodegenDeviceOperation::compute_output_specs's non-aligned branch declares. Cliff-capable (two compute
+// kernels), same as build_main_split.
 std::optional<ProgramDescriptor> build_with_unpadding(
     const CommonArgs& a,
     uint32_t wt,
@@ -354,9 +350,9 @@ std::optional<ProgramDescriptor> build_with_unpadding(
 
     ProgramDescriptor desc;
     // Both CBs use the input format/tile size: build_untilize_with_unpadding only ever runs on a
-    // dtype that is already RM-representable (bf8_b is cast to bf16 upstream of this port's
-    // scope), so in and out CBs are the same dtype here, unlike build_untilize_tile's bf8_b->bf16
-    // repack.
+    // dtype that is already RM-representable (bf16, int32, uint32; bf8_b has no RM form and is
+    // cast to bf16 before it could reach this builder), so in and out CBs are the same dtype here,
+    // unlike build_untilize_tile's bf8_b->bf16 repack.
     desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range));
     desc.cbs.push_back(make_tile_cb(kCbOut, a.in_fmt, plan.cb_out_depth, a.in_tile_size, core_range));
 
@@ -430,12 +426,12 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     DataType in_dtype = input.dtype();
     DataType out_dtype = output.dtype();
     a.fp32 = needs_dst_accum(in_dtype);
-    a.max_bct = a.fp32 ? 4 : 8;
+    a.max_bct = max_block_ct(a.fp32);
     a.in_fmt = tt::tt_metal::datatype_to_dataformat_converter(in_dtype);
     a.out_fmt = tt::tt_metal::datatype_to_dataformat_converter(out_dtype);
     a.in_tile_size = tt::tile_size(a.in_fmt);
     a.out_tile_size = tt::tile_size(a.out_fmt);
-    a.tile_size_for_planning = std::max(a.in_tile_size, a.out_tile_size);
+    a.tile_size_for_planning = planning_tile_size(in_dtype, out_dtype);
     a.out_elem_size = output.element_size();
     a.in_buf = input.buffer();
     a.out_buf = output.buffer();
@@ -482,8 +478,8 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     // spurious mismatch. That build is a debug aid (OFF by default) and never runs in production
     // dispatch.
 
-    // Non-tile-aligned logical shapes (bf16 only -- see supported_by_codegen) route through the
-    // with-unpadding builder instead of build_untilize_tile's variants. h == ht * TILE_HEIGHT
+    // Non-tile-aligned logical shapes (every in-scope dtype but bf8_b -- see supported_by_codegen)
+    // route through the with-unpadding builder instead of build_untilize_tile's variants. h == ht * TILE_HEIGHT
     // already (padded_shape is always tile-rounded), so it doubles as the physical per-batch
     // stick count the writer's pad-skip logic needs.
     const auto& logical_shape = input.logical_shape();
