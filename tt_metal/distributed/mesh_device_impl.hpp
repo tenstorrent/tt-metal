@@ -186,6 +186,11 @@ private:
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
+    // Set on a submesh created with share_allocator: its buffers are placed by the parent's allocator.
+    bool shares_parent_allocator_ = false;
+    // Set on the root mesh once any submesh below it shares an allocator. Families without one skip
+    // validate_no_overlapping_cq_owner, so their meshes behave as before.
+    std::atomic<bool> has_shared_allocator_submesh_ = false;
 
     ttsl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
@@ -210,7 +215,7 @@ private:
     // DRAM cores; torn down in close_impl(). Held as a shared_ptr so
     // DriscL1Allocation handles can hold a weak_ptr back and become safe no-ops
     // if the MeshDevice closes before their owning pipes are destroyed (mirrors
-    // the MeshBuffer / weak_ptr<MeshDevice> pattern).
+    // the MeshBuffer / weak_ptr<MeshDevice> pattern). A shared-allocator submesh holds its parent's arena.
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
 
     // Owns the Tensor prefetcher (DRISC) subsystem. Lazily constructed on first call
@@ -531,10 +536,19 @@ public:
      */
     void quiesce_devices();
 
+    // Throws if a mesh of this family (parent, submesh or sibling) that shares a device with this mesh has a
+    // command queue in use, since this mesh would then dispatch over that mesh's state. Checked only when one of
+    // the two meshes is a shared-allocator submesh, and returns at once in a family without one. Called when a
+    // command queue of this mesh goes from idle to in use. It reads the other meshes of the family without their
+    // locks, so it assumes overlapping meshes are not driven from two threads, and that meshes of the family are
+    // not created or closed while another thread enqueues on one of them.
+    void validate_no_overlapping_cq_owner() const;
+
     std::shared_ptr<MeshDevice> create_submesh(
         const std::shared_ptr<MeshDevice>& parent_mesh,
         const MeshShape& submesh_shape,
-        const std::optional<MeshCoordinate>& offset = std::nullopt);
+        const std::optional<MeshCoordinate>& offset = std::nullopt,
+        bool share_allocator = false);
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
         const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape);
