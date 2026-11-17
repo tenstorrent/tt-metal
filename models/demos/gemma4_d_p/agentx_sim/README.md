@@ -68,7 +68,7 @@ The serving engine keeps prefill KV in a few whole slots (Gemma4: 6 of 256K toke
 
 They were measured with tt-d-gen main `b3ebc4464` plus tt-d-gen#1924, which Gemma4 needs to resume prefill at its 1024-token granularity (`c7dca0727`; it also carries #1494, which only changes the mock prefill): real Gemma4 prefill on one BH Galaxy (tt-metal at tt-blaze's pin `6925cba1d70` with #61878), decode and KV manager mocked, 6 prefill slots of 262,144 tokens, LRU eviction of idle slots, no copy between slots, resume aligned to 1024 tokens. Re-measure them when the engine's admission or scheduling changes.
 
-Replaying each silicon run's own requests with this model (send to prefill done, seconds). Each AIPerf request (`profile_export.jsonl`) is matched to its trace entry for its block hashes and to the engine's log for its resume point, and is sent at its measured time:
+Replaying each silicon run's own requests with this model (`dgen_replay.py`, send to prefill done, seconds). Each AIPerf request (`profile_export.jsonl`) is matched to its trace entry for its block hashes and to the engine's log for its resume point, and is sent at its measured time:
 
 | run | p50 | p90 | p99 | max | cache hit |
 |---|---|---|---|---|---|
@@ -85,7 +85,7 @@ Replaying each silicon run's own requests with this model (send to prefill done,
 | 18 sessions, slot6 + rr + 13.6 ms + 0.87 ms per 1k | 0.42 | 2.87 | 10.9 | 16.5 | 79.4% |
 | 18 sessions, token LRU 1.57M + fcfs + 95 ms | 0.29 | 0.54 | 3.7 | 6.5 | 91.8% |
 
-The token LRU rows hold the same 1.57M tokens as the six slots. The knobs were read from the 12- and 24-session runs. The 9- and 18-session runs were held out; they ran on a Galaxy whose chunks took 30–40% longer (see Accuracy), so their slot-cache rows scale the step time to that box's measured chunk time, and their token LRU rows do not.
+The token LRU rows hold the same 1.57M tokens as the six slots. The knobs were read from the 12- and 24-session runs. The 9- and 18-session runs were held out; they ran on a Galaxy whose chunks took 30–40% longer (see Accuracy), so their slot-cache rows scale the step time to that box's measured chunk time (`--chunk-time 153.8,1.081`: 153.8 ms + 1.081 us per prefix token, against 118.6 ms + 0.68 us on the first box, `--ref-chunk-time`), and their token LRU rows do not.
 
 From 18 sessions the slot cache thrashes, and the replay is sensitive to small timing changes:
 - 18 sessions: inject depths 7 to 10, with a flat 95 ms or the per-token overhead, give 79–86% hit, a p90 of 1.8–2.9 s and a p99 of 5–11 s. Every variant overstates the p99.
@@ -94,6 +94,15 @@ From 18 sessions the slot cache thrashes, and the replay is sensitive to small t
 ```
 ./agentx_sim.py --traces <dir>/traces.jsonl --config 8192x8192:rr --cache slot6 --align resume --max-think-s 1800 \
     --request-overhead-ms 13.6 --request-overhead-ms-per-1k 0.87 --inject-depth 9 --concurrency 6,12,24 -j 3
+```
+
+To regenerate a run's rows, point `dgen_replay.py` at its directory: AIPerf's `aiperf/profile_export.jsonl`, the Dynamo frontend's `frontend.log` and the tt-d-gen prefill worker's `prefill.log`. Its defaults are the slot-cache row; every knob takes a comma list, and `--cache engine` replays with the engine's own resume points, which separates the timing model from the cache model.
+
+```
+./dgen_replay.py <run>/c24 --traces <dir>/traces.jsonl                                   # slot6 + rr + 13.6 ms + 0.87 ms per 1k, depth 9
+./dgen_replay.py <run>/c24 --traces <dir>/traces.jsonl --cache token --policy fcfs \
+    --request-overhead-ms 95 --request-overhead-ms-per-1k 0                                # token LRU 1.57M + fcfs + 95 ms
+./dgen_replay.py <run>/c18 --traces <dir>/traces.jsonl --chunk-time 153.8,1.081 --inject-depth 7,8,9,10  # on a slower box
 ```
 
 ## Accuracy
