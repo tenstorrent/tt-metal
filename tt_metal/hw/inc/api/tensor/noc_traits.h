@@ -16,6 +16,8 @@ struct endpoint<PageView<Accessor>> : endpoint<Accessor> {};
 template <typename Accessor>
 struct endpoint<ShardView<Accessor>> : endpoint<Accessor> {};
 template <typename Accessor>
+struct endpoint<BankView<Accessor>> : endpoint<Accessor> {};
+template <typename Accessor>
 struct endpoint<tensor_accessor::AccessorPage<Accessor>> : endpoint<Accessor> {};
 template <typename Accessor>
 struct endpoint<tensor_accessor::ShardPage<Accessor>> : endpoint<Accessor> {};
@@ -173,6 +175,38 @@ struct noc_traits_t<TensorAccessor<DSpecT>> : tensor_accessor::detail::PushIssue
         }
         return noc_addr;
     }
+
+    // Multicast: offset_bytes into the tensor's region on every node of the rectangle (corners as for
+    // get_noc_multicast_addr). With Watcher, a sharded tensor's rectangle is checked against its nodes; buffers
+    // described by a 2D ShardSpecBuffer carry no node set and are not checked.
+    struct dst_args_mcast_type {
+        uint32_t noc_x_start{};
+        uint32_t noc_y_start{};
+        uint32_t noc_x_end{};
+        uint32_t noc_y_end{};
+        uint32_t offset_bytes = 0;
+    };
+    template <Noc::AddressType address_type>
+    static uint64_t dst_addr_mcast(const TensorAccessor<DSpecT>& dst, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        static_assert(!DSpecT::is_dram, "A DRAM tensor cannot be a multicast destination");
+        static_assert(
+            !DSpecT::is_interleaved,
+            "An interleaved tensor cannot be a multicast destination: its accessor carries no node set, so Watcher "
+            "could not check the rectangle");
+        // No l1_cached_view: a tensor's base address comes from the host allocator, never the uncached L1 alias.
+        return ::get_noc_multicast_addr(
+            args.noc_x_start,
+            args.noc_y_start,
+            args.noc_x_end,
+            args.noc_y_end,
+            tensor_accessor::detail::TransferAccess::bank_base(dst) + args.offset_bytes,
+            noc.get_noc_id());
+    }
+    // The tensor's nodes, which Noc::async_write_multicast checks the rectangle against with Watcher.
+    static DebugMulticastNodeSet multicast_node_set(const TensorAccessor<DSpecT>& dst) {
+        return {&dst.dspec().packed_xy_coords()[0], dst.dspec().num_banks()};
+    }
 };
 
 template <typename Accessor>
@@ -256,6 +290,39 @@ struct noc_traits_t<ShardView<Accessor>> {
             return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
+    }
+};
+
+// BankView: the NoC address of offset_bytes into the tensor's region of bank bank_id. The bank's location (and, for
+// DRAM, its per-bank offset) comes from the bank tables; the tensor supplies its bank-relative base address.
+template <typename Accessor>
+struct noc_traits_t<BankView<Accessor>> {
+    struct src_args_type {
+        uint32_t bank_id{};
+        uint32_t offset_bytes = 0;
+    };
+    struct dst_args_type {
+        uint32_t bank_id{};
+        uint32_t offset_bytes = 0;
+    };
+    template <Noc::AddressType address_type>
+    static uint64_t src_addr(const BankView<Accessor>& src, const Noc& noc, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC, "BankView can only be the NoC side of a transfer");
+        return bank_noc_addr(src, args.bank_id, args.offset_bytes, noc);
+    }
+    template <Noc::AddressType address_type>
+    static uint64_t dst_addr(const BankView<Accessor>& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC, "BankView can only be the NoC side of a transfer");
+        return bank_noc_addr(dst, args.bank_id, args.offset_bytes, noc);
+    }
+
+private:
+    static uint64_t bank_noc_addr(
+        const BankView<Accessor>& view, uint32_t bank_id, uint32_t offset_bytes, const Noc& noc) {
+        return ::get_noc_addr_from_bank_id<Accessor::DSpec::is_dram>(
+            bank_id,
+            tensor_accessor::detail::TransferAccess::bank_base(view.accessor) + offset_bytes,
+            noc.get_noc_id());
     }
 };
 

@@ -33,10 +33,10 @@
 
 #include <gtest/gtest.h>
 
-#include <umd/device/arc/firmware_telemetry_reader.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/noc_id.hpp>
-#include <umd/device/types/telemetry.hpp>
+#include <tt-umd/arc/firmware_telemetry_reader.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/noc_id.hpp>
+#include <tt-umd/types/telemetry.hpp>
 
 #include <array>
 #include <chrono>

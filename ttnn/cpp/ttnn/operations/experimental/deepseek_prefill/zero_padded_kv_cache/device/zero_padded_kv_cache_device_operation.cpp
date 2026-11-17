@@ -22,6 +22,15 @@ using namespace tt::constants;
 
 namespace {
 
+// Extent of the block-cyclic axis: SP alone, or SP*TP when the cache is TP-deduped.
+uint32_t block_cyclic_factor(
+    const ttnn::distributed::MeshDeviceView& mesh_view, uint32_t cluster_axis, const std::optional<uint32_t>& tp_axis) {
+    const uint32_t sp_factor = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t tp_factor =
+        tp_axis.has_value() ? ((*tp_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+    return sp_factor * tp_factor;
+}
+
 // Three kernels on a single core per chip: the reader brings the boundary (partial) tile in from the
 // cache and builds the row-mask tile in L1; the compute multiplies them; the writer writes the masked
 // partial back and zeros the full pad tiles from the L1 zeros buffer. Each chip computes its share of
@@ -141,7 +150,12 @@ void validate_runtime_args(
         cache.storage_type());
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "zero_padded_kv_cache requires a 2D mesh");
-    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    TT_FATAL(
+        !args.tp_axis.has_value() || *args.tp_axis != args.cluster_axis,
+        "tp_axis ({}) must differ from cluster_axis ({})",
+        args.tp_axis.value_or(0),
+        args.cluster_axis);
+    const uint32_t sp_factor = block_cyclic_factor(mesh_view, args.cluster_axis, args.tp_axis);
     TT_FATAL(
         args.chunk_size_global % sp_factor == 0,
         "chunk_size_global ({}) must be a multiple of sp_factor ({})",
@@ -192,7 +206,8 @@ void ZeroPaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& cache = tensor_args.cache;
     // cache storage is pinned in validate_runtime_args so it also runs on hits.
-    TT_FATAL(cache.buffer()->buffer_type() == BufferType::DRAM, "zero_padded_kv_cache requires a DRAM-backed cache");
+    TT_FATAL(
+        cache.memory_config().buffer_type() == BufferType::DRAM, "zero_padded_kv_cache requires a DRAM-backed cache");
     TT_FATAL(
         cache.layout() == Layout::TILE || cache.layout() == Layout::ROW_MAJOR,
         "cache layout must be TILE or ROW_MAJOR");
@@ -241,6 +256,13 @@ ZeroPaddedKvCacheDeviceOperation::spec_return_value_t ZeroPaddedKvCacheDeviceOpe
     return tensor_args.cache.tensor_spec();  // in-place
 }
 
+ZeroPaddedKvCacheDeviceOperation::topology_return_value_t ZeroPaddedKvCacheDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    // In-place: the generic inference would collapse a TP-deduped Shard(2),Shard(2) cache to
+    // Shard(2),Replicate and, since the output aliases the cache, rewrite the cache's own topology.
+    return {tensor_args.cache.tensor_topology()};
+}
+
 ZeroPaddedKvCacheDeviceOperation::tensor_return_value_t ZeroPaddedKvCacheDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     return tensor_args.cache;  // in-place
@@ -259,6 +281,7 @@ ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
         args.layer_idx,
         args.num_layers,
         args.cluster_axis,
+        args.tp_axis,
         args.chunk_size_global,
         args.pad_align,
         cache.dtype(),
@@ -283,9 +306,10 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     auto* device = cache.device();
     const auto& cache_shape = cache.padded_shape();
     const bool has_metadata = tensor_args.slot_idx.has_value();
-    const uint32_t slot_idx_addr = has_metadata ? static_cast<uint32_t>(tensor_args.slot_idx->buffer()->address()) : 0u;
+    const uint32_t slot_idx_addr =
+        has_metadata ? static_cast<uint32_t>(tensor_args.slot_idx->mesh_buffer().address()) : 0u;
     const uint32_t valid_global_addr =
-        has_metadata ? static_cast<uint32_t>(tensor_args.valid_global->buffer()->address()) : 0u;
+        has_metadata ? static_cast<uint32_t>(tensor_args.valid_global->mesh_buffer().address()) : 0u;
 
     const tt::DataFormat cache_format = datatype_to_dataformat_converter(cache.dtype());
     const bool is_row_major = cache.layout() == Layout::ROW_MAJOR;
@@ -294,8 +318,13 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     const uint32_t cache_CH_pages = cache_shape[1] * cache_H_pages;
 
     const auto& mesh_view = device->get_view();
-    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    const uint32_t my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
+    const uint32_t sp_factor = block_cyclic_factor(mesh_view, args.cluster_axis, args.tp_axis);
+    uint32_t my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
+    if (args.tp_axis.has_value()) {
+        const uint32_t tp_factor = (*args.tp_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+        my_sp_coord =
+            my_sp_coord * tp_factor + ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis);
+    }
     const uint32_t chunk_local = args.chunk_size_global / sp_factor;  // tokens
 
     // Single core per chip: the pad window is at most pad_align tokens (a few tiles).
@@ -329,7 +358,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     if (is_row_major) {
         // A row is one opaque DRAM page. Use a dataflow-only zero writer so FP8 never enters the
         // unpack/compute engine (and therefore needs no fp32 destination accumulator setting).
-        const uint32_t row_page_size = cache.buffer()->aligned_page_size();
+        const uint32_t row_page_size = cache.mesh_buffer().aligned_page_size();
         desc.cbs.push_back(CBDescriptor{
             .total_size = row_page_size,
             .core_ranges = all_cores,
@@ -460,8 +489,8 @@ void ZeroPaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_arg
     //   - scalar path: every kernel reads slot_idx (9)/valid_global (3). TILE has reader/compute/writer
     //     (3 kernels); ROW_MAJOR is a dataflow-only writer (1 kernel).
     if (tensor_args.slot_idx.has_value()) {
-        const uint32_t slot_idx_addr = static_cast<uint32_t>(tensor_args.slot_idx->buffer()->address());
-        const uint32_t valid_global_addr = static_cast<uint32_t>(tensor_args.valid_global->buffer()->address());
+        const uint32_t slot_idx_addr = static_cast<uint32_t>(tensor_args.slot_idx->mesh_buffer().address());
+        const uint32_t valid_global_addr = static_cast<uint32_t>(tensor_args.valid_global->mesh_buffer().address());
         for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
             for (uint32_t kernel_handle : {0u, 2u}) {  // reader, writer (metadata path is TILE-only)
                 auto& common = GetCommonRuntimeArgs(program, kernel_handle);
@@ -500,7 +529,8 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t valid_global,
     uint32_t chunk_size_global,
     uint32_t cluster_axis,
-    uint32_t pad_align) {
+    uint32_t pad_align,
+    std::optional<uint32_t> tp_axis) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache::ZeroPaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
@@ -511,6 +541,7 @@ ttnn::Tensor zero_padded_kv_cache(
         .layer_idx = layer_idx,
         .num_layers = num_layers,
         .cluster_axis = cluster_axis,
+        .tp_axis = tp_axis,
     };
     auto tensor_args =
         OperationType::tensor_args_t{.cache = cache, .slot_idx = slot_idx_tensor, .valid_global = valid_global_tensor};

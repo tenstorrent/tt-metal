@@ -20,7 +20,8 @@ instead (``(Wg_i . W_down) x``) is mathematically valid and strictly worse -- it
 7168 dispatch payload and double expert weight memory, because the factor is 896 experts. Contrast
 MLA, which *does* absorb ``wkv_b1`` into Q, a win there because it is per-head over 128 heads.
 
-Tensor-parallel placement, mirroring the surrounding modules:
+Tensor-parallel placement over the TP mesh axis (``tp_axis``, 1 by default), mirroring the surrounding
+modules; the dims below are for tp_axis=1 and swap for tp_axis=0:
   * ``down_proj`` is COLUMN-parallel (``dims=(None, -1)``, as ``TtSharedExpert``'s gate/up). Its input
     is the already-all-gathered full-width ``x``, so each device produces ``routed_emb_dim/tp`` and one
     all-gather makes the latent whole again -- dispatch needs complete rows.
@@ -49,9 +50,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENAB
 # Both projections are the shared expert's shapes with a narrower latent -- down_proj is its gate
 # (K 224 tiles, N 28) and up_proj its down (K 28, N 224) -- so the block rules measured there apply
 # unchanged rather than being re-derived here.
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import _in0_block_w, _out_subblock
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # Cache-file basenames. Kept as a tuple so check_cache_complete and the writer cannot drift.
 _PROJ_NAMES = ("down_proj", "up_proj")
@@ -171,6 +174,7 @@ class TtLatentMoeProjections(LightweightModule):
         cache_path: Path | None,
         cache_name_prefix: str | None,
         device: ttnn.MeshDevice | None = None,
+        tp_axis: int = 1,
     ):
         """Convert the two projections to TTNN with caching.
 
@@ -179,6 +183,7 @@ class TtLatentMoeProjections(LightweightModule):
                 'up_proj' [emb_dim, routed_emb_dim], HF ``(out_features, in_features)`` convention.
                 None builds correctly-shaped placeholders, for a cache-only pass.
             device: None for cache-only, mesh_device for cache+load.
+            tp_axis: mesh axis the projections are sharded over.
 
         Returns:
             dict of ttnn.Tensor when device is not None, else None.
@@ -211,14 +216,15 @@ class TtLatentMoeProjections(LightweightModule):
                 dtype=weights_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
                 cache_file_name=_cache_name(name),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
-        # (None, -1): shard OUT features across the TP axis -> column-parallel.
-        # (None, -2): shard IN  features across the TP axis -> row-parallel.
+        # dim -1: shard OUT features across the TP axis -> column-parallel.
+        # dim -2: shard IN  features across the TP axis -> row-parallel.
         # Names come from _PROJ_NAMES so the writer and check_cache_complete cannot drift apart.
         down_name, up_name = _PROJ_NAMES
-        down_tt = _to_ttnn(down_w, (None, -1), down_name)
-        up_tt = _to_ttnn(up_w, (None, -2), up_name)
+        down_tt = _to_ttnn(down_w, mesh_shard_dims(-1, tp_axis), down_name)
+        up_tt = _to_ttnn(up_w, mesh_shard_dims(-2, tp_axis), up_name)
 
         if device is None:
             del down_tt, up_tt
@@ -235,6 +241,7 @@ class TtLatentMoeProjections(LightweightModule):
         cache_path: Path,
         cache_name_prefix: str,
         use_norm: bool = True,
+        tp_axis: int = 1,
     ):
         """Write the projection (and latent-norm) caches without copying to device.
 
@@ -254,6 +261,7 @@ class TtLatentMoeProjections(LightweightModule):
             cache_path,
             cache_name_prefix,
             device=None,
+            tp_axis=tp_axis,
         )
         if use_norm:
             TtDistributedRmsNorm.build_ttnn_cache(
@@ -262,6 +270,7 @@ class TtLatentMoeProjections(LightweightModule):
                 mesh_device=mesh_device,
                 cache_path=cache_path,
                 cache_name_prefix=f"{cache_name_prefix}.norm",
+                cluster_axis=tp_axis,
             )
 
     # ------------------------------------------------------------------ init
@@ -280,6 +289,7 @@ class TtLatentMoeProjections(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         compute_kernel_config=None,
+        tp_axis: int = 1,
     ):
         """
         Args:
@@ -289,7 +299,8 @@ class TtLatentMoeProjections(LightweightModule):
             use_norm / rms_norm_eps: K3 sets latent_moe_use_norm=True and rms_norm_eps=1e-5.
                 Note the eps MUST be passed through: TtDistributedRmsNorm defaults to 1e-6, and
                 silently inheriting that would be a quiet accuracy loss.
-            num_links / topology: CCL config for the TP-axis collectives (column axis).
+            num_links / topology: CCL config for the TP-axis collectives.
+            tp_axis: mesh axis the projections are sharded over and the TP collectives run on.
         """
         super().__init__()
         self._require_weight_source(torch_weights, weight_cache_path, cache_name_prefix, use_norm)
@@ -300,7 +311,9 @@ class TtLatentMoeProjections(LightweightModule):
         self.use_norm = use_norm
         self.num_links = num_links
         self.topology = topology
-        self.tp_factor = mesh_device.shape[1]
+        assert tp_axis in (0, 1), f"tp_axis must be 0 or 1, got {tp_axis}"
+        self.tp_axis = tp_axis
+        self.tp_factor = mesh_device.shape[tp_axis]
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.compute_kernel_config = compute_kernel_config
 
@@ -313,6 +326,7 @@ class TtLatentMoeProjections(LightweightModule):
             weight_cache_path,
             cache_name_prefix,
             device=mesh_device,
+            tp_axis=tp_axis,
         )
         self.down_proj = weights["down"]
         self.up_proj = weights["up"]
@@ -323,7 +337,7 @@ class TtLatentMoeProjections(LightweightModule):
                 emb_dim=routed_emb_dim,
                 epsilon=rms_norm_eps,
                 torch_weight=torch_weights.get("norm") if torch_weights else None,
-                cluster_axis=1,
+                cluster_axis=tp_axis,
                 num_links=num_links,
                 topology=topology,
                 weight_cache_path=weight_cache_path,
@@ -374,9 +388,9 @@ class TtLatentMoeProjections(LightweightModule):
             latent = ttnn.experimental.all_gather_async(
                 latent,
                 dim=-1,
-                cluster_axis=1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+                cluster_axis=self.tp_axis,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.num_links,
                 topology=self.topology,
             )
@@ -426,7 +440,7 @@ class TtLatentMoeProjections(LightweightModule):
             out = ttnn.reduce_scatter(
                 out_full,
                 dim=-1,
-                cluster_axis=1,
+                cluster_axis=self.tp_axis,
                 num_links=self.num_links,
                 topology=self.topology,
             )

@@ -4,14 +4,14 @@
 from itertools import product
 
 import torch
-from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
     DataCopyGolden,
     TransposeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync, Transpose, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, Transpose
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
@@ -21,6 +21,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     MATH_TRANSPOSE_FACES,
     NUM_BLOCKS,
     NUM_FACES,
@@ -28,12 +29,11 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TRANSPOSE_DEST_FLOAT_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
-        DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
     ]
@@ -55,9 +55,9 @@ def generate_transpose_dest_float_combinations(formats_list):
     1. Lossless transpose of 32-bit values in dest -> input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=True.
     2. Transpose of 32-bit values in dest with precision loss (unpacks Float32 to src registers, Float32 truncates to Tf32) ->
        input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=False.
-    3. Transpose of 32-bit values in dest with potential precision loss -> input_format=[Bfp8_b, Float16_b], output_format=[Float16]
+    3. Transpose of 32-bit values in dest with potential precision loss -> input_format=[Bfp8_b, Float16_b],
        dest_acc=DestAccumulation.Yes and unpack_to_dest=False (intermediate data is 32-bit in dest).
-    4. Transpose of 16-bit values in dest -> input_format=[Float16, Float16_b, Bfp8_b],
+    4. Transpose of 16-bit values in dest -> input_format=[Float16_b, Bfp8_b],
        dest_acc=DestAccumulation.No and unpack_to_dest=False.
 
     Args:
@@ -70,10 +70,11 @@ def generate_transpose_dest_float_combinations(formats_list):
 
     for fmt in formats_list:
         is_input_32bit = fmt.input_format.is_32_bit()
+        # 16-bit inputs run with both a 16-bit and a 32-bit dest (combinations 3 and 4)
         dest_acc_list = (
             [DestAccumulation.Yes]
-            if is_input_32bit or is_dest_acc_needed(fmt)
-            else [DestAccumulation.No]
+            if is_input_32bit
+            else [DestAccumulation.No, DestAccumulation.Yes]
         )
 
         # Transpose of 16-bit values in dest is supported only for math_transpose_faces = True
@@ -249,12 +250,7 @@ def transpose_dest_int8(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert torch.equal(res_tensor, golden_tensor), "Assert against golden failed"
 
@@ -319,7 +315,11 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
     configuration = TestConfig(
         "sources/transpose_dest_test.cpp",
         formats,
-        templates=[MATH_TRANSPOSE_FACES(math_transpose_faces)],
+        templates=[
+            # The kernel only syncs Dest in halves.
+            DEST_SYNC(DestSync.Half),
+            MATH_TRANSPOSE_FACES(math_transpose_faces),
+        ],
         runtimes=[
             # When math_transpose_faces is False, unpack_transpose_faces should be Transpose.Yes
             # This mode is supported only for 32-bit dest
@@ -352,18 +352,13 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     if (
         unpack_to_dest == True
         and dest_acc == DestAccumulation.Yes
-        and formats.input_format in (DataFormat.Int32, DataFormat.Float32)
-        and formats.output_format in (DataFormat.Int32, DataFormat.Float32)
+        and formats.input_format.is_32_bit()
+        and formats.output_format.is_32_bit()
     ):
         is_equal = torch.equal(res_tensor, golden_tensor)
         assert is_equal, "Assert against golden failed"

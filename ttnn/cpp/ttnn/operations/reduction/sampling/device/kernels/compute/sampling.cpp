@@ -26,19 +26,22 @@
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
-static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
+namespace {
+
+void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
     compute_kernel_hw_startup(dfb_id, dfb_id);
     copy_init(dfb_id);
 
     DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb_id));
 
-    // The random threshold reaches the writer as BF16 (8-bit mantissa), which near 1.0 means
-    // ~1/256 resolution: tokens whose cumulative slice lies in the last 0.4% of the mass could
-    // never be drawn and the rest of the tail was under-sampled (unit test
-    // test_sampling_distribution.py). Each element is drawn in [0, 256] and FLOORED on the SFPU
-    // before packing, so every element is an exact integer digit 0..256 in BF16 (integers up to
-    // 256 are exact). The writer combines two such digits into a 16-bit lattice threshold.
-    constexpr uint32_t rand_scale = 0x43800000U;  // 256.0f
+    // The writer compares an FP32 cumulative probability against one threshold. This kernel keeps
+    // 16-bit dest on Wormhole/Blackhole (the top-k index path is UInt16), so a Float32 pack of the
+    // random tile would still round to BF16 and the threshold would sit on the 1/256 grid. Instead
+    // each element is a digit in {0, ..., 255}: rand_tile's range is inclusive, so the scale is the
+    // last FP32 value below 256 and the SFPU floor makes an integer. Integers through 255 are exact
+    // in BF16, and the writer joins three of them into a uniform on k/2^24. That is the FP32 ulp on
+    // [0.5, 1), not the BF16 grid and not the old 255/256 cap.
+    constexpr uint32_t rand_scale = 0x437FFFFFU;  // nextafter(256.0f, 0.0f)
     constexpr uint32_t rand_from = 0;
 
     if (seed != 0) {
@@ -57,6 +60,8 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     dfb_obj.push_back(1);
 }
+
+}  // namespace
 
 template <uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols>
 void sub_exp_block_bcast_cols_inplace() {
@@ -98,7 +103,9 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
-static void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
+namespace {
+
+void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
@@ -126,7 +133,7 @@ static void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_t
     }
 }
 
-static void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t rows, uint32_t cols) {
+void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -159,7 +166,7 @@ static void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t ou
     in1_dfb_obj.pop_front(static_cast<uint16_t>(rows));
 }
 
-static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
+void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     DataflowBuffer in_dfb_obj(static_cast<uint16_t>(in_dfb));
@@ -184,6 +191,8 @@ static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
         in_dfb_obj.push_back(1);
     }
 }
+
+}  // namespace
 
 template <
     PoolType pool_type,
@@ -274,7 +283,7 @@ void top_k() {
                 DST_ACCUM_MODE,
                 /*fused=*/false,
                 /*rank_stamped=*/false,
-                ckernel::TopkTieOrder::Descending>(0, (int)ascending, logk - 1);
+                ckernel::TopkTieOrder::Descending>(0, static_cast<int>(ascending), logk - 1);
 
             tile_regs_commit();
 
@@ -328,14 +337,15 @@ void top_k() {
                     DST_ACCUM_MODE,
                     /*fused=*/false,
                     /*rank_stamped=*/false,
-                    ckernel::TopkTieOrder::Descending>(0, m_iter, K);
+                    ckernel::TopkTieOrder::Descending>(0, static_cast<int>(m_iter), K);
                 // sort within the larger 32 values
                 ckernel::topk_rebuild<
                     stable_sort,
                     DST_ACCUM_MODE,
                     /*fused=*/false,
                     /*rank_stamped=*/false,
-                    ckernel::TopkTieOrder::Descending>(0, (uint32_t)a, m_iter, K, logk, true);
+                    ckernel::TopkTieOrder::Descending>(
+                    0, static_cast<uint32_t>(a), static_cast<int>(m_iter), K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();

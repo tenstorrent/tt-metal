@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Ethernet and DRAM cores only; TENSIX uses watcher_ringbuf_2_0.cpp.
+// Ethernet, DRAM and dispatch-engine cores only; TENSIX uses watcher_ringbuf_2_0.cpp.
 
 #include <cstdint>
 #include "api/debug/ring_buffer.h"

@@ -135,6 +135,19 @@ FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
 }
 #endif
 
+// Fills in where workers report done for a go: the dispatcher sending it (at NOC 0 virtual coordinates noc_x, noc_y)
+// and this CQ's completion counters, offset by completion_counter_offset. The host leaves both out of the go, so a go
+// recorded in a trace replays on any CQ.
+FORCE_INLINE uint32_t add_go_signal_done_target(
+    uint32_t go_signal_value, uint32_t noc_x, uint32_t noc_y, uint32_t completion_counter_offset) {
+    go_msg_t go_msg;
+    go_msg.all = go_signal_value;
+    go_msg.master_x = noc_x;
+    go_msg.master_y = noc_y;
+    go_msg.dispatch_message_offset += completion_counter_offset;
+    return go_msg.all;
+}
+
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
 #ifdef ARCH_BLACKHOLE
@@ -205,7 +218,7 @@ inline __attribute__((always_inline)) void noc_read_with_state_bank(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
-        noc_reads_num_issued[noc] += 1;
+        noc_async_read_inc_num_issued(1, noc);
     }
 }
 #endif  // NOC_ATT_ENABLED
@@ -692,7 +705,7 @@ class CBReaderWithReleasePolicy : public CBReader<my_sem_id, cb_log_page_size, c
 public:
     FORCE_INLINE void init() {
         this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
-        this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
+        this->block_writes_checkpoint_ = noc_nonposted_writes_checkpoint(noc_index);
     }
 
     // Returns how much data is available. Will block until data is available. Tracks via blocked
@@ -749,19 +762,19 @@ public:
 
 private:
     FORCE_INLINE void release_block_pages() {
-        // When finishing a block, don't immediately return it, but just store the number of nonposted write requests
-        // issued. We will wait for writes to be sent and will return the  block when the next block is finished; this
-        // allows time for writes from that block to complete. Note: this is incorrect if writes can be sent out of
-        // order. We should use transaction IDs instead in that case.
+        // When finishing a block, don't immediately return it, but just checkpoint the nonposted writes issued so
+        // far. We will wait for writes to be sent and will return the block when the next block is finished; this
+        // allows time for writes from that block to complete. Note: on archs that checkpoint with a count, this is
+        // incorrect if writes can be sent out of order. We should use transaction IDs instead in that case.
         if (released_prev_block_) {
             WAYPOINT("CBRW");
-            while (!noc_nonposted_writes_sent_at_count(noc_index, this->block_noc_writes_to_clear_));
+            while (!noc_nonposted_writes_sent_since(noc_index, this->block_writes_checkpoint_));
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
             WAYPOINT("CBRD");
         } else {
             released_prev_block_ = true;
         }
-        this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
+        this->block_writes_checkpoint_ = noc_nonposted_writes_checkpoint(noc_index);
     }
 
     FORCE_INLINE void move_rd_to_next_block_and_release_pages() {
@@ -770,8 +783,8 @@ private:
     }
 
     bool released_prev_block_{false};
-    // Snapshot of nonposted write requests issued at block entry; used to wait/clear before releasing credits.
-    uint32_t block_noc_writes_to_clear_{0};
+    // Checkpoint of the nonposted writes issued at block entry; used to wait/clear before releasing credits.
+    uint32_t block_writes_checkpoint_{0};
 };
 
 template <uint32_t my_sem_id, uint32_t cb_log_page_size, uint32_t cb_base, uint32_t cb_end>

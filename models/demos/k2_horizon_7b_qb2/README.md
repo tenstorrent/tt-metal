@@ -15,8 +15,9 @@ whose `<think>` segments need the `k2_horizon` reasoning and tool-call parsers t
 
 ## Design
 
-- **Tensor parallel over the 1x4 mesh** with the shared `models/common` CCL and sampling
-  modules (`TT_CCL`, `Sampling1D`, `LMHead1D`). Decode runs as one traced step per batch bucket;
+- **Tensor parallel over the 1x4 mesh** with the shared `models/common` CCL module (`TT_CCL`)
+  and the [tt-transformers](https://github.com/tenstorrent/tt-transformers) sampling and LM head
+  modules (`Sampling1D`, `LMHead1D`). Decode runs as one traced step per batch bucket;
   the paged BFP8 KV cache uses 32-token pages.
 - **Per-layer precision policy** (`doc/datatype_sweep/selected_precision_config.json`, loaded by
   `tt/precision_config.py`): BFP8/HiFi2 and BFP4/LoFi are mixed per layer and per operator.
@@ -38,6 +39,11 @@ whose `<think>` segments need the `k2_horizon` reasoning and tool-call parsers t
   sampler (`tt/host_sampling.py`). `K2_VLLM_FORCE_HOST_SAMPLING=1` sends every request there.
 
 ## Run
+
+Build tt-metal and activate its Python environment, then install the pinned tt-transformers
+package, which provides the sampler and LM head:
+`uv pip install --no-deps -r models/demos/k2_horizon_7b_qb2/requirements.txt`. `--no-deps` keeps
+the ttnn built from this tree; a resolving install would replace it.
 
 vLLM serving goes through [vllm-tt-plugin](https://github.com/tenstorrent/vllm-tt-plugin). The
 plugin registers `TTK2HorizonForCausalLM` from this directory's `vllm_metadata.json` when

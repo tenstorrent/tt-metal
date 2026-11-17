@@ -25,6 +25,8 @@
  * @tparam src_b_bcast_type Broadcast mode; non-NONE uses unary-broadcast math init when type is B2D
  * @tparam unpack_to_dest Set true to enable the UNP_DEST routing decision (unary, non-broadcast path)
  * @param operand Logical dataflow buffer id for the input operand
+ * @note With EN_32BIT_DEST, an Int16 operand needs unpack_to_dest, including the B2D broadcast path.
+ *       The FPU cannot datacopy Int16 into a 32-bit Dest. The check below is LLK_ASSERT-only.
  */
 template <
     DataCopyType type,
@@ -41,7 +43,14 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
-    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(srcA_format, srcB_format);
+    // Int16 is MOV-only, so this 32-bit Dest datacopy writes bad data. Unpack-to-Dest skips it.
+    // LLK_ASSERT only: a normal build does not check. ProgramSpec rejects this input.
+    if constexpr (EN_32BIT_DEST && !unpack_to_dest) {
+        LLK_ASSERT(
+            srcA_format != DataFormat::Int16,
+            "Quasar FPU cannot datacopy Int16 into a 32-bit Dest; unpack this operand to Dest");
+    }
+    _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
@@ -91,10 +100,16 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
         static_assert(type == DataCopyType::B2D, "Unary broadcast math path requires DataCopyType::B2D");
         static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
+        LLK_ASSERT(
+            (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+            "llk_math_eltwise_unary_datacopy: dst_index exceeds dest capacity");
         _llk_math_eltwise_unary_broadcast_<false /*unpack_to_dest*/>(dst_index);
     } else {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
         if constexpr (!unpack_to_dest) {
+            LLK_ASSERT(
+                (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+                "llk_math_eltwise_unary_datacopy: dst_index exceeds dest capacity");
             _llk_math_eltwise_unary_datacopy_(dst_index);
         }
     }
@@ -124,6 +139,9 @@ inline void llk_math_eltwise_unary_datacopy_block(
 
     // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
     if constexpr (!unpack_to_dest) {
+        LLK_ASSERT(
+            (start_dst_index + ntiles <= get_dest_max_tiles<DST_SYNC_MODE, EN_32BIT_DEST>()),
+            "llk_math_eltwise_unary_datacopy_block: dst range exceeds dest capacity");
         for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
             _llk_math_eltwise_unary_datacopy_(dst_index);
         }

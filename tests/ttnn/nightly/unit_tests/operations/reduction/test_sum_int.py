@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.sum vs torch.sum for int32 (SFPU reduce path)."""
+"""ttnn.sum vs torch.sum for int32 and uint32 (SFPU reduce path)."""
 
 import pytest
 import torch
@@ -107,3 +107,30 @@ def test_sum_int32_with_scaling(device, input_shape, dim, scale):
 
     assert output_tensor.dtype == torch.int32
     assert_equal(output_tensor.reshape(torch_expected.shape), torch_expected)
+
+
+@pytest.mark.parametrize("input_shape", _SHAPES)
+@pytest.mark.parametrize("dim", _DIMS)
+def test_sum_uint32(device, input_shape, dim):
+    """ttnn.sum on uint32 must match torch.sum exactly over the full 32-bit range, wrapping mod 2^32."""
+    torch.manual_seed(0)
+    torch_input = torch.randint(0, 2**32, input_shape, dtype=torch.int64)
+    torch_input.view(-1)[:4] = torch.tensor([0, 2**31 - 1, 2**31, 2**32 - 1])
+    torch_output = torch.sum(torch_input, dim=dim) % 2**32
+
+    ttnn_input = ttnn.from_torch(
+        torch_input.to(torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    ttnn_output = ttnn.to_torch(ttnn.sum(ttnn_input, dim=dim))
+
+    assert ttnn_output.dtype == torch.uint32
+    assert_equal(ttnn_output.to(torch.int64).reshape(torch_output.shape), torch_output)
+
+
+def test_sum_uint32_rejects_scaling(device, expect_error):
+    """scalar != 1 is rejected for uint32. The int32 path would apply it as an inexact float32 multiply."""
+    ttnn_input = ttnn.from_torch(
+        torch.ones((1, 1, 32, 32), dtype=torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    with expect_error(RuntimeError, "UINT32 sum/max/min do not support scalar"):
+        ttnn.sum(ttnn_input, dim=-1, scalar=2.0)

@@ -23,11 +23,12 @@ static_assert(DFB_TXN_ID_BASE > USER_TXN_ID_MAX);
 namespace dfb {
 
 constexpr uint8_t NUM_DFBS = 32;
-// Pack TRISC stores only active logical DFBs in a compact local array. Its TC state is allocated
-// separately from a shared pool, so common one-TC DFBs do not each reserve the six-slot worst case.
-constexpr uint8_t MAX_ACTIVE_DFBS_PACK = 24;
-constexpr uint8_t MAX_PACK_TC_SLOTS = 32;
-static_assert(MAX_PACK_TC_SLOTS >= MAX_ACTIVE_DFBS_PACK);
+// Compute TRISCs (pack and unpack) store only the active logical DFBs in a compact local array and
+// draw tile-counter slots from a shared pool, so common one-TC DFBs do not each reserve the six-slot
+// worst case. The host checks both limits per Neo.
+constexpr uint8_t MAX_ACTIVE_DFBS_TRISC = 24;
+constexpr uint8_t MAX_TRISC_TC_SLOTS = 32;
+static_assert(MAX_TRISC_TC_SLOTS >= MAX_ACTIVE_DFBS_TRISC);
 
 constexpr uint8_t NUM_TENSIX = 4;
 constexpr uint8_t NUM_TILE_COUNTERS_PER_TENSIX = 32;
@@ -325,12 +326,24 @@ struct dfb_dm0_isr_txn_threshold_t {
     uint8_t _pad[3];
 };
 
+// What DM0 needs to finish one implicit-sync DFB side at kernel exit (dfb_dm0_flush_side). Every txn id of
+// the side carries the same copy.
+constexpr uint8_t DFB_DM0_FINISH_FLAG_SPLIT = 0x1;      // each op is split across all of an issuer's counters
+constexpr uint8_t DFB_DM0_FINISH_FLAG_BROADCAST = 0x2;  // each op is posted to all of an issuer's counters
+struct dfb_dm0_finish_info_t {
+    uint8_t issuer_hart_mask;  // DM harts that issue on this side; their counters are listed in this order
+    uint8_t flags;             // DFB_DM0_FINISH_FLAG_*
+    uint8_t num_txn_ids;       // the side's txn ids, one ascending block starting at the lowest
+};
+static_assert(sizeof(dfb_dm0_finish_info_t) == 3, "dfb_dm0_finish_info_t must be 3 bytes");
+
 // 32-byte image matching TxnDFBDescriptor layout in dataflow_buffer_interface.h.
 struct dfb_dm0_txn_descriptor_image_t {
     uint8_t num_counters;
     uint8_t tile_counters[18];
     uint8_t tiles_to_post_or_ack;  // union post/ack share offset in TxnDFBDescriptor
-    uint8_t _pad[12];
+    dfb_dm0_finish_info_t finish;
+    uint8_t _pad[9];
 };
 
 // One entry per producer RISC that uses the remapper.

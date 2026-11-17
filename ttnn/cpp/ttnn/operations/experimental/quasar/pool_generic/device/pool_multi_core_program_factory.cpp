@@ -16,8 +16,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -40,7 +40,6 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::pool::quasar {
 
@@ -255,7 +254,7 @@ std::vector<uint32_t> generate_core_starting_indices(
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
-            starting_indices.push_back(0);
+            starting_indices.insert(starting_indices.end(), repeat_factor, 0);
             continue;
         }
         TT_ASSERT(item.input_range.start == op_trace_metadata[output_shard_start]);
@@ -1259,8 +1258,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // result stays resident (the DFB is borrowed from OUTPUT_TENSOR and sized to the
         // full output shard, so the producer never wraps), so there is no real consumer.
         // Self-loop the compute as producer+consumer to satisfy the SPSC completeness
-        // check (mirrors the mpwi writer-face self-loop on DFB_OUT); no kernel-side
-        // pop is needed since the data is the final resident output.
+        // check (mirrors the mpwi writer-face self-loop on DFB_OUT). The compute kernel pops
+        // each block after pushing it so the DFB is left balanced (the data stays resident).
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_OUT,
             .accessor_name = "out_cb",

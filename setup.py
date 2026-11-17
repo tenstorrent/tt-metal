@@ -336,9 +336,9 @@ class CMakeBuild(build_ext):
         ]
         ttnn_cpp_patterns = [
             "ttnn/kernel/**/*",
-            "ttnn/operations/**/kernels/**/*",
-            "ttnn/operations/**/kernels_ng/**/*",
-            "ttnn/operations/**/kernels_dfb/**/*",
+            # Every per-op kernel directory (kernels/, kernels_ng/, kernels_dfb/, kernels_qsr/, ...), as the Quasar
+            # ops' CMake kernels FILE_SET globs them: in a wheel, kernel includes resolve against this copy.
+            "ttnn/operations/**/kernels*/**/*",
             "ttnn/operations/**/shared_with_host/**/*",
             "ttnn/operations/**/hostdevcommon/**/*",
             "ttnn/operations/kernel_helper_functions/*",
@@ -354,10 +354,6 @@ class CMakeBuild(build_ext):
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
-            "api/tt-metalium/buffer_types.hpp",
-            "api/tt-metalium/circular_buffer_constants.h",
-            "api/tt-metalium/constants.hpp",
-            "api/tt-metalium/dev_msgs.h",
             "api/tt-metalium/experimental/fabric/fabric_edm_types.hpp",
             "api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp",
             "core_descriptors/*.yaml",
@@ -372,10 +368,9 @@ class CMakeBuild(build_ext):
             "fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
-            # The DRISC tensor-prefetcher kernel and the two host/device shared headers it
-            # includes: a wheel run resolves kernel includes against the wheel, not TT_METAL_HOME.
+            # The DRISC tensor-prefetcher kernel and the host/device shared header it includes:
+            # a wheel run resolves kernel includes against the wheel, not TT_METAL_HOME.
             "impl/buffers/kernels/**/*",
-            "impl/buffers/dram_sender_state_block.hpp",
             "impl/buffers/tensor_prefetcher_request.hpp",
             "impl/dispatch/kernels/**/*",
             "impl/streaming_profiler/kernels/**/*",

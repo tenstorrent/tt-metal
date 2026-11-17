@@ -13,14 +13,13 @@
 #include <span>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -41,12 +40,13 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input buffer should be allocated on device!");
-    TT_FATAL(start_tensor.buffer() != nullptr, "Start buffer should be allocated on device!");
-    TT_FATAL(end_tensor.buffer() != nullptr, "End buffer should be allocated on device!");
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input buffer should be allocated on device!");
+    TT_FATAL(start_tensor.is_allocated(), "Start buffer should be allocated on device!");
+    TT_FATAL(end_tensor.is_allocated(), "End buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input_tensor.dtype(), device->arch());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
 
     constexpr uint32_t num_input_tiles = 2;
@@ -57,11 +57,12 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
         .num_entries = num_input_tiles,
         .data_format_metadata = dfb_data_format,
     };
-    DataflowBufferSpec dfb_tensor{
+    // The reader reads the start index tensor and then the end index tensor into this region, copying
+    // the indices out after each read. It is private to the reader and carries nothing between kernels,
+    // so it is a scratchpad.
+    ScratchpadSpec tensor_scratch{
         .unique_id = TA_TENSOR,
-        .entry_size = single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = dfb_data_format,
+        .size_per_node = single_tile_size,
     };
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_tensor.padded_shape().rank());
@@ -116,8 +117,6 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
 
     constexpr uint32_t start_offset = 0;
 
-    // The staging buffer for the start / end index tensors is touched only by the reader, which runs
-    // the full reserve -> push -> wait -> pop handshake against itself; it binds both ends.
     KernelSpec reader{
         .unique_id = TA_READER,
         .source =
@@ -130,22 +129,16 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
                     .accessor_name = "in",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = TA_TENSOR,
-                    .accessor_name = "tensor",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = TA_TENSOR,
-                    .accessor_name = "tensor",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
             },
         .scratchpad_bindings =
             {
                 ScratchpadBinding{
                     .scratchpad_spec_name = TA_ID_PER_DIM,
                     .accessor_name = "id_per_dim",
+                },
+                ScratchpadBinding{
+                    .scratchpad_spec_name = TA_TENSOR,
+                    .accessor_name = "tensor",
                 },
             },
         .tensor_bindings =
@@ -259,8 +252,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     ProgramSpec spec{
         .name = "slice_tile_tensor_args",
         .kernels = {std::move(reader), std::move(writer)},
-        .dataflow_buffers = {std::move(dfb_in), std::move(dfb_tensor)},
-        .scratchpads = {std::move(id_per_dim_scratch)},
+        .dataflow_buffers = {std::move(dfb_in)},
+        .scratchpads = {std::move(id_per_dim_scratch), std::move(tensor_scratch)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()},
@@ -296,8 +289,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
 SliceTileTensorArgsProgramFactory::cached_program_t SliceTileTensorArgsProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     auto artifacts = create_program_artifacts(args, tensor_args, output);
-    auto program = MakeProgramFromSpec(*tensor_args.input.device(), artifacts.spec);
-    SetProgramRunArgs(program, artifacts.run_params);
+    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input.device(), artifacts.spec);
+    tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
     // Geometry is keyed; start/end values remain device-side controls. Retain owned scalar maps,
     // not non-owning references to the tensors used on the cache miss.
     artifacts.run_params.tensor_args.clear();
@@ -313,7 +306,8 @@ void SliceTileTensorArgsProgramFactory::override_runtime_arguments(
         {OUTPUT, output.mesh_tensor()},
         {START_TENSOR, tensor_args.start_tensor.value().mesh_tensor()},
         {END_TENSOR, tensor_args.end_tensor.value().mesh_tensor()}};
-    UpdateProgramRunArgs(cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
+    tt::tt_metal::experimental::UpdateProgramRunArgs(
+        cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
     run_args.tensor_args.clear();
 }
 

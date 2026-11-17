@@ -11,6 +11,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -49,7 +50,7 @@ FORCE_INLINE auto local_noc_addr(uint32_t addr, uint8_t noc_id = noc_index) {
  * @param dfb DataflowBuffer whose current write entry should be zeroed
  */
 template <typename DFB>
-FORCE_INLINE void zero_tile(DFB dfb) {
+FORCE_INLINE void zero_tile(DFB&& dfb) {
     Noc noc;
     noc.async_write_zeros(dfb, dfb.get_tile_size());
     noc.write_zeros_l1_barrier();
@@ -58,14 +59,22 @@ FORCE_INLINE void zero_tile(DFB dfb) {
 /**
  * @brief Reserve, zero-fill, and push one tile into a DataflowBuffer
  *
- * @tparam dfb_id DataflowBuffer ID whose tile byte size should be used
+ * @param dfb The kernel's DataflowBuffer. Construct it once at kernel scope and pass it by reference:
+ *        on Quasar a DataflowBuffer drains when it goes out of scope, so a helper-owned one would block
+ *        here until the consumer pops the tile.
  */
-template <uint32_t dfb_id>
-FORCE_INLINE void prepare_zero_tile() {
-    ::DataflowBuffer dfb(dfb_id);
+template <typename DFB>
+FORCE_INLINE void prepare_zero_tile(DFB& dfb) {
     dfb.reserve_back(1);
     zero_tile(dfb);
     dfb.push_back(1);
+}
+
+// The id-only form: builds the DataflowBuffer from the id and runs the form above. See id_only_helpers.hpp.
+template <uint32_t dfb_id>
+KERNEL_LIB_ID_ONLY_HELPER FORCE_INLINE void prepare_zero_tile() {
+    ::DataflowBuffer dfb(dfb_id);
+    prepare_zero_tile(dfb);
 }
 
 /**

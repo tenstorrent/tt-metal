@@ -88,7 +88,7 @@ jobs:
           echo "ignore-commits=${{ env.DEFAULT_IGNORE_COMMITS }}" >> "$GITHUB_OUTPUT"
           echo "ops-test-categories=${{ env.DEFAULT_OPS_TEST_CATEGORIES }}" >> "$GITHUB_OUTPUT"
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -208,7 +208,7 @@ jobs:
 
   blaze-merge-gate:
     needs: [build-artifact-profiler]
-    if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
+    if: ${{ !cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
     # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
@@ -225,6 +225,34 @@ jobs:
       dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       # Run tt-blaze's full merge gate from its main branch.
       blaze-ref: main
+
+  # Hands a build that passed tt-blaze's merge gate to tt-blaze's nightly tt-metal uplift,
+  # which pins it on a trial branch and validates it there. Only a scheduled run on main,
+  # or a re-run of one (a re-run keeps its event), launches it. It launches the run and
+  # does not wait: the uplift reports in its own run and draft PR.
+  launch-blaze-uplift:
+    needs: [blaze-merge-gate]
+    if: >-
+      ${{ !cancelled()
+          && needs.blaze-merge-gate.result == 'success'
+          && github.event_name == 'schedule'
+          && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Launch tt-blaze's nightly tt-metal uplift
+        env:
+          # The default GITHUB_TOKEN cannot dispatch another repo.
+          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          METAL_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # metal-sha makes the uplift adopt this run's profiler build, the one the gate
+          # just passed, instead of building it again; metal-ref is the branch it is on.
+          gh workflow run nightly-metal-uplift.yaml --repo tenstorrent/tt-blaze --ref main \
+            -f metal-ref=main -f metal-sha="$METAL_SHA" -f validate=true
+          echo "Launched tt-blaze nightly-metal-uplift.yaml for tt-metal ${METAL_SHA}" >> "$GITHUB_STEP_SUMMARY"
 
   publish-to-pypi:
     needs: [build-test-publish, create-tag, blaze-merge-gate]
@@ -297,7 +325,7 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}
-        uses: pypa/gh-action-pypi-publish@ed0c539abdc6b55ad89f3ea7b8e96860a5ddef80 # v1.13.0
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
 
 
@@ -307,7 +335,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -395,7 +423,7 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Download changelog
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -429,7 +457,7 @@ jobs:
       should-skip-release: ${{ steps.check-release-conditions.outputs.should-skip-release }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -536,7 +564,7 @@ jobs:
         }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -617,7 +645,7 @@ jobs:
     if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run && github.run_attempt == '1' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Convert draft to prerelease
         env:
@@ -648,7 +676,7 @@ jobs:
     if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout stable branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           ref: stable
@@ -748,7 +776,9 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          # github.token is enough: this workflow grants actions: write, and
+          # workflow_dispatch is one of the two events the built-in token may raise.
+          token: ${{ github.token }}
           ref: stable
           inputs: |
             {
@@ -782,7 +812,9 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          # github.token is enough: this workflow grants actions: write, and
+          # workflow_dispatch is one of the two events the built-in token may raise.
+          token: ${{ github.token }}
           ref: ${{ needs.create-tag.outputs.version }}
           inputs: |
             {

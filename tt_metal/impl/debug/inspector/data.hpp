@@ -8,7 +8,7 @@
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <atomic>
 #include <cstddef>
 #include <optional>
@@ -44,6 +44,7 @@ private:
     void rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
+    static void populate_kernel(rpc::KernelData::Builder out, const KernelData& kernel_data, uint64_t program_id);
     static void populate_core_ranges(
         ::capnp::List<rpc::LogicalCoreRange>::Builder list, const CoreRangeSet& core_range_set);
     static void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <set>
@@ -221,6 +222,31 @@ void align_factory_descriptor_with_live(
     // descriptor can, from the board id, and the grouping the mapper loads is chosen from this flag.
     // Leaving it unset seats a rev C machine on the rev AB grouping, which then fails to place.
     fsd.set_is_bh_galaxy_rev_c(live.is_bh_galaxy_rev_c());
+}
+
+bool agree_job_runs_on_device_subset(const ::tt::tt_metal::distributed::multihost::DistributedContext& ctx) {
+    // Read straight from the environment: TT_VISIBLE_DEVICES is UMD's variable and has no RTOptions entry,
+    // and this runs inside ControlPlane init where RTOptions is already a reference, not a lookup.
+    auto is_set = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value != nullptr && value[0] != '\0';
+    };
+    std::array<std::uint64_t, 1> local{
+        static_cast<std::uint64_t>(is_set("TT_VISIBLE_DEVICES") || is_set("TT_METAL_VISIBLE_DEVICES"))};
+    std::array<std::uint64_t, 1> any{};
+    using ::tt::tt_metal::distributed::multihost::ReduceOp;
+    ctx.all_reduce(ttsl::Span<std::uint64_t>(local), ttsl::Span<std::uint64_t>(any), ReduceOp::MAX);
+    return any[0] != 0;
+}
+
+std::set<::tt::tt_metal::experimental::PhysicalNodeId> live_allocation(
+    const ::tt::tt_metal::PhysicalSystemDescriptor& live) {
+    std::set<::tt::tt_metal::experimental::PhysicalNodeId> allocation;
+    for (const auto& [node_id, unused_asic_id] : live.physical_node_to_asic_id()) {
+        (void)unused_asic_id;
+        allocation.insert(node_id);
+    }
+    return allocation;
 }
 
 void throw_on_fsd_chips_absent_from_live(

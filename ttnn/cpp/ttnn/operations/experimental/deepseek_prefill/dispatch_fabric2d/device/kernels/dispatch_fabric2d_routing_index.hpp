@@ -43,8 +43,6 @@ struct Scratch {
     volatile tt_l1_ptr uint32_t* bucket_start;    // extent x experts_per_chip + 1, exclusive prefix sums with a total
     volatile tt_l1_ptr uint32_t* records;         // 3 words per kept (token, topk index)
     volatile tt_l1_ptr uint32_t* padding;         // [real_token_count, pad_side], when one was supplied
-    volatile tt_l1_ptr uint32_t* in_start;        // page offset of each chunk this stream reads
-    volatile tt_l1_ptr uint32_t* out_start;       // page offset of each chunk it writes downstream
     volatile tt_l1_ptr uint32_t* risc;            // INDEX_RISCS x index_risc_words
     uint32_t end;
 };
@@ -85,8 +83,6 @@ inline Scratch layout_scratch() {
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkBucketStart));
     c.records = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkRecords));
     c.padding = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkPadding));
-    c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkInStart));
-    c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkOutStart));
     c.risc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkRisc));
     c.end = a;
     // The host reserved exactly this; anything more would run into the global semaphores.
@@ -214,8 +210,9 @@ inline void count_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
         const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
-        static_assert(ct.topk <= 8, "the unroll count is the top-k bound");
-#pragma GCC unroll 8
+        // Fully unrolled for every top-k the op accepts. The widest body still leaves each RISC that builds this
+        // header most of its stack.
+#pragma GCC unroll 16
         for (uint32_t k = 0; k < ct.topk; k++) {
             const uint32_t bucket = bucket_of(es, idx[k]);
             if (bucket >= n) {
@@ -249,7 +246,8 @@ inline void fill_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t1
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
         const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
-#pragma GCC unroll 8
+        // As in count_pass.
+#pragma GCC unroll 16
         for (uint32_t k = 0; k < ct.topk; k++) {
             const uint32_t bucket = bucket_of(es, idx[k]);
             if (bucket >= n) {

@@ -9,30 +9,28 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "api/debug/kernel_profiler.hpp"
+#include "experimental/kernel_args.h"
 
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    uint32_t arg_index = 0;
-    uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_c = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_t = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_th = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_tw = get_arg_val<uint32_t>(arg_index++);
-    uint32_t num_tiles = get_arg_val<uint32_t>(arg_index++);
-    uint32_t n_stride = get_arg_val<uint32_t>(arg_index++);
-    uint32_t c_stride = get_arg_val<uint32_t>(arg_index++);
-    uint32_t N = get_arg_val<uint32_t>(arg_index++);
-    uint32_t C = get_arg_val<uint32_t>(arg_index++);
-    uint32_t Ht = get_arg_val<uint32_t>(arg_index++);
-    uint32_t Wt = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_n = get_arg(args::start_n);
+    uint32_t start_c = get_arg(args::start_c);
+    uint32_t start_t = get_arg(args::start_t);
+    uint32_t start_th = get_arg(args::start_th);
+    uint32_t start_tw = get_arg(args::start_tw);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t n_stride = get_arg(args::n_stride);
+    uint32_t c_stride = get_arg(args::c_stride);
+    uint32_t N = get_arg(args::N);
+    uint32_t C = get_arg(args::C);
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
 
-    constexpr auto dfb_id_src_id = get_compile_time_arg_val(0);
-    constexpr auto dfb_id_dst_id = get_compile_time_arg_val(1);
-    DataflowBuffer dfb_id_src_id_obj(dfb_id_src_id);
-    DataflowBuffer dfb_id_dst_id_obj(dfb_id_dst_id);
-    compute_kernel_hw_startup(dfb_id_src_id, dfb_id_dst_id);
-    unary_bcast_init<BroadcastType::ROW>(dfb_id_src_id);
+    DataflowBuffer dfb_src(dfb::src);
+    DataflowBuffer dfb_dst(dfb::dst);
+    compute_kernel_hw_startup(dfb::src, dfb::dst);
+    unary_bcast_init<BroadcastType::ROW>(dfb::src);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
@@ -46,15 +44,15 @@ void kernel_main() {
                         ckl::UnaryBcast<
                             ckl::BroadcastDim::Row,
                             ckl::input(
-                                dfb_id_src_id,
+                                dfb::src,
                                 ckl::WaitPolicy::PerTile,
                                 ckl::PopPolicy::PerTile,
-                                ckl::DataFormatReconfig::Disabled)>{dfb_id_src_id_obj},
+                                ckl::DataFormatReconfig::Disabled)>{dfb_src},
                         ckl::PackTile<ckl::output(
-                            dfb_id_dst_id,
+                            dfb::dst,
                             ckl::ReservePolicy::PerTile,
                             ckl::PushPolicy::PerTile,
-                            ckl::DataFormatReconfig::Disabled)>{dfb_id_dst_id_obj});
+                            ckl::DataFormatReconfig::Disabled)>{dfb_dst});
                     ++num_tiles_read;
                 }
             }

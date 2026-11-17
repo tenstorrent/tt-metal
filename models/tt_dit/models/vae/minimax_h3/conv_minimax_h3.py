@@ -207,6 +207,20 @@ class MiniMaxH3CausalConv3d(Module):
             w_factor=self.width_factor,
         )
 
+        # Blocking tables are tuned at one temporal tap, but CBs scale with input T, so multi-tap
+        # (ref2va encoder) overflows L1; shrink H_out_block by the tap count to compensate.
+        if temporal_taps > 1 and self.conv_config.H_out_block > 1:
+            self.conv_config = ttnn.Conv3dConfig(
+                weights_dtype=self.conv_config.weights_dtype,
+                output_layout=self.conv_config.output_layout,
+                T_out_block=self.conv_config.T_out_block,
+                W_out_block=self.conv_config.W_out_block,
+                H_out_block=max(1, self.conv_config.H_out_block // temporal_taps),
+                C_out_block=self.conv_config.C_out_block,
+                C_in_block=self.conv_config.C_in_block,
+                compute_with_storage_grid_size=self.conv_config.compute_with_storage_grid_size,
+            )
+
         from models.common.utility_functions import is_blackhole
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(

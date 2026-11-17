@@ -46,7 +46,6 @@ Compute (FPU/matrix engine)
   transpose_tile
 
   tilize
-  untilize
 
 .. only:: not html
 
@@ -171,6 +170,7 @@ Special mathematical functions
   i0_tile
   i1_tile
   cumsum_tile
+  cumprod_tile
   alt_complex_rotate90_tile
 
 Initialization and utilities

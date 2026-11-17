@@ -10,6 +10,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <filesystem>
 #include <string>
 
@@ -35,6 +36,12 @@ bool find_device_with_neighbor_in_direction(
     ChipId& src_physical_device_id,
     ChipId& dst_physical_device_id,
     RoutingDirection direction);
+
+// Config for a directly constructed ControlPlane. Carries this process's TT_MESH_ID / TT_MESH_HOST_RANK binding
+// (parsed by MetalEnv), since ControlPlane does not read those env vars itself.
+tt_metal::FabricConfigDescriptor make_control_plane_config(
+    FabricConfig fabric_config = FabricConfig::DISABLED,
+    FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords);

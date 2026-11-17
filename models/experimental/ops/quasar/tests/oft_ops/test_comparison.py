@@ -12,6 +12,9 @@ Shape source (kernel cache, binary_ng):
     rhs and output; both operands L1                                                     [H]
 
 Results are 0/1, so the check is exact.
+
+Cache #1 only. The second cache (in-tree OFT at ``628a4797bf7``) runs ``atan2`` natively
+(``test_atan2.py``) and has no comparison or logical kernels.
 """
 
 import pytest

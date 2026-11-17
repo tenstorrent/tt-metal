@@ -16,7 +16,7 @@ from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 # Kimi K2.7 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
 # MLA_START signpost, so only the single forward is timed.
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
-_CMD_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_7 and func and torus-xy-8x4'"
+_CMD_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_7 and func and torus-xy-8x4 and sp_only'"
 
 
 _IGNORE_POWER = os.environ.get("DS_PERF_IGNORE_POWER") == "1"
@@ -44,7 +44,9 @@ def _require_certified_torus_xy():
 # this reason (13_947_233 vs a 7_118_649 baseline that matches one forward within 2%). The metadata
 # axis came in with 3d3c65f985b (#51624), predating both K3 commits. Fix is to pin 'and scalar'
 # there too and keep 7_118_649; left alone here so this change doesn't touch another CI baseline.
-_CMD_K3_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar'"
+_CMD_K3_CHUNKED_8X4 = (
+    f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar and sp_only'"
+)
 
 # Same 50k+5k scenario and mesh as the two Kimi rows, so the three are comparable per forward.
 # RingJointSDPA is the only op in a Mistral4 layer that grows with KV depth, so it is the lever for
@@ -54,7 +56,7 @@ _CMD_K3_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 an
 # signpost filter keeps every MLA_START/MLA_END region, so an unpinned axis multiplies the total.
 _CMD_MISTRAL4_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} "
-    "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism'"
+    "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism and sp_only'"
 )
 # Record-only: one local run on DDR 14000 where the other baselines here are cut at 16000, so the
 # margin admits any measurement. Replace both with the first certified TorusXY CI result.
@@ -64,9 +66,9 @@ _MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED = 3_301_775
 _CMD_MISTRAL4_CHUNKED_8X1 = (
     "pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla_chunked_prefill_loudbox"
 )
-# CI LoudBox run 37547491707 (LoFi chunked ring SDPA; was 8_944_184 from run 36924353598). SDPA is
-# most of this total and CCL is 0, so the row tracks the depth-proportional term almost alone.
-_MISTRAL4_MLA_CHUNKED_LB_8X1_NS = 8_122_154
+# CI LoudBox measurement (LoFi chunked ring SDPA). SDPA is most of this total and CCL is 0, so the
+# row tracks the depth-proportional term almost alone.
+_MISTRAL4_MLA_CHUNKED_LB_8X1_NS = 7_878_336
 
 
 @pytest.mark.timeout(0)

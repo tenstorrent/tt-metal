@@ -58,7 +58,7 @@ protected:
     // determines where unreserved_base_ is positioned and thus the kernel config buffer size.
     // Larger worker_l1_size -> higher unreserved_base_ -> smaller kernel config buffer and vice versa
     void compute_memory_layout() {
-        TT_FATAL(!devices_.empty() && !devices_[0]->get_devices().empty(), "No devices available for testing");
+        TT_FATAL(!devices_.empty() && !devices_[0]->get_device_ids().empty(), "No devices available for testing");
 
         unreserved_base_ = devices_[0]->allocator()->get_base_allocator_addr(HalMemType::L1);
         auto l1_base = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
@@ -133,7 +133,7 @@ TEST_F(KernelSizeTestBigBuffer, LargeKernelWorks) {
 
     auto& device = devices_[0];
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*device);
 
     CreateKernel(
         program,
@@ -166,7 +166,7 @@ TEST_F(KernelSizeTestDefaultBuffer, LargeKernelFails) {
 
     auto& device = devices_[0];
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*device);
 
     CreateKernel(
         program,
@@ -215,7 +215,7 @@ TEST_F(KernelSizeTestDefaultBuffer, KernelSizesBoundaryConditions) {
 
         auto& device = devices_[0];
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*device);
 
         CreateKernel(
             program,
@@ -244,7 +244,7 @@ TEST_F(KernelSizeTestBigBuffer, BigKernelExecutionCorrectness) {
 
     auto& device = devices_[0];
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*device);
 
     // Get unreserved L1 base address - this is where we can safely write
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);

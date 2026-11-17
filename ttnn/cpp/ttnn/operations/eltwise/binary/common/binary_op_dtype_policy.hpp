@@ -35,7 +35,7 @@ inline constexpr std::array int32_only{DT::INT32};
 // uint8/int8 quantized tile that reaches DST as a zero-extended byte before the SFPU casts it
 // to fp32. int8 is deliberately read through the UInt8 unpacker, so the byte in DST holds raw 2's
 // complement. QUANT is intentionally NOT mapped to this set: its input A is the original floating-point
-// tensor (float_only), and only its *output* can be uint8/int8. Both round via FP32_TO_UINT8.
+// tensor (float_only), and only its *output* can be uint8/int8. Both round to nearest even and saturate.
 // Do not add BinaryOpType::QUANT here - that would wrongly accept integer inputs.
 inline constexpr std::array requant_dequant{DT::INT32, DT::UINT8, DT::INT8};
 
@@ -61,6 +61,10 @@ inline constexpr std::array where{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::
 // happens to match float_only today, but the two answer different questions (per-operand
 // support vs. mix eligibility) and are kept distinct.
 inline constexpr std::array mixed_float{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B};
+
+// A fused binary activation runs its own SFPU kernel on BF16 data in DEST: BFLOAT16 operands, and
+// BFLOAT8_B ones, which unpack to BF16. Every other dtype keeps the path it had.
+inline constexpr std::array fused_activation_bf16{DT::BFLOAT16, DT::BFLOAT8_B};
 
 // Enum values that are not dispatched to binary_ng (e.g. ADDALPHA -> ADD).
 inline constexpr std::array<DT, 0> unsupported{};

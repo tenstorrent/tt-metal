@@ -11,8 +11,8 @@
 
 #include <gtest/gtest.h>
 
-#include <umd/device/types/blackhole_arc.hpp>
-#include <umd/device/types/noc_id.hpp>
+#include <tt-umd/types/blackhole_arc.hpp>
+#include <tt-umd/types/noc_id.hpp>
 
 #include <cstdint>
 #include <cstdio>

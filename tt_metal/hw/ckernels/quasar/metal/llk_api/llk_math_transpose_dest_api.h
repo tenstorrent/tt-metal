@@ -11,10 +11,9 @@
 
 /**
  * @brief Initializes transpose-dest. Configures the ALU state that transpose-dest
- * requires for both 16/32-bit dest (implied math format disabled, en_int32_dest_format off
- * because MOVD2A/B do not honor INT8 math), programming the srcA/srcB ALU format registers from the
- * operand's dest data format and enabling 32-bit dest when EN_32BIT_DEST is set, then loads the
- * bank0 replay buffer with the transpose-dest MOP.
+ * requires for both 16/32-bit dest (en_int32_dest_format off because MOVD2A/B do not honor INT8 math),
+ * programming the srcA/srcB ALU format registers from the operand's dest data format and enabling 32-bit dest
+ * when EN_32BIT_DEST is set, then loads the bank0 replay buffer with the transpose-dest MOP.
  *
  * @note Uses the state-tracked _configure_mov_ops_explicit_alu_data_format_state_ so a following
  * op (datacopy/matmul/reduce/binary) detects the non-default ALU state and reconfigures back to
@@ -40,4 +39,9 @@ inline void llk_math_transpose_dest_init(const std::uint32_t operand) {
  * @note Call @ref llk_math_transpose_dest_init first; it applies the faces / 32-bit configuration,
  * so this runs the pre-configured MOP and takes no template params.
  */
-inline void llk_math_transpose_dest(const std::uint32_t dst_index) { _llk_math_transpose_dest_(dst_index); }
+inline void llk_math_transpose_dest(const std::uint32_t dst_index) {
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "llk_math_transpose_dest: dst_index exceeds dest capacity");
+    _llk_math_transpose_dest_(dst_index);
+}
