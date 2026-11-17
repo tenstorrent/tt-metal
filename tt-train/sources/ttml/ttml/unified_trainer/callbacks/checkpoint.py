@@ -10,7 +10,7 @@ from .callback import Callback
 
 
 class CheckpointCallback(Callback):
-    """Starts the run from a checkpoint and saves checkpoints, as ``config.checkpoint`` says.
+    """Saves checkpoints, as ``config.checkpoint.save_strategy`` says.
 
     Checkpoints hold the model's weights in the layout ``config.checkpoint.format`` picks
     (``Trainer.save_checkpoint``).
@@ -23,14 +23,7 @@ class CheckpointCallback(Callback):
     def on_train_start(self, trainer: Any) -> None:
         # A callback outlives the run; never carry the previous run's metrics into this one's checkpoints.
         self._last_metrics = {}
-        config = trainer.config.checkpoint
-        self.manager = trainer.create_checkpoint_manager(config, trainer.logger)
-        init = config.init_strategy
-        if init is None:
-            return
-        # Weights only: training still starts at step 0, so the stored step, epoch and metrics are unused.
-        trainer.load_checkpoint(init.path)
-        trainer.logger.info(f"Initialized the weights from {init.path}")
+        self.manager = trainer.create_checkpoint_manager(trainer.config.checkpoint, trainer.logger)
 
     def on_validation_end(self, trainer: Any, val_loss: Any) -> None:
         # Runs before that step's `on_step_end`, so the step's checkpoint carries it (for best rotation).

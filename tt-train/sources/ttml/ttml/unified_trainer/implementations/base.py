@@ -237,7 +237,7 @@ class Trainer(ABC):
 
     @abstractmethod
     def _load_model(self) -> Any:
-        """Build the model to train, with its pretrained weights."""
+        """Build the model to train, with its pretrained weights, and those of ``config.checkpoint.init_strategy``."""
 
     @abstractmethod
     def _load_optimizer(self) -> Any:
@@ -317,13 +317,8 @@ class Trainer(ABC):
         """Save the model's weights as a directory at ``path``, in the layout ``config.checkpoint.format`` picks,
         replacing one that is there.
 
-        ``metadata`` (step, epoch, metrics) is stored alongside, and returned by ``load_checkpoint``.
+        ``metadata`` (step, epoch, metrics) is stored alongside.
         """
-
-    @abstractmethod
-    def load_checkpoint(self, path: str) -> dict:
-        """Load the weights of a directory written by ``save_checkpoint``, in either format, into the model; return
-        its metadata (``{}`` if none)."""
 
     def create_checkpoint_manager(
         self, config: CheckpointConfig, logger: Optional[TrainingLogger] = None

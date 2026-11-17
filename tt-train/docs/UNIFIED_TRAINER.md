@@ -256,8 +256,8 @@ directory and moved into place when complete, so a failed save leaves the previo
 
 ### Starting from a checkpoint
 
-`checkpoint.init_strategy` names a checkpoint directory, which `CheckpointCallback` loads when training starts. Unset,
-the run starts from the pretrained weights of `model.name`.
+`checkpoint.init_strategy` names a checkpoint directory, which `setup` loads onto the model it builds. Unset, the run
+starts from the pretrained weights of `model.name`.
 
 ```yaml
 checkpoint:
@@ -271,11 +271,9 @@ checkpoint may be in either format, which is told from its files: with `checkpoi
 every weight is loaded; with `adapter_config.json` it's a PEFT adapter, and its adapters are loaded onto the pretrained
 weights. Either must be of the run's `model.name`, with the run's LoRA `r`, `alpha` and `target_modules`.
 
-It takes effect only in a run with `CheckpointCallback`. A host that saves with callbacks of its own starts from a
-checkpoint by calling `trainer.load_checkpoint(path)` between `setup` and `train`. A checkpoint that doesn't load fails
-`train`. A full model directory is not a checkpoint a run can start from: to train adapters on it, make it the
-`model.name` instead. That includes the `base_model/` of a checkpoint saved with `set: all`, which its own adapter then
-loads onto.
+It takes effect with or without `CheckpointCallback`, and a checkpoint that doesn't load fails `setup`. A full model
+directory is not a checkpoint a run can start from: to train adapters on it, make it the `model.name` instead. That
+includes the `base_model/` of a checkpoint saved with `set: all`, which its own adapter then loads onto.
 
 ---
 
@@ -311,20 +309,30 @@ finally:
   optimizer in `optimizer` order), `trainer.parameter_counts()` (total, trainable), `trainer.global_step` and
   `trainer.epoch`.
 - **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint in the format
-  `checkpoint.format` picks, and `trainer.load_checkpoint(path)` loads one in either format.
+  `checkpoint.format` picks.
 
 ---
 
 ## Adding a model
 
-A model provider builds the ttml model for an HF `model_type` and maps its weights to HF's. It implements the
-`ModelProvider` protocol in `ttml/models/provider.py`:
+A model provider builds the ttml model for an HF `model_type`, and loads and exports its weights. It subclasses
+`ModelProvider` in `ttml/models/provider.py`; the trainer makes one per run, with the run's config as `self.config` and
+the model's HF `config.json` as `self.hf_config`. The trainer calls four methods:
 
-- `check(config, hf_config)`: raise `UnsupportedTrainingConfig` for anything the model can't train, including a
-  `device.mesh` it can't be built on. It runs before the device opens.
-- `build(config, hf_config)`: the model with pretrained weights, wrapped in LoRA as `config.model.lora` describes.
-- `export_adapter` / `import_adapter`: the LoRA weights as PEFT tensors and adapter config, and back.
-- `export_model`: the model's weights, without the LoRA adapters, as an HF model directory; for `set: all`.
+- `check()`: raise `UnsupportedTrainingConfig` for anything the model can't train, including a `device.mesh` it can't
+  be built on. It runs before the device opens.
+- `build()`: the model's architecture, wrapped in LoRA as `config.model.lora` describes, with no weights loaded yet.
+- `load_weights(model, checkpoint)`: the pretrained weights of `model.name`, then the checkpoint's if one is given.
+- `export_weights(model, directory)`: reads the weights from the device and writes them in the format
+  `checkpoint.format` picks.
+
+A provider implements `check` and `build`. `load_weights` and `export_weights` come with `ModelProvider`, which reads
+and writes the checkpoint formats and checks that a checkpoint is of the run's model; they call what is the model's
+own:
+
+- `_load_hf_weights`: the pretrained weights, into the model `build` made; the LoRA adapters keep their initial values.
+- `_export_hf_model`: the model's weights, without the LoRA adapters, as an HF model directory.
+- `_export_adapter` / `_import_adapter`: the LoRA weights as PEFT tensors and adapter config, and back.
 
 Write it in `ttml/models/<model>/provider.py` and add it to `providers()` in `ttml/models/provider.py`, keyed by the
 `model_type`. `LlamaProvider` in `ttml/models/llama/provider.py` is the reference.

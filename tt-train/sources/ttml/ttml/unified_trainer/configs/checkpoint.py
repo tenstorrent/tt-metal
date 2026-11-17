@@ -101,8 +101,8 @@ RotationStrategy = Annotated[Union[LastRotation, BestRotation, NoRotation], Fiel
 
 
 class CheckpointConfig(BaseModel):
-    """The checkpoint ``CheckpointCallback`` starts the run from, when it saves, which checkpoints
-    ``CheckpointManager`` keeps, and how they store the model.
+    """The checkpoint the run starts from, which ``setup`` loads, and the checkpoints the run saves: when
+    ``CheckpointCallback`` saves them, which ones ``CheckpointManager`` keeps, and how they store the model.
 
     A checkpoint is a directory holding the model's weights, in the layout ``format`` picks.
     """
