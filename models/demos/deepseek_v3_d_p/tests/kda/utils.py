@@ -39,7 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state, device_scalar
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -771,10 +771,33 @@ def assert_matches_reference(
 
 
 def read_slab_layer(mesh_device, slabs: KdaStates, slot: int, layer_idx: int) -> KdaState:
-    """A copy of layer ``layer_idx``'s carry at host ``slot``, read through the device-slot import the
-    K3 layers use. OWNED: free it with ``deallocate_state``."""
-    state = allocate_native_state(mesh_device, slabs.geometry)
-    index = device_scalar(mesh_device, slot)
-    slabs.import_layer(state, index, layer_idx)
-    ttnn.deallocate(index)
-    return state
+    """A native copy of layer ``layer_idx``'s carry at host ``slot``. OWNED: free it with ``deallocate_state``."""
+    batch = slabs.batch_index(slot, layer_idx)
+
+    def entry(slab: ttnn.Tensor) -> ttnn.Tensor:
+        # Both may hand back their input: clone the entry, and free only an interleaved copy of the ND slab.
+        interleaved = ttnn.to_memory_config(slab, ttnn.DRAM_MEMORY_CONFIG)
+        ends = [batch + 1, *tuple(slab.shape)[1:]]
+        sliced = ttnn.slice(interleaved, [batch] + [0] * (len(ends) - 1), ends, [1] * len(ends))
+        copy = ttnn.clone(sliced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if interleaved.buffer_address() != slab.buffer_address():
+            ttnn.deallocate(interleaved)
+        return copy
+
+    return KdaState(recurrent=entry(slabs.recurrent), convolution=entry(slabs.convolution))
+
+
+def upload_slab(slab: ttnn.Tensor, shards: list[torch.Tensor]) -> None:
+    """Overwrite ``slab`` in place with one host tensor per device, in row-major mesh order."""
+    mesh_device = slab.device()
+    rows, cols = tuple(mesh_device.shape)
+    staged = ttnn.from_torch(
+        torch.cat([torch.cat(shards[row * cols : (row + 1) * cols], dim=1) for row in range(rows)]),
+        dtype=slab.dtype,
+        layout=slab.layout,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(rows, cols)),
+    )
+    ttnn.to_memory_config(staged, slab.memory_config(), output_tensor=slab)
+    ttnn.deallocate(staged)

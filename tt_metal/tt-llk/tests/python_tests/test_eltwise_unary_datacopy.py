@@ -38,6 +38,7 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
+from helpers.tile_constants import get_tile_params
 from helpers.utils import passed_test, result_tensor
 
 # Sub-byte block-float formats need extra handling: tilize is unsupported and
@@ -72,18 +73,18 @@ def get_valid_tilize_datacopy(formats):
     return [Tilize.No, Tilize.Yes]
 
 
-def get_valid_num_faces_datacopy(tilize):
+def get_valid_tile_dimensions_datacopy(tilize):
     """
-    Get valid num_faces options for _llk_math_eltwise_unary_datacopy_
+    Get valid tile shapes for _llk_math_eltwise_unary_datacopy_
 
-    - Number of faces must be 4 when tilization is enabled (SW limitation)
-    - Otherwise num_faces can be 1, 2, or 4
+    - The tile must be a full 32x32 (four faces) when tilization is enabled (SW limitation)
+    - Otherwise it can be 16x16 (one face), 16x32 (two faces) or 32x32 (four faces)
     """
 
     if tilize == Tilize.Yes:
-        return [4]
+        return [[32, 32]]
 
-    return [1, 2, 4]
+    return [[16, 16], [16, 32], [32, 32]]
 
 
 DATACOPY_FORMATS = input_output_formats(
@@ -113,14 +114,14 @@ SUB_BYTE_DATACOPY_FORMATS = [
 DATACOPY_SWEEP = dict(
     formats=DATACOPY_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
-    num_faces=get_valid_num_faces_datacopy,
+    tile_dimensions=get_valid_tile_dimensions_datacopy,
     tilize=get_valid_tilize_datacopy,
     input_dimensions=[[64, 64], [32, 256], [128, 256]],
 )
 DATACOPY_SUB_BYTE_SWEEP = dict(
     formats=SUB_BYTE_DATACOPY_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
-    num_faces=get_valid_num_faces_datacopy,
+    tile_dimensions=get_valid_tile_dimensions_datacopy,
     tilize=Tilize.No,
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
 )
@@ -129,7 +130,7 @@ DATACOPY_SUB_BYTE_SWEEP = dict(
 def _run_unary_datacopy_test(
     formats,
     dest_acc,
-    num_faces,
+    tile_dimensions,
     tilize,
     input_dimensions,
     *,
@@ -152,6 +153,10 @@ def _run_unary_datacopy_test(
         or formats.output_format == DataFormat.Fp8_e4m3
     ):
         pytest.skip("Fp8_e4m3 not supported on wormhole")
+
+    # num_faces follows the tile shape: 16x16 is one face, 16x32 two, 32x32 four (face_r_dim 16).
+    _, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    num_faces = num_faces_r_dim * num_faces_c_dim
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -248,25 +253,27 @@ def _run_unary_datacopy_test(
 def test_eltwise_unary_datacopy(
     formats,
     dest_acc,
-    num_faces,
+    tile_dimensions,
     tilize,
     input_dimensions,
 ):
-    _run_unary_datacopy_test(formats, dest_acc, num_faces, tilize, input_dimensions)
+    _run_unary_datacopy_test(
+        formats, dest_acc, tile_dimensions, tilize, input_dimensions
+    )
 
 
 @parametrize(**DATACOPY_SUB_BYTE_SWEEP)
 def test_eltwise_unary_datacopy_sub_byte_bfp(
     formats,
     dest_acc,
-    num_faces,
+    tile_dimensions,
     tilize,
     input_dimensions,
 ):
     _run_unary_datacopy_test(
         formats,
         dest_acc,
-        num_faces,
+        tile_dimensions,
         tilize,
         input_dimensions,
         quantize_golden_input=True,

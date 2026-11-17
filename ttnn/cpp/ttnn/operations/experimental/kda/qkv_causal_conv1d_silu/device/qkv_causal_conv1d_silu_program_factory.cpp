@@ -38,6 +38,26 @@ using qkv_conv::no_fabric_connection;
 
 const SemaphoreSpecName predecessor_ready_semaphore{"predecessor_ready"};
 const SemaphoreSpecName staged_semaphore{"staged"};
+// With a history slab: every convolution core has read the old carry before the exchange core replaces it.
+const SemaphoreSpecName history_consumed_semaphore{"history_consumed"};
+const TensorParamName slab_index_tensor{"slab_index"};
+
+void add_slab_args(KernelSpec& kernel, const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in) {
+    const bool slab = in.slab_index.has_value();
+    const auto [has_slab, limit, scale, offset] = kda_factory_detail::slab_kernel_args(
+        slab ? &in.history : nullptr, attrs.slab_index_scale, attrs.slab_index_offset);
+    for (const auto& [name, value] :
+         {std::pair{"slab", has_slab},
+          {"slab_index_limit", limit},
+          {"slab_scale", scale},
+          {"slab_offset", offset},
+          {"entry_pages", static_cast<uint32_t>(in.history.logical_shape()[1])}}) {
+        kernel.compile_time_args.insert({name, value});
+    }
+    if (slab) {
+        kernel.tensor_bindings.push_back({slab_index_tensor, "slab_index"});
+    }
+}
 
 // Fabric connections of one rank's exchange core along the SP axis, and how its sends use them.
 struct ExchangeRoute {
@@ -177,7 +197,12 @@ void add_history_exchange(
         if (sp_size > 1) {
             const std::vector<uint32_t> unbound_semaphores(route.neighbors.size(), 0);
             varargs = tt::tt_metal::internal::compute_fabric_connection_rt_args(
-                device.get_fabric_node_id(coordinate), route.neighbors, {0}, unbound_semaphores, unbound_semaphores);
+                device,
+                device.get_fabric_node_id(coordinate),
+                route.neighbors,
+                {0},
+                unbound_semaphores,
+                unbound_semaphores);
             varargs.insert(varargs.end(), convolution_core_xy.begin(), convolution_core_xy.end());
             varargs.insert(varargs.end(), route.peer_args.begin(), route.peer_args.end());
         }
@@ -191,6 +216,7 @@ void add_history_exchange(
                 {
                     SemaphoreBinding{staged_semaphore, "staged"},
                     SemaphoreBinding{predecessor_ready_semaphore, "predecessor_ready"},
+                    SemaphoreBinding{history_consumed_semaphore, "history_consumed"},
                     SemaphoreBinding{teardown[0], "teardown0"},
                     SemaphoreBinding{buffer_index[0], "buffer_index0"},
                     SemaphoreBinding{teardown[1], "teardown1"},
@@ -205,7 +231,9 @@ void add_history_exchange(
                 {
                     TensorBinding{TensorParamName{"history"}, "history"},
                     TensorBinding{exchange_buffer, "exchange_buffer"},
-                    TensorBinding{final_history_tensor, "final_history"},
+                    // A slab's carry is replaced in place: final_history is history.
+                    TensorBinding{
+                        in.slab_index.has_value() ? TensorParamName{"history"} : final_history_tensor, "final_history"},
                     TensorBinding{TensorParamName{"actual_start"}, "actual_start"},
                 },
             .compile_time_args =
@@ -234,19 +262,22 @@ void add_history_exchange(
         };
         if (sp_size > 1) {
             // The fabric API-type defines; lowering adds only the control plane's routing and header-size ones.
-            for (const auto& [name, value] : tt::tt_metal::internal::get_fabric_kernel_defines()) {
+            for (const auto& [name, value] : tt::tt_metal::internal::get_fabric_kernel_defines(device)) {
                 kernel.compiler_options.defines.insert({name, value});
             }
         }
+        add_slab_args(kernel, attrs, in);
         kernel.advanced_options.num_runtime_varargs = static_cast<uint32_t>(varargs.size());
         if (in.actual_end) {
             kernel.tensor_bindings.push_back({TensorParamName{"actual_end"}, "actual_end"});
         }
         auto& spec = program.spec;
         spec.kernels.push_back(std::move(kernel));
-        spec.tensor_parameters.push_back(
-            {.unique_id = final_history_tensor, .spec = final_history.mesh_tensor().tensor_spec()});
-        program.run_params.tensor_args.emplace(final_history_tensor, final_history.mesh_tensor());
+        if (!in.slab_index.has_value()) {
+            spec.tensor_parameters.push_back(
+                {.unique_id = final_history_tensor, .spec = final_history.mesh_tensor().tensor_spec()});
+            program.run_params.tensor_args.emplace(final_history_tensor, final_history.mesh_tensor());
+        }
         for (uint32_t i = 0; i < qkv_conv::max_fabric_connections; ++i) {
             spec.semaphores.push_back(SemaphoreSpec{.unique_id = teardown[i], .target_nodes = exchange_nodes});
             spec.semaphores.push_back(SemaphoreSpec{.unique_id = buffer_index[i], .target_nodes = exchange_nodes});
@@ -374,7 +405,9 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 DFBBinding{taps_dfb_name, "taps", DFBEndpointType::PRODUCER},
                 DFBBinding{eye_dfb_name, "eye", DFBEndpointType::PRODUCER},
             },
-        .semaphore_bindings = {SemaphoreBinding{predecessor_ready_semaphore, "predecessor_ready"}},
+        .semaphore_bindings =
+            {SemaphoreBinding{predecessor_ready_semaphore, "predecessor_ready"},
+             SemaphoreBinding{history_consumed_semaphore, "history_consumed"}},
         .scratchpad_bindings = {{act_window_name, "act_window"}},
         .tensor_bindings =
             {
@@ -393,10 +426,13 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
              {"input_ct_offset", input_ct_offset},
              {"exchange", uint32_t(exchange)},
              {"token_paged", uint32_t(tail.token_paged)},
-             {"page_channels", tail.page_channels}},
+             {"page_channels", tail.page_channels},
+             {"exchange_core_x", static_cast<uint32_t>(exchange_core_xy.x)},
+             {"exchange_core_y", static_cast<uint32_t>(exchange_core_xy.y)}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
+    add_slab_args(reader, attrs, in);
 
     const TensorParamName actual_start_name{"actual_start"};
     const TensorParamName predecessor_name{"predecessor_carry"};
@@ -512,6 +548,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
             {
                 SemaphoreSpec{.unique_id = predecessor_ready_semaphore, .target_nodes = semaphore_cores},
                 SemaphoreSpec{.unique_id = staged_semaphore, .target_nodes = semaphore_cores},
+                SemaphoreSpec{.unique_id = history_consumed_semaphore, .target_nodes = semaphore_cores},
             },
         .scratchpads =
             {{.unique_id = act_window_name, .size_per_node = window_bytes},
@@ -546,6 +583,11 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
 
     run_args.tensor_args.emplace(actual_start_name, in.actual_start.mesh_tensor());
     run_args.tensor_args.emplace(predecessor_name, predecessor);
+    if (in.slab_index.has_value()) {
+        spec.tensor_parameters.push_back(
+            {.unique_id = slab_index_tensor, .spec = in.slab_index->mesh_tensor().tensor_spec()});
+        run_args.tensor_args.emplace(slab_index_tensor, in.slab_index->mesh_tensor());
+    }
     kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, writer);
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
 

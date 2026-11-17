@@ -225,7 +225,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
         // First pass: Calculate minimums for each row/column
         size_t num_chips_in_mesh = intra_mesh_connectivity[mesh_id.get()].size();
-        bool is_single_chip = num_chips_in_mesh == 1 && user_meshes.size() == 1;
+        // A lone single-chip system. user_meshes holds only this process's meshes, so count the meshes of the whole
+        // fabric: a one-chip mesh in a multi-mesh graph (e.g. one stage of a pipeline of [1,1] meshes) still has
+        // N/E/S/W inter-mesh ports whose routing planes must be counted.
+        bool is_single_chip = num_chips_in_mesh == 1 && this->mesh_graph_->get_mesh_ids().size() == 1;
         bool may_have_intra_mesh_connectivity = !is_single_chip;
 
         if (may_have_intra_mesh_connectivity) {
@@ -409,7 +412,7 @@ void ControlPlane::init_control_plane(
         config_.fabric_config = mgd.default_fabric_config_from_dim_types(config_.mesh_id);
     }
 
-    // Gather every rank's FabricConfigDescriptor once (reused by validate_fabric_config_compatibility()), then build
+    // Gather every rank's FabricSettings once (reused by validate_fabric_config_compatibility()), then build
     // each mesh's config from it. This is what lets the fabric config differ per mesh while every rank still builds an
     // identical mesh graph.
     this->gather_fabric_config_descriptors();
@@ -691,7 +694,7 @@ ControlPlane::ControlPlane(
     const ::tt::llrt::RunTimeOptions& rtoptions,
     const ::tt::tt_metal::Hal& hal,
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
-    const tt_metal::FabricConfigDescriptor& config) :
+    const tt_metal::FabricSettings& config) :
     cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
     init_control_plane_auto_discovery();
     initialize_fabric_context();
@@ -703,7 +706,7 @@ ControlPlane::ControlPlane(
     const ::tt::tt_metal::Hal& hal,
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
     const std::string& mesh_graph_desc_file,
-    const tt_metal::FabricConfigDescriptor& config) :
+    const tt_metal::FabricSettings& config) :
     cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);
     initialize_fabric_context();
@@ -716,22 +719,22 @@ ControlPlane::ControlPlane(
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-    const tt_metal::FabricConfigDescriptor& config) :
+    const tt_metal::FabricSettings& config) :
     cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
     init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
     initialize_fabric_context();
 }
 
 void ControlPlane::gather_fabric_config_descriptors() {
-    // Gather every rank's FabricConfigDescriptor (raw bytes, indexed by sending rank). Every rank takes part, including
+    // Gather every rank's FabricSettings (raw bytes, indexed by sending rank). Every rank takes part, including
     // DISABLED ones, so the collective stays symmetric and DISABLED is cross-checked in the validate step.
     const auto& distributed_context = this->distributed_context_.get();
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
-    gathered_fabric_configs_.assign(world_size, tt_metal::FabricConfigDescriptor{});
+    gathered_fabric_configs_.assign(world_size, tt_metal::FabricSettings{});
     distributed_context.all_gather(
-        ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{&this->config_, 1}),
-        ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{
-            gathered_fabric_configs_.data(), gathered_fabric_configs_.size()}));
+        ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricSettings>{&this->config_, 1}),
+        ttsl::as_writable_bytes(
+            ttsl::Span<tt_metal::FabricSettings>{gathered_fabric_configs_.data(), gathered_fabric_configs_.size()}));
 }
 
 void ControlPlane::validate_fabric_config_compatibility() {
@@ -788,7 +791,7 @@ void ControlPlane::validate_fabric_config_compatibility() {
         }
     }
 
-    // vc2 / mesh pass-through come from rtoptions, not FabricConfigDescriptor; bit 0 = vc2, bit 1 = pass-through.
+    // vc2 / mesh pass-through come from rtoptions, not FabricSettings; bit 0 = vc2, bit 1 = pass-through.
     const auto& rtoptions = this->rtoptions_.get();
     uint8_t local_channel_flags =
         (rtoptions.get_enable_fabric_vc2() ? 1u : 0u) | (rtoptions.get_enable_fabric_mesh_pass_through() ? 2u : 0u);
@@ -856,14 +859,14 @@ void ControlPlane::validate_fabric_config_compatibility() {
             observed_values);
     }
 
-    // Every FabricConfigDescriptor setting except fabric_config, mesh_id and host_rank must be identical on every rank:
+    // Every FabricSettings setting except fabric_config, mesh_id and host_rank must be identical on every rank:
     // vc2 / mesh_pass_through / max_payload pick the per-VC buffer table, so a disagreement silently stalls the fabric.
-    auto payload_str = [](const tt_metal::FabricConfigDescriptor& c) {
+    auto payload_str = [](const tt_metal::FabricSettings& c) {
         return c.router_config.max_packet_payload_size_bytes.has_value()
                    ? std::to_string(*c.router_config.max_packet_payload_size_bytes)
                    : std::string("<default>");
     };
-    auto planes_str = [](const tt_metal::FabricConfigDescriptor& c) {
+    auto planes_str = [](const tt_metal::FabricSettings& c) {
         return c.num_routing_planes.has_value() ? std::to_string(*c.num_routing_planes) : std::string("<default>");
     };
     auto flag_str = [](uint8_t flags, uint8_t bit) { return std::string((flags & bit) != 0 ? "true" : "false"); };

@@ -7,6 +7,7 @@
 #include <limits>
 #include <set>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
@@ -44,6 +45,57 @@ const Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const Prog
 const experimental::AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(
     const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.common_runtime_varargs;
+}
+
+// UpdateProgramRunArgs drops the per-device values of the named args it lists (see ProgramImpl::PerDeviceRunArgDrops).
+// Tensor args, DFB overrides and varargs cannot have per-device values, so only named args are recorded.
+static void RecordPerDeviceRunArgDrops(detail::ProgramImpl& program_impl, const ProgramRunArgs& params) {
+    if (!program_impl.tracks_per_device_run_args()) {
+        return;
+    }
+    using Key = detail::ProgramImpl::PerDeviceRunArgKey;
+    for (const auto& kernel_params : params.kernel_run_args) {
+        const std::string& kernel_name = kernel_params.kernel.get();
+        const KernelHandle kernel = program_impl.get_kernel_handle(kernel_name);
+        if (!program_impl.tracks_per_device_run_args_of(kernel)) {
+            continue;
+        }
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name);
+        TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
+        for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+            const auto it = schema->runtime_arg_name_to_slot.find(name);
+            if (it == schema->runtime_arg_name_to_slot.end()) {
+                continue;  // the update itself fails on it
+            }
+            for (const auto& [node, value] : per_node) {
+                program_impl.record_per_device_run_arg_drop(Key{kernel, node, static_cast<uint32_t>(it->second)});
+            }
+        }
+        for (const auto& [name, per_node] : kernel_params.runtime_array_arg_values) {
+            const auto it = schema->runtime_array_arg_slots.find(name);
+            if (it == schema->runtime_array_arg_slots.end()) {
+                continue;
+            }
+            for (const auto& [node, value] : per_node) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, node, static_cast<uint32_t>(it->second.first_slot)});
+            }
+        }
+        for (const auto& [name, value] : kernel_params.common_runtime_arg_values) {
+            const auto it = schema->common_runtime_arg_name_to_slot.find(name);
+            if (it != schema->common_runtime_arg_name_to_slot.end()) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, std::nullopt, static_cast<uint32_t>(it->second)});
+            }
+        }
+        for (const auto& [name, value] : kernel_params.common_runtime_array_arg_values) {
+            const auto it = schema->common_runtime_array_arg_slots.find(name);
+            if (it != schema->common_runtime_array_arg_slots.end()) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, std::nullopt, static_cast<uint32_t>(it->second.first_slot)});
+            }
+        }
+    }
 }
 
 // Validation of the array args a KernelRunArgs supplies, shared by the full and partial-update paths:
@@ -136,6 +188,37 @@ static std::optional<BufferDistributionSpec> resolve_shard_distribution(const Te
     return spec.compute_buffer_sharding_args().buffer_distribution_spec();
 }
 
+// The tensor_layout part of report_tensor_arg_mismatch, shared by both relaxed modes. Checked in two
+// parts, because the alignment is the one component of tensor_layout that
+// relax_tensor_layout_alignment frees. mode_name names the active relaxation, for the messages.
+static void report_tensor_layout_mismatch(
+    const TensorParamName& param_name,
+    const TensorLayout& runtime_layout,
+    const TensorLayout& expected_layout,
+    const TensorSpecRelaxations& relaxation,
+    std::string_view mode_name) {
+    TT_FATAL(
+        runtime_layout.get_data_type() == expected_layout.get_data_type() &&
+            runtime_layout.get_page_config() == expected_layout.get_page_config() &&
+            runtime_layout.get_memory_config() == expected_layout.get_memory_config(),
+        "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
+        "binding's declared layout. {} loosens the match only along the shape; dtype, page_config, and "
+        "memory_config must still match exactly.",
+        param_name,
+        mode_name);
+    if (!relaxation.relax_tensor_layout_alignment) {
+        TT_FATAL(
+            runtime_layout.get_alignment() == expected_layout.get_alignment(),
+            "TensorArgument for binding '{}' supplied a MeshTensor whose TensorLayout has {} where the binding "
+            "declares {}. {} lets the shape vary, but the tensor must still be padded to the declared alignment. "
+            "To accept other alignments, also set relax_tensor_layout_alignment.",
+            param_name,
+            runtime_layout.get_alignment(),
+            expected_layout.get_alignment(),
+            mode_name);
+    }
+}
+
 // Emit a precise diagnostic for a tensor argument that failed tensorspecs_match_with_relaxation, then
 // throw. Called only on the rejection path: the branches mirror the match to produce a specific
 // message, and the trailing TT_THROW guarantees rejection even if a branch ever drifts from the match.
@@ -145,28 +228,12 @@ static void report_tensor_arg_mismatch(
     const TensorSpec& expected_spec,
     const TensorSpecRelaxations& relaxation) {
     if (relaxation.dynamic_tensor_shape) {
-        // Checked in two parts, because the alignment is the one component of tensor_layout that
-        // relax_tensor_layout_alignment frees.
-        const TensorLayout& runtime_layout = runtime_spec.tensor_layout();
-        const TensorLayout& expected_layout = expected_spec.tensor_layout();
-        TT_FATAL(
-            runtime_layout.get_data_type() == expected_layout.get_data_type() &&
-                runtime_layout.get_page_config() == expected_layout.get_page_config() &&
-                runtime_layout.get_memory_config() == expected_layout.get_memory_config(),
-            "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-            "binding's declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
-            "page_config, and memory_config must still match exactly.",
-            param_name);
-        if (!relaxation.relax_tensor_layout_alignment) {
-            TT_FATAL(
-                runtime_layout.get_alignment() == expected_layout.get_alignment(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose TensorLayout has {} where the binding "
-                "declares {}. dynamic_tensor_shape lets the shape values vary, but the tensor must still be padded to "
-                "the declared alignment. To accept other alignments, also set relax_tensor_layout_alignment.",
-                param_name,
-                runtime_layout.get_alignment(),
-                expected_layout.get_alignment());
-        }
+        report_tensor_layout_mismatch(
+            param_name,
+            runtime_spec.tensor_layout(),
+            expected_spec.tensor_layout(),
+            relaxation,
+            "dynamic_tensor_shape");
         // The rank is the one shape term dynamic_tensor_shape still pins, and relax_logical_rank
         // frees it.
         if (!relaxation.relax_logical_rank) {
@@ -215,14 +282,12 @@ static void report_tensor_arg_mismatch(
                 expected_dist->cores().size());
         }
     } else if (relaxation.match_padded_shape_only) {
-        TT_FATAL(
-            runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
-            "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-            "binding's "
-            "declared layout. match_padded_shape_only loosens the match only along logical_shape (within the "
-            "constraint that padded_shape is preserved); dtype, page_config, memory_config, and alignment must "
-            "still match exactly.",
-            param_name);
+        report_tensor_layout_mismatch(
+            param_name,
+            runtime_spec.tensor_layout(),
+            expected_spec.tensor_layout(),
+            relaxation,
+            "match_padded_shape_only");
         TT_FATAL(
             runtime_spec.padded_shape() == expected_spec.padded_shape(),
             "TensorArgument for binding '{}' supplied a MeshTensor whose padded_shape does not match the binding's "
@@ -265,13 +330,14 @@ static void report_tensor_arg_mismatch(
 //       - match_page_size=true (with dynamic_tensor_shape): as above, plus the page size must
 //         match. A TIGHTENING rather than a relaxation -- it declares that the width is constant
 //         even though the shape varies, so the accessor can keep the page size compile-time.
-//       - relax_tensor_layout_alignment=true (with dynamic_tensor_shape): tensor_layout() need not match on its
-//         alignment, so a tensor padded differently from the declared one is accepted. Composes
-//         with the two flags above.
-//     relax_logical_rank and relax_tensor_layout_alignment are inert unless dynamic_tensor_shape is also set;
-//     the load-bearing field set for every combination is derived in one place, by
-//     pertinent_fields() (tensor_spec_relaxations.cpp), which both this validation and the
-//     relaxation-aware hash use.
+//       - relax_tensor_layout_alignment=true (with either flag): tensor_layout() need not match on
+//         its alignment. Under match_padded_shape_only the padded shape is still pinned, so only
+//         the logical shape and alignment that produce it may differ. Under dynamic_tensor_shape a
+//         tensor padded differently is accepted; there it composes with the two flags above.
+//     relax_logical_rank is inert unless dynamic_tensor_shape is also set, and
+//     relax_tensor_layout_alignment unless either flag is. The load-bearing field set for every
+//     combination is derived in one place, by pertinent_fields() (tensor_spec_relaxations.cpp),
+//     which both this validation and the relaxation-aware hash use.
 //     See the field doc comments in tensor_spec_relaxations.hpp for the full contracts.
 //   - When require_all is true: every declared TensorParameter must be set.
 //   - When require_all is false (partial update): any TensorParameter may be omitted; its
@@ -1280,6 +1346,9 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         program_impl.set_bound_tensor_footprint(param_name, tt_metal::detail::make_bound_tensor_footprint(*tensor));
     }
     program_impl.mark_program_run_args_initialized();
+    // Every arg was just set for the whole program: per-device values are dropped (see
+    // ProgramImpl::PerDeviceRunArgDrops).
+    program_impl.record_per_device_run_args_drop_all();
 }
 
 void experimental::UpdateTensorArgs(
@@ -1595,7 +1664,6 @@ void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& 
     if (!skip_validation) {
         ValidateUpdateProgramRunArgs(program, params);
     }
-
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,
     // retaining the value installed by the most recent SetProgramRunArgs. A supplied positional
     // vararg section refreshes that section wholesale.
@@ -1782,6 +1850,8 @@ void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& 
 
     // Install arena addresses after DFB, tensor, and pipe checks succeed.
     BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
+    // Only once the update succeeded: a failed update must not drop per-device values it never replaced.
+    RecordPerDeviceRunArgDrops(program_impl, params);
 }
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
