@@ -72,7 +72,7 @@ CASES = {
     ),
     "2x2_dp_tp->1x4_fsdp": (
         _world("2x2", "dp,tp", ("--tp",), "bh_2_2_line_line.textproto"),
-        _world("1x4", "dp,fsdp", ("--fsdp",), "bh_qb_1_4_ring_ring.textproto"),
+        _world("1x4", "dp,fsdp", ("--fsdp",), "bh_1_4_line_line.textproto"),
         4,
     ),
     # Two-device cases, which a 2-chip CI host can run. TP1 -> TP2: the fused rows spread over the shards and the vocab
@@ -133,7 +133,7 @@ def _run(args: list[str], what: str, expect_ok: bool = True) -> str:
     proc = run_world(_command(args), env, CHILD_TIMEOUT_S)
     lines = output_lines(proc)
     opened = not any("MESH_OPEN_FAILED" in ln for ln in lines)  # tt-run may not carry a rank's exit status
-    if proc.returncode == MESH_OPEN_FAILED or not opened:  # only the descriptor-fabric mismatch: the QuietBox 1x4 ring
+    if proc.returncode == MESH_OPEN_FAILED or not opened:  # only the descriptor-fabric mismatch (see dcp_driver)
         reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")
         pytest.skip(f"{what}: this host cannot open the mesh: {reason}")
     for line in lines:  # the measured differences, for the log
