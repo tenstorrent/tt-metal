@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 
