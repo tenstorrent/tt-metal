@@ -77,8 +77,7 @@ static constexpr std::uint32_t DST_ROW = DST_TILE * 64;
 static constexpr std::uint32_t SRC_ROW = SRC_TILE * 64;
 
 // output_granularity gates how many tiles run between FPU_SFPU posts. Pin 1 to preserve per-tile FPU_SFPU cadence
-// (matches the demo behavior). The golden ignores signalling cadence — this only affects when the (unconsumed) posts
-// fire.
+// (matches the demo behavior). Pack drains each post so repeated perf iterations preserve the production handshake.
 static constexpr std::uint32_t OUTPUT_GRANULARITY = 1;
 
 // The face count MUST be a compile-time constant on the math thread: sdpa_bcast_col_srca_srcb_reuse_configure_addrmod
@@ -202,8 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        // This standalone driver has no SFPU consumer, so repeated loops suppress
-        // the production FPU_SFPU post instead of saturating the semaphore.
+        t6_semaphore_init(semaphore::FPU_SFPU, 0 /* min_value */, NUM_TILES / OUTPUT_GRANULARITY /* max_value */);
         PROFILER_SYNC();
     }
     {
@@ -232,6 +230,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(DST_TILE, formats.math, formats.math, tensor_shape);
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_TILE, formats.math, formats.math, tensor_shape);
                 _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, MATH_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
+                t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU);
                 _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, false /* clear_dest */>(SRC_ROW);
                 _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
                     SDPA_OP,
@@ -240,7 +239,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     is_fp32_dest_acc_en,
                     MATH_FIDELITY,
                     false /* clear_dest */,
-                    true /* skip_signalling */,
+                    false /* skip_signalling */,
                     OUTPUT_GRANULARITY>(DST_ROW);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
@@ -282,8 +281,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // Preserve the production FPU_SFPU handshake while pack otherwise stands in for the absent consumer.
+                t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU);
+                t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU);
+            }
         }
         else
         {
@@ -292,6 +300,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_packer_wait_for_math_done_();
+                    t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU);
                 }
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
