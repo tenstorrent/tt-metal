@@ -150,6 +150,15 @@ inline uint32_t prepare_worker_completion_signal(
 inline void signal_worker_completion(uint32_t worker_completion_group) {
     overlay::fds_signalling::worker_signal_done(worker_completion_group);
 }
+
+// Masks the FDS external interrupt and drains/disables worker auto-dispatch before parking the tile.
+inline void quiesce_go_signalling() {
+    asm volatile("csrrc zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
+    overlay::fds_signalling::worker_config_interrupt_enable(overlay::fds_signalling::interrupts_disabled);
+    overlay::fds_signalling::wait_cycles(overlay::auto_dispatch_drain_cycles(
+        overlay::worker_auto_dispatch_queue_depth, overlay::fds_signalling::auto_dispatch_pacing_cycle_count));
+    overlay::fds_signalling::worker_disable_auto_dispatch();
+}
 #else
 inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
     clear_go_messages(mailboxes->go_messages);
@@ -161,4 +170,6 @@ inline void reset_go_ring_write_slot() {}
 inline uint32_t prepare_worker_completion_signal(tt_l1_ptr mailboxes_t* const, launch_msg_t*, bool) { return 0; }
 
 inline void signal_worker_completion(uint32_t) { ASSERT(0); }
+
+inline void quiesce_go_signalling() {}
 #endif

@@ -32,3 +32,6 @@ static_assert(
 // clear of the kernel text that follows.
 static_assert(MEM_DISPATCH_LOGICAL_TO_VIRTUAL_SCRATCH + MEM_LOGICAL_TO_VIRTUAL_SIZE <= MEM_DISPATCH_DM0_KERNEL_BASE);
 static_assert(MEM_DISPATCH_MAP_END + MEM_DISPATCH_KERNEL_CONFIG_SIZE <= MEM_DISPATCH_DM0_KERNEL_BASE);
+static_assert(sizeof(quiesce_msg_t) <= MEM_QUIESCE_SIZE);
+static_assert(MEM_DISPATCH_QUIESCE_BASE % 64 == 0, "Dispatch quiesce slot must be 64-byte aligned");
+static_assert(MEM_QUIESCE_SIZE % 64 == 0, "Quiesce slot size must be a multiple of 64 bytes");

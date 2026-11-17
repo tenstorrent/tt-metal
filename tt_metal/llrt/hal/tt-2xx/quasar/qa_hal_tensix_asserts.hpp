@@ -45,3 +45,6 @@ static_assert(MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 == 0, "Tensix fabric conne
 static_assert(MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 == 0, "Tensix fabric connections size must be 16-byte aligned");
 static_assert(
     MEM_TENSIX_FABRIC_CONNECTIONS_BASE - MEM_TENSIX_ROUTING_TABLE_BASE == sizeof(tt::tt_fabric::routing_l1_info_t));
+static_assert(sizeof(quiesce_msg_t) <= MEM_QUIESCE_SIZE);
+static_assert(MEM_TENSIX_QUIESCE_BASE % 64 == 0, "Tensix quiesce slot must be 64-byte aligned");
+static_assert(MEM_QUIESCE_SIZE % 64 == 0, "Quiesce slot size must be a multiple of 64 bytes");

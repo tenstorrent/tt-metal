@@ -118,6 +118,8 @@ constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
 constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
 // Quasar kernel DM: the kernel has returned and its DFB exit records are written; it is now draining.
 constexpr uint32_t RUN_SYNC_MSG_DFB_DRAINING = 0x4;
+// Quasar subordinate hart park: ack DONE and spin on nop until reset.
+constexpr uint32_t RUN_SYNC_MSG_PARK = 0x5;
 constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;
@@ -409,6 +411,24 @@ struct l1_ecc_halt_slot_t {
     // (brisc_int_release_code in hostdev/l1_ecc_halt_constants.h).
     volatile uint32_t brisc_int_release[2];
 };
+
+// Quasar Tensix and Dispatch tiles only, at MEM_QUIESCE_BASE.
+// Host-written and device-written fields occupy separate 32-bit words to avoid RMW races.
+constexpr uint32_t QUIESCE_MAX_CQS = 2;
+constexpr uint32_t QUIESCE_CTRL_NONE = 0;
+constexpr uint32_t QUIESCE_CTRL_NEXT_OP = 0x51550001u;
+constexpr uint32_t QUIESCE_CTRL_AT_OP_COUNT = 0x51550002u;
+constexpr uint32_t QUIESCE_STATUS_UNINIT = 0;
+constexpr uint32_t QUIESCE_STATUS_RUNNING = 0x51551001u;
+constexpr uint32_t QUIESCE_STATUS_QUIESCED = 0x5155DEADu;
+
+struct quiesce_msg_t {
+    volatile uint32_t target_op_count[QUIESCE_MAX_CQS];
+    volatile uint32_t control;
+    volatile uint32_t op_started_count[QUIESCE_MAX_CQS];
+    volatile uint32_t status;
+};
+static_assert(sizeof(quiesce_msg_t) == 24);
 
 // NOC alignment max from BH
 constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;

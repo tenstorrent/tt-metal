@@ -207,10 +207,18 @@
 #error "CAS-ret/lock regions and the cached semaphore pool must be whole, aligned 64B cache lines"
 #endif
 
+// Dedicated uncached quiesce control/status slot (quiesce_msg_t): occupies one full 64B L2 cache line so
+// no cached neighbour's write-back can clobber uncached host/device updates.
+#define MEM_TENSIX_QUIESCE_BASE (MEM_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE)
+#define MEM_QUIESCE_SIZE 64
+#if (MEM_TENSIX_QUIESCE_BASE % 64 != 0) || (MEM_QUIESCE_SIZE % 64 != 0)
+#error "Tensix quiesce slot must be a whole, aligned 64B cache line"
+#endif
+
 // Read-only reserved memory boundary for watcher checks
 #define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
 // Read-write reserved memory boundary for watcher checks
-#define MEM_MAP_END (MEM_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE)
+#define MEM_MAP_END (MEM_TENSIX_QUIESCE_BASE + MEM_QUIESCE_SIZE)
 
 // Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).
 #define MEM_KERNEL_CONFIG_SIZE (100 * 1024)
@@ -281,21 +289,29 @@
 #error "Dispatch watcher ring buffer head must start on a 64B cache line"
 #endif
 
+// Dedicated uncached quiesce control/status slot (quiesce_msg_t) on its own 64B cache line.
+#define MEM_DISPATCH_QUIESCE_BASE MEM_DISPATCH_WATCHER_RING_HEAD_END
+#define MEM_DISPATCH_QUIESCE_END (MEM_DISPATCH_QUIESCE_BASE + MEM_QUIESCE_SIZE)
+#if (MEM_DISPATCH_QUIESCE_BASE % 64 != 0)
+#error "Dispatch quiesce slot must start on a 64B cache line"
+#endif
+
 // Everything above shifts with MEM_DISPATCH_MAP_END, so round the whole span up to the 2 kB L1 cache set
 // period: otherwise the kernel config ring and kernel text land on different sets.
-#define MEM_DISPATCH_MAP_END         \
-    (MEM_DISPATCH_SEM_REGIONS_BASE + \
-     (((MEM_DISPATCH_WATCHER_RING_HEAD_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
+#define MEM_DISPATCH_MAP_END \
+    (MEM_DISPATCH_SEM_REGIONS_BASE + (((MEM_DISPATCH_QUIESCE_END - MEM_DISPATCH_SEM_REGIONS_BASE) + 2047) & ~2047))
 
 // Pre-resolved form of the two layouts, so shared device code names one symbol instead of its own #if.
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
 #define MEM_SEM_CAS_RET_BASE MEM_DISPATCH_NOC_CAS_RET_BASE
 #define MEM_SEM_LOCK_BASE MEM_DISPATCH_NOC_SEM_LOCK_BASE
 #define MEM_SEM_CACHED_POOL_BASE MEM_DISPATCH_DM_CACHED_SEM_BASE
+#define MEM_QUIESCE_BASE MEM_DISPATCH_QUIESCE_BASE
 #else
 #define MEM_SEM_CAS_RET_BASE MEM_NOC_CAS_RET_BASE
 #define MEM_SEM_LOCK_BASE MEM_NOC_SEM_LOCK_BASE
 #define MEM_SEM_CACHED_POOL_BASE MEM_DM_CACHED_SEM_BASE
+#define MEM_QUIESCE_BASE MEM_TENSIX_QUIESCE_BASE
 #endif
 #define MEM_SEM_CAS_RET_SIZE MEM_NOC_CAS_RET_SIZE
 #define MEM_SEM_LOCK_SIZE MEM_NOC_SEM_LOCK_SIZE
