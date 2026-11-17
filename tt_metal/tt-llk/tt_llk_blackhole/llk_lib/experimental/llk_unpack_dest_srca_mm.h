@@ -66,6 +66,8 @@ inline void _llk_unpack_dest_srca_mm_(const std::uint32_t in0_address)
  * @param words_offset: Byte offset of the words in the page, a multiple of 64.
  * @param words: 32-bit words to unpack, a multiple of 16.
  * @param x_end: Unpacker A's X end to put back.
+ * @param words_shift: Bytes added to the words' L1 address only (their DEST rows still follow words_offset), a
+ * multiple of 16; negative: words before the page.
  * @note The first call reads unpacker A's formats (the page's), which the words and later unpacks use.
  */
 inline void _llk_unpack_dest_srca_mm_codes_page_(
@@ -74,7 +76,8 @@ inline void _llk_unpack_dest_srca_mm_codes_page_(
     const std::uint32_t exp,
     const std::uint32_t words_offset,
     const std::uint32_t words,
-    const std::uint32_t x_end)
+    const std::uint32_t x_end,
+    const std::int32_t words_shift = 0)
 {
     constexpr std::uint32_t bfp4 = to_underlying(DataFormat::Bfp4), fp16 = to_underlying(DataFormat::Float16);
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
@@ -124,7 +127,8 @@ inline void _llk_unpack_dest_srca_mm_codes_page_(
     TT_SETADCXX(p_setadc::UNP_A, words - 1, 0x0);
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     wait_for_next_context(2);
-    cfg[unp_cfg_context == 0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address + words_offset / 16;
+    cfg[unp_cfg_context == 0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] =
+        address + static_cast<std::uint32_t>((static_cast<std::int32_t>(words_offset) + words_shift) / 16);
     semaphore_post(semaphore::UNPACK_SYNC);
     {
         // set_dst_write_addr with the rows past the tile.

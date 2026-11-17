@@ -569,7 +569,10 @@ def _group_planes(fmt, planes, t, g):
         pack(fmt, planes, t, fmt.pages_per_group * g + i)
         for i in range(fmt.pages_per_group)
     ]
-    # One codes page per group: codes first, then the scale fields, in the page's order.
+    # One codes page per group: codes first, then the scale fields, in the page's order. MXFP4: the scale row between
+    # its two codes pages, so that its first page is one read.
+    if fmt.name == "MXFP4":
+        return pages[:1] + [scale] + pages[1:]
     return [scale] + pages if fmt.pages_per_group > 1 else pages + [scale]
 
 
@@ -754,7 +757,8 @@ _CODEBOOK_GROUPS = {
 
 def records(fmt: GgufFormat, blocks: np.ndarray) -> list[list[list[bytes]]]:
     """records[nt][g]: group g of N tile nt as its parts in storage order (the scale fields and the codes pages; a
-    group with one codes page stores it first). Their sizes add up to the blocks' size.
+    group with one codes page stores it first, MXFP4 its scale row between its two codes pages). Their sizes add up to
+    the blocks' size.
     """
     n, nb, _ = blocks.shape
     k = nb * fmt.block_elems
@@ -843,7 +847,9 @@ def pages(fmt: GgufFormat, recs) -> list[list[bytes]]:
     for groups in recs:
         tile_pages = []
         for parts in groups:
-            if fmt.pages_per_group > 1:
+            if fmt.name == "MXFP4":
+                codes, scale = parts[0::2], parts[1]
+            elif fmt.pages_per_group > 1:
                 scale, codes = parts[0], parts[1:]
             else:
                 codes, scale = parts[:-1], parts[-1]
