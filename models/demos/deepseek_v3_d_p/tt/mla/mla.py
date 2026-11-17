@@ -392,8 +392,12 @@ class ttMLA:
                 # Hy4-preview learnable sink, in sparse_sdpa's attention_sink form ([1, 1, 1, H] bf16
                 # ROW_MAJOR, unpadded, DRAM). REPLICATED, not TP-sharded: the sparse path moves the TP split
                 # from heads to sequence for the attention (reshards_heads_to_seq: every TP > 1, and sparse
-                # requires TP > 1), so each chip runs sparse_sdpa over all heads. This holds for any head
-                # split of the projections (SP 8 x TP 4 or SP 4 x TP 8), so the sink does not depend on it.
+                # requires TP > 1), so each chip runs sparse_sdpa over all heads -- which is also what keeps
+                # sparse_sdpa's H % 32 == 0 limit off the per-chip head count of the projections (16 at TP 4,
+                # 8 at TP 8). Each query's whole top-k is attended on one chip here (the selected KV rows are
+                # gathered/pushed to it), so the op's sink is exact. A context-parallel core that merges
+                # per-stripe partials by LSE must instead add the sink once, at the merge:
+                # out = merged * sigmoid(lse - sink) (tests/test_hy4_attention_math.py::test_lse_fold_*).
                 result["attn_sink"] = ttnn.as_tensor(
                     attn_sink,
                     device=device,

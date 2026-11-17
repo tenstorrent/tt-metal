@@ -25,6 +25,7 @@ Env: ``HY4_HF_MODEL`` (default /mnt/tt-data/Hy4-Preview), ``HY4_GOLDEN_DIR`` (de
 
 from __future__ import annotations
 
+import copy
 import os
 import time
 from pathlib import Path
@@ -47,7 +48,12 @@ CHECKPOINT = Path(os.environ.get("HY4_HF_MODEL", "/mnt/tt-data/Hy4-Preview"))
 GOLDEN = Path(os.environ.get("HY4_GOLDEN_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-v2"))
 SEQ_LENS = [int(s) for s in os.environ.get("HY4_ATTN_SEQ_LENS", "4096").split(",")]
 ATTN_PCC = 0.995  # GLM-5.3's MLA threshold (Hy4Adapter.mla_pcc_threshold)
-FULL_LAYER, SHARED_LAYER = 0, 2  # Hy4 indexer_types: 0, 1 full; 2, 3, 4 shared
+FULL_LAYER, SHARED_LAYER = 0, 2
+# GLM-5.3's prefill L1_SMALL (test_prefill_transformer_chunked.GLM_L1_SMALL_SIZE): a shared layer's sparse KV push
+# adds its semaphores beside the full layer's CCL ones.
+L1_SMALL = 1536
+# Prefill chunk (global tokens). The runtime's is 5120 (PREFILL_CHUNK_TOKENS); 4096 divides the 4K golden and 32K.
+CHUNK = int(os.environ.get("HY4_ATTN_CHUNK", "4096"))  # Hy4 indexer_types: 0, 1 full; 2, 3, 4 shared
 
 pytestmark = [
     pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only"),
@@ -165,8 +171,35 @@ def device_indices_to_host(indices: ttnn.Tensor, mesh_device, sp_axis: int, seq_
         sp_i, tp_i = (r, c) if sp_axis == 0 else (c, r)
         blocks[sp_i * tp + tp_i] = t.reshape(-1, t.shape[-1])
     idx = torch.cat(blocks).to(torch.int64) & 0xFFFFFFFF
-    assert idx.shape[0] == seq_len, idx.shape
     return torch.where(idx >= seq_len, torch.full_like(idx, -1), idx)
+
+
+def host_indices_to_device(topk: torch.Tensor, mesh_device, sp_axis: int) -> ttnn.Tensor:
+    """Inverse of ``device_indices_to_host``: ``[S, K]`` natural positions (-1 = masked, a contiguous tail) ->
+    the ``[1, 1, S/(sp*tp), K]`` uint32 per-chip shards ttMLA takes as ``indexer_indices``."""
+    S, K = topk.shape
+    rows, cols = mesh_device.shape
+    sp, tp = (rows, cols) if sp_axis == 0 else (cols, rows)
+    host = topk.to(torch.int32).reshape(sp, tp, S // (sp * tp), K)
+    if sp_axis != 0:
+        host = host.transpose(0, 1).contiguous()  # mesh dim 0 indexes TP, dim 1 SP
+    return ttnn.from_torch(
+        host,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, 1)),
+    )
+
+
+def sliding_topk(S: int, K: int) -> torch.Tensor:
+    """``[S, K]`` selection of the last K causal keys per query (valid keys first, -1 tail)."""
+    out = torch.full((S, K), -1, dtype=torch.long)
+    for i in range(S):
+        lo = max(0, i - K + 1)
+        out[i, : i + 1 - lo] = torch.arange(lo, i + 1)
+    return out
 
 
 def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -176,7 +209,12 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def run_device_attention(config, weights, mesh_device, hn, layer_idx, topology, sp_axis, inject=None):
+    """Chunked prefill of ``hn`` through one ttMLA layer (chunks of CHUNK tokens, as the runtime does). ``inject``:
+    host top-k ``[S, K]`` fed to a shared layer chunk by chunk. Returns (output [S, hidden] fp32, the top-k the
+    layer attended over, ``[S, K]`` natural positions, read back per chunk since the indexer reuses its buffer)."""
     seq_len = hn.shape[0]
+    chunk = min(seq_len, CHUNK)
+    assert seq_len % chunk == 0
     tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
     kvpe_cache = init_mla_kv_cache(
@@ -200,13 +238,13 @@ def run_device_attention(config, weights, mesh_device, hn, layer_idx, topology, 
         is_balanced=False,
         topology=topology,
         is_chunked=True,
-        active_seq_len=seq_len,
+        active_seq_len=chunk,
         layer_num=1,
         sparse_kv_cache_format=kvpe_cache.format,
     )
     assert mla.attn_sink is not None and mla._use_gate
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
-    rope_tensors = rope.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
+    rope_tensors = rope.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=chunk)
     index_kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
         mesh_device=mesh_device,
@@ -220,29 +258,43 @@ def run_device_attention(config, weights, mesh_device, hn, layer_idx, topology, 
     )
     shard_dims = [None, None]
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
-    tt_hidden = ttnn.from_torch(
-        hn.view(1, 1, seq_len, -1),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-    )
     t0 = time.time()
-    out, indices = mla.forward(
-        hidden_states=tt_hidden,
-        rope_tensors=rope_tensors,
-        kvpe_cache=kvpe_cache,
-        actual_start=0,
-        indexer_indices=inject,
-        return_indexer_indices=True,
-        index_kv_cache=index_kv_cache,
-    )
+    outs, indices = [], []
+    for start in range(0, seq_len, chunk):
+        tt_hidden = ttnn.from_torch(
+            hn[start : start + chunk].view(1, 1, chunk, -1),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+        out, idx = mla.forward(
+            hidden_states=tt_hidden,
+            rope_tensors=rope_tensors,
+            kvpe_cache=kvpe_cache,
+            actual_start=start,
+            indexer_indices=(
+                None if inject is None else host_indices_to_device(inject[start : start + chunk], mesh_device, sp_axis)
+            ),
+            return_indexer_indices=True,
+            index_kv_cache=index_kv_cache,
+        )
+        outs.append(
+            ttnn.to_torch(
+                out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
+            ).float()[0, 0]
+        )
+        indices.append(device_indices_to_host(idx, mesh_device, sp_axis, seq_len))
+        ttnn.deallocate(out)
+        ttnn.deallocate(tt_hidden)
     ttnn.synchronize_device(mesh_device)
-    logger.info(f"layer {layer_idx}: device attention forward {time.time() - t0:.1f}s (includes compile)")
-    out_host = ttnn.to_torch(
-        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
-    ).float()[0, 0]
+    logger.info(
+        f"layer {layer_idx}: device attention, {len(outs)} chunk(s), {time.time() - t0:.1f}s (includes compile)"
+    )
+    out_host, indices = torch.cat(outs), torch.cat(indices)
+    del mla, kvpe_cache, index_kv_cache
     return out_host, indices
 
 
@@ -279,9 +331,10 @@ def _topk_agreement(dev: torch.Tensor, gold: torch.Tensor, start: int) -> float:
     "mesh_device,device_params,sp_axis",
     [
         # GLM-5.3's prefill layout (default): SP 8 x TP 4, 16 heads per chip for the projections.
-        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), 0, id="sp8xtp4"),
-        # decode-aligned head split (open layout decision, tt/hy4/layout.py): SP 4 x TP 8, 8 heads per chip.
-        pytest.param((4, 8), torus_xy_device_params(l1_small_size=1152), 0, id="sp4xtp8"),
+        pytest.param((8, 4), torus_xy_device_params(l1_small_size=L1_SMALL), 0, id="sp8xtp4"),
+        # SC1's head split (#65884 / #65885): 8 heads per chip over the 8 columns. The rows carry sequence here
+        # (ttMLA's SP x TP), not SC1's 2D-TP hidden split, which ttMLA does not implement yet (#65885).
+        pytest.param((4, 8), torus_xy_device_params(l1_small_size=L1_SMALL), 0, id="sp4xtp8"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -302,17 +355,35 @@ def test_hy4_attention_sublayer_vs_hf(mesh_device, device_params, sp_axis, seq_l
     hn, tokens = layer0_hidden(ckpt, seq_len, config.rms_norm_eps)
     results = {}
 
-    # Full-indexer layer: the device indexer picks the top-k; the reference attends over the same rows.
-    w0 = hf_attention_weights(ckpt, FULL_LAYER, owns_indexer=True)
-    out0, idx_tt = run_device_attention(
-        config, ttmla_weights(w0, config, True), mesh_device, hn, FULL_LAYER, topology, sp_axis
-    )
-    topk = device_indices_to_host(idx_tt, mesh_device, sp_axis, seq_len)
-    results["full"], kvpe0 = _check_layer(f"layer {FULL_LAYER} (full)", out0, hn, w0, topk, dims)
+    tp = mesh_device.shape[1 - sp_axis]
+    gold_topk = None
     if tokens is not None:
         gold_topk = golden_tensor(
             f"dsa/dsa_topk_indices_layer_{FULL_LAYER}", f"dsa_topk_indices_layer_{FULL_LAYER}", seq_len
         )
+    # TtIndexer all-gathers its TP-sharded index head dim, which must be whole tiles per chip: 128 / TP=8 = 16 is
+    # not (#65887 layout item). There the full layer's attention runs as a shared layer fed the golden top-k
+    # (or, without a golden, a sliding causal window), which still checks sparse MLA + sink + gate on that layout.
+    device_indexer = config.index_head_dim % (tp * ttnn.TILE_SIZE) == 0
+    if device_indexer:
+        run_cfg, inject0 = config, None
+    else:
+        logger.warning(
+            f"TP={tp}: TP-local index head dim {config.index_head_dim // tp} is not tile aligned; injecting top-k"
+        )
+        host_topk = gold_topk.long() if gold_topk is not None else sliding_topk(seq_len, config.index_topk)
+        run_cfg = copy.copy(config)
+        run_cfg.indexer_types = ["shared"] * len(config.indexer_types)  # no TtIndexer on any layer
+        inject0 = host_topk
+
+    # Full-indexer layer: the device indexer picks the top-k; the reference attends over the same rows.
+    w0 = hf_attention_weights(ckpt, FULL_LAYER, owns_indexer=device_indexer)
+    out0, idx_tt = run_device_attention(
+        run_cfg, ttmla_weights(w0, config, device_indexer), mesh_device, hn, FULL_LAYER, topology, sp_axis, inject0
+    )
+    topk = idx_tt
+    results["full"], kvpe0 = _check_layer(f"layer {FULL_LAYER} (full)", out0, hn, w0, topk, dims)
+    if tokens is not None:
         gold_kv = golden_tensor(f"kv_cache/layer_{FULL_LAYER}", f"kv_post_transform_layer_{FULL_LAYER}", seq_len)
         if gold_kv is not None:
             L = config.kv_lora_rank
@@ -320,7 +391,7 @@ def test_hy4_attention_sublayer_vs_hf(mesh_device, device_params, sp_axis, seq_l
                 f"layer {FULL_LAYER}: reference KVPE vs golden (checks hn = layer-0 sublayer input): "
                 f"latent {pcc(kvpe0[:, :L], gold_kv[:, :L]):.6f} k_pe {pcc(kvpe0[:, L:], gold_kv[:, L:]):.6f}"
             )
-        if gold_topk is not None and seq_len > config.index_topk:
+        if device_indexer and gold_topk is not None and seq_len > config.index_topk:
             agree = _topk_agreement(topk, gold_topk.long(), config.index_topk)
             logger.info(f"layer {FULL_LAYER}: device top-k vs golden, rows >= {config.index_topk}: {agree:.4f}")
     del w0
@@ -328,7 +399,7 @@ def test_hy4_attention_sublayer_vs_hf(mesh_device, device_params, sp_axis, seq_l
     # Shared layer: no indexer of its own; reuses the full layer's top-k, as in the model.
     w2 = hf_attention_weights(ckpt, SHARED_LAYER, owns_indexer=False)
     out2, _ = run_device_attention(
-        config, ttmla_weights(w2, config, False), mesh_device, hn, SHARED_LAYER, topology, sp_axis, inject=idx_tt
+        run_cfg, ttmla_weights(w2, config, False), mesh_device, hn, SHARED_LAYER, topology, sp_axis, inject=idx_tt
     )
     results["shared"], _ = _check_layer(f"layer {SHARED_LAYER} (shared)", out2, hn, w2, topk, dims)
 
