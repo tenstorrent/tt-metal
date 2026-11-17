@@ -18,9 +18,8 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .genify_matmul_program_descriptor import create_program_descriptor
+from .genify_matmul_program_descriptor import TILE, create_program_descriptor
 
-TILE = 32
 _ML = ttnn.TensorMemoryLayout
 
 

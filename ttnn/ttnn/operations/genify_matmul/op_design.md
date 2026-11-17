@@ -120,7 +120,7 @@ Allocation: `ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, TI
 
 **Intermediate data re-tabled.** The partial-sum block and the epilogue output have the same (m, n) axes as the output. Both are produced and consumed **on the core that owns the block**. No stage is centralised on one core, and no core acts only as a coordinator. The swiglu epilogue halves n (`block_n_tiles/2` output columns). That axis is still independent and is owned by the same core.
 
-### Work-split rule (core-assignment knob, host `choose_grid()`)
+### Work-split rule (core-assignment knob, host `choose_split()`)
 
 `C = grid.x · grid.y`, with `grid = device.compute_with_storage_grid_size()`. The grid is never hardcoded.
 
@@ -137,6 +137,8 @@ Selection is lexicographic min of:
 2. `R = core_batches·tensor_k_tiles·(core_m_tiles·a_tile_bytes + core_n_tiles·b_tile_bytes)`: per-core DRAM read bytes. Summed over cores this is the aggregate DRAM traffic.
 3. Used core count.
 
+> **Verifier amendment (Phase 0 verification).** The strict `(W, R, cores)` order is replaced, because R1 has no cross-core operand reuse and is DRAM-bound on every measured shape (HiFi2 ≈ HiFi4 device time). Ranking W strictly first picked a 1×108 N-only split for M=9472, K=5120, N=3456 (W 296 vs 324 for the 10×9 rectangle): 1×1 subblocks and every core reading all of A, 10.5 GB of DRAM reads instead of 1.3 GB, 4.6× slower. Implemented rule (`choose_split()`): keep the candidates with `W ≤ (1 + GRID_W_SLACK)·W_min` (`GRID_W_SLACK = 0.25`, a named knob), run `choose_blocking()` on each, and take the lexicographic min of **(aggregate A+B read bytes over the used cores *including* the block re-reads `nb_n`/`nb_m` the L1 solve adds, W, used cores)**. Blocking-unaware traffic was tried first and regressed 2048×9216×6144 by 1.2× (the S3 shrink doubled A re-reads), so the blocking is part of the score. Measured on the 14-shape guard set (`tests/.../genify_matmul/perf/`): no regression beyond ±1% noise; 0.21–0.46× device time on the shapes the old rule mis-split. Across the golden suite the geomean is 0.95. The worst regression is +7% (`test_matmul_with_core_grid[7]`, a small-K shape whose W sits at the cap); it is a `GRID_W_SLACK` tuning point for the perf refinements.
+
 Cores are enumerated row-wise (`ttnn.num_cores_to_corerangeset(n, grid, row_wise=True)` / `ttnn.grid_to_cores(..., row_wise=True)`, per `noc_placement`). The logical index is `(b, i, j)`. For a rectangle placement core `(x=j, y=i)` owns region `(i, j)`, transposed if the transposed orientation was chosen. Otherwise core `p = (b·grid_m' + i)·grid_n' + j` in row-wise order. Ragged edge regions are narrower in real tiles; their compute still runs the **nominal** block shape (see Key Risks).
 
 ### L1 solve (extent knob values, host `choose_blocking()`)
@@ -149,6 +151,8 @@ Cores are enumerated row-wise (`ttnn.num_cores_to_corerangeset(n, grid, row_wise
 A solve is still unavoidable. The op's extents span `tensor_k_tiles` = 4..512 and per-core regions from 1 to ~200 tiles, so no fixed extent is both legal and coarse. The solve picks extents **coarsest-first** against the footprint `F` (closed form in `l1_ledger.md`) and the budget
 
 `l1_cb_budget = ttnn.get_max_worker_l1_unreserved_size() − l1_tensor_bytes_per_core − l1_reserve_bytes`
+
+> **Implemented (implementer + verifier).** `get_max_worker_l1_unreserved_size()` counts from below the CB base and over-states the room. The code takes the L1 memory view instead: `l1_cb_budget = min(lowest allocated L1 block offset, bank − l1_tensor_bytes_per_core) − l1_reserve_bytes`. The **lowest allocated block** matters (verifier fix). L1 tensors are placed top-down, and a freed tensor above a live one leaves a hole. `bank − allocated bytes` then over-states the room by the hole, and program.cpp throws "circular buffers … clash with L1 buffers". This is reproduced in `test_genify_matmul_extended.py::test_fragmented_l1`.
 
 Here `l1_tensor_bytes_per_core` = Σ over this op's L1-resident tensors: an interleaved-L1 tensor costs `ceil(pages / C)·aligned_page_size`, a sharded tensor costs its shard bytes. `l1_reserve_bytes` is a named knob with Phase 0 value 0.
 

@@ -4,8 +4,10 @@
 """genify_matmul program descriptor — regime R1 `interleaved_out_split` (op_design.md, Blocking Model).
 
 Host side of the blocking scheme:
-  * choose_grid()     — the core-assignment knob: logical (grid_b, grid_m, grid_n) factorization,
-                        lexicographic min of (per-core output tiles W, per-core read bytes R, cores).
+  * choose_split()    — the core-assignment knob: logical (grid_b, grid_m, grid_n) factorization.
+                        Candidates within (1 + GRID_W_SLACK) of the best per-core output tiles W are
+                        blocked (choose_blocking) and ranked by (aggregate read traffic incl. block
+                        re-reads, W, cores).
   * choose_blocking() — the extent knobs (block_batches, block_m_tiles, block_n_tiles, block_k_tiles /
                         num_k_blocks / last_block_k_tiles), solved coarsest-first against the L1 budget
                         (steps S1..S4), plus the derived output subblock (sb_h, sb_w).
@@ -38,6 +40,12 @@ DEPTH_OUT = 2  # output row groups in flight
 # ---- Blocking knobs ----
 BLOCK_K_FLOOR = 8  # smallest K-block the solve accepts (clamped to tensor_k_tiles)
 Q_N_MAX = 4  # subblock quantum on core_n_tiles (a 4-tile subblock always exists)
+# Core-assignment knob: a factorization whose per-core output tiles W are within (1 + GRID_W_SLACK)
+# of the best W competes on aggregate DRAM read traffic (R summed over the used cores). R1 has no
+# operand reuse across cores, so it is DRAM-bound on every measured shape (HiFi2 ~= HiFi4); ranking
+# W strictly first picked e.g. a 1x108 N-only split for M=9472, K=5120, N=3456 (W 296 vs 324) that
+# made every core read all of A (10.5 GB instead of 1.3 GB, 4.5x slower).
+GRID_W_SLACK = 0.25
 L1_RESERVE_BYTES = 0  # L1 held back for foreign tensors
 
 
@@ -163,10 +171,11 @@ def _placement_for(gb, gm, gn, gx, gy):
     return None
 
 
-def choose_grid(geom: Geometry, gx: int, gy: int) -> GridChoice:
+def grid_candidates(geom: Geometry, gx: int, gy: int):
+    """Every legal (grid_b, grid_m, grid_n) factorization as a GridChoice (used grid, deduplicated)."""
     C = gx * gy
-    tb, tm, tn, tk = geom.tensor_batches, geom.tensor_m_tiles, geom.tensor_n_tiles, geom.tensor_k_tiles
-    best_key, best = None, None
+    tb, tm, tn = geom.tensor_batches, geom.tensor_m_tiles, geom.tensor_n_tiles
+    seen = {}
     for gb in range(1, min(tb, C) + 1):
         for gm in range(1, min(tm, C // gb) + 1):
             for gn in range(1, min(tn, C // (gb * gm)) + 1):
@@ -179,12 +188,48 @@ def choose_grid(geom: Geometry, gx: int, gy: int) -> GridChoice:
                 placement = _placement_for(ub, um, un, gx, gy)
                 if placement is None:
                     continue
-                W = core_b * core_m * core_n
-                R = core_b * tk * (core_m * geom.a_tile_bytes + core_n * geom.b_tile_bytes)
-                key = (W, R, ub * um * un)
-                if best_key is None or key < best_key:
-                    best_key = key
-                    best = GridChoice(ub, um, un, core_b, core_m, core_n, q_n, placement)
+                grid = GridChoice(ub, um, un, core_b, core_m, core_n, q_n, placement)
+                seen.setdefault((ub, um, un, core_b, core_m, core_n, q_n), grid)
+    return list(seen.values())
+
+
+def grid_work(grid: GridChoice):
+    """W: per-core output tiles, the critical path (each costs tensor_k_tiles matmul steps)."""
+    return grid.core_batches * grid.core_m_tiles * grid.core_n_tiles
+
+
+def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """Aggregate A + B bytes read over the used cores, including the re-reads the block split adds
+    (A once per N-block, B once per M-block of each core's region)."""
+    nb_m = _cdiv(grid.core_m_tiles, blk.block_m_tiles)
+    nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
+    per_core = (
+        grid.core_batches
+        * geom.tensor_k_tiles
+        * (grid.core_m_tiles * geom.a_tile_bytes * nb_n + grid.core_n_tiles * geom.b_tile_bytes * nb_m)
+    )
+    return per_core * grid.grid_b * grid.grid_m * grid.grid_n
+
+
+def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
+    """Core-assignment knob + extent knobs together. Among the factorizations whose W is within
+    (1 + GRID_W_SLACK) of the best W, solve the blocking of each and take the lexicographic min of
+    (aggregate read traffic incl. block re-reads, W, used cores)."""
+    candidates = grid_candidates(geom, gx, gy)
+    w_cap = min(grid_work(g) for g in candidates) * (1 + GRID_W_SLACK)
+    best_key, best = None, None
+    for grid in candidates:
+        if grid_work(grid) > w_cap:
+            continue
+        try:
+            blk = choose_blocking(geom, grid, budget)
+        except RuntimeError:
+            continue
+        key = (read_traffic(geom, grid, blk), grid_work(grid), grid.grid_b * grid.grid_m * grid.grid_n)
+        if best_key is None or key < best_key:
+            best_key, best = key, (grid, blk)
+    if best is None:
+        raise RuntimeError(f"genify_matmul: even the minimum block does not fit the L1 CB budget of {budget} bytes")
     return best
 
 
@@ -325,18 +370,27 @@ def _l1_tensor_bytes_per_core(tensors, num_cores):
     return total
 
 
+def _lowest_allocated_l1_offset(view):
+    """Offset (from the bank base, where the CB region starts) of the lowest allocated L1 block, or
+    the bank size when nothing is allocated. L1 tensors are placed top-down but freed blocks leave
+    holes, so this -- not `total - allocated` -- is where the CB region must end (program.cpp throws
+    "circular buffers ... clash with L1 buffers" otherwise)."""
+    allocated = [int(b["address"]) for b in view.block_table if b["allocated"] == "yes"]
+    return min(allocated) if allocated else view.total_bytes_per_bank
+
+
 def l1_cb_budget(device, op_tensors):
-    """Bytes per core the CBs may use: the worker-L1 region above l1_unreserved_base (where CBs start
-    and where program.cpp bounds them), minus this op's L1-resident tensors per core, minus the
-    reserve knob. The allocator's live per-bank usage is a floor on the tensor term (it also sees
-    foreign L1 tensors). Note: ttnn.get_max_worker_l1_unreserved_size() counts from the kernel-config
-    ring buffer, below the CB base, and over-states the budget."""
+    """Bytes per core the CBs may use: the worker-L1 region from l1_unreserved_base (where CBs start
+    and where program.cpp bounds them) up to the lowest allocated L1 block, never more than the bank
+    minus this op's own L1-resident tensors per core, minus the reserve knob. Note:
+    ttnn.get_max_worker_l1_unreserved_size() counts from the kernel-config ring buffer, below the CB
+    base, and over-states the budget."""
     view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
-    tensor_bytes = max(
-        _l1_tensor_bytes_per_core(op_tensors, view.num_banks),
-        view.total_bytes_allocated_per_bank,
+    room = min(
+        _lowest_allocated_l1_offset(view),
+        view.total_bytes_per_bank - _l1_tensor_bytes_per_core(op_tensors, view.num_banks),
     )
-    return view.total_bytes_per_bank - tensor_bytes - L1_RESERVE_BYTES
+    return room - L1_RESERVE_BYTES
 
 
 def plan(a, b, out, fp32_dest_acc_en, device):
@@ -344,9 +398,8 @@ def plan(a, b, out, fp32_dest_acc_en, device):
     geom = _geometry(a, b, out, fp32_dest_acc_en)
     grid_size = device.compute_with_storage_grid_size()
     gx, gy = grid_size.x, grid_size.y
-    grid = choose_grid(geom, gx, gy)
     budget = l1_cb_budget(device, [a, b, out])
-    blocking = choose_blocking(geom, grid, budget)
+    grid, blocking = choose_split(geom, gx, gy, budget)
     return geom, grid, blocking, (gx, gy)
 
 
