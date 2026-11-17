@@ -7,10 +7,11 @@ Reference for the performance monitor inside the RISC-V cores of a Tensix tile a
 | Architecture | Core | Counters present | Captured by `TT_METAL_PROFILE_RISCV_PMC` |
 |---|---|---|---|
 | Blackhole | BRISC, NCRISC, TRISC0, TRISC1, TRISC2 | yes: `mcycle`, `minstret`, `mhpmcounter3/4` | yes |
+| Blackhole | active ethernet tile ERISC0 | yes: same core and CSRs as the baby cores | yes |
 | Quasar | TRISC0..3 of each Neo | yes: same CSR set and event layout, two extra IF events (section 6) | yes |
 | Quasar | data-movement cores DM0..DM7 | yes: `mcycle`, `minstret`, `mhpmcounter3..6`, set-and-mask event selects (section 7) | yes, DM0 and the DMs that run a kernel (DM2..DM7) |
 | Wormhole | all RISC-V cores | no: the cores implement no performance counter CSRs | no |
-| Blackhole | Ethernet and DRAM cores | probably, not captured | no |
+| Blackhole | idle ethernet tile, subordinate ERISC1, DRAM tile RISC | same core design | no, see below |
 
 Blackhole is documented in the public ISA documentation: its baby-core CSR list contains `mcycle`,
 `minstret`, `mhpmcounter3/4`, `mhpmevent3/4` and `mcountinhibit` at the addresses used here, and says
@@ -25,9 +26,13 @@ on Quasar silicon or a simulator.
 Wormhole RISC-V cores have no `mcycle`, `minstret` or `mhpm*` CSRs, so there is nothing to capture, and
 the option fails the JIT build on Wormhole instead of producing empty data.
 
-The Blackhole Ethernet cores and DRAM cores run the same `configure_csr()` as the Tensix baby cores, which
-writes the custom cfg CSR `0x7C0`, so they most likely carry the same CSR block. No hook is added for
-them.
+The Blackhole ethernet cores are the same baby core as BRISC and NCRISC: the same CSR file, the same
+`mhpmevent` nibble layout and the same event tables. The kernel on the active ethernet ERISC0 is captured and
+its records land in the profiler buffer the host reads for the ethernet core (profiler name `ERISC`). The idle
+ethernet firmware and the subordinate ERISC1 firmware have no hook: the host reads the device profiler of
+active ethernet cores only, and only the first profiler buffer of each, so markers from either would never
+reach the log. The DRAM tile RISC has the same core but no hook: the host never reads a DRAM tile profiler
+and the DRAM firmware does not set one up.
 
 ## 2. Where the definitions live
 
@@ -70,8 +75,7 @@ Each core emits three `TS_DATA` markers per kernel launch, all payload in the `d
 | 9093 | `(minstret delta << 32) \| mcycle delta` |
 | 9094 | `(mhpmevent4 << 32) \| mhpmevent3` |
 
-The deltas cover the kernel invocation in the firmware (waypoint `R` to `D`). On Quasar DM0, which runs
-no kernel itself, they cover the window from the TRISC launch to the end of the dataflow-buffer drain. On Blackhole BRISC the
+The deltas cover the kernel invocation in the firmware (waypoint `R` to `D`). On an ethernet core they cover the kernel call only. On Quasar DM0, which runs no kernel itself, they cover the window from the TRISC launch to the end of the dataflow-buffer drain. On Blackhole BRISC the
 bracket also covers `wait_for_go_message()` when BRISC has no kernel. The selects are re-emitted every
 launch so each capture says which events it counted. If the per-core profiler buffer is full the three
 markers are dropped rather than displacing zone markers. The Tensix counter multi-pass flow keeps the
@@ -391,5 +395,5 @@ riscv_pmc.decode_launch("blackhole", kind, launch)         # event names, mcycle
 ## 13. Open questions
 
 - Quasar TRISC and DM capture on silicon or an emulator.
-- Blackhole Ethernet and DRAM cores run the same `configure_csr()` as the Tensix cores, so they most likely carry the same CSRs; no hook exists.
+- Idle ethernet and ERISC1 capture need the host profiler to read those cores first.
 - The meaning of individual per-stage events comes from the hardware description; only the union counter, `mcycle`, `EX_INST_RET` and the TRISC-only `MEM_INS_BUF_WRITE` were validated on silicon.

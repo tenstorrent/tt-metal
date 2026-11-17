@@ -14,7 +14,7 @@ namespace llk::perf::riscv
 // Core families that carry the RISC-V performance monitor and how their mhpmevent select is encoded.
 enum class CoreKind : std::uint8_t
 {
-    BABY = 0, // Blackhole BRISC/NCRISC/TRISC: eight 4-bit nibbles, one event index per pipeline domain
+    BABY = 0, // Blackhole BRISC/NCRISC/TRISC/ERISC: eight 4-bit nibbles, one event index per pipeline domain
     TRISC,    // Quasar TRISC: the BABY layout plus two IF events
     DM,       // Quasar data-movement cores: (event mask << 8) | event set, one bit per event
 };

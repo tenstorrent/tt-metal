@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RISC-V performance monitor capture for the Tensix baby cores and the Quasar data-movement cores. The hardware
+// RISC-V performance monitor capture for the Tensix baby cores, the Blackhole ethernet cores and the Quasar
+// data-movement cores. The hardware
 // description (CSRs, select formats, event tables) is in tt-llk perf_counters/riscv_pmc_*.h; this header adds the
 // profiler marker format and emission.
 //
@@ -18,7 +19,8 @@ constexpr uint16_t RISCV_PMC_CYCLES_PROFILER_ID = 9093;  // (minstret << 32) | m
 constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) | mhpmevent3
 
 // Cores that carry the counters and have a firmware hook.
-#if defined(ARCH_BLACKHOLE) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC))
+#if defined(ARCH_BLACKHOLE) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || \
+                                defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_AERISC))
 #define RISCV_PMC_CORE 1
 #elif defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
 #define RISCV_PMC_CORE 1

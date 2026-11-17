@@ -40,6 +40,7 @@ def core_kind(arch, risc_type) -> Optional[str]:
         "TRISC_0",
         "TRISC_1",
         "TRISC_2",
+        "ERISC",
     ):
         return "baby"
     return None
