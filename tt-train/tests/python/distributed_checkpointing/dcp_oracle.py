@@ -19,10 +19,16 @@ from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing._errors import TopologyError
 from ttml.distributed_checkpointing._index import FileRecord, Index, data_file_name
 from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
-from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
+from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, owner
 
 R = Placement.replicate
 S = Placement.shard
+
+
+def one_process_owner(key: str, group) -> object:
+    """The election of a single-process save: the chunk of the group's coordinates ``_topology.owner`` picks."""
+    coord = owner(key, [c.mesh_coord for c in group])
+    return next(c for c in group if c.mesh_coord == coord)
 
 
 def label_local_shape(label: Label, global_shape) -> tuple[int, ...]:
@@ -96,7 +102,7 @@ class FakeCheckpoint:
     def save(self, tensors: dict[str, tuple[np.ndarray, Label, object]]) -> Index:
         """``tensors[key] = (device-layout global array, label, transform)``."""
         infos = [info(key, label, arr.shape, transform) for key, (arr, label, transform) in tensors.items()]
-        plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord))
+        plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord), one_process_owner)
         self.files = {}
         records = []
         crcs = {}
