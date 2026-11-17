@@ -184,6 +184,9 @@ PREP_NORM_MAX_ROWS = 8
 # landings counted per piece (one cumulative semaphore each, not one per unit) the split then also fits a chip
 # T=4096 call (21 units per norm core, 1061 kB against 1217): 716.9 -> 682.4 us.
 PREP_NORM_SLIM = True
+# R-PREP prep writer: a head's state cores are told that their row landed after that head's block, not after the
+# row's last one.
+PREP_HEAD_UP = True
 # PREP_NORM_SPLIT: a prep core whose stride position is past the inbox depth sends a row only when the state cores
 # have freed its slot, and its next row's head blocks wait for that send. It normalizes this many of its norm units
 # between the conv and the heads of each later row (the time it would wait), where their o precedes its own rows.
@@ -1940,6 +1943,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_EARLY_S0", str(int(early_s0))),
             ("GDN_RMS_ONE_COPY", str(int(RMS_ONE_COPY and prep is None and unit_lag(unit_depth)))),
             ("GDN_PREP_NORM_SPLIT", str(int(norm_split))),
+            ("GDN_PREP_HEAD_UP", str(int(PREP_HEAD_UP))),
             ("GDN_SILU_BF16", str(int(PREP_SILU_BF16) if prep is not None and conv_on_fpu else 0)),
             ("GDN_SILU_MID", str(int(PREP_SILU_MID) if prep is not None and conv_on_fpu else 0)),
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),

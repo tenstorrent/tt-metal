@@ -388,8 +388,15 @@ void prep_writer(
             noc_async_write_barrier();
             cb_pop_front(cb_prep_send, HEAD_PAGES);
             GDN_MARK("m_wr_head");
+            if constexpr (GDN_PREP_HEAD_UP != 0) {
+                // The head's pieces step the row as soon as their block is in, not after the row's last head.
+                for (uint32_t c = j * PIECES; c < (j + 1) * PIECES; ++c) {
+                    Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
+                    landed.up(noc, cons_x[c], cons_y[c], 1);
+                }
+            }
         }
-        for (uint32_t c = 0; c < GROUP; ++c) {
+        for (uint32_t c = 0; GDN_PREP_HEAD_UP == 0 && c < GROUP; ++c) {
             Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
             landed.up(noc, cons_x[c], cons_y[c], 1);
         }
