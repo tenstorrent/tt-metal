@@ -2288,8 +2288,6 @@ def run_chunked_transformer_updated(
         # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
         assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
 
-    if determinism_check and num_iters < 2:
-        pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
     det_baseline = None
     det_failures = []
 
@@ -2949,6 +2947,9 @@ def test_kimi_k3_prefill_transformer_chunked(
     determinism_check,
     preload_isl,
 ):
+    # Skip here, before the weight load and trace capture.
+    if determinism_check and num_iters < 2:
+        pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_updated(
         variant,
