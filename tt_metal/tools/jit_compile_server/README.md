@@ -213,12 +213,14 @@ objects and ELFs accumulate for every unique kernel and, unless pruning is enabl
 nothing removes them; a few large workloads can fill a tmpfs. Use a node-local disk with
 headroom.
 
-Keep it distinct from any client `TT_METAL_CACHE`; the two layouts differ. There is a real
-collision to avoid when the server shares a host with its clients (§4a, §4b): a client
-whose `TT_METAL_CACHE` is unset falls back to `$HOME/.cache/tt-metal-cache/`, but if
-`$HOME` is also unset or missing — common in containers — it falls back to
-`/tmp/tt-metal-cache/`, which is exactly the server's default. Set both variables
-explicitly in that case.
+Keep it distinct from any client's kernel cache. Both use the same directory structure,
+`<root>/<build_key>/kernels/<kernel>/<hash>/`, so a shared directory mixes the server's files
+with a client's, and with pruning on the server would delete ELFs the client is loading (it
+refuses to start; see Cache pruning below). There is a real collision to avoid when the
+server shares a host with its clients (§4a, §4b): a client whose `TT_METAL_CACHE` is unset
+falls back to `$HOME/.cache/tt-metal-cache/`, but if `$HOME` is also unset or missing —
+common in containers — it falls back to `/tmp/tt-metal-cache/`, which is exactly the
+server's default. Set both variables explicitly in that case.
 
 ### Cache pruning
 
