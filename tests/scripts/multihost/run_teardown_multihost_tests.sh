@@ -63,17 +63,28 @@ kill_stragglers() {
 }
 
 failures=0
-# assert a teardown shape. usage: expect <clean|torn_down> <name> <exit-code>
+# assert a teardown shape. usage: expect <clean|torn_down> <name> <exit-code> [exact-code]
 #   clean      -> the job must exit 0
-#   torn_down  -> the job must exit non-zero (a fault was injected)
+#   torn_down  -> the job must exit non-zero, but NOT 124. 124 is this harness's own `timeout 120` killing a
+#                 launcher that hung: the launcher never tore the job down itself, which is the failure these
+#                 cases exist to catch, not a teardown. With [exact-code] given the job must exit exactly that
+#                 code (241, the PRRTE --timeout wall clock, for the hang case).
 # in both cases nothing of this job may be left alive on any host.
 expect() {
-  local shape="$1" name="$2" rc="$3"
+  local shape="$1" name="$2" rc="$3" exact="${4:-}"
   sleep 2  # let PRRTE finish tearing the job down before we count
   local alive problem=""
   alive=$(ranks_still_alive)
   if [ "$shape" = "clean" ] && [ "$rc" -ne 0 ]; then problem="expected exit 0, got $rc"; fi
-  if [ "$shape" = "torn_down" ] && [ "$rc" -eq 0 ]; then problem="expected a non-zero exit, got 0"; fi
+  if [ "$shape" = "torn_down" ]; then
+    if [ "$rc" -eq 0 ]; then
+      problem="expected a non-zero exit, got 0"
+    elif [ "$rc" -eq 124 ]; then
+      problem="the launcher hung and this harness's timeout 120 killed it (rc 124); it did not tear the job down"
+    elif [ -n "$exact" ] && [ "$rc" -ne "$exact" ]; then
+      problem="expected exit $exact, got $rc"
+    fi
+  fi
   if [ "$alive" -ne 0 ]; then problem="${problem:+$problem; }$alive rank(s) still alive on the hosts"; fi
   if [ -z "$problem" ]; then
     echo "  PASS  $name  (exit $rc, nothing left)"
@@ -101,7 +112,7 @@ expect torn_down "multihost_remote_rank_death" $?
 echo "--- 3. a rank hangs on the remote host (P22): the PRRTE --timeout wall clock ends it (241), nothing left"
 PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" \
   timeout 120 "$launcher" --timeout 30 --report-state-on-timeout "${launch[@]}" "$probe"
-expect torn_down "multihost_remote_hang_timeout" $?
+expect torn_down "multihost_remote_hang_timeout" $? 241  # PRRTE --timeout 30 must end it with 241, not a hang
 
 echo "--- 4. the daemon on the remote host is killed (P19): with the plain launcher PRRTE aborts the job instead of"
 echo "       exiting 0 and orphaning the launch-host rank. We kill the remote prted while the ranks wait; the job"
