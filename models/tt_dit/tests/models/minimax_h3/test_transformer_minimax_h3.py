@@ -1102,14 +1102,14 @@ def test_minimax_h3_transformer_block_prepared_modulation(
     for step in (32 // slots, NUM_STEPS - 1):
         tt_model.release_modulation()
         prepare(step)
-        prepared = fixture.run(tt_model, modulation_rows=rows_of(step))
+        prepared = fixture.run(tt_model, temb=None, modulation_rows=rows_of(step))
         logger.info(f"step {step} (rows {step * slots}..{(step + 1) * slots - 1}): prepared vs projected")
         assert_quality(projected, prepared, pcc=MIN_PCC_PROJECTED)
         assert_quality(fixture.torch_out, prepared, pcc=MIN_PCC)
 
     tt_model.release_modulation()
     with expect_error(RuntimeError, "modulation_rows needs prepare_modulation first"):
-        fixture.run(tt_model, modulation_rows=rows_of(0))
+        fixture.run(tt_model, temb=None, modulation_rows=rows_of(0))
 
 
 @GALAXY_RING_AND_LINE

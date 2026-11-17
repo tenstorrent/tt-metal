@@ -52,9 +52,11 @@ class MiniMaxH3TransformerBlock(Module):
     AdaLN parameters selected *per row* of the packed sequence.
 
     The per-row modulation is what sets this apart from Wan. A single projection turns the shared
-    timestep embedding into a `(num_timesteps * MODALITY_NUM, hidden_size)` table for each of the six
+    timestep embedding into a `(num_slots * MODALITY_NUM, hidden_size)` table for each of the six
     modulation parameters, and every row of the packed sequence indexes that table by
-    `timestep_indices * MODALITY_NUM + token_tags`. One forward therefore serves rows at different
+    `timestep_indices * MODALITY_NUM + token_tags`. A slot is one noise level of the packed sequence
+    (target video, target audio, a conditioning role; the reference's distinct timesteps), and
+    `timestep_indices` holds each row's slot. One forward therefore serves rows at different
     noise levels and of different modalities. Wan, by contrast, broadcasts one modulation over the
     whole sequence, so it needs no gather at all.
 
@@ -243,7 +245,13 @@ class MiniMaxH3TransformerBlock(Module):
     # ------------------------------------------------------------------ modulation
 
     def _project(self, temb: ttnn.Tensor) -> ttnn.Tensor:
-        """adaln_proj(silu(temb)) as [1, 1, rows, MODALITY_NUM * 6 * hidden_local], row-major."""
+        """adaln_proj(silu(temb)) as [1, 1, rows, MODALITY_NUM * 6 * hidden_local], row-major.
+
+        The SiLU runs at `temb`'s own (float32) precision and only its result is cast
+        down to the bfloat16 projection, as the reference is explicit about: every block reads the
+        same `temb`, so rounding applied before the activation biases every block's modulation
+        identically at every sampling step and accumulates over the denoising trajectory.
+        """
         # silu at temb's precision, then cast to the projection's dtype -- the reference's
         # `self.linear(silu(temb).to(self.linear.weight.dtype))`. Casting here also keeps the
         # resulting tables bfloat16, so the bf16 one-hot gathers below reproduce their rows exactly.
@@ -269,32 +277,25 @@ class MiniMaxH3TransformerBlock(Module):
             ttnn.deallocate(self._projected_steps)
             self._projected_steps = None
 
-    def _modulation_tables(self, temb: ttnn.Tensor, rows_index: ttnn.Tensor | None = None) -> list[ttnn.Tensor]:
-        """Project `temb` into the six per-(timestep, modality) modulation tables.
+    def _prepared_rows(self, modulation_rows: ttnn.Tensor) -> ttnn.Tensor:
+        """Rows `modulation_rows` ([1, num_slots] uint32) of `prepare_modulation`'s projection: what `_project`
+        returns for those steps' temb, by an embedding lookup (a copy, so bit-identical)."""
+        if self._projected_steps is None:
+            raise RuntimeError("modulation_rows needs prepare_modulation first")
+        return ttnn.embedding(modulation_rows, self._projected_steps, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        `temb` is [1, 1, num_timesteps, time_embed_dim]. Returns six [num_timesteps * MODALITY_NUM,
-        hidden_local] tables, row `t * MODALITY_NUM + modality`, matching the row order that
-        `adaln_indices` addresses. With `rows_index` ([1, num_timesteps] uint32), the projection is
-        instead those rows of `prepare_modulation`'s (an embedding lookup: a copy, so bit-identical).
+    def _modulation_tables(self, projected: ttnn.Tensor) -> list[ttnn.Tensor]:
+        """Split a projection (`_project` or `_prepared_rows`) into the six per-(slot, modality) modulation tables.
 
-        The SiLU runs at `temb`'s own (float32) precision and only its result is cast
-        down to the bfloat16 projection, as the reference is explicit about: every block reads the
-        same `temb`, so rounding applied before the activation biases every block's modulation
-        identically at every sampling step and accumulates over the denoising trajectory.
+        Returns six [num_slots * MODALITY_NUM, hidden_local] tables, row `slot * MODALITY_NUM + modality`,
+        matching the row order that `adaln_indices` addresses.
         """
-        num_timesteps = temb.shape[2]
-        # [1, 1, num_timesteps, MODALITY_NUM * 6 * hidden_local] per device, row-major
-        if rows_index is None:
-            projected = self._project(temb)
-        else:
-            if self._projected_steps is None:
-                raise RuntimeError("modulation_rows needs prepare_modulation first")
-            projected = ttnn.embedding(rows_index, self._projected_steps, layout=ttnn.ROW_MAJOR_LAYOUT)
+        num_slots = projected.shape[-2]
 
-        # Fold the modality axis into rows: [num_timesteps, mod, param, h] -> [t * mod, param * h].
-        # Done in row-major because the row count changes and num_timesteps is tiny (a handful of
+        # Fold the modality axis into rows: [num_slots, mod, param, h] -> [slot * mod, param * h].
+        # Done in row-major because the row count changes and num_slots is tiny (a handful of
         # rows), so the layout round-trip is negligible.
-        rows = num_timesteps * MODALITY_NUM
+        rows = num_slots * MODALITY_NUM
         projected = ttnn.reshape(projected, (1, 1, rows, NUM_MODULATION_PARAMS * self.hidden_local))
         projected = ttnn.to_layout(projected, ttnn.TILE_LAYOUT)
 
@@ -302,7 +303,7 @@ class MiniMaxH3TransformerBlock(Module):
         for p in range(NUM_MODULATION_PARAMS):
             table = ttnn.slice(projected, [0, 0, 0, p * self.hidden_local], [1, 1, rows, (p + 1) * self.hidden_local])
             # AdaLN applies the scales as (1 + scale). Adding the 1 to the table costs one elementwise
-            # op on `num_timesteps * MODALITY_NUM` rows -- six, typically -- where doing it after the
+            # op on `num_slots * MODALITY_NUM` rows -- six, typically -- where doing it after the
             # gather would cost one over the whole packed sequence, per scale, per block.
             if p in (_SCALE_MSA, _SCALE_MLP):
                 table = ttnn.add(table, 1.0)
@@ -357,17 +358,15 @@ class MiniMaxH3TransformerBlock(Module):
         indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
         return indices if indices.dtype == ttnn.uint32 else ttnn.typecast(indices, ttnn.uint32)
 
-    def onehot_table(
-        self, adaln_indices: ttnn.Tensor, num_timesteps: int, eye: ttnn.Tensor | None = None
-    ) -> ttnn.Tensor:
+    def onehot_table(self, adaln_indices: ttnn.Tensor, num_slots: int, eye: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """The per-token one-hot gather matrix shared by every block of a forward."""
-        return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM, eye)
+        return self._onehot(self._gather_indices(adaln_indices), num_slots * MODALITY_NUM, eye)
 
     def tilerow_tables(
         self,
         tile_map: ttnn.Tensor | None,
         expanded_indices: ttnn.Tensor | None,
-        num_timesteps: int,
+        num_slots: int,
         eye: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor] | None:
         """`(tile_map, selector)` shared by every block of a forward when the caller built a tile-row map, else None
@@ -375,7 +374,7 @@ class MiniMaxH3TransformerBlock(Module):
         table whose tile row `tile_map[r]` is tile row `r` of the gather."""
         if tile_map is None or expanded_indices is None:
             return None
-        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_timesteps * MODALITY_NUM, eye)
+        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_slots * MODALITY_NUM, eye)
 
     # ------------------------------------------------------------------ forward
 
@@ -383,7 +382,7 @@ class MiniMaxH3TransformerBlock(Module):
         self,
         spatial_1BND: ttnn.Tensor,
         logical_n: ttnn.Tensor,
-        temb: ttnn.Tensor,
+        temb: ttnn.Tensor | None,
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
@@ -393,7 +392,8 @@ class MiniMaxH3TransformerBlock(Module):
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
-        temb: [1, 1, num_timesteps, time_embed_dim], replicated, float32
+        temb: [1, 1, num_slots, time_embed_dim], replicated, float32, projected into the adaLN tables.
+            Pass exactly one of `temb` and `modulation_rows`.
         adaln_indices: [1, 1, 1, N_local] integer row indices, fractured N on SP
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
@@ -401,15 +401,18 @@ class MiniMaxH3TransformerBlock(Module):
         onehot / tilerow: the shared one-hot gather matrix (built here when absent) and the `(tile_map, selector)`
             pair from `tilerow_tables`; without the pair the norms take the per-token gather.
 
-        modulation_rows: [1, num_timesteps] uint32, the rows of `prepare_modulation`'s projection to take the tables
-            from instead of projecting `temb` (which then only gives the slot count).
+        modulation_rows: [1, num_slots] uint32, the rows of `prepare_modulation`'s projection to take the tables
+            from in place of projecting a `temb`: the transformer's `modulation_rows`, flattened.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        tables = self._modulation_tables(temb, modulation_rows)
+        if (temb is None) == (modulation_rows is None):
+            raise ValueError("pass exactly one of temb and modulation_rows")
+        projected = self._project(temb) if modulation_rows is None else self._prepared_rows(modulation_rows)
+        tables = self._modulation_tables(projected)
 
         if onehot is None:
-            onehot = self.onehot_table(adaln_indices, temb.shape[2])
+            onehot = self.onehot_table(adaln_indices, projected.shape[-2])
 
         def modulation(param: int) -> ttnn.Tensor:
             return self._gather_rows(tables[param], onehot)

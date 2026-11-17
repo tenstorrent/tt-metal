@@ -143,7 +143,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
         activated = ttnn.silu(temb)
         if activated.dtype != ttnn.bfloat16:
             activated = ttnn.typecast(activated, ttnn.bfloat16)
-        projected = self.linear(activated)  # [1, 1, num_timesteps, 2 * hidden_local]
+        projected = self.linear(activated)  # [1, 1, num_slots, 2 * hidden_local]
 
         rows = projected.shape[2]
         tables = []
@@ -481,8 +481,8 @@ class MiniMaxH3Transformer3DModel(Module):
             capture per `(pad_to, map present)`).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
-        modulation_rows: [1, 1, 1, num_slots] uint32, this step's rows of `prepare_modulation`'s projection: the
-            blocks take their adaLN tables from there instead of projecting `temb`.
+        modulation_rows: [1, 1, 1, num_slots] uint32, this step's rows of `prepare_modulation`'s projection, one
+            per slot: the blocks take their adaLN tables from there instead of projecting `temb`.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -673,7 +673,7 @@ class MiniMaxH3Transformer3DModel(Module):
             hidden = block(
                 hidden,
                 logical_n,
-                temb=temb,
+                temb=temb if modulation_rows is None else None,
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
