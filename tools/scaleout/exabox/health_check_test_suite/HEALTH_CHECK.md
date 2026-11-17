@@ -95,7 +95,10 @@ collects a bundle for the ticket and never gates the run.
 still there for whoever picks the ticket up, and no tests, so nothing has
 retrained or reset a link before it is read. The other phases are recorded as
 SKIP with the reason. Unlike the triage and QSFP phases, the ETH status phase
-gates the run, since it is the whole of what `flash` checks.
+gates the run, since it is the whole of what `flash` checks. Under the fleet
+harness (`test_infrastructure/run_health_check.py`) a clean `flash` run never
+closes the node's open ticket: it runs no device tests, so passing it does not
+show the node recovered from whatever the ticket is about.
 
 What each tier runs is defined in one place, `TIERS` in
 [`tiers.py`](tiers.py): per tier, the pre-test resets, the tests, the post-test

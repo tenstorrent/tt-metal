@@ -65,6 +65,15 @@ class TestShellWrappersAgree(unittest.TestCase):
         self.assertIsNotNone(m)
         self.assertEqual(set(re.findall(r'"([a-z_]+)"', m.group(1))), set(TIERS))
 
+    def test_run_health_check_non_resolving_tiers(self):
+        # A clean flash run must not auto-close a ticket its device tests never looked at.
+        text = (SUITE_DIR / "test_infrastructure" / "run_health_check.py").read_text()
+        m = re.search(r"^NON_RESOLVING_TIERS = frozenset\(\{([^}]*)\}\)", text, re.MULTILINE)
+        self.assertIsNotNone(m)
+        names = set(re.findall(r'"([a-z_]+)"', m.group(1)))
+        self.assertIn("flash", names)
+        self.assertLessEqual(names, set(TIERS))
+
 
 class TestDiagRunnerCli(unittest.TestCase):
     def test_tier_choices_follow_tiers(self):
