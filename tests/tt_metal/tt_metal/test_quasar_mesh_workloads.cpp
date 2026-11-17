@@ -48,7 +48,7 @@ const std::vector<uint32_t> kExpectedComputeValues = {4, 6, 5, 9, 8, 10, 9, 13, 
 // workload_id_str must be unique per call (used to derive kernel names).
 distributed::MeshWorkload create_workload(
     distributed::MeshDevice& mesh_device,
-    const experimental::NodeCoord& node,
+    const NodeCoord& node,
     uint32_t dm_base_address,
     uint32_t dm_base_value,
     uint32_t compute_address,
@@ -56,57 +56,57 @@ distributed::MeshWorkload create_workload(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device.shape());
 
-    std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<experimental::KernelSpecName> wu_kernel_names;
+    std::vector<KernelSpec> kernel_specs;
+    std::vector<KernelSpecName> wu_kernel_names;
 
     for (uint32_t i = 0; i < kNumUserDMThreads; i++) {
-        experimental::KernelSpecName kernel_id{std::string("dm_") + workload_id_str + "_" + std::to_string(i)};
-        kernel_specs.push_back(experimental::KernelSpec{
+        KernelSpecName kernel_id{std::string("dm_") + workload_id_str + "_" + std::to_string(i)};
+        kernel_specs.push_back(KernelSpec{
             .unique_id = kernel_id,
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         });
         wu_kernel_names.push_back(std::move(kernel_id));
     }
 
-    const experimental::KernelSpecName COMPUTE_KERNEL{std::string("compute_") + workload_id_str};
-    kernel_specs.push_back(experimental::KernelSpec{
+    const KernelSpecName COMPUTE_KERNEL{std::string("compute_") + workload_id_str};
+    kernel_specs.push_back(KernelSpec{
         .unique_id = COMPUTE_KERNEL,
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = kNumComputeNEOs,
         .runtime_arg_schema = {.runtime_arg_names = {"l1_address"}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     });
     wu_kernel_names.push_back(COMPUTE_KERNEL);
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = wu_kernel_names,
         .target_nodes = node,
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = std::string("l1_write_") + workload_id_str,
         .kernels = kernel_specs,
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     for (uint32_t i = 0; i < kNumUserDMThreads; i++) {
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = experimental::KernelSpecName{std::string("dm_") + workload_id_str + "_" + std::to_string(i)},
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{std::string("dm_") + workload_id_str + "_" + std::to_string(i)},
             .runtime_arg_values =
-                experimental::MakeRuntimeArgsForSingleNode(node, {{"address", dm_base_address + i * sizeof(uint32_t)}}),
+                MakeRuntimeArgsForSingleNode(node, {{"address", dm_base_address + i * sizeof(uint32_t)}}),
             .common_runtime_arg_values = {{"value", dm_base_value + i}},
         });
     }
-    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"l1_address", compute_address}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"l1_address", compute_address}}),
     });
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     return workload;
@@ -114,7 +114,7 @@ distributed::MeshWorkload create_workload(
 
 void set_multi_node_run_args(
     Program& program,
-    const std::vector<experimental::NodeCoord>& nodes,
+    const std::vector<NodeCoord>& nodes,
     const std::vector<uint32_t>& dm_addresses,
     uint32_t dm_value,
     const std::vector<uint32_t>& compute_addresses) {
@@ -122,52 +122,49 @@ void set_multi_node_run_args(
         nodes.size() == dm_addresses.size() && nodes.size() == compute_addresses.size(),
         "Per-node address vectors must match the node list size");
 
-    const experimental::KernelSpecName dm_kernel{"multi_node_dm"};
-    const experimental::KernelSpecName compute_kernel{"multi_node_compute"};
+    const KernelSpecName dm_kernel{"multi_node_dm"};
+    const KernelSpecName compute_kernel{"multi_node_compute"};
 
-    experimental::ProgramRunArgs params;
-    experimental::ProgramRunArgs::KernelRunArgs dm_args{
-        .kernel = dm_kernel, .common_runtime_arg_values = {{"value", dm_value}}};
-    experimental::ProgramRunArgs::KernelRunArgs compute_args{.kernel = compute_kernel};
+    ProgramRunArgs params;
+    ProgramRunArgs::KernelRunArgs dm_args{.kernel = dm_kernel, .common_runtime_arg_values = {{"value", dm_value}}};
+    ProgramRunArgs::KernelRunArgs compute_args{.kernel = compute_kernel};
     for (size_t i = 0; i < nodes.size(); ++i) {
-        experimental::AddRuntimeArgsForNode(dm_args.runtime_arg_values, nodes[i], {{"address", dm_addresses[i]}});
-        experimental::AddRuntimeArgsForNode(
-            compute_args.runtime_arg_values, nodes[i], {{"l1_address", compute_addresses[i]}});
+        AddRuntimeArgsForNode(dm_args.runtime_arg_values, nodes[i], {{"address", dm_addresses[i]}});
+        AddRuntimeArgsForNode(compute_args.runtime_arg_values, nodes[i], {{"l1_address", compute_addresses[i]}});
     }
     params.kernel_run_args = {std::move(dm_args), std::move(compute_args)};
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 }
 
 distributed::MeshWorkload create_multi_node_workload(
     distributed::MeshDevice& mesh_device,
-    const experimental::NodeRange& node_range,
+    const NodeRange& node_range,
     const std::vector<uint32_t>& dm_addresses,
     uint32_t dm_value,
     const std::vector<uint32_t>& compute_addresses) {
-    const experimental::KernelSpecName dm_kernel{"multi_node_dm"};
-    const experimental::KernelSpecName compute_kernel{"multi_node_compute"};
-    const std::vector<experimental::NodeCoord> nodes =
-        experimental::grid_to_nodes(node_range.start_coord, node_range.end_coord);
+    const KernelSpecName dm_kernel{"multi_node_dm"};
+    const KernelSpecName compute_kernel{"multi_node_compute"};
+    const std::vector<NodeCoord> nodes = grid_to_nodes(node_range.start_coord, node_range.end_coord);
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "multi_node_l1_write",
         .kernels =
-            {experimental::KernelSpec{
+            {KernelSpec{
                  .unique_id = dm_kernel,
                  .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
                  .num_threads = 1,
                  .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-                 .hw_config = experimental::DataMovementHardwareConfig{}},
-             experimental::KernelSpec{
+                 .hw_config = DataMovementHardwareConfig{}},
+             KernelSpec{
                  .unique_id = compute_kernel,
                  .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
                  .num_threads = kNumComputeNEOs,
                  .runtime_arg_schema = {.runtime_arg_names = {"l1_address"}},
-                 .hw_config = experimental::ComputeHardwareConfig{}}},
-        .work_units = {experimental::WorkUnitSpec{
+                 .hw_config = ComputeHardwareConfig{}}},
+        .work_units = {WorkUnitSpec{
             .name = "multi_node", .kernels = {dm_kernel, compute_kernel}, .target_nodes = node_range}},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
     set_multi_node_run_args(program, nodes, dm_addresses, dm_value, compute_addresses);
 
     distributed::MeshWorkload workload;
@@ -183,7 +180,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSingleWorkloadNonBlockingEnqueueFi
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -219,7 +216,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMultipleWorkloadsNonBlockingEnqueu
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -272,7 +269,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, TestInterleavedWorkloadsAcrossT
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -335,9 +332,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes)
         GTEST_SKIP() << "Test requires at least two worker nodes";
     }
 
-    const experimental::NodeRange node_range{{0, 0}, {worker_grid.x - 1, worker_grid.y - 1}};
-    const std::vector<experimental::NodeCoord> nodes =
-        experimental::grid_to_nodes(node_range.start_coord, node_range.end_coord);
+    const NodeRange node_range{{0, 0}, {worker_grid.x - 1, worker_grid.y - 1}};
+    const std::vector<NodeCoord> nodes = grid_to_nodes(node_range.start_coord, node_range.end_coord);
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -384,7 +380,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes)
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
         for (uint32_t node_index = 0; node_index < num_nodes; ++node_index) {
-            const experimental::NodeCoord& node = nodes[node_index];
+            const NodeCoord& node = nodes[node_index];
             std::vector<uint32_t> dm_output(1, 0);
             slow_dispatch::ReadFromL1(this->device(), node, dm_addresses[node_index], sizeof(uint32_t), dm_output);
             EXPECT_EQ(dm_output[0], dm_values[round]);
@@ -410,7 +406,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMeshDeviceCloseDrainsNonBlockingWo
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     // Result region on `node`: the DM slots in the first cache line, the compute slots in the second.
     static_assert(kNumUserDMThreads * sizeof(uint32_t) <= kL1CacheLineBytes);
     constexpr uint32_t kResultBytes = kL1CacheLineBytes + kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t);
@@ -432,27 +428,27 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMeshDeviceCloseDrainsNonBlockingWo
     std::vector<uint32_t> zeros(kResultWords, 0);
     slow_dispatch::WriteToL1(this->device(), node, base_address, zeros);
 
-    const experimental::KernelSpecName DELAYED_KERNEL{"delayed_dm"};
-    experimental::ProgramSpec spec{
+    const KernelSpecName DELAYED_KERNEL{"delayed_dm"};
+    ProgramSpec spec{
         .name = "delayed_l1_write",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = DELAYED_KERNEL,
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/delayed_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema =
                 {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value", "delay_cycles"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         }},
-        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {DELAYED_KERNEL}, .target_nodes = node}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {DELAYED_KERNEL}, .target_nodes = node}},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = DELAYED_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", base_address}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", base_address}}),
         .common_runtime_arg_values = {{"value", kDoneValue}, {"delay_cycles", kDelayCycles}},
     });
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
 

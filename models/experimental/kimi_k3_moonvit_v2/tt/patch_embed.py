@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""Patch embedding: `MoonVision3dPatchEmbed` in the reference.
+
+The reference is a Conv2d whose kernel equals its stride over patches the processor has already
+cut, which makes it a matmul over each flattened 3x14x14 patch (`host_prep.patches_to_rows`).
+So `proj` is a Linear and `_prepare_torch_state` flattens the conv weight into it, zero-padding
+its input width from 588 to `config.padded_patch_dim` (608) to match the padded patch rows
+(`host_prep.patch_rows`). See `padded_patch_dim` for why, and when the padding could go.
+
+The 64x64 position table stays on the host. It is interpolated to the image's grid there
+(`host_prep.pos_embeds`) and uploaded with the patches, so `forward` only adds it.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import torch
+import torch.nn.functional as F
+
+import ttnn
+
+from .linear import Linear
+from .model_config import MoonViTConfig
+from .module import LoadingError, Module
+
+
+class TT_Patch_Embed(Module):
+    def __init__(self, config: MoonViTConfig, *, mesh_device: ttnn.MeshDevice, compute_kernel_config) -> None:
+        super().__init__()
+        self.config = config
+        self.proj = Linear(
+            config.padded_patch_dim,
+            config.hidden_size,
+            bias=config.patch_embed_proj_bias,
+            mesh_device=mesh_device,
+            compute_kernel_config=compute_kernel_config,
+            # fp32 out: the start of the encoder's fp32 residual stream (vision_block.py).
+            output_dtype=ttnn.float32,
+        )
+        self.pos_emb_weight: torch.Tensor | None = None
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        weight = state.get("proj.weight")
+        if weight is not None and weight.ndim > 2:
+            weight = weight.reshape(self.config.hidden_size, self.config.patch_dim)
+            state["proj.weight"] = F.pad(weight, (0, self.config.padded_patch_dim - self.config.patch_dim))
+        if "pos_emb.weight" not in state:
+            raise LoadingError("pos_emb.weight: missing")
+        self.pos_emb_weight = state.pop("pos_emb.weight")
+
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        if self.pos_emb_weight is None:
+            raise ValueError("pos_emb weight is unavailable; call load_torch_state_dict first")
+        super().save(directory, prefix=prefix)
+        torch.save(self.pos_emb_weight, Path(directory) / f"{prefix}pos_emb.weight.pt")
+
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().load(directory, prefix=prefix)
+        self.pos_emb_weight = torch.load(Path(directory) / f"{prefix}pos_emb.weight.pt")
+
+    def forward(self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor) -> ttnn.Tensor:
+        """patches [1, 1, S/sp, padded_patch_dim] bf16 row major, pos_emb [1, 1, S/sp, hidden] fp32 ->
+        [1, 1, S/sp, hidden] fp32, the encoder's fp32 residual stream.
+
+        `patches` is uploaded row major and tiled here: tiling is faster on device than on
+        the host. `patches` and `pos_emb` are left allocated: they are the
+        caller's (per-image `DeviceInput`s in the full model)."""
+        if patches.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError(f"patches must be row major, got {patches.layout}")
+        tiled = ttnn.to_layout(patches, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = self.proj(tiled)
+        ttnn.deallocate(tiled)
+        out = ttnn.add(x, pos_emb, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
+        return out
