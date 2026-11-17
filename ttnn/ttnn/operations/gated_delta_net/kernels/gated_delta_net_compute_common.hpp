@@ -357,9 +357,41 @@ ALWI void silu_tile_bf16(uint32_t dst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (false, 8), dst, VectorMode::RC));
 }
 
-ALWI void silu_conv(uint32_t dst, RowScope scope) {
-    if constexpr (GDN_SILU_BF16 >= 2 && PREP) {
-        silu_tile_bf16(dst);
+// GDN_SILU_MID: x / (1 + exp(-x)) with the bf16 arm's exp, two reciprocal iterations, no rounding to bf16.
+#ifndef GDN_SILU_MID
+#define GDN_SILU_MID 0
+#endif
+#ifdef TRISC_MATH
+namespace gdn_sfpu {
+template <int ITERATIONS>
+inline void calculate_silu_mid() {
+    using namespace ckernel::sfpu;
+    sfpi::vFloat c0 = EXP_21F_C0, c1 = EXP_21F_C1, c2 = EXP_21F_C2;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat e = _sfpu_exp_21f_bf16_<true>(-x, sfpi::vConstFloatPrgm1, c0, c1, c2);
+        sfpi::dst_reg[0] = x * sfpu_reciprocal_iter<2>(1.0f + e);
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace gdn_sfpu
+#endif
+ALWI void silu_tile_mid(uint32_t dst) {
+#ifdef TRISC_MATH
+    _llk_math_eltwise_unary_sfpu_params_([] { gdn_sfpu::calculate_silu_mid<8>(); }, dst, VectorMode::RC);
+#endif
+}
+
+ALWI void silu_conv(uint32_t dst, RowScope scope, bool qk) {
+    if constexpr ((PREP || PREP_QK) && ((GDN_SILU_BF16 & 6) != 0 || GDN_SILU_MID != 0)) {
+        if ((GDN_SILU_BF16 & (qk ? 4 : 2)) != 0) {
+            silu_tile_bf16(dst);
+        } else if (GDN_SILU_MID != 0) {
+            silu_tile_mid(dst);
+        } else {
+            silu_scoped(dst, scope);
+        }
     } else {
         silu_scoped(dst, scope);
     }
@@ -753,7 +785,7 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
         }
         silu_tile_init();
         for (uint32_t i = 0; i < n; ++i) {
-            silu_conv(i, scope);
+            silu_conv(i, scope, col0 + i < cols.qk_cols);
         }
         tile_regs_commit();
         tile_regs_wait();

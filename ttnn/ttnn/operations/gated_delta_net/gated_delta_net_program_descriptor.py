@@ -185,9 +185,13 @@ PREP_NORM_MAX_ROWS = 4
 # between the conv and the heads of each later row (the time it would wait), where their o precedes its own rows.
 PREP_NORM_MID = 1
 # R-PREP prep cores (bf16 tokens): silu through the bf16 arm of the SFPU sigmoid (exp to one bf16 ULP, one reciprocal
-# iteration) instead of the fp32 one, in the fp32 DEST. 1: the gate factor silu(z) of the bf16 output; 2: also the
-# conv (q, k, v of bf16 tokens).
+# iteration) instead of the fp32 one, in the fp32 DEST. A mask: 1 the gate factor silu(z) of the bf16 output, 2 the
+# conv's v columns, 4 its q / k columns.
 PREP_SILU_BF16 = 1
+# The conv columns not under PREP_SILU_BF16 (prep and q / k cores): the bf16 arm's exp with two reciprocal iterations
+# and no rounding of the result to bf16. T=4096 769.4 -> 717.0 us, state relative RMS 1.29e-3 -> 1.38e-3 (the rounding
+# is what doubles it under PREP_SILU_BF16 6: 2.74e-3 at 722.1 us).
+PREP_SILU_MID = 1
 # R-PREP state step: the prep core sends -(beta exp(c)) (*) kn, so the state core accumulates the k read onto beta V in
 # DEST (the rhs of M in one window: no packed reads, no subtraction window) and starts the output's window with the q
 # read. Same operands and fp32 accumulation as the separate read.
@@ -1923,6 +1927,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_RMS_ONE_COPY", str(int(RMS_ONE_COPY and prep is None and unit_lag(unit_depth)))),
             ("GDN_PREP_NORM_SPLIT", str(int(norm_split))),
             ("GDN_SILU_BF16", str(int(PREP_SILU_BF16) if prep is not None and conv_on_fpu else 0)),
+            ("GDN_SILU_MID", str(int(PREP_SILU_MID) if prep is not None and conv_on_fpu else 0)),
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),
             ("GDN_PREP_SCALE_FPU", str(int(PREP_SCALE_FPU) if prep is not None else 0)),
             ("GDN_FPU_UNBIAS_BITS", f"{PREP_FPU_UNBIAS_BITS:#x}u"),
