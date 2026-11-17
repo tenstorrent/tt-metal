@@ -292,6 +292,7 @@ runtime:
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
     bh_loudbox: 20
+    cpu_medium: 3
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
@@ -367,7 +368,7 @@ models:
   e2e:
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 215
+    bh_loudbox: 227
     bh_quietbox_2: 90
     bh_sc1: 20
     bh_galaxy: 43
@@ -450,8 +451,11 @@ models:
     # [5/5]; the other K3.1 contract tests, the cache footprint test included, joined [1/5].
     # 2575 -> 2460 (-115): the K3.1 depth L24 / L24-128k sections, one test since, have a 45 min bound from
     # measured time (see the K3 transformer suite), not K3's L24 depth / chunked bounds (70 + 90).
-    bh_sc1: 2460
-    bh_sc1_high_power: 498
+    # 2460 -> 2458 on merging main (+10 -12): main's MoonViT leg (+10, #64694), and the K3.1 sparse MLA section
+    # is main's k31_sparse_mla (#64666), which fits the K3 accuracy suite's 54 min bound, so its +12 above is gone.
+    # bh_sc1_high_power 500 is main's (#64666, +2).
+    bh_sc1: 2458
+    bh_sc1_high_power: 500
     bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300

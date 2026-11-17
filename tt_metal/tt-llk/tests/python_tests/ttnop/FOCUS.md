@@ -16,7 +16,7 @@ Run from the `ttnop` directory and quote the full pytest node id.
 
 ```bash
 ./scripts/focus.sh \
-    'test_eltwise_unary_datacopy.py::test_eltwise_unary_datacopy[formats:Float16_b->Float16_b-dest_acc:No-num_faces:1-tilize:No-input_dimensions:[64, 64]]'
+    'test_eltwise_unary_datacopy.py::test_eltwise_unary_datacopy[formats:Float16_b->Float16_b-dest_acc:No-tile_dimensions:[16, 16]-tilize:No-input_dimensions:[64, 64]]'
 ```
 
 To measure a known site with one filler and a small delay range:

@@ -52,6 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t num_faces   = params.num_faces;
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -62,8 +63,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_dst,
             FACE_R_DIM,
             FACE_R_DIM,
-            4 /* num_faces */,
-            4 /* num_faces */);
+            num_faces /* num_faces_A */,
+            num_faces /* num_faces_B */);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
@@ -123,40 +124,39 @@ void run_l1_to_l1_math(const Params& params, const Formats& formats)
         // Column reduction can be done block by block
         for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
-            _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+            _llk_math_wait_for_dest_available_<dest_sync>();
             for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
             {
                 LLK_ASSERT(
-                    (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                    (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                     "Block tile index exceeds maximum destination tiles");
-                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                     tile, formats.math, formats.math);
             }
 
             for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
             {
                 LLK_ASSERT(
-                    (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                    (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                     "Block tile index exceeds maximum destination tiles");
                 _llk_math_eltwise_sfpu_start_(tile);
                 ckernel::sfpu::calculate_reduce<POOL_TYPE, REDUCE_DIM, MathFormat, is_fp32_dest_acc_en, PackFormat>();
             }
 
             _llk_math_eltwise_sfpu_done_();
-            _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }
     else if (REDUCE_DIM == ReduceDim::REDUCE_ROW)
     {
         // Row reduction requires all tiles in destination at once
         LLK_ASSERT(num_blocks == 1, "Row reduction requires all tiles in one block");
-        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        _llk_math_wait_for_dest_available_<dest_sync>();
         for (std::uint32_t i = 0; i < num_tiles_in_block * num_blocks; ++i)
         {
             LLK_ASSERT(
-                (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                "Block tile index exceeds maximum destination tiles");
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                (i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
+            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 i, formats.math, formats.math);
         }
 
@@ -171,15 +171,14 @@ void run_l1_to_l1_math(const Params& params, const Formats& formats)
         for (int i = 1; i < num_tiles_in_block * num_blocks; ++i)
         {
             LLK_ASSERT(
-                (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                "Block tile index exceeds maximum destination tiles");
+                (i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
             // Add the top rows of all the tiles we reduced in dst register
             ckernel::sfpu::_calculate_add_top_row_<MathFormat>(0, i, 0); // accumulate the result in tile at index 0
         }
 #endif
 
         _llk_math_eltwise_sfpu_done_();
-        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
 
@@ -200,7 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             BroadcastType::NONE,
             false /* is_int_fpu_en */,
             PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
-        _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
         ckernel::sfpu::init_reduce<POOL_TYPE, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>();
@@ -265,11 +264,10 @@ void run_l1_to_l1_pack(const Params& params)
         {
             std::uint32_t res_tile_idx = (block * num_tiles_in_block) + tile;
             LLK_ASSERT(
-                (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                "Block tile index exceeds maximum destination tiles");
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
+                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
         }
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
 
@@ -286,7 +284,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
+        _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
     }
     {
@@ -310,10 +308,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         LLK_ASSERT(
-                            (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            (block_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
                     // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
                     if constexpr (PERF_PACK_SECTION_RELEASE)
