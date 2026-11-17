@@ -43,7 +43,6 @@ value is already bf16-exact and the golden models that. The Float32 output arm o
 skips a second, no-op conversion in the packer.
 """
 
-import pytest
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -100,10 +99,6 @@ def test_sfpu_sdpa_exp_unclamped(
     run_types=None,
     loop_factor=1,
 ):
-    if not scale_en and scale != BF16_ONE:
-        # The template drops the multiply entirely, so the scale value is dead.
-        pytest.skip("scale is not read when SCALE_EN is false")
-
     torch.manual_seed(0)
 
     torch_format = format_dict[formats.input_format]
