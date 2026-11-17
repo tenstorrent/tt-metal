@@ -1,3 +1,4 @@
 {"event":"test_run","status":"pass","test":"single_tile --dev","details":"first device run of the full R1 topology (ports, receivers, hub, 4 compute cores) passed","ts":"2026-11-17T17:02:53+00:00"}
 {"event":"test_run","status":"pass","test":"acceptance (8) --dev + non-dev; golden suite (7)","details":"15/15 pass incl. tall block_h=3 ragged and bit-identical repeats","ts":"2026-11-17T17:24:04+00:00"}
 {"event":"perf_measure","case":"640x384 G=4 L=2 traced","fastest_us":29.995,"slowest_us":32.746,"spread_us":2.751,"dispatch_bound":false,"roofline_us":7.6,"target_us":10.1,"ts":"2026-11-17T17:24:04+00:00"}
+{"event":"test_run","status":"pass","what":"R1 port placement eth_nearest; acceptance 8/8; perf fastest 29.834->25.783 slowest 32.315->29.079","ts":"2026-11-17T18:54:46+00:00"}

@@ -38,6 +38,7 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # ---- block / transport knobs (host constants, defined once) ----
 SLICES_PER_BLOCK = 1  # mechanism cap: a block never straddles slices
 BLOCK_W = None  # tile columns of a slice per block; None = the whole slice (Wl_t)
+PORT_PLACEMENT = "eth_nearest"  # "eth_nearest" (each port next to its link's Ethernet core) | "centred"  [TRANSPORT]
 PORT_BATCH_CHUNKS = 4  # chunks per port batch (cb_port_chunks holds 2 batches)  [TRANSPORT]
 PORT_BATCH_CHUNKS_MAX = 8  # packet-header pool cap
 INC_EVERY = 8  # fused arrival increment every this many chunks (+ every entry end)  [TRANSPORT]
@@ -118,9 +119,7 @@ class Geometry:
     max_payload: int
     gx: int
     gy: int
-    ports: dict  # (l, d) -> logical CoreCoord
-    receivers: dict  # (l, d) -> logical CoreCoord
-    hub: object
+    placement: dict  # chip coord -> Row0Placement (ports / receivers / hub differ per chip: they follow its links)
     compute: list  # logical CoreCoord, index i = q * nb + m
     row_base: list  # per logical row y: index of core (0, y) or 0xFFFFFFFF
     key: tuple = field(default=())
@@ -145,12 +144,75 @@ class Geometry:
         return self.compute[q * self.nb + m]
 
     @property
+    def row0(self):  # every row-0 core: the union of the chips' port / receiver / hub placements fits in it
+        return [ttnn.CoreCoord(x, 0) for x in range(self.gx)]
+
+    @property
     def op_cores(self):
-        return list(self.ports.values()) + list(self.receivers.values()) + [self.hub] + self.compute
+        return self.row0 + self.compute
 
     @property
     def slot_bytes(self):  # one slice's fp32 partial vector: Mt rows x 32 values (kernels: STATS_ROW_BYTES)
         return self.Mt * STATS_ROW_BYTES
+
+
+@dataclass
+class Row0Placement:
+    ports: dict  # (l, d) -> logical CoreCoord
+    receivers: dict  # (l, d) -> logical CoreCoord
+    hub: object
+
+
+def _link_eth_cores(mesh_device, coord, peers, L):
+    """{(l, d): physical NoC (x, y) of the Ethernet core link l toward peers[d] forwards through}, found on the host
+    with no device dispatch: the first fabric connection RT arg is the router's Ethernet channel (append_fabric_
+    connection_rt_args, a throwaway ProgramDescriptor absorbs its semaphores), and the channel indexes the chip's
+    non-harvested Ethernet list (examples/fabric_all_gather `_chip_maps`, the cluster + SoC descriptors)."""
+    from ttnn.operations.examples.fabric_all_gather.program_descriptor_with_inline_kernels import _chip_maps
+
+    eth_list = _chip_maps(mesh_device, coord)[0]
+    me = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
+    out = {}
+    for d in (FWD, BWD):
+        pn = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*peers[d]))
+        links = ttnn.get_forwarding_link_indices(me, pn)
+        for l in range(L):
+            chan = int(
+                ttnn.setup_fabric_connection(me, pn, links[l], ttnn.ProgramDescriptor(), ttnn.CoreCoord(0, 0))[0]
+            )
+            out[(l, d)] = eth_list[chan]
+    return out
+
+
+def _place_row0(mesh_device, coord, peers, L, gx):
+    """Each port at the row-0 worker with the fewest NoC1 hops to its link's Ethernet core (examples/fabric_all_gather
+    `_worker_nearest_noc1`, report.md: per-link streams then share no NoC1 segment into the Ethernet row); the
+    receivers and the hub on the row-0 cores left. Falls back to ports centred on row 0 when the Ethernet cores
+    cannot be resolved on the host (e.g. an emulator without a cluster descriptor)."""
+    keys = [(l, d) for l in range(L) for d in (FWD, BWD)]
+    row0 = {(x, 0) for x in range(gx)}
+    ports = {}
+    if PORT_PLACEMENT == "eth_nearest":
+        try:
+            from ttnn.operations.examples.fabric_all_gather.program_descriptor_with_inline_kernels import (
+                _worker_nearest_noc1,
+            )
+
+            eth = _link_eth_cores(mesh_device, coord, peers, L)
+            taken = set()
+            for k in keys:
+                c = _worker_nearest_noc1(mesh_device, coord, eth[k], taken, row0)
+                ports[k] = c
+                taken.add((c.x, c.y))
+        except Exception:  # host-side lookup unavailable: the centred placement below
+            ports = {}
+    if not ports:
+        x0 = max(0, gx // 2 - L)
+        ports = {k: ttnn.CoreCoord(x0 + 2 * k[0] + k[1], 0) for k in keys}
+    taken = {c.x for c in ports.values()}
+    free0 = [ttnn.CoreCoord(x, 0) for x in range(gx) if x not in taken]
+    receivers = {k: free0[i] for i, k in enumerate(keys)}
+    return Row0Placement(ports=ports, receivers=receivers, hub=free0[len(keys)])
 
 
 def build_geometry(mesh_device, padded_shape, cluster_axis, num_links):
@@ -164,7 +226,7 @@ def build_geometry(mesh_device, padded_shape, cluster_axis, num_links):
     max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
     grid = mesh_device.compute_with_storage_grid_size()
     gx, gy = int(grid.x), int(grid.y)
-    key = (id(mesh_device), tuple(padded_shape), G, L, gx, gy, max_payload)
+    key = (id(mesh_device), tuple(padded_shape), G, L, gx, gy, max_payload, PORT_PLACEMENT)
     if key in _GEO_CACHE:
         return _GEO_CACHE[key][1]
 
@@ -179,12 +241,11 @@ def build_geometry(mesh_device, padded_shape, cluster_axis, num_links):
     n_aux = 2 * L + 1
     if 2 * L + n_aux > gx:
         raise ValueError(f"all_gather_rms_norm_kimi: grid row of {gx} cores cannot hold {2 * L} ports + {n_aux} aux")
-    x0 = max(0, gx // 2 - L)
-    port_cores = [ttnn.CoreCoord(x0 + i, 0) for i in range(2 * L)]
-    ports = {(l, d): port_cores[2 * l + d] for l in range(L) for d in (FWD, BWD)}
-    free0 = [ttnn.CoreCoord(x, 0) for x in range(gx) if not (x0 <= x < x0 + 2 * L)]
-    receivers = {(l, d): free0[2 * l + d] for l in range(L) for d in (FWD, BWD)}
-    hub = free0[2 * L]
+    placement = {
+        (r, p): _place_row0(mesh_device, (r, p), ((r, (p + 1) % G), (r, (p - 1) % G)), L, gx)
+        for r in range(rows)
+        for p in range(G)
+    }
     avail = (gy - 1) * gx
     slots = G * SLICES_PER_BLOCK * (Wl_t // block_w)
     if slots > avail:
@@ -217,9 +278,7 @@ def build_geometry(mesh_device, padded_shape, cluster_axis, num_links):
         max_payload=max_payload,
         gx=gx,
         gy=gy,
-        ports=ports,
-        receivers=receivers,
-        hub=hub,
+        placement=placement,
         compute=compute,
         row_base=row_base,
         key=key,
@@ -362,15 +421,9 @@ def compute_crs(geo):
 
 
 def op_core_crs(geo):
-    """Every op core: the compute rectangles + the row-0 ports / receivers / hub (merged into x-runs)."""
-    row0 = sorted({c.x for c in list(geo.ports.values()) + list(geo.receivers.values()) + [geo.hub]})
-    runs, start = [], row0[0]
-    for a, b in zip(row0, row0[1:] + [None]):
-        if b != a + 1:
-            runs.append((start, a))
-            start = b
-    ranges = [ttnn.CoreRange(ttnn.CoreCoord(x0, 0), ttnn.CoreCoord(x1, 0)) for x0, x1 in runs]
-    return ttnn.CoreRangeSet(ranges + list(compute_crs(geo).ranges()))
+    """Every op core: logical row 0 (ports / receivers / hub of every chip) + the compute rectangles."""
+    row0 = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(geo.gx - 1, 0))
+    return ttnn.CoreRangeSet([row0] + list(compute_crs(geo).ranges()))
 
 
 def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilon, cfg):
@@ -391,15 +444,11 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
     W = G * geo.Wl_t * 32
 
     comp_crs = compute_crs(geo)
-    port_list = [geo.ports[(l, d)] for l in range(L) for d in (FWD, BWD)]
-    port_crs = _crs(port_list)
-    recv_crs = _crs([geo.receivers[(l, d)] for l in range(L) for d in (FWD, BWD)])
-    hub_crs = _crs([geo.hub])
     op_crs = op_core_crs(geo)
-
-    hub_v = virt(geo.hub)
-    port_v = {k: virt(c) for k, c in geo.ports.items()}
-    recv_v = {k: virt(c) for k, c in geo.receivers.items()}
+    # row-0 roles per chip (virtual coords): a sender addresses the PEER chip's ready port / receiver / hub
+    port_vs = {c: {k: virt(v) for k, v in pl.ports.items()} for c, pl in geo.placement.items()}
+    recv_vs = {c: {k: virt(v) for k, v in pl.receivers.items()} for c, pl in geo.placement.items()}
+    hub_vs = {c: virt(pl.hub) for c, pl in geo.placement.items()}
 
     # geometry CT args shared by the compute-core kernels
     geo_ct = [geo.block_h, geo.block_w, geo.Mt, geo.Wl_t, G, geo.nb, chunk, geo.cpl, geo.gy, L]
@@ -413,6 +462,11 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
         for p in range(G):
             coord = (r, p)
             prev_c, next_c = (r, (p - 1) % G), (r, (p + 1) % G)
+            pl = geo.placement[coord]
+            port_v, hub_v = port_vs[coord], hub_vs[coord]
+            port_crs = _crs([pl.ports[(l, d)] for l in range(L) for d in (FWD, BWD)])
+            recv_crs = _crs([pl.receivers[(l, d)] for l in range(L) for d in (FWD, BWD)])
+            hub_crs = _crs([pl.hub])
             program = ttnn.ProgramDescriptor()
             program.custom_program_hash = _hash(
                 "all_gather_rms_norm_kimi",
@@ -422,6 +476,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 cfg.math_fidelity,
                 cfg.math_approx_mode,
                 BLOCK_W,
+                sorted((k, (c.x, c.y)) for k, c in pl.ports.items()),
                 PORT_BATCH_CHUNKS,
                 INC_EVERY,
                 OUT_DEPTH_CHUNKS,
@@ -524,7 +579,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             preader_rt, psender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for l in range(L):
                 for d in (FWD, BWD):
-                    core = geo.ports[(l, d)]
+                    core = pl.ports[(l, d)]
                     peer = next_c if d == FWD else prev_c
                     entries = port_stream(geo, p, l, d)
                     blocks = []  # (q, m, relay, entry_end)
@@ -541,8 +596,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                     preader_rt[core.x][core.y] = rargs
                     # sender
                     sargs = [landing_addr, stats_addr, int(active), n_chunks, len(blocks), len(slots)]
-                    sargs += [ready_addr, _xy(port_v[(l, _OPP[d])]), arrival_addr, _xy(recv_v[(l, d)])]
-                    sargs += [sfwd_addr if d == FWD else sbwd_addr, _xy(hub_v)]
+                    sargs += [ready_addr, _xy(port_vs[peer][(l, _OPP[d])]), arrival_addr, _xy(recv_vs[peer][(l, d)])]
+                    sargs += [sfwd_addr if d == FWD else sbwd_addr, _xy(hub_vs[peer])]
                     pn = node(peer)
                     sargs += [int(pn.mesh_id), int(pn.chip_id)]
                     sargs += slots
@@ -589,7 +644,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             recv_rt = ttnn.RuntimeArgs()
             for l in range(L):
                 for d in (FWD, BWD):
-                    core = geo.receivers[(l, d)]
+                    core = pl.receivers[(l, d)]
                     up_p = (p - 1) % G if d == FWD else (p + 1) % G
                     up_entries = port_stream(geo, up_p, l, d)
                     local_entries = port_stream(geo, p, l, d)
@@ -642,7 +697,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 a, b = virt(ttnn.CoreCoord(x0, y0)), virt(ttnn.CoreCoord(x1, y1))
                 hub_args += [min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y), n]
             hub_rt = ttnn.RuntimeArgs()
-            hub_rt[geo.hub.x][geo.hub.y] = hub_args
+            hub_rt[pl.hub.x][pl.hub.y] = hub_args
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_kimi_hub.cpp"),
