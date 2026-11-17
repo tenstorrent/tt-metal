@@ -25,7 +25,8 @@ def _write(path, chunks, expected, positions=64, unchecked=None, slot=0):
         "layouts": {},
         "unchecked_positions": unchecked or {},
     }
-    path.write_text(json.dumps({"host": path.stem, "scope": scope, "expected_chunks": expected, "chunks": chunks}))
+    doc = {"format": mcd._FORMAT, "host": path.stem, "scope": scope, "expected_chunks": expected, "chunks": chunks}
+    path.write_text(json.dumps(doc))
 
 
 def _compare(tmp_path, src_hosts, dst_hosts, expected=None):
@@ -109,6 +110,21 @@ def test_positions_left_unchecked_fail(tmp_path, capsys):
         _write(tmp_path / f"{side}_h0.json", chunks, 1, positions=63, unchecked={"01": 31})
     assert _compare_files(tmp_path) == 1
     assert "config 01: last 31 position(s) of each layer NOT checked" in capsys.readouterr().out
+
+
+def test_digests_from_before_partial_chunks_were_recorded_are_an_error(tmp_path, expect_error):
+    # The earlier file had no format and no record of what was skipped: with positions=63 it hashed [0, 32) only,
+    # and two such files agree on every key.
+    old = {
+        "host": "h0",
+        "scope": {"slot": 0, "positions": 63, "configs": ["00", "01"]},
+        "expected_chunks": 1,
+        "chunks": {"00/3/0": "a"},
+    }
+    for side in ("prefill", "decode"):
+        (tmp_path / f"{side}_h0.json").write_text(json.dumps(old))
+    with expect_error(SystemExit, "take the digest again"):
+        _compare_files(tmp_path)
 
 
 def test_rows_layout_keeps_the_leading_pages():

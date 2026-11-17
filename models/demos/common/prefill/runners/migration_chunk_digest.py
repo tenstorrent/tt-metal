@@ -98,6 +98,11 @@ def _bytes_below(raw: bytes, layout: str, n_tokens: int, chunk_n_tokens: int) ->
     raise SystemExit(f"unknown layout {layout!r}; use rows or bfp8")
 
 
+# Version of the digest file. 2 added what the hashes cover below P (scope layouts and unchecked_positions); a file
+# without it cannot say whether a chunk that P ends inside was hashed, so compare refuses it.
+_FORMAT = 2
+
+
 def _parse_layouts(text: str) -> dict:
     layouts = dict(item.split("=", 1) for item in text.split(",") if item)
     for name, layout in layouts.items():
@@ -152,7 +157,13 @@ def digest(args) -> None:
         "unchecked_positions": unchecked,
     }
     json.dump(
-        {"host": socket.gethostname(), "scope": scope, "expected_chunks": len(out) + skipped_remote, "chunks": out},
+        {
+            "format": _FORMAT,
+            "host": socket.gethostname(),
+            "scope": scope,
+            "expected_chunks": len(out) + skipped_remote,
+            "chunks": out,
+        },
         open(args.out, "w"),
     )
     print(
@@ -174,8 +185,10 @@ def compare(args) -> int:
         merged, origin, stated = {}, {}, None
         for f in sorted(glob.glob(pattern)):
             doc = json.load(open(f))
-            if "expected_chunks" not in doc or "scope" not in doc:
-                raise SystemExit(f"{f}: no expected_chunks/scope; take the digest again with this version")
+            if doc.get("format") != _FORMAT:
+                raise SystemExit(
+                    f"{f}: digest format {doc.get('format', 1)}, need {_FORMAT}; take the digest again with this version"
+                )
             this = (doc["scope"], int(doc["expected_chunks"]))
             if stated is not None and this != stated[0]:
                 raise SystemExit(f"{stated[1]} and {f} differ in scope or table: {stated[0]} vs {this}")
@@ -216,7 +229,7 @@ def compare(args) -> int:
     hashed = [{k: v for k, v in scope.items() if k != "slot"} for scope in (src_scope, dst_scope)]
     if hashed[0] != hashed[1]:
         print(f"  the two sides were digested differently: src {hashed[0]}, dst {hashed[1]}")
-    unchecked = {**src_scope.get("unchecked_positions", {}), **dst_scope.get("unchecked_positions", {})}
+    unchecked = {**src_scope["unchecked_positions"], **dst_scope["unchecked_positions"]}
     for cfg, n in sorted(unchecked.items()):
         print(f"  config {cfg}: last {n} position(s) of each layer NOT checked; name its layout in digest --layouts")
     failed = bad or only or short or src_expected != dst_expected or hashed[0] != hashed[1] or unchecked or not both
