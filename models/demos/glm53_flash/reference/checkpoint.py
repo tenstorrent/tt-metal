@@ -26,6 +26,15 @@ FP8_BLOCK = (128, 128)
 
 
 WEIGHTS_DIR_ENV = "MODEL_WEIGHTS_DIR"  # tt-inference-server's flat weights directory inside the container
+REPO_ID = "zai-org/GLM-5.3-Flash"
+
+
+def hub_cache_dir() -> Path:
+    """The HF hub cache: ``HF_HUB_CACHE`` (the Models CI sets it to the shared /mnt/MLPerf/huggingface/hub), else
+    ``HF_HOME``/hub, else ~/.cache/huggingface/hub -- huggingface_hub's own order."""
+    if os.environ.get("HF_HUB_CACHE"):
+        return Path(os.environ["HF_HUB_CACHE"])
+    return Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
 
 
 def missing_shards(snapshot: Path) -> list[str]:
@@ -47,8 +56,7 @@ def default_snapshot_dir() -> Path:
     if env and (Path(env) / "config.json").exists():
         d = Path(env)
     else:
-        hub = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
-        repo = hub / "models--zai-org--GLM-5.3-Flash"
+        repo = hub_cache_dir() / "models--zai-org--GLM-5.3-Flash"
         ref = repo / "refs" / "main"
         d = None
         if ref.exists():
@@ -70,6 +78,20 @@ def default_snapshot_dir() -> Path:
             f"(first: {missing[:3]}): an incomplete download or a config-only snapshot"
         )
     return d
+
+
+def ensure_snapshot() -> Path:
+    """``default_snapshot_dir()``, after downloading the checkpoint into the hub cache when it is absent or lacks
+    shards (the Models CI Galaxy entries' first run on a runner: the shared hub is writable with mlperf-read-only
+    off; run with HF_HUB_OFFLINE=0). A complete snapshot returns without touching the network."""
+    try:
+        return default_snapshot_dir()
+    except FileNotFoundError as e:
+        print(f"{e}: downloading {REPO_ID} into {hub_cache_dir()}", flush=True)
+    from huggingface_hub import snapshot_download
+
+    snapshot_download(REPO_ID, cache_dir=str(hub_cache_dir()))
+    return default_snapshot_dir()
 
 
 def shard_headers(snapshot: Path) -> dict[str, tuple[str, dict]]:
@@ -152,3 +174,7 @@ def load_layer_raw(snapshot: Path, layer_idx: int, headers=None, *, name_filter=
 def load_embedding(snapshot: Path, headers=None) -> torch.Tensor:
     headers = headers or shard_headers(snapshot)
     return load_tensors(snapshot, [EMBED_KEY], headers)[EMBED_KEY]
+
+
+if __name__ == "__main__":
+    print(ensure_snapshot())

@@ -86,9 +86,12 @@ def test_module_imports_without_ttnn():
 # ----------------------------------------------------------------------------------------- geometry
 def test_snapshot_dir_resolution(tmp_path, monkeypatch):
     """``default_snapshot_dir``: MODEL_WEIGHTS_DIR (tt-inference-server's flat weights dir) wins when it holds a
-    config.json, else the HF cache's refs/main snapshot; a directory missing shards of its index is refused by
-    name (the shield's config-only shared snapshot, 2026-10-31)."""
-    from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, missing_shards
+    config.json, else the HF cache's refs/main snapshot (HF_HUB_CACHE before HF_HOME, as the Models CI sets it); a
+    directory missing shards of its index is refused by name (the shield's config-only shared snapshot,
+    2026-10-31). ``ensure_snapshot`` downloads only when the resolution fails."""
+    import huggingface_hub
+
+    from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, ensure_snapshot, missing_shards
 
     def make(d, shards_present):
         d.mkdir(parents=True, exist_ok=True)
@@ -109,6 +112,7 @@ def test_snapshot_dir_resolution(tmp_path, monkeypatch):
     make(snap_b, ["model-00001-of-00002.safetensors"])  # the config-only / partial snapshot sorts last
     (hub / "refs").mkdir(parents=True)
     (hub / "refs" / "main").write_text("aaaa\n")
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)  # the Models CI sets it; the HF_HOME cases come first
     monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
     monkeypatch.setenv("MODEL_WEIGHTS_DIR", str(flat))
     assert default_snapshot_dir() == flat
@@ -121,6 +125,22 @@ def test_snapshot_dir_resolution(tmp_path, monkeypatch):
     monkeypatch.setenv("MODEL_WEIGHTS_DIR", str(tmp_path / "nowhere"))
     (hub / "refs" / "main").write_text("aaaa\n")
     assert default_snapshot_dir() == snap_a, "an absent MODEL_WEIGHTS_DIR falls through to the cache"
+
+    calls = []
+
+    def fake_download(repo_id, cache_dir):
+        calls.append((repo_id, cache_dir))
+        repo = tmp_path / "ci_hub" / "models--zai-org--GLM-5.3-Flash"
+        make(repo / "snapshots" / "cccc", ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"])
+        (repo / "refs").mkdir(parents=True, exist_ok=True)
+        (repo / "refs" / "main").write_text("cccc\n")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_download)
+    assert ensure_snapshot() == snap_a and calls == [], "a complete snapshot needs no download"
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "ci_hub"))  # the CI's hub, still empty: HF_HOME is not read
+    ci_snap = tmp_path / "ci_hub" / "models--zai-org--GLM-5.3-Flash" / "snapshots" / "cccc"
+    assert ensure_snapshot() == ci_snap and calls == [("zai-org/GLM-5.3-Flash", str(tmp_path / "ci_hub"))]
+    assert default_snapshot_dir() == ci_snap
 
 
 def test_geometry_columns_and_capacity():

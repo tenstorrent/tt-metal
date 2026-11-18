@@ -2208,6 +2208,9 @@
     # first run on a runner builds it from the checkpoint as the stack loads (mlperf write access, ~1 h), later runs
     # load it in ~5 min; the permuted expert copies sit next to it.
     export GLM53_MK_TILE_CACHE_V3=$TT_CACHE_PATH/glm53_tile_cache_v3 GLM53_FUSED_EXPERTS_CACHE=$TT_CACHE_PATH/glm53_fused_experts_cache
+    # the checkpoint (public, ~306 GB) into the shared $HF_HUB_CACHE on a runner's first run (mlperf-read-only off); a
+    # complete snapshot returns without the network
+    HF_HUB_OFFLINE=0 python -m models.demos.glm53_flash.reference.checkpoint
     # 32 K x 4 users with one prompt and 1 M x 1 user (the resident capstone): the TP prefill, the traced decode step,
     # TTFT and tok/s per user logged; the rows FAIL when the users disagree, the first ids leave the validated prefix
     # or the decode drops under the floor (GLM53_MK_EXPECT_IDS / GLM53_MK_MIN_TOKS). The 32 K ids moved at token 7 (a
@@ -2233,6 +2236,9 @@
     export GLM53_MESH_CACHE=$TT_CACHE_PATH/glm53_mesh GLM53_MESH_SHAPE=8,4
     # 32 users (4 per row) x 8 short questions, 64 greedy tokens each: the resident 45-layer mesh model, the eager
     # prefill and the traced decode step end to end (TTFT and tok/s logged)
+    # the checkpoint (public, ~306 GB) into the shared $HF_HUB_CACHE on a runner's first run (mlperf-read-only off); a
+    # complete snapshot returns without the network
+    HF_HUB_OFFLINE=0 python -m models.demos.glm53_flash.reference.checkpoint
     pytest --timeout 2400 models/demos/glm53_flash/demo/text_demo.py -k "questions_8-4users"
   model: glm53-flash
   model_family: GLM
