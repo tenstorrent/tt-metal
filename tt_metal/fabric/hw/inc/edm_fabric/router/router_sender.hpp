@@ -1203,8 +1203,9 @@ __attribute__((noinline, cold)) bool connect() {
     } else {
         c->connect_failures++;
     }
-    c->command = InterDomainCommand::NONE;
+    // the state first: the host reads it once the command clears
     set_inter_domain_state(connected ? InterDomainState::SERVICE_TRAFFIC : InterDomainState::DRAIN);
+    c->command = InterDomainCommand::NONE;
     return connected;
 }
 
