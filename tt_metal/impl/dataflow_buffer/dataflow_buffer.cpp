@@ -1411,6 +1411,24 @@ static std::optional<std::string> dfb_txn_descriptor_violation(
         return fmt::format(
             "num_entries_per_txn_id {} must be divisible by num_tcs_per_risc {}", per_txn, num_tcs_per_risc);
     }
+    // One uncredited batch moves per_tc entries on a counter. prepare_implicit_* and
+    // dfb_dm0_flush_side read that gap as a signed 16-bit distance, so it must be below
+    // 32768: 32768 is int16's minimum and every larger gap looks non-negative. The wait then
+    // returns as if the counter had caught up, and the exit top-up skips the increment and
+    // clears the count, so the other side waits forever.
+    const uint32_t per_tc = per_txn / num_tcs_per_risc;
+    if (per_tc >= 0x8000u) {
+        return fmt::format(
+            "Implicit-sync DFB per-counter batch {} is at least 32768 entries (num_entries {}, num_txn_ids {}, "
+            "num_prods_or_cons {}, num_tcs_per_risc {}). The tile counters are 16-bit and these credit checks are "
+            "signed, so an uncredited batch this large is lost. Reduce num_entries so it divides into smaller "
+            "batches, or use explicit sync on this side.",
+            per_tc,
+            num_entries,
+            num_txn_ids,
+            num_prods_or_cons,
+            num_tcs_per_risc);
+    }
     if (counter_share > 1 && per_txn % (counter_share * num_tcs_per_risc) != 0) {
         return fmt::format(
             "BLOCKED DFB with implicit sync: num_entries_per_txn_id {} must be divisible by "

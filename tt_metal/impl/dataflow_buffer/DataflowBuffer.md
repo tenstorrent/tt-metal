@@ -418,7 +418,7 @@ That requires the batch to divide evenly across txn ids, participating DMs, and 
 | `num_entries_per_txn_id_per_tc` (`per_txn_per_tc`) | Entries each of that DM’s RR TCs owns in the batch → stored as `tiles_to_post` / `tiles_to_ack` in `TxnDFBDescriptor` |
 
 
-`threshold`, `per_txn` and `per_txn_per_tc` are 16 bits, like the tile counters and the hardware's tiles-to-process threshold registers, so a txn id can cover up to 65535 entries. The entries of one op (`block_size` on a BLOCKED side, a STRIDED side's counter share) are stored in the DM0 finish info as 8 bits (`op_entries`), so the host rejects more than 255 entries per op.
+`threshold`, `per_txn` and `per_txn_per_tc` are 16 bits, like the tile counters and the hardware's tiles-to-process threshold registers, so a txn id can cover up to 65535 entries. `per_txn_per_tc` must stay below 32768. The credit wait and the kernel-exit top-up read the gap between a counter and what a DM has issued as a signed 16-bit distance; a gap of 32768 or more looks caught up, the top-up writes nothing, and the partial count is then cleared. The entries of one op (`block_size` on a BLOCKED side, a STRIDED side's counter share) are stored in the DM0 finish info as 8 bits (`op_entries`), so the host rejects more than 255 entries per op.
 
 **Normal (non–ALL-consumer) side:**
 

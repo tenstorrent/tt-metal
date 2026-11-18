@@ -620,6 +620,43 @@ TEST_F(UnitMeshFixture, DfbSerializeImplicitSyncRingOver255) {
     }
 }
 
+// The credit wait and the kernel-exit top-up read a counter gap as int16, so a per-counter batch of
+// 32768 or more is lost. 32771 is not divisible by 2, 3 or 4 txn ids, so its only layout is one batch
+// of 32771 and the host must reject it. 65534 splits into two batches of 32767, the largest safe gap.
+TEST_F(UnitMeshFixture, DfbSerializeImplicitSyncHalfWrapBound) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    const auto config_for = [](uint32_t num_entries) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size = 1,
+            .num_entries = num_entries,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x10,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true};
+    };
+    EXPECT_THROW(
+        {
+            Program program = CreateProgram();
+            experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config_for(32771));
+        },
+        std::exception);
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, config_for(65534));
+    const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+    ASSERT_EQ(dfbs.size(), 1u);
+    EXPECT_EQ(dfbs[0]->producer_txn_descriptor.num_txn_ids, 2u);
+    EXPECT_EQ(dfbs[0]->producer_txn_descriptor.num_entries_per_txn_id_per_tc, 32767u);
+    EXPECT_EQ(dfbs[0]->consumer_txn_descriptor.num_entries_per_txn_id_per_tc, 32767u);
+}
+
 TEST_F(UnitMeshFixture, DMTest1xDFB1Sx4SConfig) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
