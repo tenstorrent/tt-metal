@@ -42,7 +42,12 @@ inline uint32_t relay_affine_prefix_sender_slots(uint32_t key_tiles, tt::ARCH ar
 
 // Heads one sender serves: each needs its own count semaphore on the sender core, and the fabric connection takes
 // two more of the core's 16 (tt::tt_metal::NUM_SEMAPHORES, which no public header exposes).
-inline constexpr uint32_t relay_affine_prefix_max_heads_per_link = 16 - 2;
+inline constexpr uint32_t relay_affine_prefix_sender_semaphores = 16;
+inline constexpr uint32_t relay_affine_prefix_connection_semaphores = 2;
+inline constexpr uint32_t relay_affine_prefix_max_heads_per_link =
+    relay_affine_prefix_sender_semaphores - relay_affine_prefix_connection_semaphores;
+// The fabric connections a sender may open (the fewest RoutingPlaneConnectionManager::MaxConnections allows).
+inline constexpr uint32_t relay_affine_prefix_max_connections = 4;
 
 // Legacy program descriptors: the metal2 ProgramSpec cannot yet open fabric connections.
 struct RelayAffinePrefixProgramFactory {

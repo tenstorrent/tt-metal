@@ -4,6 +4,8 @@
 #include "ttnn/operations/experimental/kda/relay_affine_prefix/device/relay_affine_prefix_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -83,51 +85,77 @@ tt::tt_metal::ProgramDescriptor build_program(
     // The ranks this rank's final carry reaches each way: half the ring each way, else to either end of the line.
     const uint32_t ahead = ring ? sp_size / 2 : sp_size - 1 - sp_rank;
     const uint32_t behind = sp_size - 1 - ahead;
-    // A 2D multicast leaves every hop in one ETH direction. Where the SP axis turns on a 2D fabric, the carry goes to
-    // each other rank as a 2D unicast instead, from the link's sender whose connection (towards the successor, or the
-    // predecessor) the rank's route leaves on.
-    const bool unicast_peers = fabric_2d && !ttnn::ccl::is_axis_straight(*mesh, axis);
-    std::vector<tt::tt_fabric::FabricNodeId> successor_peers, predecessor_peers;
-    if (unicast_peers) {
-        const auto predecessor_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, predecessor_node);
-        // Routes in one direction share its links, so the first link of a connection tells its direction.
-        const auto leaves_towards = [&](const tt::tt_fabric::FabricNodeId& peer,
-                                        const tt::tt_fabric::FabricNodeId& neighbor,
-                                        const std::vector<uint32_t>& neighbor_links) {
-            const auto peer_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, peer);
-            return !neighbor_links.empty() &&
-                   std::find(peer_links.begin(), peer_links.end(), neighbor_links.front()) != peer_links.end() &&
-                   tt::tt_fabric::get_forwarding_eth_core(*mesh, source_node, peer, neighbor_links.front()) ==
-                       tt::tt_fabric::get_forwarding_eth_core(*mesh, source_node, neighbor, neighbor_links.front());
-        };
-        for (uint32_t step = 1; step < sp_size; ++step) {
-            auto peer_coord = coord;
-            peer_coord[axis] = (sp_rank + step) % sp_size;
-            const auto peer = mesh->get_fabric_node_id(peer_coord);
-            if (leaves_towards(peer, destination_node, links)) {
-                successor_peers.push_back(peer);
-            } else {
-                TT_FATAL(
-                    leaves_towards(peer, predecessor_node, predecessor_links),
-                    "relay_affine_prefix: the route from SP rank {} to rank {} leaves towards neither SP neighbor",
-                    sp_rank,
-                    peer_coord[axis]);
-                predecessor_peers.push_back(peer);
-            }
-        }
-    }
-    // The relay's sender sends the carry along its connection; a second sender per link covers the ranks behind when
-    // that connection heads forward (unicast: the ranks whose routes leave towards the predecessor).
-    const uint32_t relay_range = unicast_peers ? successor_peers.size() : successor_forward ? ahead : behind;
-    const bool back_sender = unicast_peers ? !predecessor_peers.empty() : successor_forward && behind != 0;
-    const uint32_t back_range = unicast_peers ? predecessor_peers.size() : back_sender ? behind : 0;
-
     const auto [batch_heads, key_dim] = relay_state_geometry(in);
     const uint32_t kt = key_dim / tt::constants::TILE_HEIGHT;
     const uint32_t state_tiles = kt * kt;
     const uint32_t state_tile = tt::constants::TILE_HW * sizeof(float);
     const uint32_t summary_tile = tt::constants::TILE_HW * sizeof(uint16_t);
     const uint32_t heads_per_link = (batch_heads + attrs.num_links - 1) / attrs.num_links;
+
+    // A 2D multicast leaves every hop in one ETH direction. Where the SP axis turns on a 2D fabric, the carry goes to
+    // each other rank as a 2D unicast instead, on a connection in the direction its route leaves: the relay's own
+    // towards the successor, else one of the link's second sender (towards the predecessor, or across the mesh), else
+    // one more on the relay's sender.
+    const bool unicast_peers = fabric_2d && !ttnn::ccl::is_axis_straight(*mesh, axis);
+    struct CarrySender {
+        std::vector<tt::tt_fabric::FabricNodeId> connections;  // the node each connection is opened towards
+        std::vector<uint32_t> peer_args;                       // per rank: its connection, chip and mesh
+        uint32_t peers = 0;
+    };
+    std::array<CarrySender, 2> carry_senders;  // the relay's sender, then the second
+    if (unicast_peers) {
+        // A connection takes two of a sender core's semaphores, beside one per head the sender serves.
+        const uint32_t max_connections = std::min(
+            relay_affine_prefix_max_connections,
+            (relay_affine_prefix_sender_semaphores - heads_per_link) / relay_affine_prefix_connection_semaphores);
+        // Routes in one direction share its links, so a link's ETH core tells the direction.
+        const auto same_direction = [&](const tt::tt_fabric::FabricNodeId& peer,
+                                        const tt::tt_fabric::FabricNodeId& node) {
+            const auto node_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, node);
+            const auto peer_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, peer);
+            return !node_links.empty() &&
+                   std::find(peer_links.begin(), peer_links.end(), node_links.front()) != peer_links.end() &&
+                   tt::tt_fabric::get_forwarding_eth_core(*mesh, source_node, peer, node_links.front()) ==
+                       tt::tt_fabric::get_forwarding_eth_core(*mesh, source_node, node, node_links.front());
+        };
+        carry_senders[0].connections = {destination_node};
+        for (uint32_t step = 1; step < sp_size; ++step) {
+            auto peer_coord = coord;
+            peer_coord[axis] = (sp_rank + step) % sp_size;
+            const auto peer = mesh->get_fabric_node_id(peer_coord);
+            std::optional<std::pair<uint32_t, uint32_t>> found;  // sender, connection
+            for (uint32_t s = 0; s < carry_senders.size() && !found; ++s) {
+                const auto& connections = carry_senders[s].connections;
+                for (uint32_t c = 0; c < connections.size() && !found; ++c) {
+                    if (same_direction(peer, connections[c])) {
+                        found = {s, c};
+                    }
+                }
+            }
+            if (!found) {
+                const uint32_t s = carry_senders[1].connections.size() < max_connections ? 1 : 0;
+                TT_FATAL(
+                    carry_senders[s].connections.size() < max_connections,
+                    "relay_affine_prefix: the routes from SP rank {} to the other ranks leave in more directions than "
+                    "its two carry senders have semaphores for ({} connections each at {} heads per link)",
+                    sp_rank,
+                    max_connections,
+                    heads_per_link);
+                carry_senders[s].connections.push_back(peer);
+                found = {s, static_cast<uint32_t>(carry_senders[s].connections.size() - 1)};
+            }
+            auto& sender = carry_senders[found->first];
+            sender.peer_args.insert(
+                sender.peer_args.end(),
+                {found->second, static_cast<uint32_t>(peer.chip_id), static_cast<uint32_t>(*peer.mesh_id)});
+            ++sender.peers;
+        }
+    }
+    // The relay's sender sends the carry along its connection; a second sender per link covers the ranks behind when
+    // that connection heads forward (unicast: the ranks the relay's connection does not lead to).
+    const uint32_t relay_range = unicast_peers ? carry_senders[0].peers : successor_forward ? ahead : behind;
+    const bool back_sender = unicast_peers ? carry_senders[1].peers != 0 : successor_forward && behind != 0;
+    const uint32_t back_range = unicast_peers ? carry_senders[1].peers : back_sender ? behind : 0;
 
     const std::vector<CoreCoord> head_cores(attrs.cores.begin(), attrs.cores.begin() + batch_heads);
     // The relay's sender per link, then (with ranks behind) the second carry sender per link, towards the predecessor.
@@ -294,7 +322,9 @@ tt::tt_metal::ProgramDescriptor build_program(
         {in.actual_start.buffer(), in.landing.buffer(), carry.buffer(), slab_index.buffer()});
     // The second carry senders connect to the predecessor where they carry; an idle one is given the relay's
     // connection, which it never opens, so every chip's runtime args keep one layout.
-    const auto back_node = back_sender ? predecessor_node : connection_node;
+    const auto back_node = !back_sender    ? connection_node
+                           : unicast_peers ? carry_senders[1].connections.front()
+                                           : predecessor_node;
     const auto back_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, back_node);
     const auto drain_core = mesh->worker_core_from_logical_core(sender_cores.front());
     TT_FATAL(
@@ -331,23 +361,33 @@ tt::tt_metal::ProgramDescriptor build_program(
             sender_rt.push_back(link);
             sender_rt.push_back(uint32_t(!backward));
             sender_rt.push_back(backward ? back_range : relay_range);
-            sender_rt.push_back(uint32_t(!backward || back_sender));
+            // An idle second sender is given the relay's connection, which it never opens.
+            std::vector<tt::tt_fabric::FabricNodeId> nodes = {backward ? back_node : connection_node};
+            std::vector<uint32_t> node_links = {backward ? back_links[link] : links[link]};
+            const auto& carry_sender = carry_senders[direction];
+            if (unicast_peers && (!backward || back_sender)) {
+                // The further connections, each on this link's index among its direction's links.
+                for (size_t c = 1; c < carry_sender.connections.size(); ++c) {
+                    const auto& node = carry_sender.connections[c];
+                    const auto extra_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, node);
+                    TT_FATAL(
+                        extra_links.size() > link,
+                        "relay_affine_prefix uses {} links; a carry route from SP rank {} leaves on a direction with "
+                        "{}",
+                        attrs.num_links,
+                        sp_rank,
+                        extra_links.size());
+                    nodes.push_back(node);
+                    node_links.push_back(extra_links[link]);
+                }
+            }
+            sender_rt.push_back(!backward || back_sender ? static_cast<uint32_t>(nodes.size()) : 0u);
             std::vector<uint32_t> fabric_args;
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                *mesh,
-                source_node,
-                {backward ? back_node : connection_node},
-                {backward ? back_links[link] : links[link]},
-                desc,
-                sender_kernel,
-                core,
-                fabric_args);
+                *mesh, source_node, nodes, node_links, desc, sender_kernel, core, fabric_args);
             sender_rt.append(fabric_args);
-            // Unicast: each rank this sender carries to, as its chip and mesh.
-            for (const auto& peer : backward ? predecessor_peers : successor_peers) {
-                sender_rt.push_back(static_cast<uint32_t>(peer.chip_id));
-                sender_rt.push_back(static_cast<uint32_t>(*peer.mesh_id));
-            }
+            // Unicast: per rank this sender carries to, its connection, chip and mesh.
+            sender_rt.append(carry_sender.peer_args);
             desc.kernels[sender_kernel].emplace_runtime_args(core, sender_rt);
         }
     }
