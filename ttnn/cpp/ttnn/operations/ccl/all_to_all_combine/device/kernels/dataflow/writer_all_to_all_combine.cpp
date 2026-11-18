@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -61,6 +63,7 @@ template <
     uint32_t DeviceStride,
     typename SenderType>
 inline void send_completion_credits(
+    const Noc& noc,
     std::array<SenderType, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
@@ -76,12 +79,12 @@ inline void send_completion_credits(
             ReplicateAxis,
             /*DoubleAntipodalAtomicInc=*/(Topology == tt::tt_fabric::Topology::Ring)>(
             fabric_connections, packet_header_pos, packet_header_neg, global_noc_semaphore_addr);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     } else {
         for (uint32_t device_idx = DeviceBeginIdx; device_idx < DeviceEndIdx; device_idx += DeviceStride) {
             if (device_idx == LinearizedMeshCoord) {
                 noc_semaphore_inc(global_noc_semaphore_addr, 1);
-                noc_async_atomic_barrier();
+                noc.async_atomic_barrier();
             } else if (is_configured_target<LinearizedMeshCoord, MeshRows, MeshCols, ReplicateAxis>(device_idx)) {
                 fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
                     fabric_connections,
@@ -164,17 +167,23 @@ void kernel_main() {
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
 
+    Noc noc;
+    CircularBuffer metadata_cb(metadata_cb_id);
+    CircularBuffer local_experts_cb(local_experts_cb_id);
+    CircularBuffer packet_header_cb(packet_header_cb_id);
+    CircularBuffer data_cb(data_cb_id);
+
     // 3 distinct header buffers: the bidirectional completion send fills packet_headers[1] and [2]
     // back-to-back with non-draining fabric sends, so they must not alias. get_read_ptr stays pinned
     // (nothing pops this scratch CB), so take the base once and offset each by sizeof(PACKET_HEADER_TYPE).
     volatile PACKET_HEADER_TYPE* packet_headers[3];
-    cb_reserve_back(packet_header_cb_id, 3);
-    const uint32_t packet_header_base = get_read_ptr(packet_header_cb_id);
+    packet_header_cb.reserve_back(3);
+    const uint32_t packet_header_base = packet_header_cb.get_read_ptr();
     for (uint8_t i = 0; i < 3; ++i) {
         packet_headers[i] =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_base + i * sizeof(PACKET_HEADER_TYPE));
     }
-    cb_push_back(packet_header_cb_id, 3);
+    packet_header_cb.push_back(3);
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
 
     open_direction_connections_barrier(directions, fabric_connections);
@@ -187,16 +196,16 @@ void kernel_main() {
         replicate_axis,
         num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
-    cb_wait_front(local_experts_cb_id, 1);
-    auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
+    local_experts_cb.wait_front(1);
+    auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_experts_cb.get_read_ptr());
     bool needs_barrier = false;
     noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_addr, 0);
 
     for (uint32_t t = token_start_idx; t < token_end_idx; ++t) {
-        cb_wait_front(metadata_cb_id, 1);
+        metadata_cb.wait_front(1);
         // Consumer: read the front page via get_read_ptr (get_write_ptr only coincides while depth==1).
-        const uint32_t metadata_l1_addr = get_read_ptr(metadata_cb_id);
+        const uint32_t metadata_l1_addr = metadata_cb.get_read_ptr();
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
 
         for (uint32_t e = 0; e < num_local_experts; ++e) {
@@ -204,12 +213,11 @@ void kernel_main() {
             const auto [found, k] = find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
 
             if (found) {
-                cb_wait_front(data_cb_id, 1);
-                const uint32_t src_data_l1_ptr = get_read_ptr(data_cb_id);
+                data_cb.wait_front(1);
+                const uint32_t src_data_l1_ptr = data_cb.get_read_ptr();
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx = detail::get_output_page_idx<tokens_per_device>(t, k);
-                const uint64_t output_noc_addr = output_addrgen.get_noc_addr(output_page_idx);
 
                 // figure out which device to send data to and routing
                 const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
@@ -221,9 +229,14 @@ void kernel_main() {
                 const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
 
                 if (dest_device_idx == linearized_mesh_coord) {
-                    noc_async_write(src_data_l1_ptr, output_noc_addr, data_size_bytes);
+                    noc.async_write(
+                        data_cb,
+                        output_addrgen,
+                        data_size_bytes,
+                        {.offset_bytes = 0},
+                        {.page_id = output_page_idx, .offset_bytes = 0});
                     needs_barrier = true;
-                    noc_async_writes_flushed();
+                    noc.async_writes_flushed();
                 } else {
                     if constexpr (is_1d_topology<topology>()) {
                         fabric_send_chip_unicast_noc_unicast_1d<
@@ -258,7 +271,7 @@ void kernel_main() {
                             alignment);
                     }
                 }
-                cb_pop_front(data_cb_id, 1);
+                data_cb.pop_front(1);
 
                 if constexpr (locally_reduced) {
                     break;
@@ -266,11 +279,11 @@ void kernel_main() {
             }
         }
 
-        cb_pop_front(metadata_cb_id, 1);
+        metadata_cb.pop_front(1);
     }
-    cb_pop_front(local_experts_cb_id, 1);
+    local_experts_cb.pop_front(1);
     if (needs_barrier) {
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
     // Signal completion to the other devices in the replicate group (see send_completion_credits).
@@ -284,6 +297,7 @@ void kernel_main() {
         device_begin_idx,
         device_end_idx,
         device_stride>(
+        noc,
         fabric_connections,
         packet_headers[1],
         packet_headers[2],
