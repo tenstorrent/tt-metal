@@ -226,6 +226,8 @@ TEST_F(ExplicitCqTest, DeprecatedThreadLocalSelectionStillHonoredWhenIdOmitted) 
     EXPECT_EQ(GetCurrentCommandQueueIdForThread(), 1);
     EXPECT_EQ(mesh_device->mesh_command_queue().id(), 1);
     EXPECT_EQ(mesh_device->mesh_command_queue(0).id(), 0);  // explicit id wins
+    EXPECT_EQ(mesh_device->mesh_command_queue(std::nullopt).id(), 1);
+    EXPECT_EQ(mesh_device->mesh_command_queue(std::optional<uint8_t>{0}).id(), 0);
     EXPECT_EQ(PopCurrentCommandQueueIdForThread(), 1);
 
     EXPECT_EQ(mesh_device->mesh_command_queue().id(), 0);

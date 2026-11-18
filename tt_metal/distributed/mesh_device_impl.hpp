@@ -552,15 +552,14 @@ public:
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
-    // If cq_id is not provided, the queue selected through the deprecated PushCurrentCommandQueueIdForThread is
-    // returned (command queue 0 if none). Prefer passing cq_id explicitly: TTNN and Metal-internal code always do,
-    // and the implicit selection will be removed together with the deprecated Push/Pop/Get functions.
-    MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const;
+    // The command queue id is always explicit; the deprecated thread-local selection is only consulted by the
+    // deprecated MeshDevice::mesh_command_queue(std::optional<uint8_t>) when no id is given.
+    MeshCommandQueue& mesh_command_queue(uint8_t cq_id) const;
 
-    // Same queue as mesh_command_queue() but returned as the internal
+    // Same queue as mesh_command_queue(cq_id) but returned as the internal
     // MeshCommandQueueBase, exposing dispatch-implementation methods (e.g.
     // enqueue_write_dram_core_counter) without a downcast.
-    MeshCommandQueueBase& mesh_command_queue_base(std::optional<uint8_t> cq_id = std::nullopt) const;
+    MeshCommandQueueBase& mesh_command_queue_base(uint8_t cq_id) const;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f);
