@@ -7,10 +7,12 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+// Blackhole-only: other archs' llk_api entry points reject these calls (LLK_ASSERT).
+#ifdef TRISC_UNPACK
+#include "experimental/llk_unpack_srca_forced_exp_api.h"
+#endif
 
 namespace ckernel {
-
-#if defined(ARCH_BLACKHOLE)
 
 // clang-format off
 /**
@@ -27,23 +29,8 @@ namespace ckernel {
  * | exp      | The exponent every datum takes (biased)   | uint32_t | 0 to 255    | True     |
  */
 // clang-format on
-ALWI void srca_forced_exp_bfp2(uint32_t exp) {
-#ifdef TRISC_UNPACK
-    constexpr uint32_t bfp2_b = 15;  // DataFormat::Bfp2_b
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(bfp2_b);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Force_shared_exp_RMW>(1);
-    cfg_reg_rmw_tensix<UNP0_FORCED_SHARED_EXP_shared_exp_RMW>(exp);
-#endif
-}
+ALWI void srca_forced_exp_bfp2(uint32_t exp) { UNPACK((llk_unpack_srca_forced_exp_bfp2(exp))); }
 
-ALWI void srca_forced_exp_off() {
-#ifdef TRISC_UNPACK
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Force_shared_exp_RMW>(0);
-#endif
-}
-
-#endif  // ARCH_BLACKHOLE
+ALWI void srca_forced_exp_off() { UNPACK((llk_unpack_srca_forced_exp_off())); }
 
 }  // namespace ckernel
