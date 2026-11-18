@@ -189,6 +189,31 @@ def test_buffers_are_saved_and_loaded(tp_mesh, tmp_path):
     _assert_same_shards(_model_shards(fresh.parameters()), _model_shards(model.parameters()))
 
 
+def test_a_moment_laid_out_unlike_its_parameter_is_refused(tp_mesh, tmp_path, expect_error):
+    """A moment with its TP-sharded parameter's per-device shape but labelled replicated would be saved as one device's
+    piece and loaded onto every device; save refuses it by its global shape."""
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    key = next(k for k in params if k.endswith("up/weight"))
+
+    def moments(node):
+        if isinstance(node, ttml.NamedParameters):
+            yield node
+        elif isinstance(node, dict):
+            for child in node.values():
+                yield from moments(child)
+
+    moment = next(m for m in moments(opt.get_state_dict()) if key in m)[key]
+    value = moment.get_value()
+    replicated = ttml.autograd.Tensor.from_numpy(
+        np.zeros(tuple(int(n) for n in value.shape), dtype=np.float32), ttnn.Layout.TILE, value.dtype
+    )
+    moment.set_value(replicated.get_value())
+    with expect_error(dcp.CheckpointError, r"over the mesh but its parameter .* it is not sharded as its parameter is"):
+        dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt)
+    assert not (tmp_path / "step_0000001").exists()
+
+
 def test_strict_load_names_the_mismatch(tp_mesh, tmp_path, expect_error):
     model, params, opt = fresh_tp(DIM)
     path = str(tmp_path / "step_0000001")

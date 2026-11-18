@@ -277,9 +277,10 @@ def _collect_buffers(model, root: str) -> list[LiveTensor]:
 def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTensor], dict[str, Any]]:
     """Every tensor of the optimizer's state dict as a ``LiveTensor``, and its scalars.
 
-    A state tensor keyed by a parameter name inherits that parameter's transform and live names; its per-device
-    shape must match the parameter's, the one invariant every optimizer keeps (state is created as zeros of its
-    parameter), so a mismatch means the optimizer was created before the model was sharded.
+    A state tensor keyed by a parameter name inherits that parameter's transform and live names; its per-device and
+    global shapes must match the parameter's, the invariant every optimizer keeps (state is created as zeros of its
+    parameter): a per-device mismatch means the optimizer was created before the model was sharded, a global one that
+    the state is laid out over the mesh unlike its parameter.
     """
     by_fqn = {lt.key[len("model/") :]: lt for lt in params if lt.info.role == "param"}
     live: list[LiveTensor] = []
@@ -303,6 +304,13 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                         raise CheckpointError(
                             f"{key} is {list(local_shape)} per device but its parameter {param.key} is "
                             f"{list(param.info.local_shape)}; was the optimizer created before the model was sharded?"
+                        )
+                    # Equal per-device shapes still allow a moment labelled Replicate on the parameter's TP axis: save
+                    # would write one device's piece as the whole moment and load would put it on every device.
+                    if global_shape(label, local_shape) != param.info.global_shape:
+                        raise CheckpointError(
+                            f"{key} is {list(global_shape(label, local_shape))} over the mesh but its parameter "
+                            f"{param.key} is {list(param.info.global_shape)}: it is not sharded as its parameter is"
                         )
                     transform = param.info.transform
                     prefix = "optimizer/" + "/".join(path) + "/"
