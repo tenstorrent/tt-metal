@@ -196,23 +196,6 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             out_tensor.tensor_spec().tensor_layout());
     }
     const auto output_spec = compute_output_specs(args, tensor_args);
-    const auto& output_nd_shard_spec = output_spec.memory_config().nd_shard_spec();
-    if (output_nd_shard_spec.has_value() &&
-        output_nd_shard_spec->shard_distribution_strategy == tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D &&
-        output_spec.logical_shape().volume() != 0) {
-        // The allocator only enforces this in compute_page_mapping, which the slice kernels never call, so an
-        // invalid output spec would otherwise reach the device and hang it.
-        const auto distribution = output_spec.compute_buffer_sharding_args().buffer_distribution_spec();
-        TT_FATAL(
-            distribution.has_value() && distribution->num_shards() % distribution->num_cores() == 0,
-            "Slice output ND shard spec {} is CONTIGUOUS_1D but splits the output shape {} into {} shard(s), which is "
-            "not a multiple of its {} core(s). Pass a memory_config that fits the sliced shape, or omit memory_config "
-            "to derive one from the input.",
-            *output_nd_shard_spec,
-            output_spec.logical_shape(),
-            distribution.has_value() ? distribution->num_shards() : 0,
-            distribution.has_value() ? distribution->num_cores() : 0);
-    }
     // noc_async_{read,write}_sharded walks a rank-1 ND spec one aligned page at a time, so a shard whose payload is
     // not alignment-sized would have its padding read as data (or real data skipped) once a transfer goes past the
     // shard's payload. Reject sub-aligned rank-1 shards unless every transfer provably stays inside the payload:
@@ -401,9 +384,28 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
             tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
     }
 
-    return tt::tt_metal::TensorSpec(
+    auto output_spec = tt::tt_metal::TensorSpec(
         output_tensor_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
+
+    // Creating the output buffer would also reject a CONTIGUOUS_1D spec whose shard count isn't a multiple of its
+    // nodes. Checking here first gives an error that names slice and says how to fix memory_config.
+    const auto& output_nd_shard_spec = output_spec.memory_config().nd_shard_spec();
+    if (output_nd_shard_spec.has_value() &&
+        output_nd_shard_spec->shard_distribution_strategy == tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D &&
+        output_spec.logical_shape().volume() != 0) {
+        const auto distribution = output_spec.compute_buffer_sharding_args().buffer_distribution_spec();
+        TT_FATAL(
+            distribution.has_value() && distribution->num_shards() % distribution->num_cores() == 0,
+            "Slice output ND shard spec {} is CONTIGUOUS_1D but splits the output shape {} into {} shard(s), which is "
+            "not a multiple of its {} core(s). Pass a memory_config that fits the sliced shape, or omit memory_config "
+            "to derive one from the input.",
+            *output_nd_shard_spec,
+            output_spec.logical_shape(),
+            distribution.has_value() ? distribution->num_shards() : 0,
+            distribution.has_value() ? distribution->num_cores() : 0);
+    }
+    return output_spec;
 }
 
 Tensor SliceDeviceOperation::create_output_tensors(

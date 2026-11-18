@@ -201,6 +201,19 @@ void validate_buffer_parameters(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
 
+        // Kernels compute a CONTIGUOUS_1D shard's bank as shard_id / (num_shards / num_cores), which is only valid for
+        // a whole number of shards per node. The spec itself may describe an uneven count, as ops compare candidates.
+        if (buffer_distribution_spec.has_value() &&
+            buffer_distribution_spec->shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D &&
+            buffer_distribution_spec->num_shards() != 0) {
+            TT_FATAL(
+                buffer_distribution_spec->num_shards() % buffer_distribution_spec->num_cores() == 0,
+                "CONTIGUOUS_1D distribution requires the number of shards ({}) to be a multiple of the number of "
+                "nodes ({})",
+                buffer_distribution_spec->num_shards(),
+                buffer_distribution_spec->num_cores());
+        }
+
         // Every shard core must own a bank of this buffer type. Nothing else on the allocation path
         // checks this: the allocator is handed a shard *count*, not the coordinates, so an invalid
         // core survives construction and is only caught later by whichever op happens to resolve a

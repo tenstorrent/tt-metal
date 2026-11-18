@@ -12,6 +12,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -602,4 +603,19 @@ TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
 
     const auto single_page_shard = make_spec({8, 1}, {1, 1});
     EXPECT_EQ(single_page_shard.contiguous_page_stride(), 1u);
+}
+
+// CONTIGUOUS_1D needs a whole number of shards per node; creating a buffer with an uneven count must fatal, before
+// kernels or host transfers use it.
+TEST_F(BufferDistributionSpecFixture, ContiguousBufferRequiresUniformShardsPerNode) {
+    const BufferDistributionSpec spec(
+        Shape{7, 1},  // 7 shards over 2 nodes
+        Shape{1, 1},
+        NodeRangeSet(NodeRange({0, 0}, {1, 0})),
+        ShardOrientation::ROW_MAJOR,
+        ShardDistributionStrategy::CONTIGUOUS_1D);
+    EXPECT_ANY_THROW(distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 7 * 64},
+        distributed::DeviceLocalBufferConfig{.page_size = 64, .buffer_type = BufferType::L1, .sharding_args = spec},
+        mesh_device_.get()));
 }
