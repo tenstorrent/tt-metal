@@ -132,9 +132,7 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
         });
     }
     static std::unordered_map<int, size_t> next_cpu_per_numa_node = {};
-    // Workers placed per CPU. A node with no allowed CPU takes CPUs from the allowed ones, which other nodes' lists
-    // hold too, so each pick is the least-used CPU of the list: its workers then avoid the CPUs other nodes' workers
-    // took.
+    // Workers placed per CPU: nodes with no allowed CPU share the allowed list, so picks skip CPUs already taken.
     static std::unordered_map<uint32_t, uint32_t> workers_per_cpu = {};
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
@@ -163,7 +161,7 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
         for (const uint32_t cpu : cpu_cores_on_node) {
             least_used = std::min(least_used, workers_per_cpu[cpu]);
         }
-        // Round robin over the node's CPUs, skipping those with more workers than the least-used one.
+        // Round robin among the least-used CPUs.
         size_t& next = next_cpu_per_numa_node[numa_node];
         for (size_t i = 0;; i++) {
             const size_t index = (next + i) % cpu_cores_on_node.size();
