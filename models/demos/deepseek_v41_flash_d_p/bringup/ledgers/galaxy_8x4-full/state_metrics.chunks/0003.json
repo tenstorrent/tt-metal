@@ -3513,5 +3513,9 @@
   "device_ms_total_p32768_nonlast": 82.08,
   "steady_wall_ms_p262144": 110.7,
   "steady_wall_ms_p32768": 105.9
+ },
+ "X.7": {
+  "device_ms_total_p145408_nonlast": 82.21,
+  "op_rows_p145408_nonlast": 794
  }
 }

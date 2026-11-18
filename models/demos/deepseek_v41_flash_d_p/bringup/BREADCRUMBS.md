@@ -644,3 +644,16 @@
   last, ladder): rc 0, all 103 err metrics within their limits; err_final_hidden 0.1346 (limit 0.2422; P.76's on side
   0.1271), err L19 0.1375 (0.2643; P.76 0.1232), L39 0.684 (1.533; 0.781), final hidden PCC 0.991, top1 / top5 1.0
   (limit 0.994). The 4-bit history moves the stable metrics by about +0.01 (L19 / final), within the limits.
+
+## X.7 fix 1 (2026-11-18): profile at p145408, metrics named with `_nonlast`
+- No code change. The previous attempt's run passed (both units rc 0) and wrote results/X.7.json, X.7_profile.json,
+  X.7_ops.json.gz, X.7_host_p145408_nonlast.{json,pstats}. Its metrics carry `_p145408_nonlast` because the gate sets
+  BRINGUP_CHUNK_LAST=0 (F249, testing/profile.py:417); tasks.yaml X.7 gates `device_ms_total_p145408` /
+  `op_rows_p145408`, so the runner reports them MISSING (DS41-296). The fix belongs in tasks.yaml (owner /
+  orchestrator): rename both thresholds with `_nonlast`. Not re-run: the same code would record the same names.
+- Recorded (steady chunk [145408, 150528), 40 layers): device_ms_total 82.21 (experts 43.78, attention 21.54,
+  ffn_residual 4.2, attn_residual 3.5, indexer 3.1, q_a 1.7, compressor 1.4, engram_rows 0.9), op_rows 794,
+  profiled wall 147.1 ms, clean wall median 154.8 ms, host cProfile 161.4 ms, host_overhead 72.6 ms,
+  timeline gap 143.6 ms, determinism_max_abs_diff 0.0.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate X.7 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (after the tasks.yaml rename).

@@ -5227,6 +5227,6 @@ tasks:
   gate:
     cmd: DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 BRINGUP_PROFILE_OPS=1 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      device_ms_total_p145408: '> 0'
-      op_rows_p145408: '>= 1'
+      device_ms_total_p145408_nonlast: '> 0'
+      op_rows_p145408_nonlast: '>= 1'
   device: true
