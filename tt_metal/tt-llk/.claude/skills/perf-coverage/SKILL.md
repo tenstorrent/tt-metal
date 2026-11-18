@@ -46,7 +46,10 @@ fixed inside a `PerfConfig` call: read the code for those (`perf-test`,
   `_quasar`. One lumped wrapper cannot pair with several functional families;
   split it.
 - `CROSS_ARCH_FUNCTION_EXCEPTIONS` pairs a function that lives in a different
-  module on the other side.
+  module on the other side. Use it only for that. Two modules of one op whose
+  stems differ (`pack_dest_bank` against `pack_l1_acc`) are a naming bug: rename
+  the module, with its kernel source, `perf_split_costs*.json` entries and a
+  `test_name_aliases` entry in `test_schemas.py`.
 
 **Axes**
 
@@ -83,6 +86,7 @@ and reloads already-imported modules. Pass Quasar paths as
    | Functional-only value | perf has no tilize | share the sweep (`perf-test`, "Python") |
    | Functional-only axis that changes the MOP | `num_faces` swept only in functional | share it; perf must measure each MOP functional checks |
    | Perf-only packaging | a shared sweep multiplied by the run types is too big | narrow in the perf module, as below |
+   | Same axis, different spelling | `math_op` against `mathop`, `reduce_pool` against `pool_type` | rename in the test (`perf-test`, "Canonical axis names"); never alias in the comparer |
    | Documented perf generator | Quasar `PERF_TILE_SIZES`, `DestSync.Half` | keep; it is the architecture's documented narrowing |
    | Functional-only axis | `runtime(...)` axes such as `tile_indices`, edge stimuli | keep; not a separate MOP |
 
