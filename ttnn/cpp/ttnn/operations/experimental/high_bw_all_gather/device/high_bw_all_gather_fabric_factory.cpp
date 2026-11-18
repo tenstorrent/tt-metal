@@ -562,7 +562,9 @@ GatherPlan build_gather_plan(
         return core.y >= middle_y;
     });
     // Interleaved input: one per link of a hop. Any other input (the ND-sharded KV cache): none, the link workers write
-    // the own shard from the chunks they read for sending.
+    // the own shard from the chunks they read for sending. The write goes where the gather has slack: the ND-sharded
+    // gather is bound by the reader's page reads (NoC0), so the sender writes on NoC1; the interleaved gather is bound
+    // by the sender, so copy cores write (sender: ~4% slower, reader: ~2%; copy cores for ND: ~3% slower).
     const uint32_t num_local_copy_cores = input_interleaved ? plan.links_per_hop : 0;
     std::vector<std::set<std::pair<size_t, size_t>>> link_worker_cores_of_chip(num_chips);
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
