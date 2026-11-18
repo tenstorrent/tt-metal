@@ -13,10 +13,9 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -56,14 +55,14 @@ struct AllToAllCombineDeviceOperation {
     struct AllToAllCombineFromSparse {
         // Builds the entire workload in one call (cache miss):
         //   1. Allocates the two GlobalSemaphores used by the kernels (init / cross-device)
-        //      and parks them on `WorkloadDescriptor::semaphores` so the framework keeps
+        //      and parks them on `MeshWorkloadArtifacts::global_semaphores` so the framework keeps
         //      them alive for the cached workload's lifetime.
         //   2. Runs the cross-device Synchronize barrier once per workload.
-        //   3. Loops `tensor_coords.coords()` and pushes a per-coord ProgramDescriptor
+        //   3. Loops `tensor_coords.coords()` and pushes a per-coord program
         //      into `programs`.  Each program depends on its mesh coordinate (fabric
-        //      routing / DEST_CHIP_ID define / linearized mesh index), so descriptors
+        //      connections / linearized mesh index), so programs
         //      cannot be shared across coords.
-        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,

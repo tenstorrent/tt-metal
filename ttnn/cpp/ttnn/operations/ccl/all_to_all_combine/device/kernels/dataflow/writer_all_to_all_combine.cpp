@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/global_semaphore.h"
+#include "experimental/kernel_args.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
@@ -102,25 +104,20 @@ inline void send_completion_credits(
 }  // namespace detail
 
 void kernel_main() {
-    constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t local_experts_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t data_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t batch_size = get_compile_time_arg_val(4);
-    constexpr uint32_t seq_size = get_compile_time_arg_val(5);
-    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(6);
-    constexpr uint32_t num_local_experts = get_compile_time_arg_val(7);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(8);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(9);
-    constexpr uint32_t data_size_bytes = get_compile_time_arg_val(10);  // hidden dim * datum size
-    constexpr uint32_t alignment = get_compile_time_arg_val(11);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(12);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(13);  // ew_dim
-    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(14);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(15);
-    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(16));
-    constexpr uint32_t locally_reduced = get_compile_time_arg_val(17);
-    constexpr auto output_args = TensorAccessorArgs<18>();
+    constexpr uint32_t batch_size = get_arg(args::batch_size);
+    constexpr uint32_t seq_size = get_arg(args::seq_size);
+    constexpr uint32_t selected_experts_k = get_arg(args::selected_experts_k);
+    constexpr uint32_t num_local_experts = get_arg(args::num_local_experts);
+    constexpr uint32_t num_devices = get_arg(args::num_devices);
+    constexpr uint32_t src_chip_id = get_arg(args::src_chip_id);
+    constexpr uint32_t data_size_bytes = get_arg(args::data_size_bytes);  // hidden dim * datum size
+    constexpr uint32_t alignment = get_arg(args::alignment);
+    constexpr uint32_t mesh_rows = get_arg(args::mesh_rows);
+    constexpr uint32_t mesh_cols = get_arg(args::mesh_cols);  // ew_dim
+    constexpr uint32_t fabric_max_packet_size_bytes = get_arg(args::fabric_max_packet_size_bytes);
+    constexpr uint32_t linearized_mesh_coord = get_arg(args::linearized_mesh_coord);
+    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_arg(args::topology));
+    constexpr uint32_t locally_reduced = get_arg(args::locally_reduced);
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -153,40 +150,53 @@ void kernel_main() {
     constexpr uint8_t Num_Directions = 4;
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
-    const std::array<bool, Num_Directions> directions = DIRECTIONS;
+    // Fabric connections in {East, West, North, South} order; a direction without a neighbor has no connection.
+    const std::array<FabricConnectionBindingToken, Num_Directions> fabric_bindings = {
+        fabric::east, fabric::west, fabric::north, fabric::south};
+    std::array<bool, Num_Directions> directions;
+    for (uint32_t i = 0; i < Num_Directions; i++) {
+        directions[i] = tt::tt_fabric::has_fabric_connection(fabric_bindings[i]);
+    }
 
-    size_t rt_arg_count = 0;
-    const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
-    const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
-    const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
-    const uint32_t token_start_idx = get_arg_val<uint32_t>(rt_arg_count++);
-    const uint32_t token_end_idx = get_arg_val<uint32_t>(rt_arg_count++);
+    const uint32_t token_start_idx = get_arg(args::token_start_idx);
+    const uint32_t token_end_idx = get_arg(args::token_end_idx);
+    experimental::GlobalSemaphore global_semaphore(global_sem::global_semaphore);
+    experimental::GlobalSemaphore init_semaphore(global_sem::init_semaphore);
 
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
-    open_direction_connections_async(directions, fabric_connections, rt_arg_count);
+    for (uint32_t i = 0; i < Num_Directions; i++) {
+        if (directions[i]) {
+            fabric_connections[i] = WorkerToFabricEdmSender::build_from_binding(fabric_bindings[i]);
+            fabric_connections[i].open_start();
+        }
+    }
 
-    const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
+    const auto output_addrgen = TensorAccessor(tensor::output);
 
     Noc noc;
-    CircularBuffer metadata_cb(metadata_cb_id);
-    CircularBuffer local_experts_cb(local_experts_cb_id);
-    CircularBuffer packet_header_cb(packet_header_cb_id);
-    CircularBuffer data_cb(data_cb_id);
+    DataflowBuffer dfb_metadata(dfb::metadata);
+    DataflowBuffer dfb_local_experts(dfb::local_experts);
+    DataflowBuffer dfb_packet_header(dfb::packet_header);
+    DataflowBuffer dfb_data(dfb::data);
 
     // 3 distinct header buffers: the bidirectional completion send fills packet_headers[1] and [2]
     // back-to-back with non-draining fabric sends, so they must not alias. get_read_ptr stays pinned
-    // (nothing pops this scratch CB), so take the base once and offset each by sizeof(PACKET_HEADER_TYPE).
+    // (nothing pops this scratch DFB), so take the base once and offset each by sizeof(PACKET_HEADER_TYPE).
     volatile PACKET_HEADER_TYPE* packet_headers[3];
-    packet_header_cb.reserve_back(3);
-    const uint32_t packet_header_base = packet_header_cb.get_read_ptr();
+    dfb_packet_header.reserve_back(3);
+    const uint32_t packet_header_base = dfb_packet_header.get_read_ptr();
     for (uint8_t i = 0; i < 3; ++i) {
         packet_headers[i] =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_base + i * sizeof(PACKET_HEADER_TYPE));
     }
-    packet_header_cb.push_back(3);
-    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
+    dfb_packet_header.push_back(3);
+    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore.address());
 
-    open_direction_connections_barrier(directions, fabric_connections);
+    for (uint32_t i = 0; i < Num_Directions; i++) {
+        if (directions[i]) {
+            fabric_connections[i].open_finish();
+        }
+    }
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
@@ -196,16 +206,16 @@ void kernel_main() {
         replicate_axis,
         num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
-    local_experts_cb.wait_front(1);
-    auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_experts_cb.get_read_ptr());
+    dfb_local_experts.wait_front(1);
+    auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb_local_experts.get_read_ptr());
     bool needs_barrier = false;
-    noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_addr, 0);
+    init_semaphore.wait(replicate_group_devices - 1);
+    init_semaphore.set(0);
 
     for (uint32_t t = token_start_idx; t < token_end_idx; ++t) {
-        metadata_cb.wait_front(1);
+        dfb_metadata.wait_front(1);
         // Consumer: read the front page via get_read_ptr (get_write_ptr only coincides while depth==1).
-        const uint32_t metadata_l1_addr = metadata_cb.get_read_ptr();
+        const uint32_t metadata_l1_addr = dfb_metadata.get_read_ptr();
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
 
         for (uint32_t e = 0; e < num_local_experts; ++e) {
@@ -213,8 +223,8 @@ void kernel_main() {
             const auto [found, k] = find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
 
             if (found) {
-                data_cb.wait_front(1);
-                const uint32_t src_data_l1_ptr = data_cb.get_read_ptr();
+                dfb_data.wait_front(1);
+                const uint32_t src_data_l1_ptr = dfb_data.get_read_ptr();
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx = detail::get_output_page_idx<tokens_per_device>(t, k);
@@ -230,7 +240,7 @@ void kernel_main() {
 
                 if (dest_device_idx == linearized_mesh_coord) {
                     noc.async_write(
-                        data_cb,
+                        dfb_data,
                         output_addrgen,
                         data_size_bytes,
                         {.offset_bytes = 0},
@@ -271,7 +281,7 @@ void kernel_main() {
                             alignment);
                     }
                 }
-                data_cb.pop_front(1);
+                dfb_data.pop_front(1);
 
                 if constexpr (locally_reduced) {
                     break;
@@ -279,13 +289,13 @@ void kernel_main() {
             }
         }
 
-        metadata_cb.pop_front(1);
+        dfb_metadata.pop_front(1);
     }
-    local_experts_cb.pop_front(1);
+    dfb_local_experts.pop_front(1);
     if (needs_barrier) {
         noc.async_write_barrier();
     }
-    const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
+    const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore.address());
     // Signal completion to the other devices in the replicate group (see send_completion_credits).
     detail::send_completion_credits<
         linearized_mesh_coord,
@@ -305,13 +315,16 @@ void kernel_main() {
         dest_chip_ids,
         dest_mesh_ids);
 
-    close_direction_connections(directions, fabric_connections);
+    for (uint32_t i = 0; i < Num_Directions; i++) {
+        if (directions[i]) {
+            fabric_connections[i].close();
+        }
+    }
 
-    auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
     // Credits expected: Ring = replicate_group_devices (antipodal doubled); Linear = replicate_group_devices - 1;
     // 2D unicast = 1 self-inc + (replicate_group_devices - 1) remotes = replicate_group_devices.
     constexpr uint32_t expected_credits =
         (topology == tt::tt_fabric::Topology::Linear) ? (replicate_group_devices - 1) : replicate_group_devices;
-    noc_semaphore_wait(semaphore_ptr, expected_credits);
-    noc_semaphore_set(semaphore_ptr, 0);
+    global_semaphore.wait(expected_credits);
+    global_semaphore.set(0);
 }
