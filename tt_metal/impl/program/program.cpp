@@ -1236,6 +1236,12 @@ KernelGroup::KernelGroup(
 
     kernel_config.exit_erisc_kernel() = false;
     kernel_config.reload_table_addr() = program.get_reload_table_addr(this->core_ranges);
+    const auto& rtoptions = MetalContext::instance(context_id_).rtoptions();
+    TT_FATAL(
+        kernel_config.reload_table_addr() == 0 || !rtoptions.get_fast_dispatch() ||
+            rtoptions.get_brisc_firmware_variant() != llrt::BriscFirmwareVariant::Blaze,
+        "A reload table with TT_METAL_FW_SRC_BRISC=blaze requires slow dispatch: under fast dispatch the walk would "
+        "load images into a kernel-config ring slot sized for the first image only");
     kernel_config.local_cb_mask() = local_cb_mask;
     kernel_config.min_remote_cb_start_index() = min_remote_cb_start_index;
     this->go_msg.view().signal() = dev_msgs::RUN_MSG_GO;

@@ -2032,7 +2032,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 TT_FATAL(
                     variant == "blaze", "Unsupported TT_METAL_FW_SRC_BRISC value '{}'; supported values: blaze", value);
                 this->brisc_firmware_variant = BriscFirmwareVariant::Blaze;
-                this->set_disable_precompiled_fw(true);
             }
             break;
         }
@@ -2041,19 +2040,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Absolute or working-directory-relative header supplied by the selected BRISC firmware variant.
         // Default: unset
         // Usage: export TT_METAL_FW_HEADER_BRISC=/path/to/blaze/firmware/runtime_reload.h
-        case EnvVarID::TT_METAL_FW_HEADER_BRISC: {
-            const std::string header = trim_copy(value);
-            if (!header.empty()) {
-                const auto path = std::filesystem::absolute(header).lexically_normal();
-                TT_FATAL(
-                    std::filesystem::is_regular_file(path),
-                    "TT_METAL_FW_HEADER_BRISC '{}' is not a file",
-                    path.string());
-                TT_FATAL(path.filename() == "runtime_reload.h", "TT_METAL_FW_HEADER_BRISC must name runtime_reload.h");
-                this->brisc_firmware_header = path.string();
-            }
-            break;
-        }
+        case EnvVarID::TT_METAL_FW_HEADER_BRISC: this->brisc_firmware_header = trim_copy(value); break;
 
         // TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US
         // Period in microseconds between dispatch_s DEVICE_PRINT stall-detection passes.
@@ -2114,11 +2101,7 @@ void RunTimeOptions::InitializeFromEnvVars() {
         }
     }
 
-    if (this->brisc_firmware_variant == BriscFirmwareVariant::Blaze) {
-        TT_FATAL(!this->brisc_firmware_header.empty(), "TT_METAL_FW_SRC_BRISC=blaze requires TT_METAL_FW_HEADER_BRISC");
-    } else {
-        TT_FATAL(this->brisc_firmware_header.empty(), "TT_METAL_FW_HEADER_BRISC requires TT_METAL_FW_SRC_BRISC=blaze");
-    }
+    this->set_brisc_firmware_variant(this->brisc_firmware_variant, this->brisc_firmware_header);
 
     // Validate emulated mode configuration
     if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
@@ -2637,6 +2620,21 @@ void RunTimeOptions::set_experimental_noc_debug_dump_enabled(bool enabled) {
         profiler_noc_events_enabled = false;
         experimental_noc_debug_dump_enabled = false;
     }
+}
+
+void RunTimeOptions::set_brisc_firmware_variant(BriscFirmwareVariant variant, const std::string& header) {
+    if (variant == BriscFirmwareVariant::Blaze) {
+        TT_FATAL(!header.empty(), "TT_METAL_FW_SRC_BRISC=blaze requires TT_METAL_FW_HEADER_BRISC");
+        const auto path = std::filesystem::absolute(header).lexically_normal();
+        TT_FATAL(std::filesystem::is_regular_file(path), "TT_METAL_FW_HEADER_BRISC '{}' is not a file", path.string());
+        TT_FATAL(path.filename() == "runtime_reload.h", "TT_METAL_FW_HEADER_BRISC must name runtime_reload.h");
+        this->brisc_firmware_header = path.string();
+        this->set_disable_precompiled_fw(true);
+    } else {
+        TT_FATAL(header.empty(), "TT_METAL_FW_HEADER_BRISC requires TT_METAL_FW_SRC_BRISC=blaze");
+        this->brisc_firmware_header.clear();
+    }
+    this->brisc_firmware_variant = variant;
 }
 
 void RunTimeOptions::resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane) {

@@ -309,6 +309,21 @@ void ConfigureProgramWithoutLaunch(
         program.impl().finalize_offsets(device);
     }
     log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] finalized", device->id());
+    // A capture copies the kernel-config block up to the end of a core's binaries (CaptureKernelConfig), so
+    // nothing may follow them, and nothing the program needs may live outside the block.
+    {
+        const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
+        const uint32_t tensix = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const auto& cfg = program.impl().get_program_config(tensix);
+        TT_FATAL(
+            program.impl().get_program_config_sizes()[tensix] == cfg.kernel_text_offset + cfg.kernel_text_size,
+            "Kernel binaries must be the last region of the kernel config block: a reload capture copies up to "
+            "their end");
+        TT_FATAL(
+            cfg.cross_node_dfb_offset == REMOTE_DFB_OFFSET_NONE && cfg.prefetcher_pipe_offset == REMOTE_DFB_OFFSET_NONE,
+            "A reload capture cannot carry CrossNodeDFB or PrefetcherPipe state, which lives outside the kernel "
+            "config block");
+    }
     ConfigureDeviceWithProgram(*device, program, /*force_slow_dispatch=*/false, kernel_config_buffer);
     log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] configured", device->id());
     WriteRuntimeArgsToDevice(*device, program, /*force_slow_dispatch=*/false, kernel_config_buffer);
