@@ -1889,8 +1889,11 @@ class TPGatedDeltaNet:
         )
         if self._gdn_spec_verify:
             W = self.qkvz_dim_tp + 2 * Nv
-            # One user: the op call is padded to a whole tile row of rows that are off (63 us against 92 at T=12).
-            self._spec_Tp = tpc.TILE_SIZE if B == 1 else T
+            # Rows per user of the op call, padded with rows that are off. One user: a whole tile row (63 us against
+            # 92 at T=12). Two users: 16 rows each. The ops rounding depends on a users row offset inside a 16-row
+            # tile face (measured on model data: 2 x 12, 4 x 8 and 8 x 4 give users different last bits for the same
+            # inputs, 2 x 16 does not), and identical users must stay identical.
+            self._spec_Tp = tpc.TILE_SIZE if B == 1 else (16 if B == 2 and T <= 16 else T)
             self._spec_prev_rows = ttnn.zeros(
                 [1, B * self._spec_Tp, W],
                 device=self.mesh,
@@ -2118,11 +2121,20 @@ class TPGatedDeltaNet:
 
         if Tp != T:
             # Pad rows hold SPEC_GATE_OFF in every column: gates off, so they leave the state as it is.
-            rows = _replace(rows, ttnn.pad(rows, [(0, 0), (0, B * (Tp - T)), (0, 0)], SPEC_GATE_OFF))
+            if B > 1:
+                rows = _replace(rows, ttnn.reshape(rows, (B, T, rows.shape[-1])))
+            rows = _replace(rows, ttnn.pad(rows, [(0, 0), (0, Tp - T), (0, 0)], SPEC_GATE_OFF))
+            if B > 1:
+                rows = _replace(rows, ttnn.reshape(rows, (1, B * Tp, rows.shape[-1])))
         ttnn.copy(rows, self._spec_prev_rows)
         ttnn.deallocate(rows)
         gated = op(self._spec_prev_rows, history(self._verify_win_buf), self._spec_scr_state)
-        if Tp != T and B * Tp != bucket:
+        if Tp != T and B > 1:
+            V = gated.shape[-1]
+            gated = _replace(gated, ttnn.reshape(gated, (B, Tp, V)))
+            gated = _replace(gated, ttnn.slice(gated, (0, 0, 0), (B, T, V), memory_config=mc))
+            gated = _replace(gated, ttnn.reshape(gated, (1, R, V)))
+        elif Tp != T and Tp != bucket:
             gated = _replace(gated, ttnn.slice(gated, (0, 0, 0), (1, R, gated.shape[-1]), memory_config=mc))
         else:
             R = B * Tp
