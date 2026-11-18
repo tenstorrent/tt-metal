@@ -70,22 +70,47 @@ struct ReaderScratch {
 
 // Work item `work` is tile row work % tile_rows of channel block work / tile_rows. With defer_first_rows each core
 // handles a block's tile row 0, which may wait for the predecessor's rows, after the block's other rows, so no block
-// is visited twice; the reader, compute and writer must all walk this order.
+// is visited twice. On a rank holding a split interval, the tail's first tile row `split_row` (nonzero) waits for the
+// predecessor's rows instead of row 0 (which starts from the caller's history): it is deferred the same way, ahead of a
+// deferred row 0. Compute uses only a work item's block, so it may walk the order without the split row; the reader and
+// writer must walk the same order.
+template <typename Process>
+inline void for_each_work_item(
+    uint32_t first,
+    uint32_t count,
+    uint32_t tile_rows,
+    bool defer_first_rows,
+    uint32_t split_row,
+    const Process& process) {
+    const uint32_t end = first + count;
+    for (uint32_t segment_start = first; segment_start < end;) {
+        const uint32_t block_start = segment_start / tile_rows * tile_rows;
+        const uint32_t block_end = block_start + tile_rows;
+        const uint32_t segment_end = block_end < end ? block_end : end;
+        const bool defer_first = defer_first_rows && segment_start == block_start;
+        const uint32_t split = block_start + split_row;
+        const bool defer_split = split_row != 0 && split >= segment_start && split < segment_end;
+        // The segment's other rows in order, then the deferred split row, then the deferred row 0. One call site keeps
+        // `process` inlined.
+        const uint32_t deferred_begin = segment_end - defer_split - defer_first;
+        for (uint32_t index = segment_start; index < segment_end; ++index) {
+            uint32_t work = segment_start;
+            if (index < deferred_begin) {
+                work = index + defer_first;
+                work += defer_split && work >= split;
+            } else if (defer_split && index == deferred_begin) {
+                work = split;
+            }
+            process(work);
+        }
+        segment_start = segment_end;
+    }
+}
+
 template <typename Process>
 inline void for_each_work_item(
     uint32_t first, uint32_t count, uint32_t tile_rows, bool defer_first_rows, const Process& process) {
-    const uint32_t end = first + count;
-    uint32_t segment_start = first;
-    for (uint32_t index = first; index < end; ++index) {
-        const uint32_t block_end = (segment_start / tile_rows + 1) * tile_rows;
-        const uint32_t segment_end = block_end < end ? block_end : end;
-        const bool defer = defer_first_rows && segment_start % tile_rows == 0;
-        // A deferred segment runs rows [1, n) first, then its row 0.
-        process(defer ? (index + 1 == segment_end ? segment_start : index + 1) : index);
-        if (index + 1 == segment_end) {
-            segment_start = segment_end;
-        }
-    }
+    for_each_work_item(first, count, tile_rows, defer_first_rows, 0, process);
 }
 
 // Fabric exchange buffer pages. The predecessor writes rows [predecessor_page, +3) and the final segment's owner

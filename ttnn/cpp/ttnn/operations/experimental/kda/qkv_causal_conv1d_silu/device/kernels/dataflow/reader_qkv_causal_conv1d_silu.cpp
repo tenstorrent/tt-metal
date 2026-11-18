@@ -275,5 +275,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         previous_work = work;
         parity ^= 1;
     };
-    for_each_work_item(wi_start, wi_count, Mt, exchange, process);
+    // The split row waits for the predecessor's rows only with the fabric exchange; the writer derives the same row.
+    const uint32_t split_row = exchange ? local_split_row / tt::constants::TILE_HEIGHT : 0;
+    for_each_work_item(wi_start, wi_count, Mt, exchange, split_row, process);
 }

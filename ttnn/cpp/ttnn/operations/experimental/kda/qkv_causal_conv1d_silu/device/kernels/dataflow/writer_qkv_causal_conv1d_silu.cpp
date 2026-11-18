@@ -39,6 +39,9 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
     DataflowBuffer output(dfb::output);
     Noc noc;
 
+    // The reader's order of work items: a split rank's tail-start row waits for the predecessor (see
+    // for_each_work_item).
+    uint32_t split_row = 0;
     // With the fabric exchange, stage this core's share of the rows the exchange core sends, channel tiles
     // [ct_start, ct_start + ct_count) of this rank's outgoing rows and, on the final segment's owner, its end rows.
     // The writer has nothing to write until compute's first output, so staging first does not delay the convolution.
@@ -54,6 +57,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
             const uint32_t offset = base - scratch_base;
 
             const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, base);
+            split_row = interval.local_split ? interval.head_rows / tt::constants::TILE_HEIGHT : 0;
             uint32_t source_rows[StagingScratch::rows];
             for (uint32_t i = 0; i < history_rows; ++i) {
                 source_rows[i] = interval.outgoing_rows_begin() + i;
@@ -112,6 +116,14 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
         Semaphore staged(sem::staged);
         staged.up(noc, exchange_core_x, exchange_core_y, 1);
         noc.async_atomic_barrier();
+        if (staged_ct_count == 0) {
+            // No rows to stage: read the chronology for the order alone, after releasing the exchange core.
+            Scratchpad<uint32_t> scratch(scratch::staging);
+            const uint32_t base =
+                align_up(local_mem::detail::AddressAccess::address(scratch.local_mem()), read_alignment);
+            const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, base);
+            split_row = interval.local_split ? interval.head_rows / tt::constants::TILE_HEIGHT : 0;
+        }
     }
 
     const uint32_t tile_bytes = output.get_entry_size();
@@ -139,5 +151,5 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
             }
         }
     };
-    for_each_work_item(wi_start, wi_count, Mt, exchange, process);
+    for_each_work_item(wi_start, wi_count, Mt, exchange, split_row, process);
 }
