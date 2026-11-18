@@ -83,6 +83,8 @@
   "perf_sum_reduce_scalar": 18.9,
   "perf_top32_rm": 38.8,
   "perf_topk_pack_supplied_indices": 38.3,
+  "perf_topk_xl": 155.9,
+  "perf_topk_xl_split": 60.7,
   "perf_transpose_dest": 0.4,
   "perf_unpack_A_custom": 2.2,
   "perf_unpack_a_bcast_eltwise": 0.0,
