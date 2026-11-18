@@ -27,75 +27,54 @@ constexpr uint16_t NOC_COUNTERS_MAX_PAIRS = 16;
     (defined(NOC_COUNTERS_OPEN) || defined(NOC_COUNTERS_CLOSE))
 #define NOC_COUNTERS_CAPTURE 1
 
-#include <array>
-
 #include "internal/profiler/ts_data_marker.hpp"
-#include "perf_counters/noc_counters_inventory.h"
+#include "perf_counters/noc_counters_hw.h"
 
 namespace kernel_profiler {
 namespace noc_counters {
 
 constexpr uint32_t kGroups = PROFILE_NOC_COUNTERS;
-constexpr auto kRegs = llk::perf::noc::selected_regs<kGroups>();
-constexpr uint32_t kPerNoc = kRegs.size();
-constexpr uint32_t kTotal = kPerNoc * llk::perf::noc::NIU_NOCS;
+constexpr uint32_t kTotal = llk::perf::noc::value_count<kGroups>();
 constexpr uint32_t kPairs = kTotal / 2;
 constexpr uint32_t kReservedWords = (1 + kPairs) * TS_DATA_MARKER_WORDS;
 static_assert(kTotal % 2 == 0, "counters are emitted in pairs");
 static_assert(kPairs <= NOC_COUNTERS_MAX_PAIRS, "pair ids end at 9116");
 
-// Word offset of every counter from the NoC 0 status file, NoC 0 counters first.
-constexpr auto kOffsets = []() {
-    std::array<uint16_t, kTotal> out{};
-    for (uint32_t i = 0; i < kTotal; i++) {
-        out[i] = (i / kPerNoc) * (llk::perf::noc::NIU_NOC_STRIDE / 4) + kRegs[i % kPerNoc];
-    }
-    return out;
-}();
-
-inline __attribute__((always_inline)) uint32_t read_counter(uint32_t i) {
-    return *reinterpret_cast<volatile uint32_t*>(llk::perf::noc::NIU_STATUS_BASE + kOffsets[i] * 4);
-}
-
 }  // namespace noc_counters
 }  // namespace kernel_profiler
 
-// The start values live in the firmware, which the BRISC kernel links against.
+// The start values live in the firmware, which the BRISC kernel links against; end() turns them into the deltas.
 #if defined(FW_BUILD)
-uint32_t noc_counters_begin_values[kernel_profiler::noc_counters::kTotal] __attribute__((used));
+uint32_t noc_counters_values[kernel_profiler::noc_counters::kTotal] __attribute__((used));
 #else
-extern uint32_t noc_counters_begin_values[kernel_profiler::noc_counters::kTotal];
+extern uint32_t noc_counters_values[kernel_profiler::noc_counters::kTotal];
 #endif
 
 namespace kernel_profiler {
 namespace noc_counters {
 
 #if defined(NOC_COUNTERS_OPEN)
-__attribute__((noinline)) void begin() {
-    for (uint32_t i = 0; i < kTotal; i++) {
-        noc_counters_begin_values[i] = read_counter(i);
-    }
-}
+__attribute__((noinline)) void begin() { llk::perf::noc::capture<kGroups>(noc_counters_values, false); }
 #endif
 
 #if defined(NOC_COUNTERS_CLOSE)
 // Holds back room for the markers so a kernel that fills the buffer does not drop them.
 inline __attribute__((always_inline)) void reserve() { stackSize += kReservedWords; }
 
-// One header marker and kPairs pair markers behind one room check and one timestamp; the counters are read as the
-// pairs are written.
+// One header marker and kPairs pair markers behind one room check and one timestamp.
 __attribute__((noinline)) void end() {
     stackSize -= kReservedWords;
     // The firmware marks a launch that runs no kernel on this core as invalid, and such a launch publishes nothing.
     if (get_profiler_zone_invalid() || !bufferHasRoom(kReservedWords - 1)) {
         return;
     }
+    llk::perf::noc::capture<kGroups>(noc_counters_values, true);
     const TsDataStamp stamp = ts_data_stamp();
     uint32_t w = wIndex;
     put_ts_data(w, stamp, NOC_COUNTERS_HEADER_PROFILER_ID, llk::perf::noc::NIU_NOCS, kGroups);
     for (uint32_t k = 0; k < kPairs; k++) {
-        const uint32_t lo = read_counter(2 * k) - noc_counters_begin_values[2 * k];
-        const uint32_t hi = read_counter(2 * k + 1) - noc_counters_begin_values[2 * k + 1];
+        const uint32_t lo = noc_counters_values[2 * k];
+        const uint32_t hi = noc_counters_values[2 * k + 1];
         put_ts_data(w, stamp, NOC_COUNTERS_PAIR_PROFILER_ID_BASE + k, hi, lo);
     }
     wIndex = w;
