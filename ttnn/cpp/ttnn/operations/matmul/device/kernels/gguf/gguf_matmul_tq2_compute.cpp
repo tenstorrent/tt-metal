@@ -32,8 +32,8 @@ void kernel_main() {
     constexpr uint32_t k_first = get_compile_time_arg_val(4);
     constexpr uint32_t cb_w = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_scale = tt::CBIndex::c_3;
     constexpr uint32_t cb_out = gguf_matmul::cb_out, cb_own = gguf_matmul::cb_own;
-    constexpr uint32_t record_pages = 33;               // c_0 pages of 64 B: eight 256-byte tiles, then the scales
-    constexpr uint32_t in0_pages = one_row ? 64 : 1;   // c_1 pages per input tile
+    constexpr uint32_t record_pages = 33;             // c_0 pages of 64 B: eight 256-byte tiles, then the scales
+    constexpr uint32_t in0_pages = one_row ? 64 : 1;  // c_1 pages per input tile
     constexpr uint32_t scale_dst = 2;
     const uint32_t segments = get_arg_val<uint32_t>(0);
 

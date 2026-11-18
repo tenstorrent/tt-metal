@@ -318,7 +318,7 @@ uint8_t* group_planes(
         default: TT_THROW("{} is not a plane format", type);
     }
     const int parts = int(f.group_tiles / f.page_tiles);
-    std::array<uint32_t, 320> words{};  // the largest codes part, Q5_K's
+    std::array<uint32_t, 320> words{};                              // the largest codes part, Q5_K's
     const int scale_at = parts == 1 || type == GGUF_MXFP4 ? 1 : 0;  // the codes parts before the scale rows
     for (int i = 0; i <= parts; ++i) {
         if (i == scale_at) {

@@ -139,8 +139,8 @@ void kernel_main() {
                 asm volatile("fence" ::: "memory");
                 answers.set(++served);
                 if (served == (table_entries<FMT>() * 2 <= 1024 ? 1u : 2u)) {
-                    // The local copy once the first request (IQ2_S: the second) is answered, while the reader works on the
-                    // next.
+                    // The local copy once the first request (IQ2_S: the second) is answered, while the reader works on
+                    // the next.
                     if constexpr (table_entries<FMT>() * 2 <= 1024) {
                         table = local_level_table<FMT>(table_copy);
                     } else {

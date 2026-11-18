@@ -24,13 +24,13 @@ using namespace gguf_program;
 
 namespace {
 
-constexpr uint32_t kMaxPartials = 7;    // a finishing core adds its fp32 partial and up to 7 others in DEST's 8 tiles
-constexpr uint32_t kInputChunk = 16;    // input tiles per multicast
-constexpr uint32_t kMaxSegments = 46;   // keeps each kernel's runtime arguments within the limit (writer: 7 a segment)
-constexpr uint32_t kScaleTiles = 3;     // TQ2_0: scale tiles in c_3
-constexpr uint32_t kTq2Unit = 2;        // TQ2_0: records per unit of reads (measured, decode)
-constexpr uint32_t kTq2Units = 8;       // TQ2_0: units c_0 holds
-constexpr uint32_t kTq2InFlight = 2;    // TQ2_0: units in flight
+constexpr uint32_t kMaxPartials = 7;   // a finishing core adds its fp32 partial and up to 7 others in DEST's 8 tiles
+constexpr uint32_t kInputChunk = 16;   // input tiles per multicast
+constexpr uint32_t kMaxSegments = 46;  // keeps each kernel's runtime arguments within the limit (writer: 7 a segment)
+constexpr uint32_t kScaleTiles = 3;    // TQ2_0: scale tiles in c_3
+constexpr uint32_t kTq2Unit = 2;       // TQ2_0: records per unit of reads (measured, decode)
+constexpr uint32_t kTq2Units = 8;      // TQ2_0: units c_0 holds
+constexpr uint32_t kTq2InFlight = 2;   // TQ2_0: units in flight
 
 // Compute order of a core's work on one N tile; must match gguf_matmul_compute.cpp and gguf_matmul_writer.cpp.
 enum Role : uint32_t {
