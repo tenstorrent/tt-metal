@@ -5105,3 +5105,43 @@ tasks:
       e2e_tok_s_p1024000: '> 0'
       pos_chunk: '>= 1'
   device: true
+- id: X.6
+  title: 'OWNER 2026-11-18: packed-equivalent prefill throughput at AgentX shape (full 5120-token chunks at history
+    32k / 64k / 95k / 142k / 256k), the current default tree, DECODER_SKIP=decode, STATIC_TABLES=off'
+  step: perf
+  deps:
+  - X.5
+  brief:
+    details: 'Owner 2026-11-18, for a comparison with another team''s DSv4.1 prefill bench (tt-lab-private
+      dsv41f-next-prefill) at the AgentX shape. No code change: the committed default tree (rebased onto main
+      8a317f39a8d; Marko''s MoE block with split rows, 6208 B payload; STATIC_TABLES=off with the hidden history gather;
+      INDEX_K_SOURCE=served; non-matmul ops on 120 cores), DECODER_SKIP=decode (layers 0-19 + layer 20''s KV head).
+      One full 5120-token chunk (a steady chunk: not the request''s last, BRINGUP_CHUNK_LAST=0) at each history
+      position p = 32768, 65536, 97280, 145408, 262144 (32k, 64k, 95k, 142k, 256k; chunk starts, multiples of 32);
+      a full chunk stands for a packed chunk (packing several requests into one chunk is not built). Per position:
+      the clean wall (device profiler off, BRINGUP_PROFILE_WALL=1, chunk_wall_clean = 1: the gate adds that run) and
+      the device time per section from the program real-time profiler, plus test_skip_positions'' steady / resumed
+      walls at the same points (SKIP_POS) as a cross-check. Report tok/s = 5120 / steady chunk wall at each point (and
+      5120 / device ms as the device-bound ceiling). Determinism checked (bit-identical repeats). The overseer records
+      the unaccounted host RAM before and after the run.'
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=32768 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=65536 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=97280 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=262144 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=decode SKIP_POS=32768,65536,97280,145408,262144 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      determinism_max_abs_diff_decoder_skip: == 0
+      chunk_wall_ms_p32768: '> 0'
+      chunk_wall_ms_p65536: '> 0'
+      chunk_wall_ms_p97280: '> 0'
+      chunk_wall_ms_p145408: '> 0'
+      chunk_wall_ms_p262144: '> 0'
+      chunk_wall_clean_p262144: == 1
+      device_ms_total_p32768: '> 0'
+      device_ms_total_p262144: '> 0'
+      steady_wall_ms_p32768: '> 0'
+      steady_wall_ms_p262144: '> 0'
+  device: true
