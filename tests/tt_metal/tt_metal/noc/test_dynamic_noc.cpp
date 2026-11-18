@@ -186,14 +186,17 @@ void build_and_run_program_ethernet(
     bool mix_noc_mode) {
     auto* device_0 = device->impl().get_devices()[0];
 
-    // Query the number of ethernet ERISCs
+    // We need at least 2 ERISCs (ERISC0 and ERISC1) to run this test
     const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    if (erisc_count < 2) {
+        GTEST_SKIP() << "Skipping test as this test requires at least 2 ERISCs, but only " << erisc_count
+                     << " available.";
+    }
 
-    const auto active_eth_cores = device_0->get_active_ethernet_cores(true);
-    if (erisc_count == 0 || active_eth_cores.empty()) {
-        GTEST_SKIP() << "Device has no active ethernet cores";
-        return;
+    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
+    if (active_eth_cores.empty()) {
+        GTEST_SKIP() << "Skipping test as this test requires at least 1 active ethernet core, but none are available.";
     }
 
     if (not slow_dispatch) {
@@ -205,13 +208,6 @@ void build_and_run_program_ethernet(
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
-
-    // We need at least 2 ERISCs (ERISC0 and ERISC1) to run this test
-    if (erisc_count < 2) {
-        GTEST_SKIP() << "Skipping test as this test requires at least 2 ERISCs, but only " << erisc_count
-                     << " available.";
-        return;
-    }
 
     // Pick the first active ethernet core
     CoreCoord eth_core = *active_eth_cores.begin();
