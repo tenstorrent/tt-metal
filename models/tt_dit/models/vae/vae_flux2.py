@@ -111,6 +111,12 @@ class Flux2VaeDecoder(Module):
         # The pipeline traces the decoder at every image size, and each keeps its own conv config
         # tensors, which would not fit in L1_SMALL.
         configure_conv2d(self, config_tensors_in_dram=True)
+        # Fixed shard schemes, so each conv prepares its weights once instead of per image size. On a
+        # T3K (2x4) from 256x256 to 2048x1024 these are the schemes conv2d picks on its own, except
+        # conv_out at 256x256, which it block-shards (21 ms faster there; block sharding costs 5-6% of
+        # the decode from 512x512 up).
+        configure_conv2d(self, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED)
+        configure_conv2d(self.conv_out, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # remove encoder state
