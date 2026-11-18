@@ -10,7 +10,7 @@
 
 #include "impl/metal2_host_api/helpers.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -42,7 +42,8 @@ WatcherNodeRanges MakeWatcherNodeRanges(
     if (!rtoptions.get_watcher_enabled() || rtoptions.watcher_noc_sanitize_disabled()) {
         return ranges;
     }
-    for (const auto& [dfb_name, nodes] : collected.dfb_node_set) {
+    for (const auto& [dfb_name, placement] : collected.dfb_placements) {
+        const NodeRangeSet& nodes = placement.allocation;
         const std::optional<TensorParamName>& borrowed_from = collected.dfb_by_name.at(dfb_name)->borrowed_from;
         if (!borrowed_from.has_value()) {
             ranges.dfbs.emplace(dfb_name, ToVirtualNodeRanges(mesh_device, nodes));
@@ -135,4 +136,4 @@ KernelResourceBindings ResolveKernelResourceBindings(
     return bindings;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

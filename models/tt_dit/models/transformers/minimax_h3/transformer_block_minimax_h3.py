@@ -20,7 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_core_grid
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_kwargs, agmm_pins
+from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
 
@@ -52,9 +52,11 @@ class MiniMaxH3TransformerBlock(Module):
     AdaLN parameters selected *per row* of the packed sequence.
 
     The per-row modulation is what sets this apart from Wan. A single projection turns the shared
-    timestep embedding into a `(num_timesteps * MODALITY_NUM, hidden_size)` table for each of the six
+    timestep embedding into a `(num_slots * MODALITY_NUM, hidden_size)` table for each of the six
     modulation parameters, and every row of the packed sequence indexes that table by
-    `timestep_indices * MODALITY_NUM + token_tags`. One forward therefore serves rows at different
+    `timestep_indices * MODALITY_NUM + token_tags`. A slot is one noise level of the packed sequence
+    (target video, target audio, a conditioning role; the reference's distinct timesteps), and
+    `timestep_indices` holds each row's slot. One forward therefore serves rows at different
     noise levels and of different modalities. Wan, by contrast, broadcasts one modulation over the
     whole sequence, so it needs no gather at all.
 
@@ -82,15 +84,24 @@ class MiniMaxH3TransformerBlock(Module):
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
+        agmm_mode: AgmmMode | str | None = None,
         matmul_profile: str | None = None,
     ) -> None:
         """`dynamic_length` freezes the ff1 / ff2 blockings and the one-hot gathers' blocking at construction, so
-        no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms.
-        `matmul_profile="image"` takes the image-tuned all-gather-matmul pins (`IMAGE_AGMM_PINS`) where they exist."""
+        no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms, and
+        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`). `matmul_profile="image"` takes the
+        image-tuned all-gather-matmul pins (`IMAGE_AGMM_PINS`) where they exist."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.dynamic_length = dynamic_length
+        # ff1's persistent all-gather pair is sized at the norms' row capacity on the dynamic-length path, so every
+        # length shares one pair instead of pinning one per length. ff2's fused reduce-scatter output pair is the
+        # activation it returns, so it cannot be oversized: on that path ff2 allocates its exact output per call
+        # (the op's barrier-semaphore mode, which the 4x8 runs for every collective) instead of pinning a pair per
+        # length.
+        self.ag_row_capacity = norm_row_capacity if dynamic_length else None
+        self.ff2_use_persistent_buffer = use_persistent_ccl_buffers and not dynamic_length
         norm_kwargs = {"row_capacity": norm_row_capacity} if dynamic_length else {}
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
@@ -130,6 +141,7 @@ class MiniMaxH3TransformerBlock(Module):
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
             dynamic_length=dynamic_length,
             norm_row_capacity=norm_row_capacity,
+            agmm_mode=agmm_mode,
             matmul_profile=matmul_profile,
         )
         self.norm2 = DistributedRMSNorm(
@@ -141,6 +153,35 @@ class MiniMaxH3TransformerBlock(Module):
             ccl_manager=ccl_manager,
             **norm_kwargs,
         )
+        self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
+        # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
+        self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
+        # Dynamic-length pins (ff1 per length class), resolved once per layer: no table scan per call.
+        self._ff1_pins = self._mmrs_pin = None
+        if dynamic_length:
+            grid = mesh_device.compute_with_storage_grid_size()
+            if self.use_fused_agmm:
+                self._ff1_pins = agmm_pins(
+                    *self._ff1_kn,
+                    full_grid=grid,
+                    num_links=ccl_manager.num_links,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    mode=agmm_mode,
+                    profile=matmul_profile,
+                )
+            if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
+                self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
+        # ff1 runs its pins' compute config (the same in every length class), ff2 the block's.
+        ff1_compute_kernel_config = self.mm_compute_kernel_config
+        if self._ff1_pins is not None:
+            ff1_compute_kernel_config = next(iter(self._ff1_pins.values())).compute_kernel_config
         # The reference's SwiGLU is `up, gate = proj(x).chunk(2); up * silu(gate)`, which is the
         # `gate_is_first=False` layout `ColParallelLinear` already assumes for activation_fn="swiglu".
         self.ff = ParallelFeedForward(
@@ -152,6 +193,8 @@ class MiniMaxH3TransformerBlock(Module):
             mesh_axis=self.tp_mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            ff1_compute_kernel_config=ff1_compute_kernel_config,
+            ff2_compute_kernel_config=self.mm_compute_kernel_config,
         )
         self.adaln_proj = ColParallelLinear(
             time_embed_dim,
@@ -162,29 +205,10 @@ class MiniMaxH3TransformerBlock(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
-
-        self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
-        # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
-        self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
-        # Dynamic-length pins (ff1 per length class), resolved once per layer: no table scan per call.
-        self._ff1_pins = self._mmrs_pin = None
-        if dynamic_length:
-            grid = mesh_device.compute_with_storage_grid_size()
-            if self.use_fused_agmm:
-                self._ff1_pins = agmm_pins(
-                    *self._ff1_kn, full_grid=grid, num_links=ccl_manager.num_links, profile=matmul_profile
-                )
-            if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
-                self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
+        # `prepare_modulation`'s projection of every step's temb, row-major [steps * slots, adaLN width].
+        self._precomputed_adaln_projections: ttnn.Tensor | None = None
         # The dynamic-length modulation gathers: one-hot [rows, 32] @ table [32, hidden_local] through
         # minimal_matmul, whose program keeps only the M > N bit of the row count (fixed per selector kind).
         self._gather_config = None
@@ -224,38 +248,64 @@ class MiniMaxH3TransformerBlock(Module):
 
     # ------------------------------------------------------------------ modulation
 
-    def modulation_tables(self, temb: ttnn.Tensor) -> list[ttnn.Tensor]:
-        """The six modulation tables for `temb`, for a caller that reuses them across forwards (see `forward`)."""
-        return self._modulation_tables(temb)
-
-    def _modulation_tables(self, temb: ttnn.Tensor) -> list[ttnn.Tensor]:
-        """Project `temb` into the six per-(timestep, modality) modulation tables.
-
-        `temb` is [1, 1, num_timesteps, time_embed_dim]. Returns six [num_timesteps * MODALITY_NUM,
-        hidden_local] tables, row `t * MODALITY_NUM + modality`, matching the row order that
-        `adaln_indices` addresses.
+    def _compute_adaln_projection(self, temb: ttnn.Tensor) -> ttnn.Tensor:
+        """adaln_proj(silu(temb)) as [1, 1, rows, MODALITY_NUM * 6 * hidden_local], row-major.
 
         The SiLU runs at `temb`'s own (float32) precision and only its result is cast
         down to the bfloat16 projection, as the reference is explicit about: every block reads the
         same `temb`, so rounding applied before the activation biases every block's modulation
         identically at every sampling step and accumulates over the denoising trajectory.
         """
-        num_timesteps = temb.shape[2]
         # silu at temb's precision, then cast to the projection's dtype -- the reference's
         # `self.linear(silu(temb).to(self.linear.weight.dtype))`. Casting here also keeps the
         # resulting tables bfloat16, so the bf16 one-hot gathers below reproduce their rows exactly.
         activated = ttnn.silu(temb)
         if activated.dtype != ttnn.bfloat16:
             activated = ttnn.typecast(activated, ttnn.bfloat16)
-
-        # [1, 1, num_timesteps, MODALITY_NUM * 6 * hidden_local] per device
         projected = self.adaln_proj(activated, compute_kernel_config=self.mm_compute_kernel_config)
+        return ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
 
-        # Fold the modality axis into rows: [num_timesteps, mod, param, h] -> [t * mod, param * h].
-        # Done in row-major because the row count changes and num_timesteps is tiny (a handful of
+    def prepare_modulation(self, temb_steps: ttnn.Tensor) -> None:
+        """Project every denoising step's temb at once; a forward looks up its step's rows by `modulation_row_indices`.
+
+        `temb_steps` is [1, 1, rows, time_embed_dim], the rows of all steps (and any padding). temb depends on the
+        timesteps only, which the scheduler fixes before the first step, so one projection (and one FSDP gather of
+        the 2688 x 24192 weight a device) serves the whole denoise instead of one a step.
+        """
+        self.release_modulation()
+        projected = self._compute_adaln_projection(temb_steps)
+        self._precomputed_adaln_projections = ttnn.reshape(projected, (projected.shape[2], projected.shape[3]))
+
+    def release_modulation(self) -> None:
+        if self._precomputed_adaln_projections is not None:
+            ttnn.deallocate(self._precomputed_adaln_projections)
+            self._precomputed_adaln_projections = None
+
+    def _lookup_precomputed_adaln_projections(self, modulation_row_indices: ttnn.Tensor) -> ttnn.Tensor:
+        """Rows `modulation_row_indices` ([1, num_slots] uint32) of `prepare_modulation`'s table: what
+        `_compute_adaln_projection` returns for those steps' temb, by an embedding lookup (a copy, so bit-identical)."""
+        if self._precomputed_adaln_projections is None:
+            raise RuntimeError("modulation_row_indices needs prepare_modulation first")
+        return ttnn.embedding(modulation_row_indices, self._precomputed_adaln_projections, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def modulation_tables(self, temb: ttnn.Tensor) -> list[ttnn.Tensor]:
+        """The six modulation tables for `temb` ([1, 1, num_slots, time_embed_dim]), for a caller that reuses them
+        across forwards (`forward(tables=...)`): a sampler whose timesteps are fixed builds them once per step."""
+        return self._modulation_tables(self._compute_adaln_projection(temb))
+
+    def _modulation_tables(self, projected: ttnn.Tensor) -> list[ttnn.Tensor]:
+        """Split a projection (`_compute_adaln_projection` or `_lookup_precomputed_adaln_projections`) into the six
+        per-(slot, modality) modulation tables.
+
+        Returns six [num_slots * MODALITY_NUM, hidden_local] tables, row `slot * MODALITY_NUM + modality`,
+        matching the row order that `adaln_indices` addresses.
+        """
+        num_slots = projected.shape[-2]
+
+        # Fold the modality axis into rows: [num_slots, mod, param, h] -> [slot * mod, param * h].
+        # Done in row-major because the row count changes and num_slots is tiny (a handful of
         # rows), so the layout round-trip is negligible.
-        rows = num_timesteps * MODALITY_NUM
-        projected = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
+        rows = num_slots * MODALITY_NUM
         projected = ttnn.reshape(projected, (1, 1, rows, NUM_MODULATION_PARAMS * self.hidden_local))
         projected = ttnn.to_layout(projected, ttnn.TILE_LAYOUT)
 
@@ -263,7 +313,7 @@ class MiniMaxH3TransformerBlock(Module):
         for p in range(NUM_MODULATION_PARAMS):
             table = ttnn.slice(projected, [0, 0, 0, p * self.hidden_local], [1, 1, rows, (p + 1) * self.hidden_local])
             # AdaLN applies the scales as (1 + scale). Adding the 1 to the table costs one elementwise
-            # op on `num_timesteps * MODALITY_NUM` rows -- six, typically -- where doing it after the
+            # op on `num_slots * MODALITY_NUM` rows -- six, typically -- where doing it after the
             # gather would cost one over the whole packed sequence, per scale, per block.
             if p in (_SCALE_MSA, _SCALE_MLP):
                 table = ttnn.add(table, 1.0)
@@ -318,17 +368,15 @@ class MiniMaxH3TransformerBlock(Module):
         indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
         return indices if indices.dtype == ttnn.uint32 else ttnn.typecast(indices, ttnn.uint32)
 
-    def onehot_table(
-        self, adaln_indices: ttnn.Tensor, num_timesteps: int, eye: ttnn.Tensor | None = None
-    ) -> ttnn.Tensor:
+    def onehot_table(self, adaln_indices: ttnn.Tensor, num_slots: int, eye: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """The per-token one-hot gather matrix shared by every block of a forward."""
-        return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM, eye)
+        return self._onehot(self._gather_indices(adaln_indices), num_slots * MODALITY_NUM, eye)
 
     def tilerow_tables(
         self,
         tile_map: ttnn.Tensor | None,
         expanded_indices: ttnn.Tensor | None,
-        num_timesteps: int,
+        num_slots: int,
         eye: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor] | None:
         """`(tile_map, selector)` shared by every block of a forward when the caller built a tile-row map, else None
@@ -336,7 +384,7 @@ class MiniMaxH3TransformerBlock(Module):
         table whose tile row `tile_map[r]` is tile row `r` of the gather."""
         if tile_map is None or expanded_indices is None:
             return None
-        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_timesteps * MODALITY_NUM, eye)
+        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_slots * MODALITY_NUM, eye)
 
     # ------------------------------------------------------------------ forward
 
@@ -344,33 +392,47 @@ class MiniMaxH3TransformerBlock(Module):
         self,
         spatial_1BND: ttnn.Tensor,
         logical_n: ttnn.Tensor,
-        temb: ttnn.Tensor,
+        temb: ttnn.Tensor | None,
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         onehot: ttnn.Tensor | None = None,
         tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        modulation_row_indices: ttnn.Tensor | None = None,
         tables: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
-        temb: [1, 1, num_timesteps, time_embed_dim], replicated, float32
+        temb: [1, 1, num_slots, time_embed_dim], replicated, float32, projected into the adaLN tables.
+            Pass exactly one of `temb` and `modulation_row_indices`.
         adaln_indices: [1, 1, 1, N_local] integer row indices, fractured N on SP
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
 
         onehot / tilerow: the shared one-hot gather matrix (built here when absent) and the `(tile_map, selector)`
             pair from `tilerow_tables`; without the pair the norms take the per-token gather.
-        tables: this block's six modulation tables for `temb`, precomputed with `modulation_tables` (a sampler
-            whose timesteps are fixed computes them once); without them the block projects `temb` itself.
+
+        modulation_row_indices: [1, num_slots] uint32, the rows of `prepare_modulation`'s projection to take the tables
+            from in place of projecting a `temb`: the transformer's `modulation_row_indices`, flattened.
+        tables: this block's six modulation tables, built with `modulation_tables` for this step's `temb`; they take
+            precedence over `temb` / `modulation_row_indices` and skip the projection and the split entirely.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        if tables is None:
-            tables = self._modulation_tables(temb)
+        if tables is not None:
+            num_slots = tables[0].shape[-2] // MODALITY_NUM
+        else:
+            if (temb is None) == (modulation_row_indices is None):
+                raise ValueError("pass exactly one of temb and modulation_row_indices (or tables)")
+            if modulation_row_indices is None:
+                projected = self._compute_adaln_projection(temb)
+            else:
+                projected = self._lookup_precomputed_adaln_projections(modulation_row_indices)
+            num_slots = projected.shape[-2]
+            tables = self._modulation_tables(projected)
 
         if onehot is None:
-            onehot = self.onehot_table(adaln_indices, temb.shape[2])
+            onehot = self.onehot_table(adaln_indices, num_slots)
 
         def modulation(param: int) -> ttnn.Tensor:
             return self._gather_rows(tables[param], onehot)
@@ -415,7 +477,12 @@ class MiniMaxH3TransformerBlock(Module):
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
-            normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
+            normed = self.ccl_manager.all_gather(
+                normed,
+                dim=3,
+                mesh_axis=self.tp_mesh_axis,
+                use_hyperparams=False,
+            )
         # ff2's reduce-scatter and the gated residual after it fuse into a single
         # minimal_matmul_strided_reduce_scatter_async, computing residual + ff2(...) * gate in one op.
         #
@@ -447,26 +514,30 @@ class MiniMaxH3TransformerBlock(Module):
                 normed,
                 residual,
                 modulation(_GATE_MLP),
-                compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 force_transpose=False,
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
+                persistent_buffer_rows=self.ag_row_capacity,
                 mmrs_config=self._mmrs_pin,
+                ff2_use_persistent_buffer=self.ff2_use_persistent_buffer,
                 **self._ff1_kwargs(normed),
             )
         ff_out = self.ff(
             normed,
-            compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            persistent_buffer_rows=self.ag_row_capacity,
             **self._ff1_kwargs(normed),
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
 
     def _ff1_kwargs(self, normed: ttnn.Tensor) -> dict:
-        """ff1's blocking kwargs on the fused all-gather matmul (class pin, else the length-keyed swept table);
-        none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
+        """ff1's blocking kwargs on the fused all-gather matmul (class pin, else the length-keyed swept table); none
+        on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths. Its compute
+        config is set at construction."""
         if not self.use_fused_agmm:
             return {}
-        return agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2])
+        kwargs = agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2], self.mm_compute_kernel_config)
+        del kwargs["compute_kernel_config"]
+        return kwargs

@@ -200,6 +200,9 @@ RouterArchetype router_archetype(
     ExpressAxis express_axis,
     const IntermeshVCConfig* vc_config);
 
+// Fails on a supplied shape that the router can't hold.
+void check_vc_shape(const RouterVcShape& shape);
+
 /**
  * Datamover owner for sender channels on one VC. In MUX mode TENSIX owns VC0; ERISC owns VC1/VC2.
  * The link-scoped downstream owner is supplied at the use site rather than stored in the archetype.

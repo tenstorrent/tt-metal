@@ -14,9 +14,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -493,7 +493,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeReceiverWithoutRelayBindsBothP
 // so every later use of the pipe is rejected instead of reading freed memory.
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_PipeOutlivingSpaceIsDetached) {
     std::optional<PrefetcherPipeSpace> space = CreatePrefetcherPipeSpace(
-        *mesh_device_,
+        mesh_device_->mesh_command_queue(0),
         PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(pipe_sender_node)),
             .receiver_domain = CoreRangeSet(pipe_receiver_nodes),
