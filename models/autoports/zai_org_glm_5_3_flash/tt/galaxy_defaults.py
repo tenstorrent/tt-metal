@@ -64,6 +64,13 @@ KNOBS = {
     # 45-layer step at 1 M 31.73 -> 29.83 ms (8 rows) / 36.07 -> 34.16 ms (16 rows); ids identical at 32 K x 4 spec and
     # the 1 M warm turn (B attached == B_cold); served 1 M x 2 / 4 / 8 decode +4.3 / +6.4 / +7.1 %, 1-user text unchanged
     "GLM53_DSA_SHARD_RS1_SPLIT": "1",
+    # GLM53_DSA_SHARD_COMB (rev 65): the fold combine on the lane roots -- each RS round's slices combined in one pass
+    # (FOLD1 / FOLD2 matmuls, every operand rounded to tf32 once instead of once per pairwise chain step). Correct but
+    # not bitwise: the fp32 order moves near-ties. Full 45-layer plain step at 32 K x 16 rows 29.25 -> 27.95 ms (-4.5 %,
+    # reproduced twice); metal 32 K x 8 (8 x 1) in-loop step 33.5 -> 32.1 ms, tau 1.904 -> 1.909, 5 / 8 users' ids
+    # identical, the others leave at near-ties onto existing sequences (chain_knob_1 / chain_knob_2, 2026-11-18).
+    # Needs fp32 O partials (raises with GLM53_MLA_ATT_OBF16, the t = 32 default): the 8x4 builds run t <= 16
+    "GLM53_DSA_SHARD_COMB": "1",
     # the speculative verify (8 x 1 / 4 x 3 on 16 rows, AgentX at 8 users): ix_dm1 MLA_DSA_BATON_GROUPS keeps the ring /
     # pooled-key write order only inside each user row group (rows of different users are different slots), the
     # mesh-wide NOC-0-aware DRAM reader placement (reader_place.py), and the pipelined kda_pre verify reader
@@ -105,8 +112,6 @@ KNOBS = {
     "GLM53_STACK_DEFER": "1",
     "GLM53_MK_MOE_DEFER_INV": "1",
     "GLM53_MHC_MS1": "1",
-    # opt-in, not a default: GLM53_DSA_SHARD_COMB (the fold combine on the lane roots: correct, but its fp32 order moves
-    # the ids at a near-tie -- fails the strict ids gate)
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE
     "GLM53_DSA_POOL": "1",  # the sparse_dsa layers' intermediates from one AllocPool (stack_model._dsa_pools)
     "GLM53_MOE_SHARE_M": "1",  # one shared-expert intermediate per stack (mk_moe.MkMoE)

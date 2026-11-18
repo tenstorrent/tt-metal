@@ -1350,8 +1350,8 @@ def _protect_env(monkeypatch, keys) -> None:
 
 def test_galaxy_defaults_shard_tail(monkeypatch):
     """tt/galaxy_defaults.py: the 8x4 default turns on AGK, AGB, RS1_EARLY, RSB, R8 and RSNP (validated: 4 K x 16
-    bit-identical to knob-off over 3 runs; 32 K x 4 ids identical) and the fused prefill mHC mix, and leaves COMB (ids
-    move at a near-tie) opt-in; an
+    bit-identical to knob-off over 3 runs; 32 K x 4 ids identical), the fused prefill mHC mix and COMB (2026-11-18:
+    not bitwise -- ids move at near-ties -- gated on tau / coherence and the served 1 M / AgentX rows); an
     explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
     default); other meshes get nothing"""
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
@@ -1359,7 +1359,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert GD.KNOBS["GLM53_DSA_SHARD_AGK"] == "1"
     assert GD.KNOBS["GLM53_MKX_XROWS_COAL"] == "1"
     assert GD.KNOBS["GLM53_DSA_SHARD_RS1_EARLY"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_AGB"] == "1"
-    assert "GLM53_DSA_SHARD_COMB" not in GD.KNOBS
+    assert GD.KNOBS["GLM53_DSA_SHARD_COMB"] == "1" and "GLM53_MLA_ATT_OBF16" not in GD.KNOBS
     assert GD.KNOBS["GLM53_DSA_SHARD_RSB"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_R8"] == "1"
     assert GD.KNOBS["GLM53_DSA_SHARD_RSNP"] == "1"
     assert GD.KNOBS["GLM53_DSA_SHARD_LOCAL_ALL"] == "1"
@@ -1389,7 +1389,13 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert GD.apply((2, 4), 4096) == {} and not SP.shard_agk(8)
     got = GD.apply((8, 4), 4096, 4096)
     assert got["GLM53_DSA_SHARD_AGK"] == got["GLM53_DSA_SHARD_AGB"] == got["GLM53_DSA_SHARD_RS1_EARLY"] == "1"
-    assert SP.shard_agk(8) and SP.shard_agb(8) and SP.shard_rs1_early(8) and not SP.shard_comb(8)
+    assert (
+        SP.shard_agk(8)
+        and SP.shard_agb(8)
+        and SP.shard_rs1_early(8)
+        and SP.shard_comb(8)
+        and got["GLM53_DSA_SHARD_COMB"] == "1"
+    )
     assert got["GLM53_DSA_SHARD_RSB"] == "1" and SP.shard_rsb(8)
     assert got["GLM53_DSA_SHARD_R8"] == "1" and SP.shard_r8(8)
     assert got["GLM53_DSA_SHARD_RSNP"] == "1" and SP.shard_rsnp(8)
@@ -1628,6 +1634,8 @@ def test_native_width_fabric_policy():
     r = subprocess.run([sys.executable, "-c", _NATIVE_FAB_CHILD], cwd=str(root), env=env, capture_output=True,
                        text=True, timeout=300)  # fmt: skip
     assert r.returncode == 0 and "NATIVE_FAB_OK" in r.stdout, (r.returncode, r.stdout[-2000:], r.stderr[-4000:])
+
+
 # ---- the DRAM-bank reader placement on a heterogeneously harvested Galaxy (tt/reader_place.py, GLM53_MK_READER_PLACE)
 GRID = (12, 10)  # the 8x4 Galaxy's common compute grid (logical)
 # per bank: (side, optimal logical row); the west banks' worker column is logical 0 on every chip, the east banks' is the
