@@ -1,0 +1,44 @@
+{"variant": "mop2x2", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 28653.0, "exact": true, "pack": 28611.0}
+{"variant": "mop1x4", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 25631.0, "exact": true, "pack": 25602.0}
+{"variant": "mop4x1", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 34590.0, "exact": true, "pack": 34563.0}
+{"variant": "rep4x1", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22047.0, "exact": true, "pack": 22012.0}
+{"variant": "rep4x1_s2", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22753.0, "exact": true, "pack": 22710.0}
+{"variant": "rep4x1_s4", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 24267.0, "exact": true, "pack": 24199.0}
+{"variant": "zst4x1", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 21389.0, "exact": true, "pack": 21347.0}
+{"variant": "zst4x1_s2", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22232.0, "exact": true, "pack": 22187.0}
+{"variant": "zst4x1_s4", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 23942.0, "exact": true, "pack": 23908.0}
+{"variant": "tile", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 13820.0, "exact": true, "pack": 13581.0}
+{"variant": "empty", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 12499.0, "pack": 1736.0}
+{"variant": "mop2x2", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 28630.0, "exact": true, "pack": 28608.0}
+{"variant": "mop1x4", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 25702.0, "exact": true, "pack": 25656.0}
+{"variant": "mop4x1", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 34646.0, "exact": true, "pack": 34669.0}
+{"variant": "rep4x1", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22129.0, "exact": true, "pack": 22092.0}
+{"variant": "rep4x1_s2", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22837.0, "exact": true, "pack": 22767.0}
+{"variant": "rep4x1_s4", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 24253.0, "exact": true, "pack": 24222.0}
+{"variant": "zst4x1", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 21423.0, "exact": true, "pack": 21380.0}
+{"variant": "zst4x1_s2", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22269.0, "exact": true, "pack": 22288.0}
+{"variant": "zst4x1_s4", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 23995.0, "exact": true, "pack": 23929.0}
+{"variant": "tile", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 14075.0, "exact": true, "pack": 13830.0}
+{"variant": "empty", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 12518.0, "pack": 1714.0}
+{"variant": "mop2x2", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 28644.0, "exact": true, "pack": 28593.0}
+{"variant": "mop1x4", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 25631.0, "exact": true, "pack": 25597.0}
+{"variant": "mop4x1", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 34589.0, "exact": true, "pack": 34581.0}
+{"variant": "rep4x1", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22050.0, "exact": true, "pack": 21996.0}
+{"variant": "rep4x1_s2", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22758.0, "exact": true, "pack": 22713.0}
+{"variant": "rep4x1_s4", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 24234.0, "exact": true, "pack": 24198.0}
+{"variant": "zst4x1", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 21400.0, "exact": true, "pack": 21335.0}
+{"variant": "zst4x1_s2", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22236.0, "exact": true, "pack": 22211.0}
+{"variant": "zst4x1_s4", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 23953.0, "exact": true, "pack": 23936.0}
+{"variant": "tile", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 13843.0, "exact": true, "pack": 13563.0}
+{"variant": "empty", "acc": 0, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 12521.0, "pack": 1736.0}
+{"variant": "mop2x2", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 28626.0, "exact": true, "pack": 28616.0}
+{"variant": "mop1x4", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 25690.0, "exact": true, "pack": 25646.0}
+{"variant": "mop4x1", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 34625.0, "exact": true, "pack": 34671.0}
+{"variant": "rep4x1", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22100.0, "exact": true, "pack": 22081.0}
+{"variant": "rep4x1_s2", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22828.0, "exact": true, "pack": 22781.0}
+{"variant": "rep4x1_s4", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 24247.0, "exact": true, "pack": 24223.0}
+{"variant": "zst4x1", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 21394.0, "exact": true, "pack": 21370.0}
+{"variant": "zst4x1_s2", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 22255.0, "exact": true, "pack": 22301.0}
+{"variant": "zst4x1_s4", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 24016.0, "exact": true, "pack": 23950.0}
+{"variant": "tile", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 14096.0, "exact": true, "pack": 13808.0}
+{"variant": "empty", "acc": 1, "sections": 32, "passes": 3, "box": "bh-lb-11-special-pmilojevic-for-reservation-295838", "arch": "Arch.BLACKHOLE", "copy": 12514.0, "pack": 1713.0}

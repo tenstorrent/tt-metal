@@ -1208,9 +1208,18 @@ def kw_fold_kblocked(g):
     return 9 * g.c_in_tiles * g.tensor_n_tiles >= KW_FOLD_KBLOCK_MIN_WEIGHT_TILES
 
 
+# kw-fold subblocks over 1-wide ACC planes (conv2d_3x3_kw_fold.hpp): 1 x sbw where 3 or 4 output column tiles divide N,
+# else 4 x 1 column runs. Measured (Blackhole p150b, LoFi bf8_b): N = 2 as 4 x 1 instead of 2 x 2, stem.conv2 34.3 ->
+# 32.2 us (2 x 2 runs two unpack contexts per matmul call); N = 4 as 4 x 1 instead of 1 x 4 (four srcB unpacks per
+# 4 tile-MACs instead of one), +2% to +22%.
+def _kw_fold_group(n_tiles):
+    """Output column tiles per kw-fold pass (one n-group): the ACC planes and a K-blocked weight sub-round's width."""
+    return _largest_divisor_at_most(n_tiles, DEST_TILES_FP32_HALF_SYNC)
+
+
 def _kw_fold_subblock(n_tiles):
-    sbw = _largest_divisor_at_most(n_tiles, DEST_TILES_FP32_HALF_SYNC)
-    return sbw, DEST_TILES_FP32_HALF_SYNC // sbw
+    gw = _kw_fold_group(n_tiles)
+    return (gw, 1) if gw >= 3 else (1, DEST_TILES_FP32_HALF_SYNC)
 
 
 def _kw_fold_blocking(g, b, bm):
@@ -1222,10 +1231,9 @@ def _kw_fold_blocking(g, b, bm):
     r = g.dilation * g.input_width // TILE
     ub = KW_FOLD_FILL_BATCH_ROWS
     slab_rows = _div_up(bm + 2 + 2 * r, ub) * ub
-    # One weight round: K-blocked, one column kw x one n-group of sbw output column tiles ([3 C_in, sbw] tiles,
+    # One weight round: K-blocked, one column kw x one n-group of gw output column tiles ([3 C_in, gw] tiles,
     # streamed double-buffered); whole-K, one column kw x all of C_out (the three rounds resident).
-    sbw, _ = _kw_fold_subblock(n)
-    rw = sbw if kw_fold_kblocked(g) else n
+    rw = _kw_fold_group(n) if kw_fold_kblocked(g) else n
     return replace(
         b,
         block_k_tiles=ct,
@@ -1241,13 +1249,16 @@ def _kw_fold_blocking(g, b, bm):
     )
 
 
-def _kw_fold_acc_bytes(g, bm):
-    """ACC: one column plane (the n-groups take turns), [rows, sbw * 32] fp32; rows bound every core's
-    rowbase(bm + 1) + 32 + d."""
+def _kw_fold_plane_bytes(g, bm):
+    """One ACC plane, one output column tile wide: [rows, 32] fp32; rows bound every core's rowbase(bm + 1) + 32 + d."""
     tpr = g.input_width // TILE
     rows = TILE * (bm + 3) + g.dilation * ((bm + 2) // tpr + 3)
-    sbw, _ = _kw_fold_subblock(g.tensor_n_tiles)
-    return _div_up(rows * sbw * TILE * 4, TILE_BYTES_FP32) * TILE_BYTES_FP32
+    return rows * TILE * 4
+
+
+def _kw_fold_acc_bytes(g, bm):
+    """ACC: the planes of one n-group (the n-groups take turns)."""
+    return _div_up(_kw_fold_group(g.tensor_n_tiles) * _kw_fold_plane_bytes(g, bm), TILE_BYTES_FP32) * TILE_BYTES_FP32
 
 
 def create_program_descriptor(
@@ -1411,7 +1422,7 @@ def create_program_descriptor(
 
     if kwf:
         # kw-fold CBs: the whole slab (input tiles), the weights (whole-K: the three [3 C_in, C_out] column rounds;
-        # K-blocked: two [3 C_in, sbw] sub-round slots), the fp32 accumulator plane, the bias (the writer's read), its
+        # K-blocked: two [3 C_in, gw] sub-round slots), the fp32 accumulator plane, the bias (the writer's read), its
         # fp32 rows (the reader's decode; final-pass srcB) and the output shard.
         alias_ring = False
         input_ring_batches = (2 if b.max_m_blocks_per_core > 1 else 1) * (b.slab_tile_rows // b.untilize_batch_rows)
@@ -1868,8 +1879,10 @@ def create_program_descriptor(
             ("KWF_TPR", str(_tpr)),
             ("KWF_SBW", str(_sbw)),
             ("KWF_SBH", str(_sbh)),
+            ("KWF_GW", str(_kw_fold_group(g.tensor_n_tiles))),
             ("KWF_M_TILES", str(g.tensor_m_tiles)),
             ("KWF_KBLOCKED", str(int(kw_fold_kblocked(g)))),
+            ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
             # Out-of-line subblock (see conv2d_3x3_kw_fold.hpp): whole-K with multi-row subblocks.
             ("KWF_NOINLINE", str(int(not kw_fold_kblocked(g) and _sbh > 1))),
         ]

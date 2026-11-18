@@ -523,10 +523,12 @@ void kernel_main() {
         KWF_TPR,
         KWF_SBW,
         KWF_SBH,
+        KWF_GW,
         get_compile_time_arg_val(13) != 0,                            // relu
         get_compile_time_arg_val(18) * get_compile_time_arg_val(17),  // slab pages
         KWF_M_TILES,
         KWF_KBLOCKED != 0,
+        KWF_PLANE_BYTES,
         KWF_NOINLINE != 0>(get_arg_val<uint32_t>(3), get_arg_val<uint32_t>(4), get_arg_val<uint32_t>(0));
 #else
     constexpr uint32_t cb_im2col_rm = get_compile_time_arg_val(0);
