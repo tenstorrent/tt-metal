@@ -6,8 +6,12 @@
 
 #pragma once
 
+#include <functional>
+#include <initializer_list>
 #include <optional>
+#include <string_view>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -164,6 +168,27 @@ void check_tensor(
     Layout layout = Layout::TILE,
     bool check_dtype = true,
     bool check_layout = true);
+
+// compute_output_topologies for a moreh op whose outputs are `std::optional<Tensor>` slots the caller may
+// preallocate (moreh_adamw, moreh_adam, moreh_sgd). `operands` is every tensor the op reads (nullptr for an absent
+// optional); `output_specs` and `preallocated_outputs` list the outputs in the same order, and an absent output (a
+// nullopt spec) gets no entry. A preallocated output keeps its label while
+// ttnn::device_operation::detail::caller_owned_output_topology accepts it; otherwise, and for an output the op
+// allocates, the label is the union of the operands and the preallocated outputs. Returns {} when nothing is
+// preallocated, so the framework applies the union itself.
+std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologies(
+    std::initializer_list<const Tensor*> operands,
+    const Tensor& primary_input,
+    const std::vector<std::optional<tt::tt_metal::TensorSpec>>& output_specs,
+    const std::vector<std::reference_wrapper<const std::optional<Tensor>>>& preallocated_outputs,
+    std::string_view op_name);
+
+// The framework's union default over `tensors` (every tensor in tensor_args), placed on `primary_input`'s mesh
+// coordinates: the label of an output that is per-device distinct whenever any input is. Assumes uniform storage
+// (every tensor spans the whole mesh), as these ops' tensors do; the framework filters a non-uniform output to the
+// coordinate intersection, and no label computed here describes such an output exactly.
+tt::tt_metal::TensorTopology union_output_topology(
+    const std::vector<std::reference_wrapper<const Tensor>>& tensors, const Tensor& primary_input);
 
 struct CallbackArgMap {
     std::map<uint32_t, uint32_t> input;
