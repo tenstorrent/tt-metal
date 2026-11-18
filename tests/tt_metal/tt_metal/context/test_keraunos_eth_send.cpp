@@ -121,7 +121,7 @@ public:
         return value;
     }
 
-    // eth_cce_send.h's EthLink: the link peer's HSIO tile, then the valid word.
+    // hostdev/eth_link.h's EthLink: the link peer's HSIO tile, then the valid word.
     void write_eth_link(const KeraunosCore& core, const KeraunosCore& peer) {
         write(core, MEM_IERISC_FABRIC_ETH_LINK_BASE, {peer.hsio, MEM_IERISC_FABRIC_ETH_LINK_VALID, 0, 0});
     }
