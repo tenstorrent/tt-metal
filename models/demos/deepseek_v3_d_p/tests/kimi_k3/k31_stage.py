@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kimi-K3.1's PP4 deployment as the K3.1 tests share it: the runner's mesh, context, chunk and stage
-split, the measured PP4 user capacity, and PP4 rank 0 built with the K3 manifest's knobs."""
+"""Kimi-K3.1's deployments as the K3.1 tests share them: the runner's mesh, context, chunk and stage split, the
+measured PP4 user capacity, and PP4 rank 0 built with the K3 manifest's knobs.
+
+Two layouts: PP4 (one 8x4 stage per galaxy, SP=8 on axis 0, 5120-token chunks), and the manifest's default, K3's
+4x4 stages (two per galaxy, SP=4 on axis 1, TP=4 on axis 0, 2560-token chunks), eight of them for the 93 layers."""
 
 from __future__ import annotations
 
@@ -31,6 +34,16 @@ STAGES = compute_layer_split(
 # The most users PP4 fits at MAX_SEQ_LEN, measured on bh-glx-110-c10u14 with each stage built and traced as the
 # runner builds it (one more fails): stage 0 is the bound at 76; stages 1-3 fit 77 / 77 / 93.
 PP4_MAX_USERS = 76
+
+# The 4x4 stage of kimi_k3_1.json: SP on the tray half's axis-1 ring, TP on axis 0.
+MESH_4X4 = (4, 4)
+SP_AXIS_4X4, TP_AXIS_4X4 = 1, 0
+CHUNK_4X4 = 2560
+NUM_STAGES_4X4 = 8
+# (first layer, layer count) of each 4x4 stage: twelve layers (one AttnRes block) each, nine on the last.
+STAGES_4X4 = compute_layer_split(
+    KimiK31Config.NUM_LAYERS, NUM_STAGES_4X4, ADAPTER.layer_split_boundaries(KimiK31Config.NUM_LAYERS)
+)
 
 # The runner's mesh: 8x4 torus, the adapter's fabric payload and L1_SMALL, the default trace region.
 PLACEMENT = [

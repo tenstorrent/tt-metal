@@ -11,6 +11,7 @@ The actual shell harness runs with stub launchers; its inline verdict gate remai
 import contextlib
 import importlib.util
 import io
+import itertools
 import json
 import os
 import shutil
@@ -248,8 +249,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
             (manifest_dir / f"{model_key}.json").write_text(
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
             )
-        # Kimi-K3's and GLM-5.3's layouts are their manifests', so the harness reads the real ones.
-        for name in ("kimi_k3.json", "glm53.json", "glm53_4x4.json", "glm53_mtp_kv_share.json"):
+        # Kimi-K3's, Kimi-K3.1's and GLM-5.3's layouts are their manifests', so the harness reads the real ones.
+        for name in ("kimi_k3.json", "kimi_k3_1.json", "glm53.json", "glm53_4x4.json", "glm53_mtp_kv_share.json"):
             shutil.copyfile(REPO / MANIFESTS / name, manifest_dir / name)
         checkpoint = root / "checkpoint"
         checkpoint.mkdir()
@@ -259,6 +260,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
             (cache / "mistral_small_4_bh_8dev/8x1").mkdir(parents=True)
             (cache / "kimi_k3_bh_16dev/4x4_sp1").mkdir(parents=True)
             (cache / "kimi_k3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
+            (cache / "kimi_k3_1_bh_16dev/4x4_sp1").mkdir(parents=True)
+            (cache / "kimi_k3_1_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
             (cache / "glm_5_3_bh_16dev/4x4_sp1").mkdir(parents=True)
             (cache / "glm_5_3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
         golden = root / "golden"
@@ -476,8 +479,26 @@ class MultirankPccHarnessTests(unittest.TestCase):
 
     SC4_HOSTS = ["c07u08", "c07u02", "c08u02", "c08u08"]
 
-    def test_kimi_k3_sc4_is_eight_4x4_stages_from_the_manifest(self):
-        result, records = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS)
+    # Kimi-K3 and Kimi-K3.1 share the launcher's layout handling; they differ in the request and the slot counts.
+    KIMI_REQUEST_LEN = {"kimi_k3": 1049600, "kimi_k3_1": 10240}
+    KIMI_4X4_USERS = {"kimi_k3": "127", "kimi_k3_1": "76"}
+    KIMI_8X4_USERS = {"kimi_k3": "100", "kimi_k3_1": "76"}
+
+    def assert_kimi_4x4_cache_check(self, records, model):
+        """The pre-launch probe checks the model's own [4,4] SP-axis-1 cache under PREFILL_TTNN_CACHE, and the
+        runner reads that same root."""
+        checks = [r for r in records if r["kind"] == "mpi" and "no 4x4 weight cache" in r["args"][-1]]
+        self.assertEqual(len(checks), 1, records)
+        self.assertIn(f"/cache/{model}_bh_16dev/4x4_sp1", checks[0]["args"][-1])
+        self.assertTrue(self.one_record(records, "runner")["env"]["PREFILL_TTNN_CACHE"].endswith("/cache"))
+
+    def test_kimi_sc4_is_eight_4x4_stages_from_the_manifest(self):
+        for model in ("kimi_k3", "kimi_k3_1"):
+            with self.subTest(model=model):
+                self._check_kimi_sc4(model)
+
+    def _check_kimi_sc4(self, model):
+        result, records = self.run_harness(model, hosts=self.SC4_HOSTS)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse([record for record in records if record["kind"] == "probe"])
         launch = self.one_record(records, "runner_launch")["args"]
@@ -487,15 +508,15 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(launch[launch.index("--hosts") + 1], ",".join(self.SC4_HOSTS))
         runner = self.one_record(records, "runner")["env"]
         # The stage shape is the manifest's, which the runner applies itself: the launcher exports none of it.
-        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/kimi_k3.json"))
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith(f"manifests/{model}.json"))
         for key in ("PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS", "PREFILL_NUM_USERS"):
             self.assertNotIn(key, runner, key)
-        self.assertTrue(runner["PREFILL_TTNN_CACHE"].endswith("cache"))
+        self.assert_kimi_4x4_cache_check(records, model)
         producer = self.one_record(records, "producer")["env"]
-        self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/kimi_k3.json"))
-        # The manifest's 2560-token chunk (640 tokens per chip), and the 1M request in those chunks.
+        self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith(f"manifests/{model}.json"))
+        # The manifest's 2560-token chunk (640 tokens per chip), and the request in those chunks.
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
-        self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1049600 // 2560))
+        self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(self.KIMI_REQUEST_LEN[model] // 2560))
         self.assertEqual(runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"], producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"])
         self.assertIn("PCC GATE PASS", result.stdout)
 
@@ -510,8 +531,13 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(mpi_args[mpi_args.index("--host") + 1], "c07u02:2,c08u02:2,c08u08:2,c07u08:2")
         self.assertIn("--map-by", mpi_args)
 
-    def test_kimi_k3_sc1_is_sc4s_first_two_4x4_stages_on_one_galaxy(self):
-        result, records = self.run_harness("kimi_k3", config="sc1", hosts=self.SC4_HOSTS[:1])
+    def test_kimi_sc1_is_sc4s_first_two_4x4_stages_on_one_galaxy(self):
+        for model in ("kimi_k3", "kimi_k3_1"):
+            with self.subTest(model=model):
+                self._check_kimi_sc1(model)
+
+    def _check_kimi_sc1(self, model):
+        result, records = self.run_harness(model, config="sc1", hosts=self.SC4_HOSTS[:1])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         launch = self.one_record(records, "runner_launch")["args"]
         self.assertTrue(
@@ -522,8 +548,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
         runner = self.one_record(records, "runner")["env"]
         # 24 layers, 12 per tray half, at sc4's slot count.
         self.assertEqual(runner["PREFILL_NUM_LAYERS"], "24")
-        self.assertEqual(runner["PREFILL_NUM_USERS"], "127")
+        self.assertEqual(runner["PREFILL_NUM_USERS"], self.KIMI_4X4_USERS[model])
         self.assertNotIn("PREFILL_SP_AXIS", runner)
+        self.assert_kimi_4x4_cache_check(records, model)
         producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
         mpi_args = producer_mpi[0]["args"]
         self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "2")
@@ -531,15 +558,18 @@ class MultirankPccHarnessTests(unittest.TestCase):
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual(producer["PREFILL_NUM_LAYERS"], "24")
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        if model == "kimi_k3_1":
+            # The whole 8192-token golden in 2560-token chunks: 10240 tokens, four chunks.
+            self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], "4")
         self.assertIn("PCC GATE PASS", result.stdout)
 
-    def test_kimi_k3_8x4_configs_put_the_8x4_stage_back(self):
-        for config, descriptor, layers in (
-            ("sc4_8x4", "ci/sc4_mgd.textproto", None),
-            ("sc1_8x4", "ci/sc1_mgd.textproto", "24"),
+    def test_kimi_8x4_configs_put_the_8x4_stage_back(self):
+        for model, (config, descriptor, layers) in itertools.product(
+            ("kimi_k3", "kimi_k3_1"),
+            (("sc4_8x4", "ci/sc4_mgd.textproto", None), ("sc1_8x4", "ci/sc1_mgd.textproto", "24")),
         ):
-            with self.subTest(config=config):
-                result, records = self.run_harness("kimi_k3", config=config)
+            with self.subTest(model=model, config=config):
+                result, records = self.run_harness(model, config=config)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 launch = self.one_record(records, "runner_launch")["args"]
                 self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith(descriptor))
@@ -550,9 +580,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
                         (env["PREFILL_SP"], env["PREFILL_TP"], env["PREFILL_SP_AXIS"], env["PREFILL_CHUNK_SIZE"]),
                         ("8", "4", "0", "5120"),
                     )
-                self.assertEqual(runner["PREFILL_NUM_USERS"], "100")
+                self.assertEqual(runner["PREFILL_NUM_USERS"], self.KIMI_8X4_USERS[model])
                 self.assertEqual(runner.get("PREFILL_NUM_LAYERS"), layers)
-                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1049600 // 5120))
+                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(self.KIMI_REQUEST_LEN[model] // 5120))
                 # The 8x4 cache, not the 4x4 one: no 4x4 cache check runs.
                 self.assertNotIn("no 4x4 weight cache", result.stdout + result.stderr)
 
@@ -624,11 +654,14 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("requires exactly 4 cabled Galaxy hosts", result.stderr)
         self.assertFalse([record for record in records if record["kind"] in ("mpi", "probe", "runner_launch")])
 
-    def test_kimi_k3_4x4_missing_cache_fails_before_launch(self):
-        result, records = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS, missing_cache=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("no 4x4 weight cache", result.stdout + result.stderr)
-        self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
+    def test_kimi_4x4_missing_cache_fails_before_launch(self):
+        for model in ("kimi_k3", "kimi_k3_1"):
+            with self.subTest(model=model):
+                result, records = self.run_harness(model, hosts=self.SC4_HOSTS, missing_cache=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
+                self.assertIn(f"{model}_bh_16dev/4x4_sp1", result.stdout + result.stderr)
+                self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
     def test_glm53_sc4_and_sc1_are_8x4_stages_from_the_manifest(self):
         for config, descriptor in (("sc4", "ci/sc4_mgd.textproto"), ("sc1", "ci/sc1_mgd.textproto")):
@@ -733,11 +766,12 @@ class MultirankPccHarnessTests(unittest.TestCase):
                     # The MTP variants keep their manifest's slots.
                     self.assertNotIn("PREFILL_NUM_USERS", runner)
 
-    def test_only_kimi_k3_has_the_8x4_configs_and_only_glm53_the_4x4_configs(self):
+    def test_only_kimi_k3s_have_the_8x4_configs_and_only_glm53_the_4x4_configs(self):
         for model, config in (
             ("kimi27", "sc4_8x4"),
             ("kimi27", "sc4_4x4"),
             ("kimi_k3", "sc4_4x4"),
+            ("kimi_k3_1", "sc4_4x4"),
             ("glm53", "sc4_8x4"),
         ):
             with self.subTest(model=model, config=config):
