@@ -147,15 +147,18 @@ void verify_runtime_page_size(
         CircularBufferConfig(OUTPUT_PAGE_SIZE, {{0, tt::DataFormat::RawUInt32}}).set_page_size(0, OUTPUT_PAGE_SIZE);
     CreateCircularBuffer(prog, KERNEL_CORE, cb_config);
 
-    // Forge the input accessor's compile-time args: the args_config word with the RuntimePageSize
-    // bit set, and NO aligned-page-size word (A-collapse). The legacy TensorAccessorArgs(buffer)
-    // path never sets this bit -- only the Metal 2.0 resolver does -- so we build the word by hand.
+    // Under RuntimePageSize, the input accessor's compile-time args are only the args_config word, with
+    // NO aligned-page-size word (A-collapse); the page size is its only common runtime arg.
     // The output accessor is appended normally (static); the kernel reads it at the post-A-collapse
     // offset, which only resolves correctly if the input consumed exactly one CTA word.
     std::vector<uint32_t> compile_time_args;
+    std::vector<uint32_t> common_runtime_args;
+    TensorAccessorArgs(input_buffer, tensor_accessor::ArgConfig::RuntimePageSize)
+        .append_to(compile_time_args, common_runtime_args);
     const uint32_t input_config_word =
         (tensor_accessor::ArgConfig::IsDram | tensor_accessor::ArgConfig::RuntimePageSize).raw();
-    compile_time_args.push_back(input_config_word);
+    EXPECT_EQ(compile_time_args, std::vector<uint32_t>{input_config_word});
+    EXPECT_EQ(common_runtime_args, std::vector<uint32_t>{static_cast<uint32_t>(input_buffer.aligned_page_size())});
     TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
     auto kernel = CreateKernel(
@@ -169,8 +172,10 @@ void verify_runtime_page_size(
 
     SetRuntimeArgs(prog, kernel, KERNEL_CORE, {input_buffer.address(), output_buffer->address()});
     // The input's dynamic page size rides common runtime arg 0 -- the channel the device accessor
-    // reads via get_aligned_page_size() when the RuntimePageSize bit is set.
-    SetCommonRuntimeArgs(prog, kernel, {sentinel_page_size});
+    // reads via get_aligned_page_size() when the RuntimePageSize bit is set. Replace it with the
+    // sentinel, so a passing check can only mean the kernel read the runtime value.
+    common_runtime_args[0] = sentinel_page_size;
+    SetCommonRuntimeArgs(prog, kernel, common_runtime_args);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
