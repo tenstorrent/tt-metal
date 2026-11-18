@@ -41,6 +41,35 @@ static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_pro
     return dfb_is_blocked_strided(config) && side_blocked && other_side_count > 1;
 }
 
+// Entries one implicit-sync op moves on a DM of this side: DataflowBuffer::side_share(). A BLOCKED side
+// moves the block size written into every hart's interface, which is the producer block when both sides
+// are BLOCKED. The STRIDED side of a mixed ring moves block / stride_in_entries entries, or 1 when the
+// block is no larger than that stride. A DM on that STRIDED side keeps stride_in_entries; the widened
+// hops belong to the BLOCKED DM side, and that side does not divide. Every issuer on a side gets the same
+// value, so DM0 reads it from the txn descriptor instead of from each hart's exit record.
+static uint32_t dfb_dm_side_op_entries(const DataflowBufferImpl& dfb, bool is_producer) {
+    const DataflowBufferConfig& config = dfb.config;
+    const bool producer_blocked = config.pap == ::dfb::AccessPattern::BLOCKED;
+    const bool consumer_blocked = config.cap == ::dfb::AccessPattern::BLOCKED;
+    const bool this_blocked = is_producer ? producer_blocked : consumer_blocked;
+    const bool peer_blocked = is_producer ? consumer_blocked : producer_blocked;
+    uint32_t block = 1u;
+    if (producer_blocked) {
+        block = std::max<uint32_t>(config.producer_block_size, 1u);
+    } else if (consumer_blocked) {
+        block = std::max<uint32_t>(config.consumer_block_size, 1u);
+    }
+    if (this_blocked) {
+        return block;
+    }
+    if (!peer_blocked) {
+        return 1u;
+    }
+    const uint32_t stride = dfb.stride_in_entries;
+    TT_FATAL(stride != 0, "DFB {}: stride_in_entries is 0", dfb.id);
+    return block > stride ? block / stride : 1u;
+}
+
 namespace {
 
 // Narrow a host-side value into an on-disk init-blob field width. Rejects silent truncation so the
@@ -215,6 +244,10 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
 
         prod_finish.num_txn_ids = dfb->producer_txn_descriptor.num_txn_ids;
         cons_finish.num_txn_ids = dfb->consumer_txn_descriptor.num_txn_ids;
+        prod_finish.op_entries = dfb_narrow_field<uint8_t>(
+            dfb_dm_side_op_entries(*dfb, /*is_producer=*/true), dfb->id, "producer op_entries");
+        cons_finish.op_entries = dfb_narrow_field<uint8_t>(
+            dfb_dm_side_op_entries(*dfb, /*is_producer=*/false), dfb->id, "consumer op_entries");
         const uint8_t num_prod_tcs = static_cast<uint8_t>(blob_producer_tcs.size());
         const uint8_t num_cons_tcs = static_cast<uint8_t>(blob_consumer_tcs.size());
         const auto prod_desc = producer_live ? build_dm0_txn_descriptor_image(
@@ -1359,7 +1392,7 @@ static std::optional<std::string> dfb_txn_descriptor_violation(
             num_txn_ids,
             num_prods_or_cons);
     }
-    // A DM tracks the entries of the op it is issuing in 8 bits (DFBImplicitProgress::share).
+    // DM0's finish info stores the op size in one byte (dfb_dm0_finish_info_t::op_entries).
     if (std::max<uint32_t>(block_size, counter_share) > 0xFFu) {
         return fmt::format(
             "Implicit-sync DFB op size overflow: block_size {} / counter_share {} exceed uint8_t. Use explicit "

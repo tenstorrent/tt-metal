@@ -149,24 +149,22 @@ static_assert(NUM_KERNEL_DM_HARTS == MAX_PRODUCERS_PER_DFB, "kernel DMs and DFB 
 struct DFBImplicitProgress {
     uint16_t loop;      // completed txn-id batches, mod 2^16 like the tile counters
     uint16_t pos;       // entries issued into the current batch, < num_entries_per_txn_id
-    uint8_t share;      // entries per op, at most 255 (the host rejects more); DM0 needs it to split the last batch
     uint8_t txn_idx;    // index into txn_ids[] of the current batch
-    uint8_t share_pos;  // STRIDED side: entries of the current op issued so far, < share
-    uint8_t _pad;
+    uint8_t share_pos;  // STRIDED side: entries of the current op issued so far, < the side's op size
+    uint8_t _pad[2];
 };
 static_assert(sizeof(DFBImplicitProgress) == 8, "DFBImplicitProgress size is incorrect");
 extern thread_local DFBImplicitProgress g_dfb_progress[dfb::NUM_DFBS];
 
 // Kernel-exit handoff from each kernel DM to DM0.
 // A record holds a DM's loop and pos (loop | pos << 16) on one implicit-sync DFB side, indexed by the
-// side's lowest txn id, and g_dfb_exit_share holds its share in the same slot. A DM signals that its
-// records are written through its run state (RUN_SYNC_MSG_DFB_DRAINING). The run state alone is not
+// side's lowest txn id. The op size is not in the record: every op on a side is the size the host stored
+// in the txn descriptor (dfb_dm0_finish_info_t::op_entries), which DM0 already reads. A DM signals that
+// its records are written through its run state (RUN_SYNC_MSG_DFB_DRAINING). The run state alone is not
 // enough: DM0 can read a DM's DONE from before it started this launch. So a slot holds
 // DFB_EXIT_RECORD_NONE until its DM writes it, and DM0 puts DFB_EXIT_RECORD_NONE back once it has used
-// the record, or at the end of the launch for a side it never flushed. A DM writes the share before the
-// record, so DM0 reads it only once the record is there.
+// the record, or at the end of the launch for a side it never flushed.
 extern uint32_t g_dfb_exit_record[dfb::NUM_KERNEL_DM_HARTS][NUM_DFB_POOL_TXN_IDS];
-extern uint8_t g_dfb_exit_share[dfb::NUM_KERNEL_DM_HARTS][NUM_DFB_POOL_TXN_IDS];
 // Never a record: pos is below num_entries_per_txn_id, which is at most 65535.
 constexpr uint32_t DFB_EXIT_RECORD_NONE = 0xFFFFFFFFu;
 
@@ -203,7 +201,7 @@ struct TxnDFBDescriptor {
         uint16_t tiles_to_ack;
     };                             // 2B-aligned, at byte 20
     dfb_dm0_finish_info_t finish;  // read only by DM0's kernel-exit flush, not by the ISR
-    uint8_t _pad[7];               // pad 25 → 32 bytes
+    uint8_t _pad[6];               // pad 26 → 32 bytes
 };
 static_assert(sizeof(TxnDFBDescriptor) == 32, "TxnDFBDescriptor size is incorrect");
 static_assert(offsetof(TxnDFBDescriptor, tiles_to_post) == 20, "TxnDFBDescriptor tiles_to_post must be 2B-aligned");

@@ -606,6 +606,7 @@ TEST_F(UnitMeshFixture, DfbSerializeImplicitSyncRingOver255) {
                 dfb_dm0_txn_descriptor_image_t image;
                 std::memcpy(&image, buf.data() + desc_off + slot * sizeof(image), sizeof(image));
                 EXPECT_EQ(image.tiles_to_post_or_ack, per_txn);
+                EXPECT_EQ(image.finish.op_entries, 1u);
             }
         }
 
