@@ -93,8 +93,15 @@ class MiniMaxM3Media:
 
     def encode(self, items: list[M3Image], out: list[memoryview]) -> None:
         assert self._stub, "encode before load"
-        # TODO: replace the stub embeddings with the vision encoder.
         for item, buf in zip(items, out, strict=True):
+            size = self.stored_nbytes(item)
+            if buf.nbytes != size:
+                raise ValueError(
+                    f"a slot of {buf.nbytes} B for an image of {item.n_tokens} tokens, which needs {size} B"
+                )
+        # TODO: replace the stub embeddings with the vision encoder.
+        for item, buf in zip(items, out):
+            buf = buf.cast("B")  # the header and the rows are at byte offsets, whatever the slot's format
             media_format.Header("image").write(buf)
             digest = hashlib.sha256(np.asarray(item.pixels.shape).tobytes() + item.pixels.tobytes()).digest()
             seed = int.from_bytes(digest[:8], "little")

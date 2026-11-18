@@ -114,6 +114,24 @@ def test_format_rejects_bad_values(expect_error):
         media_format.Header.read(buf)
 
 
+def test_encode_counts_slot_sizes_in_bytes(expect_error):
+    """encode sizes a slot in bytes: a uint16 slot of the right size is written like a byte slot.
+
+    A slot one byte short raises ValueError.
+    """
+    media = MiniMaxM3Media(CONFIG)
+    media.load(None, "", "image", {"stub_embeddings": True})
+    item = media.prepare("image", rgb(100, 60))
+    size = media.stored_nbytes(item)
+    want = memoryview(bytearray(size))
+    media.encode([item], [want])
+    for slot in (memoryview(np.full(size // 2, 0xFFFF, np.uint16)), memoryview(bytearray(b"\xff" * size)).cast("H")):
+        media.encode([item], [slot])
+        assert slot.format == "H" and slot.tobytes() == want.tobytes()
+    with expect_error(ValueError, "needs"):
+        media.encode([item], [memoryview(bytearray(size - 1))])
+
+
 def test_image_pickles_out_of_band():
     item = MiniMaxM3Media(CONFIG).prepare("image", rgb(672, 896))
     buffers = []

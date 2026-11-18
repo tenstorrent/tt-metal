@@ -26,8 +26,9 @@ class Header:
 
     @classmethod
     def read(cls, buf: memoryview) -> "Header":
-        if len(buf) < _HEADER.size:
-            raise ValueError(f"stored value of {len(buf)} B is shorter than its {_HEADER.size} B header")
+        nbytes = memoryview(buf).nbytes
+        if nbytes < _HEADER.size:
+            raise ValueError(f"stored value of {nbytes} B is shorter than its {_HEADER.size} B header")
         (kind,) = _HEADER.unpack_from(buf)
         if kind >= len(KINDS):
             raise ValueError(f"unknown media kind {kind}")
@@ -41,7 +42,7 @@ def stored_nbytes(n_tokens: int, hidden: int) -> int:
 def embeddings(buf: memoryview, hidden: int) -> np.ndarray:
     """[n_tokens, hidden] view of the rows after the header as bf16 bit patterns (uint16). Row i is the i-th media
     token's."""
-    rows = buf[_HEADER.size :]
-    if not len(rows) or len(rows) % (hidden * _BF16_BYTES):
-        raise ValueError(f"stored value of {len(buf)} B is not a header and whole bf16 rows of width {hidden}")
-    return np.frombuffer(rows, dtype=np.uint16).reshape(-1, hidden)
+    nbytes = memoryview(buf).nbytes
+    if nbytes <= _HEADER.size or (nbytes - _HEADER.size) % (hidden * _BF16_BYTES):
+        raise ValueError(f"stored value of {nbytes} B is not a header and whole bf16 rows of width {hidden}")
+    return np.frombuffer(memoryview(buf).cast("B"), dtype=np.uint16, offset=_HEADER.size).reshape(-1, hidden)
