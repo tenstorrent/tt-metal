@@ -611,7 +611,8 @@ def test_summarize_chunk_recurrence_emitted_outputs_reconstruct_scan(
     bf16_names: frozenset[str],
 ) -> None:
     """Unsplit from the sequence start, every chunk enters at the entry state E: the emitted F(0) and F(I) must give
-    the recurrent scan's outputs as F(0) + (F(I) - F(0)) @ E, and the emitted final transform its final state."""
+    the recurrent scan's outputs as F(0) + (F(I) - F(0)) @ E, and the emitted final transform, in complement form
+    (E_A = A - I, B), its final state E + (E_A @ E + B)."""
     host_inputs = host_protocol(batch_heads, num_chunks, dim, dim, bf16_names=bf16_names, seed=813)
     entry = initial_state(batch_heads, dim, dim, seed=3142)
     expected_output, expected_final = recurrent_oracle(host_inputs, entry)
@@ -619,7 +620,7 @@ def test_summarize_chunk_recurrence_emitted_outputs_reconstruct_scan(
     inputs = device_protocol(host_inputs, device)
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        packed, terms, final_a, final_b = ttnn.experimental.kda.summarize_chunk_recurrence(
+        packed, terms, final_e, final_b = ttnn.experimental.kda.summarize_chunk_recurrence(
             *inputs, actual_start=zero_actual_start, emit_outputs=True
         )
     assert packed.dtype == ttnn.bfloat16
@@ -627,13 +628,13 @@ def test_summarize_chunk_recurrence_emitted_outputs_reconstruct_scan(
     for tensor, shape in (
         # Interleaved, a terms block is a head's chunks: its F(0) rows, then its F(I) rows.
         (terms, (batch_heads, 2, num_chunks * CHUNK_SIZE, dim)),
-        (final_a, (batch_heads, dim, dim)),
+        (final_e, (batch_heads, dim, dim)),
         (final_b, (batch_heads, dim, dim)),
     ):
         assert tensor.dtype == ttnn.float32
         assert tuple(tensor.shape) == shape
     zero, identity = ttnn.to_torch(terms).reshape(batch_heads, 2, num_chunks, CHUNK_SIZE, dim).unbind(1)
-    a, b = (ttnn.to_torch(tensor) for tensor in (final_a, final_b))
+    e, b = (ttnn.to_torch(tensor) for tensor in (final_e, final_b))
 
     assert_accurate(
         expected_output.float(),
@@ -643,20 +644,20 @@ def test_summarize_chunk_recurrence_emitted_outputs_reconstruct_scan(
     )
     assert_accurate(
         expected_final,
-        torch.matmul(a, entry) + b,
+        entry + (torch.matmul(e, entry) + b),
         name="final state from the emitted transform",
         nrmse_threshold=0.004,
     )
     assert_outputs_accurate(
-        (expected_a, expected_b),
-        (final_a, final_b),
-        names=("final_a", "final_b"),
+        (expected_a - torch.eye(dim), expected_b),
+        (final_e, final_b),
+        names=("final_e", "final_b"),
         context="emitted transform",
         nrmse_threshold=0.004,
     )
-    # The packed head is the same transform rounded to BFLOAT16.
+    # The packed head is the same complement-form transform rounded to BFLOAT16.
     packed_host = ttnn.to_torch(packed).float()[0]
-    assert_accurate(a, packed_host[:, :, :dim], name="packed head A", nrmse_threshold=0.004)
+    assert_accurate(e, packed_host[:, :, :dim], name="packed head E", nrmse_threshold=0.004)
     assert_accurate(b, packed_host[:, :, dim:], name="packed head B", nrmse_threshold=0.004)
 
 

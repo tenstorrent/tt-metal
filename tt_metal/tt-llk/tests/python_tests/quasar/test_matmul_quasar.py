@@ -52,6 +52,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    QUASAR_VARIANT,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -470,6 +471,7 @@ def test_matmul(
         ENABLE_DIRECT_INDEXING(enable_direct_indexing),
         DEST_SYNC(dest_sync_mode),
         UNPACK_TRANS_FACES(transpose),
+        QUASAR_VARIANT(),
     ]
     runtimes = [
         CRK_TILE_DIMM(ct_dim, rt_dim, kt_dim),

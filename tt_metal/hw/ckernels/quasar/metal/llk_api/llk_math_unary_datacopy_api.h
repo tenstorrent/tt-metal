@@ -25,6 +25,8 @@
  * @tparam src_b_bcast_type Broadcast mode; non-NONE uses unary-broadcast math init when type is B2D
  * @tparam unpack_to_dest Set true to enable the UNP_DEST routing decision (unary, non-broadcast path)
  * @param operand Logical dataflow buffer id for the input operand
+ * @note With EN_32BIT_DEST, an Int16 operand needs unpack_to_dest, including the B2D broadcast path.
+ *       The FPU cannot datacopy Int16 into a 32-bit Dest. The check below is LLK_ASSERT-only.
  */
 template <
     DataCopyType type,
@@ -41,6 +43,13 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
+    // Int16 is MOV-only, so this 32-bit Dest datacopy writes bad data. Unpack-to-Dest skips it.
+    // LLK_ASSERT only: a normal build does not check. ProgramSpec rejects this input.
+    if constexpr (EN_32BIT_DEST && !unpack_to_dest) {
+        LLK_ASSERT(
+            srcA_format != DataFormat::Int16,
+            "Quasar FPU cannot datacopy Int16 into a 32-bit Dest; unpack this operand to Dest");
+    }
     _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {

@@ -243,7 +243,7 @@ inline void sync_regfile_write(const std::uint32_t index);
 
 // Field value overflow check
 template <typename T>
-static constexpr bool is_valid(const T val, const std::uint8_t wid)
+constexpr bool is_valid(const T val, const std::uint8_t wid)
 {
     const T mask = (1 << wid) - 1;
     return (val & mask) == val;
