@@ -283,7 +283,9 @@ class TtKimiK3Block(LightweightModule):
         chip, ``rows // len(ctxs)`` rows each.
 
         The attention (attn_norm, MLA with its KV write and pad-zero, or KDA with its slot's carry) runs once per
-        non-empty chunk on that chunk's rows with that chunk's context; an empty chunk contributes zeros, so its
+        non-empty chunk on that chunk's rows with that chunk's context. On K3.1 the MLA is Gated DSA: each chunk also
+        writes its index keys to its slot of ``ctx.index_kv_cache`` and runs its own top-k over that slot's prefix
+        (TtK3MlaAttention.forward, as in forward()), so nothing indexer-related crosses chunks. An empty chunk contributes zeros, so its
         rows pass through the residual unchanged. The FFN (ffn_norm, MoE or dense FFN) then runs ONCE over all
         rows, the MoE skipping each chunk's pad rows (``packed_padding_config``, the forward's PackedPadding;
         None when every row is real). AttnRes reduces over the hidden dimension only, so one walk serves every chunk's rows.

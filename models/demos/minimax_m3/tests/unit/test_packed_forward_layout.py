@@ -184,3 +184,98 @@ def test_packed_real_row_mask_random():
             chunks.append(PrefillChunk(len(chunks), start, start + lengths[randint(0, len(lengths) - 1)]))
         mask = packed_real_row_mask(chunks, SP, S)
         assert [list(map(bool, chip)) for chip in mask] == brute_flags(chunks, SP, S)
+
+
+# --- Kimi-K3.1: packed forwards with a DSA indexer per layer (no indexer indices between ranks) ---
+
+
+def _k31_params(forward_chunks, use_trace, num_users=4):
+    from models.demos.common.prefill.adapter import PrefillRunParams
+
+    return PrefillRunParams(
+        mesh_shape=(8, 4),
+        num_layers=24,
+        first_layer_idx=0,
+        is_first_rank=True,
+        is_last_rank=False,
+        max_seq_len=8 * 5120,
+        chunk_size=5120,
+        num_users=num_users,
+        capacity_factor=8,
+        num_links=2,
+        gate_mode_name="DEVICE_FP32",
+        kv_only_last_layer=False,
+        weight_cache_path=None,
+        tp_shard_kv=True,
+        use_trace=use_trace,
+        forward_chunks=forward_chunks,
+    )
+
+
+def test_k31_adapter_packs_on_pp4():
+    """K3.1 packs with K3's capabilities. Its PP4 split passes no indexer indices (every DSA layer owns its indexer),
+    so the runner's multi-rank check (indexer_indices = num_ranks > 1 and passes_indexer_indices) refuses nothing."""
+    from models.demos.common.prefill.prefill_chunk import packed_forward_capabilities, packed_forward_refusals
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
+
+    assert KimiK31Adapter.supports_packed_forward
+    assert not KimiK31Adapter.passes_indexer_indices
+    caps = packed_forward_capabilities(KimiK31Adapter)
+    assert caps == packed_forward_capabilities(KimiK3Adapter)
+    assert packed_forward_refusals(2, indexer_indices=KimiK31Adapter.passes_indexer_indices, **caps) == []
+    # Trace and D2H acks stay refused at the runner, as for K3, until a runner-level run has driven them.
+    assert packed_forward_refusals(2, use_trace=True, **caps) == packed_forward_refusals(
+        2, use_trace=True, **packed_forward_capabilities(KimiK3Adapter)
+    )
+
+
+@pytest.mark.parametrize("forward_chunks,use_trace,extra", [(1, True, 0), (2, False, 0), (2, True, 1)])
+def test_k31_cache_slots_hold_the_traced_scratch_slot(forward_chunks, use_trace, extra):
+    """Every K3.1 KV cache, the DSA index cache included (allocate_kv_cache sizes both from kv_cache_slots), holds the
+    traced packed forward's scratch slot, which an empty chunk position writes."""
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
+
+    params = _k31_params(forward_chunks, use_trace)
+    assert KimiK31Adapter().kv_cache_slots(params) == params.num_users + extra
+
+
+class _GuardsPassed(Exception):
+    pass
+
+
+def _k31_stub(forward_chunks=2, has_indexer=True, num_mla_layers=1):
+    from types import SimpleNamespace
+
+    class Stub(SimpleNamespace):
+        @property
+        def is_first_rank(self):  # first read after the argument checks
+            raise _GuardsPassed
+
+    return Stub(
+        forward_chunks=forward_chunks,
+        has_indexer=has_indexer,
+        schedule=SimpleNamespace(num_mla_layers=num_mla_layers),
+        first_layer_idx=0,
+    )
+
+
+def test_k31_packed_forward_takes_the_index_cache():
+    """TtKimiK3Transformer.forward_packed: K3.1 needs its index cache, K3 refuses one, and neither takes seed indices
+    (no layer reuses another's top-k)."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
+
+    chunks = [PrefillChunk(0, 0, C), EMPTY]
+    fwd = TtKimiK3Transformer.forward_packed
+    with pytest.raises(_GuardsPassed):
+        fwd(_k31_stub(), None, None, chunks, index_kv_cache=object())
+    with pytest.raises(ValueError, match="pass index_kv_cache"):
+        fwd(_k31_stub(), None, None, chunks)
+    with pytest.raises(_GuardsPassed):  # a rank with no DSA layer has no index cache
+        fwd(_k31_stub(num_mla_layers=0), None, None, chunks)
+    with pytest.raises(ValueError, match="seed_indexer_indices"):
+        fwd(_k31_stub(), None, None, chunks, index_kv_cache=object(), seed_indexer_indices=object())
+    with pytest.raises(ValueError, match="no DSA indexer"):
+        fwd(_k31_stub(has_indexer=False), None, None, chunks, index_kv_cache=object())
+    with pytest.raises(_GuardsPassed):
+        fwd(_k31_stub(has_indexer=False), None, None, chunks)

@@ -591,8 +591,10 @@ class TtKimiK3Transformer(LightweightModule):
             forward().
         zero_pad: zero each chunk's KV pad window as it is written without acking it, for a caller that sends the
             acks itself once the forward is done (TtPrefillRuntime.prefill_forward; always on the traced path).
-        seed_indexer_indices: part of the shared packed contract (GLM-5.3's indexer reuse); Kimi-K3 has no indexer,
-            so it must be None.
+        index_kv_cache: K3.1's DSA indexer key cache (None on K3). Each DSA layer runs its own indexer per chunk, as
+            in forward(): the chunk's index-key write and top-k against that chunk's slot and prefix.
+        seed_indexer_indices: part of the shared packed contract (GLM-5.3's indexer reuse). No K3 or K3.1 layer reuses
+            another's top-k, so none cross a pipeline boundary and it must be None.
         metadata / padding_config: the traced form. One ``(slot, actual_start, actual_end)`` device triple per
             chunk position replaces ``chunks`` (then None), and the runtime's persistent PackedPadding replaces the
             one built from the chunks. Every position runs (an empty one points at a scratch slot); no acks.
@@ -603,10 +605,12 @@ class TtKimiK3Transformer(LightweightModule):
         n = len(metadata) if traced else len(chunks)
         if n != self.forward_chunks:
             raise ValueError(f"{n} chunks for a model built for {self.forward_chunks}")
-        if self.has_indexer:
-            raise NotImplementedError("Kimi-K3.1 (DSA indexer) runs one chunk per forward; packed forwards are K3 only")
-        if index_kv_cache is not None or seed_indexer_indices is not None:
-            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache and seed_indexer_indices must be None")
+        if seed_indexer_indices is not None:
+            raise ValueError("Kimi-K3 passes no indexer indices between ranks; seed_indexer_indices must be None")
+        if index_kv_cache is not None and not self.has_indexer:
+            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
+        if index_kv_cache is None and self.has_indexer and self.schedule.num_mla_layers:
+            raise ValueError("Kimi-K3.1's DSA layers write and read an indexer key cache; pass index_kv_cache")
         if traced and (padding_config is None or on_layer_complete is not None):
             raise ValueError("a traced packed forward takes the persistent padding_config and no host acks")
 
@@ -659,6 +663,9 @@ class TtKimiK3Transformer(LightweightModule):
                     dict(
                         rope_tensors=rope_tensors,
                         kvpe_cache=kvpe_cache,
+                        # K3.1: each DSA layer writes this chunk's indexer keys to its own slot and runs its own
+                        # top-k over the chunk's prefix, so nothing indexer-related crosses chunks or layers.
+                        index_kv_cache=index_kv_cache,
                         cache_user_id=slot,
                         actual_start=start,
                         actual_end=end,

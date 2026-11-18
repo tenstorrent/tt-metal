@@ -130,34 +130,29 @@ def build_stack(
     is_last_rank: bool = True,
     kv_only_last_layer: bool = False,
     num_users: int = 1,
+    forward_chunks: int = 1,
+    residual_factory=None,
 ):
     """A rank's `TtKimiK3Transformer` and its caches from the serving allocator (`allocate_kv_cache`).
 
     TP-deduped scaled-FP8 kvpe, the bf8 indexer key cache, and the KDA slabs, attached to the model as
     the runner's compile() does. `num_users` is the slot count of every cache and slab and the model's
-    user slots.
+    user slots. `forward_chunks` builds the model for packed forwards of that many chunks;
+    `residual_factory` replaces the AttnRes stream (e.g. PlainResidualStream, the bisection arm).
     """
     adapter = get_adapter("kimi_k3_1")
     config = hf_config()
-    params = PrefillRunParams(
-        mesh_shape=tuple(mesh_device.shape),
-        num_layers=num_layers,
-        first_layer_idx=first_layer_idx,
+    params = run_params(
+        mesh_device,
+        first_layer_idx,
+        num_layers,
         is_first_rank=is_first_rank,
         is_last_rank=is_last_rank,
-        max_seq_len=CACHE_LEN,
-        chunk_size=CHUNK,
-        num_users=num_users,
-        capacity_factor=2,
-        num_links=1,
-        gate_mode_name="DEVICE_FP32",
         kv_only_last_layer=kv_only_last_layer,
-        weight_cache_path=None,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
-        tp_shard_kv=True,
-        sparse_kv_cache_format=None,
+        num_users=num_users,
+        forward_chunks=forward_chunks,
     )
+    extra = {} if residual_factory is None else {"residual_factory": residual_factory}
     transformer = TtKimiK3Transformer(
         mesh_device,
         config,
@@ -176,6 +171,8 @@ def build_stack(
         slot_num=num_users,
         sparse_kv_cache_format=adapter.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
         tp_shard_kv=True,
+        forward_chunks=forward_chunks,
+        **extra,
     )
     if is_first_rank and first_layer_idx > 0:
         # The transformer reads a first rank past layer 0 as a capacity probe (PREFILL_PP_LAYER_OFFSET) and
@@ -193,6 +190,43 @@ def build_stack(
     caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=config, params=params)
     transformer.kda_states = caches.kda_states
     return transformer, caches
+
+
+def run_params(
+    mesh_device,
+    first_layer_idx: int,
+    num_layers: int,
+    *,
+    is_first_rank: bool = True,
+    is_last_rank: bool = True,
+    kv_only_last_layer: bool = False,
+    num_users: int = 1,
+    forward_chunks: int = 1,
+    use_trace: bool = False,
+) -> PrefillRunParams:
+    """The `PrefillRunParams` the serving allocator sizes a synthetic rank's caches from. A traced packed rank
+    (`use_trace` with `forward_chunks` > 1) gets one more KV slot, the scratch slot of an empty chunk position."""
+    return PrefillRunParams(
+        mesh_shape=tuple(mesh_device.shape),
+        num_layers=num_layers,
+        first_layer_idx=first_layer_idx,
+        is_first_rank=is_first_rank,
+        is_last_rank=is_last_rank,
+        max_seq_len=CACHE_LEN,
+        chunk_size=CHUNK,
+        num_users=num_users,
+        capacity_factor=2,
+        num_links=1,
+        gate_mode_name="DEVICE_FP32",
+        kv_only_last_layer=kv_only_last_layer,
+        weight_cache_path=None,
+        sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
+        tp_shard_kv=True,
+        sparse_kv_cache_format=None,
+        use_trace=use_trace,
+        forward_chunks=forward_chunks,
+    )
 
 
 def release(transformer, caches) -> None:
