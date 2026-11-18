@@ -130,12 +130,12 @@ __attribute__((noinline)) void calculate_remainder_uint32_scalar_small_b(uint sc
         a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
         sfpi::vInt x = rt + rt + (a & 1);  // x = 2 * (t % b) + (a & 1), in [0, 2b)
 
-        // x % b = (x >=u b) ? x - b : x
-        sfpi::vInt r = x;
-        v_if(sfpi::vUInt(x) >= sfpi::vUInt(b)) { r = x - b; }
+        // x % b = (x >=u b) ? x - b : x. With b < 2^31, x - b is in [-b, b) and doesn't overflow.
+        sfpi::vInt y = x - b;
+        v_if(y >= 0) { x = y; }
         v_endif;
 
-        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = r;
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = x;
         sfpi::dst_reg++;
     }
 }
@@ -158,12 +158,12 @@ __attribute__((noinline)) void calculate_remainder_uint32_scalar_general(uint sc
         a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
         sfpi::vInt x = rt + rt + (a & 1);  // x = 2 * (t % b) + (a & 1), in [0, 2b)
 
-        // x % b = (x >=u b) ? x - b : x
-        sfpi::vInt r = x;
-        v_if(sfpi::vUInt(x) >= sfpi::vUInt(b)) { r = x - b; }
+        // x % b = (x >=u b) ? x - b : x. With b < 2^31, x - b is in [-b, b) and doesn't overflow.
+        sfpi::vInt y = x - b;
+        v_if(y >= 0) { x = y; }
         v_endif;
 
-        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = r;
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = x;
         sfpi::dst_reg++;
     }
 }
