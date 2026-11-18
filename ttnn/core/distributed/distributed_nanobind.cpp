@@ -334,8 +334,11 @@ void py_module(nb::module_& mod) {
             "lowest_occupied_compute_l1_address",
             [](const MeshDevice& self) { return self.lowest_occupied_compute_l1_address(); },
             R"doc(
-           Lowest L1 address held by a buffer on the compute cores (all devices of the mesh), or None
-           when no L1 buffer is allocated. Circular buffers of a program must end below it.
+           Lowest L1 address occupied by an L1 buffer, as reported by the mesh's global allocator and the
+           active sub-devices' allocators, or None when they report no L1 buffer. This is the address the
+           runtime checks a program's circular buffers against (they must end below it). It does not cover
+           the L1_SMALL region, which sits above all L1 buffers, nor per-core (HYBRID mode) allocations held
+           by each device's own allocator. It is a snapshot of current allocations.
        )doc")
         .def(
             "l1_allocator_base",
@@ -343,7 +346,9 @@ void py_module(nb::module_& mod) {
                 return self.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
             },
             R"doc(
-           L1 address where the L1 allocator (and a program's circular buffers) start on the compute cores.
+           Configured base address of the mesh's L1 allocator on the compute cores: the lowest address an L1
+           buffer or a circular buffer can use. It is a lower bound, not necessarily where a program's circular
+           buffers start: persistent L1 allocations on a core raise that start above this base.
        )doc")
         .def(
             "compute_with_storage_grid_size",
