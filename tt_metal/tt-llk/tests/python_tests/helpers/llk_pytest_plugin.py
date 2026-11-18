@@ -759,8 +759,6 @@ def _select_node_list(config, items):
         if line.strip():
             order.setdefault(line.strip(), len(order))
             module_order.setdefault(line.strip().split("::")[0], len(module_order))
-    # In the list's order (stage 2 lists the largest slowdowns first, and a deadline skips the rest),
-    # with each module's tests kept together: a module's report is written when its tests end.
     selected = sorted(
         (item for item in items if item.nodeid in wanted),
         key=lambda item: (module_order[item.nodeid.split("::")[0]], order[item.nodeid]),
@@ -1164,7 +1162,6 @@ def pytest_runtest_setup(item):
     if _worker_fatal is not None:
         _fail_xdist_worker(item, _worker_fatal)
 
-    # Stage 2 of the perf gate stops starting tests at its deadline, so the session still writes its reports.
     stop_at = os.environ.get("LLK_STOP_AT")
     if stop_at and datetime.datetime.now().timestamp() > float(stop_at):
         pytest.skip("past the LLK_STOP_AT deadline")
@@ -1303,7 +1300,6 @@ def perf_report(request, worker_id):
 
 @contextlib.contextmanager
 def _shift_output(shift):
-    """Point the report paths at code position `shift`: temp_perf_data_p<shift>, run tag p<shift>."""
     saved_dir, saved_tag = TestConfig.PERF_DATA_DIR, os.environ.get("PERF_RUN_TAG")
     TestConfig.PERF_DATA_DIR = TestConfig.ARTEFACTS_DIR / f"temp_perf_data_p{shift}"
     os.environ["PERF_RUN_TAG"] = f"p{shift}"

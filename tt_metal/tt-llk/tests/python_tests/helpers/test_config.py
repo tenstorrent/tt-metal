@@ -125,8 +125,6 @@ class TestOutcome:
     device_print_lines: list = field(default_factory=list)
 
 
-# Bytes to move all TRISC code by (stage 2 of the perf gate). LLK_CODE_SHIFTS runs several in one session:
-# PerfConfig.run sets TestConfig.CODE_SHIFT to each in turn.
 LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "0"))
 # The link flag that applies it; the object cache key leaves it out, so every position reuses the objects.
 CODE_SHIFT_FLAG = "-Wl,--defsym=__llk_code_shift="
@@ -1456,8 +1454,6 @@ class TestConfig:
             else []
         )
         parts = temp_str + ["<<search-dirs>>"] + search_dirs + build_modes
-        # Each code position links its own ELFs; position 0 keeps the id it always had. The object cache keys on
-        # the position-0 id, so all positions share the objects.
         self.unshifted_variant_id = sha256(str(" | ".join(parts)).encode()).hexdigest()
         self.variant_id = (
             sha256(
@@ -2366,10 +2362,11 @@ class TestConfig:
             TestConfig.TENSIX_LOCATION,
         )
 
-        logger.debug(
-            "ELF directory: {}",
-            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf",
-        )
+        elf_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        logger.debug("ELF directory: {}", elf_dir)
+
+        if TestConfig.BUILD_MODE == BuildMode.CONSUME and not elf_dir.is_dir():
+            pytest.skip("no ELFs: the compile session did not reach this test")
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)

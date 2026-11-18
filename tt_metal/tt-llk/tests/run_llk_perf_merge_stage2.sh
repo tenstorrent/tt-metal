@@ -43,8 +43,6 @@ fi
 python3 "$LLK/perf/placement_check.py" nodes --candidates "$OUT/stage1.regressions.csv" \
   --map "$LLK/perf_data/runs/**/*.windowhash" --cap 1000000 --out "$OUT/nodes.txt"
 
-# measure <side> <tree> <stop at> <node list>: the listed tests at the 5 positions, kept as perf_data/runs/p<shift>-1.
-# No test starts after <stop at>; the session then ends and writes what it measured.
 measure() {
   local left=$(( $3 - $(date +%s) ))
   if (( left < 30 )); then
@@ -86,8 +84,6 @@ elif ! cmp -s "$LLK/tests/sfpi-version" "$BASE/tt_metal/tt-llk/tests/sfpi-versio
 fi
 ln -s "$LLK/tests/sfpi" "$BASE/tt_metal/tt-llk/tests/sfpi"
 # No test limit: stage 2 measures until the deadline, and the report lists what it did not measure on both sides.
-# The head measures the largest slowdowns first, until halfway to the deadline. The base then measures the tests
-# the head measured, until the deadline.
 measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 )) "$OUT/nodes.txt"
 grep -Fx -f "$OUT/measured.head" "$OUT/nodes.txt" > "$OUT/nodes.base" || true
 if [[ -s "$OUT/nodes.base" ]]; then

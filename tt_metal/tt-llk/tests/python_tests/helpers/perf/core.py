@@ -44,8 +44,6 @@ from .schema import (
 )
 from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 
-# Stage 2 of the perf gate: the code positions (bytes) to measure every test at, in one session, e.g. "0 4 20 36 52".
-# The first position's rows go to the session's report, the others to perf_data/runs/p<shift>/.
 CODE_SHIFTS = [int(s) for s in os.environ.get("LLK_CODE_SHIFTS", "").split()]
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
@@ -801,7 +799,6 @@ def _selected_run_types(run_types):
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
-    # {shift: report} for the code positions after the first; set by the perf_report fixture.
     SHIFT_REPORTS: ClassVar[dict] = {}
     COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
 
@@ -1001,7 +998,6 @@ class PerfConfig(TestConfig):
         if not CODE_SHIFTS:
             self._run_at_position(perf_report, run_count, first=True, last=True)
             return
-        # Stage 2: every code position of this test, one after the other, each into its own report.
         try:
             for i, shift in enumerate(CODE_SHIFTS):
                 TestConfig.CODE_SHIFT = shift
@@ -1166,7 +1162,6 @@ class PerfConfig(TestConfig):
             self.passed_runtimes,
         )
         perf_report.append(combined, label=self.test_name)
-        # The window map (node id, loop fingerprint) comes from the first code position only.
         if first:
             window_hash.write_rows(
                 TestConfig.perf_run_dir(),
