@@ -29,9 +29,11 @@ void IntImgDeviceOperation::validate_on_program_cache_miss(
     const uint32_t num_cores = grid.x * grid.y;
     TT_FATAL(
         tensor_args.padded_shape()[3] == CORES_X * CORES_Y * tile_width,
-        "intimg expects {} channel slices of width {} (channel dimension {}), but it is {} (padded {})",
-        CORES_X * CORES_Y,
+        "intimg runs one {}-wide channel slice on each core of a fixed {}x{} core grid, so the channel dimension must "
+        "be {}, but it is {} (padded {})",
         tile_width,
+        CORES_X,
+        CORES_Y,
         CORES_X * CORES_Y * tile_width,
         input_shape[3],
         tensor_args.padded_shape()[3]);
