@@ -7,6 +7,7 @@
 #include <limits>
 
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 
 namespace tt::tt_metal {
 
@@ -147,6 +148,11 @@ void TensorAccessorArgs::update_args_config() {
         args_config_ = tensor_accessor::ArgConfig::None;
         return;
     }
+    // A TensorAccessor addresses every node at one base address, which a per-core allocated buffer doesn't have.
+    TT_FATAL(
+        !experimental::per_core_allocation::is_per_core_allocation(*buffer_),
+        "A per-core allocated buffer cannot build a TensorAccessor: each node knows only its own address. "
+        "Use a per-node tensor binding with LocalTensorAccessor instead.");
 
     if (buffer_->buffer_distribution_spec().has_value()) {
         args_config_.set(tensor_accessor::ArgConfig::Sharded);
