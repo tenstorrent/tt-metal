@@ -444,8 +444,7 @@ models:
     bh_galaxy: 470
     # 2385 -> 2463 (+78, PR #64830): K3.1 synthetic suite 47 (traced DSA replay 12 of it), K3.1 L24 / L24-128k
     # depth 45, K3 / K3.1 KV table rows 2 (94 min, 16 of it from existing headroom).
-    # 2463 -> 2478 (+15, PR #63859): Kimi-K3 multi-user section (interleaved, packed and traced packed forwards).
-    bh_sc1: 2478
+    bh_sc1: 2463
     bh_sc1_high_power: 500
     bh_sc4: 60
     wh_n150: 500
