@@ -223,6 +223,21 @@ def test_indexed_fill(device):
     logger.info("Indexed Fill Output Tensor Shape:", output_tensor.shape)
 
 
+def test_moe_routing_remap(device):
+    # Routing weights of 32 experts, 4 of them selected
+    routing_weights = torch.zeros((1, 32))
+    routing_weights[0, [3, 10, 17, 28]] = torch.tensor([0.5, 0.25, 0.125, 0.125])
+    routing_weights_tt = ttnn.from_torch(
+        routing_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+    # A single device is the only device along cluster_axis, so it keeps all 4 non-zero weights
+    local_weights = ttnn.moe_routing_remap(
+        routing_weights_tt, non_zero_weight_size=4, expert_parallel_size=1, cluster_axis=0
+    )
+    logger.debug(f"Local Routing Weights Shape: {local_weights.shape}")  # Shape([1, 32])
+
+
 def test_gather(device):
     # Create a tensor and an index tensor
     ttnn_input = ttnn.rand((4, 4), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
