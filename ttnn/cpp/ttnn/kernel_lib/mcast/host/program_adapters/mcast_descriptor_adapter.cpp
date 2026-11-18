@@ -105,6 +105,8 @@ void McastImpl::attach(
                 entry != kernel.runtime_args.end() && binding.arg_idx < entry->second.size(),
                 "Multicast attachment encountered an invalid buffer binding");
         }
+        // Every core gets the channel's words at rt_offset, padded alike, unless the channel has none here.
+        const bool no_words = wire::RuntimeLayout(metadata).words == 0;
         for (const auto& core : corerange_to_cores(kernel.core_ranges)) {
             if (const auto* group = group_for_core_(core)) {
                 const bool sender =
@@ -113,11 +115,11 @@ void McastImpl::attach(
                     !(sender || chain) || noc == cfg_.noc,
                     "Multicast sender/forwarder NoC differs from the configured multicast NoC");
             }
-            const auto payload = runtime_args_(core, metadata);
-            if (payload.empty()) {
-                // Nothing for this core to read: its runtime args stay as the operation set them.
+            if (no_words) {
+                // The channel has no per-core words on this kernel: its runtime args stay as the operation set them.
                 continue;
             }
+            const auto payload = runtime_args_(core, metadata);
             auto entry = std::find_if(
                 kernel.runtime_args.begin(),
                 kernel.runtime_args.end(),

@@ -38,11 +38,11 @@ hardware multicast uses `SenderPipe` and `ReceiverPipe`. `TransferMode::ChainUni
 When every group has one fixed sender and the groups tile one rectangle in equal sub-rectangles (rows or columns of a
 matmul grid, for example), with every sender at the same offset in its group or, for row or column lines,
 `McastSenderPlacement::Staggered` along them, a `ProgramDescriptor` or `ProgramSpec` attachment gives the channel no
-per-core runtime arguments. Each core derives its roles, its sender and its group's NoC rectangle from its logical coordinates and a NoC
-table the attachment appends to the kernel's common runtime arguments (one x per grid column, one y per grid row). The
-host checks that every core derives exactly what the per-core path would give it, and otherwise keeps per-core
-arguments. `McastConfig::derive_regular_grid = false` keeps per-core arguments; a direct `Program` attachment always
-does.
+per-core runtime arguments. Each core derives its roles, its sender and its group's NoC rectangle from its logical
+coordinates and a NoC table the attachment appends to the kernel's common runtime arguments (one x per grid column,
+one y per grid row). The host checks that every core derives exactly what the per-core path would give it, and
+otherwise keeps per-core arguments. `McastConfig::derive_regular_grid = false` keeps per-core arguments; a direct
+`Program` attachment always does. Common runtime arguments set after the attachment would overwrite the table.
 
 ## File map
 

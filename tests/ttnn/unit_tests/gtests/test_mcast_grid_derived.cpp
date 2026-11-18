@@ -474,6 +474,10 @@ TEST_F(McastHostFixture, GridDerivedFallsBackToPerCoreWords) {
                  McastFixedSenderConfig{.sender_index = 0, .placement = McastSenderPlacement::Staggered});
          },
          CoreRangeSet(CoreRange({0, 0}, {1, 3}))},
+        // Senders at varying offsets that are not one step per line (0 then 2): the stagger check must reject them.
+        {"unstaggered_offsets",
+         [&] { return Mcast(*device_, {}, CoreRangeSet(rows), 4, McastExplicitFixedSenderConfig{{{0, 0}, {2, 1}}}); },
+         CoreRangeSet(rows)},
         {"irregular",
          [&] { return Mcast(*device_, {}, cores({{0, 0}, {2, 0}, {0, 1}, {2, 1}}), 2); },
          CoreRangeSet(rows)},

@@ -95,7 +95,7 @@ struct GridMetadata {
     uint32_t rows = 0;
     uint32_t group_width = 0;  // Each group's logical extent.
     uint32_t group_height = 0;
-    uint32_t sender_dx = 0;  // The sender's offset in its group; the first group's when staggered.
+    uint32_t sender_dx = 0;  // The sender's offset in its group; line 0's when staggered.
     uint32_t sender_dy = 0;
     uint32_t common_base = 0;  // The table's first common runtime arg.
 };
