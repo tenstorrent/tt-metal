@@ -7,13 +7,12 @@ import pytest
 from loguru import logger
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from collections import OrderedDict
-from PIL import Image
-from torchvision import transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 from models.experimental.retinanet.tt.tt_stem import resnet50Stem, neck_optimisations
 from models.experimental.retinanet.tt.utils import activation_memory_config
+from models.experimental.retinanet.tests.pcc.synthetic_input import synthetic_image
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
 
@@ -58,15 +57,6 @@ class Resnet50StemTestInfra:
 
         # Build reference torch model
         weights = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT
-        preprocess = transforms.Compose(
-            [
-                transforms.CenterCrop((512, 512)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ]
-        )
-
-        img = Image.open("models/experimental/retinanet/resources/dog_800x800.jpg").convert("RGB")
 
         retinanet = retinanet_resnet50_fpn_v2(weights=weights).eval()
         backbone = retinanet.backbone.body
@@ -89,7 +79,7 @@ class Resnet50StemTestInfra:
         )
 
         # Prepare golden inputs/outputs
-        self.torch_input_tensor = preprocess(img).unsqueeze(0)
+        self.torch_input_tensor = synthetic_image()
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
 
         # Convert input to TTNN format
