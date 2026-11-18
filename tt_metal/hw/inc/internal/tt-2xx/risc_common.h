@@ -339,11 +339,10 @@ inline void invalidate_cache_all(uint32_t hartid) {
 
 #endif  // ARCH_QUASAR && COMPILE_FOR_DM
 
-// Fallback for Quasar non-DM cores (TRISC) - no cache management needed
+// A fence request invalidates a TRISC's read cache of L1. Call this before reading an L1 word that another core
+// writes.
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DM)
-inline __attribute__((always_inline)) void invalidate_l1_cache() {
-    // No-op for non-DM cores on Quasar
-}
+inline __attribute__((always_inline)) void invalidate_l1_cache() { asm volatile("fence" ::: "memory"); }
 #endif  // ARCH_QUASAR && !COMPILE_FOR_DM
 
 #include "api/debug/assert.h"

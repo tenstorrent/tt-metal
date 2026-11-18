@@ -71,6 +71,9 @@ auto make_tensor_accessor_tuple_uniform_page_size_common(
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#ifdef FABRIC_2D
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+#endif
 
 using namespace tt::tt_fabric::linear::experimental;
 #endif
@@ -186,9 +189,9 @@ void compute_actual_k_block(
 
 #ifdef USE_MUX
 struct PacketHeaders {
-    volatile tt::tt_fabric::LowLatencyPacketHeader* scatter_hdr;
-    volatile tt::tt_fabric::LowLatencyPacketHeader* unicast_hdr;
-    volatile tt::tt_fabric::LowLatencyPacketHeader* sem_inc_hdr;
+    volatile PACKET_HEADER_TYPE* scatter_hdr;
+    volatile PACKET_HEADER_TYPE* unicast_hdr;
+    volatile PACKET_HEADER_TYPE* sem_inc_hdr;
 };
 
 template <typename TensorAccessorType, typename ConnectionHandleType>
@@ -709,8 +712,10 @@ void read_ternary_blocks_sync(
 /**
  * This write method is more granular, waiting on a row of output tiles
  * in the output CB before writing those out, rather than waiting on the entire block.
+ * PIECE_W: the compute publishes the output PIECE_W tiles at a time (a whole row by default; a subblock with the
+ * multicast path's direct output, out_piece_w); each piece is written and released as soon as it lands.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t PIECE_W = N_block_tiles, typename TensorAccessorType>
 void write_block_sync_granular(
     Noc noc,
     const TensorAccessorType& tensor_accessor,
@@ -721,23 +726,31 @@ void write_block_sync_granular(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+    static_assert(N_block_tiles % PIECE_W == 0, "a row is a whole number of pieces");
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
-        cb_out.wait_front(N_block_tiles);
-        uint32_t m_tile = d0_start + m_id;
-        if (m_tile < d0_end && m_tile < shape.logical_d0) {
-            uint32_t out_read_ptr = cb_out.get_read_ptr();
-            for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
-                if (n_tile_id >= shape.logical_d1) {
-                    break;
+        const uint32_t m_tile = d0_start + m_id;
+        const bool row_valid = m_tile < d0_end && m_tile < shape.logical_d0;
+        for (uint32_t p = 0; p < N_block_tiles; p += PIECE_W) {
+            cb_out.wait_front(PIECE_W);
+            if (row_valid) {
+                uint32_t out_read_ptr = cb_out.get_read_ptr();
+                for (uint32_t w = 0; w < PIECE_W; w++) {
+                    const uint32_t n_tile_id = d1_start + p + w;
+                    if (n_tile_id >= d1_end || n_tile_id >= shape.logical_d1) {
+                        break;
+                    }
+                    noc.async_write(
+                        CoreLocalMem<uint8_t>(out_read_ptr),
+                        tensor_accessor,
+                        tile_size_bytes,
+                        {},
+                        {.page_id = m_tile * shape.logical_d1 + n_tile_id});
+                    out_read_ptr += tile_size_bytes;
                 }
-                uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
-                noc.async_write(
-                    CoreLocalMem<uint8_t>(out_read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
-                out_read_ptr += tile_size_bytes;
             }
+            noc.async_writes_flushed();
+            cb_out.pop_front(PIECE_W);
         }
-        noc.async_writes_flushed();
-        cb_out.pop_front(N_block_tiles);
     }
 }
 
@@ -1012,6 +1025,28 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
 
+#ifdef FABRIC_2D
+        // Fabric2D / TorusXY: route to the neighbour by fabric node (chip, mesh), not by hop count.
+        const auto dst_chip = static_cast<uint8_t>(unicast_route_info.dst_chip_id);
+        const auto dst_mesh = static_cast<uint16_t>(unicast_route_info.dst_mesh_id);
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+            hdrs.scatter_hdr,
+            dst_chip,
+            dst_mesh,
+            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
+            page_size * num_tiles_to_write_per_packet);
+
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_write_set_state<
+            UnicastWriteUpdateMask::PayloadSize>(hdrs.unicast_hdr, dst_chip, dst_mesh, nullptr, in3_tile_size);
+
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            hdrs.sem_inc_hdr,
+            dst_chip,
+            dst_mesh,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+#else
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             hdrs.scatter_hdr,
@@ -1027,6 +1062,7 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
             hdrs.sem_inc_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+#endif
 
         ccl_routing_utils::fabric_set_line_unicast_route(hdrs.scatter_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(hdrs.unicast_hdr, unicast_route_info);

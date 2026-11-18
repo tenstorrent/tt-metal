@@ -2815,7 +2815,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     bool gqa_mcast_enabled = false;
     std::string gqa_mcast_fallback_reason;
     std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
-    if (gqa_grouped_kv && build_kv_chains) {
+    // The grouped chains follow the per-length Q split, so dynamic_local_n builds none: every core reads its K/V
+    // from DRAM, as for B > 1.
+    if (gqa_grouped_kv && build_kv_chains && !dynamic_local_n) {
         std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
 
         for (uint32_t ci = 0; ci < num_cores; ++ci) {
@@ -3396,11 +3398,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
-    if (ksplit_count > 1) {
-        // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
-        // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
+    if (ksplit_count > 1 || (dynamic_local_n && !use_streaming_compute)) {
+        // Code size, not correctness: at O3 the K-split merge epilogue and the fp32 path under dynamic_local_n push
+        // the compute binaries past the kernel config buffer ("Program size too large"). O2 fits.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
 

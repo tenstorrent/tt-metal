@@ -235,6 +235,23 @@ std::ostream& operator<<(std::ostream& os, const AsicID& asic_id);
 std::ostream& operator<<(std::ostream& os, const TrayID& tray_id);
 std::ostream& operator<<(std::ostream& os, const ASICLocation& asic_location);
 
+// Describes the fabric topology and routing configuration for the devices in the environment.
+// These parameters determine how devices are interconnected and how data is routed between them.
+struct FabricSettings {
+    tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
+    tt_fabric::FabricReliabilityMode reliability_mode =
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    std::optional<uint8_t> num_routing_planes = std::nullopt;
+    tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED;
+    tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED;
+    tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT;
+    tt_fabric::FabricRouterConfig router_config = {};
+    // This process's binding into the mesh graph descriptor. Defaults to mesh 0 with the host rank left to the
+    // topology mapper; TT_MESH_ID / TT_MESH_HOST_RANK, when set, override these.
+    tt_fabric::MeshId mesh_id = tt_fabric::MeshId{0};
+    tt_fabric::MeshHostRankId host_rank = tt_fabric::MESH_HOST_RANK_UNSET;
+};
+
 }  // namespace tt::tt_metal
 
 template <>

@@ -82,7 +82,9 @@ from ttnn._ttnn.multi_device import (
     MeshComposerConfig,
     TensorTopology,
     get_device_tensors,
+    cpu_shards,
     from_host_shards,
+    from_local_host_shards,
     combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
@@ -205,6 +207,9 @@ from ttnn._ttnn.hd_socket import (
 
 from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
+    StreamCounter,
+    StreamInputCounters,
+    StreamOutputCounters,
 )
 
 from ttnn._ttnn.d2h_stream_service import (
@@ -409,6 +414,7 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+host_tensor_from_bytes = ttnn._ttnn.tensor.host_tensor_from_bytes
 experimental_create_sram_tensor_view = ttnn._ttnn.tensor.experimental_create_sram_tensor_view
 NodeLocalSpan = ttnn._ttnn.tensor.NodeLocalSpan
 PerNodeDeviceLocalMemorySpan = ttnn._ttnn.tensor.PerNodeDeviceLocalMemorySpan
@@ -643,6 +649,14 @@ from ttnn._ttnn.operations import command_list as _command_list
 
 experimental.CommandListBuilder = _command_list.CommandListBuilder
 experimental.CommandList = _command_list.CommandList
+
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use. Experimental-only surface.
+from ttnn._ttnn import program_spec as _program_spec
+
+for _name in dir(_program_spec):
+    if not _name.startswith("_"):
+        setattr(experimental, _name, getattr(_program_spec, _name))
+del _name
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
