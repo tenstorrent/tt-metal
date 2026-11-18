@@ -17,18 +17,42 @@ namespace ttnn::operations::data_movement::detail {
 
 void bind_move(nb::module_& mod) {
     const auto* doc = R"doc(
-            Moves the elements of the input tensor ``arg0`` to a location in memory with specified memory layout.
+            Moves `input_tensor` into a newly allocated tensor and deallocates `input_tensor`.
 
-            If no memory layout is specified, output memory will be the same as the input tensor memory config.
+            `input_tensor` is deallocated before the output is allocated, so the output can take its place, or memory
+            that tensors deallocated earlier left free. This can compact device memory.
 
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | Argument | Description                | Data type                  | Valid range                     | Required |
-            +==========+============================+============================+=================================+==========+
-            | arg0     | Tensor to move             | Tensor                     | Tensor of shape [W, Z, Y, X]    | Yes      |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
-            |          | TT accelerator device      |                            |                                 |          |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
+            Args:
+                input_tensor (ttnn.Tensor): the tensor to move, on device. No other tensor, such as a view from ``ttnn.view``, may share its device buffer. It is deallocated by the call and must not be used afterwards.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. Defaults to `None`, which uses the input tensor's memory configuration. For an interleaved input it must be interleaved, and for a sharded input `None` or the input's memory configuration.
+
+            Returns:
+                ttnn.Tensor: the output tensor, with the shape, dtype, layout and values of the input.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+                     - TILE, ROW_MAJOR
+                   * - BFLOAT8_B, BFLOAT4_B
+                     - TILE
+
+                On Blackhole, the input can also be a ``FP8_E4M3`` tensor in ROW_MAJOR layout.
+
+                When an interleaved output is in the input's buffer type, each core's share of the tensor, its size
+                divided by the number of cores in the device's compute grid, must fit in that core's free L1: anywhere
+                above the allocator's base for a DRAM tensor, and below the output for an L1 tensor.
+
+            Memory Support:
+                - Interleaved: DRAM and L1; the input and the output can be in different buffer types
+                - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1, with the output in the input's memory configuration
         )doc";
 
     ttnn::bind_function<"move">(
