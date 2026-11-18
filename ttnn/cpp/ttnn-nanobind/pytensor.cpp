@@ -59,6 +59,7 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/experimental/gguf.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -518,7 +519,7 @@ void pytensor_module(nb::module_& mod) {
         "from_gguf",
         [](const nb::ndarray<const uint8_t, nb::ndim<1>, nb::c_contig, nb::device::cpu>& blocks,
            const TensorSpec& spec) {
-            return Tensor(tt::tt_metal::from_gguf(
+            return Tensor(tt::tt_metal::experimental::from_gguf(
                 ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(blocks.data()), blocks.size()), spec));
         },
         nb::arg("blocks"),
@@ -527,7 +528,7 @@ void pytensor_module(nb::module_& mod) {
     mod.def(
         "to_gguf",
         [](const Tensor& tensor) {
-            auto* blocks = new std::vector<std::byte>(tt::tt_metal::to_gguf(tensor.host_tensor()));
+            auto* blocks = new std::vector<std::byte>(tt::tt_metal::experimental::to_gguf(tensor.host_tensor()));
             nb::capsule owner(blocks, [](void* p) noexcept { delete static_cast<std::vector<std::byte>*>(p); });
             return nb::ndarray<nb::numpy, uint8_t, nb::ndim<1>>(blocks->data(), {blocks->size()}, owner);
         },

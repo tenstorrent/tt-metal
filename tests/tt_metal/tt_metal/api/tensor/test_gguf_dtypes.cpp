@@ -12,6 +12,7 @@
 #include <random>
 #include <vector>
 
+#include <tt-metalium/experimental/gguf.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
@@ -20,6 +21,9 @@
 
 namespace tt::tt_metal {
 namespace {
+
+using experimental::from_gguf;
+using experimental::to_gguf;
 
 std::vector<DataType> gguf_dtypes() {
     std::vector<DataType> dtypes;

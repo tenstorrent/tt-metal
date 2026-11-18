@@ -20,7 +20,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/gguf.hpp>
 
 #include "tt_metal/hw/inc/experimental/gguf_page.h"
 
@@ -1022,6 +1022,8 @@ void group_records(DataType type, int64_t K, int64_t N, const uint8_t* in, uint8
 
 }  // namespace
 
+namespace experimental {
+
 HostTensor from_gguf(ttsl::Span<const std::byte> blocks, const TensorSpec& spec) {
     const auto [K, N] = gguf_shape(spec);
     const DataType type = spec.data_type(), source = gguf_source_dtype(type);
@@ -1097,5 +1099,7 @@ std::vector<std::byte> to_gguf(const HostTensor& tensor) {
     }
     return blocks;
 }
+
+}  // namespace experimental
 
 }  // namespace tt::tt_metal
