@@ -11,7 +11,11 @@ after ``index.json`` is fsynced, so a crashed attempt can never look complete an
 ``index.json`` is written by the coordinator only. It records, per canonical key, the global and canonical shapes,
 the transform, the topology label the writer trusted, every live name the tensor was seen under, and a columnar
 table of chunks: one row per unique shard, with its box in the global array, the file that holds it, its byte range
-and its CRC. Readers reject a higher major version and ignore unknown fields.
+and its CRC.
+
+Readers refuse a newer ``VERSION`` and ignore fields they do not know. A new field that a reader may ignore needs no
+bump. A field readers require, or one that changes how the rest is read (a reader ignoring it would load the wrong
+data), bumps ``VERSION``, so that an older reader refuses the checkpoint instead of misreading it.
 """
 
 from __future__ import annotations
