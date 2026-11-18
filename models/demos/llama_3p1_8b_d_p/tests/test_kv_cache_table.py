@@ -276,7 +276,9 @@ def test_llama_kv_table_reads_all_synthetic_cache_pages(mesh_device, device_para
                         live = _snapshot_page(snapshots[kind], head=head, slot=slot, layer=layer, position=position)
                         expected = _tagged_page(kind, slot, layer, head, position).to(torch.bfloat16)
                         _assert_page_equal(live, expected, f"live {config_name}/{slot}/{layer}/{position}")
-                        table_page = _decode_page(table.read_device_chunk(layer, position, slot, config_id=config_id))
+                        table_page = _decode_page(
+                            table.read_device_chunk(mesh_device, layer, position, slot, config_id=config_id)
+                        )
                         _assert_page_equal(table_page, live, f"table {config_name}/{slot}/{layer}/{position}")
                         comparisons += 1
         assert comparisons == EXPECTED_PAGES
@@ -340,7 +342,7 @@ def test_llama_gqa_producer_pages_match_kv_table(mesh_device, device_params):
             for position in range(0, GLOBAL_CHUNK, PAGE_TOKENS):
                 live = _snapshot_page(snapshots[kind], head=head, slot=0, layer=0, position=position)
                 nonzero_values += torch.count_nonzero(live).item()
-                table_page = _decode_page(table.read_device_chunk(0, position, 0, config_id=config_id))
+                table_page = _decode_page(table.read_device_chunk(mesh_device, 0, position, 0, config_id=config_id))
                 _assert_page_equal(table_page, live, f"producer {config_name}/0/0/{position}")
                 comparisons += 1
         assert comparisons == len(CONFIG_NAMES) * (GLOBAL_CHUNK // PAGE_TOKENS)

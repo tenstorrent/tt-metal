@@ -159,7 +159,7 @@ def test_kimi_kv_cache_table(
     # against the corresponding 32-token slice of the gathered cache.
     chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0)
+        raw_bytes = lookup_table.read_device_chunk(mesh_device, layer=0, position=position, slot=0)
         chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
         expected_chunk = tt_kvpe_cache_torch_layer0[:, :, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, :]
@@ -259,7 +259,7 @@ def test_kimi_kv_cache_mock(
             batch_idx = slot * num_layers + layer  # cache batch index
             for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
                 pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-                raw_bytes = lookup_table.read_device_chunk(layer=layer, position=position, slot=slot)
+                raw_bytes = lookup_table.read_device_chunk(mesh_device, layer=layer, position=position, slot=slot)
                 chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
                 chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
                 expected_chunk = reference_bf8[batch_idx : batch_idx + 1, :, position:pos_end, :]
@@ -364,7 +364,7 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
             batch_idx = slot * num_layers + layer
             for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
                 pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-                raw_bytes = lookup_table.read_device_chunk(layer=layer, position=position, slot=slot)
+                raw_bytes = lookup_table.read_device_chunk(mesh_device, layer=layer, position=position, slot=slot)
                 chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
                 chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
                 assert_equal(chunk_torch, reference_bf8[batch_idx : batch_idx + 1, :, position:pos_end, :])
@@ -705,7 +705,7 @@ def test_dflash_kv_cache_mock(
                     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
                         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
                         raw_bytes = lookup_table.read_device_chunk(
-                            layer=layer, position=position, slot=slot, config_id=base + head_idx
+                            mesh_device, layer=layer, position=position, slot=slot, config_id=base + head_idx
                         )
                         chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
                         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
@@ -991,7 +991,7 @@ def test_glm53_tp_sharded_kv_cache_mock(
             table_row = layer_rows[layer] if layer_rows is not None else layer
             for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
                 pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-                raw_bytes = lookup_table.read_device_chunk(layer=table_row, position=position, slot=slot)
+                raw_bytes = lookup_table.read_device_chunk(mesh_device, layer=table_row, position=position, slot=slot)
                 chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
                 chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
                 expected_chunk = reference_bf8[batch_idx : batch_idx + 1, :, position:pos_end, :]
@@ -1177,7 +1177,9 @@ def test_glm53_kv_cache_table(
     chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, index_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0, config_id=INDEX_CONFIG_ID)
+        raw_bytes = lookup_table.read_device_chunk(
+            mesh_device, layer=0, position=position, slot=0, config_id=INDEX_CONFIG_ID
+        )
         chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
         assert_equal(chunk_torch, index_kbuf_torch[:, :, position:pos_end, :])
@@ -1188,7 +1190,9 @@ def test_glm53_kv_cache_table(
     kvpe_chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0, config_id=KVPE_CONFIG_ID)
+        raw_bytes = lookup_table.read_device_chunk(
+            mesh_device, layer=0, position=position, slot=0, config_id=KVPE_CONFIG_ID
+        )
         chunk_tt = ttnn.experimental.disaggregation.tensor_from_bf16_bytes(raw_bytes, kvpe_chunk_shape)
         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
         assert_equal(chunk_torch, tt_kvpe_cache_torch[:, :, position:pos_end, :])
@@ -1555,7 +1559,7 @@ def test_mistral4_kv_cache_table(
     # against the corresponding 32-token slice of the gathered cache.
     chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0)
+        raw_bytes = lookup_table.read_device_chunk(mesh_device, layer=0, position=position, slot=0)
         chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
         expected_chunk = tt_kvpe_cache_torch_layer0[:, :, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, :]

@@ -15,6 +15,7 @@
 #include <internal/disaggregation/kv_chunk_address_table.hpp>
 #include <internal/disaggregation/kv_chunk_table_cache.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/experimental/disaggregation/tensor_helpers.hpp"
 
@@ -397,6 +398,44 @@ void bind_disaggregation_api(nb::module_& mod) {
         // Device reads
         .def(
             "read_device_chunk",
+            [](const KvChunkAddressTable& table,
+               const tt::tt_metal::distributed::MeshDevice& mesh_device,
+               uint32_t layer,
+               uint32_t position,
+               uint32_t slot,
+               uint32_t config_id) {
+                auto buf = table.read_device_chunk(mesh_device, layer, position, slot, config_id);
+                return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
+            },
+            nb::arg("mesh_device"),
+            nb::arg("layer"),
+            nb::arg("position"),
+            nb::arg("slot"),
+            nb::arg("config_id") = 0,
+            R"(
+            Read the raw bytes of a single chunk from the primary replica device,
+            resolved in ``mesh_device``'s context.
+            Position is in tokens (chunk-aligned). config_id defaults to 0.
+            )")
+        .def(
+            "read_device_chunk",
+            [](const KvChunkAddressTable& table,
+               const tt::tt_metal::distributed::MeshDevice& mesh_device,
+               uint32_t layer,
+               uint32_t position,
+               uint32_t slot,
+               const std::string& config) {
+                auto buf = table.read_device_chunk(mesh_device, layer, position, slot, config);
+                return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
+            },
+            nb::arg("mesh_device"),
+            nb::arg("layer"),
+            nb::arg("position"),
+            nb::arg("slot"),
+            nb::arg("config"),
+            "Read the raw bytes of a single chunk in ``mesh_device``'s context (config addressed by name).")
+        .def(
+            "read_device_chunk",
             [](const KvChunkAddressTable& table, uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id) {
                 auto buf = table.read_device_chunk(layer, position, slot, config_id);
                 return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
@@ -406,8 +445,12 @@ void bind_disaggregation_api(nb::module_& mod) {
             nb::arg("slot"),
             nb::arg("config_id") = 0,
             R"(
-            Read the raw bytes of a single chunk from the primary replica device.
-            Resolves the device internally via the global ControlPlane.
+            Read the raw bytes of a single chunk from the primary replica device, in the default context.
+
+            .. deprecated::
+                Pass ``mesh_device`` as the first argument instead. This overload resolves the
+                default context.
+
             Position is in tokens (chunk-aligned). config_id defaults to 0.
             )")
         .def(
@@ -424,7 +467,13 @@ void bind_disaggregation_api(nb::module_& mod) {
             nb::arg("position"),
             nb::arg("slot"),
             nb::arg("config"),
-            "Read the raw bytes of a single chunk (config addressed by name).");
+            R"(
+            Read the raw bytes of a single chunk in the default context (config addressed by name).
+
+            .. deprecated::
+                Pass ``mesh_device`` as the first argument instead. This overload resolves the
+                default context.
+            )");
 
     mod.def(
         "tensor_from_bfp8_bytes",
