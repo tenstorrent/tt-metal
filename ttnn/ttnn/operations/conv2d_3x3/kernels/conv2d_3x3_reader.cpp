@@ -99,6 +99,13 @@
 // tilize: on TILE input compute itself is the slab's next writer (its untilize of the next M-block follows its tilize
 // of this one), on ROW_MAJOR the reader waits for compute to pop every entry before it refills the slab.
 //
+// N-slice center taps (the descriptor's NSLICE_CENTER_TAPS; tap-direct N-slice prelude, the kw = 1 tap a whole-tile-row
+// shift, the whole slab in the input ring): the center taps of the three kernel rows are input tile-rows of the core's
+// channel slice, which the fill already landed in the input ring. Right after the fill the reader copies them (a local
+// copy, one read per run of rows inside one slab segment; zero tile-rows outside the image or past the block's valid
+// rows) into cb_center_tiles ([3, bm, c_in_tiles], kernel-row major), so the tap-direct units carry taps 0 and 2 only.
+// The copy lands before the first unit is pushed: compute's tilize then overwrites the ring (it shares in0's L1).
+//
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
 // zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
@@ -226,7 +233,9 @@ void kernel_main() {
     // slots).
     constexpr uint32_t tap_direct_fifo_units = get_compile_time_arg_val(72);
     constexpr bool tap_direct_windows = get_compile_time_arg_val(73) != 0;
-    constexpr auto input_args = TensorAccessorArgs<74>();
+    // N-slice center taps (see the file comment).
+    constexpr bool nslice_center = get_compile_time_arg_val(74) != 0;
+    constexpr auto input_args = TensorAccessorArgs<75>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -323,10 +332,26 @@ void kernel_main() {
         center_mode == 2 ? 1 : -1,
         ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : 0>;
     using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
-    using TapDirectT =
-        conv2d_3x3::TapDirect<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
-    using TapPlannedT =
-        conv2d_3x3::TapDirectPlanned<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
+    // N-slice center taps: the tap-direct units leave tap 1 to cb_center_tiles.
+    constexpr int32_t unit_skip_kw = nslice_center ? 1 : -1;
+    using TapDirectT = conv2d_3x3::
+        TapDirect<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles, unit_skip_kw>;
+    using TapPlannedT = conv2d_3x3::TapDirectPlanned<
+        output_width,
+        input_height,
+        input_width,
+        padding,
+        dilation,
+        c_in_p,
+        block_k_tiles,
+        unit_skip_kw>;
+    static_assert(
+        !nslice_center ||
+            (tap_direct && tile_input && channel_slice && padding == dilation && input_width % TILE_DIM == 0 &&
+             output_width == input_width && block_k_tiles == 3 * (c_in_p / TILE_DIM) && fill_window >= 1 &&
+             input_ring_batches * untilize_batch_rows >= slab_tile_rows),
+        "N-slice center taps: tap-direct units of one kernel row, the kw = 1 tap a whole-tile-row shift, and the whole "
+        "slab in the input ring");
     // Tap-direct on the K-blocked walk (TapDirectFifo); the N-slice prelude keeps the slot-indexed table.
     constexpr bool kb_tap_direct = tap_direct && !nslice_outer;
     constexpr uint32_t fifo_taps = c_in_p >= TILE_DIM ? block_k_tiles * TILE_DIM / c_in_p : 1;
@@ -517,6 +542,14 @@ void kernel_main() {
         int32_t slab_x_base[3];
         [[maybe_unused]] uint32_t slab_ready_pages[3];  // TILE: slab pages that hold band kh once compute pushed them
 
+        // N-slice center taps: the slab plan (where the ring holds each input tile-row) and cb_center_tiles' block.
+        [[maybe_unused]] conv2d_3x3::TileSlabPlan center_plan{};
+        [[maybe_unused]] uint32_t center_l1 = 0;
+        if constexpr (nslice_center) {
+            cb_reserve_back(cb_center_tiles, 3 * block_m_tiles * c_in_tiles);
+            center_l1 = get_write_ptr(cb_center_tiles);
+        }
+
         if constexpr (ring_slab) {
             // ---- fill_halo_slab (ring): pop the rows below this block's window (the previous block's gather is done),
             // then stream the window's rows past the last row pushed, in batches; a short last batch is pushed whole
@@ -594,6 +627,9 @@ void kernel_main() {
             MaybeDeviceZoneScope("reader_fill");
             conv2d_3x3::TileSlabPlan plan;
             conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
+            if constexpr (nslice_center) {
+                center_plan = plan;
+            }
             const uint32_t num_segs = plan.num_segs;
             const uint32_t(&seg_first)[3] = plan.seg_first;
             const uint32_t(&seg_count)[3] = plan.seg_count;
@@ -714,6 +750,56 @@ void kernel_main() {
             if constexpr (slab_split) {
                 MaybeDeviceZoneScope("reader_fill_fwd_wait");
                 Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);
+            }
+        }
+
+        if constexpr (nslice_center) {
+            // ---- N-slice center taps: output tile-row t's center tap of kernel row kh is input tile-row
+            // t + (kh * d - p) * W / 32, which the fill landed in the ring (slab order: the plan's segments back to
+            // back from the ring base; one read per run inside one segment), or a zero tile-row outside the image or
+            // past the block's valid rows. cb_center_tiles row r of kernel row kh at (kh * bm + r) * c_in_tiles pages.
+            MaybeDeviceZoneScope("reader_center");
+            // Compiled on every path (W < 32 must not divide by zero); it only runs with W % 32 == 0.
+            constexpr int32_t tile_rows_per_image_row = input_width >= TILE_DIM ? input_width / TILE_DIM : 1;
+            const uint32_t t_first = m_tile_start + block_tiles_done;
+            reads.begin(TRID_CENTER);
+            for (int32_t kh = 0; kh < 3; ++kh) {
+                const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
+                uint32_t l1 = center_l1 + kh * block_m_tiles * row_bytes;
+                for (uint32_t r = 0; r < block_m_tiles;) {
+                    const uint32_t t = t_first + r;
+                    const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
+                    if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
+                        reads.read(zero_src_noc, l1, row_bytes);
+                        l1 += row_bytes;
+                        ++r;
+                        continue;
+                    }
+                    // Tile-rows of this image row and below stay inside the image up to its last row.
+                    const uint32_t rows_left = static_cast<uint32_t>(input_height - h_in) * tile_rows_per_image_row -
+                                               t % tile_rows_per_image_row;
+                    uint32_t run = block_valid_tiles - r;
+                    run = run < rows_left ? run : rows_left;
+                    const uint32_t row = t + shift_rows;
+                    // Band kh's in-image rows hold every center row of kernel row kh: find the run's segment.
+                    uint32_t seg_lo = 0;
+                    uint32_t slab_row = 0;
+                    uint32_t seg_left = 0;
+                    for (uint32_t sg = 0; sg < center_plan.num_segs; ++sg) {
+                        const uint32_t first = center_plan.seg_first[sg];
+                        if (row >= first && row < first + center_plan.seg_count[sg]) {
+                            slab_row = seg_lo + (row - first);
+                            seg_left = first + center_plan.seg_count[sg] - row;
+                            break;
+                        }
+                        seg_lo += center_plan.seg_count[sg];
+                    }
+                    ASSERT(seg_left > 0);
+                    run = run < seg_left ? run : seg_left;
+                    reads.read(get_noc_addr(input_ring_base + slab_row * row_bytes), l1, run * row_bytes);
+                    l1 += run * row_bytes;
+                    r += run;
+                }
             }
         }
 
@@ -864,6 +950,12 @@ void kernel_main() {
                     take_unit(m_seq_end);
                 }
             } else if constexpr (tap_direct) {
+                if constexpr (nslice_center) {
+                    // The center copy reads the input ring, which compute's tilize overwrites once a unit is pushed.
+                    MaybeDeviceZoneScope("reader_center_wait");
+                    reads.wait(TRID_CENTER);
+                    cb_push_back(cb_center_tiles, 3 * block_m_tiles * c_in_tiles);
+                }
                 // Each tile-row's taps are classified once (TapDirectPlanned::plan; a tile-row that is not one
                 // output-row run takes TapDirect::tile_row), and units are reserved, fenced and pushed in groups of
                 // tap_direct_group: one trid wait and one push per group. A group never crosses the ring end (a CB

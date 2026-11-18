@@ -1,0 +1,556 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -69,6 +69,7 @@
+ CB_ZERO_SRC = 11
+ # Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
+ CB_CENTER_TILES = 12
++# (N-slice center taps reuse it: [3, bm, c_in_tiles], see NSLICE_CENTER_TAPS.)
+ # Tap-direct N-slice prelude (see _tap_direct): one 16 B entry of tap source addresses per cb_im2col_rm unit slot.
+ CB_SRC_TABLE = 13
+ 
+@@ -109,6 +110,19 @@
+ # untilize batch or the im2col ring. False keeps the tilize for every K-block.
+ CENTER_TAP_DIRECT = True
+ CENTER_TAP_SLOTS = True
++
++# N-slice center taps (the K split's N-slice-outer walk with the tap-direct prelude, TILE input, stride 1,
++# padding == dilation, W % 32 == 0, one kernel row per unit): the kw = 1 tap of kernel row kh for output tile-row t is
++# input tile-row t + (kh*d - p) * W / 32 of the core's channel slice (or a zero tile-row outside the image), so compute
++# tilizes only taps 0 and 2 (in0 is [bm, 6 * c_in_tiles]) and the ring walk reads the center taps from cb_center_tiles
++# ([3, bm, c_in_tiles], kernel-row major). The reader copies them, right after its fill, from the whole-slab input ring
++# (cb_input_tiles in cb_im2col_tiles' L1 holds every in-image center tile-row, a short slice's padding tiles zeroed): a
++# local copy, landed before compute's tilize overwrites the ring. L1-neutral (in0 shrinks by what the center CB takes).
++# Measured on the tap-direct prelude, where the tilize paced it (LoFi, median of 4): aspp.convs.3 37435 -> 36328 ns,
++# aspp.convs.1 67310 -> 66083 ns; res5.x flat; res4.x 16530 -> 16697 ns (inside the noise band: its prelude is paced by
++# the reader's per-group gather work, which this does not shorten). Only where the input ring holds the whole slab (one
++# M-block per core); elsewhere every tap is tilized. False tilizes every tap.
++NSLICE_CENTER_TAPS = True
+ 
+ # Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
+ # tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
+@@ -532,6 +546,22 @@
+     return _div_up(ring_units * 16, 64) * 64
+ 
+ 
++def nslice_center_capable(g: Conv3x3Geometry, b):
++    """N-slice center taps apart from the input ring (see NSLICE_CENTER_TAPS): the kw = 1 tap is a whole-tile-row
++    vertical shift of the core's channel slice, on the tap-direct N-slice prelude with one kernel row per unit."""
++    return (
++        NSLICE_CENTER_TAPS
++        and g.k_split
++        and b.nslice
++        and g.tile_input
++        and g.stride == 1
++        and g.padding == g.dilation
++        and g.input_width % TILE == 0
++        and b.block_k_tiles == 3 * g.c_in_tiles
++        and _tap_direct(g, b.block_m_tiles, b.block_k_tiles, b.nslice)
++    )
++
++
+ def center_tap_mode(g: Conv3x3Geometry, bm, bk):
+     """How the kw = 1 taps skip the tilize (see CENTER_TAP_DIRECT): they are whole input tile-rows (a vertical-only
+     shift by whole tile-rows).
+@@ -539,8 +569,9 @@
+       CENTER_SLOTS    one kernel row per K-block (bm >= 2): the reader writes each tile-row's center tiles into their
+                       slots of a second in0 K-block, and they land before the reader pushes the K-block's last im2col row.
+     Not under a K split. Its K-blocked walk's L1-accumulating packs are ordered only by the tilize between K-blocks. On
+-    the N-slice-outer walk the tilize is paced by the gather, so the copy saves nothing: measured LoFi median of 3,
+-    res5.1 +1.5% and aspp.convs.1 +2.3% with non-overlapping ranges, the other N-slice layers flat."""
++    the N-slice-outer walk, copying from the owner shards into in0 slots measured slower (round 3: res5.1 +1.5%,
++    aspp.convs.1 +2.3%, LoFi median of 3); that walk copies its center taps from the input ring into their own CB
++    instead (NSLICE_CENTER_TAPS)."""
+     if g.k_split:
+         return CENTER_NONE
+     # Sharded input only: the center tiles are then L1 copies from the own or a neighbour shard. On an interleaved input
+@@ -1002,6 +1033,25 @@
+             cores,
+         )
+     face_direct = face_direct_im2col(g, bk)
++
++    # Whole-slab input ring: where every core runs one M-block, cb_input_tiles shares cb_im2col_tiles' L1 (compute
++    # tilizes in0 only after its untilize consumed every input batch, and no reader write lands in in0 before then: no
++    # center-tap slots) and holds the whole slab, so the reader never waits on a reserve and the split fill hands the
++    # writer every batch up front. Costs no L1 (it frees the separate ring).
++    def whole_slab_ring(in0_k_tiles):
++        return (
++            g.tile_input
++            and not b.ring
++            and b.max_m_blocks_per_core == 1
++            and b.center_mode == CENTER_NONE
++            and not face_direct
++            and b.slab_tile_rows * g.c_in_tiles <= bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks)
++        )
++
++    # N-slice center taps: in0 holds taps 0 and 2 of every kernel row, cb_center_tiles the center taps, copied from the
++    # whole-slab input ring (which must then fit the smaller in0).
++    nslice_center = nslice_center_capable(g, b) and whole_slab_ring(g.tensor_k_tiles - 3 * g.c_in_tiles)
++    in0_k_tiles = g.tensor_k_tiles - (3 * g.c_in_tiles if nslice_center else 0)
+     cbs = [slab_cb]
+     if not face_direct:
+         cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, b.im2col_rm_depth_rows * bk, cores))
+@@ -1011,7 +1061,7 @@
+             CB_IM2COL_TILES,
+             input_tensor.dtype,
+             g.in0_tile_bytes,
+-            bm * (g.tensor_k_tiles if b.nslice else bk * b.center_slot_blocks),
++            bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks),
+             cores,
+         ),
+         _cb(
+@@ -1046,23 +1096,10 @@
+         )
+     if has_bias:
+         cbs.append(_cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores))
+-    # Whole-slab input ring: where every core runs one M-block, cb_input_tiles shares cb_im2col_tiles' L1 (compute
+-    # tilizes in0 only after its untilize consumed every input batch, and no reader write lands in in0 before then: no
+-    # center-tap slots) and holds the whole slab, so the reader never waits on a reserve and the split fill hands the
+-    # writer every batch up front. Costs no L1 (it frees the separate ring).
+     input_ring_batches = INPUT_TILE_DEPTH_BATCHES
+-    alias_ring = False
+-    if (
+-        g.tile_input
+-        and not b.ring
+-        and b.max_m_blocks_per_core == 1
+-        and b.center_mode == CENTER_NONE
+-        and not face_direct
+-    ):
+-        in0_pages = bm * (g.tensor_k_tiles if b.nslice else bk * b.center_slot_blocks)
+-        if b.slab_tile_rows * g.c_in_tiles <= in0_pages:
+-            alias_ring = True
+-            input_ring_batches = b.slab_tile_rows // b.untilize_batch_rows
++    alias_ring = whole_slab_ring(in0_k_tiles)
++    if alias_ring:
++        input_ring_batches = b.slab_tile_rows // b.untilize_batch_rows
+     if alias_ring:
+         for i, cb in enumerate(cbs):
+             if cb.format_descriptors[0].buffer_index == CB_IM2COL_TILES:
+@@ -1085,6 +1122,8 @@
+     center_mode = b.center_mode
+     if center_mode == CENTER_K_BLOCK:
+         cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores))
++    elif nslice_center:
++        cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, 3 * bm * g.c_in_tiles, cores))
+     if g.k_split:
+         if not b.shared_slab_bytes:
+             cbs.append(_cb(CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32, g.k_cols * bm * ns, cores))
+@@ -1241,6 +1280,7 @@
+             input_ring_batches,
+             # A window past the ring would reserve more than the CB holds.
+             min(FILL_WINDOW_BATCHES, input_ring_batches) if g.tile_input and not b.ring else 1,
++            int(nslice_center),
+         ]
+         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+         return args
+@@ -1287,6 +1327,7 @@
+         int(tap_direct),
+         CB_SRC_TABLE,
+         b.im2col_rm_depth_rows,
++        int(nslice_center),
+     ]
+ 
+     writer_ct_args = [
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -12,6 +12,10 @@
+ // Center-tap direct in0 (see the reader's file comment): center_mode 1 skips the tilize of K-blocks k % 3 == 1 and
+ // matmul_block's In0SourceFn reads them from cb_center_tiles (same data format as cb_im2col_tiles); center_mode 2
+ // tilizes taps 0 and 2 of every im2col row and reserves + pushes tap 1's slots unpacked (the reader wrote them).
++//
++// N-slice center taps (the descriptor's NSLICE_CENTER_TAPS): the tap-direct prelude tilizes taps 0 and 2 of every unit
++// (in0 [bm, 6 * c_in_tiles]) and the ring walk reads the kw = 1 taps from cb_center_tiles ([3, bm, c_in_tiles], the
++// reader's copy of the input tiles), in the same K order (bit-identical).
+ //
+ // Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook. With one
+ // K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it lands,
+@@ -157,7 +161,15 @@
+ }
+ #endif
+ 
+-template <uint32_t tw, uint32_t taps, uint32_t ring, uint32_t cb_in, uint32_t cb_out, uint32_t cb_table>
++// skip_t (>= 0, N-slice center taps): that tap of every unit is not tilized (the matmul reads it from cb_center_tiles).
++template <
++    uint32_t tw,
++    uint32_t taps,
++    uint32_t ring,
++    uint32_t cb_in,
++    uint32_t cb_out,
++    uint32_t cb_table,
++    int32_t skip_t = -1>
+ ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units, uint32_t& seq) {
+     static_assert(tw != 0 && taps <= 4, "a source entry is 16 B: at most 4 taps per unit");
+     reconfig_data_format_srca(cb_in);
+@@ -173,6 +185,9 @@
+         [[maybe_unused]] uint32_t src[taps];
+         UNPACK((direct_unit_sources<cb_table, taps>(seq % ring, src)));
+         for (uint32_t t = 0; t < taps; ++t) {
++            if (static_cast<int32_t>(t) == skip_t) {
++                continue;
++            }
+             if constexpr (tw == 1) {
+                 out.reserve_back(1);
+                 UNPACK((direct_unpack_tilize<cb_in>(src[t])));
+@@ -213,6 +228,17 @@
+     }
+     fast_tilize_uninit(cb_in, cb_out, tw);
+ }
++
++// N-slice center taps: the ring walk reads in0 rows from two CBs of different row strides (cb_im2col_tiles [bm, 6 ct],
++// cb_center_tiles [3, bm, ct]). With rt > ct the BH matmul unpacker steps in0 rows by tile size x the KT_DIM GPR, which
++// only matmul_block_init sets (llk_unpack_AB_matmul: MULDMAREG TMP_LO = TILE_SIZE_B x KT_DIM at every call); with
++// ct >= rt it takes the call's kt_dim. Raw LLK (capability): no compute API sets the in0 row stride per call, so the walk
++// rewrites the GPR between the two sources (one SETDMAREG per switch, in order on the unpack thread).
++#ifdef TRISC_UNPACK
++inline void set_matmul_in0_row_stride(uint32_t kt_dim) {
++    TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM));
++}
++#endif
+ 
+ // Center-tap direct modes (the descriptor's center_tap_mode).
+ constexpr uint32_t CENTER_K_BLOCK = 1;
+@@ -365,6 +391,9 @@
+     constexpr bool tap_direct = get_compile_time_arg_val(39) != 0;
+     constexpr uint32_t cb_src_table = get_compile_time_arg_val(40);
+     constexpr uint32_t im2col_rm_depth_rows = get_compile_time_arg_val(41);
++    // N-slice center taps (see the file comment).
++    constexpr bool nslice_center = get_compile_time_arg_val(42) != 0;
++    static_assert(!nslice_center || (tap_direct && block_k_tiles == 3 * c_in_tiles));
+     static_assert(!tap_direct || (k_split && !face_direct && !strided_window));
+     static_assert(!ring_slab || (tile_input && !k_split && !face_direct && c_in_tiles > 1));
+     static_assert(center_mode == 0 || (tile_input && !face_direct && !k_split));
+@@ -576,6 +605,9 @@
+             // rt > ct): 1.5 unpacks per tile-MAC, 19.5 cycles per tile-MAC. 4 x 1 subblocks with a 3-row last group
+             // cost 1.25 / 1.33: 17.5 cycles per tile-MAC, res5.x @ LoFi 45.4 -> 42.2 us (Blackhole p150b).
+             constexpr uint32_t k_tiles = block_k_tiles * num_k_blocks;
++            // in0's K: all of it, or (N-slice center taps) taps 0 and 2 of every kernel row.
++            constexpr uint32_t in0_k_tiles = k_tiles - (nslice_center ? 3 * c_in_tiles : 0);
++            CircularBuffer center(cb_center_tiles);
+             constexpr uint32_t num_owning_cols = (block_n_tiles + out_n_tiles - 1) / out_n_tiles;
+             static_assert(out_n_tiles % slice_sb_w == 0 && (slice_sb_w == 1 || block_m_tiles % slice_sb_h == 0));
+             constexpr uint32_t ring_groups = (block_m_tiles + slice_sb_h - 1) / slice_sb_h;
+@@ -593,7 +625,9 @@
+                         im2col_rm_depth_rows,
+                         cb_im2col_rm,
+                         cb_im2col_tiles,
+-                        cb_src_table>(im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks, direct_seq);
++                        cb_src_table,
++                        nslice_center ? 1 : -1>(
++                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks, direct_seq);
+                 } else {
+                     conv2d_3x3::lean_tilize::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                         im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
+@@ -614,7 +648,10 @@
+                 pack_reconfig_data_format(cb_combine_slots);
+                 ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
+                 uint32_t init_rows = slice_sb_h;
+-                im2col_tiles.wait_front(block_m_tiles * k_tiles);
++                im2col_tiles.wait_front(block_m_tiles * in0_k_tiles);
++                if constexpr (nslice_center) {
++                    center.wait_front(3 * block_m_tiles * c_in_tiles);
++                }
+                 for (uint32_t j = first; j < k_cols;
+                      j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
+                     const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+@@ -631,21 +668,76 @@
+                         ring_token.reserve_back(1);
+                         for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += slice_sb_w) {
+                             tile_regs_acquire();
+-                            uint32_t in0_index = r0 * k_tiles;
+                             uint32_t in1_index = c0;
+-                            for (uint32_t k = 0; k < k_tiles; ++k) {
+-                                ckernel::matmul_block(
+-                                    cb_im2col_tiles,
+-                                    cb_weights,
+-                                    in0_index,
+-                                    in1_index,
+-                                    0,
+-                                    false,
+-                                    slice_sb_w,
+-                                    rows,
+-                                    k_tiles);
+-                                ++in0_index;
+-                                in1_index += out_n_tiles;
++                            if constexpr (nslice_center) {
++                                // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
++                                // single loop choosing the CB per k measured res5.1 +5.6%).
++                                constexpr uint32_t ct = c_in_tiles;
++                                uint32_t in0_index = r0 * in0_k_tiles;
++                                uint32_t ctr_index = r0 * ct;
++                                for (uint32_t kh = 0; kh < 3; ++kh) {
++                                    if (kh == 0) {
++                                        UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
++                                    }
++                                    for (uint32_t c = 0; c < ct; ++c) {
++                                        ckernel::matmul_block(
++                                            cb_im2col_tiles,
++                                            cb_weights,
++                                            in0_index++,
++                                            in1_index,
++                                            0,
++                                            false,
++                                            slice_sb_w,
++                                            rows,
++                                            in0_k_tiles);
++                                        in1_index += out_n_tiles;
++                                    }
++                                    UNPACK((set_matmul_in0_row_stride(ct)));
++                                    for (uint32_t c = 0; c < ct; ++c) {
++                                        ckernel::matmul_block(
++                                            cb_center_tiles,
++                                            cb_weights,
++                                            ctr_index++,
++                                            in1_index,
++                                            0,
++                                            false,
++                                            slice_sb_w,
++                                            rows,
++                                            ct);
++                                        in1_index += out_n_tiles;
++                                    }
++                                    ctr_index += (block_m_tiles - 1) * ct;
++                                    UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
++                                    for (uint32_t c = 0; c < ct; ++c) {
++                                        ckernel::matmul_block(
++                                            cb_im2col_tiles,
++                                            cb_weights,
++                                            in0_index++,
++                                            in1_index,
++                                            0,
++                                            false,
++                                            slice_sb_w,
++                                            rows,
++                                            in0_k_tiles);
++                                        in1_index += out_n_tiles;
++                                    }
++                                }
++                            } else {
++                                uint32_t in0_index = r0 * k_tiles;
++                                for (uint32_t k = 0; k < k_tiles; ++k) {
++                                    ckernel::matmul_block(
++                                        cb_im2col_tiles,
++                                        cb_weights,
++                                        in0_index,
++                                        in1_index,
++                                        0,
++                                        false,
++                                        slice_sb_w,
++                                        rows,
++                                        k_tiles);
++                                    ++in0_index;
++                                    in1_index += out_n_tiles;
++                                }
+                             }
+                             tile_regs_commit();
+                             tile_regs_wait();
+@@ -657,7 +749,10 @@
+                     }
+                     weights.pop_front(k_tiles * out_n_tiles);
+                 }
+-                im2col_tiles.pop_front(block_m_tiles * k_tiles);
++                im2col_tiles.pop_front(block_m_tiles * in0_k_tiles);
++                if constexpr (nslice_center) {
++                    center.pop_front(3 * block_m_tiles * c_in_tiles);
++                }
+                 pack_reconfig_l1_acc(0);
+                 slots.push_back(k_cols * slot_tiles);
+             }
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
+@@ -438,6 +438,7 @@
+ // Only the other taps (a run touching the left / right padding, or a tile-row straddling two output rows) are gathered
+ // into the unit's own slot, as TapMajorGather does. Rows past o_end read whatever follows the run: every phase
+ // downstream is row-independent and the writer never stores them.
++// skip_kw (>= 0, N-slice center taps): that tap's block and source entry are left alone; compute does not tilize it.
+ template <
+     uint32_t output_width,
+     int32_t input_height,
+@@ -445,7 +446,8 @@
+     int32_t padding,
+     int32_t dilation,
+     uint32_t c_in_p,
+-    uint32_t block_k_tiles>
++    uint32_t block_k_tiles,
++    int32_t skip_kw = -1>
+ struct TapDirect {
+     static constexpr uint32_t TILE_DIM = 32;
+     static constexpr uint32_t pixel_bytes = c_in_p * 2;
+@@ -479,6 +481,9 @@
+         const int32_t h_in0 = ho0 + kh * dilation - padding;
+         const bool row_out = h_in0 < 0 || h_in0 >= input_height;
+         for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
++            if (kw == skip_kw) {
++                continue;  // N-slice center taps: compute reads this tap from cb_center_tiles
++            }
+             const uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
+             const int32_t w_lo0 = wo0 - padding + kw * dilation;
+             uint32_t src = dst;
+@@ -586,7 +591,8 @@
+     int32_t padding,
+     int32_t dilation,
+     uint32_t c_in_p,
+-    uint32_t block_k_tiles>
++    uint32_t block_k_tiles,
++    int32_t skip_kw = -1>
+ struct TapDirectPlanned {
+     static constexpr int32_t TILE_DIM = 32;
+     static constexpr uint32_t pixel_bytes = c_in_p * 2;
+@@ -698,6 +704,9 @@
+         uint32_t gathered = 0;
+         for (uint32_t t = 0; t < taps; ++t) {
+             const uint32_t kw = kw_first + t;
++            if (static_cast<int32_t>(kw) == skip_kw) {
++                continue;  // N-slice center taps: compute reads this tap from cb_center_tiles
++            }
+             const uint32_t dst = slot_l1 + t * blk_bytes;
+             const uint32_t cls = r.cls[kw];
+             if (cls == DIRECT) {
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -90,6 +90,13 @@
+ //     pushes the slots unpacked. The copy (own transaction id) lands before the K-block's last im2col row is pushed.
+ //     cb_im2col_tiles holds two K-blocks, so K-block k's slots (k % 2) are free once the reader can reserve K-block k's
+ //     first im2col row: compute then began K-block k - 1, so the matmul of K-block k - 2 is done.
++//
++// N-slice center taps (the descriptor's NSLICE_CENTER_TAPS; tap-direct N-slice prelude, the kw = 1 tap a whole-tile-row
++// shift, the whole slab in the input ring): the center taps of the three kernel rows are input tile-rows of the core's
++// channel slice, which the fill already landed in the input ring. Right after the fill the reader copies them (a local
++// copy, one read per run of rows inside one slab segment; zero tile-rows outside the image or past the block's valid
++// rows) into cb_center_tiles ([3, bm, c_in_tiles], kernel-row major), so the tap-direct units carry taps 0 and 2 only.
++// The copy lands before the first unit is pushed: compute's tilize then overwrites the ring (it shares in0's L1).
+ //
+ // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
+ // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
+@@ -213,7 +220,9 @@
+     // up to fill_window of them in flight, each under its own transaction id (TRID_FILL_BASE + batch % fill_window).
+     constexpr uint32_t input_ring_batches = get_compile_time_arg_val(70);
+     constexpr uint32_t fill_window = get_compile_time_arg_val(71);
+-    constexpr auto input_args = TensorAccessorArgs<72>();
++    // N-slice center taps (see the file comment).
++    constexpr bool nslice_center = get_compile_time_arg_val(72) != 0;
++    constexpr auto input_args = TensorAccessorArgs<73>();
+     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
+ 
+     const uint32_t input_addr = get_arg_val<uint32_t>(0);
+@@ -310,10 +319,19 @@
+         center_mode == 2 ? 1 : -1,
+         ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : 0>;
+     using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
+-    using TapDirectT =
+-        conv2d_3x3::TapDirect<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
+-    using TapPlannedT =
+-        conv2d_3x3::TapDirectPlanned<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
++    // N-slice center taps: the tap-direct units leave tap 1 to cb_center_tiles.
++    constexpr int32_t unit_skip_kw = nslice_center ? 1 : -1;
++    using TapDirectT = conv2d_3x3::
++        TapDirect<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles, unit_skip_kw>;
++    using TapPlannedT = conv2d_3x3::
++        TapDirectPlanned<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles, unit_skip_kw>;
++    static_assert(
++        !nslice_center || (tap_direct && tile_input && channel_slice && padding == dilation &&
++                           input_width % TILE_DIM == 0 && output_width == input_width &&
++                           block_k_tiles == 3 * (c_in_p / TILE_DIM) && fill_window >= 1 &&
++                           input_ring_batches * untilize_batch_rows >= slab_tile_rows),
++        "N-slice center taps: tap-direct units of one kernel row, the kw = 1 tap a whole-tile-row shift, and the whole "
++        "slab in the input ring");
+     static_assert(
+         !tap_direct ||
+             (tap_direct_group >= 1 && (tap_direct_group == 1 || 2 * tap_direct_group <= im2col_rm_depth_rows) &&
+@@ -474,6 +492,14 @@
+         int32_t slab_x_base[3];
+         [[maybe_unused]] uint32_t slab_ready_pages[3];  // TILE: slab pages that hold band kh once compute pushed them
+ 
++        // N-slice center taps: the slab plan (where the ring holds each input tile-row) and cb_center_tiles' block.
++        [[maybe_unused]] conv2d_3x3::TileSlabPlan center_plan{};
++        [[maybe_unused]] uint32_t center_l1 = 0;
++        if constexpr (nslice_center) {
++            cb_reserve_back(cb_center_tiles, 3 * block_m_tiles * c_in_tiles);
++            center_l1 = get_write_ptr(cb_center_tiles);
++        }
++
+         if constexpr (ring_slab) {
+             // ---- fill_halo_slab (ring): pop the rows below this block's window (the previous block's gather is done),
+             // then stream the window's rows past the last row pushed, in batches; a short last batch is pushed whole
+@@ -551,6 +577,9 @@
+             MaybeDeviceZoneScope("reader_fill");
+             conv2d_3x3::TileSlabPlan plan;
+             conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
++            if constexpr (nslice_center) {
++                center_plan = plan;
++            }
+             const uint32_t num_segs = plan.num_segs;
+             const uint32_t(&seg_first)[3] = plan.seg_first;
+             const uint32_t(&seg_count)[3] = plan.seg_count;
+@@ -671,6 +700,56 @@
+             if constexpr (slab_split) {
+                 MaybeDeviceZoneScope("reader_fill_fwd_wait");
+                 Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);
++            }
++        }
++
++        if constexpr (nslice_center) {
++            // ---- N-slice center taps: output tile-row t's center tap of kernel row kh is input tile-row
++            // t + (kh * d - p) * W / 32, which the fill landed in the ring (slab order: the plan's segments back to back
++            // from the ring base; one read per run inside one segment), or a zero tile-row outside the image or past the
++            // block's valid rows. cb_center_tiles row r of kernel row kh at (kh * bm + r) * c_in_tiles pages.
++            MaybeDeviceZoneScope("reader_center");
++            // Compiled on every path (W < 32 must not divide by zero); it only runs with W % 32 == 0.
++            constexpr int32_t tile_rows_per_image_row = input_width >= TILE_DIM ? input_width / TILE_DIM : 1;
++            const uint32_t t_first = m_tile_start + block_tiles_done;
++            reads.begin(TRID_CENTER);
++            for (int32_t kh = 0; kh < 3; ++kh) {
++                const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
++                uint32_t l1 = center_l1 + kh * block_m_tiles * row_bytes;
++                for (uint32_t r = 0; r < block_m_tiles;) {
++                    const uint32_t t = t_first + r;
++                    const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
++                    if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
++                        reads.read(zero_src_noc, l1, row_bytes);
++                        l1 += row_bytes;
++                        ++r;
++                        continue;
++                    }
++                    // Tile-rows of this image row and below stay inside the image up to its last row.
++                    const uint32_t rows_left = static_cast<uint32_t>(input_height - h_in) * tile_rows_per_image_row -
++                                               t % tile_rows_per_image_row;
++                    uint32_t run = block_valid_tiles - r;
++                    run = run < rows_left ? run : rows_left;
++                    const uint32_t row = t + shift_rows;
++                    // Band kh's in-image rows hold every center row of kernel row kh: find the run's segment.
++                    uint32_t seg_lo = 0;
++                    uint32_t slab_row = 0;
++                    uint32_t seg_left = 0;
++                    for (uint32_t sg = 0; sg < center_plan.num_segs; ++sg) {
++                        const uint32_t first = center_plan.seg_first[sg];
++                        if (row >= first && row < first + center_plan.seg_count[sg]) {
++                            slab_row = seg_lo + (row - first);
++                            seg_left = first + center_plan.seg_count[sg] - row;
++                            break;
++                        }
++                        seg_lo += center_plan.seg_count[sg];
++                    }
++                    ASSERT(seg_left > 0);
++                    run = run < seg_left ? run : seg_left;
++                    reads.read(get_noc_addr(input_ring_base + slab_row * row_bytes), l1, run * row_bytes);
++                    l1 += run * row_bytes;
++                    r += run;
++                }
+             }
+         }
+ 
+@@ -821,6 +900,12 @@
+                     take_unit(m_seq_end);
+                 }
+             } else if constexpr (tap_direct) {
++                if constexpr (nslice_center) {
++                    // The center copy reads the input ring, which compute's tilize overwrites once a unit is pushed.
++                    MaybeDeviceZoneScope("reader_center_wait");
++                    reads.wait(TRID_CENTER);
++                    cb_push_back(cb_center_tiles, 3 * block_m_tiles * c_in_tiles);
++                }
+                 // Each tile-row's taps are classified once (TapDirectPlanned::plan; a tile-row that is not one
+                 // output-row run takes TapDirect::tile_row), and units are reserved, fenced and pushed in groups of
+                 // tap_direct_group: one trid wait and one push per group. A group never crosses the ring end (a CB

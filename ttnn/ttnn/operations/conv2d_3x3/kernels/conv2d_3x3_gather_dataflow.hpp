@@ -438,6 +438,7 @@ struct TapMajorGather {
 // Only the other taps (a run touching the left / right padding, or a tile-row straddling two output rows) are gathered
 // into the unit's own slot, as TapMajorGather does. Rows past o_end read whatever follows the run: every phase
 // downstream is row-independent and the writer never stores them.
+// skip_kw (>= 0, N-slice center taps): that tap's block and source entry are left alone; compute does not tilize it.
 template <
     uint32_t output_width,
     int32_t input_height,
@@ -445,7 +446,8 @@ template <
     int32_t padding,
     int32_t dilation,
     uint32_t c_in_p,
-    uint32_t block_k_tiles>
+    uint32_t block_k_tiles,
+    int32_t skip_kw = -1>
 struct TapDirect {
     static constexpr uint32_t TILE_DIM = 32;
     static constexpr uint32_t pixel_bytes = c_in_p * 2;
@@ -479,6 +481,9 @@ struct TapDirect {
         const int32_t h_in0 = ho0 + kh * dilation - padding;
         const bool row_out = h_in0 < 0 || h_in0 >= input_height;
         for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
+            if (kw == skip_kw) {
+                continue;  // N-slice center taps: compute reads this tap from cb_center_tiles
+            }
             const uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
             const int32_t w_lo0 = wo0 - padding + kw * dilation;
             uint32_t src = dst;
@@ -586,7 +591,8 @@ template <
     int32_t padding,
     int32_t dilation,
     uint32_t c_in_p,
-    uint32_t block_k_tiles>
+    uint32_t block_k_tiles,
+    int32_t skip_kw = -1>
 struct TapDirectPlanned {
     static constexpr int32_t TILE_DIM = 32;
     static constexpr uint32_t pixel_bytes = c_in_p * 2;
@@ -698,6 +704,9 @@ struct TapDirectPlanned {
         uint32_t gathered = 0;
         for (uint32_t t = 0; t < taps; ++t) {
             const uint32_t kw = kw_first + t;
+            if (static_cast<int32_t>(kw) == skip_kw) {
+                continue;  // N-slice center taps: compute reads this tap from cb_center_tiles
+            }
             const uint32_t dst = slot_l1 + t * blk_bytes;
             const uint32_t cls = r.cls[kw];
             if (cls == DIRECT) {

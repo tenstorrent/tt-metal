@@ -72,6 +72,7 @@ RING_TOKEN_BYTES = 16
 CB_ZERO_SRC = 11
 # Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
 CB_CENTER_TILES = 12
+# (N-slice center taps reuse it: [3, bm, c_in_tiles], see NSLICE_CENTER_TAPS.)
 # Tap-direct (see _tap_direct): N-slice prelude, one 16 B entry of tap source addresses per cb_im2col_rm unit slot;
 # K-blocked walk, a FIFO of one 16 B entry per unit (_tap_direct_fifo_units).
 CB_SRC_TABLE = 13
@@ -113,6 +114,19 @@ STRIDED_WINDOW_IM2COL = True
 # untilize batch or the im2col ring. False keeps the tilize for every K-block.
 CENTER_TAP_DIRECT = True
 CENTER_TAP_SLOTS = True
+
+# N-slice center taps (the K split's N-slice-outer walk with the tap-direct prelude, TILE input, stride 1,
+# padding == dilation, W % 32 == 0, one kernel row per unit): the kw = 1 tap of kernel row kh for output tile-row t is
+# input tile-row t + (kh*d - p) * W / 32 of the core's channel slice (or a zero tile-row outside the image), so compute
+# tilizes only taps 0 and 2 (in0 is [bm, 6 * c_in_tiles]) and the ring walk reads the center taps from cb_center_tiles
+# ([3, bm, c_in_tiles], kernel-row major). The reader copies them, right after its fill, from the whole-slab input ring
+# (cb_input_tiles in cb_im2col_tiles' L1 holds every in-image center tile-row, a short slice's padding tiles zeroed): a
+# local copy, landed before compute's tilize overwrites the ring. L1-neutral (in0 shrinks by what the center CB takes).
+# Measured on the tap-direct prelude, where the tilize paced it (LoFi, median of 4): aspp.convs.3 37435 -> 36328 ns,
+# aspp.convs.1 67310 -> 66083 ns; res5.x flat; res4.x 16530 -> 16697 ns (inside the noise band: its prelude is paced by
+# the reader's per-group gather work, which this does not shorten). Only where the input ring holds the whole slab (one
+# M-block per core); elsewhere every tap is tilized. False tilizes every tap.
+NSLICE_CENTER_TAPS = True
 
 # Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
 # tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
@@ -567,6 +581,22 @@ def _tap_direct_windows(g: Conv3x3Geometry, bm, bk, nslice, center_mode):
     )
 
 
+def nslice_center_capable(g: Conv3x3Geometry, b):
+    """N-slice center taps apart from the input ring (see NSLICE_CENTER_TAPS): the kw = 1 tap is a whole-tile-row
+    vertical shift of the core's channel slice, on the tap-direct N-slice prelude with one kernel row per unit."""
+    return (
+        NSLICE_CENTER_TAPS
+        and g.k_split
+        and b.nslice
+        and g.tile_input
+        and g.stride == 1
+        and g.padding == g.dilation
+        and g.input_width % TILE == 0
+        and b.block_k_tiles == 3 * g.c_in_tiles
+        and _tap_direct(g, b.block_m_tiles, b.block_k_tiles, b.nslice)
+    )
+
+
 def center_tap_mode(g: Conv3x3Geometry, bm, bk):
     """How the kw = 1 taps skip the tilize (see CENTER_TAP_DIRECT): they are whole input tile-rows (a vertical-only
     shift by whole tile-rows).
@@ -574,8 +604,9 @@ def center_tap_mode(g: Conv3x3Geometry, bm, bk):
       CENTER_SLOTS    one kernel row per K-block (bm >= 2): the reader writes each tile-row's center tiles into their
                       slots of a second in0 K-block, and they land before the reader pushes the K-block's last im2col row.
     Not under a K split. Its K-blocked walk's L1-accumulating packs are ordered only by the tilize between K-blocks. On
-    the N-slice-outer walk the tilize is paced by the gather, so the copy saves nothing: measured LoFi median of 3,
-    res5.1 +1.5% and aspp.convs.1 +2.3% with non-overlapping ranges, the other N-slice layers flat."""
+    the N-slice-outer walk, copying from the owner shards into in0 slots measured slower (round 3: res5.1 +1.5%,
+    aspp.convs.1 +2.3%, LoFi median of 3); that walk copies its center taps from the input ring into their own CB
+    instead (NSLICE_CENTER_TAPS)."""
     if g.k_split:
         return CENTER_NONE
     # Sharded input only: the center tiles are then L1 copies from the own or a neighbour shard. On an interleaved input
@@ -1094,6 +1125,25 @@ def create_program_descriptor(
             cores,
         )
     face_direct = face_direct_im2col(g, bk)
+
+    # Whole-slab input ring: where every core runs one M-block, cb_input_tiles shares cb_im2col_tiles' L1 (compute
+    # tilizes in0 only after its untilize consumed every input batch, and no reader write lands in in0 before then: no
+    # center-tap slots) and holds the whole slab, so the reader never waits on a reserve and the split fill hands the
+    # writer every batch up front. Costs no L1 (it frees the separate ring).
+    def whole_slab_ring(in0_k_tiles):
+        return (
+            g.tile_input
+            and not b.ring
+            and b.max_m_blocks_per_core == 1
+            and b.center_mode == CENTER_NONE
+            and not face_direct
+            and b.slab_tile_rows * g.c_in_tiles <= bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks)
+        )
+
+    # N-slice center taps: in0 holds taps 0 and 2 of every kernel row, cb_center_tiles the center taps, copied from the
+    # whole-slab input ring (which must then fit the smaller in0).
+    nslice_center = nslice_center_capable(g, b) and whole_slab_ring(g.tensor_k_tiles - 3 * g.c_in_tiles)
+    in0_k_tiles = g.tensor_k_tiles - (3 * g.c_in_tiles if nslice_center else 0)
     cbs = [slab_cb]
     if not face_direct:
         cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, b.im2col_rm_depth_rows * bk, cores))
@@ -1103,7 +1153,7 @@ def create_program_descriptor(
             CB_IM2COL_TILES,
             input_tensor.dtype,
             g.in0_tile_bytes,
-            bm * (g.tensor_k_tiles if b.nslice else bk * b.center_slot_blocks),
+            bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks),
             cores,
         ),
         _cb(
@@ -1141,23 +1191,10 @@ def create_program_descriptor(
         )
     if has_bias:
         cbs.append(_cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores))
-    # Whole-slab input ring: where every core runs one M-block, cb_input_tiles shares cb_im2col_tiles' L1 (compute
-    # tilizes in0 only after its untilize consumed every input batch, and no reader write lands in in0 before then: no
-    # center-tap slots) and holds the whole slab, so the reader never waits on a reserve and the split fill hands the
-    # writer every batch up front. Costs no L1 (it frees the separate ring).
     input_ring_batches = INPUT_TILE_DEPTH_BATCHES
-    alias_ring = False
-    if (
-        g.tile_input
-        and not b.ring
-        and b.max_m_blocks_per_core == 1
-        and b.center_mode == CENTER_NONE
-        and not face_direct
-    ):
-        in0_pages = bm * (g.tensor_k_tiles if b.nslice else bk * b.center_slot_blocks)
-        if b.slab_tile_rows * g.c_in_tiles <= in0_pages:
-            alias_ring = True
-            input_ring_batches = b.slab_tile_rows // b.untilize_batch_rows
+    alias_ring = whole_slab_ring(in0_k_tiles)
+    if alias_ring:
+        input_ring_batches = b.slab_tile_rows // b.untilize_batch_rows
     if alias_ring:
         for i, cb in enumerate(cbs):
             if cb.format_descriptors[0].buffer_index == CB_IM2COL_TILES:
@@ -1184,6 +1221,8 @@ def create_program_descriptor(
     center_mode = b.center_mode
     if center_mode == CENTER_K_BLOCK:
         cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores))
+    elif nslice_center:
+        cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, 3 * bm * g.c_in_tiles, cores))
     if g.k_split:
         if not b.shared_slab_bytes:
             cbs.append(_cb(CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32, g.k_cols * bm * ns, cores))
@@ -1357,6 +1396,7 @@ def create_program_descriptor(
             min(FILL_WINDOW_BATCHES, input_ring_batches) if g.tile_input and not b.ring else 1,
             tap_direct_fifo_units,
             int(tap_direct_windows),
+            int(nslice_center),
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1405,6 +1445,7 @@ def create_program_descriptor(
         b.im2col_rm_depth_rows,
         int(tap_direct_fifo_units > 0),
         int(tap_direct_windows),
+        int(nslice_center),
     ]
 
     writer_ct_args = [

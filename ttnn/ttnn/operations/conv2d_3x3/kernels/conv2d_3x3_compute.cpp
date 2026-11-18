@@ -13,6 +13,10 @@
 // matmul_block's In0SourceFn reads them from cb_center_tiles (same data format as cb_im2col_tiles); center_mode 2
 // tilizes taps 0 and 2 of every im2col row and reserves + pushes tap 1's slots unpacked (the reader wrote them).
 //
+// N-slice center taps (the descriptor's NSLICE_CENTER_TAPS): the tap-direct prelude tilizes taps 0 and 2 of every unit
+// (in0 [bm, 6 * c_in_tiles]) and the ring walk reads the kw = 1 taps from cb_center_tiles ([3, bm, c_in_tiles], the
+// reader's copy of the input tiles), in the same K order (bit-identical).
+//
 // Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook. With one
 // K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it lands,
 // keeping the weights fronted across the calls, and adds the bias once per bias_stream_groups groups, so only the
@@ -157,7 +161,15 @@ inline void direct_unpack_tilize(uint32_t src) {
 }
 #endif
 
-template <uint32_t tw, uint32_t taps, uint32_t ring, uint32_t cb_in, uint32_t cb_out, uint32_t cb_table>
+// skip_t (>= 0, N-slice center taps): that tap of every unit is not tilized (the matmul reads it from cb_center_tiles).
+template <
+    uint32_t tw,
+    uint32_t taps,
+    uint32_t ring,
+    uint32_t cb_in,
+    uint32_t cb_out,
+    uint32_t cb_table,
+    int32_t skip_t = -1>
 ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units, uint32_t& seq) {
     static_assert(tw != 0 && taps <= 4, "a source entry is 16 B: at most 4 taps per unit");
     reconfig_data_format_srca(cb_in);
@@ -173,6 +185,9 @@ ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units,
         [[maybe_unused]] uint32_t src[taps];
         UNPACK((direct_unit_sources<cb_table, taps>(seq % ring, src)));
         for (uint32_t t = 0; t < taps; ++t) {
+            if (static_cast<int32_t>(t) == skip_t) {
+                continue;
+            }
             if constexpr (tw == 1) {
                 out.reserve_back(1);
                 UNPACK((direct_unpack_tilize<cb_in>(src[t])));
@@ -213,6 +228,17 @@ ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units,
     }
     fast_tilize_uninit(cb_in, cb_out, tw);
 }
+
+// N-slice center taps: the ring walk reads in0 rows from two CBs of different row strides (cb_im2col_tiles [bm, 6 ct],
+// cb_center_tiles [3, bm, ct]). With rt > ct the BH matmul unpacker steps in0 rows by tile size x the KT_DIM GPR, which
+// only matmul_block_init sets (llk_unpack_AB_matmul: MULDMAREG TMP_LO = TILE_SIZE_B x KT_DIM at every call); with
+// ct >= rt it takes the call's kt_dim. Raw LLK (capability): no compute API sets the in0 row stride per call, so the
+// walk rewrites the GPR between the two sources (one SETDMAREG per switch, in order on the unpack thread).
+#ifdef TRISC_UNPACK
+inline void set_matmul_in0_row_stride(uint32_t kt_dim) {
+    TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM));
+}
+#endif
 
 // Center-tap direct modes (the descriptor's center_tap_mode).
 constexpr uint32_t CENTER_K_BLOCK = 1;
@@ -523,6 +549,9 @@ void kernel_main() {
     // Tap-direct on the K-blocked walk: cb_src_table is a FIFO of unit entries (fifo_tilize), with window units.
     constexpr bool kb_tap_direct = get_compile_time_arg_val(42) != 0;
     constexpr bool tap_direct_windows = get_compile_time_arg_val(43) != 0;
+    // N-slice center taps (see the file comment).
+    constexpr bool nslice_center = get_compile_time_arg_val(44) != 0;
+    static_assert(!nslice_center || (tap_direct && block_k_tiles == 3 * c_in_tiles));
     static_assert(!tap_direct || (!face_direct && !strided_window));
     static_assert(kb_tap_direct == (tap_direct && !(k_split && nslice_outer)));
     static_assert(!ring_slab || (tile_input && !k_split && !face_direct && c_in_tiles > 1));
@@ -739,6 +768,9 @@ void kernel_main() {
             // rt > ct): 1.5 unpacks per tile-MAC, 19.5 cycles per tile-MAC. 4 x 1 subblocks with a 3-row last group
             // cost 1.25 / 1.33: 17.5 cycles per tile-MAC, res5.x @ LoFi 45.4 -> 42.2 us (Blackhole p150b).
             constexpr uint32_t k_tiles = block_k_tiles * num_k_blocks;
+            // in0's K: all of it, or (N-slice center taps) taps 0 and 2 of every kernel row.
+            constexpr uint32_t in0_k_tiles = k_tiles - (nslice_center ? 3 * c_in_tiles : 0);
+            CircularBuffer center(cb_center_tiles);
             constexpr uint32_t num_owning_cols = (block_n_tiles + out_n_tiles - 1) / out_n_tiles;
             static_assert(out_n_tiles % slice_sb_w == 0 && (slice_sb_w == 1 || block_m_tiles % slice_sb_h == 0));
             constexpr uint32_t ring_groups = (block_m_tiles + slice_sb_h - 1) / slice_sb_h;
@@ -756,7 +788,9 @@ void kernel_main() {
                         im2col_rm_depth_rows,
                         cb_im2col_rm,
                         cb_im2col_tiles,
-                        cb_src_table>(im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks, direct_seq);
+                        cb_src_table,
+                        nslice_center ? 1 : -1>(
+                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks, direct_seq);
                 } else {
                     conv2d_3x3::lean_tilize::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
                         im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
@@ -777,7 +811,10 @@ void kernel_main() {
                 pack_reconfig_data_format(cb_combine_slots);
                 ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
                 uint32_t init_rows = slice_sb_h;
-                im2col_tiles.wait_front(block_m_tiles * k_tiles);
+                im2col_tiles.wait_front(block_m_tiles * in0_k_tiles);
+                if constexpr (nslice_center) {
+                    center.wait_front(3 * block_m_tiles * c_in_tiles);
+                }
                 for (uint32_t j = first; j < k_cols;
                      j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
                     const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
@@ -794,21 +831,76 @@ void kernel_main() {
                         ring_token.reserve_back(1);
                         for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += slice_sb_w) {
                             tile_regs_acquire();
-                            uint32_t in0_index = r0 * k_tiles;
                             uint32_t in1_index = c0;
-                            for (uint32_t k = 0; k < k_tiles; ++k) {
-                                ckernel::matmul_block(
-                                    cb_im2col_tiles,
-                                    cb_weights,
-                                    in0_index,
-                                    in1_index,
-                                    0,
-                                    false,
-                                    slice_sb_w,
-                                    rows,
-                                    k_tiles);
-                                ++in0_index;
-                                in1_index += out_n_tiles;
+                            if constexpr (nslice_center) {
+                                // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
+                                // single loop choosing the CB per k measured res5.1 +5.6%).
+                                constexpr uint32_t ct = c_in_tiles;
+                                uint32_t in0_index = r0 * in0_k_tiles;
+                                uint32_t ctr_index = r0 * ct;
+                                for (uint32_t kh = 0; kh < 3; ++kh) {
+                                    if (kh == 0) {
+                                        UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
+                                    }
+                                    for (uint32_t c = 0; c < ct; ++c) {
+                                        ckernel::matmul_block(
+                                            cb_im2col_tiles,
+                                            cb_weights,
+                                            in0_index++,
+                                            in1_index,
+                                            0,
+                                            false,
+                                            slice_sb_w,
+                                            rows,
+                                            in0_k_tiles);
+                                        in1_index += out_n_tiles;
+                                    }
+                                    UNPACK((set_matmul_in0_row_stride(ct)));
+                                    for (uint32_t c = 0; c < ct; ++c) {
+                                        ckernel::matmul_block(
+                                            cb_center_tiles,
+                                            cb_weights,
+                                            ctr_index++,
+                                            in1_index,
+                                            0,
+                                            false,
+                                            slice_sb_w,
+                                            rows,
+                                            ct);
+                                        in1_index += out_n_tiles;
+                                    }
+                                    ctr_index += (block_m_tiles - 1) * ct;
+                                    UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
+                                    for (uint32_t c = 0; c < ct; ++c) {
+                                        ckernel::matmul_block(
+                                            cb_im2col_tiles,
+                                            cb_weights,
+                                            in0_index++,
+                                            in1_index,
+                                            0,
+                                            false,
+                                            slice_sb_w,
+                                            rows,
+                                            in0_k_tiles);
+                                        in1_index += out_n_tiles;
+                                    }
+                                }
+                            } else {
+                                uint32_t in0_index = r0 * k_tiles;
+                                for (uint32_t k = 0; k < k_tiles; ++k) {
+                                    ckernel::matmul_block(
+                                        cb_im2col_tiles,
+                                        cb_weights,
+                                        in0_index,
+                                        in1_index,
+                                        0,
+                                        false,
+                                        slice_sb_w,
+                                        rows,
+                                        k_tiles);
+                                    ++in0_index;
+                                    in1_index += out_n_tiles;
+                                }
                             }
                             tile_regs_commit();
                             tile_regs_wait();
@@ -820,7 +912,10 @@ void kernel_main() {
                     }
                     weights.pop_front(k_tiles * out_n_tiles);
                 }
-                im2col_tiles.pop_front(block_m_tiles * k_tiles);
+                im2col_tiles.pop_front(block_m_tiles * in0_k_tiles);
+                if constexpr (nslice_center) {
+                    center.pop_front(3 * block_m_tiles * c_in_tiles);
+                }
                 pack_reconfig_l1_acc(0);
                 slots.push_back(k_cols * slot_tiles);
             }
