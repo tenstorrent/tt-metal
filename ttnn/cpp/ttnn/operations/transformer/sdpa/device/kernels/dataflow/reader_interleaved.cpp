@@ -1039,4 +1039,8 @@ void kernel_main() {
             }
         }
     }  // close phase
+    // K/V chain forwards end with async_writes_flushed (sent, not acked). Wait for the acks before the kernel ends:
+    // on Blackhole the next kernel's brisc re-reads the NOC ack counter at launch (noc_local_state_init), so an ack
+    // landing after that read leaves the counter ahead of the kernel's own count and its next write barrier spins.
+    noc.async_write_barrier();
 }
