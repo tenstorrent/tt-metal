@@ -397,7 +397,12 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
                 DST_SYNC_MODE,
                 is_fp32_dest_acc_en,
                 calculate_log,
-                (APPROX, fast_and_approx, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, 32, base_is_two),
+                (APPROX,
+                 fast_and_approx,
+                 true /* HAS_BASE_SCALING */,
+                 is_fp32_dest_acc_en,
+                 32 /*ITERATIONS*/,
+                 base_is_two),
                 idst,
                 VectorMode::None,
                 base_scale);

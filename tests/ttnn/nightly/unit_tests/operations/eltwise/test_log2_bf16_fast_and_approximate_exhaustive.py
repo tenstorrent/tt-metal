@@ -86,7 +86,7 @@ def _raw_classes(words):
 
 
 def _reference_inputs(raw_classes, values):
-    """Apply the compiler target's typed ingress before the math reference."""
+    """Each input as the kernel reads it (_RAW_TO_REFERENCE_INPUT), before the math reference."""
     canonical = {
         "pos_zero": np.float64(0.0),
         "neg_zero": np.float64(-0.0),
