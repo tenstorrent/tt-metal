@@ -42,13 +42,13 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig + CreateKernel(DramConfig)
 #include "impl/program/program_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
@@ -156,15 +156,8 @@ std::pair<uint32_t, uint32_t> pick_page_size(uint32_t max_page_size, uint32_t nu
     return {page, static_cast<uint32_t>(total / page)};
 }
 
-// Distinguishes the two supported buffer layouts the prefetcher knows how to
-// consume. KRowMajor is the legacy layout: one shard per DRAM bank,
-// K-row-major within the bank. ReceiverContiguous stacks num_receivers slabs
-// per bank, each slab being (K, n_per_recv) contiguous bytes. Detection is
-// implicit per the design doc — see detect_layout_mode().
-enum class LayoutMode : uint32_t {
-    KRowMajor = 0,
-    ReceiverContiguous = 1,
-};
+// Detection is implicit per the design doc — see detect_layout_mode().
+using LayoutMode = TensorPrefetcherLayoutMode;
 
 // Detection keys on how the weight was allocated, NOT the shard count: receiver-contiguous
 // weights are created with an NdShardSpec (num_shards == ring_size), K-row-major weights use a
@@ -571,17 +564,15 @@ SelectorLocation resolve_group_selector(
         num_groups,
         mask_shape);
 
-    const ContextId context_id = mesh_device.impl().get_context_id();
     const MemoryConfig& memory_config = mask.memory_config();
+    auto& cluster = mesh_device.impl().metal_env().get_cluster();
     std::optional<SelectorLocation> location;
     for (IDevice* device : devices) {
         SelectorLocation here;
         if (memory_config.buffer_type() == BufferType::DRAM && !memory_config.is_sharded()) {
             // Page 0 of an interleaved buffer sits in bank 0.
             const auto channel = mesh_device.allocator()->impl().get_dram_channel_from_bank_id(0);
-            const CoreCoord xy = MetalContext::instance(context_id)
-                                     .get_cluster()
-                                     .get_soc_desc(device->id())
+            const CoreCoord xy = cluster.get_soc_desc(device->id())
                                      .get_preferred_worker_core_for_dram_view(static_cast<int>(channel), /*noc=*/0);
             here.noc_xy = pack_virtual_xy(xy);
             here.addr = static_cast<uint32_t>(mask.mesh_buffer().get_reference_buffer()->page_address(0, 0));
@@ -636,15 +627,18 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
     // the rest agree, because everything downstream (socket placement, kernel placement, pipe sender
     // indices) indexes senders by slot and would otherwise silently drive another device's wrong
     // DRISC core.
-    const auto senders_on = [this](const IDevice* device) {
+    // Two roles per bank on DRAM cores (the free subchannel, then the NOC1-endpoint subchannel); one on a
+    // dispatch engine, which holds every endpoint.
+    const size_t roles_per_bank = on_dispatch_engine() ? 1 : 2;
+    const auto senders_on = [this, roles_per_bank](const IDevice* device) {
         std::vector<CoreCoord> senders;
-        senders.reserve(2 * num_banks_);
+        senders.reserve(roles_per_bank * num_banks_);
         for (uint32_t b = 0; b < num_banks_; ++b) {
-            // Two roles per bank: the free subchannel then the NOC1-endpoint subchannel.
             const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(device, b);
             TT_FATAL(
-                bank_senders.size() == 2,
-                "Tensor prefetcher expected two DRAM sender roles for bank {} on device {}, found {}",
+                bank_senders.size() == roles_per_bank,
+                "Tensor prefetcher expected {} DRAM sender roles for bank {} on device {}, found {}",
+                roles_per_bank,
                 b,
                 device->id(),
                 bank_senders.size());
@@ -757,6 +751,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         "CreatePrefetcherPipesForTensorPrefetcher call, in any order, but {} of that call's {} pipes were passed.",
         prefetcher_pipes.size(),
         factory_num_pipes);
+    target.total_receivers = total_receivers;
     return target;
 }
 
@@ -780,7 +775,7 @@ std::vector<uint32_t> TensorPrefetcherManager::sender_indices_for_target(const R
 }
 
 void TensorPrefetcherManager::allocate_sockets() {
-    const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
+    const auto& hal = mesh_device_->impl().metal_env().get_hal();
     const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     const uint32_t page_size = align_up(kRequestPageBytes, pcie_alignment);
     const uint32_t fifo_size = align_up(page_size * kSocketFifoPages, pcie_alignment);
@@ -817,15 +812,13 @@ void TensorPrefetcherManager::build_and_launch_programs(
     // socket_config_addr as a runtime arg.
     TT_FATAL(sockets_.size() == devices_.size() * num_senders_, "sockets must be allocated before programs");
 
-    const uint32_t pcie_alignment =
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t pcie_alignment = mesh_device_->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
     const uint32_t socket_page_size = align_up(kRequestPageBytes, pcie_alignment);
 
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         auto program = std::make_unique<Program>(CreateProgram(*mesh_device_));
-        const auto& soc_desc =
-            MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().get_soc_desc(devices_[d]->id());
+        const auto& soc_desc = mesh_device_->impl().metal_env().get_cluster().get_soc_desc(devices_[d]->id());
         TT_FATAL(
             soc_desc.get_grid_size(tt::CoreType::DRAM).y == kNumGddrSubchannelsPerBank,
             "Tensor prefetcher expected {} GDDR subchannels per bank, found {}",
@@ -951,11 +944,11 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
             mesh_device_->arch());
     }
 
-    const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
+    const auto& hal = mesh_device_->impl().metal_env().get_hal();
     TT_FATAL(
-        hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
+        mesh_device_->impl().dram_sender_placement().has_value(),
         "Tensor prefetcher requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0");
+        ">= 19.12.0.0, or fast dispatch on a dispatch engine serving one command queue");
 
     // Populate devices_ before resolving sender slots: enumerate_dram_senders checks the slots
     // against every device's DRAM topology. Build the coord->index map at the same time so
@@ -969,6 +962,10 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     }
     enumerate_dram_senders();
     drain_targets_per_sender_.assign(num_senders_, {});
+    if (on_dispatch_engine()) {
+        start_on_dispatch_engine();
+        return;
+    }
 
     // DRISC L1 layout: the kernel working region (above the arena's sender-state zone) holds the
     // CQ signal slots, the request socket and the ping-pong stage ring. Each pipe's NOC XY table,
@@ -1014,13 +1011,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         stage_ring_base_ < kernel_region_end,
         "DRISC L1 kernel region ({} B) too small for socket buffers + stage ring",
         kernel_region_size);
-    stage_ring_size_ = kernel_region_end - stage_ring_base_;
-    // Align stage_ring_size to LCM(2, 3, l1_alignment) so both halves (K-row
-    // path) and thirds (recv-contig path) are individually l1-aligned. With
-    // l1_alignment=16, LCM = 48. Bitmask shortcut doesn't work because 48 is
-    // not a power of 2 — use integer division.
-    const uint32_t kRingSizeAlign = 6u * l1_alignment;  // = LCM(2*3, l1_alignment) when l1_alignment is even
-    stage_ring_size_ = (stage_ring_size_ / kRingSizeAlign) * kRingSizeAlign;
+    set_stage_ring_size(kernel_region_end - stage_ring_base_, l1_alignment);
     // After aligning down, make sure the ring is still big enough for at least
     // one minimal sub-chunk per slot. Catches accidental shrink-to-zero if the
     // socket carve-out ever grows past the L1 region.
@@ -1030,8 +1021,6 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         "kernel region",
         stage_ring_size_,
         kernel_region_size);
-    ring_half_ = stage_ring_size_ / 2;
-    stage_third_ = stage_ring_size_ / 3;
 
     allocate_sockets();
     build_and_launch_programs(stage_ring_base_, stage_ring_size_, mpfe_policy);
@@ -1045,7 +1034,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         for (const CoreCoord& sender : sender_logical_cores_) {
             write_dram_sender_l1(*mesh_device_, device, sender, signal_slots_l1_addr_, zero_slots);
         }
-        MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().l1_barrier(device->id());
+        mesh_device_->impl().metal_env().get_cluster().l1_barrier(device->id());
     }
     op_signal_waits_.fill(0);
 
@@ -1082,10 +1071,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     // with a different receiver count. total_receivers (== ring_size) and receivers_per_bank are
     // independent of how many DRISC senders drive a bank.
     const auto& mapping = target.mapping;
-    uint32_t total_receivers = 0;
-    for (const auto& [_sender, receivers] : mapping) {
-        total_receivers += receivers.num_cores();
-    }
+    const uint32_t total_receivers = target.total_receivers;
     TT_FATAL(num_banks_ > 0, "Tensor prefetcher: num_banks must be > 0");
     // receivers_per_bank is only consumed by the K-row-major layout (single sender per
     // bank). Recv-contig derives its geometry from the shard shape and ignores it, and
@@ -1110,7 +1096,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         }
     }
 
-    const uint32_t pcie_alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
+    const uint32_t pcie_alignment = mesh_device_->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
     const uint32_t aligned_page_bytes = align_up(kRequestPageBytes, pcie_alignment);
 
     constexpr uint32_t kHeaderBytes = sizeof(TensorPrefetcherRequestHeader);
@@ -1427,6 +1413,9 @@ std::vector<std::shared_ptr<const TensorPrefetcherManager::Request>> TensorPrefe
     std::vector<std::vector<std::vector<uint8_t>>> pages = serialize_request_pages(target, tensors);
     for (const auto& sender_pages : pages) {
         validate_request_pages(sender_pages);
+        if (on_dispatch_engine()) {
+            validate_dispatch_engine_pages(sender_pages, target);
+        }
     }
 
     // Target devices: subset if given, else full mesh. Caller is responsible
@@ -1476,7 +1465,23 @@ void TensorPrefetcherManager::queue(
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
     validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherRequest");
+    TT_FATAL(
+        trace_capture_cq == nullptr || !trace_capture_cq->trace_id().has_value() || !on_dispatch_engine(),
+        "QueueTensorPrefetcherRequest: trace capture is not supported when fast dispatch runs the Tensor prefetcher "
+        "(#65545)");
     send_or_capture(build_requests(target, device_subset, tensors), trace_capture_cq);
+}
+
+bool TensorPrefetcherManager::on_dispatch_engine() const { return dram_senders_on_dispatch_engine(*mesh_device_); }
+
+void TensorPrefetcherManager::set_stage_ring_size(uint32_t raw_bytes, uint32_t l1_alignment) {
+    // Align down to LCM(2, 3, l1_alignment) so both halves (K-row path) and thirds (recv-contig path)
+    // are individually l1-aligned: 6 * l1_alignment when l1_alignment is even (48 B at 16 B). Not a
+    // power of two, so integer division rather than a mask.
+    const uint32_t ring_size_align = 6u * l1_alignment;
+    stage_ring_size_ = raw_bytes / ring_size_align * ring_size_align;
+    ring_half_ = stage_ring_size_ / 2;
+    stage_third_ = stage_ring_size_ / 3;
 }
 
 void TensorPrefetcherManager::validate_own_cq(const MeshCommandQueue* cq, std::string_view api_name) const {
@@ -1543,8 +1548,7 @@ std::vector<TensorPrefetcherManager::Request> TensorPrefetcherManager::build_dra
         max_pages = std::max(max_pages, pages_per_sender[s].size());
     }
 
-    const uint32_t pcie_alignment =
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t pcie_alignment = mesh_device_->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
     const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
     const MeshCoordinateRangeSet full_subset = full_mesh_subset();
     std::vector<MeshCoordinate> all_devices;
@@ -1583,8 +1587,8 @@ std::vector<TensorPrefetcherManager::Request> TensorPrefetcherManager::build_dra
 }
 
 void TensorPrefetcherManager::validate_request_pages(const std::vector<std::vector<uint8_t>>& sender_pages) const {
-    // allocate_sockets gives every socket the same page size.
-    const uint32_t socket_page_bytes = sockets_.front()->get_page_size();
+    // allocate_sockets gives every socket the same page size; a dispatch-engine FIFO lane holds one page.
+    const uint32_t socket_page_bytes = on_dispatch_engine() ? kRequestPageBytes : sockets_.front()->get_page_size();
     for (const auto& page : sender_pages) {
         TT_FATAL(
             page.size() == socket_page_bytes,
@@ -1602,6 +1606,10 @@ void TensorPrefetcherManager::capture(
     const RequestTarget target = target_for(prefetcher_pipes);
     auto lock = lock_api_function_();
     TT_FATAL(active_, "CommandListBuilder::add_tensor_prefetcher_request called before StartTensorPrefetcher");
+    TT_FATAL(
+        !on_dispatch_engine(),
+        "CommandListBuilder::add_tensor_prefetcher_request is not supported when fast dispatch runs the Tensor "
+        "prefetcher (#65545)");
     TT_FATAL(
         captured.requests.empty() || captured.run_id == run_id_,
         "CommandListBuilder::add_tensor_prefetcher_request: the builder holds requests from a Tensor prefetcher that "
@@ -1646,8 +1654,7 @@ void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
 }
 
 std::vector<uint8_t> TensorPrefetcherManager::wait_signal_page(uint32_t slot_index, uint32_t wait_value) const {
-    const uint32_t pcie_alignment =
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t pcie_alignment = mesh_device_->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
     std::vector<uint8_t> page(align_up(kRequestPageBytes, pcie_alignment), 0);
     auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data());
     header->base.cmd_id = DRAM_PREFETCHER_CMD_WAIT_SIGNAL;
@@ -1672,6 +1679,9 @@ uint32_t TensorPrefetcherManager::signal_slot_addr(uint32_t slot_index) const {
 uint32_t TensorPrefetcherManager::signal_address(uint32_t signal_id) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "GetTensorPrefetcherSignalAddress called before StartTensorPrefetcher");
+    TT_FATAL(
+        !on_dispatch_engine(),
+        "GetTensorPrefetcherSignalAddress is not supported when fast dispatch runs the Tensor prefetcher (#65545)");
     validate_signal_id(signal_id, "GetTensorPrefetcherSignalAddress");
     return signal_slot_addr(op_signal_slot_index(signal_id));
 }
@@ -1679,6 +1689,9 @@ uint32_t TensorPrefetcherManager::signal_address(uint32_t signal_id) {
 void TensorPrefetcherManager::queue_wait_for_signal(uint32_t signal_id, MeshCommandQueue* trace_capture_cq) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherWaitForSignal called before StartTensorPrefetcher");
+    TT_FATAL(
+        !on_dispatch_engine(),
+        "QueueTensorPrefetcherWaitForSignal is not supported when fast dispatch runs the Tensor prefetcher (#65545)");
     validate_signal_id(signal_id, "QueueTensorPrefetcherWaitForSignal");
     validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherWaitForSignal");
 
@@ -1720,6 +1733,10 @@ bool TensorPrefetcherManager::enqueue_cq_signal_and_wait_if_active(MeshCommandQu
 void TensorPrefetcherManager::enqueue_cq_signal_and_wait_locked(
     MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset) {
     validate_own_cq(&cq, "WaitForCqOnTensorPrefetcher");
+    TT_FATAL(
+        !on_dispatch_engine(),
+        "WaitForCqOnTensorPrefetcher is not supported when fast dispatch runs the Tensor prefetcher (#65545); "
+        "create PrefetcherPipes before StartTensorPrefetcher");
     const uint32_t cq_id = cq.id();
     TT_FATAL(
         cq_id < cq_signal_counter_.size(),
@@ -1747,9 +1764,8 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait_locked(
     // Destination of the dispatcher write: the full device address (the kernel's
     // local slot base plus the programmable-DRAM-core L1 NOC offset), so the
     // dispatcher must NOT apply a bank offset.
-    const uint64_t dram_l1_noc_offset = MetalContext::instance(mesh_device_->impl().get_context_id())
-                                            .hal()
-                                            .get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+    const uint64_t dram_l1_noc_offset =
+        mesh_device_->impl().metal_env().get_hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
     const uint64_t slot_addr = static_cast<uint64_t>(signal_slot_addr(cq_id)) + dram_l1_noc_offset;
 
     std::vector<DeviceMemoryAddress> targets;
@@ -1966,8 +1982,7 @@ void TensorPrefetcherManager::stop() {
     // request loop on it. The worker_loop returns once pending is drained and
     // stop_requested_ is set.
     Request sentinel;
-    const uint32_t pcie_alignment =
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t pcie_alignment = mesh_device_->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
     const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
     // STOP is all-zero (cmd_id 0) and rotation-free, so one page broadcast to every sender.
     sentinel.sender_pages.assign(1, std::vector<uint8_t>(page_bytes, 0));
@@ -1991,7 +2006,10 @@ void TensorPrefetcherManager::stop() {
         for (auto& drain : drains) {
             pending_.push_back(std::make_shared<const Request>(std::move(drain)));
         }
-        pending_.push_back(std::make_shared<const Request>(std::move(sentinel)));
+        // The dispatch-engine kernels outlive the run (fast dispatch owns them), so they get no STOP.
+        if (!on_dispatch_engine()) {
+            pending_.push_back(std::make_shared<const Request>(std::move(sentinel)));
+        }
         has_pending_.store(true);
         stop_requested_.store(true);
     }
@@ -2007,8 +2025,14 @@ void TensorPrefetcherManager::stop() {
     // lock. With the device profiler off the read is a no-op, so this only deadlocks under
     // tracy. Nothing is lost by skipping it — the read covers worker/eth cores, not the DRAM
     // cores this program runs on, and the profiler still drains on Finish and at device close.
-    for (uint32_t d = 0; d < devices_.size(); ++d) {
-        ::tt::tt_metal::slow_dispatch::WaitProgramDone(*devices_[d], *programs_[d]);
+    if (on_dispatch_engine()) {
+        // The kernels outlive this run (fast dispatch owns them); wait until they have served every
+        // request, the drains included, so no receiver is still acking into this run's pipes.
+        wait_for_fifo_idle();
+    } else {
+        for (uint32_t d = 0; d < devices_.size(); ++d) {
+            ::tt::tt_metal::slow_dispatch::WaitProgramDone(*devices_[d], *programs_[d]);
+        }
     }
     active_lifetime_timer_.reset();
 
@@ -2022,6 +2046,7 @@ void TensorPrefetcherManager::stop() {
     drain_holds_.clear();
     num_senders_ = 0;
     num_banks_ = 0;
+    fifos_.clear();
     active_ = false;
 }
 
@@ -2033,23 +2058,24 @@ void TensorPrefetcherManager::stop() {
 namespace tt::tt_metal::experimental {
 
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
-    const auto& metal = MetalContext::instance(mesh_device.impl().get_context_id());
+    auto& env = mesh_device.impl().metal_env();
     // The streaming profiler owns the same DRISCs. A bank's senders are its free (non-endpoint)
     // subchannel and its NOC1 worker endpoint (dram_sender_logical_cores), and a streaming-profiler
     // relay takes that same free subchannel with BOTH of its NIUs in stream mode
     // (set_drisc_niu_stream_mode). Two resident kernels cannot share one DRISC L1, so the profiler
     // wins and the prefetcher reports unsupported rather than racing it for the core.
-    if (metal.rtoptions().get_streaming_profiler_enabled()) {
+    if (env.get_rtoptions().get_streaming_profiler_enabled()) {
         return false;
     }
-    return metal.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    return mesh_device.impl().dram_sender_placement().has_value();
 }
 
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config) {
     TT_FATAL(
         IsTensorPrefetcherSupported(mesh_device),
-        "Tensor prefetcher is not supported on this mesh device. Either programmable DRAM cores are "
-        "unavailable (they auto-enable on Blackhole with firmware >= 19.12.0.0), or the streaming profiler "
+        "Tensor prefetcher is not supported on this mesh device. Either it cannot run DRAM-sender endpoints "
+        "(that takes Blackhole with firmware >= 19.12.0.0, or Quasar fast dispatch with one command queue), or "
+        "the streaming profiler "
         "is enabled (TT_METAL_STREAMING_PROFILER=1) and holds the DRISCs the prefetcher needs. Unset "
         "TT_METAL_STREAMING_PROFILER to use the prefetcher, or call IsTensorPrefetcherSupported() first to "
         "skip the prefetcher path.");

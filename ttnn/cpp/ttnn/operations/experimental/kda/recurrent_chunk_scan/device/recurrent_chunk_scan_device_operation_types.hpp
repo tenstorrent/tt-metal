@@ -24,14 +24,15 @@ struct RecurrentChunkScanParams {
     // Groups folded into batch_heads; 1 means ungrouped.
     uint32_t groups_per_head;
     RecurrentChunkScanMode mode;
-    // SUMMARY only. The output is one [S, BH, K, K+V] tensor of [A | B] rows: slot 0 holds head transforms and,
-    // with tail, slot 1 holds tail transforms (S = 2). With init, every slot without a valid segment holds the
-    // identity (I, 0); otherwise such slots are unspecified.
+    // SUMMARY only. The output is one [S, BH, K, K+V] tensor of complement-form [E | B] rows (E = A - I): slot 0
+    // holds head transforms and, with tail, slot 1 holds tail transforms (S = 2). With init, every slot without a
+    // valid segment holds the identity, (0, 0); otherwise such slots are unspecified.
     bool tail = false;
     bool init = true;
     // SUMMARY with one group per head only: also write each chunk's zero-seeded output F(0) and identity-seeded output
-    // F(I) as one terms tensor, and the final segment's transform (A, B: [BH, K, V] each), all FLOAT32. Once the entry
-    // state is known, a chunk's output is F(0) + (F(I) - F(0)) @ entry and the rank's final state is A @ entry + B.
+    // F(I) as one terms tensor, and the final segment's transform in complement form (E = A - I, B: [BH, K, V] each),
+    // all FLOAT32. Once the entry state is known, a chunk's output is F(0) + (F(I) - F(0)) @ entry and the rank's final
+    // state is entry + (E @ entry + B).
     // The terms are [BH * blocks, 2, block_chunks * 32, V]: each block of a head's chunks holds its F(0) rows, then
     // its F(I) rows, so a height shard of one block holds both (emit_block_chunks).
     bool emit_outputs = false;

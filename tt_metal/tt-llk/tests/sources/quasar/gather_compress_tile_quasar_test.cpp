@@ -41,7 +41,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A = params.buffer_A;
     const Operand& buffer_B = params.buffer_B;
 #endif
-    auto unpack_arg_mbox = (std::uint8_t*)UNPACKER_ARG_MAILBOX_BASE1;
+    auto unpack_arg_mbox = reinterpret_cast<std::uint8_t*>(UNPACKER_ARG_MAILBOX_BASE1);
 
     // UNPACR_STRIDE indexes 16-element L1 rows as tiles.
     constexpr ckernel::TensorShape src_shape =

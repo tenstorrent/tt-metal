@@ -16,8 +16,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -40,7 +40,6 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::pool::quasar {
 
@@ -640,7 +639,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         output_tensors[0].dtype(),
         {output_shard_shape[0], output_shard_shape[1]},
         config_tensor_in_dram,
-        reader_indices_actual_page_size);
+        reader_indices_actual_page_size,
+        /*scalar_config_actual_page_size=*/std::nullopt,
+        QUASAR_POOL_PRE_TILIZE_TILE_ROWS);
 
     const auto& input_shape = input.padded_shape();
     const uint32_t shard_width = input.shard_spec()->shape[1];
@@ -847,7 +848,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             cb_sizes.pre_tilize_cb_pagesize,
             cb_sizes.pre_tilize_cb_npages,
             params.data_format,
-            pack_untilize_tile);
+            tt::tt_metal::Tile());  // full 32x32 pack_untilize target (see the pre_tilize sizing above)
         pre.advanced_options.alias_with = {DFB_FAST_TILIZE};
         DataflowBufferSpec fast = local_dfb(
             DFB_FAST_TILIZE, fast_tilize_page_size, pre_tilize_total / fast_tilize_page_size, params.data_format);
