@@ -1285,8 +1285,8 @@ def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs, callbacks=()
 def test_failed_trainer_shuts_down_the_rollout_server(
     mpi_loopback, monkeypatch, expect_error, reward_func, callbacks, message
 ):
-    """A trainer that fails before or during training sends OP_SHUTDOWN; the rollout server stops and closes its
-    sampler, and the atexit backstop sends nothing more."""
+    """A trainer that fails before or during training sends OP_SHUTDOWN; the rollout server stops without closing
+    the sampler, and the atexit backstop sends nothing more."""
     queues, at_exit = mpi_loopback
     sampler = _EchoSampler()
     client, server_thread = _start_rollout_server(sampler)
@@ -1297,10 +1297,21 @@ def test_failed_trainer_shuts_down_the_rollout_server(
 
     server_thread.join(timeout=30)
     assert not server_thread.is_alive()
-    assert sampler.closed
+    assert not getattr(sampler, "closed", False)
     assert at_exit == [client.shutdown]
     at_exit[0]()
     assert queues[mpi_rollout._INFER_REQ_HDR_TAG].empty()
+
+
+def test_serve_rollouts_closes_the_sampler_and_the_mesh(monkeypatch):
+    closed_meshes = []
+    monkeypatch.setattr(ttnn, "close_mesh_device", closed_meshes.append)
+    trainer = object.__new__(GRPOTrainer)
+    sampler = _EchoSampler()
+    trainer._rollout_server = SimpleNamespace(serve_forever=lambda: None)
+    trainer.rollout_sampler, trainer._rollout_mesh = sampler, "mesh"
+    trainer._serve_rollouts()
+    assert sampler.closed and closed_meshes == ["mesh"]
 
 
 @pytest.mark.parametrize(

@@ -1419,7 +1419,7 @@ class GRPOTrainer:
             tokenizer=tokenizer,
             reward_funcs=self.reward_funcs,
         )
-        total_optimizer_steps = (total_prompts // generation_batch_prompts) * grpo_cfg.num_iterations
+        total_optimizer_steps = self._num_generation_batches * grpo_cfg.num_iterations
         self._lr_scheduler = _build_lr_scheduler(optimizer, grpo_cfg, total_optimizer_steps)
 
     def _prompt_batches(
