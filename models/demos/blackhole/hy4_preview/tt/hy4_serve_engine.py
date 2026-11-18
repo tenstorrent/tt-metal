@@ -94,6 +94,14 @@ class Hy4Engine:
         self.xrow = None  # Hy4Xrow, built in warm() before the first capture
         self.xrow_plan = {}  # destination mesh row -> (source row, h tokens), set by assign_rows, consumed by prefill
         self.xrow_stats = dict(copies=0, failed=0, tokens=0, seconds=0.0)
+        # HY4_BLOCKS=1 (default 0; needs HY4_PFX=1, spec mode): multi-chain SHADOW block store (tt/hy4_blocks_store.py + hy4_blocks_copy.py, B45b, program/b45/blocks/DESIGN.md): every pool tensor gets HY4_BLOCKS_PAGES extra
+        # pages (clamped to the DRAM budget); the retained chain of a row is published there (page copies) before another prompt overwrites it, a prompt matching a shadow chain deeper than the retained one gets the blocks
+        # copied back before the prefill. Live switch HY4_BLOCKS_FILE (0 / 1): 0 = row-local behaviour (nothing published, nothing copied in). Any copy error = cold recompute.
+        self.blocks_on = os.environ.get("HY4_BLOCKS", "0") == "1" and self.pfx
+        self.blocks = None  # ShadowStore
+        self.bcopy = None  # Hy4PageCopy, built in warm() before the first capture
+        self.blocks_pages = 0
+        self.blocks_stats = dict(out_pages=0, in_pages=0, in_calls=0, failed=0, seconds=0.0)
         ckpt = os.environ.get("HY4_CKPT", "/ckpt")
         nl = int(os.environ.get("HY4_SERVE_LAYERS", "78"))
         t0 = time.time()
@@ -125,8 +133,20 @@ class Hy4Engine:
             raise RuntimeError(
                 f"pool of {self.pages} pages/row needs {pool_bytes >> 20} MiB/bank, only {dv['free_per_bank'] >> 20} MiB/bank free after the weights: lower --max-model-len"
             )
+        if self.blocks_on:
+            page_b = 475_978  # B/bank per pool page incl. pool-attached tensors (RESULT_B43 calibration)
+            want = int(os.environ.get("HY4_BLOCKS_PAGES", "256"))
+            room = (
+                dv["free_per_bank"] - pool_bytes - (int(os.environ.get("HY4_BLOCKS_GUARD_MB", "400")) << 20)
+            ) // page_b
+            self.blocks_pages = max(0, min(want, int(room)))
+            logger.info(
+                f"HY4 blocks: shadow pages/row {self.blocks_pages} (asked {want}, room {room}); free {dv['free_per_bank'] >> 20} MiB/bank before the pool"
+            )
+            if self.blocks_pages < 8:
+                self.blocks_on, self.blocks_pages = False, 0
         self.dec = Hy4PoolDecoder(
-            self.ch, self.pages, mode="topk", S=self.S, bucket_tokens=self.pages * PAGE
+            self.ch, self.pages, mode="topk", S=self.S, bucket_tokens=self.pages * PAGE, extra_pages=self.blocks_pages
         )  # S = 1 for plain
         self.pp = Hy4PoolPrefill(self.dec, pf_rows=self.pf_rows)
         self.runner = self.dl = self.mtp = None
@@ -143,7 +163,13 @@ class Hy4Engine:
 
                 smp = SpecSampling(Hy4DeviceSampler(md, mc, ccl, users_per_row=self.S), self.K, invT=1.0, seed=0)
             self.runner = Hy4SpecRunner(
-                self.dec, self.mtp, self.K, lambda lg: greedy_tokens(self.ch, lg), self.pages, sampling=smp
+                self.dec,
+                self.mtp,
+                self.K,
+                lambda lg: greedy_tokens(self.ch, lg),
+                self.pages,
+                sampling=smp,
+                extra_pages=self.blocks_pages,
             )
             self.runner.default_variant = "G"
             self.samp = smp
@@ -342,6 +368,83 @@ class Hy4Engine:
         st["seconds"] += dt
         logger.info(f"HY4 xrow: copied {h} tokens row {src} -> {dst} in {dt * 1e3:.0f} ms (stats {st})")
 
+    def _pool_tensors(self):
+        ts = [(f"kv{i}", t) for i, t in enumerate(self.dec.kv_pools)] + [
+            (f"key{i}", t) for i, t in enumerate(self.dec.key_pools) if t is not None
+        ]
+        if self.runner is not None:
+            ts += [("mtp_kv", self.runner.mtp_kv), ("mtp_keys", self.runner.mtp_keys)]
+        return ts
+
+    def _blocks_build(self):
+        from models.demos.blackhole.hy4_preview.tt.hy4_blocks_copy import Hy4PageCopy
+        from models.demos.blackhole.hy4_preview.tt.hy4_blocks_store import ShadowStore
+
+        self._dram("before blocks build")
+        self.bcopy = Hy4PageCopy(self.md, self._pool_tensors())
+        for r in range(ROWS):
+            self.bcopy._ctl_row(r)  # persistent control pages, before the first capture
+        self.blocks = ShadowStore(
+            rows=ROWS,
+            shadow_pages=self.blocks_pages,
+            shadow_base=self.pages,
+            tip_sessions=int(os.environ.get("HY4_BLOCKS_TIPS", "1")),
+            depth_weight=float(os.environ.get("HY4_BLOCKS_DEPTH_W", "0")),
+        )
+        self._dram("after blocks build")
+        logger.info(
+            f"HY4 blocks: store built, {self.blocks_pages} shadow pages/row ({self.blocks_pages * PAGE} tokens), {len(self.bcopy.tensors)} pool tensors"
+        )
+
+    def _blocks_live(self):
+        if self.blocks is None:
+            return False
+        f = os.environ.get("HY4_BLOCKS_FILE")
+        if f:
+            try:
+                with open(f) as fh:
+                    return fh.read().strip() == "1"
+            except (OSError, ValueError):
+                pass
+        return True
+
+    def _blocks_pre_prefill(self, r, toks):
+        """row r is about to be prefilled with ``toks`` (np.int32): plan the shadow hit against the retained chain, publish the retained chain (copy-out, parents first), then copy the hit blocks in. On return
+        ``self.ret[r]`` = the tokens whose pool pages are valid (the hit prefix, chunk aligned) so ``hit_len`` sees the deeper hit. Never raises: an error leaves nothing retained (cold).
+        """
+        res = self.ret[r]
+        plan = self.blocks.plan_hit(r, toks, res)
+        out = []
+        try:
+            if res is not None and len(res) >= PAGE:
+                out = self.blocks.plan_out(r, res, session=f"row{r}")
+            t0 = time.perf_counter()
+            if out:
+                self.bcopy.copy(r, [(a, b) for a, b in out])  # active -> shadow
+            if plan.copy_in:
+                self.bcopy.copy(
+                    r, [(a, b) for a, b in plan.copy_in]
+                )  # shadow -> active (never the pages just published: pinned)
+            dt = time.perf_counter() - t0
+        except Exception as e:  # noqa: BLE001
+            self.blocks_stats["failed"] += 1
+            logger.error(f"HY4 blocks: row {r} copy FAILED ({type(e).__name__}: {str(e)[:200]}): cold recompute")
+            self.blocks.unpin(plan)
+            self.ret[r] = None
+            return
+        self.blocks.unpin(plan)
+        st = self.blocks_stats
+        st["out_pages"] += len(out)
+        st["in_pages"] += len(plan.copy_in)
+        st["in_calls"] += 1 if plan.copy_in else 0
+        st["seconds"] += dt
+        if plan.copy_in:
+            self.ret[r] = toks[: plan.start].copy()
+            self.ret_t[r] = time.time()
+            logger.info(
+                f"HY4 blocks: row {r} hit {plan.start} tokens ({plan.active_blocks} active + {plan.shadow_blocks} shadow blocks), out {len(out)} / in {len(plan.copy_in)} pages in {dt * 1e3:.0f} ms (stats {st})"
+            )
+
     def _xrow_build(self):
         from models.demos.blackhole.hy4_preview.tt.hy4_xrow import Hy4Xrow
 
@@ -393,6 +496,9 @@ class Hy4Engine:
                 sc = plan.get(r)
                 if sc is not None and self.xrow is not None:
                     self._xrow_copy(sc[0], r, sc[1])
+            if self.blocks is not None and self._blocks_live() and self._pfx_on():
+                for r in rows:
+                    self._blocks_pre_prefill(r, torch.as_tensor(prompts_by_row[r], dtype=torch.int32).numpy())
             for r in rows:
                 hits[r] = self.hit_len(r, torch.as_tensor(prompts_by_row[r], dtype=torch.int32).numpy())
             st = [(h - A if (self.pfx_redo and h > 0) else h) for h in hits.values()]
@@ -431,6 +537,10 @@ class Hy4Engine:
                 n = (len(prompts_by_row[r]) // PAGE) * PAGE
                 self.ret[r] = torch.as_tensor(prompts_by_row[r][:n], dtype=torch.int32).numpy().copy() if n else None
                 self.ret_t[r] = now
+        if self.blocks_on:
+            self._dram(
+                "blocks: after prefill call"
+            )  # steady-state free DRAM per bank (low-water proxy for the mega-bundle gate)
         first = {}
         for r in rows:
             sp = (sampling or {}).get(r, (0.0, -1, 1.0, 0))
@@ -439,7 +549,7 @@ class Hy4Engine:
         if self.spec:
             self._seed_rows(rows, first, res, prompts_by_row, sampling or {})
         logger.info(
-            f"HY4 prefill call: lg_md5={ {r: hashlib.md5(res.logits[r].numpy().tobytes()).hexdigest()[:12] for r in rows} } pfx_start={start} hits={hits} pfx_stats={self.pfx_stats} xrow={self.xrow_stats} mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
+            f"HY4 prefill call: lg_md5={ {r: hashlib.md5(res.logits[r].numpy().tobytes()).hexdigest()[:12] for r in rows} } pfx_start={start} hits={hits} pfx_stats={self.pfx_stats} xrow={self.xrow_stats} blocks={self.blocks_stats} mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
             f"(chunk median {sorted(res.chunk_sec)[len(res.chunk_sec) // 2]:.2f}s) chunks_s={[round(x, 1) for x in res.chunk_sec[:6]]}..{[round(x, 1) for x in res.chunk_sec[-2:]]} seed={time.perf_counter() - t1:.2f}s"
         )
         return first
@@ -818,6 +928,8 @@ class Hy4Engine:
                 logger.info(f"HY4 warm-up: chain prefill 4 x {ln} {time.time() - tw:.1f} s")
         if self.xrow_on:
             self._xrow_build()  # persistent stage tensors + programs before the first capture (D75-1)
+        if self.blocks_on:
+            self._blocks_build()
         t1 = time.time()
         if self.spec:
             # D75-1: EVERY lazily created persistent tensor of EVERY variant must exist before the FIRST capture (one allocated between two captures can sit in the first trace's scratch and is clobbered by its

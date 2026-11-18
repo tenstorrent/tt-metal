@@ -360,7 +360,7 @@ class Hy4SpecRunner:
     Build order: chain + head + MTP layer, Hy4PoolVerifier (pools, XMerge), ``Hy4SpecRunner`` (MTP pool + persistent tensors), then ``capture`` (eager warm round first).
     """
 
-    def __init__(self, dec, mtp, k, greedy, pages, key_dtype=ttnn.bfloat8_b, sampling=None):
+    def __init__(self, dec, mtp, k, greedy, pages, key_dtype=ttnn.bfloat8_b, sampling=None, extra_pages=0):
         self.dec, self.mtp, self.k, self.S = dec, mtp, k, k + 1
         ch, md, ctx = dec.ch, dec.md, dec.ctx
         ly = mtp.ly
@@ -379,14 +379,14 @@ class Hy4SpecRunner:
             assert self.S * int(md.shape[0]) <= 16
             ly.blk_tp = Hy4MoeTp32Block(md, ch.ccl, ly.blk.gate, ly.blk_tp.tpe, self.S)
         self.mtp_kv = ttnn.empty(
-            [1, 1, pages * 64, 656],
+            [1, 1, (pages + extra_pages) * 64, 656],
             dtype=ttnn.fp8_e4m3,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=md,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.mtp_keys = ttnn.empty(
-            [pages, 1, 64, 128],
+            [pages + extra_pages, 1, 64, 128],
             dtype=key_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=md,
