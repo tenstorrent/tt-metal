@@ -81,9 +81,10 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
                     break
             self._key_to_file[key] = filename
         self._mxfp4_keys = {k[: -len("_blocks")] for k in weight_map if k.endswith("_blocks")}
-        # TEMP experiment: GPT_OSS_DENSE_ROUNDED_DECODE = a file of GPTQ-rounded dense weights (dense_gptq.py; q / k in
-        # Meta order); each of its keys is also served as "<key>_decode", which only the fused decode stream copies
-        # read (attention/weights.py, topk.py, model.py LM head), so prefill keeps the checkpoint weights.
+        # GPT_OSS_DENSE_ROUNDED_DECODE (a release setting, models/demos/gpt_oss/__init__.py) = a file of GPTQ-rounded
+        # dense weights (q / k in Meta order); each of its keys is also served as "<key>_decode", which only the fused
+        # decode stream copies read (attention/weights.py, topk.py, model.py LM head), so prefill keeps the checkpoint
+        # weights.
         # (with_decode_rounded=False: no fused decode copy will read them, so the file is not resolved / downloaded)
         self._decode_rounded_path = (
             env_path("GPT_OSS_DENSE_ROUNDED_DECODE") if with_decode_rounded else ""
