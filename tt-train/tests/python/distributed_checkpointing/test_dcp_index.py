@@ -254,13 +254,13 @@ def test_a_header_save_would_not_write_is_refused(tmp_path, expect_error):
             read_user_header(ckpt)
 
 
-def test_a_staging_directory_is_named_by_its_nonce_and_only_a_shared_one_may_exist(tmp_path):
+def test_a_staging_directory_is_named_by_its_nonce_and_only_a_shared_one_may_exist(tmp_path, expect_error):
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=42, shared=False)
     assert staging == staging_dir(final, 42) == final + ".partial-42" and os.path.isdir(os.path.join(staging, "data"))
     # Every rank of a multi-rank save creates the directory its ranks agreed on; a lone save's must be new.
     assert begin_staging(final, nonce=42, shared=True) == staging
-    with pytest.raises(FileExistsError):
+    with expect_error(FileExistsError, "File exists"):
         begin_staging(final, nonce=42, shared=False)
 
 
