@@ -124,11 +124,10 @@ inline void llk_pack_dest_dvalid_section_done() {
 inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_(); }
 
 /**
- * @brief Signals that the packer has finished consuming the current Destination Register section.
- * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
+ * @brief Releases the current Dest section after the packer has finished reading it.
+ * Decrements MATH_PACK so math can use the section again. The regular path also clears the used Dest banks.
  *
- * @tparam EN_32BIT_DEST True if math destination is in 32-bit mode, false for 16-bit mode. On the unpack-to-dest
- * path it must equal DST_ACCUM_MODE (enforced by a static_assert), see the body.
+ * @tparam EN_32BIT_DEST True if the math destination uses 32 bits per value, false if it uses 16 bits.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
@@ -137,15 +136,6 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
 template <bool EN_32BIT_DEST>
 inline void llk_pack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
-        // The unpack side sizes its SyncHalf bank flip from DST_ACCUM_MODE (llk_unpack_A / llk_unpack_A_block). The two
-        // strides must agree or unpack and pack address different DEST halves, and the compute API lets callers
-        // override is_fp32_dest_acc_en (tile_regs_release, release_dst, tilize_block, ...), so pin it here.
-        static_assert(
-            EN_32BIT_DEST == DST_ACCUM_MODE,
-            "unpack-to-dest: EN_32BIT_DEST must equal DST_ACCUM_MODE, the stride the unpack side flips banks with");
-        // Both gets behind the PACK0 drain. UNPACK_PACK first: it frees the bank for the unpacker, which is the count
-        // llk_unpack_wait_for_dest_available stalls on; MATH_PACK then lets math forward the next section.
-        _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
             // Same bank switch as the regular path: PACR reads DEST at THCON_PACKER0_REG0_SRC_ADDR_OFFSET plus its tile

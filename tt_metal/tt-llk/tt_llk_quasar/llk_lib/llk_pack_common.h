@@ -269,7 +269,7 @@ inline void _llk_pack_reduce_mask_clear_()
  */
 inline void _llk_packer_wait_for_math_done_()
 {
-    TTI_SEMWAIT(p_stall::STALL_TDMA, p_stall::STALL_ON_ZERO, 0, semaphore::t6_sem(semaphore::MATH_PACK));
+    TTI_SEMWAIT(p_stall::STALL_TDMA | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO, 0, semaphore::t6_sem(semaphore::MATH_PACK));
 }
 
 /**
