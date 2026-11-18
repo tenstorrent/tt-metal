@@ -1,0 +1,249 @@
+--- kernels_orig/all_gather_rms_norm_kimi_compute.cpp	2026-11-17 23:56:08.473795376 +0000
++++ agrn_copy/kernels/all_gather_rms_norm_kimi_compute.cpp	2026-11-18 00:28:04.424834161 +0000
+@@ -65,6 +65,14 @@
+ // xg mode, a block with no chunk ahead (all of it lands late): one gamma pass + one normalize pass over the whole
+ // block (cumulative waits, pushed per chunk) instead of a gamma + normalize pass per chunk
+ constexpr bool late_block = get_compile_time_arg_val(C + 15) != 0;
++// late_chunk_one_pass experiment: 0 = baseline (gamma pass + normalize pass through cb_xg for a late chunk);
++// 1 = SFPU: late chunk = x*gamma (FPU, fp32 DEST) then * rstd_full (copied fp32 into D1) with the SFPU fp32 mul, one
++//     DEST window; ahead chunk = xg reloaded exactly (UnpackToDestFp32) + rstd_full into D1 + the same SFPU mul;
++// 2 = DEST-reuse: late chunk = x*gamma (FPU) then DEST->srcA * rstd_full (FPU, fused_chunk); ahead chunk = xg reloaded
++//     exactly into DEST (UnpackToDestFp32) then the same DEST->srcA * rstd_full. Both paths hand the identical fp32
++//     DEST value to the identical second op, so every core of a slice writes the same bits.
++constexpr uint32_t norm_impl = get_compile_time_arg_val(C + 16);
++constexpr bool one_pass = norm_impl != 0;
+
+ static_assert(block_w % chunk_tiles == 0 || chunk_tiles % block_w == 0, "a chunk is a run in one row or whole rows");
+
+@@ -155,6 +163,159 @@
+         PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
+ }
+
++// ---- late_chunk_one_pass variants ----
++constexpr InputSpec rstd_full_copy_in = input(
++    cb_rstd_full,
++    WaitPolicy::None,
++    PopPolicy::None,
++    InputTileMapping::Col,
++    DataFormatReconfig::Enabled,
++    TileAddressing::Offset);
++constexpr InputSpec x_chunk_in = input(
++    cb_x_block,
++    WaitPolicy::None,
++    PopPolicy::None,
++    InputTileMapping::Block,
++    DataFormatReconfig::Enabled,
++    TileAddressing::Offset);
++constexpr BroadcastInputSpec gamma_chunk_in = input(
++    cb_gamma,
++    BroadcastDim::Row,
++    WaitPolicy::None,
++    PopPolicy::None,
++    InputTileMapping::Row,
++    DataFormatReconfig::Enabled,
++    TileAddressing::Offset);
++
++// late chunk, SFPU: D0 = x * gamma (FPU), D1 = rstd_full (exact fp32 copy), D0 = D0 * D1 (SFPU fp32) -> cb_out
++ALWI void late_chunk_sfpu(uint32_t k) {
++    const ChunkWindow w = chunk_window(k);
++    cb_wait_front(cb_x_block, (k + 1) * chunk_tiles);
++    eltwise_chain(
++        IterationShape::grid(w.rows, w.cols).block_size(chunk_tiles),
++        BinaryFpu<BinaryFpuOp::Mul, x_chunk_in, gamma_chunk_in, Dst::D0>{k * chunk_tiles, w.c0},
++        CopyTile<rstd_full_copy_in, Dst::D1>{w.r0},
++        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
++        PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
++}
++
++// ahead chunk, SFPU: D0 = xg (exact fp32 copy), D1 = rstd_full, D0 = D0 * D1 (SFPU fp32) -> cb_out
++ALWI void ahead_chunk_sfpu(uint32_t k) {
++    const ChunkWindow w = chunk_window(k);
++    eltwise_chain(
++        IterationShape::grid(w.rows, w.cols).block_size(chunk_tiles),
++        CopyTile<input(cb_xg, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{},
++        CopyTile<rstd_full_copy_in, Dst::D1>{w.r0},
++        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
++        PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
++}
++
++// ahead chunk, DEST-reuse: D0 = xg (exact fp32 copy), then DEST->srcA * rstd_full (FPU) -> cb_out
++ALWI void ahead_chunk_dreuse(uint32_t k) {
++    const ChunkWindow w = chunk_window(k);
++    eltwise_chain(
++        IterationShape::grid(w.rows, w.cols).block_size(chunk_tiles),
++        CopyTile<input(cb_xg, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{},
++        DestReuseBinary<BinaryFpuOp::Mul, rstd_full_in, DestReuseType::DEST_TO_SRCA>{w.r0},
++        PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
++}
++
++// ---- norm_impl 3: raw one-window SFPU path (same arithmetic as norm_impl 1: fp32(x*gamma) * rstd_full, SFPU fp32) ----
++// Bypasses eltwise_chain (BinaryFpu + CopyTile + MulBinary): the chain gives every lane its own rstd copy (lane width 2
++// -> 2 tiles per window, one 4 KiB fp32 rstd unpack per tile, a generic per-tile SFPU binary call). Here a window holds
++// up to RS_W product tiles in D0..D{RS_W-1} and ONE rstd_full tile in D{RS_W}; one SFPU pass loads each rstd vector
++// once and multiplies the RS_W product vectors by it. No helper expresses a per-window shared operand slot.
++#include "api/compute/tile_move_copy.h"
++#include "api/compute/bcast.h"
++#include "api/compute/pack.h"
++#include "api/compute/reconfig_data_format.h"
++#include "api/compute/eltwise_binary_sfpu.h"
++constexpr uint32_t RS_W = DEST_AUTO_LIMIT - 1;  // product slots per window (3 with fp32 half-sync DEST)
++#ifdef TRISC_MATH
++template <uint32_t N>
++sfpi_inline void rstd_scale_body() {
++    constexpr uint32_t ts = 32;  // one DEST tile in sfpi rows
++#pragma GCC unroll 8
++    for (uint32_t d = 0; d < 8; ++d) {
++        const sfpi::vFloat r = sfpi::dst_reg[RS_W * ts];
++#pragma GCC unroll 4
++        for (uint32_t t = 0; t < N; ++t) {
++            sfpi::dst_reg[t * ts] = sfpi::dst_reg[t * ts] * r;
++        }
++        sfpi::dst_reg++;
++    }
++}
++#endif
++ALWI void rstd_scale(uint32_t n) {
++#ifdef TRISC_MATH
++    if (n == 3) {
++        _llk_math_eltwise_unary_sfpu_params_(rstd_scale_body<3>, 0, ckernel::VectorMode::RC);
++    } else if (n == 2) {
++        _llk_math_eltwise_unary_sfpu_params_(rstd_scale_body<2>, 0, ckernel::VectorMode::RC);
++    } else {
++        _llk_math_eltwise_unary_sfpu_params_(rstd_scale_body<1>, 0, ckernel::VectorMode::RC);
++    }
++#endif
++}
++static_assert(RS_W >= 1 && RS_W <= 3, "rstd_scale_body instantiations cover 1..3 product slots");
++
++// One window of n tiles (row r, block cols c0..c0+n-1). late: D[j] = x * gamma (FPU, row bcast); ahead: D[j] = xg
++// (exact fp32 copy, xg_idx = front index of the first tile). Then D{RS_W} = rstd_full[r], D[j] *= it, pack -> cb_out.
++template <bool late>
++ALWI void rs_window(uint32_t n, uint32_t x_idx, uint32_t c0, uint32_t r, uint32_t xg_idx) {
++    tile_regs_acquire();
++    if constexpr (late) {
++        reconfig_data_format(cb_x_block, cb_gamma);
++        mul_bcast_rows_init(cb_x_block, cb_gamma);
++        for (uint32_t j = 0; j < n; ++j) {
++            mul_tiles_bcast_rows(cb_x_block, cb_gamma, x_idx + j, c0 + j, j);
++        }
++        reconfig_data_format_srca(cb_rstd_full);
++        copy_init(cb_rstd_full);
++    } else {
++        reconfig_data_format_srca(cb_xg);
++        copy_init(cb_xg);
++        for (uint32_t j = 0; j < n; ++j) {
++            copy_tile(cb_xg, xg_idx + j, j);
++        }
++    }
++    copy_tile(cb_rstd_full, r, RS_W);
++#ifndef AGRN_DIAG_NOSFPU
++    mul_binary_tile_init();
++    rstd_scale(n);
++#endif
++    tile_regs_commit();
++    tile_regs_wait();
++    for (uint32_t j = 0; j < n; ++j) {
++        pack_tile(j, cb_out);
++    }
++    tile_regs_release();
++}
++
++template <bool late>
++ALWI void rs_chunk(uint32_t k) {
++    const ChunkWindow w = chunk_window(k);
++    if constexpr (late) {
++        cb_wait_front(cb_x_block, (k + 1) * chunk_tiles);
++    } else {
++        cb_wait_front(cb_xg, chunk_tiles);
++    }
++    cb_reserve_back(cb_out, chunk_tiles);
++    pack_reconfig_data_format(cb_out);
++    uint32_t t = 0;
++    for (uint32_t rr = 0; rr < w.rows; ++rr) {
++        for (uint32_t c = 0; c < w.cols; c += RS_W) {
++            const uint32_t n = (w.cols - c) < RS_W ? (w.cols - c) : RS_W;
++            rs_window<late>(n, k * chunk_tiles + t, w.c0 + c, w.r0 + rr, t);
++            t += n;
++        }
++    }
++    cb_push_back(cb_out, chunk_tiles);
++    if constexpr (!late) {
++        cb_pop_front(cb_xg, chunk_tiles);
++    }
++}
++
+ static_assert(G <= DEST_AUTO_LIMIT, "combine_stats_block holds all G partials in DEST at once");
+
+ // Partial q (q >= 1) of a row: tile q * h + r of cb_partials (caller-managed window) -> DEST slot q.
+@@ -275,7 +436,7 @@
+     // ahead = this core's entry of the host look-ahead table (common args after row_base, 8 bits per core)
+     const uint32_t core_idx = b.q * nb + b.m;
+     const uint32_t ahead_tab = get_common_arg_val<uint32_t>(row_base_idx + grid_y + core_idx / 4);
+-    const uint32_t ahead = (fuse_late || scale_mode) ? 0 : ((ahead_tab >> (8 * (core_idx % 4))) & 0xFF);
++    const uint32_t ahead = ((fuse_late && !one_pass) || scale_mode) ? 0 : ((ahead_tab >> (8 * (core_idx % 4))) & 0xFF);
+     {
+         MaybeDeviceZoneScope("compute_gamma_wait");
+         cb_wait_front(cb_gamma, block_w);  // held for every chunk (Row-mapped, offset per chunk)
+@@ -317,23 +478,45 @@
+     // ---- normalize_block: per chunk, out = xg * rstd (x * gamma * rstd for the chunks not done ahead) ----
+     MaybeDeviceZoneScope("compute_normalize");  // includes the per-chunk landing waits
+     cb_wait_front(cb_rstd_full, h);             // held for every chunk (Col-mapped, offset per chunk)
+-    if (late_block && !fuse_late && ahead == 0) {
+-        const IterationShape block = IterationShape::grid(h, block_w).block_size(chunk_tiles);
+-        mul<input(cb_x_block, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),
+-            input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row),
+-            output(cb_xg, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
+-        mul<input(cb_xg, WaitPolicy::Cumulative, PopPolicy::AtEnd, InputTileMapping::Block),
+-            input(cb_rstd_full, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
+-            output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
+-    }
+-    for (uint32_t k = (late_block && !fuse_late && ahead == 0) ? n_chunks : 0; k < n_chunks; ++k) {
+-        if (k < ahead) {
+-            normalize_chunk(k);
+-        } else if constexpr (fuse_late) {
+-            fused_chunk(k);
+-        } else {
+-            gamma_chunk(k);
+-            normalize_chunk(k);
++    if constexpr (one_pass) {
++        for (uint32_t k = 0; k < n_chunks; ++k) {
++            if (k < ahead) {
++                if constexpr (norm_impl == 3) {
++                    rs_chunk<false>(k);
++                } else if constexpr (norm_impl == 1) {
++                    ahead_chunk_sfpu(k);
++                } else {
++                    ahead_chunk_dreuse(k);
++                }
++            } else {
++                if constexpr (norm_impl == 3) {
++                    rs_chunk<true>(k);
++                } else if constexpr (norm_impl == 1) {
++                    late_chunk_sfpu(k);
++                } else {
++                    fused_chunk(k);
++                }
++            }
++        }
++    } else {
++        if (late_block && !fuse_late && ahead == 0) {
++            const IterationShape block = IterationShape::grid(h, block_w).block_size(chunk_tiles);
++            mul<input(cb_x_block, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),
++                input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row),
++                output(cb_xg, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
++            mul<input(cb_xg, WaitPolicy::Cumulative, PopPolicy::AtEnd, InputTileMapping::Block),
++                input(cb_rstd_full, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
++                output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
++        }
++        for (uint32_t k = (late_block && !fuse_late && ahead == 0) ? n_chunks : 0; k < n_chunks; ++k) {
++            if (k < ahead) {
++                normalize_chunk(k);
++            } else if constexpr (fuse_late) {
++                fused_chunk(k);
++            } else {
++                gamma_chunk(k);
++                normalize_chunk(k);
++            }
+         }
+     }
+     cb_pop_front(cb_rstd_full, h);

@@ -163,3 +163,103 @@
   - Scale mode trades the fastest chip against the slowest through the same store contention.
 - Remaining headroom (finding): the op is transport (15.85) plus a 2.9 µs tail. The tail is ~1 µs of last-chunk compute plus DRAM stores slowed by NoC1 contention with the fabric traffic; some cores take 8 µs to store 12 tiles mid-bulk. In local-only, the end-of-op store burst is +6 µs against a ~3.8 µs DRAM SOL. Next: route the stores away from the fabric's NoC1 paths (per-core NoC choice or compute placement by column), and time the stores of the early-landed remote cores against the stream position.
 - Tests added: none (acceptance + determinism + precision cover the changed paths). Perf tooling: `perf/r3_*.json`, `perf/r3_tail_probe.patch`, `perf/r3_tail_analyze.py.txt`, regenerated `perf/ablation_hooks.patch`.
+
+## Perf 1 — tournament round 1 (2-experiment cap)
+- Date: 2026-11-18
+- Focus: the one perf case of the suite (per-chip input `(1,1,640,384)` bf16, γ bf16 ROW_MAJOR, `fp32_dest_acc_en=True`, HiFi4, G = 4 ring, 2 links). Every axis it declares is in `SUPPORTED`. Roofline 7.6 µs (links), target 10.1 µs.
+- Start (harness, 5 experiments): fastest chip **18.72 µs**, slowest 19.77 µs, not dispatch-bound (`perf/p1_baseline.json`).
+
+### Instrumentation (permanent)
+- Every kernel now carries `MaybeDeviceZoneScope` zones at its stage boundaries. The macro comes from `kernels/all_gather_rms_norm_kimi_perf.hpp`, an alias of `DeviceZoneScopedN`; `kernel_lib/perf_instrumentation.hpp` does not exist in this tree.
+- Waits are zoned apart from the work they gate, and no zone sits inside a per-chunk loop:
+  - **sender:** `sender_open`, `sender_fence`, `sender_bulk`, `sender_tail_stats`
+  - **port reader:** `preader_own_wait`
+  - **receiver:** `recv_notify`, `recv_drain`
+  - **hub:** `hub_gamma`, `hub_own_wait`, `hub_stats`
+  - **reader:** `reader_own_load`, `reader_gamma_wait`, `reader_stats`, `reader_landed_wait`
+  - **writer:** `writer_partial_wait`, `writer_export`, `writer_gate_wait`, `writer_store`
+  - **compute:** `compute_partial`, `compute_gamma_wait`, `compute_xg_ahead`, `compute_stats_wait`, `compute_combine`, `compute_normalize`
+- **The zones compile in only with `AGRN_PERF_ZONES=1`** (the host adds the define and includes the flag in the program hash). With the zones on, the ccl_perf harness (500 traced calls with the profiler on) dropped programs: it saw `programs per chip {3: 579, ...}, expected 600`, because the zone markers overflow the profiler buffer. So the harness build leaves them out.
+- With the zones compiled out, the harness is unchanged: 18.713 / 19.793 µs, `compare` null.
+- Tools:
+  - `perf/p1_zone_driver.py.txt`: run as `AGRN_PERF_ZONES=1 TT_METAL_DEVICE_PROFILER=1 scripts/tt-probe.sh all_gather_rms_norm_kimi < it`.
+  - `perf/p1_zone_analyze.py.txt` and `perf/p1_tail_analyze.py.txt`: the analyzers.
+  - `perf/ablation_hooks.patch`: regenerated against the zoned kernels.
+
+### Measured breakdown (fastest chip, µs)
+Cumulative payload ablation (`perf/p1_abl_*.json`); it reproduces Refinement 3 to within 0.02 µs:
+
+| Variant | µs |
+|---|---|
+| full | 18.72 |
+| `nostore` | 17.73 |
+| `nocompute` | 17.77 |
+| transport only (`nocompute,nostore`) | 15.86 |
+| local only (`nobulk`) | 15.74 |
+| `nobulk,nostore` | 9.69 |
+| skeleton (`nobulk,nocompute,nostore`) | 6.92 |
+
+The overlap loss is full − slowest part alone = 18.72 − 15.86 = **2.86 µs**.
+
+Zone timeline. All times are µs from the chip's first kernel start, medians over calls, for chips 0 / 1 / 2 / 3:
+
+| Stage | Measured | Part SOL | Gap |
+|---|---|---|---|
+| Sender setup before `conn.open` | 1.26 (+0.28 open) | ≈ 0.6 (one route + open) | the fence ends at 2.07 / 3.06 / 3.43 / 2.99, while the own data is ready at ~2.2 |
+| `sender_bulk`: 360 KiB per port | 11.8 – 12.8, i.e. 63% of the 48.5 GB/s link | 7.6 at the link rate; the `fabric_all_gather` example reaches 74% at 2 links, which would be 10.3 | **2.2 – 5** |
+| Last bulk packet handed to the router → last landing | 1.2 – 2.2 | the router channel drains at the link rate | — |
+| Last landing → last normalize | **1.7** (a gamma pass plus a normalize pass over the late block) | ~0.4 (one 6-tile pass) | 1.3 |
+| Last normalize → last store | 0.65 | ~0.5 (DRAM write latency) | — |
+| Stores competing with fabric traffic | nocompute − transport only = 1.9 µs, of which ~0.65 is the inherent last store | — | ~1.2 |
+
+Ranked headroom:
+1. **TRANSPORT bulk stream rate.** Largest gap, but no concrete lever was cheap enough under the cap.
+2. **OVERLAP post-exchange chain** (1.3).
+3. **Store contention** (~1.2).
+4. **TRANSPORT pre-bulk handshake** (up to ~1 on 3 of 4 chips).
+
+The stats chain (the hub has every slot at 7.3 – 8.2 µs) and the compute before the landing are not on the critical path.
+
+### Portfolio and verdicts (cap: 2 experiments)
+| Idea | Kind | Verdict | Focus: fastest / slowest µs, base → candidate | Domain |
+|---|---|---|---|---|
+| `fence_first_sender` (`perf_experiments/fence_first_sender/`) | TRANSPORT, handshake | **NULL** | 18.708 / 19.795 → 18.673 / 19.796 (r1); 18.720 / 19.800 → 18.680 / 19.785 (r2). Fastest −0.035 / −0.040 against 0.050 noise | It would apply everywhere (header setup only). Tall shape: fastest −0.20, slowest +0.18; it shifts time between chips |
+| `late_chunk_one_pass` (`perf_experiments/late_chunk_one_pass/`) | OVERLAP, post-exchange chain | **REGRESSION** | 18.71 / 19.82 → impl1 (SFPU chain) 21.13 / 22.31; impl2 (FPU DEST reuse) 19.25 / 20.33; impl3 (raw SFPU) 19.78 / 20.80 | Measured regression everywhere. Tall shape: +3.5 to +4.9 µs |
+
+**fence_first_sender**
+- What it found: almost all of the 1.07 µs before `conn.open` is three 2D `fabric_set_unicast_route` calls at ~0.35 µs each. A software copy of a routed header costs as much as routing it.
+- The best variant, `ff2`:
+  - `open_start`, then route only the control header, then `open_finish`;
+  - send the ready increment;
+  - fill the bulk headers by NoC reads of the routed control header while waiting on the fence.
+- Effect: the pre-fence window drops from 1.55 to 0.88 µs, and the fence ends 0.3 – 0.9 µs earlier. But the bulk still ends at 14.5 – 14.9 µs, because the bulk's rate (link or port-reader supply), not its start, sets the end.
+- Correct: golden check passed and repeated calls were identical. Not graduated: no measured win.
+
+**late_chunk_one_pass**
+- Idea: one DEST window per late chunk (x·γ on the FPU, then · rstd in DEST). Every chip must keep producing bit-identical output, so the look-ahead path has to use the same arithmetic.
+- That costs more than it saves:
+  - reloading fp32 xg into DEST exactly adds ~1.0 µs per 12 tiles;
+  - the SFPU fp32 multiply adds ~1.3 µs per 12 tiles (~145 cycles per tile);
+  - last landing → last normalize grows from 1.7 to 3.0 µs.
+- All variants were correct and bit-identical across chips.
+- Precision: impl1 and impl3 are more precise (relative RMS 0.0017 vs 0.0020). impl2 is less precise (0.0039, max ULP 2.5) because the DEST → srcA move keeps only part of xg's mantissa.
+- None is graduated. Recorded as precision options with their cost.
+
+Not tested (cap): 14,336 B full-payload packets (7 tiles; this needs packets that cross block boundaries, i.e. scatter writes, or a re-block), and routing the compute cores' stores away from the fabric's NoC1 paths.
+
+### Graduated
+- Nothing. The op's arithmetic and dataflow are unchanged; the only kernel change this round is the zones, which compile out by default.
+- Whole op before / after: 18.72 / 19.77 → 18.71 / 19.79 µs (null).
+- Guard set: the op has one kernel path × layout × placement. The golden suite passes, 7 / 7.
+
+### Helper bypasses — none
+Nothing graduated, so the op gained no raw-LLK path.
+- The rejected `late_chunk_one_pass` impl3 bypassed the eltwise_chain helpers (`BinaryFpu` + `CopyTile` + `MulBinary`). The chain gives every DEST lane its own copy of the shared rstd_full operand, so it fits 2 tiles per window and re-reads rstd_full for every tile. No helper keeps one operand in a single DEST slot shared across a window.
+- That bypass did not win, so it is not a graduated row. It is noted here as feedback to the helper library.
+
+### Next round
+- The bulk rate is now the clearly binding term: `ff2` showed that starting the bulk earlier does not end it earlier.
+- Diagnose the sender's stall split (waiting on a router slot vs waiting on CB data) before choosing a lever:
+  - full-payload packets if the sender is link-bound;
+  - port-reader supply (batch depth, relay readiness) if it is data-starved.
+- `ff2` costs nothing and should be re-measured together with any bulk-rate win.

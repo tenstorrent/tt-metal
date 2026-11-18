@@ -1,0 +1,128 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""fence_first_sender: zone-timed pre-bulk window of the op COPY's port senders (isolated measurement).
+
+Run (FFS_SENDER picks the sender kernel in op_copy/kernels):
+    AGRN_PERF_ZONES=1 FFS_SETUP_ZONES=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR=<dir> FFS_SENDER=<k> \\
+        scripts/tt-probe.sh all_gather_rms_norm_kimi <<< "from ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.fence_first_sender import ffs_zones; ffs_zones.run()"
+Prints, per chip, medians over the calls (us from the chip's earliest kernel start) of the port senders' setup
+stages: kernel start, args done (s_build start), build done (s_route start), routes done, open done, fence done,
+and the per-call max over the 4 senders of the fence end. Also checks output bit-identity across calls.
+"""
+
+from __future__ import annotations
+
+import collections
+import csv
+import os
+import statistics as st
+from pathlib import Path
+
+import torch
+import ttnn
+
+from eval import ccl_perf
+from eval.golden_tests.all_gather_rms_norm_kimi.conftest import _FabricMeshCache
+from eval.golden_tests.all_gather_rms_norm_kimi.topology import focus_mesh_shape
+from eval.golden_tests.all_gather_rms_norm_kimi.helpers import create_ttnn_input_tensor, create_ttnn_gamma
+from ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.fence_first_sender.op_copy import (
+    all_gather_rms_norm_kimi,
+)
+
+F = 1350.0  # cycles per us (BH AICLK)
+CALLS = int(os.environ.get("FFS_CALLS", "6"))
+
+
+def analyze(path):
+    prog = collections.defaultdict(list)
+    with open(path) as f:
+        next(f)
+        r = csv.reader(f)
+        next(r)
+        for x in r:
+            prog[(x[0], x[7])].append((int(x[1]), int(x[2]), x[3].strip(), int(x[5]), x[10].strip(), x[11].strip()))
+    stages = collections.defaultdict(lambda: collections.defaultdict(list))
+    fence_max = collections.defaultdict(list)
+    for (chip, run), ev in prog.items():
+        names = {e[4] for e in ev}
+        if "sender_fence" not in names:
+            continue
+        t0 = min(e[3] for e in ev if e[4].endswith("-KERNEL") and e[5] == "ZONE_START")
+        ports = {(e[0], e[1]) for e in ev if e[4] == "sender_fence"}
+        per_port = collections.defaultdict(dict)
+        for cx, cy, risc, t, name, typ in ev:
+            if (cx, cy) not in ports or risc != "BRISC":
+                continue
+            key = {
+                ("BRISC-KERNEL", "ZONE_START"): "kstart",
+                ("s_build", "ZONE_START"): "args_done",
+                ("s_route", "ZONE_START"): "build_done",
+                ("s_route", "ZONE_END"): "route_done",
+                ("sender_open", "ZONE_START"): "open_start",
+                ("sender_open", "ZONE_END"): "open_done",
+                ("sender_fence", "ZONE_START"): "fence_start",
+                ("sender_fence", "ZONE_END"): "fence_done",
+                ("sender_bulk", "ZONE_START"): "bulk_start",
+                ("sender_bulk", "ZONE_END"): "bulk_end",
+            }.get((name, typ))
+            if key:
+                per_port[(cx, cy)][key] = (t - t0) / F
+        for cx, cy, risc, t, name, typ in sorted(ev, key=lambda e: e[3]):
+            if (cx, cy) in ports and risc == "BRISC" and name in ("s_r1", "s_rc"):
+                if typ == "ZONE_START":
+                    per_port[(cx, cy)]["_o"] = t
+                else:
+                    stages[chip]["dur_" + name].append((t - per_port[(cx, cy)].pop("_o")) / F)
+        for pc, d in per_port.items():
+            for k, v in d.items():
+                stages[chip][k].append(v)
+        stages[chip]["span"].append((max(e[3] for e in ev if e[4].endswith("-KERNEL") and e[5] == "ZONE_END") - t0) / F)
+        fence_max[chip].append(max(d.get("fence_done", 0) for d in per_port.values()))
+    order = [
+        "kstart",
+        "args_done",
+        "build_done",
+        "route_done",
+        "open_start",
+        "open_done",
+        "fence_start",
+        "fence_done",
+        "bulk_start",
+        "bulk_end",
+        "span",
+        "dur_s_r1",
+        "dur_s_rc",
+    ]
+    for chip in sorted(stages):
+        s = stages[chip]
+        line = " ".join(f"{k}={st.median(s[k]):.2f}" for k in order if s[k])
+        print(
+            f"FFS chip {chip}: n={len(fence_max[chip])} {line} | fence_end max-over-ports med "
+            f"{st.median(fence_max[chip]):.2f}"
+        )
+
+
+def run():
+    cache = _FabricMeshCache()
+    mesh = cache.get(focus_mesh_shape()[0])
+    rows, cols = tuple(mesh.shape)
+    shape = (1, 1, int(os.environ.get("AGRN_M", "640")), 384)
+    torch.manual_seed(0)
+    x = torch.randn((rows, cols, *shape)).to(torch.bfloat16)
+    g = torch.randn((cols * 384,)).to(torch.bfloat16)
+    tx = create_ttnn_input_tensor(x, mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tg = create_ttnn_gamma(g, mesh, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    spin = ccl_perf.spin_op(mesh, cycles=40_000_000)
+    call = lambda: all_gather_rms_norm_kimi(tx, gamma=tg, cluster_axis=1, num_links=2)
+    ref = ttnn.to_torch(call(), mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    ttnn.synchronize_device(mesh)
+    for _ in range(CALLS):
+        spin()
+        out = call()
+    ttnn.synchronize_device(mesh)
+    got = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    assert torch.equal(ref, got), "output not bit-identical across calls"
+    ttnn.ReadDeviceProfiler(mesh)
+    cache.close()
+    d = os.environ.get("TT_METAL_PROFILER_DIR", "generated/profiler")
+    analyze(Path(d) / ".logs" / "profile_log_device.csv")

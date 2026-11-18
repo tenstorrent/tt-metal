@@ -1,0 +1,71 @@
+--- ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_port_sender.cpp	2026-11-17 23:51:09.405460677 +0000
++++ ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/fence_first_sender/op_copy/kernels/all_gather_rms_norm_kimi_port_sender_ff2.cpp	2026-11-18 00:03:46.236762577 +0000
+@@ -46,6 +46,17 @@
+ #endif
+ }
+
++// Copy a routed header word by word: the 2D route (fabric_set_unicast_route: table decode + byte-wise volatile writes
++// of the 35-byte route buffer) measured ~0.35 us per header on BH; a 96-byte word copy is a few dozen cycles.
++inline void copy_header(volatile tt_l1_ptr PACKET_HEADER_TYPE* dst, volatile tt_l1_ptr PACKET_HEADER_TYPE* src) {
++    static_assert(sizeof(PACKET_HEADER_TYPE) % 4 == 0);
++    auto* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
++    auto* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
++    for (uint32_t i = 0; i < sizeof(PACKET_HEADER_TYPE) / 4; ++i) {
++        d[i] = s[i];
++    }
++}
++
+ void kernel_main() {
+     size_t a = 0;
+     const uint32_t landing_addr = get_arg_val<uint32_t>(a++);
+@@ -70,32 +81,42 @@
+         return;
+     }
+
++    // Fence first: the ready inc is the only thing the peer waits on, so it goes out before any other setup.
++    //   open_start (connection reads in flight) -> route the ONE control header in their shadow -> open_finish ->
++    //   send the ready inc -> set up the bulk headers (copies of the routed one) while the peer's ready is in flight
++    //   -> wait for my own ready. The fence's guarantee is unchanged: no bulk write before the peer's ready.
+     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
+-    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[batch];
+-    for (uint32_t h = 0; h < batch; ++h) {
+-        hdrs[h] = PacketHeaderPool::allocate_header();
+-        route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
+-    }
+-    volatile tt_l1_ptr PACKET_HEADER_TYPE* ctl_hdr = PacketHeaderPool::allocate_header();
+-    route_one_hop(ctl_hdr, dst_chip_id, dst_mesh_id);
++    volatile tt_l1_ptr PACKET_HEADER_TYPE* ctl_hdr;
+     {
+         MaybeDeviceZoneScope("sender_open");
+-        conn.open();
++        conn.open_start();
++        ctl_hdr = PacketHeaderPool::allocate_header();
++        route_one_hop(ctl_hdr, dst_chip_id, dst_mesh_id);
++        conn.open_finish();
+     }
+
+     // ---- fence ----
++    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[batch];
+     {
+         MaybeDeviceZoneScope("sender_fence");
+         ctl_hdr->to_noc_unicast_atomic_inc(
+             NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_xy >> 8, ready_xy & 0xFF, ready_addr), 1, true});
+         conn.wait_for_empty_write_slot();
+         conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(ctl_hdr), sizeof(PACKET_HEADER_TYPE));
++        // in the shadow of the peer's ready: the bulk headers (only their route matters; every send rewrites the
++        // command fields), copied from the routed control header (flushed above, so it is no longer read by the NoC)
++        for (uint32_t h = 0; h < batch; ++h) {
++            hdrs[h] = PacketHeaderPool::allocate_header();
++            noc_async_read(get_noc_addr(reinterpret_cast<uint32_t>(ctl_hdr)), reinterpret_cast<uint32_t>(hdrs[h]),
++                           sizeof(PACKET_HEADER_TYPE));
++        }
+         {
+             volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+             noc_semaphore_wait_min(ready, 1);
+             noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+             noc_async_atomic_barrier();
+         }
++        noc_async_read_barrier();  // the bulk headers' copies have landed
+     }  // sender_fence
+
+     // ---- stats: send every slot the hub has handed over so far ----

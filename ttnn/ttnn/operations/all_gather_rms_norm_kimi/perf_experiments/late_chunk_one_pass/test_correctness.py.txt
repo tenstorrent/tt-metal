@@ -1,0 +1,97 @@
+"""Correctness gate for the late_chunk_one_pass variants (env AGRN_NORM_IMPL / AGRN_LATE_BLOCK / AGRN_XG_LATE).
+
+Mirrors tests/.../test_all_gather_rms_norm_kimi.py::test_repeated_calls_deterministic_and_replicated against the
+experiment's op copy, on several shapes, and prints PCC / relative RMS / max bf16 ULP vs an fp32 torch reference.
+Saves each variant's device-0 output to outputs/<label>_<shape>.pt for a cross-variant bit diff."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+import torch
+import ttnn
+
+from eval.golden_tests.all_gather_rms_norm_kimi.conftest import focus_mesh_or_skip
+from eval.golden_tests.all_gather_rms_norm_kimi.helpers import TOLERANCES, create_ttnn_gamma, create_ttnn_input_tensor
+
+from _op import all_gather_rms_norm_kimi
+
+EPS = 1e-6
+OUT_DIR = Path(__file__).parent / "outputs"
+LABEL = "impl{}_lb{}_xg{}".format(
+    os.environ.get("AGRN_NORM_IMPL", "0"), os.environ.get("AGRN_LATE_BLOCK", "1"), os.environ.get("AGRN_XG_LATE", "8")
+)
+
+
+def _cfg():
+    c = ttnn.ComputeConfigDescriptor()
+    c.math_fidelity = ttnn.MathFidelity.HiFi4
+    c.fp32_dest_acc_en = True
+    c.math_approx_mode = False
+    return c
+
+
+def _ref32(x, gamma):
+    # x (R, C, ..., M, Wl), ring along cluster_axis 1: concat members of row r
+    rows, cols = x.shape[0], x.shape[1]
+    out = []
+    for r in range(rows):
+        full = torch.cat([x[r, c].float() for c in range(cols)], dim=-1)
+        out.append(torch.nn.functional.rms_norm(full, (full.shape[-1],), weight=gamma.float(), eps=EPS))
+    return out
+
+
+def _ulp_bf16(v):
+    a = v.abs().clamp_min(torch.finfo(torch.float32).tiny)
+    e = torch.floor(torch.log2(a))
+    return torch.pow(2.0, e - 7)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 1, 640, 384), (1, 1, 2048, 384), (1, 1, 128, 256), (1, 1, 32, 32)],
+    ids=lambda s: "x".join(map(str, s)),
+)
+def test_variant_correct_and_replicated(shape, _fabric_mesh_cache):
+    mesh = _fabric_mesh_cache.get(focus_mesh_or_skip())
+    rows, cols = tuple(mesh.shape)
+    torch.manual_seed(44)
+    x = torch.randn((rows, cols, *shape), dtype=torch.float32).to(torch.bfloat16)
+    gamma = torch.randn((cols * shape[-1],), dtype=torch.float32).to(torch.bfloat16)
+    tx = create_ttnn_input_tensor(x, mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tg = create_ttnn_gamma(gamma, mesh, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    outs = [
+        all_gather_rms_norm_kimi(
+            tx,
+            gamma=tg,
+            cluster_axis=1,
+            epsilon=EPS,
+            topology=ttnn.Topology.Ring,
+            num_links=2,
+            compute_kernel_config=_cfg(),
+        )
+        for _ in range(4)
+    ]
+    per_call = [[ttnn.to_torch(t) for t in ttnn.get_device_tensors(o)] for o in outs]
+    first = per_call[0]
+    for call in per_call[1:]:
+        for idx, (a, b) in enumerate(zip(first, call)):
+            assert torch.equal(a, b), f"device {idx}: output differs between identical calls"
+    for idx, t in enumerate(first):
+        assert torch.equal(t, first[(idx // cols) * cols]), f"device {idx}: differs from its group's member 0"
+    ref = _ref32(x, gamma)[0].reshape(first[0].shape)
+    a = first[0].double()
+    e = ref.double()
+    ac, ec = a.flatten() - a.mean(), e.flatten() - e.mean()
+    pcc = ((ac * ec).sum() / (ac.norm() * ec.norm())).item()
+    rms = (((a - e) ** 2).mean().sqrt() / (e**2).mean().sqrt()).item()
+    ulp = ((a - e).abs() / _ulp_bf16(e)).max().item()
+    print(
+        f"\nPRECISION {LABEL} {shape}: pcc={pcc:.7f} rel_rms={rms:.6f} max_ulp_vs_fp32={ulp:.3f} replicated=bit-identical"
+    )
+    OUT_DIR.mkdir(exist_ok=True)
+    torch.save(first[0], OUT_DIR / f"{LABEL}_{'x'.join(map(str, shape))}.pt")
+    pcc_t, rms_t = TOLERANCES[(ttnn.bfloat16, True)]
+    assert pcc >= pcc_t and rms <= rms_t

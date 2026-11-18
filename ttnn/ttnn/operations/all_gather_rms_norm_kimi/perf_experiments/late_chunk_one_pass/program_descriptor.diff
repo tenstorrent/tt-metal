@@ -1,0 +1,60 @@
+--- ../../all_gather_rms_norm_kimi_program_descriptor.py	2026-11-17 23:51:28.969965336 +0000
++++ agrn_copy/all_gather_rms_norm_kimi_program_descriptor.py	2026-11-18 00:28:04.425004035 +0000
+@@ -64,7 +64,7 @@
+ # distance from the stream end is the combine time over the per-chunk landing interval (~6 chunks measured; the
+ # PERF FOCUS sweep: 10 late -> 19.01 us, 6 -> 18.94, 4 -> 20.74 cliff), independent of the stream length.
+ # None = no remote chunk ahead (every remote chunk after the combine).  [OVERLAP]
+-XG_LATE_STREAM_CHUNKS = 8
++XG_LATE_STREAM_CHUNKS = int(os.environ.get("AGRN_XG_LATE", "8"))
+ # A chunk whose xg was not computed ahead runs x * gamma * rstd as ONE chain (x * gamma into DEST, then * rstd_full
+ # with DEST reused as srcA): one unpack/pack pass on the landing tail instead of an fp32 round trip through cb_xg.
+ FUSE_LATE_CHUNKS = False
+@@ -77,7 +77,9 @@
+ NORMALIZE_MODE = "xg"
+ # xg mode: a block with no chunk ahead runs one gamma + one normalize pass over the whole block (pushed per chunk)
+ # instead of two passes per chunk: half the per-pass init / format reconfig on the landing tail.  [R3]
+-LATE_BLOCK = True
++LATE_BLOCK = os.environ.get("AGRN_LATE_BLOCK", "1") == "1"
++# late_chunk_one_pass experiment: 0 baseline, 1 SFPU fp32 mul, 2 DEST-reuse (kernels/..._compute.cpp norm_impl)
++NORM_IMPL = int(os.environ.get("AGRN_NORM_IMPL", "0"))
+ # NoC of the compute cores' writer (the DRAM output store + the partial export); the compute reader takes the other
+ # one. The port senders and receivers write on NoC1, the port readers pull the landed chunks on NoC0.  [R3]
+ COMPUTE_STORE_NOC = 1
+@@ -560,6 +562,10 @@
+     unpack_modes = [ttnn.UnpackToDestMode.Default] * 64
+     unpack_modes[CB_PARTIALS] = ttnn.UnpackToDestMode.UnpackToDestFp32
+     unpack_modes[CB_XSQ_SUM] = ttnn.UnpackToDestMode.UnpackToDestFp32
++    if NORM_IMPL in (1, 2, 3):
++        unpack_modes[CB_XG] = ttnn.UnpackToDestMode.UnpackToDestFp32  # xg reloaded exactly into DEST
++    if NORM_IMPL in (1, 3):
++        unpack_modes[CB_RSTD_FULL] = ttnn.UnpackToDestMode.UnpackToDestFp32  # rstd_full copied into D1
+
+     mesh_desc = ttnn.MeshProgramDescriptor()
+     for r in range(geo.rows):
+@@ -591,6 +597,8 @@
+                 COMBINE_COL0,
+                 NORMALIZE_MODE,
+                 LATE_BLOCK,
++                "late_chunk_one_pass", os.environ.get("AGRN_DIAG_NOSFPU", "0"),
++                NORM_IMPL,
+                 COMPUTE_STORE_NOC,
+                 OWN_STORE_GATE,
+                 gamma_page,
+@@ -654,7 +662,7 @@
+             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
+             compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_XG]
+             compute_ct += [CB_SCALER, CB_RSTD_FULL, int(FUSE_LATE_CHUNKS), int(COMBINE_COL0)]
+-            compute_ct += [int(NORMALIZE_MODE == "scale"), int(LATE_BLOCK)]
++            compute_ct += [int(NORMALIZE_MODE == "scale"), int(LATE_BLOCK), NORM_IMPL]
+
+             ccfg = ttnn.ComputeConfigDescriptor()
+             ccfg.math_fidelity = cfg.math_fidelity
+@@ -845,6 +853,8 @@
+             if PERF_ZONES:
+                 for k in kernels:
+                     k.defines = list(k.defines) + [("AGRN_PERF_ZONES", "1")]
++                    if os.environ.get("AGRN_DIAG_NOSFPU") == "1":  # diagnostic only: garbage output
++                        k.defines = list(k.defines) + [("AGRN_DIAG_NOSFPU", "1")]
+             program.kernels = kernels
+             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*coord), ttnn.MeshCoordinate(*coord))] = program
+     return mesh_desc
