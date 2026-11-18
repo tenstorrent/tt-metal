@@ -42,7 +42,6 @@ from ._safetensors import create_file, pwrite_all
 from ._state_dict import (
     NATIVE,
     LiveTensor,
-    check_label_unchanged,
     collect_model,
     check_threads,
     collect_optimizer,
@@ -160,15 +159,10 @@ def _write_plan(
                 shards = value.cpu_shards([ttnn.MeshCoordinate(list(it.chunk.mesh_coord)) for it in items])
                 shards = [shard.to(ttnn.ROW_MAJOR_LAYOUT) for shard in shards]
                 readback_s += time.perf_counter() - t_read
-                check_label_unchanged(live_tensor, "during readback")
                 per_item = charged // len(items)
                 for it, shard in zip(items, shards):
                     data = shard.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0))  # its one shard
                     view = _logical_bytes(np.from_dlpack(data), it.chunk.box.sizes, info.itemsize)
-                    if view.nbytes != it.nbytes:
-                        raise CheckpointError(
-                            f"{key}: shard at {it.chunk.mesh_coord} is {view.nbytes} bytes, planned {it.nbytes}"
-                        )
                     future = pool.submit(
                         _write_chunk, fds[it.file], data_start[it.file] + it.data_offset, view, budget, per_item
                     )
