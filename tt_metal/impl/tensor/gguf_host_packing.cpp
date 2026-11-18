@@ -32,6 +32,9 @@ namespace {
 static_assert(std::endian::native == std::endian::little, "GGUF fields and the pages are little-endian words");
 
 using enum DataType;
+using experimental::gguf_records_per_page;
+using experimental::gguf_traits;
+using experimental::GgufTraits;
 namespace gg = ::experimental::gguf;
 
 uint16_t rd16(const uint8_t* p) {

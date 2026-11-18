@@ -7,6 +7,7 @@
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/gguf.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
@@ -88,7 +89,7 @@ TensorLayoutImpl::TensorLayoutImpl(
         const uint32_t shard_height = memory_config_.shard_spec().has_value()
                                           ? memory_config_.shard_spec()->shape[0]
                                           : memory_config_.nd_shard_spec()->shard_shape[-2];
-        const uint32_t page_height = gguf_traits(dtype_).page_height();
+        const uint32_t page_height = experimental::gguf_traits(dtype_).page_height();
         TT_FATAL(
             shard_height % page_height == 0,
             "{} shard height {} must be a multiple of the page height {}",

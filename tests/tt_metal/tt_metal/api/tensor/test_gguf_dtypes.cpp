@@ -23,6 +23,10 @@ namespace tt::tt_metal {
 namespace {
 
 using experimental::from_gguf;
+using experimental::gguf_records_per_page;
+using experimental::gguf_source_dtype;
+using experimental::gguf_traits;
+using experimental::is_gguf_expanded;
 using experimental::to_gguf;
 
 std::vector<DataType> gguf_dtypes() {

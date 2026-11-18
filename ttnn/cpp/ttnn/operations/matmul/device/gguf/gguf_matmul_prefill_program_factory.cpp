@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 
+#include <tt-metalium/experimental/gguf.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 

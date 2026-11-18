@@ -6,6 +6,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
+#include <tt-metalium/experimental/gguf.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/float8.hpp>
 #include <numeric>
@@ -15,6 +16,11 @@
 #include "impl/tensor/spec/layout/page_config_impl.hpp"
 
 namespace tt::tt_metal {
+
+using experimental::gguf_records_per_page;
+using experimental::gguf_traits;
+using experimental::GgufTraits;
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 

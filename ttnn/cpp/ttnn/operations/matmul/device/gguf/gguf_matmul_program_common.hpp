@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include <tt-metalium/experimental/gguf.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -23,6 +24,10 @@
 namespace ttnn::prim::gguf_program {
 
 using namespace tt::tt_metal;
+using tt::tt_metal::experimental::gguf_records_per_page;
+using tt::tt_metal::experimental::gguf_traits;
+using tt::tt_metal::experimental::GgufTraits;
+using tt::tt_metal::experimental::is_gguf_expanded;
 
 inline constexpr auto kKernels = "ttnn/cpp/ttnn/operations/matmul/device/kernels/gguf/";
 inline constexpr uint32_t kGroupsPerRead = 4;  // one-page groups: records per unit of reads

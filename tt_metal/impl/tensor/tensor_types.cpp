@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <string_view>
+#include <tt-metalium/experimental/gguf.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -17,7 +18,7 @@ constexpr int kFirstGguf = static_cast<int>(DataType::GGUF_Q8_0);
 
 struct GgufFormat {
     std::string_view name;
-    GgufTraits traits;
+    experimental::GgufTraits traits;
 };
 
 // A format: the decoder's format number, the GGUF block size and bytes (expanded layouts: page bytes per block_elems
@@ -188,6 +189,8 @@ bool is_block_float(DataType dtype) {
 
 bool is_gguf(DataType dtype) { return static_cast<int>(dtype) >= kFirstGguf && dtype < DataType::INVALID; }
 
+namespace experimental {
+
 const GgufTraits& gguf_traits(DataType dtype) { return gguf_format(dtype).traits; }
 
 uint32_t gguf_records_per_page(DataType dtype, uint64_t k) {
@@ -221,6 +224,8 @@ DataType gguf_source_dtype(DataType dtype) {
         default: return dtype;
     }
 }
+
+}  // namespace experimental
 
 bool is_mx(DataType dtype) {
     switch (dtype) {
