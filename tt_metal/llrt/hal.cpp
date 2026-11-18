@@ -37,7 +37,6 @@ Hal::Hal(
     bool enable_2_erisc_mode,
     uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
-    bool is_simulator,
     bool enable_blackhole_dram_programmable_cores,
     bool enable_aerisc_ptp_trace,
     IpVariant quasar_arch_variant) :
@@ -56,7 +55,6 @@ Hal::Hal(
                 enable_2_erisc_mode,
                 profiler_dram_bank_size_per_risc_bytes,
                 enable_dram_backed_cq,
-                is_simulator,
                 enable_blackhole_dram_programmable_cores,
                 enable_aerisc_ptp_trace);
             break;

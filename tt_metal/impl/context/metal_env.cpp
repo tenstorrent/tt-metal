@@ -123,7 +123,8 @@ namespace {
 //
 // Auto-detect resolves firmware support only (architecture + firmware-bundle floor, via
 // check_firmware_capabilities). DRAM harvesting no longer disables the core type: DRAM programs and
-// GCB credit targets resolve sender coordinates from each device's SOC descriptor.
+// GCB credit targets resolve sender coordinates from each device's SOC descriptor. A simulator goes
+// through the same gate, using the bundle version its firmware mock reports.
 bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
     const auto override = rtoptions.get_blackhole_dram_programmable_cores_override();
     if (override.has_value()) {
@@ -206,7 +207,6 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->get_enable_2_erisc_mode(),
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
-        this->rtoptions_->get_simulator_enabled(),
         should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
         this->rtoptions_->get_eth_ptp_trace(),
         // just take the descriptor of the first device

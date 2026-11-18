@@ -47,7 +47,6 @@ TEST(DramCoreFirmwareBuildDeathTest, BuildsDriscAfterContextWithoutDramCores) {
                 /*enable_2_erisc_mode=*/true,
                 with_dram_config.profiler_dram_bank_size_per_risc_bytes,
                 /*enable_dram_backed_cq=*/false,
-                /*is_simulator=*/false,
                 /*enable_blackhole_dram_programmable_cores=*/false,
                 /*enable_aerisc_ptp_trace=*/true);
             JitDeviceConfig without_dram_config = with_dram_config;

@@ -332,7 +332,6 @@ void Hal::initialize_bh(
     bool enable_2_erisc_mode,
     std::uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
-    bool is_simulator,
     bool enable_blackhole_dram_programmable_cores,
     bool enable_aerisc_ptp_trace) {
     using namespace blackhole;
@@ -353,8 +352,7 @@ void Hal::initialize_bh(
     idle_eth_mem_map.num_physical_riscs_ = static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_.push_back(idle_eth_mem_map);
 
-    if (!is_simulator && enable_blackhole_dram_programmable_cores) {
-        // Dram cores are opt-in on Blackhole and are not yet supported in simulator.
+    if (enable_blackhole_dram_programmable_cores) {
         HalCoreInfoType dram_mem_map = blackhole::create_dram_mem_map();
         dram_mem_map.num_physical_riscs_ = static_cast<uint32_t>(DramProcessorTypes::COUNT);
         this->core_info_.push_back(dram_mem_map);

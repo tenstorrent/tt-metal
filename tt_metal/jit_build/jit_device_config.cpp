@@ -223,7 +223,6 @@ void enumerate_jit_device_configs(
                             enable_2_erisc_mode,
                             profiler_dram_bank_size_per_risc_bytes,
                             enable_dram_backed_cq,
-                            /*is_simulator=*/false,
                             /*enable_blackhole_dram_programmable_cores=*/true,
                             /*enable_aerisc_ptp_trace=*/true);
                         JitDeviceConfig jit_device_config = {
