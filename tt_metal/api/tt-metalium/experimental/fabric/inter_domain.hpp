@@ -21,6 +21,10 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
+
 namespace tt::tt_fabric::experimental {
 
 // A link that leaves this domain, with its inter-domain router.
@@ -33,6 +37,7 @@ struct InterDomainPort {
     bool has_router = true;    // false on a dead link, and (not yet) on Z
     uint64_t peer_asic = 0;    // the chip and channel across the link
     chan_id_t peer_chan = 0;
+    int context = 0;  // the MetalContext that owns the port, set by get_inter_domain_ports
 };
 
 // What two peers swap before they connect (the design's SentCrossDomainConnectionMetadata).
@@ -48,8 +53,8 @@ struct InterDomainMetadata {
     uint32_t flows_per_domain = 0;
 };
 
-// This host's inter-domain ports, from the running fabric.
-std::vector<InterDomainPort> get_inter_domain_ports();
+// This host's inter-domain ports, from the fabric `mesh_device` runs on. Every other call uses the port's context.
+std::vector<InterDomainPort> get_inter_domain_ports(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 // The chip a port is on, by its unique (asic) id.
 uint64_t get_inter_domain_port_asic(const InterDomainPort& port);
