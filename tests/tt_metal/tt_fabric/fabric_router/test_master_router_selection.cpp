@@ -51,12 +51,14 @@ MasterRouterCandidate make_north_mesh_edge_candidate(chan_id_t eth_chan) {
 // Ensure that the tiebreak case isn't hit when an actual case exists (difference in forwarding downstreams).
 TEST(MasterRouterSelectionTest, FewerForwardingDownstreamsWinsOverALowerChannel) {
     // The galaxy case: the north-facing mesh-edge router has the lowest channel but the most to forward.
+    // The east router forwards to 1 live downstream (it never turns a packet onto N/S) against the south router's
+    // 3, yet has the higher channel: only counting live downstreams, not array entries, picks it over the south one.
     const std::vector<MasterRouterCandidate> candidates = {
         make_north_mesh_edge_candidate(0),
-        make_candidate(3, eth_chan_directions::EAST),
-        make_candidate(7, eth_chan_directions::SOUTH),
+        make_candidate(7, eth_chan_directions::EAST),
+        make_candidate(3, eth_chan_directions::SOUTH),
     };
-    EXPECT_EQ(pick_local_handshake_master_router(candidates), 3);
+    EXPECT_EQ(pick_local_handshake_master_router(candidates), 7);
 }
 
 // Ensure that intermesh routers win over mesh-edge routers.
