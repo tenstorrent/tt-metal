@@ -41,6 +41,9 @@ inline void hardmish_init() {
     sfpi::vConstFloatPrgm0 = 0.5f;
 }
 
+// Whether BF16 DEST runs the generated hardmish kernel as one call over the whole tile.
+inline constexpr bool hardmish_bf16_whole_tile = false;
+
 /**
  * hardmish(x) on ITERATIONS Dest rows, two rows per iteration with the statements interleaved: each
  * row's MAD -> clamp (2x SFPSWAP) -> MUL chain is serial, so pairing two independent rows fills the

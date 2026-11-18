@@ -29,8 +29,24 @@ namespace sfpu {
 // so the final multiply produces exact 0 or exact x at transitions.
 inline void hardmish_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+}  // namespace sfpu
+}  // namespace ckernel
+
+#include "ckernel_sfpu_hardmish_bf16.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// Whether BF16 DEST runs the generated hardmish kernel as one call over the whole tile.
+inline constexpr bool hardmish_bf16_whole_tile = true;
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat DEST_16BIT_FORMAT, int ITERATIONS = 8>
 inline void hardmish() {
+    if constexpr (!is_fp32_dest_acc_en && DEST_16BIT_FORMAT == DataFormat::Float16_b && ITERATIONS == 32) {
+        if (bf16_dest_hardmish()) {
+            calculate_hardmish_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat scale = x * 0.5f + 1.0f;

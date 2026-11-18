@@ -41,6 +41,17 @@ namespace ckernel {
 // clang-format on
 template <DataFormat DEST_16BIT_FORMAT = DataFormat::Float16_b>
 ALWI void hardmish_tile(std::uint32_t idst) {
+    MATH(if constexpr (
+        ckernel::sfpu::hardmish_bf16_whole_tile && !DST_ACCUM_MODE && DEST_16BIT_FORMAT == DataFormat::Float16_b) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            hardmish,
+            (APPROX, DST_ACCUM_MODE, DEST_16BIT_FORMAT, 32),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
