@@ -1,0 +1,338 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""MiMo decoder layer: RMSNorm -> attention -> residual -> RMSNorm -> (dense MLP | MoE) -> residual.
+
+The residual stream is replicated on every chip of the row (each sub-block ends in an all-reduce).
+"""
+
+import os
+
+import ttnn
+
+from .attention import TtMiMoAttention
+from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
+from .moe import TtMiMoMoE
+from .moe_stream import ReduceExpand, is_dram_interleaved
+from .profiling import zone
+
+
+class TtRMSNorm:
+    def __init__(self, plan, weight, eps, cache_file):
+        w = None
+        if weight is not None:
+            w = weight.float().reshape(1, 1, -1, TILE).bfloat16()
+        self.weight = as_weight(w, plan, plan.replicate(), ttnn.bfloat16, cache_file, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # Prefill (many tile rows) reads a tiled copy: with a row-major weight the interleaved rms_norm cannot fall back
+        # to its streaming large-tensor kernel, so once decode's persistent L1 buffers exist (a prefill after decode)
+        # its whole-row circular buffers clash with them.
+        hidden = self.weight.shape[-2] * self.weight.shape[-1]
+        self.weight_tiled = ttnn.to_layout(ttnn.reshape(self.weight, (1, 1, 1, hidden)), ttnn.TILE_LAYOUT)
+        self.eps = eps
+        self.config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
+        # Decode (one tile row): an interleaved rms_norm runs on a single core (67 us); width-shard the
+        # hidden dim over 8 x 4 cores instead.
+        grid = ttnn.CoreGrid(y=4, x=8)
+        self.decode_grid = grid
+
+    def _decode_configs(self, hidden):
+        cores = self.decode_grid.x * self.decode_grid.y
+        shard_w = hidden // cores
+        mem = ttnn.create_sharded_memory_config(
+            shape=(TILE, shard_w),
+            core_grid=self.decode_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        program = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(self.decode_grid.x, self.decode_grid.y),
+            subblock_w=shard_w // TILE,
+            block_h=1,
+            block_w=shard_w // TILE,
+            inplace=False,
+        )
+        return mem, program
+
+    def torch_weight(self):
+        """The weight as a torch [hidden] tensor (read back from chip 0; it is replicated)."""
+        return ttnn.to_torch(ttnn.get_device_tensors(self.weight)[0]).float().reshape(-1)
+
+    def __call__(self, x, memory_config=None, prefill=False):
+        """``memory_config``: where the decode (one tile row) output goes; DRAM interleaved by default. ``prefill``
+        takes the interleaved norm for any row count, whose rows do not depend on the other rows (a prefill row in a
+        batch equals the same row alone); a decode tile row takes the width-sharded norm."""
+        if x.shape[-2] == TILE and not prefill:
+            mem, program = self._decode_configs(x.shape[-1])
+            x_sharded = ttnn.to_memory_config(x, mem)
+            y = ttnn.rms_norm(
+                x_sharded,
+                epsilon=self.eps,
+                weight=self.weight,
+                program_config=program,
+                memory_config=mem,
+                compute_kernel_config=self.config,
+            )
+            x_sharded.deallocate(True)
+            out = ttnn.to_memory_config(y, memory_config or ttnn.DRAM_MEMORY_CONFIG)
+            y.deallocate(True)
+            return out
+        return ttnn.rms_norm(
+            x,
+            epsilon=self.eps,
+            weight=self.weight_tiled,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.config,
+        )
+
+
+class TtMiMoDenseMLP:
+    """SwiGLU MLP (layer 0): gate/up column-parallel, down row-parallel, all-reduce."""
+
+    def __init__(self, plan, layer_idx, weights=None, cache_dir=None, weight_dtype=ttnn.bfloat8_b):
+        self.plan = plan
+        prefix = f"layer{layer_idx}_mlp_tp{plan.tp}"
+        g = u = d = None
+        if weights is not None:
+            g = weights["gate_proj"].T.contiguous()
+            u = weights["up_proj"].T.contiguous()
+            d = weights["down_proj"].T.contiguous()
+        w_gate = as_weight(g, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "w_gate"))
+        w_up = as_weight(u, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "w_up"))
+        w_down = as_weight(d, plan, plan.shard(-2), weight_dtype, cache_name(cache_dir, prefix, "w_down"))
+        self.config = compute_config(ttnn.MathFidelity.HiFi2)
+        # Decode reads each weight once per step: DRAM-sharded matmuls (one reader core per bank) run at ~2x the
+        # bandwidth of the interleaved linears here (gate / up 74 us -> ~34 us each). The weights are resharded once
+        # on device; prefill uses interleaved copies made per call.
+        hidden, inter = w_gate.shape[-2], w_gate.shape[-1]
+        self.up_mm = DramShardedMatmul(plan, hidden, inter, compute_kernel_config=self.config)
+        self.down_mm = DramShardedMatmul(plan, inter, hidden, compute_kernel_config=self.config)
+        assert self.up_mm.n_pad == inter and self.down_mm.n_pad == hidden
+        self.w_gate = ttnn.to_memory_config(w_gate, self.up_mm.weight_memory_config)
+        self.w_up = ttnn.to_memory_config(w_up, self.up_mm.weight_memory_config)
+        self.w_down = ttnn.to_memory_config(w_down, self.down_mm.weight_memory_config)
+        for w in (w_gate, w_up, w_down):
+            w.deallocate(True)
+
+    def forward(self, x, token_mask=None, decode=False):
+        """``decode``: a decode step (32 rows), through the DRAM-sharded matmuls. Prefill always takes the
+        interleaved linears, whose rows do not depend on the other rows (a prefill row computed in a batch equals
+        the same row computed alone)."""
+        if decode and x.shape[-2] == TILE:
+            gate = self.up_mm(x, self.w_gate)
+            up = self.up_mm(x, self.w_up)
+            act = ttnn.mul(
+                gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            gate.deallocate(True)
+            up.deallocate(True)
+            out = self.down_mm(act, self.w_down)
+            act.deallocate(True)
+            return self.plan.all_reduce(out)
+        kw = dict(dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.config)
+        with zone("weight_copies"):
+            w_gate, w_up, w_down = (
+                ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG) for w in (self.w_gate, self.w_up, self.w_down)
+            )
+        with zone("matmuls"):
+            gate = ttnn.linear(x, w_gate, **kw)
+            up = ttnn.linear(x, w_up, **kw)
+            act = ttnn.mul(
+                gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            gate.deallocate(True)
+            up.deallocate(True)
+            out = ttnn.linear(act, w_down, **kw)
+        act.deallocate(True)
+        for w in (w_gate, w_up, w_down):
+            w.deallocate(True)
+        with zone("all_reduce"):
+            return self.plan.all_reduce(out)
+
+
+class TtMiMoDecoderLayer:
+    def __init__(
+        self,
+        plan,
+        cfg,
+        layer_idx,
+        weights,
+        rope_setups,
+        cache_dir=None,
+        attn_dtype=ttnn.bfloat8_b,
+        mlp_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,
+    ):
+        """``weights``: dict from reference.model.load_layer_weights, or None to load from a warm cache.
+        ``rope_setups``: {"swa": MiMoRotarySetup, "full": MiMoRotarySetup}."""
+        self.layer_idx = layer_idx
+        self.is_swa = cfg.is_swa(layer_idx)
+        self.is_moe = cfg.is_moe(layer_idx)
+        w = weights or {}
+        prefix = f"layer{layer_idx}"
+        eps = cfg.layernorm_epsilon
+        self.input_norm = TtRMSNorm(plan, w.get("input_layernorm"), eps, cache_name(cache_dir, prefix, "input_norm"))
+        self.post_norm = TtRMSNorm(
+            plan, w.get("post_attention_layernorm"), eps, cache_name(cache_dir, prefix, "post_attn_norm")
+        )
+        self.rope = rope_setups["swa" if self.is_swa else "full"]
+        self.attn = TtMiMoAttention(
+            plan, cfg, layer_idx, w.get("attn"), self.rope, cache_dir=cache_dir, weight_dtype=attn_dtype
+        )
+        if self.is_moe:
+            self.mlp = TtMiMoMoE(
+                plan, cfg, layer_idx, w.get("router"), w.get("experts"), cache_dir=cache_dir, expert_dtype=expert_dtype
+            )
+        else:
+            self.mlp = TtMiMoDenseMLP(plan, layer_idx, w.get("mlp"), cache_dir=cache_dir, weight_dtype=mlp_dtype)
+        self.fused_norm = None
+        self.hidden = cfg.hidden_size
+        self.attn_reduce = None  # set_compact_attention
+
+    def can_fuse_norms(self):
+        return self._compact_decode() and self.mlp.reduce_expand.can_norm
+
+    def set_fused_norms(self, plan, next_norm, buffers):
+        """Compact decode with both block reductions also computing the following RMSNorm: the attention block's
+        reduction writes post_norm(x2) into ``buffers[1]`` and the MoE block's writes ``next_norm`` (the next layer's
+        input norm, or the final norm) of the layer output into ``buffers[0]``; forward_decode(h=..., return_norm=True)
+        passes the latter on. ``buffers``: persistent zero [1, 1, 32, hidden] bf16 DRAM tensors shared by all layers."""
+        red = self.mlp.reduce_expand
+        # Both block reductions also all-gather the compact rows over the fabric (MIMO_FABRIC_GATHER=0: all_gather).
+        fabric = os.environ.get("MIMO_FABRIC_GATHER", "1") == "1" and tuple(plan.mesh_device.shape) == (1, plan.tp)
+        self.attn.fabric_gather = self.mlp.fabric_gather = fabric
+        self.fused_norm = {
+            "post": (red.compact_gamma(plan, self.post_norm.torch_weight()), buffers[1], self.post_norm.eps),
+            "next": (red.compact_gamma(plan, next_norm.torch_weight()), buffers[0], next_norm.eps),
+        }
+
+    def can_compact_attention(self):
+        """A global layer that does not decode compactly (the dense layer 0) can still reduce its attention block on
+        the users' rows (see set_compact_attention)."""
+        return not self._compact_decode() and self.attn.split_users and self.attn.o_stream is not None
+
+    def set_compact_attention(self, plan):
+        """Decode users in rows 0-3: the attention block reduces like a compact layer's (o stream into compact rows, row
+        all-gather, ReduceExpand: chip-ordered fp32 sum, one bf16 rounding, plus the residual) instead of the o linear,
+        all_reduce and add. The chip pair splits the users by slot parity, so only one chip of each pair has a user's
+        row. The all_reduce's ring adds those rows with bf16 partial sums in an order that depends on the parity, so a
+        user's logits depended on its slot; the chip-ordered sum adds them in the same order for both parities."""
+        cfg = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+        self.attn_reduce = ReduceExpand(plan, self.hidden, plan.tp, cfg, rows=self.attn.rows)
+
+    def _ffn(self, x, token_mask, decode=False):
+        h = self.post_norm(x, prefill=not decode)
+        if decode and self.is_moe and self.mlp.decode_users is not None:
+            out = self.mlp.forward_decode(h, token_mask)
+        else:
+            out = self.mlp.forward(h, token_mask, decode=decode)
+        h.deallocate(True)
+        y = ttnn.add(x, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out.deallocate(True)
+        return y
+
+    def _page_table(self, page_table):
+        """Accepts one table or {is_swa: table} (the SWA and the global layers have their own tables, kv.py)."""
+        return page_table[self.is_swa] if isinstance(page_table, dict) else page_table
+
+    def forward_prefill(
+        self, x, user_id, page_table, kv_cache, token_mask=None, real_len=None, start_pos=0, tables=None, users=1
+    ):
+        """One prefill chunk at ``start_pos``; ``tables``: this layer's kv.PrefillTables (see
+        TtMiMoAttention.forward_prefill). ``users`` R > 1: the first chunks of R users, rows user after user."""
+        with zone("attn"):  # with its norm and residual add
+            h = self.input_norm(x, prefill=True)
+            attn = self.attn.forward_prefill(
+                h,
+                user_id,
+                self._page_table(page_table),
+                kv_cache,
+                start_pos=start_pos,
+                real_len=real_len,
+                tables=tables,
+                users=users,
+            )
+            h.deallocate(True)
+            x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn.deallocate(True)
+        with zone("moe" if self.is_moe else "mlp"):  # with its norm and residual add
+            y = self._ffn(x2, token_mask)
+        x2.deallocate(True)
+        return y
+
+    def attention_decode(self, x, rot_mats, cur_pos, page_table, kv_cache):
+        """Decode attention block: input norm, attention (with its row all-reduce), residual add."""
+        # The normed row only feeds the qkv matmul's L1 reshard: keep it in L1.
+        h = self.input_norm(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        compact = self.attn_reduce is not None
+        attn = self.attn.forward_decode(
+            h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache, compact=compact
+        )
+        h.deallocate(True)
+        if compact:
+            # attn: the chips' compact rows, all-gathered; x2 = x + their chip-ordered sum.
+            x2 = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, TILE, self.hidden]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.attn.plan.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+            res = x if is_dram_interleaved(x) else ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            self.attn_reduce(attn, x2, residual=res)
+            if res is not x:
+                res.deallocate(True)
+            attn.deallocate(True)
+            return x2
+        x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn.deallocate(True)
+        return x2
+
+    def _compact_decode(self):
+        """The MoE streaming decode serves users in rows 0-3 only: both block reductions then move only those rows."""
+        return self.is_moe and self.mlp.gate_up_stream is not None
+
+    def forward_decode(
+        self, x, rot_mats, cur_pos, page_table, kv_cache, token_mask=None, h=None, return_norm=False, next_attn=None
+    ):
+        """``h``: input_norm(x) when the previous layer's reduction already computed it (see set_fused_norms).
+        ``return_norm``: return (y, the next norm of y or None). ``next_attn``: the next layer's attention, whose
+        compact qkv may run in this layer's MoE launch (moe.QKV_PREFETCH) on that next norm."""
+        if not self._compact_decode():
+            x2 = self.attention_decode(x, rot_mats, cur_pos, page_table, kv_cache)
+            y = self._ffn(x2, token_mask, decode=True)
+            x2.deallocate(True)
+            return (y, None) if return_norm else y
+        # Each block's row all-reduce is a compact all-gather; ReduceExpand sums the chips and adds the residual
+        # (with fused norms, it also computes the following RMSNorm).
+        fused = self.fused_norm
+        own_h = h is None
+        if own_h:
+            h = self.input_norm(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        gathered = self.attn.forward_decode(
+            h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache, compact=True
+        )
+        if own_h:
+            h.deallocate(True)
+        if fused is not None and self.attn.fabric_gather:
+            x2, h2 = self.mlp.reduce_residual(None, x, norm=fused["post"], compact=gathered, route=True)
+        elif fused is not None:
+            x2, h2 = self.mlp.reduce_residual(gathered, x, norm=fused["post"])
+        else:
+            x2 = self.mlp.reduce_residual(gathered, x)
+        if gathered is not self.attn.compact_buf and hasattr(gathered, "deallocate"):
+            gathered.deallocate(True)
+        if fused is None:
+            h2 = self.post_norm(x2)
+        nxt = fused["next"] if fused is not None and return_norm else None
+        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt, next_attn=next_attn if nxt else None)
+        if fused is None:
+            h2.deallocate(True)
+        x2.deallocate(True)
+        y, h_next = out if nxt is not None else (out, None)
+        return (y, h_next) if return_norm else y

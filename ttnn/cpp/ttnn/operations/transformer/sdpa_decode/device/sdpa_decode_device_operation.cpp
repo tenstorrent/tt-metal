@@ -81,6 +81,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             q_shape[3]);
     }
 
+    TT_FATAL(
+        !operation_attributes.spec_multi_pos_packed || (spec_multi_pos && spec_T % 2 == 0),
+        "spec_multi_pos_packed needs spec_multi_pos_tiles even, got {}",
+        spec_T);
     if (spec_multi_pos) {
         // Speculative multi-position mode: spec_T candidates folded onto EACH batch row, so
         // every row scans its KV cache once instead of spec_T times. With B batch rows the
@@ -91,7 +95,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(operation_attributes.is_causal, "spec_multi_pos_tiles requires is_causal");
         TT_FATAL(operation_attributes.paged_attention, "spec_multi_pos_tiles requires paged attention");
         TT_FATAL(tensor_args.page_table_tensor.has_value(), "spec_multi_pos_tiles requires a page_table tensor");
-        TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with multi-latent attention");
+        // MLA reads V from the K cache's first columns when no V cache is given (reuse_k), which the spec path
+        // does not handle; with its own V cache it is a one-KV-head decode with a narrower V.
+        TT_FATAL(
+            !use_mla || tensor_args.v.has_value(),
+            "spec_multi_pos_tiles with multi-latent attention needs a separate V cache (input_tensor_v)");
         TT_FATAL(
             !operation_attributes.sliding_window_size.has_value() ||
                 operation_attributes.sliding_window_size.value() == 0,
@@ -101,6 +109,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !input_tensors.at(0).is_sharded(),
             "spec_multi_pos_tiles requires an unsharded (DRAM interleaved) Q tensor");
+        // The writer zeroes the -1 candidates' rows in an interleaved output's staging tiles only.
+        TT_FATAL(
+            !operation_attributes.output_mem_config.is_sharded(),
+            "spec_multi_pos_tiles requires an interleaved output (memory_config), got {}",
+            operation_attributes.output_mem_config.memory_layout());
         TT_FATAL(
             input_tensors.at(0).dtype() == DataType::BFLOAT16,
             "spec_multi_pos_tiles requires a BFLOAT16 Q tensor, got {}",
@@ -310,28 +323,34 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                         B,
                         spec_T,
                         cur_pos_shape[-1]);
-                    // Within a group the entries must be non-decreasing: the reader takes the group's
-                    // KV scan range from its LAST entry and skips k-chunks that end before its FIRST
-                    // entry, so a non-ascending group silently loses KV instead of failing. In the
-                    // (only) supported spec path the positions live in cur_pos_tensor and are read on
+                    // Within a group the entries other than -1 must be non-decreasing: the kernels take the
+                    // group's KV scan range from its largest entry and its mask threshold from its smallest
+                    // (spec_group_bounds), so a non-ascending group silently loses KV instead of failing. In
+                    // the (only) supported spec path the positions live in cur_pos_tensor and are read on
                     // device, so validate cannot see them without a readback; check the host cur_pos
                     // vector when one is supplied and leave the tensor path untouched.
                     const auto& host_cur_pos = operation_attributes.cur_pos;
                     if (host_cur_pos.size() == static_cast<size_t>(B) * spec_T) {
                         for (uint32_t b = 0; b < B; b++) {
-                            for (uint32_t i = 0; i + 1 < spec_T; i++) {
+                            std::optional<uint32_t> prev;  // the group's last entry other than -1
+                            for (uint32_t i = 0; i < spec_T; i++) {
+                                const uint32_t idx = b * spec_T + i;
+                                if (host_cur_pos[idx] == UINT32_MAX) {
+                                    continue;
+                                }
                                 TT_FATAL(
-                                    host_cur_pos[b * spec_T + i] <= host_cur_pos[b * spec_T + i + 1],
+                                    !prev.has_value() || host_cur_pos[*prev] <= host_cur_pos[idx],
                                     "spec_multi_pos_tiles={}: cur_pos entries within candidate group {} must be "
-                                    "non-decreasing, but entry {} ({}) > entry {} ({}); the reader derives the "
-                                    "group's KV scan range from the group's last entry, so a non-ascending group "
-                                    "would silently drop KV.",
+                                    "non-decreasing apart from -1, but entry {} ({}) > entry {} ({}); the kernels "
+                                    "derive the group's KV scan range from its largest entry, so a non-ascending "
+                                    "group would silently drop KV.",
                                     spec_T,
                                     b,
-                                    b * spec_T + i,
-                                    host_cur_pos[b * spec_T + i],
-                                    b * spec_T + i + 1,
-                                    host_cur_pos[b * spec_T + i + 1]);
+                                    *prev,
+                                    host_cur_pos[*prev],
+                                    idx,
+                                    host_cur_pos[idx]);
+                                prev = idx;
                             }
                         }
                     }
@@ -583,6 +602,27 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "Attention sink must be in DRAM memory, but got {}",
             attention_sink.memory_config().buffer_type());
     }
+
+    if (tensor_args.lse_output.has_value()) {
+        const auto& lse = tensor_args.lse_output.value();
+        TT_FATAL(
+            lse.storage_type() == StorageType::DEVICE && lse.buffer() != nullptr,
+            "lse output must be allocated on device");
+        TT_FATAL(lse.dtype() == DataType::FLOAT32, "lse output must be FLOAT32, got {}", lse.dtype());
+        TT_FATAL(lse.layout() == Layout::TILE, "lse output must be in TILE layout, got {}", lse.layout());
+        TT_FATAL(!lse.is_sharded(), "lse output must be interleaved (DRAM or L1)");
+        TT_FATAL(operation_attributes.is_causal, "return_lse needs causal decode");
+        TT_FATAL(!tensor_args.attention_sink.has_value(), "return_lse is not supported with an attention sink");
+        TT_FATAL(k_shape[1] == 1, "return_lse needs one KV head, got {}", k_shape[1]);
+        TT_FATAL(input_tensors.at(0).layout() == Layout::TILE, "return_lse needs a TILE layout Q (got ROW_MAJOR)");
+        auto expected = compute_output_specs(operation_attributes, tensor_args).logical_shape();
+        expected[3] = 1;
+        TT_FATAL(
+            lse.logical_shape() == expected,
+            "lse output must have shape {} (the output's shape with a last dim of 1), got {}",
+            expected,
+            lse.logical_shape());
+    }
 }
 
 tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
@@ -642,6 +682,110 @@ Tensor SdpaDecodeDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
 
+namespace {
+SdpaDecodeParams make_sdpa_decode_params(
+    bool is_causal,
+    bool paged_attention,
+    const std::vector<uint32_t>& cur_pos,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t k_chunk_size,
+    std::optional<bool> share_cache,
+    std::optional<bool> use_mla,
+    std::optional<uint32_t> head_dim_v,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> cache_position_modulo,
+    uint32_t spec_multi_pos_tiles,
+    bool spec_multi_pos_packed) {
+    return SdpaDecodeParams{
+        .is_causal = is_causal,
+        .paged_attention = paged_attention,
+        .cur_pos = cur_pos,
+        .scale = scale,
+        .sliding_window_size = sliding_window_size,
+        .output_mem_config = output_mem_config,
+        .program_config = program_config,
+        .compute_kernel_config = compute_kernel_config,
+        .k_chunk_size = k_chunk_size,
+        .share_cache = share_cache,
+        .use_mla = use_mla,
+        .head_dim_v = head_dim_v,
+        .paged_cache_geometry =
+            paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+        .cache_position_modulo = cache_position_modulo,
+        .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .spec_multi_pos_packed = spec_multi_pos_packed,
+    };
+}
+}  // namespace
+
+std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const std::optional<const Tensor>& input_tensor_v,
+    const std::optional<const Tensor>& cur_pos_tensor,
+    const std::optional<const Tensor>& page_table_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& attention_sink,
+    bool is_causal,
+    bool paged_attention,
+    const std::vector<uint32_t>& cur_pos,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t k_chunk_size,
+    std::optional<bool> share_cache,
+    std::optional<bool> use_mla,
+    std::optional<uint32_t> head_dim_v,
+    uint32_t spec_multi_pos_tiles,
+    bool spec_multi_pos_packed) {
+    using OperationType = SdpaDecodeDeviceOperation;
+    auto operation_attributes = make_sdpa_decode_params(
+        is_causal,
+        paged_attention,
+        cur_pos,
+        scale,
+        sliding_window_size,
+        output_mem_config,
+        program_config,
+        compute_kernel_config,
+        k_chunk_size,
+        share_cache,
+        use_mla,
+        head_dim_v,
+        std::nullopt,
+        std::nullopt,
+        spec_multi_pos_tiles,
+        spec_multi_pos_packed);
+    auto tensor_args = OperationType::tensor_args_t{
+        .q = input_tensor_q,
+        .k = input_tensor_k,
+        .v = input_tensor_v,
+        .cur_pos_tensor = cur_pos_tensor,
+        .page_table_tensor = page_table_tensor,
+        .attn_mask = attn_mask,
+        .attention_sink = attention_sink,
+    };
+    // [1, B, nh, 1] fp32: the output's shape with one column. Interleaved, in the output's buffer type.
+    auto lse_shape = OperationType::compute_output_specs(operation_attributes, tensor_args).logical_shape();
+    lse_shape[3] = 1;
+    const tt::tt_metal::MemoryConfig lse_mem_config =
+        output_mem_config.is_sharded()
+            ? tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, output_mem_config.buffer_type()}
+            : output_mem_config;
+    tensor_args.lse_output = create_device_tensor(
+        tt::tt_metal::TensorSpec(lse_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), lse_mem_config)),
+        input_tensor_q.device());
+    Tensor lse = tensor_args.lse_output.value();
+    Tensor out = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return {out, lse};
+}
+
 Tensor sdpa_decode(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
@@ -664,7 +808,8 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    bool spec_multi_pos_packed) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -683,6 +828,7 @@ Tensor sdpa_decode(
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .spec_multi_pos_packed = spec_multi_pos_packed,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

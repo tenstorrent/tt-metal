@@ -54,6 +54,13 @@ struct SDPAInputs {
     std::optional<Tensor> windowed_q_token_offset_tensor;
     // [Bm, Hm, q chunks, k chunks] int32 or uint32, nonzero where that block of the dense attn_mask is not all masked.
     std::optional<Tensor> attn_mask_block_map;
+    // Chunked prefill with return_lse: preallocated fp32 [B, NQH, Sq, 1] TILE output for the log-sum-exp of
+    // every (head, query) in the kernel's logit space (lse = scale * m + log(l)); see chunked_flash_mla_prefill.
+    std::optional<Tensor> lse_output;
+    // Pair-split chunked prefill: 1-element int32 / uint32 ROW_MAJOR tensor holding this device's parity c
+    // (0 or 1; mesh-sharded so each device of a pair reads its own). The K / V cache holds chip c's half of
+    // every 128-token global block; see chunked_flash_mla_prefill.
+    std::optional<Tensor> kv_pair_parity;
 };
 
 }  // namespace ttnn::prim

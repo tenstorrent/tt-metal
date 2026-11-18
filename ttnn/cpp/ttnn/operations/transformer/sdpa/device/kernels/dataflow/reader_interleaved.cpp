@@ -12,6 +12,18 @@
 #include "api/tensor/noc_traits.h"
 #include "dataflow_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/chunked_ksplit.hpp"
+#ifdef SDPA_PAIR_SPLIT
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_pair_split.hpp"
+#endif
+
+// Chunked causal prefill with grouped Q heads and a K split (see sdpa_grouped_v2 in compute_streaming.hpp).
+#ifndef SDPA_Q_HEADS_PER_UNIT
+#define SDPA_Q_HEADS_PER_UNIT 1
+#endif
+#ifndef SDPA_K_SPLITS
+#define SDPA_K_SPLITS 1
+#endif
 
 // Fetch a KV chunk into L1 for forwarding. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Single read barrier at end for lower latency.
@@ -213,6 +225,14 @@ void kernel_main() {
     // Global Q scheduling runtime args sit right after chain metadata.
     global_q_start = get_arg_val<uint32_t>(argidx++);
     global_q_count = get_arg_val<uint32_t>(argidx++);
+#ifdef SDPA_PAIR_SPLIT
+    // Pair-split prefill: the per-device parity tensor's address (int32, element 0) is the last runtime arg,
+    // after the 4-value windowed tail the host always sends and the feature tails. Its accessor follows the
+    // CB-id block in the compile-time args.
+    const uint32_t pair_parity_addr =
+        get_arg_val<uint32_t>(argidx + 4 + (use_mask_block_map ? 2 : 0) + (causal_chain ? 3 : 0));
+    uint32_t pair_parity = 0;
+#endif
 
     // Windowed K-range narrowing tail: the same four values the writer receives, so both kernels
     // resolve each Q chunk's global row range and windows identically (the writer self-computes the
@@ -272,6 +292,10 @@ void kernel_main() {
     constexpr uint32_t mask_tile_bytes = use_provided_mask ? get_tile_size(cb_mask_in) : 0;
     constexpr uint32_t attention_sink_tile_bytes = use_attention_sink ? get_tile_size(cb_attention_sink) : 0;
 
+    // Work items are (unit, K slice) pairs; a unit is q_heads_per_unit consecutive Q heads of one K/V head.
+    constexpr uint32_t q_heads_per_unit = SDPA_Q_HEADS_PER_UNIT;
+    constexpr uint32_t k_splits = SDPA_K_SPLITS;
+    constexpr bool grouped_or_split = q_heads_per_unit > 1 || k_splits > 1;
     constexpr uint32_t q_heads_per_k = NQH / NKH;
     constexpr uint32_t q_heads_per_v = NQH / NVH;
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
@@ -357,6 +381,24 @@ void kernel_main() {
                 chunk_start_idx_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr), 4, {.page_id = 0}, {});
             noc.async_read_barrier();
             uint32_t chunk_start_idx = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
+#ifdef SDPA_PAIR_SPLIT
+            {
+                // Pair-split prefill: element 1 of the compute and writer chunk-start pages carries this
+                // device's parity. Staged through the compute page's (aligned) element 0, then the start is
+                // put back.
+                constexpr auto pair_parity_args = TensorAccessorArgs<SDPA_PAIR_PARITY_CT_OFFSET>();
+                const auto pair_parity_reader = TensorAccessor(pair_parity_args, pair_parity_addr);
+                volatile tt_l1_ptr uint32_t* page =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
+                noc.async_read(
+                    pair_parity_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr), 4, {.page_id = 0}, {});
+                noc.async_read_barrier();
+                pair_parity = page[0] & 1u;
+                sdpa_pair_split::g_parity = pair_parity;  // the K split's ranges (chunked_unit_k_end) read it
+                page[0] = chunk_start_idx;
+                page[1] = pair_parity;
+            }
+#endif
             cb_chunk_compute.push_back(1);
 
             CircularBuffer cb_chunk_writer(cb_id_chunk_start_idx_writer);
@@ -365,6 +407,9 @@ void kernel_main() {
             noc.async_read(
                 chunk_start_idx_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr_2), 4, {.page_id = 0}, {});
             noc.async_read_barrier();
+#ifdef SDPA_PAIR_SPLIT
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr_2)[1] = pair_parity;
+#endif
             cb_chunk_writer.push_back(1);
 
             const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
@@ -408,7 +453,14 @@ void kernel_main() {
         uint32_t valid_Skt_bound;
         if (chunk_start_idx_addr != 0) {
             // Flexible or ring: cap at valid_Skt so we never read past K/V extent.
+#ifdef SDPA_PAIR_SPLIT
+            // K is this chip's half of the cache: the local tiles below the chunk's end.
+            valid_Skt_bound = std::min(
+                sdpa_pair_split::local_tiles_before(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, pair_parity),
+                valid_Skt);
+#else
             valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
+#endif
         } else {
             // Scalar-offset factories already include the prefix in valid_Skt.
             // Adding it again can resolve page-table entries beyond the valid KV
@@ -430,8 +482,16 @@ void kernel_main() {
         uint32_t mask_batch_offset = 0;
         uint32_t retain_prev_nb = static_cast<uint32_t>(-1), retain_prev_key = static_cast<uint32_t>(-1);
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
-            const auto decoded =
-                decompose_global_q_index(global_q_start + global_q_iter, q_num_chunks, NQH, use_zigzag_balancing);
+            // Grouped / K split: the core's slices of one unit run as one piece (chunked_piece_at), so the loop
+            // steps over all of them at once.
+            ChunkedPiece piece = {global_q_start + global_q_iter, 0, 0, 1};
+            if constexpr (grouped_or_split) {
+                piece = chunked_piece_at(global_q_start + global_q_iter, global_q_start + global_q_count, k_splits);
+                global_q_iter += piece.items - 1;
+            }
+            auto decoded =
+                decompose_global_q_index(piece.unit, q_num_chunks, NQH / q_heads_per_unit, use_zigzag_balancing);
+            decoded.nq *= q_heads_per_unit;  // the unit's first Q head
             if (decoded.nb != prev_nb) {
                 if constexpr (!broadcast_provided_mask_batch) {
                     if constexpr (broadcast_provided_mask_heads) {
@@ -565,11 +625,40 @@ void kernel_main() {
             const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
             uint32_t q_read_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
 
+            // K split: the piece's part of the unit's causal K range. An empty piece reads nothing (no Q, no K/V);
+            // compute skips it and the writer fills its output.
+            ChunkedKSplitRange k_split_range = {0, 0};
+            if constexpr (grouped_or_split) {
+                k_split_range = chunked_piece_range(
+                    piece,
+                    (chunked_q_chunk_offset + q_chunk) * Sq_chunk_t,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    k_num_chunks,
+                    k_splits);
+            }
+
             // Q read is deferred into the K loop (k_chunk==0) for subblock interleaving.
             // When use_q_subblock_push is false, Q is read in full before the K loop (original behavior).
             if constexpr (!use_q_subblock_push) {
-                read_chunk_with_padding<q_tile_bytes>(
-                    q_reader, cb_q_in, q_read_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                if constexpr (grouped_or_split) {
+                    if (k_split_range.lo < k_split_range.hi) {
+                        for (uint32_t g = 0; g < q_heads_per_unit; ++g) {
+                            read_chunk_with_padding<q_tile_bytes>(
+                                q_reader,
+                                cb_q_in,
+                                q_tile_shape.id_of(nb, nq + g, read_offset + q_row_start_tile, 0),
+                                q_row_tile_count,
+                                DHt,
+                                Sq_chunk_t,
+                                DHt,
+                                barrier_threshold);
+                        }
+                    }
+                } else {
+                    read_chunk_with_padding<q_tile_bytes>(
+                        q_reader, cb_q_in, q_read_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                }
             }
 
             q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -579,7 +668,12 @@ void kernel_main() {
                 // Clamp to total K-tile extent (Skt = k_num_chunks * Sk_chunk_t). Without
                 // this, when Q-chunk extends past K (e.g., Sq_chunk_t > k_num_chunks*Sk_chunk_t),
                 // the K-loop pushes more chunks than compute consumes → CB deadlock.
+#ifdef SDPA_PAIR_SPLIT
+                // Local K tiles visible to the chunk's last row (at least one: see sdpa_pair_split.hpp).
+                const uint32_t q_high_unclamped = sdpa_pair_split::local_k_end(q_low_idx + Sq_chunk_t, pair_parity);
+#else
                 const uint32_t q_high_unclamped = q_low_idx + Sq_chunk_t;
+#endif
                 q_high_idx = q_high_unclamped < Skt ? q_high_unclamped : Skt;
             } else {
                 q_high_idx = Skt;
@@ -603,6 +697,11 @@ void kernel_main() {
                 // Must match what this reader pushed to compute and what the writer self-computes.
                 k_loop_start = windowed_k_lo;
                 q_high_idx = windowed_k_hi * Sk_chunk_t;
+            }
+            if constexpr (grouped_or_split) {
+                // Must match sdpa_grouped_v2's loop over the same slice.
+                k_loop_start = k_split_range.lo;
+                q_high_idx = k_split_range.hi * Sk_chunk_t;
             }
 
             const uint32_t first_k_chunk = use_row_map ? block_map_first : k_loop_start;
@@ -879,17 +978,23 @@ void kernel_main() {
                 // when NOC writes are in-flight).
                 if constexpr (use_q_subblock_push) {
                     if (k_chunk == first_k_chunk) {
-                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                            read_q_subblock<q_tile_bytes>(
-                                q_reader,
-                                cb_q_in,
-                                q_read_tile_id,
-                                q_sub * qk_subblock_h,
-                                qk_subblock_h,
-                                q_row_tile_count,
-                                DHt,
-                                DHt,
-                                barrier_threshold);
+                        // Grouped heads: each head's Q chunk in turn, the order compute reads them in.
+                        for (uint32_t g = 0; g < q_heads_per_unit; ++g) {
+                            if (g > 0) {
+                                q_read_tile_id = q_tile_shape.id_of(nb, nq + g, read_offset + q_row_start_tile, 0);
+                            }
+                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                                read_q_subblock<q_tile_bytes>(
+                                    q_reader,
+                                    cb_q_in,
+                                    q_read_tile_id,
+                                    q_sub * qk_subblock_h,
+                                    qk_subblock_h,
+                                    q_row_tile_count,
+                                    DHt,
+                                    DHt,
+                                    barrier_threshold);
+                            }
                         }
                     }
                 }

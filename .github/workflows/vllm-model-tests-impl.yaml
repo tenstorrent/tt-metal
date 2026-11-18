@@ -130,7 +130,9 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     # Whole-job guard (per-step timeouts still apply below). Sourced from the SKU's
     # `timeout` in tests/pipeline_reorg/vllm_model_tests.yaml, budget-checked per tier.
-    timeout-minutes: ${{ matrix.test-group.timeout }}
+    # A dispatch with /mnt/MLPerf writable (first use: checkpoint download and cache
+    # build) takes the entry's `first-use-timeout` instead, when it sets one.
+    timeout-minutes: ${{ (!inputs.mlperf-read-only && matrix.test-group.first-use-timeout) || matrix.test-group.timeout }}
     # Per-phase log paths kept job-level so they resolve in both the ${{ env }}
     # expression context (run-with-log log-file inputs) and the container step
     # shells ($FILE_*). container.env is shell-only, not visible to expressions.
@@ -278,6 +280,23 @@ jobs:
           git -C vllm-source fetch --depth 1 origin "refs/tags/v${VLLM_VERSION}"
           git -C vllm-source checkout --detach FETCH_HEAD
 
+      - name: ⬇️ Download model checkpoint (first use)
+        # Entries with `hub-download: true` fetch their checkpoint into the shared
+        # HF_HUB_CACHE, but only on a dispatch with /mnt/MLPerf writable: scheduled
+        # and read-only runs stay offline and use what is already cached. A complete
+        # snapshot downloads nothing again, so re-running this is cheap.
+        if: ${{ !inputs.mlperf-read-only && matrix.test-group.hub-download }}
+        timeout-minutes: 240
+        env:
+          HF_HUB_OFFLINE: 0
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        run: |
+          HF_MODEL="${{ matrix.test-group.model }}"
+          start=$(date +%s)
+          python3 -c 'import sys; from huggingface_hub import snapshot_download; print(snapshot_download(sys.argv[1], max_workers=16))' "$HF_MODEL"
+          echo "Checkpoint ready in $(( $(date +%s) - start )) s"
+          du -sh --apparent-size "$HF_HUB_CACHE/models--${HF_MODEL//\//--}" || true
+
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
@@ -407,6 +426,15 @@ jobs:
                 echo "Gemma4 KV pool: GEMMA4_MAX_TOKENS_ALL_USERS=$GEMMA4_MAX_TOKENS_ALL_USERS (from max_model_len=${MAX_MODEL_LEN:-default})"
               fi
               ;;
+            XiaomiMiMo/MiMo-V2.6-Flash-*)
+              # MiMo reads its checkpoint from MIMO_MODEL_PATH (vLLM's TT loader does
+              # not load weights) and keeps its converted TTNN weights under
+              # MIMO_TT_CACHE/<checkpoint dir name>/model_bfp4experts. Point the first
+              # at the cached hub snapshot and the second at this model's TT cache.
+              export MIMO_MODEL_PATH="$(python3 -c 'import sys; from huggingface_hub import snapshot_download; print(snapshot_download(sys.argv[1], local_files_only=True))' "$HF_MODEL")"
+              export MIMO_TT_CACHE="$TT_CACHE_PATH"
+              echo "MiMo: MIMO_MODEL_PATH=$MIMO_MODEL_PATH MIMO_TT_CACHE=$MIMO_TT_CACHE"
+              ;;
           esac
 
           # Per-entry environment, space-separated KEY=VALUE pairs, exported after
@@ -440,7 +468,9 @@ jobs:
         run: |
           echo "Waiting for server..."
 
-          timeout_seconds=$(( ${{ matrix.test-group.server-timeout }} * 60 ))
+          # A first-use dispatch (/mnt/MLPerf writable) builds the TT cache during
+          # startup, so it waits `first-use-server-timeout` when the entry sets one.
+          timeout_seconds=$(( ${{ (!inputs.mlperf-read-only && matrix.test-group.first-use-server-timeout) || matrix.test-group.server-timeout }} * 60 ))
           elapsed=0
           interval=20
 
@@ -597,7 +627,9 @@ jobs:
         timeout-minutes: 15
         run: |
           # Prefix-caching gate: a second request sharing a ~24K-token document with a completed one must
-          # answer from the cached blocks correctly and show the engine's prefix-cache counters engaged.
+          # answer from the cached blocks correctly and show the prefix cache engaged. The resume's own
+          # usage.prompt_tokens_details.cached_tokens is used when the server reports it
+          # (--enable-prompt-tokens-details); otherwise the engine's prefix-cache counters in /metrics.
           python3 - <<'EOF' 2>&1 | tee "${FILE_PREFIX_CACHING_LOG}"
           import json, sys, time, urllib.request
 
@@ -620,21 +652,26 @@ jobs:
                   "model": MODEL,
                   "messages": [{"role": "system", "content": doc}, {"role": "user", "content": question}],
                   "max_tokens": 32, "temperature": 0.0, "stream": True,
+                  "stream_options": {"include_usage": True},
                   "chat_template_kwargs": {"enable_thinking": False},
               }).encode()
               req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json", "X-User-ID": "vllm_test"})
               t0 = time.perf_counter()
-              ttft, text = None, ""
+              ttft, text, usage = None, "", None
               with urllib.request.urlopen(req, timeout=1800) as resp:
                   for raw in resp:
                       line = raw.decode("utf-8", "ignore").strip()
                       if not line.startswith("data:") or line.endswith("[DONE]"):
                           continue
-                      piece = (json.loads(line[5:])["choices"][0].get("delta") or {}).get("content") or ""
+                      chunk = json.loads(line[5:])
+                      usage = chunk.get("usage") or usage
+                      if not chunk.get("choices"):
+                          continue
+                      piece = (chunk["choices"][0].get("delta") or {}).get("content") or ""
                       if piece:
                           ttft = ttft if ttft is not None else time.perf_counter() - t0
                           text += piece
-              return ttft, text
+              return ttft, text, usage
 
           def cache_counters():
               # vLLM's prefix-cache counters (tokens queried / tokens served from cache)
@@ -647,21 +684,28 @@ jobs:
                       h += float(line.rsplit(" ", 1)[1])
               return q, h
 
-          cold_ttft, cold = ask("What is the vault passphrase recorded in the archive above? Answer with just the passphrase.")
+          qs, hs = cache_counters()
+          cold_ttft, cold, cold_usage = ask("What is the vault passphrase recorded in the archive above? Answer with just the passphrase.")
           q0, h0 = cache_counters()
-          warm_ttft, warm = ask("Quote the vault passphrase from the archive above, and nothing else.")
+          warm_ttft, warm, warm_usage = ask("Quote the vault passphrase from the archive above, and nothing else.")
           q1, h1 = cache_counters()
           queried, hits = q1 - q0, h1 - h0
-          print(f"cold request: ttft={cold_ttft:.2f}s answer={cold.strip()[:80]!r}")
-          print(f"cache-hit resume: ttft={warm_ttft:.2f}s answer={warm.strip()[:80]!r}")
+          print(f"cold request: ttft={cold_ttft:.2f}s answer={cold.strip()[:80]!r} usage={cold_usage}")
+          print(f"cache-hit resume: ttft={warm_ttft:.2f}s answer={warm.strip()[:80]!r} usage={warm_usage}")
+          print(f"/metrics vllm:prefix_cache_queries/hits: before cold {qs:.0f}/{hs:.0f}, after cold {q0:.0f}/{h0:.0f}, after resume {q1:.0f}/{h1:.0f}")
           print(f"resume prefix-cache counters: queried={queried:.0f} tokens, hits={hits:.0f} tokens")
+          cached = ((warm_usage or {}).get("prompt_tokens_details") or {}).get("cached_tokens")
+          if cached is not None:
+              # Per-request count: holds however the engine aggregates (or omits) its counters.
+              queried, hits = float(warm_usage["prompt_tokens"]), float(cached)
+              print(f"resume usage: {hits:.0f} of {queried:.0f} prompt tokens cached")
           ok = True
           if secret not in cold:
               print("❌ cold request did not recall the passphrase"); ok = False
           if secret not in warm:
               print("❌ cache-hit resume did not recall the passphrase (wrong prefix or window tail)"); ok = False
           # The prompts are identical up to the question, so nearly all of the resume should hit the cache.
-          # Gate on the engine's counters, not TTFT, which also carries queueing and the resume cost.
+          # Gate on the cache counts, not TTFT, which also carries queueing and the resume cost.
           if queried <= 0 or hits < 0.8 * queried:
               print(f"❌ prefix cache not engaged for the resume: {hits:.0f} of {queried:.0f} queried tokens were cache hits"); ok = False
           if ok:

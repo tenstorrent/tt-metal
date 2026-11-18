@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
+#include "ttnn/operations/transformer/sdpa/device/chunked_ksplit_plan.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device.hpp"
@@ -374,6 +375,24 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                     v_shape[3]);
             }
         }
+        if (use_mla && tensors.v.has_value()) {
+            // A separate paged V cache, head_dim_v wide, addressed by K's page table.
+            const auto& v_cache = tensors.v.value();
+            const auto v_cache_shape = v_cache.logical_shape();
+            TT_FATAL(
+                v_cache.storage_type() == StorageType::DEVICE && v_cache.layout() == Layout::TILE &&
+                    !v_cache.is_sharded(),
+                "MLA V cache must be an interleaved tile tensor on device");
+            TT_FATAL(
+                v_cache_shape[0] == k_shape[0] && v_cache_shape[1] == nkv_cache &&
+                    v_cache_shape[2] == k_page_size_cache && v_cache_shape[3] == attrs.head_dim_v.value(),
+                "MLA V cache must be [{}, {}, {}, head_dim_v={}], got {}",
+                k_shape[0],
+                nkv_cache,
+                k_page_size_cache,
+                attrs.head_dim_v.value(),
+                v_cache_shape);
+        }
         TT_FATAL(
             nkv > 0 && nqh >= nkv && nqh % nkv == 0,
             "Q num_heads must be >= K num_heads and divisible by K num_heads, and K num_heads must be greater than 0. "
@@ -425,6 +444,20 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 kv_length,
                 q_shape[2],
                 attrs.chunk_start_idx.value());
+        } else if (tensors.kv_pair_parity.has_value()) {
+            // Pair split: the op reads this chip's local keys below the chunk's end ((start + S) / 2 when start + S
+            // is a multiple of 128). Start (>= 0) and parity are only known on device, so require the least of
+            // those: chip 1 at start 0, i.e. the local tiles below global tile S / 32 (local_tiles_before in
+            // kernels/sdpa_pair_split.hpp with c = 1). S % 32 == 0 is checked with the parity tensor below.
+            const uint32_t sq_tiles = q_shape[2] / tt::constants::TILE_HEIGHT;
+            const uint32_t min_local_tokens =
+                ((sq_tiles / 4) * 2 + (sq_tiles % 4 > 2 ? sq_tiles % 4 - 2 : 0)) * tt::constants::TILE_HEIGHT;
+            TT_FATAL(
+                kv_length >= min_local_tokens,
+                "Pair split: the page table must cover at least the local keys below the chunk's end at start 0 "
+                "({} tokens). Got {}",
+                min_local_tokens,
+                kv_length);
         } else {
             // Flexible: only require KV length to cover Q
             TT_FATAL(
@@ -525,11 +558,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         // offset >= 0, so it is checked in both offset forms.
         const auto q_rows = static_cast<uint32_t>(q.logical_shape()[-2]);
         const auto k_rows = static_cast<uint32_t>(k.logical_shape()[-2]);
-        TT_FATAL(
-            q_rows <= k_rows,
-            "windowed Q shard has {} rows, more than the K sequence length {}.",
-            q_rows,
-            k_rows);
+        TT_FATAL(q_rows <= k_rows, "windowed Q shard has {} rows, more than the K sequence length {}.", q_rows, k_rows);
         if (!tensors.windowed_q_token_offset_tensor.has_value()) {
             // Scalar form. (When the tensor is supplied it overrides the scalar on device, and its
             // per-device values cannot be validated here without a readback -- tile alignment and
@@ -585,6 +614,97 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     // Validate attention sink if provided
     validate_attention_sink();
 
+    if (tensors.kv_pair_parity.has_value()) {
+        // Pair split: the K / V cache holds this chip's half of every 128-token global block, read through the
+        // page table at local positions; the queries are the chunk's global positions.
+        const auto& parity = tensors.kv_pair_parity.value();
+        TT_FATAL(
+            attrs.chunk_start_idx_tensor.has_value(),
+            "kv_pair_parity_tensor needs the chunk start as a device tensor (chunk_start_idx_tensor)");
+        TT_FATAL(attrs.is_causal, "kv_pair_parity_tensor needs causal attention");
+        TT_FATAL(attrs.sliding_window_size.value_or(0) == 0, "kv_pair_parity_tensor does not support a sliding window");
+        TT_FATAL(!tensors.attention_sink.has_value(), "kv_pair_parity_tensor does not support an attention sink");
+        TT_FATAL(
+            !attrs.paged_cache_geometry.active(),
+            "kv_pair_parity_tensor does not support a paged cache geometry override");
+        TT_FATAL(
+            parity.storage_type() == StorageType::DEVICE && parity.buffer() != nullptr,
+            "kv_pair_parity_tensor must be allocated on device");
+        TT_FATAL(q.device() == parity.device(), "kv_pair_parity_tensor must be on the same device as Q");
+        TT_FATAL(
+            parity.dtype() == DataType::INT32 || parity.dtype() == DataType::UINT32,
+            "kv_pair_parity_tensor must be int32 or uint32, got {}",
+            parity.dtype());
+        TT_FATAL(parity.layout() == Layout::ROW_MAJOR, "kv_pair_parity_tensor must be ROW_MAJOR");
+        TT_FATAL(!parity.is_sharded(), "kv_pair_parity_tensor must be interleaved");
+        TT_FATAL(
+            parity.logical_shape().volume() == 1,
+            "kv_pair_parity_tensor must hold one element, got shape {}",
+            parity.logical_shape());
+        TT_FATAL(
+            q.logical_shape()[2] % tt::constants::TILE_HEIGHT == 0,
+            "kv_pair_parity_tensor needs a tile-aligned chunk length, got {}",
+            q.logical_shape()[2]);
+    }
+
+    if (tensors.lse_output.has_value()) {
+        const auto& lse = tensors.lse_output.value();
+        TT_FATAL(
+            attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value(),
+            "return_lse is supported for chunked prefill");
+        TT_FATAL(!tensors.attention_sink.has_value(), "return_lse does not support an attention sink");
+        TT_FATAL(!attrs.output_concat_heads, "return_lse does not support output_concat_heads");
+        TT_FATAL(
+            lse.storage_type() == StorageType::DEVICE && lse.buffer() != nullptr,
+            "lse output must be allocated on device");
+        TT_FATAL(lse.dtype() == DataType::FLOAT32, "lse output must be FLOAT32, got {}", lse.dtype());
+        TT_FATAL(lse.layout() == Layout::TILE, "lse output must be in TILE layout");
+        TT_FATAL(!lse.is_sharded(), "lse output must be interleaved");
+        const auto q_shape = q.logical_shape();
+        const ttnn::Shape expected({q_shape[0], q_shape[1], q_shape[2], 1});
+        TT_FATAL(
+            lse.logical_shape() == expected, "lse output must have shape {}, got {}", expected, lse.logical_shape());
+        TT_FATAL(
+            !attrs.program_config.has_value() || attrs.program_config->k_splits <= 1,
+            "an lse output needs k_splits 1 (with a K split, chunked_flash_mla_prefill's merge forms the lse)");
+    }
+
+    // Grouped Q heads and the chunked K split (sdpa_grouped_v2): chunked causal prefill on the streaming kernel.
+    if (attrs.program_config.has_value()) {
+        const uint32_t heads_per_unit = attrs.program_config->q_heads_per_unit;
+        const uint32_t k_splits = is_chunked_mode ? attrs.program_config->k_splits : 1;
+        TT_FATAL(heads_per_unit >= 1, "q_heads_per_unit must be at least 1, got {}", heads_per_unit);
+        TT_FATAL(k_splits >= 1, "k_splits must be at least 1, got {}", k_splits);
+        if (heads_per_unit > 1 || k_splits > 1) {
+            TT_FATAL(
+                is_chunked_mode && attrs.is_causal,
+                "q_heads_per_unit > 1 needs chunked (paged) causal prefill (k_splits applies only there)");
+            TT_FATAL(
+                !ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config),
+                "q_heads_per_unit {} / k_splits {} need the streaming compute path (fp32_dest_acc_en off)",
+                heads_per_unit,
+                k_splits);
+            TT_FATAL(
+                !tensors.attention_sink.has_value() && attrs.sliding_window_size.value_or(0) == 0,
+                "q_heads_per_unit / k_splits do not support an attention sink or a sliding window");
+            const uint32_t nqh = q.logical_shape()[1];
+            const uint32_t nkv =
+                attrs.paged_cache_geometry.active() ? attrs.paged_cache_geometry.num_kv_heads : k.logical_shape()[1];
+            TT_FATAL(
+                nqh % (nkv * heads_per_unit) == 0,
+                "q_heads_per_unit {} must divide the Q heads per K/V head ({} Q heads, {} K/V heads)",
+                heads_per_unit,
+                nqh,
+                nkv);
+        }
+        if (k_splits > 1) {
+            TT_FATAL(
+                q.dtype() == DataType::BFLOAT16,
+                "k_splits > 1 writes bf16 partial results, so Q (and the output) must be bfloat16, got {}",
+                q.dtype());
+        }
+    }
+
     // Check padding: Only the sequence dimension may be padded. For all other dims, logical shape must be equal to
     // legacy shape
     for (const auto* tensor : {&q, &k, &v}) {
@@ -600,6 +720,21 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     }
     if (attrs.output_concat_heads) {
         shape = ttnn::Shape({shape[0], 1, shape[2], shape[1] * shape[3]});
+    }
+    // Chunked K split: each piece's normalized output plus its row max and row sum tiles, one plane per piece slot
+    // (chunked_ksplit_plan.hpp), merged by the caller (chunked_ksplit_merge in sdpa.cpp).
+    const bool is_chunked = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
+    if (is_chunked && attrs.program_config.has_value() && attrs.program_config->k_splits > 1) {
+        const auto& config = attrs.program_config.value();
+        const auto& q_shape = tensors.q.logical_shape();
+        const uint32_t q_num_chunks = (q_shape[2] + config.q_chunk_size - 1) / config.q_chunk_size;
+        const uint32_t items = q_shape[0] * (q_shape[1] / config.q_heads_per_unit) * q_num_chunks * config.k_splits;
+        const uint32_t pieces = chunked_ksplit_plan(
+                                    items,
+                                    config.k_splits,
+                                    config.compute_with_storage_grid_size.x * config.compute_with_storage_grid_size.y)
+                                    .pieces;
+        shape = ttnn::Shape({shape[0] * pieces, shape[1], shape[2], shape[3] + 2 * tt::constants::TILE_WIDTH});
     }
     return tt::tt_metal::TensorSpec(
         shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
@@ -714,7 +849,9 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     bool output_concat_heads,
-    const std::optional<Tensor>& attn_mask_block_map) {
+    const std::optional<Tensor>& attn_mask_block_map,
+    const std::optional<Tensor>& lse_output,
+    const std::optional<Tensor>& kv_pair_parity) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -747,6 +884,8 @@ Tensor sdpa(
             .cu_window_seqlens = cu_window_seqlens,
             .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
             .attn_mask_block_map = attn_mask_block_map,
+            .lse_output = lse_output,
+            .kv_pair_parity = kv_pair_parity,
         });
 }
 }  // namespace ttnn::prim

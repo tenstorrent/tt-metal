@@ -10,6 +10,32 @@
 
 inline uint32_t nearest_n(uint32_t x, uint32_t n) { return ((x + n - 1) / n) * n; }
 
+// Speculative multi-position mode: the bounds of one batch row's group of T candidate positions. A candidate at -1
+// (UINT32_MAX: it sees no key, e.g. a verify gap, or a chip of a KV pair split that holds none of its keys yet) takes
+// no part: the group's KV scan bound (hi) is its largest other entry and its mask threshold (lo) the smallest, both
+// UINT32_MAX when every candidate is -1 (the row is skipped). The other entries ascend; the writer writes output 0
+// (and lse -1e30) for the -1 candidates.
+struct SpecGroupBounds {
+    uint32_t lo;
+    uint32_t hi;
+};
+
+template <uint32_t T, typename Positions>
+inline SpecGroupBounds spec_group_bounds(const Positions& pos) {
+    SpecGroupBounds bounds{UINT32_MAX, UINT32_MAX};
+    for (uint32_t j = 0; j < T; ++j) {
+        const uint32_t p = pos[j];
+        if (p == UINT32_MAX) {
+            continue;
+        }
+        if (bounds.lo == UINT32_MAX) {
+            bounds.lo = p;
+        }
+        bounds.hi = p;
+    }
+    return bounds;
+}
+
 template <uint8_t max>
 inline uint8_t nearest_pow_of_2_up_to_8(uint32_t x) {
     if (x == 0) {

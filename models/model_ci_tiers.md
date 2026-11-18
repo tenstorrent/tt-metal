@@ -67,6 +67,7 @@ it is classified differently on different systems.
 | Qwen3.6-35B-A3B | BH QuietBox 2 |
 | GPT-OSS 120B | WH LLMBox, WH Galaxy, BH QuietBox 2, BH Galaxy |
 | MiniMax-M3 | BH P150, BH Galaxy |
+| MiMo-V2.6-Flash | BH Galaxy |
 | Gemma-4-12B | BH QuietBox 2 |
 | Gemma-4-26B-A4B | BH QuietBox 2 |
 | Gemma-4-31B | BH QuietBox 2 |

@@ -20,6 +20,7 @@ on:
           - qwen3.6-27b
           - qwen3.6-35b-a3b
           - gpt-oss-120b
+          - mimo-v2.6-flash
           - whisper
           - gemma-4-12b
           - gemma-4-26b-a4b

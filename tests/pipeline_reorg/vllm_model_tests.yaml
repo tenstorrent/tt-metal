@@ -32,6 +32,15 @@
 #     and its generation_config.json top_k is unset or above that limit. Without it
 #     those requests (all of vllm bench serve) sample on host, or are silently capped
 #     on device for model classes that declare no max_device_top_k.
+#   extra-env: space-separated KEY=VALUE pairs exported before the server starts.
+#
+# First use (a model not yet on /mnt/MLPerf; dispatch with mlperf-write-access):
+#   hub-download: true downloads the checkpoint into HF_HUB_CACHE before the server
+#     starts, only on a dispatch with /mnt/MLPerf writable. Every other run stays
+#     offline (HF_HUB_OFFLINE=1) on the cached snapshot.
+#   first-use-timeout (per SKU) / first-use-server-timeout: the job and server-start
+#     timeouts (minutes) of such a dispatch, which also builds the TT cache during
+#     startup. Not charged to the time budget; scheduled runs never use them.
 #
 # For max allowed timeout refer to .github/time_budget.yaml
 

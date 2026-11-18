@@ -1,0 +1,26 @@
+# MMMU-Pro as Artificial Analysis runs it (artificialanalysis.ai/methodology/intelligence-benchmarking, read
+# 2026-11-07): MMMU/MMMU_Pro, 1,730 questions, 10 options, 1 repeat, AA's multiple-choice instruction prompt and its
+# multi-stage answer regex (last match), pass@1. AA's MiMo-V2.6-Flash score: 73.06% (reasoning variant, Xiaomi API).
+# AA does not name the split; 1,730 questions with 10 options and question text is the "standard (10 options)" split
+# (the "vision" split renders the question into the image). Generation: thinking on (AA evaluates the reasoning
+# variant), temperature 1.0 / top_p 0.95 (AA uses the lab's recommended temperature; MiMo's card recommends these),
+# max_new_tokens 131072 (AA: the maximum output the creator allows; Xiaomi's API caps at 131,072).
+dataset_path: MMMU/MMMU_Pro
+dataset_name: standard (10 options)
+task: mmmu_pro_aa
+test_split: test
+output_type: generate_until
+doc_to_visual: !function utils.mmmu_pro_doc_to_visual
+doc_to_text: !function utils.aa_doc_to_text
+doc_to_target: "{{answer}}"
+process_results: !function utils.aa_process_results
+generation_kwargs:
+  max_new_tokens: 131072
+  temperature: 1.0
+  top_p: 0.95
+metric_list:
+  - metric: aa_accuracy
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  - version: 0.0

@@ -155,15 +155,21 @@ void kernel_main() {
             // that group's largest bound (positions are ascending within a group). Per-row
             // bounds are applied later, by the mask.
             if constexpr (spec_multi_pos) {
-                cur_pos = index_ptr[cur_batch * spec_multi_pos_T + (spec_multi_pos_T - 1)];
-#if ASSERT_ENABLED
-                // The reader derives the group's KV scan range from the group's LAST entry and skips
-                // k-chunks that end before its FIRST, so a non-ascending group silently drops KV; this
-                // is the on-device half of a contract validate cannot see, because in spec mode the
-                // positions live in cur_pos_tensor and are only ever read here, on device.
+                // The group's largest entry other than -1 (spec_group_bounds) sets the KV scan range.
                 const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
-                for (uint32_t j = 0; j + 1 < spec_multi_pos_T; ++j) {
-                    ASSERT(index_ptr[spec_pos_base + j] <= index_ptr[spec_pos_base + j + 1]);
+                cur_pos = spec_group_bounds<spec_multi_pos_T>(index_ptr + spec_pos_base).hi;
+#if ASSERT_ENABLED
+                // The group's KV scan range comes from its largest entry and the mask threshold from its
+                // smallest, so a non-ascending group silently drops KV; this is the on-device half of a
+                // contract validate cannot see, because in spec mode the positions live in cur_pos_tensor and
+                // are only ever read here, on device. -1 entries (UINT32_MAX) take no part.
+                uint32_t spec_prev = 0;
+                for (uint32_t j = 0; j < spec_multi_pos_T; ++j) {
+                    const uint32_t p = index_ptr[spec_pos_base + j];
+                    if (p != UINT32_MAX) {
+                        ASSERT(spec_prev <= p);
+                        spec_prev = p;
+                    }
                 }
 #endif
             } else {
@@ -226,16 +232,22 @@ void kernel_main() {
     const uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
     // Read Q
-    read_q<cb_q_in, cb_q_rm, q_tile_bytes, q_chunk_tiles, is_q_sharded, tilize_q, use_half_tile, barrier_threshold>(
-        q_locally_available,
-        is_output_core,
-        q_addr,
-        output_core_noc_x,
-        output_core_noc_y,
-        q_chunk_size_bytes,
-        q_args,
-        q_page_size_bytes,
-        q_batch_offset);
+    if constexpr (spec_multi_pos && spec_multi_pos_T == 2 * PNHt) {
+        // spec_multi_pos_packed: Q keeps a tile per candidate (DRAM interleaved, heads in rows 0..15)
+        read_q_spec_packed<cb_q_in, q_tile_bytes, PNHt, DHt>(
+            q_args, q_addr, q_page_size_bytes, cur_batch * spec_multi_pos_T * DHt);
+    } else {
+        read_q<cb_q_in, cb_q_rm, q_tile_bytes, q_chunk_tiles, is_q_sharded, tilize_q, use_half_tile, barrier_threshold>(
+            q_locally_available,
+            is_output_core,
+            q_addr,
+            output_core_noc_x,
+            output_core_noc_y,
+            q_chunk_size_bytes,
+            q_args,
+            q_page_size_bytes,
+            q_batch_offset);
+    }
 
     const auto k_reader = TensorAccessor(k_args, k_addr);
 

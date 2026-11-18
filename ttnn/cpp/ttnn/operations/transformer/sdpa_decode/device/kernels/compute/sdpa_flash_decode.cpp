@@ -173,11 +173,17 @@ void kernel_main() {
             CircularBuffer(cb_cur_pos).wait_front(1);
             if constexpr (spec_multi_pos) {
                 // cur_pos holds B*Tg bounds; this batch row owns the group starting at
-                // cur_batch*Tg. Within a group positions are ascending: entry 0 is the
-                // smallest bound (mask predicate), entry Tg-1 the largest (KV scan range).
+                // cur_batch*Tg. Within a group positions are ascending, -1 entries apart
+                // (spec_group_bounds): the smallest bound is the mask predicate's, the largest
+                // the KV scan range.
                 const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
-                spec_pos_min = read_tile_value(cb_cur_pos, 0, spec_pos_base);
-                cur_pos = read_tile_value(cb_cur_pos, 0, spec_pos_base + spec_multi_pos_T - 1);
+                uint32_t spec_pos[spec_multi_pos_T];
+                for (uint32_t j = 0; j < spec_multi_pos_T; ++j) {
+                    spec_pos[j] = read_tile_value(cb_cur_pos, 0, spec_pos_base + j);
+                }
+                const SpecGroupBounds bounds = spec_group_bounds<spec_multi_pos_T>(spec_pos);
+                spec_pos_min = bounds.lo;
+                cur_pos = bounds.hi;
             } else {
                 cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
             }
@@ -686,6 +692,12 @@ void kernel_main() {
 
             reconfig_data_format(cb_prev_sum, cb_prev_sum);
             pack_reconfig_data_format(cb_prev_sum);
+#ifdef SDPA_DECODE_RETURN_LSE
+            // The root's final max (raw q.k) and softmax denominator, for the writer's lse = scale * m + log(l).
+            // cb_out_m / cb_out_l are only used by non-root senders, so the root can hand them to its writer.
+            move_block<false>(cb_prev_max, cb_out_m, Sq_chunk_t);
+            move_block<false>(cb_prev_sum, cb_out_l, Sq_chunk_t);
+#endif
             recip_block_inplace(cb_prev_sum, Sq_chunk_t);
 
             /* OUT_ACC *= 1/SUM */

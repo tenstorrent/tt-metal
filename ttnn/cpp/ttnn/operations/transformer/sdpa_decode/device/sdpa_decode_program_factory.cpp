@@ -83,6 +83,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     const bool use_attention_mask = attn_mask.has_value();
     const bool use_attention_sink = attention_sink.has_value();
+    // Optional LSE output (sdpa_decode_with_lse). Off: no CB, define, compile-time or runtime arg is added.
+    const bool return_lse = tensor_args.lse_output.has_value();
     // ========== Tensor Shapes ==========
     auto q_shape = input_tensor_q.padded_shape();
     q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);
@@ -169,7 +171,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t St = S / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
     const uint32_t vDHt = vDH / TILE_WIDTH;
-    const uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT;
+    // Packed spec mode computes two candidates per Q row-tile.
+    const bool spec_packed = operation_attributes.spec_multi_pos_packed;
+    const uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT / (spec_packed ? 2 : 1);
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
 
     // ========== Grid & Core Configuration ==========
@@ -528,13 +532,20 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         TT_FATAL(use_cur_pos_tensor, "spec_multi_pos_tiles requires a cur_pos tensor");
         TT_FATAL(!is_q_sharded, "spec_multi_pos_tiles requires an unsharded Q tensor");
         TT_FATAL(sliding_window_size == 0, "spec_multi_pos_tiles is not supported with a sliding window");
-        TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with MLA");
+        TT_FATAL(!use_mla || tensor_args.v.has_value(), "spec_multi_pos_tiles with MLA needs a separate V cache");
         TT_FATAL(!use_attention_mask, "spec_multi_pos_tiles is not supported with an explicit attention mask");
+        // Sub-tile cache blocks move positions into padded tile space; the kernels convert the group's scan bound
+        // but not the candidates' mask bounds.
         TT_FATAL(
-            PNHt == spec_multi_pos_tiles,
-            "spec_multi_pos_tiles={} must equal PNHt={} (one 32-row Q tile per candidate)",
+            !has_block_padding,
+            "spec_multi_pos_tiles needs cache blocks of whole tiles, got a block of {} positions",
+            original_block_size);
+        TT_FATAL(
+            PNHt * (spec_packed ? 2 : 1) == spec_multi_pos_tiles,
+            "spec_multi_pos_tiles={} needs one 32-row Q tile per candidate, computed as PNHt={} row-tiles (packed: {})",
             spec_multi_pos_tiles,
-            PNHt);
+            PNHt,
+            spec_packed);
         TT_FATAL(q_heads_parallel_factor == 1, "spec_multi_pos_tiles requires q_heads_parallel_factor == 1");
         TT_FATAL(num_heads_per_core == 1, "spec_multi_pos_tiles requires num_heads_per_core == 1");
         // The mask CB is now push/pop cycled (one block per masked chunk) instead of pushed
@@ -545,6 +556,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             (Sk_chunk_t_cb_size & (Sk_chunk_t_cb_size - 1)) == 0,
             "spec_multi_pos_tiles requires a power-of-2 k chunk size in tiles, got {}",
             Sk_chunk_t_cb_size);
+    }
+    if (return_lse) {
+        // The root core of each user owns the user's whole output and its final (m, l); see the writer.
+        TT_FATAL(num_kv_heads == 1, "return_lse needs num_kv_heads == 1, got {}", num_kv_heads);
+        TT_FATAL(q_heads_parallel_factor == 1, "return_lse needs q_heads_parallel_factor == 1");
+        TT_FATAL(num_heads_per_core == 1, "return_lse needs num_heads_per_core == 1");
+        TT_FATAL(!use_attention_sink, "return_lse is not supported with an attention sink");
+        TT_FATAL(!tilize_q, "return_lse needs a TILE layout Q");
+        TT_FATAL(is_causal, "return_lse needs causal decode");
     }
     const auto q_tile = use_half_tile ? half_tile : full_tile;
     const auto k_tile = full_tile;
@@ -646,6 +666,13 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     add_cb(CBIndex::c_3, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);  // attn_mask
     if (use_attention_sink) {
         add_cb(CBIndex::c_4, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    }
+    if (return_lse) {
+        // fp32 staging tiles for the LSE output (c_4 is free: return_lse rejects an attention sink).
+        const uint32_t lse_tile_size = full_tile.get_tile_size(tt::DataFormat::Float32);
+        // packed spec: an lse tile per candidate (two per compute row-tile)
+        const uint32_t lse_tiles = spec_packed ? spec_multi_pos_tiles : PNHt;
+        add_cb(CBIndex::c_4, lse_tiles * lse_tile_size, tt::DataFormat::Float32, lse_tile_size, &full_tile);
     }
     add_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);   // scale
     add_cb(CBIndex::c_6, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // m_in
@@ -864,6 +891,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         spec_multi_pos_tiles,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
+    Buffer* lse_buffer = return_lse ? tensor_args.lse_output->buffer() : nullptr;
+    if (return_lse) {
+        tt_metal::TensorAccessorArgs(lse_buffer).append_to(writer_compile_time_args_common);
+    }
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
@@ -919,6 +950,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
 
+    if (return_lse) {
+        compute_defines["SDPA_DECODE_RETURN_LSE"] = "1";
+    }
+
     KernelDescriptor::Defines compute_defines_vec;
     compute_defines_vec.reserve(compute_defines.size());
     for (auto& [k, v] : compute_defines) {
@@ -941,6 +976,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
     writer_desc.config = WriterConfigDescriptor{};
+    if (return_lse) {
+        writer_desc.defines = {
+            {"SDPA_DECODE_RETURN_LSE", "1"},
+            {"SDPA_LSE_SCALE_BITS", std::to_string(scale_packed) + "u"},
+        };
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";
@@ -1093,6 +1134,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         writer_rt_args.append(reduce_core_physical_ys);
         writer_rt_args.append(output_core_physical_xs);
         writer_rt_args.append(output_core_physical_ys);
+        if (return_lse) {
+            writer_rt_args.push_back(lse_buffer);
+        }
 
         // compute runtime args
         KernelDescriptor::RTArgList compute_rt_args;
