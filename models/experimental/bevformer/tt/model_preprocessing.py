@@ -253,7 +253,12 @@ def _resnet_preprocessor(model, resnet, tt_kwargs):
         linear_dtype = tt_kwargs["weights_dtype"] if dram_activation and is_pointwise(conv) else None
         return _conv_parameters(weight, bias, linear_dtype, ttnn.float32)
 
-    parameters = {"conv1": conv_parameters(model.conv1, model.bn1, False)}
+    # The stem conv reads convert_to_hwc's pixels, their channels padded to the L1 alignment;
+    # zero weights on the padding keep it the reference conv.
+    weight, bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
+    padding = TTResNet.stem_hwc_channels(weight.shape[1]) - weight.shape[1]
+    weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, padding))
+    parameters = {"conv1": _conv_parameters(weight, bias, None, ttnn.float32)}
     for layer_idx in range(1, 5):
         prefix = f"layer{layer_idx}"
         parameters[prefix] = {}

@@ -41,7 +41,7 @@ struct dbg_daisy_id
     constexpr static std::uint32_t INSTR_ISSUE_2 = 6;
 };
 
-typedef struct
+struct dbg_bus_cntl_t
 {
     std::uint32_t sig_sel    : 16;
     std::uint32_t daisy_sel  : 8;
@@ -49,55 +49,55 @@ typedef struct
     std::uint32_t reserved_0 : 1;
     std::uint32_t en         : 1;
     std::uint32_t reserved_1 : 2;
-} dbg_bus_cntl_t;
+};
 
-typedef union
+union dbg_bus_cntl_u
 {
     std::uint32_t val;
     dbg_bus_cntl_t f;
-} dbg_bus_cntl_u;
+};
 
 ;
 
-typedef struct
+struct dbg_array_rd_en_t
 {
     std::uint32_t en       : 1;
     std::uint32_t reserved : 31;
-} dbg_array_rd_en_t;
+};
 
-typedef union
+union dbg_array_rd_en_u
 {
     std::uint32_t val;
     dbg_array_rd_en_t f;
-} dbg_array_rd_en_u;
+};
 
-typedef struct
+struct dbg_array_rd_cmd_t
 {
     std::uint32_t row_addr    : 12;
     std::uint32_t row_32b_sel : 4;
     std::uint32_t array_id    : 3;
     std::uint32_t bank_id     : 1;
     std::uint32_t reserved    : 12;
-} dbg_array_rd_cmd_t;
+};
 
-typedef union
+union dbg_array_rd_cmd_u
 {
     std::uint32_t val;
     dbg_array_rd_cmd_t f;
-} dbg_array_rd_cmd_u;
+};
 
-typedef struct
+struct dbg_soft_reset_t
 {
     std::uint32_t unp      : 2;
     std::uint32_t pack     : 4;
     std::uint32_t reserved : 26;
-} dbg_soft_reset_t;
+};
 
-typedef union
+union dbg_soft_reset_u
 {
     std::uint32_t val;
     dbg_soft_reset_t f;
-} dbg_soft_reset_u;
+};
 
 ;
 
@@ -207,7 +207,7 @@ inline void dbg_copy_dest_tile(
         volatile elem_t *dest_array = reinterpret_cast<volatile elem_t *>(RISCV_DEST_START_ADDR);
         if constexpr (op == DbgDestTileOp::Write)
         {
-            const volatile elem_t *src = reinterpret_cast<const volatile elem_t *>(buffer);
+            const volatile elem_t *src = static_cast<const volatile elem_t *>(buffer);
             for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
             {
                 dest_array[offset + i] = src[i];
@@ -215,7 +215,7 @@ inline void dbg_copy_dest_tile(
         }
         else
         {
-            volatile elem_t *dst = reinterpret_cast<volatile elem_t *>(buffer);
+            volatile elem_t *dst = static_cast<volatile elem_t *>(buffer);
             for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
             {
                 dst[i] = dest_array[offset + i];
@@ -250,7 +250,7 @@ inline void dbg_copy_dest_tile(
 // Reads the config from the RISC, so queued config writes must have landed first.
 inline InstrModLoadStore dbg_dest_row_save_mode()
 {
-    return (cfg_read(ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK) ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    return (cfg_read(ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK) ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
 }
 
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
@@ -263,7 +263,7 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     }
 
     // The same mode must save and restore the borrowed row; read it once, after queued config writes land.
-    InstrModLoadStore save_mode = InstrModLoadStore::LO16;
+    InstrModLoadStore save_mode = InstrModLoadStore::UINT16;
     if (array_id == dbg_array_id::SRCA)
     {
         tensix_sync();

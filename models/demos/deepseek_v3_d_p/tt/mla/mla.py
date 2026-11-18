@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, ML
 from models.demos.deepseek_v3_d_p.tt.mla.rope import identity_rope_tensors_indexed
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart, sparse_kv_push_supported
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCache,
@@ -30,7 +31,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCacheGeometry,
     declared_seq_shard_factor,
     is_tp_deduped_kv_cache,
+    striped_cache_to_host,
 )
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
@@ -195,28 +198,34 @@ class ttMLA:
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
         has_host_weights = bool(state_dict) and "q_a_layernorm.weight" in state_dict
 
-        def _wkv_b1_as(mapper, name):
+        def _wkv_b1_as(mapper, name, on_device=True):
             return ttnn.as_tensor(
                 wkv_b1,
-                device=device,
+                device=device if on_device else None,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
+                memory_config=mem if on_device else None,
                 mesh_mapper=mapper,
                 cache_file_name=name,
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         def _wkv_b1():
             if not replicate_wkv_b1:
                 return _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
+
+            def _tensorbin(name):
+                return name and Path(f"{name}_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
+
             repl_name = _cache_name("wkv_b1", "mla_repl")
-            repl_file = repl_name and Path(
-                f"{repl_name}_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
-            )
+            repl_file = _tensorbin(repl_name)
+            tp1_file = _tensorbin(_cache_name("wkv_b1"))
             if device is None or has_host_weights or (repl_file and repl_file.exists()):
-                if device is None:
-                    # A cache build keeps the TP-sharded file too: check_cache_complete looks for it.
-                    _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
+                if (device is None or (has_host_weights and cache_path)) and not (tp1_file and tp1_file.exists()):
+                    # Any write of the cache keeps the TP-sharded file too: check_cache_complete looks for
+                    # it. Written host-side only, so a load from host weights uploads just the replica;
+                    # skipped when the file is already there, since as_tensor would only read it back.
+                    _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"), on_device=False)
                 return _wkv_b1_as(ttnn.ReplicateTensorToMesh(mesh_device), repl_name)
             # A cache holding only the TP-sharded file: gather the TP shards once, at load. Loading
             # the placeholder through as_tensor would write it to the cache as the weights.
@@ -239,6 +248,7 @@ class ttMLA:
                     memory_config=mem,
                     mesh_mapper=mapper_tp3,
                     cache_file_name=tp_name if cached else None,
+                    cache_dump_mode=weight_cache_dump_mode(),
                 )
             local = ttnn.mesh_partition(replicated, dim=2, cluster_axis=tp_axis)
             row = ttnn.reshape(local, (1, 1, 1, q_lora_rank // mesh_device.shape[tp_axis]))
@@ -258,6 +268,7 @@ class ttMLA:
                 memory_config=mem,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 cache_file_name=_cache_name("kv_a_layernorm"),
+                cache_dump_mode=weight_cache_dump_mode(),
             ),
             "kv_a_proj_with_mqa": ttnn.as_tensor(
                 kv_a_proj,
@@ -267,6 +278,7 @@ class ttMLA:
                 memory_config=mem,
                 mesh_mapper=mapper_tp0,
                 cache_file_name=_cache_name("kv_a_proj_with_mqa"),
+                cache_dump_mode=weight_cache_dump_mode(),
             ),
         }
         if not kv_only:
@@ -280,6 +292,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                         cache_file_name=_cache_name("q_a_layernorm"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "q_a_proj": ttnn.as_tensor(
                         q_a_proj,
@@ -289,6 +302,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
                         cache_file_name=_cache_name("q_a_proj"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "q_b_proj": ttnn.as_tensor(
                         q_b_proj,
@@ -298,6 +312,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
                         cache_file_name=_cache_name("q_b_proj"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "wkv_b1": _wkv_b1(),
                     "wkv_b2": ttnn.as_tensor(
@@ -308,6 +323,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
                         cache_file_name=_cache_name("wkv_b2"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "o_proj": ttnn.as_tensor(
                         o_proj,
@@ -317,6 +333,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
                         cache_file_name=_cache_name("o_proj"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                 }
             )
@@ -331,6 +348,7 @@ class ttMLA:
                     memory_config=mem,
                     mesh_mapper=mapper_tp1,
                     cache_file_name=_cache_name("g_proj"),
+                    cache_dump_mode=weight_cache_dump_mode(),
                 )
             if tp_shard_q_a_norm:
                 result["q_a_layernorm_tp"] = _q_a_layernorm_tp(result["q_a_layernorm"])
@@ -925,31 +943,11 @@ class ttMLA:
         """
         storage = kvpe_cache.storage
         if len(list(storage.tensor_topology().distribution_shape())) == 2:
-            n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
-            sharded = ttnn.to_torch(
-                storage,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-            )  # [slots, n1, n0 * rows_per_chip, width]
-            rows = sharded.shape[2] // n0
-            # Row-major chip order (axis 0 outer), matching the coordinate order init_kvpe_cache declares.
-            host = torch.cat(
-                [sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0 in range(n0) for a1 in range(n1)],
-                dim=2,
-            )
+            # SP-major stripe order, as ring_mla writes it.
+            host = striped_cache_to_host(storage, mesh_device, sp_axis).unsqueeze(1)
         else:
-            host = ttnn.to_torch(
-                storage,
-                mesh_composer=ttnn.create_mesh_composer(
-                    mesh_device,
-                    config=ttnn.MeshComposerConfig(
-                        dims=(2, -1),
-                        mesh_shape_override=ttnn.MeshShape(
-                            mesh_device.shape[sp_axis],  # concat SP shards
-                            1,  # collapse TP replicas
-                        ),
-                    ),
-                ),
-            )
+            # SP shards concatenate on the sequence dim; only one TP replica is read back.
+            host = ttnn.to_torch(storage, mesh_composer=get_sp_mesh_composer(mesh_device, sp_axis, concat_dim=2))
         return kvpe_cache.unpack_host(host)
 
     def get_weight_shapes(self) -> dict[str, tuple]:
@@ -1668,7 +1666,7 @@ class ttMLA:
         the two in step by hand -- a divergence shows up only as a copy/shape failure at runtime.
 
         NOTE ON RESIDENCY: the cache holds one [1, 1, chunk, q_lora_rank] bf16 tensor per distinct
-        offset -- 1.31 MB per entry at 8x4 / chunk 5120 (3.28 MB before the scale moved from Q onto the
+        offset -- 1.31 MB per entry at 8x4 at the production chunk (3.28 MB before the scale moved from Q onto the
         q_a latent; the figures below were measured at that size), freed only with the model. Growth is linear in
         context depth, since an offset is visited once per request and never repeats.
         TtPrefillTransformer builds ONE dict and threads it down, so the layers pay that once. Measured
@@ -1691,7 +1689,7 @@ class ttMLA:
         the sharing stops here.
 
         An LRU cap is NOT the answer: offsets never repeat within a request, so every chunk would
-        miss and rebuild a 21 MB host tensor ([1, 1, 5120, 1024] fp32; 52 MB in the Q-shaped layout
+        miss and rebuild a 21 MB host tensor ([1, 1, chunk, 1024] fp32; 52 MB in the Q-shaped layout
         it was measured with), which measured 3x slower at long context.
 
         BUILDING THESE AT WARM-UP instead of lazily is the natural next step, and the transformer is
@@ -2573,13 +2571,13 @@ class ttMLA:
                 loaded = True
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_START`")
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_LOCAL_TOPK`")
-                # The KV gather's readers stream from DRAM on NoC0 concurrently; reading the logits on NoC1 keeps
-                # top-k off that traffic.
+                # Logits on NoC0: NoC1 reads here contend with the gather's fabric routers writing the KV prefix to
+                # DRAM on NoC1, which costs more than sharing NoC0 with the gather's link-worker reads.
                 local_indices = self._indexer.select_local(
                     selection_state,
                     subdevice_id=resources.topk_subdevice_id,
                     sub_core_grids=resources.topk_core_grid,
-                    dram_read_noc=ttnn.NOC.NOC_1,
+                    dram_read_noc=ttnn.NOC.NOC_0,
                 )
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_KV_GATHER`")
                 kvpe_dev = self._gather_kvpe_prefix(
@@ -2767,9 +2765,11 @@ class ttMLA:
             ), "dense tp_shard_kv is the chunked ring_mla split-KV path; single-shot prefill has no striped write"
         # Checked here, not on the first chunk after a long weight load.
         if self.tp_shard_kv and not self._has_indexer:
-            assert self.sp_axis == 0 and self.tp_axis == 1, (
-                f"dense tp_shard_kv needs SP on mesh axis 0 and TP on axis 1 (split-KV ring_mla), got "
-                f"sp_axis={self.sp_axis} tp_axis={self.tp_axis}"
+            # Either axis works: ring_mla numbers its KV stripes SP-major, row-major over the mesh with SP
+            # on axis 0 and column-major with SP on axis 1, from Q's declared sequence placement.
+            assert self.tp_axis == 1 - self.sp_axis, (
+                f"dense tp_shard_kv needs SP and TP on distinct mesh axes, got sp_axis={self.sp_axis} "
+                f"tp_axis={self.tp_axis}"
             )
             chunk_local = self.active_seq_len // self.sp_factor
             assert self.active_seq_len % self.sp_factor == 0 and chunk_local % (self.tp_factor * ttnn.TILE_SIZE) == 0, (
@@ -2842,7 +2842,6 @@ class ttMLA:
 
         compact: ``kvpe`` is a pushed compact buffer, addressed by the rewritten slots directly (no block-cyclic
         remap). prefetch: a push to run beside the attention on the push sub-device (see _beside_prefetch)."""
-        assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
         sp = self.sp_factor
         # A row-major q comes from _q_stem_seq_sharded, already sequence-sharded over TP.
         q_seq_ready = q.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -2954,8 +2953,9 @@ class ttMLA:
         physical block-cyclic pages in-kernel (invP), so the buffer is LEFT in block-cyclic order -- no
         host reorder.
 
-        Each device holds seq_len/(sp*tp) rows in sp*tp row-major order, which is what the snake ring
-        reassembles directly -- no TP-inner stage, no intermediate allocation, and the result lands in the
+        Each device holds seq_len/(sp*tp) rows in SP-major (sp_coord*tp + tp_coord) order. The snake ring
+        gathers with sp_axis outermost (full_mesh_outer_axis), so it reassembles that order directly on
+        either SP axis -- no TP-inner stage, no intermediate allocation, and the result lands in the
         persistent worst-case scratch rather than being transient. Same linear chip-major buffer that
         sparse_sdpa decodes with block_cyclic_cache_tp_sharded=True.
 
@@ -3007,8 +3007,9 @@ class ttMLA:
         )
         assert self._sparse_kv_gather_buffer is not None
         # Preconditions of the full-mesh gather -- wrong here means a silently misordered gather.
-        # Row-major over the mesh equals the sp*tp linearization only for this axis assignment.
-        assert self.sp_axis == 0 and self.tp_axis == 1, "full-mesh KVPE gather assumes sp_axis=0, tp_axis=1"
+        # No assert_full_mesh_stripe_order: the gather below passes full_mesh_outer_axis=sp_axis, so it orders its
+        # ranks by physical coordinates (SP outermost), the stripe order on either SP axis, not by the cache's
+        # row-major label.
         # A cache still declaring the legacy kv-head-on-TP layout reports too few stripes and would
         # under-gather. This is the assertion that catches an allocator which forgot tp_axis.
         assert self._declared_seq_shard_factor(storage) == stripes, (
@@ -3029,6 +3030,8 @@ class ttMLA:
             output_tensor=self._sparse_kv_gather_buffer,
             num_links=self.ccl_num_links,
             cluster_axis=None,
+            # SP-major stripes: row-major on the mesh at sp_axis=0, column-major at sp_axis=1.
+            full_mesh_outer_axis=self.sp_axis,
             **slot_meta_kwargs,
             **extent_kwargs,
         )

@@ -399,16 +399,17 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
 }
 
-// The feature set dynamic_local_n serves: non-causal, non-chunked MHA with a separate V and nothing that bakes
-// the length into host-built structure. Scalar and presence checks only, so it runs on every cache hit too.
+// The feature set dynamic_local_n serves: non-chunked MHA or grouped GQA with a separate V, causal only when
+// unbalanced, and nothing that bakes the length into host-built structure. Scalar and presence checks only, so it
+// runs on every cache hit too.
 void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const bool has_joint_tensors =
         tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();
     TT_FATAL(
         tensor_args.has_logical_n_tensor(),
         "dynamic_local_n requires logical_n as a device tensor (the kernels derive the masks from it)");
-    TT_FATAL(
-        !args.is_causal && !args.is_balanced && !args.is_cross, "dynamic_local_n supports non-causal attention only");
+    // Balanced causal compiles the zigzag parity and the straddle chunk per length.
+    TT_FATAL(!args.is_balanced && !args.is_cross, "dynamic_local_n does not support balanced or cross attention");
     TT_FATAL(!has_joint_tensors, "dynamic_local_n does not support joint tensors");
     TT_FATAL(
         tensor_args.input_v.has_value() && !tensor_args.has_latent_v() && !tensor_args.attention_sink.has_value(),
@@ -427,8 +428,9 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
     const auto& k_shape = tensor_args.input_k.logical_shape();
     const auto& v_shape = tensor_args.input_v->logical_shape();
     TT_FATAL(
-        q_shape[1] == k_shape[1] && k_shape[1] == v_shape[1],
-        "dynamic_local_n requires MHA (equal Q/K/V head counts). Got Q: {}, K: {}, V: {}",
+        (q_shape[1] == k_shape[1] && k_shape[1] == v_shape[1]) ||
+            ring_joint::is_gqa_grouped_kv_head_mode(/*v_shares_k_buffer=*/false, q_shape[1], k_shape[1], v_shape[1]),
+        "dynamic_local_n requires MHA or grouped GQA head counts. Got Q: {}, K: {}, V: {}",
         q_shape[1],
         k_shape[1],
         v_shape[1]);
@@ -445,11 +447,11 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
         tensor_args.input_k.padded_shape()[2],
         v_shape[2],
         tensor_args.input_v->padded_shape()[2]);
-    // The one-K-head shared-K batch chain is host-built per length; the hit path cannot rebuild it.
+    // One K head per chip: MHA selects the shared-K batch chain, host-built per length and not rebuilt on a hit.
+    // One-head GQA builds no chain under dynamic_local_n but is untested, so it is refused too.
     TT_FATAL(
         tensor_args.gathered_k.logical_shape()[1] > 1,
-        "dynamic_local_n requires more than one K head per chip (the shared-K batch chain is built per length). "
-        "Got {}",
+        "dynamic_local_n requires more than one K head per chip. Got {}",
         tensor_args.gathered_k.logical_shape()[1]);
     TT_FATAL(
         tensor_args.input_q.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
@@ -1548,6 +1550,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<uint64_t> route_plan_hash;
     ttnn::ccl::Topology resolved_topology = topology;
     uint32_t resolved_kv_stripe_split = 1;
+    // Split KV numbers its KV stripes SP-major: row-major over the mesh with Q's sequence on axis 0,
+    // column-major with it on axis 1 (the 4x4 prefill stages, SP on the 4-wide ring axis).
+    bool column_major_ranks = false;
     if (full_mesh) {
         TT_FATAL(
             topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
@@ -1574,16 +1579,19 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         if (resolved_kv_stripe_split > 1) {
             const auto& placements = input_tensor_q.tensor_topology().placements();
             const uint32_t dims = input_tensor_q.logical_shape().rank();
+            const auto q_sequence_on = [&](uint32_t axis) {
+                return ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[axis], 2, dims) &&
+                       !ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[1 - axis], 2, dims) &&
+                       q_shards == mesh_shape[axis] && resolved_kv_stripe_split == mesh_shape[1 - axis];
+            };
             TT_FATAL(
-                placements.size() == 2 &&
-                    ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[0], 2, dims) &&
-                    !ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[1], 2, dims) &&
-                    q_shards == mesh_shape[0] && resolved_kv_stripe_split == mesh_shape[1],
-                "Split KV requires Q sequence sharded only on mesh axis 0 and the extra KV stripes on axis 1. Got "
-                "{} Q shards, mesh shape {}, KV/Q shard ratio {}",
+                placements.size() == 2 && (q_sequence_on(0) || q_sequence_on(1)),
+                "Split KV requires Q sequence sharded only on one mesh axis and the extra KV stripes on the other. "
+                "Got {} Q shards, mesh shape {}, KV/Q shard ratio {}",
                 q_shards,
                 mesh_shape,
                 resolved_kv_stripe_split);
+            column_major_ranks = !q_sequence_on(0);
             const uint32_t q_slab = input_tensor_q.logical_shape()[2];
             TT_FATAL(
                 q_slab % (resolved_kv_stripe_split * tt::constants::TILE_HEIGHT) == 0,
@@ -1633,7 +1641,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         snake_orientation,
         mesh_rows,
         mesh_cols,
-        route_plan_hash};
+        route_plan_hash,
+        column_major_ranks};
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
     std::vector<std::optional<Tensor>> all_gather_output_tensors = {persistent_output_buffer_k};
     if (input_tensor_v.has_value()) {
