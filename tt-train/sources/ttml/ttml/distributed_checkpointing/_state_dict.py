@@ -27,6 +27,7 @@ import numpy as np
 import ttnn
 
 import ttml
+from ttml.fsdp import fsdp_axis_of
 from ttml.modules.parameter import Parameter
 
 from ._errors import CheckpointError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
@@ -173,11 +174,6 @@ def _module_name(key: str) -> str:
     return key.rsplit("/", 2)[-2] if key.count("/") >= 2 else key
 
 
-def _fsdp_axis(tensor: Any) -> int | None:
-    """The mesh axis FSDP shards ``tensor`` over (an autograd tensor of a ``fully_shard``-ed module), or None."""
-    return getattr(tensor, "_fsdp_axis", None) if getattr(tensor, "_fsdp_managed", False) else None
-
-
 def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) -> None:
     """A TP-sharded weight that looks fused by name but declares no segments loads silently wrong across TP sizes.
 
@@ -185,7 +181,7 @@ def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) 
     so an FSDP-only model's fused-looking weights are fine."""
     if "fused" in declaration:
         return
-    fsdp_axis = _fsdp_axis(tensor)
+    fsdp_axis = fsdp_axis_of(tensor)
     axes = [a for a in label.shard_axes(2) if a != fsdp_axis]
     shards = int(np.prod([label.dist_shape[a] for a in axes])) if axes else 1
     if shards <= 1:
@@ -236,7 +232,7 @@ def collect_model(model) -> list[LiveTensor]:
             local_shape,
             transform,
             live_keys,
-            tp_split=tp_split(label, _fsdp_axis(tensor), len(local_shape)),
+            tp_split=tp_split(label, fsdp_axis_of(tensor), len(local_shape)),
         )
         fused_name = bool(_FUSION_HINT.search(_module_name(key)))
         live.append(LiveTensor(key, tensor, info, fused_name=fused_name))
@@ -316,7 +312,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     prefix = "optimizer/" + "/".join(path) + "/"
                     live_keys = tuple(sorted(prefix + n[len("model/") :] for n in param.info.live_keys))
                     ref = param.key
-                    fsdp_axis = _fsdp_axis(param.tensor)  # the moments are sharded like their parameter
+                    fsdp_axis = fsdp_axis_of(param.tensor)  # the moments are sharded like their parameter
                     fused_name = param.fused_name
                 info = TensorInfo(
                     key,
