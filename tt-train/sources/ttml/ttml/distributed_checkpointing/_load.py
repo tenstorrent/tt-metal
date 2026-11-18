@@ -206,6 +206,71 @@ def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: in
     ) from err
 
 
+def _read_and_place(
+    plan: LoadPlan,
+    files: _DataFiles,
+    by_key: dict[str, LiveTensor],
+    threads: int | None,
+    local: set[tuple[int, ...]],
+) -> tuple[int, int, float, float, list[str]]:
+    """Read every planned key into host arrays and place the shards of the coordinates in ``local`` on the device;
+    returns the bytes read, the number of reads, the seconds spent waiting for reads and placing, and the keys placed.
+    A failure once a tensor was placed raises a ``CheckpointError`` that says the live state is partly restored."""
+    fds, data_start, paths = files.fds, files.data_start, files.paths
+    placed: list[str] = []
+    device = mesh_device()
+    bytes_read = 0
+    reads = 0
+    read_s = place_s = 0.0
+    workers = 32 if threads is None else threads
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+
+        def submit(kplan: KeyPlan):
+            """Allocate a key's destination shards and submit its reads; returns (arrays, futures)."""
+            info = kplan.info
+            carrier = NUMPY_CARRIERS[info.dtype]
+            arrays = {group: np.zeros(box.sizes, dtype=carrier) for group, box in kplan.boxes.items()}
+            by_chunk: dict[int, list[ReadItem]] = {}
+            for r in kplan.reads:
+                by_chunk.setdefault(r.chunk, []).append(r)
+            futures = [
+                pool.submit(
+                    _read_chunk,
+                    fds[its[0].file],
+                    data_start[its[0].file],
+                    kplan,
+                    its,
+                    info.itemsize,
+                    carrier,
+                    arrays,
+                    paths[its[0].file],
+                )
+                for its in by_chunk.values()
+            ]
+            return arrays, futures
+
+        # The reads of the next key run while the current key is placed on the device, so file I/O and placement
+        # overlap; at most two keys' host arrays are alive at a time.
+        keys = list(plan.keys.items())
+        pending = submit(keys[0][1]) if keys else None
+        for position, (key, kplan) in enumerate(keys):
+            try:
+                arrays, futures = pending
+                t_key = time.perf_counter()
+                for future in futures:
+                    bytes_read += future.result()
+                t_read_done = time.perf_counter()
+                pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
+                _place(by_key[key], arrays, device, local)
+            except Exception as err:
+                _raise_partly_restored(err, key, placed, len(keys))
+            placed.append(key)
+            read_s += t_read_done - t_key
+            place_s += time.perf_counter() - t_read_done
+            reads += len(futures)
+    return bytes_read, reads, read_s, place_s, placed
+
+
 def load(
     ckpt_dir: str,
     *,
@@ -343,63 +408,10 @@ def load(
             )
         stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
 
-        def read_and_place() -> tuple[int, int, float, float, list[str]]:
-            fds, data_start, paths = files.fds, files.data_start, files.paths
-            placed: list[str] = []
-            device = mesh_device()
-            bytes_read = 0
-            reads = 0
-            read_s = place_s = 0.0
-            workers = 32 if threads is None else threads
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-
-                def submit(kplan: KeyPlan):
-                    """Allocate a key's destination shards and submit its reads; returns (arrays, futures)."""
-                    info = kplan.info
-                    carrier = NUMPY_CARRIERS[info.dtype]
-                    arrays = {group_: np.zeros(box.sizes, dtype=carrier) for group_, box in kplan.boxes.items()}
-                    by_chunk: dict[int, list[ReadItem]] = {}
-                    for r in kplan.reads:
-                        by_chunk.setdefault(r.chunk, []).append(r)
-                    futures = [
-                        pool.submit(
-                            _read_chunk,
-                            fds[its[0].file],
-                            data_start[its[0].file],
-                            kplan,
-                            its,
-                            info.itemsize,
-                            carrier,
-                            arrays,
-                            paths[its[0].file],
-                        )
-                        for its in by_chunk.values()
-                    ]
-                    return arrays, futures
-
-                # The reads of the next key run while the current key is placed on the device, so file I/O and
-                # placement overlap; at most two keys' host arrays are alive at a time.
-                keys = list(plan.keys.items())
-                pending = submit(keys[0][1]) if keys else None
-                for position, (key, kplan) in enumerate(keys):
-                    try:
-                        arrays, futures = pending
-                        t_key = time.perf_counter()
-                        for future in futures:
-                            bytes_read += future.result()
-                        t_read_done = time.perf_counter()
-                        pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
-                        _place(by_key[key], arrays, device, local)
-                    except Exception as err:
-                        _raise_partly_restored(err, key, placed, len(keys))
-                    placed.append(key)
-                    read_s += t_read_done - t_key
-                    place_s += time.perf_counter() - t_read_done
-                    reads += len(futures)
-            return bytes_read, reads, read_s, place_s, placed
-
         t1 = time.perf_counter()
-        bytes_read, reads, read_s, place_s, placed = group.phase("reading and placing the shards", read_and_place)
+        bytes_read, reads, read_s, place_s, placed = group.phase(
+            "reading and placing the shards", lambda: _read_and_place(plan, files, by_key, threads, local)
+        )
         stats["read_and_place_s"] = time.perf_counter() - t1
         stats["read_s"] = read_s
         stats["place_s"] = place_s

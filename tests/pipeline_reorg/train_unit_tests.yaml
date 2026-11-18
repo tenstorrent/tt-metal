@@ -49,7 +49,7 @@
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
     bh_quietbox_2:
-      timeout: 25
+      timeout: 20
   owner_id: U07K00A281X # Kevin Wu
   team: train
   budget_type: unit
@@ -94,13 +94,14 @@
   budget_type: unit
 
 - name: tt-train python distributed unit tests
+  # Its 30 minutes and the cpp distributed leg's 20 make up train's 50-minute bh_quietbox_2 budget.
   cmd: |
     # Workaround for hang in QB2 https://github.com/tenstorrent/tt-metal/issues/55957
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     python -m pytest tt-train/tests/python
   skus:
     bh_quietbox_2:
-      timeout: 25
+      timeout: 30
   owner_id: U07K00A281X # Kevin Wu
   team: train
   budget_type: unit
