@@ -18,6 +18,8 @@ global_env:
   PREFILL_SP: "4"
   PREFILL_TP: "4"
   PREFILL_SP_AXIS: "1"
+  # Hosts per stage, in stage order (rank -> stage mapping of the runner); the seam stages span two.
+  PREFILL_STAGE_HOSTS: "1,2,1"
   PREFILL_TP_SHARD_KV: "1"
   PREFILL_CHUNK_SIZE: "2560"
   PREFILL_MAX_SEQ_LEN: "61440"
