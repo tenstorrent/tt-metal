@@ -71,6 +71,16 @@ Show the verdict, the top regressions, and the improvements if any. Point at
 ## Interpreting results (tell the user)
 - Comparison is **per (marker, sweep-config)** on `mean(<run_type>)` cycles, median across
   iterations. A point exists on both sides or it is a "new point" (no baseline).
+- Treat match coverage as part of the verdict. A changed schema or
+  configuration column changes the point key. When no point matches, the
+  compare exits with "No points compared" before writing a report: that is a
+  key mismatch, not a crash. When only a few points match, a clean verdict
+  covers just those points. In the multi-module CI gate, one module can lose
+  every match while others still compare, so the gate passes without
+  measuring it. Either outcome is inconclusive, not a pass. Preserve the old
+  key long enough to compare, run an explicit like-for-like baseline, or
+  state that the validated current report must become the new pinned
+  baseline.
 - Cleanest when only **kernel/LLK code** differs between the commits. If the test's sweep
   changed, expect "new points" — those are reported, never counted as regressions.
 - **Noise:** 3 iterations + median reduces run-to-run noise, but deltas near the threshold

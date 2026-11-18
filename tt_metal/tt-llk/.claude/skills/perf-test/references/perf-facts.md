@@ -30,7 +30,8 @@ comparison.
   of light; the PR, merge and `llk-perf-gate.yaml` nightly gates build the
   normal kind. A gate refuses to compare the two kinds ("CI" below). Normal
   builds also load the runtime-parameter struct, so they move more under
-  layout changes.
+  layout changes. Both kinds describe the same sweep point (`perf-test`,
+  "Parameters that compile in every build").
 - **Asserts.** Wormhole and Blackhole CI build perf with
   `TT_LLK_DISABLE_ASSERTS=1`, which drops `-DENABLE_LLK_ASSERT`; Quasar perf
   CI keeps asserts. `run_test.sh --perf` matches that default per
@@ -59,6 +60,10 @@ comparison.
   passes. The per-module column set is in
   `helpers/perf/test_schemas.py`; the hardware-free header gate
   (`tests/hardware_free/perf/test_perf_header_gate.py`) fails on drift.
+- The warehouse schema is chosen per architecture by `schema_for_arch` in
+  `helpers/perf/parquet.py`: `helpers/perf/wide_schema.py` for Wormhole and
+  Blackhole, `helpers/perf/wide_schema_quasar.py` for Quasar. Column
+  placement and naming rules are in `perf-test`, "Perf schema".
 
 ## Accounting and comparability
 
@@ -76,6 +81,8 @@ comparison.
   section-done traffic.
 - Compare like with like: architecture, build kind, `loop_factor`, marker,
   schema version, and report kind.
+- A comparison with few or no matched points is inconclusive
+  (`perf-regression-check`, "Interpreting results").
 
 ## Where reports land
 
@@ -119,6 +126,9 @@ comparison.
   `tests/perf_split_costs_sol.json`. A module missing from that table counts
   as 1 s. When a PR adds a perf module or changes its build count a lot,
   update its entries and say so in the PR.
+  These values schedule CI only; changing them does not establish a new
+  performance baseline and must not be used to explain away unmatched gate
+  points.
 - The perf gates and `perf_compare_commits.sh` share
   `perf/regression_compare.py`: a point regresses only when it is slower by
   both more than the threshold and more than the cycle floor. Thresholds

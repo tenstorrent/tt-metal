@@ -23,6 +23,8 @@ target architecture before editing:
 - [references/perf-facts.md](references/perf-facts.md): run types, build
   kinds, CSV normalization, schema and `tile_cnt` accounting, report paths,
   determinism, CI. Every perf skill links here.
+- [references/examples.md](references/examples.md): worked cases behind the
+  rules below.
 
 Related skills, in the order work usually needs them:
 
@@ -70,6 +72,9 @@ alone: it reads only `@parametrize`. Values set inside the test body
 | Addresses | any run type uses the `PERF_ADDRESS` ring or hard-coded L1 addresses instead of `buffer_A` / `buffer_Res` |
 | Loop shape | isolates iterate differently from `L1_TO_L1`: other block sizes, `MAX_TILES_DEST` chunks instead of `NUM_BLOCKS × NUM_TILES_IN_BLOCK`, a hard-coded dst index |
 | Parameters | the kernel picks values by build kind, such as `#ifdef LLK_PROFILER` stand-in zeros |
+| Build kinds | normal and speed-of-light builds assign different semantic values to the same point, or distinct sweep points collapse to one generated build |
+| Fixed values | a value fixed in the test body or a literal in the kernel (`DstSync::SyncHalf`) that no axis or CSV column records |
+| Init calls | an init the functional loop repeats per block runs inside `TILE_LOOP` |
 
 ## 2. Python: one sweep, one runner
 
@@ -114,9 +119,32 @@ Rules:
 - Stimuli, golden, block split (`get_num_blocks_and_num_tiles_in_block`),
   templates and runtimes are built in one place. Perf never builds its own
   config.
+- Perf control flow is explicit in the call graph. Pass `is_perf`,
+  `perf_report`, `run_types` and `loop_factor` into the shared helper; do not
+  smuggle them through module globals or use an exception for normal
+  completion. The helper returns normally after `configuration.run`.
 - Emit every template and runtime the kernel reads, in both modes. If perf
   lacks a field such as `INPUT_DIMENSIONS`, pass it; do not make the kernel
   guess.
+- Make fixed values explicit. A constant set in the test body becomes a
+  single-value axis (`loop_factor=[32]`), and every parameter the kernel
+  reads comes from the config instead of a literal, so the CSV records what
+  was measured.
+- Sweep the tile shape the way the architecture's existing tests do, and
+  derive faces and face rows from it rather than sweeping them separately.
+  When an axis change renames pytest ids, find and update every place that
+  hard-codes those ids.
+- Build `templates` and `runtimes` in a form `perf/perf_schema_derive.py`
+  can read statically: list literals, `+`, conditional expressions, and local
+  helpers that return a list. It does not follow `.extend()` or `.append()`;
+  write `templates = templates + ([...] if is_perf else [])`.
+- Keep one arch-aware helper per sweep constraint in `helpers/constraints.py`,
+  and delete wrappers that only forward to it.
+  Drop variants that differ only in their id and build the same kernel.
+- Prove a refactor that should not change the sweep: collected counts per
+  architecture before and after, quoted in the commit. Every intermediate
+  commit stays consistent; a helper removed in one commit is not called by a
+  later one.
 - No perf-only rejections. Reject a combination only when the hardware or the
   LLK cannot run it, and then reject it for functional too.
 - Functional-only steps stay after the `is_perf` return: zero-filling the
@@ -169,6 +197,18 @@ thread's isolate call the same helper with the same `NUM_BLOCKS`,
 `NUM_TILES_IN_BLOCK`, `DST_INDEX` and addresses, and repeat it `LOOP_FACTOR`
 times. The two branches then differ only in sync, plus the Dest bookkeeping
 that pack's section done carries (below the table):
+
+Everything inside `TILE_LOOP` is measured as the operation's cost. Inventory
+every instruction there that is harness setup rather than the operation, and
+move one-time setup and clears to `INIT`. Before adding a Dest clear or
+address reset, account for the implicit work the release path already does
+(architecture reference, "Dest clearing in the measured loop"). A required
+per-iteration harness step must also be present in the functional loop and
+called out in the PR.
+
+The same holds for init calls. When the functional loop repeats an init per
+block and production calls it once, separately from the tile call, move it to
+`INIT` in both modes rather than carrying it into `TILE_LOOP`.
 
 | Run type | Unpack | Math | Pack |
 |---|---|---|---|
@@ -245,16 +285,35 @@ still compile. Every name it uses must exist in every build.
 ```
 
 - Select only on `SPEED_OF_LIGHT` (runtime field versus generated constant).
+- The two sides must represent the same semantic value. Tile shape, dimensions,
+  block counts and every other swept parameter come from the runtime field in
+  a normal build and the corresponding generated constant in a
+  speed-of-light build. Do not substitute a default full tile or another
+  stand-in.
+- For a changed parameter path, inspect generated `build.h` values and, when
+  useful, the ELFs for representative points. Two sweep points that differ in
+  a compile-time parameter must not silently produce identical generated
+  constants or identical affected-thread ELFs.
 - Never select parameter values on `LLK_PROFILER`
   ([references/perf-facts.md](references/perf-facts.md), "Build kinds"). A
   stand-in there silently returns wrong values when a config changes and
-  hides untested code.
+  hides untested code. This also covers choosing a value's source: do not
+  make geometry compile-time under `LLK_PROFILER`, even when Python emits the
+  same value as a template.
+- A normal build reads trip counts and tile geometry from the runtime struct,
+  so its loops may not unroll, and that cost is part of the normal-build
+  number. Use the speed-of-light build to measure code cost without it.
 - If a field is missing in one mode, fix the Python side, not the kernel.
 - Use sources of truth such as `get_dest_max_tiles<...>()` and
   `TILE_WIDTH * TILE_HEIGHT`. Label literal arguments (`false /*untilize*/`)
   and check each label against the callee's parameter name.
 - Use the target architecture's current LLK signatures. Do not copy calls
   from another architecture's or an older perf kernel.
+- When Wormhole and Blackhole expose different signatures for the same call,
+  add a wrapper in `tests/helpers/include/llk_lib_*_wrappers.h` instead of
+  `#ifdef ARCH_BLACKHOLE` in the test source. Make the wrapper
+  `static_assert` combinations an architecture lacks, and skip them in Python
+  before building the config.
 
 ## 5. No dead paths
 
@@ -264,11 +323,41 @@ offset stepped by `BLOCK_RT_DIM` instead of `BLOCK_CT_DIM`. Either sweep the
 option in functional (and so in perf), with the matching golden
 (`TilizeGolden`), or delete the branch.
 
+Reachability is not enough for a regression variant. Trace the state it is
+meant to perturb through the complete INIT order and prove that a later init
+does not overwrite it before the operation under test. As a negative control,
+disable the implementation fix and verify that the regression variant fails;
+restore the fix and verify that it passes. If the variant passes without the
+fix, it does not cover that behavior. Removing the setup perturbation instead
+may legitimately leave a correct implementation passing.
+
 ## 6. Perf schema
 
 Adding a template or runtime field adds CSV columns. Update the module's
 entry in `helpers/perf/test_schemas.py` and bump its `version` once per PR,
-relative to main. The hardware-free header gate fails on any drift.
+relative to main. The hardware-free header gate fails on any drift. Bump only
+when the column set differs from main: if main already bumped the entry to
+the same columns, keep its version.
+
+To record a value the kernel does not read, use a `TemplateParameter` whose
+`convert_to_cpp` returns `""`. Never add it as a field of a runtime
+parameter: `write_runtimes_to_L1` serializes every runtime field, so the
+kernel's struct layout changes. A column takes its name from the dataclass
+field, so name the field after the quantity it holds.
+
+After a rebase, check `wide_schema.py` and `wide_schema_quasar.py` for a
+column added twice, once by each side.
+
+`helpers/perf/wide_schema.py` is one table shared by Wormhole and Blackhole
+modules; Quasar uses the separate `helpers/perf/wide_schema_quasar.py`. In the
+schema for the target architecture:
+
+- put every test-emitted configuration column above `_TIMING_COLUMNS`;
+- add a shared column once, never once per module;
+- qualify a generic name with the operation when it would be ambiguous in
+  the shared warehouse;
+- keep configuration, timing and provenance columns in their existing
+  sections.
 
 ## 7. Repair a run type
 
@@ -305,20 +394,37 @@ Run device and simulator tests through `run-test`; perf sweeps take `--perf`.
    only measurement axes ignored.
 6. **Host-only suite**, which includes the schema header gate:
    `tests/run_hardware_free.sh`.
-7. **Against main**: `perf-regression-check`. When the sweep or run types
-   changed, few points match. Read deltas with its "Layout sensitivity"
-   section before calling anything a regression.
+7. **Against main**: `perf-regression-check`. Check match coverage first
+   (its "Interpreting results"), and read deltas with its "Layout
+   sensitivity" section before calling anything a regression.
 8. **CI cost**: when the build count changes a lot, update the split costs
    ([references/perf-facts.md](references/perf-facts.md), "CI").
+9. **Attribute every move.** For each published number that changes, report
+   every run type, not only `L1_TO_L1` and the one that moved most. Confirm
+   each cause by experiment: revert the suspected change, re-measure, and
+   restore it. A plausible mechanism is not a cause. Quote exact deltas in
+   commits and the PR, not a rounded bound.
+10. **After a rebase** onto a main that changed the same test, re-measure
+    against the new main, drop commits main already contains, and re-derive
+    the commit and PR text from the new base.
 
 ## PR description
 
-State:
+Derive the description from the final diff, not the issue title. State:
 
 - which drift was removed;
+- every functional fix or newly unskipped functional test included with the
+  perf coverage;
+- any measured-loop or accounting change, including runtime loops or harness
+  work that moves published numbers, with the delta for every run type and
+  its verified cause;
+- whether the perf module/schema entry already existed on main versus being
+  added by this PR;
 - the isolate model (the table above, as implemented);
 - any intentionally unmatched functional tests;
 - the schema version change;
+- split-cost changes and why their build-count estimate changed;
+- when rows no longer match the old catalog, that the baseline needs a re-pin;
 - the validation actually run, per architecture, and what was not measured
   (for example Blackhole on a Wormhole-only host).
 
@@ -326,9 +432,11 @@ State:
 
 - keep a second kernel source for perf;
 - add perf-only sweep values, rejections, stimuli or init steps;
+- use module globals or exceptions to hide the functional/perf control flow;
 - give an isolate a different loop structure, address set or dst index than
   `L1_TO_L1`;
-- choose parameter values on `LLK_PROFILER`;
+- add redundant setup, clears or per-block inits inside `TILE_LOOP`;
+- choose parameter values, or their source, on `LLK_PROFILER`;
 - keep a feature branch that no sweep exercises;
 - weaken functional assertions;
 - narrow the permanent sweep to make a run finish;
