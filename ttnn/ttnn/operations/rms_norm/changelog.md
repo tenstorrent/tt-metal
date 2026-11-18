@@ -112,3 +112,41 @@
   - A structural fix would make the TILE kernels' shape extents runtime args, so binaries are shared across shapes. That rewrites all three kernels and was not done here, because any kernel edit invalidates the warm cache.
   - The bf8b non-aligned resident-shard case needs only the reader's block-float `static_assert` relaxed for `x_resident`. It was deferred for the same reason: the cells are INVALID, and the edit would invalidate the cache.
 - Tests added: none.
+
+## Refinement 3 — Speed up the width-sharded decode profile (cross-core combine latency)
+- Date: 2026-11-18
+- What was done (perf; no SUPPORTED change). Zone profiling of the W_SPLIT rendezvous on the 7×4 decode case (1 tile-row per core, x resident) gave the critical path: γ DRAM load before the partial send (1.3–1.9 µs), 27 × 2 KB fan-in into the root (~1 µs), root finalize (~1.4 µs), multicast (~0.7 µs), then the fused normalize (~1.3 µs). Levers, each measured on device and all kept:
+  - **γ off the gather path (writer).** `load_gamma` split into `gamma_issue` / `gamma_commit`. W_SPLIT issues the γ reads at kernel start, inside the writer's wait for the first partial, and commits after block 0's partial send. TILE γ zeroes only the nominal tail tiles, since the Row-broadcast FPU op reads row 0 only; the full 16 KB zero fill was ~0.7 µs of writer time and is gone on every path.
+  - **Column-scoped fused finalize (compute, all regimes).** New `RinvColumn` chain element: one SFPU pass `rsqrt(Σ·(1/W)+ε)` over the 8 column-0 vectors (`VectorMode::C` + even-parity stride, catalog `sfpu_tile_scope`), in place on `cb_rinv_col`, then `UnaryBcast<Col>`. The stock MulUnary / AddUnary / Rsqrt hardcode `VectorMode::RC`; the raw element is documented at its definition. Root finalize went from 1.4 µs to ~0.6 µs.
+  - **L4 `GATHER_COL_FACES`.** The partial gather sends faces 0 + 2 only, halving the fan-in bytes.
+  - **L5 `RINV_MCAST_HANDSHAKE = False`.** Safe by the partial(b+1) ⇒ rinv(b)-consumed causal chain.
+  - **x·γ prescale (`Blocking.xg_prescale`, `XG_PRESCALE` knob, new `cb_xg`).**
+    - `prescale_block` computes x·γ into `cb_xg` before the rinv wait: non-roots right after collapse; the root after finalize, overlapping its multicast.
+    - Normalize is then one FPU mul `xg·rinv`.
+    - `select_blocking()` enables it only for W_SPLIT ∧ TILE ∧ resident γ, and only where `cb_xg` fits without shrinking `block_rows`.
+    - Same FP order and intermediate precision, so y is bit-identical.
+  - Reused: the whole W_SPLIT topology, gather / Mcast helpers, every compute chain, the `CoreWork` / `select_blocking` plumbing. Added: `RinvColumn`, `prescale_block`, `cb_xg` (CB 14), the `gamma_issue` / `gamma_commit` split, 3 host knobs (`GATHER_COL_FACES`, `RINV_MCAST_HANDSHAKE`, `XG_PRESCALE`).
+- Perf (device kernel ns, BH p150b at 1350 MHz; `achievable_ns` applies unscaled):
+
+  | WIDTH decode case | Before | After | Speedup | `achievable_ns` |
+  |---|---|---|---|---|
+  | 8×1 (W=1024) | 4323 | 2978 | 1.45× | 4110 |
+  | 9×1 (W=2304) | 5453 | 3347 | 1.63× | 4617 |
+  | 8×4 (W=5120) | 5647 | 3750 | 1.51× | 5267 |
+  | 7×4 (W=7168) | 6508 | 3792 | 1.72× | 5481 |
+
+  Guard set (R2 commit → now) — every shape equal or faster:
+  - BLOCK: 640×6144 17.9 → 12.1 µs; 640×7168 22.3 → 14.8 µs; 7168×1024 55.4 → 31.1 µs; 7168×2048 67.3 → 47.5 µs; 8192×1024 77.4 → 50.7 µs
+  - HEIGHT 1024×4096: 38.7 → 31.4 µs
+  - RM WIDTH 32×4096: 10.6 → 9.8 µs
+  - interleaved TILE: 32×1024 5.8 → 4.2 µs; 32×4096 6.8 → 5.4 µs; 32×7168 8.5 → 6.8 µs; 8192×7168 553 → 543 µs; 7168×1024 77.2 → 76.1 µs
+  - interleaved RM 32×4096: 9.6 → 8.8 µs
+- Accuracy achieved: the four perf cases at PCC 0.999983–0.999986 (gate 0.9995). Every existing unit tolerance holds.
+- Golden test progress (targeted slices; the harness's full run is the record):
+  - `test_op_loose` WIDTH + BLOCK sharded (includes the 4 targets): 165 passed, 3 infeasible-skipped
+  - HEIGHT / interleaved decode loose + interleaved W_SPLIT cartesian 1×1×32×8192 bf16: 85 passed
+- Issues encountered:
+  - The first prescale version tilized RM γ twice (`gamma_ready()` ran before the prescale and again before normalize), which hung `test_sharded_tile_rm_gamma_fp32`. Fixed: the trailing call is skipped when the prescale already ran.
+  - The fused SFPU body first ran out of LREGs (1/W and ε held live across the rsqrt body). The constants are now re-materialized per vector.
+- Remaining headroom (finding, not a follow-up): see the Refinement 3 **Outcome** line in `op_requirements.md`.
+- Tests added: probes `probes/perf_r3_width_decode.py` (the 4 perf cases, ns + PCC) and `probes/perf_r3_guard.py` (13-shape guard set, `xg` A/B). Unit suites re-run green: sharded 51, acceptance 110, numeric 74 + 6 skipped, precision baseline 16.

@@ -11,3 +11,4 @@
 {"event":"test_run","refinement":3,"status":"pass","tests":"sharded 51/51, acceptance 110/110, numeric 74 pass 6 skip","perf_ns":{"8x1":3444,"9x1":4159,"8x4":4321,"7x4":4661},"ts":"2026-11-18T06:02:05+00:00"}
 {"event":"hypothesis","refinement":3,"symptom":"hang test_sharded_tile_rm_gamma_fp32: compute stuck in tilize<cb_gamma_rm->cb_gamma>","cause":"gamma_ready() called twice on the xg_prescale path; RM gamma tilized twice (second waits a page never pushed, cb_gamma full)","fix":"trailing gamma_ready only when !xg_prescale","ts":"2026-11-18T06:21:05+00:00"}
 {"event":"test_run","refinement":3,"status":"pass","tests":"sharded 51, acceptance 110, numeric 74+6skip, precision 16","lever":"xg_prescale","ts":"2026-11-18T06:24:01+00:00"}
+{"event":"refinement_complete","refinement":3,"outcome":"[x]","perf_before_ns":[4323,5453,5647,6508],"perf_after_ns":[2978,3347,3750,3792],"golden_slices":"165 pass + 3 skip; 85 pass","ts":"2026-11-18T06:35:03+00:00"}

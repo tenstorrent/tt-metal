@@ -102,7 +102,7 @@ Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (respons
   - Verifier: supported_pass 4980, supported_fail 0, xfail_wrong_mode 0. Every R1-passing cell passes (0 regressions).
   - Slowest chunk: 254 s.
 - No code changed. The JIT cache under `built/` now holds every golden program.
-### [ ] Refinement 3 — Speed up the width-sharded decode profile (cross-core combine latency)
+### [x] Refinement 3 — Speed up the width-sharded decode profile (cross-core combine latency)
 
 **Type**: perf
 
@@ -117,6 +117,28 @@ The implementer owns the lever choice. No SUPPORTED change.
 **Verifier notes**: measure the exact config above, never a fp32_dest_acc_en=True stand-in. This phase is one ⭐⭐⭐ restructure at most (combine topology) plus cheap knobs (L4/L5). Do not also take on the block-sharded throughput work; that is Refinement 4. L4 also shrinks `cb_gathered` (`k·br` tiles on every core, about 412 KB at `w_split = 103`), which is the over-capacity ledger finding folded in here.
 
 **Done when**: measured device-kernel ns improves on the four WIDTH_SHARDED decode perf cases (record before/after against the clock-scaled `achievable_ns`); their 0.9995 PCC gate still holds; the golden suite is green; and there is no regression across the config-spanning guard set (one representative per kernel path × layout × placement: LOCAL/W_SPLIT × TILE/RM × interleaved/height/width/block).
+
+**Outcome**:
+- **Measured.** Device-kernel ns on BH p150b at 1350 MHz, so `achievable_ns` applies unscaled. Decode `(1,1,32,W)`, W = 1024 / 2304 / 5120 / 7168:
+  - before: 4323 / 5453 / 5647 / 6508
+  - after: 2978 / 3347 / 3750 / 3792
+  - speedup 1.45 / 1.63 / 1.51 / 1.72×; now 0.69–0.72× of `achievable_ns` (4110 / 4617 / 5267 / 5481)
+  - PCC 0.99998
+- **Levers, all kept and all knobs.** Approximate gain on 7×4, in landing order:
+  - γ off the gather path, then tail-only zero fill + issue at kernel start: −0.5 µs
+  - column-scoped fused rinv finalize (`RinvColumn`): −0.6 µs
+  - L4 faces-0/2 gather: −0.5 µs
+  - L5 `handshake=False`: −0.1 µs
+  - x·γ prescale into `cb_xg` during the rendezvous wait: −0.84 µs
+- **No regression.** The guard probe ran one representative per path × layout × placement against the R2 commit: every shape is equal or faster, e.g. HEIGHT 1024×4096 38.7 → 31.4 µs, BLOCK 7168×1024 55.4 → 31.1 µs, interleaved 32×7168 8.5 → 6.8 µs.
+- **What binds now** (7×4 zones):
+  - sumsq + collapse ≈ 0.95 µs before the partial exists
+  - partial landing ≈ 0.7 µs: write-barrier ack round trip + atomic inc. This is latency, not fan-in; 8-core lines show the same 0.7 µs.
+  - root combine + finalize ≈ 0.9 µs
+  - multicast ≈ 0.6 µs: the loopback send fences on every receiver's ack
+  - xg·rinv + store ≈ 0.4 µs
+- **Next steps.** Replace the barrier + atomic with flushed writes + a per-sender flag write on the same NoC/VC (the chain-pipe ordering pattern; kernel_lib documents no ordering between departed writes and an atomic). Let the root normalize from its own `cb_rinv_bcast` instead of waiting for the loopback fence. Scope the collapse's within-tile SFPU reduce to column 0.
+- **Why not done here.** These are new synchronization protocols with hang risk, the targets are already beaten by ~30%, and a tree / scatter combine would only add serial rendezvous at one tile-row per core.
 
 ### [ ] Refinement 4 — Speed up the block-sharded prefill profile (per-core compute throughput)
 
