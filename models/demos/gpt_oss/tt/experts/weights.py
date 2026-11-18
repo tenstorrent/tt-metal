@@ -3,6 +3,7 @@
 
 """Generic expert weight loading and management."""
 
+import hashlib
 import os
 from dataclasses import dataclass
 
@@ -12,7 +13,7 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, Mode
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
-from ..weight_source import env_path
+from ..weight_source import resolve
 from .config import ExpertConfig
 
 
@@ -501,10 +502,13 @@ def _load_split_decode_expert_weights(
         tag += "_rnd"
     # GPT_OSS_DECODE_SPLIT_ROUND_DIR: the rounded part from a dir of layer_<L>.pt on the K-grouped bfloat4_b grid (the
     # K-GPTQ experts, checkpoint channel order) instead of round_k of the checkpoint
-    round_dir = env_path("GPT_OSS_DECODE_SPLIT_ROUND_DIR") if with_round else ""
-    if round_dir:
+    # The source as given names the cache files: a pinned hf:// location includes its revision, so another revision
+    # gets its own files (the directory's base name alone is the same for every revision). It is resolved, i.e.
+    # downloaded, only when the streams are packed, so a complete cache needs no Hub access.
+    round_spec = os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_DIR", "").strip() if with_round else ""
+    if round_spec:
         assert layer_idx is not None, "GPT_OSS_DECODE_SPLIT_ROUND_DIR needs the layer index"
-        tag += "_g" + os.path.basename(round_dir.rstrip("/"))
+        tag += "_g" + hashlib.sha1(round_spec.rstrip("/").encode()).hexdigest()[:10]
     names = {s: f"{s}_stream_{tag}" for s in streams}
     # as_tensor's cache file names (ttnn/operations/core.py): a cached stream is loaded, so skip the CPU packing
     cached = cache_path is not None and all(
@@ -516,8 +520,8 @@ def _load_split_decode_expert_weights(
         gu, gub = state_dict["gate_up_proj"].float(), state_dict["gate_up_proj_bias"].float()  # [E, H, 2I], [E, 2I]
         dn, dnb = state_dict["down_proj"].float(), state_dict["down_proj_bias"].float()  # [E, I, H], [E, H]
         gu_r = dn_r = None
-        if round_dir:
-            rw = torch.load(f"{round_dir}/layer_{int(layer_idx)}.pt")
+        if round_spec:
+            rw = torch.load(f"{resolve(round_spec)}/layer_{int(layer_idx)}.pt")
             gu_r, dn_r = rw["gate_up_proj"].float(), rw["down_proj"].float()  # [E, H, 2I], [E, I, H]
         gu_dev, dn_dev = [], []
         half = inter_pad // tile

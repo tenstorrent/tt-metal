@@ -23,7 +23,6 @@ straight into the decode token input (tt_out_tok). The candidate ids are exact: 
 the union of the per-core (or per-row) top-32s, and the merges and the greedy pick order ties by the lowest vocab id.
 """
 
-import os
 
 import torch
 from loguru import logger
@@ -33,6 +32,7 @@ from models.common.sampling.generator import SamplingGenerator
 from models.common.sampling.tt_sampling import TTSampling
 
 from .boundary import KERNEL_DIR
+from ..weight_source import dense_rounded_decode_tag
 from .config import (
     DECODE_GREEDY_SAMPLER,
     DECODE_TERMINAL_EXCHANGE,
@@ -102,8 +102,7 @@ class DecodeTerminal:
             LM_HEAD_DECODE_WEIGHT_DTYPE,
             _cache_name(
                 tensor_cache_path,
-                f"lm_head.weight_stream_{dt}_vd{self.vd}_b{banks}"
-                + ("_drnd" if os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE") else ""),
+                f"lm_head.weight_stream_{dt}_vd{self.vd}_b{banks}" + dense_rounded_decode_tag(),
             ),
         )
 

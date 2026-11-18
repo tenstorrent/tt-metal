@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from dataclasses import dataclass
 
 import torch
@@ -10,6 +9,8 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
+
+from ..weight_source import dense_rounded_decode_tag
 
 from ..fused_decode.config import OPROJ_DECODE_WEIGHT_DTYPE, QKV_DECODE_WEIGHT_DTYPE, QKV_FUSED_ROPE_KV
 from ..fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, qkv_column_order, stream_linear_layout
@@ -74,7 +75,7 @@ def load_attention_weights(
     padded_local_hidden = ((local_hidden + 31) // 32) * 32  # Round up to tile boundary
     o_proj_pad_size = padded_local_hidden - local_hidden
     o_proj_cache_suffix = f"_padded" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
-    decode_rounded_tag = "_drnd" if os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE") else ""
+    decode_rounded_tag = dense_rounded_decode_tag()
 
     if state_dict:
         # Extract projection weights from state dict
@@ -151,7 +152,7 @@ def load_attention_weights(
             ]
             qkv_decode = torch.cat(parts, dim=-1).unsqueeze(0).unsqueeze(0)
             o_proj_decode = dec["o_proj"].transpose(-1, -2)
-            decode_rounded_tag = "_drnd"
+            decode_rounded_tag = dense_rounded_decode_tag()
         if mesh_config.tp > 1:
             # Row-parallel: the bias is added once, on the first TP device.
             o_proj_bias_decode = torch.cat(

@@ -380,13 +380,13 @@ class RoutedPrefillExperts:
         self.weights_dtype = routed_weights_dtype(layer_idx)
         # GPT_OSS_PREFILL_KGPTQ: the bfloat4_b layers read the decode experts' K-GPTQ weights, tile-transposed.
         self.weights_tile_transposed = prefill_kgptq_enabled() and self.weights_dtype == ttnn.bfloat4_b
-        kgptq_dir = ""
+        # The K-GPTQ source as given (a local directory or a pinned hf:// location): it names the cache files, and is
+        # resolved (downloaded) only when the weights are loaded, so a complete cache needs no Hub access.
+        kgptq_spec = ""
         if self.weights_tile_transposed:
-            from ..weight_source import env_path
-
-            kgptq_dir = env_path("GPT_OSS_DECODE_SPLIT_ROUND_DIR")
+            kgptq_spec = os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_DIR", "").strip()
             assert (
-                kgptq_dir and layer_idx is not None
+                kgptq_spec and layer_idx is not None
             ), f"{PREFILL_KGPTQ_ENV}=1 needs GPT_OSS_DECODE_SPLIT_ROUND_DIR (the K-GPTQ experts) and the layer index"
         # Slot v (device v // experts_per_chip, local slot v % experts_per_chip) holds expert expert_order[v]; None is
         # the identity order. The ids this module receives are slot ids: the MLP routes with a router whose output
@@ -502,8 +502,10 @@ class RoutedPrefillExperts:
         self.cache_dir = cache_dir
         prefix = f"routed_v{ROUTED_PREFILL_WEIGHTS_VERSION}"
         if self.weights_tile_transposed:
-            # Own cache files per K-GPTQ source (the resolved path names the pinned Hub revision).
-            prefix += "_kt" + hashlib.sha1(kgptq_dir.rstrip("/").encode()).hexdigest()[:10]
+            # Own cache files per K-GPTQ source. The source as given, not its resolved path: a Hub location names its
+            # pinned revision, and the resolved path also holds the machine's Hub cache root, which would give every
+            # machine (and the shared CI cache) its own file names.
+            prefix += "_kt" + hashlib.sha1(kgptq_spec.rstrip("/").encode()).hexdigest()[:10]
 
         has_weights = bool(state_dict) and "gate_up_proj" in state_dict
         if has_weights and cache_dir is not None and not self._cache_complete(prefix):
@@ -530,7 +532,9 @@ class RoutedPrefillExperts:
             weights_source = state_dict
             if self.weights_tile_transposed:
                 # K-GPTQ weights (checkpoint channel order, HF layout); the biases stay the checkpoint's.
-                rw = torch.load(f"{kgptq_dir}/layer_{int(layer_idx)}.pt")
+                from ..weight_source import resolve
+
+                rw = torch.load(f"{resolve(kgptq_spec)}/layer_{int(layer_idx)}.pt")
                 weights_source = dict(state_dict, gate_up_proj=rw["gate_up_proj"], down_proj=rw["down_proj"])
                 del rw
             torch_weights, _ = prepare_routed_expert_weights(

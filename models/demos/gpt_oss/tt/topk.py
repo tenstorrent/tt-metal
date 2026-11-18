@@ -10,7 +10,6 @@ transformation followed by top-k selection to assign tokens to experts.
 
 """
 
-import os
 
 import torch
 
@@ -19,6 +18,7 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 from .fused_decode.config import DECODE_ROUTER_FAST_TOPK, ROUTER_DECODE_WEIGHT_DTYPE
 from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+from .weight_source import dense_rounded_decode_tag
 
 
 def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_config=None):
@@ -136,7 +136,7 @@ class TopKRouter:
         layout = None
         if torch_weight is not None:
             layout = stream_linear_layout(torch_weight, torch_bias.reshape(-1), banks)
-        tag = "_drnd" if os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE") else ""
+        tag = dense_rounded_decode_tag()
         self.weight_stream = as_stream_tensor(
             mesh_device,
             [layout] * mesh_device.shape[1] if layout is not None else None,
