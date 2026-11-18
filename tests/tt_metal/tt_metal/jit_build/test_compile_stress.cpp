@@ -24,9 +24,10 @@
 // That path feeds the compile_stress_ci.py per-arch timing goldens; keep it as is.
 //
 // Quasar rejects the legacy kernel API, so it builds each program from a Metal 2.0
-// ProgramSpec instead (see create_quasar_compile_stress_program). Mock and emulated
-// Quasar are rejected: JIT compile is a no-op there. Run Quasar with
-// TT_METAL_COMPILE_STRESS_MOCK=0 on a simulator or device.
+// ProgramSpec instead (see create_quasar_compile_stress_program). Mock Quasar is
+// rejected (JIT compile is a no-op there), and real mode needs a silicon or simulator
+// target. Run Quasar with TT_METAL_COMPILE_STRESS_MOCK=0
+// TT_METAL_COMPILE_STRESS_ARCH=quasar on a simulator or device.
 //
 // Configuration (env vars):
 //   TT_METAL_COMPILE_STRESS_NUM_KERNELS     total kernels                 (default 1000)
@@ -332,6 +333,13 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
             "CompileStressFixture expects mock device; got target_type={}.",
             target_device_type_to_string(target));
     } else {
+        // Real mode times compiles for the attached device. Mock and Emule have none, and
+        // Program::compile skips the JIT on Emule and on mock Quasar, so the run would time nothing.
+        TT_FATAL(
+            target == tt::TargetDevice::Silicon || target == tt::TargetDevice::Simulator,
+            "CompileStressFixture real mode needs a silicon or simulator target; got target_type={}. "
+            "Use TT_METAL_COMPILE_STRESS_MOCK=1 for a mock run.",
+            target_device_type_to_string(target));
         // Real mode compiles for the attached device (TT_METAL_COMPILE_STRESS_ARCH
         // does not steer CompileProgram), so a runner/arch mismatch would gate
         // e.g. Wormhole kernels against the Blackhole golden. Fail fast instead.
@@ -342,11 +350,6 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
             "CompileStressFixture requested arch '{}' but the attached device is '{}'.",
             tt::get_string_lowercase(expected_arch),
             tt::get_string_lowercase(actual_arch));
-        // Program::compile also returns early on an emulated Quasar, so the run would time nothing.
-        TT_FATAL(
-            !(actual_arch == tt::ARCH::QUASAR && target == tt::TargetDevice::Emule),
-            "emulated Quasar JIT compile is a no-op (Program::compile returns early); run on a Quasar simulator or "
-            "device");
     }
 
     const uint32_t target_num_kernels = tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_KERNELS", 1000);
