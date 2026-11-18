@@ -21,6 +21,8 @@ from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 
 HF_ID = "google/gemma-4-31B-it"
 HF_REVISION = "842da3794eaa0b77d5f08bae87a17459d91ff475"
+# Storage format of the tied LM head (the decoder projections are in decoder.WEIGHT_DTYPES).
+HEAD_DTYPE = ttnn.bfloat8_b
 
 
 def checkpoint_path():
@@ -97,7 +99,7 @@ class Gemma4Model:
         weight = reader.get("model.language_model.embed_tokens.weight")
         # The tied embedding has one physical layout for each consuming operation.
         self.embedding = self.tensor(weight, dim=1, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.head = self.tensor(weight.T.contiguous(), dim=1, dtype=ttnn.bfloat8_b)
+        self.head = self.tensor(weight.T.contiguous(), dim=1, dtype=HEAD_DTYPE)
         self.embedding_scale = torch.tensor(self.config.hidden_size**0.5, dtype=weight.dtype).item()
         norm = reader.get("model.language_model.norm.weight")
         self.norm = self.tensor(norm.reshape(1, 1, 1, -1))
@@ -194,12 +196,40 @@ class Gemma4Model:
         return logits
 
     def prefill_device(
-        self, tokens, *, sequence_length, page_tables, kv_cache, all_logits=False, start_pos=0, histories=None
+        self,
+        tokens,
+        *,
+        sequence_length,
+        page_tables,
+        kv_cache,
+        all_logits=False,
+        start_pos=0,
+        histories=None,
+        host_rows=None,
+        valid_length=None,
     ):
+        """sequence_length is the (page-padded) length of the chunk; valid_length (<= it) is its logical length.
+
+        With host_rows (the host page-table row of each table key) the position-dependent ops take runtime values (see
+        Decoder.prefill_chunk_inputs) and the logits row is selected by a device-valued slice, so the programs depend only
+        on the padded chunk length.
+        """
         if len(kv_cache) != len(self.layers):
             raise ValueError("Expected one cache pair per loaded layer")
         x = self.embed(tokens, sequence_length=sequence_length)
+        rope, fills = {}, {}
         for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
+            inputs = None
+            if host_rows is not None:
+                key = i if i in page_tables else layer.kind
+                if layer.kind not in rope:
+                    rope[layer.kind] = layer.prefill_chunk_inputs(sequence_length, start_pos)
+                # Layers of one KV group share their page-table row (one host tensor): upload the fill pages and the chunk start once
+                # per row, not once per layer.
+                row = id(host_rows[key])
+                if row not in fills:
+                    fills[row] = layer.prefill_chunk_inputs(sequence_length, start_pos, host_rows[key])
+                inputs = [dict(f, rope=r["rope"]) for r, f in zip(rope[layer.kind], fills[row])]
             # This hidden stream is private to this invocation. Completed
             # chunks can reuse it once their input reads and KV fills finish.
             x = layer.prefill_forward(
@@ -210,22 +240,53 @@ class Gemma4Model:
                 start_pos=start_pos,
                 history=histories[i] if histories is not None else None,
                 return_history=histories is not None,
+                chunk_inputs=inputs,
+                padded_tails=host_rows is not None,
             )
             if histories is not None:
                 x, histories[i] = x
         if not all_logits:
             # An unaligned slice begin untilizes its entire input. Copy
             # the aligned final tile first, then select its logical row.
-            tile_start = (sequence_length - 1) // 32 * 32
-            x = x[:, :, tile_start:sequence_length, :]
-            last_row = sequence_length - 1 - tile_start
+            valid = sequence_length if valid_length is None else valid_length
+            tile_start = (valid - 1) // 32 * 32
+            last_row = valid - 1 - tile_start
+            if host_rows is None:
+                x = x[:, :, tile_start:sequence_length, :]
+            else:
+                # The 32-row group holding the last token, selected by a device-valued offset (one program for every
+                # logical length of this padded chunk length).
+                width = x.shape[3]
+                upload = lambda values: ttnn.from_torch(
+                    torch.tensor(values, dtype=torch.int32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                )
+                x = ttnn.slice(
+                    x,
+                    upload([0, 0, tile_start, 0]),
+                    upload([1, 1, tile_start + 32, width]),
+                    slice_dim=2,
+                    num_devices=x.shape[2] // 32,
+                )
             x = x[:, :, last_row : last_row + 1, :]
         return self.terminal(x)
 
-    def decode_device(self, tokens, positions, *, page_tables, kv_cache, batch, rope_positions=None):
+    def decode_device(
+        self, tokens, positions, *, page_tables, kv_cache, batch, rope_positions=None, update_positions=None
+    ):
         if len(kv_cache) != len(self.layers):
             raise ValueError("Expected one cache pair per loaded layer")
         x = self.embed(tokens, batch=batch)
+        # RoPE cos/sin rows depend only on the positions and the layer kind: look them up once per step.
+        rope = {}
+        for layer in self.layers:
+            if layer.kind not in rope:
+                rope[layer.kind] = layer.decode_rope_tables(
+                    positions if rope_positions is None else rope_positions, batch
+                )
         for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
             x = layer.decode_forward(
                 x,
@@ -233,7 +294,9 @@ class Gemma4Model:
                 page_table=page_tables[i] if i in page_tables else page_tables[layer.kind],
                 kv_cache=cache,
                 rope_positions=rope_positions,
+                rope=rope[layer.kind],
                 cyclic_cache=i not in page_tables,
+                update_positions=update_positions,
             )
         logits = self.terminal(x)
         # Common samplers own a 32-row tile; inactive padding stays internal.

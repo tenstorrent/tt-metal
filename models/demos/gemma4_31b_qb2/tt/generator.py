@@ -36,6 +36,8 @@ class CacheState:
     # Standalone mode retains the stricter private cyclic-cache contract.
     vllm_owned: bool = False
     prefill_history: dict = field(default_factory=dict)
+    # Draft columns of a speculative decode (see Decoder.decode_forward): rows = users x columns, one cache update per column.
+    columns: int = 1
 
 
 class Gemma4Generator:
@@ -49,7 +51,9 @@ class Gemma4Generator:
         self.initial_capacity = max_seq_len
         self.states = {}
         self.traces = {}
-        self.prefill_shapes = set()
+        # Persistent inputs of each decode entry, kept when the traces are retired: only the traces are recaptured, one at a
+        # time, and capturing one trace allocates no persistent tensor that could land on another trace's memory.
+        self.entries = {}
         self.counters = {
             k: 0
             for k in (
@@ -327,6 +331,42 @@ class Gemma4Generator:
         self.counters["token_readbacks"] += 1
         return ttnn.to_torch(ttnn.get_device_tensors(token)[0]).reshape(-1)[:batch].long()
 
+    def _restore_prefill_history(self, state, page_tables, slot, start):
+        """Gather the preceding sliding window from vLLM's retained KV pages.
+
+        The scheduler owns cache identity and eviction. Only pages in this
+        request's current table are read; null pages are never valid history.
+        Decode and cached continuation consume the same stored BF8 values.
+        """
+        histories = []
+        bounds = {}
+        for i, layer in enumerate(self.model.layers):
+            if not layer.sliding:
+                histories.append(None)
+                continue
+            first = max(0, start - layer.window) // Decoder.PAGE_SIZE
+            pages = page_tables[i][slot, first : start // Decoder.PAGE_SIZE].tolist()
+            if not pages or any(p <= 0 or p >= state.kv[i][0].shape[0] for p in pages):
+                raise ValueError(f"Missing sliding prefix pages for layer {i} at position {start}: {pages}")
+            pair = []
+            for cache in state.kv[i]:
+                # The page id is a runtime value of the slice (device tensors): a Python slice cache[p : p + 1] puts p
+                # in the program hash, so every request with new block ids compiled new programs and retired the traces.
+                shape = tuple(cache.shape)
+                parts = []
+                for p in pages:
+                    if (p, 0) not in bounds:
+                        bounds[(p, 0)] = self._upload(torch.tensor([p, 0, 0, 0]), ttnn.uint32)
+                    if (p, shape) not in bounds:
+                        bounds[(p, shape)] = self._upload(torch.tensor([p + 1, *shape[1:]]), ttnn.uint32)
+                    parts.append(
+                        ttnn.slice(cache, bounds[(p, 0)], bounds[(p, shape)], slice_dim=0, num_devices=shape[0])
+                    )
+                tail = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
+                pair.append(ttnn.typecast(tail, ttnn.bfloat16))
+            histories.append(tuple(pair))
+        return histories
+
     def prefill_forward(
         self,
         tokens,
@@ -360,11 +400,7 @@ class Gemma4Generator:
         starts = [0] * len(prompt_lens) if start_positions is None else list(start_positions)
         if len(starts) != len(prompt_lens) or any(s < 0 or s >= n for s, n in zip(starts, prompt_lens)):
             raise ValueError("Prefill must advance each request from its current position")
-        shape_key = (state.batch, state.capacity, tuple(prompt_lens), tuple(starts), bool(return_all_logits))
-        if shape_key not in self.prefill_shapes:
-            # A new prefill signature may create cached protocol semaphores or
-            # norm buffers. Retire old traces before those persistent allocations.
-            self._retire_traces()
+        programs = self.mesh.num_program_cache_entries()
         self._tables(state, page_table)
         outputs = []
         for row, (slot, length) in enumerate(zip(slots, prompt_lens)):
@@ -379,10 +415,22 @@ class Gemma4Generator:
                 if start == 0:
                     histories = [None] * len(self.model.layers)
                 else:
-                    previous = state.prefill_history[key]
+                    previous = state.prefill_history.get(key)
+                    if previous is None:
+                        if not state.vllm_owned or start != aligned_start:
+                            raise ValueError("Cached prefill must start at a whole page in the serving cache")
+                        previous = {
+                            "end": start,
+                            "layers": self._restore_prefill_history(state, page_table, slot, start),
+                        }
                     if previous["end"] != start:
-                        raise ValueError("Prefill history does not match the scheduler continuation")
-                    rewind = start - aligned_start
+                        raise ValueError(
+                            "Prefill history does not match the scheduler continuation: "
+                            f"key={key}, saved_end={previous['end']}, start={start}"
+                        )
+                    # The saved tails end at tail_end: the logical end, or the page-padded end when the chunk ran
+                    # with runtime-valued inputs (rows after the logical end are replaced by this continuation).
+                    rewind = previous.get("tail_end", start) - aligned_start
                     histories = []
                     for tail in previous["layers"]:
                         if tail is None:
@@ -394,10 +442,14 @@ class Gemma4Generator:
                             continue
                         begin = max(0, valid - 1024)
                         histories.append(tuple(t[:, :, begin:valid, :] for t in tail))
-            ids = torch.zeros(1, (chunk_length + 31) // 32 * 32, dtype=torch.int32)
+            # Runtime-valued chunk inputs (see Decoder.prefill_chunk_inputs) need whole cache pages; the programs then
+            # depend on the padded length only, not on the logical length or the start position.
+            runtime_inputs = not return_all_logits
+            padded = (chunk_length + Decoder.PAGE_SIZE - 1) // Decoder.PAGE_SIZE * Decoder.PAGE_SIZE
+            ids = torch.zeros(1, padded if runtime_inputs else (chunk_length + 31) // 32 * 32, dtype=torch.int32)
             ids[0, :chunk_length] = tokens[row, aligned_start:length]
             tt_ids = self._upload(ids, ttnn.uint32)
-            tables, uploaded_rows = {}, {}
+            tables, uploaded_rows, host_rows, rows_by_kind = {}, {}, {}, {}
             for kind, table in page_table.items():
                 sentinel = state.vllm_owned and self.model.layers[kind].kind == "sliding_attention"
                 key = (id(table), sentinel)
@@ -409,26 +461,43 @@ class Gemma4Generator:
                         # persistent decode tables retain independent storage.
                         row_table = row_table.masked_fill(row_table == 0, -1)
                     uploaded_rows[key] = self._upload(row_table)
+                    host_rows[key] = row_table
                     self.counters["prefill_table_uploads"] += 1
                 tables[kind] = uploaded_rows[key]
+                rows_by_kind[kind] = host_rows[key]
             out = self.model.prefill_device(
                 tt_ids,
-                sequence_length=chunk_length,
+                sequence_length=padded if runtime_inputs else chunk_length,
                 page_tables=tables,
                 kv_cache=state.kv,
                 all_logits=return_all_logits,
                 start_pos=aligned_start,
                 histories=histories,
+                host_rows=rows_by_kind if runtime_inputs else None,
+                valid_length=chunk_length if runtime_inputs else None,
             )
             if history_keys is not None:
-                state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}
+                state.prefill_history[history_keys[row]] = {
+                    "end": length,
+                    "tail_end": aligned_start + padded if runtime_inputs else length,
+                    "layers": histories,
+                }
             outputs.append(
                 out if return_device else self._host_logits(out).reshape(1, -1, self.model.config.vocab_size)
             )
             # Device-return outputs retain their own owners in outputs. Host
             # mode has consumed out; do not carry it into the next prefill.
-            del out, tt_ids, tables, uploaded_rows
-        self.prefill_shapes.add(shape_key)
+            del out, tt_ids, tables, uploaded_rows, host_rows, rows_by_kind
+        compiled = self.mesh.num_program_cache_entries() - programs
+        if compiled:
+            logger.debug(
+                "Prefill {} from {} compiled {} programs: decode traces retired", prompt_lens, starts, compiled
+            )
+            # A prefill that compiled new programs created persistent device state (programs, semaphores, buffers)
+            # that a captured decode trace may overlap, so the traces are rebuilt. A signature the program cache
+            # already holds creates none: warm_prefill_shapes compiles every length class before serving, and
+            # the decode trace then survives the prefills of an agent loop.
+            self._retire_traces(keep_entries=True)
         if return_device:
             return outputs
         width = max(prompt_lens) if return_all_logits else 1
@@ -445,21 +514,37 @@ class Gemma4Generator:
             kv_cache=state.kv,
             batch=state.batch,
             rope_positions=entry["rope_positions"],
+            update_positions=entry["update_positions"],
         )
         ttnn.copy(out, entry["logits"])
+        # Only the first update column advances with the step; the other draft columns are reloaded by every verify step before
+        # they are read, so they need no increment here.
         ttnn.plus_one(entry["positions"], skip_negative_entries=True)
+        if entry["update_positions"][0] is not entry["positions"]:
+            ttnn.plus_one(entry["update_positions"][0], skip_negative_entries=True)
         ttnn.plus_one(entry["rope_positions"])
 
     def sample_prefill_outputs(self, outputs, state, sampling_params):
         """Consume compact prefill rows with the canonical sampling trace."""
         batch = len(outputs)
         self.configure_sampling(batch=batch, **sampling_params)
-        merged = outputs[0] if batch == 1 else ttnn.concat(outputs, dim=2)
-        if batch > 1 and batch < 32:
-            merged = ttnn.pad(merged, [(0, 0), (0, 0), (0, 32 - batch), (0, 0)], value=0.0)
+        # The concat/pad programs of a new batch size compile here, with decode traces live, outside prefill_forward's
+        # count: they are counted too (warm_prefill_shapes compiles every batch size, so this normally adds none).
+        programs = self.mesh.num_program_cache_entries()
+        merged = self._merge_prefill_rows(outputs)
+        compiled = self.mesh.num_program_cache_entries() - programs
         entry = self._entry(state)
+        programs = self.mesh.num_program_cache_entries()
         shape = ttnn.Shape([1, 1, 32, self.model.config.vocab_size // 4])
         ttnn.copy(ttnn.reshape(merged, shape, shape), entry["logits"])
+        compiled += self.mesh.num_program_cache_entries() - programs
+        if compiled:
+            # Programs compiled while decode traces were live: no captured trace, the sampling trace included, may run before
+            # it is rebuilt. Rebuilding the entry overwrites its logits, so the merged rows are copied again.
+            logger.info("Sampling a batch of {} compiled {} programs: decode traces retired", batch, compiled)
+            self._retire_traces(keep_entries=True)
+            entry = self._entry(state)
+            ttnn.copy(ttnn.reshape(merged, shape, shape), entry["logits"])
         # CQ0 consumes the copy before replay. Release temporary prefill owners
         # so a hot trace never replays with unrelated live postcapture buffers.
         outputs.clear()
@@ -468,10 +553,91 @@ class Gemma4Generator:
         self.counters["sampling_replays"] += 1
         return self._read_tokens(entry["tokens"], batch).reshape(-1, 1)
 
+    def _merge_prefill_rows(self, outputs):
+        """One 32-row logits tile from the compact rows of a prefill batch."""
+        batch = len(outputs)
+        merged = outputs[0] if batch == 1 else ttnn.concat(outputs, dim=2)
+        if 1 < batch < 32:
+            merged = ttnn.pad(merged, [(0, 0), (0, 0), (0, 32 - batch), (0, 0)], value=0.0)
+        return merged
+
     def _sample_step(self, entry):
         self.sampler(entry["logits"], tt_out_tok=entry["tokens"])
         # Seed state advances on device, including when an explicit seed was set.
         ttnn.plus_one(self.sampler.seeds_tt_tensor)
+
+    def warm_prefill_shapes(self, state, page_table, max_tokens):
+        """Compile the prefill programs of every length class before serving.
+
+        Prefill runs on whole cache pages (runtime-valued inputs, see Decoder.prefill_chunk_inputs), so programs are keyed
+        by the page-padded chunk length only. Warmed here: every padded length from position 0, the logical lengths 1..32
+        and 129..160 (the selectable last-token rows at both widths), for every padded length a continuation after a full
+        1024-token sliding window (from an aligned and from an unaligned previous end), and in the serving cache the
+        prefix-cache history restore for every page count. A continuation at any other start or logical length then
+        compiles nothing. Not covered, so each still compiles once and retires the decode traces: a continuation after
+        fewer than 1024 sliding tokens (a history of 128..896 rows: a chunked prompt whose first chunk was short, or a
+        prefix hit at a short aligned start), and a continuation chunk of more than max_tokens - 1152 padded rows (7041..8320
+        rows for the 8192-token limit, since an unaligned start adds up to a page). Uses blocks 1.. of the (still empty) pool;
+        nothing there is read afterwards.
+        """
+        page = Decoder.PAGE_SIZE
+        window = 1024 + page
+        lengths = list(range(page, max_tokens + 1, page))
+        for length in lengths:
+            self.prefill_forward(
+                torch.ones(1, length, dtype=torch.int32),
+                page_table=page_table,
+                kv_cache=state,
+                prompt_lens=[length],
+                slots=[0],
+            )
+        # The 32 last-token rows, at both residual widths (prompts of at most 128 tokens run at width 5376, longer at 1344).
+        for length in (*range(1, 33), *range(page + 1, page + 33)):
+            self.prefill_forward(
+                torch.ones(1, length, dtype=torch.int32),
+                page_table=page_table,
+                kv_cache=state,
+                prompt_lens=[length],
+                slots=[0],
+            )
+        key = -1
+        for chunk in range(page, max_tokens - window + 1, page):
+            for previous_end in (window, window + 1):
+                tokens = torch.ones(1, window + chunk, dtype=torch.int32)
+                self.prefill_forward(
+                    tokens,
+                    page_table=page_table,
+                    kv_cache=state,
+                    prompt_lens=[previous_end],
+                    slots=[0],
+                    history_keys=[key],
+                )
+                self.prefill_forward(
+                    tokens,
+                    page_table=page_table,
+                    kv_cache=state,
+                    prompt_lens=[window + chunk],
+                    slots=[0],
+                    start_positions=[previous_end],
+                    history_keys=[key],
+                )
+        state.prefill_history.pop(key, None)
+        if getattr(state, "vllm_owned", False):
+            # A request whose first chunk starts after cached pages restores its sliding history from the pages (slice, concat and
+            # typecast programs per page count); the first prefix hit after start-up would compile them and retire the traces.
+            for start in range(page, 1024 + page, page):
+                self._restore_prefill_history(state, page_table, 0, start)
+        # Every prefill batch size of sample_prefill_outputs (the row merge compiles per size).
+        for batch in range(2, 33):
+            rows = [
+                self.model.tensor(torch.zeros(1, 1, 1, self.model.config.vocab_size), dim=3, dtype=ttnn.bfloat16)
+                for _ in range(batch)
+            ]
+            self._merge_prefill_rows(rows)
+            del rows
+        state.prefill_history.pop(key, None)
+        self._retire_traces(keep_entries=True)
+        logger.info("Warmed {} prefill length classes up to {} tokens", len(lengths), max_tokens)
 
     def _entry(self, state):
         key = id(state)
@@ -484,7 +650,33 @@ class Gemma4Generator:
                     "Captured cache/table tensors were replaced; retire traces before replacing backing storage"
                 )
             return self.traces[key]
-        self._retire_traces()
+        entry = self.entries.get(key)
+        if entry is None:
+            # Persistent tensors must not be allocated while a trace is captured: they could land on its intermediates.
+            self._retire_traces(keep_entries=True)
+            entry = self.entries[key] = self._new_entry(state)
+        self._warm_entry(entry, state)
+        self._capture_entry(entry, state)
+        self.traces[key] = entry
+        return entry
+
+    def prepare_entries(self, states):
+        """Capture one decode trace per cache state; the states share the KV pool and differ in rows.
+
+        Every entry's persistent inputs are allocated before any trace is captured, so no persistent tensor can land
+        on memory that a captured trace reuses for intermediates.
+        """
+        self._retire_traces(keep_entries=True)
+        entries = [self.entries.get(id(state)) or self._new_entry(state) for state in states]
+        self.entries.update({id(state): entry for state, entry in zip(states, entries)})
+        for entry, state in zip(entries, states):
+            self._warm_entry(entry, state)
+        for entry, state in zip(entries, states):
+            self._capture_entry(entry, state)
+            self.traces[id(state)] = entry
+        return entries
+
+    def _new_entry(self, state):
         entry = {
             "tokens": self._upload(
                 torch.zeros(1, 1, 1, 32, dtype=torch.int32),
@@ -504,6 +696,16 @@ class Gemma4Generator:
             "table_ids": {k: id(v) for k, v in state.device_tables.items()},
             "remaining_steps": 0,
         }
+        # One cache-update index tensor per draft column (see Decoder.decode_forward); a single column updates with the
+        # positions themselves.
+        entry["update_positions"] = (
+            [entry["positions"]]
+            if state.columns == 1
+            else [self._upload(torch.zeros(state.batch, dtype=torch.int32)) for _ in range(state.columns)]
+        )
+        return entry
+
+    def _warm_entry(self, entry, state):
         for kind, table in state.device_tables.items():
             scratch_table = (
                 torch.tensor(state.scratch_pages[kind])[:, None]
@@ -528,6 +730,9 @@ class Gemma4Generator:
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["positions"], "position_refreshes")
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["rope_positions"], "rope_refreshes")
         self._refresh(torch.zeros(1, 1, 1, 32, dtype=torch.int32), entry["tokens"], "token_refreshes")
+        self._refresh_update_positions(entry, torch.zeros(state.batch, dtype=torch.int32))
+
+    def _capture_entry(self, entry, state):
         logger.info("Capturing model trace")
         with corruptible_allocation_scope(self.mesh):
             entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
@@ -538,8 +743,6 @@ class Gemma4Generator:
             entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
             self._sample_step(entry)
             ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
-        self.traces[key] = entry
-        return entry
 
     def replay(self, entry, *, sample=True):
         """Continue a prepared fixed-slot request without rebuilding device inputs."""
@@ -553,6 +756,14 @@ class Gemma4Generator:
         if sample:
             ttnn.execute_trace(self.mesh, entry["sampling_trace"], cq_id=0, blocking=False)
             self.counters["sampling_replays"] += 1
+
+    def _refresh_update_positions(self, entry, positions):
+        """Column c of the decode rows (row // slots) is updated by call c, which skips every other row."""
+        columns = len(entry["update_positions"])
+        if columns > 1:
+            column = torch.arange(len(positions)) // (len(positions) // columns)
+            for c, tensor in enumerate(entry["update_positions"]):
+                self._refresh(torch.where(column == c, positions, -1).int(), tensor, "position_refreshes")
 
     def prepare_decode(
         self,
@@ -589,6 +800,7 @@ class Gemma4Generator:
         self._refresh(ids, entry["tokens"], "token_refreshes")
         self._refresh(start_pos.int(), entry["positions"], "position_refreshes")
         self._refresh(start_pos.int().clamp_min(0), entry["rope_positions"], "rope_refreshes")
+        self._refresh_update_positions(entry, start_pos.int())
         active = start_pos[start_pos >= 0]
         entry["remaining_steps"] = state.capacity - int(active.max()) if active.numel() else state.capacity
         return entry
@@ -723,7 +935,7 @@ class Gemma4Generator:
             )
         self.configure_sampling()
 
-    def _retire_traces(self):
+    def _retire_traces(self, *, keep_entries=False):
         if self.traces:
             ttnn.synchronize_device(self.mesh)
             self.counters["synchronizations"] += 1
@@ -731,6 +943,8 @@ class Gemma4Generator:
             for name in ("model_trace", "sampling_trace"):
                 ttnn.release_trace(self.mesh, entry[name])
         self.traces.clear()
+        if not keep_entries:
+            self.entries.clear()
 
     def close(self):
         self._retire_traces()
