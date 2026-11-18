@@ -39,6 +39,11 @@ class Conv2d(Module):
     # with every cached program, so a model that runs many input sizes fills L1_SMALL without it.
     config_tensors_in_dram: bool = False
 
+    # The shard scheme, or None to let conv2d pick it per input size from its L1 estimate. With a
+    # fixed scheme one prepared set serves every input size, unless the conv folds its stride or its
+    # input channels are not whole tiles (see forward).
+    shard_layout: ttnn.TensorMemoryLayout | None = None
+
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
     # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
     # so ttnn picks the slicing from the L1 free at call time. Models can extend the table for their
@@ -547,12 +552,19 @@ class Conv2d(Module):
             act_block_h_override=32,
             weights_dtype=self.weight.dtype,
             config_tensors_in_dram=self.config_tensors_in_dram,
+            shard_layout=self.shard_layout,
         )
 
-        # The prepared layout depends on the input size and the slice config. The input memory config,
+        # The prepared layout depends on the shard scheme and the slice config. The input size reaches
+        # it through conv2d's per-size pick of the scheme, through kernel-stride folding (stride equal
+        # to the kernel, decided by whether the size divides by the stride) and, for channel counts
+        # that are not whole tiles, through the channel alignment the per-size DRAM slicing sets. So a
+        # fixed scheme makes the key size-free only without those two. The input memory config,
         # layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each
         # Conv2d instance always gets inputs with the same memory config, layout and dtype.
-        prepared_key = (b, h, w, num_slices)
+        may_fold = self.stride == self.kernel_size and self.stride != (1, 1)
+        size_free = self.shard_layout is not None and not may_fold and in_channels % ttnn.TILE_SIZE == 0
+        prepared_key = (num_slices,) if size_free else (b, h, w, num_slices)
         prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
         if prepared_weight is None:
             base_kwargs = {
@@ -638,12 +650,13 @@ def configure_conv2d(
     *,
     slice_params: dict[tuple[int, ...], dict[tuple[int, int, int, int], int]] | None = None,
     config_tensors_in_dram: bool | None = None,
+    shard_layout: ttnn.TensorMemoryLayout | None = None,
 ) -> None:
     """Configure every Conv2d in ``module``'s tree.
 
     ``slice_params`` (same layout as ``Conv2d.slice_params``) is added on top of the shared table for
-    each mesh shape it names, for these instances only. ``config_tensors_in_dram`` overrides the
-    class default for them.
+    each mesh shape it names, for these instances only. ``config_tensors_in_dram`` and
+    ``shard_layout`` override the class defaults for them.
     """
     if isinstance(module, Conv2d):
         if slice_params is not None:
@@ -653,5 +666,13 @@ def configure_conv2d(
             module.slice_params = table
         if config_tensors_in_dram is not None:
             module.config_tensors_in_dram = config_tensors_in_dram
+        if shard_layout is not None and shard_layout != module.shard_layout:
+            module._release_prepared()
+            module.shard_layout = shard_layout
     for _, child in module.named_children():
-        configure_conv2d(child, slice_params=slice_params, config_tensors_in_dram=config_tensors_in_dram)
+        configure_conv2d(
+            child,
+            slice_params=slice_params,
+            config_tensors_in_dram=config_tensors_in_dram,
+            shard_layout=shard_layout,
+        )
