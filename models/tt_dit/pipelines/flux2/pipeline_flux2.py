@@ -177,7 +177,9 @@ class Flux2Pipeline:
         self.dynamic_load = dynamic_load
 
         # The denoising states by image size and whether there is a reference image, and the VAE
-        # traces by image size.
+        # traces by image size. A pipeline without trace warmup keeps them only for traced calls;
+        # its untraced calls keep nothing on the device once they return.
+        self._trace_warmup = trace_warmup
         self._denoise_states: dict[tuple[int, int, bool], _DenoiseState] = {}
         self._vae_decoder_tracers: dict[tuple[int, int], Tracer] = {}
         self._vae_encoder_tracers: dict[tuple[int, int], Tracer] = {}
@@ -598,7 +600,7 @@ class Flux2Pipeline:
         shape = [transformer_batch_size, self._num_channels_latents * p * p, latents_height // p, latents_width // p]
         latents = torch.randn(shape, generator=generator, dtype=torch.bfloat16).flatten(2).transpose(1, 2).float()
 
-        state = self._denoise_state(width, height, edit=reference is not None)
+        state = self._denoise_state(width, height, edit=reference is not None, traced=traced)
         image_ids = _prepare_ids(height=latents_height // self._patch_size, width=latents_width // self._patch_size)
         rope_cos, rope_sin = self._pos_embed.forward(image_ids)
 
@@ -699,11 +701,14 @@ class Flux2Pipeline:
                 tt_latents, height=latents_height, width=latents_width, split_height=not rows_on_sp
             )
 
-            tracer = self._vae_decoder_tracers.get((width, height))
-            if tracer is None:
-                tracer = Tracer(self._vae_decoder.forward, device=self._mesh_device, clone_prep_inputs=False)
-                self._vae_decoder_tracers[width, height] = tracer
-            tt_decoded_output = tracer(tt_latents, traced=traced)
+            if self._keeps_size_state(traced):
+                tracer = self._vae_decoder_tracers.get((width, height))
+                if tracer is None:
+                    tracer = Tracer(self._vae_decoder.forward, device=self._mesh_device, clone_prep_inputs=False)
+                    self._vae_decoder_tracers[width, height] = tracer
+                tt_decoded_output = tracer(tt_latents, traced=traced)
+            else:
+                tt_decoded_output = self._vae_decoder.forward(tt_latents)
             decoded_output = fast_device_to_host(
                 tt_decoded_output,
                 self._mesh_device,
@@ -716,10 +721,18 @@ class Flux2Pipeline:
         on_event(SectionEnd("total"))
         return output
 
-    def _denoise_state(self, width: int, height: int, *, edit: bool) -> _DenoiseState:
+    def _keeps_size_state(self, traced: bool) -> bool:
+        """Whether a call keeps its size's denoising state and VAE tracers. A trace fixes its inputs'
+        buffers, so a traced size needs its own. A pipeline with trace warmup also keeps them for its
+        untraced calls, which allocate them before the first capture."""
+        return traced or self._trace_warmup
+
+    def _denoise_state(self, width: int, height: int, *, edit: bool, traced: bool) -> _DenoiseState:
+        # The step updates the latents in place, so the run before the capture works on copies.
+        if not self._keeps_size_state(traced):
+            return _DenoiseState(step_tracer=Tracer(self._step, device=self._mesh_device, clone_prep_inputs=True))
         state = self._denoise_states.get((width, height, edit))
         if state is None:
-            # The step updates the latents in place, so the run before the capture works on copies.
             state = _DenoiseState(step_tracer=Tracer(self._step, device=self._mesh_device, clone_prep_inputs=True))
             self._denoise_states[width, height, edit] = state
         return state
@@ -783,11 +796,14 @@ class Flux2Pipeline:
             pixels, device=self._mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, h_axis, w_axis, None]
         )
 
-        tracer = self._vae_encoder_tracers.get((reference_width, reference_height))
-        if tracer is None:
-            tracer = Tracer(self._vae_encoder.forward, device=self._mesh_device, clone_prep_inputs=False)
-            self._vae_encoder_tracers[reference_width, reference_height] = tracer
-        tt_latents = tracer(tt_pixels, traced=traced)
+        if self._keeps_size_state(traced):
+            tracer = self._vae_encoder_tracers.get((reference_width, reference_height))
+            if tracer is None:
+                tracer = Tracer(self._vae_encoder.forward, device=self._mesh_device, clone_prep_inputs=False)
+                self._vae_encoder_tracers[reference_width, reference_height] = tracer
+            tt_latents = tracer(tt_pixels, traced=traced)
+        else:
+            tt_latents = self._vae_encoder.forward(tt_pixels)
 
         latents = to_torch(tt_latents).float()
         tokens = (self._patchify(latents) - self._latents_bn_mean) / self._latents_bn_std
