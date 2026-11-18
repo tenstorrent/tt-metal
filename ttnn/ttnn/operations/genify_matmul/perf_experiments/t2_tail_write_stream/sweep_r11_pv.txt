@@ -1,0 +1,15 @@
+proj_out                         58561 rect_t
+te_qkv                           93673 rect
+te_o                             69573 rect
+te_down                         431139 rect
+te_gate                         376457 bank
+s_qkv                          1121742 rect_t
+s_out                          1428253 rect_t
+s_ff1                          2156771 rect_t
+q4096_qkvg                      374213 rect_t
+q1024_in                        124726 rect_t
+q512_in                          75330 rect
+q512_out                         44412 rect
+q512_gu                         161503 rect
+q512_down                        81094 rect
+q512_qkvg                        73262 rect

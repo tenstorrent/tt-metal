@@ -429,6 +429,8 @@ void kernel_main() {
     const uint32_t t_tensor_m_tiles = get_arg_val<uint32_t>(arg++);
     const uint32_t t_out_n_tiles = get_arg_val<uint32_t>(arg++);  // per output tensor (chunk)
     const out_chunks::Table t_out_tab = out_chunks::read_table(t_out_addr, t_out_n_tiles, arg);
+    // Perf 1 (tournament 2) tail policy (GM_TAIL_POLICY): this RISC's tiles of every tail row.
+    const tail_split::Policy t_pol = tail_split::read_policy(arg);
     const uint32_t tail_mbox = get_semaphore(TAIL_SEM_MBOX);
     const uint32_t tail_post = get_semaphore(TAIL_SEM_POST);
     const uint32_t tail_done = get_semaphore(TAIL_SEM_DONE);
@@ -468,7 +470,7 @@ void kernel_main() {
                     batch * t_tensor_m_tiles + t_row0 + t_blk_r0 + blk_row,
                     t_blk_col,
                     t_blk_cols,
-                    [&](uint32_t n) { return tail_split::reader_owns(n, t_blk_cols); },
+                    [&](uint32_t n) { return tail_split::reader_owns(n, t_blk_cols, t_pol); },
                     GM_OUT_STRIDE);
             }
             noc_async_writes_flushed();  // the reader's share left L1

@@ -1,0 +1,612 @@
+--- a/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
++++ b/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
+@@ -44,6 +44,20 @@
+ 
+ KERNEL_DIR = Path(__file__).parent / "kernels"
+ 
++# ---- M-split walk with B L1-resident (perf tournament 2, t2_msplit_b_resident) ----
++# MSPLIT_HEIGHTS: None = off; else the core's M-block heights (tallest first, each dividing the first, summing to the
++# core's rows), e.g. (12, 4). Applies to an R1b epilogue-none multi-K-block walk whose plan is one block per core.
++MSPLIT_HEIGHTS = "auto"
++MSPLIT_DEPTH_ACT = 4  # A ring depth (K-blocks of the tallest M-block)
++MSPLIT_BLOCK_K = None  # None = the largest block_k that fits; else forced
++MSPLIT_B_AHEAD = 2  # B K-blocks the reader keeps on the wire
++MSPLIT_TAIL_PCT = 100  # NoC0 (reader) share % of the last M-block's columns; < 100 splits it with the writer
++MSPLIT_B_PACE = 1  # 0 = B as fast as it goes; L = issue B K-block j once A round j - L has landed
++MSPLIT_INJECTORS = None  # None = ACT_STREAM_INJECTORS clamp; else forced
++MSPLIT_OUT_DEPTH = 2  # output CB row groups (DEPTH_OUT); 1 frees one row group of L1 for the A ring
++MSPLIT_SAME_ROUND = True  # shorter M-blocks take proportionally wider K-blocks (one A round size); False: block_k
++MSPLIT_MIN_WALK_RATIO = 1.25  # gate: only when the plan's K-walk >= ratio * max(DRAM stream, busiest core's reads)
++
+ TILE = 32
+ 
+ # ---- CB indices (op_design.md, Circular Buffers) ----
+@@ -1378,6 +1392,68 @@
+     raise RuntimeError(f"genify_matmul: even the minimum block does not fit the L1 CB budget of {budget} bytes")
+ 
+ 
++
++def msplit_blocking(geom, grid, blk, budget, heights=None):
++    """t2_msplit_b_resident: the M-split, B-resident blocking for an R1b one-block K-walk, or None when it does not
++    apply / fit. B: all num_k_blocks K-blocks resident (depth_weight = num_k_blocks)."""
++    heights = MSPLIT_HEIGHTS if heights is None else heights
++    if heights == "auto":
++        # In units of the planned subblock height (the M-split keeps the plan's subblock): half the rows first
++        # (B lands while they compute), then two quarters (the last quarter's writes are the only tail).
++        cm, u = grid.core_m_tiles, blk.sb_h
++        units = cm // u if cm % u == 0 else 0
++        if units >= 4 and units % 4 == 0:
++            heights = (cm // 2, cm // 4, cm // 4)
++        elif units >= 2 and units % 2 == 0:
++            heights = (cm // 2, cm // 2)
++        else:
++            heights = ()
++    heights = tuple(heights)
++    if not heights or len(heights) > 4 or sum(heights) != grid.core_m_tiles:
++        return None
++    if geom.epilogue != "none" or blk.block_batches != 1 or blk.block_m_tiles != grid.core_m_tiles:
++        return None
++    if MSPLIT_MIN_WALK_RATIO:
++        walk, dram, core_read, _ = split_cost_terms(geom, grid, blk)
++        if walk < MSPLIT_MIN_WALK_RATIO * max(dram, core_read):
++            return None  # a stream-bound walk: the split only queues compute behind the B stream
++    if blk.block_n_tiles != grid.core_n_tiles:
++        return None
++    hmax = heights[0]
++    if any(h <= 0 or hmax % h for h in heights) or list(heights) != sorted(heights, reverse=True):
++        return None
++    g = 0
++    for h in heights:
++        g = h if g == 0 else __import__("math").gcd(g, h)
++    sb_h, sb_w = choose_subblock(g, blk.block_n_tiles, geom.dest_limit, geom)
++    bn = blk.block_n_tiles
++    tk = geom.tensor_k_tiles
++    d = MSPLIT_DEPTH_ACT
++    out_cb = MSPLIT_OUT_DEPTH * sb_h * bn * geom.o_tile_bytes
++    partials = hmax * bn * geom.p_tile_bytes
++    cands = [MSPLIT_BLOCK_K] if MSPLIT_BLOCK_K else range(min(tk, 64), 0, -1)
++    for bk_max in cands:
++        bk, nkb, last = _k_split(tk, bk_max)
++        if bk != bk_max and not MSPLIT_BLOCK_K:
++            continue
++        foot = d * hmax * bk * geom.a_tile_bytes + nkb * bk * bn * geom.b_tile_bytes + partials + out_cb
++        if foot <= budget and nkb >= 2:
++            new = replace(
++                blk,
++                block_m_tiles=hmax,
++                block_k_tiles=bk,
++                num_k_blocks=nkb,
++                last_block_k_tiles=last,
++                sb_h=sb_h,
++                sb_w=sb_w,
++                depth_act=d,
++                depth_weight=nkb,
++                write_batch=1,
++            )
++            ks = tuple(bk * hmax // h if MSPLIT_SAME_ROUND else bk for h in heights)
++            return new, heights, foot, ks
++    return None
++
+ def _l1_tensor_bytes_per_core(tensors, num_cores):
+     total = 0
+     for t in tensors:
+@@ -1582,6 +1658,14 @@
+         residual=residual,
+         math_fidelity=compute_config.math_fidelity,
+     )
++    ms = None
++    if MSPLIT_HEIGHTS and operand_mode(geom, grid, blk) == 2:
++        budget = l1_cb_budget(
++            device, [t for t in (*_a_list(a), b, *_out_list(out), row, residual) if t is not None]
++        )
++        ms = msplit_blocking(geom, grid, blk, budget)
++        if ms is not None:
++            blk, ms_heights, ms_foot, ms_ks = ms
+     cores, core_ranges = _logical_cores(grid, gx)
+     # Split output (Refinement 13): the chunks share one memory config / dtype / shape, so chunk 0 stands in
+     # for every per-tensor property; the writer (and the reader's tail share) route each output tile column
+@@ -1614,7 +1698,7 @@
+             CB_OUTPUT_TILES,
+             out.dtype,
+             geom.o_tile_bytes,
+-            DEPTH_OUT * blk.write_batch * blk.sb_h * out_block_n_tiles,
++            (MSPLIT_OUT_DEPTH if ms is not None else DEPTH_OUT) * blk.write_batch * blk.sb_h * out_block_n_tiles,
+             core_ranges,
+         ),
+     ]
+@@ -1724,6 +1808,8 @@
+         reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *chunk_addrs]
+         writer_rt[core.x][core.y] = wrt
+         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
++        if ms is not None:
++            assert nb_b == 1 and nb_n == 1 and rows_valid == grid.core_m_tiles
+ 
+     # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
+     # specialized, so every core hosts exactly one reader. Plain R1 is a single group (0, 0).
+@@ -1790,11 +1876,15 @@
+         )
+     if act_stream:
+         rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
++        if ms is not None:
++            rounds = sum(_cdiv(geom.tensor_k_tiles, kk) for kk in ms_ks) // blk.num_k_blocks
+         # Rotating injectors on the bank-local split only (one rectangle, as the helper's rotating senders need):
+         # on a small flat split of thin K-blocks the turn hand-over costs more than the parallel reads save
+         # (64x16384x256, 16-bit DEST, 8 cores x 64 rounds of 32 KB: 84 -> 92 us with 3).
+         bank = grid.placement == "bank"
+         injectors = act_stream_injectors(blk, rounds * blk.num_k_blocks) if bank else 1
++        if ms is not None and MSPLIT_INJECTORS:
++            injectors = MSPLIT_INJECTORS
+         _attach_act_stream(descriptor, writer, core_ranges, device, injectors)
+     elif not split:  # (split: the writer's `act` channel is the A row line, attached above)
+         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
+@@ -1822,6 +1912,19 @@
+         defs = [("GM_R1A_AHEAD", str(R1A_INJECTOR_AHEAD)), ("GM_R1A_DEPTH", str(min(blk.depth_act, blk.depth_weight)))]
+         for k in readers:
+             k.defines = list(k.defines) + defs
++    if ms is not None:
++        defs = [("GM_MSPLIT", "1"), ("GM_MSPLIT_NB", str(len(ms_heights)))]
++        defs += [(f"GM_MSPLIT_H{i}", str(h)) for i, h in enumerate(ms_heights)]
++        defs += [(f"GM_MSPLIT_K{i}", str(kk)) for i, kk in enumerate(ms_ks)]
++        defs += [("GM_MSPLIT_TAIL_PCT", str(MSPLIT_TAIL_PCT))]
++        for k in (*readers, writer, compute):
++            k.defines = [(n, v) for n, v in k.defines if n != "GM_NONE_RAW_WALK"] + defs
++        for k in readers:
++            k.defines = list(k.defines) + [
++                ("GM_MSPLIT_B_AHEAD", str(MSPLIT_B_AHEAD)),
++                ("GM_MSPLIT_B_PACE", str(MSPLIT_B_PACE)),
++                ("GM_MSPLIT_CB_OUT", str(CB_OUTPUT_TILES)),
++            ]
+     for k in (*readers, writer, compute):
+         k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
+     descriptor.kernels = [*readers, writer, compute]
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp
+@@ -275,6 +275,28 @@
+ 
+ }  // namespace
+ 
++#ifdef GM_MSPLIT
++#ifdef GM_MSPLIT_H2
++#define GM_MSPLIT_H2_R GM_MSPLIT_H2
++#else
++#define GM_MSPLIT_H2_R 0
++#endif
++#ifdef GM_MSPLIT_H3
++#define GM_MSPLIT_H3_R GM_MSPLIT_H3
++#else
++#define GM_MSPLIT_H3_R 0
++#endif
++#ifndef GM_MSPLIT_B_AHEAD
++#define GM_MSPLIT_B_AHEAD 2
++#endif
++#ifndef GM_MSPLIT_TAIL_PCT
++#define GM_MSPLIT_TAIL_PCT 100
++#endif
++#ifndef GM_MSPLIT_B_PACE
++#define GM_MSPLIT_B_PACE 0
++#endif
++#endif
++
+ void kernel_main() {
+     constexpr uint32_t cb_act_tiles = get_compile_time_arg_val(0);
+     constexpr uint32_t cb_weight_tiles = get_compile_time_arg_val(1);
+@@ -698,6 +720,108 @@
+         r1a_split ? gm_line::first_turn<b_line_span>(mc_weight) : b_line_span,
+         r1a_split ? get_write_ptr(GM_LINE_STAGE_CB) : 0);
+ 
++#ifdef GM_MSPLIT
++    // ---- t2_msplit_b_resident: B once, resident (cb_weight_tiles holds all num_k_blocks K-blocks: reserve the whole
++    // walk up front, keep GM_MSPLIT_B_AHEAD K-blocks on the wire under alternating trids, push K-block by K-block),
++    // then drain EVERY M-block's output on NoC0 (this RISC is idle once B is resident; the writer runs only the A
++    // stream). M-block i's writes overlap M-block i+1's K-walk; only the last M-block's writes are a tail.
++    {
++        static_assert(act_on_writer && TAIL_SPLIT_MODE != 0 && block_batches == 1 && !gm_ks::ramp);
++        constexpr uint32_t ms_h[4] = {GM_MSPLIT_H0, GM_MSPLIT_H1, GM_MSPLIT_H2_R, GM_MSPLIT_H3_R};
++        constexpr uint32_t ms_nb = GM_MSPLIT_NB;
++        constexpr uint32_t ahead = GM_MSPLIT_B_AHEAD;
++        static_assert(ahead >= 1 && ahead <= 3);
++        const uint32_t base = get_write_ptr(cb_weight_tiles);
++        {
++            MaybeDeviceZoneScope("rd_b_resident");
++            cb_reserve_back(cb_weight_tiles, num_k_blocks * weight_block_tiles);
++            auto issue_b = [&](uint32_t j) {
++                const uint32_t kv = (j == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
++                dataflow_kernel_lib::set_read_trid(noc, j % ahead + 1);
++                read_weight(base + j * weight_block_bytes, col0, j * block_k_tiles, kv, cols_valid);
++            };
++            for (uint32_t j = 0; j + 1 < ahead && j < num_k_blocks; ++j) {
++                issue_b(j);
++            }
++            // GM_MSPLIT_B_PACE (lead L > 0): issue B K-block j only once A round j - L has landed here (the writer's
++            // cb_act_tiles pushes), so B tracks the walk instead of saturating DRAM ahead of it (the injectors' A
++            // reads share the banks).
++            constexpr uint32_t pace = GM_MSPLIT_B_PACE;
++            auto paced = [&](uint32_t j) {
++                if constexpr (pace != 0) {
++                    if (j > pace) {
++                        const uint32_t need = (j - pace) * act_block_tiles;
++                        while (((get_cb_tiles_received_ptr(cb_act_tiles)[0]) & 0xFFFFu) < need) {
++                        }
++                    }
++                }
++            };
++            for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
++                if (kb + ahead - 1 < num_k_blocks) {
++                    paced(kb + ahead - 1);
++                    issue_b(kb + ahead - 1);
++                }
++                dataflow_kernel_lib::async_read_barrier_with_trid(noc, kb % ahead + 1);
++                cb_push_back(cb_weight_tiles, weight_block_tiles);
++            }
++            dataflow_kernel_lib::set_read_trid(noc, 0);
++        }
++        constexpr uint32_t row_group_tiles = sb_h * t_out_block_n;
++        // GM_MSPLIT_TAIL_PCT < 100: the LAST M-block's row groups are split by columns with the writer (idle once its
++        // A stream is done): this RISC posts each row group (tail_split mailbox, roles reversed: the reader posts,
++        // the writer writes columns >= the cut on NoC1 and acks), writes its own columns, pops after the ack.
++        constexpr uint32_t tail_pct = GM_MSPLIT_TAIL_PCT;
++        auto mine = [&](uint32_t n) { return tail_pct >= 100 || n < (t_blk_cols * tail_pct) / 100; };
++        uint32_t tail_seq = 0;
++        uint32_t r0 = 0;
++        for (uint32_t mb = 0; mb < ms_nb; ++mb) {
++            const uint32_t h = ms_h[mb];
++            const uint32_t rows = block_extent(t_rows_valid, r0, h);
++            const bool split = tail_pct < 100 && mb + 1 == ms_nb;
++            for (uint32_t g = 0; g < h / sb_h; ++g) {
++                {
++                    MaybeDeviceZoneScope("rd_wait_out");
++                    cb_wait_front(GM_MSPLIT_CB_OUT, row_group_tiles);
++                }
++                if (split) {
++                    ++tail_seq;
++                    tail_split::post(tail_mbox, tail_post, get_read_ptr(GM_MSPLIT_CB_OUT), tail_seq);
++                }
++                {
++                    MaybeDeviceZoneScope("rd_write");
++                    const uint32_t l1_base = get_read_ptr(GM_MSPLIT_CB_OUT);
++                    for (uint32_t r = 0; r < sb_h; ++r) {
++                        const uint32_t blk_row = g * sb_h + r;
++                        if (blk_row >= rows) {
++                            break;
++                        }
++                        out_chunks::write_row(
++                            out_args,
++                            t_out_tab,
++                            TAIL_O_PAGE_BYTES,
++                            t_o_tile_bytes,
++                            l1_base + r * t_out_block_n * t_o_tile_bytes,
++                            t_b0 * t_tensor_m_tiles + t_row0 + r0 + blk_row,
++                            t_blk_col,
++                            t_blk_cols,
++                            [&](uint32_t n) { return !split || mine(n); },
++                            GM_OUT_STRIDE);
++                    }
++                    noc_async_writes_flushed();
++                }
++                if (split) {
++                    MaybeDeviceZoneScope("rd_tail_wait_writer");
++                    tail_split::wait_at_least(tail_done, tail_seq);
++                }
++                cb_pop_front(GM_MSPLIT_CB_OUT, row_group_tiles);
++            }
++            r0 += h;
++        }
++        MaybeDeviceZoneScope("rd_final_barrier");
++        noc_async_write_barrier();
++        return;
++    }
++#endif
+     for (uint32_t bb = 0; bb < nb_b; ++bb) {
+         const uint32_t blk_b0 = bb * block_batches;
+         const uint32_t blk_b_valid =
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
+@@ -80,6 +80,28 @@
+ #define GM_LINE_STARTUP 1
+ #endif
+ 
++#ifdef GM_MSPLIT
++#ifdef GM_MSPLIT_TAIL_PCT
++#define GM_MSPLIT_TAIL_PCT_W GM_MSPLIT_TAIL_PCT
++#else
++#define GM_MSPLIT_TAIL_PCT_W 100
++#endif
++#ifdef GM_MSPLIT_H2
++#define GM_MSPLIT_H2_W GM_MSPLIT_H2
++#define GM_MSPLIT_K2_W GM_MSPLIT_K2
++#else
++#define GM_MSPLIT_H2_W 0
++#define GM_MSPLIT_K2_W 1
++#endif
++#ifdef GM_MSPLIT_H3
++#define GM_MSPLIT_H3_W GM_MSPLIT_H3
++#define GM_MSPLIT_K3_W GM_MSPLIT_K3
++#else
++#define GM_MSPLIT_H3_W 0
++#define GM_MSPLIT_K3_W 1
++#endif
++#endif
++
+ namespace {
+ // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
+ // wholly in the padded tail of a ragged edge region: the grid-uniform R1a walk visits such blocks).
+@@ -233,6 +255,163 @@
+         read_act_kblock(act_ring_base + (r % act_cb_blocks) * act_block_bytes, blk_r0, blk_rows, r % num_k_blocks);
+         dataflow_kernel_lib::set_read_trid(noc, 0);
+     };
++#ifdef GM_MSPLIT
++    // ---- t2_msplit_b_resident: the A stream over M-blocks of heights GM_MSPLIT_H0.. (rotating injectors, or the
++    // fixed one with injectors == 1). Round r = (M-block r / nkb, K-block r % nkb); its slot holds h * block_k pages
++    // at the ring position of the pages pushed before it (heights non-increasing and dividing: a round never
++    // straddles the ring end). This RISC writes no output: the reader drains cb_output_tiles (it is idle once B is
++    // resident), so the next M-block's A rounds never wait behind the previous M-block's writes.
++    {
++        static_assert(act_stream && a_segments::num == 1 && !act_resident);
++        constexpr uint32_t ms_h[4] = {GM_MSPLIT_H0, GM_MSPLIT_H1, GM_MSPLIT_H2_W, GM_MSPLIT_H3_W};
++        constexpr uint32_t ms_k[4] = {GM_MSPLIT_K0, GM_MSPLIT_K1, GM_MSPLIT_K2_W, GM_MSPLIT_K3_W};
++        constexpr uint32_t ms_nb = GM_MSPLIT_NB;
++        constexpr uint32_t ring_pages = act_cb_blocks * block_m_tiles * block_k_tiles;
++        static_assert(ms_k[0] == block_k_tiles);
++        const uint32_t tk = (num_k_blocks - 1) * block_k_tiles + last_block_k_tiles;
++        uint32_t ms_nkb[4];
++        uint32_t total_rounds = 0;
++        for (uint32_t i = 0; i < ms_nb; ++i) {
++            ms_nkb[i] = (tk + ms_k[i] - 1) / ms_k[i];
++            total_rounds += ms_nkb[i];
++        }
++        // round r -> (M-block, K-block); pages pushed before round r
++        auto locate = [&](uint32_t r, uint32_t& mb, uint32_t& kb, uint32_t& before) {
++            mb = 0;
++            before = 0;
++            while (r >= ms_nkb[mb]) {
++                before += ms_h[mb] * ms_k[mb] * ms_nkb[mb];
++                r -= ms_nkb[mb];
++                ++mb;
++            }
++            kb = r;
++            before += r * ms_h[mb] * ms_k[mb];
++        };
++        auto pages_before = [&](uint32_t r) {
++            if (r >= total_rounds) {
++                uint32_t p = 0;
++                for (uint32_t i = 0; i < ms_nb; ++i) {
++                    p += ms_h[i] * ms_k[i] * ms_nkb[i];
++                }
++                return p;
++            }
++            uint32_t mb, kb, before;
++            locate(r, mb, kb, before);
++            return before;
++        };
++        uint32_t seq = 0;  // rounds pushed so far
++        auto slot_of = [&](uint32_t r) { return act_ring_base + (pages_before(r) % ring_pages) * a_tile_bytes; };
++        auto trid_of = [&](uint32_t r) { return (r / act_injectors) % 2 + 1; };
++        auto round_pages = [&](uint32_t r) {
++            uint32_t mb, kb, before;
++            locate(r, mb, kb, before);
++            return ms_h[mb] * ms_k[mb];
++        };
++        auto issue = [&](uint32_t r) {
++            cb_reserve_back(cb_act_tiles, pages_before(r + 1) - pages_before(seq));
++            uint32_t mb, j, before;
++            locate(r, mb, j, before);
++            uint32_t r0 = 0;
++            for (uint32_t i = 0; i < mb; ++i) {
++                r0 += ms_h[i];
++            }
++            const uint32_t h = ms_h[mb], bk = ms_k[mb];
++            const uint32_t k_valid = (j + 1 == ms_nkb[mb]) ? tk - j * bk : bk;
++            const uint32_t l1_slot = act_ring_base + (before % ring_pages) * a_tile_bytes;
++            dataflow_kernel_lib::set_read_trid(noc, trid_of(r));
++            for (uint32_t rr = 0; rr < h; ++rr) {
++                const uint32_t page = (row0 + r0 + rr) * tensor_k_tiles + j * bk;
++                uint32_t l1 = l1_slot + rr * bk * a_tile_bytes;
++                for (uint32_t k = 0; k < k_valid; ++k) {
++#ifndef GM_ABLATE_A
++                    noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
++#endif
++                    l1 += a_tile_bytes;
++                }
++            }
++            dataflow_kernel_lib::set_read_trid(noc, 0);
++        };
++        if (a_sender) {
++            for (uint32_t r = 0; r < act_injectors && r < total_rounds; ++r) {
++                if (mc_act.should_send(r)) {
++                    issue(r);
++                    break;
++                }
++            }
++        }
++        MaybeDeviceZoneScope("wr_a_rotate");
++        for (uint32_t r = 0; r < total_rounds; ++r) {
++            const uint32_t pages = round_pages(r);
++            if (a_sender && mc_act.should_send(r)) {
++                const uint32_t next = r + act_injectors;
++                bool next_issued = next >= total_rounds;
++                if (!next_issued &&
++                    cb_pages_reservable_at_back(cb_act_tiles, pages_before(next + 1) - pages_before(seq))) {
++                    issue(next);
++                    next_issued = true;
++                }
++                {
++                    MaybeDeviceZoneScope("wr_a_barrier");
++                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid_of(r));
++                }
++                const uint32_t slot = slot_of(r);
++                {
++                    MaybeDeviceZoneScope("wr_a_send");
++#ifdef GM_ABLATE_A_SEND
++                    a_sender->send(slot, slot, 32);
++#else
++                    a_sender->send(slot, slot, pages * a_tile_bytes);
++#endif
++                }
++                cb_push_back(cb_act_tiles, pages);
++                ++seq;
++                if (!next_issued) {
++                    issue(next);
++                }
++            } else {
++                cb_reserve_back(cb_act_tiles, pages);
++                a_receiver->receive(r);
++                cb_push_back(cb_act_tiles, pages);
++                ++seq;
++            }
++        }
++#if TAIL_SPLIT_MODE != 0
++        // GM_MSPLIT_TAIL_PCT < 100: serve the columns >= the cut of the LAST M-block's row groups the reader posts.
++        if constexpr (GM_MSPLIT_TAIL_PCT_W < 100) {
++            MaybeDeviceZoneScope("wr_tail_help");
++            const uint32_t t_mbox = get_semaphore(TAIL_SEM_MBOX);
++            const uint32_t t_post = get_semaphore(TAIL_SEM_POST);
++            const uint32_t t_done = get_semaphore(TAIL_SEM_DONE);
++            const uint32_t h_last = ms_h[ms_nb - 1];
++            const uint32_t r0_last = rows_valid - h_last;
++            const uint32_t blk_cols = block_extent(cols_valid, 0, out_block_n_tiles);
++            const out_chunks::Col blk_col = out_chunks::locate(out_tab, col0);
++            const uint32_t cut = (blk_cols * GM_MSPLIT_TAIL_PCT_W) / 100;
++            for (uint32_t g = 0; g < h_last / sb_h; ++g) {
++                tail_split::wait_at_least(t_post, g + 1);
++                const uint32_t l1_base = tail_split::read(t_mbox);
++                for (uint32_t r = 0; r < sb_h; ++r) {
++                    out_chunks::write_row(
++                        out_args,
++                        out_tab,
++                        o_page_bytes,
++                        o_tile_bytes,
++                        l1_base + r * out_block_n_tiles * o_tile_bytes,
++                        b0 * tensor_m_tiles + row0 + r0_last + g * sb_h + r,
++                        blk_col,
++                        blk_cols,
++                        [&](uint32_t n) { return n >= cut; },
++                        GM_OUT_STRIDE);
++                }
++                noc_async_writes_flushed();
++                *tail_split::word(t_done) = g + 1;
++            }
++        }
++#endif
++        noc_async_write_barrier();
++        return;
++    }
++#endif
+     if constexpr (act_stream && act_injectors > 1) {
+         if (a_sender) {
+             for (uint32_t r = 0; r < act_injectors && r < act_rounds; ++r) {
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp
+@@ -288,7 +288,113 @@
+     }
+ }
+ 
++// ---- t2_msplit_b_resident (perf experiment): M-split walk with B L1-resident ----
++// GM_MSPLIT: the core's rows are walked as GM_MSPLIT_NB M-blocks of heights GM_MSPLIT_H0.. (non-increasing, each
++// dividing block_m_tiles = the first / tallest). B is pushed ONCE (cb_weight_tiles holds all num_k_blocks K-blocks)
++// and never popped until the end: M-block 0 waits for K-block kb cumulatively (PreKBlockFn), every M-block reads
++// K-block kb at tile offset kb * block_k * block_n (In1BaseOffsetFn, in1 NoWaitNoPop). Each M-block is the same
++// helper call as the op's multi-K-block walk (packer L1 acc, LastBlockTarget::Out), so the per-tile accumulation
++// order is unchanged. A shorter M-block packs h * block_n partials per K-block into a block_m * block_n ring: the
++// PostKBlockFn advances both ends by the difference after every drained K-block so in-place L1 accumulation keeps
++// landing on the same address.
++#ifdef GM_MSPLIT
++#ifndef GM_MSPLIT_H2
++#define GM_MSPLIT_H2 0
++#define GM_MSPLIT_K2 1
++#endif
++#ifndef GM_MSPLIT_H3
++#define GM_MSPLIT_H3 0
++#define GM_MSPLIT_K3 1
++#endif
++namespace ms {
++constexpr uint32_t nb = GM_MSPLIT_NB;
++constexpr uint32_t h[4] = {GM_MSPLIT_H0, GM_MSPLIT_H1, GM_MSPLIT_H2, GM_MSPLIT_H3};
++// Per-M-block K-block width: h[i] * kk[i] is the same for every M-block (one A round size, one ring slot); the
++// resident B is k-row-major (tile k * block_n + c), so any K-block width addresses it. M-block 0 runs the reader's
++// K-blocks (kk[0] == block_k_tiles) so its cumulative waits follow the pushes.
++constexpr uint32_t kk[4] = {GM_MSPLIT_K0, GM_MSPLIT_K1, GM_MSPLIT_K2, GM_MSPLIT_K3};
++constexpr uint32_t tensor_k = (num_k_blocks - 1) * block_k_tiles + last_block_k_tiles;
++static_assert(nb >= 1 && nb <= 4 && h[0] == block_m_tiles && kk[0] == block_k_tiles && !has_epilogue);
++static_assert(block_batches == 1 && !gm_ks::ramp);
++struct ResidentBWait {
++    uint32_t first;
++    ALWI void operator()(uint32_t kb, uint32_t, bool) const {
++        if (first) {
++            CircularBuffer wb(cb_weight_tiles);
++            wb.wait_front((kb + 1) * block_k_tiles * block_n_tiles);
++        }
++    }
++};
++struct ResidentBOffset {
++    uint32_t bk;
++    ALWI uint32_t operator()(uint32_t kb) const { return kb * bk * block_n_tiles; }
++};
++struct Inner {
++    uint32_t nkb, bk, last;
++    ALWI uint32_t operator()(uint32_t kb, uint32_t) const { return kb + 1 == nkb ? last : bk; }
++};
++struct PartialsRewind {
++    uint32_t pad;  // (block_m - h) * block_n tiles
++    ALWI void operator()(uint32_t kb, uint32_t nkb, bool) const {
++        // Drained K-blocks only (the Out target keeps K-block nkb-2's spill for the last K-block's reload).
++        if (pad != 0 && nkb >= 2 && kb + 2 < nkb) {
++            CircularBuffer p(cb_partials);
++            p.reserve_back(pad);
++            p.push_back(pad);
++            p.wait_front(pad);
++            p.pop_front(pad);
++        }
++    }
++};
++ALWI void run() {
++    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_tiles, cb_weight_tiles, cb_output_tiles);
++    CircularBuffer act_buf(cb_act_tiles), weight_buf(cb_weight_tiles), out_buf(cb_output_tiles),
++        interm_buf(cb_partials);
++    for (uint32_t mb = 0; mb < nb; ++mb) {
++        const uint32_t bk = kk[mb];
++        const uint32_t nkb = (tensor_k + bk - 1) / bk;
++        const uint32_t last = tensor_k - (nkb - 1) * bk;
++        const auto shape = ckl::MatmulBlockShape::of(h[mb] / sb_h, in1_num_subblocks, sb_h, sb_w, bk, nkb, 1);
++        MaybeDeviceZoneScope("cmp_matmul");
++        ckl::matmul_block<
++            /*transpose=*/false,
++            /*packer_l1_acc=*/true,
++            ckl::LastBlockTarget::Out,
++            ckl::OutputCBLayout::TileRowMajor,
++            ckl::matmul_config::InitMode::Short,
++            ckl::InputPolicy::WaitAndPopPerKBlock,
++            ckl::InputPolicy::NoWaitNoPop,
++            ckl::NoPostCompute,
++            ResidentBWait,
++            PartialsRewind,
++            /*untilize_block_ct_dim=*/0,
++            Inner,
++            ckl::NoIn0Source,
++            ResidentBOffset>(
++            act_buf,
++            weight_buf,
++            out_buf,
++            interm_buf,
++            shape,
++            ckl::NoPostCompute{},
++            ResidentBWait{mb == 0 ? 1u : 0u},
++            /*in1_per_core_w=*/block_n_tiles,
++            /*out_row_width=*/block_n_tiles,
++            PartialsRewind{(block_m_tiles - h[mb]) * block_n_tiles},
++            Inner{nkb, bk, last},
++            ckl::NoIn0Source{},
++            ResidentBOffset{bk});
++    }
++    weight_buf.pop_front(num_k_blocks * block_k_tiles * block_n_tiles);  // the resident B, after its last use
++}
++}  // namespace ms
++#endif
++
+ void kernel_main() {
++#ifdef GM_MSPLIT
++    ms::run();
++    return;
++#endif
+     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
+     const uint32_t own_kb = get_arg_val<uint32_t>(1);  // R3: this core's K shard; NO_OWN_KB elsewhere
+     // A residency: blocks per M-block (N-blocks, n fastest); A is popped after each group. R1 only.

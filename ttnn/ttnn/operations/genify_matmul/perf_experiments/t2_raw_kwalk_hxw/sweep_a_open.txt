@@ -1,0 +1,4 @@
+a_open test_perf_r15[q128_in] sb=2x2 blk=4x2 nkb=5 epi=0 wres=0 ares=0 defs=GM_HXW+GM_NONE_RAW_WALK kernel_us=51.3
+a_open test_perf_r15[q128_down] sb=2x2 blk=4x2 nkb=4 epi=0 wres=0 ares=0 defs=GM_HXW+GM_NONE_RAW_WALK kernel_us=42.1
+a_open test_perf_r15[q128_out] sb=2x2 blk=4x2 nkb=2 epi=0 wres=0 ares=0 defs=GM_HXW+GM_NONE_RAW_WALK kernel_us=24.0
+a_open test_perf_r15[q128_qkvg] sb=2x2 blk=4x2 nkb=5 epi=0 wres=0 ares=0 defs=GM_HXW+GM_NONE_RAW_WALK kernel_us=50.6

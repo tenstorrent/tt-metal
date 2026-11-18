@@ -157,6 +157,9 @@ void kernel_main() {
     }
     // Refinement 13 split output: chunk 0 is out_addr, chunks 1.. follow (out_chunks.hpp).
     const out_chunks::Table out_tab = out_chunks::read_table(out_addr, out_n_tiles, arg);
+    // Perf 1 (tournament 2) tail policy: the host's per-core reader share of the tail (GM_TAIL_POLICY; else
+    // TAIL_NC_PCT).
+    const tail_split::Policy tail_pol = tail_split::read_policy(arg);
 
     [[maybe_unused]] const auto a_acc = TensorAccessor(a_args, a_addr, a_page_bytes);
 
@@ -497,7 +500,9 @@ void kernel_main() {
                                     batch * tensor_m_tiles + row0 + blk_r0 + blk_row,
                                     blk_col,
                                     blk_cols,
-                                    [&](uint32_t n) { return !tail || !tail_split::reader_owns(n, blk_cols); },
+                                    [&](uint32_t n) {
+                                        return !tail || !tail_split::reader_owns(n, blk_cols, tail_pol);
+                                    },
                                     GM_OUT_STRIDE);
                             }
                             noc_async_writes_flushed();  // slot is free once the writes left L1

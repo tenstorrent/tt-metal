@@ -1,0 +1,238 @@
+diff -ruN a/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py b/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
+--- a/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py	2026-11-18 07:58:14.961308301 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py	2026-11-18 07:58:14.965308444 +0000
+@@ -165,6 +165,17 @@
+ # (PERF FOCUS 1, epilogue stubbed: write tail 60 -> 43 us, ~414 GB/s; 25 / 30 / 43 / 50 % all worse).
+ # It is the R1 descriptor's only write path (R1 / R1a / R1b; R4 in-place output has nothing to write).
+ TAIL_NC_PCT = 36
++# Tail write policy knob (t2_tail_write_stream; R1b bank-local split, DRAM output, Blackhole). Every core of the bank
++# split writes ONE bank, whose NoC1 endpoint sits in another grid row than the bank's NoC0 endpoint (the cores' home
++# row): the writer's NoC1 share climbed 2-11 rows (NoC1 runs north, then west) and merged with other rows' streams on
++# the endpoint rows, the far cores of every row trailing -- te_gate 512x5120x16384: write tail 338 -> 404 us at
++# ~260 GB/s, a smooth x / y end-time gradient. True: per core, the host prices both NoCs' paths in hops on the NoC
++# torus (bank_tail_policy) and puts the whole tail on the shorter one (ties: TAIL_NC_PCT), the writer addressing the
++# bank through whichever of its NoC0 / NoC1 endpoints is nearer northward: te_gate 404 -> 375 us (write tail 37 us,
++# ~450 GB/s, every bank finishing together). False: TAIL_NC_PCT on every core, each RISC its own endpoints.
++TAIL_POLICY = True
++# NoC torus (columns, rows) per arch, for bank_tail_policy's hop counts (Blackhole only: measured there).
++TAIL_POLICY_TORUS = {"BLACKHOLE": (17, 12)}
+ # Subblock tie-break knob (same DEST area): True prefers the square-most subblock (fewest operand
+ # unpacks per K step). Measured on PERF FOCUS 1 (LoFi, block 6x28): 2x2 477.8 us vs 1x4 463.7 us, so
+ # the wide subblock stays the default.
+@@ -1676,6 +1687,7 @@
+     reader_roles = {}  # core -> (a_sends, b_sends)
+     reader_args = {}  # core -> reader runtime args (placed per role group below)
+     bank_cols = bank_core_columns(geom, grid, gx) if grid.placement == "bank" else None
++    tail_pol = bank_tail_policy(geom, grid, bank_cols, out)  # TAIL_POLICY: per-core tail NoC / endpoint
+     for bi, i, j, core in cores:
+         b0 = bi * grid.core_batches
+         batches_valid = min(grid.core_batches, geom.tensor_batches - b0)
+@@ -1722,6 +1734,9 @@
+         wrt = [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *a_stream_rt, *chunk_addrs]
+         # Tail write split (Perf 2): the reader serves part of the last block's writes on NoC0.
+         reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *chunk_addrs]
++        if tail_pol is not None:  # GM_TAIL_POLICY: right after the chunk table on both RISCs
++            wrt += list(tail_pol[(core.x, core.y)])
++            reader_args[(core.x, core.y)] += list(tail_pol[(core.x, core.y)])
+         writer_rt[core.x][core.y] = wrt
+         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
+ 
+@@ -1799,6 +1814,9 @@
+     elif not split:  # (split: the writer's `act` channel is the A row line, attached above)
+         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
+     _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
++    if tail_pol is not None:
++        for k in (*readers, writer):
++            k.defines = list(k.defines) + [("GM_TAIL_POLICY", "1")]
+     if len(outs) > 1:
+         for k in (*readers, writer):
+             k.defines = list(k.defines) + [("GM_OUT_CHUNKS", str(len(outs)))]
+@@ -1828,6 +1846,53 @@
+     return descriptor
+ 
+ 
++def bank_tail_policy(geom: Geometry, grid: GridChoice, bank_cols, out):
++    """TAIL_POLICY: {(x, y): (reader tiles of every tail row, writer endpoint NoC)} for a bank-local split whose cores
++    each write ONE DRAM bank (no swiglu, output rows a whole number of bank rounds, DRAM interleaved output), on an
++    arch with a known NoC torus; None otherwise (TAIL_NC_PCT everywhere).
++
++    Hops in virtual NoC coordinates: a bank's NoC0 / NoC1 endpoint is the DRAM column just west of its optimal NoC0 /
++    NoC1 worker, in that worker's row. NoC1 runs north then west (the writer may address either endpoint: NoC1 writes
++    into the NoC0 endpoints are bit-exact), NoC0 east then south (the reader keeps its own NoC0 endpoint). All the
++    core's tail tiles go on the NoC with fewer hops; ties keep the TAIL_NC_PCT split."""
++    if not TAIL_POLICY or grid.placement != "bank" or geom.swiglu or bank_cols is None:
++        return None
++    mc = out.memory_config()
++    if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
++        return None
++    banks = geom.b_banks
++    if not banks or geom.out_n_tiles % banks:
++        return None
++    dev = out.device()
++    torus = TAIL_POLICY_TORUS.get(str(dev.arch()).split(".")[-1])
++    if torus is None:
++        return None
++    nx, ny = torus
++    virt = lambda c: (lambda v: (v.x, v.y))(dev.worker_core_from_logical_core(c))
++    w0 = [virt(c) for c in ttnn.get_optimal_dram_bank_to_logical_worker_assignment(dev, ttnn.NOC.NOC_0)]
++    w1 = [virt(c) for c in ttnn.get_optimal_dram_bank_to_logical_worker_assignment(dev, ttnn.NOC.NOC_1)]
++    if len(w0) != banks or len(w1) != banks:
++        return None
++
++    def hops1(c, wk):  # NoC1: -y, then -x to the DRAM column west of the worker
++        return (c[1] - wk[1]) % ny + (c[0] - wk[0]) % nx + 0.5
++
++    def hops0(c, wk):  # NoC0: +x to the DRAM column west of the worker, then +y
++        return ((wk[0] - c[0]) % nx - 0.5) % nx + (wk[1] - c[1]) % ny
++
++    pol = {}
++    for (x, y), (col0, w) in bank_cols.items():
++        if not w:
++            pol[(x, y)] = (0, 1)
++            continue
++        c, u = virt(ttnn.CoreCoord(x, y)), col0 % banks
++        d1 = {0: hops1(c, w0[u]), 1: hops1(c, w1[u])}
++        ep = min(d1, key=lambda e: (d1[e], e != 1))
++        h1, h0 = d1[ep], hops0(c, w0[u])
++        pol[(x, y)] = (w if h0 < h1 else 0 if h1 < h0 else (w * TAIL_NC_PCT) // 100, ep)
++    return pol
++
++
+ def _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out):
+     """Tail write split: the reader (NCRISC / NoC0) writes TAIL_NC_PCT % of every output row of the core's
+     LAST block, the writer (BRISC / NoC1) the rest; a post / done handshake on three local semaphores keeps
+diff -ruN a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp	2026-11-18 07:58:14.961308301 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp	2026-11-18 07:58:14.965308444 +0000
+@@ -429,6 +429,9 @@
+     const uint32_t t_tensor_m_tiles = get_arg_val<uint32_t>(arg++);
+     const uint32_t t_out_n_tiles = get_arg_val<uint32_t>(arg++);  // per output tensor (chunk)
+     const out_chunks::Table t_out_tab = out_chunks::read_table(t_out_addr, t_out_n_tiles, arg);
++    // t2_tail_write_stream: the per-core tail policy (GM_TAIL_POLICY): this RISC's tiles of every tail row. Its own
++    // writes keep the NoC0 endpoints (NoC0 writes into the NoC1 endpoints corrupt: measured).
++    const tail_split::Policy t_pol = tail_split::read_policy(arg);
+     const uint32_t tail_mbox = get_semaphore(TAIL_SEM_MBOX);
+     const uint32_t tail_post = get_semaphore(TAIL_SEM_POST);
+     const uint32_t tail_done = get_semaphore(TAIL_SEM_DONE);
+@@ -468,7 +471,7 @@
+                     batch * t_tensor_m_tiles + t_row0 + t_blk_r0 + blk_row,
+                     t_blk_col,
+                     t_blk_cols,
+-                    [&](uint32_t n) { return tail_split::reader_owns(n, t_blk_cols); },
++                    [&](uint32_t n) { return tail_split::reader_owns(n, t_blk_cols, t_pol); },
+                     GM_OUT_STRIDE);
+             }
+             noc_async_writes_flushed();  // the reader's share left L1
+diff -ruN a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp	2026-11-18 07:58:14.961308301 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp	2026-11-18 07:58:14.965308444 +0000
+@@ -157,6 +157,8 @@
+     }
+     // Refinement 13 split output: chunk 0 is out_addr, chunks 1.. follow (out_chunks.hpp).
+     const out_chunks::Table out_tab = out_chunks::read_table(out_addr, out_n_tiles, arg);
++    // t2_tail_write_stream: the host's per-core tail policy (GM_TAIL_POLICY; else TAIL_NC_PCT, the NoC1 endpoints).
++    const tail_split::Policy tail_pol = tail_split::read_policy(arg);
+ 
+     [[maybe_unused]] const auto a_acc = TensorAccessor(a_args, a_addr, a_page_bytes);
+ 
+@@ -497,8 +499,9 @@
+                                     batch * tensor_m_tiles + row0 + blk_r0 + blk_row,
+                                     blk_col,
+                                     blk_cols,
+-                                    [&](uint32_t n) { return !tail || !tail_split::reader_owns(n, blk_cols); },
+-                                    GM_OUT_STRIDE);
++                                    [&](uint32_t n) { return !tail || !tail_split::reader_owns(n, blk_cols, tail_pol); },
++                                    GM_OUT_STRIDE,
++                                    tail_pol.wr_ep_noc);
+                             }
+                             noc_async_writes_flushed();  // slot is free once the writes left L1
+                         }
+diff -ruN a/ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp b/ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp	2026-11-18 07:58:14.961308301 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp	2026-11-18 07:58:14.965308444 +0000
+@@ -59,6 +59,9 @@
+ // this RISC writes (n = 0 .. cols-1, the block-relative column); the others are skipped.
+ // `stride` (Refinement 15, the R1b bank-local stream): block column n lands at output column start + n * stride;
+ // the host only sets it > 1 with one chunk.
++// `ep_noc` (t2_tail_write_stream): the NoC whose DRAM endpoint table addresses the pages (a DRAM bank has several NoC
++// endpoints; the default is this RISC's own). Only the writer (NoC1) ever passes the NoC0 table: NoC1 writes into the
++// NoC0 endpoints are bit-exact on Blackhole, NoC0 writes into the NoC1 endpoints are NOT (measured, poisoned DRAM).
+ template <typename Args, typename Owns>
+ FORCE_INLINE void write_row(
+     const Args& args,
+@@ -70,7 +73,8 @@
+     Col start,
+     uint32_t cols,
+     Owns owns,
+-    uint32_t stride = 1) {
++    uint32_t stride = 1,
++    uint8_t ep_noc = noc_index) {
+     uint32_t c = start.chunk;
+     uint32_t lc = start.local;
+     uint32_t n = 0;
+@@ -85,7 +89,7 @@
+         const uint32_t page = trow * t.row_tiles + lc;
+         for (uint32_t j = 0; j < seg; ++j) {
+             if (owns(n + j)) {
+-                noc_async_write(l1, acc.get_noc_addr(page + j * stride), tile_bytes);
++                noc_async_write(l1, acc.get_noc_addr(page + j * stride, 0, ep_noc), tile_bytes);
+             }
+             l1 += tile_bytes;
+         }
+diff -ruN a/ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp b/ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp	2026-11-18 07:58:14.961308301 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp	2026-11-18 07:58:14.965308444 +0000
+@@ -19,6 +19,7 @@
+ //   1 column cut: the reader owns tiles n < blk_cols * TAIL_NC_PCT / 100 of every row, the writer the rest
+ #pragma once
+ #include <cstdint>
++#include "api/dataflow/dataflow_api.h"
+ 
+ #ifndef TAIL_SPLIT_MODE
+ #define TAIL_SPLIT_MODE 0
+@@ -26,15 +27,43 @@
+ #ifndef TAIL_NC_PCT
+ #define TAIL_NC_PCT 50
+ #endif
++// GM_TAIL_POLICY (t2_tail_write_stream, host TAIL_POLICY): the host's per-core tail policy for the bank-local split
++// with a DRAM output -- the reader's tile count of every tail row (instead of TAIL_NC_PCT) and the DRAM endpoint
++// table the writer addresses (0: the NoC0 endpoints, 1: its own NoC1 endpoints) -- arrives as two runtime args right
++// after the output chunk table, on both RISCs. Absent (0): TAIL_NC_PCT and each RISC's own endpoints.
++#ifndef GM_TAIL_POLICY
++#define GM_TAIL_POLICY 0
++#endif
+ 
+ namespace tail_split {
+ constexpr uint32_t mode = TAIL_SPLIT_MODE;
+ constexpr bool active = mode != 0;
+ 
++// The per-core tail policy (GM_TAIL_POLICY), or the defaults.
++struct Policy {
++    uint32_t reader_tiles;  // GM_TAIL_POLICY: the reader's tiles of every tail row (else unused)
++    uint8_t wr_ep_noc;      // the DRAM endpoint table the writer's output writes address
++};
++
++// Reads the policy's two runtime args at `arg` (advanced) under GM_TAIL_POLICY; else the defaults, nothing read.
++FORCE_INLINE Policy read_policy(uint32_t& arg) {
++    if constexpr (GM_TAIL_POLICY != 0) {
++        const uint32_t tiles = get_arg_val<uint32_t>(arg++);
++        const uint32_t ep = get_arg_val<uint32_t>(arg++);
++        return {tiles, static_cast<uint8_t>(ep)};
++    } else {
++        return {0, static_cast<uint8_t>(noc_index)};
++    }
++}
++
+ // Does the reader (NCRISC) own tile n of a row of blk_cols valid tiles?
+-FORCE_INLINE bool reader_owns(uint32_t n, uint32_t blk_cols) {
++FORCE_INLINE bool reader_owns(uint32_t n, uint32_t blk_cols, const Policy& p) {
+     if constexpr (mode == 1) {
+-        return n < (blk_cols * TAIL_NC_PCT) / 100;
++        if constexpr (GM_TAIL_POLICY != 0) {
++            return n < p.reader_tiles;
++        } else {
++            return n < (blk_cols * TAIL_NC_PCT) / 100;
++        }
+     } else {
+         return false;
+     }

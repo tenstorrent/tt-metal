@@ -1256,3 +1256,95 @@ Artifacts: `perf_experiments/<slug>/` and `tests/.../genify_matmul/perf_experime
   - `test_bs_split_roles` (res5 reduce, ASPP pool, addcmul × lookahead 0 / 2: both halves present, bit-identical);
   - `test_bs_a_one_shot_parked` (ASPP pool, res5 reduce);
   - `test_bs_traffic_gate` now pins the gate on one reader and the multicast under the split.
+
+## Perf 1 (tournament 2) — PERF FOCUS: text-encoder MLP gate, 512 tokens
+- Date: 2026-11-18. This is round 1 of the second perf tournament. The earlier `## Perf 1` / `## Perf 2` entries belong to the first tournament.
+- **Focus** (`LOOSE_CASES` attention #1, exact config): A (1, 512, 5120) bf16 @ B (5120, 16384) bfloat8_b, epilogue none, HiFi2, fp32 DEST, every tensor DRAM interleaved, bf16 out. Roofline 403.5 µs; stock 501 µs.
+- **Plan:** R1b bank-local 1×110. Every core computes 16×5 output tiles as one block: block_k 9, 18 K-blocks, 4×1 subblock on the helper `matmul_block<Out>`.
+- **Bench:** `agent_logs/r16_run.sh te_gate "<knobs>"`.
+- **Analysis tools:** `agent_logs/t2p1_zone_summary.py` (per-zone first / last / total across cores), `agent_logs/t2p1_guard.sh` (whole perf file, base vs new), `agent_logs/t2p1_ab.sh` (alternating base / new reps of single ids).
+
+### Measured breakdown (before: 404.1 / 404.4 / 405.8 µs, one fresh run each)
+- Ablation, cumulative (µs):
+  - full: 405
+  - compute stubbed (`SKIP_COMPUTE`, data movement only): 262.5
+  - compute-only (A reads, A multicast payload and B reads stubbed): 391.9
+  - B stubbed: 403.5
+  - A stubbed: 397.7
+  - compute + B stubbed: 229.6
+  - compute + A stubbed: 245.0
+  - everything stubbed: 124.4
+- Compute-bound. Data movement is hidden except at the head and the tail.
+- Zones:
+  - The A ring finishes on every core at 312–314 µs.
+  - `wr_write` starts at ~338 µs on every core and ends at 351–404 µs. The end time rises smoothly with physical x and y; the far corner (x 14, y 9 / 10) is last.
+  - The same gradient appears in `cmp_matmul`'s end (the pack thread waits on `cb_output_tiles`). It persists with `SKIP_COMPUTE`, so it is **the end-of-walk output write stream, not compute speed**: 16.8 MB at ~260 GB/s, serialized after the K-walk.
+  - The flat 1×103 split (`FORCE="1,103"`) measured 392.7 / 393.9 µs with a 48 µs write tail, against the bank split's 66 µs.
+- K-block count is not a lever. Compute-only, 18 / 20 / 40 K-blocks measured 374.2 / 381.9 / 389.4 µs (flat split): ~0.4 µs per K-block.
+- **Ranked:**
+  1. The output write tail: 48–66 µs, write-bound.
+  2. The K-walk: ~37–41 cycles per tile-K against 35 modeled. It runs on the helper because sb_h > 1 is a carve-out of the raw walk.
+  3. N quantization to 5 columns: 80 output tiles per core against an average of 74.5 (at most 7%; not floated).
+
+### Portfolio (4 experiments, one perf-part-optimizer each) and verdicts
+| idea | stage | verdict | focus µs (base → candidate) | domain / notes |
+|---|---|---|---|---|
+| `t2_progressive_nsplit`: the core's N range as ≥ 2 N-blocks, A re-broadcast per N-block, so block i's writes overlap block i+1 | tail | **REGRESSION** | 405.1 → 433.2 (best: 3+2 with a ragged last block, 1×3) | Each extra N-block is a full A broadcast pass (~165 µs at ~32 GB/s). The tail fell 67 → 27 µs, but the K-walk's end moved 338 → 406 µs. R1b M ≥ 128: +9..+81 %; M = 1 flat. Not graduated. |
+| `t2_msplit_b_resident`: M-blocks (8-4-4) with B L1-resident (delivered during M-block 0) and B reads paced behind the A rounds | tail | WIN alone, **not graduated** | 404.3 → 382.7 (bit-identical variant at block_k 9: 396.9) | Measured regression on DRAM / A-stream-bound R1b (f256 qkv / ff2 / ctx +12 / +26 / +36 %), so it needs a compute-bound gate. R1a is inexpressible. Its compute rides matmul_block's hook points, which conflicts with the raw h×w walk below on the same walk. Its pacing reads another RISC's CB counter. Its tail gain overlaps the tail policy's. The two graduated ideas together beat it (360 vs 383). Recorded as a round-2 candidate on top of them. |
+| `t2_tail_write_stream`: de-hotspot the tail writes | tail rate | **WIN** | 404.0 → 380.4 (hop policy, default endpoints) / 376.4 (+ writer addressing the NoC0 endpoint) / 389.6 (NoC0 share 80 %) | The gradient: on the bank-local split each core writes ONE bank, and that bank's NoC1 endpoint sits in another grid row than its cores. The writer's NoC1 share (64 %) climbed 2–11 rows and merged with other rows' streams on the endpoint rows. Coalescing same-bank pages: flat (407.1). Bit-exact output. |
+| `t2_raw_kwalk_hxw`: the raw K-walk (`kw::matmul_accumulate_interm`) for sb_h × sb_w subblocks, plus the epilogue-none identity copy streamed per row group during the last K-block | K-walk | **WIN** | 404.1 → 379.1 (isolated: 35.63 → 33.06 cycles per tile-K) | Isolated −4.9 … −9.3 % on every subblock shape tried (3×1, 2×2, 2×4, 8×1, HiFi4, LoFi bfp4). Whole op: q512 gate_up (swiglu 2×2) −2.6 %, BS bias_relu 4×1 −11 %, FLUX addcmul −5 %, compute-bound epilogue-none sb_h = 1 walks −1..−4 % (streamed copy). Exception: sb_h > sb_w > 1 (16-bit DEST only) measured incorrect, so it keeps the helper. |
+
+Precision: no option traded precision.
+- The raw walk is bit-identical to the existing raw walk + identity copy class. Against the helper's `Out` reload it differs by ≤ 1 bf16 ulp, with slightly lower error. Focus PCC 0.999883 → 0.999886, rel-RMS 0.00489 → 0.00468.
+- The tail policy is bit-exact.
+- msplit's 1-ulp variant was not graduated.
+
+### Graduated (aggregate: the two composable WINs; msplit dropped as conflicting / superseded)
+1. **Raw h×w K-walk** (`kernels/genify_matmul_kwalk.hpp`, `kernels/genify_matmul_compute.cpp`).
+   - `kwalk_expressible` is now `(sb_w >= sb_h || sb_w == 1)`. The `sb_h == 1` carve-out is deleted, and every epilogue walk and gate-open epilogue-none walk with sb_h > 1 takes the raw walk.
+   - The epilogue-none raw walk streams its identity copy inside the walk (`stream_out`), replacing the separate after-walk `eltwise_chain` copy. That code is deleted.
+   - Remaining helper cases, unchanged from before except the first:
+     - a multi-column column walk: `sb_h > sb_w > 1`, 16-bit DEST only; measured incorrect, guarded by a `static_assert`;
+     - operand residency;
+     - epilogue-none walks the host's `NONE_RAW_WALK_MIN_RATIO` gate leaves on `LastBlockTarget::Out`.
+   - That gate was kept as it is. The subagent measured opening it: wins on data-movement-bound cells (te_down −6.5 %, te_qkv −4.4 %), but q128 2×2 epilogue-none cells +3..+7 %. Re-gating is left as a round-2 lever.
+   - Instrumentation: `cmp_matmul` now includes the streamed copy, and a new PERMANENT zone `cmp_out_tail` (inside the walk, once per block, the budget of the old per-block `cmp_epilogue`) times the serialized last row group's copy. Zone-hash check: no collisions.
+2. **Tail write policy** (`TAIL_POLICY`, host `bank_tail_policy`, reader / writer / `tail_split.hpp` `GM_TAIL_POLICY`).
+   - On the bank-local split with a DRAM interleaved output, the host prices each core's NoC0 path (reader → the bank's NoC0 endpoint) and NoC1 path (writer → its NoC1 endpoint) in torus hops. The whole tail goes on the shorter one; ties keep `TAIL_NC_PCT`.
+   - Each RISC addresses the bank through its own NoC's endpoint.
+   - **Deliberately NOT graduated:** the subagent's best variant had the writer address the bank's NoC0 endpoint from NoC1 (376.4 µs, bit-exact on this board). That is cross-NoC endpoint use. Its mirror (NoC0 into the NoC1 endpoints) corrupted 1,760 output tiles, and the NoC0 endpoint is CMFW's DRAM-telemetry port (`blackhole_140_arch.yaml`, SYS-1419). The ~4 µs it would add is not worth a firmware-dependent correctness risk.
+   - Where it applies: the bank split exists only on R1b. The guard is not an allow-list. The policy has no meaning elsewhere: there, a core does not write one bank, and the policy needs the NoC torus size (Blackhole only).
+   - Elsewhere `TAIL_NC_PCT` is unchanged.
+- **Whole op, focus:** 404.1 / 404.4 / 405.8 → **360.1 / 360.5 / 359.8 / 360.0 / 360.3 µs (−11 %)**. That is 0.89× the 403.5 µs roofline and 0.72× stock.
+  - Raw walk alone (`TAIL_POLICY=False`): 379.1.
+  - After: `wr_write` ends at 327–360 µs (was 351–404), and the write tail is 10–42 µs.
+  - What is left: the write gradient (some cores' `cmp_out_tail` waits up to 26 µs on `cb_output_tiles`) and the K-walk at ~33 cycles per tile-K. These are the round-2 targets, together with msplit on top of the new base.
+
+### Guard (no regression)
+- Method: base = HEAD's descriptor + kernels (git stash), same session, one fresh run per cell. Files: perf_r16 (15), r11 (15), r15 (17), r17 (10), flux (20), focus (1, Qwen gate_up 2048 R1a), guard (62), sharded (46). This covers one or more cells per kernel path × layout × placement.
+- Faster beyond 3 %:
+  - te_gate −10.9 % (r16 and r11)
+  - q512 gate_up −3.1 %
+  - q128_out −10.6 %, q128_qkvg −4.9 %
+  - f256_attn addcmul −3.1 %, te_qkv_bf16_hifi4 −3.2 %
+  - guard: 9472×5120×3456 −4.1 %, 9472×3456×5120 HiFi2 −4.1 %, 4096³ −3.3 %, 2048×5120×8704 −4.4 %, formats 2048×5120×4160 −5.3 %, 2048×6144×3072 addcmul fused / none −4.4 / −4.0 %
+  - BS 8192×512×256 bias_relu −11.6 % / −12.2 %, bs_aspp_1x1 −3.9 %
+  - FLUX 256×6144×3072 addcmul −3.1 %
+  - Every other cell within ±3 %.
+- Flagged slower and re-run (alternating base / new, 3 reps each): every one is noise or within the band.
+  - flux 1×256×6144 fp32: 10.0 / 10.6 / 10.8 base vs 10.0 / 10.3 / 10.4 new.
+  - guard 256×6144×9216: 287.6 / 291.0 / 291.6 vs 288.1 / 288.4 / 291.8.
+  - bs_aspp_pool: 9.0 / 9.4 / 9.6 vs 8.9 / 9.0 / 9.2.
+  - f1_lin2_fp32 (1×6144×6144, bank R1b, 1×2 subblock): 168.0 / 169.0 / 169.8 vs 169.5 / 173.1 / 174.5, a median of +2.4 %. With `TAIL_POLICY` off / on: 170.1 / 170.6 vs 173.2 / 171.5. That is within the 2–3 % noise band, not a material regression, so no carve-out.
+- Correctness:
+  - `test_golden.py`: 1523 passed, 375 xfailed (the permanent EXCLUSIONs), 0 failed.
+  - `test_regression.py`: 10/10.
+  - `test_translated.py`: 69 failed / 202 passed. These are the identical failing set on the base: host-side n-non-aligned `ValueError`s and program-cache count asserts, all pre-existing.
+  - Unit (tail split, bank-local, stream mcast, split lines, epilogue, segments, chunks, main, extended, mcast, residency, block / height / dram sharded, sharded B mcast, precision baseline): 255 passed, re-run after the zone change: 61 passed.
+  - After the zone change, `test_op_loose or test_op_feature`: 98 passed.
+- Artifacts: the experiment dirs `perf_experiments/t2_*` (raw profiler dumps dropped). The shims at `tests/.../perf_experiments/t2_{raw_kwalk_hxw,msplit_b_resident}/` exist because the benches cannot be collected from inside the ttnn package.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::matmul_block` (LLK `_llk_math_matmul_` under every flavour) | capability | (1) No multi-tile MVMUL sequence that advances DEST by address modifier instead of writing the DEST offset (SETC16) before every output tile, for any rt_dim × ct_dim: ~2.5 cycles per HiFi2 tile-K on a 4×1 subblock. (2) No "accumulate in an L1 partials block, emit to the output row group by row group during the last K-block" target. `LastBlockTarget::Out` reloads the partials into DEST per subblock, with a data-format reconfig + `copy_init` + `matmul_block_init` per subblock (20× per block on the focus). `Interm` leaves the whole block for an after-walk copy. | 404100 (whole op); 337900 (isolated K-walk, 35.63 cyc/tile-K) | 379100; 313400 (33.06 cyc/tile-K) | `kernels/genify_matmul_compute.cpp:320`, `:367` → `kernels/genify_matmul_kwalk.hpp:189` |

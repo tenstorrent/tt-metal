@@ -41,9 +41,13 @@
 // (PERF FOCUS 1 whole op 466.3 -> 441.5 us, output bit-identical): every matmul_block flavour writes the
 // DEST offset (SETC16) before each output tile, ~1 FPU cycle per 16-cycle LoFi tile-K; the raw walk advances
 // DEST with an address modifier on the last MVMUL instead, and reserves / pushes cb_partials once per block
-// (no per-K-block drain on the unpack thread). Do NOT "fix" it back to the helper. The helper keeps the
-// cases the raw walk cannot express: sb_h > 1 subblocks, operand residency, and the epilogue-none
-// LastBlockTarget::Out reload path.
+// (no per-K-block drain on the unpack thread). Do NOT "fix" it back to the helper.
+// Tournament 2 (perf_experiments/t2_raw_kwalk_hxw): the raw walk covers sb_h x sb_w subblocks (sb_w >= sb_h or
+// sb_w == 1). RAW-LLK, justified by measurement: isolated K-walk 16x5 block 4 x 1 HiFi2 bf16 x bfp8 35.63 ->
+// 33.06 cycles per tile-K, text-encoder MLP gate whole op 404.1 -> 379.3 us; epilogue walks bit-identical to the
+// helper's Interm walk. The helper keeps the cases the raw walk cannot express: a multi-column column walk
+// (sb_h > sb_w > 1, 16-bit DEST only), operand residency, and the epilogue-none walks the host leaves on
+// LastBlockTarget::Out (NONE_RAW_WALK gate: data-movement-bound splits).
 //
 // Regime R3 `block_sharded` (Refinement 5): K-block `own_kb` (this core's grid column) is its own resident
 // A shard, pushed by the reader into cb_act_shard (backed on the shard, zero-copy); the helper's
@@ -77,7 +81,9 @@
 // is OCCUPANCY: cmp_matmul includes the helper's per-K-block cb_wait_front on A / B (unpack thread) and
 // the reserve on cb_partials / cb_output_tiles (pack thread); cmp_epilogue includes the writer's
 // back-pressure on cb_output_tiles. Ablate (SKIP_COMPUTE / CKL_ELTWISE_CHAIN_SKIP_COMPUTE) before ranking.
-//   cmp_matmul     the block's whole K-walk (matmul_block)
+//   cmp_matmul     the block's whole K-walk (matmul_block / kw::matmul_accumulate_interm); on the epilogue-none raw
+//                  walk it includes the streamed identity copy of the last K-block's row groups
+//   cmp_out_tail   (epilogue-none raw walk, inside cmp_matmul) the copy of the block's last row group, after the walk
 //   cmp_epilogue   the fused epilogue over the accumulated block (bias / swiglu / addcmul)
 
 namespace ckl = compute_kernel_lib;
@@ -168,20 +174,28 @@ struct RetireOwnRoundSlot {
 constexpr uint32_t cb_interm = (has_epilogue || num_k_blocks > 1) ? cb_partials : cb_output_tiles;
 
 // The raw K-walk (kw::matmul_accumulate_interm) is the epilogue path's walk wherever it can be expressed: it is
-// written for 1 x sb_w subblocks over a whole block, with both operands waited / popped per K-block. Carve-outs
-// (helper): sb_h > 1, and operand residency (WaitAndRetainOnLastBlock).
-constexpr bool kwalk_expressible = sb_h == 1 && !act_resident && !weight_resident &&
-                                   block_m_tiles == in0_num_subblocks && block_n_tiles == in1_num_subblocks * sb_w;
+// written for sb_h x sb_w subblocks with a row walk (sb_w >= sb_h) or a one-column walk (sb_w == 1) over a whole
+// block, with both operands waited / popped per K-block. Carve-outs (helper): a multi-column column walk
+// (sb_h > sb_w > 1, 16-bit DEST only), and operand residency (WaitAndRetainOnLastBlock).
+constexpr bool kwalk_expressible = (sb_w >= sb_h || sb_w == 1) && !act_resident && !weight_resident &&
+                                   block_m_tiles == in0_num_subblocks * sb_h &&
+                                   block_n_tiles == in1_num_subblocks * sb_w;
 // Refinement 11 (host NONE_RAW_WALK -> GM_NONE_RAW_WALK): an epilogue-none multi-K-block walk takes the raw
 // K-walk too -- it accumulates the whole block in cb_partials exactly as under an epilogue, and an identity
-// epilogue (one CopyTile -> PackTile chain, row by row) moves it to cb_output_tiles. That copy replaces the
-// helper's last-K-block reload of the partials, so the walk saves the helper's per-tile DEST-offset write.
+// epilogue moves it to cb_output_tiles. That copy replaces the helper's last-K-block reload of the partials, so the
+// walk saves the helper's per-tile DEST-offset write. Tournament 2: the copy is streamed inside the walk (stream_out:
+// the last K-block pushes cb_partials row group by row group and each is copied one row group behind the walk), so
+// the output leaves during the last K-block instead of after it -- bit-identical to the whole-block copy after the
+// walk (te MLP gate 386.8 -> 379.3 us; FLUX segments / 4096^3 / 9472x3456x5120 -1..-4%).
 #ifndef GM_NONE_RAW_WALK
 #define GM_NONE_RAW_WALK 0
 #endif
 constexpr bool none_raw_walk = GM_NONE_RAW_WALK != 0 && !has_epilogue && num_k_blocks > 1 && kwalk_expressible;
 // A compaction (head ramp) needs the raw walk: compute_kernel_lib::matmul_block strides A rows by block_k.
 static_assert(!gm_ks::compact_a || (has_epilogue && kwalk_expressible), "GM_COMPACT_A needs the raw K-walk");
+// The unpacker strides an sb_h > 1 subblock's A rows by block_k (llk_unpack_AB_matmul kt_dim): no compaction there
+// (the host's k_head_ramp only compacts 1 x sb_w walks).
+static_assert(!gm_ks::compact_a || sb_h == 1, "GM_COMPACT_A needs 1 x sb_w subblocks");
 
 template <ckl::LastBlockTarget target>
 ALWI void run_matmul(
@@ -300,31 +314,24 @@ void kernel_main() {
     CircularBuffer act_buf(cb_act_tiles), weight_buf(cb_weight_tiles), out_buf(cb_output_tiles), interm_buf(cb_interm);
 
     if constexpr (none_raw_walk) {
-        DataflowBuffer partials_dfb(cb_partials), out_dfb(cb_output_tiles);
         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-            {
-                MaybeDeviceZoneScope("cmp_matmul");
-                kw::matmul_accumulate_interm<
-                    sb_w,
-                    in0_num_subblocks,
-                    in1_num_subblocks,
-                    block_k_tiles,
-                    num_k_blocks,
-                    last_block_k_tiles>(
-                    cb_act_tiles, cb_weight_tiles, cb_partials, OwnShardSource{own_kb}, RetireOwnRoundSlot{own_kb});
-            }
-            pack_reconfig_l1_acc(0);  // the copy packs fresh tiles
-            {
-                MaybeDeviceZoneScope("cmp_epilogue");
-                using namespace ckl;
-                interm_buf.wait_front(block_tiles);
-                eltwise_chain(
-                    IterationShape::grid(block_m_tiles, block_n_tiles),
-                    CopyTile<input(cb_partials, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{
-                        partials_dfb},
-                    PackTile<output(cb_output_tiles, ReservePolicy::PerOuter, PushPolicy::PerOuter)>{out_dfb});
-                interm_buf.pop_front(block_tiles);
-            }
+            // cmp_matmul includes the streamed identity copy (the last K-block's row groups -> cb_output_tiles)
+            MaybeDeviceZoneScope("cmp_matmul");
+            kw::matmul_accumulate_interm<
+                sb_h,
+                sb_w,
+                in0_num_subblocks,
+                in1_num_subblocks,
+                block_k_tiles,
+                num_k_blocks,
+                last_block_k_tiles,
+                /*stream_out=*/true>(
+                cb_act_tiles,
+                cb_weight_tiles,
+                cb_partials,
+                cb_output_tiles,
+                OwnShardSource{own_kb},
+                RetireOwnRoundSlot{own_kb});
         }
     } else if constexpr (!has_epilogue) {
         const auto shape = ckl::MatmulBlockShape::of(
@@ -358,6 +365,7 @@ void kernel_main() {
                             act_buf, weight_buf, out_buf, interm_buf, shape, own_kb);
                     } else {
                         kw::matmul_accumulate_interm<
+                            sb_h,
                             sb_w,
                             in0_num_subblocks,
                             in1_num_subblocks,
@@ -367,6 +375,7 @@ void kernel_main() {
                             cb_act_tiles,
                             cb_weight_tiles,
                             cb_partials,
+                            cb_output_tiles,
                             OwnShardSource{own_kb},
                             RetireOwnRoundSlot{own_kb});
                     }

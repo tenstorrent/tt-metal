@@ -165,6 +165,19 @@ OUT_WRITE_BATCH_ROW_GROUPS = 1
 # (PERF FOCUS 1, epilogue stubbed: write tail 60 -> 43 us, ~414 GB/s; 25 / 30 / 43 / 50 % all worse).
 # It is the R1 descriptor's only write path (R1 / R1a / R1b; R4 in-place output has nothing to write).
 TAIL_NC_PCT = 36
+# Tail write policy knob (Perf 1 of tournament 2, t2_tail_write_stream; R1b bank-local split, DRAM output, Blackhole).
+# Every core of the bank split writes ONE bank. Under the TAIL_NC_PCT split ~2/3 of a core's tail went out on NoC1 to
+# the bank's NoC1 endpoint, which sits in another grid row than the bank's NoC0 endpoint (the cores' home row): those
+# writes climbed 2-11 rows (NoC1 runs north, then west) and merged with other rows' streams on the endpoint rows --
+# te_gate 512x5120x16384: write tail 338 -> 404 us at ~260 GB/s, a smooth x / y end-time gradient. True: per core,
+# the host prices the NoC0 path (reader, NoC0 endpoint) and the NoC1 path (writer, NoC1 endpoint) in hops on the NoC
+# torus (bank_tail_policy) and puts the whole tail on the shorter one (ties: TAIL_NC_PCT); each RISC keeps its own
+# NoC's endpoints. Measured te_gate 404 -> 380 us (subagent, alone). Not graduated: the writer addressing the bank's
+# NoC0 endpoint from NoC1 (375 us) -- cross-NoC endpoint use, and the mirror case (NoC0 into the NoC1 endpoints)
+# corrupted DRAM; the NoC0 endpoint is CMFW's telemetry port (SYS-1419). False: TAIL_NC_PCT on every core.
+TAIL_POLICY = True
+# NoC torus (columns, rows) per arch, for bank_tail_policy's hop counts (Blackhole only: measured there).
+TAIL_POLICY_TORUS = {"BLACKHOLE": (17, 12)}
 # Subblock tie-break knob (same DEST area): True prefers the square-most subblock (fewest operand
 # unpacks per K step). Measured on PERF FOCUS 1 (LoFi, block 6x28): 2x2 477.8 us vs 1x4 463.7 us, so
 # the wide subblock stays the default.
@@ -1676,6 +1689,7 @@ def create_program_descriptor(
     reader_roles = {}  # core -> (a_sends, b_sends)
     reader_args = {}  # core -> reader runtime args (placed per role group below)
     bank_cols = bank_core_columns(geom, grid, gx) if grid.placement == "bank" else None
+    tail_pol = bank_tail_policy(geom, grid, bank_cols, out)  # TAIL_POLICY: per-core tail reader share
     for bi, i, j, core in cores:
         b0 = bi * grid.core_batches
         batches_valid = min(grid.core_batches, geom.tensor_batches - b0)
@@ -1722,6 +1736,9 @@ def create_program_descriptor(
         wrt = [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *a_stream_rt, *chunk_addrs]
         # Tail write split (Perf 2): the reader serves part of the last block's writes on NoC0.
         reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *chunk_addrs]
+        if tail_pol is not None:  # GM_TAIL_POLICY: right after the chunk table on both RISCs
+            wrt += list(tail_pol[(core.x, core.y)])
+            reader_args[(core.x, core.y)] += list(tail_pol[(core.x, core.y)])
         writer_rt[core.x][core.y] = wrt
         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
 
@@ -1799,6 +1816,9 @@ def create_program_descriptor(
     elif not split:  # (split: the writer's `act` channel is the A row line, attached above)
         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
     _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
+    if tail_pol is not None:
+        for k in (*readers, writer):
+            k.defines = list(k.defines) + [("GM_TAIL_POLICY", "1")]
     if len(outs) > 1:
         for k in (*readers, writer):
             k.defines = list(k.defines) + [("GM_OUT_CHUNKS", str(len(outs)))]
@@ -1826,6 +1846,51 @@ def create_program_descriptor(
         k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
     descriptor.kernels = [*readers, writer, compute]
     return descriptor
+
+
+def bank_tail_policy(geom: Geometry, grid: GridChoice, bank_cols, out):
+    """TAIL_POLICY: {(x, y): (reader tiles of every tail row,)} for a bank-local split whose cores each write ONE DRAM
+    bank (no swiglu, output rows a whole number of bank rounds, DRAM interleaved output), on an arch with a known NoC
+    torus; None otherwise (TAIL_NC_PCT everywhere).
+
+    Hops in virtual NoC coordinates: a bank's NoC0 / NoC1 endpoint is the DRAM column just west of its optimal NoC0 /
+    NoC1 worker, in that worker's row. NoC0 (the reader) runs east then south to the NoC0 endpoint, NoC1 (the writer)
+    north then west to the NoC1 endpoint. All the core's tail tiles go on the NoC with fewer hops; ties keep the
+    TAIL_NC_PCT split."""
+    if not TAIL_POLICY or grid.placement != "bank" or geom.swiglu or bank_cols is None:
+        return None
+    mc = out.memory_config()
+    if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        return None
+    banks = geom.b_banks
+    if not banks or geom.out_n_tiles % banks:
+        return None
+    dev = out.device()
+    torus = TAIL_POLICY_TORUS.get(str(dev.arch()).split(".")[-1])
+    if torus is None:
+        return None
+    nx, ny = torus
+    virt = lambda c: (lambda v: (v.x, v.y))(dev.worker_core_from_logical_core(c))
+    w0 = [virt(c) for c in ttnn.get_optimal_dram_bank_to_logical_worker_assignment(dev, ttnn.NOC.NOC_0)]
+    w1 = [virt(c) for c in ttnn.get_optimal_dram_bank_to_logical_worker_assignment(dev, ttnn.NOC.NOC_1)]
+    if len(w0) != banks or len(w1) != banks:
+        return None
+
+    def hops1(c, wk):  # NoC1: -y, then -x to the DRAM column west of the worker
+        return (c[1] - wk[1]) % ny + (c[0] - wk[0]) % nx + 0.5
+
+    def hops0(c, wk):  # NoC0: +x to the DRAM column west of the worker, then +y
+        return ((wk[0] - c[0]) % nx - 0.5) % nx + (wk[1] - c[1]) % ny
+
+    pol = {}
+    for (x, y), (col0, w) in bank_cols.items():
+        if not w:
+            pol[(x, y)] = (0,)
+            continue
+        c, u = virt(ttnn.CoreCoord(x, y)), col0 % banks
+        h1, h0 = hops1(c, w1[u]), hops0(c, w0[u])
+        pol[(x, y)] = (w if h0 < h1 else 0 if h1 < h0 else (w * TAIL_NC_PCT) // 100,)
+    return pol
 
 
 def _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out):

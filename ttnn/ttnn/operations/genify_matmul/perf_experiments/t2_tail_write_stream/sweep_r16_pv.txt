@@ -1,0 +1,15 @@
+te_gate                         375811 bank
+te_down                         430312 rect
+te_qkv                           93807 rect
+te_o                             69329 rect
+q512_in                          75543 rect
+q512_gu                         160134 rect
+q512_down                        80657 rect
+q512_qkvg                        73143 rect
+q512_out                         44747 rect
+q1024_out                        75967 rect
+q1024_qkvg                      106997 rect_t
+q1024_in                        124733 rect_t
+q1024_down                      125000 rect_t
+q2048_out                       128951 rect
+q4096_out                       226259 rect

@@ -19,6 +19,7 @@
 //   1 column cut: the reader owns tiles n < blk_cols * TAIL_NC_PCT / 100 of every row, the writer the rest
 #pragma once
 #include <cstdint>
+#include "api/dataflow/dataflow_api.h"
 
 #ifndef TAIL_SPLIT_MODE
 #define TAIL_SPLIT_MODE 0
@@ -26,15 +27,40 @@
 #ifndef TAIL_NC_PCT
 #define TAIL_NC_PCT 50
 #endif
+// GM_TAIL_POLICY (Perf 1 of tournament 2, host TAIL_POLICY): the host's per-core tail policy for the bank-local
+// split with a DRAM output -- the reader's tile count of every tail row, instead of TAIL_NC_PCT -- arrives as one
+// runtime arg right after the output chunk table, on both RISCs. Each RISC keeps its own NoC's DRAM endpoints.
+// Absent (0): TAIL_NC_PCT.
+#ifndef GM_TAIL_POLICY
+#define GM_TAIL_POLICY 0
+#endif
 
 namespace tail_split {
 constexpr uint32_t mode = TAIL_SPLIT_MODE;
 constexpr bool active = mode != 0;
 
+// The per-core tail policy (GM_TAIL_POLICY), or the defaults.
+struct Policy {
+    uint32_t reader_tiles;  // GM_TAIL_POLICY: the reader's tiles of every tail row (else unused)
+};
+
+// Reads the policy's runtime arg at `arg` (advanced) under GM_TAIL_POLICY; else the default, nothing read.
+FORCE_INLINE Policy read_policy(uint32_t& arg) {
+    if constexpr (GM_TAIL_POLICY != 0) {
+        return {get_arg_val<uint32_t>(arg++)};
+    } else {
+        return {0};
+    }
+}
+
 // Does the reader (NCRISC) own tile n of a row of blk_cols valid tiles?
-FORCE_INLINE bool reader_owns(uint32_t n, uint32_t blk_cols) {
+FORCE_INLINE bool reader_owns(uint32_t n, uint32_t blk_cols, const Policy& p) {
     if constexpr (mode == 1) {
-        return n < (blk_cols * TAIL_NC_PCT) / 100;
+        if constexpr (GM_TAIL_POLICY != 0) {
+            return n < p.reader_tiles;
+        } else {
+            return n < (blk_cols * TAIL_NC_PCT) / 100;
+        }
     } else {
         return false;
     }

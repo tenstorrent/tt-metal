@@ -1,0 +1,272 @@
+--- a/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py	2026-11-18 05:47:32.588106827 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py	2026-11-18 06:52:15.970527216 +0000
+@@ -77,6 +77,15 @@
+ SWIGLU_FAST_SILU = True
+ 
+ # ---- Blocking knobs ----
++# Progressive N split (perf experiment t2_progressive_nsplit, measured a REGRESSION -- keep False). True: an R1b
++# epilogue-none walk of ONE block per core is re-blocked into two N-blocks (ceil(core_n / 2) + the ragged rest, same
++# block_k), the writer drains a block's output during the NEXT block's A K-walk (kernels GM_NSPLIT; the output CB
++# holds one whole block) and the ragged last block computes only its valid columns (GM_NSPLIT_LAST_N), so only the
++# last block's output is left in the write tail. The price is one more pass of the A broadcast per N-block (~32 GB/s
++# rotating-injector multicast): text-encoder gate 512x5120x16384 405 -> 433 us (the 2-column second block is
++# A-stream bound: ~190 us per A pass vs 134 us of compute), Qwen3.8 M = 128 rows +60..81 %, FLUX M = 256 qkv / ff2
++# +9 / +13 %, M = 1 flat.
++PROGRESSIVE_N_SPLIT = False
+ BLOCK_K_FLOOR = 8  # smallest K-block the solve accepts (clamped to tensor_k_tiles)
+ # Precision knob, 16-bit DEST only: the longest K chain accumulated inside DEST before the packer
+ # folds it into cb_partials (packer L1 accumulation). A bf16 DEST running sum swamps small addends,
+@@ -1424,9 +1433,43 @@
+     gx, gy = grid_size.x, grid_size.y
+     budget = l1_cb_budget(device, [t for t in (*_a_list(a), b, *_out_list(out), row, residual) if t is not None])
+     grid, blocking = choose_split(geom, gx, gy, budget)
++    if PROGRESSIVE_N_SPLIT:
++        blocking = progressive_n_split(geom, grid, blocking, budget)
+     return geom, grid, blocking, (gx, gy)
+ 
+ 
++def progressive_n_split(geom: Geometry, grid: GridChoice, blk: Blocking, budget: int) -> Blocking:
++    """PROGRESSIVE_N_SPLIT: the chosen R1b one-block walk as two N-blocks (same block_k, same ring depths), when
++    the output CB of one whole block still fits L1; else the blocking unchanged."""
++    cm, cn = grid.core_m_tiles, grid.core_n_tiles
++    if (
++        operand_mode(geom, grid, blk) != 2
++        or geom.epilogue != "none"
++        or (blk.block_m_tiles, blk.block_n_tiles) != (cm, cn)
++        or grid.core_batches != 1
++        or cn < 2
++    ):
++        return blk
++    bn = _cdiv(cn, 2)
++    depths = (blk.depth_act, blk.depth_weight)
++    new = _make_blocking(geom, 1, cm, bn, blk.block_k_tiles, depths)
++    groups = cm // new.sb_h
++    extra = max(0, groups - DEPTH_OUT) * new.sb_h * geom.out_block_n(bn) * geom.o_tile_bytes
++    fp = _footprint(geom, cm, bn, new.block_k_tiles, True, depth_weight=depths[1], depth_act=depths[0])
++    if fp + extra > budget or operand_mode(geom, grid, new) != 2:
++        return blk
++    return new
++
++
++def progressive_out_depth(geom: Geometry, grid: GridChoice, blk: Blocking, act_stream: bool) -> int:
++    """Output CB depth in row-group batches: DEPTH_OUT, or one whole block under a progressive N split (the writer
++    drains a block only during the next block's A K-walk, so compute must be able to park a whole block)."""
++    nb = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
++    if PROGRESSIVE_N_SPLIT and act_stream and geom.epilogue == "none" and nb * grid.core_batches > 1:
++        return max(DEPTH_OUT, (blk.block_m_tiles // blk.sb_h) // blk.write_batch)
++    return DEPTH_OUT
++
++
+ # ---------------------------------------------------------------------------
+ # Program descriptor
+ # ---------------------------------------------------------------------------
+@@ -1614,7 +1657,10 @@
+             CB_OUTPUT_TILES,
+             out.dtype,
+             geom.o_tile_bytes,
+-            DEPTH_OUT * blk.write_batch * blk.sb_h * out_block_n_tiles,
++            progressive_out_depth(geom, grid, blk, operand_mode(geom, grid, blk) == 2)
++            * blk.write_batch
++            * blk.sb_h
++            * out_block_n_tiles,
+             core_ranges,
+         ),
+     ]
+@@ -1815,6 +1861,18 @@
+             ]
+         writer.defines = list(writer.defines) + [("GM_OUT_STRIDE", str(U))]
+     _attach_k_head_ramp(readers, compute, blk, mode, epilogue, writer if split else None)
++    if progressive_out_depth(geom, grid, blk, act_stream) != DEPTH_OUT or (
++        PROGRESSIVE_N_SPLIT and act_stream and epilogue == "none" and _cdiv(grid.core_n_tiles, blk.block_n_tiles) > 1
++    ):
++        # Progressive N split: deferred output drain on the writer, ragged last N-block on compute (a one-row subblock
++        # narrowed to the valid columns, or a 1 x block_n subblock for that block; else it computes its full width).
++        writer.defines = list(writer.defines) + [("GM_NSPLIT", "1")]
++        last_n = grid.core_n_tiles - (_cdiv(grid.core_n_tiles, blk.block_n_tiles) - 1) * blk.block_n_tiles
++        in1_sub = blk.block_n_tiles // blk.sb_w
++        if last_n != blk.block_n_tiles and (
++            (blk.sb_h == 1 and (in1_sub - 1) * blk.sb_w < last_n) or blk.block_n_tiles <= geom.dest_limit
++        ):
++            compute.defines = list(compute.defines) + [("GM_NSPLIT_LAST_N", str(last_n))]
+     walk, *streams = split_cost_terms(geom, grid, blk)
+     if NONE_RAW_WALK and epilogue == "none" and walk >= NONE_RAW_WALK_MIN_RATIO * max(streams):
+         compute.defines = list(compute.defines) + [("GM_NONE_RAW_WALK", "1")]
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp	2026-11-18 02:50:42.996138473 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp	2026-11-18 06:30:49.238764519 +0000
+@@ -79,6 +79,15 @@
+ #ifndef GM_LINE_STARTUP
+ #define GM_LINE_STARTUP 1
+ #endif
++// t2_progressive_nsplit (perf experiment): under the R1b A stream, a NON-last block's output is not drained right
++// after its A K-walk (that serialized every block's writes with the K-walk: compute starved for the next block's A
++// while this RISC wrote) but during the NEXT block's A K-walk, one row-group batch per A round when it is ready
++// (non-blocking check), finished (blocking) after that walk. The output CB must hold one whole block (host:
++// DEPTH_OUT >= the block's row-group batches) so compute never waits on it. Only the core's last block is left as
++// the write tail (still split with the reader on NoC0).
++#ifndef GM_NSPLIT
++#define GM_NSPLIT 0
++#endif
+ 
+ namespace {
+ // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
+@@ -312,6 +321,58 @@
+     const uint32_t tail_done = get_semaphore(TAIL_SEM_DONE);
+ #endif
+ 
++    // t2_progressive_nsplit: the pending (previous) block whose output drains during this block's A K-walk.
++    constexpr bool nsplit = GM_NSPLIT != 0 && act_stream && !out_in_place;
++    struct Pend {
++        uint32_t g;
++        uint32_t batch;
++        uint32_t blk_r0;
++        uint32_t blk_rows;
++        out_chunks::Col col;
++        uint32_t cols;
++        bool valid;
++        bool active;
++    };
++    [[maybe_unused]] Pend pend{0, 0, 0, 0, {0, 0}, 0, false, false};
++    // One row-group batch of the pending block: false (nothing done) when not blocking and not yet packed.
++    [[maybe_unused]] auto pend_drain = [&](bool blocking) -> bool {
++        if (!blocking && !cb_pages_available_at_front(cb_output_tiles, batch_tiles)) {
++            return false;
++        }
++        if (blocking) {
++            MaybeDeviceZoneScope("wr_pend_wait");
++            cb_wait_front(cb_output_tiles, batch_tiles);
++        }
++        if (pend.valid) {
++            MaybeDeviceZoneScope("wr_pend_write");
++            const uint32_t l1_base = get_read_ptr(cb_output_tiles);
++            for (uint32_t r = 0; r < batch_rows; ++r) {
++                const uint32_t blk_row = pend.g * sb_h + r;
++                if (blk_row >= pend.blk_rows) {
++                    break;
++                }
++                out_chunks::write_row(
++                    out_args,
++                    out_tab,
++                    o_page_bytes,
++                    o_tile_bytes,
++                    l1_base + r * out_block_n_tiles * o_tile_bytes,
++                    pend.batch * tensor_m_tiles + row0 + pend.blk_r0 + blk_row,
++                    pend.col,
++                    pend.cols,
++                    [&](uint32_t) { return true; },
++                    GM_OUT_STRIDE);
++            }
++            noc_async_writes_flushed();  // slot is free once the writes left L1
++        }
++        cb_pop_front(cb_output_tiles, batch_tiles);
++        pend.g += write_batch;
++        if (pend.g >= num_row_groups) {
++            pend.active = false;
++        }
++        return true;
++    };
++
+     for (uint32_t bb = 0; bb < nb_b; ++bb) {
+         const uint32_t blk_b0 = bb * block_batches;
+         const uint32_t blk_b_valid =
+@@ -374,12 +435,22 @@
+                                 if (!next_issued) {
+                                     issue_turn(next);  // after the send: compute frees the slots meanwhile
+                                 }
++                                if constexpr (nsplit) {
++                                    if (pend.active) {
++                                        pend_drain(false);
++                                    }
++                                }
+                             } else {
+                                 MaybeDeviceZoneScope("wr_a_recv1");
+                                 cb_reserve_back(cb_act_tiles, act_block_tiles);
+                                 a_receiver->receive(r);
+                                 cb_push_back(cb_act_tiles, act_block_tiles);
+                                 ++act_seq;
++                                if constexpr (nsplit) {
++                                    if (pend.active) {
++                                        pend_drain(false);
++                                    }
++                                }
+                             }
+                         }
+                     } else if (!act_resident || nbk == 0) {
+@@ -446,6 +517,11 @@
+                                 cb_push_back(cb_act_tiles, act_block_tiles);
+                                 ++issued_from;
+                                 ++act_seq;
++                                if constexpr (nsplit) {
++                                    if (pend.active) {
++                                        pend_drain(false);
++                                    }
++                                }
+                             }
+                             dataflow_kernel_lib::set_read_trid(noc, 0);  // restore untagged reads
+                         } else {
+@@ -454,11 +530,26 @@
+                                 cb_reserve_back(cb_act_tiles, act_block_tiles);
+                                 a_receiver->receive();
+                                 cb_push_back(cb_act_tiles, act_block_tiles);
++                                if constexpr (nsplit) {
++                                    if (pend.active) {
++                                        pend_drain(false);
++                                    }
++                                }
+                             }
+                         }
+                     }
+                 }
+                 const bool last_block = bb + 1 == nb_b && mb + 1 == nb_m && nbk + 1 == nb_n;
++                if constexpr (nsplit) {
++                    while (pend.active) {
++                        pend_drain(true);  // the previous block's rest (packed long ago)
++                    }
++                    if (!last_block) {
++                        // (block_batches == 1 under R1b) this block drains during the next block's A K-walk
++                        pend = Pend{0, b0 + blk_b0, blk_r0, blk_rows, blk_col, blk_cols, 0 < blk_b_valid, true};
++                        continue;
++                    }
++                }
+                 for (uint32_t bi = 0; bi < block_batches; ++bi) {
+                     const bool batch_valid = bi < blk_b_valid;
+                     const uint32_t batch = b0 + blk_b0 + bi;
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp	2026-11-17 16:36:19.955549336 +0000
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp	2026-11-18 06:49:52.809596121 +0000
+@@ -329,11 +329,37 @@
+     } else if constexpr (!has_epilogue) {
+         const auto shape = ckl::MatmulBlockShape::of(
+             in0_num_subblocks, in1_num_subblocks, sb_h, sb_w, block_k_tiles, KS::n, block_batches);
++#ifdef GM_NSPLIT_LAST_N
++        // t2_progressive_nsplit: the core's LAST N-block of each M-block is ragged (GM_NSPLIT_LAST_N < block_n columns of
++        // the nominal region). Its last in1 subblock runs the FMA on only the valid columns (the helper's
++        // last_in1_subblock_w_valid: matmul ct_dim narrowed, DEST / pack / every CB count stay full width), so the
++        // unwritten column(s) of the output row groups are garbage the writer never writes (invalid columns). The
++        // helper cannot drop whole subblocks (its L1-acc partials drain counts assume the full in1 width), so when the
++        // ragged part does not fit the block's last subblock, the ragged block runs a 1 x block_n subblock instead
++        // (the shape is a runtime argument; the output / partials row-group pushes change granularity, not totals).
++        // The narrowing is only safe on a ONE-ROW subblock: a 2 x 2 subblock narrowed to ct_dim 1 (FLUX qkv 256 x 6144 x
++        // 9216, block 8 x 2) hung inside the matmul LLK (unpack waiting for math's context, math mid-matmul_block).
++        static_assert(GM_NSPLIT_LAST_N <= block_n_tiles);
++        constexpr bool ragged_same_sb = sb_h == 1 && (in1_num_subblocks - 1) * sb_w < GM_NSPLIT_LAST_N;
++        static_assert(ragged_same_sb || block_n_tiles <= ckl::DEST_AUTO_LIMIT);
++        auto shape_last = ragged_same_sb ? shape
++                                         : ckl::MatmulBlockShape::of(
++                                               in0_num_subblocks * sb_h, 1, 1, block_n_tiles, block_k_tiles, KS::n, block_batches);
++        shape_last.last_in1_subblock_w_valid =
++            ragged_same_sb ? GM_NSPLIT_LAST_N - (in1_num_subblocks - 1) * sb_w : GM_NSPLIT_LAST_N;
++        const uint32_t nb_n_walk = get_arg_val<uint32_t>(2);
++#endif
+         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+             const bool act_last_use = !act_resident || (block_idx + 1) % nb_n == 0;
+             {
+                 MaybeDeviceZoneScope("cmp_matmul");
++#ifdef GM_NSPLIT_LAST_N
++                const bool ragged = (block_idx % nb_n_walk) == nb_n_walk - 1;
++                run_matmul<ckl::LastBlockTarget::Out>(
++                    act_buf, weight_buf, out_buf, interm_buf, ragged ? shape_last : shape, own_kb);
++#else
+                 run_matmul<ckl::LastBlockTarget::Out>(act_buf, weight_buf, out_buf, interm_buf, shape, own_kb);
++#endif
+             }
+             if constexpr (act_resident) {
+                 if (act_last_use) {
