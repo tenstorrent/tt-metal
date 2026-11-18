@@ -104,7 +104,19 @@ void kernel_main() {
     // Streamed (gamma_streams): every chunk once per normalize pass (per block; RM: per tile-row).
     constexpr uint32_t num_g_chunks = (core_w_tiles + w_chunk_tiles - 1) / w_chunk_tiles;
     const auto g_acc = TensorAccessor(g_args, g_addr, g_page_bytes);
-    auto load_gamma_chunk = [&](uint32_t j) {
+    // gamma_issue(j): reserve + pre-zero + issue the chunk's DRAM reads (no final read barrier, no push);
+    // gamma_commit(): read barrier + push. Split so W_SPLIT can put the γ DRAM latency in the shadow of the
+    // gather / combine round trip instead of in front of the partial send (γ is first needed by normalize, which
+    // waits for rinv anyway). load_gamma_chunk(j) = issue + commit back to back.
+    auto gamma_commit = [&]() {
+        noc_async_read_barrier();
+        if constexpr (gamma_is_rm) {
+            cb_push_back(cb_gamma_rm, 1);
+        } else {
+            cb_push_back(cb_gamma, w_chunk_tiles);
+        }
+    };
+    auto gamma_issue = [&](uint32_t j) {
         const uint32_t c0 = j * w_chunk_tiles;
         // valid tiles of this chunk within the slice
         const uint32_t cv = (w_valid > c0) ? ((w_valid - c0 < w_chunk_tiles) ? (w_valid - c0) : w_chunk_tiles) : 0;
@@ -146,9 +158,7 @@ void kernel_main() {
                 } else {
                     noc_async_read(g_acc.get_noc_addr(0, g_off), get_write_ptr(cb_gamma_rm), g_bytes);
                 }
-                noc_async_read_barrier();
             }
-            cb_push_back(cb_gamma_rm, 1);
         } else if constexpr (gamma_is_block_float) {
             // TILE block-float γ (bf8b): a tile is a shared-exponent section + a mantissa section, so face-row
             // addressing is meaningless -> read the valid tiles whole (contiguous pages, one barrier). The nominal
@@ -164,8 +174,6 @@ void kernel_main() {
             for (uint32_t c = 0; c < cv; ++c) {
                 noc_async_read(g_acc.get_noc_addr(w_start + c0 + c), l1 + c * g_tile_bytes, g_tile_bytes);
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_gamma, w_chunk_tiles);
         } else {
             // TILE γ: only row 0 matters (row broadcast) -> read face0-row0 and face1-row0 of each valid tile.
             CircularBuffer g_buf(cb_gamma);
@@ -181,12 +189,18 @@ void kernel_main() {
                 noc_async_read(
                     g_acc.get_noc_addr(page, face1_offset), l1 + c * g_tile_bytes + face1_offset, face_row_bytes);
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_gamma, w_chunk_tiles);
         }
     };
-    if constexpr (has_gamma && !gamma_streams) {
-        load_gamma_chunk(0);  // resident for the whole kernel
+    auto load_gamma_chunk = [&](uint32_t j) {
+        gamma_issue(j);
+        gamma_commit();
+    };
+    // Resident γ (whole kernel). LOCAL: loaded up front. W_SPLIT: issued right after block 0's partial send and
+    // committed after the root's multicast, so neither the issue nor the γ DRAM latency delays the gather.
+    constexpr bool gamma_resident = has_gamma && !gamma_streams;
+    constexpr bool gamma_deferred = gamma_resident && is_wsplit;
+    if constexpr (gamma_resident && !gamma_deferred) {
+        load_gamma_chunk(0);
     }
 
     // ---------------- W_SPLIT plumbing ----------------
@@ -222,6 +236,11 @@ void kernel_main() {
             noc_async_write_barrier();
             sem_partials.up(noc, root_x, root_y, 1);
             cb_pop_front(cb_partial, rows);
+            if constexpr (gamma_deferred) {
+                if (b == 0) {
+                    gamma_issue(0);
+                }
+            }
 
             // ---- broadcast_rinv_block (root) ----
             if (is_root) {
@@ -233,6 +252,12 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_rinv_bcast, rows);
                 sem_rinv_local.set(b + 1);  // send() barriered the loopback copy: own cb_rinv holds rinv(b)
+            }
+        }
+
+        if constexpr (gamma_deferred) {
+            if (b == 0) {
+                gamma_commit();
             }
         }
 
@@ -311,6 +336,11 @@ void kernel_main() {
                     y_ring_pos = 0;
                 }
             }
+        }
+    }
+    if constexpr (gamma_deferred) {
+        if (num_blocks == 0) {
+            load_gamma_chunk(0);
         }
     }
     (void)es;

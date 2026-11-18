@@ -15,8 +15,9 @@
 //                                          (AccumulateViaAdd + within-tile Collapse; the second per-row tile, when
 //                                          present, is folded through the 0/1 lane mask cb_wmask: only_partial())
 //   combine_block        (W_SPLIT root)    reduce SUM ROW  cb_gathered -> cb_rinv_col (AccumulateViaAdd, Skip)
-//   finalize_rinv_block  (LOCAL / root)    eltwise_chain   cb_rinv_col -> bcast col, *(1/W), +eps, rsqrt
-//                                                          -> cb_rinv (LOCAL) | cb_rinv_bcast (root)
+//   finalize_rinv_block  (LOCAL / root)    eltwise_chain x2 (1) cb_rinv_col -> rsqrt(Σ*(1/W)+eps) on the column-0
+//                                                          vectors only (RinvColumn, fused SFPU) -> cb_rinv_col in place
+//                                                          (2) bcast col -> cb_rinv (LOCAL) | cb_rinv_bcast (root)
 //   normalize_block                        eltwise_chain   y = (x * γ[row bcast]) * rinv  -> cb_y (TILE)
 //                                                          | in place into cb_x (RM, per-tile credit)
 //   untilize_y_block     (RM)              untilize        cb_x (y) -> cb_out_rm
@@ -38,6 +39,11 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_sqrt.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#endif
 
 constexpr uint32_t cb_x_rm = 0;
 constexpr uint32_t cb_x = 1;
@@ -162,16 +168,59 @@ ALWI void combine_block(uint32_t rows) {
         ReduceWithinTile::Skip>(ReduceInputBlockShape::of(rows, w_split));
 }
 
+// ---- RinvColumn: rinv = rsqrt(Σ * (1/W) + eps) on the column-0 lanes of a DEST tile, as ONE fused SFPU pass ----
+// Raw-SFPU chain element (op_design.md lamp "finalize scope"; catalog `sfpu_tile_scope`). Why not the stock
+// MulUnary / AddUnary / Rsqrt elements: each hardcodes VectorMode::RC (binop_with_scalar.h, rsqrt.h:44-52), i.e. 3
+// passes x 32 vectors over a tile whose only meaningful lanes are column 0 (the collapse / combine output). Measured
+// on the W_SPLIT root this finalize was ~1.4 us of the rendezvous critical path. VectorMode::C + an even-parity
+// stride visits only the 8 vectors that hold column 0 (faces 0 and 2, even columns), and the three ops share one
+// load/store. The element still runs inside eltwise_chain (the chain owns DEST sync, CB credit and reconfig). The
+// result is column-0-valid; the Col broadcast that follows reads only column 0.
+#ifdef TRISC_MATH
+template <bool kFastApprox>
+sfpi_inline void rinv_column_body(uint32_t inv_w_bits, uint32_t eps_bits) {
+    for (int rg = 0; rg < 4; rg++) {
+        // constants re-materialized per vector: the rsqrt body needs every LREG
+        const sfpi::vFloat v = sfpi::dst_reg[0] * ckernel::sfpu::Converter::as_float(inv_w_bits) +
+                               ckernel::sfpu::Converter::as_float(eps_bits);
+        sfpi::vFloat t = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, kFastApprox>(v);
+        if constexpr (!DST_ACCUM_MODE) {
+            t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = t;
+        sfpi::dst_reg += 2;  // skip the odd-parity vector (columns 1, 3, .., 15: never column 0)
+    }
+}
+#endif
+
+template <Dst Slot = Dst::D0>
+struct RinvColumn : UnaryOp<RinvColumn<Slot>, Slot> {
+    uint32_t inv_w_bits;
+    uint32_t eps_bits;
+    constexpr RinvColumn(uint32_t inv_w, uint32_t eps) noexcept : inv_w_bits(inv_w), eps_bits(eps) {}
+    constexpr RinvColumn() noexcept : inv_w_bits(0), eps_bits(0) {}
+    static ALWI void init() { rsqrt_tile_init(); }  // sqrt constants + SFPU address-mod setup
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            rinv_column_body<rsqrt_approx>,
+            to_u32(Slot) + slot_offset,
+            ckernel::VectorMode::C,
+            inv_w_bits,
+            eps_bits)));
+    }
+};
+
 template <uint32_t out_cb>
 ALWI void finalize_rinv_block(uint32_t rows, uint32_t inv_w_bits, uint32_t eps_bits) {
-    // rinv = rsqrt(Σx² * (1/W) + eps), broadcast from column 0 to the whole tile.
+    // (1) rinv = rsqrt(Σx² * (1/W) + eps) on column 0, in place on cb_rinv_col (each tile is popped before its slot
+    //     is re-reserved: streaming in place). (2) broadcast column 0 to the whole tile.
     eltwise_chain(
         IterationShape::tiles(rows),
-        UnaryBcast<BroadcastDim::Col, input(cb_rinv_col)>{},
-        MulUnary<>{inv_w_bits},
-        AddUnary<>{eps_bits},
-        Rsqrt<kRsqrtApprox>{},
-        PackTile<output(out_cb)>{});
+        CopyTile<input(cb_rinv_col)>{},
+        RinvColumn<>{inv_w_bits, eps_bits},
+        PackTile<output(cb_rinv_col)>{});
+    eltwise_chain(
+        IterationShape::tiles(rows), UnaryBcast<BroadcastDim::Col, input(cb_rinv_col)>{}, PackTile<output(out_cb)>{});
 }
 
 ALWI void normalize_block(uint32_t rows) {
