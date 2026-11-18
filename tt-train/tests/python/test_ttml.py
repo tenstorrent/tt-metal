@@ -587,6 +587,27 @@ class TestModuleList:
         param_names = list(params.keys())
         assert len(param_names) == 4, f"Should have 4 parameters, got {len(param_names)}: {param_names}"
 
+    def test_buffers_inside_module_containers_are_named(self):
+        """named_buffers walks the modules a ModuleList or ModuleDict holds, as named_modules does."""
+        from ttml.modules import AbstractModuleBase, Buffer, ModuleDict, ModuleList
+
+        class WithBias(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                self.bias = Buffer(ttml.autograd.Tensor.from_numpy(np.zeros((1, 1, 1, 32), dtype=np.float32)))
+
+        class Outer(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                self.blocks = ModuleList([WithBias(), WithBias()])
+                self.heads = ModuleDict({"main": WithBias()})
+
+        model = Outer()
+        names = [name for name, _ in model.named_buffers()]
+        assert names == ["blocks.0.bias", "blocks.1.bias", "heads.main.bias"], names
+        assert next(model.named_buffers())[1] is model.blocks[0].bias.tensor
+        assert set(model.state_dict()) >= set(names)
+
     def test_module_list_iteration(self):
         """Test that ModuleList supports iteration."""
         from ttml.modules import AbstractModuleBase, ModuleList, Parameter

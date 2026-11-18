@@ -22,7 +22,7 @@ import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.distributed_checkpointing._state_dict import collect_model
 from ttml.fsdp import _ShardedState
-from ttml.modules import AbstractModuleBase, Buffer, LinearLayer, Parameter
+from ttml.modules import AbstractModuleBase, Buffer, LinearLayer, ModuleList, Parameter
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -146,16 +146,23 @@ def test_a_step_after_the_load_matches_the_uninterrupted_run(tp_mesh, tmp_path):
     _assert_some_differ(_state(opt3)[0], expected_state)
 
 
+class _Bias(AbstractModuleBase):
+    def __init__(self, values: np.ndarray) -> None:
+        super().__init__()
+        self.bias = Buffer(ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16))
+
+
 class _WithBuffers(AbstractModuleBase):
     """A layer plus state a step updates outside the optimizer, like a MoE's load-balancing bias, reachable under two
-    names."""
+    names, and a second such buffer in a module a ModuleList holds, as a MoE's blocks are."""
 
     def __init__(self, dim: int, seed: int) -> None:
         super().__init__()
         self.linear = LinearLayer(dim, dim, has_bias=False)
-        values = np.random.default_rng(seed).standard_normal((1, 1, 1, dim)).astype(np.float32)
-        self.expert_bias = Buffer(ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16))
+        values = np.random.default_rng(seed).standard_normal((2, 1, 1, dim)).astype(np.float32)
+        self.expert_bias = Buffer(ttml.autograd.Tensor.from_numpy(values[:1], ttnn.Layout.TILE, ttnn.DataType.BFLOAT16))
         self.alias = self.expert_bias
+        self.blocks = ModuleList([_Bias(values[1:])])
 
     def forward(self, x):
         return self.linear(x)
@@ -165,14 +172,20 @@ def test_buffers_are_saved_and_loaded(tp_mesh, tmp_path):
     model = _WithBuffers(DIM, seed=1)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model)
-    entry = dcp.read_index(path).entries["model/_WithBuffers/expert_bias"]
+    entries = dcp.read_index(path).entries
+    entry = entries["model/_WithBuffers/expert_bias"]
     assert entry.role == "buffer" and entry.live_keys == ("model/_WithBuffers/alias", "model/_WithBuffers/expert_bias")
+    assert entries["model/_WithBuffers/blocks/0/bias"].role == "buffer", "a buffer under a ModuleList is saved"
+
+    def buffers(m):
+        return {"b": _shards(m.expert_bias.tensor), "listed": _shards(m.blocks[0].bias.tensor)}
 
     fresh = _WithBuffers(DIM, seed=2)
     _assert_some_differ({"b": _shards(fresh.expert_bias.tensor)}, {"b": _shards(model.expert_bias.tensor)})
+    _assert_some_differ({"b": _shards(fresh.blocks[0].bias.tensor)}, {"b": _shards(model.blocks[0].bias.tensor)})
     loaded = dcp.load(path, model=fresh)
     assert loaded.missing == [] and loaded.unexpected == []
-    _assert_same_shards({"b": _shards(fresh.expert_bias.tensor)}, {"b": _shards(model.expert_bias.tensor)})
+    _assert_same_shards(buffers(fresh), buffers(model))
     _assert_same_shards(_model_shards(fresh.parameters()), _model_shards(model.parameters()))
 
 
