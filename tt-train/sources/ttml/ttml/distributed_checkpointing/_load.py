@@ -60,7 +60,8 @@ class LoadResult:
 def _read_into(
     fd: int, data_start: int, plan: KeyPlan, item: ReadItem, itemsize: int, carrier, dest: np.ndarray
 ) -> int:
-    """Copy ``item.src`` of the chunk into ``item.dst`` of ``dest`` with the fewest contiguous reads; returns bytes read."""
+    """Copy ``item.src`` of the chunk into ``item.dst`` of ``dest`` with the fewest contiguous reads; returns bytes read.
+    ``_read_chunk`` calls it only for items that need under half of the chunk, so some dim is read in part."""
     record = plan.entry.chunks[item.chunk]
     chunk = record.box.sizes
     src, dst = item.src, item.dst
@@ -73,10 +74,6 @@ def _read_into(
     for d in range(ndim - 2, -1, -1):
         strides[d] = strides[d + 1] * chunk[d + 1]
     base = data_start + record.data_offset
-    if k == 0:
-        raw = pread_all(fd, record.nbytes, base)
-        dest[dst.slices()] = np.frombuffer(raw, dtype=carrier).reshape(chunk)
-        return record.nbytes
     run_rows = src.sizes[k - 1]
     inner = prod(chunk[k:])
     run_bytes = run_rows * inner * itemsize
