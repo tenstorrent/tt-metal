@@ -574,6 +574,12 @@ TEST(BufferDistributionSpecContiguous, CPU_ShardContiguousRequiresUniformShardsP
     EXPECT_ANY_THROW((void)shard_contiguous.compute_page_mapping());
 }
 
+// The node-list constructor rejects an empty node list only for a tensor with pages.
+TEST(BufferDistributionSpecConstruction, CPU_EmptyNodeListOnlyForEmptyTensor) {
+    EXPECT_NO_THROW(BufferDistributionSpec(Shape{0, 4}, Shape{1, 1}, {}));
+    EXPECT_ANY_THROW(BufferDistributionSpec(Shape{2, 4}, Shape{1, 1}, {}));
+}
+
 // Shape-only; the grid is arbitrary.
 TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
     const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));
