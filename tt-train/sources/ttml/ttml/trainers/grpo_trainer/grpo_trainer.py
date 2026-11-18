@@ -1288,9 +1288,7 @@ class GRPOTrainer:
                     dataset_func(), self.tokenizer, num_devices=1
                 )
                 return AsyncRolloutServer(
-                    bridge=ThreadedWeightBridge.receiver(
-                        peer_rank=TTML_RANK, mesh_device=self._rollout_mesh, submeshes=self.rollout_sampler.submeshes
-                    ),
+                    bridge=ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, submeshes=self.rollout_sampler.submeshes),
                     queue=RolloutQueue.producer(
                         peer_rank=TTML_RANK, capacity=cfg.remote_rollout.rollout_queue_capacity
                     ),

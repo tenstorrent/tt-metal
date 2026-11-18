@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import queue
-import struct
 import threading
 from typing import Any, Optional
 
@@ -16,7 +15,7 @@ import numpy as np
 from ..distributed import exit_on_error
 from ..grpo_trainer import RolloutBatch
 from ..rollout_batch_source import ScoredRolloutBatch
-from .weight_bridge import duplicate_distributed_context
+from .transport import duplicate_distributed_context, recv_frame, send_frame
 
 # Tags are matched only within this queue's own communicator, so they cannot collide with other MPI traffic.
 _TAG_LEN, _TAG_BODY = 0, 1
@@ -83,15 +82,13 @@ class RolloutQueue:
     def _producer_loop(self) -> None:
         with exit_on_error():
             while (scored := self._local.get()) is not _STOP:
-                body = _encode(scored)
-                self._ctx.send(struct.pack("<Q", len(body)), self._peer_rank, _TAG_LEN)
-                self._ctx.send(body, self._peer_rank, _TAG_BODY)
-            self._ctx.send(struct.pack("<Q", 0), self._peer_rank, _TAG_LEN)
+                send_frame(self._ctx.send, _encode(scored), self._peer_rank, _TAG_LEN, _TAG_BODY)
+            send_frame(self._ctx.send, b"", self._peer_rank, _TAG_LEN, _TAG_BODY)
 
     def _consumer_loop(self) -> None:
         with exit_on_error():
-            while n := struct.unpack("<Q", self._ctx.recv(8, self._peer_rank, _TAG_LEN))[0]:
-                self._local.put(_decode(self._ctx.recv(int(n), self._peer_rank, _TAG_BODY)))
+            while (body := recv_frame(self._ctx.recv, self._peer_rank, _TAG_LEN, _TAG_BODY)) is not None:
+                self._local.put(_decode(body))
             self._local.put(None)
 
 

@@ -52,7 +52,7 @@ def test_receiver_writes_wait_for_trace_capture(monkeypatch):
     monkeypatch.setattr(ttnn, "begin_trace_capture", twb._begin_trace_capture)
     monkeypatch.setattr(ttnn, "end_trace_capture", twb._end_trace_capture)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), num_command_queues=2, trace_region_size=1 << 20)
-    bridge = twb.ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, mesh_device=mesh, submeshes=[mesh])
+    bridge = twb.ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, submeshes=[mesh])
     tid = None
     try:
         a = ttnn.from_torch(torch.full(SHAPE, 10.0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh)
