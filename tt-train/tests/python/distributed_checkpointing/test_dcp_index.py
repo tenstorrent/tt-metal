@@ -8,6 +8,7 @@ import gc
 import json
 import os
 import shutil
+import warnings
 
 import numpy as np
 import pytest
@@ -244,6 +245,7 @@ def test_naming(expect_error):
         step_dir_name(-1)  # "step_-000001" would never parse back, so find_latest would not find it
 
 
+@pytest.mark.filterwarnings("ignore:.*left by saves that did not finish")
 def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     for name in [
         "step_0000005",
@@ -269,6 +271,26 @@ def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     assert not is_complete(str(tmp_path / "step_0000100.partial-123"))
     assert not is_complete(str(tmp_path / "step_0000050.replaced-9")), "renamed back to its final name first"
     assert not is_complete(str(tmp_path / "step_0000040"))
+
+
+def test_find_latest_warns_about_the_leftovers_of_its_prefix_and_removes_none(tmp_path):
+    names = ["step_0000005", "step_0000010.partial-7", "step_0000005.replaced-3", "other_step_0000020.partial-1"]
+    for name in names:
+        (tmp_path / name).mkdir()
+    (tmp_path / "step_0000005" / "index.json").write_text("{}")
+    leftovers = r"2 directories left by saves that did not finish: step_0000005\.replaced-3, step_0000010\.partial-7\. "
+    with pytest.warns(UserWarning, match=leftovers):
+        assert find_latest(str(tmp_path)) == str(tmp_path / "step_0000005")
+    with pytest.warns(
+        UserWarning, match=r"1 directory left by saves that did not finish: other_step_0000020\.partial-1"
+    ):
+        assert find_latest(str(tmp_path), prefix="other") is None
+    assert sorted(os.listdir(tmp_path)) == sorted(names), "nothing is removed: a .partial- save may still be running"
+    clean = tmp_path / "clean"
+    (clean / "step_0000001").mkdir(parents=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert find_latest(str(clean)) is None, "no leftovers, no warning"
 
 
 def test_read_user_header_returns_only_the_dict_passed_to_save(tmp_path):
@@ -327,7 +349,10 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     assert ".partial-" in staging and os.path.isdir(os.path.join(staging, "data"))
     write_header(staging, {"step": 10})
     write_index(staging, _index())
-    assert not is_complete(staging) and find_latest(str(tmp_path)) is None
+    assert not is_complete(staging)
+    # A save still running looks like one that died: find_latest names its staging directory and finds nothing.
+    with pytest.warns(UserWarning, match=r"left by saves that did not finish: step_0000010\.partial-100\. "):
+        assert find_latest(str(tmp_path)) is None
     with expect_error(IncompleteCheckpointError, "is a staging directory"):
         read_index(staging)
     with expect_error(IncompleteCheckpointError, "is a staging directory"):

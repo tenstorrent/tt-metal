@@ -337,20 +337,27 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
     ``include_replaced`` also considers ``.replaced-`` directories, which ``finalize_staging`` leaves behind only if
     a process dies between moving the old checkpoint aside and moving the new one in. It is a recovery aid: a final
     directory always wins a step tie, and a replaced directory it returns must be renamed back to its final name
-    before ``load`` (or ``is_complete``) accepts it."""
+    before ``load`` (or ``is_complete``) accepts it.
+
+    Directories left by saves that did not finish, ``.partial-`` ones of saves that died and ``.replaced-`` ones of
+    interrupted overwrites, can each hold a whole checkpoint. Nothing removes them, since a ``.partial-`` directory may
+    belong to a save still running in another job; this warns about those of ``prefix``, naming each."""
     best: tuple[int, int, str, str] | None = None
+    leftovers: list[str] = []
     try:
         names = os.listdir(root)
     except FileNotFoundError:
         return None
     for name in names:
         candidate = name
-        if REPLACED_MARK in name:
-            if not include_replaced:
+        mark = REPLACED_MARK if REPLACED_MARK in name else PARTIAL_MARK if PARTIAL_MARK in name else None
+        if mark is not None:
+            candidate = name.split(mark, 1)[0]
+            stem = parse_dir_name(candidate)
+            if stem is not None and stem[0] == prefix:
+                leftovers.append(name)
+            if mark == PARTIAL_MARK or not include_replaced:
                 continue
-            candidate = name.split(REPLACED_MARK, 1)[0]
-        elif PARTIAL_MARK in name:
-            continue
         parsed = parse_dir_name(candidate)
         if parsed is None or parsed[0] != prefix:
             continue
@@ -360,6 +367,15 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
         rank = (parsed[1], 0 if REPLACED_MARK in name else 1, name, path)
         if best is None or rank > best:
             best = rank
+    if leftovers:
+        count = f"{len(leftovers)} director{'y' if len(leftovers) == 1 else 'ies'}"
+        warnings.warn(
+            f"{root} holds {count} left by saves that did not finish: {', '.join(sorted(leftovers))}. A .partial- "
+            f"directory is the staging directory of a save that died, or of one still running; a .replaced- one is a "
+            f"previous checkpoint that an interrupted overwrite moved aside. Remove them once no save into {root} is "
+            f"running.",
+            stacklevel=2,
+        )
     return best[3] if best else None
 
 
