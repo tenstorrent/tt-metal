@@ -161,8 +161,12 @@ class Hy4Xrow:
         self.topo = ttnn.Topology.Ring if self.rows >= 4 else ttnn.Topology.Linear
         self.shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=tuple(md.shape))
         self.stage, self.kind = {}, {}
-        for name, t in self.tensors:
-            kind = "kv" if int(t.shape[-1]) == 656 else "key"
+        self.tensors = [(x[0], x[1]) for x in self.tensors]
+        for x in tensors:
+            name, t = x[0], x[1]
+            kind = (
+                x[2] if len(x) > 2 else ("kv" if int(t.shape[-1]) == 656 else "key")
+            )  # (kind override: dtype-blind probes)
             self.kind[name] = kind
             pb, u, cp = (
                 (KV_PAGE_B, KV_UNITS, self.cp_kv) if kind == "kv" else (KEY_PAGE_B[key_dtype], KEY_UNITS, self.cp_key)
@@ -252,11 +256,11 @@ class Hy4Xrow:
         self._prog(full, t, ctl_out, n * u, 0, p0 * u, pb)
         return full
 
-    def copy(self, src, dst, h, only=None):
+    def copy(self, src, dst, h, only=None, allow_same=False):
         """pool[dst][pages 0..h/512) = pool[src][...] for every pool tensor (in place, synchronous). Raises on any error (the caller recomputes cold). ``only``: restrict to the first N tensors (probes)."""
         import ttnn
 
-        if not (0 <= src < self.rows and 0 <= dst < self.rows) or src == dst:
+        if not (0 <= src < self.rows and 0 <= dst < self.rows) or (src == dst and not allow_same):
             raise ValueError(f"xrow copy rows {src} -> {dst}")
         npool = blocks_of(h)
         t0 = time.perf_counter()
