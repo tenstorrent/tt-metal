@@ -57,6 +57,8 @@
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
 #include <env_lib.hpp>
@@ -1908,10 +1910,16 @@ bool MeshDeviceImpl::initialize_impl(
     }
     Inspector::mesh_device_initialized(this);
 
-    // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
-    // cores so users don't observe a lazy side-effect on first DRAM-sender pipe creation.
-    if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    // DRAM-sender state arena: always constructed up-front where this mesh runs DRAM-sender endpoints,
+    // so users don't observe a lazy side-effect on first DRAM-sender pipe creation.
+    dram_sender_placement_ = ::tt::tt_metal::dram_sender_placement(context_id_, num_hw_cqs());
+    if (dram_sender_placement_ == DramSenderPlacement::DramCore) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
+    } else if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
+        const auto layout = ::tt::tt_metal::tensor_prefetcher_region_layout(metal_env().get_cluster());
+        drisc_l1_arena_ = ::tt::tt_metal::DriscL1Arena::for_dispatch_engine(
+            metal_context().dispatch_mem_map().unused_l1_base() + layout.sender_state_zone_offset(),
+            layout.sender_state_zone_bytes());
     }
 
     is_internal_state_initialized = true;
@@ -1980,14 +1988,31 @@ std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
     return host_region_;
 }
 
+void MeshDeviceImpl::check_dram_bank(const IDevice* device, uint32_t bank_id) const {
+    const uint32_t num_banks = metal_env().get_cluster().get_soc_desc(device->id()).get_num_dram_views();
+    TT_FATAL(
+        bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device->id(), num_banks);
+}
+
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
+    // On a dispatch engine an endpoint is only a role of its bank; no DRAM core is occupied.
+    if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
+        check_dram_bank(device, bank_id);
+        return CoreCoord(bank_id, 0);
+    }
     return tt::tt_metal::pick_unused_dram_logical_core(
         metal_env().get_cluster().get_soc_desc(device->id()), bank_id, device->id());
 }
 
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
+    // A dispatch engine holds every endpoint, so a second one per bank would only split the bank's
+    // receivers into two pipes without adding a data path.
+    if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
+        check_dram_bank(device, bank_id);
+        return {CoreCoord(bank_id, 0)};
+    }
     const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
 
     // Sender 0: the free non-endpoint subchannel.
@@ -2123,7 +2148,8 @@ void MeshDeviceImpl::quiesce_devices() {
             TT_ASSERT(
                 device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
                 "Last completed event is not 0");
-            TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
+            TT_ASSERT(
+                device->sysmem_manager().get_last_issued_event(command_queue->id()) == 0, "Last issued event is not 0");
         }
     }
 }

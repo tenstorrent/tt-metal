@@ -20,8 +20,11 @@ class TopologyMapper;
 // representation stays out of this public header.
 struct AxisRouteTopology;
 
-using RoutingTable =
-    std::vector<std::vector<std::vector<RoutingDirection>>>;  // [mesh_id][chip_id][target_chip_or_mesh_id]
+// [mesh_id][chip_id][target_chip_or_mesh_id]
+template <typename Entry>
+using RoutingTableT = std::vector<std::vector<std::vector<Entry>>>;
+
+using RoutingTable = RoutingTableT<RoutingDirection>;
 
 class RoutingTableGenerator {
 public:

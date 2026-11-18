@@ -404,6 +404,13 @@ void Kernel::process_scratchpad_binding_handles(const std::function<void(
     }
 }
 
+void Kernel::process_global_semaphore_binding_handles(
+    std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)> callback) const {
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        callback(handle.accessor_name, handle.addr_crta_word);
+    }
+}
+
 void Kernel::process_prefetcher_pipe_binding_handles(
     std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)> callback) const {
     for (const auto& handle : this->prefetcher_pipe_binding_handles_) {
@@ -795,6 +802,13 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
         hash_llk_metadata(handle.llk_metadata);
+    }
+    // GlobalSemaphore binding handles: the address word index is baked into the generated `global_sem::`
+    // token. The parameter name is omitted, as it does not appear in the generated headers.
+    hasher.update(static_cast<uint64_t>(this->global_semaphore_binding_handles_.size()));
+    for (const auto& handle : this->global_semaphore_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
     }
     // PrefetcherPipe binding handles: the slot id is baked into the generated `pipe::` token.
     hasher.update(static_cast<uint64_t>(this->prefetcher_pipe_binding_handles_.size()));

@@ -26,59 +26,6 @@
 
 namespace tt::tt_metal::trace_dispatch {
 
-void reset_host_dispatch_state_for_trace(
-    uint32_t num_sub_devices,
-    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
-    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
-    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
-    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
-    // Record the original value of expected_num_workers_completed, and reset it to 0.
-    std::copy(
-        expected_num_workers_completed.begin(),
-        expected_num_workers_completed.begin() + num_sub_devices,
-        expected_num_workers_completed_reset.begin());
-    std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_sub_devices, 0);
-
-    // Record original value of launch msg buffer
-    std::copy(
-        worker_launch_message_buffer_state.begin(),
-        worker_launch_message_buffer_state.begin() + num_sub_devices,
-        worker_launch_message_buffer_state_reset.begin());
-    for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        // Set launch msg wptr to 0. Every time trace runs on device, it will ensure that the workers
-        // reset their rptr to be in sync with device.
-        worker_launch_message_buffer_state[i].reset();
-    }
-    // Record original value of config buffer manager
-    std::copy(config_buffer_mgr.begin(), config_buffer_mgr.begin() + num_sub_devices, config_buffer_mgr_reset.begin());
-    for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        // Sync values in the trace need to match up with the counter starting at 0 again.
-        config_buffer_mgr[i].mark_completely_full(expected_num_workers_completed[i]);
-    }
-}
-
-void load_host_dispatch_state(
-    uint32_t num_sub_devices,
-    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
-    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
-    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
-    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
-    std::copy(
-        expected_num_workers_completed_reset.begin(),
-        expected_num_workers_completed_reset.begin() + num_sub_devices,
-        expected_num_workers_completed.begin());
-    std::copy(
-        worker_launch_message_buffer_state_reset.begin(),
-        worker_launch_message_buffer_state_reset.begin() + num_sub_devices,
-        worker_launch_message_buffer_state.begin());
-    std::copy(
-        config_buffer_mgr_reset.begin(), config_buffer_mgr_reset.begin() + num_sub_devices, config_buffer_mgr.begin());
-}
-
 void issue_trace_commands(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& sysmem_manager,

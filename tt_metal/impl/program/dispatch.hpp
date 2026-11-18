@@ -24,6 +24,7 @@
 #include "trace/trace_node.hpp"
 
 namespace tt::tt_metal {
+class CommandSink;
 class Device;
 class IDevice;
 class LaunchMessageRingBufferState;
@@ -252,8 +253,7 @@ void for_each_program_command_sequence_chunk(
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
-    SystemMemoryManager& manager,
-    uint32_t command_queue_id,
+    CommandSink& sink,
     bool stall_first,
     bool stall_before_program,
     bool send_binary = true);
@@ -261,11 +261,10 @@ void write_program_command_sequence(
 // As write_program_command_sequence, with per-device runtime args: each patch's words are written in place of the
 // sequence's words at patch.location (chunks holding a patch are copied and patched; the sequence is not written).
 // If `patch_write_offsets` is set, it receives, per patch, the issue-queue write pointer its first word was written
-// at (in bypass mode: the byte offset in the trace stream).
+// at (for a TraceCaptureBuffer: the byte offset in the recorded stream).
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
-    SystemMemoryManager& manager,
-    uint32_t command_queue_id,
+    CommandSink& sink,
     bool stall_first,
     bool stall_before_program,
     bool send_binary,
