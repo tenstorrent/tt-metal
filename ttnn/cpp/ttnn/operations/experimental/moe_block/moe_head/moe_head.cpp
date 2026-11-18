@@ -324,7 +324,7 @@ const MoEHeadSetup& setup_moe_head(
         setup.model = make_head_model(mesh, program_config, resources.port_luts());
         for (const auto& spec : head_words(*setup.model)) {
             const auto& words_tensor =
-                resources.persistent_words("moe_head/" + key + "/" + spec.name, spec.cores, spec.words);
+                resources.persistent_words("moe_head/" + key + "/" + spec.name, spec.cores, spec.words, spec.align);
             setup.words.push_back(static_cast<uint32_t>(words_tensor.buffer()->address()));
         }
         setup.inputs = persistent_inputs(resources, *setup.model, fit.row_blocks);

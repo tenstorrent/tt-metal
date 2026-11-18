@@ -714,9 +714,9 @@ std::vector<HeadWordsSpec> head_words(const HeadModel& model) {
     // (the matmul cores' phase words: kRouterXReadyFlag .. kLiveChunksFlag, head_program_common.hpp)
     out.push_back({"ewords", model.engine_cores(), kEngineWordsBytes / 4});
     // a padded forward's metadata, read by the kernels that skip its row chunks past the last real one
-    // (the named arg skip_padding_chunks: padded_rows.hpp padded_live_chunks): a 128 B slot from its first 64 B aligned
-    // address (padded_metadata_slot), so 48 words (192 B) a core - the slot and up to 64 B of alignment
-    out.push_back({"valid", head_arena_cores(model), 48});
+    // (the named arg skip_padding_chunks: padded_rows.hpp padded_live_chunks): a 128 B slot at a 64 B aligned address
+    // (padded_metadata_slot rounds the words' address up to 64 B: placed aligned, it is the words' own address)
+    out.push_back({"valid", head_arena_cores(model), 128 / 4, moe_head_alignment::kAlignBytes});
     // router iterations: [0] router core 0's count of the chip's router cores / ports done with an iteration, [16] a
     // port's count of the chip's router cores done
     if (model.router_iterations > 1) {
