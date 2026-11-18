@@ -4,7 +4,7 @@
 
 """The FLUX 3 Klein VAE encoder on fixed reference canvases. A prepared reference (sides multiples of 16, at most 4 MP)
 sits in the top-left corner of the smallest canvas that holds it and the rest is masked out at runtime, so every
-reference shape runs the programs of one of six canvases. The masked encoder matches the encoder on the image alone:
+reference shape runs the programs of one of eight canvases. The masked encoder matches the encoder on the image alone:
 the area right of and below the image is zeroed before every 3x3 conv and strided downsample (their zero padding),
 GroupNorm statistics cover the image only, and the mid-block attention biases the keys outside it away."""
 
@@ -21,9 +21,19 @@ from ...utils import tensor
 from .vae import VaeAttention, VaeResnetBlock
 from .vae_flux2 import Flux2VaeEncoder
 
-# 1:1, 16:9 and 9:16 canvases (width, height) at 1 MP and 4 MP, smallest first; every prepared reference fits one.
-# Sides are multiples of 256, so every level down to the latent (/ 8) is whole tiles.
-REFERENCE_CANVASES = ((1024, 1024), (1536, 1024), (1024, 1536), (2304, 2304), (4096, 1792), (1792, 4096))
+# Canvases (width, height), smallest first; every prepared reference fits one. 2816x1536 / 1536x2816 hold the 16:9 /
+# 9:16 references up to 4 MP at 1.04x their area; the 7.3 MP pair the wider ones. Sides are multiples of 256, so every
+# level down to the latent (/ 8) is whole tiles.
+REFERENCE_CANVASES = (
+    (1024, 1024),
+    (1536, 1024),
+    (1024, 1536),
+    (2816, 1536),
+    (1536, 2816),
+    (2304, 2304),
+    (4096, 1792),
+    (1792, 4096),
+)
 LEVELS = 4
 KEY_MASK_BIAS = -1.0e5
 GROUP_NORM_EPS = 1e-6

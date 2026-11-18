@@ -52,6 +52,13 @@ def test_every_prepared_reference_fits_a_canvas():
     assert all(cw % 256 == 0 and ch % 256 == 0 for cw, ch in REFERENCE_CANVASES)
 
 
+@pytest.mark.parametrize("size, canvas", [((2720, 1536), (2816, 1536)), ((1530, 2720), (1536, 2816))])
+def test_4mp_wide_and_tall_references_take_the_tight_canvases(size, canvas):
+    image = prepare_reference(Image.new("RGB", size))
+    assert canvas_for(*image.size) == canvas
+    assert canvas[0] * canvas[1] < 1.05 * image.width * image.height
+
+
 @pytest.fixture
 def torch_ttnn(monkeypatch):
     """canvas_flux3_klein's ttnn and uploads as torch: tensors stay torch tensors (fp32 for both dtypes)."""
