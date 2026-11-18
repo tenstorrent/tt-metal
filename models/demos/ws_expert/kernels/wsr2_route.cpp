@@ -19,11 +19,11 @@
 //   QG (owner) credits: my n-th owned row tile's gather slot is free once the compute popped my row tile n - NG: then
 //      n + 1 into my word of every group core's GCRED; arrivals: GARR at GS (n + 1) -> push the slot (CB 5);
 //   QA (owner) per owned row tile: the top-K keys (CB 7) and exp of their logits (CB 8), a token a column: w (t, k) =
-//      e_k / sum_k e_k (soft float), each token's w row ([16] fp32) to w page t (posted); records t | k << 16 | e << 20.
-//      WSR_SIDE (lane groups G): k's result row is t S + slot, the slot chosen so the row's DRAM bank lies on the side
-//      of the expert's lane group (e % G >= G / 2: the upper WSR_SIDE_BANKS / 2 banks), the rest in order; w and the
-//      record carry the slot instead of k.
-//      QA_TOK tokens a pass, so the soft float does not hold up the other queues;
+//      e_k / sum_k e_k (soft float), each token's w row ([16] fp32) to w page t (posted); records t | k << 16 | e
+//      << 20. WSR_SIDE (lane groups G): k's result row is t S + slot, the slot chosen so the row's DRAM bank lies on
+//      the side of the expert's lane group (e % G >= G / 2: the upper WSR_SIDE_BANKS / 2 banks), the rest in order; w
+//      and the record carry the slot instead of k. QA_TOK tokens a pass, so the soft float does not hold up the other
+//      queues;
 //   (WSR_DEBUG_LOGITS) QL my logits tiles (CB 9) to the logits^T tensor (posted).
 // A launch starts with this core's state words zeroed (flags, credits, the exchange's counts and offsets: their L1 is
 // another program's between launches), then a barrier over the chip (semaphores 5, 6; the BRISC waits for it too)
@@ -40,6 +40,13 @@
 //     then TensorAccessorArgs(logits^T).
 // Semaphores: 0, 1 (the exchange), 2 (the barrier's count, core 0), 3 (the barrier's go), 4 (the flag value source),
 // 5 (the start barrier's count, core 0), 6 (its go).
+// WSR_EP4 (EP-4, the experts split over the mesh row's chips; WSR_EP4 = experts a chip column): the w output is the
+// token's 128-B topk row instead (words 0-15 w (t, k), 16 + k the expert id, 28 the route word; 4-KB pages of 32
+// tokens, token t at page t / 32, offset (t % 32) 128: the group exchange gathers whole pages), every row tile's 32
+// dispatch route words go to the route tensor (one page, 128 B a row tile; tokens >= T 0), and there is no exchange.
+// Route word: bit RB + e / WSR_EP4 for each of the token's experts e not on this chip's column MC (sparse_dispatch_2d's
+// mask, chip index r C + c; order 0: X first), link (t & 1) << 17. RT 17 + GS + NC: RB (r C), MC, the route tensor's
+// address; CT after the logits': TensorAccessorArgs(route).
 #include "wsr_exchange.hpp"
 
 void kernel_main() {
@@ -63,6 +70,12 @@ void kernel_main() {
     constexpr uint32_t rflags = get_compile_time_arg_val(o + 15);
     constexpr uint32_t rgrant = get_compile_time_arg_val(o + 16);
     constexpr auto largs = TensorAccessorArgs<o + 17>();
+#ifdef WSR_EP4
+    constexpr auto rargs = TensorAccessorArgs<largs.next_compile_time_args_offset()>();
+    constexpr uint32_t WROW = 128, WPAGE = 4096;
+#else
+    constexpr uint32_t WROW = 64, WPAGE = 64;
+#endif
     constexpr uint32_t NB = KT / BK, XT = 2048, FT = 4096, EPC = 2;
     constexpr uint32_t xr_cb = tt::CBIndex::c_1, run_cb = tt::CBIndex::c_4;
     constexpr uint32_t ga_cb = tt::CBIndex::c_5, be_cb = tt::CBIndex::c_7, ee_cb = tt::CBIndex::c_8;
@@ -71,7 +84,7 @@ void kernel_main() {
 
     const uint32_t me = get_arg_val<uint32_t>(0), R0 = get_arg_val<uint32_t>(1), n = get_arg_val<uint32_t>(2);
     const uint32_t c = get_arg_val<uint32_t>(3), T = get_arg_val<uint32_t>(4);
-    const auto ws = TensorAccessor(wargs, get_arg_val<uint32_t>(5), 64);
+    const auto ws = TensorAccessor(wargs, get_arg_val<uint32_t>(5), WPAGE);
     volatile tt_l1_ptr uint32_t* stamps = p<uint32_t>(get_arg_val<uint32_t>(10));
     const auto ls = TensorAccessor(largs, get_arg_val<uint32_t>(11), FT);
     const uint32_t mx0 = get_arg_val<uint32_t>(12), my0 = get_arg_val<uint32_t>(13);
@@ -89,6 +102,11 @@ void kernel_main() {
         return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + i * 16);
     };
     const uint32_t xscr_addr = get_semaphore(4);
+#ifdef WSR_EP4
+    const uint32_t RB = get_arg_val<uint32_t>(17 + GS + NC), MC = get_arg_val<uint32_t>(18 + GS + NC);
+    const auto rs = TensorAccessor(rargs, get_arg_val<uint32_t>(19 + GS + NC), 4 * RTX * 32);
+    const uint32_t rstage = wst + 32 * WROW;  // (the row tile's 32 route words, after the topk rows' staging)
+#endif
     volatile tt_l1_ptr uint32_t* xscr = p<uint32_t>(xscr_addr);
 
     {  // the start: state words zeroed, then every core's
@@ -268,8 +286,23 @@ void kernel_main() {
                     sum += v[k];
                 }
                 const float inv = 1.0f / sum;
-                volatile tt_l1_ptr uint32_t* wr = p<uint32_t>(wst + col * 64);
-#if defined(WSR_SIDE)
+                volatile tt_l1_ptr uint32_t* wr = p<uint32_t>(wst + col * WROW);
+#if defined(WSR_EP4)
+                uint32_t mask = 0;
+                for (uint32_t k = 0; k < 16; ++k) {
+                    wr[k] = k < K ? __builtin_bit_cast(uint32_t, v[k] * inv) : 0;
+                }
+                for (uint32_t k = 0; k < K; ++k) {
+                    const uint32_t ek = key[at(k, col)] & IDM, ck = ek / WSR_EP4;
+                    wr[16 + k] = ek;
+                    mask |= ck != MC ? 1u << (RB + ck) : 0u;
+                }
+                for (uint32_t k = 16 + K; k < 32; ++k) {
+                    wr[k] = 0;
+                }
+                wr[28] = mask | (t & 1) << 17;
+                p<uint32_t>(rstage)[col] = wr[28];
+#elif defined(WSR_SIDE)
                 // (bank side: pick k's slot j among the token's result rows t S + j so that the row's DRAM bank, (t S + j)
                 // % WSR_SIDE_BANKS, is on the side of k's expert's lane group (e % WSR_SIDE >= WSR_SIDE / 2: the upper
                 // half of the banks), the rest in order; w and the record carry the slot, so the lists' rows, the
@@ -308,7 +341,9 @@ void kernel_main() {
                     wr[k] = k < K ? __builtin_bit_cast(uint32_t, v[k] * inv) : 0;
                 }
 #endif
-                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(wst + col * 64, ws.get_noc_addr(t), 64);
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(
+                    wst + col * WROW, ws.get_noc_addr(t * WROW / WPAGE, t * WROW % WPAGE), WROW);
+#ifndef WSR_EP4
                 for (uint32_t k = 0; k < K; ++k) {
 #if defined(WSR_SIDE)
                     p<uint32_t>(rec)[nrec++] = t | slot[k] << 16 | (key[at(k, col)] & IDM) << 20;
@@ -316,9 +351,16 @@ void kernel_main() {
                     p<uint32_t>(rec)[nrec++] = t | k << 16 | (key[at(k, col)] & IDM) << 20;
 #endif
                 }
+#endif
             }
             a_col = col_end;
             if (a_col == 32 || r * 32 + a_col >= T) {
+#ifdef WSR_EP4
+                for (uint32_t col = T - r * 32 < 32 ? T - r * 32 : 32; col < 32; ++col) {  // (tokens >= T: nowhere)
+                    p<uint32_t>(rstage)[col] = 0;
+                }
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(rstage, rs.get_noc_addr(0, r * 128), 128);
+#endif
                 noc_async_posted_writes_flushed();  // (the w staging rows are rewritten for the next row tile)
                 cb_pop_front(be_cb, 1);
                 cb_pop_front(ee_cb, 1);
@@ -373,6 +415,7 @@ void kernel_main() {
     }
     word(rgrant, 0) = 0;
 
+#ifndef WSR_EP4
     exchange(
         me,
         nrec,
@@ -383,4 +426,9 @@ void kernel_main() {
         get_arg_val<uint32_t>(8),
         get_arg_val<uint32_t>(9),
         stamps);
+#else
+    noc_async_write_barrier();
+    noc_async_posted_writes_flushed();
+    stamps[63] = wall();
+#endif
 }

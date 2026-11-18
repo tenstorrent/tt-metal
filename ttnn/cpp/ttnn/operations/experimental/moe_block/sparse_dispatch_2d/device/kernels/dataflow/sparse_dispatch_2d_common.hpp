@@ -5,14 +5,15 @@
 // The sparse 2D dispatch's shared kernel constants and span helpers. The mesh constants come in as defines:
 //   SA_R, SA_C            mesh rows / columns
 //   SA_S                  own rows a chip
+//   SA_ROW_OFF            xbuf row of slot 0
 //   SA_GMAX               (C - 1) + (R - 1) - 1: the last END generation
 //   SA_RW                 route words per own row (1: mask | order << 16 | link << 17; 2: mask, order | link << 1)
 //   SA_WRAP_X, SA_WRAP_Y  0 / 1: the axis is a ring
 //   SA_XRING, SA_YRING    the ring span tables (ring_table(C, wrap_x), ring_table(R, wrap_y)) as comma lists
 //
-// Manifest entries are 16 bytes: word 0 = slot | hops left << 16 | generation << 20 | order << 24 (or END | g << 20),
-// word 1 = the destination mask. A port core's semaphore words (`words`, 16 B apart): the rings' three entry counters,
-// then the neighbour fence's ready word.
+// Manifest entries are 16 bytes: word 0 = slot (low 16 bits) | hops left << 16 | generation << 20 | order << 24 | slot
+// bits 16-20 << 25 (or END | g << 20), word 1 = the destination mask. slot_of / slot_bits: a slot in word 0. A port
+// core's semaphore words (`words`, 16 B apart): the rings' three entry counters, then the neighbour fence's ready word.
 
 #pragma once
 
@@ -28,6 +29,7 @@ constexpr uint32_t IDLE_PORT = 0xFFFFFFFFu;
 constexpr uint32_t R = SA_R;
 constexpr uint32_t C = SA_C;
 constexpr uint32_t S = SA_S;
+constexpr uint32_t ROW_OFF = SA_ROW_OFF;
 constexpr uint32_t GMAX = SA_GMAX;
 constexpr bool WRAP_X = SA_WRAP_X != 0, WRAP_Y = SA_WRAP_Y != 0;
 // ring spans by the destination mask rotated to the position (a ring looks the same from every chip: 2^n x 2 bytes, not
@@ -47,6 +49,8 @@ FORCE_INLINE uint32_t route_flags(const uint32_t* w, uint32_t t) { return RW == 
 FORCE_INLINE uint32_t ring_off(uint32_t ring_offs, uint32_t k) {
     return k == 0 ? 0 : (ring_offs >> (16 * (k - 1))) & 0xFFFF;
 }
+FORCE_INLINE uint32_t slot_of(uint32_t w0) { return (w0 & 0xFFFF) | ((w0 >> 25) & 0x1F) << 16; }
+FORCE_INLINE uint32_t slot_bits(uint32_t slot) { return (slot & 0xFFFF) | (slot >> 16) << 25; }
 FORCE_INLINE uint32_t tie_of(uint32_t t) { return ((t * 2654435761u) >> 30) & 1; }
 // (a, b) packed a | b << 4: hops forward / backward from pos covering mask m's set positions (pos itself ignored)
 template <uint32_t n, bool wrap>

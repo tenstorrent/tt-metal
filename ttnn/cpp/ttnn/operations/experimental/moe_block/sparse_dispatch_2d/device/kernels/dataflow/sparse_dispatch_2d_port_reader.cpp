@@ -136,7 +136,7 @@ void read(const ReaderArgs& args) {
     };
     auto put = [&](uint32_t slot, uint32_t w0, uint32_t w1) {
         slot_page();
-        noc_async_read(out.get_noc_addr(slot), rows_w + batch * row_bytes, row_bytes);
+        noc_async_read(out.get_noc_addr(ROW_OFF + slot), rows_w + batch * row_bytes, row_bytes);
         volatile tt_l1_ptr uint32_t* mp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_w) + batch * META_WORDS;
         mp[0] = w0;
         mp[1] = w1;
@@ -171,7 +171,7 @@ void read(const ReaderArgs& args) {
                 if (e0 & END) {
                     end_in[k] = static_cast<int32_t>((e0 >> 20) & 0xF);
                 } else {
-                    put(e0 & 0xFFFF, e0, e1);
+                    put(slot_of(e0), e0, e1);
                 }
                 did = true;
             }
@@ -183,7 +183,7 @@ void read(const ReaderArgs& args) {
                 const uint32_t h = own_hops(t, m, order);
                 if (h) {
                     const uint32_t slot = me * S + t;
-                    put(slot, slot | (h << 16) | (order << 24), m);
+                    put(slot, slot_bits(slot) | (h << 16) | (order << 24), m);
                     did = true;
                     break;
                 }
@@ -223,4 +223,3 @@ void kernel_main() {
     size_t a = 0;
     sa::read(sa::reader_args(a, get_write_ptr(cb_man)));
 }
-

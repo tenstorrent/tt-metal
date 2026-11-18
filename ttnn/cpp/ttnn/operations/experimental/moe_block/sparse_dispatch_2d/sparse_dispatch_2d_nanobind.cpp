@@ -43,6 +43,8 @@ void bind_sparse_dispatch_2d(nb::module_& mod) {
                 arena: the block's L1 arena of the call (height-sharded over the worker grid): the dispatch's CBs go in
                     its first ``sparse_dispatch_2d_arena_bytes`` a port core instead of static CBs under it. Default:
                     static CBs.
+                row_offset: the xbuf row of slot 0 (a call on one piece of a larger xbuf: slot s at row row_offset +
+                    s). Default 0.
 
             Returns:
                 xbuf.
@@ -52,7 +54,8 @@ void bind_sparse_dispatch_2d(nb::module_& mod) {
         nb::arg("route").noconvert(),
         nb::arg("resources"),
         nb::kw_only(),
-        nb::arg("arena") = nb::none());
+        nb::arg("arena") = nb::none(),
+        nb::arg("row_offset") = 0);
 
     mod.def(
         "sparse_dispatch_2d_arena_bytes",

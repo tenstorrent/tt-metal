@@ -31,16 +31,18 @@ struct SparseDispatch2dParams {
     uint32_t group = 8;            // rows a reader -> sender hand-off (and fabric headers a sender)
     uint32_t manifest_batch = 16;  // manifest entries a stream sends at once
     uint32_t pack = 1;             // rows a fabric packet (1 or 2)
+    uint32_t row_offset = 0;       // xbuf row of slot 0 (a call on one piece of a larger xbuf)
     // Derived from the hashed fields above; not hashed itself.
     std::shared_ptr<const SparseDispatch2dPorts> ports;
 
     // (reflection / logging: the structural fields; `ports` follows from them)
-    static constexpr auto attribute_names = std::forward_as_tuple("plan_key", "group", "manifest_batch", "pack");
-    auto attribute_values() const { return std::forward_as_tuple(plan_key, group, manifest_batch, pack); }
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("plan_key", "group", "manifest_batch", "pack", "row_offset");
+    auto attribute_values() const { return std::forward_as_tuple(plan_key, group, manifest_batch, pack, row_offset); }
 };
 
 struct SparseDispatch2dInputs {
-    Tensor xbuf;   // [1, 1, N * S, W] ROW_MAJOR, DRAM interleaved; own rows in place; written in place
+    Tensor xbuf;   // [1, 1, >= row_offset + N * S, W] ROW_MAJOR, DRAM interleaved; own rows in place; written in place
     Tensor route;  // [1, 1, 1, RW * S] uint32 ROW_MAJOR, DRAM interleaved: the own rows' route words
     // The port cores' semaphore words (MoEBlockResources persistent words "sparse_dispatch_2d/sems"): per port core
     // the three ring counters and the fence's ready word, 16 B apart. Persistent and zero between calls.

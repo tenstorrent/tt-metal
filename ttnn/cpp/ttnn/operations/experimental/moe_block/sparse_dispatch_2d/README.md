@@ -9,6 +9,8 @@ The MoE block's dispatch: every chip's own rows go to the chips that hold one of
 - `xbuf` `[1, 1, N * S, W]` ROW_MAJOR, DRAM interleaved, per chip: chip `(r, c)`'s own S rows already at slots
   `(r * C + c) * S + t` (the MoE head writes them there). Filled in place: slot `home * S + t` lands on every chip
   the row's route word names; other slots are not touched.
+- `row_offset` (keyword, default 0): xbuf row of slot 0 - a call on one piece of a larger xbuf (`[1, 1, >= row_offset + N * S,
+  W]`), slot s at row `row_offset + s`. Slots are 21 bits (`N * S < 2^21`).
 - `route` `[1, 1, 1, RW * S]` uint32, per chip: a route word per own row. Up to 16 chips one word
   (`mask | order << 16 | link << 17`), beyond two (`mask`, `order | link << 1`). `order` 0 sends the row along its
   mesh row first (X), 1 along its column first (Y); `link` picks the fabric link of every hop.
@@ -49,7 +51,7 @@ SA_YRING`); everything else is compile-time args.
 | Ring counters x 3 + fence ready word | `MoEBlockResources.persistent_words("sparse_dispatch_2d/ports/sems")`, 16 B apart on every port cell of every chip, zero between calls (each call returns them to zero). |
 | Rows, metadata, plan, stage CBs | as the reference (`2 group row_bytes`, `2 group 16`, `plan_bytes`, `3 x 2 x manifest_batch x 16`). |
 
-`compute_program_hash` covers the resources' `plan_key()`, `group`, `manifest_batch`, `pack` and the tensor specs; no
+`compute_program_hash` covers the resources' `plan_key()`, `group`, `manifest_batch`, `pack`, `row_offset` and the tensor specs; no
 address. Every address in the runtime args is a tensor base (xbuf, route, the semaphore words); the mesh workload
 factory records where each sits (`common/address_patches.hpp`), and a cache hit rewrites a tensor's arguments only when its address moved - with nothing moved, one runtime-arg lookup per
 tensor a chip. The mesh plan, port cores and semaphore words are computed once per resources object.

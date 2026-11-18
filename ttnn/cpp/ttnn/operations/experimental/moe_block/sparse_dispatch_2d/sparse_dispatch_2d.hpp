@@ -29,7 +29,8 @@ Tensor sparse_dispatch_2d(
     const Tensor& xbuf,
     const Tensor& route,
     MoEBlockResources& resources,
-    const std::optional<Tensor>& arena = std::nullopt);
+    const std::optional<Tensor>& arena = std::nullopt,
+    uint32_t row_offset = 0);
 
 // Bytes a port core of the block's arena the dispatch's CBs take with arena= (its group, manifest_batch 16), for
 // rows of `width` elements of `dtype_bytes` bytes (64 B aligned rows, as the DRAM xbuf's pages).

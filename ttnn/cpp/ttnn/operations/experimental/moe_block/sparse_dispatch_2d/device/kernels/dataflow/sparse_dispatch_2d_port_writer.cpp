@@ -142,8 +142,8 @@ void send(const SenderArgs& args, CONN& conn) {
     };
     // what the neighbour does with a row this port just sent it
     auto follow = [&](uint32_t w0, uint32_t m) {
-        const uint32_t slot = w0 & 0xFFFF, h = (w0 >> 16) & 0xF, g = (w0 >> 20) & 0xF, order = (w0 >> 24) & 1;
-        const uint32_t nxt = (g + 1) << 20 | (order << 24) | slot;
+        const uint32_t slot = slot_of(w0), h = (w0 >> 16) & 0xF, g = (w0 >> 20) & 0xF, order = (w0 >> 24) & 1;
+        const uint32_t nxt = (g + 1) << 20 | (order << 24) | slot_bits(slot);
         if (h > 1) {
             stage(0, nxt | ((h - 1) << 16), m);
         }
@@ -196,8 +196,8 @@ void send(const SenderArgs& args, CONN& conn) {
                     // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
                     hdr->to_noc_unicast_scatter_write(
                         NocUnicastScatterCommandHeader(
-                            {tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, w0 & 0xFFFF),
-                             tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, w0b & 0xFFFF)},
+                            {tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, ROW_OFF + slot_of(w0)),
+                             tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, ROW_OFF + slot_of(w0b))},
                             {static_cast<uint16_t>(row_bytes)}),
                         2 * row_bytes);
                     conn.wait_for_empty_write_slot();
@@ -211,7 +211,8 @@ void send(const SenderArgs& args, CONN& conn) {
             }
             // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
             hdr->to_noc_unicast_write(
-                NocUnicastCommandHeader{tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, w0 & 0xFFFF)},
+                NocUnicastCommandHeader{
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, ROW_OFF + slot_of(w0))},
                 row_bytes);
             conn.wait_for_empty_write_slot();
             conn.send_current_slot_non_blocking(rows_l1 + i * row_bytes, row_bytes, reinterpret_cast<uint32_t>(hdr));
@@ -248,4 +249,3 @@ void kernel_main() {
     sa::send(args, conn);
     conn.close();
 }
-

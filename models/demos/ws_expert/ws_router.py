@@ -50,7 +50,10 @@ def router_inputs(mesh, wr):
     E = wr.shape[1]
     dram = ttnn.DRAM_MEMORY_CONFIG
     wrT = ttnn.from_torch(
-        wr.t().contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
+        wr.t().contiguous().to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
         memory_config=dram,
     )
     ids = torch.arange(E, dtype=torch.int32).unsqueeze(1).expand(E, 32).contiguous()
@@ -61,15 +64,32 @@ def router_inputs(mesh, wr):
 def logits_debug_tensor(mesh, lc):
     """The logits^T [E, TX] fp32 TILE the program writes under debug_logits."""
     return ttnn.empty(
-        [lc.nexp, lc.TX], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        [lc.nexp, lc.TX],
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
-def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0):
+def ep4_outputs(mesh, lc):
+    """The head's outputs in EP-4 mode (build_router ep4): the topk rows [TX, 32] uint32 (words 0-15 the gate weights'
+    fp32 bits, 16 + k the expert ids, 28 the route word) as [TX / 32, 1024] (4-KB pages of 32 tokens) and the dispatch
+    route words [1, 1, 1, TX] uint32 (tokens >= T 0); the WS outputs it does not write as one-page placeholders."""
+    rm, dram = ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG
+    e = lambda shape: ttnn.empty(shape, dtype=ttnn.uint32, layout=rm, device=mesh, memory_config=dram)
+    small = e([1, 32])
+    return dict(
+        w=e([lc.TX // 32, 1024]), route=e([1, 1, 1, lc.TX]), idx_t=small, dest_t=small, counts_t=small, fence_t=small
+    )
+
+
+def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0, ep4=0):
     """generic_op mesh program of the head; returns (mesh program, io tensors, stamps). x_rm: [TX, H] bf16 row-major
     (rows >= T zero); outs: ws_head.head_outputs; logd: the debug logits^T tensor (written when given); side: the
     routed stream's lane groups G (> 0: each (t, k)'s result row t S + slot in a DRAM bank of the side of its expert's
-    group, e % G >= G / 2 the upper half of the banks - WSR_SIDE)."""
+    group, e % G >= G / 2 the upper half of the banks - WSR_SIDE); ep4: experts a chip column (> 0: EP-4 mode, outs from
+    ep4_outputs - each token's topk row and dispatch route word, no per-expert exchange; one program a chip)."""
     K, NE, S, T, H = lc.K, lc.nexp, lc.S, lc.T, lc.H
     NET, KT = NE // 32, H // 32
     NB = KT // BK
@@ -93,7 +113,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0):
     gring = tl(NG * GS, ttnn.float32)  # gather ring (CB 5)
     idl1 = tl(EPC, ttnn.uint16)  # id tiles (CB 6)
     bufs = dict(
-        wst=w16(32 * 16),
+        wst=w16(32 * 32 + 32 if ep4 else 32 * 16),
         rec=w16(rcsrc),
         srt=w16(rcsrc + 4 * NOWN),
         cnt_in=w16(NC),
@@ -118,6 +138,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0):
     xy = lambda c: noc(mesh, *c)[0] | noc(mesh, *c)[1] << 8
     all_xy = [xy(c) for c in cores]
     rd_rt, cp_rt, rt_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    rt_py = {}
     me = 0
     for g, (R0, n) in zip(grp, rng):
         rs = noc_rects(mesh, g)
@@ -133,7 +154,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0):
                 mxy[h],
             ]
             cp_rt[x][y] = [n, c, st.buffer_address()]
-            rt_rt[x][y] = (
+            rt_py[(x, y)] = rt_rt[x][y] = (
                 [me, R0, n, c, T]
                 + [outs[k].buffer_address() for k in ("w", "idx_t", "dest_t", "counts_t", "fence_t")]
                 + [st.buffer_address(), logd.buffer_address()]
@@ -151,6 +172,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0):
     ccfg.unpack_to_dest_mode = utd
     ta = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     defs = [("WSR_DEBUG_LOGITS", "1")] if debug else []
+    defs += [("WSR_EP4", str(ep4))] if ep4 else []
     if side:
         banks = mesh.dram_grid_size().x
         assert banks % 2 == 0 and side % 2 == 0
@@ -168,6 +190,23 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0):
         + ta(outs["fence_t"])
     )
     idm = 0xFF if NE <= 256 else 0x1FF if NE <= 512 else 0x3FF
+
+    def route_kd(rt):
+        return ttnn.KernelDescriptor(
+            kernel_source=kpath("wsr2_route.cpp"),
+            core_ranges=cset,
+            compile_time_args=exch_ct
+            + [BK, NX, KT, GS, NG, ring.buffer_address(), bufs["xflags"].buffer_address()]
+            + [bufs[k].buffer_address() for k in ("xprog", "gcred", "garr")]
+            + [gring.buffer_address(), idm, RTX, NR, relay.buffer_address()]
+            + [bufs[k].buffer_address() for k in ("rflags", "rgrant")]
+            + ta(logd)
+            + (ta(outs["route"]) if ep4 else []),
+            defines=rdefs,
+            runtime_args=rt,
+            config=dm(1),
+        )
+
     kernels = [
         ttnn.KernelDescriptor(
             kernel_source=kpath("wsr2_reader.cpp"),
@@ -188,19 +227,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0):
             runtime_args=cp_rt,
             config=ccfg,
         ),
-        ttnn.KernelDescriptor(
-            kernel_source=kpath("wsr2_route.cpp"),
-            core_ranges=cset,
-            compile_time_args=exch_ct
-            + [BK, NX, KT, GS, NG, ring.buffer_address(), bufs["xflags"].buffer_address()]
-            + [bufs[k].buffer_address() for k in ("xprog", "gcred", "garr")]
-            + [gring.buffer_address(), idm, RTX, NR, relay.buffer_address()]
-            + [bufs[k].buffer_address() for k in ("rflags", "rgrant")]
-            + ta(logd),
-            defines=rdefs,
-            runtime_args=rt_rt,
-            config=dm(1),
-        ),
+        route_kd(rt_rt),
     ]
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(0, wl1),
@@ -216,9 +243,22 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0):
     if debug:
         cbs += [cb(9, ttnn.float32, 2 * EPC, cset), cb(10, ttnn.float32, EPC, cset)]
     sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(7)]
-    mpd = mesh_program(mesh, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
+    if not ep4:
+        mpd = mesh_program(mesh, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
+    else:  # (a program a chip: its row's first chip index r C and its column)
+        R, Cn = tuple(mesh.shape)
+        mpd = ttnn.MeshProgramDescriptor()
+        for r in range(R):
+            for c in range(Cn):
+                rt = ttnn.RuntimeArgs()
+                for x, y in cores:
+                    rt[x][y] = rt_py[(x, y)] + [r * Cn, c, outs["route"].buffer_address()]
+                ks = list(kernels[:2]) + [route_kd(rt)]
+                mc = ttnn.MeshCoordinate(r, c)
+                mpd[ttnn.MeshCoordinateRange(mc, mc)] = ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
     io = [x_rm, wrT, ids_t, wl1, ring, relay, xst, gring, idl1, st] + list(bufs.values())
     io += ([logd] if debug else []) + [outs[k] for k in ("w", "idx_t", "dest_t", "counts_t", "fence_t")]
+    io += [outs["route"]] if ep4 else []
     return mpd, io, st
 
 

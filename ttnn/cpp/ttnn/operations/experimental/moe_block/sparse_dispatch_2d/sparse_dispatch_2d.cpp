@@ -52,7 +52,8 @@ Tensor sparse_dispatch_2d(
     const Tensor& xbuf,
     const Tensor& route,
     MoEBlockResources& resources,
-    const std::optional<Tensor>& arena) {
+    const std::optional<Tensor>& arena,
+    uint32_t row_offset) {
     ZoneScopedN("sparse_dispatch_2d: entry");
     using namespace sparse_dispatch_2d_detail;
     const State& state = state_of(resources);
@@ -62,6 +63,7 @@ Tensor sparse_dispatch_2d(
         .group = dispatch_group(resources),
         .manifest_batch = 16,
         .pack = default_pack(row_bytes, resources.fabric_max_payload_bytes()),
+        .row_offset = row_offset,
         .ports = state.ports,
     };
     return ttnn::prim::moe_block_sparse_dispatch_2d(xbuf, route, state.sems, params, arena);

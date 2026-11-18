@@ -36,6 +36,7 @@ ttsl::hash::hash_t SparseDispatch2dDeviceOperation::compute_program_hash(
         args.group,
         args.manifest_batch,
         args.pack,
+        args.row_offset,
         t.xbuf.tensor_spec(),
         t.route.tensor_spec(),
         t.sems.tensor_spec(),
@@ -79,11 +80,12 @@ void SparseDispatch2dDeviceOperation::validate_on_program_cache_miss(
     const uint32_t S = route_len / RW;
     const auto& xs = t.xbuf.logical_shape();
     TT_FATAL(
-        xs.rank() >= 2 && xs[-2] == N * S && t.xbuf.logical_volume() == static_cast<uint64_t>(N) * S * xs[-1],
-        "sparse_dispatch_2d: xbuf must be [1, 1, N * S = {}, W], got {}",
-        N * S,
+        xs.rank() >= 2 && xs[-2] >= args.row_offset + N * S &&
+            t.xbuf.logical_volume() == static_cast<uint64_t>(xs[-2]) * xs[-1],
+        "sparse_dispatch_2d: xbuf must be [1, 1, >= row_offset + N * S = {}, W], got {}",
+        args.row_offset + N * S,
         xs);
-    TT_FATAL(N * S < (1u << 16), "sparse_dispatch_2d: N * S = {} slots; manifest entries hold 16-bit slots", N * S);
+    TT_FATAL(N * S < (1u << 21), "sparse_dispatch_2d: N * S = {} slots; manifest entries hold 21-bit slots", N * S);
 
     const uint32_t row_bytes = t.xbuf.buffer()->aligned_page_size();
     const size_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();

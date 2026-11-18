@@ -1533,3 +1533,44 @@ speed-of-light ep4_targets.py.
 - Capacity (10 seeds; LB n 9449, Galaxy n 4096): busiest chip's O rows / 12 n: uniform max 1.006 (LB) / 1.012 (GLX),
   zipf mean 1.075-1.078, max 1.138-1.140. Partials a (source, home) pair: max 0.975 n (uniform) / 0.988 n (zipf)
   against the mean p = 0.968 n. Sizing: O at 1.25 x 12 n covers both routings with margin; past it, assert / fall back.
+
+### Stage 2: head + group exchange (ws_router EP-4 mode, ep4_layer.head_program / exchange; tests/test_ep4_layer.py)
+- ws_router with WSR_EP4 (= experts a chip column): per token a 128-B topk row (gate weights fp32 bits in words 0-15,
+  expert ids 16 + k, the route word 28), written as 4-KB pages of 32 tokens; per row tile its 32 route words into the
+  route tensor (sparse_dispatch_2d's format: bit r C + c' for each chip of the row holding >= 1 expert, own chip
+  excluded, order 0, link t & 1 << 17; tokens >= T 0); no per-expert exchange (one program a chip: RT r C, c).
+- grp: stock ttnn.all_gather of the topk pages along X (cluster_axis 1).
+- 302K-eq (n 9449, 2 x 4), both routings: route words and grp bit-exact against ep4_ref from the device's own top-K;
+  top-K equal to torch's on 99.5% (uniform) / 98.9% (zipf) of the tokens, the rest near ties (worst miss 0.13% / 0.26%
+  below torch's 12th score); gate weights PCC 0.9999997 / 0.9999986 (the head's exp, as the WS layer's).
+- Traced (20 + 5, AICLK 1350): head 0.985 ms, exchange 0.088 ms, head + exchange 1.05 ms. With 128-B pages (a token a
+  page) the all-gather took 0.92 ms; 4-KB pages 0.088. (WS head at T 31250: 2.70 ms on the Galaxy.)
+
+### Stage 3: dispatch on X (sparse_dispatch_2d, masks inside the mesh row)
+- sparse_dispatch_2d as it was takes N S < 2^16 slots and sizes its manifest rings in L1 for every row of a call (N S
+  = 75.8K at 302K-eq; 303K on the Galaxy). Two changes to the op: slots are 21 bits (word 0's free bits 25-29 hold
+  slot bits 16-20; N S < 2^21), and a row_offset argument (xbuf row of slot 0, in the program hash). EP-4 dispatches in
+  KP pieces of SP tokens a chip (EP4Cfg.SP, default 1184): chip ch's token t at xbuf row (t / SP) N SP + ch SP + t %
+  SP, piece p one call at row offset p N SP with the [1, 1, 1, SP] slice of the route words. The MoE block's own
+  dispatch tests still pass (2x4 W3584 / W6144).
+- Bit-exact at every destination for both routings (2.91 rows sent a token); pass-through chips keep some home rows
+  (allowed, as the op's own test).
+- Traced: 4.26 / 4.21 / 4.19 ms for 8 / 4 / 2 pieces (uniform 302K-eq) against 2.11 ms speed of light at 50 GB/s and
+  2.64 at 40: 1.6x of the @40 column. Piece count does not matter. The gap is the fabric connection: one connection a
+  (direction, link), 1 row (7.7 KB) a packet (2 rows need a 15.4 KB payload; Blackhole's maximum is 15232), and the
+  busiest link pair's 210 MB in 4.2 ms is 25 GB/s a connection - the per-connection ceiling measured on the LoudBox
+  (bench_unicast ~0.3 us a packet + bytes at 50 GB/s). On the Galaxy the 25 GB/s link is the same rate, so the LoudBox
+  line is no faster than the Galaxy ring here: X phases on the LoudBox run at the Galaxy's link speed.
+
+### Stage 4: receive-side lists (kernels e4_lists_rd.cpp / e4_lists.cpp, ep4_layer.build_lists)
+- One program a chip, every core: BRISC reads the core's range of grp rows; NCRISC counts each token's local pairs,
+  an exclusive prefix over the cores (core 0) gives each token's first O row (a token's O rows contiguous, k order),
+  writes every token's 128-B run record (base, count, last local expert in stream order, gate weights, local experts),
+  and sends 2-word records (token | expert, O row) plus one ready record a token to the expert's owner core (2
+  experts an owner, 80 owners; the ws_head exchange with wider records: group token indices reach 125K at 1M-eq).
+  Owners write each expert's token list (xbuf rows), O rows and ready list as whole pages. Also the expected partial
+  counts a home chip gets from each row chip (atomic adds at core 0), and the O rows used.
+- Exact against ep4_ref.chip_layout on every chip, both routings (counts, lists, O rows, run records, ready lists,
+  expected counts); head -> exchange -> lists bit-identical over two runs. O rows used / 12 n: uniform 0.993-1.009,
+  zipf 0.908-1.070.
+- Traced: 0.59 ms uniform, 1.07 ms zipf (owners serial over their records; the hot experts' owners carry more).

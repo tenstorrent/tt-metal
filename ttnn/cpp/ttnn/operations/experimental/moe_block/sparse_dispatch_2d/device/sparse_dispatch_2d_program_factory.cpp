@@ -33,7 +33,7 @@ constexpr const char* KERNEL_DIR =
     "ttnn/cpp/ttnn/operations/experimental/moe_block/sparse_dispatch_2d/device/kernels/dataflow/";
 
 // The reference's text substitutions of _COMMON, as defines.
-tt::tt_metal::KernelDescriptor::Defines common_defines(const MeshTopology& topo, uint32_t S) {
+tt::tt_metal::KernelDescriptor::Defines common_defines(const MeshTopology& topo, uint32_t S, uint32_t row_offset) {
     const auto span = span_subs(topo.R, topo.C, topo.wrap_x, topo.wrap_y);
     const auto list = [](const std::vector<uint8_t>& v) {
         std::vector<uint32_t> w(v.begin(), v.end());
@@ -43,6 +43,7 @@ tt::tt_metal::KernelDescriptor::Defines common_defines(const MeshTopology& topo,
         {"SA_R", std::to_string(topo.R)},
         {"SA_C", std::to_string(topo.C)},
         {"SA_S", std::to_string(S)},
+        {"SA_ROW_OFF", std::to_string(row_offset)},
         {"SA_GMAX", std::to_string(gmax(topo))},
         {"SA_RW", std::to_string(route_words(topo.num_chips()))},
         {"SA_WRAP_X", span.wrap_x ? "1" : "0"},
@@ -105,7 +106,7 @@ tt::tt_metal::WorkloadDescriptor build_workload(
         }
         return c;
     };
-    const auto defines = common_defines(topo, S);
+    const auto defines = common_defines(topo, S, args.row_offset);
     const tt::DataFormat row_fmt = tt::tt_metal::datatype_to_dataformat_converter(t.xbuf.dtype());
 
     // compile-time args: the manifest CB, then the kernels' own (see the kernels)

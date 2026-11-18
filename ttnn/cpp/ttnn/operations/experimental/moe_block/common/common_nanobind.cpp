@@ -21,6 +21,7 @@
 #include "mesh_routing.hpp"
 #include "moe_block_config.hpp"
 #include "moe_block_resources.hpp"
+#include "port_placement.hpp"
 
 namespace ttnn::operations::experimental::moe_block {
 
@@ -191,6 +192,30 @@ void bind_resources(nb::module_& mod) {
             nb::arg("chunk_splits"),
             "Plan the ops for MoEBlockConfig.chunk_splits (MoEBlock's choice): drops every plan and persistent word "
             "made so far - before any op call or weight preparation on these resources")
+        .def(
+            "port_cores",
+            [](MoEBlockResources& r, const std::optional<std::vector<std::pair<uint32_t, uint32_t>>>& allowed) {
+                std::optional<std::vector<tt::tt_metal::CoreCoord>> cells;
+                if (allowed) {
+                    cells.emplace();
+                    for (const auto& [x, y] : *allowed) {
+                        cells->push_back(tt::tt_metal::CoreCoord(x, y));
+                    }
+                }
+                const PortCores& pc = r.ports(cells);
+                nb::dict out;
+                for (const auto& [k, core] : pc) {
+                    const auto& mp = r.mesh_plan().chips.at(k.chip)[static_cast<size_t>(k.dir)];
+                    const uint32_t link = mp ? mp->links.at(k.link_index) : 0;
+                    out[nb::make_tuple(k.chip.r, k.chip.c, std::string(dir_name(k.dir)), k.link_index)] =
+                        nb::make_tuple(core.x, core.y, link);
+                }
+                return out;
+            },
+            nb::arg("allowed") = nb::none(),
+            "Port cores (place_ports, memoized per allowed cells): {(r, c, dir name, link index): (logical x, logical "
+            "y, "
+            "fabric link id)}; allowed: [(x, y)] logical cells to place them in (None: the whole grid)")
         .def("release", &MoEBlockResources::release);
 }
 
