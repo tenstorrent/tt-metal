@@ -2691,4 +2691,4 @@ def test_slice_block_sharded_non_square_grid_default_memory_config(
     assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
     assert tt_output.memory_config().shard_spec.orientation == orientation
     expected = torch_input[:, :, : slice_end[2], : slice_end[3]]
-    assert torch.equal(ttnn.to_torch(tt_output), expected)
+    assert_exact(expected, ttnn.to_torch(tt_output))
