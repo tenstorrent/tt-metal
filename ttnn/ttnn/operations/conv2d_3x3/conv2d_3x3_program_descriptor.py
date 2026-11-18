@@ -97,6 +97,12 @@ FACE_DIRECT_WHOLE_K_BLOCK = True
 # shards, the writer (NoC1) those of higher shards, so no read response wraps around the ring. False keeps the
 # whole fill on the reader.
 SLAB_SPLIT_NOCS = True
+# HEIGHT-sharded TILE input: the fill is split by NoC like the ROW_MAJOR one. The reader (NoC0) reads the tile-rows of
+# its own and lower input shards into each cb_input_tiles batch, the writer (NoC1) those of higher shards into the batch
+# the reader reserved and handed over; the writer serves hand-overs wherever it would otherwise wait (weight multicast
+# receive, weight reserve, bias read, row-gather serving). Only on cores whose writer is a pure weight-multicast
+# receiver: the sender and the own-stream cores spend their writer in blocking weight DRAM reads, which delays their
+# fill and with it every round (measured slower), so they keep the whole fill on the reader.
 # Face-direct in0 streaming: with one K-block per M-block, the reader pushes the in0 block in row groups of this
 # many tile-rows (rounded down to whole matmul subblocks; the last group may be shorter) and compute runs one matmul
 # call per group, so the matmul overlaps the gather. A value >= block_m_tiles pushes and multiplies the whole block
@@ -831,6 +837,7 @@ def create_program_descriptor(
     # Channel-slice reads (R4): the core's slice of input row v is page v * row_page_stride + col offset,
     # and one owner shard holds input_shard_rows consecutive rows of it contiguously.
     slab_split = SLAB_SPLIT_NOCS and g.sharded_output and not g.tile_input and not g.k_split
+    tile_fill_split = g.sharded_output and g.tile_input and not g.k_split
     if g.k_split:
         in_spec = input_tensor.memory_config().shard_spec
         page_cols = TILE if g.tile_input else g.c_in_p
@@ -838,6 +845,8 @@ def create_program_descriptor(
         input_shard_rows = int(in_spec.shape[0]) // (TILE if g.tile_input else 1)
     elif slab_split:
         row_page_stride, input_shard_rows = 0, int(input_tensor.memory_config().shard_spec.shape[0])
+    elif tile_fill_split:
+        row_page_stride, input_shard_rows = 0, int(input_tensor.memory_config().shard_spec.shape[0]) // TILE
     else:
         row_page_stride, input_shard_rows = 0, 0
     pages_per_slice_row = g.c_in_tiles if g.tile_input else 1
@@ -851,8 +860,9 @@ def create_program_descriptor(
     # Semaphore ids: the R4 combine's four, then the split slab fill's two and the split gather's two; the weight
     # channel attaches after.
     sem_ids = (SEM_COMBINE_CREDIT, SEM_COMBINE_ARRIVAL, SEM_COMBINE_SEND_GO, SEM_COMBINE_SEND_DONE) if g.k_split else ()
-    slab_sem_ids = (len(sem_ids), len(sem_ids) + 1) if slab_split else (0, 0)
-    sem_ids += slab_sem_ids if slab_split else ()
+    fill_split = slab_split or tile_fill_split
+    slab_sem_ids = (len(sem_ids), len(sem_ids) + 1) if fill_split else (0, 0)
+    sem_ids += slab_sem_ids if fill_split else ()
     gather_sem_ids = (len(sem_ids), len(sem_ids) + 1) if gather_split else (0, 0)
     sem_ids += gather_sem_ids if gather_split else ()
     # Split row gather: row_go, row_done, row_limit, row_assigned, then ROW_QUEUE mailbox words.
@@ -865,7 +875,8 @@ def create_program_descriptor(
         """The reader zeroes cb_im2col_rm once (mirror of its zero_im2col_once)."""
         return not face_direct and bk == g.tensor_kkh_tiles and (slice_channels < g.c_in_p or k_padded)
 
-    def reader_ct_args(slice_channels):
+    def reader_ct_args(slice_channels, split_core=None):
+        split_core = tile_fill_split if split_core is None else split_core
         args = [
             CB_HALO_SLAB,
             CB_IM2COL_RM,
@@ -923,6 +934,7 @@ def create_program_descriptor(
             # Shared-L1 N-slice walk: slab_dead reuses send_go's id, which the N-slice walk never uses.
             int(b.shared_slab_bytes > 0),
             SEM_COMBINE_SEND_GO,
+            int(split_core),
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1020,11 +1032,21 @@ def create_program_descriptor(
         SEM_COMBINE_SEND_GO,  # slab_dead
     ]
     writer_slice_arg = len(writer_ct_args) - 5
+    writer_split_arg = len(writer_ct_args)
+    writer_ct_args += [
+        int(tile_fill_split),
+        CB_INPUT_TILES,
+        b.slab_tile_rows,
+        b.untilize_batch_rows,
+        INPUT_TILE_DEPTH_BATCHES,
+    ]
 
-    def writer_ct_args_for(slice_channels):
+    def writer_ct_args_for(slice_channels, split_core=None):
         args = list(writer_ct_args)
         args[writer_slice_arg] = slice_channels
         args[writer_slice_arg + 2] = int(zero_im2col_once(slice_channels))
+        if split_core is not None:
+            args[writer_split_arg] = int(split_core)
         return args
 
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
@@ -1040,7 +1062,7 @@ def create_program_descriptor(
     )
     writer_ct_args.extend(
         ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
-        if slab_split
+        if fill_split
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
 
@@ -1060,6 +1082,16 @@ def create_program_descriptor(
         for core, row, _ in work:
             virtual = device.worker_core_from_logical_core(core)
             row_peer_coords.setdefault(row, []).extend([virtual.x, virtual.y])
+    # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
+    # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
+    mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
+    split_cores = set()
+    if tile_fill_split and mcast_receivers is not None:
+        split_cores = {(c.x, c.y) for c in core_list[1:] if mcast_receivers.contains(c)}
+
+    def split_of(core):
+        return (core.x, core.y) in split_cores
+
     for core, m_index, col in work:
         m_tile_start, actual_m_tiles = core_m_ranges[m_index]
         num_m_blocks_this_core = m_blocks_per_index[m_index]
@@ -1067,7 +1099,9 @@ def create_program_descriptor(
         # empty past the last C_out tile).
         out_n_tile_start = col * ns
         out_valid_tiles = max(0, min(ns, g.tensor_n_tiles - out_n_tile_start))
-        reader_cores, reader_rt = reader_groups.setdefault(_slice_channels(g, col), ([], ttnn.RuntimeArgs()))
+        reader_cores, reader_rt = reader_groups.setdefault(
+            (_slice_channels(g, col), split_of(core)), ([], ttnn.RuntimeArgs())
+        )
         reader_cores.append(core)
         reader_rt[core.x][core.y] = [
             input_addr,
@@ -1080,7 +1114,9 @@ def create_program_descriptor(
             m_index,
         ] + row_peer_coords.get(m_index, [])
         compute_rt[core.x][core.y] = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
-        writer_cores, writer_rt = writer_groups.setdefault(_slice_channels(g, col), ([], ttnn.RuntimeArgs()))
+        writer_cores, writer_rt = writer_groups.setdefault(
+            (_slice_channels(g, col), split_of(core)), ([], ttnn.RuntimeArgs())
+        )
         writer_cores.append(core)
         writer_rt[core.x][core.y] = [
             weight_addr,
@@ -1102,7 +1138,7 @@ def create_program_descriptor(
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
             core_ranges=_core_range_set(reader_cores),
-            compile_time_args=reader_ct_args(slice_channels),
+            compile_time_args=reader_ct_args(*slice_channels),
             runtime_args=reader_rt,
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -1112,7 +1148,7 @@ def create_program_descriptor(
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "conv2d_3x3_writer.cpp"),
             core_ranges=_core_range_set(writer_cores),
-            compile_time_args=writer_ct_args_for(slice_channels),
+            compile_time_args=writer_ct_args_for(*slice_channels),
             runtime_args=writer_rt,
             config=ttnn.WriterConfigDescriptor(),
         )
@@ -1143,7 +1179,6 @@ def create_program_descriptor(
                 device, weight_mcast_config, receivers, group_size, ttnn.McastFixedSenderConfig(), order
             )
     else:
-        mcast_receivers = _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
         if mcast_receivers is not None:
             weight_mcast = ttnn.Mcast(
                 device,

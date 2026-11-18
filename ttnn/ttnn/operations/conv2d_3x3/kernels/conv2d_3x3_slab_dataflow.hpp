@@ -100,4 +100,32 @@ FORCE_INLINE void tile_slab_plan(const SlabFootprint& fp, int32_t (&slab_x_base)
     }
 }
 
+// The input tile-rows of slab rows [batch * batch_rows, + batch_rows) in slab order: fn(row0, rows, batch_row) per
+// segment piece, input tile-rows [row0, row0 + rows) landing at row batch_row of the batch. Slab rows past the plan's
+// last segment are unread.
+template <uint32_t batch_rows, typename Fn>
+FORCE_INLINE void tile_batch_rows(const TileSlabPlan& plan, uint32_t batch, Fn&& fn) {
+    const uint32_t b_lo = batch * batch_rows;
+    const uint32_t b_hi = b_lo + batch_rows;
+    uint32_t seg_lo = 0;
+    for (uint32_t s = 0; s < plan.num_segs; ++s) {
+        const uint32_t seg_hi = seg_lo + plan.seg_count[s];
+        const uint32_t lo = b_lo > seg_lo ? b_lo : seg_lo;
+        const uint32_t hi = b_hi < seg_hi ? b_hi : seg_hi;
+        if (lo < hi) {
+            fn(plan.seg_first[s] + (lo - seg_lo), hi - lo, lo - b_lo);
+        }
+        seg_lo = seg_hi;
+    }
+}
+
+// Split TILE fill: does the batch hold an input tile-row at or past hi_row (a higher-index owner shard's)?
+template <uint32_t batch_rows>
+FORCE_INLINE bool tile_batch_has_rows_from(const TileSlabPlan& plan, uint32_t batch, uint32_t hi_row) {
+    bool any = false;
+    tile_batch_rows<batch_rows>(
+        plan, batch, [&](uint32_t row0, uint32_t rows, uint32_t) { any = any || row0 + rows > hi_row; });
+    return any;
+}
+
 }  // namespace conv2d_3x3
