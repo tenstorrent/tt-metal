@@ -49,6 +49,16 @@ def test_permute(device):
     logger.info(f"Permuted Tensor Shape: {permuted_tensor.shape}")  # Shape([1, 1, 32, 64])
 
 
+def test_copy(device):
+    # Create a tensor to copy from and a tensor of the same shape and layout to copy into
+    input_a = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.zeros((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Copy the values of input_a into input_b
+    output = ttnn.copy(input_a, input_b)
+    logger.info(f"Copied Tensor Shape: {output.shape}")  # Shape([1, 1, 64, 32])
+
+
 def test_reshape(device):
     # Create a tensor to reshape
     input_tensor = torch.arange(4, dtype=torch.bfloat16)
