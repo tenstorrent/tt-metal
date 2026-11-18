@@ -699,6 +699,12 @@ constexpr char llk_pack_block_form_of(
             out = 'B';
         }
     }
+    // Half sync, 16-bit DEST, no 32-bit CB, LoFi, Float16_b, three tiles or more: the table's block forms. With the copy and the unpacker
+    // on the datacopy stack the pack binds there, and a per-tile pack pays main's destination word write per tile.
+    if (llk_pack_src32_mask(0) == 0 && llk_pack_src32_mask(32) == 0 && column == 0 && MATH_FIDELITY == MathFidelity::LoFi && row == 10 && count >= 2)
+    {
+        return form;
+    }
     constexpr std::uint32_t fam_bit = family == 0 ? 1 : (llk_pack_unpack_to_dest ? 4 : 2);
     constexpr std::uint32_t fid_bit =
         MATH_FIDELITY == MathFidelity::LoFi ? 1 : (MATH_FIDELITY == MathFidelity::HiFi2 ? 2 : (MATH_FIDELITY == MathFidelity::HiFi3 ? 4 : 8));
