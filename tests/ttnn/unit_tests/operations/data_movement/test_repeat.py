@@ -16,7 +16,11 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    full_range_input,
+    one_exponent_input,
+)
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
@@ -271,14 +275,6 @@ def test_pc_with_different_shapes_in_sequence(device):
 _BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
 
 
-def _one_exponent_input(shape, seed=0):
-    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
-    tile come back exactly."""
-    torch.manual_seed(seed)
-    magnitude = 1 + torch.rand(shape)
-    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
-
-
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.repeat))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.repeat))
 def test_repeat_docstring_supported_inputs(dtype, layout, buffer_type, device):
@@ -311,7 +307,7 @@ def test_repeat_docstring_supported_inputs(dtype, layout, buffer_type, device):
     # are compared by value. Values also move into new blocks, so block floats get values with one exponent.
     bfloat16_tile = dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT
     if dtype in _BLOCK_FLOATS:
-        x = _one_exponent_input((1, 1, 30, 30))
+        x = one_exponent_input((1, 1, 30, 30))
     else:
         x = full_range_input((1, 1, 30, 30), dtype, nan=not bfloat16_tile)
     unaligned = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)

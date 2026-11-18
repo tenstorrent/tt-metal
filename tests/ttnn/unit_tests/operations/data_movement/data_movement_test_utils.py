@@ -31,15 +31,8 @@ def full_range_input(shape, dtype, seed=0, nan=True):
     Floats get random signs, exponents and mantissas, so every normal exponent occurs. Their first elements are
     +inf, -inf, NaN (left out if ``nan`` is False), -0.0 and +0.0. Subnormals are left out, since the hardware may
     flush them to zero. Integers cover their whole range, and their first elements are their smallest and largest
-    values. Block floats share one exponent per 16 values, so they get standard normal values instead. FP8_E4M3
-    gets every value it holds except subnormals, which the host conversion flushes to zero: NaN, -0.0, +0.0 and every
-    normal value up to +-448, repeated over the shape.
+    values. Block floats share one exponent per 16 values, so they get standard normal values instead.
     """
-    if dtype == ttnn.fp8_e4m3:
-        values = torch.arange(256, dtype=torch.uint8).view(torch.float8_e4m3fn).float()
-        values = values[values.isnan() | (values == 0) | (values.abs() >= 2.0**-6)]
-        count = math.prod(shape)
-        return values.repeat(count // values.numel() + 1)[:count].reshape(shape)
     torch.manual_seed(seed)
     if dtype in _FLOATS:
         torch_dtype, bits_dtype, mantissa_bits = _FLOATS[dtype]
@@ -59,6 +52,15 @@ def full_range_input(shape, dtype, seed=0, nan=True):
     if dtype in _BLOCK_FLOATS:
         return torch.randn(shape, dtype=torch.float32)
     raise ValueError(f"no input for {dtype}")
+
+
+
+def one_exponent_input(shape, seed=0):
+    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
+    tile come back exactly."""
+    torch.manual_seed(seed)
+    magnitude = 1 + torch.rand(shape)
+    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
 
 
 def block_shards(shard_shape, grid_y, grid_x):
