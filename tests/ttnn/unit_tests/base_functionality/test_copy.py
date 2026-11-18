@@ -2759,3 +2759,62 @@ def test_copy_docstring_supported_inputs(dtype, layout, input_buffer_type, outpu
     assert output.layout == layout
     assert output.memory_config() == memory_config
     assert_exact(expected, ttnn.to_torch(input_b))
+
+
+def _docstring_blackhole_dtype_layouts(op):
+    """One ``pytest.param(dtype, layout)`` per "On Blackhole, ... ``<DTYPE>`` tensors in <LAYOUT> layout" sentence of the
+    op's docstring."""
+    import re
+
+    from tests.ttnn.unit_tests.operations.data_movement.docstring_support import UnreadableDocstring
+
+    try:
+        text = " ".join(op.__doc__.split())
+        found = re.findall(r"On Blackhole, [^.]*?``(\w+)`` tensors in (\w+) layout", text)
+        assert found, "no 'On Blackhole, ... ``<DTYPE>`` tensors in <LAYOUT> layout' sentence"
+        params = []
+        for dtype_name, layout_name in found:
+            dtype, layout = getattr(ttnn.DataType, dtype_name, None), getattr(ttnn.Layout, layout_name, None)
+            assert isinstance(dtype, ttnn.DataType), f"not a ttnn.DataType: {dtype_name}"
+            assert isinstance(layout, ttnn.Layout), f"not a ttnn.Layout: {layout_name}"
+            params.append(pytest.param(dtype, layout, id=f"{dtype_name}-{layout_name}"))
+        return params
+    except Exception as error:
+        reason = UnreadableDocstring(f"could not read the Blackhole dtypes from the {op} docstring: {error}")
+        return [pytest.param(reason, reason, id="docstring-unreadable")]
+
+
+@pytest.mark.parametrize("output_buffer_type", docstring_interleaved_buffer_type_params(ttnn.copy))
+@pytest.mark.parametrize("input_buffer_type", docstring_interleaved_buffer_type_params(ttnn.copy))
+@pytest.mark.parametrize("dtype, layout", _docstring_blackhole_dtype_layouts(ttnn.copy))
+def test_copy_docstring_blackhole_inputs(dtype, layout, input_buffer_type, output_buffer_type, device):
+    """Runs the dtypes the ttnn.copy docstring lists for Blackhole, for ``input_a`` and ``input_b`` in every
+    interleaved buffer type. The tensors are made by a typecast from BFLOAT16 and compared after a typecast back,
+    which holds every FP8_E4M3 value."""
+    check_readable(dtype, layout, input_buffer_type, output_buffer_type)
+    if not is_blackhole():
+        pytest.skip("the docstring lists these dtypes for Blackhole")
+    shape = (2, 3, 50, 70)
+
+    def device_tensor(values, buffer_type):
+        bfloat16_tensor = ttnn.from_torch(
+            values,
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=device,
+            memory_config=interleaved_memory_config(buffer_type),
+        )
+        return ttnn.typecast(bfloat16_tensor, dtype)
+
+    torch.manual_seed(0)
+    input_a = device_tensor(torch.randn(shape, dtype=torch.bfloat16) * 8, input_buffer_type)
+    expected = ttnn.to_torch(ttnn.typecast(input_a, ttnn.bfloat16))
+    # Every value of input_b differs from input_a's, so the test sees each one overwritten.
+    input_b = device_tensor(torch.where(expected == 1, 2, 1).to(torch.bfloat16), output_buffer_type)
+    output = ttnn.copy(input_a, input_b)
+
+    assert output.buffer_address() == input_b.buffer_address()
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config() == interleaved_memory_config(output_buffer_type)
+    assert_exact(expected, ttnn.to_torch(ttnn.typecast(input_b, ttnn.bfloat16)))
