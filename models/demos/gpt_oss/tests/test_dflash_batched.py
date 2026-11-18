@@ -25,7 +25,7 @@ from models.demos.gpt_oss.demo.dflash_demo import (
     fetch_books,
     parametrize_dflash_mesh,
 )
-from models.tt_transformers.demo.simple_text_demo import load_inputs
+from models.ttt_compat.demo.simple_text_demo import load_inputs
 
 ISL = 256  # prompt tokens per user
 NEW_TOKENS = 256  # decoded tokens per user
