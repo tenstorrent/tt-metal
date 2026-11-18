@@ -88,6 +88,12 @@ class Hy4Engine:
             []
         )  # recent prompts (np.int32, floored to the page) with the row they were prefilled on and the time: the 'was it ever here' memory of the loss classifier
         self.hist_max = int(os.environ.get("HY4_PFX_LOSS_HIST", "24"))
+        # HY4_XROW=1 (default 0; needs HY4_PFX=1): device-to-device cross-row COPY of a retained chain (tt/hy4_xrow.py, B45x): a request whose prefix sits on another mesh row (busy decoding, or a free row that is not the one
+        # chosen) is served on a free row after the first h tokens of pool pages were copied row -> row. Live switch HY4_XROW_FILE (0 / 1), cap HY4_XROW_MAX (tokens), floor HY4_XROW_MIN. Any error = cold recompute.
+        self.xrow_on = os.environ.get("HY4_XROW", "0") == "1" and self.pfx
+        self.xrow = None  # Hy4Xrow, built in warm() before the first capture
+        self.xrow_plan = {}  # destination mesh row -> (source row, h tokens), set by assign_rows, consumed by prefill
+        self.xrow_stats = dict(copies=0, failed=0, tokens=0, seconds=0.0)
         ckpt = os.environ.get("HY4_CKPT", "/ckpt")
         nl = int(os.environ.get("HY4_SERVE_LAYERS", "78"))
         t0 = time.time()
@@ -220,6 +226,26 @@ class Hy4Engine:
             return list(cur_rows)
         taken, out = set(), [None] * len(prompts)
         arrs = [torch.as_tensor(p, dtype=torch.int32).numpy() for p in prompts]
+        self.xrow_plan = {}
+        if self.xrow is not None and self.xrow_on:
+            from models.demos.blackhole.hy4_preview.tt import hy4_xrow as XR
+
+            if XR.enabled():
+                rows, copies = XR.plan_copies(
+                    self.ret,
+                    self.live,
+                    taken,
+                    arrs,
+                    cur_rows,
+                    pf_rows=self.pf_rows,
+                    own_hit=self.ret_t,
+                    min_hit_tokens=XR.min_hit(),
+                    cap=XR.xrow_max(),
+                )
+                self.xrow_plan = {rows[i]: sc for i, sc in copies.items()}
+                if copies:
+                    logger.info(f"HY4 xrow plan: rows={rows} copies={ {rows[i]: sc for i, sc in copies.items()} }")
+                return rows
         cand = lambda: [r for r in range(ROWS) if not self.live[r] and r not in taken]
         order = []
         for i, a in enumerate(arrs):
@@ -293,6 +319,43 @@ class Hy4Engine:
                 self.hist.append((torch.as_tensor(prompts_by_row[r][:n], dtype=torch.int32).numpy().copy(), r, now))
         del self.hist[: max(0, len(self.hist) - self.hist_max)]
 
+    def _xrow_copy(self, src, dst, h):
+        """copy the first h tokens of the retained chain of mesh row src to mesh row dst (device to device); the destination chain is cleared BEFORE the copy (an aborted copy retains nothing); any error = cold."""
+        a = self.ret[src]
+        self.ret[dst] = None
+        if a is None or len(a) < h or h % PAGE or h <= 0:
+            logger.warning(f"HY4 xrow: copy {src}->{dst} h={h} refused (source chain {None if a is None else len(a)})")
+            return
+        try:
+            dt = self.xrow.copy(src, dst, h)
+        except Exception as e:  # noqa: BLE001
+            self.xrow_stats["failed"] += 1
+            logger.error(
+                f"HY4 xrow: copy {src}->{dst} h={h} FAILED ({type(e).__name__}: {str(e)[:200]}): cold recompute"
+            )
+            return
+        self.ret[dst] = a[:h].copy()
+        self.ret_t[dst] = time.time()
+        st = self.xrow_stats
+        st["copies"] += 1
+        st["tokens"] += h
+        st["seconds"] += dt
+        logger.info(f"HY4 xrow: copied {h} tokens row {src} -> {dst} in {dt * 1e3:.0f} ms (stats {st})")
+
+    def _xrow_build(self):
+        from models.demos.blackhole.hy4_preview.tt.hy4_xrow import Hy4Xrow
+
+        ts = [(f"kv{i}", t) for i, t in enumerate(self.dec.kv_pools)] + [
+            (f"key{i}", t) for i, t in enumerate(self.dec.key_pools) if t is not None
+        ]
+        if self.runner is not None:
+            ts += [("mtp_kv", self.runner.mtp_kv), ("mtp_keys", self.runner.mtp_keys)]
+        self._dram("before xrow build")
+        self.xrow = Hy4Xrow(self.md, ts)
+        w = self.xrow.warm()
+        self._dram("after xrow build")
+        logger.info(f"HY4 xrow: stage buffers built, {len(ts)} pool tensors, warm {w:.1f} s")
+
     def drain(self):
         """wait for an in-flight speculative round and drop it (state on device advanced past the mirror: reload before the next round). Called before anything else touches the device (prefill, seed)."""
         if self.inflight is not None:
@@ -325,6 +388,11 @@ class Hy4Engine:
         start, hits = 0, {}
         if self.pfx:
             A = self.pf_rows
+            plan, self.xrow_plan = self.xrow_plan, {}
+            for r in rows:
+                sc = plan.get(r)
+                if sc is not None and self.xrow is not None:
+                    self._xrow_copy(sc[0], r, sc[1])
             for r in rows:
                 hits[r] = self.hit_len(r, torch.as_tensor(prompts_by_row[r], dtype=torch.int32).numpy())
             st = [(h - A if (self.pfx_redo and h > 0) else h) for h in hits.values()]
@@ -371,7 +439,7 @@ class Hy4Engine:
         if self.spec:
             self._seed_rows(rows, first, res, prompts_by_row, sampling or {})
         logger.info(
-            f"HY4 prefill call: lg_md5={ {r: hashlib.md5(res.logits[r].numpy().tobytes()).hexdigest()[:12] for r in rows} } pfx_start={start} hits={hits} pfx_stats={self.pfx_stats} mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
+            f"HY4 prefill call: lg_md5={ {r: hashlib.md5(res.logits[r].numpy().tobytes()).hexdigest()[:12] for r in rows} } pfx_start={start} hits={hits} pfx_stats={self.pfx_stats} xrow={self.xrow_stats} mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
             f"(chunk median {sorted(res.chunk_sec)[len(res.chunk_sec) // 2]:.2f}s) chunks_s={[round(x, 1) for x in res.chunk_sec[:6]]}..{[round(x, 1) for x in res.chunk_sec[-2:]]} seed={time.perf_counter() - t1:.2f}s"
         )
         return first
@@ -748,6 +816,8 @@ class Hy4Engine:
                 )
                 self._dram(f"after warm chain prefill {ln}")
                 logger.info(f"HY4 warm-up: chain prefill 4 x {ln} {time.time() - tw:.1f} s")
+        if self.xrow_on:
+            self._xrow_build()  # persistent stage tensors + programs before the first capture (D75-1)
         t1 = time.time()
         if self.spec:
             # D75-1: EVERY lazily created persistent tensor of EVERY variant must exist before the FIRST capture (one allocated between two captures can sit in the first trace's scratch and is clobbered by its
