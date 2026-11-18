@@ -4,12 +4,38 @@
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
 #include <algorithm>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
+namespace {
+
+void validate_concat_heads_decode_tile(const Tensor& tensor, const char* name) {
+    const auto& tile = tensor.tensor_spec().tile();
+    const auto face = tile.get_face_shape();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+            face[0] == tt::constants::FACE_HEIGHT && face[1] == tt::constants::FACE_WIDTH &&
+            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+        "{} tile must be non-transposed {}x{} with {}x{} faces; got {}x{} with {}x{} faces "
+        "(transpose_within_face={}, transpose_of_faces={})",
+        name,
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        tt::constants::FACE_HEIGHT,
+        tt::constants::FACE_WIDTH,
+        tile.get_height(),
+        tile.get_width(),
+        face[0],
+        face[1],
+        tile.get_transpose_within_face(),
+        tile.get_transpose_of_faces());
+}
+
+}  // namespace
 
 NLPConcatHeadsDecodeDeviceOperation::program_factory_t NLPConcatHeadsDecodeDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
@@ -35,6 +61,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
         input_tensor.layout() == tt::tt_metal::Layout::TILE,
         "Input tensor layout must be TILE but got {}",
         input_tensor.layout());
+    validate_concat_heads_decode_tile(input_tensor, "Input");
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
     TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
     TT_FATAL(input_shape[2] % 32 == 0, "padded heads must be a multiple of TILE_HEIGHT (32), got {}", input_shape[2]);
@@ -42,6 +69,10 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
 
     // input tensor shard spec
     TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded");
+    TT_FATAL(
+        input_tensor.memory_config().is_l1(),
+        "Input buffer must be L1, got {}",
+        input_tensor.memory_config().buffer_type());
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         "Input tensor memory layout must be HEIGHT_SHARDED but got {}",
@@ -66,6 +97,55 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
             "Subcoregrids must have at least num_heads cores");
     } else {
         TT_FATAL(num_cores == input_shape[1], "Input core grid num_cores must be equal to num users");
+    }
+
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& output = *tensor_args.preallocated_output;
+        TT_FATAL(output.device() == input_tensor.device(), "Output tensor must be on the same device as input");
+        TT_FATAL(output.layout() == tt::tt_metal::Layout::TILE, "Output layout must be TILE, got {}", output.layout());
+        validate_concat_heads_decode_tile(output, "Output");
+        TT_FATAL(
+            output.memory_config().is_l1(), "Output buffer must be L1, got {}", output.memory_config().buffer_type());
+        TT_FATAL(
+            output.dtype() == input_tensor.dtype(),
+            "Output dtype must match input dtype ({}), got {}",
+            input_tensor.dtype(),
+            output.dtype());
+        TT_FATAL(
+            output.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+            "Output memory layout must be WIDTH_SHARDED, got {}",
+            output.memory_config().memory_layout());
+        const Shape expected_shape({1, 1, tt::constants::TILE_HEIGHT, args.num_heads * input_shape[3]});
+        TT_FATAL(
+            output.padded_shape() == expected_shape,
+            "Output padded shape must be {}, got {}",
+            expected_shape,
+            output.padded_shape());
+        TT_FATAL(
+            output.logical_shape()[3] == expected_shape[3] ||
+                (args.num_heads == 1 && output.logical_shape()[3] == input_tensor.logical_shape()[3]),
+            "Output logical width must be {} (or the input logical width {} for one head), got {}",
+            expected_shape[3],
+            input_tensor.logical_shape()[3],
+            output.logical_shape()[3]);
+        TT_FATAL(
+            output.logical_shape()[2] >= input_shape[1],
+            "Output must contain all {} user rows, got {}",
+            input_shape[1],
+            output.logical_shape()[2]);
+        const auto& output_shard = output.shard_spec().value();
+        TT_FATAL(
+            output_shard.grid.num_cores() >= args.num_heads,
+            "Output grid must have at least num_heads ({}) cores, got {}",
+            args.num_heads,
+            output_shard.grid.num_cores());
+        TT_FATAL(
+            output_shard.shape[0] == tt::constants::TILE_HEIGHT && output_shard.shape[1] == input_shape[3],
+            "Output shard shape must be [{}, {}], got [{}, {}]",
+            tt::constants::TILE_HEIGHT,
+            input_shape[3],
+            output_shard.shape[0],
+            output_shard.shape[1]);
     }
 }
 
