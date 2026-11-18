@@ -33,6 +33,20 @@ inline uint32_t ring_next_real(uint32_t my_col, uint32_t j) {
     return k_cols;
 }
 
+// Row groups of an owner slice [bm, out_n] (one ring hop and one token each): R rows, the last group shorter when R
+// does not divide bm. Odd owners take the short group first: a core's consecutive steps alternate owner parity (except
+// at the wrap when k_cols is odd), so each step starts at the matmul subblock height the previous one ended on. The
+// order is a function of the owner only, so the two columns a partial moves between walk its groups alike.
+template <uint32_t bm, uint32_t R>
+inline uint32_t ring_group_row0(uint32_t owner, uint32_t g) {
+    if constexpr (bm % R != 0) {
+        if (owner & 1) {
+            return g == 0 ? (bm / R) * R : (g - 1) * R;
+        }
+    }
+    return g * R;
+}
+
 // Real steps j >= 1 of one M-block: each receives one partial from column my_col - 1.
 template <uint32_t k_cols, uint32_t num_owning_cols>
 inline uint32_t ring_incoming(uint32_t my_col) {

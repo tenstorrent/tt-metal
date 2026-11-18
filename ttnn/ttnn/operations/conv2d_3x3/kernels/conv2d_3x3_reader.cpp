@@ -194,7 +194,8 @@ void kernel_main() {
     // cb_im2col_rm slot, cb_src_table holds one 16 B entry of tap source addresses that compute tilizes from.
     constexpr bool tap_direct = get_compile_time_arg_val(66) != 0;
     constexpr uint32_t cb_src_table = get_compile_time_arg_val(67);
-    // N-slice ring: tile-rows per forwarded row group (one matmul subblock row of a slice).
+    // N-slice ring: tile-rows per forwarded row group (compute's slice subblock height; the last group of a slice may
+    // be shorter, see conv2d_3x3::ring_group_row0).
     constexpr uint32_t ring_group_rows = get_compile_time_arg_val(68);
     constexpr auto input_args = TensorAccessorArgs<69>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
@@ -953,15 +954,14 @@ void kernel_main() {
             MaybeDeviceZoneScope("reader_combine_send");
             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
             constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
-            constexpr uint32_t groups = block_m_tiles / ring_group_rows;
-            static_assert(groups * ring_group_rows == block_m_tiles);
+            constexpr uint32_t groups = (block_m_tiles + ring_group_rows - 1) / ring_group_rows;
             constexpr uint32_t ring_inflight = 2;
             constexpr uint32_t ring_trid_base = 12;
             Semaphore<> credit(combine_credit_sem_id);
             Semaphore<> arrival(combine_arrival_sem_id);
             Noc noc;
             const uint32_t slot_bytes = slot_tiles * get_tile_size(cb_combine_slots);
-            const uint32_t group_bytes = slot_bytes / groups;
+            const uint32_t row_bytes = slot_bytes / block_m_tiles;
             const uint32_t combine_base = get_write_ptr(cb_combine_slots);
             const uint32_t next_col = my_col + 1 == k_cols ? 0 : my_col + 1;
             const uint32_t nx = get_arg_val<uint32_t>(row_peer_coords_arg + 2 * next_col);
@@ -1028,8 +1028,13 @@ void kernel_main() {
                             try_retire();
                         }
                         const uint32_t trid = ring_trid_base + issued % ring_inflight;
-                        const uint32_t src = combine_base + (k_cols - 1 - j) * slot_bytes + g * group_bytes;
-                        const uint32_t dst = combine_base + (k_cols - 2 - j) * slot_bytes + g * group_bytes;
+                        const uint32_t r0 = conv2d_3x3::ring_group_row0<block_m_tiles, ring_group_rows>(
+                            conv2d_3x3::nslice_owner<k_cols>(my_col, j), g);
+                        const uint32_t rows =
+                            block_m_tiles - r0 < ring_group_rows ? block_m_tiles - r0 : ring_group_rows;
+                        const uint32_t group_bytes = rows * row_bytes;
+                        const uint32_t src = combine_base + (k_cols - 1 - j) * slot_bytes + r0 * row_bytes;
+                        const uint32_t dst = combine_base + (k_cols - 2 - j) * slot_bytes + r0 * row_bytes;
                         for (uint32_t off = 0; off < group_bytes; off += NOC_MAX_BURST_SIZE) {
                             const uint32_t bytes =
                                 group_bytes - off < NOC_MAX_BURST_SIZE ? group_bytes - off : NOC_MAX_BURST_SIZE;

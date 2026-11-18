@@ -333,6 +333,17 @@ def _out_subblock(block_m_tiles, block_n_tiles):
     return sb_h, sb_w
 
 
+def _ring_subblock(block_m_tiles, out_n_tiles):
+    """N-slice ring walk subblock (rows, cols), also the ring's row group. Four tiles long along the slice's longer side:
+    the BH matmul unpacker reads rt + rt * ct tiles per k-step (ct + ct * rt when rt > ct), so 4 x 1 or 1 x 4 costs
+    1.25 unpacks per tile-MAC against 1.5 for 1 x 2 or 2 x 2. A tall subblock may leave a shorter last row group (bm 7:
+    4 + 3); a wide one must divide out_n, so it falls back to _out_subblock."""
+    tall = min(block_m_tiles, DEST_TILES_FP32_HALF_SYNC)
+    if tall >= min(out_n_tiles, DEST_TILES_FP32_HALF_SYNC):
+        return tall, 1
+    return _out_subblock(block_m_tiles, out_n_tiles)
+
+
 def m_split(g: Conv3x3Geometry, num_cores):
     """(core_m_tiles, num_m_groups): contiguous output tile-row ranges over `num_cores` cores. On a sharded
     input this is also the output shard: roundup32(ceil(M / n)) / 32 == ceil(ceil(M / 32) / n)."""
@@ -1121,7 +1132,7 @@ def create_program_descriptor(
             int(tap_direct),
             CB_SRC_TABLE,
             # N-slice ring: tile-rows per forwarded row group, the compute's slice subblock height.
-            _out_subblock(bm, ns)[0],
+            _ring_subblock(bm, ns)[0],
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1159,7 +1170,7 @@ def create_program_descriptor(
         max(1, min(BIAS_STREAM_GROUPS, _div_up(bm, b.in0_stream_rows))),
         int(b.nslice),
         CB_RING_TOKEN,
-        *_out_subblock(bm, ns),
+        *_ring_subblock(bm, ns),
         b.untilize_batch_rows,
         int(strided_window),
         center_mode,

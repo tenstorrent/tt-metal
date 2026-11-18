@@ -347,6 +347,8 @@ void kernel_main() {
     constexpr bool nslice_outer = get_compile_time_arg_val(30) != 0;
     // N-slice ring: one page per packed row group, packer -> reader (see the N-slice branch).
     constexpr uint32_t cb_ring_token = get_compile_time_arg_val(31);
+    // N-slice ring subblock: slice_sb_h rows (the ring's row group; the last group of a slice may be shorter, see
+    // conv2d_3x3::ring_group_row0) x slice_sb_w columns.
     constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
     constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(34);
@@ -565,10 +567,15 @@ void kernel_main() {
             // cb_combine_slots: only the bias add (or a copy) and ReLU remain, packed into the output shard.
             // Raw LLK (matmul_block / pack_tile): compute_kernel_lib::matmul_block cannot pack its only K-block
             // with L1 accumulation onto a partial already in L1 (its L1-accumulating pack is "K-block > 0"), nor
-            // gate each subblock row's pack on a CB of another RISC.
+            // gate each subblock row's pack on a CB of another RISC, nor run a shorter last subblock: it takes one
+            // subblock shape per call, which must divide the block. A bm 7 x out_n 2 slice (res5.x) then only gets
+            // 1 x 2 subblocks, and the BH matmul unpacker reads rt + rt * ct tiles per k-step (ct + ct * rt when
+            // rt > ct): 1.5 unpacks per tile-MAC, 19.5 cycles per tile-MAC. 4 x 1 subblocks with a 3-row last group
+            // cost 1.25 / 1.33: 17.5 cycles per tile-MAC, res5.x @ LoFi 45.4 -> 42.2 us (Blackhole p150b).
             constexpr uint32_t k_tiles = block_k_tiles * num_k_blocks;
             constexpr uint32_t num_owning_cols = (block_n_tiles + out_n_tiles - 1) / out_n_tiles;
-            static_assert(block_m_tiles % slice_sb_h == 0 && out_n_tiles % slice_sb_w == 0);
+            static_assert(out_n_tiles % slice_sb_w == 0 && (slice_sb_w == 1 || block_m_tiles % slice_sb_h == 0));
+            constexpr uint32_t ring_groups = (block_m_tiles + slice_sb_h - 1) / slice_sb_h;
             // The tilize packs must overwrite (the previous M-block's combine may have left L1 accumulation on).
             pack_reconfig_l1_acc(0);
             if constexpr (!face_direct) {
@@ -603,18 +610,26 @@ void kernel_main() {
                 reconfig_data_format(cb_weights, cb_im2col_tiles);
                 pack_reconfig_data_format(cb_combine_slots);
                 ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
+                uint32_t init_rows = slice_sb_h;
                 im2col_tiles.wait_front(block_m_tiles * k_tiles);
                 for (uint32_t j = first; j < k_cols;
                      j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
+                    const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
                     weights.wait_front(k_tiles * out_n_tiles);
                     pack_reconfig_l1_acc(j >= 1 ? 1 : 0);
                     const uint32_t slot_base = (k_cols - 1 - j) * slot_tiles;
-                    for (uint32_t in0_sb = 0; in0_sb < block_m_tiles / slice_sb_h; ++in0_sb) {
+                    for (uint32_t g = 0; g < ring_groups; ++g) {
+                        const uint32_t r0 = conv2d_3x3::ring_group_row0<block_m_tiles, slice_sb_h>(owner, g);
+                        const uint32_t rows = block_m_tiles - r0 < slice_sb_h ? block_m_tiles - r0 : slice_sb_h;
+                        if (rows != init_rows) {
+                            ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, rows, k_tiles);
+                            init_rows = rows;
+                        }
                         ring_token.reserve_back(1);
-                        for (uint32_t in1_sb = 0; in1_sb < out_n_tiles / slice_sb_w; ++in1_sb) {
+                        for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += slice_sb_w) {
                             tile_regs_acquire();
-                            uint32_t in0_index = in0_sb * slice_sb_h * k_tiles;
-                            uint32_t in1_index = in1_sb * slice_sb_w;
+                            uint32_t in0_index = r0 * k_tiles;
+                            uint32_t in1_index = c0;
                             for (uint32_t k = 0; k < k_tiles; ++k) {
                                 ckernel::matmul_block(
                                     cb_im2col_tiles,
@@ -624,7 +639,7 @@ void kernel_main() {
                                     0,
                                     false,
                                     slice_sb_w,
-                                    slice_sb_h,
+                                    rows,
                                     k_tiles);
                                 ++in0_index;
                                 in1_index += out_n_tiles;
@@ -632,12 +647,7 @@ void kernel_main() {
                             tile_regs_commit();
                             tile_regs_wait();
                             ckl::pack_subblock_row_strided(
-                                0,
-                                cb_combine_slots,
-                                slot_base + in0_sb * slice_sb_h * out_n_tiles + in1_sb * slice_sb_w,
-                                out_n_tiles,
-                                slice_sb_h,
-                                slice_sb_w);
+                                0, cb_combine_slots, slot_base + r0 * out_n_tiles + c0, out_n_tiles, rows, slice_sb_w);
                             tile_regs_release();
                         }
                         ring_token.push_back(1);
