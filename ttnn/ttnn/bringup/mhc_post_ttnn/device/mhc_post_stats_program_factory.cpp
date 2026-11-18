@@ -261,7 +261,7 @@ FeedTable feed_table(
                 tt::tt_metal::ProgramDescriptor scratch;
                 std::vector<uint32_t> a;
                 tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                    node[pos], node[at(pos, tgt)], l, scratch, ports[d * L + l], a);
+                    *mesh, node[pos], node[at(pos, tgt)], l, scratch, ports[d * L + l], a);
                 TT_FATAL(!a.empty() && a[0] < 0xFF, "mhc_post stats: feed: no fabric channel");
                 const uint32_t k = pos * FT_MAX_PORTS + d * L + l;
                 ft.chan[k / 4] &= ~(0xFFu << (8 * (k % 4)));

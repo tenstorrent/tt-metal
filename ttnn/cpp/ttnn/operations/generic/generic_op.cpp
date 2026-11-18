@@ -37,9 +37,9 @@ Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::Pro
 
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
-    const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
-    const tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, uint32_t>& tensor_args) {
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args,
+    const tt::tt_metal::Table<tt::tt_metal::TensorParamName, uint32_t>& tensor_args) {
     return ttnn::prim::generic_op(
         io_tensors,
         ttnn::operations::generic::operation_attributes_t{

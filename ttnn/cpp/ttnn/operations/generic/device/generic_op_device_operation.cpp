@@ -153,22 +153,22 @@ namespace m2 = tt::tt_metal::experimental;
 // Every field below is structural: it changes the compiled program or its resource layout.
 // Anything that varies per dispatch (runtime arg VALUES, tensor addresses) must stay out.
 
-size_t hash_nodes(const m2::Nodes& nodes) {
+size_t hash_nodes(const tt::tt_metal::Nodes& nodes) {
     return std::visit([](const auto& n) { return ttsl::hash::hash_objects_with_default_seed(n); }, nodes);
 }
 
-size_t hash_source(const std::variant<std::filesystem::path, m2::KernelSpec::SourceCode>& source) {
+size_t hash_source(const std::variant<std::filesystem::path, tt::tt_metal::KernelSpec::SourceCode>& source) {
     return std::visit(
         ttsl::overloaded{
             [](const std::filesystem::path& p) { return ttsl::hash::hash_objects_with_default_seed(p.string()); },
-            [](const m2::KernelSpec::SourceCode& c) { return ttsl::hash::hash_objects_with_default_seed(c.code); }},
+            [](const tt::tt_metal::KernelSpec::SourceCode& c) { return ttsl::hash::hash_objects_with_default_seed(c.code); }},
         source);
 }
 
-size_t hash_hw_config(const std::variant<m2::DataMovementHardwareConfig, m2::ComputeHardwareConfig>& hw_config) {
+size_t hash_hw_config(const std::variant<tt::tt_metal::DataMovementHardwareConfig, tt::tt_metal::ComputeHardwareConfig>& hw_config) {
     return std::visit(
         ttsl::overloaded{
-            [](const m2::DataMovementHardwareConfig& dm) {
+            [](const tt::tt_metal::DataMovementHardwareConfig& dm) {
                 size_t hash = ttsl::hash::hash_objects_with_default_seed(0);
                 if (const auto& c = dm.config_1xx) {
                     ttsl::hash::hash_combine(
@@ -182,7 +182,7 @@ size_t hash_hw_config(const std::variant<m2::DataMovementHardwareConfig, m2::Com
                 }
                 return hash;
             },
-            [](const m2::ComputeHardwareConfig& c) {
+            [](const tt::tt_metal::ComputeHardwareConfig& c) {
                 size_t hash = ttsl::hash::hash_objects_with_default_seed(
                     3,
                     c.fpu_math_fidelity,
@@ -202,7 +202,7 @@ size_t hash_hw_config(const std::variant<m2::DataMovementHardwareConfig, m2::Com
         hw_config);
 }
 
-size_t hash_kernel_spec(const m2::KernelSpec& kernel) {
+size_t hash_kernel_spec(const tt::tt_metal::KernelSpec& kernel) {
     size_t hash = ttsl::hash::hash_objects_with_default_seed(*kernel.unique_id, kernel.num_threads);
     ttsl::hash::hash_combine(hash, hash_source(kernel.source));
 
@@ -248,7 +248,7 @@ size_t hash_kernel_spec(const m2::KernelSpec& kernel) {
     return hash;
 }
 
-size_t hash_dataflow_buffer(const m2::DataflowBufferSpec& dfb) {
+size_t hash_dataflow_buffer(const tt::tt_metal::DataflowBufferSpec& dfb) {
     size_t hash = ttsl::hash::hash_objects_with_default_seed(
         *dfb.unique_id,
         dfb.entry_size,
@@ -268,7 +268,7 @@ size_t hash_dataflow_buffer(const m2::DataflowBufferSpec& dfb) {
 
 }  // namespace
 
-ttsl::hash::hash_t compute_program_spec_hash(const m2::ProgramSpec& spec) {
+ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::ProgramSpec& spec) {
     size_t hash = ttsl::hash::hash_objects_with_default_seed(spec.name);
 
     for (const auto& kernel : spec.kernels) {

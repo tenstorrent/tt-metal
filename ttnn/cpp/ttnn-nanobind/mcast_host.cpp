@@ -18,8 +18,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn-nanobind/metal2_casters.hpp"
 
@@ -79,10 +79,10 @@ void py_module(nb::module_& mod) {
         .def(
             "attach",
             [](const kh::Mcast& mcast,
-               m2::ProgramSpec& spec,
-               m2::ProgramRunArgs& run_args,
+               tt::tt_metal::ProgramSpec& spec,
+               tt::tt_metal::ProgramRunArgs& run_args,
                const std::string& prefix,
-               const std::vector<m2::KernelSpecName>& kernels) { mcast.attach(spec, run_args, prefix, kernels); },
+               const std::vector<tt::tt_metal::KernelSpecName>& kernels) { mcast.attach(spec, run_args, prefix, kernels); },
             nb::arg("spec"),
             nb::arg("run_args"),
             nb::arg("prefix"),
@@ -98,7 +98,7 @@ void py_module(nb::module_& mod) {
         nb::arg("prefix"));
     mod.def(
         "attach_absent_mcast",
-        [](m2::ProgramSpec& spec, const std::string& prefix, const std::vector<m2::KernelSpecName>& kernels) {
+        [](tt::tt_metal::ProgramSpec& spec, const std::string& prefix, const std::vector<tt::tt_metal::KernelSpecName>& kernels) {
             kh::attach_absent_mcast(spec, prefix, kernels);
         },
         nb::arg("spec"),

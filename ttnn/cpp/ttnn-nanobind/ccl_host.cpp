@@ -63,15 +63,17 @@ void py_module(nb::module_& mod) {
         "it on MeshProgramDescriptor.semaphores).");
     mod.def(
         "build_ccl_fabric_rt_args",
-        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const tt::tt_fabric::FabricNodeId& neighbor_fabric_node_id,
            uint32_t link_idx,
            tt::tt_metal::ProgramDescriptor& descriptor,
            const tt::tt_metal::CoreCoord& worker_core,
            bool is_forward) {
             return ttnn::ccl::dataflow::build_ccl_fabric_rt_args(
-                src_fabric_node_id, neighbor_fabric_node_id, link_idx, descriptor, worker_core, is_forward);
+                mesh_device, src_fabric_node_id, neighbor_fabric_node_id, link_idx, descriptor, worker_core, is_forward);
         },
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("neighbor_fabric_node_id"),
         nb::arg("link_idx"),

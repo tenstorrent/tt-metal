@@ -13,11 +13,11 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -56,58 +56,58 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         device.compute_with_storage_grid_size(), num_heads * num_chunks, std::numeric_limits<uint32_t>::max());
     const auto& cores = distribution.core_set;
 
-    const m2::KernelSpecName READER{"reader"};
-    const m2::KernelSpecName WRITER{"writer"};
-    const m2::KernelSpecName COMPUTE{"compute"};
-    const m2::DFBSpecName q_dfb{"q"};
-    const m2::DFBSpecName k_dfb{"k"};
-    const m2::DFBSpecName v_dfb{"v"};
-    const m2::DFBSpecName g_dfb{"g"};
-    const m2::DFBSpecName beta_dfb{"beta"};
+    const tt::tt_metal::KernelSpecName READER{"reader"};
+    const tt::tt_metal::KernelSpecName WRITER{"writer"};
+    const tt::tt_metal::KernelSpecName COMPUTE{"compute"};
+    const tt::tt_metal::DFBSpecName q_dfb{"q"};
+    const tt::tt_metal::DFBSpecName k_dfb{"k"};
+    const tt::tt_metal::DFBSpecName v_dfb{"v"};
+    const tt::tt_metal::DFBSpecName g_dfb{"g"};
+    const tt::tt_metal::DFBSpecName beta_dfb{"beta"};
     // Sigmoid of the beta logits.
-    const m2::DFBSpecName beta_activated_dfb{"beta_activated"};
-    const m2::DFBSpecName eye_dfb{"eye"};
-    const m2::DFBSpecName tril_dfb{"tril"};
-    const m2::DFBSpecName ones_dfb{"ones"};
-    const m2::DFBSpecName gate_tril_dfb{"gate_tril"};
-    const m2::DFBSpecName gate_ones_dfb{"gate_ones"};
-    const m2::DFBSpecName block_masks_dfb{"block_masks"};
-    const m2::DFBSpecName workspace_0_dfb{"workspace_0"};
-    const m2::DFBSpecName centered_inverse_decay_dfb{"centered_inverse_decay"};
-    const m2::DFBSpecName akk_dfb{"akk"};
-    const m2::DFBSpecName t_inv_dfb{"t_inv"};
-    const m2::DFBSpecName v_beta_dfb{"v_beta"};
-    const m2::DFBSpecName kd_dfb{"kd"};
-    const m2::DFBSpecName q_decay_dfb{"q_decay"};
-    const m2::DFBSpecName intra_dfb{"intra"};
-    const m2::DFBSpecName workspace_1_dfb{"workspace_1"};
-    const m2::DFBSpecName final_decay_dfb{"final_decay"};
-    const m2::DFBSpecName k_decay_transposed_dfb{"k_decay_transposed"};
-    const m2::DFBSpecName anchor_decay_dfb{"anchor_decay"};
-    const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
-    const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
-    const m2::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
-    const m2::DFBSpecName tile_workspace_1_dfb{"tile_workspace_1"};
-    const m2::DFBSpecName tile_workspace_2_dfb{"tile_workspace_2"};
+    const tt::tt_metal::DFBSpecName beta_activated_dfb{"beta_activated"};
+    const tt::tt_metal::DFBSpecName eye_dfb{"eye"};
+    const tt::tt_metal::DFBSpecName tril_dfb{"tril"};
+    const tt::tt_metal::DFBSpecName ones_dfb{"ones"};
+    const tt::tt_metal::DFBSpecName gate_tril_dfb{"gate_tril"};
+    const tt::tt_metal::DFBSpecName gate_ones_dfb{"gate_ones"};
+    const tt::tt_metal::DFBSpecName block_masks_dfb{"block_masks"};
+    const tt::tt_metal::DFBSpecName workspace_0_dfb{"workspace_0"};
+    const tt::tt_metal::DFBSpecName centered_inverse_decay_dfb{"centered_inverse_decay"};
+    const tt::tt_metal::DFBSpecName akk_dfb{"akk"};
+    const tt::tt_metal::DFBSpecName t_inv_dfb{"t_inv"};
+    const tt::tt_metal::DFBSpecName v_beta_dfb{"v_beta"};
+    const tt::tt_metal::DFBSpecName kd_dfb{"kd"};
+    const tt::tt_metal::DFBSpecName q_decay_dfb{"q_decay"};
+    const tt::tt_metal::DFBSpecName intra_dfb{"intra"};
+    const tt::tt_metal::DFBSpecName workspace_1_dfb{"workspace_1"};
+    const tt::tt_metal::DFBSpecName final_decay_dfb{"final_decay"};
+    const tt::tt_metal::DFBSpecName k_decay_transposed_dfb{"k_decay_transposed"};
+    const tt::tt_metal::DFBSpecName anchor_decay_dfb{"anchor_decay"};
+    const tt::tt_metal::DFBSpecName normalized_q_dfb{"normalized_q"};
+    const tt::tt_metal::DFBSpecName normalized_k_dfb{"normalized_k"};
+    const tt::tt_metal::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
+    const tt::tt_metal::DFBSpecName tile_workspace_1_dfb{"tile_workspace_1"};
+    const tt::tt_metal::DFBSpecName tile_workspace_2_dfb{"tile_workspace_2"};
 
-    const m2::DFBSpecName workspace_3_dfb{"workspace_3"};
-    const m2::DFBSpecName workspace_2_dfb{"workspace_2"};
+    const tt::tt_metal::DFBSpecName workspace_3_dfb{"workspace_3"};
+    const tt::tt_metal::DFBSpecName workspace_2_dfb{"workspace_2"};
     // precise_gate_factors: masks scale*([j<=i] - 1/2), its negation and scale/2, filled once by the reader
-    const m2::DFBSpecName gate_center_dfb{"gate_center"};
-    const m2::DFBSpecName gate_center_neg_dfb{"gate_center_neg"};
-    const m2::DFBSpecName gate_half_dfb{"gate_half"};
-    const m2::TensorParamName Q_TENSOR{"q"};
-    const m2::TensorParamName K_TENSOR{"k"};
-    const m2::TensorParamName V_TENSOR{"v"};
-    const m2::TensorParamName G_TENSOR{"g"};
-    const m2::TensorParamName BETA_TENSOR{"beta"};
-    const m2::TensorParamName V_BETA_OUTPUT{"v_beta_output"};
-    const m2::TensorParamName KD_OUTPUT{"kd_output"};
-    const m2::TensorParamName Q_DECAY_OUTPUT{"q_decay_output"};
-    const m2::TensorParamName INTRA_OUTPUT{"intra_output"};
-    const m2::TensorParamName K_DECAY_TRANSPOSED_OUTPUT{"k_decay_transposed_output"};
-    const m2::TensorParamName FINAL_DECAY_OUTPUT{"final_decay_output"};
-    const m2::TensorParamName T_INV_OUTPUT{"t_inv_output"};
+    const tt::tt_metal::DFBSpecName gate_center_dfb{"gate_center"};
+    const tt::tt_metal::DFBSpecName gate_center_neg_dfb{"gate_center_neg"};
+    const tt::tt_metal::DFBSpecName gate_half_dfb{"gate_half"};
+    const tt::tt_metal::TensorParamName Q_TENSOR{"q"};
+    const tt::tt_metal::TensorParamName K_TENSOR{"k"};
+    const tt::tt_metal::TensorParamName V_TENSOR{"v"};
+    const tt::tt_metal::TensorParamName G_TENSOR{"g"};
+    const tt::tt_metal::TensorParamName BETA_TENSOR{"beta"};
+    const tt::tt_metal::TensorParamName V_BETA_OUTPUT{"v_beta_output"};
+    const tt::tt_metal::TensorParamName KD_OUTPUT{"kd_output"};
+    const tt::tt_metal::TensorParamName Q_DECAY_OUTPUT{"q_decay_output"};
+    const tt::tt_metal::TensorParamName INTRA_OUTPUT{"intra_output"};
+    const tt::tt_metal::TensorParamName K_DECAY_TRANSPOSED_OUTPUT{"k_decay_transposed_output"};
+    const tt::tt_metal::TensorParamName FINAL_DECAY_OUTPUT{"final_decay_output"};
+    const tt::tt_metal::TensorParamName T_INV_OUTPUT{"t_inv_output"};
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto bf16 = tt::DataFormat::Float16_b;
@@ -117,14 +117,14 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     for (const auto& output : outputs) {
         output_formats.push_back(datatype_to_dataformat_converter(output.dtype()));
     }
-    auto make_dfb = [](const m2::DFBSpecName& name, uint32_t entries, tt::DataFormat format) {
-        return m2::DataflowBufferSpec{
+    auto make_dfb = [](const tt::tt_metal::DFBSpecName& name, uint32_t entries, tt::DataFormat format) {
+        return tt::tt_metal::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = tt::tile_size(format),
             .num_entries = entries,
             .data_format_metadata = format};
     };
-    m2::Group<m2::DataflowBufferSpec> dfb_specs = {
+    tt::tt_metal::Group<tt::tt_metal::DataflowBufferSpec> dfb_specs = {
         make_dfb(q_dfb, 2 * ck, bf16),
         make_dfb(k_dfb, 2 * ck, bf16),
         make_dfb(v_dfb, 2 * cv, bf16),
@@ -166,32 +166,32 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         dfb_specs.push_back(make_dfb(gate_center_neg_dfb, cc, fp32));
         dfb_specs.push_back(make_dfb(gate_half_dfb, cc, fp32));
     }
-    m2::KernelSpec reader{
+    tt::tt_metal::KernelSpec reader{
         .unique_id = READER,
         .source =
             "ttnn/ttnn/bringup/prepare_chunk_recurrence/device/kernels/dataflow/"
             "reader_prepare_chunk_recurrence.cpp",
         .dfb_bindings =
             {
-                m2::DFBBinding{q_dfb, "q", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{k_dfb, "k", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{v_dfb, "v", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{g_dfb, "g", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{beta_dfb, "beta", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{gate_tril_dfb, "gate_tril", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{gate_ones_dfb, "gate_ones", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{q_dfb, "q", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{k_dfb, "k", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{v_dfb, "v", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{g_dfb, "g", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{beta_dfb, "beta", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{eye_dfb, "eye", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{tril_dfb, "tril", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{ones_dfb, "ones", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{gate_tril_dfb, "gate_tril", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{gate_ones_dfb, "gate_ones", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{block_masks_dfb, "block_masks", tt::tt_metal::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
-                m2::TensorBinding{Q_TENSOR, "q"},
-                m2::TensorBinding{K_TENSOR, "k"},
-                m2::TensorBinding{V_TENSOR, "v"},
-                m2::TensorBinding{G_TENSOR, "g"},
-                m2::TensorBinding{BETA_TENSOR, "beta"},
+                tt::tt_metal::TensorBinding{Q_TENSOR, "q"},
+                tt::tt_metal::TensorBinding{K_TENSOR, "k"},
+                tt::tt_metal::TensorBinding{V_TENSOR, "v"},
+                tt::tt_metal::TensorBinding{G_TENSOR, "g"},
+                tt::tt_metal::TensorBinding{BETA_TENSOR, "beta"},
             },
         .compile_time_args =
             {{"Ct", Ct},
@@ -204,30 +204,30 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    m2::KernelSpec writer{
+    tt::tt_metal::KernelSpec writer{
         .unique_id = WRITER,
         .source =
             "ttnn/ttnn/bringup/prepare_chunk_recurrence/device/kernels/dataflow/"
             "writer_prepare_chunk_recurrence.cpp",
         .dfb_bindings =
             {
-                m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{t_inv_dfb, "t_inv", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{kd_dfb, "kd", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{q_decay_dfb, "q_decay", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{intra_dfb, "intra", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{final_decay_dfb, "final_decay", m2::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{v_beta_dfb, "v_beta", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{t_inv_dfb, "t_inv", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{kd_dfb, "kd", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{q_decay_dfb, "q_decay", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{intra_dfb, "intra", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{final_decay_dfb, "final_decay", tt::tt_metal::DFBEndpointType::CONSUMER},
             },
         .tensor_bindings =
             {
-                m2::TensorBinding{V_BETA_OUTPUT, "v_beta_output"},
-                m2::TensorBinding{KD_OUTPUT, "kd_output"},
-                m2::TensorBinding{Q_DECAY_OUTPUT, "q_decay_output"},
-                m2::TensorBinding{INTRA_OUTPUT, "intra_output"},
-                m2::TensorBinding{K_DECAY_TRANSPOSED_OUTPUT, "k_decay_transposed_output"},
-                m2::TensorBinding{FINAL_DECAY_OUTPUT, "final_decay_output"},
-                m2::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
+                tt::tt_metal::TensorBinding{V_BETA_OUTPUT, "v_beta_output"},
+                tt::tt_metal::TensorBinding{KD_OUTPUT, "kd_output"},
+                tt::tt_metal::TensorBinding{Q_DECAY_OUTPUT, "q_decay_output"},
+                tt::tt_metal::TensorBinding{INTRA_OUTPUT, "intra_output"},
+                tt::tt_metal::TensorBinding{K_DECAY_TRANSPOSED_OUTPUT, "k_decay_transposed_output"},
+                tt::tt_metal::TensorBinding{FINAL_DECAY_OUTPUT, "final_decay_output"},
+                tt::tt_metal::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
@@ -273,7 +273,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         unpack_modes[gate_center_neg_dfb] = UnpackMode::UnpackToSrc;
         unpack_modes[gate_half_dfb] = UnpackMode::UnpackToSrc;
     }
-    m2::KernelSpec compute{
+    tt::tt_metal::KernelSpec compute{
         .unique_id = COMPUTE,
         .source =
             "ttnn/ttnn/bringup/prepare_chunk_recurrence/device/kernels/compute/"
@@ -281,51 +281,51 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
-                m2::DFBBinding{q_dfb, "q", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{k_dfb, "k", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{v_dfb, "v", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{g_dfb, "g", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{beta_dfb, "beta", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{beta_activated_dfb, "beta_activated", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{beta_activated_dfb, "beta_activated", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{gate_tril_dfb, "gate_tril", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{gate_ones_dfb, "gate_ones", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{centered_inverse_decay_dfb, "centered_inverse_decay", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{centered_inverse_decay_dfb, "centered_inverse_decay", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{akk_dfb, "akk", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{akk_dfb, "akk", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{workspace_1_dfb, "workspace_1", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{workspace_1_dfb, "workspace_1", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{anchor_decay_dfb, "anchor_decay", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{anchor_decay_dfb, "anchor_decay", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{q_dfb, "q", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{k_dfb, "k", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{v_dfb, "v", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{g_dfb, "g", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{beta_dfb, "beta", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{beta_activated_dfb, "beta_activated", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{beta_activated_dfb, "beta_activated", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{eye_dfb, "eye", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{tril_dfb, "tril", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{ones_dfb, "ones", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{gate_tril_dfb, "gate_tril", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{gate_ones_dfb, "gate_ones", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{block_masks_dfb, "block_masks", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{workspace_0_dfb, "workspace_0", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{workspace_0_dfb, "workspace_0", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{centered_inverse_decay_dfb, "centered_inverse_decay", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{centered_inverse_decay_dfb, "centered_inverse_decay", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{akk_dfb, "akk", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{akk_dfb, "akk", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{workspace_1_dfb, "workspace_1", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{workspace_1_dfb, "workspace_1", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{anchor_decay_dfb, "anchor_decay", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{anchor_decay_dfb, "anchor_decay", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{normalized_q_dfb, "normalized_q", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{normalized_q_dfb, "normalized_q", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{normalized_k_dfb, "normalized_k", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{normalized_k_dfb, "normalized_k", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", tt::tt_metal::DFBEndpointType::CONSUMER},
 
-                m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{workspace_2_dfb, "workspace_2", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{workspace_2_dfb, "workspace_2", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{t_inv_dfb, "t_inv", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{kd_dfb, "kd", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{q_decay_dfb, "q_decay", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{intra_dfb, "intra", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{final_decay_dfb, "final_decay", m2::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{workspace_3_dfb, "workspace_3", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{workspace_3_dfb, "workspace_3", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{workspace_2_dfb, "workspace_2", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{workspace_2_dfb, "workspace_2", tt::tt_metal::DFBEndpointType::CONSUMER},
+                tt::tt_metal::DFBBinding{v_beta_dfb, "v_beta", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{t_inv_dfb, "t_inv", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{kd_dfb, "kd", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{q_decay_dfb, "q_decay", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{intra_dfb, "intra", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", tt::tt_metal::DFBEndpointType::PRODUCER},
+                tt::tt_metal::DFBBinding{final_decay_dfb, "final_decay", tt::tt_metal::DFBEndpointType::PRODUCER},
             },
         .compile_time_args =
             {{"Ct", Ct},
@@ -343,52 +343,52 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         .hw_config = std::move(compute_hw),
     };
 
-    m2::KernelRunArgs reader_run{.kernel = READER};
-    m2::KernelRunArgs writer_run{.kernel = WRITER};
-    m2::KernelRunArgs compute_run{.kernel = COMPUTE};
+    tt::tt_metal::KernelRunArgs reader_run{.kernel = READER};
+    tt::tt_metal::KernelRunArgs writer_run{.kernel = WRITER};
+    tt::tt_metal::KernelRunArgs compute_run{.kernel = COMPUTE};
     for (uint32_t index = 0; index < distribution.cores.size(); ++index) {
         const auto& core = distribution.cores[index];
         const uint32_t work_item_start = distribution.wi_start[index];
         const uint32_t work_item_count = distribution.wi_count[index];
-        m2::AddRuntimeArgsForNode(
+        tt::tt_metal::AddRuntimeArgsForNode(
             reader_run.runtime_arg_values,
             core,
             {{"work_item_start", work_item_start},
              {"work_item_count", work_item_count},
              {"num_chunks", num_chunks},
              {"num_heads", attrs.num_heads}});
-        m2::AddRuntimeArgsForNode(
+        tt::tt_metal::AddRuntimeArgsForNode(
             writer_run.runtime_arg_values,
             core,
             {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}, {"num_chunks", num_chunks}});
-        m2::AddRuntimeArgsForNode(
+        tt::tt_metal::AddRuntimeArgsForNode(
             compute_run.runtime_arg_values,
             core,
             {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}, {"num_chunks", num_chunks}});
     }
 
-    m2::ProgramSpec spec{
+    tt::tt_metal::ProgramSpec spec{
         .name = "prepare_chunk_recurrence",
         .dataflow_buffers = std::move(dfb_specs),
         .tensor_parameters =
             {
-                m2::TensorParameter{.unique_id = Q_TENSOR, .spec = q.tensor_spec()},
-                m2::TensorParameter{.unique_id = K_TENSOR, .spec = k.tensor_spec()},
-                m2::TensorParameter{.unique_id = V_TENSOR, .spec = v.tensor_spec()},
-                m2::TensorParameter{.unique_id = G_TENSOR, .spec = g.tensor_spec()},
-                m2::TensorParameter{.unique_id = BETA_TENSOR, .spec = beta.tensor_spec()},
-                m2::TensorParameter{.unique_id = V_BETA_OUTPUT, .spec = outputs[0].mesh_tensor().tensor_spec()},
-                m2::TensorParameter{.unique_id = KD_OUTPUT, .spec = outputs[1].mesh_tensor().tensor_spec()},
-                m2::TensorParameter{.unique_id = Q_DECAY_OUTPUT, .spec = outputs[2].mesh_tensor().tensor_spec()},
-                m2::TensorParameter{.unique_id = INTRA_OUTPUT, .spec = outputs[3].mesh_tensor().tensor_spec()},
-                m2::TensorParameter{
+                tt::tt_metal::TensorParameter{.unique_id = Q_TENSOR, .spec = q.tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = K_TENSOR, .spec = k.tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = V_TENSOR, .spec = v.tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = G_TENSOR, .spec = g.tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = BETA_TENSOR, .spec = beta.tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = V_BETA_OUTPUT, .spec = outputs[0].mesh_tensor().tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = KD_OUTPUT, .spec = outputs[1].mesh_tensor().tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = Q_DECAY_OUTPUT, .spec = outputs[2].mesh_tensor().tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = INTRA_OUTPUT, .spec = outputs[3].mesh_tensor().tensor_spec()},
+                tt::tt_metal::TensorParameter{
                     .unique_id = K_DECAY_TRANSPOSED_OUTPUT, .spec = outputs[4].mesh_tensor().tensor_spec()},
-                m2::TensorParameter{.unique_id = FINAL_DECAY_OUTPUT, .spec = outputs[5].mesh_tensor().tensor_spec()},
-                m2::TensorParameter{.unique_id = T_INV_OUTPUT, .spec = outputs[6].mesh_tensor().tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = FINAL_DECAY_OUTPUT, .spec = outputs[5].mesh_tensor().tensor_spec()},
+                tt::tt_metal::TensorParameter{.unique_id = T_INV_OUTPUT, .spec = outputs[6].mesh_tensor().tensor_spec()},
             },
-        .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = cores}},
+        .work_units = {tt::tt_metal::WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = cores}},
     };
-    m2::ProgramRunArgs run_args;
+    tt::tt_metal::ProgramRunArgs run_args;
     run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
     run_args.tensor_args = {
         {Q_TENSOR, q},
@@ -405,14 +405,14 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         {T_INV_OUTPUT, outputs[6].mesh_tensor()},
     };
     if (attrs.precise_gate_factors) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{gate_center_dfb, "gate_center", m2::DFBEndpointType::PRODUCER});
+        reader.dfb_bindings.push_back(tt::tt_metal::DFBBinding{gate_center_dfb, "gate_center", tt::tt_metal::DFBEndpointType::PRODUCER});
         reader.dfb_bindings.push_back(
-            m2::DFBBinding{gate_center_neg_dfb, "gate_center_neg", m2::DFBEndpointType::PRODUCER});
-        reader.dfb_bindings.push_back(m2::DFBBinding{gate_half_dfb, "gate_half", m2::DFBEndpointType::PRODUCER});
-        compute.dfb_bindings.push_back(m2::DFBBinding{gate_center_dfb, "gate_center", m2::DFBEndpointType::CONSUMER});
+            tt::tt_metal::DFBBinding{gate_center_neg_dfb, "gate_center_neg", tt::tt_metal::DFBEndpointType::PRODUCER});
+        reader.dfb_bindings.push_back(tt::tt_metal::DFBBinding{gate_half_dfb, "gate_half", tt::tt_metal::DFBEndpointType::PRODUCER});
+        compute.dfb_bindings.push_back(tt::tt_metal::DFBBinding{gate_center_dfb, "gate_center", tt::tt_metal::DFBEndpointType::CONSUMER});
         compute.dfb_bindings.push_back(
-            m2::DFBBinding{gate_center_neg_dfb, "gate_center_neg", m2::DFBEndpointType::CONSUMER});
-        compute.dfb_bindings.push_back(m2::DFBBinding{gate_half_dfb, "gate_half", m2::DFBEndpointType::CONSUMER});
+            tt::tt_metal::DFBBinding{gate_center_neg_dfb, "gate_center_neg", tt::tt_metal::DFBEndpointType::CONSUMER});
+        compute.dfb_bindings.push_back(tt::tt_metal::DFBBinding{gate_half_dfb, "gate_half", tt::tt_metal::DFBEndpointType::CONSUMER});
         reader.compiler_options.defines.insert({"PRECISE_GATE_FACTORS", "1"});
         compute.compiler_options.defines.insert({"PRECISE_GATE_FACTORS", "1"});
         // -O2: at -O3 the matmul init re-inlined into matmul_blocks and the pre-#60899 program overflowed the kernel
@@ -422,14 +422,14 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     reader.compile_time_args.insert({"has_actual_start", uint32_t(in.actual_start.has_value())});
     kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
     kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, reader);
-    const m2::DFBSpecName writer_chronology{"chronology_writer"};
+    const tt::tt_metal::DFBSpecName writer_chronology{"chronology_writer"};
     spec.dataflow_buffers.push_back(
         {.unique_id = writer_chronology,
          .entry_size = 32,
          .num_entries = 1,
          .data_format_metadata = tt::DataFormat::UInt32});
-    reader.dfb_bindings.push_back(m2::ProducerOf(writer_chronology, "chronology_writer"));
-    writer.dfb_bindings.push_back(m2::ConsumerOf(writer_chronology, "chronology_writer"));
+    reader.dfb_bindings.push_back(tt::tt_metal::ProducerOf(writer_chronology, "chronology_writer"));
+    writer.dfb_bindings.push_back(tt::tt_metal::ConsumerOf(writer_chronology, "chronology_writer"));
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         {.spec = std::move(spec), .run_params = std::move(run_args)},

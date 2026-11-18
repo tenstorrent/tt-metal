@@ -388,6 +388,15 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
+    # Bring-up models (dnijemcevic/model_bringup)
+    # DeepSeek-V4.1-Flash (layer subset, scaled on a 2x2 BH mesh): CSA window / compressed sparse attention, engram, mHC.
+    "deepseek_v41_flash_d_p": "models.demos.deepseek_v41_flash_d_p.tt.runners.adapter:DS41PrefillAdapter",
+    # Xing4.0-29B-A4B: dense MLA + mHC 4-stream residual + 64-expert top-4 MoE; 4x2 BH mesh (SP 4 x TP 2).
+    "xing40_a4b_d_p": "models.demos.xing40_a4b_d_p.tt.runners.adapter:XingPrefillAdapter",
+    # MiMo-V2.6-Flash-RL: full + sliding-window (sink) GQA, QK 192 / V 128, 256-expert top-8 MoE; 1x4 BH mesh.
+    "mimo_v2_6_d_p": "models.demos.mimo_v2_6_d_p.tt.runners.adapter:MiMoPrefillAdapter",
+    # MiMo-V2.6-Flash-RL on a 2x2 BH mesh (TP 4 over the flattened mesh, EP over 2 dispatch groups).
+    "mimo_v2_6_d_p_2x2": "models.demos.mimo_v2_6_d_p_2x2.tt.runners.adapter:MiMo2x2PrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

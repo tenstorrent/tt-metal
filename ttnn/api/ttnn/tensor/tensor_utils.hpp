@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
 
 // Exports symbols
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -120,11 +120,11 @@ tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
  *
  * @return DataflowBufferSpec with all entry-format fields populated from the tensor.
  */
-tt::tt_metal::experimental::DataflowBufferSpec dfb_spec_from_sharded_tensor(
-    tt::tt_metal::experimental::DFBSpecName unique_id,
+tt::tt_metal::DataflowBufferSpec dfb_spec_from_sharded_tensor(
+    tt::tt_metal::DFBSpecName unique_id,
     const Tensor& tensor,
     uint32_t num_entries = 0,
-    const std::optional<tt::tt_metal::experimental::TensorParamName>& borrowed_from = std::nullopt,
+    const std::optional<tt::tt_metal::TensorParamName>& borrowed_from = std::nullopt,
     bool page_as_tile = false,
     const std::optional<tt::tt_metal::Tile>& tile_format_override = std::nullopt,
     tt::tt_metal::experimental::DFBAdvancedOptions advanced_options = {});
