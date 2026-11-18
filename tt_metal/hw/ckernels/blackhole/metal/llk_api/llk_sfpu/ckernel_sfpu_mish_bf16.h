@@ -19,7 +19,7 @@ inline bool bf16_dest_mish() {
     return false;
 #endif
 }
-// calculate_exponent_alu_product's instructions in a stall-filling order, constants held in LRegs.
+// The kernel's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_mish_bf16_scheduled() {
     TTI_SFPLOADI(7, 8, 0x33a8);
     TTI_SFPLOADI(7, 0xa, 0x5ade);
