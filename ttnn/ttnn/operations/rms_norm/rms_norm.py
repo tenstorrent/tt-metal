@@ -1,44 +1,29 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""rms_norm: the starting stub of benchmark experiment E1 (generation). No kernels; every call is refused.
+"""rms_norm — one native generic_op dispatch per call.
 
-Specification
--------------
     rms_norm(x, gamma=None, epsilon=1e-6) = x / sqrt(mean(x**2, dim=-1) + epsilon) * gamma
 
-computed over the last dimension of `x`, as a single-device TTNN op on Blackhole.
+computed over the last dimension of `x`. Design: op_design.md (LOCAL and W_SPLIT regimes, both built).
 
 Inputs
-    input_tensor  rank 2, 3 or 4; dtype float32, bfloat16 or bfloat8_b; TILE or ROW_MAJOR layout (bfloat8_b is
-                  TILE only); any H and W, tile-aligned or not; DRAM interleaved, or L1 HEIGHT, WIDTH or BLOCK sharded.
-    gamma         optional; shape [1, 1, 1, W]; its own dtype (float32, bfloat16, bfloat8_b) and layout (TILE,
-                  ROW_MAJOR; bfloat8_b is TILE only).
+    input_tensor  rank >= 2; float32 / bfloat16; TILE or ROW_MAJOR; any H and W (tile-aligned or not);
+                  interleaved (Phase 0).
+    gamma         optional; shape [1, 1, 1, W]; float32 / bfloat16 (may differ from x); ROW_MAJOR or TILE.
     epsilon       added to the mean of squares before the reciprocal square root.
     compute_kernel_config
-                  a ttnn.ComputeConfigDescriptor; None means default_compute_kernel_config(): HiFi4, fp32 DEST
-                  off, approx mode on (ttnn.rms_norm's own default). The op honors its math_fidelity,
-                  fp32_dest_acc_en and math_approx_mode.
-    memory_config the output's placement; None means the input's. A sharded input's output keeps its shard spec.
+                  a ttnn.ComputeConfigDescriptor; None means default_compute_kernel_config() (the Phase 0 corner:
+                  HiFi4, fp32 DEST accumulation on, approx off). math_fidelity / math_approx_mode are honoured as
+                  given; fp32_dest_acc_en=False is a refinement candidate (refused for now).
+    memory_config the output's placement; None means DRAM interleaved. Phase 0: interleaved only.
 
 Output
     Same shape, dtype and layout as the input.
 
 Refusals
     A cell the op does not support raises NotImplementedError (UnsupportedAxisValue or ExcludedCell from
-    ttnn.operations._op_contract). A refused cell is unsupported, not failed; any other exception, or an output
-    outside the accuracy targets, is a failure.
-
-Accuracy targets (tt_ops_code_gen bc965d1, eval/golden_tests/rms_norm/helpers.py TOLERANCES)
-    PCC and RMS error relative to the reference's standard deviation, per input dtype:
-    float32 (0.999, 0.02), bfloat16 (0.995, 0.04), bfloat8_b (0.99, 0.10). The reference is computed in float32.
-
-Target cells
-    cartesian(TARGET, INPUT_SHAPES) minus the suite's INVALID list (tt_ops_code_gen bc965d1,
-    eval/golden_tests/rms_norm/feature_spec.py, sha256 0a0705d8de82...), plus the suite's loose, translated and
-    regression tests. alignment and rank are derived from the input shape by INPUT_TAGGERS. The benchmark
-    evaluator owns the support lists it scores with; SUPPORTED and EXCLUSIONS below are for the generator's own
-    bookkeeping and are not read when scoring.
+    ttnn.operations._op_contract). Structural misuse (rank < 2, gamma width mismatch) raises ValueError.
 """
 
 from __future__ import annotations
@@ -47,7 +32,7 @@ from typing import Optional
 
 import ttnn
 
-from ttnn.operations._op_contract import UnsupportedAxisValue
+from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 TILE_DIM = 32
 
@@ -78,6 +63,11 @@ INPUT_SHAPES = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# 1. INPUT_TAGGERS (shape-derived axes only)
+# ---------------------------------------------------------------------------
+
+
 def tag_alignment(inputs, axes):
     """tile_aligned (H%32==0 and W%32==0) / w_non_aligned (W%32!=0) / h_non_aligned (W aligned, H not)."""
     shape = inputs[0]
@@ -95,17 +85,53 @@ def tag_rank(inputs, axes):
 
 INPUT_TAGGERS = {"alignment": tag_alignment, "rank": tag_rank}
 
-SUPPORTED = {axis: [] for axis in TARGET}
 
-EXCLUSIONS = []
+# Gamma-format axes with the "none" sentinel. These read the gamma TENSOR, which a registry tagger never sees
+# (taggers get only the shape tuple), and registering them in INPUT_TAGGERS would make the golden harness stop
+# iterating TARGET["gamma_dtype"/"gamma_layout"] (a tagger axis wins over its TARGET entry). So validate() calls
+# them directly; the harness keeps cartesian-iterating the two axes.
+def tag_gamma_dtype(gamma):
+    return "none" if gamma is None else gamma.dtype
+
+
+def tag_gamma_layout(gamma):
+    return "none" if gamma is None else gamma.layout
+
+
+# ---------------------------------------------------------------------------
+# 2. SUPPORTED / 3. EXCLUSIONS
+# ---------------------------------------------------------------------------
+
+SUPPORTED = {
+    "dtype": [ttnn.float32, ttnn.bfloat16],
+    "fp32_dest_acc_en": [True],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
+    "rank": [2, 3, 4],
+    "gamma_mode": ["gamma", "no_gamma"],
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
+    "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
+    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+}
+
+EXCLUSIONS = [
+    # Permanent (precision convention): float32 input requires fp32 DEST accumulation.
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+]
 
 
 def default_compute_kernel_config() -> ttnn.ComputeConfigDescriptor:
+    """The Phase 0 corner. The single place the default lives (the golden tagger reads it too)."""
     return ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        fp32_dest_acc_en=False,
-        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        math_approx_mode=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. validate()
+# ---------------------------------------------------------------------------
 
 
 def validate(
@@ -115,7 +141,52 @@ def validate(
     compute_kernel_config: Optional[ttnn.ComputeConfigDescriptor] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.ComputeConfigDescriptor:
-    raise UnsupportedAxisValue("rms_norm: not implemented")
+    """Gate the call; return the resolved compute config."""
+    shape = tuple(int(d) for d in input_tensor.shape)
+    if len(shape) < 2:
+        raise ValueError(f"rms_norm: input must have rank >= 2, got shape {list(shape)}")
+    if gamma is not None:
+        g_shape = tuple(int(d) for d in gamma.shape)
+        g_volume = 1
+        for d in g_shape:
+            g_volume *= d
+        if g_shape[-1] != shape[-1] or g_volume != shape[-1]:
+            raise ValueError(
+                f"rms_norm: gamma shape {list(g_shape)} must be (1, 1, 1, W) with W == input W ({shape[-1]})"
+            )
+
+    cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+
+    axes = {
+        "dtype": input_tensor.dtype,
+        "fp32_dest_acc_en": bool(cfg.fp32_dest_acc_en),
+        "layout": input_tensor.layout,
+        "gamma_mode": "no_gamma" if gamma is None else "gamma",
+        "gamma_dtype": tag_gamma_dtype(gamma),
+        "gamma_layout": tag_gamma_layout(gamma),
+        "memory_layout": input_tensor.memory_config().memory_layout,
+    }
+    for axis_name, tagger in INPUT_TAGGERS.items():
+        axes[axis_name] = tagger((shape,), axes)
+
+    for axis, allowed in SUPPORTED.items():
+        if axes[axis] not in allowed:
+            raise UnsupportedAxisValue(f"rms_norm: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+
+    for exc in EXCLUSIONS:
+        if all(axes.get(k) == v for k, v in exc.items()):
+            raise ExcludedCell(f"rms_norm: unsupported combination: {exc}")
+
+    if gamma is not None and gamma.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise UnsupportedAxisValue("rms_norm: gamma must be interleaved")
+    if memory_config is not None and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise UnsupportedAxisValue(f"rms_norm: output memory_config {memory_config.memory_layout} not supported")
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 
 def rms_norm(
@@ -126,4 +197,19 @@ def rms_norm(
     compute_kernel_config: Optional[ttnn.ComputeConfigDescriptor] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.Tensor:
-    validate(input_tensor, gamma=gamma, compute_kernel_config=compute_kernel_config, memory_config=memory_config)
+    cfg = validate(input_tensor, gamma=gamma, compute_kernel_config=compute_kernel_config, memory_config=memory_config)
+
+    from .rms_norm_program_descriptor import create_program_descriptor
+
+    device = input_tensor.device()
+    output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    output_tensor = ttnn.allocate_tensor_on_device(
+        input_tensor.shape,
+        input_tensor.dtype,
+        input_tensor.layout,
+        device,
+        output_memory_config,
+    )
+    program_descriptor = create_program_descriptor(input_tensor, gamma, output_tensor, float(epsilon), cfg)
+    io_tensors = [input_tensor] + ([gamma] if gamma is not None else []) + [output_tensor]
+    return ttnn.generic_op(io_tensors, program_descriptor)
