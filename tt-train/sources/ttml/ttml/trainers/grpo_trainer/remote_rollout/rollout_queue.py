@@ -14,7 +14,7 @@ import numpy as np
 
 from ..distributed import exit_on_error
 from ..grpo_trainer import RolloutBatch
-from ..rollout_batch_source import ScoredRolloutBatch
+from ..rollout_batch_source import ScoredRolloutBatch, encode_rollout, pad_logprobs
 from .transport import duplicate_distributed_context, recv_frame, send_frame
 
 # Tags are matched only within this queue's own communicator, so they cannot collide with other MPI traffic.
@@ -96,10 +96,9 @@ def _encode(scored: ScoredRolloutBatch) -> bytes:
     r = scored.rollout
     return json.dumps(
         {
-            "weight_version": r.weight_version,
+            **encode_rollout(r),
+            "logprobs_width": r.logprobs.shape[1],
             "prompts": r.prompts,
-            "completions": r.completions,
-            "logprobs": r.logprobs.tolist(),
             "rewards": scored.rewards.tolist(),
             "reward_components": {k: v.tolist() for k, v in scored.reward_components.items()},
             "generation_time_s": scored.generation_time_s,
@@ -115,7 +114,7 @@ def _decode(body: bytes) -> ScoredRolloutBatch:
             weight_version=d["weight_version"],
             prompts=d["prompts"],
             completions=d["completions"],
-            logprobs=np.asarray(d["logprobs"], dtype=np.float32),
+            logprobs=pad_logprobs(d["completions"], d["logprobs"], d["logprobs_width"]),
         ),
         rewards=np.asarray(d["rewards"], dtype=np.float32),
         reward_components={k: np.asarray(v, dtype=np.float32) for k, v in d["reward_components"].items()},

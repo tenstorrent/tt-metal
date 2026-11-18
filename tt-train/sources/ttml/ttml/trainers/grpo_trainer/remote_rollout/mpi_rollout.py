@@ -32,6 +32,7 @@ from ttnn import distributed_context_send_bytes as _mpi_send_bytes
 
 from ..distributed import exit_on_error
 from ..grpo_trainer import RolloutSampler
+from ..rollout_batch_source import encode_rollout
 from .weight_bridge import (
     TTML_RANK,
     TTT_RANK,
@@ -108,13 +109,7 @@ class MPIRolloutServer:
         req = json.loads(body_bytes.decode("utf-8"))
         try:
             batch = self._sampler.generate(req["prompts"])
-            body = json.dumps(
-                {
-                    "completions": [[int(t) for t in c] for c in batch.completions],
-                    "logprobs": [batch.logprobs[r, : len(c)].tolist() for r, c in enumerate(batch.completions)],
-                    "weight_version": int(batch.weight_version),
-                }
-            ).encode("utf-8")
+            body = json.dumps(encode_rollout(batch)).encode("utf-8")
             op = OP_GENERATE
         except Exception:
             op, body = OP_ERROR, traceback.format_exc().encode("utf-8")

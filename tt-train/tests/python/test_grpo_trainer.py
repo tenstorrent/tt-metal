@@ -79,6 +79,7 @@ from ttml.trainers.grpo_trainer.rollout_batch_source import (
     InProcessRolloutBatchSource,
     RolloutBatchSource,
     ScoredRolloutBatch,
+    pad_logprobs,
     score_rollout,
     validate_rollout_batch,
 )
@@ -1542,7 +1543,7 @@ def _scored_batch(version):
             weight_version=version,
             prompts=[[1], [1]],
             completions=completions,
-            logprobs=np.full((2, 4), -0.5, dtype=np.float32),
+            logprobs=pad_logprobs(completions, [[-0.5] * len(c) for c in completions], 4),
         ),
         rewards=np.array([1.0, 0.5], dtype=np.float32),
         reward_components={"length": np.array([2.0, 1.0], dtype=np.float32)},
