@@ -15,10 +15,10 @@ Load: every destination shard's box is taken to canonical coordinates through th
 the checkpoint's device layout through the inverse of the saved transform, and intersected with the saved chunks.
 Each overlap is one read: a sub-box of a chunk copied into a sub-box of the destination shard. When the saved and
 destination layouts are the same (same transform and global shape) the boxes meet in device coordinates directly,
-so a same-topology resume reads every shard whole, padding rows included. Destination padding rows that no chunk
-covers are fills, which load as zeros. The reads and fills must tile every destination shard exactly: the
-saved chunks are checked to tile their global shape once per key, after which a shard's reads cannot overlap and
-only their total volume is left to check.
+so a same-topology resume reads every shard whole, padding rows included, each chunk found by its box without a
+lookup or an intersection. Destination padding rows that no chunk covers are fills, which load as zeros. The reads
+and fills must tile every destination shard exactly: the saved chunks are checked to tile their global shape once per
+key, after which a shard's reads cannot overlap and only their total volume is left to check.
 """
 
 from __future__ import annotations
@@ -316,6 +316,27 @@ class _ChunkLookup:
         return found
 
 
+def _whole_chunk_reads(entry: Entry, info: TensorInfo, boxes: Mapping[tuple[int, ...], Box]) -> list[ReadItem] | None:
+    """The reads of a same-layout load whose destination shards are all saved chunks: each shard reads the chunk with
+    its box, whole. ``None`` when some shard is not a saved chunk, or the saved boxes repeat or do not add up to the
+    global volume; the general path then plans the key, and refuses an inconsistent index.
+
+    This path builds no chunk lookup, so it skips the lookup's tiling check. Distinct saved boxes whose volumes add up
+    to the global shape's, every destination box among them, make the destination boxes of the whole world (every
+    rank's, in a multi-rank load) the saved boxes exactly, so the saved chunks tile."""
+    saved = {c.box: i for i, c in enumerate(entry.chunks)}
+    if len(saved) != len(entry.chunks) or sum(c.box.volume for c in entry.chunks) != prod(entry.global_shape):
+        return None
+    reads = []
+    for group, dbox in boxes.items():
+        ci = saved.get(dbox)
+        if ci is None:
+            return None
+        whole = Box((0,) * dbox.ndim, dbox.sizes)
+        reads.append(ReadItem(info.key, entry.chunks[ci].file, ci, whole, whole, group))
+    return reads
+
+
 def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] | None = None) -> KeyPlan:
     """The reads and fills that build every destination shard of one key from the saved chunks.
 
@@ -337,11 +358,13 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
     if local_coords is not None:
         groups = {g: cs for g, cs in groups.items() if any(c.mesh_coord in local_coords for c in cs)}
     boxes = {group: chunks[0].box for group, chunks in groups.items()}
+    if same_layout:
+        whole = _whole_chunk_reads(entry, info, boxes)
+        if whole is not None:
+            return KeyPlan(info.key, entry, info, boxes, whole, [], True)
     reads: list[ReadItem] = []
     fills: list[FillItem] = []
-    fast = same_layout
     lookup = _ChunkLookup(entry)
-    saved_boxes = {c.box: i for i, c in enumerate(entry.chunks)}
     for group, dbox in boxes.items():
         group_reads: list[ReadItem] = []
         group_fills: list[FillItem] = []
@@ -356,8 +379,6 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
                 overlap = pad_box.intersect(dbox)
                 if overlap is not None:
                     group_fills.append(FillItem(info.key, overlap.relative_to(dbox), group))
-        if fast and saved_boxes.get(dbox) is None:
-            fast = False
         for d_piece, s_piece in pieces:
             for ci in lookup.overlapping(s_piece):
                 chunk = entry.chunks[ci]
@@ -381,7 +402,7 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
             )
         reads.extend(group_reads)
         fills.extend(group_fills)
-    return KeyPlan(info.key, entry, info, boxes, reads, fills, fast)
+    return KeyPlan(info.key, entry, info, boxes, reads, fills, False)
 
 
 def create_load_plan(

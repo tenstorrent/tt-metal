@@ -31,6 +31,7 @@ from dcp_oracle import (
     world,
 )
 
+from ttml.distributed_checkpointing import _planner as planner_module
 from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing._errors import (
     CheckpointError,
@@ -205,16 +206,26 @@ def test_fsdp4_tp8_to_tp8_places_four_chunks_side_by_side_and_back():
     assert_shards_equal(shards, expected)
 
 
-def test_same_world_reads_every_shard_whole():
+def test_same_world_reads_every_shard_whole(monkeypatch):
     canonical = arange((1, 1, 64, 32))
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (canonical, TP8_DP4, Identity())})
-    plan, _ = ckpt.load({"w": (TP8_DP4, Identity(), canonical.shape)})
+
+    def no_lookup(entry):
+        raise AssertionError("a same-layout load finds each chunk by its box, without the chunk lookup")
+
+    monkeypatch.setattr(planner_module, "_ChunkLookup", no_lookup)
+    plan, shards = ckpt.load({"w": (TP8_DP4, Identity(), canonical.shape)})
+    assert_shards_equal(shards["w"], expected_shards(canonical, TP8_DP4))
     kplan = plan.keys["w"]
-    assert kplan.fast_path and len(kplan.reads) == 8
+    assert kplan.fast_path and len(kplan.reads) == 8 and not kplan.fills
     for read in kplan.reads:
         chunk = kplan.entry.chunks[read.chunk]
-        assert read.src.offsets == (0, 0, 0, 0) and read.src.sizes == chunk.box.sizes
+        assert chunk.box == kplan.boxes[read.group] and read.src == read.dst == Box.whole(chunk.box.sizes)
+    # One rank of a multi-rank load takes the same path for the shards it holds.
+    left = {c for c in TP8_DP4.mesh_coords if c[1] < 4}
+    part = create_load_plan(ckpt.index, [info("w", TP8_DP4, canonical.shape, Identity())], local_coords=left)
+    assert part.keys["w"].fast_path and sorted(r.group for r in part.keys["w"].reads) == [(0,), (1,), (2,), (3,)]
 
 
 def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
@@ -337,8 +348,9 @@ def test_a_missing_chunk_is_a_coverage_error(expect_error):
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (canonical, TP8_DP4, Identity())})
     del ckpt.index.entries["w"].chunks[3]
-    with expect_error(CoverageError, "w: the checkpoint's 7 chunks do not tile its global shape"):
-        ckpt.load({"w": (SINGLE, Identity(), (1, 1, 64, 32))})
+    for dest in (SINGLE, TP8_DP4):  # a reshard, and the same layout that would read each chunk whole
+        with expect_error(CoverageError, "w: the checkpoint's 7 chunks do not tile its global shape"):
+            ckpt.load({"w": (dest, Identity(), (1, 1, 64, 32))})
 
 
 @dataclass(frozen=True)
