@@ -2,12 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from typing import List, Optional
+from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG, Conv2dNormActivation
+from typing import List
 from dataclasses import dataclass
-
-# The bbox_reg conv's DRAM slicing. Its weights and bias are prepared for this same slicing
-# (custom_preprocessor): weights prepared for another slicing are laid out for another program.
-BBOX_REG_SLICE_CONFIG = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
 
 
 @dataclass
@@ -101,134 +98,6 @@ retinanet_head_optimizations = {
         },
     ),
 }
-
-
-class Conv2dNormActivation:
-    """
-    TTNN implementation of Conv2d + GroupNorm + ReLU block.
-    """
-
-    def __init__(
-        self,
-        parameters: dict,
-        device: ttnn.Device,
-        in_channels: int = 256,
-        out_channels: int = 256,
-        kernel_size: tuple = (3, 3),
-        stride: tuple = (1, 1),
-        padding: tuple = (1, 1),
-        num_groups: int = 32,
-        grid_size: Optional[ttnn.CoreGrid] = None,
-        input_mask: Optional[ttnn.Tensor] = None,
-        model_config: dict = None,
-        compute_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
-        conv_config: Optional[ttnn.Conv2dConfig] = None,
-    ):
-        """
-        Args:
-            parameters: Dict with keys 'weight', 'norm_weight', 'norm_bias'
-            device: TTNN device
-            in_channels: Number of input channels
-            out_channels: Number of output channels
-            kernel_size: Convolution kernel size
-            stride: Convolution stride
-            padding: Convolution padding
-            num_groups: Number of groups for GroupNorm
-            grid_size: CoreGrid for GroupNorm (defaults to 8x8)
-            input_mask: Pre-created input mask for GroupNorm
-        """
-        self.device = device
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
-        self.num_groups = num_groups
-        self.model_config = model_config
-        self.compute_config = compute_config
-        self.conv_config = conv_config
-        self.conv_weight = parameters["weight"]
-        self.conv_bias = parameters["bias"]
-        self.norm_weight = parameters["norm_weight"]
-        self.norm_bias = parameters["norm_bias"]
-        self.grid_size = grid_size if grid_size is not None else ttnn.CoreGrid(y=8, x=8)
-
-        self.input_mask = input_mask
-
-        self.slice_config = ttnn.Conv2dSliceConfig(
-            slice_type=ttnn.Conv2dDRAMSliceHeight,
-        )
-
-    def __call__(
-        self,
-        x: ttnn.Tensor,
-        batch_size: int,
-        input_height: int,
-        input_width: int,
-    ) -> ttnn.Tensor:
-        """
-        Forward pass: Conv2d -> GroupNorm -> ReLU
-
-        Args:
-            x: Input tensor in NHWC format
-            batch_size: Batch size
-            input_height: Input height
-            input_width: Input width
-
-        Returns:
-            Output tensor after Conv2d + GroupNorm + ReLU
-        """
-
-        x, [H_out, W_out], [prepared_weight, prepared_bias] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self.conv_weight,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            device=self.device,
-            bias_tensor=self.conv_bias,
-            kernel_size=list(self.kernel_size),
-            stride=list(self.stride),
-            padding=list(self.padding),
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            slice_config=self.slice_config,
-            compute_config=self.compute_config,
-            conv_config=self.conv_config,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
-
-        N, H_out, W_out, C = x.shape
-
-        spatial_size = H_out * W_out
-        x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
-
-        # group_norm counts every row it is given in the group statistics, so the level is not
-        # padded; its grid rows instead divide the level's tile rows. The grid keeps its width,
-        # which the norm weight and bias are prepared for (create_group_norm_weight_bias_rm).
-        tile_rows = -(-spatial_size // 32)
-        grid_rows = max(y for y in range(1, self.grid_size.y + 1) if tile_rows % y == 0)
-        x_normalized = ttnn.group_norm(
-            x_flat,
-            num_groups=self.num_groups,
-            input_mask=self.input_mask,
-            weight=self.norm_weight,
-            bias=self.norm_bias,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=ttnn.CoreGrid(y=grid_rows, x=self.grid_size.x),
-            inplace=False,
-            # A few grid rows leave each core many tile rows; group_norm splits them to fit L1.
-            num_out_blocks=-1,
-            compute_kernel_config=self.compute_config,
-        )
-
-        x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
-
-        # ReLU activation
-        x = ttnn.relu(x)
-
-        return x
 
 
 # Usage in ttnn_retinanet_regression_head

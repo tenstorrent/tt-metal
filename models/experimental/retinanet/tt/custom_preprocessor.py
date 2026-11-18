@@ -5,7 +5,7 @@ import torch
 import ttnn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
-from models.experimental.retinanet.tt.tt_regression_head import BBOX_REG_SLICE_CONFIG
+from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG
 
 
 def conv_bn_to_params(conv, bn, mesh_mapper):
