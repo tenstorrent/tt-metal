@@ -55,13 +55,20 @@ SIGNAL_FORWARD_GRACE_S = 10.0
 ABORT_HANG_GRACE_S = 15.0
 _MPI_ABORT_BANNER = "MPI_ABORT was invoked"
 
+# Minimum age of an unmapped /dev/shm segment before the leftover sweep removes it. Below this it may be a
+# concurrent same-user job's segment that is created but not yet mapped (uncertain ownership), so it is preserved;
+# a genuine leak from a job that is gone has sat unmapped far longer. A short job's own leak is instead cleared by
+# the next launch's pre-launch sweep.
+SHM_MIN_STALE_AGE_S = 30.0
+
 
 def remove_stale_launcher_leftovers() -> int:
     """Remove this user's leftovers from a killed job that no live owner claims (teardown plan P11, P25). The
     launcher's normal exit clears both of these; a launcher killed by a signal (``kill -9``, an OOM kill, a runner
     reaping the tree) never runs that exit path and leaves them behind until reboot:
 
-    - Open MPI shared-memory segments in /dev/shm (``sm_segment.*``, 16 MB each) that no live process maps.
+    - Open MPI shared-memory segments in /dev/shm (``sm_segment.*``, 16 MB each) that no live process maps AND
+      have sat unmapped past SHM_MIN_STALE_AGE_S (a just-created one may be a concurrent job's, so it is kept).
     - PRRTE launcher session directories (``<tmpdir>/prterun.<host>.<pid>.<uid>``) whose launcher pid is dead.
 
     A segment a running job still maps, or a directory whose launcher pid is alive, is kept, so a concurrent job
@@ -69,7 +76,7 @@ def remove_stale_launcher_leftovers() -> int:
     in its teardown (its own, once the launcher it owned is gone). It is a fail-safe on the launch host only, so
     remote hosts are cleaned by each rank's own context.
     """
-    host, uid, removed = socket.gethostname(), os.getuid(), 0
+    host, uid, removed, now = socket.gethostname(), os.getuid(), 0, time.time()
     # Open MPI /dev/shm segments that no live process maps.
     mine = glob.glob(f"/dev/shm/sm_segment.{host}.{uid}.*")
     if mine:
@@ -88,6 +95,11 @@ def remove_stale_launcher_leftovers() -> int:
             if seg in mapped:
                 continue
             try:
+                # Uncertain ownership: a just-created segment may be a concurrent same-user job's that has not
+                # mapped it yet (shm_open and mmap are not atomic). Sweep only one that has sat unmapped past
+                # SHM_MIN_STALE_AGE_S, i.e. long enough that it cannot be mid-startup — a genuine leak, not a race.
+                if now - os.path.getmtime(seg) < SHM_MIN_STALE_AGE_S:
+                    continue
                 os.unlink(seg)
                 removed += 1
             except OSError:

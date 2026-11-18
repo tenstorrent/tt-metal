@@ -1448,6 +1448,7 @@ class TestJobOwnership:
     def test_sweep_removes_a_stale_shm_segment_but_keeps_a_mapped_one(self):
         import mmap
         import socket
+        import time
 
         from ttnn.distributed.ttrun import remove_stale_launcher_leftovers
 
@@ -1456,23 +1457,27 @@ class TestJobOwnership:
         host, uid = socket.gethostname(), os.getuid()
         stale = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_stale_{os.getpid()}")
         live = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_live_{os.getpid()}")
+        fresh = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_fresh_{os.getpid()}")
         mm = fd = None
         try:
             stale.write_bytes(b"\0" * 4096)  # a leftover nobody maps
+            os.utime(stale, (time.time() - 3600, time.time() - 3600))  # aged past SHM_MIN_STALE_AGE_S: a genuine leak
+            fresh.write_bytes(b"\0" * 4096)  # unmapped but just created, like a concurrent job before it maps it
             fd = os.open(str(live), os.O_RDWR | os.O_CREAT, 0o600)  # a segment this process maps, like a live job
             os.ftruncate(fd, 4096)
             mm = mmap.mmap(fd, 4096)
 
             remove_stale_launcher_leftovers()
 
-            assert not stale.exists(), "the stale segment was not removed"
+            assert not stale.exists(), "the aged, unmapped segment was not removed"
             assert live.exists(), "a segment a live process maps must be kept"
+            assert fresh.exists(), "a just-created unmapped segment (uncertain ownership) must be preserved"
         finally:
             if mm is not None:
                 mm.close()
             if fd is not None:
                 os.close(fd)
-            for p in (stale, live):
+            for p in (stale, live, fresh):
                 try:
                     p.unlink()
                 except OSError:
