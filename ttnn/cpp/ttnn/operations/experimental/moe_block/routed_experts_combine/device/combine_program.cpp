@@ -197,7 +197,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->hops = resources.first_hops();
     plan->fabric_links = mesh.num_links;
     plan->port_luts = resources.port_luts();
-    plan->snap_bits = cfg.snap_bits();
+    plan->snap_step_bits = cfg.snap_step_bits();
     plan->home_tokens = in.home_tokens;
     plan->row_elements = in.row_elements;
     const uint32_t N = mesh.topo.num_chips();
@@ -641,12 +641,14 @@ CombineHandles add_combine_program(
         plan.accumulator_table_cb_bytes);
     arena_cb(kCbRow, aset, plan.row_cb_offset, plan.row_depth * NT * kTile, tt::DataFormat::Float16_b, kTile);
     arena_cb(kCbMeta, aset, plan.meta_cb_offset, plan.row_depth * 32, tt::DataFormat::UInt32, 32);
+    // (the sums: int32 counts of q with the snap - the packer's INT32 L1 accumulation, exact in any order - else fp32;
+    // 4 B a value either way)
     arena_cb(
         kCbAcc,
         aset,
         plan.accumulator_fp32_offset,
         plan.max_tokens_per_accumulator * NT * 4096,
-        tt::DataFormat::Float32,
+        plan.snap_step_bits ? tt::DataFormat::Int32 : tt::DataFormat::Float32,
         4096);
     arena_cb(kCbOut, aset, plan.output_cb_offset, 2 * NT * kTile, tt::DataFormat::Float16_b, kTile);
     arena_cb(kCbW, aset, plan.weight_cb_offset, plan.row_depth * kTile, tt::DataFormat::Float16_b, kTile);
@@ -924,7 +926,8 @@ CombineHandles add_combine_program(
             dual ? static_cast<uint32_t>(pend[R_PR].ct.size()) : 0u);
         const auto rd =
             kern(R_AR, "dataflow/accumulator_reader.cpp", aset, std::move(rd_ct), r_riscv0, std::move(rd_named));
-        // (the fp32 sums unpacked straight to DEST: the default narrows a Float32 CB to TF32 on its way)
+        // (the sums unpacked straight to DEST: the default narrows a Float32 CB to TF32 on its way, and an Int32 CB
+        // has no path through srcA)
         std::vector<tt::tt_metal::UnpackToDestMode> u2d(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
         u2d[kCbAcc] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         // (no runtime args - one program for the mesh needs them alike, and a core's accumulator and its tokens differ
@@ -942,7 +945,7 @@ CombineHandles add_combine_program(
             {names::kRowTiles, NT},
             {names::kMaxTokensPerAccumulator, plan.max_tokens_per_accumulator},
             {names::kWeightCb, kCbW},
-            {names::kSnapOffsetBits, plan.snap_bits}};
+            {names::kSnapStepBits, plan.snap_step_bits}};
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;  // (ComputeConfig's default)
         compute_kernel.config = tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true, .unpack_to_dest_mode = u2d};
