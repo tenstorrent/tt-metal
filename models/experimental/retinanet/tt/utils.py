@@ -97,7 +97,7 @@ class TTConv2D:
         is_reshape=True,
         enable_act_double_buffer=False,
         enable_weights_double_buffer=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=None,
         packer_l1_acc=False,
         math_approx_mode=False,
         input_channels_alignment=32,
@@ -137,6 +137,11 @@ class TTConv2D:
         self.bias = parameters["bias"]
         self.deallocate_activation = deallocate_activation
         self.reallocate_halo_output = reallocate_halo_output
+        # The convs accumulate in fp32 unless the model config or the layer says otherwise: the
+        # backbone's sums run over thousands of products, and bfloat16 accumulation of them costs
+        # its feature levels most of their margin to the reference.
+        if fp32_dest_acc_en is None:
+            fp32_dest_acc_en = self.kernel_fidelity.get("FP32_DEST_ACC_EN", True)
         self.fp32_dest_acc_en = fp32_dest_acc_en
         self.packer_l1_acc = packer_l1_acc
         self.math_approx_mode = math_approx_mode
