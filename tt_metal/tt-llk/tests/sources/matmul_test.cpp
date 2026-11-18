@@ -172,6 +172,22 @@ constexpr bool matmul_hoist_rows = matmul_force_form ? (MATMUL_FORCE_FORM_CHAR =
                                                      : unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_TILES)
+// minimal_matmul's run-time calls take the compute API's unkeyed hoist (llk_unpack_AB_matmul): off where the kernel names a one-tile-wide
+// subblock over 16-bit operands, and above LoFi only with a 16-bit DEST
+constexpr bool matmul_kernel_bfp = []
+{
+    for (const std::uint8_t f : MATMUL_KERNEL_FORMATS)
+    {
+        if (f == static_cast<std::uint8_t>(DataFormat::Bfp8_b) || f == static_cast<std::uint8_t>(DataFormat::Bfp4_b))
+        {
+            return true;
+        }
+    }
+    return false;
+}();
+constexpr bool matmul_hoist_rows = ((MATMUL_PK_CT != 1 || matmul_kernel_bfp) && (MATH_FIDELITY == ckernel::MathFidelity::LoFi || !is_fp32_dest_acc_en)) ||
+                                   unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_PRODUCTION)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
 #elif defined(ARCH_BLACKHOLE)
