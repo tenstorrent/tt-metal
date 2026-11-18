@@ -360,7 +360,7 @@ class Flux3KleinEarlyStacks(Module):
         linear1: bool,
     ) -> None:
         super().__init__()
-        self._ring = ccl_manager.topology == ttnn.Topology.Ring
+        self._ring = ccl_manager.axis_topology(parallel_config.tensor_parallel.mesh_axis) == ttnn.Topology.Ring
         for mode in MODES:
             setattr(
                 self,
