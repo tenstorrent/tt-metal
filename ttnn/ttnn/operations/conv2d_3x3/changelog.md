@@ -1261,3 +1261,160 @@ All 3x3 layers of one Panoptic inference (each case x its calls): 1538 -> 1456 u
 | no helper (dataflow format conversion) | capability | Nothing converts a bf8_b / bf16 tile's row 0 to fp32 row-major on a data-movement RISC. The reader decodes it in plain RISC code. | n/a | ~1.3 us per tile with `__builtin_clz` (res3.x, N 4: 5.4 us); normalize loop not timed separately, hidden on every focus case | conv2d_3x3_reader.cpp:810 |
 
 The row skip's host masks and the weight-round order use no raw LLK beyond the walks above.
+
+## Perf 8
+- Date: 2026-11-18
+- Scope: perf tournament (run round 3 of 5) on the 22 `[perf]` LOOSE cases (LoFi, fp32 DEST, bf8_b activation and weights except stem.conv1, bias + ReLU except aspp.convs.3, pinned shard grids). Goal: >= 70% compute utilization against an ideal on 110 cores, worked in priority order. No SUPPORTED change. Base `3ca4eb28f46` (end of Perf 7). Board: Blackhole p150b, 11x10 = 110 cores, AICLK 1350 MHz. DEVICE KERNEL DURATION.
+- Outcome: 6 of 6 ideas graduated, all bit-identical. Two focus cases reach 70%: sem res2.fuse_conv.1 (priority 2) 60% -> 74%, sem dec res2.fuse_conv.0 (priority 12) 53% -> 75%. aspp.convs.3 (priority 1) 60% -> 65%. All 3x3 layers of one inference: 1456 -> 1248 us (-14.3%). No focus or guard cell regressed beyond noise.
+- Instrumentation: Perf 1-7 zones kept. New zones: `server_send_bias` (server bias multicast), `compute_kwf_halo_wait`, `writer_khx_send`, `writer_khx_drain` (halo exchange), `compute_tilize_wait` and `reader_slab_dead_wait` (padded slab). The n-group passes, narrow planes and balanced split run inside existing zones.
+- Ablation hooks and merge gates: `perf_experiments/ablation_r8/` (README). The roofline gate used the measured rates against the LoFi FPU floor (16 cycles per tile-MAC) and the NoC link rate, not the `noc_estimate` CLI.
+
+### Measured breakdown (before, zoned, us)
+DM-first cumulative peel: full > gather > fill > weights > scatter > untilize > tilize > matmul (everything stubbed). "mm only": the matmul alone stubbed; "weights only": everything but the weight stream stubbed.
+
+| case | full | -gather | -fill | -weights | -scatter | -untilize | -tilize | -matmul | mm only | weights only |
+|---|---|---|---|---|---|---|---|---|---|---|
+| aspp.convs.3 | 27.5 | 27.0 | 25.2 | 25.3 | 24.5 | 22.9 | 20.5 | 11.5 | 21.8 | 17.9 |
+| sem res2 fc1 | 107.7 | 107.8 | 105.8 | 105.7 | 105.7 | 101.6 | 93.5 | 53.6 | 74.2 | 65.4 |
+| res4.x | 16.1 | 14.2 | 13.4 | 13.4 | 12.4 | 12.4 | 10.9 | 8.5 | 15.6 | 10.1 |
+| res3.x | 15.0 | 14.9 | 14.7 | 11.3 | 11.3 | 11.3 | 11.4 | 11.1 | 14.6 | 13.9 |
+| stem.conv2 | 34.2 | 34.2 | 33.1 | 32.2 | 32.2 | 32.2 | 32.2 | 28.5 | 28.5 | 28.5 |
+| aspp.convs.2 | 59.4 | 58.9 | 56.0 | 54.7 | 54.1 | 52.4 | 47.2 | 13.0 | 34.5 | 35.2 |
+| res2 | 14.0 | 14.0 | 12.8 | 11.7 | 11.7 | 11.7 | 11.7 | 9.3 | 11.5 | 10.5 |
+| center_head.1 | 12.1 | 12.2 | 11.5 | 10.0 | 10.0 | 10.1 | 10.0 | 6.9 | 9.6 | 9.4 |
+| sem dec res2 fc0 | 135.8 | 136.3 | 133.2 | 133.1 | 133.2 | 120.4 | 104.1 | 57.3 | 92.3 | 76.5 |
+| sem dec res3 fc0 | 45.0 | 45.4 | 43.4 | 42.7 | 42.7 | 39.7 | 33.6 | 8.8 | 24.4 | 24.3 |
+
+All 22 cases are in `ablation_r8/peel_results.txt`. kw-fold cases keep their pack stream and final pass under every hook.
+
+Ranked:
+1. **sem res2 fc1 / sem dec res2 fc0 run the K-blocked tap-direct walk** at ~22.5 cycles per tile-MAC, with six per-K-block tilizes (~1 us each) per M-block and a fill-paced first untilize (0.5-7.3 us). Their everything-stubbed skeleton is 53.6 / 57.3 us of per-K-block fp32 L1-acc partial packs. kw-fold would pay (halo / im2col 0.43 / 0.34) but missed L1: 1104 vs 1027 KB and 1285 vs 1005 KB (two slabs plus double-buffered whole-N column rounds).
+2. **BLOCK grid rows are unbalanced after the kernel-row skip.** `compute_matmul_walk` p50 / max: aspp.convs.3 13.7 / 16.2, aspp.convs.2 28.5 / 39.8, aspp.convs.1 37.3 / 39.5, res5.2 24.2 / 26.8 us. The middle grid rows keep all three kernel rows.
+3. **HEIGHT round-0 weight latency.** Round 0 lands at ~4 us on every server-fed layer: a 1 us kernel-start ack wait, reads with 2 chunks in flight (9-22 GB/s), and ~0.3-0.4 us per 8.7 KB chunk multicast. res3.x's compute waited 6.6 of its 12.9 us.
+4. **The N-slice prelude is gather-paced.** res4.x: the reader's gather (4.3 us, per-unit planning plus edge-tap copies) paces a 4.6 us tilize whose own work is ~2.3 us. aspp.convs.3: gather 3.9, tilize 4.4 us.
+5. **kw-fold recomputes a halo tile-row per side**: +22% MACs at bm 3. The gate keeps sem dec res3 fc0 / fc1 off kw-fold (0.57 / 0.73).
+6. **kw-fold at N = 2** (stem.conv2): 28.5 us with the matmul stubbed, 2x2 subblocks, a 2-tile-wide fp32 stream at ~116-140 cycles per tile. Its optimizer then showed the op is matmul-unpack bound (stubbing the pack moved it only 34.3 -> 34.0 us).
+
+### Portfolio and verdicts
+Each idea was built and measured in isolation by its own optimizer (`perf_experiments/<slug>/`). All six are bit-identical to the base op.
+
+| idea | verdict | focus result (us, isolated) | domain / notes |
+|---|---|---|---|
+| `kwf_ngroup_outer`: kw-fold walks one output-column group (sbw tiles) per pass, one fp32 accumulator plane, weight sub-rounds of [3 C_in, sbw] tiles, at its own bm (largest divisor whose CBs fit) | WIN | sem res2 fc1 107.6 -> 89.7, sem dec res2 fc0 135.9 -> 100.3 | Every kw-fold case. Existing ones have N <= 4 (one group): flat. bm 5 x 2 blocks measured 96.1, all planes resident 89.4 at 215 KB more L1. |
+| `block_balanced_msplit`: per-grid-row M ranges from a fitted cost model (untilize per slab tile, tilize per unit, walk per k-tile of each ring row group) | WIN | aspp.convs.3 27.1 -> 26.1 (median of 3) | aspp.convs.2 -14.0%, aspp.convs.1 -8.6%, res5.1 -4.5%, res5.2 -3.5%, res5.0 / res4 flat; HiFi4 BLOCK -3% to -13%. Taken where the model drops the costliest row >= 2%; runtime row sizing on a uniform split measured +5.0% on aspp.convs.3. Found: aspp.convs.3 is now paced by the weight multicast (rounds 3+ leave the sender after its `slab_dead_wait`). |
+| `server_stream_latency`: one linked multicast chain per run of landed chunks, 3 chunks per round, early slot-reuse acks, start ack first, the server multicasts the bias | WIN | res3.x 14.95 -> 12.12 (median of 3) | Every server-fed layer: res2 -10.8%, center_head.1 -6.5%, inst res2 fc1 -2.5%, the rest flat. The linked chain alone: 14.45; the bias multicast alone: flat; together they unblock each other. Server reads are issue-bound (37-50 cycles per one-tile read). |
+| `tapdirect_cheap_publish`: the N-slice slab untilized into zero-gapped row slots (W + d pixels), so every tap is one slab run or the zero block; compute computes its tilize sources | WIN | res4.x 15.90 -> 13.43 (median of 3) | Every N-slice center-tap prelude (stride 1, p == d, W % 32 == 0, one M-block) where the padded slab fits leftover L1: res5.x -2.7% to -5.1%, aspp flat (its 6-wide tilize already ran at its own rate). Of the old 4.3 us gather, ~1.7 us were edge-tap copies and ~0.8 us planning. |
+| `kwf_halo_exchange`: with one M-block per core, neighbours pass the d boundary rows (A: Q_1 up, B: Q_1 + Q_0 down, C: the completed rows up) instead of recomputing a halo tile-row | WIN | res3.x 15.26 -> 15.15 (flat: its final pass waited for the bias decode); sem dec res3 fc0 44.91 -> 40.97, fc1 36.22 -> 33.01 (now kw-fold), inst dec res3 fc0 25.21 -> 22.63 | Every kw-fold case with one M-block per core; more than one keeps the recompute (blocks would chain). NoC atomic increments for the counters slowed a concurrent multicast (center_head.1 +3.3%); inline absolute-value writes did not. |
+| `kwf_narrow_planes`: 1-tile-wide fp32 accumulator planes packed by a replayed z-stepped PACR stream (`pack_zst`); 4x1 subblocks where 3 or 4 does not divide N | WIN (narrow) | stem.conv2 34.31 -> 32.21 | Every kw-fold case: res2 -2.9%, the rest flat. Isolated fp32 pack: 75 cycles per tile vs 100 (2-wide MOP) and 122 (1-wide MOP). 4x1 on N = 4 measured +2% to +22% (four srcB unpacks per 4 tile-MACs), so N = 4 keeps 1x4. |
+
+Not floated (cap of 6): stem.conv1 (its RM row gather is untouched by every hook: 21.9 us with everything stubbed), the BLOCK ring tail (bias + ReLU after the last hop, ~1.5 us on res4.x), and 110-core use for res4 / res5 (spare columns cannot take a channel slice).
+
+### Graduated (one path each, in commit order)
+1. **Weight-server stream** (`e3c0367d159`). Clean merge. The bias multicast is off only under the ROW_MAJOR split slab fill, where receivers do not take the bias from `cb_bias` (no focus case).
+2. **kw-fold n-groups** (`4586341772d`).
+   - Merge fix: on top of (1)'s multicast bias, the writer finishes the bias after the first n-group's three rounds (not the M-block's last), or it can block on a slot only a later n-group frees.
+   - `graduation_tests.patch`: the ragged weight-multicast unit test pins kw-fold's bm to its forced one-tile-row blocks.
+3. **Narrow planes** (`e0f8401c6f4`), merged by hand onto (2).
+   - The n-group's ACC is gw one-tile-wide planes.
+   - Merge fix (measured): with the n-group width tied to the subblock width, N = 2's 4x1 subblocks made two passes and res2 regressed 12.2 -> 13.0 us. The pass width is now `_kw_fold_group` (the largest divisor of N up to 4), decoupled from the subblock: res2 12.0, stem.conv2 33.5 -> 32.1.
+4. **Halo exchange** (`238c5636264`), ported by hand: the optimizer's protocol ran once per column round; on the merged tree it runs once per n-group.
+   - Semaphore counts: A 2g + 1 and C 2g + 2 from below, B g + 1 from above.
+   - Writer polls the exchange inside its weight-slot reserve. With n-groups and streamed sub-rounds, compute can hold both slots at a gate only this writer opens.
+   - `cb_halo_in` holds 3 x n-groups pages. A per-group `pop_front(halo_seen)` straddled the 3-page ring end and tripped an LLK assert under `--dev`.
+   - Adds the exchange-vs-recompute bit-exact test (11 shapes, incl. a program-cache re-run) to `test_conv2d_3x3_kw_fold.py`.
+5. **Padded slab** (`3a91e2bac2c`). Clean merge. The old reader-planned tap-direct prelude stays for the shapes the padded slab cannot take (stride 2, no center taps, more than one M-block, or no leftover L1 for the slab).
+6. **Balanced BLOCK split** (`faf15c942a9`), merged by hand with (5).
+   - `padded_tilize` takes the row's runtime prelude rows; the slab wait and tail use the runtime slab rows.
+   - The padded slab's runtime args follow the balanced split's per-M-block args.
+   - `padded_slab_extent` walks the balanced ranges.
+   - The exchange's writer args take the descriptor's local range list (the name `core_m_ranges` is now a function).
+   - `unit_tests.patch`: the ragged-row weight-multicast unit test pins the uniform split.
+
+Carve-outs, each stated as its reason:
+- **Halo exchange: more than one M-block per core** (inexpressible): a core's first block would wait on its upper neighbour's last block. stem.conv3 keeps the recompute.
+- **Padded slab: where the slab does not fit the leftover L1 plus the freed unit ring** (inexpressible). In the optimizer's set that was C_in 512 split two ways at d 4, bf16.
+- **Balanced split: taken only where the model drops the costliest row by >= 2%.** Its runtime row sizing on the uniform split measured +5.0% (aspp.convs.3, median of 3) and +1.1% on a no-ragged-row shape.
+- **Narrow planes: N = 4 keeps 1x4 subblocks.** This is the rule itself (4x1 measured +2% to +22%), not a guard.
+
+Combined-tree steps (zoned, us; `ablation_r8/peel_results.txt` rows g1-g6):
+
+| case | base | +server | +n-groups | +narrow planes | +exchange | +padded slab | +balanced split |
+|---|---|---|---|---|---|---|---|
+| aspp.convs.3 | 27.5 | 27.5 | 27.2 | 27.3 | 27.2 | 26.8 | 25.3 |
+| sem res2 fc1 | 107.7 | 107.9 | 89.6 | 89.6 | 86.4 | 86.5 | 86.4 |
+| res4.x | 16.1 | 15.6 | 15.9 | 16.1 | 16.3 | 13.9 | 14.1 |
+| res3.x | 15.0 | 12.1 | 12.1 | 12.0 | 11.3 | 11.3 | 11.3 |
+| stem.conv2 | 34.2 | 34.2 | 33.5 | 32.1 | 31.5 | 31.5 | 31.5 |
+| aspp.convs.2 | 59.4 | 59.2 | 59.7 | 59.1 | 59.0 | 59.0 | 50.5 |
+| sem dec res2 fc0 | 135.8 | 136.1 | 100.3 | 100.4 | 95.8 | 96.1 | 96.1 |
+| sem dec res3 fc0 | 45.0 | 45.1 | 45.1 | 45.0 | 37.8 | 37.8 | 37.9 |
+
+### Precision
+- Every focus case is bit-identical to the base op on the final tree: kw-fold cases 16 / 16 (with and without ReLU), BLOCK cases 8 / 8, and the HEIGHT decoder layers 6 / 6, including the four that changed path (sem res2 fc1 / sem dec res2 fc0 / fc0 / fc1 onto kw-fold): PCC 0.999762 and MAE 0.42167 / 0.37630 / 0.40108 / 0.37740 on both sides. stem.conv1 and res3.0 run unchanged paths.
+- The padded slab gate: 25 / 25 shapes bit-identical against the old prelude on the merged tree, under `--dev`.
+- The exchange: 11 / 11 shapes bit-identical against the forced recompute, under `--dev`, and stable across a program-cache re-run.
+
+### Whole-op result (unzoned, us; base `3ca4eb28f46` and final `faf15c942a9`, mean of 3 each, alternating; target = t_ideal / 0.7; utilization = t_ideal / measured)
+
+| prio | case | before | after | speedup | target | util before -> after |
+|---|---|---|---|---|---|---|
+| 1 | aspp.convs.3 | 26.66 | 24.49 | 1.09x | 22.7 | 60% -> 65% |
+| 2 | sem res2.fuse_conv.1 + head.{0,1} | 106.71 | 85.78 | 1.24x | 90.8 | 60% -> **74%** |
+| 3 | res4.{1..5}.conv2 | 14.80 | 12.74 | 1.16x | 5.7 | 27% -> 31% |
+| 4 | res3.{1,2,3}.conv2 | 14.79 | 10.93 | 1.35x | 5.7 | 27% -> 36% |
+| 5 | stem.conv2 | 33.84 | 31.11 | 1.09x | 22.7 | 47% -> 51% |
+| 6 | aspp.convs.2 | 58.80 | 49.71 | 1.18x | 45.4 | 54% -> 64% |
+| 7 | aspp.convs.1 | 57.89 | 52.56 | 1.10x | 45.4 | 55% -> 60% |
+| 8 | res2.{0,1,2}.conv2 | 13.20 | 11.10 | 1.19x | 5.7 | 30% -> 36% |
+| 9 | center_head.1 + offset_head.1 | 11.50 | 10.02 | 1.15x | 5.7 | 35% -> 40% |
+| 10 | inst res2.fuse_conv.1 + heads.0 | 26.87 | 25.19 | 1.07x | 22.7 | 59% -> 63% |
+| 11 | stem.conv3 | 48.62 | 48.53 | 1.00x | 45.4 | 65% -> 65% |
+| 12 | sem dec res2.fuse_conv.0 | 134.86 | 95.39 | 1.41x | 102.1 | 53% -> **75%** |
+| 13 | sem dec res3.fuse_conv.0 | 44.72 | 37.17 | 1.20x | 28.4 | 44% -> 53% |
+| 14 | sem dec res3.fuse_conv.1 | 35.97 | 30.44 | 1.18x | 22.7 | 44% -> 52% |
+| 15 | stem.conv1 | 22.83 | 22.55 | 1.01x | 1.1 | 3% -> 3% |
+| 16 | inst dec res3.fuse_conv.0 | 25.23 | 21.71 | 1.16x | 14.2 | 39% -> 46% |
+| 17 | inst dec res2.fuse_conv.0 | 31.99 | 30.19 | 1.06x | 28.4 | 62% -> 66% |
+| 18 | res5.2.conv2 | 36.68 | 33.82 | 1.08x | 22.7 | 43% -> 47% |
+| 19 | res5.1.conv2 | 36.06 | 33.69 | 1.07x | 22.7 | 44% -> 47% |
+| 20 | res5.0.conv2 | 35.26 | 34.21 | 1.03x | 22.7 | 45% -> 46% |
+| 21 | res3.0.conv2 | 17.55 | 17.53 | 1.00x | 5.7 | 23% -> 23% |
+| 22 | res4.0.conv2 | 15.49 | 15.42 | 1.00x | 5.7 | 26% -> 26% |
+
+All 3x3 layers of one Panoptic inference (each case x its calls): 1456 -> 1248 us (-14.3%).
+
+### Guard set (whole perf harness, 41 shapes plus the 22 focus cases, unzoned, same session, 3 alternating pairs; `ablation_r8/ab_results.txt`)
+- **HEIGHT (HiFi4):**
+  - kw-fold / server layers: res3 -11.8%, sem res2 fuse_conv0 -10.2%, center_head1 -9.6%, res2 -8.7%, inst res3 fuse_conv0 -8.1%, sem res2 fuse_conv1 -6.0%, inst res2 fuse_conv1 -5.5%, inst res2 fuse_conv0 -5.3%, sem res3 fuse_conv0 -3.9%, sem res3 fuse_conv1 -3.1%, stem_conv2 -2.0%;
+  - unchanged paths: stem_conv1 +0.3%, stem_conv3 -0.1%, res3_0 0.0%.
+- **BLOCK (HiFi4 unless noted):** aspp_convs2 -21.0%, res5_2 -14.0%, res5_1 -13.9%, aspp_convs1 -13.2%, res4 LoFi -13.0%, aspp_convs3 -12.2%, res4 -6.1%, res5_0 -4.9%, res4_0 +0.3% (stride 2, unchanged path).
+- **Interleaved (18 shapes):** -0.5% to +0.6%, except two cells.
+  - H32_W64_Ci128 tile_bf16: +1.6% over the 3 pairs, from one 25.61 us outlier. Four more pairs: -0.3%.
+  - H16_W16_Ci64 tile_bf16 / tile_bf8b: +1.1% / +2.1% over four more pairs, ~0.1-0.2 us on 10 us.
+    - Two passes at every round-8 commit (`ab_guard_bisect.txt`) were non-monotonic: 9.92-10.22 and 9.98-10.25 us, moving at commits that do not touch the interleaved path. Final vs base in that pass: 10.005 vs 10.00 and 10.18 vs 10.10.
+    - No graduated pattern runs on that path (interleaved: no servers, no kw-fold, no N-slice), so there is nothing to carve out. It is the same ~10 us shape flagged in rounds 1-6; recorded as code-layout noise.
+- **Golden:** `eval/golden_tests/conv2d_3x3/` 1518 passed, 480 skipped (INVALID), 0 failed after every graduation and on the final tree.
+- **Unit dir:** 276 / 276 through graduation 3, 287 / 287 from graduation 4 on (the 11 exchange tests).
+- **`--dev`:** the kw-fold file 21 / 21, the n-group extra shapes 11 / 11, the BLOCK file 50 / 50 and the padded-slab gate 25 / 25 on the merged trees.
+
+### Bottleneck now
+- **aspp.convs.3 (priority 1, 65%).** Prelude untilize 0.9-5.0 us (fill-paced) and tilize to 9.6 us; the walk then runs to 23.8 us, paced by the weight multicast. The column sender's writer only multicasts round 3 on after its own `slab_dead_wait` (7.2-10.1 us), then every ~2 us.
+- **Small configs (res3.x 10.9, res2 11.1, center_head.1 10.0, res4.x 12.7 us vs 5.7).**
+  - HEIGHT: round 0 still lands at ~3.6 us. Server reads are issue-bound at one-tile DRAM reads; a larger read page would need a weight layout change.
+  - res4.x: prelude 4.5 us, walk 7.7 us on 80 cores (its 100%-of-FPU time on 80 cores is 6.0 us), ring tail 1.5 us.
+- **stem.conv2 (51%).** The kw-fold walk is matmul-unpack bound at ~23.5 cycles per tile-MAC. Its optimizer's untested next step: fuse the Q_0 and Q_2 rounds into 1x4 subblocks that share one in0 tile (~3.5 us estimated).
+- **res5.x (46-47%).** Ring wait ~20 us and weight fetch ~21 us per core.
+- **stem.conv1 (3%).** Untouched: an RM row gather (reader 18.4 us, writer 12.6 us) that the ablation hooks do not reach.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `pack_untilize_dest` / `llk_pack_untilize` MOP (compute API) | capability | No destination row offset, and the untilize MOP closes every row. A run of fp32 tiles down a one-tile-wide accumulator plane is one stream only if the packer replays strided PACRs and steps z per face pair with no ADC instruction between tiles. The 1-wide MOP measured 122 cycles per fp32 tile isolated; the replayed stream 75. | 40400 (stem.conv2, 4x1 on the 1-wide stream MOP) | 32210 | conv2d_3x3_kw_fold.hpp:150 (`pack_zst`) |
+| `compute_kernel_lib::tilize` / `fast_tilize_block` | capability | It reads at the CB read pointer. The padded slab's tap blocks are runs at computed L1 addresses (row slot pitch W + d), one per (tile-row, kernel row, tap). | 15901 (res4.x, reader-published tap-direct, itself raw) | 13431 | conv2d_3x3_compute.cpp:268 (`padded_tilize`) |
+| `compute_kernel_lib::untilize` | capability | It packs each tile-row at the CB write pointer. The padded slab puts each image row's tile-rows at its own zero-gapped slot, a per-tile-row L1 destination. | n/a (no helper form) | in the 13431 above | conv2d_3x3_narrow_untilize.hpp:162 (`untilize_1wide_at`), conv2d_3x3_wide_untilize.hpp (`untilize_wide` destinations) |
+| `compute_kernel_lib::matmul_block` | capability | One subblock height per call, which must divide the block. The balanced split's ring row groups are ragged per grid row (1-4 rows); with runtime subblock dims a 1-row group cost ~49 cycles per k-tile vs ~46 with the height as a template constant. | 26889 (aspp.convs.3, balanced split, runtime group heights) | 26072 | conv2d_3x3_compute.cpp:705 (group dispatch), :1132 |
+| `dataflow_kernel_lib` multicast (`SenderPipe`) | capability | Two more gaps on top of Perf 6's five. (1) It cannot chain a variable run of already-landed chunks into one linked multicast and close it with a conditional flag write. (2) It cannot multicast a side buffer (the bias) with its own completion flag to the same receivers. | 14950 (res3.x, one multicast per chunk, 6 chunks) | 12120 | conv2d_3x3_weight_server_writer.cpp:75, :99 |
+| no helper (dataflow neighbour strip exchange) | capability | Nothing hands a d-row strip of a core's fp32 L1 buffer to a neighbour core with an absolute-count semaphore and turns arrivals into compute-visible CB tokens. NoC atomic increments for the count slowed a concurrent multicast (center_head.1 +3.3%). | n/a (recompute instead: sem dec res3 fc0 44.91) | 40970 | conv2d_3x3_writer.cpp:661 (`khx_send`), kw_fold.hpp halo gates |
+
+The n-group passes add no raw LLK beyond the existing kw-fold bypasses (Perf 6 / 7 rows).
