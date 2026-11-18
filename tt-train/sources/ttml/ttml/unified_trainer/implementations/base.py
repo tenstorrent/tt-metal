@@ -25,11 +25,10 @@ from ..managers.logging import TrainingLogger
 class Trainer(ABC):
     """The training loop: callbacks, gradient accumulation and clipping, validation scheduling and the run lifecycle.
 
-    Holds no tensors and imports no framework; everything that does is an abstract method a subclass such
-    as ``SFTTrainer`` implements. A host builds the trainer once with its callbacks and runs any number of
-    jobs on it::
+    Holds no tensors and imports no framework; everything that does is an abstract method a subclass
+    implements. A host builds the trainer once with its callbacks and runs any number of jobs on it::
 
-        trainer = SFTTrainer(callbacks=[...])
+        trainer = MyTrainer(callbacks=[...])
         for config in jobs:
             try:
                 trainer.setup(config)
