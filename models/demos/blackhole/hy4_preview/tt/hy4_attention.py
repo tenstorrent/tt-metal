@@ -30,6 +30,16 @@ _ROPE_TABS = (
 )  # B49 (HY4_B49_ROPE_CACHE=1): key -> (cos, sin, idx_cos, idx_sin) of the current prefill chunk, shared by all layers
 
 
+def clear_rope_cache():
+    """B49 (HY4_B49_ROPE_CACHE): drop the per-chunk rope tables (and the indexer's 128-wide ones). They must NOT outlive the chunk: a DRAM tensor that stays allocated across requests is created after the decode
+    trace captures and sits in their scratch (D75-1), so the next replay corrupts it (served model: garbage from the first request).
+    """
+    _ROPE_TABS.clear()
+    from models.demos.blackhole.hy4_preview.tt import hy4_indexer
+
+    hy4_indexer._C128.clear()
+
+
 class Hy4Attention:
     def __init__(
         self,

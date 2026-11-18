@@ -148,6 +148,9 @@ class Hy4PoolPrefill:
             ttnn.deallocate(t)
         if ids is not None:
             ttnn.deallocate(ids)
+        from models.demos.blackhole.hy4_preview.tt.hy4_attention import clear_rope_cache
+
+        clear_rope_cache()  # B49 rope tables must not outlive the chunk (D75-1)
 
     def _chain_mode(self, on):
         for ly in self.ch.layers:  # the MTP layer (ch.mtp_layers) always writes the pool directly

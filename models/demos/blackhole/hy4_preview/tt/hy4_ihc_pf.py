@@ -177,6 +177,9 @@ class Hy4IHCPF:
         def build():
             cs, co = _cores(self.grid, TR)
             cfg = self._cfg(3, 4, 7, 8, 9, 10, 12)
+            cfg.math_fidelity = getattr(
+                ttnn.MathFidelity, os.environ.get("HY4_B53_FID", "HiFi4")
+            )  # stats matmul fidelity (default unchanged)
             return (
                 [
                     _kernel(
@@ -250,7 +253,7 @@ class Hy4IHCPF:
 
         self._launch(
             0x4B4E,
-            ("pm", TR, NTD, eps),
+            ("pm", TR, NTD, eps, os.environ.get("HY4_B53_FID", "HiFi4")),
             build,
             [x4, self.w_t, self.cst, self.wn, st, hout],
             [A(x4, self.w_t, self.cst, self.wn, st), A(hout, hout), []],

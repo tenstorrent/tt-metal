@@ -723,6 +723,8 @@ class Hy4Chain:
         """one chunk: ids [4, 512] -> x4 after the layers (list taps[L] = x4 after layer L when taps is a dict)."""
         x4 = self.embed_ids(ids)
         ids_by_layer = {} if ids_by_layer is None else ids_by_layer
+        from models.demos.blackhole.hy4_preview.tt.hy4_attention import clear_rope_cache
+
         for ly in layers or self.layers:
             x4 = ly.prefill_chunk(x4, start, ids_by_layer)
             if taps is not None:
@@ -730,6 +732,7 @@ class Hy4Chain:
                     os.environ.get("HY4_TAP_ROWS", "0")
                 )  # >0: keep only the first rows (the short dump prompts) of every layer's stream
                 taps[ly.L] = ttnn.slice(x4, [0, 0, 0, 0], [1, NSTREAM, tr, HID]) if tr else ttnn.clone(x4)
+        clear_rope_cache()
         return x4, ids_by_layer
 
     def reset(self):
