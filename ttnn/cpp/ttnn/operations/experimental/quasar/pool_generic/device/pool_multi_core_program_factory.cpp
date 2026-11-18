@@ -1213,7 +1213,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         compute_cta["pad_l"] = setup.pad_l;
         compute_cta["kernel_h"] = kernel_h;
         compute_cta["kernel_w"] = kernel_w;
-        compute_cta["indexes_32_bit"] = static_cast<uint32_t>(indexes_32_bit);
     }
 
     Group<DFBBinding> compute_bindings;

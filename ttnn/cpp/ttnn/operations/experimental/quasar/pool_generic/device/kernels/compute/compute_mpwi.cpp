@@ -70,7 +70,6 @@ void kernel_main() {
     constexpr auto clear_value_cb_id = dfb::clear_value_cb;
     constexpr uint32_t kernel_h = get_arg(args::kernel_h);
     constexpr uint32_t kernel_w = get_arg(args::kernel_w);
-    constexpr uint32_t indexes_32_bit = get_arg(args::indexes_32_bit);
 
     // DataflowBuffer wrappers for CB operations
     DataflowBuffer in_scalar_cb(in_scalar_cb_id_0);
@@ -86,11 +85,7 @@ void kernel_main() {
     DataflowBuffer clear_value_cb(clear_value_cb_id);
     DataflowBuffer in_cb_0(in_cb_id_0);
 
-#ifdef ARCH_QUASAR
-    constexpr DataFormat copy_format = DataFormat::Int32;  // Quasar's DataFormat has no UInt16/UInt32
-#else
-    constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
-#endif
+    constexpr DataFormat copy_format = static_cast<DataFormat>(unpack_src_format[in_idx_cb_id]);
 
     constexpr uint32_t mpwi_cb_tile_idx = 0;
     constexpr uint32_t data_dst_idx = 0;
@@ -268,17 +263,13 @@ void kernel_main() {
 
             pack_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_tmp_cb_id);
-#ifdef ARCH_QUASAR
-            pack_init(pack_tmp_cb_id);  // Quasar bakes the pack target at init
-#endif
+            pack_init(pack_tmp_cb_id);                                        // Quasar bakes the pack target at init
             pack_tile<true>(data_dst_idx, pack_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output data)
             pack_tmp_cb.push_back(1);
 
             pack_idx_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_idx_tmp_cb_id);
-#ifdef ARCH_QUASAR
             pack_init(pack_idx_tmp_cb_id);  // Quasar bakes the pack target at init
-#endif
             pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output indexes)
             pack_idx_tmp_cb.push_back(1);
 
@@ -288,9 +279,7 @@ void kernel_main() {
             if (!is_last_iteration) {
                 compute_tmp_idx_cb.reserve_back(1);
                 pack_reconfig_data_format(compute_tmp_idx_cb_id);
-#ifdef ARCH_QUASAR
                 pack_init(compute_tmp_idx_cb_id);  // Quasar bakes the pack target at init
-#endif
                 pack_tile<true>(
                     index_scratch_out_dst_idx,
                     compute_tmp_idx_cb_id,

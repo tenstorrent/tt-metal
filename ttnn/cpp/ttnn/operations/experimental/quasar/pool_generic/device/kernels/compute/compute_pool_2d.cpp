@@ -265,10 +265,8 @@ void kernel_main() {
                     fast_tilize_cb.push_back(in_ntiles_c);
                     fast_tilize_cb.wait_front(in_ntiles_c);
 
-#ifdef ARCH_QUASAR
                     // Quasar tilize_init does not program PACK; retarget from pack-untilize (pre_tilize) to out_cb.
                     pack_init(out_cb_id);
-#endif
                     fast_tilize_init(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_block(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_uninit(fast_tilize_cb_id, out_cb_id, in_ntiles_c);
