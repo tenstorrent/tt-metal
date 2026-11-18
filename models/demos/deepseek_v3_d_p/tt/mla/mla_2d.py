@@ -4,57 +4,63 @@
 """2D tensor-parallel MLA projections for the Hy4-preview SC1 layout (TP32 / DP1, #65885).
 
 ttMLA shards its projections over ONE mesh axis (TP) and replicates them over the other (SP, which carries the
-sequence). ``ttMLA2DTP`` shards every projection over BOTH axes, once, with nothing replicated:
+sequence). ``ttMLA2DTP`` shards every projection over BOTH axes, once, with nothing replicated.
 
-  * the HEAD axis (``tp_axis``, 8 chips): heads, 8 per chip column;
-  * the HIDDEN axis (``sp_axis``, 4 chips): the 6144 hidden dimension (1536 per chip), and inside the attention
-    core the sequence, as ttMLA's SP axis.
+Residual contract: the prefill block's, unchanged: ``[1, 1, S / sp, hidden / tp]`` per chip, the sequence over the SP
+axis (4 chips) and the hidden over the TP axis (8 chips). The 2D shared expert / dense FFN (``TtMlp2D``, #65890) uses
+the same, so attention and FFN hand the residual to each other with no reshuffle. Mesh: the physical 8x4 torus, TP on
+axis 0 and SP on axis 1 (no logical 4x8 view).
 
-Activation contract (Llama-70B-on-TG style): the sublayer input ``hn`` and the output are ``[1, 1, S, hidden / 4]``,
-hidden-sharded over the hidden axis and replicated over the head axis, for the whole chunk ``S`` (no sequence split).
+Roles of the two axes:
 
-Per-weight sharding (``hp`` = hidden-axis size 4, ``tp`` = head-axis size 8; per-chip shapes for Hy4):
+  * TP (8): the hidden of every hidden-side contraction (q_a, kv_a, gate: K over TP; o_proj: N over TP, as the
+    residual); the 8 heads per chip column of q_b and the attention core (``8 heads per chip``, #65884);
+  * SP (4): the residual's sequence; the K of q_b (q_lora); the head blocks of the gate and o_proj (16 heads each);
+    the sequence inside the attention core (ttMLA's SP axis).
 
-  ============  ==========================  ===========================================  =========================
-  weight        [K, N]                      split                                        per chip
-  ============  ==========================  ===========================================  =========================
-  q_a_proj      [6144, 2048]                K over hidden, N over heads                  [1536, 256]
-  q_b_proj      [2048, 64 * 256]            K (q_lora) over hidden, N (heads) over heads [512, 8 heads * 256]
-  kv_a_proj     [6144, 576]                 K over hidden x heads (576 is not 8 tiles)   [192, 576]
-  wkv_b1        [64, 192, 512] per head     heads over heads x hidden (2 per chip)       [2, 192, 512]
-  wkv_b2        [64, 512, 256] per head     heads over heads x hidden (2 per chip)       [2, 512, 256]
-  g_proj        [6144, 64 * 256]            K over hidden, N (heads) over heads          [1536, 8 heads * 256]
-  o_proj        [64 * 256, 6144]            K (heads) over heads, N over hidden          [8 heads * 256, 1536]
-  ============  ==========================  ===========================================  =========================
+Per-weight sharding (``sp`` = 4, ``tp`` = 8; per-chip shapes for Hy4):
 
-  Chip (r, c) (r on the hidden axis, c on the head axis) owns heads ``8c + 2r`` and ``8c + 2r + 1`` for the
-  per-head ops (wkv_b1, wkv_b2, the gate multiply). The two norms (2048 + 512) and the 64-value sink are replicated.
+  ============  ==========================  =============================================  =====================
+  weight        [K, N]                      split                                          per chip
+  ============  ==========================  =============================================  =====================
+  q_a_proj      [6144, 2048]                K (hidden) over TP, N over SP                  [768, 512]
+  q_b_proj      [2048, 64 * 256]            K (q_lora) over SP, N (heads) over TP          [512, 8 heads * 256]
+  kv_a_proj     [6144, 576]                 K over TP x SP (576 is not 8 tiles)            [192, 576]
+  wkv_b1        [64, 192, 512] per head     2 heads per chip                               [2, 192, 512]
+  wkv_b2        [64, 512, 256] per head     2 heads per chip                               [2, 512, 256]
+  g_proj        [6144, 64 * 256]            K (hidden) over TP, N (16-head blocks) over SP [768, 16 heads * 256]
+  o_proj        [64 * 256, 6144]            K (16-head blocks) over SP, N (hidden) over TP [16 heads * 256, 768]
+  ============  ==========================  =============================================  =====================
 
-Collectives (the hidden contraction is a reduce over the hidden axis; every reduce accumulates in fp32 inside
-``matmul_reduce_scatter_prefill``):
+  Chip (s, t) owns heads ``16 s + 2 t`` and ``16 s + 2 t + 1`` in the per-head ops (wkv_b1, wkv_b2, the gate multiply):
+  the gate's reduce-scatter over TP of its SP block picks exactly those. q_b, wkv_b and the sink are stored with the
+  heads permuted (``core_head_order``) so that q_b's column t, reduce-scattered over SP, lands the same heads, and the
+  attention core sees the 64 heads in that order. Only the two norms (2048 + 512) and the 64 sinks are replicated.
 
-  q_a:   x @ Wqa -> reduce-scatter(hidden, N) -> all-gather(hidden) -> all-gather(heads) -> q_a_layernorm (full row)
-  q_b:   q_lat[:, K_r] @ Wqb -> reduce-scatter(hidden, N): this chip's 2 heads, every token
-         -> wkv_b1 (2 heads) -> all-to-all(hidden) + all-to-all(heads), heads -> sequence: [64 heads, S / 32]
-         -> RoPE (ttMLA's indexed op) -> the unchanged sparse core
-  kv_a:  x[:, K_rc] @ Wkva -> reduce-scatter(hidden, sequence) -> ttMLA's KV stem (TP gather + fp32 reduce)
-         -> kv_a_layernorm, RoPE, KV cache write (ttMLA's SP x TP block-cyclic cache, SP on the hidden axis)
+Collectives (every reduce accumulates in fp32 inside ``matmul_reduce_scatter_prefill``):
+
+  in:    all-gather(SP, sequence): x [S, hidden / tp]
+  q_a:   x @ Wqa -> reduce-scatter(TP, N) -> all-gather(TP) -> all-gather(SP) -> q_a_layernorm on the full row
+  q_b:   q_lat[:, K_s] @ Wqb -> reduce-scatter(SP, N): this chip's 2 heads, every token -> wkv_b1 (2 heads)
+         -> all-to-all(SP) + all-to-all(TP), heads -> sequence: [64 heads, S / 32] -> RoPE -> the sparse core
+  kv_a:  x[:, K_ts] @ Wkva -> reduce-scatter(SP, sequence) -> ttMLA's KV stem (TP gather + fp32 reduce)
+         -> kv_a_layernorm, RoPE, KV cache write (ttMLA's SP x TP block-cyclic cache)
   core:  ttMLA's sparse path, unchanged: sparse_sdpa over all 64 heads per chip with the learnable sink
-         (``attention_sink``), each query's whole top-k on one chip -> all-to-all back to [8 heads, S / 4]
-  wkv_b2: all-to-all(hidden), sequence -> heads: [2 heads, S] -> wkv_b2 (2 heads)
-  gate:  x @ Wg -> reduce-scatter(hidden, N) -> sigmoid. The reduce over the hidden axis completes BEFORE the
-         sigmoid (sigmoid of a partial sum would be wrong); the scatter only picks this chip's 2 heads.
-  o:     (v * g) -> all-gather(hidden) [8 heads, S] -> @ Wo -> reduce-scatter(heads, N) -> all-gather(heads)
-         -> [S, hidden / 4], the input layout.
+         (``attention_sink``), each query's whole top-k on one chip -> all-to-all back to [8 heads, S / sp]
+  wkv_b2: all-to-all(SP), sequence -> heads: [2 heads, S] -> wkv_b2 (2 heads)
+  gate:  x @ Wg -> reduce-scatter(TP, N) -> sigmoid. The reduce over the hidden (TP) completes BEFORE the sigmoid
+         (sigmoid of a partial sum would be wrong); the scatter only picks this chip's 2 heads.
+  o:     (v * g) -> all-gather(TP) [16 heads, S] -> @ Wo -> reduce-scatter(SP, sequence): [S / sp, hidden / tp], the
+         residual layout.
 
-The attention core is ttMLA's: per chip, all 64 heads over S / 32 queries, with the selected KV rows gathered
-(or pushed) to that chip, so each query's softmax is complete on one chip and the sink goes into ``sparse_sdpa``
-exactly once. The context-parallel stripe-and-LSE-merge core of #65884 (each chip attends over its own KV stripe,
-partials merged by LSE) is NOT used here; if it lands (#65886 / #65887) the sink must move to the merge,
+The attention core is ttMLA's: per chip, all 64 heads over S / 32 queries, with the selected KV rows gathered to
+that chip, so each query's softmax is complete on one chip and the sink goes into ``sparse_sdpa`` exactly once. The
+context-parallel stripe-and-LSE-merge core of #65884 (each chip attends over its own KV stripe, partials merged by
+LSE) is NOT used here; if it lands (#65886 / #65887) the sink must move to the merge,
 ``out = merged * sigmoid(lse - sink)`` (``tests/test_hy4_attention_math.py::test_lse_fold_is_the_same_function``).
 
-Not here: the DSA indexer on this input layout (TtIndexer needs 128 / 8 = 16 index dims per chip, not tile
-aligned, #65887); this module takes the top-k as ``indexer_indices``.
+Not here: the DSA indexer on this layout (TtIndexer needs 128 / 8 = 16 index dims per chip, not tile aligned,
+#65887); this module takes the top-k as ``indexer_indices``.
 """
 
 from __future__ import annotations
@@ -89,32 +95,38 @@ class ttMLA2DTP(ttMLA):
 
     # ------------------------------------------------------------------------------------------- host math
     @staticmethod
-    def heads_of_chip(num_heads: int, hp: int, tp: int, r: int, c: int) -> list[int]:
-        """The heads chip (r on the hidden axis, c on the head axis) owns for the per-head ops."""
-        per_col = num_heads // tp
-        per_chip = per_col // hp
-        return [c * per_col + r * per_chip + j for j in range(per_chip)]
+    def heads_of_chip(num_heads: int, sp: int, tp: int, s: int, t: int) -> list[int]:
+        """The heads chip (s on the SP axis, t on the TP axis) owns in the per-head ops: the gate's SP block s
+        (``num_heads / sp`` heads), reduce-scattered over TP, chunk t."""
+        block = num_heads // sp
+        per_chip = block // tp
+        return [s * block + t * per_chip + j for j in range(per_chip)]
 
     @staticmethod
-    def check_dims(config, hp: int, tp: int) -> None:
+    def core_head_order(num_heads: int, sp: int, tp: int) -> list[int]:
+        """The head order q_b, wkv_b and the sink are stored in, which is the order the attention core sees: TP column
+        t holds the heads of chips (0, t) .. (sp - 1, t), so q_b's reduce-scatter over SP hands chip (s, t) its own."""
+        return [h for t in range(tp) for s in range(sp) for h in ttMLA2DTP.heads_of_chip(num_heads, sp, tp, s, t)]
+
+    @staticmethod
+    def check_dims(config, sp: int, tp: int) -> None:
         H, hidden, Q = config.num_attention_heads, config.hidden_size, config.q_lora_rank
         v, qk = config.v_head_dim, config.qk_nope_head_dim + config.qk_rope_head_dim
         T = ttnn.TILE_SIZE
         checks = {
-            "heads over heads x hidden": H % (tp * hp) == 0,
-            "hidden over hidden x heads, whole tiles": hidden % (hp * tp * T) == 0,
-            "q_lora over hidden x heads, whole tiles": Q % (hp * tp * T) == 0,
-            "q_b / gate heads per chip, whole tiles": (H // (tp * hp)) * qk % T == 0 and (H // (tp * hp)) * v % T == 0,
-            "o_proj output over heads, whole tiles": hidden // hp % (tp * T) == 0,
+            "heads over SP x TP": H % (tp * sp) == 0,
+            "hidden over TP x SP, whole tiles": hidden % (sp * tp * T) == 0,
+            "q_lora over SP x TP, whole tiles": Q % (sp * tp * T) == 0,
+            "heads per chip, whole tiles": (H // (tp * sp)) * qk % T == 0 and (H // (tp * sp)) * v % T == 0,
         }
         bad = [k for k, ok in checks.items() if not ok]
         if bad:
-            raise ValueError(f"2D TP attention (hidden over {hp}, heads over {tp}) does not tile: {bad}")
+            raise ValueError(f"2D TP attention (SP {sp} x TP {tp}) does not tile: {bad}")
 
     @staticmethod
-    def host_weights_2d(state_dict: dict | None, config, hp: int, tp: int) -> dict:
-        """Host tensors laid out for the 2D mesh mappers, as ``name -> (tensor, hidden_dim, head_dim)``: the tensor
-        dim sharded over the hidden axis and the one sharded over the head axis (None = replicated over it).
+    def host_weights_2d(state_dict: dict | None, config, sp: int, tp: int) -> dict:
+        """Host tensors laid out for the 2D mesh mappers, as ``name -> (tensor, sp_dim, tp_dim)``: the tensor dim
+        sharded over the SP axis and the one sharded over the TP axis (None = replicated over that axis).
 
         ``state_dict`` holds ttMLA's canonical weights (``q_a_proj.weight`` ... ``g_proj.weight``, ``attn_sink.weight``,
         with Hy4's RoPE frames already reordered by ``hy4_checkpoint.hy4_mla_weights``). None/empty -> placeholders
@@ -125,20 +137,24 @@ class ttMLA2DTP(ttMLA):
         use_gate = bool(getattr(config, "mla_use_output_gate", False))
         use_sink = bool(getattr(config, "mla_learnable_sink", False))
         real = bool(state_dict) and "q_a_proj.weight" in state_dict
-        hpc = H // tp  # heads per head-axis column
+        order = torch.tensor(ttMLA2DTP.core_head_order(H, sp, tp))
         if real:
             sd = state_dict
             q_a = sd["q_a_proj.weight"].transpose(-2, -1)
-            q_b = sd["q_b_proj.weight"].transpose(-2, -1)
+            q_b = sd["q_b_proj.weight"].reshape(H, N + R, Q)[order].reshape(H * (N + R), Q).transpose(-2, -1)
             kv_a = sd["kv_a_proj_with_mqa.weight"].transpose(-2, -1)
-            kv_b = sd["kv_b_proj.weight"].reshape(H, N + V, L)
+            kv_b = sd["kv_b_proj.weight"].reshape(H, N + V, L)[order]
             w_uk = kv_b[:, :N, :]  # [H, N, L]: q_nope @ w_uk -> latent
             w_uv = kv_b[:, N:, :].transpose(-2, -1)  # [H, L, V]: latent @ w_uv -> v
             o = sd["o_proj.weight"].transpose(-2, -1)
             g = sd["g_proj.weight"].transpose(-2, -1) if use_gate else None
             q_a_ln = sd["q_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
             kv_a_ln = sd["kv_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
-            sink = ttMLA.sink_for_sparse_sdpa(sd["attn_sink.weight"], ttMLA.softmax_scale(config)) if use_sink else None
+            sink = (
+                ttMLA.sink_for_sparse_sdpa(sd["attn_sink.weight"], ttMLA.softmax_scale(config))[..., order]
+                if use_sink
+                else None
+            )
         else:
             e = torch.empty
             q_a, q_b, kv_a = e(hidden, Q), e(Q, H * (N + R)), e(hidden, L + R)
@@ -148,30 +164,30 @@ class ttMLA2DTP(ttMLA):
             kv_a_ln = e(1, 1, L // ttnn.TILE_SIZE, ttnn.TILE_SIZE)
             sink = torch.empty(1, 1, 1, H, dtype=torch.bfloat16) if use_sink else None
         out = {
-            "q_a_proj": (q_a, 0, 1),
+            "q_a_proj": (q_a, 1, 0),
             "q_b_proj": (q_b, 0, 1),
-            # K over both axes: hidden index r * (hidden / hp) + c * (hidden / (hp * tp)) + k.
-            "kv_a_proj_with_mqa": (kv_a.reshape(hp, tp, hidden // (hp * tp), L + R), 0, 1),
-            # Head h = c * hpc + r * (hpc / hp) + j: dim 0 is c (head axis), dim 1 is r * (hpc / hp) + j (hidden axis).
-            "wkv_b1": (w_uk.reshape(tp, hpc, N, L), 1, 0),
-            "wkv_b2": (w_uv.reshape(tp, hpc, L, V), 1, 0),
-            "o_proj": (o, 1, 0),
+            # K over both axes: hidden index t * (hidden / tp) + s * (hidden / (tp * sp)) + k.
+            "kv_a_proj_with_mqa": (kv_a.reshape(tp, sp, hidden // (sp * tp), L + R), 1, 0),
+            # Heads in core order: dim 0 is the TP column, dim 1 its SP chunks (2 heads each).
+            "wkv_b1": (w_uk.reshape(tp, H // tp, N, L), 1, 0),
+            "wkv_b2": (w_uv.reshape(tp, H // tp, L, V), 1, 0),
+            "o_proj": (o, 0, 1),
             "q_a_layernorm": (q_a_ln, None, None),
             "kv_a_layernorm": (kv_a_ln, None, None),
         }
         if use_gate:
-            out["g_proj"] = (g, 0, 1)
+            out["g_proj"] = (g, 1, 0)
         if use_sink:
             out["attn_sink"] = (sink, None, None)
         return out
 
     @staticmethod
-    def chip_shard(t: torch.Tensor, hidden_dim, head_dim, hp: int, tp: int, r: int, c: int) -> torch.Tensor:
-        """What ``ShardTensor2dMesh`` puts on chip (r, c) for a ``host_weights_2d`` entry (CPU tests)."""
-        if hidden_dim is not None:
-            t = t.chunk(hp, dim=hidden_dim)[r]
-        if head_dim is not None:
-            t = t.chunk(tp, dim=head_dim)[c]
+    def chip_shard(t, sp_dim, tp_dim, sp: int, tp: int, s: int, c: int) -> torch.Tensor:
+        """What ``ShardTensor2dMesh`` puts on chip (s, c) for a ``host_weights_2d`` entry (CPU tests)."""
+        if sp_dim is not None:
+            t = t.chunk(sp, dim=sp_dim)[s]
+        if tp_dim is not None:
+            t = t.chunk(tp, dim=tp_dim)[c]
         return t
 
     # ------------------------------------------------------------------------------------------- caches
@@ -209,20 +225,20 @@ class ttMLA2DTP(ttMLA):
         tp_shard_q_a_norm: bool = False,
     ) -> dict | None:
         assert not tp_shard_q_a_norm, "2D TP normalizes the full q_a row after its gathers"
-        hp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
-        ttMLA2DTP.check_dims(config, hp, tp)
-        host = ttMLA2DTP.host_weights_2d(state_dict, config, hp, tp)
+        sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+        ttMLA2DTP.check_dims(config, sp, tp)
+        host = ttMLA2DTP.host_weights_2d(state_dict, config, sp, tp)
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
         kv_names = ("kv_a_proj_with_mqa", "kv_a_layernorm")
         result = {}
-        for name, (t, hidden_dim, head_dim) in host.items():
+        for name, (t, sp_dim, tp_dim) in host.items():
             if kv_only and name not in kv_names:
                 continue
-            if hidden_dim is None and head_dim is None:
+            if sp_dim is None and tp_dim is None:
                 mapper = ttnn.ReplicateTensorToMesh(mesh_device)
             else:
                 dims = [None, None]
-                dims[sp_axis], dims[tp_axis] = hidden_dim, head_dim
+                dims[sp_axis], dims[tp_axis] = sp_dim, tp_dim
                 mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
             vector = name in ("q_a_layernorm", "kv_a_layernorm", "attn_sink")
             result[name] = ttnn.as_tensor(
@@ -273,29 +289,27 @@ class ttMLA2DTP(ttMLA):
         # The K-over-both-axes shard loads as [1, 1, K, 576]; matmul_reduce_scatter_prefill takes a rank-2 weight.
         kv_a = self.kv_a_proj_with_mqa_weight
         self.kv_a_proj_with_mqa_weight = ttnn.reshape(kv_a, (kv_a.shape[-2], kv_a.shape[-1]))
-        self.hp = self.sp_factor  # the hidden axis is ttMLA's SP axis
-        self.heads_per_chip = self.num_heads // (self.tp_factor * self.hp)
+        self.heads_per_chip = self.num_heads // (self.tp_factor * self.sp_factor)
         # All-gather outputs: persistent, shared by every layer through TT_CCL, and gathered with ttMLA's shared
         # high-bandwidth semaphores (plain ttnn.all_gather allocates its own in L1_SMALL, which the prefill's 1536 B
         # do not hold). Gather outputs alias these buffers, so the forward never deallocates them.
         S = self.active_seq_len
-        heads_v = self.num_heads // self.tp_factor * self.v_head_dim
         self._gather_out = {
             name: self.tt_ccl.get_mla_high_bw_all_gather_buffer(
                 name=f"mla2d_{name}", shape=[1, 1, S, width], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
             for name, width in (
-                ("q_a_col", self.q_lora_rank // self.tp_factor),
+                ("x", self.hidden_size // self.tp_factor),
+                ("q_a_col", self.q_lora_rank // self.sp_factor),
                 ("q_a", self.q_lora_rank),
-                ("o_in", heads_v),
-                ("o_out", self.hidden_size // self.hp),
+                ("o_in", self.num_heads // self.sp_factor * self.v_head_dim),
             )
         }
         ready, data_valid = self.tt_ccl.get_mla_high_bw_gather_semaphores()
         self._gather_semaphores = dict(ready_semaphore=ready, data_valid_semaphore=data_valid)
         logger.info(
-            f"MLA layer {self.layer_idx}: 2D TP, hidden over axis {self.sp_axis} ({self.hp}), heads over axis "
-            f"{self.tp_axis} ({self.tp_factor}), {self.heads_per_chip} heads per chip in the per-head ops"
+            f"MLA layer {self.layer_idx}: 2D TP, residual [S/{self.sp_factor}, hidden/{self.tp_factor}] (SP axis "
+            f"{self.sp_axis}, TP axis {self.tp_axis}), {self.heads_per_chip} heads per chip in the per-head ops"
         )
 
     def _axis_topology(self, axis: int):
@@ -312,11 +326,11 @@ class ttMLA2DTP(ttMLA):
             num_links=self.ccl_num_links,
         )
 
-    def _all_gather(self, x: ttnn.Tensor, axis: int, name: str) -> ttnn.Tensor:
-        """All-gather the last dim over ``axis`` into the persistent buffer ``name`` (returned; not to be freed)."""
+    def _all_gather(self, x: ttnn.Tensor, axis: int, name: str, dim: int = 3) -> ttnn.Tensor:
+        """All-gather ``dim`` over ``axis`` into the persistent buffer ``name`` (returned; not to be freed)."""
         return ttnn.experimental.high_bw_all_gather(
             x,
-            dim=3,
+            dim=dim,
             output_tensor=self._gather_out[name],
             cluster_axis=axis,
             num_links=self.ccl_num_links,
@@ -336,16 +350,16 @@ class ttMLA2DTP(ttMLA):
 
     def _q_a_latent_2d(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """q_a_layernorm(x @ Wqa), the whole 2048-wide row on every chip: [1, 1, S, q_lora]."""
-        part = self._mm_rs(x, self.q_a_proj_weight, self.sp_axis, -1)  # [S, q_lora / (hp * tp)], reduced
-        col = self._all_gather(part, self.sp_axis, "q_a_col")  # [S, q_lora / tp]
+        part = self._mm_rs(x, self.q_a_proj_weight, self.tp_axis, -1)  # [S, q_lora / (sp * tp)], reduced
+        col = self._all_gather(part, self.tp_axis, "q_a_col")  # [S, q_lora / sp]
         ttnn.deallocate(part)
-        qr = self._all_gather(col, self.tp_axis, "q_a")  # [S, q_lora]
+        qr = self._all_gather(col, self.sp_axis, "q_a")  # [S, q_lora]
         return self._q_a_norm(qr, ttnn.DRAM_MEMORY_CONFIG)
 
     def _q_stem_2d(self, qr: ttnn.Tensor, rope_tensors, kv_actual_isl, seq_len_local: int, metadata) -> ttnn.Tensor:
-        """q_b (K over hidden) -> this chip's heads -> wkv_b1 -> heads to sequence -> RoPE: [1, H, S / (hp * tp), 576]
+        """q_b (K over SP) -> this chip's heads -> wkv_b1 -> heads to sequence -> RoPE: [1, H, S / (sp * tp), 576]
         row-major, the q ttMLA's sparse core takes (as _q_stem_seq_sharded returns it)."""
-        k_slice = ttnn.mesh_partition(qr, dim=3, cluster_axis=self.sp_axis)  # [S, q_lora / hp]
+        k_slice = ttnn.mesh_partition(qr, dim=3, cluster_axis=self.sp_axis)  # [S, q_lora / sp]
         ttnn.deallocate(qr)
         q = self._mm_rs(k_slice, self.q_b_proj_weight, self.sp_axis, -1)  # [S, heads_per_chip * qk_head_dim]
         ttnn.deallocate(k_slice)
@@ -361,9 +375,9 @@ class ttMLA2DTP(ttMLA):
         ttnn.deallocate(q_nope)
         moved = []
         for t in (q_lat, q_rope):
-            rows = self._all_to_all(t, 1, 2, self.sp_axis)  # [heads / tp, S / hp]
+            rows = self._all_to_all(t, 1, 2, self.sp_axis)  # [heads / tp, S / sp]
             ttnn.deallocate(t)
-            moved.append(self._all_to_all(rows, 1, 2, self.tp_axis))  # [heads, S / (hp * tp)]
+            moved.append(self._all_to_all(rows, 1, 2, self.tp_axis))  # [heads, S / (sp * tp)], core order
             ttnn.deallocate(rows)
         prefix, rope_seq = moved
         tt_q = self._apply_rope_padded(
@@ -380,15 +394,16 @@ class ttMLA2DTP(ttMLA):
         return tt_q
 
     def _kv_a_proj(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
-        """x[:, K_rc] @ Wkva reduced over the hidden axis and sequence-scattered over it: [1, 1, S / hp, 576], still
-        partial over the head axis, which ttMLA's KV stem then gathers and reduces in fp32."""
-        x_rc = ttnn.mesh_partition(hidden_states, dim=3, cluster_axis=self.tp_axis)
+        """x[:, K_ts] @ Wkva reduced over SP and sequence-scattered over it: [1, 1, S / sp, 576], still partial over
+        TP, which ttMLA's KV stem then gathers and reduces in fp32. ``hidden_states`` is the gathered [S, hidden / tp].
+        """
+        x_rc = ttnn.mesh_partition(hidden_states, dim=3, cluster_axis=self.sp_axis)
         kv = self._mm_rs(x_rc, self.kv_a_proj_with_mqa_weight, self.sp_axis, -2)
         ttnn.deallocate(x_rc)
         return kv
 
     def _apply_wkv_b2(self, t: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
-        """[1, heads / tp, S / hp, 512] -> sequence to heads over the hidden axis -> wkv_b2 on this chip's heads:
+        """[1, heads / tp, S / sp, 512] -> sequence to heads over SP -> wkv_b2 on this chip's heads:
         [1, heads_per_chip, S, v_head_dim]."""
         mine = self._all_to_all(t, 2, 1, self.sp_axis)
         # bf16 out (ttMLA's default is bf8): the gated v is all-gathered into a bf16 buffer before o_proj.
@@ -398,8 +413,8 @@ class ttMLA2DTP(ttMLA):
         return v
 
     def _output_gate(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
-        """sigmoid(x @ Wg) for this chip's heads: the hidden-axis reduce finishes before the sigmoid."""
-        g = self._mm_rs(hidden_states, self.g_proj_weight, self.sp_axis, -1)
+        """sigmoid(x @ Wg) for this chip's heads: the reduce over the hidden (TP) finishes before the sigmoid."""
+        g = self._mm_rs(hidden_states, self.g_proj_weight, self.tp_axis, -1)
         out = ttnn.sigmoid(g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(g)
         return out
@@ -414,12 +429,9 @@ class ttMLA2DTP(ttMLA):
             ttnn.deallocate(g)
             ttnn.deallocate(v)
             v = gated
-        col = self._all_gather(v, self.sp_axis, "o_in")  # [S, heads / tp * V]: this column's heads
+        block = self._all_gather(v, self.tp_axis, "o_in")  # [S, heads / sp * V]: this chip's SP head block
         ttnn.deallocate(v)
-        part = self._mm_rs(col, self.o_proj_weight, self.tp_axis, -1)  # [S, hidden / (hp * tp)]
-        out = self._all_gather(part, self.tp_axis, "o_out")  # [S, hidden / hp]
-        ttnn.deallocate(part)
-        return ttnn.clone(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # the caller owns the output
+        return self._mm_rs(block, self.o_proj_weight, self.sp_axis, -2)  # [S / sp, hidden / tp], the residual
 
     def forward(
         self,
@@ -437,17 +449,20 @@ class ttMLA2DTP(ttMLA):
         metadata: Optional[ttnn.Tensor] = None,
         force_kv_only: bool = False,
     ):
-        """``hidden_states``: ``[1, 1, S, hidden / hp]`` (the whole chunk, hidden over the hidden axis, replicated
-        over the head axis). Returns the same layout. ``indexer_indices``: this chunk's top-k as ttMLA takes it,
-        ``[1, 1, S / (hp * tp), k]`` per chip."""
+        """``hidden_states``: the residual layout, ``[1, 1, S / sp, hidden / tp]`` (the prefill block's, ttMLA's and
+        TtMlp2D's). Returns the same layout. ``indexer_indices``: this chunk's top-k as ttMLA takes it,
+        ``[1, 1, S / (sp * tp), k]`` per chip."""
         if kvpe_cache.geometry != self.kv_cache_geometry:
             raise ValueError(f"MLA configured for KV geometry {self.kv_cache_geometry}, got {kvpe_cache.geometry}")
         assert kvpe_cache.format == self.sparse_kv_cache_format
-        chunk = hidden_states.shape[2]
-        assert chunk == self.active_seq_len, f"2D TP MLA was built for {self.active_seq_len}-token chunks, got {chunk}"
-        seq_len_local = chunk // self.sp_factor
+        seq_len_local = hidden_states.shape[2]
+        assert (
+            seq_len_local == self.active_seq_len_local
+        ), f"2D TP MLA was built for {self.active_seq_len_local} local rows, got {seq_len_local}"
         kv_actual_isl = actual_start or 0
         ttnn.tracy_message("`TT_SIGNPOST: MLA_START`")
+        # Every hidden-side matmul takes the whole chunk: gather the sequence over SP once (persistent buffer).
+        hidden_states = self._all_gather(hidden_states, self.sp_axis, "x", dim=2)  # [S, hidden / tp]
 
         if self.kv_only or force_kv_only:
             tt_kvpe, tt_kv_nope, _ = self._kv_stem(

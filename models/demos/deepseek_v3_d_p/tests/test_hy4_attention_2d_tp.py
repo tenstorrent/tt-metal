@@ -3,12 +3,12 @@
 
 """Hy4-preview attention sublayer on the SC1 2D tensor-parallel layout vs the fp32 HF ``hy_v4`` reference (#65885).
 
-``ttMLA2DTP`` (``tt/mla/mla_2d.py``) with REAL Hy4 weights, every projection sharded once over the 32 chips: heads over
-the mesh's 8-chip axis, the 6144 hidden over its 4-chip axis. Input and output are ``[S, 6144 / 4]`` per chip, hidden
-over the 4-chip axis and replicated over the 8-chip axis.
+``ttMLA2DTP`` (``tt/mla/mla_2d.py``) with REAL Hy4 weights, every projection sharded once over the 32 chips. Input and
+output are the prefill block's residual layout ``[S / 4, 6144 / 8]`` per chip (sequence over SP, hidden over TP), the
+same as the 2D shared expert / dense FFN of #65890.
 
-Mesh: the physical 8x4 torus (``single_bh_galaxy_torus_xy``, dims [8, 4]) with heads on axis 0 and hidden on axis 1.
-That is TP32's 4x8 placement with its axes named by the fabric; no logical (4, 8) view is opened.
+Mesh: the physical 8x4 torus (``single_bh_galaxy_torus_xy``, dims [8, 4]) with TP 8 on axis 0 and SP 4 on axis 1, as
+#65890 runs it. That is TP32's 4x8 placement with its axes named by the fabric; no logical (4, 8) view is opened.
 
 Layers 0 (full indexer) and 2 (shared), both fed the top-k: the golden layer-0 top-k at 4K, a sliding causal window at
 longer lengths (seeded random tokens, no golden). The DSA indexer has no 2D layout yet (TtIndexer needs 128 / 8 = 16
@@ -58,8 +58,8 @@ pytestmark = [
     pytest.mark.skipif(not (CHECKPOINT / "model.safetensors.index.json").is_file(), reason="no Hy4 checkpoint"),
 ]
 
-HIDDEN_AXIS = 1  # 4 chips: hidden for the projections, sequence (ttMLA's SP axis) in the attention core
-HEAD_AXIS = 0  # 8 chips: 8 heads per chip column
+SP_AXIS = 1  # 4 chips: the residual's sequence, q_b's K, the gate / o_proj head blocks
+TP_AXIS = 0  # 8 chips: the residual's hidden, 8 heads per chip column
 
 
 def run_2d_attention(config, weights, mesh_device, hn, layer_idx, topology, topk):
@@ -74,9 +74,9 @@ def run_2d_attention(config, weights, mesh_device, hn, layer_idx, topology, topk
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
-        sp_axis=HIDDEN_AXIS,
+        sp_axis=SP_AXIS,
         num_kvpe_cache_layers=1,
-        tp_axis=HEAD_AXIS,
+        tp_axis=TP_AXIS,
     )
     cls = mla_class(config)
     assert cls is ttMLA2DTP
@@ -86,8 +86,8 @@ def run_2d_attention(config, weights, mesh_device, hn, layer_idx, topology, topk
         mesh_device,
         layer_idx=layer_idx,
         seq_len=seq_len,
-        sp_axis=HIDDEN_AXIS,
-        tp_axis=HEAD_AXIS,
+        sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
         is_balanced=False,
         topology=topology,
         is_chunked=True,
@@ -96,12 +96,11 @@ def run_2d_attention(config, weights, mesh_device, hn, layer_idx, topology, topk
         sparse_kv_cache_format=kvpe_cache.format,
     )
     assert mla.attn_sink is not None and mla._use_gate and mla.heads_per_chip == 2
-    rope = RotarySetup(config, mesh_device, sp_axis=HIDDEN_AXIS, is_balanced=False)
+    rope = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False)
     rope_tensors = rope.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=chunk)
-    in_dims = [None, None]
-    in_dims[HIDDEN_AXIS] = 3  # hidden over the 4-chip axis, replicated over the 8-chip axis
-    out_dims = [None, None]
-    out_dims[HIDDEN_AXIS], out_dims[HEAD_AXIS] = 3, 0  # the head-axis replicas stacked on dim 0
+    # The prefill block's residual layout (also TtMlp2D's, #65890): sequence over SP, hidden over TP.
+    dims = [None, None]
+    dims[SP_AXIS], dims[TP_AXIS] = 2, 3
     t0 = time.time()
     outs = []
     for start in range(0, seq_len, chunk):
@@ -111,23 +110,22 @@ def run_2d_attention(config, weights, mesh_device, hn, layer_idx, topology, topk
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=in_dims),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
         )
         out = mla.forward(
             hidden_states=tt_hidden,
             rope_tensors=rope_tensors,
             kvpe_cache=kvpe_cache,
             actual_start=start,
-            indexer_indices=host_indices_to_device(topk[start : start + chunk], mesh_device, HIDDEN_AXIS),
+            indexer_indices=host_indices_to_device(topk[start : start + chunk], mesh_device, SP_AXIS),
         )
-        assert tuple(out.shape) == (1, 1, chunk, config.hidden_size // mesh_device.shape[HIDDEN_AXIS])
-        host = ttnn.to_torch(
-            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_dims, mesh_shape=mesh_device.shape)
-        ).float()
-        # Replicated over the head axis: every copy is the same output.
-        for k in range(1, host.shape[0]):
-            assert torch.equal(host[k], host[0]), f"head-axis replica {k} differs"
-        outs.append(host[0, 0])
+        sp, tp = mesh_device.shape[SP_AXIS], mesh_device.shape[TP_AXIS]
+        assert tuple(out.shape) == (1, 1, chunk // sp, config.hidden_size // tp)
+        outs.append(
+            ttnn.to_torch(
+                out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=dims, mesh_shape=mesh_device.shape)
+            ).float()[0, 0]
+        )
         ttnn.deallocate(out)
         ttnn.deallocate(tt_hidden)
     ttnn.synchronize_device(mesh_device)

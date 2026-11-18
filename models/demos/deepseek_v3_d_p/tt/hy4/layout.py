@@ -64,11 +64,17 @@ SC1_CHIPS = 32
 TP32_BLOCKERS = (
     (
         "2D TP attention in the prefill block: the projections, output gate and sink are 2D TP in ttMLA2DTP "
+        "2D TP attention in the prefill block: the projections, output gate and sink are 2D TP in ttMLA2DTP "
         "(tt/mla/mla_2d.py: every attention weight sharded once over all 32 chips, the hidden over TP (axis 1, 4 "
         "chips), 8 heads per chip over SP (axis 0, 8 chips), validated against HF as a module) and it takes and "
         "returns the block's residual [S/sp, hidden/tp] = [S/8, 6144/4], as TtMlp2D (#65890) does, but "
         "TtPrefillBlock still builds ttMLA (mla_class(config) with config.mla_2d_tp selects it) and ttMLA2DTP does "
         "not build the DSA indexer (#65887)",
+        "#65885",
+    ),
+    (
+        "DSA indexer on the 2D layout: TtIndexer runs on this mesh (128 index dims / TP 4 = 32 per chip, tile "
+        "aligned) but shards its weights over TP only and replicates them over the 8 SP chips (indexer.py)",
         "#65885",
     ),
     (
