@@ -171,3 +171,18 @@ def hy4_fabric_selftest(
         res.seconds,
     )
     return res
+
+
+def make_safe_ccl(mesh, topology=None, **kw):
+    """NAN49 / B51 helper for tests and harnesses: CCLManager whose num_links comes from the fabric self-test (the production engine does this in hy4_serve_engine; a bare
+    ``CCLManager(md, num_links=2, topology=Ring)`` on a board in the parity-defect state returns WRONG reduce-scatter / all-gather results on every odd call, e.g. NaN in
+    Hy4Attention.prefill_chunk on odd chunks). HY4_B51_SAFE_CCL=0 -> plain num_links=2 (old harness behaviour)."""
+    from models.demos.gpt_oss.tt.ccl import CCLManager
+
+    topology = topology or ttnn.Topology.Ring
+    nl = (
+        2
+        if os.environ.get("HY4_B51_SAFE_CCL", "1") == "0"
+        else hy4_fabric_selftest(mesh, topology=topology, **kw).num_links
+    )
+    return CCLManager(mesh, num_links=nl, topology=topology)

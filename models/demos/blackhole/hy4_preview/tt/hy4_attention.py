@@ -278,10 +278,15 @@ class Hy4Attention:
         self._tap("o", o)
         g = plinear(self.pf if pf else None, h, self.w_gate, ckc, act="sigmoid")
         og = ttnn.multiply(o, g)
-        ttnn.deallocate(g)
+        self._tap("gate", g)
+        self._free(g, "gate")
         part = plinear(self.pf if pf else None, og, self.w_o, ckc)  # [1,1,n,6144] partial
-        ttnn.deallocate(og)
-        return self.mesh_config.allreduce(part, self.ccl, axis=1)
+        self._tap("og", og)
+        self._free(og, "og")
+        if self.taps is not None:
+            self.taps["part"] = ttnn.clone(part)  # the all-reduce may consume its input
+        res = self.mesh_config.allreduce(part, self.ccl, axis=1)
+        return res
 
     # ------------------------------------------------------------------ decode (one token per user = per mesh row; all rows at the same position in v0)
     def dense_ids(self, pos):
