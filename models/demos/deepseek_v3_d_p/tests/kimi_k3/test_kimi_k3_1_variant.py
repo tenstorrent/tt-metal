@@ -20,7 +20,7 @@ from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import MAX_SEQ_LEN, NUM_STAGES, PP4_MAX_USERS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import index_keys_hadamard_rotated, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
 
 K3 = get_adapter("kimi_k3")
@@ -60,6 +60,11 @@ def test_only_kimi_k3_1_config_carries_the_indexer():
     assert resolve_has_indexer(k31)
     assert (k31.index_topk, k31.index_n_heads, k31.index_head_dim, k31.index_rope_dim) == (2048, 32, 128, 0)
     assert k31.num_hidden_layers == k3.num_hidden_layers == KimiK31Config.NUM_LAYERS
+
+
+def test_kimi_k3_1_index_keys_stay_in_the_model_basis():
+    # K3.1's decode keeps indexer keys unrotated, and migration copies the prefill cache's bytes as they are.
+    assert not index_keys_hadamard_rotated(K31.load_hf_config())
 
 
 @pytest.mark.parametrize("attr", _K3_ARTIFACTS)

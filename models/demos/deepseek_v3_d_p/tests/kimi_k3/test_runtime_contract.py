@@ -138,6 +138,22 @@ def test_only_a_dsa_config_takes_a_sparse_kv_cache_format(expect_error):
         )
 
 
+def test_a_dsa_config_needs_a_sparse_kv_cache_format(expect_error):
+    """K3.1's DSA layers read the sparse cache, so a K3.1 build without its format is refused at construction."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config, kimi_k3_1_hf_config
+
+    with expect_error(ValueError, "needs its KV cache format"):
+        TtKimiK3Transformer(
+            None,
+            kimi_k3_1_hf_config(),
+            KimiK31Config,
+            {},
+            num_layers=1,
+            seq_len=5120,
+            sparse_kv_cache_format=None,
+        )
+
+
 def test_runtime_rejects_mtp_before_the_shared_build(monkeypatch, expect_error):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime

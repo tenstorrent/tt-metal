@@ -76,13 +76,8 @@ class MigrationDriver:
         self.handoff_path = os.environ.get("PREFILL_MIGRATION_HANDOFF_PATH", "")
         # Prompt tokens past the prefilled ones that the handoff leaves for decode to run (``tail_tokens``). A model
         # with recurrent state (Kimi-K3's KDA) needs at least one: decode cannot re-run a token the migrated state
-        # already applied, and prefill samples no first token. The adapter sets the default.
-        tail = os.environ.get("PREFILL_MIGRATION_HANDOFF_TAIL")
-        if tail is None:
-            from models.demos.common.prefill.runners import prefill_producer as producer
-
-            tail = getattr(producer.ADAPTER, "migration_handoff_tail_tokens", 0)
-        self.handoff_tail = int(tail)
+        # already applied, and prefill samples no first token. runners/run_k31_pd.sh sets 1.
+        self.handoff_tail = int(os.environ.get("PREFILL_MIGRATION_HANDOFF_TAIL", "0"))
         if self.handoff_tail < 0:
             raise ValueError(f"PREFILL_MIGRATION_HANDOFF_TAIL must be >= 0, got {self.handoff_tail}")
         self.client = None
@@ -142,8 +137,11 @@ class MigrationDriver:
         ):
             raise RuntimeError("DFlash migration requires the published KV table with drafter configs")
         triples = self._resolve_pairs(stats, num_slots=num_slots)
+        # Built before any copy, from lengths known up front: a handoff that cannot be written (a tail past the
+        # prompt) stops the run with nothing migrated, not after every cache has moved.
+        handoff = self._handoff_slots(triples, slot_traces, pools_by_trace)
         self._issue(triples, kv_table=kv_table)
-        self._write_handoff(triples, slot_traces, pools_by_trace)
+        self._write_handoff(handoff)
         self._write_done_sentinel(triples)
         return triples
 
@@ -360,9 +358,10 @@ class MigrationDriver:
         )
         return reply
 
-    def _write_handoff(self, triples: list, slot_traces: dict, pools_by_trace: dict) -> None:
+    def _handoff_slots(self, triples: list, slot_traces: dict, pools_by_trace: dict):
+        """The handoff's per-slot records, or ``None`` with no PREFILL_MIGRATION_HANDOFF_PATH."""
         if not self.handoff_path:
-            return
+            return None
         if slot_traces is None or pools_by_trace is None:
             raise ValueError(
                 "PREFILL_MIGRATION_HANDOFF_PATH is set but the producer passed no slot_traces/pools_by_trace; "
@@ -396,6 +395,11 @@ class MigrationDriver:
                 continue
             last_tok = int(pool[real_len - 1]) if 1 <= real_len <= len(pool) else int(pool[-1])
             slots.append({"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok})
+        return slots
+
+    def _write_handoff(self, slots) -> None:
+        if slots is None:
+            return
         base_dir = os.path.abspath(os.path.dirname(self.handoff_path) or ".")
         name = os.path.basename(self.handoff_path)
         handoff_path = os.path.abspath(os.path.join(base_dir, name))

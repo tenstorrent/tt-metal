@@ -545,6 +545,15 @@ prefill→decode run needs the decode endpoint to publish its configs in the sam
 
 ## Gate 3 — prefill → decode through tt-d-gen's KV Manager
 
+Gate 3 is manual test tooling, not the production path. In production, d-gen's engine sends migrate commands
+to the KVM over ZMQ as each layer's completion arrives, overlapped with prefill; here the driver sends
+blocking HTTP `/migrate` requests after the whole prefill, so the KVM fleet must run with
+`KV_MANAGER_TRANSPORT_KIND=http`. It checks the table layout and the migrated bytes. Once the d-gen engine
+path runs K3.1 prefill → decode, the driver's KVM mode, its handoff tail and `runners/run_k31_pd.sh` can be
+removed, along with `run_multirank_pcc.sh`'s manual-run overrides (`PREFILL_FEED_ONLY`, `PREFILL_*_OVERRIDE`,
+`PREFILL_EXTRA_*_ENV`, `PREFILL_PRODUCER_MODULE`, `PREFILL_TABLE_PATH`). `migration_chunk_digest` checks
+bytes whatever moved them, so it stays.
+
 A real cross-system migration: prefill on one pod, decode on another, with tt-d-gen's KV Manager (KVM)
 fleet moving the chunks. There is no tt-llm-engine endpoint and no shared-memory queue. Both sides export
 their tables and device maps to files, the KVM processes on each host serve them, and the driver asks the
@@ -566,19 +575,23 @@ consecutive layers that share a position range (`layer_position_range`).
 
 Any other reply that is not `status: SUCCESSFUL` raises. After the last layer the driver writes the handoff
 JSON (`PREFILL_MIGRATION_HANDOFF_PATH`) and the DONE sentinel (`MIGRATION_DONE_FILE`) that decode waits on.
-With `PREFILL_MIGRATION_HANDOFF_TAIL=1` the handoff carries the prompt token after the last one prefill ran,
-for decode to apply; the prefill length itself is unchanged. When that token lies past the prompt pool, the driver reads it from the
-trace (`_trace_continuation`), after checking that the trace starts with the pool.
+With `PREFILL_MIGRATION_HANDOFF_TAIL=1` (default 0) the handoff carries the prompt token after the last one
+prefill ran, for decode to apply; the prefill length itself is unchanged. When that token lies past the prompt
+pool, the driver reads it from the trace (`_trace_continuation`), after checking that the trace starts with the
+pool. The driver builds the handoff before the first `/migrate`, so a tail that does not fit stops the run
+with nothing copied.
 
-**Kimi-K3.1 on four galaxies.** `ci/run_multirank_pcc.sh` drives the prefill side:
+**Kimi-K3.1 on four galaxies.** `runners/run_k31_pd.sh` drives the prefill side, on top of
+`ci/run_multirank_pcc.sh`'s `kimi_k3_1 sc4` leg:
 
-- `PREFILL_K31_SC4_SMOKE=1` runs K3.1 on sc4 (all 93 layers) with a single-rank producer that only feeds
-  tokens. `PREFILL_SC4_MAX_SEQ_LEN` (default 245760) and `PREFILL_SC4_REQUEST_LEN` set the shape; the
-  manifest's 1M × 100 shape does not fit in DRAM with the indexer cache.
-- `PREFILL_K31_PD=1` on top of it makes the runners export the table (`PREFILL_PD_TABLE_PATH`, on shared
-  storage) and each host's device map (`PREFILL_PD_DEVICE_MAP`), and runs `migration_driver` in KVM mode in
-  place of the producer, with pairs `0:1` and `PREFILL_VERIFY_MIGRATION=off`. It needs
-  `PREFILL_MIGRATION_KVM_URL`, `MIGRATION_DONE_FILE` and `PREFILL_MIGRATION_HANDOFF_PATH`.
+- `run_k31_pd.sh smoke` runs K3.1 on sc4 (all 93 layers) with a single-rank producer that only feeds
+  tokens. `PREFILL_SC4_MAX_SEQ_LEN` (default 245760) and `PREFILL_SC4_REQUEST_LEN` (default 56320) set the
+  shape; the manifest's 1M × 100 shape does not fit in DRAM with the indexer cache.
+- `run_k31_pd.sh pd` adds what P→D needs: the runners export the table (`PREFILL_PD_TABLE_PATH`, on shared
+  storage) and each host's device map (`PREFILL_PD_DEVICE_MAP`), and `migration_driver` runs in KVM mode in
+  place of the producer, with pairs `0:1`, `PREFILL_VERIFY_MIGRATION=off` and a 1-token handoff tail
+  (K3.1's KDA state is recurrent). It needs `PREFILL_MIGRATION_KVM_URL`, `MIGRATION_DONE_FILE` and
+  `PREFILL_MIGRATION_HANDOFF_PATH`.
 
 The driver's own `--verify-migration` reads destination slots through the loopback table, so it is off here.
 Check the destination with the byte digest below instead.

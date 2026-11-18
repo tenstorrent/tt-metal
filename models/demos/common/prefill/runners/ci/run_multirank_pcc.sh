@@ -229,36 +229,6 @@ case "${MODEL}" in
     # length cap is needed: as for kimi_k3, the span is PCC'd and the tail is timed. Two chunks, so the
     # gate reads one chunk's KV from the next.
     REQUEST_LEN=$((2 * CHUNK_SIZE))
-    # PREFILL_K31_SC4_SMOKE=1: sc4, all 93 layers, with a single-rank producer that only feeds tokens (no
-    # read-back, no PCC gate), to check the four-stage pipeline runs before a P->D migration.
-    K31_SC4_SMOKE=0
-    if [ "${CONFIG}" = sc4 ] && [ "${PREFILL_K31_SC4_SMOKE:-0}" = 1 ]; then
-      K31_SC4_SMOKE=1
-      PRODUCER_CHECK_PCC=0
-      REQUEST_LEN="${PREFILL_SC4_REQUEST_LEN:-${GOLDEN_LEN}}"
-      # At the manifest's 1M-context shape the expert weights no longer fit in DRAM beside K3.1's indexer cache
-      # (bank_manager OOM on load). 245,760 is sc1's shape, 24 layers per galaxy as here.
-      VARIANT_MAX_SEQ_LEN="${PREFILL_SC4_MAX_SEQ_LEN:-245760}"
-      RUNNER_ENV="${RUNNER_ENV/LOGURU_LEVEL=ERROR/LOGURU_LEVEL=INFO}"
-      if [ "${PREFILL_K31_PD:-0}" = 1 ]; then
-        # P->D through tt-d-gen's KV Manager: the runners export the table (PREFILL_PD_TABLE_PATH) and each
-        # host's device map to files, and migration_driver replaces the producer: it feeds the prompt, POSTs
-        # /migrate to the prefill leader KVM, then writes the handoff and the DONE sentinel for decode.
-        : "${PREFILL_PD_TABLE_PATH:?PREFILL_K31_PD=1 needs PREFILL_PD_TABLE_PATH on shared storage}"
-        : "${PREFILL_MIGRATION_KVM_URL:?PREFILL_K31_PD=1 needs PREFILL_MIGRATION_KVM_URL}"
-        RUNNER_ENV+=" export PREFILL_MIGRATION_EXPORT_TO_FILE=1; \
-          export PREFILL_MIGRATION_DEVICE_MAP_PATH=${PREFILL_PD_DEVICE_MAP:-/tmp/prefill_device_map.txt};"
-        PRODUCER_MODULE=migration_driver
-        PRODUCER_ENV+=" export PREFILL_MIGRATION_KVM_URL='${PREFILL_MIGRATION_KVM_URL}'; \
-          export PREFILL_MIGRATION_KVM_RECEIVER='${PREFILL_MIGRATION_KVM_RECEIVER:-decode-0}'; \
-          export PREFILL_MIGRATION_PAIRS='${PREFILL_MIGRATION_PAIRS:-0:1}'; \
-          export PREFILL_MIGRATION_SRC_ENDPOINT_ID=1; export PREFILL_MIGRATION_DEST_ENDPOINT_ID=0; \
-          export MIGRATION_DONE_FILE='${MIGRATION_DONE_FILE:?}'; \
-          export PREFILL_MIGRATION_HANDOFF_PATH='${PREFILL_MIGRATION_HANDOFF_PATH:?}'; \
-          export PREFILL_VERIFY_MIGRATION=off; \
-          ${PREFILL_MIGRATION_DUMP_SRC_KV:+export PREFILL_MIGRATION_DUMP_SRC_KV='${PREFILL_MIGRATION_DUMP_SRC_KV}';}"
-      fi
-    fi
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -285,11 +255,19 @@ case "${MODEL}" in
     ;;
 esac
 
-# PREFILL_K31_PD is read only inside the kimi_k3_1 sc4 smoke above. Anywhere else it would be dropped and the
-# normal PCC leg would run, looking like a P->D run that passed.
-if [ "${PREFILL_K31_PD:-0}" = 1 ] && [ "${PRODUCER_MODULE:-}" != migration_driver ]; then
-  echo "PREFILL_K31_PD=1 needs model kimi_k3_1, config sc4 and PREFILL_K31_SC4_SMOKE=1 (got ${MODEL}/${CONFIG})" >&2
-  exit 2
+# Manual runs layer these on a model's CI leg (runners/run_k31_pd.sh); CI sets none of them.
+# PREFILL_FEED_ONLY=1: one producer rank that only feeds the request: no read-back, no PCC gate.
+FEED_ONLY="${PREFILL_FEED_ONLY:-0}"
+if [ "${FEED_ONLY}" = 1 ]; then
+  PRODUCER_CHECK_PCC=0
+fi
+REQUEST_LEN="${PREFILL_REQUEST_LEN_OVERRIDE:-${REQUEST_LEN}}"
+VARIANT_MAX_SEQ_LEN="${PREFILL_MAX_SEQ_LEN_OVERRIDE:-${VARIANT_MAX_SEQ_LEN}}"
+RUNNER_ENV+=" ${PREFILL_EXTRA_RUNNER_ENV:-}"
+PRODUCER_ENV+=" ${PREFILL_EXTRA_PRODUCER_ENV:-}"
+PRODUCER_MODULE="${PREFILL_PRODUCER_MODULE:-prefill_producer}"
+if ! [[ "${PRODUCER_MODULE}" =~ ^[a-z_]+$ ]]; then
+  echo "PREFILL_PRODUCER_MODULE='${PRODUCER_MODULE}' is not a runners module" >&2; exit 2
 fi
 
 if [ -n "${VARIANT}" ]; then
@@ -362,10 +340,10 @@ mkdir -p "${TTRUN_CWD}"
 
 MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${RUN_NAME}_prefill_ci_mr.XXXXXX")
 GATE_LOG="${MR_DIR}/gates.log"
-export TABLE_PATH="${PREFILL_PD_TABLE_PATH:-${MR_DIR}/kv_chunk_table.pb}"
+export TABLE_PATH="${PREFILL_TABLE_PATH:-${MR_DIR}/kv_chunk_table.pb}"
 # A caller-chosen path outlives the run, unlike the fresh MR_DIR one. Rank 0 removes a table left there only at
 # table setup, after weight load, so until then the wait below would take the last run's table for this run's.
-[ -z "${PREFILL_PD_TABLE_PATH:-}" ] || rm -f -- "${TABLE_PATH}"
+[ -z "${PREFILL_TABLE_PATH:-}" ] || rm -f -- "${TABLE_PATH}"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
 PRODUCER_LOG="${MR_DIR}/producer.log"
@@ -622,11 +600,11 @@ PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
 if [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
   echo "tt-run discovery interleaved hosts across ranks: ${RANK_HOSTS//$'\n'/ }"; exit 1
 fi
-if [ "${K31_SC4_SMOKE:-0}" = 1 ]; then
-  # Feed-only: one producer on rank 0's host. A multi-rank producer only runs validators, which need a golden.
+if [ "${FEED_ONLY}" = 1 ]; then
+  # One producer on rank 0's host. A multi-rank producer only runs validators, which need a golden.
   HOSTS="${HOSTS%%,*}"
   PRODUCER_PLACEMENT=(-np 1 --map-by slot)
-  echo "K3.1 sc4 smoke: single-rank feed-only producer on ${HOSTS}"
+  echo "feed-only: single-rank producer on ${HOSTS}"
 fi
 if [ "${DFLASH}" = 1 ]; then
   mkdir -p "${TT_METAL_HOME}/generated/ttrun"
@@ -735,7 +713,7 @@ set +e
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m models.demos.common.prefill.runners.${PRODUCER_MODULE:-prefill_producer}" 2>&1 | tee "${PRODUCER_LOG}"
+    exec python3 -m models.demos.common.prefill.runners.${PRODUCER_MODULE}" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
 
