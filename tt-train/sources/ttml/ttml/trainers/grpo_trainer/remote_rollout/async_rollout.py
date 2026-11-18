@@ -85,7 +85,7 @@ class AsyncRolloutServer:
         self._num_generations = num_generations
         self._bridge.connect()
         self._queue.connect()
-        # If rank 0 fails to send a shutdown signal, force rank 1 to exit.
+        # The peer waits on this rank until serve_forever returns; a normal exit before that hangs both ranks.
         atexit.register(os._exit, 1)
 
     def serve_forever(self) -> None:
