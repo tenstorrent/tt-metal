@@ -526,6 +526,236 @@ struct TapDirect {
     }
 };
 
+// Zero-once edge of tap kw (TapDirectPlanned): rows [0, zl) zero, [zl, hi) one slab run, [hi, 32) zero, the same for
+// every tile-row that gathers tap kw; on = false when no tile-row gathers it, or two of them differ.
+struct TapEdgeCanon {
+    int32_t zl;
+    int32_t hi;
+    bool on;
+};
+template <uint32_t output_width, int32_t input_width, int32_t padding, int32_t dilation, bool enabled>
+constexpr TapEdgeCanon tap_edge_canon(int32_t kw) {
+    constexpr int32_t TILE_DIM = 32;
+    TapEdgeCanon c{0, TILE_DIM, false};
+    if (!enabled || output_width % TILE_DIM != 0) {
+        return c;
+    }
+    bool any = false;
+    for (int32_t wo0 = 0; wo0 < static_cast<int32_t>(output_width); wo0 += TILE_DIM) {
+        const int32_t w_lo = wo0 - padding + kw * dilation;
+        if (w_lo >= 0 && w_lo + TILE_DIM <= input_width) {
+            continue;
+        }
+        const int32_t zl = -w_lo < 0 ? 0 : (-w_lo > TILE_DIM ? TILE_DIM : -w_lo);
+        int32_t hi = input_width - w_lo;
+        hi = hi < zl ? zl : (hi > TILE_DIM ? TILE_DIM : hi);
+        if (hi == zl) {
+            continue;
+        }
+        if (!any) {
+            c.zl = zl;
+            c.hi = hi;
+            any = true;
+        } else if (c.zl != zl || c.hi != hi) {
+            return TapEdgeCanon{0, TILE_DIM, false};
+        }
+    }
+    c.on = any;
+    return c;
+}
+
+// Tap-direct, planned per tile-row (the reader's tap-direct loop; TapDirect::tile_row stays for tile-rows that are not
+// one output-row run). With stride 1 a tap's class depends only on the tile-row's first output column, never on the
+// kernel row, which only picks the slab row (or the zero block outside the image): plan() classifies the three taps
+// once per tile-row, and unit() adds each kernel row's slab offset.
+//   DIRECT  the tap's 32 pixels are one in-image slab run: compute tilizes the slab in place.
+//   ZERO    the tap lies wholly in the left / right padding: the zero block.
+//   EDGE    zero-once: three taps per unit (block t of a slot is always tap kw = t) and W_out a multiple of 32, so
+//   every
+//           gather of tap kw is its canonical edge (tap_edge_canon). The first EDGE gather of a (slot, kw) block writes
+//           its zero rows too; later ones read only the [zl, hi) run, with a stateful fixed-size read (one size per
+//           kw).
+//   GATHER  any other one-run edge: zero-fill / slab run / zero-fill into the slot block, as TapDirect does.
+// Measured (res5.1 @ LoFi, focus, median of 3): with the grouped push in the reader 45.55 -> 44.17 us, bit-identical.
+// The per-unit arithmetic of TapDirect::tile_row was itself the pacing cost: the same zero-once and fixed reads bolted
+// onto it measured flat.
+template <
+    uint32_t output_width,
+    int32_t input_height,
+    int32_t input_width,
+    int32_t padding,
+    int32_t dilation,
+    uint32_t c_in_p,
+    uint32_t block_k_tiles>
+struct TapDirectPlanned {
+    static constexpr int32_t TILE_DIM = 32;
+    static constexpr uint32_t pixel_bytes = c_in_p * 2;
+    static constexpr uint32_t blk_bytes = TILE_DIM * pixel_bytes;
+    // 1 (one tap per unit) or 3 (one kernel row); instantiated on every path, so no assertion here.
+    static constexpr uint32_t taps = block_k_tiles * TILE_DIM / c_in_p;
+    static constexpr uint32_t DIRECT = 0, ZERO = 1, EDGE = 2, GATHER = 3;
+    static constexpr TapEdgeCanon canon_kw[3] = {
+        tap_edge_canon < output_width,
+        input_width,
+        padding,
+        dilation,
+        taps == 3 > (0),
+        tap_edge_canon<output_width, input_width, padding, dilation, taps == 3>(1),
+        tap_edge_canon<output_width, input_width, padding, dilation, taps == 3>(2)};
+    static constexpr bool zero_once = canon_kw[0].on || canon_kw[1].on || canon_kw[2].on;
+    // The stateful read is one packet: the edge run of tap kw must fit one burst.
+    static constexpr uint32_t edge_bytes(uint32_t kw) {
+        return canon_kw[kw].on &&
+                       static_cast<uint32_t>(canon_kw[kw].hi - canon_kw[kw].zl) * pixel_bytes <= NOC_MAX_BURST_SIZE
+                   ? static_cast<uint32_t>(canon_kw[kw].hi - canon_kw[kw].zl) * pixel_bytes
+                   : 0;
+    }
+
+    struct Row {
+        int32_t ho0;
+        int32_t n;
+        int32_t off[3];  // w_lo0 * pixel_bytes
+        int32_t zl[3];
+        int32_t hi[3];
+        uint32_t cls[3];
+    };
+
+    // Returns false when the tile-row is not one output-row run (the caller takes TapDirect::tile_row).
+    FORCE_INLINE static bool plan(Row& r, uint32_t o, uint32_t o_end) {
+        const int32_t n_all = static_cast<int32_t>(o_end) - static_cast<int32_t>(o);
+        r.n = n_all < TILE_DIM ? n_all : TILE_DIM;
+        r.ho0 = o / output_width;
+        const int32_t wo0 = o % output_width;
+        if (r.n <= 0) {
+            for (uint32_t kw = 0; kw < 3; ++kw) {
+                r.cls[kw] = ZERO;
+            }
+            return true;
+        }
+        if (wo0 + r.n > static_cast<int32_t>(output_width)) {
+            return false;
+        }
+        for (int32_t kw = 0; kw < 3; ++kw) {
+            const int32_t w_lo = wo0 - padding + kw * dilation;
+            r.off[kw] = w_lo * static_cast<int32_t>(pixel_bytes);
+            if (w_lo >= 0 && w_lo + r.n <= input_width) {
+                r.cls[kw] = DIRECT;
+                continue;
+            }
+            const int32_t zl = -w_lo < 0 ? 0 : (-w_lo > r.n ? r.n : -w_lo);
+            int32_t hi = input_width - w_lo;
+            hi = hi < zl ? zl : (hi > r.n ? r.n : hi);
+            r.zl[kw] = zl;
+            r.hi[kw] = hi;
+            if (hi == zl) {
+                r.cls[kw] = ZERO;
+            } else if (canon_kw[kw].on && zl == canon_kw[kw].zl && hi == canon_kw[kw].hi) {
+                r.cls[kw] = EDGE;
+            } else {
+                r.cls[kw] = GATHER;
+            }
+        }
+        return true;
+    }
+
+    template <uint32_t bytes, typename Reads>
+    FORCE_INLINE static void fixed_read(Reads& reads, uint32_t& state, uint32_t src_l1, uint32_t dst_l1) {
+        if (state != bytes) {
+            dataflow_kernel_lib::set_read_state<bytes>(reads.noc, src_l1);
+            state = bytes;
+        }
+        dataflow_kernel_lib::read_with_state<bytes>(reads.noc, dst_l1, src_l1);
+        reads.count_packets(1);
+    }
+
+    // One unit (kernel row kh, taps kw_first..) into slot `slot` at slot_l1: publishes its sources, issues its gathers;
+    // returns the taps gathered. zeroed: bit slot * 3 + kw is set while that block holds its canonical zero rows.
+    // fixed_state: bytes of the stateful read setup in the read command buffer (0: none; any other read clears it).
+    template <typename Reads>
+    FORCE_INLINE static uint32_t unit(
+        Reads& reads,
+        const Row& r,
+        uint32_t slab_l1,
+        uint64_t slab_noc,
+        uint32_t zero_l1,
+        uint64_t zero_src_noc,
+        uint32_t slot_l1,
+        int32_t kh,
+        uint32_t kw_first,
+        int32_t slab_x_base_kh,
+        volatile tt_l1_ptr uint32_t* srcs,
+        uint32_t& zeroed,
+        uint32_t slot,
+        uint32_t& fixed_state) {
+        const int32_t h_in0 = r.ho0 + kh * dilation - padding;
+        if (r.n <= 0 || h_in0 < 0 || h_in0 >= input_height) {
+            for (uint32_t t = 0; t < taps; ++t) {
+                srcs[t] = zero_l1;
+            }
+            return 0;
+        }
+        const int32_t row_off = (slab_x_base_kh + h_in0 * input_width) * static_cast<int32_t>(pixel_bytes);
+        uint32_t gathered = 0;
+        for (uint32_t t = 0; t < taps; ++t) {
+            const uint32_t kw = kw_first + t;
+            const uint32_t dst = slot_l1 + t * blk_bytes;
+            const uint32_t cls = r.cls[kw];
+            if (cls == DIRECT) {
+                srcs[t] = slab_l1 + static_cast<uint32_t>(row_off + r.off[kw]);
+                continue;
+            }
+            if (cls == ZERO) {
+                srcs[t] = zero_l1;
+                continue;
+            }
+            srcs[t] = dst;
+            ++gathered;
+            const int32_t zl = r.zl[kw];
+            const int32_t hi = r.hi[kw];
+            const uint32_t data_off =
+                static_cast<uint32_t>(row_off + r.off[kw] + zl * static_cast<int32_t>(pixel_bytes));
+            bool fill = true;
+            if constexpr (zero_once) {
+                const uint32_t bit = 1u << (slot * 3 + kw);
+                if (cls == EDGE) {
+                    fill = (zeroed & bit) == 0;
+                    zeroed |= bit;
+                } else {
+                    zeroed &= ~bit;  // this gather may write the block's zero rows
+                }
+                if (!fill) {
+                    const uint32_t d = dst + zl * pixel_bytes;
+                    if (kw == 0) {
+                        if constexpr (edge_bytes(0) > 0) {
+                            fixed_read<edge_bytes(0)>(reads, fixed_state, slab_l1 + data_off, d);
+                            continue;
+                        }
+                    } else if (kw == 2) {
+                        if constexpr (edge_bytes(2) > 0) {
+                            fixed_read<edge_bytes(2)>(reads, fixed_state, slab_l1 + data_off, d);
+                            continue;
+                        }
+                    } else {
+                        if constexpr (edge_bytes(1) > 0) {
+                            fixed_read<edge_bytes(1)>(reads, fixed_state, slab_l1 + data_off, d);
+                            continue;
+                        }
+                    }
+                }
+                fixed_state = 0;
+            }
+            if (fill && zl > 0) {
+                reads.read(zero_src_noc, dst, zl * pixel_bytes);
+            }
+            reads.read(slab_noc + data_off, dst + zl * pixel_bytes, (hi - zl) * pixel_bytes);
+            if (fill && r.n > hi) {
+                reads.read(zero_src_noc, dst + hi * pixel_bytes, (r.n - hi) * pixel_bytes);
+            }
+        }
+        return gathered;
+    }
+};
+
 // Strided window (stride 2, d 1, C_in_p whole tiles, one K-block per kernel row): im2col row i of a tile-row is the 3
 // consecutive input pixels from 2 * wo_i - padding, and inside one output-row run row i + 1 starts two pixels after row
 // i. So the run's rows are overlapping windows of one input run: pixel slot j of the unit holds input pixel

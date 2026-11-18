@@ -162,6 +162,10 @@ ROW_SPLIT_DEPTH_ROWS = 8
 # grows past IM2COL_RM_DEPTH_ROWS toward one K-block of tile-rows, as far as the L1 left at the solved blocking allows
 # (_im2col_ring_target).
 IM2COL_RM_DEPTH_ROWS = 2
+# Tap-direct N-slice prelude: units (tile-row x K-block) the reader reserves, fences and pushes at once; the ring aims for
+# two groups from the L1 left after the solve (_im2col_ring_target). The reader's per-unit work, not its reads, paced
+# the prelude tilize, so one trid wait and one push per group instead of per unit.
+TAP_DIRECT_GROUP = 3
 WEIGHT_DEPTH = 2
 OUT_DEPTH_ROW_GROUPS = 2
 # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b.
@@ -529,8 +533,11 @@ def _row_split(g: Conv3x3Geometry, bm, bk):
 def _im2col_ring_target(g: Conv3x3Geometry, bm, bk, nslice):
     """Tile-rows cb_im2col_rm aims for: one K-block on the K-blocked walk with the non-split gather, so the reader
     gathers K-block k+1 while compute multiplies K-block k and the tilize never waits on a reserve-blocked gather. The
-    split row gather has its own ring, face-direct has no cb_im2col_rm, and the N-slice-outer walk tilizes all of K
-    before its first matmul, so there is nothing for the gather to run under."""
+    split row gather has its own ring, face-direct has no cb_im2col_rm. The N-slice-outer walk tilizes all of K before
+    its first matmul, so there is nothing for the gather to run under, except on tap-direct: two TAP_DIRECT_GROUP
+    groups, so compute tilizes one group while the reader prepares the next."""
+    if nslice and _tap_direct(g, bm, bk, nslice):
+        return max(IM2COL_RM_DEPTH_ROWS, 2 * TAP_DIRECT_GROUP)
     if nslice or face_direct_im2col(g, bk) or _row_split(g, bm, bk):
         return IM2COL_RM_DEPTH_ROWS
     return max(IM2COL_RM_DEPTH_ROWS, bm)
@@ -1062,7 +1069,9 @@ def create_program_descriptor(
 
     def zero_im2col_once(slice_channels):
         """The reader zeroes cb_im2col_rm once (mirror of its zero_im2col_once)."""
-        return not face_direct and bk == g.tensor_kkh_tiles and (slice_channels < g.c_in_p or k_padded)
+        return (
+            not face_direct and bk == g.tensor_kkh_tiles and (slice_channels < g.c_in_p or k_padded) and not tap_direct
+        )
 
     def reader_ct_args(slice_channels, split_core=None):
         split_core = tile_fill_split if split_core is None else split_core
@@ -1133,6 +1142,8 @@ def create_program_descriptor(
             CB_SRC_TABLE,
             # N-slice ring: tile-rows per forwarded row group, the compute's slice subblock height.
             _ring_subblock(bm, ns)[0],
+            # Tap-direct group: at most half the ring, so compute always has the other half.
+            max(1, min(TAP_DIRECT_GROUP, b.im2col_rm_depth_rows // 2)) if tap_direct else 1,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args

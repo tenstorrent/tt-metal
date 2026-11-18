@@ -190,14 +190,17 @@ void kernel_main() {
     // slab_tile_rows consecutive input tile-rows across M-blocks. Each M-block streams only the rows past the previous
     // block's window and pops only the rows below its own window; every band gathers at one base and wraps.
     constexpr bool ring_slab = get_compile_time_arg_val(65) != 0;
-    // Tap-direct N-slice prelude (the descriptor's _tap_direct; TapDirect in conv2d_3x3_gather_dataflow.hpp): per
-    // cb_im2col_rm slot, cb_src_table holds one 16 B entry of tap source addresses that compute tilizes from.
+    // Tap-direct N-slice prelude (the descriptor's _tap_direct; TapDirectPlanned / TapDirect in
+    // conv2d_3x3_gather_dataflow.hpp): per cb_im2col_rm slot, cb_src_table holds one 16 B entry of tap source addresses
+    // that compute tilizes from.
     constexpr bool tap_direct = get_compile_time_arg_val(66) != 0;
     constexpr uint32_t cb_src_table = get_compile_time_arg_val(67);
     // N-slice ring: tile-rows per forwarded row group (compute's slice subblock height; the last group of a slice may
     // be shorter, see conv2d_3x3::ring_group_row0).
     constexpr uint32_t ring_group_rows = get_compile_time_arg_val(68);
-    constexpr auto input_args = TensorAccessorArgs<69>();
+    // Tap-direct units per reserve / fence / push (at most half the cb_im2col_rm ring).
+    constexpr uint32_t tap_direct_group = get_compile_time_arg_val(69);
+    constexpr auto input_args = TensorAccessorArgs<70>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -218,7 +221,9 @@ void kernel_main() {
     constexpr bool k_padded = tensor_kkh_tiles * TILE_DIM > tap_cols;
     // One K-block per kernel row: every K-block puts taps, lanes and K padding at the same row offsets.
     constexpr bool one_k_block_per_kh = block_k_tiles == tensor_kkh_tiles;
-    constexpr bool zero_im2col_once = !face_direct && one_k_block_per_kh && (lanes_padded || k_padded);
+    // Tap-direct writes every byte compute reads from a slot (zero block / slab pixels with zero padded lanes), so its
+    // ring needs no zeroing; on the deeper tap-direct ring that zeroing cost the short last channel column 1.8 us.
+    constexpr bool zero_im2col_once = !face_direct && one_k_block_per_kh && (lanes_padded || k_padded) && !tap_direct;
     constexpr uint32_t c_in_tiles = c_in_p / TILE_DIM;
     static_assert(
         (tensor_kkh_tiles % block_k_tiles) == 0 || (face_direct && block_k_tiles % tensor_kkh_tiles == 0),
@@ -289,6 +294,13 @@ void kernel_main() {
     using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
     using TapDirectT =
         conv2d_3x3::TapDirect<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
+    using TapPlannedT =
+        conv2d_3x3::TapDirectPlanned<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
+    static_assert(
+        !tap_direct ||
+            (tap_direct_group >= 1 && (tap_direct_group == 1 || 2 * tap_direct_group <= im2col_rm_depth_rows) &&
+             (!TapPlannedT::zero_once || im2col_rm_depth_rows * 3 <= 32)),
+        "tap-direct groups: half the ring at most; the zero-once mask holds 3 bits per slot");
     static_assert(
         !tap_direct || (tap_major && nslice_outer && !center_direct && !ring_slab && !face_direct),
         "tap-direct: the tap-major N-slice-outer gather");
@@ -341,6 +353,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t src_table_l1 = tap_direct ? get_write_ptr(cb_src_table) : 0;
     // Tap-direct: units pushed so far; unit u's source entry is slot u % im2col_rm_depth_rows (compute's direct_seq).
     [[maybe_unused]] uint32_t direct_seq = 0;
+    [[maybe_unused]] uint32_t zeroed_blocks = 0;  // tap-direct zero-once: slot blocks holding their zero rows
     conv2d_3x3::TaggedReads<face_direct> reads;
 
     if constexpr (zero_im2col_once) {
@@ -748,33 +761,79 @@ void kernel_main() {
                     take_unit(m_seq_end);
                 }
             } else if constexpr (tap_direct) {
+                // Each tile-row's taps are classified once (TapDirectPlanned::plan; a tile-row that is not one
+                // output-row run takes TapDirect::tile_row), and units are reserved, fenced and pushed in groups of
+                // tap_direct_group: one trid wait and one push per group. A group never crosses the ring end (a CB
+                // push must land exactly on it), so its slots are consecutive. The reader's per-unit work, not the
+                // read latency, paced the prelude, so the group is fenced in place.
+                constexpr uint32_t units_per_block = block_m_tiles * num_k_blocks;
+                const uint32_t unit_bytes = block_k_tiles * get_tile_size(cb_im2col_rm);
+                uint32_t g_left = 0;       // units of the current group still to issue
+                uint32_t g_size = 0;       // units in the current group
+                uint32_t g_base = 0;       // slot address of the group's first unit
+                uint32_t g_reads = 0;      // taps the current group gathered
+                uint32_t fixed_state = 0;  // the fill's reads reprogrammed the read command buffer
+                uint32_t u = 0;
+                TapPlannedT::Row plan;
                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
-                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
-                        cb_reserve_back(cb_im2col_rm, block_k_tiles);
+                    const uint32_t o = o_first + tile_row * TILE_DIM;
+                    const bool planned = TapPlannedT::plan(plan, o, o_end);
+                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx, ++u, ++direct_seq) {
+                        const uint32_t slot = direct_seq % im2col_rm_depth_rows;
+                        if (g_left == 0) {
+                            const uint32_t to_ring_end = im2col_rm_depth_rows - slot;
+                            g_size = units_per_block - u < tap_direct_group ? units_per_block - u : tap_direct_group;
+                            g_size = g_size < to_ring_end ? g_size : to_ring_end;
+                            cb_reserve_back(cb_im2col_rm, g_size * block_k_tiles);
+                            g_base = get_write_ptr(cb_im2col_rm);
+                            g_left = g_size;
+                            g_reads = 0;
+                            reads.begin(TRID_GATHER);
+                        }
+                        const uint32_t slot_l1 = g_base + (g_size - g_left) * unit_bytes;
                         const uint32_t k_tile0 = k_block_idx * block_k_tiles;
                         const int32_t kh = k_tile0 / tensor_kkh_tiles;
                         const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
-                        volatile tt_l1_ptr uint32_t* srcs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            src_table_l1 + (direct_seq % im2col_rm_depth_rows) * 16);
-                        reads.begin(TRID_GATHER);
-                        const uint32_t gathered = TapDirectT::tile_row(
-                            reads,
-                            slab_l1,
-                            slab_noc,
-                            zero_src_l1,
-                            zero_src_noc,
-                            get_write_ptr(cb_im2col_rm),
-                            o_first + tile_row * TILE_DIM,
-                            o_end,
-                            kh,
-                            col_lo,
-                            slab_x_base[kh],
-                            srcs);
-                        if (gathered > 0) {
-                            reads.wait(TRID_GATHER);
+                        volatile tt_l1_ptr uint32_t* srcs =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_table_l1 + slot * 16);
+                        if (planned) {
+                            g_reads += TapPlannedT::unit(
+                                reads,
+                                plan,
+                                slab_l1,
+                                slab_noc,
+                                zero_src_l1,
+                                zero_src_noc,
+                                slot_l1,
+                                kh,
+                                col_lo / c_in_p,
+                                slab_x_base[kh],
+                                srcs,
+                                zeroed_blocks,
+                                slot,
+                                fixed_state);
+                        } else {
+                            fixed_state = 0;
+                            g_reads += TapDirectT::tile_row(
+                                reads,
+                                slab_l1,
+                                slab_noc,
+                                zero_src_l1,
+                                zero_src_noc,
+                                slot_l1,
+                                o,
+                                o_end,
+                                kh,
+                                col_lo,
+                                slab_x_base[kh],
+                                srcs);
                         }
-                        cb_push_back(cb_im2col_rm, block_k_tiles);
-                        ++direct_seq;
+                        if (--g_left == 0) {
+                            if (g_reads > 0) {
+                                reads.wait(TRID_GATHER);
+                            }
+                            cb_push_back(cb_im2col_rm, g_size * block_k_tiles);
+                        }
                     }
                 }
             } else {
