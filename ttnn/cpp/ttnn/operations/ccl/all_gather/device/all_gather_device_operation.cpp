@@ -277,12 +277,7 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
     int32_t gather_dim_from_end,
     uint32_t num_devices,
     const std::optional<MemoryConfig>& memory_config) {
-    auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
-    if (output_mem_config.created_with_nd_shard_spec()) {
-        // Forward only the nd_shard_spec: the legacy 2D spec that TensorSpec back-fills describes the
-        // *input* shape, and its one-shard-per-core rule rejects valid ND configs for the larger output.
-        output_mem_config = MemoryConfig(output_mem_config.buffer_type(), output_mem_config.nd_shard_spec());
-    }
+    const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
     auto shape = input_tensor.logical_shape();
     shape[gather_dim_from_end] *= num_devices;
     return tt::tt_metal::TensorSpec(

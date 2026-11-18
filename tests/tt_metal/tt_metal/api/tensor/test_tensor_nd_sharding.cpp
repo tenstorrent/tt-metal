@@ -151,6 +151,43 @@ TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
     }
 }
 
+// A memory config created with an ND spec and converted for one shape is reused for another shape, for which the
+// conversion fails. The 2D spec derived for the first shape must not be checked against or kept for the second.
+TEST(NdToLegacyShardingReuseTests, ReusedConfigDropsDerivedShardSpec) {
+    NodeRangeSet nodes(NodeRange(NodeCoord{0, 0}, NodeCoord{1, 3}));
+    NdShardSpec nd_shard_spec{Shape({1, 32, 32}), nodes, ShardOrientation::ROW_MAJOR};
+    TensorSpec converted(
+        Shape({2, 32 * 2, 32 * 2}),
+        TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), MemoryConfig{BufferType::L1, nd_shard_spec}));
+    ASSERT_TRUE(converted.memory_config().shard_spec().has_value());
+
+    // 4 x 3 = 12 shards don't fit the 8 nodes, so there is no 2D spec for this shape.
+    TensorSpec reused(
+        Shape({2, 32 * 2, 32 * 3}),
+        TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), converted.memory_config()));
+    EXPECT_EQ(reused.memory_config().memory_layout(), TensorMemoryLayout::ND_SHARDED);
+    EXPECT_FALSE(reused.memory_config().shard_spec().has_value());
+    EXPECT_EQ(reused.memory_config().nd_shard_spec(), nd_shard_spec);
+}
+
+// As above, but the 2D spec derived for the first shape also fits the second, so it used to be kept silently,
+// describing block sharding while the buffer uses 1D distribution.
+TEST(NdToLegacyShardingReuseTests, ReusedConfigDropsDerivedShardSpecThatStillFits) {
+    NodeRangeSet nodes(NodeRange(NodeCoord{0, 0}, NodeCoord{3, 1}));
+    NdShardSpec nd_shard_spec{Shape({1, 32, 32}), nodes, ShardOrientation::ROW_MAJOR};
+    TensorSpec converted(
+        Shape({1, 32 * 2, 32 * 4}),
+        TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), MemoryConfig{BufferType::L1, nd_shard_spec}));
+    ASSERT_EQ(converted.memory_config().memory_layout(), TensorMemoryLayout::BLOCK_SHARDED);
+
+    // 2 shards along the width no longer match the grid width of 4, so 1D distribution differs from block sharding.
+    TensorSpec reused(
+        Shape({1, 32 * 2, 32 * 2}),
+        TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), converted.memory_config()));
+    EXPECT_EQ(reused.memory_config().memory_layout(), TensorMemoryLayout::ND_SHARDED);
+    EXPECT_FALSE(reused.memory_config().shard_spec().has_value());
+}
+
 class NDShardingCoreInfoTests : public ::testing::TestWithParam<NDShardingCoreInfoParams> {};
 
 TEST_P(NDShardingCoreInfoTests, TestCoreInfo) {

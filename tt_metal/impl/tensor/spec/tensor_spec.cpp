@@ -38,6 +38,11 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
     if (!memory_config.shard_spec().has_value()) {
         return std::nullopt;
     }
+    // A 2D spec derived from an ND spec can describe another shape, when the config is reused. ND sharding fits any
+    // shape, and TensorSpec::populate_sharding_specs() derives the 2D spec again for this one.
+    if (memory_config.created_with_nd_shard_spec()) {
+        return std::nullopt;
+    }
 
     // Sharding checks use physical shape and physical shard shape
     // TODO: Review and port to use logical shapes
@@ -299,7 +304,23 @@ TensorSpec TensorSpec::sharded(
 
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
-        if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
+        auto upd_mem_config = populate_legacy_shard_spec_from_nd();
+        if (!upd_mem_config.has_value() && memory_config().shard_spec().has_value()) {
+            // Drop the 2D spec derived for another shape when the config is reused: there is none for this shape, and
+            // keeping it would describe a layout the buffer doesn't have.
+            const auto& mem_config = memory_config();
+            upd_mem_config = create_memory_config_with_prepopulated_shard_specs({
+                .memory_layout = TensorMemoryLayout::ND_SHARDED,
+                .buffer_type = mem_config.buffer_type(),
+                .shard_spec = std::nullopt,
+                .nd_shard_spec = mem_config.nd_shard_spec(),
+                .created_with_nd_shard_spec = true,
+                .per_core_allocation = experimental::per_core_allocation::is_per_core_allocation(mem_config),
+                .range_lockstep_allocation =
+                    experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config),
+            });
+        }
+        if (upd_mem_config.has_value()) {
             tensor_layout_ = experimental::tensor_layout_with_custom_alignment(
                 tensor_layout_.get_data_type(),
                 tensor_layout_.get_page_config(),
