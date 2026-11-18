@@ -99,28 +99,25 @@ constexpr uint32_t reserved_words = marker_count * marker_words + DISPATCH_HEADR
 // kernel's own zones; a kernel that fills the buffer would otherwise drop them.
 inline __attribute__((always_inline)) void begin() {
     stackSize += reserved_words;
-    llk::perf::riscv::select(RISCV_PMC_SEL3, RISCV_PMC_SEL4);
-    llk::perf::riscv::zero_counters();
+    llk::perf::riscv::arm(RISCV_PMC_SEL3, RISCV_PMC_SEL4);
 #if defined(RISCV_PMC_UPPER)
-    llk::perf::riscv::select_upper(PROFILE_RISCV_PMC_DM_EV5, PROFILE_RISCV_PMC_DM_EV6);
-    llk::perf::riscv::zero_counters_upper();
+    llk::perf::riscv::arm_upper(PROFILE_RISCV_PMC_DM_EV5, PROFILE_RISCV_PMC_DM_EV6);
 #endif
-    cycle_begin = llk::perf::riscv::read_mcycle();
-    instret_begin = llk::perf::riscv::read_minstret();
+    const auto start = llk::perf::riscv::reference();
+    cycle_begin = start.cycles;
+    instret_begin = start.instret;
 }
 
 // The markers share one buffer-room check and one timestamp, which keeps the hook small. Re-emitting the selects every
 // launch keeps each capture self-describing. No flush_to_dram_if_full(): a full buffer drops the markers, and the flush
 // would pull noc_index into images that do not define it.
 inline __attribute__((always_inline)) void end() {
-    const uint32_t pmc3 = llk::perf::riscv::read_counter3();
-    const uint32_t pmc4 = llk::perf::riscv::read_counter4();
 #if defined(RISCV_PMC_UPPER)
-    const uint32_t pmc5 = llk::perf::riscv::read_counter5();
-    const uint32_t pmc6 = llk::perf::riscv::read_counter6();
+    uint32_t pmc5, pmc6;
+    llk::perf::riscv::sample_upper(pmc5, pmc6);
 #endif
-    const uint32_t mcycle = llk::perf::riscv::read_mcycle();
-    const uint32_t minstret = llk::perf::riscv::read_minstret();
+    uint32_t pmc3, pmc4, cycles, instret;
+    llk::perf::riscv::sample({cycle_begin, instret_begin}, pmc3, pmc4, cycles, instret);
 
     stackSize -= reserved_words;
     if (!bufferHasRoom<DoingDispatch::DISPATCH>(marker_count * marker_words - 1)) {
@@ -151,7 +148,7 @@ inline __attribute__((always_inline)) void end() {
         w += marker_words;
     };
     put(RISCV_PMC_COUNTS_PROFILER_ID, pmc4, pmc3);
-    put(RISCV_PMC_CYCLES_PROFILER_ID, minstret - instret_begin, mcycle - cycle_begin);
+    put(RISCV_PMC_CYCLES_PROFILER_ID, instret, cycles);
     put(RISCV_PMC_EVENTS_PROFILER_ID, RISCV_PMC_SEL4, RISCV_PMC_SEL3);
 #if defined(RISCV_PMC_UPPER)
     put(RISCV_PMC_COUNTS_UPPER_PROFILER_ID, pmc6, pmc5);

@@ -54,4 +54,17 @@ constexpr std::array<std::uint8_t, detail::count_for(GroupMask)> selected_regs()
     return out;
 }
 
+// Word offsets from the status file of NoC 0 of the selected counters of every NoC, NoC 0 first, in table order.
+template <std::uint32_t GroupMask>
+constexpr std::array<std::uint16_t, NIU_NOCS * detail::count_for(GroupMask)> selected_offsets()
+{
+    constexpr auto regs = selected_regs<GroupMask>();
+    std::array<std::uint16_t, NIU_NOCS * regs.size()> out {};
+    for (std::size_t i = 0; i < out.size(); i++)
+    {
+        out[i] = static_cast<std::uint16_t>((i / regs.size()) * (NIU_NOC_STRIDE / 4) + regs[i % regs.size()]);
+    }
+    return out;
+}
+
 } // namespace llk::perf::noc

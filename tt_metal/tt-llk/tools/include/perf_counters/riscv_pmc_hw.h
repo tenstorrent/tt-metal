@@ -94,4 +94,48 @@ inline std::uint32_t read_counter6()
     return value;
 }
 
+// The mcycle and minstret a window starts from. Both free-run and are never written, so a window is a difference.
+struct Reference
+{
+    std::uint32_t cycles;
+    std::uint32_t instret;
+};
+
+// Selects the events and zeroes the counters they count into.
+__attribute__((always_inline)) inline void arm(std::uint32_t event3, std::uint32_t event4)
+{
+    select(event3, event4);
+    zero_counters();
+}
+
+__attribute__((always_inline)) inline void arm_upper(std::uint32_t event5, std::uint32_t event6)
+{
+    select_upper(event5, event6);
+    zero_counters_upper();
+}
+
+__attribute__((always_inline)) inline Reference reference()
+{
+    return Reference {read_mcycle(), read_minstret()};
+}
+
+// What a window counted: the two programmable counters and the mcycle and minstret deltas, modulo 2^32. The counters are
+// read first and mcycle and minstret last, so the window ends as late as the reads allow. Results come back through
+// references, not a struct, because a struct result is kept in memory by the firmware build.
+__attribute__((always_inline)) inline void sample(
+    const Reference& start, std::uint32_t& pmc3, std::uint32_t& pmc4, std::uint32_t& cycles, std::uint32_t& instret)
+{
+    pmc3    = read_counter3();
+    pmc4    = read_counter4();
+    cycles  = read_mcycle() - start.cycles;
+    instret = read_minstret() - start.instret;
+}
+
+// Counters 5 and 6 of a window, Quasar data-movement cores.
+__attribute__((always_inline)) inline void sample_upper(std::uint32_t& pmc5, std::uint32_t& pmc6)
+{
+    pmc5 = read_counter5();
+    pmc6 = read_counter6();
+}
+
 } // namespace llk::perf::riscv

@@ -40,36 +40,18 @@ namespace kernel_profiler {
 namespace noc_counters {
 
 constexpr uint32_t kGroups = PROFILE_NOC_COUNTERS;
-constexpr auto kRegs = llk::perf::noc::selected_regs<kGroups>();
-constexpr uint32_t kPerNoc = kRegs.size();
-constexpr uint32_t kTotal = kPerNoc * llk::perf::noc::NIU_NOCS;
+constexpr uint32_t kTotal = llk::perf::noc::value_count<kGroups>();
 constexpr uint32_t kMarkers = 1 + kTotal / 2;
 static_assert(kTotal % 2 == 0, "counters are emitted in pairs");
 static_assert(kTotal / 2 <= NOC_COUNTERS_MAX_PAIRS, "pair ids end at 9116");
 
-// Word offset of every counter from the NoC 0 status file, NoC 0 counters first.
-constexpr auto kOffsets = []() {
-    std::array<uint16_t, kTotal> out{};
-    for (uint32_t i = 0; i < kTotal; i++) {
-        out[i] = (i / kPerNoc) * (llk::perf::noc::NIU_NOC_STRIDE / 4) + kRegs[i % kPerNoc];
-    }
-    return out;
-}();
+// The start readings, which end() turns into the launch's deltas, NoC 0 counters first.
+static uint32_t values[kTotal];
 
-static uint32_t begin_values[kTotal];
+__attribute__((noinline)) void begin() { llk::perf::noc::capture<kGroups>(values, false); }
 
-inline __attribute__((always_inline)) uint32_t read_counter(uint32_t i) {
-    return *reinterpret_cast<volatile uint32_t*>(llk::perf::noc::NIU_STATUS_BASE + kOffsets[i] * 4);
-}
-
-__attribute__((noinline)) void begin() {
-    for (uint32_t i = 0; i < kTotal; i++) {
-        begin_values[i] = read_counter(i);
-    }
-}
-
-// One header marker and kTotal / 2 pair markers behind one buffer-room check and one timestamp; the counters are read
-// as the pairs are written. A full buffer drops the whole capture.
+// One header marker and kTotal / 2 pair markers behind one buffer-room check and one timestamp. A full buffer drops the
+// whole capture.
 __attribute__((noinline)) void end() {
     // Every worker gets a go signal; a launch without a kernel publishes nothing.
     if (get_profiler_zone_invalid()) {
@@ -91,6 +73,7 @@ __attribute__((noinline)) void end() {
 #endif
 
     auto& data = profiler_data_buffer[myRiscID].data;
+    llk::perf::noc::capture<kGroups>(values, true);
     const uint32_t stamp_high = time_high & PROFILER_MARKER_TS_HIGH_MASK;
     uint32_t w = wIndex;
     for (uint32_t m = 0; m < kMarkers; m++) {
@@ -101,8 +84,8 @@ __attribute__((noinline)) void end() {
              << PROFILER_MARKER_TIMER_ID_SHIFT) |
             stamp_high;
         data[w + 1] = time_low;
-        data[w + 2] = m ? read_counter(j + 1) - begin_values[j + 1] : llk::perf::noc::NIU_NOCS;
-        data[w + 3] = m ? read_counter(j) - begin_values[j] : kGroups;
+        data[w + 2] = m ? values[j + 1] : llk::perf::noc::NIU_NOCS;
+        data[w + 3] = m ? values[j] : kGroups;
         w += marker_words;
     }
     wIndex = w;
