@@ -29,7 +29,49 @@ ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_streaming_common.hpp"
 
+#if defined(ARCH_WORMHOLE)
+// Wormhole: a TRISC has 2 KB of local memory (Blackhole: 4 KB), 1 KB of which the firmware's CB table takes, so the
+// deepest call chain here (kernel_main > res_run_groups > sdpa_resident_piece_step_compact > res_s5_flush >
+// res_pv_member > LLK, ~1 KB of frames) overflows the stack into the CB table and the kernel hangs on its first call.
+// The member / run tables, the piece list and the per-step state therefore live in an L1 scratch CB
+// (cb_stack_scratch, one kSparseRingScratchPerTrisc region per TRISC) instead of on the stack. Blackhole keeps them on
+// the stack. Offsets within a TRISC's region, bytes:
+//   0 W[32]  64 off[32] (u16)  128 ResidentStepState (<= 256)  384 m_chunk[32]  416 m_width[32]  448 m_nruns[32]
+//   512 m_cols[32 * 16]  1024 m_ws[32 * 16]  1536 ks[64]  1600 blk_tiles[32]  1632 bias_cols[32]  (end 1664)
+#define SPARSE_RING_L1_TABLES 1
+#if defined(TRISC_UNPACK)
+constexpr uint32_t kSparseRingTriscIndex = 0;
+#elif defined(TRISC_MATH)
+constexpr uint32_t kSparseRingTriscIndex = 1;
+#else
+constexpr uint32_t kSparseRingTriscIndex = 2;
+#endif
+constexpr uint32_t kSparseRingScratchPerTrisc = 2048;
+template <typename T = uint8_t>
+inline T* sparse_ring_l1_scratch(uint32_t byte_offset) {
+    constexpr uint32_t cb_stack_scratch = get_named_compile_time_arg_val("cb_stack_scratch");
+    const uint32_t base = get_tile_address(cb_stack_scratch, 0) + kSparseRingTriscIndex * kSparseRingScratchPerTrisc;
+    return reinterpret_cast<T*>(base + byte_offset);
+}
+#if defined(TRISC_UNPACK)
+// The unpack thread's chain is still ~910 B at -O2 with the tables in L1 (budget ~830 B: 992 B of stack region less
+// the kernel's globals); -Os brings it to ~670 B. The pack thread fits at -O2 (~720 B) and cannot build at -Os (a
+// ttinsn immediate stops folding), so only the unpack thread is size-optimized.
+#pragma GCC optimize("Os")
+#endif
+#endif
+
 // ============ Resident Q: in-place slot state, lazy running max, fused per-piece steps ============
+
+// Wormhole unpack and pack threads: these helpers are outlined to save code space, but every outlined frame on the
+// deep resident-step chain saves its own registers on a ~720-770 B stack; on those threads they are inlined instead.
+#if defined(ARCH_WORMHOLE) && (defined(TRISC_UNPACK) || defined(TRISC_PACK))
+#define SR_WH_UNPACK_INLINE __attribute__((always_inline)) inline
+#define SR_WH_UNPACK_LAMBDA_INLINE __attribute__((always_inline))
+#else
+#define SR_WH_UNPACK_LAMBDA_INLINE
+#define SR_WH_UNPACK_INLINE __attribute__((noinline, noclone))
+#endif
 
 // Helpers of the per-piece step, reached from several sites on every TRISC: outlined to fit the kernel config buffer.
 
@@ -150,7 +192,7 @@ struct ResidentStepState {
 // stride in effect differs, the pack MOP when the width in effect differs (pk_w is shared with the S5 packs).
 // Outlined: it is reached from the S5 flush sites of the interleaved S5/S6 loop.
 template <uint32_t Sq_chunk_t, uint32_t vDHt, uint32_t pv_w, uint32_t cb_qkt_im, uint32_t cb_v_in, uint32_t cb_prev_out>
-static __attribute__((noinline, noclone)) void res_pv_member(
+static SR_WH_UNPACK_INLINE void res_pv_member(
     const uint32_t slot,
     const bool acc,
     const uint32_t w,
@@ -210,7 +252,7 @@ static __attribute__((noinline, noclone)) void res_pv_member(
 
 // S1 flush of the compact step: commit the open Q@K^T DEST batch and pack its units into the compact scratch.
 template <uint32_t Sq_chunk_t, uint32_t cb_qkt_im, uint32_t kDst, uint32_t kMaxMembers>
-static __attribute__((noinline, noclone)) void res_s1_flush(ResidentStepState<kDst, kMaxMembers>& st) {
+static SR_WH_UNPACK_INLINE void res_s1_flush(ResidentStepState<kDst, kMaxMembers>& st) {
     if (st.uu == 0) {
         return;
     }
@@ -236,8 +278,7 @@ template <
     uint32_t cb_qkt_im,
     uint32_t cb_v_in,
     uint32_t cb_prev_out>
-static __attribute__((noinline, noclone)) void res_s5_flush(
-    ResidentStepState<kDst, kMaxMembers>& st, const bool final) {
+static SR_WH_UNPACK_INLINE void res_s5_flush(ResidentStepState<kDst, kMaxMembers>& st, const bool final) {
     if (st.uu > 0) {
         tile_regs_commit();
         tile_regs_wait();
@@ -425,7 +466,7 @@ template <
     uint32_t qk_cap,
     uint32_t stats_cap,
     uint32_t kStepPieces>
-static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
+static SR_WH_UNPACK_INLINE void sdpa_resident_piece_step_compact(
     const uint8_t* slots,
     const uint32_t n_slots,
     const uint8_t* run_cols,
@@ -470,8 +511,14 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         return static_cast<uint32_t>(run_ws[g * kMaxRuns + s]);
     };
     // Member widths and compact offsets.
+#if defined(SPARSE_RING_L1_TABLES)
+    static_assert(kMaxMembers <= 32, "the L1 scratch layout holds 32 members");
+    uint8_t* const W = sparse_ring_l1_scratch<uint8_t>(0);
+    uint16_t* const off = sparse_ring_l1_scratch<uint16_t>(64);
+#else
     uint8_t W[kMaxMembers];
     uint16_t off[kMaxMembers];
+#endif
     uint32_t total = 0;
     uint32_t q_wait_tiles = 0;
     for (uint32_t g = 0; g < n_slots; ++g) {
@@ -496,7 +543,14 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
     sdpa_maybe_pack_reconfig_data_format<cb_out, cb_qkt_im>();
     sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
+#if defined(SPARSE_RING_L1_TABLES)
+    static_assert(
+        sizeof(ResidentStepState<kDst, kMaxMembers>) <= 256, "the L1 scratch layout holds a 256 B step state");
+    ResidentStepState<kDst, kMaxMembers>& st = *sparse_ring_l1_scratch<ResidentStepState<kDst, kMaxMembers>>(128);
+    st = ResidentStepState<kDst, kMaxMembers>{};
+#else
     ResidentStepState<kDst, kMaxMembers> st{};
+#endif
     st.v_wait_tiles = v_entry_tiles * n_entries;
     st.slots = slots;
     st.run_cols = run_cols;
@@ -1240,11 +1294,20 @@ void sdpa_ring_resident(
     // Member tables of the next step group: resident chunk index, kept width, run columns / widths (kRunStride per
     // member) and run count. One set, shared by the piece loop and the pooled loop and sorted in place by
     // res_run_groups: the stack holds no per-step or per-group copies (see the plan records above).
+#if defined(SPARSE_RING_L1_TABLES)
+    static_assert(resident_slots <= 32 && kRunStride <= 16, "the L1 scratch layout holds 32 members x 16 runs");
+    uint8_t* const m_chunk = sparse_ring_l1_scratch<uint8_t>(384);
+    uint8_t* const m_width = sparse_ring_l1_scratch<uint8_t>(416);
+    uint8_t* const m_nruns = sparse_ring_l1_scratch<uint8_t>(448);
+    uint8_t* const m_cols = sparse_ring_l1_scratch<uint8_t>(512);
+    uint8_t* const m_ws = sparse_ring_l1_scratch<uint8_t>(1024);
+#else
     uint8_t m_chunk[resident_slots];
     uint8_t m_width[resident_slots];
     uint8_t m_cols[resident_slots * kRunStride];
     uint8_t m_ws[resident_slots * kRunStride];
     uint8_t m_nruns[resident_slots];
+#endif
     // The first n members sorted by width (in place) and stepped in groups of at most kQkCap scratch tiles
     // (res_run_groups, outlined: reached from the piece loop and the pooled loop).
     const auto run_groups = [&](const uint32_t n, const bool apply_col_bias) {
@@ -1281,12 +1344,17 @@ void sdpa_ring_resident(
     // (head_mask: its resident chunks): every chunk of the head that keeps a block of them, with its run table over
     // the step's columns (piece p's tile t is column p * Sk_chunk_t + t; adjacent kept blocks of one piece merged
     // into one run, never across pieces), stepped up to the scratch capacity; then the entries popped.
-    const auto step_pieces = [&](uint32_t head_mask, const uint8_t* ks, uint32_t np) {
-        // The tiles holding each block's real tokens (block p * kBlocksPerPiece + j of the step), and the step column
-        // of every block's last tile when its real tokens end inside it (one key-bias tile each, in the reader's push
-        // order).
+    const auto step_pieces = [&](uint32_t head_mask, const uint8_t* ks, uint32_t np) SR_WH_UNPACK_LAMBDA_INLINE {
+    // The tiles holding each block's real tokens (block p * kBlocksPerPiece + j of the step), and the step column
+    // of every block's last tile when its real tokens end inside it (one key-bias tile each, in the reader's push
+    // order).
+#if defined(SPARSE_RING_L1_TABLES)
+        uint8_t* const blk_tiles = sparse_ring_l1_scratch<uint8_t>(1600);
+        uint8_t* const bias_cols = sparse_ring_l1_scratch<uint8_t>(1632);
+#else
         uint8_t blk_tiles[kRunStride];
         uint8_t bias_cols[kRunStride];
+#endif
         uint32_t n_bias = 0;
         for (uint32_t p = 0; p < np; ++p) {
             for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
@@ -1380,7 +1448,11 @@ void sdpa_ring_resident(
         // neither is a masked tail piece, the pair does not wrap the K/V CB end and at most one of the two has
         // key-bias tiles (a step holds one piece's, contiguous in the CB); otherwise one at a time.
         constexpr uint32_t kMaxPieces = 64;  // the union words' range
-        uint8_t ks[kMaxPieces];              // bytes: the compute threads' stack shares 4 KB with their globals
+#if defined(SPARSE_RING_L1_TABLES)
+        uint8_t* const ks = sparse_ring_l1_scratch<uint8_t>(1536);
+#else
+        uint8_t ks[kMaxPieces];  // bytes: the compute threads' stack shares 4 KB with their globals
+#endif
         uint32_t n_ks = 0;
         for (uint32_t k = 0; k < num_local_k_chunks && n_ks < kMaxPieces; ++k) {
             if (piece_live(k) && bit(union_lo(0), union_hi(0), k)) {

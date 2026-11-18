@@ -956,8 +956,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
     const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
                                                                : mesh_device->l1_size_per_core();
-    const uint32_t usable_l1 =
-        cb_space_top - mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    // Wormhole: the compute kernel keeps its member / run tables and per-step state in an L1 scratch CB, 2 KB per
+    // TRISC, because a WH TRISC's 2 KB local memory cannot hold the kernel's ~1 KB stack chain next to the firmware's
+    // 1 KB CB table (SPARSE_RING_L1_TABLES in sparse_ring_streaming.hpp). Blackhole keeps them on the stack.
+    const bool stack_scratch = mesh_device->arch() == tt::ARCH::WORMHOLE_B0;
+    constexpr uint32_t kStackScratchBytes = 4 * 2048;  // 2 KB per TRISC + 2 KB for the reader's tables
+    const uint32_t usable_l1 = cb_space_top -
+                               mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1) -
+                               (stack_scratch ? kStackScratchBytes : 0u);
     uint32_t max_slots = std::min(kResidentMaxSlots, max_q_per_core);
     if (args.q_blocks_per_pass.has_value()) {
         max_slots = std::min(max_slots, *args.q_blocks_per_pass);
@@ -1032,6 +1038,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         usable_l1);
 
     const CbLayout cbs = lay_out_cbs(resident_slots, kv_cb_pages, pair_steps, allocate_cb);
+    const uint32_t cb_stack_scratch =
+        stack_scratch ? allocate_cb(kStackScratchBytes, 1, tt::DataFormat::UInt8) : 0u;  // see stack_scratch above
     const uint32_t cb_q_in = cbs.q_in;
     const uint32_t cb_k_in = cbs.k_in;
     const uint32_t cb_v_in = cbs.v_in;
@@ -1306,6 +1314,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // Logical length in tokens, for the on-device pooled-column bias.
         {"sparse_logical_n", static_cast<uint32_t>(args.logical_n)},
         {"cb_sparse_plan", cb_sparse_plan},
+        // Wormhole only (0 elsewhere, unread): the compute kernel's L1 scratch for its stack tables.
+        {"cb_stack_scratch", cb_stack_scratch},
         {"cb_pooled_bias", cb_pooled_bias},
         // Real tokens per block: given (block_counts) or the geometric lengths; see the CB layout above.
         {"has_block_counts", has_block_counts ? 1u : 0u},

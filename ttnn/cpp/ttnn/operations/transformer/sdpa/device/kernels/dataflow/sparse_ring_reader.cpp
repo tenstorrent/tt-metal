@@ -232,27 +232,23 @@ void kernel_main() {
     // Throttle Q DRAM reads so many readers don't saturate the NoC outstanding-read budget.
     constexpr uint32_t q_barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_q_readers>();
 
-    const auto q_reader = TensorAccessor(q_args, q_addr);
-    const auto local_k_reader = TensorAccessor(k_args, k_addr);
-    const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
-
-    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
     // Packed KV: K/V rows can be wider than the head dims; V is the last vDHt columns of its row.
     constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
     constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");
     constexpr uint32_t v_col_offset_t = v_row_Wt - vDHt;
-    const auto input_k_tile_logical = TensorTileShape(B, NHK, kv_local_padded_Nt, k_row_Wt);
-    const auto gathered_k_input_tile_logical = TensorTileShape(B, NHK, gathered_padded_Nt, k_row_Wt);
 
-    const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
-    const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
-    const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
-    const auto local_v_reader = TensorAccessor(v_args, v_addr);
-    const auto input_v_tile_logical = TensorTileShape(B, NHV, kv_local_padded_Nt, v_row_Wt);
-    const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
-    const auto gathered_v_input_tile_logical = TensorTileShape(B, NHV, gathered_padded_Nt, v_row_Wt);
-    const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
-    const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
+    // Each generator holds its own copy of its accessor and tile shape, so they are built in place as temporaries:
+    // named copies would keep a stack slot for all of kernel_main (~240 B), which Wormhole's NCRISC cannot spare.
+    const auto q_generator =
+        PaddedAddrGenerator(TensorAccessor(q_args, q_addr), TensorTileShape(B, NH, q_local_padded_Nt, DHt));
+    const auto local_k_generator =
+        PaddedAddrGenerator(TensorAccessor(k_args, k_addr), TensorTileShape(B, NHK, kv_local_padded_Nt, k_row_Wt));
+    const auto gathered_k_generator = PaddedAddrGenerator(
+        TensorAccessor(gathered_k_args, gathered_k_addr), TensorTileShape(B, NHK, gathered_padded_Nt, k_row_Wt));
+    const auto local_v_generator =
+        PaddedAddrGenerator(TensorAccessor(v_args, v_addr), TensorTileShape(B, NHV, kv_local_padded_Nt, v_row_Wt));
+    const auto gathered_v_generator = PaddedAddrGenerator(
+        TensorAccessor(gathered_v_args, gathered_v_addr), TensorTileShape(B, NHV, gathered_padded_Nt, v_row_Wt));
     // Sparse sources: mask [1, NH, nqc_pad, n_blocks_pad] uint32 row-major (one page per row); pooled K/V
     // [1, NH, n_blocks_pad, DH] tiles (pooled route only, their readers are built where they are used).
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
@@ -353,9 +349,19 @@ void kernel_main() {
             constexpr uint32_t kResMax = 32;
             const uint32_t n_res = pass_q_end - pass_q_start;
             ASSERT(n_res <= resident_slots);
+#if defined(ARCH_WORMHOLE)
+            // Wormhole: NCRISC's stack is ~2.2 KB, so the seven per-chunk tables (896 B) live in this core's 2 KB slice
+            // of the L1 stack-scratch CB (slice 3; slices 0-2 are the compute threads'), not on the stack.
+            constexpr uint32_t cb_stack_scratch = get_named_compile_time_arg_val("cb_stack_scratch");
+            uint32_t* const reader_tables = reinterpret_cast<uint32_t*>(get_write_ptr(cb_stack_scratch) + 3 * 2048);
+            uint32_t* const res_nb = reader_tables + 0 * kResMax;
+            uint32_t* const res_nq = reader_tables + 1 * kResMax;
+            uint32_t* const res_qc = reader_tables + 2 * kResMax;
+#else
             uint32_t res_nb[kResMax];
             uint32_t res_nq[kResMax];
             uint32_t res_qc[kResMax];
+#endif
             for (uint32_t i = 0; i < n_res; ++i) {
                 const auto d = decompose_global_q_index(pass_q_start + i, num_q_chunks, NH, use_zigzag_balancing);
                 res_nb[i] = d.nb;
@@ -456,10 +462,17 @@ void kernel_main() {
                     }
                 }
             };
+#if defined(ARCH_WORMHOLE)
+            uint32_t* const res_lo = reader_tables + 3 * kResMax;
+            uint32_t* const res_hi = reader_tables + 4 * kResMax;
+            uint32_t* const seg_ulo = reader_tables + 5 * kResMax;
+            uint32_t* const seg_uhi = reader_tables + 6 * kResMax;
+#else
             uint32_t res_lo[kResMax];
             uint32_t res_hi[kResMax];
             uint32_t seg_ulo[kResMax];
             uint32_t seg_uhi[kResMax];
+#endif
             // One-page plan (plan_rec_base != 0): every chunk's record [kept-block words][union lo, hi][do_pooled]
             // from word plan_rec_base (past the shard slice in the scratch), pushed once per iteration.
             constexpr uint32_t kPlanRec = kBlockWords + 3;
