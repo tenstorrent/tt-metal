@@ -20,7 +20,6 @@
 #include <tt_stl/assert.hpp>
 #include "debug_tools_fixture.hpp"
 #include "hal_types.hpp"
-#include "internal/tt-2xx/quasar/t6_debug_map.h"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -277,7 +276,7 @@ static void RunTest(
         const tt_cxy_pair target(device_id, virtual_core);
         uint32_t chicken_bits = 0;
         cluster.read_reg(&chicken_bits, target, NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_CHICKEN_BITS_REG_ADDR);
-        chicken_bits &= ~T6_DEBUG_REGS__CHICKEN_BITS__ALLOW_UNSAFE_SEMPOST_SEMGET_bm;
+        chicken_bits &= ~T6_DEBUG_REGS_CHICKEN_BITS_ALLOW_UNSAFE_SEMPOST_SEMGET_MASK;
         cluster.write_reg(&chicken_bits, target, NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_CHICKEN_BITS_REG_ADDR);
     }
 
