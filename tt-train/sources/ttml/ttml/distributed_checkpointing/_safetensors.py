@@ -9,8 +9,8 @@ an 8-byte little-endian header length, a JSON header mapping tensor names to ``d
 ``data_offsets`` (relative to the data section), and the data section. The header is padded with spaces so the
 data section starts on a 4 KiB boundary, which the spec allows. Tensors are laid out back to back in the order given.
 
-The ``safetensors`` package itself is not used: its numpy backend has no bfloat16 entry, and the writer here needs to
-know every offset before a byte moves so that per-device threads can write at fixed offsets.
+The ``safetensors`` package itself is not used: the writer here needs to know every offset before a byte moves, so
+that per-device threads can write their chunks at fixed offsets.
 """
 
 from __future__ import annotations
