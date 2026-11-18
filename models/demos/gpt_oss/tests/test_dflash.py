@@ -8,7 +8,7 @@ differences between the verify pass's multi-row ops and the one-row decode (near
 diverges at the first flip, here after ~100-180 tokens). Also checks the mean accepted tokens per round, which falls
 if the drafter's context or K / V cache is wrong.
 
-    pytest models/demos/gpt_oss/tests/test_dflash.py
+    GPT_OSS_RELEASE_DEFAULTS=0 pytest models/demos/gpt_oss/tests/test_dflash.py  # gpt-oss-20b: see tt/dflash/verify.py
 """
 
 import pytest
