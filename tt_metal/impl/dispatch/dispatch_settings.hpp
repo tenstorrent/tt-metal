@@ -31,7 +31,8 @@ public:
         bool are_cqs_dram_backed,
         uint32_t l1_size,
         uint32_t l1_alignment,
-        uint32_t prefetch_q_entry_size_bytes);
+        uint32_t prefetch_q_entry_size_bytes,
+        uint32_t max_issue_queue_bytes = 0);
 
     bool operator==(const DispatchSettings& other) const;
 
