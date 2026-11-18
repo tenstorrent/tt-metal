@@ -176,17 +176,18 @@ class TTConv2D:
         else:
             self.math_fidelity = self.kernel_fidelity["MATH_FIDELITY"]
 
-    # The share of a core's L1 a spatial conv's weight block may take on a reduced grid.
-    WEIGHT_L1_FRACTION = 4
+    # A spatial conv's weight block may take at most 1/WEIGHT_L1_DIVISOR of a core's L1 on a
+    # reduced grid; the rest holds its activation, halo and output blocks.
+    WEIGHT_L1_DIVISOR = 4
 
     def _weight_split(self, device):
         """How many blocks a reduced grid splits the conv's input channels into so that a block
-        of its bfloat16 weights takes at most 1/WEIGHT_L1_FRACTION of a core's L1; 1 if whole.
+        of its bfloat16 weights takes at most 1/WEIGHT_L1_DIVISOR of a core's L1; 1 if whole.
         Width sharding first splits the channels over the grid's cores, and each block must stay
         whole tiles of a core's share; conv2d does not reject a split that breaks a tile."""
         in_channels = self.in_channels
         weight_bytes = in_channels * self.kernel_size[0] * self.kernel_size[1] * self.out_channels * 2
-        budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank // self.WEIGHT_L1_FRACTION
+        budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank // self.WEIGHT_L1_DIVISOR
         grid = device.compute_with_storage_grid_size()
         core_channels = in_channels // (grid.x * grid.y)
         split = 1
@@ -415,13 +416,13 @@ class Conv2dNormActivation:
         num_groups: int = 32,
         grid_size: Optional[ttnn.CoreGrid] = None,
         input_mask: Optional[ttnn.Tensor] = None,
-        model_config: dict = None,
         compute_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
         conv_config: Optional[ttnn.Conv2dConfig] = None,
     ):
         """
         Args:
-            parameters: Dict with keys 'weight', 'norm_weight', 'norm_bias'
+            parameters: Dict with the prepared conv 'weight' and 'bias', and the GroupNorm
+                'norm_weight' and 'norm_bias' (create_group_norm_weight_bias_rm)
             device: TTNN device
             in_channels: Number of input channels
             out_channels: Number of output channels
@@ -431,6 +432,8 @@ class Conv2dNormActivation:
             num_groups: Number of groups for GroupNorm
             grid_size: CoreGrid for GroupNorm (defaults to group_norm_grid)
             input_mask: Pre-created input mask for GroupNorm
+            compute_config: Compute kernel config of the conv and the GroupNorm
+            conv_config: Conv2dConfig of the conv (head_conv_config)
         """
         self.device = device
         self.in_channels = in_channels
@@ -439,7 +442,6 @@ class Conv2dNormActivation:
         self.stride = stride
         self.padding = padding
         self.num_groups = num_groups
-        self.model_config = model_config
         self.compute_config = compute_config
         self.conv_config = conv_config
         self.conv_weight = parameters["weight"]

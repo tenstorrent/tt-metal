@@ -158,7 +158,6 @@ def ttnn_retinanet_classification_head(
                 padding=(1, 1),
                 num_groups=32,
                 grid_size=grid_size,
-                model_config=model_config,
                 compute_config=compute_config,
                 conv_config=fpn_conv_config,
             )
