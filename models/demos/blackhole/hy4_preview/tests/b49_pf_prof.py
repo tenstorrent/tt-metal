@@ -269,6 +269,42 @@ def main():
                 setattr(owner, nm, obj)
             HC.Hy4ChainLayer.prefill_chunk = orig
         if (
+            os.environ.get("MOECMP") == "1"
+        ):  # MoE block with / without the fused rs-exact tail (HY4_B49_RSTAIL), all 32 devices
+            ly = ch.layers[1]
+            blkp = ly.blk_pf
+            assert blkp is not None and blkp.rowbase is not None, "needs HY4_B49_RSTAIL=1 and HY4_TP32PF_RS_EXACT=1"
+            x4 = mk_x(0)
+            pre, post = ly.ihc_m.pre_post(x4)
+            raw = HC.Hy4IHCGen.collapse(x4, pre)
+            h = ly._norm(raw, ly.w_post)
+            outs = {}
+            for mode in ("stock", "fused", "stock", "fused"):
+                saved = blkp.rowbase
+                if mode == "stock":
+                    blkp.rowbase = None
+                y = blkp.forward(h)
+                blkp.rowbase = saved
+                ttnn.synchronize_device(md)
+                outs.setdefault(mode, []).append([ttnn.to_torch(t) for t in ttnn.get_device_tensors(y)])
+                ttnn.deallocate(y)
+
+            def cmp(a, b):
+                ne = tot = mx = 0
+                for ta, tb in zip(a, b):
+                    d = (ta.view(torch.int16).int() - tb.view(torch.int16).int()).abs()
+                    ne += int((d != 0).sum())
+                    tot += d.numel()
+                    mx = max(mx, int(d.max()))
+                return ne, tot, mx
+
+            res(
+                event="moecmp",
+                stock_repeat=cmp(outs["stock"][0], outs["stock"][1]),
+                fused_repeat=cmp(outs["fused"][0], outs["fused"][1]),
+                fused_vs_stock=cmp(outs["fused"][0], outs["stock"][0]),
+            )
+        if (
             os.environ.get("OPCOUNT") == "1"
         ):  # host op counts / host time per ttnn callable for one layer of each type (fused path as configured)
             import types

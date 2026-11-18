@@ -48,6 +48,12 @@ class Hy4MoeTp32PrefillBlock:
                 + torch.arange(n, dtype=torch.int32).reshape(1, n)
             ).reshape(self.rows, 1, n)
             self.sel_idx = ttnn.reshape(upload(md, ids, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0), [1, n])
+        self.rowbase = None
+        if self.rs_exact:
+            from models.demos.blackhole.hy4_preview.tt import hy4_rs_tail
+
+            if hy4_rs_tail.enabled():
+                self.rowbase = hy4_rs_tail.make_rowbase(md, n)
         self.plan_mode = os.environ.get("HY4_TP32PF_PLAN", "dev")
         self.pb = Tp32PlanBuilder(md, nc=nc)
 
@@ -170,6 +176,15 @@ class Hy4MoeTp32PrefillBlock:
             ttnn.deallocate(o32)
             yg = self._ag_rows(y, 2)  # [1,1,4 Tt,D/8]: block r' = the partial of mesh row r'
             ttnn.deallocate(y)
+            if (
+                self.rowbase is not None
+            ):  # B49 (HY4_B49_RSTAIL=1): ordered sum of the 4 row blocks + bf16 + own rows as ONE program (13 ops -> 1)
+                from models.demos.blackhole.hy4_preview.tt.hy4_rs_tail import rs_tail
+
+                y3 = rs_tail(self.md, yg, self.rowbase, n, Dc)
+                ttnn.deallocate(yg)
+                self._probe("end")
+                return y3
             acc = ttnn.slice(yg, [0, 0, 0, 0], [1, 1, tt, Dc])
             for k in range(1, self.rows):
                 blk = ttnn.slice(yg, [0, 0, k * tt, 0], [1, 1, (k + 1) * tt, Dc])
