@@ -101,3 +101,44 @@ kernels.
 - **Oversized packet-header region.** 9840 bytes for three headers; legacy sizing, carried as is (the pass carries the DFB's
   bytes across, it does not resize).
 - **Recipe/API drift:** `Scratchpad::get_base_address()` is named by the recipe but absent here (see above).
+
+## Pass 3 — Add the Gen2 hardware configs (`semantic/gen2_hardware_configs.md`)
+
+### Outcome
+
+**APPLIED (2 sites).** Both kernels had a hand-written Gen1-only DM config (shape 4, data movement). Each now also carries
+the default-constructed Gen2 config.
+
+### Sites
+
+- `device/all_to_all_combine_program_factory.cpp:289` — reader `hw_config` (Gen1: `RISCV_1`, `NOC_1`, `DM_DEDICATED_NOC`).
+- `device/all_to_all_combine_program_factory.cpp:357` — writer `hw_config` (Gen1: `RISCV_0`, `NOC_0`, `DM_DEDICATED_NOC`).
+
+Survey (`grep -rn "hw_config\|to_compute_hardware_config\|Gen1Config\|1XXConfig\|2XXConfig\|std::get<\|std::get_if<\|holds_alternative\|disable_dfb_implicit"`
+over the op directory): the two `hw_config`s above and nothing else — no compute kernel, no helper-built config, no field
+set after the fact, no `disable_dfb_implicit_sync*` anywhere in the op.
+
+**Shape on this branch.** The recipe describes `hw_config` as a variant over `DataMovementGen1Config` /
+`DataMovementGen2Config`, chosen by an `arch` branch. On this branch `DataMovementHardwareConfig` is one struct with two
+optional members, `config_1xx` and `config_2xx`, and the target architecture picks one at program construction
+(`data_movement_hardware_config.hpp`). So the mechanical equivalent of "default-construct the Gen2 config" is
+`.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{}` next to the existing `.config_1xx`, with no `arch`
+branch. This is also what the arch-agnostic TTNN helpers do (`datamovement_kernel_config.hpp`: `config_2xx` with
+`disable_dfb_implicit_sync_for_all = false`, which is the default). The Gen1 initializers are textually unchanged (two
+added lines in the diff, nothing removed). `disable_dfb_implicit_sync_for_all` / `disable_dfb_implicit_sync_for` are not set.
+No `unpack_modes` marker: both sites are DM, so there is nothing for it to mark.
+
+### Verification
+
+Sentinel set green before (5 passed, on `9582d0fc6ce`) and after (5 passed); the sentinel spec carries the same
+`config_2xx`. This exercises only the Gen1 path; nothing here checks the Gen2 values (none were authored — the Gen2 config
+is default-constructed).
+
+### Noticed, not done
+
+- **Implicit sync on Quasar.** Both kernels move one row-major page (a "stick") per DFB entry with explicit
+  `reserve_back`/`push_back` and `wait_front`/`pop_front`. The helper header says DM kernels doing many sub-tile transfers can
+  stall the Gen2 implicit credit accounting. Whether this op needs `disable_dfb_implicit_sync_for_all` on Quasar is a
+  Quasar-uplift decision for the op owner; this pass does not set it.
+- **Recipe drift.** The recipe's variant-and-`arch`-branch shape does not match this branch's `config_1xx` / `config_2xx`
+  struct; worth a note in the recipe.
