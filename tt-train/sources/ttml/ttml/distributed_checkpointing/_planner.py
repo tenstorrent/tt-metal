@@ -224,15 +224,15 @@ def create_save_plan(
         file_of = {c: i for i, c in enumerate(coords)}
         items: dict[str, list[WriteItem]] = {}
         for key, chunks in owned.items():
-            per_key: list[WriteItem] = []
-            for own in chunks:
-                item = WriteItem(key=key, chunk=own, file=file_of[own.mesh_coord], nbytes=infos[key].local_nbytes)
-                per_key.append(item)
+            nbytes = infos[key].local_nbytes
+            per_key = [WriteItem(key, own, file_of[own.mesh_coord], nbytes) for own in chunks]
+            for item in per_key:
                 files[item.file].items.append(item)
             items[key] = per_key
+        dtype_of = {key: info.dtype for key, info in infos.items()}
         for plan in files:
             plan.items.sort(key=lambda it: (-it.nbytes, it.key))
-            tensors = [(it.key, infos[it.key].dtype, it.chunk.box.sizes, it.nbytes) for it in plan.items]
+            tensors = [(it.key, dtype_of[it.key], it.chunk.box.sizes, it.nbytes) for it in plan.items]
             plan.header, offsets, plan.data_bytes = build_header(tensors, {"ttml.format": f"{FORMAT}/{VERSION}"})
             for it in plan.items:
                 it.data_offset = offsets[it.key][0]
