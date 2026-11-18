@@ -424,9 +424,22 @@ std::map<std::string, std::string> env_vars(const fs::path& path) {
     return vars;
 }
 
+// The non-empty lines of an env file, in file order.
+std::vector<std::string> env_lines(const fs::path& path) {
+    std::vector<std::string> found;
+    std::istringstream lines(read_text(path));
+    for (std::string line; std::getline(lines, line);) {
+        if (!line.empty()) {
+            found.push_back(line);
+        }
+    }
+    return found;
+}
+
 // § Descriptors, `env.emu` and `env.mock`: three lines NAME=value with absolute paths, the SoC descriptors
 // comma-separated in chip order; env.mock names the cluster descriptor TT_METAL_MOCK_CLUSTER_DESC_PATH where env.emu
-// names it TT_METAL_EMU_CLUSTER_DESC.
+// names it TT_METAL_EMU_CLUSTER_DESC. SPEC-0014 § Contract, Phase 2's generator: TT_METAL_EMU_PACKAGE_SOC_DESC, the
+// absolute path of the package descriptor given, is the last line of both, after those three.
 TEST(VclusterDescriptors, EnvFiles) {
     const TempDir out("env");
     const GeneratedDescriptors g =
@@ -438,13 +451,44 @@ TEST(VclusterDescriptors, EnvFiles) {
         socs += (socs.empty() ? "" : ",") + fs::absolute(soc).string();
     }
     const std::map<std::string, std::string> shared = {
-        {"TT_METAL_EMU_SOC_DESC", socs}, {"TT_MESH_GRAPH_DESC_PATH", fs::absolute(g.mesh_graph_desc).string()}};
+        {"TT_METAL_EMU_SOC_DESC", socs},
+        {"TT_MESH_GRAPH_DESC_PATH", fs::absolute(g.mesh_graph_desc).string()},
+        {"TT_METAL_EMU_PACKAGE_SOC_DESC", fs::absolute(package_soc_desc()).string()}};
     auto emu = shared;
     emu["TT_METAL_EMU_CLUSTER_DESC"] = fs::absolute(g.cluster_desc).string();
     auto mock = shared;
     mock["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = fs::absolute(g.cluster_desc).string();
     EXPECT_EQ(env_vars(g.env_emu), emu);
     EXPECT_EQ(env_vars(g.env_mock), mock);
+
+    const std::vector<std::string> after_the_cluster = {
+        "TT_METAL_EMU_SOC_DESC=" + socs,
+        "TT_MESH_GRAPH_DESC_PATH=" + fs::absolute(g.mesh_graph_desc).string(),
+        "TT_METAL_EMU_PACKAGE_SOC_DESC=" + fs::absolute(package_soc_desc()).string()};
+    auto emu_lines = after_the_cluster;
+    emu_lines.insert(emu_lines.begin(), "TT_METAL_EMU_CLUSTER_DESC=" + fs::absolute(g.cluster_desc).string());
+    auto mock_lines = after_the_cluster;
+    mock_lines.insert(mock_lines.begin(), "TT_METAL_MOCK_CLUSTER_DESC_PATH=" + fs::absolute(g.cluster_desc).string());
+    EXPECT_EQ(env_lines(g.env_emu), emu_lines);
+    EXPECT_EQ(env_lines(g.env_mock), mock_lines);
+}
+
+// SPEC-0014 § Contract, Phase 2's generator: the package line is absolute when the package descriptor is given by a
+// relative path.
+TEST(VclusterDescriptors, EnvFilesPackagePathAbsolute) {
+    const TempDir out("env_relative");
+    const fs::path relative = fs::relative(package_soc_desc());
+    ASSERT_TRUE(relative.is_relative()) << relative;
+    const GeneratedDescriptors g = generate_descriptors(manifest_file("line3_eth.yaml"), relative, out.path());
+    for (const auto& env_file : {g.env_emu, g.env_mock}) {
+        const std::vector<std::string> lines = env_lines(env_file);
+        ASSERT_EQ(lines.size(), 4u) << env_file;
+        const std::string name = "TT_METAL_EMU_PACKAGE_SOC_DESC=";
+        ASSERT_EQ(lines.back().substr(0, name.size()), name) << env_file;
+        const fs::path written = lines.back().substr(name.size());
+        EXPECT_TRUE(written.is_absolute()) << written;
+        EXPECT_TRUE(fs::equivalent(written, package_soc_desc())) << written;
+    }
 }
 
 // § Descriptors: files are replaced if present.
