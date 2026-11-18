@@ -3,9 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
-
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_ulp
@@ -122,3 +120,61 @@ def test_lerp_fp32_preallocated_output(device, h, w, weight, input_dtype):
         output_dtype="float32",
         input_dtype=input_dtype,
     )
+
+
+def _lerp_f64_golden(torch_input, torch_end, weight, torch_dtype):
+    # torch.lerp forms (end - input) in the working precision and overflows with it, so the
+    # reference is evaluated in float64 and rounded once to the output dtype.
+    weight = weight.double() if torch.is_tensor(weight) else weight
+    return ((1.0 - weight) * torch_input.double() + weight * torch_end.double()).to(torch_dtype)
+
+
+def _run_lerp_exact_inputs(device, torch_input, torch_end, weight, use_scalar_weight):
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    end_tensor = ttnn.from_torch(torch_end, layout=ttnn.TILE_LAYOUT, device=device)
+    if use_scalar_weight:
+        ttnn_weight = weight
+    else:
+        torch_weight = torch.full(torch_input.shape, weight, dtype=torch_input.dtype)
+        ttnn_weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    return ttnn.to_torch(ttnn.lerp(input_tensor, end_tensor, ttnn_weight))
+
+
+@pytest.mark.parametrize("magnitude", [2.0**127, 3.0e38])
+@pytest.mark.parametrize("weight", [0.0, 0.25, 0.5, 0.75, 1.0])
+@pytest.mark.parametrize("use_scalar_weight", [True, False])
+@pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
+def test_lerp_large_opposite_sign(device, magnitude, weight, use_scalar_weight, input_dtype):
+    """|end - input| exceeds FLT_MAX although input, end and the interpolated value are all finite."""
+    torch_dtype = getattr(torch, input_dtype)
+    h, w = 64, 64
+    sign = torch.where(torch.arange(h * w) % 2 == 0, 1.0, -1.0).reshape((h, w))
+    torch_input = (sign * magnitude).to(torch_dtype)
+    torch_end = (-sign * magnitude).to(torch_dtype)
+
+    calculated = _run_lerp_exact_inputs(device, torch_input, torch_end, weight, use_scalar_weight)
+
+    assert torch.isfinite(calculated).all(), "lerp of finite inputs with weight in [0, 1] must stay finite"
+    golden = _lerp_f64_golden(torch_input, torch_end, weight, torch_dtype)
+    assert_with_ulp(expected_result=golden, actual_result=calculated, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("weight", [0.0, 1.0])
+@pytest.mark.parametrize("use_scalar_weight", [True, False])
+@pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
+def test_lerp_endpoint_passthrough(device, weight, use_scalar_weight, input_dtype):
+    """weight == 0 returns input and weight == 1 returns end, bit-exact, across the finite range."""
+    torch_dtype = getattr(torch, input_dtype)
+    h, w = 64, 64
+    torch.manual_seed(0)
+    exponent = torch.randint(-120, 128, (2, h, w)).double()
+    mantissa = torch.rand((2, h, w), dtype=torch.float64) + 1.0
+    sign = torch.where(torch.rand((2, h, w)) < 0.5, -1.0, 1.0)
+    values = (sign * mantissa * torch.pow(2.0, exponent)).to(torch_dtype)
+    values = torch.where(torch.isfinite(values), values, torch.ones_like(values))
+    torch_input, torch_end = values[0], values[1]
+
+    calculated = _run_lerp_exact_inputs(device, torch_input, torch_end, weight, use_scalar_weight)
+
+    expected = torch_input if weight == 0.0 else torch_end
+    assert torch.equal(calculated, expected)
