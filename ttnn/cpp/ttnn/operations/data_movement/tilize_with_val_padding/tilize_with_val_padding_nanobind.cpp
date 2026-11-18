@@ -62,7 +62,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
                 - Sharded input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
                 - Sharded output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
                 - A WIDTH_SHARDED or BLOCK_SHARDED input needs a shard width, in bytes, that is a multiple of the buffer's alignment
-                - ND sharded: L1 input and output
+                - ND sharded: L1 and DRAM input and output
         )doc";
 
     ttnn::bind_function<"tilize_with_val_padding">(

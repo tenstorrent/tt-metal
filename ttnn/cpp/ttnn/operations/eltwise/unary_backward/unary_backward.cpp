@@ -166,6 +166,18 @@ std::vector<Tensor> hardtanh_bw(
     float min,
     float max,
     const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config) && std::bit_cast<uint32_t>(min) == 0xbf800000u &&
+        std::bit_cast<uint32_t>(max) == 0x3f800000u) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::where(
         ttnn::le(input, min, std::nullopt, output_mem_config),
@@ -432,6 +444,18 @@ std::vector<std::optional<Tensor>> tanh_bw(
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& input_grad) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps main's single program below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config.value_or(input.memory_config()), input_grad)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::TANH_BW_BF16,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()),
+            input_grad)};
+    }
+
     std::vector<std::optional<Tensor>> grad_tensor;
 
     DataType output_dtype = input.dtype();
@@ -729,6 +753,17 @@ std::vector<std::optional<Tensor>> neg_bw(
 
 std::vector<Tensor> relu_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::RELU_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::where(ttnn::gtz(input, output_mem_config), grad, 0.0f, output_mem_config);
     grad_tensor.emplace_back(result);
@@ -1864,6 +1899,17 @@ std::vector<ComplexTensor> reciprocal_bw(
 
 std::vector<Tensor> abs_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::ABS_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
