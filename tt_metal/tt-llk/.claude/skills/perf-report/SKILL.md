@@ -133,7 +133,11 @@ consumer never reached session finish, or every selected test was skipped
    operand tiles ([perf-facts](../perf-test/references/perf-facts.md),
    "Accounting") before comparing with an older report.
 6. **Freshness.** Compare CSV columns with the current test axes. Missing
-   axes mean the report predates the test; regenerate instead of analyzing.
+   axes mean the report predates the test; regenerate instead of analyzing. A
+   column the catalog lists under `aliases` is a renamed axis, not a missing
+   one: read it under the new name. After a rename, list the dashboard aliases
+   that can go (`axis_maps.json` and `report_data.py` in the dashboard
+   repository, which this repository does not hold) in the PR description.
 7. **Completeness, by report kind.** A timing report has a
    `mean(<run type>)` column for every requested run type and a
    `TEXT_SIZE(<run type>)` column for `L1_TO_L1`, `UNPACK_ISOLATE`,

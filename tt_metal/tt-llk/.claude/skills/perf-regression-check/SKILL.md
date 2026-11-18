@@ -81,7 +81,11 @@ Show the verdict, the top regressions, and the improvements if any. Point at
   key mismatch, not a crash. When only a few points match, a clean verdict
   covers just those points. In the multi-module CI gate, one module can lose
   every match while others still compare, so the gate passes without
-  measuring it. Either outcome is inconclusive, not a pass. Preserve the old
+  measuring it. Check the matched-point count of every module: zero for one
+  module is inconclusive even when the gate is green. The rename tests in
+  `tests/hardware_free/perf/test_perf_regression_compare.py` (old header
+  against new header) show how to pin this for a renamed module or column.
+  Either outcome is inconclusive, not a pass. Preserve the old
   key long enough to compare, run an explicit like-for-like baseline, or
   state that the validated current report must become the new pinned
   baseline.

@@ -80,6 +80,10 @@ comparison.
   per-tile `MATH_ISOLATE` is about half a result tile; that halving is not a
   speedup. Do not shrink `TILE_CNT` to restore an older number: it is also the
   unpack loop bound and the stand-in dvalid count.
+- `tile_cnt` means different counts in different modules. Check what a module
+  counts before renaming an axis to it: the strided column reduce's
+  `max_tiles_per_iter` became `tile_cnt` only because it is exactly the input
+  tile count that `TILE_COUNT(tile_cnt_A)` carries.
 - At 16-bit, `dest_acc=Yes` can double the Dest handshakes relative to
   `dest_acc=No`, so a `dest_acc` delta mixes a datapath change with twice the
   section-done traffic.
