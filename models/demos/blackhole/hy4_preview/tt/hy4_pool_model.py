@@ -22,7 +22,18 @@ from models.demos.blackhole.hy4_preview.tt.hy4_rope import rope_tables
 
 
 class Hy4PoolDecoder(Hy4Decoder):
-    def __init__(self, ch, pages, mode="topk", bucket_tokens=None, opt=None, key_dtype=ttnn.bfloat8_b, S=1, tok=None):
+    def __init__(
+        self,
+        ch,
+        pages,
+        mode="topk",
+        bucket_tokens=None,
+        opt=None,
+        key_dtype=ttnn.bfloat8_b,
+        S=1,
+        tok=None,
+        extra_pages=0,
+    ):
         """S > 1 (task mtp-device, verify rows): S query rows per user per step; ``tok`` = an existing persistent uint32 [ROWS, S] token tensor (the MTPRoundTail's) or None. S == 1: unchanged."""
         self.ch, self.md = ch, ch.md
         self.S = S
@@ -30,6 +41,9 @@ class Hy4PoolDecoder(Hy4Decoder):
         r, c = int(md.shape[0]), int(md.shape[1])
         assert r == ROWS
         self.pages, self.mode = pages, mode
+        self.alloc_pages = pages + int(
+            extra_pages
+        )  # B45b HY4_BLOCKS: shadow pages appended to every pool tensor (logical pool = first ``pages``)
         self.opt = opt if opt is not None else Opt.from_env()
         self.mapper = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(r, c))
         z = lambda *shape, dt=torch.float32: torch.zeros(*shape, dtype=dt)
@@ -57,7 +71,7 @@ class Hy4PoolDecoder(Hy4Decoder):
         self.kv_pools, self.key_pools = [], []
         for ly in ch.layers:
             kv = ttnn.empty(
-                [1, 1, pages * 64, 656],
+                [1, 1, self.alloc_pages * 64, 656],
                 dtype=ttnn.fp8_e4m3,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=md,
@@ -65,7 +79,7 @@ class Hy4PoolDecoder(Hy4Decoder):
             )
             kp = (
                 ttnn.empty(
-                    [pages, 1, 64, 128],
+                    [self.alloc_pages, 1, 64, 128],
                     dtype=key_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=md,
@@ -127,7 +141,7 @@ class Hy4PoolDecoder(Hy4Decoder):
             if kp is not None:
                 k = ly.attn.indexer.keys
                 kb = ttnn.typecast(k, ttnn.bfloat8_b) if k.dtype != ttnn.bfloat8_b else k
-                kv4 = ttnn.reshape(kp, [1, 1, self.pages * 64, 128])
+                kv4 = ttnn.reshape(kp, [1, 1, self.alloc_pages * 64, 128])
                 HP.slice_copy(kb, kv4, self.ctx.colid, 8, HP.KEYTILE, npg)
                 if kb is not k:
                     ttnn.deallocate(kb)
@@ -207,7 +221,7 @@ class Hy4PoolDecoder(Hy4Decoder):
                 if kp is not None:
                     HP.slice_copy(
                         kb,
-                        ttnn.reshape(kp, [1, 1, self.pages * 64, 128]),
+                        ttnn.reshape(kp, [1, 1, self.alloc_pages * 64, 128]),
                         self.ctx.colid,
                         8,
                         HP.KEYTILE,

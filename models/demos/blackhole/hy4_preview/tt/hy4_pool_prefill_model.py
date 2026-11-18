@@ -165,7 +165,7 @@ class Hy4PoolPrefill:
             if kp is not None:
                 k = ly.attn.indexer.keys
                 kb = ttnn.typecast(k, ttnn.bfloat8_b) if k.dtype != ttnn.bfloat8_b else k
-                kv4 = ttnn.reshape(kp, [1, 1, self.dec.pages * 64, 128])
+                kv4 = ttnn.reshape(kp, [1, 1, self.dec.alloc_pages * 64, 128])
                 HP.slice_copy(kb, kv4, self.wr_mask, 8, HP.KEYTILE, npg, kernel="slice_copy_masked.cpp")
                 if kb is not k:
                     ttnn.deallocate(kb)

@@ -459,7 +459,9 @@ class Hy4AttentionPool(Hy4AttentionOpt):
         self.idx8_buf = (
             ctx.new_idx8() if self.has_indexer else None
         )  # this layer's local ids (persistent; shared layers of this source read it)
-        self.key_view = ttnn.reshape(key_pool4, [1, 1, ctx.pages * 64, 128]) if key_pool4 is not None else None
+        self.key_view = (
+            ttnn.reshape(key_pool4, [1, 1, int(key_pool4.shape[0]) * 64, 128]) if key_pool4 is not None else None
+        )
         so = self.host_w["sink_over_scale"].tensor.reshape(-1).float()  # [64] sink / scale per head
         self.sink_pool = ctx.make_sink(so * SCALE)
 
