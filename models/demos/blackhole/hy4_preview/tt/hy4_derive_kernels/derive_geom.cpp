@@ -79,8 +79,14 @@ void kernel_main() {
         int32_t d = rem - oc * SL;
         d = d < 0 ? 0 : (d > SL ? SL : d);
         kv[j] = (uint32_t)(fu * SL + d);
-        ih[j] = (uint32_t)(pv / B2);
-        il[j] = (uint32_t)(pv - (pv / B2) * B2);
+        if constexpr (B2 > 0) {
+            ih[j] = (uint32_t)(pv / (B2 > 0 ? B2 : 1));
+            il[j] = (uint32_t)(pv - (pv / (B2 > 0 ? B2 : 1)) * (B2 > 0 ? B2 : 1));
+        } else {  // B48 rope table mode (B2 = 0): ih = the position itself (row index of the full cos|sin table), il =
+                  // 0
+            ih[j] = (uint32_t)pv;
+            il[j] = 0u;
+        }
     }
     // colinfo: [0] = own column, [1] = n0, [2 + j] = n0 + j (j < S), rest 0 (verify rows only: S > 1)
     ci[0] = (uint32_t)oc;

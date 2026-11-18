@@ -64,6 +64,35 @@ class SpecDerive:
         if self._b40 is not None:  # B40: persistent rope hi / lo index rows (uint32 [1, S] per mesh row)
             zi = lambda: upload(md, torch.zeros(R, S, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
             self.ih_b40, self.il_b40 = zi(), zi()
+        # B48 (HY4_B48_ROPETAB=1, default OFF, needs HY4_B40_DERIVE=1): the whole rope half of derive (embedding x2, ~30 elementwise ops) becomes ONE embedding gather of a precomputed
+        # bf16 [B2*B2, 128] (cos | sin) table, built at init with the stock derive ops themselves (so bit-identical by construction). 256 MB per chip.
+        self._rtab = None
+        if self._b40 is not None and os.environ.get("HY4_B48_ROPETAB", "0") == "1":
+            self._rtab = self._build_rope_table()
+
+    def _g(self, tbl, idx, n):
+        D = self.D
+        e = ttnn.reshape(ttnn.embedding(idx, tbl, layout=ttnn.TILE_LAYOUT), [1, 1, n, 4 * D])
+        f = ttnn.typecast(e, ttnn.float32)
+        sl = lambda i: ttnn.slice(f, [0, 0, 0, i * D], [1, 1, n, (i + 1) * D])
+        return ttnn.add(sl(0), sl(1)), ttnn.add(sl(2), sl(3))
+
+    def _build_rope_table(self):
+        """[B2*B2, 2*D] bf16 (cos | sin of position hi * B2 + lo), computed with the exact stock two-level maths, chunk by chunk (one hi row x all B2 lo rows)."""
+        md, D = self.md, self.D
+        il = upload(md, torch.arange(B2, dtype=torch.int32).reshape(1, B2), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        cl_, sl_ = self._g(self.rt[1], il, B2)
+        out = torch.empty(B2 * B2, 2 * D, dtype=torch.bfloat16)
+        for c in range(B2):
+            ih = upload(md, torch.full((1, 1), c, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            ch_, sh_ = self._g(self.rt[0], ih, 1)
+            cos = ttnn.subtract(ttnn.multiply(ch_, cl_), ttnn.multiply(sh_, sl_))
+            sin = ttnn.add(ttnn.multiply(sh_, cl_), ttnn.multiply(ch_, sl_))
+            both = ttnn.concat([ttnn.typecast(cos, ttnn.bfloat16), ttnn.typecast(sin, ttnn.bfloat16)], dim=3)
+            out[c * B2 : (c + 1) * B2] = ttnn.to_torch(ttnn.get_device_tensors(both)[0]).reshape(B2, 2 * D)
+            for t in (ih, ch_, sh_, cos, sin, both):
+                ttnn.deallocate(t)
+        return upload(md, out, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
 
     def tabs(self):
         return (self.cos, self.sin, self.cos, self.sin, self.c128, self.s128)
@@ -79,7 +108,18 @@ class SpecDerive:
         # --- rope (two-level tables)
         if self._b40 is not None:
             self._b40.derive_geom(
-                p, self.own_col, ctx.wr, ctx.kvcnt, ctx.colinfo, self.ih_b40, self.il_b40, ctx.upd_rows, S, CH, SL, B2
+                p,
+                self.own_col,
+                ctx.wr,
+                ctx.kvcnt,
+                ctx.colinfo,
+                self.ih_b40,
+                self.il_b40,
+                ctx.upd_rows,
+                S,
+                CH,
+                SL,
+                0 if self._rtab is not None else B2,
             )
             ih, il = self.ih_b40, self.il_b40
         else:
@@ -96,10 +136,15 @@ class SpecDerive:
             sl = lambda i: ttnn.slice(f, [0, 0, 0, i * D], [1, 1, S, (i + 1) * D])
             return ttnn.add(sl(0), sl(1)), ttnn.add(sl(2), sl(3))
 
-        (ch_, sh_), (cl_, sl_) = g(self.rt[0], ih), g(self.rt[1], il)
-        cos = ttnn.subtract(ttnn.multiply(ch_, cl_), ttnn.multiply(sh_, sl_))
-        sin = ttnn.add(ttnn.multiply(sh_, cl_), ttnn.multiply(ch_, sl_))
-        cosb, sinb = ttnn.typecast(cos, ttnn.bfloat16), ttnn.typecast(sin, ttnn.bfloat16)
+        if self._rtab is not None:  # B48: one gather of the precomputed (cos | sin) rows (ih holds the position itself)
+            e = ttnn.reshape(ttnn.embedding(ih, self._rtab, layout=ttnn.TILE_LAYOUT), [1, 1, S, 2 * D])
+            cosb = ttnn.slice(e, [0, 0, 0, 0], [1, 1, S, D])
+            sinb = ttnn.slice(e, [0, 0, 0, D], [1, 1, S, 2 * D])
+        else:
+            (ch_, sh_), (cl_, sl_) = g(self.rt[0], ih), g(self.rt[1], il)
+            cos = ttnn.subtract(ttnn.multiply(ch_, cl_), ttnn.multiply(sh_, sl_))
+            sin = ttnn.add(ttnn.multiply(sh_, cl_), ttnn.multiply(ch_, sl_))
+            cosb, sinb = ttnn.typecast(cos, ttnn.bfloat16), ttnn.typecast(sin, ttnn.bfloat16)
         cp(cosb, self.cos)
         cp(sinb, self.sin)
         cp(
