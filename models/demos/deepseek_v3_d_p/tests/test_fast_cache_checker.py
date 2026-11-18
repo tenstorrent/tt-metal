@@ -11,6 +11,8 @@ import pytest
 
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
+_KDA_FULL_NAME = "layer_1.kda.norm.v3.0123456789abcdef.mesh4x4.tpaxis0_dtype_BFLOAT16_layout_TILE.tensorbin"
+
 _NAMES = (
     "a.tensorbin",
     "ab",
@@ -21,6 +23,10 @@ _NAMES = (
     "layer_3.mla.indexer_wk_dtype_BFLOAT8_B_layout_TILE.tensorbin",
     "layer_3.mla.indexer_wq_b_repl_dtype_BFLOAT8_B_layout_TILE.tensorbin",
     ".layer_3.complete",
+    # KDAWeights.check_cache_complete asks for the full name as_tensor writes (no '*'); a longer name sharing it as a
+    # prefix must not stand in for it.
+    _KDA_FULL_NAME,
+    _KDA_FULL_NAME.replace("mesh4x4", "mesh8x4") + ".partial",
     "zz",
 )
 
@@ -44,6 +50,9 @@ _PATTERNS = (
     ".layer_3.*",
     "zz*",
     "zzz*",
+    _KDA_FULL_NAME,  # literal, present
+    _KDA_FULL_NAME.replace("mesh4x4", "mesh8x4"),  # literal, only a longer name has it as a prefix
+    _KDA_FULL_NAME.replace("BFLOAT16", "FLOAT32"),  # literal, absent
 )
 
 
