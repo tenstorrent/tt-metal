@@ -14,8 +14,9 @@
 #ifdef W_FP32_FOLD
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 // split_acc keeps two FP32 accumulators per output row (dest rows 0 / 8 of each face: alternate K faces);
-// custom_mm's own finalize moves one through SrcB (TF32, ~10-bit mantissa) before adding it. custom_mm_block<dest_layout, false>
-// leaves them apart and this folds them in FP32 on the SFPU: rows 8.. of each face onto rows 0.. (VectorMode::R).
+// custom_mm's own finalize moves one through SrcB (TF32, ~10-bit mantissa) before adding it.
+// custom_mm_block<dest_layout, false> leaves them apart and this folds them in FP32 on the SFPU: rows 8.. of each face
+// onto rows 0.. (VectorMode::R).
 #ifdef TRISC_MATH
 #include "sfpi.h"
 namespace ckernel::sfpu {

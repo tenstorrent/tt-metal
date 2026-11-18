@@ -1111,7 +1111,6 @@ void kernel_main() {
     silu_tile_init();
 #endif
 
-
     // ======================= per-local-expert loop =======================
     // Run the full gate/up/down FFN for every local expert in this program.
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {

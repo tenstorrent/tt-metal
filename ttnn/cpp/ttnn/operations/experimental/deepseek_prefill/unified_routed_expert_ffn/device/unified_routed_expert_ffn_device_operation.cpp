@@ -487,8 +487,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::optional<ttnn::Tensor>& x_row_index,
     uint32_t zero_output_row,
     bool weights_tile_transposed) {
-    using OperationType =
-        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
+    using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
+        UnifiedRoutedExpertFfnDeviceOperation;
     // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
     // x_row_index's DRAM address on x's chips, so an index tensor on another mesh device reads unrelated memory.
     if (x_row_index.has_value()) {
