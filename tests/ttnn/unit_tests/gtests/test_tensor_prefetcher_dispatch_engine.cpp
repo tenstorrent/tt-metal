@@ -278,11 +278,16 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, ServesRequestAfterOpSignal) {
 // A grouped weight stacks its groups (MoE experts) in every receiver slab. Every group arrives, in ascending
 // order; with a group selector only those whose mask word is non-zero do. The reader reads the mask when it
 // reaches the request -- from DRAM by bank, or from a worker core's L1 -- and the pusher sends what it read.
+// A mask that selects no group sends nothing: the request between two others asks for blocks half the size,
+// so had it applied its entry size to the pipes or pushed any credit, the request after it would not arrive
+// intact.
 TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversTheGroupsAMaskSelects) {
     constexpr uint32_t kNumGroups = 4;
     ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, kNumGroups);
     const Tensor dram_mask =
         make_group_mask(device_, {1, 0, 1, 1}, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
+    const Tensor empty_mask =
+        make_group_mask(device_, {0, 0, 0, 0}, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
     const CoreRangeSet mask_core(CoreRange(CoreCoord(0, 1)));
     const Tensor l1_mask = make_group_mask(
         device_,
@@ -294,16 +299,27 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversTheGroupsAMaskSelects) {
 
     queue_layers(device_, prefetch, /*num_layers=*/1);
     validate_layers(device_, prefetch, /*num_layers=*/1);
-    const std::vector<std::pair<const Tensor*, std::vector<uint32_t>>> selections = {
-        {&dram_mask, {0, 2, 3}}, {&l1_mask, {1}}};
-    for (const auto& [mask, groups] : selections) {
+    // The groups each request delivers; none for the empty mask, which has nothing to validate (the validator
+    // reads an empty list as every group).
+    struct Selection {
+        const Tensor* mask;
+        uint32_t block_count;
+        std::optional<std::vector<uint32_t>> groups;
+    };
+    const std::vector<Selection> selections = {
+        {&dram_mask, prefetch.block_count, std::vector<uint32_t>{0, 2, 3}},
+        {&empty_mask, prefetch.block_count * 2, std::nullopt},
+        {&l1_mask, prefetch.block_count, std::vector<uint32_t>{1}}};
+    for (const auto& [mask, block_count, groups] : selections) {
         const std::vector<metal_exp::TensorPrefetcherInput> inputs = {
             {.tensor = prefetch.weight.mesh_tensor(),
-             .block_count = prefetch.block_count,
+             .block_count = block_count,
              .group_selector = metal_exp::TensorPrefetcherGroupSelector{mask->mesh_tensor()}}};
         metal_exp::QueueTensorPrefetcherRequest(
             *device_, prefetch.pipe_refs(), std::nullopt, inputs, &device_->mesh_command_queue());
-        validate_layers(device_, prefetch, /*num_layers=*/1, groups);
+        if (groups.has_value()) {
+            validate_layers(device_, prefetch, /*num_layers=*/1, *groups);
+        }
     }
     metal_exp::StopTensorPrefetcher(*device_);
 }
