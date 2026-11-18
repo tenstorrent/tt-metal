@@ -457,11 +457,17 @@ constexpr std::uint32_t matmul_fe_named_arg(const std::string_view name) {
     return 0;
 }
 
-// HiFi2 row forms need M block 4 (M block 2 lands the compute's L1 bursts under the reader's NoC writes); a core with
-// one M block may run fewer rows than M_block_tiles, so the fp32 row form also needs two M blocks per core.
+// HiFi2 row forms need M block 4 (M block 2 lands the compute's L1 bursts under the reader's NoC writes) and no fused
+// addcmul or swiglu epilogue on the math thread (minimal_matmul +0.8 to +1.2 %)
 constexpr std::uint32_t matmul_fe_named_m_block() { return matmul_fe_named_arg("M_block_tiles"); }
-constexpr bool matmul_fe_named_full_m_blocks() {
-    return matmul_fe_named_m_block() >= 4 && matmul_fe_named_arg("M_blocks_per_core") >= 2;
+constexpr bool matmul_fe_hifi2_rowform_kernel() {
+#if defined(FUSE_TERNARY)
+    return false;
+#elif defined(FUSE_SWIGLU)
+    return matmul_fe_named_m_block() >= 4 && matmul_fe_named_arg("swiglu_in_k_loop") == 1;
+#else
+    return matmul_fe_named_m_block() >= 4;
+#endif
 }
 
 // llk_math_matmul_tile_mop, and the row form at HiFi2 half sync with a 32-bit DEST in a kernel with a constant block
@@ -524,7 +530,7 @@ constexpr std::uint32_t matmul_fe_rowform_min_kt() {
         return 3;
     } else if constexpr (
         matmul_hifi2_half_wide(MATH_FIDELITY, true, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb()) &&
-        matmul_fe_named_full_m_blocks()) {
+        matmul_fe_hifi2_rowform_kernel()) {
         return 2;
     } else {
         return 0;
