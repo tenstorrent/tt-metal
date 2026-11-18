@@ -1352,20 +1352,20 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 
     auto host_rank_id = this->get_local_host_rank_id_binding();
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
-    // Get the number of ports per chip from a local mesh
+    // The most ports of any chip in the local meshes: chips may list different numbers of Ethernet cores, and a table
+    // indexed by channel must hold every chip's.
     std::uint32_t num_ports_per_chip = 0;
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < router_intra_mesh_routing_table.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
         if (this->is_local_mesh(mesh_id)) {
-            // Get the number of ports per chip from any chip in the local mesh
             auto local_mesh_chip_id_container = this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
 
             for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
                 const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
                 auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-                num_ports_per_chip =
-                    this->cluster_.get().get_soc_desc(physical_chip_id).get_cores(CoreType::ETH).size();
-                break;
+                num_ports_per_chip = std::max<std::uint32_t>(
+                    num_ports_per_chip,
+                    this->cluster_.get().get_soc_desc(physical_chip_id).get_cores(CoreType::ETH).size());
             }
         }
     }
@@ -2864,19 +2864,22 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
             sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
             tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
             physical_chip_id);
-        // Idle Ethernet cores that carry the table (Keraunos CCEs) run fabric workers too.
-        if (this->hal_.get().get_dev_size(
-                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH,
-                tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS) != 0) {
-            write_to_all_cores(
-                *this,
-                cluster,
-                this->hal_.get(),
-                &fabric_worker_connections,
-                sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
-                tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
-                physical_chip_id,
-                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+        // Ethernet cores that carry the table (Keraunos CCEs) run fabric workers too: idle ones, and a router's own
+        // core, whose other harts a test may load beside the router.
+        for (const auto eth_core_type :
+             {tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH}) {
+            if (this->hal_.get().get_dev_size(eth_core_type, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS) !=
+                0) {
+                write_to_all_cores(
+                    *this,
+                    cluster,
+                    this->hal_.get(),
+                    &fabric_worker_connections,
+                    sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
+                    tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
+                    physical_chip_id,
+                    eth_core_type);
+            }
         }
     }
 }

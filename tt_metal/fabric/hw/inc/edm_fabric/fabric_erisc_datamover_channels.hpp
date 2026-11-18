@@ -511,7 +511,13 @@ struct EdmChannelWorkerInterface {
 
         this->copy_read_counter_to_worker_location_info();
 
+#ifdef KERAUNOS_CCE
+        // A store, not an increment, so that a router never loads from another tile: the closer zeroes the word at
+        // open and waits for it to equal 1 (close_finish()), and this channel's router is its only writer.
+        noc_inline_dw_write<InlineWriteDst::L1, posted>(worker_semaphore_address, 1, 0xF, WORKER_HANDSHAKE_NOC);
+#else
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
+#endif
     }
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
