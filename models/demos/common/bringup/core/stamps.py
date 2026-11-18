@@ -107,6 +107,7 @@ ENV_IGNORED = {  # where a gate files its results, not what it measures
     "BRINGUP_BATCH_LM_HEAD",
     "BRINGUP_BATCH_MAX_SEQ",
     "BRINGUP_BATCH_KEEP_GOING",
+    "BRINGUP_BATCH_DRIVEN",  # F269: a driver runs what the process leaves to a fresh one
 }
 ENV_IGNORED_PREFIXES = (
     "TT_METAL_JIT_SERVER",  # F170: where kernels compile (a JIT server or locally), not the result
@@ -241,6 +242,8 @@ BOOKKEEPING = {
         "LOADS_METRIC", "GATE_LOADS_METRIC", "model_key", "gate_groups", "results_path", "load_results",
         # FIX.31
         "LAUNCH_FLAGS", "launch_form", "why_not", "_TEST_VALUES", "test_value", "normalized",
+        # F269: the processes of a plan (a run needing another model goes to a fresh one)
+        "DRIVEN_ENV", "unit_plan", "drive",
     ),
     SAFE_PYTEST_SH: (
         "section:Profiler CSV reporting", "section:Total-run timer", "section:Host memory pre-flight",

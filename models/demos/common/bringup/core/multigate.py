@@ -159,8 +159,18 @@ def _run(spec, ledger, members: list, d: Path, echo) -> tuple[dict, int]:
         bf.write(f"$ {cmd}\n")
         bf.flush()
         mem = gate.hostmem_env(blog, [c for _, c in group])
-        penv = dict(base, **uenv[group[0][0]], **hint, **mem)
-        prc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT).returncode
+    penv = dict(base, **uenv[group[0][0]], **hint, **mem)
+
+    def proc(c, k):  # F269: a run needing another model goes to a fresh process (k > 0), its output appended
+        with open(blog, "a") as bf:
+            if k:
+                bf.write(f"\n# F269: a fresh process for the runs needing another model\n$ {c}\n")
+                bf.flush()
+            return subprocess.run(
+                c, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT
+            ).returncode
+
+    prc = batch.drive(plan_path, proc)
     got = batch.load_results(plan_path)
     runs, running = got.get("runs") or {}, got.get("running")
     btext = blog.read_text(errors="replace")

@@ -2800,3 +2800,20 @@ The brief's `$knowledge_report` used `bringup_dir/results/knowledge_use/...`, wh
 allows the report under `ledger_dir/results/knowledge_use/` (orchestrator.py report check, gate.py ignored paths). In a
 seeded run they differ: FIX.36 attempt 2 wrote where the brief said and its passed gate STOPPED on a path violation. Now
 the brief names the ledger's path. Selftest: test_seeded.py (the brief names the ledger's report, not the bringup dir's).
+
+## F269: a batch run needing another model reloaded in place and ran out of device DRAM (owner 2026-11-18)
+
+A gate's / an A/B side's runs share one pytest process and one loaded model (F259, FIX.29). A later run that needed
+another model (2026-11-17: ab/P.72/old/test_full_prefill, its runtime sized for the deployment context) made
+testing/batch.shared_model release the model and load again in the same process; the release did not give the device
+DRAM back (references to the old model and its states survive), and the reload died with Out of Memory at model load
+(bank_manager.cpp:514). Alone the test passes. Fix (owner: simple and robust): a process holds ONE model, never
+reloaded in place. shared_model raises NeedsFreshProcess; run_plan ends the process at that run, the run and every later
+one (but a failed group's: skipped) get no result, only the results' `deferred` list; core/batch.drive (every caller:
+gate._run_group, a gate unit's own batch, now a plan file via batch.unit_plan, multigate._run, orchestrator.ab_batches)
+runs them in a fresh process (<plan>.fresh<k>.json) and merges its results into the plan's, so callers, logs, stamps and
+run records stay per run (runrec files each process's runs; a deferred run is filed once, by the process that ran it).
+No new process after a hang/death or when a fresh process ran none of its runs (those count as not run). A run that
+itself needs two model configurations fails; tests/test_batch.py fails a process that left runs and has no driver
+(BRINGUP_BATCH_DRIVEN, ignored in the env key). Selftests: test_fresh_process.py; test_one_process.py (refused, not
+reloaded).

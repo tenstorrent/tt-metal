@@ -9,9 +9,13 @@ batch it is hooks.device_model; inside, the first run loads the model (with the 
 run of the plan needs: core/batch.hints) and the next runs reuse it. Between runs the model's active state is freed
 (``model.state``, DeepSeek-V4.1; a model whose states are not on the model frees them with the run's locals) and the
 process environment restored; the program cache stays warm (a timed run is warm-only anyway: F196 refuses misses).
-A run that needs a model the shared one cannot serve (other layers) gets a fresh load after the old one is released,
-with a warning: a model may keep per-mesh load-time buffers (DeepSeek-V4.1's pinned outputs, L1 reservations), so the
-planner never puts two model configurations in one process.
+F269 (owner 2026-11-18): a run that needs a model the shared one cannot serve (other layers, LM head, seq, config,
+load-time switches) is NEVER loaded again in this process: a released model's device memory does not come back (its
+states, a runtime's buffers, per-mesh load-time buffers: DeepSeek-V4.1's pinned outputs, L1 reservations), and the
+reload ran out of device DRAM (2026-11-17, ab/P.72/old/test_full_prefill). ``shared_model`` raises
+``NeedsFreshProcess``; ``run_plan`` ends the process at that run, the run and every later one ``deferred`` (not run,
+not failed, no result), and the driver (core/batch.drive) runs them in a fresh process. A run that itself needs a
+second model configuration fails (no process can hold both).
 
 ``run_plan(mesh, plan)`` runs the plan: per run, ``pytest.main`` over its test files with its env, stdout / stderr (the
 C++ log too: file descriptors 1 and 2) into its log, and the outer mesh handed to its mesh_device fixture
@@ -47,6 +51,11 @@ _MODELS: dict = {}  # "model": the shared model, "key", "layers", "lm_head", "se
 _RUN = {"name": None}
 _LOADS = {"n": 0}  # FIX.29: real model loads in this process (metric model_loads)
 _LOADING = {"on": False}  # a load is running (a nested loader call is part of it)
+_FRESH: dict = {}  # F269: "why" (the run needs another model than this process holds), "by" (the run that loaded it)
+
+
+class NeedsFreshProcess(RuntimeError):
+    """F269: this run needs another model than the one this process holds; never loaded again in place."""
 
 
 def active() -> bool:
@@ -179,14 +188,15 @@ def shared_model(mesh, layers, *, seq: int, lm_head: bool, load, config=None, sp
         metrics.record("model_shared", 1)
         print(f"BATCH (F259): model reused (loaded by {_MODELS['by']} in {_MODELS['load_s']:.0f} s)", flush=True)
         return inject(m)
-    if m is not None:
+    if m is not None:  # F269: never loaded again in place (the released model's device memory does not come back)
         diff = sorted(k for k in set(sw) | set(_MODELS["settings"]) if sw.get(k) != _MODELS["settings"].get(k))
-        print(
-            f"BATCH (F259) WARNING: {_RUN['name']} needs another model (layers / LM head / seq / config / switches "
-            f"{diff} differ from {_MODELS['by']}'s): releasing it and loading again in this process",
-            flush=True,
+        why = (
+            f"{_RUN['name']} needs another model (layers / LM head / seq / config / switches {diff} differ from "
+            f"{_MODELS['by']}'s)"
         )
-        release()
+        _FRESH.update(why=why, by=_MODELS["by"])
+        print(f"BATCH (F269): {why}: not loaded again in this process; the run goes to a fresh process", flush=True)
+        raise NeedsFreshProcess(why)
     seq = max(int(seq), int(os.environ.get(B.MAX_SEQ_ENV) or 0))
     head = lm_head or os.environ.get(B.LM_HEAD_ENV) == "1"
     t0 = time.time()
@@ -315,8 +325,14 @@ def load_plan() -> tuple[dict, Path | None]:
     return B.plan_from_cmd(os.environ[B.CMD_ENV], spec() if os.environ.get("BRINGUP_SPEC") else None), None
 
 
+DEFERRED: list[str] = []  # F269: the runs the last run_plan left for a fresh process (in plan order)
+
+
 def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) -> list[str]:
-    """Run every entry of ``plan`` in this process; the names of the runs that failed. ``main``: pytest.main (tests)."""
+    """Run every entry of ``plan`` in this process; the names of the runs that failed. ``main``: pytest.main (tests).
+    F269: a run that needs another model than this process holds, and every run after it (but a failed group's: those
+    are skipped), get no result here: they are listed in the results' ``deferred`` (and ``DEFERRED``), for a fresh
+    process (core/batch.drive)."""
     main = main or pytest.main
     out = {"running": None, "runs": {}}
     res = B.results_path(plan_path) if plan_path else None
@@ -329,11 +345,16 @@ def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) 
 
     failed, dead_groups, stop = [], set(), False
     entries = plan["entries"]
+    _FRESH.clear()
+    DEFERRED.clear()
     for k, v in (plan.get("hints") or {}).items():  # the load's LM head / sequence, unless the caller set them
         os.environ.setdefault(k, str(v))
     for k, e in enumerate(entries, 1):
         name = e["name"]
         group = e.get("group") or name
+        if DEFERRED and group not in dead_groups:  # F269: the rest of the plan runs in a fresh process
+            DEFERRED.append(name)
+            continue
         if stop or group in dead_groups:
             out["runs"][name] = {"rc": None, "skipped": True}
             save()
@@ -364,6 +385,23 @@ def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) 
             os.environ.update(saved)
             _refresh_settings()
         rc = 0 if rc == 0 else 1  # a test failure; 2 stays the safe runner's HANG
+        fresh = dict(_FRESH)
+        _FRESH.clear()
+        if fresh and fresh["by"] != name:  # F269: this run and the rest of the plan in a fresh process
+            release()
+            DEFERRED.append(name)
+            out["running"] = None
+            out["deferred"] = DEFERRED  # (the same list: the later runs join it)
+            save()
+            note = f"\n# F269: {fresh['why']}: not run here; it runs in a fresh process (core/batch.drive)\n"
+            if e.get("log"):
+                with open(e["log"], "a") as f:
+                    f.write(note)
+            print(note.strip(), flush=True)
+            continue
+        if fresh:  # the run itself asked for two model configurations: no process holds both
+            rc = 1
+            print(f"BATCH (F269) run {name}: needs two model configurations itself: {fresh['why']}", flush=True)
         out["runs"][name] = {
             "rc": rc,
             "s": round(time.time() - t0, 1),
@@ -379,5 +417,9 @@ def run_plan(mesh, shape, plan: dict, plan_path: Path | None = None, main=None) 
             failed.append(name)
             dead_groups.add(group)
             stop = bool(plan.get("stop_on_fail"))
+    if DEFERRED:
+        out["deferred"] = DEFERRED
+        save()
+        print(f"BATCH (F269): runs for a fresh process: {', '.join(DEFERRED)}", flush=True)
     release()
     return failed

@@ -23,6 +23,9 @@ model_loads); one the model reads per call (hooks.batch_call_settings) does not.
 FIX.29 (OWNER 2026-11-13, "LOAD THE MODEL ONLY ONCE"): the contract tests and the model's own tests share it too, and
 a gate runs all its units that may share a process in ONE batch process (``gate_groups``, core/gate.run_units): one
 model load per gate and model configuration (``gate_model_loads``, counted from each process's ``model_loads``).
+F269 (owner 2026-11-18): a process holds one model. A run that needs another one (the device side finds out at its
+load: testing/batch.shared_model) ends its process there, it and the runs after it left to a fresh process
+(``deferred``): ``drive`` runs a plan's processes until every run has run, each run's result recorded once.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ LM_HEAD_ENV = "BRINGUP_BATCH_LM_HEAD"  # load the shared model with its LM head 
 MAX_SEQ_ENV = "BRINGUP_BATCH_MAX_SEQ"  # load it with target.seq at least this (the furthest BRINGUP_POS + chunk)
 BATCH_TEST = "models/demos/common/bringup/tests/test_batch.py"
 KEEP_GOING_ENV = "BRINGUP_BATCH_KEEP_GOING"  # 1: a hand-run batch (BRINGUP_BATCH_CMD) runs every run past a failure
+DRIVEN_ENV = "BRINGUP_BATCH_DRIVEN"  # F269: 1: a driver (drive) runs the runs this process leaves to a fresh one
 INJECT_ENV = "BRINGUP_INJECT"  # diagnostic (FIX.29): a mistake injected into the batch's model (testing/batch.inject)
 TESTS_DIR = "models/demos/common/bringup/tests/"
 SHARED_TESTS = (
@@ -347,6 +351,47 @@ def write_plan(path: Path, entries: list[dict], stop_on_fail: bool = False) -> P
     path.write_text(json.dumps({"version": 1, "stop_on_fail": stop_on_fail, "entries": entries}, indent=1) + "\n")
     results_path(path).unlink(missing_ok=True)
     return path
+
+
+def unit_plan(cmd: str, path: Path, spec=None) -> Path:
+    """F269: a gate unit's command (unit_command) as a plan file (plan_from_cmd: its hints too), for ``drive``."""
+    p = plan_from_cmd(cmd, spec)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(p, indent=1) + "\n")
+    results_path(path).unlink(missing_ok=True)
+    return path
+
+
+def drive(plan: Path, run) -> int:
+    """F269: the batch processes of ``plan`` until every run has run: ``run(cmd, k)`` runs the k-th process's command
+    (k = 0: the plan's own; its exit code back). A process that ends at a run needing another model than it holds
+    lists that run and the rest in its results' ``deferred``; they go to a fresh process (plan <plan>.fresh<k>.json:
+    those entries only, the rest of the plan as it was), whose results join the plan's own: callers read
+    load_results(plan) as from one process (a run ``running`` in the last process: it hung or died there). No new
+    process after a hang or a death (``running`` set) or when a fresh process ran none of its runs. The exit code:
+    the last process's, else an earlier failing one's."""
+    rcs = [run(f"{DRIVEN_ENV}=1 {command(plan)}", 0)]
+    got = load_results(plan)
+    cur, k = plan, 0
+    while got.get("running") is None and got.get("deferred"):
+        data = json.loads(cur.read_text())
+        rest = [e for e in data["entries"] if e["name"] in set(got["deferred"])]
+        if not rest or len(rest) == len(data["entries"]):  # (none ran: a new process would do the same)
+            break
+        k += 1
+        cur = write_plan(Path(f"{plan}.fresh{k}.json"), rest, stop_on_fail=bool(data.get("stop_on_fail")))
+        if data.get("hints"):
+            cur.write_text(json.dumps(dict(json.loads(cur.read_text()), hints=data["hints"]), indent=1) + "\n")
+        rcs.append(run(f"{DRIVEN_ENV}=1 {command(cur)}", k))
+        sub = load_results(cur)
+        got["runs"].update(sub.get("runs") or {})
+        got["running"] = sub.get("running")
+        got["deferred"] = sub.get("deferred") or []
+        got["processes"] = k + 1
+        tmp = results_path(plan).with_suffix(".tmp")
+        tmp.write_text(json.dumps(got, indent=1) + "\n")
+        os.replace(tmp, results_path(plan))
+    return rcs[-1] or next((r for r in reversed(rcs) if r), 0)
 
 
 def results_path(plan: Path) -> Path:

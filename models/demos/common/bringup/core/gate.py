@@ -999,13 +999,31 @@ def run_units(
                 if spec.get("tests.one_process"):  # FIX.31: why this unit has a process of its own, in the log
                     why = batch.why_not(cmd) or "no other unit of this gate left to run at its model configuration"
                     f.write(f"# {u}: a process of its own: {why}\n")
+                plan_f = None
                 if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model once
-                    f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {run}\n")
+                    # F269: as a plan file, so a run needing another model can go to a fresh process (batch.drive)
+                    plan_f = log.parent / f"{log.stem}.{re.sub(r'[^A-Za-z0-9_.-]', '_', u)}.plan.json"
+                    batch.unit_plan(cmd, plan_f, spec)
+                    f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {batch.command(plan_f)}\n")
                     f.flush()
                 penv = dict(uenv, **hostmem_env(log, [cmd], f))  # FIX.30
-                rc = subprocess.run(
-                    run or cmd, shell=True, cwd=spec.repo, env=penv, stdout=f, stderr=subprocess.STDOUT
-                ).returncode
+
+                def proc(c, k=0):
+                    if k:  # F269: the unit's runs needing another model, in a fresh process
+                        f.write(f"\n# {u}: F269: a fresh process for the runs needing another model\n$ {c}\n")
+                    f.flush()
+                    return subprocess.run(
+                        c, shell=True, cwd=spec.repo, env=penv, stdout=f, stderr=subprocess.STDOUT
+                    ).returncode
+
+                if plan_f is not None:
+                    rc = batch.drive(plan_f, proc)
+                    rest = batch.load_results(plan_f).get("deferred") or []
+                    if rest:
+                        f.write(f"\n# {u}: F269: runs never run (a fresh process ran none of them): {rest}\n")
+                        rc = rc or 1
+                else:
+                    rc = proc(cmd)
             if rc == SAFE_HANG_RC and _uses_safe_runner(cmd):  # F204: before the next unit's mesh open wipes it
                 kept = hangdump.keep(spec.repo, hangdump.dest_for(log, u))
                 f.write(f"\n# {u}: HANG; triage + inspector kept in {kept}\n")
@@ -1109,9 +1127,18 @@ def _run_group(spec: Spec, group: list, env: dict, log: Path, results: Path, tid
     f.flush()
     t0 = time.time()
     mem = hostmem_env(log, [c for _, c in group], f)  # FIX.30
-    with open(blog, "w") as bf:
-        penv = dict(env, **unit_env(names[0]), **hint, **mem)
-        prc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT).returncode
+    penv = dict(env, **unit_env(names[0]), **hint, **mem)
+
+    def proc(c, k):  # F269: a run needing another model goes to a fresh process (k > 0), its output appended
+        with open(blog, "w" if k == 0 else "a") as bf:
+            if k:
+                bf.write(f"\n# F269: a fresh process for the runs needing another model\n$ {c}\n")
+                bf.flush()
+            return subprocess.run(
+                c, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT
+            ).returncode
+
+    prc = batch.drive(plan, proc)
     got = batch.load_results(plan)
     runs, running = got.get("runs") or {}, got.get("running")
     btext = blog.read_text(errors="replace")

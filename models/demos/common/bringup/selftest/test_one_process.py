@@ -254,14 +254,18 @@ def test_the_model_loads_once_for_every_run_of_the_batch(shared, monkeypatch):
     assert M.load("T")["model_shared"]["value"] == 1
 
 
-def test_a_run_needing_another_model_reloads_with_a_warning(shared, monkeypatch, capsys):
+def test_a_run_needing_another_model_is_never_loaded_again_in_place(shared, monkeypatch, capsys):
+    """F269: other layers / switches than the process's model: refused (the run goes to a fresh process,
+    selftest/test_fresh_process.py), the process's model kept, no second load."""
     monkeypatch.setenv(B.KEY_ENV, "k")
     mesh = object()
     m = TB.device_model(fake_spec(), mesh, [0, 1], lm_head=False)
-    assert TB.device_model(fake_spec(), mesh, [0], lm_head=False) is not m  # other layers
+    with pytest.raises(TB.NeedsFreshProcess):
+        TB.device_model(fake_spec(), mesh, [0], lm_head=False)  # other layers
     monkeypatch.setenv(B.KEY_ENV, "k2")  # other switches (the planner never does this)
-    TB.device_model(fake_spec(), mesh, [0], lm_head=False)
-    assert Model.loads == 3 and capsys.readouterr().out.count("WARNING") == 2
+    with pytest.raises(TB.NeedsFreshProcess):
+        TB.device_model(fake_spec(), mesh, [0, 1], lm_head=False)
+    assert Model.loads == 1 and TB._MODELS["model"] is m and capsys.readouterr().out.count("F269") == 2
 
 
 def test_the_mesh_fixture_of_a_run_is_the_batchs_mesh(tmp_path):

@@ -2077,7 +2077,9 @@ class Orchestrator:
                     f"  [{tid}] A/B {where}: one process (F259), {len(todo_e)} runs: {', '.join(e['name'] for e in todo_e)}"
                 )
                 blog = d / f"batch{k}.log"
-                rc = self.run_cmd(B.command(plan), {**base, **env, **B.hints(entries, self.spec)}, blog)
+                penv = {**base, **env, **B.hints(entries, self.spec)}
+                # F269: a run needing another model than the process holds goes to a fresh process (its own log)
+                rc = B.drive(plan, lambda c, j: self.run_cmd(c, penv, blog if j == 0 else d / f"batch{k}.fresh{j}.log"))
                 got = B.load_results(plan)["runs"]
                 for e in todo_e:
                     state[e["name"]] = got.get(e["name"])
