@@ -1478,3 +1478,44 @@ The lane's schedule, slot tables, muxes and credits unchanged; the groups are th
   (the chips' clock settling under the 130 W limit at the stream's ~125 W).
 - Open: the stream 28.6 ms against the 14.8 target; the fold 9.4 against 7.5; the head 2.7; a soak of 10K+ layers on
   the K split; power on 75 W systems.
+
+## EP-4 with weights on Y (LoudBox)
+Regime for 302K-588K chunks on the Galaxy: each mesh row (4 chips, X) splits the 640 experts four ways (chip column c
+holds [160 c, 160 c + 160)); token rows move only along X (dispatch, combine); the column's 160 experts stream around
+its Y ring (LoudBox: 2-chip column, 80 own + 80 remote a chip; Galaxy: 8 chips, 20 own + 140 remote). Combine
+pre-reduces on the expert chip: one partial row a (token, expert chip) into slot c of the home chip's P[t]; the home
+pass adds the present slots and the shared expert's. Branch mstaletovic/ep4-lb (from ep4-wsy aa8fcd855d3), worktree
+tt-metal-ep4 on bh-lb-19 (2 x 4 p150b, FABRIC_2D, 2 links, links train 400G). Host reference ep4_ref.py,
+speed-of-light ep4_targets.py.
+
+### Stage 0: tree up, baselines (bh-lb-19)
+- sparse_dispatch_2d (tests/.../sparse_dispatch_2d/test_sparse_dispatch_2d.py, 2x4 FABRIC_2D): W3584 and W6144 PASS
+  (bit-exact against the torch model, program-cache hit on new buffers).
+
+### Stage 1: host reference and readiness model (ep4_ref.py, tests/test_ep4_ref.py; no device)
+- Routings: uniform (top-12 of N(0, 1) logits) and zipf (logit bias -0.25 log(rank) over a random expert order;
+  expert-load CV 0.98, the target ~1; the device head gets the same bias as x column 0 = 1, W_r row 0 = bias).
+- Layout per chip (route words, grp, lists, runs, O rows, ready, mask, cnt) vectorised: routing + layout + invariant
+  checks of 2 chips at 302K-eq (n 9449) in 3-5 s.
+- Readiness F(x) (share of a chip's runs whose last local expert is done at stream progress x; groups side by side,
+  x = an expert's index in its group's order / the group's length), 302K-eq; hidden share and tail from a fluid model
+  (runs ready at F(x), the combine drains at most S / C of the partials per unit x; with F = x^3 it reproduces the
+  spec's 70% / 0.85 ms and 92% / 0.22 ms):
+| mesh, routing, chip | experts a run | F(.25 / .5 / .75 / .9) | x^3 | hidden, tail (@50; @40) |
+|---|---|---|---|---|
+| LB uniform (0,0), lane order G 2 | 3.10 | .051 .173 .441 .729 | .016 .125 .422 .729 | 72% 0.79 ms; 71% 1.02 ms |
+| LB zipf (0,0) (light column), lane G 2 | 2.86 | .058 .206 .523 .768 | | 76% 0.67; 75% 0.87 |
+| LB zipf (0,2) (busiest column), lane G 2 | 3.26 | .035 .154 .419 .764 | | 71% 0.82; 70% 1.04 |
+| LB zipf (0,2), own experts first | | .055 .168 .388 .649 | | 66% 0.96; 65% 1.23 |
+| GLX uniform (0,0), lane order G 4 | 3.10 | .053 .176 .437 .727 | | 88% 0.33 ms (x^3: 92%, 0.22) |
+| GLX zipf (0,2) (busiest), lane G 4 | 3.27 | .033 .155 .384 .642 | | 79% 0.58 |
+  - F follows the x^c model (each run's experts at independent random positions) to +-0.01 for uniform routing in every
+    order: the order does not matter for uniform routing. F is above x^3 early (runs of 1-2 experts) and equal at
+    x = 0.9.
+  - Own-experts-first loses 4-6 points of hidden share with zipf on the LoudBox; the lane's own order (own and remote
+    interleaved by the schedule) and the G 4 split (own groups beside lane groups) are within a point of each other.
+  - Galaxy: 88% hidden (uniform) against the x^3 model's 92%; the busiest zipf chip 79% (0.58 ms tail).
+  - The two-partials knob: a 0.8-1.0 ms tail on the LoudBox, 0.3-0.6 ms on the Galaxy. Decide in stage 7.
+- Capacity (10 seeds; LB n 9449, Galaxy n 4096): busiest chip's O rows / 12 n: uniform max 1.006 (LB) / 1.012 (GLX),
+  zipf mean 1.075-1.078, max 1.138-1.140. Partials a (source, home) pair: max 0.975 n (uniform) / 0.988 n (zipf)
+  against the mean p = 0.968 n. Sizing: O at 1.25 x 12 n covers both routings with margin; past it, assert / fall back.
