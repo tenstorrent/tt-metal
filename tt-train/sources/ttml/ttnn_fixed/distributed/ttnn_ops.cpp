@@ -23,6 +23,7 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
 
@@ -217,12 +218,22 @@ ttnn::Tensor ring_shift(
         return tensor;
     }
 
-    auto output_tensor = ttnn::empty_like(tensor);
+    // Every device sends once per shift. A device without the tensor would not, and the neighbour receiving from it
+    // would wait forever.
+    TT_FATAL(tensor.device() == mesh_device_ptr.get(), "ring_shift requires a tensor on the context's mesh device");
+    TT_FATAL(
+        tensor.device_storage().is_uniform_storage(),
+        "ring_shift requires a tensor on every device of the {} mesh, got one on {} devices",
+        mesh_shape,
+        tensor.device_storage().get_coords().size());
+
+    // The direct sends below lay the data out as in `tensor`, so the output is allocated from its exact spec.
+    auto output_tensor = ttnn::create_device_tensor(tensor.tensor_spec(), tensor.device(), tensor.tensor_topology());
 
     const uint32_t num_devices = mesh_shape.mesh_size();
 
-    // Build connections for even->odd and odd->even transfers separately
-    // This two-phase approach avoids deadlock since send is blocking
+    // Build connections for even->odd and odd->even transfers separately, so that in each phase a device either
+    // sends or receives.
     const auto send_recv_core = tt::tt_metal::CoreCoord(0, 0);
     std::vector<tt::tt_metal::distributed::SocketConnection> even_to_odd_connections;
     std::vector<tt::tt_metal::distributed::SocketConnection> odd_to_even_connections;
@@ -245,18 +256,24 @@ ttnn::Tensor ring_shift(
 
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
+    using core::distributed::IntraMeshTransport;
 
-    // No host synchronization: each send/recv waits only on its peer, through the socket's flow-control state on
-    // device. This stays deadlock-free because every device issues the same socket ops in the same order (per shift,
-    // one send or recv per phase, phase 1 before phase 2), so a blocked op only ever waits on an op that is earlier in
-    // that order. Re-check this if the sends and recvs below are reordered.
+    // Direct sockets: a send writes straight into its peer's output tensor. It completes once that peer's recv has
+    // answered its handshake, and the recv completes on the send's final token.
+    // No host synchronization: the ops wait only on each other, through the socket's state on device. This is
+    // deadlock-free because a phase issues a send and its recv back to back, on disjoint sets of devices, and the
+    // host enqueues without waiting for them. So the k-th socket op on a device is always the peer of the k-th on
+    // one of its ring neighbours, and both ends of every pair are reached. Re-check this if the sends and recvs
+    // below are reordered, or if a phase stops covering every device.
     // Phase 1: Even positions send, odd positions receive
-    const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
+    const core::distributed::IntraMeshParameters even_to_odd_params{
+        even_to_odd_connections, IntraMeshTransport::Direct};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, even_to_odd_params);
 
     // Phase 2: Odd positions send, even positions receive
-    const core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
+    const core::distributed::IntraMeshParameters odd_to_even_params{
+        odd_to_even_connections, IntraMeshTransport::Direct};
     socket_manager.send(tensor, inter_host_params, odd_to_even_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, odd_to_even_params);
 

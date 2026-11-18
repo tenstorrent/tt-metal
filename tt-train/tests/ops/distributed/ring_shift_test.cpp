@@ -208,9 +208,10 @@ TEST_F(GalaxyRingShiftTest, BackwardBig) {
         16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, RingShiftDirection::Forward, /*test_backward_grad=*/true);
 }
 
-// Back-to-back shifts with no host synchronization in between: the socket FIFO state has to carry over from one
-// shift to the next on device. With both_directions a second tensor is shifted the other way, alternating with the
-// first, so both directions (separate sockets) are in flight at once. Only the final values are read back.
+// Back-to-back shifts with no host synchronization in between: the socket state has to carry over from one shift to
+// the next on device, and each shift reads the tensor the previous one has just received. With both_directions a
+// second tensor is shifted the other way, alternating with the first, so both directions (separate sockets) are in
+// flight at once. Only the final values are read back.
 static void TestChainedRingShifts(
     const size_t batch,
     const size_t seq,
@@ -218,7 +219,8 @@ static void TestChainedRingShifts(
     const uint32_t cluster_axis,
     const uint32_t shard_dim,
     const uint32_t num_shifts,
-    const bool both_directions = true) {
+    const bool both_directions = true,
+    const ttnn::DataType dtype = ttnn::DataType::BFLOAT16) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -232,9 +234,13 @@ static void TestChainedRingShifts(
     const auto make_input = [&]() {
         const xt::xarray<float> data = ttml::test_utils::make_uniform_xarray<float>(
             std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, -1.0F, 1.0F, rng());
+        if (dtype == ttnn::DataType::FLOAT32) {
+            return core::from_xtensor<float, ttnn::DataType::FLOAT32>(data, device, ttnn::Layout::TILE, mapper.get());
+        }
         return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, device, ttnn::Layout::TILE, mapper.get());
     };
     const ttnn::Tensor a_in = make_input();
+    ASSERT_EQ(a_in.dtype(), dtype) << "TestChainedRingShifts supports BFLOAT16 and FLOAT32";
     const auto a_orig = core::to_xtensor<float>(a_in, core::IdentityComposer{});
     std::optional<ttnn::Tensor> b_in;
     std::vector<xt::xarray<float>> b_orig;
@@ -284,23 +290,49 @@ TEST_F(GalaxyRingShiftTest, ChainedShiftsAlongRowsNoHostSync) {
     TestChainedRingShifts(1, 16384, 1024, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/19);
 }
 
+// Ring attention's backward shifts its float32 gradient accumulators. A float32 tile is one fabric packet, where two
+// bf16 tiles share one, so the sender takes a different path. 2048 x 1024 float32 = 8 MiB per device per tensor.
+TEST_F(GalaxyRingShiftTest, ChainedShiftsFloat32AlongRowsNoHostSync) {
+    TestChainedRingShifts(
+        1,
+        16384,
+        1024,
+        /*cluster_axis=*/0,
+        /*shard_dim=*/2,
+        /*num_shifts=*/19,
+        /*both_directions=*/true,
+        ttnn::DataType::FLOAT32);
+}
+
 TEST_F(GalaxyRingShiftTest, ChainedShiftsAlongColumnsNoHostSync) {
-    // Ring of 4 on axis 1, again 4 MiB per device per tensor.
+    // Ring of 4 on axis 1: 2048 x 1024 bf16 = 4 MiB per device per tensor.
     TestChainedRingShifts(1, 8192, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/11);
 }
 
-// The intra-mesh sockets ring_shift uses have an 80 MiB FIFO per receiver (fifo_size in
-// core/distributed/socket_manager.cpp). A 45056 x 1024 bf16 shard is 88 MiB per device, so each shift is a single
-// transfer larger than the FIFO (22528 blocks of 4096 B against 20480): within one send/recv op the FIFO wraps and
-// the sender is flow-controlled by its receiver's credits (bytes_acked), with the next shift queued behind it and
-// no host sync in between. These cases depend on that constant: raising fifo_size above 88 MiB would make them
-// stop exceeding the FIFO. 3 shifts, so the data ends 3 hops away.
-TEST_F(GalaxyRingShiftTest, ChainedShiftsLargerThanSocketFifoAlongRows) {
+// Volume test: 45056 x 1024 bf16 is 88 MiB per device (45056 tiles), which one direct send writes into the
+// receiver's tensor two tiles per fabric packet. 3 shifts back to back with no host sync in between, so the data
+// ends 3 hops away.
+TEST_F(GalaxyRingShiftTest, ChainedShiftsOfLargeShardsAlongRows) {
     TestChainedRingShifts(
         1, 8 * 45056, 1024, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
 }
 
-TEST_F(GalaxyRingShiftTest, ChainedShiftsLargerThanSocketFifoAlongColumns) {
+TEST_F(GalaxyRingShiftTest, ChainedShiftsOfLargeShardsAlongColumns) {
     TestChainedRingShifts(
         1, 4 * 45056, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
+}
+
+// The socket manager outlives the device, and its intra-mesh sockets hold buffers of the mesh they were created on.
+// close_device drops them, so the first shift on the reopened mesh creates new ones. The reopened mesh has the same
+// shape and fabric config, so tests that run after this one use it as the fixture's device.
+TEST_F(GalaxyRingShiftTest, ShiftAfterDeviceReopen) {
+    using namespace ttml;
+    TestChainedRingShifts(1, 2048, 64, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/1);
+
+    const auto mesh_shape = autograd::ctx().get_device().shape();
+    autograd::ctx().close_device();
+    ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(mesh_shape.mesh_size()));
+    autograd::ctx().open_device(mesh_shape);
+
+    TestChainedRingShifts(1, 2048, 64, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/3);
 }
