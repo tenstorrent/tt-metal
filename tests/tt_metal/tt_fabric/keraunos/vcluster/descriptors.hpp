@@ -51,8 +51,9 @@ struct GeneratedDescriptors {
     std::filesystem::path cluster_desc;
     std::vector<std::filesystem::path> soc_descs;  // index = fabric_chip
     std::filesystem::path mesh_graph_desc;
-    std::filesystem::path
-        env_emu;  // env.emu: TT_METAL_EMU_CLUSTER_DESC, TT_METAL_EMU_SOC_DESC, TT_MESH_GRAPH_DESC_PATH
+    // env.emu: TT_METAL_EMU_CLUSTER_DESC, TT_METAL_EMU_SOC_DESC, TT_MESH_GRAPH_DESC_PATH,
+    // TT_METAL_EMU_PACKAGE_SOC_DESC (the absolute `package_soc_desc`)
+    std::filesystem::path env_emu;
     std::filesystem::path
         env_mock;  // env.mock: the same with TT_METAL_MOCK_CLUSTER_DESC_PATH for the cluster descriptor
 };
