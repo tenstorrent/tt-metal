@@ -133,6 +133,17 @@ CENTER_TAP_SLOTS = True
 # M-block per core); elsewhere every tap is tilized. False tilizes every tap.
 NSLICE_CENTER_TAPS = True
 
+# Padded slab (kernels/conv2d_3x3_padded_slab.hpp), on the N-slice center-tap prelude (stride 1, p == d, W % 32 == 0,
+# one M-block per core): compute untilizes each image row of the slab into its own slot of W + d pixels behind d zero
+# pixels (the reader zeroes the gaps with its center copy), so every tap block of every tile-row is one contiguous slab
+# run or the zero block. Compute then tilizes the prelude from sources it computes itself (padded_tilize): the reader
+# publishes no table, gathers no edge tap and runs no per-group handshake; it only fills, copies the center taps and
+# waits for a one-page "slab dead" token. The unit ring shrinks to one unit (format only). The slab grows by d / W plus
+# the partial rows at the band ends, taken only where it fits the leftover L1 plus the freed ring. The fill's unread
+# tail rows are no longer untilized. Measured (Blackhole p150b, LoFi, bit-identical): res4.x 15901 -> 13431 ns (median
+# of 3; the prelude tilize 4.5 -> 2.4 us, now at its 1-wide payload rate), res5.x -3% to -5%, aspp.convs.x flat.
+PADDED_SLAB = True
+
 # Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
 # tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
 # reader then writes the bf16 in0 tiles itself, one read per face run, and compute skips the tilize. False keeps
@@ -505,6 +516,47 @@ def _tile_slab_rows(g: Conv3x3Geometry, f, band_len):
         next_free = slab_row + (t_hi - t_lo)
         prev = (t_lo, t_hi, slab_row)
     return next_free
+
+
+def _padded_slab_plan(g: Conv3x3Geometry, f, band_len):
+    """(slots, rows) of one M-block's padded slab: mirror of conv2d_3x3::padded_slab::plan (image rows of the fill's
+    tile-rows ranked in fill order, a segment starting in the row the previous one ended in sharing its slot)."""
+    tpr = max(1, g.input_width // TILE)
+    prev_t_hi, last_row, last_slot, rows = None, -1, -1, 0
+    for kh in range(3):
+        v_lo = f + kh * g.dilation * g.input_width
+        lo, hi = max(v_lo, 0), min(v_lo + band_len, g.num_in_px)
+        if lo >= hi:
+            continue
+        t_lo, t_hi = lo // TILE, _div_up(hi, TILE)
+        first_new = prev_t_hi if prev_t_hi is not None and t_lo < prev_t_hi else t_lo
+        if t_hi > first_new:
+            r0, r1 = first_new // tpr, (t_hi - 1) // tpr
+            s0 = last_slot if last_row >= 0 and r0 == last_row else last_slot + 1
+            rows += t_hi - first_new
+            last_row, last_slot = r1, s0 + (r1 - r0)
+        prev_t_hi = t_hi
+    return last_slot + 1, rows
+
+
+def padded_slab_capable(g: Conv3x3Geometry):
+    """Geometry side of PADDED_SLAB: every tap block of a tile-row is one run of a slab whose rows sit d pixels apart
+    (stride 1, p == d, whole-tile image rows)."""
+    return g.tile_input and g.stride == 1 and g.padding == g.dilation and g.input_width % TILE == 0
+
+
+def padded_slab_extent(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
+    """(slots_max, slab pixels) over every M-block of every core: slots_max + 1 gaps of d pixels around slots_max rows
+    of W pixels (the fill's unread tail rows are not untilized)."""
+    slots_max = 0
+    for start, actual in _core_m_ranges(g.tensor_m_tiles, core_m_tiles):
+        for block_start in range(0, actual, block_m_tiles):
+            tiles = min(block_m_tiles, actual - block_start)
+            o_first = (start + block_start) * TILE
+            o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
+            slots, _ = _padded_slab_plan(g, _block_first_tap(g, o_first), _block_band_len(g, o_first, o_last))
+            slots_max = max(slots_max, slots)
+    return slots_max, slots_max * (g.input_width + g.dilation) + g.dilation
 
 
 @functools.lru_cache(maxsize=1024)
@@ -1388,9 +1440,33 @@ def create_program_descriptor(
     # whole-slab input ring (which must then fit the smaller in0).
     nslice_center = nslice_center_capable(g, b) and whole_slab_ring(g.tensor_k_tiles - 3 * g.c_in_tiles)
     in0_k_tiles = g.tensor_k_tiles - (3 * g.c_in_tiles if nslice_center else 0)
+    # Padded slab (see PADDED_SLAB): cb_im2col_rm keeps one unit (compute's tilize only takes its format) and
+    # cb_src_table one token page; the slab grows by the gaps and the partial rows at the band ends. Taken where that
+    # fits the L1 left at the solved blocking plus what the unit ring and the source table give back.
+    padded_slab = False
+    pad_slots_max = 0
+    if PADDED_SLAB and nslice_center and not kwf and padded_slab_capable(g) and b.max_m_blocks_per_core == 1:
+        pad_slots_max, pad_px = padded_slab_extent(g, b.core_m_tiles, bm)
+        pad_bytes = _div_up(pad_px * pixel_bytes, TILE_BYTES_BF16) * TILE_BYTES_BF16
+        old_bytes = slab_cb.total_size
+        new_bytes = max(old_bytes, pad_bytes)
+        given_back = (b.im2col_rm_depth_rows - 1) * bk * TILE_BYTES_BF16 + _src_table_bytes(b.im2col_rm_depth_rows)
+        leftover = l1_cb_budget_bytes(resident) - b.footprint_bytes + given_back - RING_TOKEN_BYTES
+        if new_bytes - old_bytes <= leftover:
+            padded_slab = True
+            if b.shared_slab_bytes:
+                slab_cb = _shared_cb(
+                    _div_up(new_bytes, TILE_BYTES_FP32) * TILE_BYTES_FP32,
+                    (CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16),
+                    (CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32),
+                    cores,
+                )
+            else:
+                slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16, new_bytes // TILE_BYTES_BF16, cores)
     cbs = [slab_cb]
     if not face_direct:
-        cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, b.im2col_rm_depth_rows * bk, cores))
+        im2col_rm_pages = (1 if padded_slab else b.im2col_rm_depth_rows) * bk
+        cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, im2col_rm_pages, cores))
     cbs += [
         # Face-direct: the reader writes these tiles; it relies on every K-block starting at the CB base.
         _cb(
@@ -1461,6 +1537,9 @@ def create_program_descriptor(
     tap_direct_windows = not kwf and _tap_direct_windows(g, bm, bk, b.nslice, b.center_mode)
     if tap_direct_fifo_units:
         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 16, tap_direct_fifo_units, cores))
+    elif tap_direct and padded_slab:
+        # Padded slab: a one-page "slab dead" token, compute (packer) -> reader.
+        cbs.append(_cb(CB_SRC_TABLE, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
     elif tap_direct:
         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 64, _src_table_bytes(b.im2col_rm_depth_rows) // 64, cores))
     center_mode = b.center_mode
@@ -1895,7 +1974,7 @@ def create_program_descriptor(
             compute_args += _nslice_kh_masks(
                 g, bm, _ring_subblock(bm, ns)[0], m_tile_start, actual_m_tiles, num_m_blocks_this_core
             )
-        if kwf:
+        if kwf or padded_slab:
             compute_args += [m_tile_start, actual_m_tiles]
             compute_args += _kwf_xchg_flags(g, m_tile_start, actual_m_tiles) if kwf_xchg else [0, 0]
         if b.ring:
@@ -1975,13 +2054,28 @@ def create_program_descriptor(
             # The halo exchange's code only where it runs (it costs RISC time on small subblocks even when idle).
             ("KWF_XCHG", str(int(kwf_xchg))),
         ]
+    _pad_dm_defines, _pad_compute_defines = [], []
+    if padded_slab:
+        _pad_dm_defines = [("CONV2D_3X3_PADDED_SLAB", "1"), ("PAD_SLAB_SLOTS_MAX", str(pad_slots_max))]
+        _pad_compute_defines = [
+            ("CONV2D_3X3_PADDED_SLAB", "1"),
+            ("PAD_SLAB_IN_H", str(g.input_height)),
+            ("PAD_SLAB_IN_W", str(g.input_width)),
+            ("PAD_SLAB_OUT_W", str(g.output_width)),
+            ("PAD_SLAB_PAD", str(g.padding)),
+            ("PAD_SLAB_DIL", str(g.dilation)),
+            ("PAD_SLAB_NUM_IN_PX", str(g.num_in_px)),
+            ("PAD_SLAB_NUM_OUT_PX", str(g.num_out_px)),
+            ("PAD_SLAB_SLOTS_MAX", str(pad_slots_max)),
+            ("PAD_SLAB_CB_ZERO", str(CB_ZERO_SRC)),
+        ]
     readers = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
             core_ranges=_core_range_set(reader_cores),
             compile_time_args=reader_ct_args(*slice_channels),
             runtime_args=reader_rt,
-            defines=_kwf_dm_defines,
+            defines=_kwf_dm_defines + _pad_dm_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
@@ -2002,7 +2096,7 @@ def create_program_descriptor(
         core_ranges=cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
-        defines=_kwf_compute_defines,
+        defines=_kwf_compute_defines + _pad_compute_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,

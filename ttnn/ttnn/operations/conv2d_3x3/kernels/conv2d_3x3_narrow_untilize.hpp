@@ -87,6 +87,29 @@ inline void pack_contig(uint32_t addr, uint32_t g) {
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 0);
 }
+
+// Padded slab (conv2d_3x3_padded_slab.hpp): DEST tiles [t0, t1) of the current section to L1 at `addr` (16 B units,
+// packer convention) as one stream, closed by its last PACR. Same PACRs and exit state as pack_contig.
+inline void pack_contig_range(uint32_t addr, uint32_t t0, uint32_t t1) {
+    program_packer_destination(addr);
+    for (uint32_t t = t0; t < t1; ++t) {
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);               // ch0 z = 0: F0|F1
+        TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, t);  // DEST tile t of the section
+        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+        lltt::replay(kReplayOffset, kRowsPerFacePair);
+        TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);  // z += 2 faces: F2|F3
+        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010);
+        if (t + 1 < t1) {
+            lltt::replay(kReplayOffset, kRowsPerFacePair);
+        } else {
+            lltt::replay(kReplayOffset, kRowsPerFacePair - 1);
+            CONV2D_3X3_NU_PACR_ROW(1);  // closes the run's stream
+        }
+    }
+    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010);
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 0);
+}
 #endif
 
 // One DEST section: the g fronted input tiles to the g reserved output pages.
@@ -105,6 +128,55 @@ ALWI void section(uint32_t g) {
     pack_contig(get_local_cb_interface(out_id).fifo_wr_ptr - 1, g);
 #endif
     PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+}
+
+// Padded slab: as section(), but tile-row k0 + t of the section goes to L1 byte address px_bytes[k0 + t]; each run of
+// tile-rows that are consecutive in L1 (2 KB apart) is one stream.
+template <uint32_t icb, uint32_t ocb>
+ALWI void section_at(uint32_t g, [[maybe_unused]] const uint32_t* px_bytes) {
+    MATH((llk_math_wait_for_dest_available()));
+    for (uint32_t i = 0; i < g; ++i) {
+        UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, i)));
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+            i, icb)));
+    }
+    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+    PACK((llk_packer_wait_for_math_done()));
+#ifdef TRISC_PACK
+    constexpr uint32_t row_bytes = 32 * 64;  // one 1-wide tile-row of bf16 slab rows
+    for (uint32_t t = 0; t < g;) {
+        uint32_t e = t + 1;
+        while (e < g && px_bytes[e] == px_bytes[t] + (e - t) * row_bytes) {
+            ++e;
+        }
+        pack_contig_range((px_bytes[t] >> 4) - 1, t, e);
+        t = e;
+    }
+#endif
+    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+}
+
+// Padded slab: untilize_1wide with tile-row k (in stream order) packed to byte address px_bytes[k] (the CB is still
+// reserved / pushed per section, so the consumer's page counts are unchanged).
+template <uint32_t icb, uint32_t ocb, typename InDFB, typename OutDFB>
+ALWI void untilize_1wide_at(
+    InDFB& in, OutDFB& out, uint32_t num_rows, uint32_t batch_rows, [[maybe_unused]] const uint32_t* px_bytes) {
+    reconfig_data_format_srca(icb);
+    pack_reconfig_data_format(ocb);
+    pack_untilize_init<1, 1>(icb, ocb);
+    PACK((contig_init()));
+    for (uint32_t done = 0; done < num_rows; done += batch_rows) {
+        const uint32_t n = num_rows - done < batch_rows ? num_rows - done : batch_rows;
+        for (uint32_t r = 0; r < n; r += ROWS_PER_SECTION) {
+            const uint32_t g = n - r < ROWS_PER_SECTION ? n - r : ROWS_PER_SECTION;
+            in.wait_front(g);
+            out.reserve_back(g);
+            section_at<icb, ocb>(g, px_bytes + done + r);
+            in.pop_front(g);
+            out.push_back(g);
+        }
+    }
+    pack_untilize_uninit(ocb);
 }
 
 // Untilizes num_rows 1-tile tile-rows from icb into ocb (one bf16 page per tile-row), ROWS_PER_SECTION per DEST

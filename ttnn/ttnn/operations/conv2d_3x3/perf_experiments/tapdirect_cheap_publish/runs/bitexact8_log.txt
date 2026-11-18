@@ -1,0 +1,124 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py
+========================================
+2026-11-18 21:09:31.674 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-18 21:09:31.859 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-18 21:09:31.859 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-18 21:09:31.861 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-18 21:09:31.861 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-18 21:09:31.884 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-18 21:09:31.885 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-18 21:09:32.147 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-18 21:09:32.147 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-18 21:09:32.147 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-18 21:09:32.147 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-18 21:09:32.154 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-18 21:09:32.488 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-18 21:09:32.628 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-18 21:09:32.628 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-18 21:09:32.763 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+collected 28 items
+
+UP_FRONT_INLINE: collect pass over 28 item(s) took 1.9s
+UP_FRONT_INLINE: compile route local (programs=53, farm_min=10)
+
+UP_FRONT_COLLECT: 56 ops stashed across 28 bodies -> 53 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=168 fallback=0
+2026-11-18 21:09:33.910 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-18 21:09:33.992 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 53 collected · 53 built · 0 already compiled in 4.9s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=53 programs=53 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=53 compile_s=5.2 collect_s=1.9 route=local
+UP_FRONT_INLINE: compile step took 5.2s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co256_d1_sh256x32-bf8b] 2026-11-18 21:09:39.074 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co256_d1_sh256x32-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W32_Ci256_Co128_d1_sh64x32-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W32_Ci256_Co128_d1_sh64x32-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W96_Ci128_Co128_d2_sh192x32-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W96_Ci128_Co128_d2_sh192x32-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H8_W128_Ci128_Co64_d1_sh128x32-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H8_W128_Ci128_Co64_d1_sh128x32-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co256_d2_sh224x64-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co256_d2_sh224x64-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci192_Co128_d3_sh128x96-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci192_Co128_d3_sh128x96-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci256_Co128_d1_sh128x128-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci256_Co128_d1_sh128x128-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci320_Co64_d2_sh128x160-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci320_Co64_d2_sh128x160-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci384_Co128_d6_sh256x192-bf8b] SKIPPED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci384_Co128_d6_sh256x192-bf16] SKIPPED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci512_Co64_d4_sh128x256-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci512_Co64_d4_sh128x256-bf16] SKIPPED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H8_W64_Ci576_Co64_d1_sh64x288-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H8_W64_Ci576_Co64_d1_sh64x288-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci128_Co64_d40_sh128x32-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci128_Co64_d40_sh128x32-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co128_d18_sh256x64-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co128_d18_sh256x64-bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H44_W64_Ci128_Co128_d1_sh416x32-bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H44_W64_Ci128_Co128_d1_sh416x32-bf16] PASSEDUP_FRONT_INLINE: real pass took 1.1s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.25s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co256_d1_sh256x32-bf8b]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co256_d1_sh256x32-bf8b]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co256_d2_sh224x64-bf16]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co256_d2_sh224x64-bf8b]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci384_Co128_d6_sh256x192-bf16]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co256_d1_sh256x32-bf16]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci384_Co128_d6_sh256x192-bf8b]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co128_d18_sh256x64-bf16]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci512_Co64_d4_sh128x256-bf16]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H32_W64_Ci256_Co128_d18_sh256x64-bf8b]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci512_Co64_d4_sh128x256-bf8b]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci256_Co128_d1_sh128x128-bf8b]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H44_W64_Ci128_Co128_d1_sh416x32-bf8b]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci256_Co128_d1_sh128x128-bf16]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H8_W64_Ci576_Co64_d1_sh64x288-bf8b]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci192_Co128_d3_sh128x96-bf16]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci320_Co64_d2_sh128x160-bf16]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H8_W64_Ci576_Co64_d1_sh64x288-bf16]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W32_Ci256_Co128_d1_sh64x32-bf8b]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci320_Co64_d2_sh128x160-bf8b]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W64_Ci192_Co128_d3_sh128x96-bf8b]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H44_W64_Ci128_Co128_d1_sh416x32-bf16]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W32_Ci256_Co128_d1_sh64x32-bf16]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H16_W96_Ci128_Co128_d2_sh192x32-bf8b]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py::test_tdcp_bitexact[H44_W64_Ci128_Co128_d1_sh416x32-bf16]
+=========================== short test summary info ============================
+SKIPPED [3] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_cheap_publish/test_tdcp_bitexact.py:138: padded slab not taken: None
+======================== 25 passed, 3 skipped in 8.16s =========================
+2026-11-18 21:09:41.179 | info     |    BuildKernels | JIT cache stats: 114/273 hits (41.8%) [114 cached, 171 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-18 21:09:41.179 | info     |    BuildKernels | JIT telemetry: 44 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-18 21:09:41.229 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-18 21:09:41.229 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-18 21:09:41.723 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-18 21:09:41.723 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-18 21:09:41.723 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 28 item(s) took 1.9s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=53, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 56 ops stashed across 28 bodies -> 53 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=168 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 53 collected · 53 built · 0 already compiled in 4.9s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 5.2s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m15s (15s total, device-lock-acquired -> exit)

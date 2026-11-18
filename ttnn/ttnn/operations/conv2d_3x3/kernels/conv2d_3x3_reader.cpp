@@ -106,6 +106,13 @@
 // rows) into cb_center_tiles ([3, bm, c_in_tiles], kernel-row major), so the tap-direct units carry taps 0 and 2 only.
 // The copy lands before the first unit is pushed: compute's tilize then overwrites the ring (it shares in0's L1).
 //
+// Padded slab (the descriptor's PADDED_SLAB, on the N-slice center taps; conv2d_3x3_padded_slab.hpp): compute
+// untilizes every image row of the slab into a row slot behind d zero pixels, so every tap block is one slab run and
+// compute computes and tilizes the sources itself. This reader then publishes nothing and gathers nothing: it fills,
+// zeroes the slots' gaps from the zero block with the center copy, pushes the center taps (compute tilizes only after
+// that push: its packs overwrite the input ring the copy reads, and it reads the gaps) and waits for compute's one-page
+// token on cb_src_table before it pops the slab.
+//
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
 // zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
@@ -235,6 +242,16 @@ void kernel_main() {
     constexpr bool tap_direct_windows = get_compile_time_arg_val(73) != 0;
     // N-slice center taps (see the file comment).
     constexpr bool nslice_center = get_compile_time_arg_val(74) != 0;
+    // Padded slab (the descriptor's PADDED_SLAB, conv2d_3x3_padded_slab.hpp): compute untilizes the slab into
+    // zero-gapped row slots and tilizes the prelude from sources it computes; this reader zeroes the gaps once, fills,
+    // copies the center taps and waits for compute's one-page "slab dead" token on cb_src_table.
+#ifdef CONV2D_3X3_PADDED_SLAB
+    constexpr bool padded_slab = true;
+    constexpr uint32_t pad_slots_max = PAD_SLAB_SLOTS_MAX;
+#else
+    constexpr bool padded_slab = false;
+    constexpr uint32_t pad_slots_max = 0;
+#endif
     constexpr auto input_args = TensorAccessorArgs<75>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
@@ -460,6 +477,10 @@ void kernel_main() {
         zero_src_noc = get_noc_addr(get_write_ptr(cb_zero_src));
     }
     [[maybe_unused]] const uint32_t zero_src_l1 = tap_major ? get_write_ptr(cb_zero_src) : 0;
+    static_assert(
+        !padded_slab ||
+            (nslice_center && tile_input && padding == dilation && input_width % static_cast<int32_t>(TILE_DIM) == 0),
+        "padded slab: N-slice center taps, stride 1, p == d, whole-tile image rows");
 
     // Input pages [page, end_page) into consecutive L1 page slots from l1. With the split fill, runs of higher
     // shards are the writer's.
@@ -757,6 +778,23 @@ void kernel_main() {
             constexpr int32_t tile_rows_per_image_row = input_width >= TILE_DIM ? input_width / TILE_DIM : 1;
             const uint32_t t_first = m_tile_start + block_tiles_done;
             reads.begin(TRID_CENTER);
+            if constexpr (padded_slab) {
+                // Padded slab: the gap in front of every row slot and after the last one (d pixels each, at fixed
+                // offsets), from the zero block, on the center copy's transaction id. The untilize never writes the
+                // gaps and compute's tilize reads them only after the center push below, which waits for these reads
+                // too (compute must not tilize ahead of that push: zeroing them with the first fill batch instead
+                // measured +2.9%, median of 3). One M-block per core: peers write the shared combine slots only after
+                // this core's slab is dead.
+                constexpr uint32_t slot_bytes = (input_width + dilation) * pixel_bytes;
+                constexpr uint32_t gap_bytes = dilation * pixel_bytes;
+                constexpr uint32_t zero_block_bytes = TILE_DIM * pixel_bytes;
+                for (uint32_t r = 0; r <= pad_slots_max; ++r) {
+                    for (uint32_t off = 0; off < gap_bytes; off += zero_block_bytes) {
+                        const uint32_t n = gap_bytes - off < zero_block_bytes ? gap_bytes - off : zero_block_bytes;
+                        reads.read(zero_src_noc, slab_l1 + r * slot_bytes + off, n);
+                    }
+                }
+            }
             for (int32_t kh = 0; kh < 3; ++kh) {
                 const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
                 uint32_t l1 = center_l1 + kh * block_m_tiles * row_bytes;
@@ -973,7 +1011,8 @@ void kernel_main() {
         if constexpr (tile_row_outer) {
             // N-slice-outer K split: tile-row outer, K-block inner, so compute's tilize lays in0 out row-major over
             // all of K ([bm, K], the one-K-block layout of the slice matmuls).
-            {
+            // Padded slab: compute tilizes from the slab it untilized, with no reader handshake.
+            if constexpr (!padded_slab) {
                 MaybeDeviceZoneScope("reader_band_wait");
                 for (int32_t band = 0; band < 3; ++band) {
                     if constexpr (tile_input) {
@@ -991,6 +1030,12 @@ void kernel_main() {
                 while (assign_cursor < m_seq_end) {
                     take_unit(m_seq_end);
                 }
+            } else if constexpr (padded_slab) {
+                // Padded slab: no gather (compute computes every tap source). The center copy reads the input ring,
+                // which compute's tilize overwrites: compute tilizes only once this push says it landed.
+                MaybeDeviceZoneScope("reader_center_wait");
+                reads.wait(TRID_CENTER);
+                cb_push_back(cb_center_tiles, 3 * block_m_tiles * c_in_tiles);
             } else if constexpr (tap_direct) {
                 if constexpr (nslice_center) {
                     // The center copy reads the input ring, which compute's tilize overwrites once a unit is pushed.
@@ -1262,7 +1307,12 @@ void kernel_main() {
             }
         }
 
-        if constexpr (window_direct || (tap_direct && nslice_outer)) {
+        if constexpr (padded_slab) {
+            // Compute tilized the prelude straight from the slab: its token says the slab is dead.
+            MaybeDeviceZoneScope("reader_slab_dead_wait");
+            cb_wait_front(cb_src_table, 1);
+            cb_pop_front(cb_src_table, 1);
+        } else if constexpr (window_direct || (tap_direct && nslice_outer)) {
             // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
             cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
         } else if constexpr (kb_tap_direct && !tile_input) {

@@ -257,8 +257,11 @@ ALWI void section_close_math_wait_pack() {
 }
 
 // Whole-row mode: `rows` (1 .. 4 / ct) tile-rows from input tile in_tile0 to output tile out_tile0.
+// px_bytes (padded slab, conv2d_3x3_padded_slab.hpp): byte address of the section's first tile-row (its rows are
+// consecutive in L1); nullptr packs at the CB write pointer.
 template <uint32_t ct, uint32_t icb, uint32_t ocb>
-ALWI void section_whole_rows(uint32_t rows, uint32_t in_tile0, uint32_t out_tile0) {
+ALWI void section_whole_rows(
+    uint32_t rows, uint32_t in_tile0, uint32_t out_tile0, [[maybe_unused]] const uint32_t* px_bytes = nullptr) {
     constexpr uint32_t unit_rows = Plan<ct>::unit_stride;  // DEST rows per unit
     [[maybe_unused]] const uint32_t units = 2 * rows;
     section_open();
@@ -276,7 +279,9 @@ ALWI void section_whole_rows(uint32_t rows, uint32_t in_tile0, uint32_t out_tile
     section_close_math_wait_pack();
 #ifdef TRISC_PACK
     const uint32_t output_id = get_output_id(ocb);
-    program_packer_destination(get_output_tile_address<true, PackMode::Default>(output_id, out_tile0));
+    program_packer_destination(
+        px_bytes != nullptr ? (px_bytes[0] >> 4) - 1
+                            : get_output_tile_address<true, PackMode::Default>(output_id, out_tile0));
     if constexpr (ct == 2) {
         pack_reset_src_counters();
         ckernel_template::run();
@@ -301,7 +306,8 @@ ALWI void section_whole_rows(uint32_t rows, uint32_t in_tile0, uint32_t out_tile
 // Half (h) of a cw-tile chunk at column tile c0 of a tile-row: in_row / out_row index it in the input / output CB
 // windows (the input window is the batch, the output window the group).
 template <uint32_t ct, uint32_t icb, uint32_t ocb, bool strided, uint32_t cw>
-ALWI void section_half_chunk(uint32_t in_row, uint32_t out_row, uint32_t c0, uint32_t h) {
+ALWI void section_half_chunk(
+    uint32_t in_row, uint32_t out_row, uint32_t c0, uint32_t h, [[maybe_unused]] const uint32_t* px_bytes) {
     section_open();
 #ifdef TRISC_UNPACK
     {
@@ -319,7 +325,9 @@ ALWI void section_half_chunk(uint32_t in_row, uint32_t out_row, uint32_t c0, uin
         const uint32_t output_id = get_output_id(ocb);
         // Slab row 16h of this tile-row, column tile c0: one bf16 slab row is 64 * ct B = 4 * ct 16 B units.
         program_packer_destination(
-            get_output_tile_address<true, PackMode::Default>(output_id, out_row * ct) + h * 16 * 4 * ct + c0 * 4);
+            (px_bytes != nullptr ? (px_bytes[0] >> 4) - 1
+                                 : get_output_tile_address<true, PackMode::Default>(output_id, out_row * ct)) +
+            h * 16 * 4 * ct + c0 * 4);
         pack_reset_src_counters();
         if constexpr (strided) {
             TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1000);  // ch1 Y = 0: this half's first slab row
@@ -331,15 +339,15 @@ ALWI void section_half_chunk(uint32_t in_row, uint32_t out_row, uint32_t c0, uin
 }
 
 template <uint32_t ct, uint32_t icb, uint32_t ocb, bool strided, uint32_t cw>
-ALWI void chunk_both_halves(uint32_t in_row, uint32_t out_row, uint32_t c0) {
-    section_half_chunk<ct, icb, ocb, strided, cw>(in_row, out_row, c0, 0);
-    section_half_chunk<ct, icb, ocb, strided, cw>(in_row, out_row, c0, 1);
+ALWI void chunk_both_halves(uint32_t in_row, uint32_t out_row, uint32_t c0, const uint32_t* px_bytes = nullptr) {
+    section_half_chunk<ct, icb, ocb, strided, cw>(in_row, out_row, c0, 0, px_bytes);
+    section_half_chunk<ct, icb, ocb, strided, cw>(in_row, out_row, c0, 1, px_bytes);
 }
 
 // Chunk mode: chunk c (compile-time width) at column tile c0, both halves; the pack MOP is reprogrammed only where
 // the width differs from the chunk packed before it (cyclically: the last chunk of the previous tile-row).
 template <uint32_t ct, uint32_t icb, uint32_t ocb, uint32_t c, uint32_t c0>
-ALWI void chunks(uint32_t in_row, uint32_t out_row) {
+ALWI void chunks(uint32_t in_row, uint32_t out_row, const uint32_t* px_bytes = nullptr) {
     using P = Plan<ct>;
     if constexpr (c < P::num_chunks) {
         constexpr uint32_t cw = P::chunk_w(c);
@@ -347,8 +355,8 @@ ALWI void chunks(uint32_t in_row, uint32_t out_row) {
         if constexpr (cw != prev_cw) {
             PACK((pack_mop_config<true>(cw, true)));
         }
-        chunk_both_halves<ct, icb, ocb, true, cw>(in_row, out_row, c0);
-        chunks<ct, icb, ocb, c + 1, c0 + cw>(in_row, out_row);
+        chunk_both_halves<ct, icb, ocb, true, cw>(in_row, out_row, c0, px_bytes);
+        chunks<ct, icb, ocb, c + 1, c0 + cw>(in_row, out_row, px_bytes);
     }
 }
 
@@ -358,9 +366,18 @@ ALWI void chunks(uint32_t in_row, uint32_t out_row) {
 // end of a ring_rows-row output ring (ring_rows 0: the output CB is whole batches and never wraps inside a group);
 // ring_pos is the output's row position in that ring and is carried across calls. Includes init and uninit (formats
 // reconfigured as the helper does).
+// px_bytes (padded slab, conv2d_3x3_padded_slab.hpp; ring_rows must be 0): tile-row k (stream order) is packed at
+// byte address px_bytes[k] instead of at the CB write pointer; a whole-row section holds only tile-rows that are
+// consecutive in L1. The CB is still reserved / pushed as before, so the consumer's page counts are unchanged.
 template <uint32_t ct, uint32_t icb, uint32_t ocb, typename InDFB, typename OutDFB>
 ALWI void untilize_wide(
-    InDFB& in, OutDFB& out, uint32_t num_rows, uint32_t batch_rows, uint32_t ring_rows, uint32_t& ring_pos) {
+    InDFB& in,
+    OutDFB& out,
+    uint32_t num_rows,
+    uint32_t batch_rows,
+    uint32_t ring_rows,
+    uint32_t& ring_pos,
+    const uint32_t* px_bytes = nullptr) {
     using P = Plan<ct>;
     static_assert(DST_ACCUM_MODE, "fp32 DEST layout (4 tiles per half-sync section)");
     reconfig_data_format_srca(icb);
@@ -387,7 +404,18 @@ ALWI void untilize_wide(
                 if (ring_rows > 0 && ring_rows - ring_pos < g) {
                     g = ring_rows - ring_pos;
                 }
+                if (px_bytes != nullptr) {
+                    // Padded slab: only tile-rows consecutive in L1 share a section (one stream).
+                    constexpr uint32_t row_bytes = 32 * 64 * ct;
+                    const uint32_t* px = px_bytes + done + r;
+                    uint32_t run = 1;
+                    while (run < g && px[run] == px[0] + run * row_bytes) {
+                        ++run;
+                    }
+                    g = run;
+                }
             }
+            [[maybe_unused]] const uint32_t* px = px_bytes != nullptr ? px_bytes + done + r : nullptr;
             if constexpr (P::whole_rows) {
 #ifdef TRISC_PACK
                 if constexpr (ct == 2) {
@@ -397,11 +425,11 @@ ALWI void untilize_wide(
                     }
                 }
 #endif
-                section_whole_rows<ct, icb, ocb>(g, r * ct, 0);
+                section_whole_rows<ct, icb, ocb>(g, r * ct, 0, px);
             } else if constexpr (!P::strided) {
-                chunk_both_halves<ct, icb, ocb, false, ct>(r, 0, 0);
+                chunk_both_halves<ct, icb, ocb, false, ct>(r, 0, 0, px);
             } else {
-                chunks<ct, icb, ocb, 0, 0>(r, 0);
+                chunks<ct, icb, ocb, 0, 0>(r, 0, px);
             }
             out.push_back(g * ct);
             r += g;

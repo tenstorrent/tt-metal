@@ -17,6 +17,11 @@
 // (in0 [bm, 6 * c_in_tiles]) and the ring walk reads the kw = 1 taps from cb_center_tiles ([3, bm, c_in_tiles], the
 // reader's copy of the input tiles), in the same K order (bit-identical).
 //
+// Padded slab (the descriptor's PADDED_SLAB, conv2d_3x3_padded_slab.hpp): on the N-slice center taps the untilize packs
+// each image row of the slab into its own zero-gapped slot (runtime args after the masks: the core's output range), and
+// padded_tilize computes every tap block's source (a slab run or the zero block) itself, after waiting for the slab's
+// last pack and the reader's center push; a one-page token on cb_src_table then tells the reader the slab is dead.
+//
 // N-slice kernel-row skip: the ring walk multiplies, per row group, only the range of kernel rows that is in the image
 // for some row of the group (runtime args 3..: the host's masks, see the ring walk). The others are all-zero K tiles of
 // in0.
@@ -60,6 +65,7 @@
 #include "conv2d_3x3_narrow_untilize.hpp"
 #include "conv2d_3x3_wide_untilize.hpp"
 #include "conv2d_3x3_lean_tilize.hpp"
+#include "conv2d_3x3_padded_slab.hpp"
 #ifdef CONV2D_3X3_KW_FOLD
 #include "conv2d_3x3_kw_fold.hpp"
 #endif
@@ -232,6 +238,97 @@ ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units,
             }
         }
         in.pop_front(tw * taps);
+    }
+    fast_tilize_uninit(cb_in, cb_out, tw);
+}
+
+// Padded-slab tilize (the descriptor's PADDED_SLAB, conv2d_3x3_padded_slab.hpp): every tap block of the N-slice
+// prelude is one contiguous run of the padded slab or the zero block, so compute computes each source itself (output
+// tile-row t, kernel row kh, tap kw: slab pixel (h_in + band_row_off[kh]) * (W + d) + w0 + kw * d, p == d) and tilizes
+// it with direct_tilize's tile loop: no reader table, no gathered blocks, no cb_im2col_rm handshake. Taps 0 and 2 only
+// (the center taps come from cb_center_tiles), in the unit order of direct_tilize (tile-row, kernel row, tap): the same
+// in0 tiles (bit-identical). The caller orders the unpacker after the slab's last pack and the reader's center copy.
+// Raw LLK (capability), as direct_tilize: ckl::tilize / fast_tilize_block read at the CB read pointer.
+template <
+    uint32_t tw,
+    uint32_t block_m_tiles,
+    uint32_t cb_in,
+    uint32_t cb_out,
+    uint32_t output_width,
+    int32_t input_height,
+    int32_t input_width,
+    int32_t padding,
+    int32_t dilation>
+ALWI void padded_tilize(
+    DataflowBuffer& out,
+    [[maybe_unused]] uint32_t o_first,
+    [[maybe_unused]] uint32_t o_end,
+    [[maybe_unused]] const int32_t (&band_row_off)[3],
+    [[maybe_unused]] uint32_t slab_l1,
+    [[maybe_unused]] uint32_t zero_l1) {
+    reconfig_data_format_srca(cb_in);
+    pack_reconfig_data_format(cb_out);
+    fast_tilize_init(cb_in, tw, cb_out);
+    if constexpr (tw > 1) {
+        PACK((conv2d_3x3::lean_tilize::pack_init()));
+    }
+    [[maybe_unused]] uint32_t prev_chunk = 0;
+    [[maybe_unused]] constexpr uint32_t pixel_bytes = tw * 32 * 2;
+    [[maybe_unused]] constexpr int32_t slot_px = input_width + dilation;
+    for (uint32_t t = 0; t < block_m_tiles; ++t) {
+        [[maybe_unused]] const uint32_t o = o_first + t * 32;
+        [[maybe_unused]] const int32_t ho0 = o / output_width;
+        [[maybe_unused]] const int32_t wo0 = o % output_width;
+        for (int32_t kh = 0; kh < 3; ++kh) {
+            [[maybe_unused]] uint32_t row_src = 0;
+#ifdef TRISC_UNPACK
+            {
+                const int32_t h_in = ho0 + kh * dilation - padding;
+                row_src =
+                    (o >= o_end || h_in < 0 || h_in >= input_height)
+                        ? 0
+                        : slab_l1 + static_cast<uint32_t>((h_in + band_row_off[kh]) * slot_px + wo0) * pixel_bytes;
+            }
+#endif
+            for (uint32_t kw = 0; kw < 3; kw += 2) {
+                [[maybe_unused]] uint32_t src = 0;
+                UNPACK((src = row_src == 0 ? zero_l1 : row_src + kw * dilation * pixel_bytes));
+                if constexpr (tw == 1) {
+                    out.reserve_back(1);
+                    UNPACK((direct_unpack_tilize<cb_in>(src)));
+                    MATH((llk_math_wait_for_dest_available()));
+                    PACK((llk_packer_wait_for_math_done()));
+                    MATH((llk_math_eltwise_unary_datacopy<
+                          DataCopyType::A2D,
+                          DST_ACCUM_MODE,
+                          BroadcastType::NONE,
+                          UnpackToDestEn>(0, cb_in)));
+                    PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0, cb_out, 0)));
+                    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+                    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+                    out.push_back(1);
+                } else {
+                    out.reserve_back(tw);
+                    PACK((conv2d_3x3::lean_tilize::pack_row_begin(cb_out, 0)));
+                    for (uint32_t tiles_done = 0; tiles_done < tw;) {
+                        const uint32_t chunk = conv2d_3x3::lean_tilize::chunk_of(tw - tiles_done);
+                        MATH((llk_math_wait_for_dest_available()));
+                        PACK((llk_packer_wait_for_math_done()));
+                        if (chunk != prev_chunk) {
+                            UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                            prev_chunk = chunk;
+                        }
+                        UNPACK((window_unpack_chunk<cb_in>(src, chunk, tiles_done)));
+                        MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
+                        PACK((conv2d_3x3::lean_tilize::pack_row_chunk(chunk)));
+                        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+                        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+                        tiles_done += chunk;
+                    }
+                    out.push_back(tw);
+                }
+            }
+        }
     }
     fast_tilize_uninit(cb_in, cb_out, tw);
 }
@@ -593,6 +690,25 @@ void kernel_main() {
     // N-slice center taps (see the file comment).
     constexpr bool nslice_center = get_compile_time_arg_val(44) != 0;
     static_assert(!nslice_center || (tap_direct && block_k_tiles == 3 * c_in_tiles));
+    // Padded slab (the descriptor's PADDED_SLAB, conv2d_3x3_padded_slab.hpp): N-slice center taps on a slab whose rows
+    // sit in zero-gapped slots; the prelude tilizes every tap straight from it (padded_tilize), the reader only fills.
+#ifdef CONV2D_3X3_PADDED_SLAB
+    constexpr bool padded_slab = true;
+    constexpr int32_t pad_in_h = PAD_SLAB_IN_H;
+    constexpr int32_t pad_in_w = PAD_SLAB_IN_W;
+    constexpr uint32_t pad_out_w = PAD_SLAB_OUT_W;
+    constexpr int32_t pad_p = PAD_SLAB_PAD;
+    constexpr int32_t pad_d = PAD_SLAB_DIL;
+    constexpr int32_t pad_num_in_px = PAD_SLAB_NUM_IN_PX;
+    constexpr uint32_t pad_num_out_px = PAD_SLAB_NUM_OUT_PX;
+    constexpr uint32_t pad_slots_max = PAD_SLAB_SLOTS_MAX;
+    constexpr uint32_t cb_zero_src = PAD_SLAB_CB_ZERO;
+#else
+    constexpr bool padded_slab = false;
+    constexpr int32_t pad_in_h = 1, pad_in_w = 32, pad_p = 1, pad_d = 1, pad_num_in_px = 32;
+    constexpr uint32_t pad_out_w = 32, pad_num_out_px = 32, pad_slots_max = 1, cb_zero_src = 0;
+#endif
+    static_assert(!padded_slab || (nslice_center && k_split && nslice_outer && tile_input && pad_p == pad_d));
     static_assert(!tap_direct || (!face_direct && !strided_window));
     static_assert(kb_tap_direct == (tap_direct && !(k_split && nslice_outer)));
     static_assert(!ring_slab || (tile_input && !k_split && !face_direct && c_in_tiles > 1));
@@ -765,12 +881,66 @@ void kernel_main() {
         }
     };
 
+    // Padded slab: the block's output range (runtime args after the kernel-row masks), the slab and zero-block bases.
+    [[maybe_unused]] uint32_t pad_m_tile_start = 0;
+    [[maybe_unused]] uint32_t pad_actual_m_tiles = 0;
+    [[maybe_unused]] uint32_t pad_slab_l1 = 0;
+    [[maybe_unused]] uint32_t pad_zero_l1 = 0;
+    if constexpr (padded_slab) {
+        constexpr uint32_t kh_words = ((block_m_tiles + slice_sb_h - 1) / slice_sb_h + 9) / 10;
+        pad_m_tile_start = get_arg_val<uint32_t>(3 + num_m_blocks_this_core * kh_words);
+        pad_actual_m_tiles = get_arg_val<uint32_t>(4 + num_m_blocks_this_core * kh_words);
+        // The unpacker never pops either CB: their read pointers stay at the base.
+        UNPACK((pad_slab_l1 = get_local_cb_interface(get_operand_id(cb_halo_slab)).fifo_rd_ptr << 4));
+        UNPACK((pad_zero_l1 = get_local_cb_interface(get_operand_id(cb_zero_src)).fifo_rd_ptr << 4));
+        PACK((pad_slab_l1 = (get_local_cb_interface(get_output_id(cb_halo_slab)).fifo_wr_ptr) << 4));
+    }
+    [[maybe_unused]] conv2d_3x3::padded_slab::Plan pad_plan{};
+    [[maybe_unused]] uint32_t pad_o_first = 0;
+    [[maybe_unused]] uint32_t pad_o_end = 0;
+
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+        if constexpr (padded_slab) {
+            const uint32_t done = m_block_idx * block_m_tiles;
+            const uint32_t valid =
+                pad_actual_m_tiles - done < block_m_tiles ? pad_actual_m_tiles - done : block_m_tiles;
+            pad_o_first = (pad_m_tile_start + done) * 32;
+            const uint32_t o_end_tiles = pad_o_first + valid * 32;
+            pad_o_end = o_end_tiles < pad_num_out_px ? o_end_tiles : pad_num_out_px;
+            conv2d_3x3::padded_slab::plan<pad_out_w, pad_in_w, pad_p, pad_d, pad_num_in_px>(
+                pad_o_first, pad_o_end, pad_plan);
+        }
         if constexpr (tile_input) {
             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
             MaybeDeviceZoneScope("compute_untilize");
             pack_reconfig_l1_acc(0);
-            if constexpr (ring_slab) {
+            if constexpr (padded_slab) {
+                // Padded slab: each of the plan's tile-rows to its row slot (one M-block per core: the slab CB's
+                // pointers stay at the base). Every thread builds the table: the wide untilize's section split depends
+                // on it. The fill's unread tail rows are popped, not untilized, and their slab pages pushed unwritten.
+                [[maybe_unused]] uint32_t px_bytes[slab_tile_rows > 0 ? slab_tile_rows : 1];
+                const uint32_t rows = pad_plan.rows;
+                for (uint32_t k = 0; k < rows; ++k) {
+                    px_bytes[k] = pad_slab_l1 +
+                                  conv2d_3x3::padded_slab::tile_row_px<pad_in_w, pad_d, pad_slots_max>(pad_plan, k) *
+                                      c_in_tiles * 64;
+                }
+                if constexpr (untilize_width_tiles == 1) {
+                    conv2d_3x3::narrow_untilize::untilize_1wide_at<cb_input_tiles, cb_halo_slab>(
+                        input_tiles_dfb, halo_slab_dfb, rows, untilize_batch_rows, px_bytes);
+                } else {
+                    constexpr uint32_t wide_ct = untilize_width_tiles < 2 ? 2 : untilize_width_tiles;
+                    wide_untilize::untilize_wide<wide_ct, cb_input_tiles, cb_halo_slab>(
+                        input_tiles_dfb, halo_slab_dfb, rows, untilize_batch_rows, 0, untilize_ring_pos, px_bytes);
+                }
+                const uint32_t tail = slab_tile_rows - rows;
+                if (tail > 0) {
+                    input_tiles_dfb.wait_front(tail * c_in_tiles);
+                    input_tiles_dfb.pop_front(tail * c_in_tiles);
+                    halo_slab_dfb.reserve_back(tail * c_in_tiles);
+                    halo_slab_dfb.push_back(tail * c_in_tiles);
+                }
+            } else if constexpr (ring_slab) {
                 const uint32_t rows = get_arg_val<uint32_t>(3 + 2 * m_block_idx);
                 const uint32_t tail_rows = get_arg_val<uint32_t>(4 + 2 * m_block_idx);
                 if (rows > 0) {
@@ -846,6 +1016,32 @@ void kernel_main() {
                 if constexpr (strided_window) {
                     window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
                         im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
+                } else if constexpr (padded_slab) {
+                    {
+                        // The slab's last pack landed (the push is stored after the packer drained), and the reader's
+                        // center copy, with the slab gaps' zeroing, landed: it read the input ring, which shares in0's
+                        // L1 (the walk waits on the same pages). Tilizing the tile-rows past the ring before the
+                        // center push measured flat (the center copy ends with the untilize) and would need the gaps
+                        // zeroed earlier.
+                        MaybeDeviceZoneScope("compute_tilize_wait");
+                        CircularBuffer(cb_halo_slab).wait_front(slab_tile_rows * c_in_tiles);
+                        center.wait_front(3 * block_m_tiles * c_in_tiles);
+                    }
+                    padded_tilize<
+                        im2col_tilize_width_tiles,
+                        block_m_tiles,
+                        cb_im2col_rm,
+                        cb_im2col_tiles,
+                        pad_out_w,
+                        pad_in_h,
+                        pad_in_w,
+                        pad_p,
+                        pad_d>(
+                        im2col_tiles_dfb, pad_o_first, pad_o_end, pad_plan.band_row_off, pad_slab_l1, pad_zero_l1);
+                    // The slab is dead: tell the reader (cb_src_table is a one-page token on this path).
+                    CircularBuffer done_token(cb_src_table);
+                    done_token.reserve_back(1);
+                    done_token.push_back(1);
                 } else if constexpr (tap_direct) {
                     direct_tilize<
                         im2col_tilize_width_tiles,
