@@ -126,6 +126,41 @@ def test_format_rejects_bad_values(expect_error):
         media_format.Header.read(buf)
 
 
+def test_format_reads_any_view_in_bytes(expect_error):
+    stored = bytearray(media_format.stored_nbytes(6, 64))
+    media_format.Header("image").write(memoryview(stored))
+    rows = media_format.embeddings(memoryview(stored), 64)
+    rows[:] = np.arange(rows.size).reshape(rows.shape)
+    views = (
+        stored,
+        memoryview(stored).cast("H"),
+        memoryview(stored).cast("B", [2, len(stored) // 2]),
+        memoryview(np.frombuffer(stored, np.uint16).reshape(2, -1)),
+    )
+    for view in views:
+        assert media_format.Header.read(view) == media_format.Header("image")
+        got = media_format.embeddings(view, 64)
+        assert np.array_equal(got, rows) and np.shares_memory(got, rows)
+    with expect_error(ValueError, "of 14 B"):
+        media_format.Header.read(memoryview(stored).cast("H")[:7])
+    with expect_error(ValueError, f"{len(stored) - 2} B"):
+        media_format.embeddings(memoryview(stored).cast("H")[:-1], 64)
+
+
+def test_format_errors_hold_no_view(expect_error):
+    """A reader may close its shared memory while it still holds the error."""
+    stored = bytearray(media_format.stored_nbytes(1, 64) - 2)
+    stored[0] = len(media_format.KINDS)
+    view = memoryview(stored)
+    with expect_error(ValueError, "unknown media kind") as kind_error:
+        media_format.Header.read(view)
+    with expect_error(ValueError, "whole bf16 rows") as size_error:
+        media_format.embeddings(view, 64)
+    view.release()  # as SharedMemory.close does
+    stored.append(0)  # a bytearray cannot grow while any view of it is alive, such as one an error holds
+    assert kind_error.value.__traceback__ and size_error.value.__traceback__  # both errors were held until here
+
+
 def test_image_pickles_out_of_band():
     item = MiniMaxM3Media(CONFIG).prepare("image", rgb(672, 896))
     buffers = []
