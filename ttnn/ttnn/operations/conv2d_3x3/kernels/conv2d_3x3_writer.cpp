@@ -791,18 +791,12 @@ void kernel_main() {
         {
             // Back-pressure from compute's matmul.
             MaybeDeviceZoneScope("writer_weight_reserve");
-            if constexpr (tile_fill_split) {
-                // Compute may need this core's fill before it frees the slot.
-                while (!cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
-                    serve_fill();
-                }
-            }
-#ifdef KWF_XCHG
-            // Compute may sit at a halo-exchange gate before it frees the slot (see the exchange above).
+            // Compute may need this core's fill, or sit at a halo-exchange gate (see the exchange above), before it
+            // frees the slot: one loop serves both, or the writer can spin on one while compute waits on the other.
             while (!cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
+                serve_fill();
                 khx_poll();
             }
-#endif
             cb_reserve_back(cb_weights, weight_k_block_tiles);
         }
         const uint32_t l1 = get_write_ptr(cb_weights);
