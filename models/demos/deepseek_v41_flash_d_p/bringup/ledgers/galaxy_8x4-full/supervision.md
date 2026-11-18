@@ -1832,3 +1832,31 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   /scratch/dnijemcevic/phase_1117/stray/ (the ledger copy is committed).
 - 06:1x P.73 (hide the history gather) applied to tasks.yaml; launching: resume --only FIX.36 (clears the stop, no agent),
   then --only P.73. Pending framework fix before any gate that runs test_full_prefill: F259 batch reload OOM.
+- 06:12 unaccounted RAM 18.3 GiB (15.3 at 05:42; +3.0 over FIX.36's fix loop end and its gate run). P.73 agent reading (no edits, no device job yet).
+- 06:4x OWNER: gather hiding must be injected into an existing kernel, no extra op. Sent the running P.73 agent a cross-session message (session tt-metal-1f, delivered) and note OV-44 for any later attempt. Candidate named: the indexer ring score (already rings index keys over SP).
+- 06:5x OWNER clarified: injection is an idea; a separate op is fine if it hides (e.g. in the engram wait gap). Sent a second message to the P.73 session; OV-44 replaced by the new note.
+- 06:42 P.73 first numbers (sub-device route, before my messages took effect?): standalone 1M gather+top-k per source 7.28 -> 5.45 ms (row0:0-5 gather cores + 110 compute = 116 cores busy at once, above the 110 cap whose violation caused FIX.36's hang); in the model bit-identical, chunk wall 1M 152.8 -> 150.7, 51k 109.5 -> 110.8, 256k 117.0 -> 119.1 (noise). Unaccounted RAM 20.6 GiB.
+- 06:5x OWNER: hardly any idle gaps; inject into another kernel when links are less busy; candidates engram wait, token-id readback of the next chunk. Sent to P.73 (third message); note OV-46 replaces OV-45.
+- 07:12 P.73 agent done (attempt 1): shipped HISTORY_GATHER_OVERLAP=on = history gathered as ROW_MAJOR rows (no tilize/untilize, high_bw on both axes), standalone 10.0 -> 5.9 ms a source at 1M; the engram-window move (fixed-stride table) left as next step. A/B running (off side). Unaccounted RAM 23.4 GiB.
+- 07:06 HANG again, in P.73's on side (the agent's `orchestrator measure`): STATIC_TABLES=off + HISTORY_GATHER_OVERLAP=on
+  (row gather), test_skip_positions after p256000, same signature (dispatch cores 15-2/15-3 on every chip). FIX.36's proof
+  loop ran STATIC_TABLES=on only: the off path and the new row gather were never looped. The device was left dirty; the
+  A/B's off side at 07:11 started the safe runner's reset: recover-hosts (no sys-triage) FAILED: PCIe device 7 unreachable
+  ("Read 0xffffffff from PCIE", PcieHangError, POST_RESET failed for /dev/tenstorrent/7), validation skipped. The box is
+  unusable until a host-level power cycle (BMC / admins). P.73 was WAITING FOR A PERSON with an empty A/B; orchestrator
+  stopped (07:1x). Partial on-side numbers before the hang: steady wall 111.5 / 110.6 / 112.3 ms at 51k / 128k / 256k
+  (off-path P.72: 109.1 / 111.6 / 118.3). Unaccounted RAM 23.4 GiB at 07:12.
+- 07:2x OWNER asked for tt-smi -glx_reset: ran it by hand: IPMI reset issued, POST_RESET failed again for /dev/tenstorrent/7 (secondary bus reset not completed). Chip 7 needs a host reboot / power cycle.
+- 09:0x HAND-OFF written: /data/dnijemcevic/bringup/handoff_20261118/HANDOFF.md (+ bundle of the 5 local commits, the uncommitted P.73 diff/tgz, step1 report, A/B records). Box needs a host reboot (chip 7).
+- 09:17 INFRA: host rebooted (owner / admins) for chip 7; job 219332. 09:20 link check (validation only, no reset, no
+  sys-triage): all links healthy; box test PASS; unaccounted RAM 2.8 GiB.
+- 09:2x P.73 back to its agent with note OV-48 (reproduce and cap the off-path / row-gather hang with the loop, >= 20 clean
+  rounds per switch value, before its A/B). OVERSEER ERROR: I used `bringup rerun --from P.73` to restart the task; it
+  resets the task AND runs its gate (it started test_batch on the device with the hanging configuration and reset P.72 to
+  TODO). Stopped it after ~2 min (TaskStop; no hang seen; cards marked dirty, the next job resets them). Lesson: `rerun`
+  is a gate runner; to restart an agent use `orchestrator resume --only <task>` (status RUNNING / the next attempt).
+- 09:3x P.73 resume first went straight back to the old (empty) A/B decision; changed P.73's brief (attempt-2 instruction: fix the off-path hang first), which voids the old A/B key, and resumed: perf attempt 2 started with notes OV-46/OV-48.
+- 09:42 P.73 attempt 2: core audit run (p73_coreaudit_on) done, hang loop p73_loop1 running. Unaccounted RAM 14.4 GiB (2.8 at 09:20: +11.6 over my stopped gate run, its card reset and the core audit).
+- 10:07 P.73 attempt 2, off path + row gather hung again in its loop (p73_loop3, round 16, p256000 resumed) after capping slice/bitcast to 110 cores; safe runner resetting (no sys-triage). OWNER: the bring-up ran weeks on 120 cores without a hang; the first hang (11-17 14:26) ran FIX.34/35's code: spawned a read-only analysis agent (what changed between 11-15 and 11-17: builds, env, firmware/KMD, mesh-open warnings, the 13:57 link validation); report to /scratch/dnijemcevic/phase_1117/hang_origin_report.md. Unaccounted RAM 5.4 GiB at 10:12 (14.4 at 09:42: it FELL by 9 GiB across the reset).
+- 10:1x P.73 attempt 2 ended: KNOWLEDGE CONTRADICTED DS41-283: its loop with every program <= 110 cores (STATIC_TABLES=off) hung after 2,944 chunks (chip 25 dead): the 110-core cap is NOT the cause. The orchestrator then started P.73's A/B; I stopped it (doomed: hang every ~20 min, A/B ~40 min) until the hang-origin analysis reports. tt-triage never produced output in any hang (fails in UMD discovery on the dead chip); sent the analysis agent that, the Inspector dump and the watch-mode data. Cards dirty (reset by the next job).
+- 10:5x OWNER: rebase the whole branch (as llk_helper_library) onto the main of mstaletovic/moe-block-65124-split-rows (main 8a317f39a8d, 2026-11-17, + 11 MoE commits), then port Marko's MoE from that branch; only DeepSeek-V4.1 Flash matters (other models' bring-up ops may break), no extensive tests; MoE replication later. Backup tag backup/model_bringup_pre_rebase_20261118 + bundle in the handoff dir. P.73 attempt-2 WIP committed as is (not accepted; its off-path hang is unresolved; history_overlap.py, the reverted sub-device experiment, deleted).

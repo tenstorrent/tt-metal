@@ -1,0 +1,96 @@
+{
+ "used": [
+  {
+   "id": "DS41-283",
+   "how": "read the hang's per-chip last programs and the dead-MMIO chip the same way; stopped all device work at the hang",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-285",
+   "how": "same remedy class: sub_core_grids on the uncapped stock calls (bitcasts), the watch's OVER list as the audit",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-288",
+   "how": "the attempt-1 hang this attempt reproduces; entry updated with the likely cause (DS41-289)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-1",
+   "how": "_composite_capped frees the broadcast pieces / row-major copies only after their consumers ran",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-283",
+   "evidence": "its Fix line says FIX.36's caps fix the hang (41 rounds clean); P.73 loop3 (all programs <= 110 cores, STATIC_TABLES=off) hung after 2,944 chunks with the same signature (chip 25 MMIO dead): /scratch/dnijemcevic/phase_1117/p73a2/loop3.log",
+   "cited": true
+  },
+  {
+   "id": "DS41-288",
+   "evidence": "said the cause was not found and nothing outside the gather changed; the STATIC_TABLES=off path ran 120-core programs on both A/B sides (DS41-289)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "ttnn.slice of an ND-sharded ROW_MAJOR tensor whose height is not tile-aligned takes a composite (to_memory_config) that ignores sub_core_grids",
+  "ttnn.to_layout(TILE, sub_core_grids=) drops the grid when it has to pad; ttnn.all_gather's composite ignores sub_core_grid",
+  "FIX.36's core audit covered STATIC_TABLES=on only: every setting value a gate runs needs the audit"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "the own slab rounding adds at most one chunk stripe of rows to the model's own state, no work: the slices read the same rows; nothing padded to fit an op's work"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched (stock all_broadcast / concat / tilize / untilize / bitcast with sub_core_grids)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only test_skip_hang_loop.py and tests/perf/test_core_audit.py"
+  },
+  {
+   "id": "OV-46",
+   "answer": "n/a",
+   "evidence": "engram-window injection deferred by OV-48 to the next step; no sub-device split shipped"
+  },
+  {
+   "id": "OV-48",
+   "answer": "done",
+   "evidence": "reproduced with test_skip_hang_loop (STATIC_TABLES=off, switch alternating per round); watch found 120-core programs on both switch values (DS41-289), capped; loop then clean 16 rounds (8 a side, determinism 0, on vs off bit-identical) and HUNG in round 17 (chip 25 MMIO dead): stopped there, so the >= 20 rounds a side and the STATIC_TABLES=on run were not reached; switch name kept"
+  }
+ ],
+ "cited_only": [
+  "DS41-289"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.73",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-18T10:14:01",
+  "head": "64d86b8c8c5",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.73.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_hang_loop.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/cores.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

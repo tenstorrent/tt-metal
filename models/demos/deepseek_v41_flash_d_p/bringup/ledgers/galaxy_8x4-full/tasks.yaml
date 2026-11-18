@@ -4714,7 +4714,7 @@ tasks:
       op through ttnn.bringup.prepare_program / run_prepared. No fork regression or unit suites on the 8x4; only the tests
       you add and the model-level checks. If the split cannot work (L1, grids, a CCL that cannot take a sub-device), stop
       with the evidence and the next option, do not force it. Report short: what is hidden at each position, device and
-      wall, vs off and vs on (P.72''s table).'
+      wall, vs off and vs on (P.72''s table). ATTEMPT 2 (overseer 2026-11-18): first fix the hang your A/B hit at 07:06 (STATIC_TABLES=off + this switch on, test_skip_positions; see the open notes): loop, cap, prove >= 20 clean rounds per switch value, then stop; the orchestrator measures.'
   ab:
     keep_default: true
     env:

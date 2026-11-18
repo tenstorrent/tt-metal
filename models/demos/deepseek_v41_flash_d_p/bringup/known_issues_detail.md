@@ -1539,3 +1539,38 @@ Open leads, cheapest first (each costs a box reset if it hangs; the owner decide
   p256000 steady layer-19 output bit-identical to round 0 in all 40 comparisons. Before: hangs at rounds 13, 7 and 16
   (mean ~12): 41 clean rounds at that rate has a chance of about 3%. The causal link (120-core di/dt trip -> chip
   drops) is the likely one (rule 18's own failure mode, a random chip each time), not proven by a single experiment.
+
+## STATIC_TABLES=off ran 120-core programs at odd chunk counts (rule 18; FIX.36 audited STATIC_TABLES=on only)
+
+(DS41-289; P.73 attempt 2, 2026-11-18, 8x4, DECODER_SKIP=decode, tests/test_skip_hang_loop.py HANGLOOP_GATHER_ROWS=alt.)
+
+FIX.36 capped the 120-core programs it saw with STATIC_TABLES=on. STATIC_TABLES=off had never been audited. At odd
+chunk counts (every A/B and skip-positions point: nb = 11, 51, 101, 151, 201) the history slab holds nb x 80 compressed
+rows a chip, which is not a multiple of 32. Found with the hang-loop watch, then charged to calls with
+tests/perf/test_core_audit.py (BRINGUP_POS=1024000):
+- both switch values: `ServedRows.slab.slice_rows`: ttnn.slice of the ND-sharded ROW_MAJOR slab with a non-tile H
+  takes the composite path (slice.cpp needs_rm_composite_input: to_memory_config to L1 interleaved, slice, back to
+  DRAM), whose copies take no sub_core_grids: 120 cores, 6 calls a chunk (0.64 ms). `_topk_rows`' two ttnn.bitcast
+  calls had no sub_core_grids: 120 cores, 8 calls each.
+- HISTORY_GATHER_OVERLAP=off only: `to_layout(sl, TILE, sub_core_grids=...)` pads through tilize_with_zero_padding
+  without the grid (119 cores); the TP gather of the padded rows takes ttnn.all_gather's composite (all_broadcast +
+  concat; all_gather.cpp says it ignores sub_core_grid): the concat's ROW_MAJOR program on 120 cores, ~11 a chunk.
+
+Fix (bit-identical; rows_on vs rows_off at layer 19 identical in every round):
+- tt/compressor.TtServedRows: an own slab (the ladder / tests; never the engine's) gets rows rounded up to
+  lcm(32, the chip's rows a chunk) (update_padded_kv_cache needs rows % the per-chip chunk rows == 0; plain 32
+  rounding TT_FATALs there), so ttnn.slice takes its native, capped ND-sharded path. `_natural` reads the first crows.
+  An engine slab of non-tile rows would still take the composite: none at the deployment size (204 chunks, even).
+- tt/sparse_attention._topk_rows: both bitcasts get sub_core_grids.
+- tt/cores.to_tile: a padded tilize as tilize_with_val_padding(0.0, sub_core_grids) (the same zero padding).
+- tt/ccl.all_gather: where stock would take the composite under the cap, `_composite_capped` runs the same steps
+  (all_broadcast at its defaults, untilize each piece, ROW_MAJOR concat, zero-pad tilize) on the capped grid.
+
+After: loop3 (one load, the switch flipped every round): 16 rounds, 8 a side, 2,944 chunks with no program over 110
+cores on any chip and determinism 0 on both sides; then a hang in round 17 (rows_on), p256000 resumed run 10 cur:
+the DS41-283 signature again. Chips 0-3 and 24-27 never finished rid 13887 (ring_attention all_gather + indexer
+score, 104 cores; their last program the rope_chain before it), the other 24 waited further on; chip 25's MMIO dead at
+teardown ("4B load took 55505 us"); tt-triage failed; the safe runner reset the box (32 boards back). So the 120-core
+programs were not the only trigger: a chip drops with every program at or under 110. FIX.36's 41 clean rounds
+(STATIC_TABLES=on) were one sample; the rate at ~2,900 chunks is the rate it had before the caps (~2,400). Log:
+/scratch/dnijemcevic/phase_1117/p73a2/loop3.log (audit.log, loop2.log, coreaudit_on.log next to it).

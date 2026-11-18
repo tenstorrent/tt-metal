@@ -114,6 +114,19 @@ def to_rm(x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
     return ttnn.untilize_with_unpadding(x, output_tensor_end=end, memory_config=memory_config, sub_core_grids=sc)
 
 
+def to_tile(x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
+    """ttnn.to_layout(x, TILE) under the cap (P.73, DS41-289): to_layout of a ROW_MAJOR x whose last two dims are not
+    tile-aligned pads through tilize_with_zero_padding WITHOUT the sub_core_grids it was given (119 cores on the
+    Galaxy), so a capped mesh calls tilize_with_val_padding(0.0) on the capped grid itself: the same tiles (zero pad).
+    Without a cap, or aligned: ttnn.to_layout, the call as before."""
+    sc = sub_cores(x)
+    s = [int(d) for d in x.shape]
+    if sc is None or x.layout == ttnn.TILE_LAYOUT or (s[-1] % 32 == 0 and s[-2] % 32 == 0):
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=memory_config, sub_core_grids=sc)
+    padded = s[:-2] + [-(-s[-2] // 32) * 32, -(-s[-1] // 32) * 32]
+    return ttnn.tilize_with_val_padding(x, ttnn.Shape(padded), 0.0, memory_config=memory_config, sub_core_grids=sc)
+
+
 def sub_cores_tiled(x: ttnn.Tensor):
     """sub_cores(x) for an op that takes sub_core_grids only on TILE inputs (ttnn.typecast: typecast_device_op.cpp
     refuses it for a ROW_MAJOR input); None for a ROW_MAJOR x."""

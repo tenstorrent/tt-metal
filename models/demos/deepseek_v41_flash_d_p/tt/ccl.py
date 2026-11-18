@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import ttnn
 
-from .cores import sub_cores, sub_cores_tiled
+from .cores import sub_cores, sub_cores_tiled, to_rm, to_tile
 from .settings import settings
 
 TP_AXIS = 1
@@ -258,6 +258,8 @@ def all_gather(
     was reserved for this output spec (``reserve``; the result is then that buffer, which ``dealloc`` skips)."""
     mesh = t.device()
     if not fabric() or not _fits(t, dim):
+        if _composite_uncapped(t, dim):  # (P.73, DS41-289: stock's composite would run on 120 cores)
+            return _composite_capped(t, dim, cluster_axis)
         return ttnn.all_gather(t, dim=dim, cluster_axis=cluster_axis, memory_config=DRAM)
     g = mesh.shape[cluster_axis]
     shape = list(t.shape)
@@ -272,6 +274,37 @@ def all_gather(
     )
     # (a load-time output: the op returns a new wrapper of its buffer (DS41-149); hand back the kept object itself)
     return out if site is not None and id(out) in _KEEP else res
+
+
+def _composite_uncapped(t: ttnn.Tensor, dim: int) -> bool:
+    """ttnn.all_gather would take its composite path (a TILE gather of a dim that is not tile-aligned,
+    all_gather.cpp use_composite_all_gather), which ignores sub_core_grids, on a capped mesh (rule 18)."""
+    rank = len(t.shape)
+    d = dim % rank
+    return (
+        sub_cores(t) is not None
+        and t.layout == ttnn.TILE_LAYOUT
+        and d >= rank - 2
+        and int(t.shape[d]) % 32 != 0
+        and not t.memory_config().is_sharded()
+    )
+
+
+def _composite_capped(t: ttnn.Tensor, dim: int, cluster_axis: int) -> ttnn.Tensor:
+    """Stock's composite all_gather (composite_common.cpp composite_all_gather: all_broadcast with its default links /
+    topology, then ttnn.concat, whose massaged path untilizes each TILE piece, concats ROW_MAJOR and re-tilizes with
+    zero padding) with every step after the broadcast on the capped grid (P.73, DS41-289): the same pieces, rows and
+    tiles. Does not consume ``t``."""
+    pieces = ttnn.all_broadcast(t, cluster_axis=cluster_axis, memory_config=DRAM, num_links=None, topology=None)
+    rms = [to_rm(p, memory_config=DRAM) for p in pieces]
+    for p in pieces:
+        dealloc(p)
+    cat = ttnn.concat(rms, dim=dim, memory_config=DRAM, sub_core_grids=sub_cores(t))
+    for r in rms:
+        dealloc(r)
+    out = to_tile(cat, memory_config=DRAM)
+    dealloc(cat)
+    return out
 
 
 def _gather_add(mesh, t: ttnn.Tensor) -> ttnn.Tensor:

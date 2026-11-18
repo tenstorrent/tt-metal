@@ -228,6 +228,18 @@ TABLE = {
         "moves only (the same bf16 rows and the same keys per query): not a precision switch. Memory: a replicated "
         "copy of each source's compressed KV per slot (2x2 at 57,344: r2 28 MiB, r1 56 MiB a chip)",
     ),
+    "HISTORY_GATHER_OVERLAP": Setting(
+        "off",
+        ("off", "on"),
+        "P.73 (owner 2026-11-18; only with STATIC_TABLES=off): the cost of the KV source layer's per-chunk history "
+        "gather (tt/sparse_attention._compressed). off = the P.19 / P.72 path: the slab's rows tiled, all_gather TP then "
+        "SP, untilized (at an odd chunk count nb x 80 rows is not tile-aligned: the TP gather takes the composite "
+        "all_gather). on = the rows gathered as stored (ROW_MAJOR, high_bw_all_gather on both axes at any row count), "
+        "no tilize / untilize: the same rows in the same order (bit-identical). 8x4, a source at 1M: 10.04 -> 5.93 ms "
+        "(tests/test_history_gather_overlap.py::test_history_gather_rows). The name is the task's: P.73's first "
+        "build, a sub-device overlap (tt/history_overlap.py, not wired), was stopped by the overseer (116 cores busy at "
+        "once, over the 110 cap)",
+    ),
     "BF16_ACTIVATIONS": Setting(
         "on",
         ("on", "off"),

@@ -446,6 +446,67 @@ notes:
     with ''only 2 routing planes'' at open): the same chip every time points at that chip''s links, which is a box report
     for the owner, not a code fix. After a hang: stop, let the safe runner reset (~2 min), check the box test, continue;
     at most 3 hangs in this attempt, then report.'
+- id: OV-44
+  tasks:
+  - P.73
+  status: closed
+  t: '2026-11-18T06:40:59'
+  text: 'OWNER 2026-11-18: hide the history gather by INJECTING its data movement into an existing kernel that runs before
+    sparse attention (first candidate: the indexer''s ring score ttnn.bringup.ring_indexer_score_dsa, which already rings
+    the index keys over SP into a persistent buffer); no sub-device split and no separate concurrent op (one in-order CQ).
+    Bit-identical to the plain off path, determinism 0, 110-core cap, switch in settings.py.'
+  closed: '2026-11-18T06:41:46'
+  why_closed: 'owner: injection is an idea, not a rule; replaced'
+- id: OV-45
+  tasks:
+  - P.73
+  status: closed
+  t: '2026-11-18T06:41:46'
+  text: 'OWNER 2026-11-18: injecting the gather into an existing kernel is an idea, not a rule. A separate op is fine if
+    it really hides (e.g. placed in a device idle gap such as the wait for the engram host rows, or a measured sub-device
+    overlap); the owner doubts a separate op overlaps. Measure the device idle gaps (where, how long, 256k and 1M) and what
+    each route hides before building; injection (the indexer ring score first) is the fallback.'
+  closed: '2026-11-18T06:45:30'
+  why_closed: 'owner: hardly any idle gaps; inject'
+- id: OV-46
+  tasks:
+  - P.73
+  status: open
+  t: '2026-11-18T06:45:30'
+  text: 'OWNER 2026-11-18: the device has hardly any idle gaps; the history gather most likely has to be injected into another
+    kernel, moving rows when the links are less busy. Candidates: overlap with the engram wait (layers 1 / 14) or with the
+    token-id readback at the next chunk''s start. No sub-device split (2 ms at 1M, 116 cores busy: above the 110 cap).'
+- id: OV-47
+  tasks:
+  - P.73
+  status: closed
+  t: '2026-11-18T09:21:08'
+  text: 'FIRST, before anything else: your A/B hung the 8x4 at 2026-11-18 07:06 (STATIC_TABLES=off + HISTORY_GATHER_OVERLAP=on,
+    test_skip_positions after p256000, dispatch cores 15-2/15-3 on every chip) and the reset then lost chip 7 until a host
+    reboot. FIX.36''s proof loop ran STATIC_TABLES=on only. Reproduce with tests/test_skip_hang_loop.py under DS41_STATIC_TABLES=off
+    DS41_DECODER_SKIP=decode, with your switch on AND off (its watch mode prints every program over 110 cores; the row gather
+    and the off path''s ops are the suspects: high_bw_all_gather''s core grid, untilize/tilize, the remap); cap whatever
+    runs outside the 110-core grid (agent rule 18, as FIX.36 did); prove with >= 20 clean loop rounds for both switch values
+    (and one for STATIC_TABLES=on), determinism 0. Stop at a hang (the safe runner resets without sys-triage, ~5 min). Then:
+    rename HISTORY_GATHER_OVERLAP to what it is (e.g. HISTORY_GATHER_ROWS: the history gathered as row-major rows; it overlaps
+    nothing) everywhere incl. tasks.yaml''s ab is the overseer''s: say the new name in BREADCRUMBS and I update tasks.yaml.
+    The engram-window injection stays the next step (OV-46), not this attempt.'
+  closed: '2026-11-18T09:21:17'
+  why_closed: 'reworded: no rename this attempt (tasks.yaml ab names the switch)'
+- id: OV-48
+  tasks:
+  - P.73
+  status: open
+  t: '2026-11-18T09:21:17'
+  text: 'FIRST, before anything else: your A/B hung the 8x4 at 2026-11-18 07:06 (STATIC_TABLES=off + HISTORY_GATHER_OVERLAP=on,
+    test_skip_positions after p256000, dispatch cores 15-2/15-3 on every chip); the reset then lost chip 7 until a host
+    reboot. FIX.36''s proof loop ran STATIC_TABLES=on only. Reproduce with tests/test_skip_hang_loop.py under DS41_STATIC_TABLES=off
+    DS41_DECODER_SKIP=decode, your switch on AND off (its watch mode prints every program over 110 cores; suspects: the
+    row gather''s high_bw_all_gather core grid, untilize/tilize, the off path''s remap); cap whatever runs outside the 110-core
+    grid (agent rule 18, as FIX.36 did); prove with >= 20 clean loop rounds for each switch value plus one run with STATIC_TABLES=on,
+    determinism 0. Stop at a hang (the safe runner resets without sys-triage, ~5 min). Keep the switch name HISTORY_GATHER_OVERLAP
+    for now (tasks.yaml''s A/B names it; the overseer renames it after the A/B). The engram-window injection stays the next
+    step, not this attempt.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'

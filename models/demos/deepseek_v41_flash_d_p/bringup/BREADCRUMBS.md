@@ -2339,3 +2339,106 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   (99.1); wall 107.2 (106.7) .. 123.2 (120.4): within run-to-run noise.
 - Box report for the owner: the four chips with "only 2 routing planes" (phys 7 / 15 / 31 / 23) are not singled out:
   the dead chip was 15, 3, 7 in three hangs (two of them in that set, one not).
+
+## P.73 (perf, attempt 1): the STATIC_TABLES=off history gather overlapped with compute (HISTORY_GATHER_OVERLAP off | on)
+
+- Estimate (written before the change). Plan: a sub-device split that needs no op re-gridded: compute = the capped
+  11x10 grid at (0,0) (every model op already runs there, FIX.15 / FIX.36), gather = the free 12th column (10 cores; the
+  gather needs 3 x links). In layer s (2, 8, 14) the TP gather stays serial (~10 % of the bytes), the SP gather (~90 %)
+  runs on the gather column while the indexer's top-k runs on the compute grid; clear = the join. Only non-fabric
+  compute may share the region: the ring score (axis 0) would share the gather's routers (V3 overlaps only different
+  axes / no fabric). Expected device saving a chunk = sum over the 3 sources of min(SP gather, top-k): ~0.5 ms at 51k,
+  ~6-9 ms at 1M (top-k ~2-3 ms a source at 1M, SP gather ~4-6 ms); host +0.3..+1 ms (2 manager switches a source).
+  Far less than off - on (+30 ms device at 1M): the untilize after the gather and the remap stay serial.
+- Change (HISTORY_GATHER_OVERLAP=on, default off as the owner's brief; only with STATIC_TABLES=off, INDEXER_GLUE=on):
+  tt/history_overlap.py (sub-device manager made once at load, local L1 0), tt/sparse_attention.py
+  (`_compressed(overlap, run)`, `history_overlapped`: the gathered rows go into the chunk memo under the key the
+  attention step looks up), tt/indexer.py (`topk_of` takes a one-shot `overlap` hook; `topk_large_indices(grid=)`),
+  tt/model.py (`gather_overlap` on the KV source layers 2, 8, 14, 20 that index themselves; the indexer step sets the
+  hook). Off path untouched. Other boxes (no core cap): `get` is None, the serial path.
+- Region (per source, per chunk): TP gather serial (as before), then load_sub_device_manager, the SP high_bw_all_gather
+  on sub-device 1 (row 0, columns 0-5: 4 link workers + 2 copy cores, its own L1_SMALL semaphore pair per axis,
+  DS41-216), topk_large_indices on sub-device 0 (110 cores: rows 1-9 + row 0 cols 6-7), clear = the join; the
+  gather's input / output are freed only after it. Then untilize + remap as before. No fabric op in the region (the
+  indexer's ring score is SP-axis: same routers as the gather).
+- Split probes (tests/test_history_gather_overlap.py, standalone, 1M shapes, ms a source, serial gather + top-k ->
+  region): col 11 (compute = the capped 11x10 itself): 7.28 -> 8.44 (gather 8.35 vs 5.13 serial: far from the links);
+  row 0 all + compute 11x9 (99): 7.16 -> 5.30 but the top-k differs (the op splits rows by core count, ties);
+  row0:3-8 / 6-11: gather 7.19, nothing hidden; row0:0-5 + 110 compute: 7.28 -> 5.45, top-k identical: shipped
+  (DS41-286). At 51k: 0.58 -> 0.48 a source.
+- Rule 18 (owner's call): every op <= 110 cores (top-k 110, gather 6), but inside a region 116 cores are busy at once
+  (the 6 gather cores do data movement only), 3 regions a chunk, ~0.5-5.5 ms each.
+- Model check (tests/test_history_gather_overlap_model.py, one load, DS41_STATIC_TABLES=off
+  DS41_HISTORY_GATHER_OVERLAP=on DS41_DECODER_SKIP=decode; off = the blocks' gather_overlap flipped): layer 19's output
+  on vs off bit-identical at p51200, p256000, p1024000; 3 regions a chunk (layers 2, 8, 14; layer 20 runs only its KV
+  head under decode), none off. Chunk wall (synced, median of 5, one process): p51200 110.8 vs 109.5, p256000 119.1
+  vs 117.0 (noise), p1024000 150.7 vs 152.8 ms.
+- Overseer stop (2026-11-18, three messages): no sub-device split (116 cores busy at once is over the 110 cap, FIX.36's
+  hang cause; ~2 ms of ~30 ms too little), then: no gap hunt, inject the gather where the links are quiet (engram wait,
+  id readback). Done: the sub-device wiring REVERTED (patch kept at /scratch/dnijemcevic/phase_1117/
+  p73_subdevice_wiring.patch); tt/history_overlap.py and tests/test_history_gather_overlap.py stay as the measured probe
+  (not wired). Its on-side frozen tests had passed (measure --part test, rc 0) before the stop.
+- Analysis (rt-profiler timeline, STATIC_TABLES=off, p1024000, all 40 layers, BRINGUP_PROFILE_OPS=1; ms a source, layer
+  2): TP gather 2.17 (the COMPOSITE all_gather: nb x 80 = 16080 rows is not tile-aligned at odd nb, so tt/ccl._fits
+  refuses high_bw), SP high_bw_all_gather 4.98, untilize 2.77 = ~10 ms; x 3 sources = the whole off - on gap (~30 ms).
+  Device idle: before layer 1's engram matmul 66.6 ms under the profiler (the host's engram rows; the clean wall's
+  host share at 1M is ~25-33 ms), L2 / L8 / L14 compressor 14 / 10 / 7 ms; nothing else above 4 ms. What runs in the
+  engram window: nothing (the device waits); the history [0, start) is complete at chunk start, so its gather could
+  be enqueued just before that wait, but only the history part (the chunk's own period is written at layer s), and
+  the table must stay one tensor for sparse_sdpa: [history | chunk] needs a 0.5 GB concat or a fixed-stride table
+  (high_bw_all_gather's gathered_slab_global / gathered_prefix_tensor, V3's prefix gather) plus a remap with that
+  stride. The id readback window: the same idle device, the same constraint. Not built in this attempt.
+- Built instead (the cheapest bit-identical cut of that ~10 ms, no op or core added): HISTORY_GATHER_OVERLAP=on now =
+  the history gathered as the slab's ROW_MAJOR rows (tt/sparse_attention._compressed, ``gather_rows``): no tilize, no
+  untilize, high_bw_all_gather on both axes at any row count. Standalone (test_history_gather_rows): bit-identical,
+  10.04 -> 5.93 ms a source at 1M, 1.10 -> 0.58 at 51k (expected ~-12 ms device a chunk at 1M, ~-1.5 at 51k).
+  Remaining ~6 ms a source = the two gathers: the engram-window move above is the next step.
+- Model check (tests/test_history_gather_overlap_model.py, rows version, one load): layer 19 on vs off bit-identical
+  at p51200 and p1024000; chunk wall p51200 108.9 vs 110.6, p1024000 144.0 vs 152.8 ms.
+- measure --part test (change on: STATIC_TABLES=off HISTORY_GATHER_OVERLAP=on): test_determinism rc 0,
+  test_decoder_skip_decode rc 0, test_skip_positions HUNG (DS41-288): dispatch TIMEOUT at p1024000 resumed, warm-up
+  run 1, right after the steady kind's profiled run. Stopped all device work there (brief / overseer); the ladder,
+  the final measure and the gate were NOT run. Steady points it measured (wall / device ms; P.72 off, P.72 on):
+  p51200 111.5 / 82.2 (109.1 / 83.2, 104.5 / 80.7); p256000 112.3 / 91.4 (118.3 / 92.7, 108.1 / 84.2);
+  p512000 121.5 / 98.2 (125.9 / 104.4, 112.4 / 88.5); p768000 132.5 / 107.3 (141.4 / 116.3, 116.2 / 92.9);
+  p1024000 140.7 / 115.2 (155.8 / 128.3, 123.0 / 98.4). P.72 predates FIX.36's caps: the orchestrator's A/B is the
+  real off column.
+- Next (not built): the remaining ~6 ms a source at 1M is the two gathers; moving the history part [0, start) to the
+  engram wait before layer 1 (the device idles there) needs a fixed-stride table (high_bw_all_gather's
+  gathered_slab_global, V3's prefix gather) + the remap with that stride, and the chunk's own period gathered at layer s.
+- Re-run: `DS41_STATIC_TABLES=off DS41_HISTORY_GATHER_OVERLAP=on DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_history_gather_overlap_model.py -s`;
+  standalone: `scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_history_gather_overlap.py -s`.
+
+## P.73 (perf, attempt 2): the 07:06 hang first (OV-48): STATIC_TABLES=off capped, loop hung again
+
+- Expected saving (unchanged from attempt 1, written before that change): HISTORY_GATHER_OVERLAP=on = the ROW_MAJOR
+  history gather, ~-4 ms device a source at 1M (~-12 ms a chunk), ~-0.5 a source at 51k; host ~0. No perf code
+  changed in this attempt.
+- tests/test_skip_hang_loop.py: HANGLOOP_GATHER_ROWS=alt flips the sparse attentions' ``gather_rows`` every round
+  (both switch values in one load; per-side determinism reference, and on vs off compared and asserted bit-identical);
+  HANGLOOP_STOP_OVER=1 stops after the first round with a program over the cap.
+- Audit (STATIC_TABLES=off, watch + tests/perf/test_core_audit.py BRINGUP_POS=1024000): 120-core programs on BOTH
+  switch values, every chunk (DS41-289): the slab slice's composite copies (ND-sharded RM slab, nb x 80 rows not
+  tile-aligned at odd nb: every skip-positions / A/B point), 2 uncapped bitcasts in _topk_rows; switch off also the
+  composite all_gather's concat (120) and the padded tilize (119). FIX.36 had audited STATIC_TABLES=on only, so the
+  attempt-1 hang (DS41-288) ran with these on both A/B sides.
+- Fix (bit-identical, no switch, all boxes: no-ops without a cap or when aligned): own slab rows rounded up to
+  lcm(32, chip rows a chunk) (tt/compressor; 32 alone trips update_padded_kv_cache's cache_seq % written_seq);
+  bitcasts capped; tt/cores.to_tile; tt/ccl._composite_capped (stock's composite steps on the capped grid).
+- Proof loop (loop3, 50 min budget, STATIC_TABLES=off, sides alternating): rounds 1-16 clean (8 rows_on, 8 rows_off,
+  2,944 chunks), no program over 110 on any chip, determinism 0 on both sides, rows_on vs rows_off layer 19 identical
+  in all 15 cross compares. Round 17 (rows_on, p256000 resumed run 10) HUNG: the DS41-283 signature (chips 0-3 /
+  24-27 stopped before the 104-core ring_attention gather + indexer program; chip 25 MMIO dead at teardown). Box reset
+  by the safe runner (32 boards back, 10:12). Per the brief: device work stopped. NOT done: 20 clean rounds a side, the
+  STATIC_TABLES=on control run, measure --part test, the final measure, the gate.
+- Reading: the capped tree still drops a chip at about the pre-FIX.36 rate (~2,400-2,900 chunks), so the 120-core
+  programs were not the whole cause; FIX.36's 41 clean rounds were one sample. The rows gather itself runs on few
+  cores and the hung round's last finished programs are the same as FIX.36's hang 3 (rope_chain, then the ring
+  gather + indexer). Next (owner / overseer): the hardware / firmware leads of DS41-283 (which chip each time: 15, 3,
+  7, 25), or a loop on STATIC_TABLES=on with the current tree to measure its rate after the caps.
+- Logs: /scratch/dnijemcevic/phase_1117/p73a2/ (audit.log, coreaudit_on.log, loop2.log, loop3.log).
+- Re-run: `DS41_STATIC_TABLES=off DS41_HISTORY_GATHER_OVERLAP=on DS41_DECODER_SKIP=decode HANGLOOP_GATHER_ROWS=alt
+  HANGLOOP_ROUNDS=44 HANGLOOP_MINUTES=50 HANGLOOP_STOP_OVER=1 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_skip_hang_loop.py -s` (under devjob).

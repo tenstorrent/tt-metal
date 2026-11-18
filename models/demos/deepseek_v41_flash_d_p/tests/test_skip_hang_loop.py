@@ -19,6 +19,11 @@ steady chunk at the first point (the last full layer, model.decoder[0] - 1) is r
                        OVER at the end of every round), and per chip the last programs that finished; on an error
                        (a hang) it prints those per chip before the teardown: the program after them is the one in
                        flight (FIX.36)
+    HANGLOOP_GATHER_ROWS  P.73: "alt" alternates the STATIC_TABLES=off history gather per round (even rounds as
+                       loaded, odd rounds the sparse attentions' ``gather_rows`` flipped: HISTORY_GATHER_OVERLAP on /
+                       off in one load); each side keeps its own determinism reference, and the other side's output
+                       is compared with it too (on vs off bit-identity, recorded, asserted)
+    HANGLOOP_STOP_OVER  1: stop after the first round that ran a program over the core cap (an audit run)
 
     PYTHONPATH=$PWD DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile \\
         models/demos/deepseek_v41_flash_d_p/tests/test_skip_hang_loop.py -s
@@ -134,12 +139,29 @@ def test_skip_hang_loop(mesh_device, monkeypatch):
     )
 
     ids = {p: PositionGolden(S, p, chunk).tokens() for p in points}
+    alt = os.environ.get("HANGLOOP_GATHER_ROWS", "") == "alt"
+    stop_over = os.environ.get("HANGLOOP_STOP_OVER", "0") == "1"
+    sparse = [b.attention for b in model.blocks.values() if hasattr(b.attention, "gather_rows")]
+    loaded_rows = {id(b): b.gather_rows for b in sparse}
+    if alt:
+        assert (
+            settings.get("STATIC_TABLES") == "off" and sparse
+        ), "HANGLOOP_GATHER_ROWS=alt: run with DS41_STATIC_TABLES=off"
+    refs = {}  # gather side -> the steady layer output of its first round
+    rounds_of = collections.Counter()
     ref = None
     chunks = 0
     t_start = time.time()
     rnd = 0
     try:
         while rnd < max_rounds and time.time() - t_start < minutes * 60:
+            side = "as_loaded"
+            if alt:
+                flip = rnd % 2 == 1
+                for b in sparse:
+                    b.gather_rows = loaded_rows[id(b)] != flip
+                side = "rows_on" if sparse[0].gather_rows else "rows_off"
+                print(f"HANGLOOP r{rnd} side {side}", flush=True)
             for p in points:
                 prev_t, cur_t = ids[p][p - chunk : p], ids[p][p : p + chunk]
                 state = model.new_state(p + chunk)
@@ -176,6 +198,19 @@ def test_skip_hang_loop(mesh_device, monkeypatch):
                             finally:
                                 if last:
                                     profiler.disable()
+                            if out is not None and alt:
+                                for k, v in refs.items():
+                                    if k != side:
+                                        x = (out.float() - v.float()).abs().max().item()
+                                        print(
+                                            f"HANGLOOP r{rnd} {side} vs {k} L{keep_layer} max_abs_diff {x}", flush=True
+                                        )
+                                        metrics.record("hangloop_gather_rows_on_off_diff", x)
+                                        assert x == 0, f"round {rnd}: {side} differs from {k} by {x}"
+                                ref = refs.get(side)
+                                if ref is None:
+                                    refs[side] = out.clone()
+                                    out = None
                             if out is not None:
                                 if ref is None:
                                     ref = out.clone()
@@ -188,9 +223,17 @@ def test_skip_hang_loop(mesh_device, monkeypatch):
                 finally:
                     state.free()
             rnd += 1
-            print(f"HANGLOOP round {rnd} done: {chunks} chunks, {time.time() - t_start:.0f} s", flush=True)
+            rounds_of[side] += 1
+            print(
+                f"HANGLOOP round {rnd} done ({side}): {chunks} chunks, {time.time() - t_start:.0f} s, "
+                f"rounds a side {dict(rounds_of)}",
+                flush=True,
+            )
             if watch is not None:
                 watch.report(f"round {rnd}")
+                if stop_over and watch.over():
+                    print("HANGLOOP STOP: a program over the cap (HANGLOOP_STOP_OVER=1)", flush=True)
+                    break
     except BaseException:
         if watch is not None:  # (a hang: what each chip finished last, before the teardown)
             time.sleep(1.0)
@@ -200,12 +243,16 @@ def test_skip_hang_loop(mesh_device, monkeypatch):
     finally:
         if watch is not None:
             watch.close()
+        for b in sparse:
+            b.gather_rows = loaded_rows[id(b)]
         if loaded != "decode":
             model.use_decoder_skip(loaded)
     metrics.record("hangloop_rounds", rnd)
+    for k, v in rounds_of.items():
+        metrics.record(f"hangloop_rounds_{k}", v)
     metrics.record("hangloop_chunks", chunks)
     if watch is not None:
         over = watch.over()
         metrics.record("hangloop_programs_over_cap", len(over))
         assert not over, f"programs over {watch.cap} cores (rule 18): {over[:5]}"
-    print(f"HANGLOOP CLEAN: {rnd} rounds, {chunks} chunks, {time.time() - t_start:.0f} s", flush=True)
+    print(f"HANGLOOP CLEAN: {rnd} rounds {dict(rounds_of)}, {chunks} chunks, {time.time() - t_start:.0f} s", flush=True)

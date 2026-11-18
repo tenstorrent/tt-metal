@@ -60,8 +60,9 @@ from .attention import WINDOW, TtWindowAttention, TtWindowCache, WindowTables, _
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
 from .compressor import AttnTable, static_tables
-from .cores import sub_cores, sub_cores_tiled, to_rm
+from .cores import sub_cores, sub_cores_tiled, to_rm, to_tile
 from .rope import RopeTable
+from .settings import settings
 
 TOPK_LIMIT = 1 << 24  # ids (and table rows) are exact in fp32 below this
 
@@ -142,6 +143,10 @@ class TtSparseAttention(TtWindowAttention):
         super().__init__(mesh, cfg, w, rope, tables)
         self.sparse = sparse
         self.static = static_tables()  # STATIC_TABLES=on (P.21): the KV source's persistent table (``_static``)
+        # HISTORY_GATHER_OVERLAP=on (P.73, STATIC_TABLES=off): ``_compressed`` gathers the history as ROW_MAJOR rows (no
+        # tilize / untilize; tt/ccl.all_gather takes high_bw_all_gather at any row count, where a TILE gather of an
+        # odd nb x 80 rows fell back to the composite all_gather): the same rows in the same order
+        self.gather_rows = settings.get("HISTORY_GATHER_OVERLAP") == "on"
 
     # ------------------------------------------------------------------ parts
     def _gather_mesh(self, t: ttnn.Tensor, dedup: bool) -> ttnn.Tensor:
@@ -168,7 +173,12 @@ class TtSparseAttention(TtWindowAttention):
         loc = nb * stripe
         assert loc <= ckv_cache.rows, f"chunk [{start}, {start + g.chunk}) past the compressed cache ({ckv_cache.rows})"
         sl = ckv_cache.slab.slice_rows(0, loc // r)  # [1, 1, loc / r, 512] compressed rows
-        tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(sl))
+        if self.gather_rows:  # HISTORY_GATHER_OVERLAP=on (P.73): the rows gathered as stored, the table as it lands
+            gat = self._gather_mesh(sl, ckv_cache.tp_axis is not None)
+            if gat is not sl:
+                dealloc(sl)
+            return gat, nb
+        tl = to_tile(sl, memory_config=DRAM)  # (P.73: capped also where nb x 80 rows pad, DS41-289)
         dealloc(sl)
         gat = self._gather_mesh(tl, ckv_cache.tp_axis is not None)
         if gat is not tl:
@@ -205,8 +215,11 @@ class TtSparseAttention(TtWindowAttention):
             if tiled
             else topk
         )
-        x = ttnn.typecast(
-            ttnn.bitcast(tl, ttnn.int32), ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores()
+        x = ttnn.typecast(  # (P.73: the bitcasts capped too, rule 18; they ran on 120 cores)
+            ttnn.bitcast(tl, ttnn.int32, sub_core_grids=sub_cores(tl)),
+            ttnn.float32,
+            memory_config=DRAM,
+            sub_core_grids=sub_cores(),
         )  # none -> -1.0
         if tiled:
             dealloc(tl)
@@ -224,7 +237,7 @@ class TtSparseAttention(TtWindowAttention):
             out, ttnn.int32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(out)
         )  # -1 stays -1 (K-18)
         dealloc(out)
-        u32 = ttnn.bitcast(i32, ttnn.uint32)
+        u32 = ttnn.bitcast(i32, ttnn.uint32, sub_core_grids=sub_cores(i32))
         rm = to_rm(u32, memory_config=DRAM)
         if u32 is not i32:
             dealloc(u32)

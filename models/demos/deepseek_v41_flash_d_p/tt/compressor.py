@@ -59,6 +59,8 @@ No host work in ``__call__`` / ``write``: the per-chunk inputs are integers (sta
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 import ttnn
@@ -481,9 +483,13 @@ class TtServedRows:
             if index_k_copy() == "bfp8":
                 self.k8 = _alloc_zeroed(mesh, [1, 1, self.crows, width], ttnn.bfloat8_b)
         if self.k8 is None:
-            if slab is None:
-                slab = CacheSlab(alloc_served(mesh, width, self.crows, 32 // ratio, 1, dedup=dedup), owned=True)
-            assert (slab.rows, slab.width) == (self.crows, width), (slab.rows, slab.width, self.crows, width)
+            if slab is None:  # (an own slab: its rows rounded up to a tile and a whole chunk's stripe, DS41-289)
+                unit = math.lcm(32, self.stripe // ratio)  # (update_padded_kv_cache: rows % the chip's chunk rows)
+                own_rows = -(-self.crows // unit) * unit
+                slab = CacheSlab(alloc_served(mesh, width, own_rows, 32 // ratio, 1, dedup=dedup), owned=True)
+                assert (slab.rows, slab.width) == (own_rows, width), (slab.rows, slab.width, own_rows, width)
+            else:
+                assert (slab.rows, slab.width) == (self.crows, width), (slab.rows, slab.width, self.crows, width)
         self.slab = slab  # (None under INDEX_K_COPY=bfp8)
         self.version = 0  # bumped by every write (INDEXER_GLUE=on: tt/sparse_attention.ChunkMemo keys on it)
         # STATIC_TABLES=on (P.21): a KV source's compressed KV keeps the sparse-attention table of its readers in step
@@ -664,7 +670,8 @@ class TtServedRows:
         width = shards[0].shape[-1]
         hs = self.stripe // self.ratio  # compressed rows per owner stripe
         blocks = self.crows // hs
-        stacked = torch.stack([s.view(blocks, hs, width) for s in shards], dim=1)
+        # (an own slab's rows past crows are its tile padding, DS41-289)
+        stacked = torch.stack([s[: self.crows].reshape(blocks, hs, width) for s in shards], dim=1)
         nat = stacked.reshape(blocks * self.owners * hs, width)
         return nat[: -(-length // 32) * 32 // self.ratio]
 
