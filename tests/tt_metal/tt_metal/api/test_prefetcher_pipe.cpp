@@ -3076,16 +3076,26 @@ bool run_coordinated_resize(
     // probe the receiver's count instead; it is updated with NoC atomics and always reads correctly.
     const CoreCoord probe_core = is_quasar_arch() ? receiver_core : sender_core;
     if (pad_room == ResizePadRoom::PENDING) {
-        // Wait until all E1 entries have arrived before checking that the resize is still blocked.
+        // Wait until all E1 entries have arrived before checking that the resize is still blocked. A timeout
+        // fails the test but lets the rest of it run, so B still releases A.
         const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
         const uint32_t e1_units = total_entries_e1 * (e1 / l1_alignment);
+        uint32_t sent = 0;
+        uint32_t acked = 0;
+        bool e1_arrived = false;
         for (uint32_t i = 0; i < 10000; ++i) {
-            const auto [sent, acked] = prefetcher_pipe_test::read_pipe_credits(device, pipe, probe_core);
+            const auto credits = prefetcher_pipe_test::read_pipe_credits(device, pipe, probe_core);
+            sent = credits.first;
+            acked = credits.second;
             if (sent - acked >= e1_units) {
+                e1_arrived = true;
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        EXPECT_TRUE(e1_arrived)
+            << "Timed out waiting for the E1 entries before checking resize backpressure; probe credits=" << sent << "/"
+            << acked << " expected outstanding=" << e1_units;
     }
 
     // A resizes before any receiver is enqueued exactly when the pad fits.
