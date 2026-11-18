@@ -109,50 +109,50 @@ def create_program_artifacts(
     dfbs = [
         # in_tiles: per-tile streaming for both passes. Double-buffer one block of work for
         # reader/compute pipelining.
-        ttnn.DataflowBufferSpec(
+        ttnn.experimental.DataflowBufferSpec(
             unique_id=DFB_IN,
             entry_size=input_page_size,
             num_entries=2 * tiles_per_block,
-            data_format=input_tensor.dtype,
+            data_format_metadata=input_tensor.dtype,
         ),
         # centered_sq: holds (x - mean)^2 tiles for one block. The sub helper (PerTile output)
         # pushes them sequentially; the streaming reduce pops them one at a time. Both are
         # sequential within compute, so a single block's worth of entries is sufficient; 2x for
         # headroom.
-        ttnn.DataflowBufferSpec(
+        ttnn.experimental.DataflowBufferSpec(
             unique_id=DFB_CENTERED_SQ,
             entry_size=input_page_size,
             num_entries=2 * tiles_per_block,
-            data_format=input_tensor.dtype,
+            data_format_metadata=input_tensor.dtype,
         ),
         # scaler: 2 tiles when has_partial_w (full + partial scaler), else 1.
-        ttnn.DataflowBufferSpec(
+        ttnn.experimental.DataflowBufferSpec(
             unique_id=DFB_SCALER,
             entry_size=scaler_tile_bytes,
             num_entries=2 if has_partial_w else 1,
-            data_format=ttnn.bfloat16,
+            data_format_metadata=ttnn.bfloat16,
         ),
         # mean: persistent across all of pass 2 (WaitUpfrontNoPop). After pass 1 holds Ht tiles;
         # capacity must be >= Ht.
-        ttnn.DataflowBufferSpec(
+        ttnn.experimental.DataflowBufferSpec(
             unique_id=DFB_MEAN,
             entry_size=output_page_size,
             num_entries=max(2 * Ht, 2),
-            data_format=output_tensor.dtype,
+            data_format_metadata=output_tensor.dtype,
         ),
         # variance: streaming reduce accumulator for pass 2. Pop-1/push-1 per ht per block, so
         # capacity >= Ht. 2x for safety.
-        ttnn.DataflowBufferSpec(
+        ttnn.experimental.DataflowBufferSpec(
             unique_id=DFB_VARIANCE,
             entry_size=output_page_size,
             num_entries=max(2 * Ht, 2),
-            data_format=output_tensor.dtype,
+            data_format_metadata=output_tensor.dtype,
         ),
-        ttnn.DataflowBufferSpec(
+        ttnn.experimental.DataflowBufferSpec(
             unique_id=DFB_OUT,
             entry_size=output_page_size,
             num_entries=2,
-            data_format=output_tensor.dtype,
+            data_format_metadata=output_tensor.dtype,
         ),
     ]
 
@@ -164,15 +164,15 @@ def create_program_artifacts(
         "has_partial_w": int(has_partial_w),
     }
 
-    reader = ttnn.KernelSpec(
+    reader = ttnn.experimental.KernelSpec(
         unique_id=K_READER,
         source=str(KERNEL_DIR / "reader.cpp"),
-        hw_config=ttnn.create_reader_dm_config(),
+        hw_config=ttnn.experimental.create_reader_datamovement_config(),
         dfb_bindings=[
-            ttnn.producer_of(DFB_IN, DFB_IN),
-            ttnn.producer_of(DFB_SCALER, DFB_SCALER),
+            ttnn.experimental.producer_of(DFB_IN, DFB_IN),
+            ttnn.experimental.producer_of(DFB_SCALER, DFB_SCALER),
         ],
-        tensor_bindings=[ttnn.TensorBinding(TP_IN, TP_IN)],
+        tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_IN, accessor_name=TP_IN)],
         compile_time_args={
             **shape_args,
             "scaler_bits": inv_N_bits,
@@ -181,45 +181,47 @@ def create_program_artifacts(
         },
     )
 
-    compute = ttnn.KernelSpec(
+    compute = ttnn.experimental.KernelSpec(
         unique_id=K_COMPUTE,
         source=str(KERNEL_DIR / "compute.cpp"),
-        hw_config=ttnn.ComputeHardwareConfig(),
+        hw_config=ttnn.experimental.ComputeHardwareConfig(),
         dfb_bindings=[
-            ttnn.consumer_of(DFB_IN, DFB_IN),
-            ttnn.consumer_of(DFB_SCALER, DFB_SCALER),
-            ttnn.producer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
-            ttnn.consumer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
-            ttnn.producer_of(DFB_MEAN, DFB_MEAN),
-            ttnn.consumer_of(DFB_MEAN, DFB_MEAN),
-            ttnn.producer_of(DFB_VARIANCE, DFB_VARIANCE),
-            ttnn.consumer_of(DFB_VARIANCE, DFB_VARIANCE),
-            ttnn.producer_of(DFB_OUT, DFB_OUT),
+            ttnn.experimental.consumer_of(DFB_IN, DFB_IN),
+            ttnn.experimental.consumer_of(DFB_SCALER, DFB_SCALER),
+            ttnn.experimental.producer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
+            ttnn.experimental.consumer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
+            ttnn.experimental.producer_of(DFB_MEAN, DFB_MEAN),
+            ttnn.experimental.consumer_of(DFB_MEAN, DFB_MEAN),
+            ttnn.experimental.producer_of(DFB_VARIANCE, DFB_VARIANCE),
+            ttnn.experimental.consumer_of(DFB_VARIANCE, DFB_VARIANCE),
+            ttnn.experimental.producer_of(DFB_OUT, DFB_OUT),
         ],
         compile_time_args={**shape_args, "compute_std_dev": int(std_dev)},
     )
 
-    writer = ttnn.KernelSpec(
+    writer = ttnn.experimental.KernelSpec(
         unique_id=K_WRITER,
         source=str(KERNEL_DIR / "writer.cpp"),
-        hw_config=ttnn.create_writer_dm_config(),
-        dfb_bindings=[ttnn.consumer_of(DFB_OUT, DFB_OUT)],
-        tensor_bindings=[ttnn.TensorBinding(TP_OUT, TP_OUT)],
+        hw_config=ttnn.experimental.create_writer_datamovement_config(),
+        dfb_bindings=[ttnn.experimental.consumer_of(DFB_OUT, DFB_OUT)],
+        tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_OUT, accessor_name=TP_OUT)],
         compile_time_args={"num_tiles": output_tensor.buffer_num_pages()},
     )
 
-    spec = ttnn.ProgramSpec(
+    spec = ttnn.experimental.ProgramSpec(
         name="toy_variance",
         kernels=[reader, compute, writer],
         dataflow_buffers=dfbs,
         tensor_parameters=[
-            ttnn.TensorParameter(unique_id=TP_IN, spec=input_tensor.spec),
-            ttnn.TensorParameter(unique_id=TP_OUT, spec=output_tensor.spec),
+            ttnn.experimental.TensorParameter(unique_id=TP_IN, spec=input_tensor.spec),
+            ttnn.experimental.TensorParameter(unique_id=TP_OUT, spec=output_tensor.spec),
         ],
-        work_units=[ttnn.WorkUnitSpec(name="main", kernels=[K_READER, K_COMPUTE, K_WRITER], target_nodes=core_grid)],
+        work_units=[
+            ttnn.experimental.WorkUnitSpec(name="main", kernels=[K_READER, K_COMPUTE, K_WRITER], target_nodes=core_grid)
+        ],
     )
 
-    run_args = ttnn.ProgramRunArgs(kernel_run_args=[])
+    run_args = ttnn.experimental.ProgramRunArgs(kernel_run_args=[])
 
     # Bind each declared TensorParameter to its position in the caller's io_tensors list,
     # which is [input_tensor, output_tensor].

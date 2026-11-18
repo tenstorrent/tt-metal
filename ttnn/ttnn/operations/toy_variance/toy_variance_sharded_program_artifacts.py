@@ -147,125 +147,135 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
     dfbs = [
         # The resident shard itself -- zero copy. Nothing reads it into L1 because it is already
         # there; the reader only credits it (see the reader kernel's note on the producer rule).
-        ttnn.dfb_spec_from_sharded_tensor(DFB_IN_SHARD, input_tensor, borrowed_from=TP_IN),
-        ttnn.DataflowBufferSpec(unique_id=DFB_SCALER, entry_size=tile_bytes, num_entries=1, data_format=ttnn.bfloat16),
+        ttnn.experimental.dfb_spec_from_sharded_tensor(DFB_IN_SHARD, input_tensor, borrowed_from=TP_IN),
+        ttnn.experimental.DataflowBufferSpec(
+            unique_id=DFB_SCALER, entry_size=tile_bytes, num_entries=1, data_format_metadata=ttnn.bfloat16
+        ),
         # (x - mean)^2 for the whole local shard: sub writes the block, then square consumes it, so
         # the buffer has to hold a full shard's worth rather than a streaming window.
-        ttnn.DataflowBufferSpec(
+        ttnn.experimental.DataflowBufferSpec(
             unique_id=DFB_CENTERED_SQ,
             entry_size=tile_bytes,
             num_entries=shard_tiles,
-            data_format=input_tensor.dtype,
+            data_format_metadata=input_tensor.dtype,
         ),
         # This core's contribution for the current round. Used once per round; 2*Ht so round 2 can
         # be staged while the writer is still draining round 1.
-        ttnn.DataflowBufferSpec(
-            unique_id=DFB_PARTIAL, entry_size=output_page_size, num_entries=2 * Ht, data_format=output_tensor.dtype
+        ttnn.experimental.DataflowBufferSpec(
+            unique_id=DFB_PARTIAL,
+            entry_size=output_page_size,
+            num_entries=2 * Ht,
+            data_format_metadata=output_tensor.dtype,
         ),
         # The two gather buffers. One per round rather than one reused: each is reserved once,
         # written once and pushed once, so `get_write_ptr()` is the base on every core with no
         # dependence on the ring pointers staying in step across cores (finding #9's hazard).
-        ttnn.DataflowBufferSpec(
+        ttnn.experimental.DataflowBufferSpec(
             unique_id=DFB_GATHER_MEAN,
             entry_size=output_page_size,
             num_entries=num_cores * Ht,
-            data_format=output_tensor.dtype,
+            data_format_metadata=output_tensor.dtype,
         ),
-        ttnn.DataflowBufferSpec(
+        ttnn.experimental.DataflowBufferSpec(
             unique_id=DFB_GATHER_VAR,
             entry_size=output_page_size,
             num_entries=num_cores * Ht,
-            data_format=output_tensor.dtype,
+            data_format_metadata=output_tensor.dtype,
         ),
         # The root's combined mean, handed to the reader to broadcast.
-        ttnn.DataflowBufferSpec(
-            unique_id=DFB_MEAN_SRC, entry_size=output_page_size, num_entries=Ht, data_format=output_tensor.dtype
+        ttnn.experimental.DataflowBufferSpec(
+            unique_id=DFB_MEAN_SRC,
+            entry_size=output_page_size,
+            num_entries=Ht,
+            data_format_metadata=output_tensor.dtype,
         ),
         # The broadcast mean, as every core sees it.
-        ttnn.DataflowBufferSpec(
-            unique_id=DFB_MEAN, entry_size=output_page_size, num_entries=Ht, data_format=output_tensor.dtype
+        ttnn.experimental.DataflowBufferSpec(
+            unique_id=DFB_MEAN, entry_size=output_page_size, num_entries=Ht, data_format_metadata=output_tensor.dtype
         ),
-        ttnn.DataflowBufferSpec(
-            unique_id=DFB_OUT, entry_size=output_page_size, num_entries=Ht, data_format=output_tensor.dtype
+        ttnn.experimental.DataflowBufferSpec(
+            unique_id=DFB_OUT, entry_size=output_page_size, num_entries=Ht, data_format_metadata=output_tensor.dtype
         ),
     ]
 
     shape_args = {"Ht": Ht, "Wt_local": Wt_local, "num_cores": num_cores, "shard_tiles": shard_tiles}
 
-    reader = ttnn.KernelSpec(
+    reader = ttnn.experimental.KernelSpec(
         unique_id=K_READER,
         source=str(KERNEL_DIR / "sharded_reader.cpp"),
-        hw_config=ttnn.create_reader_dm_config(),
+        hw_config=ttnn.experimental.create_reader_datamovement_config(),
         dfb_bindings=[
-            ttnn.producer_of(DFB_IN_SHARD, DFB_IN_SHARD),
-            ttnn.producer_of(DFB_SCALER, DFB_SCALER),
-            ttnn.consumer_of(DFB_MEAN_SRC, DFB_MEAN_SRC),
-            ttnn.producer_of(DFB_MEAN, DFB_MEAN),
+            ttnn.experimental.producer_of(DFB_IN_SHARD, DFB_IN_SHARD),
+            ttnn.experimental.producer_of(DFB_SCALER, DFB_SCALER),
+            ttnn.experimental.consumer_of(DFB_MEAN_SRC, DFB_MEAN_SRC),
+            ttnn.experimental.producer_of(DFB_MEAN, DFB_MEAN),
         ],
         compile_time_args={**shape_args, "scaler_bits": inv_N_bits},
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["is_root"]),
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["is_root"]),
     )
 
-    compute = ttnn.KernelSpec(
+    compute = ttnn.experimental.KernelSpec(
         unique_id=K_COMPUTE,
         source=str(KERNEL_DIR / "sharded_compute.cpp"),
-        hw_config=ttnn.ComputeHardwareConfig(),
+        hw_config=ttnn.experimental.ComputeHardwareConfig(),
         dfb_bindings=[
-            ttnn.consumer_of(DFB_IN_SHARD, DFB_IN_SHARD),
-            ttnn.consumer_of(DFB_SCALER, DFB_SCALER),
-            ttnn.producer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
-            ttnn.consumer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
-            ttnn.producer_of(DFB_PARTIAL, DFB_PARTIAL),
-            ttnn.consumer_of(DFB_GATHER_MEAN, DFB_GATHER_MEAN),
-            ttnn.consumer_of(DFB_GATHER_VAR, DFB_GATHER_VAR),
-            ttnn.producer_of(DFB_MEAN_SRC, DFB_MEAN_SRC),
-            ttnn.consumer_of(DFB_MEAN, DFB_MEAN),
-            ttnn.producer_of(DFB_OUT, DFB_OUT),
+            ttnn.experimental.consumer_of(DFB_IN_SHARD, DFB_IN_SHARD),
+            ttnn.experimental.consumer_of(DFB_SCALER, DFB_SCALER),
+            ttnn.experimental.producer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
+            ttnn.experimental.consumer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
+            ttnn.experimental.producer_of(DFB_PARTIAL, DFB_PARTIAL),
+            ttnn.experimental.consumer_of(DFB_GATHER_MEAN, DFB_GATHER_MEAN),
+            ttnn.experimental.consumer_of(DFB_GATHER_VAR, DFB_GATHER_VAR),
+            ttnn.experimental.producer_of(DFB_MEAN_SRC, DFB_MEAN_SRC),
+            ttnn.experimental.consumer_of(DFB_MEAN, DFB_MEAN),
+            ttnn.experimental.producer_of(DFB_OUT, DFB_OUT),
         ],
         compile_time_args={**shape_args, "compute_std_dev": int(std_dev)},
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["is_root"]),
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["is_root"]),
     )
 
-    writer = ttnn.KernelSpec(
+    writer = ttnn.experimental.KernelSpec(
         unique_id=K_WRITER,
         source=str(KERNEL_DIR / "sharded_writer.cpp"),
-        hw_config=ttnn.create_writer_dm_config(),
+        hw_config=ttnn.experimental.create_writer_datamovement_config(),
         dfb_bindings=[
-            ttnn.consumer_of(DFB_PARTIAL, DFB_PARTIAL),
-            ttnn.producer_of(DFB_GATHER_MEAN, DFB_GATHER_MEAN),
-            ttnn.producer_of(DFB_GATHER_VAR, DFB_GATHER_VAR),
-            ttnn.consumer_of(DFB_OUT, DFB_OUT),
+            ttnn.experimental.consumer_of(DFB_PARTIAL, DFB_PARTIAL),
+            ttnn.experimental.producer_of(DFB_GATHER_MEAN, DFB_GATHER_MEAN),
+            ttnn.experimental.producer_of(DFB_GATHER_VAR, DFB_GATHER_VAR),
+            ttnn.experimental.consumer_of(DFB_OUT, DFB_OUT),
         ],
         semaphore_bindings=[
-            ttnn.SemaphoreBinding(SEM_MEAN_ARRIVED, SEM_MEAN_ARRIVED),
-            ttnn.SemaphoreBinding(SEM_VAR_ARRIVED, SEM_VAR_ARRIVED),
+            ttnn.experimental.SemaphoreBinding(semaphore_spec_name=SEM_MEAN_ARRIVED, accessor_name=SEM_MEAN_ARRIVED),
+            ttnn.experimental.SemaphoreBinding(semaphore_spec_name=SEM_VAR_ARRIVED, accessor_name=SEM_VAR_ARRIVED),
         ],
-        tensor_bindings=[ttnn.TensorBinding(TP_OUT, TP_OUT)],
+        tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_OUT, accessor_name=TP_OUT)],
         compile_time_args={**shape_args, "root_x": root_virtual.x, "root_y": root_virtual.y},
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["is_root", "gather_slot"]),
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["is_root", "gather_slot"]),
     )
 
-    spec = ttnn.ProgramSpec(
+    spec = ttnn.experimental.ProgramSpec(
         name="toy_variance_width_sharded",
         kernels=[reader, compute, writer],
         dataflow_buffers=dfbs,
         semaphores=[
-            ttnn.SemaphoreSpec(unique_id=SEM_MEAN_ARRIVED, target_nodes=grid),
-            ttnn.SemaphoreSpec(unique_id=SEM_VAR_ARRIVED, target_nodes=grid),
+            ttnn.experimental.SemaphoreSpec(unique_id=SEM_MEAN_ARRIVED, target_nodes=grid),
+            ttnn.experimental.SemaphoreSpec(unique_id=SEM_VAR_ARRIVED, target_nodes=grid),
         ],
         tensor_parameters=[
-            ttnn.TensorParameter(unique_id=TP_IN, spec=input_tensor.spec),
-            ttnn.TensorParameter(unique_id=TP_OUT, spec=output_tensor.spec),
+            ttnn.experimental.TensorParameter(unique_id=TP_IN, spec=input_tensor.spec),
+            ttnn.experimental.TensorParameter(unique_id=TP_OUT, spec=output_tensor.spec),
         ],
-        work_units=[ttnn.WorkUnitSpec(name="main", kernels=[K_READER, K_COMPUTE, K_WRITER], target_nodes=grid)],
+        work_units=[
+            ttnn.experimental.WorkUnitSpec(name="main", kernels=[K_READER, K_COMPUTE, K_WRITER], target_nodes=grid)
+        ],
     )
 
     is_root_by_core = {core: int(core == root) for core in cores}
-    run_args = ttnn.ProgramRunArgs(
+    run_args = ttnn.experimental.ProgramRunArgs(
         kernel_run_args=[
-            ttnn.KernelRunArgs(kernel=K_READER, runtime_arg_values={"is_root": is_root_by_core}),
-            ttnn.KernelRunArgs(kernel=K_COMPUTE, runtime_arg_values={"is_root": is_root_by_core}),
-            ttnn.KernelRunArgs(
+            ttnn.experimental.KernelRunArgs(kernel=K_READER, runtime_arg_values={"is_root": is_root_by_core}),
+            ttnn.experimental.KernelRunArgs(kernel=K_COMPUTE, runtime_arg_values={"is_root": is_root_by_core}),
+            ttnn.experimental.KernelRunArgs(
                 kernel=K_WRITER,
                 runtime_arg_values={
                     "is_root": is_root_by_core,

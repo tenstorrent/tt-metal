@@ -42,8 +42,8 @@ void bind_generic_operation(nb::module_& mod) {
                 MeshProgramDescriptor for explicit per-device control.
 
             Alternatively, the Metal 2.0 form takes:
-            spec (ttnn.ProgramSpec): kernels, dataflow buffers, tensor parameters, work units.
-            run_args (ttnn.ProgramRunArgs): per-dispatch runtime argument values.
+            spec (ttnn.experimental.ProgramSpec): kernels, dataflow buffers, tensor parameters, work units.
+            run_args (ttnn.experimental.ProgramRunArgs): per-dispatch runtime argument values.
             tensor_args (dict[str, int]): TensorParameter name -> index into io_tensors.
 
         Returns:

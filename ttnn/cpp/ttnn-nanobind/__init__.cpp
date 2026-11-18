@@ -276,7 +276,6 @@ NB_MODULE(_ttnn, mod) {
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
     auto m_program_spec = mod.def_submodule("program_spec", "Metal 2.0 ProgramSpec and ProgramRunArgs (experimental)");
-    auto m_program_specs = mod.def_submodule("program_spec", "Metal 2.0 program spec types");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
     auto m_ccl_host =
         mod.def_submodule("ccl_host", "Host-side CCL helpers (counterpart of kernel_lib/ccl dataflow helpers)");
@@ -308,7 +307,6 @@ NB_MODULE(_ttnn, mod) {
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
-    ttnn::program_specs::py_module_types(m_program_specs);
     ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
     ttnn::ccl_host::py_module_types(m_ccl_host);
     ttnn::mcast_host::py_module_types(m_mcast_host);
@@ -365,6 +363,7 @@ NB_MODULE(_ttnn, mod) {
     // After the operations: KernelSpec.CompilerOptions defaults to a KernelBuildOptLevel, which the fabric mux
     // operation binds.
     ttnn::program_spec::py_module_types(m_program_spec);
+    ttnn::program_specs::py_module_types(m_program_spec);
 
     // CONFIG is a shared mutable global: Python code reads and writes properties
     // via setattr (e.g. manage_config context manager).  We must bind by reference
