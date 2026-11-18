@@ -1,0 +1,50 @@
+{
+  "pr": {
+    "blackhole": {
+      "threshold": "0.01",
+      "min_cycles": "30",
+      "module_thresholds": ""
+    },
+    "wormhole": {
+      "threshold": "0.01",
+      "min_cycles": "30",
+      "module_thresholds": ""
+    }
+  },
+  "merge": {
+    "blackhole": {
+      "threshold": "0.01",
+      "min_cycles": "30",
+      "module_thresholds": ""
+    },
+    "wormhole": {
+      "threshold": "0.01",
+      "min_cycles": "30",
+      "module_thresholds": ""
+    }
+  },
+  "nightly": {
+    "blackhole": {
+      "threshold": "0.02",
+      "min_cycles": "30",
+      "module_thresholds": ""
+    },
+    "wormhole": {
+      "threshold": "0.10",
+      "min_cycles": "30",
+      "module_thresholds": "perf_matmul=0.25,perf_math_matmul=0.25"
+    }
+  },
+  "nightly_sol": {
+    "blackhole": {
+      "threshold": "0.02",
+      "min_cycles": "30",
+      "module_thresholds": ""
+    },
+    "wormhole": {
+      "threshold": "0.03",
+      "min_cycles": "30",
+      "module_thresholds": "perf_matmul=0.10,perf_math_matmul=0.10"
+    }
+  }
+}

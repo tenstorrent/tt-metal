@@ -636,9 +636,7 @@ jobs:
     outputs:
       changed: ${{ steps.classify.outputs.changed }}
       # The gate's thresholds, for the compare job and for stage 2 in the Blackhole legs.
-      thresholds: >-
-        {"blackhole": {"threshold": "0.01", "module_thresholds": ""},
-         "wormhole": {"threshold": "0.01", "module_thresholds": ""}}
+      thresholds: ${{ steps.policy.outputs.merge }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -646,6 +644,9 @@ jobs:
           fetch-depth: 0
           filter: tree:0
           sparse-checkout: .github
+      - name: Read the gate policy
+        id: policy
+        run: echo "merge=$(python3 -c 'import json; print(json.dumps(json.load(open(".github/llk-perf-policy.json"))["merge"]))')" >> "$GITHUB_OUTPUT"
       - name: Classify this entry's own changes
         id: classify
         env:

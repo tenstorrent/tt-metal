@@ -136,26 +136,24 @@ jobs:
   gate-policy:
     name: "Gate policy"
     if: >-
-      ${{ !cancelled() &&
-      (
-        (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id != '') ||
-        (
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          (
-            (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
-            (github.event.action == 'synchronize'
-             && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
-          )
-        )
-      ) }}
+      ${{ !cancelled() && (github.event_name != 'pull_request'
+          || github.event.label.name == 'llk-perf-gate'
+          || contains(github.event.pull_request.labels.*.name, 'llk-perf-gate')) }}
     runs-on: ubuntu-slim
     outputs:
-      threshold: ${{ steps.policy.outputs.threshold }}
+      pr: ${{ steps.policy.outputs.pr }}
+      nightly: ${{ steps.policy.outputs.nightly }}
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/llk-perf-policy.json
+          sparse-checkout-cone-mode: false
       - id: policy
-        env:
-          THRESHOLD: "0.01"
-        run: echo "threshold=$THRESHOLD" >> "$GITHUB_OUTPUT"
+        run: |
+          for GATE in pr nightly; do
+            echo "$GATE=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(".github/llk-perf-policy.json"))[sys.argv[1]]))' "$GATE")" >> "$GITHUB_OUTPUT"
+          done
 
   llk-perf-gate:
     name: "LLK perf regression gate (${{ matrix.arch }})"
@@ -181,8 +179,9 @@ jobs:
     with:
       arch: ${{ matrix.arch }}
       run_types: ${{ inputs.run_types || 'L1_TO_L1' }}
-      threshold: ${{ needs.gate-policy.outputs.threshold }}
-      min_cycles: "30"
+      threshold: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].threshold }}
+      module_thresholds: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].module_thresholds }}
+      min_cycles: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].min_cycles }}
       fail_on_regression: false
       measure_result: >-
         ${{ needs.measure.result }},${{ needs.measure-branch-point.result }}
@@ -384,7 +383,8 @@ jobs:
       - name: Decide
         env:
           ARCH: ${{ matrix.arch }}
-          THRESHOLD: ${{ needs.gate-policy.outputs.threshold }}
+          THRESHOLD: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].threshold }}
+          MIN_CYCLES: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].min_cycles }}
           HEAD_RESULT: ${{ needs.placement-measure-head.result }}
           BASE_RESULT: ${{ needs.placement-measure-base.result }}
           SOURCE_RUN: ${{ needs.placement-plan.outputs.run }}
@@ -394,7 +394,7 @@ jobs:
           python3 tt_metal/tt-llk/perf/placement_check.py decide \
             --candidates stage1/perf_gate_report.regressions.csv \
             --baseline baseline --current current \
-            --threshold "$THRESHOLD" --min-cycles 30 \
+            --threshold "$THRESHOLD" --min-cycles "$MIN_CYCLES" \
             --over-cap nodes/nodes.over --limit-note "$LIMIT_NOTE" \
             --arch "$ARCH" --report stage2.md || true
           if [ "$HEAD_RESULT" != success ] || [ "$BASE_RESULT" != success ]; then
@@ -453,7 +453,7 @@ jobs:
 
   nightly-gate:
     name: "Nightly gate ${{ matrix.arch }} (non speed-of-light)"
-    needs: nightly-measure
+    needs: [gate-policy, nightly-measure]
     if: >-
       ${{ !cancelled() && (github.event_name == 'schedule'
       || (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id == ''
@@ -461,7 +461,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.10","module_thresholds":"perf_matmul=0.25,perf_math_matmul=0.25","run_types":"L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02","module_thresholds":"","run_types":"L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE"}]' || '[{"arch":"blackhole","threshold":"0.02","module_thresholds":"","run_types":"L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE"},{"arch":"wormhole","threshold":"0.10","module_thresholds":"perf_matmul=0.25,perf_math_matmul=0.25","run_types":"L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE"}]') }}
+        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","run_types":"L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","run_types":"L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE"}]' || '[{"arch":"blackhole","run_types":"L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE"},{"arch":"wormhole","run_types":"L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE"}]') }}
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
@@ -469,9 +469,9 @@ jobs:
       baseline_pipeline: ${{ inputs.baseline_pipeline || 'baseline' }}
       speed_of_light: "false"
       run_types: ${{ matrix.run_types }}
-      threshold: ${{ matrix.threshold }}
-      min_cycles: "30"
-      module_thresholds: ${{ matrix.module_thresholds }}
+      threshold: ${{ fromJSON(needs.gate-policy.outputs.nightly)[matrix.arch].threshold }}
+      min_cycles: ${{ fromJSON(needs.gate-policy.outputs.nightly)[matrix.arch].min_cycles }}
+      module_thresholds: ${{ fromJSON(needs.gate-policy.outputs.nightly)[matrix.arch].module_thresholds }}
       measure_result: ${{ needs.nightly-measure.result }}
       fail_on_regression: false
     secrets: inherit
