@@ -205,6 +205,27 @@ def test_untilize_with_unpadding(device):
     logger.info(f"Untilized Tensor with Unpadding Shape: {untilized_tensor.shape}")  # Shape([1, 1, 64, 32])
 
 
+def test_sharded_to_interleaved(device):
+    # Create a tensor height-sharded in L1 over 4 cores, 32 rows per core
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        [32, 64],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    sharded_tensor = ttnn.from_torch(
+        torch.rand((1, 1, 128, 64)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_memory_config,
+    )
+
+    # Copy it into an interleaved tensor in DRAM
+    interleaved_tensor = ttnn.sharded_to_interleaved(sharded_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    logger.debug(f"Interleaved Tensor Shape: {interleaved_tensor.shape}")  # Shape([1, 1, 128, 64])
+
+
 def test_indexed_fill(device):
     # Define shapes for input tensors
     input_a_shape = (32, 1, 1, 4)
