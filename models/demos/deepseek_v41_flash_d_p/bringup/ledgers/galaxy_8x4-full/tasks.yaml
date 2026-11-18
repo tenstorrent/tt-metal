@@ -4789,3 +4789,63 @@ tasks:
       steady_wall_ms_p51200: '> 0'
       steady_wall_ms_p1024000: '> 0'
   device: true
+- id: P.74
+  title: 'OWNER 2026-11-18: STATIC_TABLES=off (no per-user, per-chip KV history) on the new tree: row gather + one
+    persistent shared gather buffer; A/B against today''s table, speed and DRAM per chip at 51k..1M'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - X.4
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  brief:
+    details: 'OWNER 2026-11-18. The owner considers the per-user, per-chip replicated KV history (STATIC_TABLES=on:
+      every user keeps each KV source''s whole compressed history on every chip, 2.5 GiB a user a chip at 1M; correct
+      only when this process wrote every earlier chunk of the slot) forbidden in the long run, and wants to see what
+      the served-state-only path (STATIC_TABLES=off: each source''s history all-gathered over the mesh every chunk) costs
+      on today''s tree (Marko''s MoE block with split rows and a 6208 B fabric payload, the hang fixed; non-matmul ops
+      on 120 cores). Build on what is already in the tree: (1) the row gather (setting HISTORY_GATHER_OVERLAP=on: the
+      history gathered as ROW_MAJOR rows, no tilize / untilize, high_bw_all_gather on both axes; standalone 10.0 -> 5.9 ms
+      a source at 1M; P.73 WIP, never accepted): RENAME it to what it is (HISTORY_GATHER=rows | tiles, default rows),
+      keep the old path behind the setting. (2) ONE persistent gather buffer per chip, allocated once at load and sized
+      for the maximum context, reused by every chunk / user / source (today the off path allocates and frees it every
+      chunk): the gather writes into it (high_bw_all_gather''s persistent / preallocated output, or a slice of it).
+      Values must be bit-identical to the plain off path and to STATIC_TABLES=on (data moves only); determinism exact.
+      Matmuls stay within 110 cores (tt/cores.py worker_grid / max_grid); non-matmul stock ops may use the full grid
+      (NONMM_MAX_CORES). Do not change the MoE block or any weight layout (no weight-cache rebuild: a run must load from
+      the existing cache in a few minutes). Check that off with your changes RUNS: one run of
+      DS41_STATIC_TABLES=off DS41_DECODER_SKIP=decode test_decoder_skip_decode.py and one test_determinism.py
+      (models/demos/common/bringup/tests). Then stop: the orchestrator measures both sides (do not run the A/B or the
+      position tests yourself). Also make test_skip_positions record the allocator''s DRAM per chip after each point
+      (it already records dram_state / dram_after: check they include the gather buffer). No fork regression suites;
+      every Python-built op through ttnn.bringup.prepare_program / run_prepared. Report short.'
+  ab:
+    keep_default: true
+    env:
+      STATIC_TABLES: 'on'
+    change:
+      STATIC_TABLES: 'off'
+  ab_mode: full
+  ab_rungs:
+  - last
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      steady_wall_ms_p51200: '> 0'
+      steady_wall_ms_p1024000: '> 0'
