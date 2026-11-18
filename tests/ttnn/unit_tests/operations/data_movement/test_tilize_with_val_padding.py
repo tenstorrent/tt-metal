@@ -1209,15 +1209,13 @@ _TILIZE_VAL_MODULES = {"ttnn": ttnn, "quasar": ttnn.experimental.quasar}
 def _tilize_val_entry(module, entry, tensor):
     shape = list(tensor.shape)
     padded = shape[:-2] + [max(32, -(-shape[-2] // 32) * 32), max(32, -(-shape[-1] // 32) * 32)]
-    if entry == "val_padding_list":
-        return module.tilize_with_val_padding(tensor, padded, 0.0)
-    if entry == "val_padding_shape":
+    if entry == "val_padding":
         return module.tilize_with_val_padding(tensor, ttnn.Shape(padded), 0.0)
     return module.tilize_with_zero_padding(tensor)
 
 
 @pytest.mark.parametrize("module_name", list(_TILIZE_VAL_MODULES))
-@pytest.mark.parametrize("entry", ["val_padding_list", "val_padding_shape", "zero_padding"])
+@pytest.mark.parametrize("entry", ["val_padding", "zero_padding"])
 @pytest.mark.parametrize("input_kind", ["host", "deallocated"])
 @pytest.mark.parametrize("shape", [(1, 1, 0, 32), (1, 1, 30, 32)], ids=["empty", "non_empty"])
 def test_tilize_with_val_padding_rejects_input_not_on_device(
@@ -1240,7 +1238,7 @@ def test_tilize_with_val_padding_rejects_input_not_on_device(
 
 
 @pytest.mark.parametrize("module_name", list(_TILIZE_VAL_MODULES))
-@pytest.mark.parametrize("entry", ["val_padding_shape", "zero_padding"])
+@pytest.mark.parametrize("entry", ["val_padding", "zero_padding"])
 def test_tilize_with_val_padding_returns_host_tile_input(module_name, entry):
     """A TILE input is already tiled and comes back as is, so a host TILE input needs no device."""
     torch_input = torch.randn((1, 1, 32, 32), dtype=torch.bfloat16)
