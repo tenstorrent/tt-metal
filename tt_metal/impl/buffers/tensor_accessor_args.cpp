@@ -8,6 +8,7 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -77,16 +78,21 @@ void append_sharded_args(
     if (add_bank_coords) {
         auto* device = buffer.device();
         auto bank_type = buffer.core_type();
+        // Each coordinate is packed into 8 bits; a larger one would be silently truncated to another bank's coordinate.
+        auto check_coord = [](const NodeCoord& coord) {
+            TT_FATAL(coord.x <= 0xFF && coord.y <= 0xFF, "Bank coordinate {} does not fit into 8 bits", coord);
+            return coord;
+        };
         for (size_t i = 0; i < n_banks; i += 2) {
             // We don't virtualize DRAM coord, since we need logical x coord == bank_id to calculate the address
-            const auto coord1 =
-                buffer.is_dram() ? bank_coords[i] : device->virtual_core_from_logical_core(bank_coords[i], bank_type);
+            const auto coord1 = check_coord(
+                buffer.is_dram() ? bank_coords[i] : device->virtual_core_from_logical_core(bank_coords[i], bank_type));
 
             if (i + 1 < n_banks) {
                 // Pack two coordinates into one uint32_t if we have a pair
-                const auto coord2 = buffer.is_dram()
-                                        ? bank_coords[i + 1]
-                                        : device->virtual_core_from_logical_core(bank_coords[i + 1], bank_type);
+                const auto coord2 = check_coord(
+                    buffer.is_dram() ? bank_coords[i + 1]
+                                     : device->virtual_core_from_logical_core(bank_coords[i + 1], bank_type));
                 args.push_back(
                     ((coord2.x & 0xFF) << 24) | ((coord2.y & 0xFF) << 16) | ((coord1.x & 0xFF) << 8) |
                     (coord1.y & 0xFF));
