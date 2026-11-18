@@ -185,14 +185,21 @@ FORCE_INLINE bool wait_for_signal(
     return true;
 }
 
+// Puts this kernel's NoC command buffers back on id 0, as a command buffer's id must be 0 at kernel exit. Each
+// keeps the last id given to it: the read command buffer the one serve_requests sets, the write command buffer
+// the one the pusher's tagged writes carry.
+FORCE_INLINE void clear_noc_trids() {
+    noc_async_read_set_trid(0);
+    noc_async_write_set_trid(0);
+}
+
 // Retires every slot the host writes, as this kernel's FIFO consumer, until termination is requested.
 // `serve_request(requests, slot)` handles a PREFETCH or DRAIN request slot and returns false if termination
 // was requested before it finished. Every kernel waits out a WAIT_SIGNAL slot here, so no kernel reads or
 // sends anything the requests after it name until the signal arrives.
 template <typename ServeRequest>
 FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
-    // Every read this kernel issues carries its id: the read command buffer keeps the id it is given. The id goes
-    // back to 0 when the kernel stops serving, as a command buffer's id must be 0 at kernel exit.
+    // Every read this kernel issues carries its id, which the read command buffer keeps.
     noc_async_read_set_trid(kTrid);
     FifoConsumer requests;
     while (volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot()) {
@@ -206,7 +213,7 @@ FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
                                         ? wait_for_signal(requests, header)
                                         : serve_request(requests, slot);
                 if (!served) {
-                    noc_async_read_set_trid(0);
+                    clear_noc_trids();
                     return;
                 }
                 break;
@@ -215,7 +222,7 @@ FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
         }
         requests.retire_slot();
     }
-    noc_async_read_set_trid(0);
+    clear_noc_trids();
 }
 
 // How one tensor of a PREFETCH slot streams: every receiver of every lane, numbered in lane order. The

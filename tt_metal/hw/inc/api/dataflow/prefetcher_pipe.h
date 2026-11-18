@@ -583,6 +583,9 @@ public:
         uint32_t num_entries,
         const typename noc_traits_t<Src>::src_args_type& src_args = {},
         const NocOptVals& noc_opts = {}) {
+        static_assert(
+            !has_flag(opts, NocOptions::CUSTOM_VC),
+            "A payload must go on NOC_UNICAST_WRITE_VC, the credit's VC, to reach its receiver ahead of the credit");
         if (!owns_receiver(receiver_idx)) {
             return;
         }
