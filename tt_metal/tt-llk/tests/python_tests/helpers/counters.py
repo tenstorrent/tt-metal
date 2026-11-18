@@ -16,6 +16,7 @@ from tt_llk_perf.metrics import quasar_l1_client_label
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .llk_params import PerfRunType
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
@@ -538,19 +539,37 @@ def decode_riscv_block(words, arch, thread: str, zone_name: str, token) -> list[
     return rows
 
 
-def read_riscv_counters(
-    location: str, zones: int, token: int, arch=None, threads: int | None = None
-) -> list[dict]:
-    """Rows of the RISC-V monitor of every counted zone, each TRISC of the arch. A counted zone whose thread left no
-    readout of this launch raises CounterReadoutMissing."""
+# A single thread run type captures the RISC-V monitor on its measured thread only (counters.h riscv_here).
+_RISCV_MEASURED_THREAD = {
+    PerfRunType.UNPACK_ISOLATE: 0,
+    PerfRunType.MATH_ISOLATE: 1,
+    PerfRunType.PACK_ISOLATE: 2,
+    PerfRunType.SFPU_ISOLATE: 3,
+}
+
+
+def riscv_threads_of(run_type, arch=None) -> list[int]:
+    """The TRISCs that leave a RISC-V monitor block in a launch of run_type: the measured one, or every TRISC."""
+    if run_type in _RISCV_MEASURED_THREAD:
+        return [_RISCV_MEASURED_THREAD[run_type]]
     arch = arch if arch is not None else get_chip_architecture()
-    threads = threads or (4 if _arch_name(arch) == "quasar" else 3)
+    return list(range(4 if _arch_name(arch) == "quasar" else 3))
+
+
+def read_riscv_counters(
+    location: str, zones: int, token: int, arch=None, threads=None
+) -> list[dict]:
+    """Rows of the RISC-V monitor of every counted zone, each TRISC in threads (default every TRISC of the arch). A
+    counted zone whose thread left no readout of this launch raises CounterReadoutMissing.
+    """
+    arch = arch if arch is not None else get_chip_architecture()
+    threads = threads if threads is not None else riscv_threads_of(None, arch)
     rows = []
     for zone in range(TestConfig.PERF_COUNTERS_MAX_ZONES):
         if not zones >> zone & 1:
             continue
         zone_name = f"ZONE_{zone}"
-        for thread in range(threads):
+        for thread in threads:
             addr = (
                 _zone_data_addr(zone)
                 + TestConfig._PERF_COUNTERS_RISCV_ZONE_OFFSET
@@ -662,13 +681,18 @@ def read_tile_counters(
 
 
 def read_family_counters(
-    location: str = "0,0", zones: int = 0, token: int | None = None
+    location: str = "0,0",
+    zones: int = 0,
+    token: int | None = None,
+    run_type: PerfRunType | None = None,
 ) -> pd.DataFrame:
     """Rows of the optional families the build compiled in (TestConfig.PERF_*), in the layout of read_counters. Empty
     when none is on."""
     rows = []
     if TestConfig.PERF_RISCV_EVENTS is not None:
-        rows += read_riscv_counters(location, zones, token)
+        rows += read_riscv_counters(
+            location, zones, token, threads=riscv_threads_of(run_type)
+        )
     rows += read_tile_counters(
         location,
         zones,
