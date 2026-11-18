@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf and accuracy sweep of the Qwen MLP prefill block on a 4-chip ring.
+"""Perf and accuracy sweep of the chip-local part of the Qwen MLP prefill block (partial y on each chip of a 4-chip ring).
 
 Run with TT_VISIBLE_DEVICES=0,1,4,5 on an 8 x P150 machine so that the 2x2 mesh is a physical ring.
 """
@@ -13,9 +13,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.tt_ccl import TT_CCL
 from models.common.utility_functions import comp_pcc
-from tests.ttnn.unit_tests.operations.qwen_mlp.multi_op_mlp import multi_op_mlp
+from tests.ttnn.unit_tests.operations.qwen_mlp.multi_op_mlp import multi_op_partial_mlp
 
 H = 5120
 I = 17408
@@ -28,18 +27,18 @@ PCC_THRESHOLD = 0.99
 
 DRAM_BW = 512e9
 COMPUTE_FLOPS = 594e12
-ETH_BW = 800e9
+TENSIX_CORES = 110
+CORES_USED = 99
 BFP4_BYTES_PER_ELEMENT = 576 / 1024
 BF16_BYTES = 2
 
-mlp_under_test = multi_op_mlp
+mlp_under_test = multi_op_partial_mlp
 
 
 def roofline_seconds(S):
     flops = 6 * S * H * I / TP
     dram_bytes = 2 * S * H * BF16_BYTES + 3 * H * I / TP * BFP4_BYTES_PER_ELEMENT + H * BF16_BYTES
-    eth_byte_hops = 2 * (TP - 1) * S * H * BF16_BYTES
-    return max(flops / COMPUTE_FLOPS, dram_bytes / DRAM_BW, eth_byte_hops / ETH_BW)
+    return max(flops / (COMPUTE_FLOPS * CORES_USED / TENSIX_CORES), dram_bytes / DRAM_BW)
 
 
 def interleave_gate_up(gate, up):
@@ -52,14 +51,11 @@ def deinterleave_gate_up(gate_up):
     return blocks[:, :, 0].reshape(H, -1), blocks[:, :, 1].reshape(H, -1)
 
 
-def reference_mlp(h, w_norm, gate_up_per_chip, down_per_chip):
+def reference_partial_y(h, w_norm, gate_up, down):
     h = h.float()
     n = h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + EPS) * w_norm.float()
-    y = h.clone()
-    for gate_up, down in zip(gate_up_per_chip, down_per_chip):
-        gate, up = deinterleave_gate_up(gate_up.float())
-        y += (torch.nn.functional.silu(n @ gate) * (n @ up)) @ down.float()
-    return y
+    gate, up = deinterleave_gate_up(gate_up.float())
+    return (torch.nn.functional.silu(n @ gate) * (n @ up)) @ down.float()
 
 
 def upload(mesh, tensor, dtype, shard_dim=None):
@@ -81,7 +77,6 @@ def test_qwen_mlp_prefill_perf():
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
     try:
         mesh.reshape(ttnn.MeshShape(1, 4))
-        ccl = TT_CCL(mesh)
 
         w_norm_torch = 1 + 0.1 * torch.randn(H)
         gate_up_torch = torch.cat(
@@ -102,16 +97,18 @@ def test_qwen_mlp_prefill_perf():
             h = upload(mesh, h_torch, ttnn.bfloat16)
 
             for _ in range(WARMUP_ITERATIONS):
-                y = mlp_under_test(h, w_norm, w_gate_up, w_down, ccl)
+                y = mlp_under_test(h, w_norm, w_gate_up, w_down)
             ttnn.synchronize_device(mesh)
             start = time.perf_counter()
             for _ in range(TIMED_ITERATIONS):
-                y = mlp_under_test(h, w_norm, w_gate_up, w_down, ccl)
+                y = mlp_under_test(h, w_norm, w_gate_up, w_down)
             ttnn.synchronize_device(mesh)
             seconds = (time.perf_counter() - start) / TIMED_ITERATIONS
 
-            expected = reference_mlp(h_torch, w_norm_torch.bfloat16(), gate_up_stored, down_stored)
-            for chip, y_chip in enumerate(ttnn.get_device_tensors(y)):
+            for chip, (y_chip, gate_up, down) in enumerate(
+                zip(ttnn.get_device_tensors(y), gate_up_stored, down_stored)
+            ):
+                expected = reference_partial_y(h_torch, w_norm_torch.bfloat16(), gate_up, down)
                 passed, pcc = comp_pcc(expected, ttnn.to_torch(y_chip).reshape(S, H).float(), PCC_THRESHOLD)
                 assert passed, f"S={S} chip {chip}: PCC {pcc}"
             results.append((S, seconds, roofline_seconds(S), pcc))

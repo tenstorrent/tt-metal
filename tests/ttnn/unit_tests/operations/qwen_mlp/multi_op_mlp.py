@@ -11,11 +11,10 @@ LOFI_FP32 = dict(
 )
 
 
-def multi_op_mlp(h, w_norm, w_gate_up, w_down, ccl: TT_CCL):
-    """y = h + MLP(RMSNorm(h)) as a chain of existing ttnn ops (the baseline to beat)."""
-    mesh = h.device()
+def multi_op_partial_mlp(h, w_norm, w_gate_up, w_down):
+    """This chip's partial of the down projection, before the cross-chip sum and the residual add."""
     compute_config = ttnn.WormholeComputeKernelConfig(**LOFI_FP32)
-    grid = mesh.compute_with_storage_grid_size()
+    grid = h.device().compute_with_storage_grid_size()
     n = ttnn.rms_norm(h, weight=w_norm, epsilon=EPS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     product = ttnn.experimental.minimal_matmul(
         n,
@@ -33,7 +32,7 @@ def multi_op_mlp(h, w_norm, w_gate_up, w_down, ccl: TT_CCL):
         dtype=ttnn.bfloat16,
         fuse_swiglu=True,
     )
-    partial_y = ttnn.experimental.minimal_matmul(
+    return ttnn.experimental.minimal_matmul(
         product,
         w_down,
         config=ttnn.MinimalMatmulConfig(
@@ -48,6 +47,12 @@ def multi_op_mlp(h, w_norm, w_gate_up, w_down, ccl: TT_CCL):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
+
+
+def multi_op_mlp(h, w_norm, w_gate_up, w_down, ccl: TT_CCL):
+    """y = h + MLP(RMSNorm(h)) as a chain of existing ttnn ops."""
+    mesh = h.device()
+    partial_y = multi_op_partial_mlp(h, w_norm, w_gate_up, w_down)
     scattered = ttnn.experimental.reduce_scatter_minimal_async(
         ttnn.reshape(partial_y, [1, 1, *partial_y.shape]),
         dim=3,
