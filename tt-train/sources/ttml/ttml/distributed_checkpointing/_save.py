@@ -12,12 +12,12 @@ touch numpy views of host buffers and file descriptors. A byte budget bounds the
 from __future__ import annotations
 
 import os
+import queue
 import secrets
 import shutil
 import threading
 import time
 import zlib
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from math import prod
 
@@ -102,12 +102,21 @@ def _one_process_owner(key: str, group: list[Chunk]) -> Chunk:
     return next(c for c in group if c.mesh_coord == coord)
 
 
-def _write_chunk(fd: int, offset: int, view: np.ndarray, budget: _ByteBudget, charged: int) -> int:
-    try:
-        pwrite_all(fd, view, offset)
-        return zlib.crc32(view)
-    finally:
-        budget.release(charged)
+def _writer(jobs: queue.SimpleQueue, crcs: dict, failed: list, stop: threading.Event, budget: _ByteBudget) -> None:
+    """A writer thread: writes the chunks queued for its files in queue order and records each one's CRC32 per
+    (key, file), until it gets None. Once a write or the readback has failed it only releases the budget of what is
+    still queued."""
+    while (job := jobs.get()) is not None:
+        key, file_index, fd, offset, view, charged = job
+        try:
+            if not stop.is_set():
+                pwrite_all(fd, view, offset)
+                crcs[(key, file_index)] = zlib.crc32(view)
+        except BaseException as err:
+            failed.append(err)
+            stop.set()
+        finally:
+            budget.release(charged)
 
 
 def _write_plan(
@@ -119,12 +128,18 @@ def _write_plan(
     stats: dict,
 ) -> dict[tuple[str, int], int]:
     """Create this process's files in ``staging`` and write every planned chunk into them; returns the CRC32 per
-    (key, file). Files are synced to the filesystem before they are closed, the first failed write stops the readback
-    of the keys after it, and every descriptor opened is closed whatever fails."""
+    (key, file). Each file's chunks go through one queue to one writer thread (``threads`` caps the threads, which then
+    share the files round-robin), so nothing per chunk outlives its write. Files are synced to the filesystem before
+    they are closed, the first failed write stops the readback of the keys after it, and every descriptor opened is
+    closed whatever fails."""
     fds: dict[int, int] = {}
     data_start: dict[int, int] = {}
     budget = _ByteBudget(max_inflight_bytes)
     crcs: dict[tuple[str, int], int] = {}
+    failed: list[BaseException] = []
+    stop = threading.Event()
+    queues: list[queue.SimpleQueue] = []
+    writers: list[threading.Thread] = []
     t2 = time.perf_counter()
     readback_s = 0.0
     synced = False
@@ -134,20 +149,20 @@ def _write_plan(
             os.makedirs(os.path.dirname(path), exist_ok=True)
             data_start[fplan.index] = create_file(path, fplan.header, fplan.data_bytes)
             fds[fplan.index] = os.open(path, os.O_RDWR)
-        workers = max(1, len(plan.files)) if threads is None else threads
-        failed: list[BaseException] = []
-
-        def record_failure(future) -> None:
-            if not future.cancelled() and future.exception() is not None:
-                failed.append(future.exception())
-
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = []
+        workers = len(plan.files) if threads is None else min(threads, len(plan.files))
+        queues = [queue.SimpleQueue() for _ in range(workers)]
+        queue_of = {fplan.index: queues[i % workers] for i, fplan in enumerate(plan.files)}
+        for i, jobs in enumerate(queues):
+            writer = threading.Thread(
+                target=_writer, args=(jobs, crcs, failed, stop, budget), name=f"dcp-writer-{i}", daemon=True
+            )
+            writer.start()
+            writers.append(writer)
+        try:
             order = sorted(plan.items, key=lambda k: (-plan.infos[k].local_nbytes * len(plan.items[k]), k))
             for key in order:
                 if failed:
-                    pool.shutdown(wait=True, cancel_futures=True)
-                    raise failed[0]
+                    break
                 items = plan.items[key]
                 info = plan.infos[key]
                 live_tensor = by_key[key]
@@ -163,14 +178,19 @@ def _write_plan(
                 for it, shard in zip(items, shards):
                     data = shard.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0))  # its one shard
                     view = _logical_bytes(np.from_dlpack(data), it.chunk.box.sizes, info.itemsize)
-                    future = pool.submit(
-                        _write_chunk, fds[it.file], data_start[it.file] + it.data_offset, view, budget, per_item
-                    )
-                    future.add_done_callback(record_failure)
-                    futures.append((key, it.file, future))
+                    offset = data_start[it.file] + it.data_offset
+                    queue_of[it.file].put((key, it.file, fds[it.file], offset, view, per_item))
                 del shards
-            for key, file_index, future in futures:
-                crcs[(key, file_index)] = future.result()
+        except BaseException:
+            stop.set()  # the writers drop what is still queued
+            raise
+        finally:
+            for jobs in queues:
+                jobs.put(None)
+            for writer in writers:
+                writer.join()
+        if failed:
+            raise failed[0]
         for fd in fds.values():
             os.fdatasync(fd)
         synced = True
