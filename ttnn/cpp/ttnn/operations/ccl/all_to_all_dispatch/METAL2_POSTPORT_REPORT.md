@@ -89,3 +89,32 @@ converted writer in both modes.
 - **No DM self-loop is left** after this pass: the two self-loops of the port had no credit calls at all, so they were
   this pass's sites rather than the DM self-loop pass's.
 - **Packet-header region size.** `3 * packet_header_size` bytes for three headers — exactly what is used.
+
+## Pass 2 — Replace fake-FIFO DM self-loops with a scratchpad (`semantic/dm_self_loop_dfbs.md`)
+
+### Outcome
+
+**NO SITES FOUND.** No DFB is bound by one DM kernel as both `PRODUCER` and `CONSUMER`. Nothing was changed.
+
+### Sites
+
+None. Survey of every `DataflowBufferSpec` and its `DFBBinding`s after pass 1 (`2de9087cf79`):
+
+| DFB | PRODUCER | CONSUMER | Self-loop? |
+|---|---|---|---|
+| `input` (`device/all_to_all_dispatch_program_factory.cpp:285`) | reader | writer | no |
+| `indices` (`:292`) | reader | writer | no |
+| `mapping` (`:299`) | reader | writer | no |
+| `metadata_buffer` (`:320`, FullPacket only) | writer | reader | no |
+
+The port had two DM self-loops (`packet_header`, `send_preparation_buffer` on the writer). Neither made a credit call,
+so pass 1 (sync-free) converted both to scratchpads; there is nothing left for this pass. No compute kernel exists.
+
+### Verification
+
+Nothing was changed, so the before and after trees are the same tree: sentinel set green (8 passed, on `2de9087cf79`).
+
+### Noticed, not done
+
+- **Quasar note.** `metadata_buffer` is the last DFB with no credit calls in this op; it is a two-kernel DFB (reader and
+  writer on one node), so it is neither this pass's target nor convertible by pass 1 (see the pass 1 feature request).
