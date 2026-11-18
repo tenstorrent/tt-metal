@@ -1343,16 +1343,28 @@ TEST_F(DriscService, Stress) {
 // issue() and issue_batch() refuse what the kernel would run wrongly, issuing nothing, and the queue stays usable.
 // A bank past the chip's last one fails the client before any seat attaches; seat() rejects a bank the client did not
 // attach and a NoC other than 0 or 1.
+// A seat that has not run the service since the last reset holds no service state, so the refused client is checked by
+// comparing state words, not by expecting STOPPED.
 TEST_F(DriscService, RejectsBadBanksAndSeats) {
+    const auto states = [] {
+        std::vector<uint32_t> words;
+        for (const uint32_t bank : all_banks()) {
+            for (const Seat& seat : device().seats(bank)) {
+                words.push_back(device().core(seat).read_l1_u32(abi::L1CommandBlockLayout::state_addr));
+            }
+        }
+        return words;
+    };
+    const std::vector<uint32_t> before = states();
     std::optional<Client> client;
     EXPECT_THROW(client.emplace(device().umd, chip_id, std::vector<uint32_t>{0, device().num_banks()}), std::exception);
     EXPECT_FALSE(client.has_value());
-    expect_all_stopped(all_banks());
+    EXPECT_EQ(states(), before) << "a refused client changed a seat's state";
     attach(client, {0});
     EXPECT_THROW(client->seat(last_bank(), 0), std::exception);
     EXPECT_THROW(client->seat(0, 2), std::exception);
     client.reset();
-    expect_all_stopped(all_banks());
+    expect_all_stopped({0});
 }
 
 TEST_F(DriscService, RejectsInvalidCommands) {
