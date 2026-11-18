@@ -34,9 +34,9 @@ public:
 
 struct WiringOptions {
     Topology topology = Topology::Mesh;
-    IntermeshVCConfig vc_config{};
-    std::map<MeshId, ExpressAxis> express_axis{};
-    std::set<MeshId> wrap_around_meshes{};
+    IntermeshVCConfig vc_config;
+    std::map<MeshId, ExpressAxis> express_axis;
+    std::set<MeshId> wrap_around_meshes;
 };
 
 // Same routers, VCs and turns as the stock builder: the turn sets come from turn_set_for_router.

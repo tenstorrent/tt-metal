@@ -585,7 +585,8 @@ constexpr uint32_t kRegionStart = 0x20000;
 constexpr uint32_t kSlotBytes = 4416;
 
 // Stand-in for the stock allocator: the router's senders by VC, then a receiver per VC, from the region start.
-ChannelAllocator fake_allocator(std::vector<std::vector<uint32_t>> sender_slots, std::vector<uint32_t> receiver_slots) {
+ChannelAllocator fake_allocator(
+    const std::vector<std::vector<uint32_t>>& sender_slots, const std::vector<uint32_t>& receiver_slots) {
     return [=](const std::array<size_t, builder_config::MAX_NUM_VCS>& counts) {
         RouterChannelLayout layout;
         uint32_t addr = kRegionStart;
@@ -714,6 +715,7 @@ TEST(FabricGraphRouterInputs, MeshHasNoRingEntries) {
 // fake live eth channels: direction d, plane p on chip c is channel 4 * d + p
 const LiveEthChannels kFakeLive = [](const FabricNodeId&, RoutingDirection d) {
     std::vector<chan_id_t> chans;
+    chans.reserve(4);
     for (uint32_t p = 0; p < 4; ++p) {
         chans.push_back(static_cast<chan_id_t>((4 * static_cast<uint32_t>(d)) + p));
     }

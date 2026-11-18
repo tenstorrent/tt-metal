@@ -43,7 +43,7 @@ ChannelGraph lower_to_channels(LogicalGraph logical, Topology topology);
 // Legacy pass: widen every router to the stock shape (router_vc_shape), used slots or not, and keep the
 // unused slots as legacy_slots. Stock sizes a router by its family, not by what feeds it; this is here for
 // parity and goes away with #65720.
-void legacy_stock_sender_counts(ChannelGraph& graph, const WiringOptions& options);
+void legacy_stock_sender_counts(ChannelGraph& cg, const WiringOptions& options);
 
 // The chip's protected-ring queries, for express meshes. On device: make_protected_ring_queries.
 using RingQueries = std::function<ProtectedRingQueries(const FabricNodeId&)>;
@@ -51,6 +51,6 @@ using RingQueries = std::function<ProtectedRingQueries(const FabricNodeId&)>;
 // Which senders acquire a protected ring (the kernel's injection flag, for bubble flow control): the
 // stock injection policy, asked about each channel's producer. Run after the legacy pass so its slots get
 // flags too.
-void mark_ring_entries(ChannelGraph& graph, const WiringOptions& options, const RingQueries& ring_queries);
+void mark_ring_entries(ChannelGraph& cg, const WiringOptions& options, const RingQueries& ring_queries);
 
 }  // namespace tt::tt_fabric::graph

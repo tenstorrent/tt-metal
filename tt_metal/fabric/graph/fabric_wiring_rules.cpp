@@ -19,11 +19,11 @@ bool is_z_boundary(const Port& p) { return is_z_boundary_router(*p.direction, p.
 
 class StockWiringRules : public WiringRules {
 public:
-    StockWiringRules(const std::vector<Port>& ports, const WiringOptions& options) : options_(options) {
+    StockWiringRules(const std::vector<Port>& ports, const WiringOptions& options) :
+        options_(options), is_2d_(is_2D_topology(options.topology)) {
         for (const auto& p : ports) {
             chips_[p.node].at(*p.direction) = p.capability;
         }
-        is_2d_ = is_2D_topology(options.topology);
     }
 
     std::vector<Vc> vcs() const override {

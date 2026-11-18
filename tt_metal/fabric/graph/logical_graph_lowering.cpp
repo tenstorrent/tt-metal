@@ -133,12 +133,12 @@ private:
     }
 
     void add_eth_edges(uint32_t vc) {
-        for (RouterIndex r = 0; r < g_.routers.size(); ++r) {
-            const auto rx = g_.receiver(*g_.routers[r].peer, vc);
+        for (const auto& router : g_.routers) {
+            const auto rx = g_.receiver(*router.peer, vc);
             if (!rx) {
                 continue;
             }
-            for (ChannelIndex c : g_.routers[r].channels) {
+            for (ChannelIndex c : router.channels) {
                 const auto& ch = g_.channels[c];
                 if (ch.kind == ChannelKind::Sender && ch.vc == vc) {
                     g_.edges.push_back(LogicalEdge{.from = c, .to = *rx, .transport = Transport::Eth});
