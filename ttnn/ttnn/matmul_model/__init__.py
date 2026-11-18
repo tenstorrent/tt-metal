@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Downloads the matmul config model blob (ttnn.CONFIG.matmul_model_config) into ttnn's cache, for an install without
-the blob the build fetches (ttnn/cpp/ttnn/operations/matmul/device/config/model/README.md, "The model blob").
+"""The matmul config model blob (ttnn.CONFIG.matmul_model_config): its default path, and its download into ttnn's
+cache for an install without the blob the build fetches (ttnn/cpp/ttnn/operations/matmul/device/config/model/README.md,
+"Turning it on" and "The model blob").
 
-    python -m ttnn.download_matmul_model
+    python -m ttnn.matmul_model
 """
 
 import hashlib
@@ -14,10 +15,11 @@ import json
 import os
 import pathlib
 import urllib.request
+import uuid
 
 from loguru import logger
 
-# The pin the build reads too. A wheel carries it under the package, a source tree has it two levels up.
+# The pin the build reads too. A wheel carries it under the ttnn package, a source tree has it two levels up.
 _PIN = pathlib.Path("ttnn/cpp/ttnn/operations/matmul/device/config/model/matmul_model.json")
 _TIMEOUT_S = 10
 
@@ -26,7 +28,7 @@ _failed = set()
 
 
 def _pin():
-    package = pathlib.Path(__file__).resolve().parent
+    package = pathlib.Path(__file__).resolve().parent.parent
     for root in (package, package.parent.parent):
         if (root / _PIN).is_file():
             return json.loads((root / _PIN).read_text())
@@ -82,10 +84,10 @@ def download(path=None):
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     # Download next to the target and rename, so an interrupted or concurrent download never looks like the blob
-    partial = path.with_name(f"{path.name}.{os.getpid()}.partial")
+    partial = path.with_name(f"{path.name}.{uuid.uuid4().hex}.partial")
     try:
         digest = hashlib.sha256()
-        with open(partial, "wb") as out, urllib.request.urlopen(request, timeout=_TIMEOUT_S) as r:
+        with open(partial, "xb") as out, urllib.request.urlopen(request, timeout=_TIMEOUT_S) as r:
             while chunk := r.read(1 << 20):
                 digest.update(chunk)
                 out.write(chunk)
@@ -112,7 +114,7 @@ def download_if_enabled():
         if path != cache_path():
             return
         download(path)
-    except (OSError, ValueError, KeyError, http.client.HTTPException) as e:
+    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as e:
         _failed.add(path)
         logger.warning(
             f"matmul_model_config: could not download the matmul config model ({e}); matmul keeps its "
@@ -120,5 +122,19 @@ def download_if_enabled():
         )
 
 
-if __name__ == "__main__":
-    print(download())
+def on_import(runtime_root):
+    """Called by `import ttnn`. Unless matmul_model_path was set, points it at the blob a source build fetched into
+    runtime/ under runtime_root, or else at cache_path(); then downloads the blob if the flag is on. An unset path
+    reads back as pathlib.Path("") == "."."""
+    import ttnn
+
+    if str(ttnn.CONFIG.matmul_model_path) in ("", "."):
+        build_blob = pathlib.Path(runtime_root) / "runtime/matmul_model/matmul_model.blob"
+        if build_blob.is_file():
+            ttnn.CONFIG.matmul_model_path = str(build_blob)
+        else:
+            try:
+                ttnn.CONFIG.matmul_model_path = str(cache_path())
+            except (OSError, ValueError, KeyError, TypeError):
+                pass  # no readable pin (setup.py checks a wheel has it): the path stays unset
+    download_if_enabled()

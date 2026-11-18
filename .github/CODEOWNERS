@@ -357,6 +357,7 @@ ttnn/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads
 ttnn/ttnn/operations/activations.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/matmul.py @tenstorrent/metalium-developers-mmfusedreduce
+ttnn/ttnn/matmul_model/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @ayerofieiev-tt @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/ttnn/operations/normalization.py @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions

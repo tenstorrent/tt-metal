@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The download of the matmul config model into ttnn's cache (ttnn/download_matmul_model.py), against a fake
+"""The download of the matmul config model into ttnn's cache (ttnn/ttnn/matmul_model/__init__.py), against a fake
 registry: no device, no network."""
 
 import hashlib
 import io
 import json
-import os
 import re
 import stat
 import urllib.error
@@ -16,7 +15,7 @@ import urllib.error
 import pytest
 import ttnn
 
-from ttnn import download_matmul_model as dl
+from ttnn import matmul_model as dl
 
 BLOB = b"matmul config model" * 1000
 SHA256 = hashlib.sha256(BLOB).hexdigest()
@@ -59,10 +58,9 @@ def test_downloads_the_pinned_blob(registry, tmp_path):
     path = tmp_path / "models" / "model.blob"
     assert dl.download(path) == path
     assert path.read_bytes() == BLOB
-    umask = os.umask(0)
-    os.umask(umask)
-    assert stat.S_IMODE(path.stat().st_mode) == 0o666 & ~umask
     assert list(path.parent.iterdir()) == [path]
+    (tmp_path / "plain").touch()
+    assert stat.S_IMODE(path.stat().st_mode) == stat.S_IMODE((tmp_path / "plain").stat().st_mode)
     # Once there, it isn't downloaded again; a damaged file is
     registry["urls"].clear()
     dl.download(path)
@@ -117,4 +115,22 @@ def test_download_if_enabled(registry, tmp_path):
         "matmul_model_config", True
     ):
         dl.download_if_enabled()
+    assert registry["urls"] == []
+
+
+def test_on_import_sets_the_default_path(registry, tmp_path):
+    mine = str(tmp_path / "mine.blob")
+    with ttnn.manage_config("matmul_model_config", False):
+        with ttnn.manage_config("matmul_model_path", ""):
+            dl.on_import(tmp_path)
+            assert str(ttnn.CONFIG.matmul_model_path) == str(dl.cache_path())
+        build_blob = tmp_path / "runtime" / "matmul_model" / "matmul_model.blob"
+        build_blob.parent.mkdir(parents=True)
+        build_blob.write_bytes(BLOB)
+        with ttnn.manage_config("matmul_model_path", ""):
+            dl.on_import(tmp_path)
+            assert str(ttnn.CONFIG.matmul_model_path) == str(build_blob)
+        with ttnn.manage_config("matmul_model_path", mine):
+            dl.on_import(tmp_path)
+            assert str(ttnn.CONFIG.matmul_model_path) == mine
     assert registry["urls"] == []

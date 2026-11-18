@@ -87,8 +87,8 @@ std::shared_ptr<LoadedModel> loaded_model(const std::filesystem::path& path) {
         log_warning(
             tt::LogOp,
             "matmul_model_config is on but the matmul config model could not be loaded ({}); matmul keeps its default "
-            "program configs until a model loads from matmul_model_path (python -m ttnn.download_matmul_model "
-            "downloads it)",
+            "program configs until a model loads from matmul_model_path (from Python, python -m ttnn.matmul_model "
+            "downloads the pinned blob into ttnn's cache)",
             error);
     }
     loaded = std::move(next);
@@ -135,6 +135,10 @@ bool is_32x32(const tt::tt_metal::Tile& tile) {
     return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
 }
 
+bool is_transposed(const tt::tt_metal::Tile& tile) {
+    return tile.get_transpose_within_face() || tile.get_transpose_of_faces();
+}
+
 std::uint32_t batch_of(const ttnn::Shape& shape) {
     return static_cast<std::uint32_t>(shape.volume() / (static_cast<std::uint64_t>(shape[-2]) * shape[-1]));
 }
@@ -172,6 +176,10 @@ std::optional<Call> describe(
         why = "fused activation, untilize_out, global CB, sub-device, prefetcher pipes or column offset";
         return std::nullopt;
     }
+    if (device->get_active_sub_device_manager_id() != device->get_default_sub_device_manager_id()) {
+        why = "sub-device manager loaded";
+        return std::nullopt;
+    }
     if (!attr.compute_kernel_config.has_value() || !attr.output_dtype.has_value()) {
         why = "attributes not normalized";
         return std::nullopt;
@@ -188,6 +196,10 @@ std::optional<Call> describe(
     const auto in1_tile = utilities::get_matmul_tile(b, attr.transpose_b);
     if (!is_32x32(in0_tile) || !is_32x32(in1_tile) || (attr.output_tile.has_value() && !is_32x32(*attr.output_tile))) {
         why = "tiles other than 32x32";
+        return std::nullopt;
+    }
+    if (is_transposed(a.tensor_spec().tile()) || is_transposed(b.tensor_spec().tile())) {
+        why = "transposed tiles";
         return std::nullopt;
     }
     const auto in0 = model_dtype(a.dtype());

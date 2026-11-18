@@ -16,7 +16,7 @@ import pytest
 import torch
 import ttnn
 
-from tt_py_test_utils_common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole, skip_for_slow_dispatch
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.comparison import comp_pcc
 
@@ -160,6 +160,39 @@ def test_model_keeps_default_for_broadcast_a(device, model_on):
     out = ttnn.matmul(ta, tb)
     assert last_pick().startswith("default: B batched"), last_pick()
     assert_with_pcc(a.float() @ b.float(), ttnn.to_torch(out), 0.999)
+
+
+@pytest.mark.parametrize("transpose_b", [False, True])
+def test_model_keeps_default_for_a_transposed_tile(device, model_on, transpose_b):
+    torch.manual_seed(0)
+    a = torch.randn(4, 64, 96).bfloat16()
+    b = torch.randn(4, 96, 64).bfloat16()
+    ta = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile((32, 32), transpose_tile=True))
+    tb = ttnn.from_torch(b.transpose(-1, -2).contiguous() if transpose_b else b, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.matmul(ta, tb, transpose_b=transpose_b)
+    assert last_pick().startswith("default: transposed tiles"), last_pick()
+    assert_with_pcc(a.float() @ b.float(), ttnn.to_torch(out).float(), 0.999)
+
+
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
+def test_model_keeps_default_with_a_sub_device_manager_loaded(device, model_on):
+    torch.manual_seed(0)
+    a = torch.randn(4, 64, 96).bfloat16()
+    b = torch.randn(4, 96, 64).bfloat16()
+    ta = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device)
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    manager = device.create_sub_device_manager([ttnn.SubDevice([cores])], 0)
+    device.load_sub_device_manager(manager)
+    device.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
+    try:
+        out = ttnn.matmul(ta, tb)
+        assert last_pick().startswith("default: sub-device manager loaded"), last_pick()
+        assert_with_pcc(a.float() @ b.float(), ttnn.to_torch(out).float(), 0.999)
+    finally:
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
 
 
 def test_explicit_program_config_is_untouched(device, model_on):

@@ -17,16 +17,16 @@ ttnn.CONFIG.matmul_model_config = True
 ```
 
 The model is the blob that `ttnn.CONFIG.matmul_model_path` names. Unless that path is already set, `import ttnn`
-sets it to the blob a source build fetched (`runtime/matmul_model/matmul_model.blob` under the runtime root, see "The
-model blob" below), or, when there is none (a wheel, or a build configured with `-DTT_MATMUL_MODEL_FETCH=OFF`), to
-`<ttnn.CONFIG.cache_path>/matmul_model/<sha256>.blob`. ttnn downloads the blob to that cache path when the flag is on
-at `import ttnn` or when a device is opened (`ttnn.open_device`, `ttnn.open_mesh_device`) and the file isn't there
-yet. It tries once per process: if the download fails, a warning is logged and matmul uses the default configs. Turned
-on after the device is open, or to download ahead of time (say, into a container image), run
-`python -m ttnn.download_matmul_model` or call `ttnn.download_matmul_model.download()`. Nothing is downloaded while
-the flag is off, or to a `matmul_model_path` set to another file. A C++ program that does not import ttnn's Python
-package must set `matmul_model_path` itself: while it is unset, a matmul with the flag on logs that the model can't be
-loaded and uses the default configs.
+sets it, once, to the blob a source build fetched (`runtime/matmul_model/matmul_model.blob` under the runtime root, see
+"The model blob" below), or, when there is none (a wheel, or a build configured with `-DTT_MATMUL_MODEL_FETCH=OFF`), to
+`<ttnn.CONFIG.cache_path>/matmul_model/<sha256>.blob`; changing `cache_path` later does not move it. ttnn downloads the
+blob to that cache path when the flag is on at `import ttnn` or when a device is opened (`ttnn.open_device`,
+`ttnn.open_mesh_device`) and the file isn't there yet. It tries once per process: if the download fails, a warning is
+logged and matmul uses the default configs. Turned on after the device is open, or to download ahead of time (say,
+into a container image), run `python -m ttnn.matmul_model` or call `ttnn.matmul_model.download()`. Nothing is
+downloaded automatically while the flag is off, or to a `matmul_model_path` set to another file. The code is
+`ttnn/ttnn/matmul_model/`. A C++ program that does not import ttnn's Python package must set `matmul_model_path`
+itself: while it is unset, a matmul with the flag on logs that the model can't be loaded and uses the default configs.
 
 When the flag is off nothing here runs and nothing is loaded. When it is on, the blob at `matmul_model_path` is
 loaded on the first matmul the model is eligible for, and loaded again on the first eligible matmul after
@@ -43,9 +43,11 @@ The model chooses only when all of the following hold. Otherwise the default sel
 
 - The arch is Blackhole, which is the only device the model was trained on.
 - No `program_config` and no `core_grid` were given.
-- A, B and the output are interleaved (DRAM or L1), with 32x32 tiles in TILE layout.
+- A, B and the output are interleaved (DRAM or L1), with 32x32 tiles in TILE layout; A's and B's tiles are not stored
+  transposed.
 - The dtypes are bf16, bfp8_b, bfp4_b or fp32.
-- There is no global CB, sub-device, prefetcher pipe, `untilize_out` or `in0_column_offset`.
+- There is no global CB, `sub_device_id`, prefetcher pipe, `untilize_out` or `in0_column_offset`, and no sub-device
+  manager is loaded: the model's configs use the whole grid.
 - A fused bias, if any, is a single row.
 - If B is batched, A has the same batch count. A broadcast A over a batched B keeps the default: the model describes
   a single batch count.
@@ -112,15 +114,15 @@ pinned by its sha256 in `matmul_model.json` (an OCI layer's digest is the sha256
 verifies the download). CMake fetches it at configure time into `runtime/matmul_model/`, like the SFPI toolchain, and
 installs it at the same path under the runtime root. A failed fetch fails configure; `-DTT_MATMUL_MODEL_FETCH=OFF`
 builds without the blob. A file at the target path with a different sha256 is deleted before fetching. The wheel leaves
-the blob out, to stay within PyPI's file size limit, and carries `matmul_model.json`: `ttnn/download_matmul_model.py`
+the blob out, to stay within PyPI's file size limit, and carries `matmul_model.json`: `ttnn/ttnn/matmul_model/`
 downloads the same artifact into ttnn's cache ("Turning it on" above). To use a local blob instead, set
 `matmul_model_path` (or `TT_MATMUL_MODEL_BLOB` for the tests).
 
-Replace it only with a retrained model; the analytic constants below must match the model it was trained with. The blob
-is a LightGBM model exported to the format `gbdt_model.cpp` reads. It carries the GBDT trees, the feature names (checked against `kFeatureNames` at load, so a blob trained on
-other features is refused) and the sha256 of the LightGBM model it was exported from, which is logged at load. It is trained on device-time
-measurements of matmul program configs on Blackhole p150 (11x10 grid). The analytic part (`matmul_model_features.cpp`,
-`matmul_model_device_params.cpp`) is code. Its constants must match the model the blob was trained with.
+Replace it only with a retrained model. The blob is a LightGBM model exported to the format `gbdt_model.cpp` reads. It
+carries the GBDT trees, the feature names (checked against `kFeatureNames` at load, so a blob trained on other features
+is refused) and the sha256 of the LightGBM model it was exported from, which is logged at load. It is trained on
+device-time measurements of matmul program configs on Blackhole. The analytic part (`matmul_model_features.cpp`,
+`matmul_model_device_params.cpp`) is code, and its constants must match the model the blob was trained with.
 
 To publish a new blob, push it as a new tag, update the sha256 in `matmul_model.json` (the build and ttnn's Python
 package both read it), and update the predictions the `MatmulModelSelector.GoldenPredictions` gtest pins:
@@ -144,3 +146,5 @@ The tests that need the model blob are skipped when there is none (a build confi
   the selector's estimate (`circular_buffer_bytes`), so a factory change the selector doesn't follow fails here.
 - **`tests/ttnn/unit_tests/operations/matmul/test_matmul_model_config.py`.** This needs a Blackhole device; it uses
   the fetched model (or `TT_MATMUL_MODEL_BLOB`).
+- **`tests/ttnn/unit_tests/operations/matmul/test_matmul_model_download.py`.** The download into ttnn's cache,
+  against a fake registry: no device, no network.

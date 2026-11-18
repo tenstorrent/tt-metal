@@ -717,23 +717,10 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
 
     SetRootDir(str(root_dir))
 
-# The matmul config model blob (ttnn/cpp/ttnn/operations/matmul/device/config/model/README.md, "Turning it on"):
-# unless matmul_model_path was set, point it at the blob the build fetched into runtime/, or else at its download in
-# ttnn's cache, so ttnn.CONFIG.matmul_model_config alone turns the model on. An unset path reads back as
-# pathlib.Path("") == ".".
-from ttnn import download_matmul_model
+# The matmul config model's default path, and its download when ttnn.CONFIG.matmul_model_config is on
+from ttnn import matmul_model as _matmul_model
 
-if str(CONFIG.matmul_model_path) in ("", "."):
-    _runtime_root = (
-        pathlib.Path(os.environ["TT_METAL_RUNTIME_ROOT"]) if "TT_METAL_RUNTIME_ROOT" in os.environ else root_dir
-    )
-    _build_blob = _runtime_root / "runtime/matmul_model/matmul_model.blob"
-    if _build_blob.is_file():
-        CONFIG.matmul_model_path = str(_build_blob)
-    else:
-        with contextlib.suppress(FileNotFoundError):  # no pin: the path stays unset (setup.py checks a wheel has it)
-            CONFIG.matmul_model_path = str(download_matmul_model.cache_path())
-download_matmul_model.download_if_enabled()
+_matmul_model.on_import(os.environ.get("TT_METAL_RUNTIME_ROOT") or root_dir)
 
 import atexit as _atexit
 

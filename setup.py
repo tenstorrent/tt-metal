@@ -252,7 +252,7 @@ class CMakeBuild(build_ext):
                     "-DWITH_PYTHON_BINDINGS=ON",
                     "-DTT_USE_SYSTEM_SFPI=ON",
                     "-DENABLE_CCACHE=TRUE",
-                    # The wheel leaves out the matmul config model blob (ttnn/download_matmul_model.py)
+                    # The wheel leaves out the matmul config model blob (ttnn/ttnn/matmul_model/__init__.py)
                     "-DTT_MATMUL_MODEL_FETCH=OFF",
                 ]
 
@@ -353,7 +353,7 @@ class CMakeBuild(build_ext):
             # the same header tree in an installed wheel as it does in a source checkout.
             "ttnn/kernel_lib/**/*.{hpp,inl}",
             "ttnn/operations/normalization/kernel_util/**/*",
-            # The matmul config model pin (ttnn/download_matmul_model.py)
+            # The matmul config model pin (ttnn/ttnn/matmul_model/__init__.py)
             "ttnn/operations/matmul/device/config/model/matmul_model.json",
         ]
         tt_metal_patterns = [

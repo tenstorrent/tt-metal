@@ -8,7 +8,6 @@ from typing import Optional, List
 
 import ttnn
 from loguru import logger
-from ttnn import download_matmul_model
 
 
 # TODO: Device = ttnn._ttnn.Device
@@ -45,8 +44,8 @@ class DispatchCoreConfig(_DispatchCoreConfig):
 
 @functools.wraps(ttnn._ttnn.device.open_device)
 def open_device(*args, **kwargs):
-    # Fetch the matmul config model if it was turned on but isn't there yet (ttnn/download_matmul_model.py)
-    download_matmul_model.download_if_enabled()
+    # Fetch the matmul config model if it was turned on but isn't there yet (ttnn/ttnn/matmul_model/__init__.py)
+    ttnn.matmul_model.download_if_enabled()
     return ttnn._ttnn.device.open_device(*args, **kwargs)
 
 
