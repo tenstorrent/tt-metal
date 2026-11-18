@@ -22,10 +22,15 @@ name: Blaze Merge Gate
 # or wheel), so the gate must run in this commit's image, not vars.DEV_IMAGE.
 #
 #
-# Auth: dispatching and polling a workflow in another repo needs a PAT with
-# `actions: write` (dispatch, cancel) and `actions: read` (poll) on
-# tenstorrent/tt-blaze, stored in THIS repo as the `TT_BLAZE_PAT` secret. The
-# default GITHUB_TOKEN is scoped to tt-metal and cannot dispatch tt-blaze.
+# Auth: the default GITHUB_TOKEN is scoped to tt-metal and cannot dispatch
+# tt-blaze, so this uses a GitHub App installed on tenstorrent/tt-blaze with
+# Repository permissions `Actions: Read and write` (dispatch, poll, cancel) and
+# `Metadata: Read` (mandatory for every App). Nothing else.
+#   - vars.TT_BLAZE_APP_CLIENT_ID     the App's Client ID (not secret)
+#   - secrets.TT_BLAZE_APP_PRIVATE_KEY the App's PEM private key
+# Installation tokens live 1 hour and the wait below runs for up to 3, so the
+# poll step mints its own tokens: proactively after 45 minutes, and again on
+# any 401. Each token is narrowed to tt-blaze + actions:write at mint time.
 #
 # `gh workflow run` returns no run id, so the run is correlated by echoing a
 # unique `dispatch-id` into tt-blaze's `run-name` and matching it back. That token
@@ -82,8 +87,10 @@ on:
         description: "URL of the tt-blaze run this gate waited on (empty if none was ever found)."
         value: ${{ jobs.blaze-ci.outputs.blaze-run-url }}
     secrets:
-      TT_BLAZE_PAT:
-        description: "PAT with actions:read+write on tenstorrent/tt-blaze."
+      TT_BLAZE_APP_PRIVATE_KEY:
+        description: >-
+          PEM private key of the GitHub App installed on tenstorrent/tt-blaze
+          (Actions: Read and write). Its Client ID is vars.TT_BLAZE_APP_CLIENT_ID.
         required: true
 
 permissions:
@@ -106,7 +113,8 @@ jobs:
       - name: Dispatch tt-blaze ${{ env.BLAZE_WORKFLOW }} and wait for it
         id: dispatch
         env:
-          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          APP_CLIENT_ID: ${{ vars.TT_BLAZE_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.TT_BLAZE_APP_PRIVATE_KEY }}
           METAL_RUN_ID: ${{ inputs.metal-run-id }}
           METAL_REF: ${{ inputs.metal-ref }}
           BLAZE_REF: ${{ inputs.blaze-ref }}
@@ -155,39 +163,190 @@ jobs:
             SCOPE_ARGS=(-f bh-loudbox-run-all=false -f bh-loudbox-selected-buckets="$SELECTED_BUCKETS")
             SCOPE="selected buckets: ${SELECTED_BUCKETS}"
           fi
-          # Preflight the token before dispatching. tt-blaze is PRIVATE, and
-          # GitHub answers 404 (never 403) for anything a token cannot see there,
-          # so `gh workflow run` reports a missing workflow when the real fault is
-          # a PAT that cannot read the repo. These two probes separate the cases so
-          # the log names the actual problem.
-          # Probe 1: is the credential live at all? Separated from the repo probe
-          # because "expired/revoked token" and "valid token that cannot see
-          # tt-blaze" have completely different fixes but look identical once the
-          # repo lookup 404s.
-          if ! PAT_LOGIN=$(gh api user --jq .login 2>/dev/null) || [ -z "$PAT_LOGIN" ]; then
-            echo "::error::TT_BLAZE_PAT is not a usable credential -- GitHub rejected it outright (401 Bad credentials), so this is not about repo access. It is expired, revoked, or was stored with stray whitespace/quotes when the secret was set. Reissue it and update the secret in ${GITHUB_REPOSITORY}."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT rejected (bad credentials)" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          # Not a secret; naming it turns "wrong account / stale bot" into a
-          # one-line diagnosis instead of a hunt.
-          echo "TT_BLAZE_PAT authenticates as: ${PAT_LOGIN}"
+          # ---- GitHub App token handling --------------------------------------
+          # Installation tokens expire after 1 hour and this step can wait 3, so
+          # tokens are minted here rather than by actions/create-github-app-token
+          # (which mints once per step). ensure_token re-mints once a token is
+          # REFRESH_AFTER_SECONDS old, and gh_auth re-mints and retries once if
+          # GitHub answers 401 anyway (clock skew, revocation).
+          REFRESH_AFTER_SECONDS=$(( 45 * 60 ))
+          WORK_DIR=$(mktemp -d "${RUNNER_TEMP:-/tmp}/blaze-app.XXXXXX")
+          chmod 700 "$WORK_DIR"
+          APP_KEY_FILE="${WORK_DIR}/key.pem"
+          APP_RESP_FILE="${WORK_DIR}/resp.json"
+          GH_OUT_FILE="${WORK_DIR}/gh.out"
+          GH_ERR_FILE="${WORK_DIR}/gh.err"
+          GH_TOKEN=""
+          GH_OUT=""
+          TOKEN_MINTED_AT=0
+          TOKEN_EXPIRES_AT=0
+          APP_INSTALLATION_ID=""
+          # Least privilege per token: only tt-blaze, only Actions.
+          TOKEN_REQUEST=$(jq -nc --arg r "${BLAZE_REPO#*/}" \
+            '{repositories: [$r], permissions: {actions: "write", metadata: "read"}}')
 
-          if ! gh api "repos/${BLAZE_REPO}" --jq .full_name >/dev/null 2>&1; then
-            echo "::error::TT_BLAZE_PAT is valid (authenticates as '${PAT_LOGIN}') but cannot see ${BLAZE_REPO}. ${BLAZE_REPO} is private, so GitHub answers 404 rather than 403 for anything this token is not entitled to. Either '${PAT_LOGIN}' has no access to ${BLAZE_REPO}, or the token is scoped away from it: a fine-grained PAT must list ${BLAZE_REPO} in its selected repositories AND be approved by the tenstorrent org (pending approval also reads as 404); a classic PAT needs the 'repo' scope to see private repos at all."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT ('${PAT_LOGIN}') cannot see ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+          cleanup() {
+            # Best effort: a revoked token is useless if a log or the disk leaks it.
+            if [ -n "${GH_TOKEN:-}" ]; then
+              curl -sS -o /dev/null -X DELETE \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "${GITHUB_API_URL}/installation/token" || true
+            fi
+            rm -rf "$WORK_DIR"
+          }
+          trap cleanup EXIT
+
+          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+
+          # A 9-minute RS256 JWT identifying the App (iat backdated 60s for skew).
+          app_jwt() {
+            local now header payload sig
+            now=$(date +%s)
+            header=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
+            payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' \
+              $(( now - 60 )) $(( now + 540 )) "$APP_CLIENT_ID" | b64url)
+            sig=$(printf '%s.%s' "$header" "$payload" \
+              | openssl dgst -sha256 -sign "$APP_KEY_FILE" -binary | b64url) || return 1
+            [ -n "$sig" ] || return 1
+            printf '%s.%s.%s' "$header" "$payload" "$sig"
+          }
+
+          # app_api METHOD PATH [JSON]: call the API as the App itself.
+          # Sets APP_HTTP (status, 000 on network failure) and APP_BODY.
+          app_api() {
+            local jwt
+            APP_HTTP=000
+            APP_BODY=""
+            jwt=$(app_jwt) || return 1
+            APP_HTTP=$(curl -sS -o "$APP_RESP_FILE" -w '%{http_code}' -X "$1" \
+              -H "Authorization: Bearer ${jwt}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              ${3:+--data "$3"} \
+              "${GITHUB_API_URL}$2") || APP_HTTP=000
+            APP_BODY=$(cat "$APP_RESP_FILE" 2>/dev/null || true)
+          }
+
+          app_message() { jq -r '.message // empty' <<< "$APP_BODY" 2>/dev/null || true; }
+
+          # Mint an installation token into GH_TOKEN (exported for gh).
+          mint_token() {
+            local token expires
+            app_api POST "/app/installations/${APP_INSTALLATION_ID}/access_tokens" "$TOKEN_REQUEST" || return 1
+            if [ "$APP_HTTP" != "201" ]; then
+              echo "::warning::Minting a ${BLAZE_REPO} App token failed (HTTP ${APP_HTTP}): $(app_message)"
+              return 1
+            fi
+            token=$(jq -r '.token // empty' <<< "$APP_BODY")
+            expires=$(jq -r '.expires_at // empty' <<< "$APP_BODY")
+            [ -n "$token" ] && [ -n "$expires" ] || return 1
+            # Installation tokens are not repo secrets, so Actions does not mask them.
+            echo "::add-mask::${token}"
+            export GH_TOKEN="$token"
+            TOKEN_MINTED_AT=$(date +%s)
+            TOKEN_EXPIRES_AT=$(date -d "$expires" +%s)
+            echo "Minted ${BLAZE_REPO} App token (expires ${expires})"
+          }
+
+          # Keep GH_TOKEN usable. Refreshes after 45 min (or within 5 min of
+          # expiry); if a refresh fails while the old token is still good, keeps
+          # it and tries again on the next call instead of failing the gate.
+          ensure_token() {
+            local now
+            now=$(date +%s)
+            if [ -n "$GH_TOKEN" ] \
+              && [ "$now" -lt $(( TOKEN_MINTED_AT + REFRESH_AFTER_SECONDS )) ] \
+              && [ "$now" -lt $(( TOKEN_EXPIRES_AT - 300 )) ]; then
+              return 0
+            fi
+            mint_token && return 0
+            if [ -n "$GH_TOKEN" ] && [ "$now" -lt $(( TOKEN_EXPIRES_AT - 60 )) ]; then
+              echo "::warning::Could not refresh the ${BLAZE_REPO} App token; keeping the current one (valid until $(date -u -d "@${TOKEN_EXPIRES_AT}" +%H:%M:%SZ)) and retrying on the next call."
+              return 0
+            fi
+            return 1
+          }
+
+          # gh_auth CMD...: run a gh command with a live token, re-minting and
+          # retrying once on 401. Stdout lands in GH_OUT rather than on stdout,
+          # because calling this inside $(...) would refresh GH_TOKEN in a
+          # subshell and throw the new token away.
+          gh_auth() {
+            local rc=0
+            GH_OUT=""
+            ensure_token || { echo "::warning::No usable ${BLAZE_REPO} App token."; return 1; }
+            "$@" > "$GH_OUT_FILE" 2> "$GH_ERR_FILE" || rc=$?
+            if [ "$rc" -ne 0 ] && grep -qE 'HTTP 401|Bad credentials' "$GH_ERR_FILE"; then
+              echo "GitHub rejected the App token (401); minting a fresh one and retrying once"
+              mint_token || return 1
+              rc=0
+              "$@" > "$GH_OUT_FILE" 2> "$GH_ERR_FILE" || rc=$?
+            fi
+            GH_OUT=$(cat "$GH_OUT_FILE")
+            [ "$rc" -eq 0 ] || cat "$GH_ERR_FILE" >&2
+            return "$rc"
+          }
+
+          # ---- Preflight -------------------------------------------------------
+          # tt-blaze is PRIVATE, and GitHub answers 404 (never 403) for anything a
+          # token cannot see there, so `gh workflow run` reports a missing workflow
+          # when the real fault is credentials. Each probe below isolates one
+          # setup mistake so the log names the actual fix.
+          if [ -z "${APP_CLIENT_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
+            echo "::error::The tt-blaze GitHub App is not configured in ${GITHUB_REPOSITORY}: set the repository/org variable TT_BLAZE_APP_CLIENT_ID (the App's Client ID) and the secret TT_BLAZE_APP_PRIVATE_KEY (its PEM private key), and make sure the caller passes the secret to this reusable workflow."
+            echo "- ❌ tt-blaze — GitHub App credentials not configured" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          if ! gh api "repos/${BLAZE_REPO}/actions/workflows/${BLAZE_WORKFLOW}" --jq .id >/dev/null 2>&1; then
-            echo "::error::TT_BLAZE_PAT can read ${BLAZE_REPO} but not ${BLAZE_WORKFLOW}. That is an Actions-permission gap, not a missing file: a fine-grained PAT needs Actions: Read and write (plus Metadata: Read); a classic PAT needs the 'repo' scope for a private repository."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT lacks Actions access on ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+          ( umask 077; printf '%s\n' "$APP_PRIVATE_KEY" > "$APP_KEY_FILE" )
+          unset APP_PRIVATE_KEY
+
+          # Probe 1: can we sign a JWT, and does GitHub accept it as this App?
+          if ! app_jwt > /dev/null; then
+            echo "::error::TT_BLAZE_APP_PRIVATE_KEY is not a usable RSA private key (openssl could not sign with it). Paste the full .pem the App generated, including the BEGIN/END lines."
+            echo "- ❌ tt-blaze — App private key unreadable" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          app_api GET /app || true
+          if [ "$APP_HTTP" != "200" ]; then
+            echo "::error::GitHub rejected the App JWT (HTTP ${APP_HTTP}: $(app_message)). TT_BLAZE_APP_CLIENT_ID and TT_BLAZE_APP_PRIVATE_KEY do not belong to the same App, or the key was revoked in the App's settings."
+            echo "- ❌ tt-blaze — App credentials rejected" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # Not a secret; naming it turns "wrong App" into a one-line diagnosis.
+          APP_SLUG=$(jq -r '.slug // "?"' <<< "$APP_BODY")
+          echo "Authenticating as GitHub App: ${APP_SLUG}"
+
+          # Probe 2: is the App installed with access to tt-blaze?
+          app_api GET "/repos/${BLAZE_REPO}/installation" || true
+          if [ "$APP_HTTP" != "200" ]; then
+            echo "::error::GitHub App '${APP_SLUG}' is not installed on ${BLAZE_REPO} (HTTP ${APP_HTTP}: $(app_message)). Install it on the tenstorrent org and include ${BLAZE_REPO} in its repository selection."
+            echo "- ❌ tt-blaze — App '${APP_SLUG}' not installed on ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          APP_INSTALLATION_ID=$(jq -r '.id' <<< "$APP_BODY")
+          if [ "$(jq -r '.permissions.actions // "none"' <<< "$APP_BODY")" != "write" ]; then
+            echo "::error::GitHub App '${APP_SLUG}' is installed on ${BLAZE_REPO} but its installation grants Actions: '$(jq -r '.permissions.actions // "none"' <<< "$APP_BODY")', not 'write'. Give the App 'Actions: Read and write' and have an org owner accept the updated permissions on the installation."
+            echo "- ❌ tt-blaze — App '${APP_SLUG}' lacks Actions: write" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          # Dispatching needs actions:WRITE, which neither probe above proves --
-          # both are reads. A 403 here (rather than 404) means the token can see
-          # Actions but not trigger them.
-          if ! gh workflow run "$BLAZE_WORKFLOW" \
+          # Probe 3: mint the first token.
+          if ! mint_token; then
+            echo "::error::GitHub App '${APP_SLUG}' could not mint an installation token for ${BLAZE_REPO} (HTTP ${APP_HTTP}: $(app_message))."
+            echo "- ❌ tt-blaze — App token mint failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # Probe 4: can the token see the workflow file?
+          if ! gh_auth gh api "repos/${BLAZE_REPO}/actions/workflows/${BLAZE_WORKFLOW}" --jq .id; then
+            echo "::error::App '${APP_SLUG}' has a token for ${BLAZE_REPO} but cannot read ${BLAZE_WORKFLOW}. Either ${BLAZE_WORKFLOW} does not exist on ${BLAZE_REPO}'s default branch, or the token lacks Actions access."
+            echo "- ❌ tt-blaze — cannot read ${BLAZE_WORKFLOW}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # Dispatching needs actions:WRITE, which the read probe does not prove.
+          if ! gh_auth gh workflow run "$BLAZE_WORKFLOW" \
             --repo "$BLAZE_REPO" \
             --ref "$BLAZE_REF" \
             -f metal-run-id="$METAL_RUN_ID" \
@@ -221,11 +380,12 @@ jobs:
               # `displayTitle` is where a computed `run-name` lands; `name` is the
               # workflow's own name. Both are searched so this keeps working if gh
               # ever changes which one carries it.
-              run_id=$(gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
-                         --event workflow_dispatch --limit 100 \
-                         --json databaseId,displayTitle,name \
-                         --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"${DISPATCH_ID}\"))] | .[0].databaseId // empty" \
-                       2>/dev/null || echo "")
+              gh_auth gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
+                --event workflow_dispatch --limit 100 \
+                --json databaseId,displayTitle,name \
+                --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"${DISPATCH_ID}\"))] | .[0].databaseId // empty" \
+                2>/dev/null || true
+              run_id="$GH_OUT"
 
               if [ -z "$run_id" ]; then
                 if [ "$elapsed" -gt "$GRACE_SECONDS" ]; then
@@ -247,9 +407,17 @@ jobs:
               echo "- ⏳ tt-blaze — [run ${run_id}](${run_url})" >> "$GITHUB_STEP_SUMMARY"
             fi
 
-            read -r status conclusion <<< "$(gh run view "$run_id" --repo "$BLAZE_REPO" \
-                                               --json status,conclusion \
-                                               --jq '"\(.status) \(.conclusion // "-")"')"
+            # A failed poll (network blip, token trouble) is not a verdict: note
+            # it and fall through to the deadline check rather than exiting.
+            if gh_auth gh run view "$run_id" --repo "$BLAZE_REPO" \
+                 --json status,conclusion \
+                 --jq '"\(.status) \(.conclusion // "-")"'; then
+              read -r status conclusion <<< "$GH_OUT"
+            else
+              echo "::warning::Polling tt-blaze run ${run_id} failed; retrying in ${POLL_SECONDS}s"
+              status="unknown"
+              conclusion="-"
+            fi
 
             if [ "$status" = "completed" ]; then
               case "$conclusion" in
@@ -288,10 +456,24 @@ jobs:
       # failure() is here for the TIMEOUT path specifically: giving up on the wait
       # exits 1, which is not cancelled(), so without this a timed-out gate leaves
       # the blaze run holding those runners with nobody watching it anymore.
-      - name: Cancel the tt-blaze run if this job was cancelled or timed out
+      #
+      # A fresh token is minted here: the poll step's token may be near its
+      # 1-hour expiry or already revoked by that step's cleanup.
+      - name: Mint a tt-blaze App token for cancellation
+        id: cancel-token
         if: (cancelled() || failure()) && env.BLAZE_RUN_ID != ''
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.TT_BLAZE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TT_BLAZE_APP_PRIVATE_KEY }}
+          owner: tenstorrent
+          repositories: tt-blaze
+          permission-actions: write
+
+      - name: Cancel the tt-blaze run if this job was cancelled or timed out
+        if: (cancelled() || failure()) && env.BLAZE_RUN_ID != '' && steps.cancel-token.outputs.token != ''
         env:
-          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          GH_TOKEN: ${{ steps.cancel-token.outputs.token }}
         shell: bash
         run: |
           echo "Cancelling tt-blaze run ${BLAZE_RUN_ID}"

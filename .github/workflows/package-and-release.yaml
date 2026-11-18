@@ -211,9 +211,10 @@ jobs:
     if: ${{ !cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
-    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
+    # tt-blaze GitHub App key -- the default GITHUB_TOKEN cannot dispatch another
+    # repo. The App's Client ID is read from vars.TT_BLAZE_APP_CLIENT_ID.
     secrets:
-      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+      TT_BLAZE_APP_PRIVATE_KEY: ${{ secrets.TT_BLAZE_APP_PRIVATE_KEY }}
     uses: ./.github/workflows/blaze-merge-gate.yaml
     with:
       # Artifacts belong to the TOP-LEVEL run, which is this workflow.
@@ -240,10 +241,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
+      # The default GITHUB_TOKEN cannot dispatch another repo. One call, so the
+      # App token's 1-hour lifetime is not a concern here.
+      - name: Mint a tt-blaze App token
+        id: blaze-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.TT_BLAZE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TT_BLAZE_APP_PRIVATE_KEY }}
+          owner: tenstorrent
+          repositories: tt-blaze
+          permission-actions: write
+
       - name: Launch tt-blaze's nightly tt-metal uplift
         env:
-          # The default GITHUB_TOKEN cannot dispatch another repo.
-          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          GH_TOKEN: ${{ steps.blaze-token.outputs.token }}
           METAL_SHA: ${{ github.sha }}
         shell: bash
         run: |

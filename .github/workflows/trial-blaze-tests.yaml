@@ -57,9 +57,10 @@ jobs:
     if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
-    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
+    # tt-blaze GitHub App key -- the default GITHUB_TOKEN cannot dispatch another
+    # repo. The App's Client ID is read from vars.TT_BLAZE_APP_CLIENT_ID.
     secrets:
-      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+      TT_BLAZE_APP_PRIVATE_KEY: ${{ secrets.TT_BLAZE_APP_PRIVATE_KEY }}
     uses: ./.github/workflows/blaze-merge-gate.yaml
     with:
       # Artifacts belong to the TOP-LEVEL run, which is this workflow.
