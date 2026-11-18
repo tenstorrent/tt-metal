@@ -6346,6 +6346,67 @@
    "X.4#test_skip_positions": "PASS"
   }
  },
+ "X.5": {
+  "attempts": 0,
+  "duration_s": 1068.1,
+  "history": [
+   {
+    "reused": [
+     "X.5#test_determinism",
+     "X.5#test_determinism.3.0",
+     "X.5#test_decoder_skip_decode",
+     "X.5#test_contract",
+     "X.5#test_adapter_acks",
+     "X.5#test_outside_history",
+     "X.5#test_skip_positions"
+    ],
+    "s": 1068.1,
+    "status": "PASS",
+    "t": "2026-11-18T21:16:29"
+   }
+  ],
+  "last_run": "2026-11-18T21:16:26",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/X.5.log",
+  "rc": 0,
+  "reason": [],
+  "stamp": {
+   "reused": [
+    "X.5#test_determinism",
+    "X.5#test_determinism.3.0",
+    "X.5#test_decoder_skip_decode",
+    "X.5#test_contract",
+    "X.5#test_adapter_acks",
+    "X.5#test_outside_history",
+    "X.5#test_skip_positions"
+   ],
+   "units": {
+    "X.5#test_adapter_acks": "6f5e53adf13c1bc8",
+    "X.5#test_contract": "05ffe624be75b73d",
+    "X.5#test_decoder_skip_decode": "a64db36f7ac82e0b",
+    "X.5#test_determinism": "29e759cf3dc744b8",
+    "X.5#test_determinism.3.0": "3e78fbc18d60f5da",
+    "X.5#test_full_prefill": "c10f578a093ea2eb",
+    "X.5#test_ladder": "c16d61a046d8980a",
+    "X.5#test_outside_history": "59de107fdd321cee",
+    "X.5#test_positions": "04de5eaf82ed8344",
+    "X.5#test_skip_positions": "e54fee99160f3fad"
+   }
+  },
+  "started": "2026-11-18T20:58:38",
+  "status": "PASS",
+  "units": {
+   "X.5#test_adapter_acks": "PASS",
+   "X.5#test_contract": "PASS",
+   "X.5#test_decoder_skip_decode": "PASS",
+   "X.5#test_determinism": "PASS",
+   "X.5#test_determinism.3.0": "PASS",
+   "X.5#test_full_prefill": "PASS",
+   "X.5#test_ladder": "PASS",
+   "X.5#test_outside_history": "PASS",
+   "X.5#test_positions": "PASS",
+   "X.5#test_skip_positions": "PASS"
+  }
+ },
  "_run": {
   "branch": "dnijemcevic/model_bringup",
   "created": "2026-10-26T10:41:59",
