@@ -31,7 +31,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "socket_service_common.hpp"
@@ -234,6 +234,7 @@ uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes) {
 //   [0]  socket_config_addr
 //   [1]  termination_semaphore_addr
 Program build_persistent_d2h_program(
+    distributed::MeshDevice& mesh_device,
     const Buffer* device_buffer,
     const CoreCoord& sender_core,
     uint32_t socket_config_buffer_address,
@@ -244,7 +245,7 @@ Program build_persistent_d2h_program(
     bool tensor_enabled,
     const D2HWorkerSyncArgs& worker_sync,
     const D2HMetadataArgs& metadata) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
 
     constexpr tt::CBIndex data_cb_index = tt::CBIndex::c_0;
     const auto data_format = datatype_to_dataformat_converter(dtype);
@@ -611,6 +612,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         }
 
         auto program = build_persistent_d2h_program(
+            *mesh_device_,
             dbuf,
             core.core_coord,
             s->get_config_buffer_address(),
@@ -986,6 +988,10 @@ DeviceAddr D2HStreamService::get_write_ack_counter_addr(const distributed::MeshC
         "D2HStreamService::get_write_ack_counter_addr: no write-ack counter at coord {}",
         coord);
     return it->second;
+}
+
+StreamCounter D2HStreamService::get_write_ack_counter(const distributed::MeshCoordinate& coord) const {
+    return {get_service_core(coord), get_write_ack_counter_addr(coord), num_workers_};
 }
 
 DeviceAddr D2HStreamService::get_worker_metadata_addr() const {

@@ -304,7 +304,7 @@ First, we initialize the device connection and allocate the necessary buffers. I
 ```c++
 auto device = MeshDevice::create_unit_mesh(/*device_id=*/0);
 CommandQueue& cq = device->mesh_command_queue(/*cq_id=*/0);
-Program program = tt::tt_metal::CreateProgram();
+Program program = tt::tt_metal::CreateProgram(*device);
 
 constexpr uint32_t n_tiles = 64;
 constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;

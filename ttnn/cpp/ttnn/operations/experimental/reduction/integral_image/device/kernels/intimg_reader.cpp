@@ -55,7 +55,7 @@ void kernel_main() {
     const auto input_addr_gtor = TensorAccessor(tensor::input);
     constexpr uint32_t num_slices_along_channels = ceil(ctas.num_channels, ctas.tile_width);
     constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_width);
+    constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();

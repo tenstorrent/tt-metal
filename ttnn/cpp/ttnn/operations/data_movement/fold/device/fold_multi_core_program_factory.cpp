@@ -6,7 +6,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
@@ -16,7 +16,6 @@
 namespace ttnn::operations::data_movement {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifacts(
     const operation_attributes_t& operation_attributes,

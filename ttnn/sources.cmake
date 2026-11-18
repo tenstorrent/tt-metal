@@ -9,6 +9,7 @@
 set(TTNN_CORE_SRCS
     core/async_runtime.cpp
     core/cluster.cpp
+    core/command_list.cpp
     core/config.cpp
     core/core.cpp
     core/device.cpp
@@ -25,6 +26,7 @@ set(TTNN_CORE_SRCS
     core/events.cpp
     core/global_circular_buffer.cpp
     core/global_semaphore.cpp
+    core/per_device_program_merge.cpp
     core/operation.cpp
     core/graph/graph_processor.cpp
     core/graph/graph_trace_utils.cpp
@@ -134,6 +136,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp
     cpp/ttnn-nanobind/program_descriptors.cpp
+    cpp/ttnn-nanobind/program_spec.cpp
     cpp/ttnn-nanobind/pytensor.cpp
     cpp/ttnn-nanobind/reports.cpp
     cpp/ttnn-nanobind/tensor.cpp
@@ -142,6 +145,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/operations/copy.cpp
     cpp/ttnn-nanobind/operations/core.cpp
     cpp/ttnn-nanobind/operations/trace.cpp
+    cpp/ttnn-nanobind/operations/command_list.cpp
     cpp/ttnn-nanobind/tensor_accessor_args.cpp
     cpp/ttnn-nanobind/mcast_host.cpp
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
@@ -189,6 +193,7 @@ set(TTNNCPP_API_HEADERS
     api/tools/profiler/op_profiler_serialize.hpp
     api/ttnn/async_runtime.hpp
     api/ttnn/cluster.hpp
+    api/ttnn/command_list.hpp
     api/ttnn/common/constants.hpp
     api/ttnn/common/guard.hpp
     api/ttnn/common/queue_id.hpp
@@ -227,6 +232,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/metal_v2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
+    api/ttnn/per_device_program_merge.hpp
     api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
     api/ttnn/tensor/d2d_pipeline_descriptor.hpp
@@ -259,6 +265,7 @@ set(TTNNCPP_API_HEADERS
     cpp/ttnn/operations/creation/creation.hpp
     cpp/ttnn/operations/functions.hpp
     cpp/ttnn/operations/compute_throttle_utils.hpp
+    cpp/ttnn/operations/common/hash_without_rows.hpp
     cpp/ttnn/operations/cb_utils.hpp
     cpp/ttnn/operations/math.hpp
     cpp/ttnn/operations/trace.hpp

@@ -5,15 +5,12 @@
 #pragma once
 
 #include <buffer_types.hpp>
-#include <stdint.h>
-#include <fstream>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <algorithm>
-#include <functional>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/strong_type.hpp>
 
@@ -154,14 +151,6 @@ public:
     // Extracts the state of the given allocator.
     AllocatorState::BufferTypeState extract_state(
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
-    // Extracts the merged state from all dependent allocators.
-    AllocatorState::BufferTypeState extract_merged_state() const;
-
-    // Applies the state of the given allocator without overriding the current state.
-    void apply_state(
-        const AllocatorState::BufferTypeState& state,
-        AllocatorDependencies::AllocatorID target_allocator_id = AllocatorDependencies::AllocatorID{0});
-
     // Overrides the current state with the given state.
     void override_state(
         const AllocatorState::BufferTypeState& state,

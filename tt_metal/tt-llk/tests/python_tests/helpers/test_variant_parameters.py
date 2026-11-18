@@ -3,11 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .chip_architecture import quasar_variant
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
@@ -29,6 +31,8 @@ from .llk_params import (
     MathFidelity,
     MathOperation,
     NarrowTile,
+    PackerReluType,
+    PackUntilizeBenchmark,
     PerfRunType,
     ReduceOrder,
     ReducePool,
@@ -90,6 +94,28 @@ class THROTTLE_LEVEL(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
+
+
+@dataclass
+class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
+    pack_untilize_benchmark: PackUntilizeBenchmark
+
+    def convert_to_cpp(self) -> str:
+        is_perf = self.pack_untilize_benchmark != PackUntilizeBenchmark.Functional
+        return (
+            f"// pack_untilize benchmark: {self.pack_untilize_benchmark.value}\n"
+            f"constexpr bool PACK_UNTILIZE_IS_PERF = {str(is_perf).lower()};"
+        )
+
+
+@dataclass
+class MATMUL_ROW_MOP(TemplateParameter):
+    """Blackhole matmul: run each reuse row of the block as one MOP instead of one MOP per tile."""
+
+    row_mop: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool MATMUL_ROW_MOP = {str(self.row_mop).lower()};"
 
 
 @dataclass
@@ -287,11 +313,49 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 class SFPU_CLOBBER_LREGS(TemplateParameter):
     """Fill the SFPU registers with garbage before the op's init (``clobber_sfpu_lregs()``).
 
-    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it.
+    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it. ``clobber_lregs`` is
+    also a perf CSV column, so a perf row states whether it clobbered; False emits nothing.
     """
 
+    clobber_lregs: bool = True
+
     def convert_to_cpp(self) -> str:
-        return "#define SFPU_CLOBBER_LREGS"
+        return "#define SFPU_CLOBBER_LREGS" if self.clobber_lregs else ""
+
+
+@dataclass
+class QUASAR_VARIANT(TemplateParameter):
+    """The Quasar part variant this build targets, recorded as a perf CSV column.
+
+    The variant comes from ``TT_METAL_QUASAR_VARIANT`` at import time and changes which formats
+    and register hints a test sweeps, but it is invisible in the parameter tuple. This reads the
+    same variable so rows from different variants stay distinguishable; it emits no code.
+    """
+
+    quasar_variant: str = field(default_factory=lambda: quasar_variant() or "quasar")
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
+class SFPLOADMACRO(TemplateParameter):
+    """Whether the SFPLOADMACRO fast paths are compiled in, recorded as a perf CSV column.
+
+    The switch itself is ``TT_METAL_DISABLE_SFPLOADMACRO=1``, which ``TestConfig`` turns into
+    ``-DDISABLE_SFPLOADMACRO`` for every kernel part. This reads the same variable, so a macro-ON
+    and a macro-OFF capture carry different values instead of averaging together; it emits no code
+    of its own.
+    """
+
+    sfploadmacro: str = field(
+        default_factory=lambda: (
+            "Off" if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1" else "On"
+        )
+    )
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
@@ -483,6 +547,28 @@ class SFPU_POLYGAMMA_ORDER(TemplateParameter):
 
 
 @dataclass
+class SFPU_SOFTPLUS_PARAMS(TemplateParameter):
+    """beta, 1/beta and the linear threshold for softplus, as fp32 bit patterns.
+
+    Macros, like :class:`SFPU_POLYGAMMA_ORDER`: sfpu_operations.h keeps the
+    beta = 1, threshold = 20 defaults under ``#ifndef``.
+    """
+
+    softplus_beta: float = 1.0
+    softplus_threshold: float = 20.0
+
+    def convert_to_cpp(self) -> str:
+        beta = self.softplus_beta
+        if beta == 0.0:
+            raise ValueError("softplus beta 0 is not a finite 1/beta")
+        return (
+            f"#define SOFTPLUS_TEST_BETA {fp32_bits(beta):#x}u\n"
+            f"#define SOFTPLUS_TEST_BETA_RECIP {fp32_bits(1.0 / beta):#x}u\n"
+            f"#define SOFTPLUS_TEST_THRESHOLD {fp32_bits(self.softplus_threshold):#x}u"
+        )
+
+
+@dataclass
 class SFPU_DROPOUT_PARAMS(TemplateParameter):
     """Dropout probability (p * INT_MAX), seed and scale, as macros (the header selects on ``#ifdef``).
 
@@ -666,6 +752,41 @@ class CUSTOM_MM_CALLS(TemplateParameter):
             [
                 f"constexpr std::uint32_t CUSTOM_MM_NUM_CALLS = {self.num_calls}u;",
                 f"constexpr bool CUSTOM_MM_REARM = {str(self.rearm).lower()};",
+            ]
+        )
+
+
+@dataclass(init=False)
+class COMPRESSED_META(TemplateParameter):
+    """Perf report label plus packed metadata that contributes to the build identity."""
+
+    compression_case: str
+
+    def __init__(self, compression_case: str, packed_meta: bytes):
+        assert (
+            compression_case
+        ), "a perf compressed-metadata stream needs a stable case label"
+        assert (
+            len(packed_meta) % 4 == 0 and packed_meta
+        ), "compressed metadata must contain complete u32 words"
+        self.compression_case = compression_case
+        self._words = tuple(
+            int.from_bytes(packed_meta[i : i + 4], "little")
+            for i in range(0, len(packed_meta), 4)
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(compression_case={self.compression_case!r}, "
+            f"packed_words={self._words!r})"
+        )
+
+    def convert_to_cpp(self) -> str:
+        words = ", ".join(f"0x{word:08x}u" for word in self._words)
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t PERF_COMPRESSED_META_WORDS[] = {{{words}}};",
+                f"constexpr std::uint32_t PERF_COMPRESSED_META_WORD_COUNT = {len(self._words)}u;",
             ]
         )
 
@@ -1344,10 +1465,15 @@ class TOP32_RM(TemplateParameter):
                       be pre-sorted into descending runs of 32.
     ``via_wrappers``  route every SFPU call through the Metal wrapper layer
                       (``experimental/llk_sfpu/llk_math_deepseek_top32_rm.h``) instead of
-                      calling the ``ckernel::sfpu::`` primitives directly. The wrappers are
-                      thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_`` call --
-                      so this is the same computation through one more layer, and the only thing
-                      in the tree that calls those 7 entry points at all.
+                      calling the ``ckernel::sfpu::`` primitives directly. The SFPU wrappers
+                      are thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_``
+                      call -- so on the SFPU side this is the same computation through one more
+                      layer, and the only thing in the tree that calls those 7 entry points at
+                      all. In the plain mode the unpack goes through
+                      ``experimental/llk_unpack_A_top32_rm_api.h`` too, which picks its own
+                      branch (Float32 takes SrcA there, not unpack-to-dest, so those cells differ
+                      from their primitives-path namesakes) and the per-chunk L1 offset, so
+                      ``datum_bytes`` is then only the primitives' fallback for mode 1.
     """
 
     row_elements: int = 64
@@ -1810,10 +1936,10 @@ class TILE_COUNT(RuntimeParameter):
 
 @dataclass
 class NUM_GUARD_TILES(RuntimeParameter):
-    count: int = 0
+    num_guard_tiles: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.count};"
+        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.num_guard_tiles};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t NUM_GUARD_TILES;", "I"
@@ -2141,6 +2267,20 @@ class RELU_CONFIG(RuntimeParameter):
 
 
 @dataclass
+class RELU_TYPE(TemplateParameter):
+    """The packer ReLU mode by name, recorded as a perf CSV column; it emits no code.
+
+    ``RELU_CONFIG`` packs the mode together with a threshold, so this states the mode on its own.
+    It is a template, not a runtime parameter, because every runtime field is serialised to L1.
+    """
+
+    relu_type: PackerReluType = PackerReluType.NoRelu
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
 class NUM_ROWS_TO_PACK(RuntimeParameter):
     num_rows_to_pack: int = 0
 
@@ -2183,10 +2323,12 @@ class EMA_INTERLEAVED_INIT(TemplateParameter):
 
 @dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
-    offset: int = 0
+    tile_dst_ct_offset: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t TILE_DST_CT_OFFSET = {self.offset};"
+        return (
+            f"constexpr std::uint32_t TILE_DST_CT_OFFSET = {self.tile_dst_ct_offset};"
+        )
 
 
 @dataclass
@@ -2371,31 +2513,20 @@ class CUSTOM_MM_REUSE_CFG(TemplateParameter):
 
 @dataclass
 class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
-    """Compile-time knobs for the experimental sdpa_custom_mm block matmul test.
-
-    Emitted as #defines (not constexpr) because the C++ driver both consumes
-    SIGNAL_GRANULARITY as a non-type template argument and guards each name with an
-    #ifndef default, so a standalone compile of the source still works.
-
-    signal_granularity : FPU->SFPU post cadence (llk_math_sdpa_custom_mm template arg).
-                         Must divide ct_dim. Purely a signalling cadence; does not change
-                         the numeric result.
-    read_transposed    : selects the transposed SrcA (in1) L1 walk in the unpack LLK.
-    mm_transpose       : the `transpose` init flag threaded through the unpack/math inits
-                         (addr_mod SrcA increment + Haloize_mode).
-    sdpa_row_stride    : physical SrcA row width in tiles for read_transposed. None
-                         omits the LLK argument; zero and kt_dim retain tight packing.
-    sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
-    preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
-                         copy_init does.
-    """
+    """Compile-time knobs for sdpa_custom_mm; -1/None omits row stride,
+    while 0 explicitly selects tight packing."""
 
     signal_granularity: int = 1
     read_transposed: bool = False
     mm_transpose: bool = False
-    sdpa_row_stride: int | None = None
+    sdpa_row_stride: int | None = -1
     sdpa_input_tile_offset: int = 0
     preserve_src_zero_flag: bool = False
+
+    def __post_init__(self):
+        # Keep implicit stride schema-visible while preserving the omitted define.
+        if self.sdpa_row_stride is None:
+            self.sdpa_row_stride = -1
 
     def convert_to_cpp(self) -> str:
         lines = [
@@ -2405,7 +2536,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
             f"#define SDPA_INPUT_TILE_OFFSET {self.sdpa_input_tile_offset}",
             f"#define SDPA_PRESERVE_SRC_ZERO_FLAG {str(self.preserve_src_zero_flag).lower()}",
         ]
-        if self.sdpa_row_stride is not None:
+        if self.sdpa_row_stride not in (None, -1):
             lines.append(f"#define SDPA_ROW_STRIDE {self.sdpa_row_stride}")
         return "\n".join(lines)
 

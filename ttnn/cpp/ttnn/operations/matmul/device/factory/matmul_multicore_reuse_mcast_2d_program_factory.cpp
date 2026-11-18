@@ -14,9 +14,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt-metalium/buffer_types.hpp"
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -30,27 +30,29 @@
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
+using tt::tt_metal::AddRuntimeArgsForNode;
+using tt::tt_metal::ComputeHardwareConfig;
+using tt::tt_metal::DataflowBufferSpec;
+using tt::tt_metal::DataMovementHardwareConfig;
+using tt::tt_metal::DFBBinding;
+using tt::tt_metal::DFBEndpointType;
+using tt::tt_metal::DFBSpecName;
+using tt::tt_metal::Group;
 using tt::tt_metal::KernelBuildOptLevel;
+using tt::tt_metal::KernelRunArgs;
+using tt::tt_metal::KernelSpec;
+using tt::tt_metal::KernelSpecName;
+using tt::tt_metal::ProgramRunArgs;
+using tt::tt_metal::ProgramSpec;
+using tt::tt_metal::SemaphoreBinding;
+using tt::tt_metal::SemaphoreSpecName;
+using tt::tt_metal::Table;
+using tt::tt_metal::TensorBinding;
+using tt::tt_metal::TensorParameter;
+using tt::tt_metal::TensorParamName;
 using tt::tt_metal::UnpackMode;
-using tt::tt_metal::experimental::AddRuntimeArgsForNode;
+using tt::tt_metal::WorkUnitSpec;
 using tt::tt_metal::experimental::AdvancedKernelRunArgs;
-using tt::tt_metal::experimental::ComputeHardwareConfig;
-using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementHardwareConfig;
-using tt::tt_metal::experimental::DFBBinding;
-using tt::tt_metal::experimental::DFBEndpointType;
-using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::Group;
-using tt::tt_metal::experimental::KernelRunArgs;
-using tt::tt_metal::experimental::KernelSpec;
-using tt::tt_metal::experimental::KernelSpecName;
-using tt::tt_metal::experimental::ProgramRunArgs;
-using tt::tt_metal::experimental::ProgramSpec;
-using tt::tt_metal::experimental::Table;
-using tt::tt_metal::experimental::TensorBinding;
-using tt::tt_metal::experimental::TensorParameter;
-using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
 
@@ -571,7 +573,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -714,8 +716,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // UnpackToDest, while the bias add keeps reading intermed0 via SrcA. The alias is handed to the
     // compute kernel through the MM_PARTIALS_RELOAD_ALIAS define, which selects the alias reload path
     // there. Without bias the reload reads intermed0 and the flag is set on it.
+    //
+    // An FP32 row-broadcast bias on FP32 partials is added on the SFPU instead (FUSE_BIAS_SFPU): the FPU add
+    // would truncate the bias to TF32 in SrcB. Both buffers then unpack to DEST, so no alias is needed.
+    const bool bias_add_sfpu = bias_tensor.has_value() && fp32_dest_acc_en &&
+                               interm0_data_format == tt::DataFormat::Float32 &&
+                               bias_data_format == tt::DataFormat::Float32 && row_broadcast_bias && !untilize_out &&
+                               bias_tile == tt::tt_metal::Tile() && device.arch() != tt::ARCH::QUASAR;
+    if (bias_add_sfpu) {
+        mm_kernel_defines["FUSE_BIAS_SFPU"] = "1";
+    }
     const bool bias_reload_alias =
-        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value() && !bias_add_sfpu;
     if (bias_reload_alias) {
         mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
     }
@@ -730,15 +742,17 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // sender/receiver, TRISC pop on the consumer). On Quasar, implicit-sync would add an extra final-credit ACK
     // on top of those explicit pops -> in0 tile-counter underflow, so opt the bound DFBs out of implicit sync.
     // config_1xx (WH/BH placement) and config_2xx (Quasar) are each ignored on the other arch.
-    const auto dm_hw_config = [](tt_metal::DataMovementProcessor proc,
-                                 tt_metal::NOC noc) -> DataMovementHardwareConfig {
+    // Quasar is single-NoC, so its multicast channels are lowered for NOC_0, and its kernels say NOC_0 too: the
+    // multicast helpers check that a sender's NoC matches its channel's.
+    const bool is_quasar_mm = device.arch() == tt::ARCH::QUASAR;
+    const auto dm_hw_config = [is_quasar_mm](tt_metal::DataMovementProcessor proc,
+                                             tt_metal::NOC noc) -> DataMovementHardwareConfig {
         return DataMovementHardwareConfig{
-            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = proc, .noc = noc},
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = proc, .noc = is_quasar_mm ? tt_metal::NOC::NOC_0 : noc},
             .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
         };
     };
-    // Quasar is single-NoC, so its multicast channels are lowered for NOC_0.
-    const bool is_quasar_mm = device.arch() == tt::ARCH::QUASAR;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Which kernels this instantiation builds
@@ -972,7 +986,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         // in0 sender
         if (in0_block_sharded) {
             const uint32_t sender_id = transpose_mcast ? core.y - start_core_y : core.x - start_core_x;
-            const std::initializer_list<std::pair<std::string, tt::tt_metal::experimental::ArgValue>> in0_sender_args = {
+            const std::initializer_list<std::pair<std::string, tt_metal::ArgValue>> in0_sender_args = {
                 {"sender_id", sender_id}};
             if (in1_idx < num_blocks_x) {
                 AddRuntimeArgsForNode(in0_sender_run_args.runtime_arg_values, core, in0_sender_args);
@@ -1492,7 +1506,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             add_if_float32(INTERMED0_RELOAD_ALIAS_DFB, interm0_data_format);
         }
         if (bias_mesh.has_value()) {
-            add_if_float32(BIAS_DFB, bias_data_format);
+            if (bias_add_sfpu) {
+                unpack_modes_table.insert({BIAS_DFB, UnpackMode::UnpackToDest});
+            } else {
+                add_if_float32(BIAS_DFB, bias_data_format);
+            }
         }
     }
     if (!unpack_modes_table.empty()) {

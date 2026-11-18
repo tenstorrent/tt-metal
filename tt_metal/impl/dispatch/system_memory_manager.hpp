@@ -5,16 +5,15 @@
 #pragma once
 
 // needed for private members
+#include "aux_region_allocator.hpp"
 #include "system_memory_cq_interface.hpp"
-#include <tt-umd/io_window/io_window.hpp>     // for tt::umd::IoWindow
-#include <tt-umd/types/xy_pair.hpp>           // for tt_cxy_pair
+#include <tt-umd/io_window/io_window.hpp>  // for tt::umd::IoWindow
+#include <tt-umd/types/xy_pair.hpp>        // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <utility>
 #include <vector>
-#include "impl/context/context_types.hpp"
 
 using ChipId = int;
 
@@ -22,33 +21,27 @@ namespace tt::tt_metal {
 
 class Buffer;
 class MetalContext;
-
-// True when the host can't pin D2H memory (no 64-bit PCIe addressing and no IOMMU).
-bool d2h_uses_hugepage_fallback(const MetalContext& ctx);
+class MetalEnvImpl;
 
 class SystemMemoryManager {
 public:
     // Create a SystemMemoryManager for accessing system memory accessible by the given device
-    // TODO: context_id will be removed in favor of directly passing around the MetalContext and MetalEnv reference.
-    SystemMemoryManager(ContextId context_id, ChipId device_id, uint8_t num_hw_cqs);
+    // The referenced MetalEnvImpl and MetalContext must outlive this SystemMemoryManager.
+    SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs);
 
-    uint32_t get_next_event(uint8_t cq_id);
+    // Per CQ, the last event issued to and completed by this device; the mesh command queue allocates the IDs.
+    void set_last_issued_event(uint8_t cq_id, uint32_t event_id);
 
-    uint32_t get_last_event(uint8_t cq_id);
-
-    void reset_event_id(uint8_t cq_id);
-
-    void increment_event_id(uint8_t cq_id, uint32_t val);
+    uint32_t get_last_issued_event(uint8_t cq_id) const;
 
     void set_last_completed_event(uint8_t cq_id, uint32_t event_id);
 
-    uint32_t get_last_completed_event(uint8_t cq_id);
+    uint32_t get_last_completed_event(uint8_t cq_id) const;
 
-    uint32_t get_current_event(uint8_t cq_id);
+    // Sets both counters, skipping the ordering check in set_last_completed_event. The CQ must be idle.
+    void reset_events(uint8_t cq_id, uint32_t event_id);
 
     void reset(uint8_t cq_id);
-
-    void set_issue_queue_size(uint8_t cq_id, uint32_t issue_queue_size);
 
     void set_bypass_mode(bool enable, bool clear);
 
@@ -74,7 +67,9 @@ public:
 
     ChipId get_device_id() const;
 
-    ContextId get_context_id() const;
+    MetalEnvImpl& env_impl() const { return env_; }
+
+    MetalContext& metal_context() const { return ctx_; }
 
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
@@ -87,13 +82,9 @@ public:
 
     uint32_t completion_queue_wait_front(uint8_t cq_id, std::atomic<bool>& exit_condition) const;
 
-    void send_completion_queue_read_ptr(uint8_t cq_id) const;
-
     void* get_completion_queue_ptr(uint8_t cq_id) const;
 
     void wrap_issue_queue_wr_ptr(uint8_t cq_id);
-
-    void wrap_completion_queue_rd_ptr(uint8_t cq_id);
 
     void completion_queue_pop_front(uint32_t num_pages_read, uint8_t cq_id);
 
@@ -101,35 +92,37 @@ public:
 
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
-    // Both CQs on the device must be idle when this is called.
-    void set_current_and_last_completed_event(
-        uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
-
-    bool is_dram_backed() const;
+    bool is_dram_backed() const { return is_dram_backed_; }
 
     uint32_t get_dram_region_base_addr() const;
 
     uint32_t get_dram_region_bank_id() const;
 
-    std::pair<void*, uint32_t> allocate_region(uint32_t size);
-
-    uint32_t get_channel_offset() const { return channel_offset; }
+    AuxRegionAllocator& aux_region_allocator() { return aux_region_allocator_; }
 
 private:
-    bool is_mock_device() const;
+    bool is_mock_device() const { return is_mock_device_; }
 
     void init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel);
 
-    ContextId context_id;
+    void send_completion_queue_read_ptr(uint8_t cq_id) const;
+
+    MetalEnvImpl& env_;
+    MetalContext& ctx_;
+    const bool is_mock_device_;
+    const bool is_dram_backed_;
+    const uint32_t cq_alignment_;  // DRAM alignment if DRAM-backed, host alignment otherwise
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
     std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size = 0;
     uint32_t channel_offset = 0;
-    std::vector<uint32_t> cq_to_event;
-    std::vector<uint32_t> cq_to_last_completed_event;
-    mutable std::vector<std::mutex> cq_to_event_locks;
+    struct CqEventProgress {
+        std::atomic<uint32_t> last_issued{0};
+        std::atomic<uint32_t> last_completed{0};
+    };
+    std::unique_ptr<CqEventProgress[]> cq_events_;
     std::vector<tt_cxy_pair> prefetcher_cores;
     std::vector<std::unique_ptr<tt::umd::IoWindow>> prefetch_q_windows;
     std::vector<std::unique_ptr<tt::umd::IoWindow>> completion_q_windows;
@@ -144,12 +137,8 @@ private:
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
 
-    // Bump-allocated tail of CQ sysmem (after all per-CQ issue/completion buffers). Device and host
-    // addresses are returned together by allocate_region() for PCIe/D2H consumers.
-    uint32_t free_region_start_ = 0;
-    uint32_t free_region_size_ = 0;
-    uint32_t free_region_bump_ = 0;
-    char* free_region_host_ptr_ = nullptr;
+    // Empty on mock devices.
+    AuxRegionAllocator aux_region_allocator_;
 };
 
 }  // namespace tt::tt_metal

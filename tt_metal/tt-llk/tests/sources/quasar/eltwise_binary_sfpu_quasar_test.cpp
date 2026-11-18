@@ -24,6 +24,13 @@
 #include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
+// A run of TILE_CNT tiles is TILE_CNT / tiles_per_block operand sets, each staged into its own Dest section.
+inline std::uint32_t binary_sfpu_tiles_per_block(const std::uint32_t src0_tile_idx, const std::uint32_t src1_tile_idx, const std::uint32_t dst_tile_idx)
+{
+    const std::uint32_t max_operand = src0_tile_idx > src1_tile_idx ? src0_tile_idx : src1_tile_idx;
+    return (max_operand > dst_tile_idx ? max_operand : dst_tile_idx) + 1;
+}
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "cfg_defines.h"
@@ -45,7 +52,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
     const std::uint32_t num_faces       = params.num_faces;
     const Operand& buffer_A             = params.buffer_A;
+    const std::uint32_t SRC0_TILE_IDX   = params.SRC0_TILE_IDX;
+    const std::uint32_t SRC1_TILE_IDX   = params.SRC1_TILE_IDX;
+    const std::uint32_t DST_TILE_IDX    = params.DST_TILE_IDX;
 #endif
+    const std::uint32_t tiles_per_block = binary_sfpu_tiles_per_block(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX);
+    const std::uint32_t num_blocks      = dest_section_count(TILE_CNT, tiles_per_block);
+    const std::uint32_t num_passes      = LOOP_FACTOR * num_blocks;
 
     {
         START_PERF_MEASURE("INIT")
@@ -91,7 +104,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+                bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, tiles_per_block);
         }
         PROFILER_SYNC();
     }
@@ -103,20 +117,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Quasar's 32-bit A2D datacopy is ELWADD and consumes SrcA
                 // plus the dummy SrcB dvalid emitted by the unpack MOP.
-                _perf_unpack_loop_set_valid<true /*set_a*/, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
+                _perf_unpack_loop_set_valid<true /*set_a*/, is_fp32_dest_acc_en>(num_passes * tiles_per_block);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t pass = 0; pass < num_passes; ++pass)
             {
+                const std::uint32_t l1_tile_idx = (pass % num_blocks) * tiles_per_block;
                 if constexpr (unpack_to_dest)
                 {
-                    _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, TILE_CNT);
+                    _llk_unpack_unary_operand_to_dest_block_(l1_tile_idx, 0 /*dst_tile_idx*/, tiles_per_block);
                 }
                 else
                 {
-                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(l1_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE);
                 }
                 if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
@@ -160,12 +175,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_TILE_IDX    = params.DST_TILE_IDX;
     const std::uint32_t ZERO_POINT      = params.ZERO_POINT;
 #endif
-    // Binary SFPU stages both operands from buffer_A into Dest. TILE_CNT is the
-    // number of staged tiles and is fixed by the test layout, not free-running:
-    // 2 when operands occupy Dest tiles 0/1 (result in-place or a separately
-    // written out tile, e.g. max/min's tile 2), or 4 for the result-aliasing
-    // variant that places operands at Dest tiles 2/3. Guard against any other count.
-    LLK_ASSERT(TILE_CNT == 2 || TILE_CNT == 4, "Binary SFPU expects TILE_CNT of 2 or 4");
+    const std::uint32_t tiles_per_block = binary_sfpu_tiles_per_block(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX);
+    const std::uint32_t num_passes      = LOOP_FACTOR * (TILE_CNT / tiles_per_block);
+    // Each block stages both operands from buffer_A into Dest, as laid out by the test.
+    LLK_ASSERT(tiles_per_block == 2 || tiles_per_block == 4, "Binary SFPU expects 2 or 4 staged tiles per block");
+    LLK_ASSERT(TILE_CNT % tiles_per_block == 0, "Binary SFPU expects whole blocks of staged tiles");
     const DataFormat math_format = static_cast<DataFormat>(formats.math);
 
     {
@@ -208,20 +222,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
+                _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en>(num_passes * tiles_per_block);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t pass = 0; pass < num_passes; ++pass)
             {
                 if constexpr (!unpack_to_dest)
                 {
-                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                    for (std::uint32_t i = 0; i < tiles_per_block; ++i)
                     {
                         _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
                     }
@@ -274,11 +288,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
     const std::uint32_t num_faces       = params.num_faces;
     const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t SRC0_TILE_IDX   = params.SRC0_TILE_IDX;
+    const std::uint32_t SRC1_TILE_IDX   = params.SRC1_TILE_IDX;
 #endif
+    const std::uint32_t num_blocks = dest_section_count(TILE_CNT, binary_sfpu_tiles_per_block(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX));
 
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // PACK runs without the L1_TO_L1 producer chain in isolated modes.
             set_up_zero_dest_dvalid_handshake_for_pack();
@@ -305,11 +323,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_blocks; ++pass)
             {
-                _llk_pack_(DST_TILE_IDX, 0 /*tile index*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                // One result tile per block.
+                _llk_pack_(DST_TILE_IDX, pass % num_blocks /*tile index*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();

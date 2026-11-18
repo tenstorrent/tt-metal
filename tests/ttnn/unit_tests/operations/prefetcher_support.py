@@ -32,9 +32,9 @@ def make_tensor_prefetcher_pipes(device, bank_to_receivers, ring_size, single_se
 
     ``single_sender`` gives each bank one pipe, as a K-row-major weight needs, rather than splitting a
     bank's receivers across its two DRISC senders. Returns (space, pipes); the pipes keep the space
-    alive, so a caller needs the space only to carve more pipes from it. Call it before any Program runs
-    on the receivers: pipe rings come from the persistent L1 arena, which refuses a core a live Program
-    holds.
+    alive, so a caller needs the space only to carve more pipes from it. The space takes its L1 from the
+    L1 allocator and writes its config pages through the calling thread's command queue, so it may be
+    created while Programs run on the receivers.
     """
     receiver_domain = ttnn.CoreRangeSet(
         {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
