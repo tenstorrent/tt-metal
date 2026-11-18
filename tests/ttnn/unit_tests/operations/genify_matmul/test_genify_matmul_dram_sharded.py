@@ -125,7 +125,8 @@ def test_ragged_last_bank_and_output_placement(device):
 
 
 # (cores_per_bank, A rounds on the writer, B K-blocks in flight, weight CB depth)
-_R6_KNOBS = [(3, True, 1, 2), (1, True, 1, 2), (3, False, 3, 4), (1, False, 2, 3)]
+# Refinement 17: cores_per_bank = 2 does not divide the 3-column bank: slices of 2 and 1 columns (ragged).
+_R6_KNOBS = [(3, True, 1, 2), (1, True, 1, 2), (3, False, 3, 4), (1, False, 2, 3), (2, True, 1, 2)]
 
 
 @pytest.mark.parametrize(
@@ -159,7 +160,7 @@ def test_cores_per_bank_split(device, monkeypatch, knobs):
     assert pcc > 0.9999, pcc
 
 
-def _plan(device, a_shape, b_shape, a_cores, a_dtype=_BF16, w_dtype=_BFP4, acc=True, swiglu=False):
+def _plan(device, a_shape, b_shape, a_cores, a_dtype=_BF16, w_dtype=_BFP4, acc=True, swiglu=False, fidelity=None):
     """R4 blocking for an allocated (uninitialized) A width-sharded over `a_cores` and B bank-sharded."""
     m_pad = math.prod(a_shape[:-2]) * (-(-a_shape[-2] // 32) * 32)
     k, n = a_shape[-1], b_shape[-1]
@@ -187,7 +188,8 @@ def _plan(device, a_shape, b_shape, a_cores, a_dtype=_BF16, w_dtype=_BFP4, acc=T
     o = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(a_shape[:-1]) + [n_out]), a_dtype, ttnn.TILE_LAYOUT, device, out_mc
     )
-    geom, topo, blk = pd.plan_dram_sharded(a, b, o, acc, epilogue="swiglu" if swiglu else "none")
+    kw = {"math_fidelity": fidelity} if fidelity is not None else {}
+    geom, topo, blk = pd.plan_dram_sharded(a, b, o, acc, epilogue="swiglu" if swiglu else "none", **kw)
     for t in (a, b, o):
         ttnn.deallocate(t)
     return geom, topo, blk
@@ -195,13 +197,19 @@ def _plan(device, a_shape, b_shape, a_cores, a_dtype=_BF16, w_dtype=_BFP4, acc=T
 
 def test_plan_blocking(device):
     """The R4 extent knobs: one A shard per round unless L1 or the 16-bit-DEST chain cap splits it."""
-    # PERF FOCUS 2: 8 shards of 17 K tiles, 20 bank columns split over 5 cores per bank (Refinement 6:
-    # 4-column slices), one block row, one K-block per shard.
-    geom, topo, blk = _plan(device, (1, 1, 1, 4352), (4352, 5120), 8)
+    # PERF FOCUS 2 at its LoFi config: 8 shards of 17 K tiles, 20 bank columns split over 4 cores per bank
+    # (Refinement 17: the smallest split whose compute hides under the bank stream; 5-column slices), one
+    # block row, one K-block per shard. Every bank's slice readers sit in its home-row segment.
+    lofi = ttnn.MathFidelity.LoFi
+    geom, topo, blk = _plan(device, (1, 1, 1, 4352), (4352, 5120), 8, fidelity=lofi)
     assert (topo.num_shards, topo.shard_k_tiles, topo.bank_n_tiles) == (8, 17, 20)
-    assert (topo.cores_per_bank, topo.core_n_tiles, len(topo.workers)) == (5, 4, 40)
-    assert len({(c.x, c.y) for c in topo.workers}) == 40 and topo.workers[::5] == topo.primaries
-    assert (blk.block_m_tiles, blk.block_n_tiles, blk.block_k_tiles, blk.num_k_blocks) == (1, 4, 17, 8)
+    assert (topo.cores_per_bank, topo.core_n_tiles, len(topo.workers)) == (4, 5, 32)
+    assert len({(c.x, c.y) for c in topo.workers}) == 32 and topo.workers[::4] == topo.primaries
+    assert all(c.y == topo.workers[(i // 4) * 4].y for i, c in enumerate(topo.workers))
+    assert (blk.block_m_tiles, blk.block_n_tiles, blk.block_k_tiles, blk.num_k_blocks) == (1, 5, 17, 8)
+    # Qwen3.8 decode qkvg (PERF FOCUS 3): 14 bank columns over 4 cores -- slices of 4, 4, 4 and 2 columns.
+    geom, topo, blk = _plan(device, (1, 1, 1, 5120), (5120, 3584), 10, fidelity=lofi)
+    assert (topo.bank_n_tiles, topo.cores_per_bank, topo.core_n_tiles) == (14, 4, 4)
     # 16-bit DEST caps the in-DEST K chain at DEST16_BLOCK_K_MAX: a 32-tile shard is split in 4.
     geom, topo, blk = _plan(device, (1, 1, 32, 1024), (1024, 512), 1, w_dtype=_BF16, acc=False)
     assert topo.num_shards == 1 and blk.block_k_tiles == pd.DEST16_BLOCK_K_MAX and blk.num_k_blocks == 4

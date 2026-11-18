@@ -568,16 +568,20 @@ void kernel_main() {
         const uint32_t kvj = (kbj == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
         const uint32_t l1 = weight_base + (j % ds_weight_depth) * weight_block_bytes;
         dataflow_kernel_lib::set_read_trid(noc, j % ds_b_ahead + 1);
+#ifdef GM_ABLATE_B
+        return;
+#endif
         if constexpr (ds_row_reads) {
             // cores_per_bank split: this worker's slice of each K row is one run (the rows are not
-            // adjacent). A slice wholly in the last bank's padding reads nothing (its page ids would
-            // alias the next row).
+            // adjacent) of its valid columns only (a bank's narrower last slice, the last bank's padding:
+            // the slots past them hold stale tiles whose output columns are never written). A slice wholly
+            // in the last bank's padding reads nothing (its page ids would alias the next row).
             if (cols_valid != 0) {
                 for (uint32_t k = 0; k < kvj; ++k) {
                     noc_async_read(
                         b_acc.get_noc_addr((k0j + k) * tensor_n_tiles + col0),
                         l1 + k * block_n_tiles * b_tile_bytes,
-                        block_n_tiles * b_tile_bytes);
+                        cols_valid * b_tile_bytes);
                 }
             }
         } else {

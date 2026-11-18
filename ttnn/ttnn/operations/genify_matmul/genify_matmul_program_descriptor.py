@@ -318,6 +318,19 @@ DS_READ_NOC = ttnn.NOC.NOC_0
 # whole swiglu pairs); 1 = one core per bank, the Refinement 4 topology (output packed in place).
 DS_CORE_N_TILES_MIN = 4
 DS_CORES_PER_BANK = None
+# Refinement 17: the auto C is the SMALLEST split whose per-core compute hides under the bank's stream --
+# fewer slice readers per bank stream faster (decode LM head, compute stubbed: C = 3 98 us, C = 4 106 us,
+# C = 5 103 us), while too few leave the walk compute-bound (qkvg C = 2: 31.9 us vs 23.8 at C = 4).
+# Hidden = (K * M * cw tile products at tile_k_cycles + DS_COMPUTE_FIXED_CYCLES) <= DS_COMPUTE_SHARE * the
+# busiest bank's stream (K * bank width tiles at DS_BANK_BYTES_PER_CYCLE). None of the C <= cap qualify:
+# the cheapest one. The cap: every bank's home-row segment (`_ds_bank_cores`) when that leaves a hiding C,
+# else the grid. DS_COMPUTE_SHARE = None restores Refinement 6's narrowest-slice rule (DS_CORE_N_TILES_MIN).
+DS_COMPUTE_SHARE = 0.65
+DS_COMPUTE_FIXED_CYCLES = 4000  # the walk's fill / drain around the hidden part (first K-block, output)
+DS_BANK_BYTES_PER_CYCLE = 42.7  # 460.8 GB/s over 8 banks at 1.35 GHz
+# Where a bank's C - 1 extra slice readers sit (`_ds_bank_cores`): "segment" (Refinement 17) = the bank's
+# home-row segment in the NoC0 travel direction first; "near" (Refinement 6) = the nearest free cores.
+DS_PLACEMENT = "segment"
 # R4 B stream depth (Refinement 6, `trid_double_issue`). DS_B_AHEAD: B K-blocks kept in flight, each
 # retired by its own transaction-id barrier so the bank pipe does not drain once per K-block (1 = the
 # Refinement 4 shape: one K-block in flight, issued before its A round). DS_DEPTH_WEIGHT: cb_weight_tiles
@@ -1878,17 +1891,14 @@ class DramShardedTopology:
     bank_n_tiles: int  # sw: B columns (tiles) per bank shard
     primaries: tuple  # bank w's optimal worker (logical CoreCoord), w in bank-shard order: output shard w
     cores_per_bank: int  # C: compute cores sharing each bank's columns (the cores_per_bank split)
+    core_n_tiles: int  # cw: the per-worker column slice = block_n (slice j = columns [j*cw, (j+1)*cw) of the
+    #                    bank; the last slice of a bank may be narrower when C does not divide the bank width)
     workers: tuple  # every compute core, bank-major: workers[w * C + j] owns bank w's column slice j
     rect: object  # CoreRange: the workers' bounding rectangle = the A broadcast's receiver group
 
     @property
     def num_shards(self):
         return len(self.a_cores)
-
-    @property
-    def core_n_tiles(self):
-        # The per-worker block width: one C-th of the bank's columns.
-        return self.bank_n_tiles // self.cores_per_bank
 
     @property
     def out_in_place(self):
@@ -1909,8 +1919,10 @@ def _core_key(c, row_major):
     return (c.y, c.x) if row_major else (c.x, c.y)
 
 
-def dram_sharded_topology(a, b, swiglu=False) -> DramShardedTopology:
-    """Validate the R4 operand layout and derive its topology (pure host, cheap)."""
+def dram_sharded_topology(a, b, swiglu=False, geom=None) -> DramShardedTopology:
+    """Validate the R4 operand layout and derive its topology (pure host, cheap). `geom` (the plan) feeds the
+    cores_per_bank cost rule; without it (layout checks, the output placement) C is the slice-width rule --
+    neither caller reads it (the output shards sit on the primaries)."""
     a_mc, b_mc = a.memory_config(), b.memory_config()
     if a_mc.buffer_type != ttnn.BufferType.L1 or a_mc.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
         raise DramShardedLayoutError("dram_sharded needs A L1 WIDTH_SHARDED (read A where it lives)")
@@ -1953,43 +1965,107 @@ def dram_sharded_topology(a, b, swiglu=False) -> DramShardedTopology:
         raise DramShardedLayoutError("dram_sharded needs one B column shard per DRAM bank")
     primaries = [optimal[c.x] for c in bank_cores[:used_banks]]
     grid = a.device().compute_with_storage_grid_size()
-    cores_per_bank = ds_cores_per_bank(sw, used_banks, grid.x * grid.y, swiglu)
+    cores_per_bank, core_n_tiles = ds_cores_per_bank(
+        sw,
+        used_banks,
+        grid.x * grid.y,
+        swiglu,
+        cost=(geom, kt) if geom is not None else None,
+        seg_cap=_ds_segment_cap(primaries, grid) if DS_PLACEMENT == "segment" else None,
+    )
     workers = _ds_bank_cores(primaries, cores_per_bank, grid)
     xs, ys = [c.x for c in workers], [c.y for c in workers]
     rect = ttnn.CoreRange(ttnn.CoreCoord(min(xs), min(ys)), ttnn.CoreCoord(max(xs), max(ys)))
     return DramShardedTopology(
-        tuple(a_cores), a_row_major, kw, sw, tuple(primaries), cores_per_bank, tuple(workers), rect
+        tuple(a_cores), a_row_major, kw, sw, tuple(primaries), cores_per_bank, core_n_tiles, tuple(workers), rect
     )
 
 
-def ds_cores_per_bank(bank_n_tiles, used_banks, grid_cores, swiglu=False):
-    """The cores_per_bank split C: C divides the bank width (each core a whole, equal column slice; whole
-    (gate, up) pairs under swiglu) and C * banks fits the grid. Auto: the smallest slice >= DS_CORE_N_TILES_MIN."""
+def ds_cores_per_bank(bank_n_tiles, used_banks, grid_cores, swiglu=False, cost=None, seg_cap=None):
+    """The cores_per_bank split: (C, cw). Bank slice j = columns [j*cw, (j+1)*cw) of the bank shard, the last
+    one possibly narrower (Refinement 17: C need not divide the bank width), every slice non-empty, whole
+    (gate, up) pairs under swiglu, and C * banks fits the grid. DS_CORES_PER_BANK forces C.
+    Auto with `cost` (geom, tensor_k_tiles; Refinement 17): the smallest C whose compute hides under the bank
+    stream (DS_COMPUTE_SHARE), within `seg_cap` (the home-row segments) when one there does. Without it
+    (or DS_COMPUTE_SHARE None): the narrowest slice >= DS_CORE_N_TILES_MIN (one fp32-DEST subblock wide)."""
     granule = 2 if swiglu else 1
     c_max = max(1, grid_cores // used_banks)
-    ok = [c for c in _divisors(bank_n_tiles) if c <= c_max and (bank_n_tiles // c) % granule == 0]
+
+    def slices(c):
+        cw = _round_up(_cdiv(bank_n_tiles, c), granule)
+        return _cdiv(bank_n_tiles, cw), cw
+
     if DS_CORES_PER_BANK is not None:
-        if DS_CORES_PER_BANK not in ok:
+        c, cw = slices(DS_CORES_PER_BANK)
+        if c != DS_CORES_PER_BANK or c > c_max:
             raise ValueError(f"DS_CORES_PER_BANK={DS_CORES_PER_BANK} does not split {bank_n_tiles} bank columns")
-        return DS_CORES_PER_BANK
-    wide = [c for c in ok if bank_n_tiles // c >= min(DS_CORE_N_TILES_MIN, bank_n_tiles)]
-    return max(wide) if wide else 1
+        return c, cw
+    if cost is None or DS_COMPUTE_SHARE is None:
+        cw_min = _round_up(min(DS_CORE_N_TILES_MIN, bank_n_tiles), granule)
+        return slices(min(c_max, _cdiv(bank_n_tiles, cw_min)))
+    geom, kt = cost
+    stream = kt * bank_n_tiles * geom.b_tile_bytes / DS_BANK_BYTES_PER_CYCLE
+    splits = sorted({slices(c) for c in range(1, c_max + 1)})
+
+    def compute(split):
+        cw = split[1]
+        sb_h, sb_w = choose_subblock(geom.tensor_m_tiles, cw, geom.dest_limit)
+        return kt * geom.tensor_m_tiles * cw * tile_k_cycles(geom, sb_h, sb_w) + DS_COMPUTE_FIXED_CYCLES
+
+    for cap in ([seg_cap] if seg_cap else []) + [c_max]:
+        ok = [sp for sp in splits if sp[0] <= cap and compute(sp) <= DS_COMPUTE_SHARE * stream]
+        if ok:
+            return ok[0]
+    return min((sp for sp in splits if sp[0] <= (seg_cap or c_max)), key=compute)
+
+
+def _ds_segment_cap(primaries, grid):
+    """The fewest cores any bank's home-row segment holds (its primary up to the row's next primary, +x)."""
+    xs = {}
+    for c in primaries:
+        xs.setdefault(c.y, []).append(c.x)
+    cap = grid.x
+    for row in xs.values():
+        row = sorted(row)
+        for i, x in enumerate(row):
+            nxt = row[(i + 1) % len(row)]
+            cap = min(cap, (nxt - x) % grid.x or grid.x)
+    return cap
 
 
 def _ds_bank_cores(primaries, cores_per_bank, grid):
-    """workers[w * C + j]: bank w's optimal worker (j = 0), then its C - 1 nearest unclaimed cores -- the
-    same row first (right before left), then the nearest rows -- so the slice readers sit by their bank."""
+    """workers[w * C + j]: bank w's optimal worker (j = 0), then C - 1 more unclaimed cores.
+
+    DS_PLACEMENT "segment" (Refinement 17): bank w first takes its home-row segment -- the cores from its
+    primary in the NoC0 travel direction (+x, wrapping) up to the next bank primary of the row -- so no
+    bank's read responses cross another bank's row links (logical row 9 holds two banks: with "near" the
+    col-6 bank's left-hand slice reader wrapped through bank 0's links, and both banks' streams slowed
+    ~20 %). Cores beyond the segment are the nearest unclaimed ones (rows first). "near" (Refinement 6):
+    the nearest unclaimed cores, the same row first (right before left), then the nearest rows."""
     taken = {(c.x, c.y) for c in primaries}
+    prim_x = {}
+    for c in primaries:
+        prim_x.setdefault(c.y, set()).add(c.x)
     workers = []
     for p in primaries:
         workers.append(p)
+        picked = []
+        if DS_PLACEMENT == "segment":
+            for d in range(1, grid.x):
+                x = (p.x + d) % grid.x
+                if x in prim_x[p.y] or len(picked) == cores_per_bank - 1:
+                    break
+                if (x, p.y) not in taken:
+                    picked.append((x, p.y))
+                    taken.add((x, p.y))
         cands = sorted(
             ((x, y) for x in range(grid.x) for y in range(grid.y) if (x, y) not in taken),
             key=lambda xy: (abs(xy[1] - p.y), abs(xy[0] - p.x), xy[0] < p.x, xy[1] < p.y),
         )
-        for x, y in cands[: cores_per_bank - 1]:
-            taken.add((x, y))
-            workers.append(ttnn.CoreCoord(x, y))
+        for xy in cands[: cores_per_bank - 1 - len(picked)]:
+            taken.add(xy)
+            picked.append(xy)
+        workers.extend(ttnn.CoreCoord(x, y) for x, y in picked)
     return workers
 
 
@@ -2050,10 +2126,13 @@ def ds_weight_depth(geom: Geometry, topo: DramShardedTopology, blk: Blocking, bu
     return DEPTH_WEIGHT
 
 
-def plan_dram_sharded(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None):
-    """R4 blocking decision (geometry, topology, blocking). Exposed for tests / perf tooling."""
-    geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual)
-    topo = dram_sharded_topology(a, b, geom.swiglu)
+def plan_dram_sharded(
+    a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None, math_fidelity=ttnn.MathFidelity.HiFi4
+):
+    """R4 blocking decision (geometry, topology, blocking). Exposed for tests / perf tooling. `math_fidelity`
+    feeds the cores_per_bank cost rule (HiFi4, the op's default, when the caller has no compute config)."""
+    geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual, math_fidelity)
+    topo = dram_sharded_topology(a, b, geom.swiglu, geom)
     budget = l1_cb_budget(a.device(), [t for t in (a, b, out, row, residual) if t is not None])
     return geom, topo, choose_dram_sharded_blocking(geom, topo, budget)
 
@@ -2065,7 +2144,14 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
     receiver rectangle only lands the multicast and exits). Compute and writer run on the workers."""
     device = a.device()
     geom, topo, blk = plan_dram_sharded(
-        a, b, out, bool(compute_config.fp32_dest_acc_en), epilogue=epilogue, row=row, residual=residual
+        a,
+        b,
+        out,
+        bool(compute_config.fp32_dest_acc_en),
+        epilogue=epilogue,
+        row=row,
+        residual=residual,
+        math_fidelity=compute_config.math_fidelity,
     )
     budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
     depth_weight = ds_weight_depth(geom, topo, blk, budget)
@@ -2161,10 +2247,11 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
     sw, cw, cpb = topo.bank_n_tiles, topo.core_n_tiles, topo.cores_per_bank
 
     def worker_cols(i):
-        # Worker i = bank i // C, slice i % C: its first B column and valid column count (0 when the
-        # slice lies wholly in the last bank's padding).
+        # Worker i = bank i // C, slice i % C: its first B column and valid column count (narrower for a
+        # bank's last slice when C does not divide the bank width; 0 when the slice lies wholly in the
+        # last bank's padding).
         col0 = (i // cpb) * sw + (i % cpb) * cw
-        return col0, max(0, min(cw, geom.tensor_n_tiles - col0))
+        return col0, max(0, min(cw, sw - (i % cpb) * cw, geom.tensor_n_tiles - col0))
 
     def reader_args(w):
         # w = None: a non-worker core of the broadcast (no B columns; it reads only nb_m and a_addr).
@@ -2257,6 +2344,8 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
             ttnn.attach_absent_mcast(wr, "act")
     for r in readers:
         ttnn.attach_absent_mcast(r, "weight")
+    for k in (*readers, *writers, compute):
+        k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
     descriptor.kernels = [*readers, *writers, compute]
     return descriptor
 
