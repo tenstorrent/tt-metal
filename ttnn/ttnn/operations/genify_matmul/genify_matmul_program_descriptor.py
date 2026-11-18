@@ -396,6 +396,11 @@ BS_B_ON_WRITER = True
 # (clamped to the walk and to the L1 budget) so the B RISC reads ahead of compute instead of one K-block at a time.
 # 2 = DEPTH_WEIGHT (the Refinement 10 ring).
 BS_SPLIT_B_DEPTH = 2
+# ... and its B rounds carry this many bytes (SHARDED_B_ROUND_BYTES' role, for the split): with B off the A chain a
+# round per K-block feeds compute earliest. Measured (device us, 1 B / 32 KB / 64 KB / all K): ASPP 1x1 13.9 / 15.1 /
+# 17.3 / 17.2, res4 shortcut 14.1 / 15.1 / 17.0 / 17.0, res5 expand 22.7 / 23.6 / 25.2 / 28.7, res5 reduce 11.7 /
+# 11.9 / 13.9 / 13.8, res5 reduce 2 and res5 shortcut flat.
+BS_SPLIT_B_ROUND_BYTES = 1
 # ... and without a weight channel (per-core B reads on NoC1) the split pays only when the A rounds are heavy
 # enough to hide the B half's read latency: A round bytes (block_m x block_k tiles) >= this. Measured (device us,
 # split vs one reader): aspp_proj 87 KB 16.8 vs 18.6, res4_reduce 70 KB 18.4 vs 18.8, res4_reduce5 35 KB 12.7 vs
@@ -2653,12 +2658,14 @@ def _sharded_b_depth(round_kblocks, walk_k_blocks):
     return round_kblocks if walk_k_blocks <= round_kblocks else DEPTH_WEIGHT * round_kblocks
 
 
-def sharded_b_round(geom: Geometry, blk: Blocking, walk_k_blocks, budget, in_place, act_cb):
+def sharded_b_round(geom: Geometry, blk: Blocking, walk_k_blocks, budget, in_place, act_cb, round_bytes=None):
     """R2a / R3a: K-blocks per B round -- the smallest divisor g of num_k_blocks whose round carries
-    SHARDED_B_ROUND_BYTES (else all of them), shrunk while its 2g-deep weight CB does not fit the budget."""
+    `round_bytes` (default SHARDED_B_ROUND_BYTES; else all of them), shrunk while its 2g-deep weight CB does not
+    fit the budget."""
+    round_bytes = SHARDED_B_ROUND_BYTES if round_bytes is None else round_bytes
     kblock_bytes = blk.block_k_tiles * blk.block_n_tiles * geom.b_tile_bytes
     divs = sorted(_divisors(blk.num_k_blocks))
-    g = next((d for d in divs if d * kblock_bytes >= SHARDED_B_ROUND_BYTES), divs[-1])
+    g = next((d for d in divs if d * kblock_bytes >= round_bytes), divs[-1])
     for d in reversed([d for d in divs if d <= g]):
         f = _footprint(
             geom,
@@ -2809,11 +2816,19 @@ def create_block_sharded_program_descriptor(
     # The B round as the channel would carry it (one round in one chunk selects the one-shot channel).
     budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
     act_cb = not topo.act_resident
-    b_round = sharded_b_round(geom, blk, walk_k_blocks, budget, in_place, act_cb=act_cb)
-    b_chunks, b_chunk_k = sharded_b_chunks(geom, blk, b_round)
-    one_shot, row_tail = sharded_b_one_shot(geom, blk, walk_k_blocks, b_round, b_chunks, budget, in_place, act_cb)
     # R3 split roles (BS_B_ON_WRITER): the B half on BRISC / NoC1 when the output needs no writer.
     split_roles = BS_B_ON_WRITER and topo.cols > 1 and in_place
+    b_round = sharded_b_round(
+        geom,
+        blk,
+        walk_k_blocks,
+        budget,
+        in_place,
+        act_cb=act_cb,
+        round_bytes=BS_SPLIT_B_ROUND_BYTES if split_roles else None,
+    )
+    b_chunks, b_chunk_k = sharded_b_chunks(geom, blk, b_round)
+    one_shot, row_tail = sharded_b_one_shot(geom, blk, walk_k_blocks, b_round, b_chunks, budget, in_place, act_cb)
     b_noc = ttnn.NOC.NOC_1 if split_roles else ttnn.NOC.NOC_0
     # One weight channel per B group (R3 / single-group R2: one channel over the whole core set).
     b_groups = sharded_b_groups(topo)
