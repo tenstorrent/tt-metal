@@ -412,15 +412,16 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     }
     auto copied_spec = spec;
     auto copied_args = args;
+    // A fixed sender over one row is grid-derived: no per-node words, a NoC table of 4 columns and 1 row instead.
     Mcast second(*device_, McastConfig{.handshake = false}, receivers, 4);
     second.attach(copied_spec, copied_args, "second", targets);
     EXPECT_EQ(copied_spec.semaphores.size(), 3u);
     EXPECT_EQ(spec.semaphores.size(), 2u);
     for (const auto& [core, words] : args.kernel_run_args.front().advanced_options.runtime_varargs) {
-        const auto expanded = copied_args.kernel_run_args.front().advanced_options.runtime_varargs.get(core).value();
-        EXPECT_GT(expanded.size(), words.size());
-        EXPECT_TRUE(std::equal(words.begin(), words.end(), expanded.begin()));
+        EXPECT_EQ(copied_args.kernel_run_args.front().advanced_options.runtime_varargs.get(core).value(), words);
     }
+    EXPECT_EQ(copied_spec.kernels.front().advanced_options.num_common_runtime_varargs, 5u);
+    EXPECT_EQ(copied_args.kernel_run_args.front().advanced_options.common_runtime_varargs.size(), 5u);
 }
 
 TEST_F(McastFixture, OperationCommunicationFeasibility) {

@@ -515,7 +515,87 @@ void McastImpl::prepare_arguments_() const {
             generic_metadata_.coordinates = candidate;
         }
     }
+    prepare_grid_();
     arguments_prepared_ = true;
+}
+
+void McastImpl::prepare_grid_() const {
+    grid_.reset();
+    grid_table_.clear();
+    const bool handshake_ack_varies =
+        (layout_.flags & wire::PRE_HANDSHAKE) != 0 && layout_.ack_count == ACK_EQUALS_FANOUT;
+    if (!cfg_.derive_regular_grid || wire::transfer_mode(layout_.flags) != TransferMode::Multicast ||
+        layout_.rotating_span != 0 || layout_.rectangle_capacity != 1 || !layout_.remote_count_known ||
+        !wire::concrete(layout_.sender_mcast_mode) || handshake_ack_varies || receivers_.ranges().size() != 1 ||
+        participating_.num_cores() != receivers_.num_cores()) {
+        return;
+    }
+    // Groups of one size tile the receiver rectangle on a grid of that size, each with its sender at one offset.
+    const auto grid_range = receivers_.ranges().front();
+    const auto first_range = groups_.front().receivers_.ranges().front();
+    const auto first_sender = groups_.front().senders_.front();
+    wire::GridMetadata grid{
+        .derived = true,
+        .origin_x = uint32_t(grid_range.start_coord.x),
+        .origin_y = uint32_t(grid_range.start_coord.y),
+        .columns = uint32_t(grid_range.grid_size().x),
+        .rows = uint32_t(grid_range.grid_size().y),
+        .group_width = uint32_t(first_range.grid_size().x),
+        .group_height = uint32_t(first_range.grid_size().y),
+        .sender_dx = uint32_t(first_sender.x - first_range.start_coord.x),
+        .sender_dy = uint32_t(first_sender.y - first_range.start_coord.y)};
+    if (grid.columns % grid.group_width != 0 || grid.rows % grid.group_height != 0) {
+        return;
+    }
+    for (const auto& group : groups_) {
+        const auto range = group.receivers_.ranges().front();
+        const auto sender = group.senders_.front();
+        if (range.grid_size() != first_range.grid_size() ||
+            (range.start_coord.x - grid.origin_x) % grid.group_width != 0 ||
+            (range.start_coord.y - grid.origin_y) % grid.group_height != 0 ||
+            sender.x - range.start_coord.x != grid.sender_dx || sender.y - range.start_coord.y != grid.sender_dy) {
+            return;
+        }
+    }
+    // The grid's NoC coordinates must split into one x per column and one y per row.
+    std::vector<uint32_t> table(grid.columns + grid.rows);
+    for (uint32_t column = 0; column < grid.columns; ++column) {
+        table[column] = detail::virt_coord(device_.get(), {grid.origin_x + column, grid.origin_y}).first;
+    }
+    for (uint32_t row = 0; row < grid.rows; ++row) {
+        table[grid.columns + row] = detail::virt_coord(device_.get(), {grid.origin_x, grid.origin_y + row}).second;
+    }
+    for (uint32_t row = 0; row < grid.rows; ++row) {
+        for (uint32_t column = 0; column < grid.columns; ++column) {
+            const auto [x, y] = detail::virt_coord(device_.get(), {grid.origin_x + column, grid.origin_y + row});
+            if (x != table[column] || y != table[grid.columns + row]) {
+                return;
+            }
+        }
+    }
+    // Every core must derive exactly the arguments the per-core path would give it.
+    for (const auto& group : groups_) {
+        const auto& state = group.prepared_state_();
+        const auto& rectangle =
+            std::get<Group::PreparedMulticast>(state.transport).receiver_rectangle_args_per_sender[0];
+        for (const auto& core : tt::tt_metal::corerange_to_cores(group.receivers_)) {
+            const auto position = wire::grid_position(grid, core.x, core.y);
+            if (wire::grid_roles(position) != group.roles_for_core_(core) ||
+                wire::grid_sender_coordinate(table, grid, position, wire::SENDER_X) != state.sender_coords[0] ||
+                wire::grid_sender_coordinate(table, grid, position, wire::SENDER_Y) != state.sender_coords[1]) {
+                return;
+            }
+            if (position.sends) {
+                const auto bounds = wire::grid_bounds(table, grid, position, cfg_.noc == tt::tt_metal::NOC::NOC_1);
+                if (bounds.sx != rectangle[wire::SX] || bounds.sy != rectangle[wire::SY] ||
+                    bounds.ex != rectangle[wire::EX] || bounds.ey != rectangle[wire::EY]) {
+                    return;
+                }
+            }
+        }
+    }
+    grid_ = grid;
+    grid_table_ = std::move(table);
 }
 
 void McastImpl::require_arguments_prepared_() const {
@@ -529,7 +609,8 @@ const McastImpl::Group* McastImpl::group_for_core_(const CoreCoord& core) const 
     }
     return nullptr;
 }
-wire::ArgumentMetadata McastImpl::argument_metadata_(const CoreRangeSet* placement) const {
+wire::ArgumentMetadata McastImpl::argument_metadata_(
+    const CoreRangeSet* placement, std::optional<uint32_t> grid_common_base) const {
     require_arguments_prepared_();
     // Empty descriptor placements still compile their source, including direct
     // pipe construction. No roles can be inferred; retain the generic metadata.
@@ -565,6 +646,10 @@ wire::ArgumentMetadata McastImpl::argument_metadata_(const CoreRangeSet* placeme
     metadata.kernel.roles = uniform_roles ? *first_roles : wire::DYNAMIC_ROLES;
     if (compatible_coordinates && encoding) {
         metadata.coordinates = *encoding;
+    }
+    if (grid_ && grid_common_base && metadata.kernel.capabilities != 0) {
+        metadata.grid = *grid_;
+        metadata.grid.common_base = *grid_common_base;
     }
     return metadata;
 }

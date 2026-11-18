@@ -141,15 +141,47 @@ def inspect_mcast_ct(kernel, prefix="mcast"):
     if fields["encoding"]:
         for name in ("columns", "rows", "x_ranges", "y_ranges"):
             fields[name] = take()
+    fields["grid"] = None
+    if control & (1 << 22):
+        names = ("origin_x", "origin_y", "columns", "rows", "width", "height", "sender_dx", "sender_dy", "base")
+        fields["grid"] = {name: take() for name in names}
     fields["words"] = offset
     return fields
+
+
+def _grid_core(grid, core):
+    """(roles, group origin) of a core in a grid-derived channel; roles 0 outside the grid."""
+    x, y = core.x - grid["origin_x"], core.y - grid["origin_y"]
+    if not (0 <= x < grid["columns"] and 0 <= y < grid["rows"]):
+        return 0, None
+    gx, gy = x - x % grid["width"], y - y % grid["height"]
+    sends = (x - gx, y - gy) == (grid["sender_dx"], grid["sender_dy"])
+    return (1 if sends else 2), (gx, gy)
+
+
+def _core_runtime_args(kernel, core):
+    try:
+        return list(kernel.runtime_args[core.x][core.y])
+    except IndexError:
+        return []  # A core with no per-core words keeps no entry.
 
 
 def inspect_mcast(kernel, core, prefix="mcast"):
     """Test-owned decoder of role/count/coordinate fields."""
     named = dict(kernel.named_compile_time_args)
     ct = inspect_mcast_ct(kernel, prefix)
-    rt = kernel.runtime_args[core.x][core.y][named[prefix + "_rt_offset"] :]
+    rt = _core_runtime_args(kernel, core)[named[prefix + "_rt_offset"] :]
+    grid = ct["grid"]
+    if grid is not None:
+        # Grid-derived: no per-core words; the sender comes from the common-arg NoC table (columns, then rows).
+        table = list(kernel.common_runtime_args)[grid["base"] : grid["base"] + grid["columns"] + grid["rows"]]
+        roles, group = _grid_core(grid, core)
+        if ct["roles"] != 0xFFFFFFFF:
+            roles = ct["roles"]
+        coordinates = []
+        if ct["capabilities"] & 2 and group is not None:
+            coordinates = [table[group[0] + grid["sender_dx"]], table[grid["columns"] + group[1] + grid["sender_dy"]]]
+        return dict(roles=roles, phase=0, rectangles=1, ack=ct["ack"], coordinates=coordinates)
     offset = 0
     roles = ct["roles"]
     if roles == 0xFFFFFFFF:
@@ -216,6 +248,7 @@ def run_mcast_groups_case(
     mixed_events=False,
     delayed=False,
     min_rectangles=None,
+    expect_grid=None,
 ):
     """Build a unified multicast channel, then exercise its attached kernel arguments."""
     specs = [Group(*group) for group in specs]
@@ -269,6 +302,7 @@ def run_mcast_groups_case(
         delayed=delayed,
         expected_chain=chained if chain_link else None,
         min_rectangles=min_rectangles,
+        expect_grid=expect_grid,
     )
 
 
@@ -346,6 +380,7 @@ def _run_channel(
     delayed=False,
     expected_chain=None,
     min_rectangles=None,
+    expect_grid=None,
     alternating=True,
     round_only_receive=False,
     control_value=7,
@@ -429,6 +464,8 @@ def _run_channel(
     descriptor = ttnn.ProgramDescriptor()
     mcast.attach(descriptor, "mcast", kernels, 0)
     attached_ct = inspect_mcast_ct(kernels[0])
+    if expect_grid is not None:
+        assert (attached_ct["grid"] is not None) == expect_grid
     if expected_chain is not None:
         assert (attached_ct["flags"] >> 3) & 3 == int(expected_chain)
         if expected_chain:

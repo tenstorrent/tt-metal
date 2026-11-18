@@ -69,6 +69,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
 
 set(UNIT_TESTS_TTNN_KERNEL_LIB_SOURCES
     test_mcast_descriptor.cpp
+    test_mcast_grid_derived.cpp
     test_mcast_host_api.cpp
     test_mcast_program.cpp
     test_mcast_program_spec.cpp

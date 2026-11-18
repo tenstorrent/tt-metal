@@ -33,6 +33,16 @@ The decoded channel selects the pipe implementation from the host-configured `Tr
 hardware multicast uses `SenderPipe` and `ReceiverPipe`. `TransferMode::ChainUnicast` uses `ChainSenderPipe` and
 `ChainReceiverPipe`; a chain receiver calls `receive_and_forward()` so intermediate receivers relay the payload.
 
+## Arguments on a regular grid
+
+When every group has one fixed sender and the groups tile one rectangle in equal sub-rectangles (rows or columns of a
+matmul grid, for example), a `ProgramDescriptor` or `ProgramSpec` attachment gives the channel no per-core runtime
+arguments. Each core derives its roles, its sender and its group's NoC rectangle from its logical coordinates and a NoC
+table the attachment appends to the kernel's common runtime arguments (one x per grid column, one y per grid row). The
+host checks that every core derives exactly what the per-core path would give it, and otherwise keeps per-core
+arguments. `McastConfig::derive_regular_grid = false` keeps per-core arguments; a direct `Program` attachment always
+does.
+
 ## File map
 
 ### Host

@@ -8,7 +8,8 @@ TEST_F(McastHostFixture, CompactPlacementGoldens) {
     using namespace tt::tt_metal;
     for (const auto noc : {NOC::NOC_0, NOC::NOC_1}) {
         for (bool handshake : {false, true}) {
-            auto mcast = make_mcast(device_, {{grid({1, 2}, {4, 2}), {{1, 2}}}}, {.noc = noc, .handshake = handshake});
+            auto mcast =
+                make_mcast(device_, {{grid({1, 2}, {4, 2}), {{1, 2}}}}, per_core({.noc = noc, .handshake = handshake}));
             ProgramDescriptor descriptor;
             KernelDescriptor sender, receiver, inactive;
             sender.core_ranges = cores({{1, 2}});
@@ -27,7 +28,8 @@ TEST_F(McastHostFixture, CompactPlacementGoldens) {
             for (const auto& [core, args] : receiver.runtime_args) {
                 EXPECT_EQ(args, (std::vector<uint32_t>{lo.x, lo.y}));
             }
-            EXPECT_TRUE(inactive.runtime_args.front().second.empty());
+            // A core with no multicast words gets no runtime-args entry.
+            EXPECT_TRUE(inactive.runtime_args.empty());
             EXPECT_EQ(sender.compile_time_args.size() + sender.named_compile_time_args.size(), handshake ? 6u : 5u);
             EXPECT_EQ(receiver.compile_time_args.size() + receiver.named_compile_time_args.size(), handshake ? 5u : 4u);
             EXPECT_EQ(emitted_metadata(sender.compile_time_args).kernel.roles, 1u);
@@ -35,14 +37,14 @@ TEST_F(McastHostFixture, CompactPlacementGoldens) {
             EXPECT_EQ(emitted_metadata(inactive.compile_time_args).kernel.roles, 0u);
         }
     }
-    auto local = make_mcast(device_, {{cores({{2, 3}}), {{2, 3}}}});
+    auto local = make_mcast(device_, {{cores({{2, 3}}), {{2, 3}}}}, per_core());
     tt::tt_metal::ProgramDescriptor descriptor;
     tt::tt_metal::KernelDescriptor kernel;
     kernel.core_ranges = cores({{2, 3}});
     kernel.config =
         tt::tt_metal::DataMovementConfigDescriptor{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
     local.attach(descriptor, "local", std::array{std::ref(kernel)}, 0);
-    EXPECT_TRUE(kernel.runtime_args.front().second.empty());
+    EXPECT_TRUE(kernel.runtime_args.empty());
     EXPECT_NE(kernel.compile_time_args[0], wire::ABSENT);
     EXPECT_EQ(emitted_metadata(kernel.compile_time_args).mcast.remote_count_known, 1u);
     tt::tt_metal::KernelDescriptor empty;
@@ -57,7 +59,7 @@ TEST_F(McastHostFixture, CompactPlacementGoldens) {
 TEST_F(McastHostFixture, DescriptorAppendPadsPerKernelAndPreservesBindings) {
     using namespace tt::tt_metal;
     const auto participants = grid({0, 0}, {1, 0});
-    auto mcast = make_mcast(device_, {GroupInput(participants, {{0, 0}})});
+    auto mcast = make_mcast(device_, {GroupInput(participants, {{0, 0}})}, per_core());
     ProgramDescriptor desc;
     KernelDescriptor kernel;
     kernel.core_ranges = grid({0, 0}, {2, 0});
@@ -134,7 +136,7 @@ TEST_F(McastHostFixture, DescriptorAppendFailurePreservesAllTargets) {
 TEST_F(McastHostFixture, DescriptorAttachAppendsAfterPrefixesAndPreservesBufferBindings) {
     using namespace tt::tt_metal;
     const auto participants = grid({0, 0}, {1, 0});
-    auto mcast = make_mcast(device_, {GroupInput(participants, {{0, 0}})});
+    auto mcast = make_mcast(device_, {GroupInput(participants, {{0, 0}})}, per_core());
     ProgramDescriptor desc;
     // The caller's cursor starts after resources already appended by other builders.
     desc.semaphores.push_back({.id = 0, .core_ranges = grid({0, 0}, {0, 0})});
@@ -179,7 +181,7 @@ TEST_F(McastHostFixture, DescriptorAttachAppendsAfterPrefixesAndPreservesBufferB
 
 TEST_F(McastHostFixture, DescriptorAttachValidatesAllKernelsBeforeMutation) {
     using namespace tt::tt_metal;
-    auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})});
+    auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})}, per_core());
     ProgramDescriptor desc;
     KernelDescriptor sender;
     sender.core_ranges = grid({0, 0}, {0, 0});
@@ -233,7 +235,7 @@ TEST_F(McastHostFixture, DescriptorAttachConsumesIdsAndSupportsIndependentMcasts
     using namespace tt::tt_metal;
     const auto participants = grid({0, 0}, {1, 0});
     const GroupInput group(participants, {{0, 0}});
-    auto first_mcast = make_mcast(device_, {group});
+    auto first_mcast = make_mcast(device_, {group}, per_core());
     ProgramDescriptor desc;
     KernelDescriptor kernel;
     kernel.core_ranges = participants;
@@ -248,7 +250,7 @@ TEST_F(McastHostFixture, DescriptorAttachConsumesIdsAndSupportsIndependentMcasts
     EXPECT_EQ(first_mcast.next_semaphore_id(), 7u);
 
     // The second channel allocates its own slots, appending after the first helper block.
-    auto second_mcast = make_mcast(device_, {group});
+    auto second_mcast = make_mcast(device_, {group}, per_core());
     const std::array second{std::ref(desc.kernels[0])};
     second_mcast.attach(desc, "second_mcast", second, first_mcast.next_semaphore_id());
     ASSERT_EQ(desc.semaphores.size(), 4u);

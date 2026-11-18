@@ -30,7 +30,9 @@ constexpr RuntimeLayout::RuntimeLayout(ArgumentMetadata metadata) {
     const auto& coordinates = metadata.coordinates;
     const bool sends = (kernel.capabilities & CAN_SEND) != 0;
     const bool receives = (kernel.capabilities & CAN_RECEIVE) != 0;
-    roles = reserve(words, kernel.roles == DYNAMIC_ROLES);
+    // A grid-derived channel computes roles, sender coordinates and rectangle bounds on the core.
+    const bool grid = metadata.grid.derived;
+    roles = reserve(words, kernel.roles == DYNAMIC_ROLES && !grid);
     if (transfer_mode(mcast.flags) == TransferMode::ChainUnicast) {
         if (receives) {
             coordinate_words = SENDER_COORD_WORDS;
@@ -42,14 +44,15 @@ constexpr RuntimeLayout::RuntimeLayout(ArgumentMetadata metadata) {
     sender_phase = reserve(words, sends && mcast.rotating_span != 0);
     rectangle_count = reserve(words, sends && mcast.rectangle_capacity > 1);
     ack = reserve(words, sends && (mcast.flags & PRE_HANDSHAKE) && mcast.ack_count == ACK_EQUALS_FANOUT);
-    if (receives) {
+    if (receives && !grid) {
         coordinate_words = coordinates.encoding == SenderCoordinateEncoding::ExplicitPairs
                                ? SENDER_COORD_WORDS * (mcast.rotating_span ? mcast.rotating_span : 1u)
                                : RANGE_WORDS * (coordinates.x_ranges + coordinates.y_ranges);
         sender_coordinates = reserve(words, true, coordinate_words);
     }
     if (sends) {
-        rectangle_bounds = reserve(rectangle_stride, mcast.sender_mcast_mode != SenderMcastMode::LocalCopy, 4);
+        rectangle_bounds =
+            reserve(rectangle_stride, mcast.sender_mcast_mode != SenderMcastMode::LocalCopy && !grid, 4);
         rectangle_remote = reserve(rectangle_stride, !(mcast.rectangle_capacity == 1 && mcast.remote_count_known));
         rectangle_mode = reserve(rectangle_stride, mcast.sender_mcast_mode == SenderMcastMode::Unknown);
         rectangles = reserve(words, true, mcast.rectangle_capacity * rectangle_stride);
@@ -92,6 +95,39 @@ constexpr uint32_t sender_coordinate(
                             : range_coordinate(payload, RANGE_WORDS * metadata.x_ranges, metadata.y_ranges, y);
 }
 
+constexpr GridPosition grid_position(const GridMetadata& grid, uint32_t logical_x, uint32_t logical_y) {
+    // Unsigned: a core before the grid origin wraps past the extent.
+    const uint32_t x = logical_x - grid.origin_x;
+    const uint32_t y = logical_y - grid.origin_y;
+    if (x >= grid.columns || y >= grid.rows) {
+        return {};
+    }
+    const uint32_t group_x = x - x % grid.group_width;
+    const uint32_t group_y = y - y % grid.group_height;
+    return {true, x - group_x == grid.sender_dx && y - group_y == grid.sender_dy, group_x, group_y};
+}
+
+// A fixed sender does not receive its own payload.
+constexpr uint32_t grid_roles(GridPosition position) {
+    return !position.participates ? 0u : position.sends ? CAN_SEND : CAN_RECEIVE;
+}
+
+template <typename Table>
+constexpr uint32_t grid_sender_coordinate(
+    const Table& table, const GridMetadata& grid, GridPosition position, uint32_t axis) {
+    return axis == SENDER_X ? table[position.group_x + grid.sender_dx]
+                            : table[grid.columns + position.group_y + grid.sender_dy];
+}
+
+template <typename Table>
+constexpr NocBounds grid_bounds(const Table& table, const GridMetadata& grid, GridPosition position, bool noc1) {
+    const uint32_t start_x = table[position.group_x];
+    const uint32_t start_y = table[grid.columns + position.group_y];
+    const uint32_t end_x = table[position.group_x + grid.group_width - 1];
+    const uint32_t end_y = table[grid.columns + position.group_y + grid.group_height - 1];
+    return noc1 ? NocBounds{end_x, end_y, start_x, start_y} : NocBounds{start_x, start_y, end_x, end_y};
+}
+
 // Internal compact CT format: control, optional semaphore IDs, then only the numeric
 // metadata used by this placement. Counts and IDs remain full-width uint32_t.
 // ProgramSpec uses the same format without IDs: its native bindings own resources.
@@ -108,6 +144,7 @@ constexpr uint32_t REMOTE_KNOWN = 1u << 18;
 constexpr uint32_t ROTATING = 1u << 19;
 constexpr uint32_t ACK_SHIFT = 20, ACK_MASK = 3u;
 enum class Ack : uint32_t { None, Constant, RemoteCount, Runtime };
+constexpr uint32_t GRID = 1u << 22;
 constexpr Ack ack(uint32_t control) { return Ack((control >> ACK_SHIFT) & ACK_MASK); }
 }  // namespace ct_control
 
@@ -130,6 +167,9 @@ constexpr ArgumentMetadata compact_compile_time_metadata(ArgumentMetadata metada
     }
     if (metadata.kernel.capabilities == 0) {
         mcast.rotating_span = 0;
+    }
+    if (!metadata.grid.derived) {
+        metadata.grid = {};
     }
     return metadata;
 }
@@ -157,7 +197,7 @@ constexpr uint32_t compile_time_control(ArgumentMetadata input) {
            (metadata.kernel.capabilities << CAPABILITIES_SHIFT) |
            (uint32_t(metadata.coordinates.encoding) << COORD_ENCODING_SHIFT) |
            (mcast.remote_count_known ? REMOTE_KNOWN : 0u) | (mcast.rotating_span ? ROTATING : 0u) |
-           (uint32_t(ack_encoding) << ACK_SHIFT);
+           (uint32_t(ack_encoding) << ACK_SHIFT) | (metadata.grid.derived ? GRID : 0u);
 }
 
 constexpr ArgumentMetadata compile_time_control_metadata(uint32_t control) {
@@ -171,6 +211,7 @@ constexpr ArgumentMetadata compile_time_control_metadata(uint32_t control) {
     metadata.kernel.roles = (control & DYNAMIC) ? DYNAMIC_ROLES : (control >> ROLES_SHIFT) & ROLES_MASK;
     metadata.kernel.capabilities = (control >> CAPABILITIES_SHIFT) & CAPABILITIES_MASK;
     metadata.coordinates.encoding = SenderCoordinateEncoding((control >> COORD_ENCODING_SHIFT) & COORD_ENCODING_MASK);
+    metadata.grid.derived = (control & GRID) != 0;
     return metadata;
 }
 
@@ -200,6 +241,10 @@ constexpr CompileTimeLayout::CompileTimeLayout(uint32_t control, bool semaphore_
     if (metadata.coordinates.encoding != SenderCoordinateEncoding::ExplicitPairs) {
         coordinates = words;
         words += 4;  // Columns, rows, X ranges, Y ranges; no dimension/count truncation.
+    }
+    if (control & ct_control::GRID) {
+        grid = words;
+        words += GRID_CT_WORDS;
     }
 }
 
@@ -233,6 +278,22 @@ constexpr void encode_compile_time_metadata(Words& words, ArgumentMetadata input
         words[layout.coordinates + 2] = metadata.coordinates.x_ranges;
         words[layout.coordinates + 3] = metadata.coordinates.y_ranges;
     }
+    if (layout.grid != OMITTED) {
+        const auto& grid = metadata.grid;
+        const uint32_t values[GRID_CT_WORDS] = {
+            grid.origin_x,
+            grid.origin_y,
+            grid.columns,
+            grid.rows,
+            grid.group_width,
+            grid.group_height,
+            grid.sender_dx,
+            grid.sender_dy,
+            grid.common_base};
+        for (uint32_t i = 0; i < GRID_CT_WORDS; ++i) {
+            words[layout.grid + i] = values[i];
+        }
+    }
 }
 
 template <typename Words>
@@ -261,6 +322,18 @@ constexpr ArgumentMetadata decode_compile_time_metadata(const Words& words, bool
         metadata.coordinates.rows = words[layout.coordinates + 1];
         metadata.coordinates.x_ranges = words[layout.coordinates + 2];
         metadata.coordinates.y_ranges = words[layout.coordinates + 3];
+    }
+    if (layout.grid != OMITTED) {
+        auto& grid = metadata.grid;
+        grid.origin_x = words[layout.grid];
+        grid.origin_y = words[layout.grid + 1];
+        grid.columns = words[layout.grid + 2];
+        grid.rows = words[layout.grid + 3];
+        grid.group_width = words[layout.grid + 4];
+        grid.group_height = words[layout.grid + 5];
+        grid.sender_dx = words[layout.grid + 6];
+        grid.sender_dy = words[layout.grid + 7];
+        grid.common_base = words[layout.grid + 8];
     }
     return metadata;
 }

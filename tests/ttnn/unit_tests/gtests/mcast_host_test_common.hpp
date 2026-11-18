@@ -41,6 +41,11 @@ inline CoreRangeSet cores(const std::vector<CoreCoord>& values) {
     }
     return CoreRangeSet(std::move(ranges));
 }
+// Per-core arguments even where the group layout could be grid-derived: for tests of the per-core mechanics.
+inline McastConfig per_core(McastConfig cfg = {}) {
+    cfg.derive_regular_grid = false;
+    return cfg;
+}
 inline McastConfig chain_config(McastConfig cfg = {}) {
     cfg.irregular_receiver_set_mode = TransferMode::ChainUnicast;
     return cfg;

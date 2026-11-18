@@ -54,8 +54,12 @@ private:
 
     void prepare_topology_() const;
     void prepare_arguments_() const;
+    // `grid_common_base` is where the kernel's common runtime args would take the NoC table; a channel the grid
+    // check accepted is grid-derived on kernels given one.
     dataflow_kernel_lib::mcast_wire::ArgumentMetadata argument_metadata_(
-        const tt::tt_metal::CoreRangeSet* placement = nullptr) const;
+        const tt::tt_metal::CoreRangeSet* placement = nullptr,
+        std::optional<uint32_t> grid_common_base = std::nullopt) const;
+    void prepare_grid_() const;
     std::vector<uint32_t> runtime_args_(
         const tt::tt_metal::CoreCoord& core, const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
 
@@ -138,6 +142,10 @@ private:
     mutable tt::tt_metal::CoreRangeSet participating_;
     mutable dataflow_kernel_lib::mcast_wire::McastMetadata layout_;
     mutable dataflow_kernel_lib::mcast_wire::ArgumentMetadata generic_metadata_;
+    // Set when every core can derive its arguments (GridMetadata); the table holds the grid's column NoC x values,
+    // then its row NoC y values.
+    mutable std::optional<dataflow_kernel_lib::mcast_wire::GridMetadata> grid_;
+    mutable std::vector<uint32_t> grid_table_;
 };
 
 }  // namespace ttnn::kernel_lib::host
