@@ -167,6 +167,9 @@ class TTConv2D:
         # longer has the OIHW shape.
         self.in_channels = self.weights.shape[1]
         self.out_channels = self.weights.shape[0]
+        # The DRAM matmul weights of a pointwise conv on a reduced grid (_pointwise_in_dram).
+        self.linear_weight = None
+        self.linear_bias = None
         self.act_block_h = act_block_h
         self.act_block_w = act_block_w
         self.groups = groups
@@ -223,7 +226,7 @@ class TTConv2D:
         with its whole weight in L1, neither of which a reduced grid holds. A strided one takes
         every stride-th pixel first. Its weights stay the host OIHW tensors conv2d would prepare,
         from which the matmul's are made once."""
-        if getattr(self, "linear_weight", None) is None:
+        if self.linear_weight is None:
             weight = ttnn.to_torch(self.weights).reshape(self.out_channels, -1).transpose(0, 1).contiguous()
             self.linear_weight = ttnn.from_torch(
                 weight, dtype=self.weights_dtype, layout=ttnn.TILE_LAYOUT, device=device
@@ -232,18 +235,22 @@ class TTConv2D:
             self.linear_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         n, h, w = input_shape[-4], input_shape[-3], input_shape[-2]
         channels = input_tensor.shape[-1]
+        activation = input_tensor
         if self.stride != (1, 1):
             sh, sw = self.stride
-            pixels = ttnn.to_layout(
-                ttnn.reshape(input_tensor, (n, h, w, channels)),
+            # The input is tiled (__call__), so each step below makes a new tensor.
+            row_major = ttnn.to_layout(
+                ttnn.reshape(activation, (n, h, w, channels)),
                 ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             pixels = ttnn.slice(
-                pixels, [0, 0, 0, 0], [n, h, w, channels], [1, sh, sw, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                row_major, [0, 0, 0, 0], [n, h, w, channels], [1, sh, sw, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+            ttnn.deallocate(row_major)
             h, w = pixels.shape[1], pixels.shape[2]
             input_tensor = ttnn.to_layout(pixels, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(pixels)
         rows = ttnn.reshape(input_tensor, (1, 1, n * h * w, channels))
         relu = self.activation is not None and self.activation.op_type == ttnn.UnaryOpType.RELU
         assert self.activation is None or relu, f"a DRAM pointwise conv fuses only RELU, got {self.activation}"
@@ -256,6 +263,10 @@ class TTConv2D:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=compute_config,
         )
+        if self.stride != (1, 1):
+            ttnn.deallocate(input_tensor)
+        if self.deallocate_activation:
+            ttnn.deallocate(activation)
         if self.is_reshape:
             output_tensor = ttnn.reshape(output_tensor, (n, h, w, self.out_channels))
         return output_tensor, (n, h, w, self.out_channels)
