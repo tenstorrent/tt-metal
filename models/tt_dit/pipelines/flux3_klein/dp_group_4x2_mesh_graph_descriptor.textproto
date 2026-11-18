@@ -1,0 +1,12 @@
+# One FLUX 3 Klein data-parallel group of a Blackhole Galaxy as its own mesh (dp_processes.py): 4 x 2 chips, the 4-chip axis a
+# ring (the Galaxy's wrap-around links), the 2-chip axis a line, two links between neighbours.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 2 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
