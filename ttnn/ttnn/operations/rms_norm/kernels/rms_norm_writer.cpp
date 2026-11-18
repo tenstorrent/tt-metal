@@ -75,8 +75,11 @@ void kernel_main() {
     // 0-15), half the gather fan-in bytes into the root. The root's slots keep stale faces 1 / 3, which the
     // elementwise combine carries along and nothing downstream reads (finalize consumes column 0 only).
     constexpr bool gather_col_faces = get_compile_time_arg_val(25) != 0;
+    // Dense rinv: one whole dense partial / rinv tile per dense_group tile-rows (all four faces carry data).
+    constexpr bool dense = get_compile_time_arg_val(26) != 0;
+    constexpr uint32_t dense_group = TILE_DIM;
     constexpr uint32_t num_w_chunks = core_w_tiles / w_chunk_tiles;  // RM pitch is a chunk multiple
-    constexpr auto y_args = TensorAccessorArgs<26>();
+    constexpr auto y_args = TensorAccessorArgs<27>();
     constexpr auto g_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr auto mcast = McastArgs<
         get_named_compile_time_arg_val("rinv_mcast_ct_offset"),
@@ -238,13 +241,14 @@ void kernel_main() {
 
         if constexpr (is_wsplit) {
             // ---- gather_partials_block ----
-            cb_wait_front(cb_partial, rows);
+            const uint32_t units = dense ? (rows + dense_group - 1) / dense_group : rows;
+            cb_wait_front(cb_partial, units);
             const uint32_t src = get_read_ptr(cb_partial);
-            for (uint32_t r = 0; r < rows; ++r) {
+            for (uint32_t r = 0; r < units; ++r) {
                 const uint32_t s = src + r * int_tile_bytes;
                 const uint64_t d =
                     get_noc_addr(root_x, root_y, gathered_base + (r * w_split + line_pos) * int_tile_bytes);
-                if constexpr (gather_col_faces) {
+                if constexpr (gather_col_faces && !dense) {
                     constexpr uint32_t face_bytes = int_tile_bytes / 4;
                     noc_async_write(s, d, face_bytes);                                    // face 0
                     noc_async_write(s + 2 * face_bytes, d + 2 * face_bytes, face_bytes);  // face 2
@@ -254,7 +258,7 @@ void kernel_main() {
             }
             noc_async_write_barrier();
             sem_partials.up(noc, root_x, root_y, 1);
-            cb_pop_front(cb_partial, rows);
+            cb_pop_front(cb_partial, units);
             if constexpr (gamma_deferred) {
                 if (b == 0) {
                     gamma_commit();
@@ -263,13 +267,13 @@ void kernel_main() {
 
             // ---- broadcast_rinv_block (root) ----
             if (is_root) {
-                cb_wait_front(cb_rinv_bcast, rows);
+                cb_wait_front(cb_rinv_bcast, units);
                 auto sender = mcast.optional_sender(noc);
                 ASSERT(sender.has_value());
                 if (sender) {
-                    sender->send(get_read_ptr(cb_rinv_bcast), rinv_base, rows * int_tile_bytes);
+                    sender->send(get_read_ptr(cb_rinv_bcast), rinv_base, units * int_tile_bytes);
                 }
-                cb_pop_front(cb_rinv_bcast, rows);
+                cb_pop_front(cb_rinv_bcast, units);
                 sem_rinv_local.set(b + 1);  // send() barriered the loopback copy: own cb_rinv holds rinv(b)
             }
         }

@@ -41,6 +41,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/compute/eltwise_unary/rsqrt.h"
@@ -64,6 +65,8 @@ constexpr uint32_t cb_out_rm = 11;
 constexpr uint32_t cb_wmask = 12;
 constexpr uint32_t cb_xg = 14;
 constexpr uint32_t cb_reduce_scaler = 15;
+constexpr uint32_t cb_dense_sum = 16;
+constexpr uint32_t cb_jsel = 17;
 
 using namespace compute_kernel_lib;
 
@@ -95,6 +98,15 @@ constexpr uint32_t norm_block = get_compile_time_arg_val(13);
 // AccumulateViaAdd's within-tile SFPU lane reduce. Never with mask_partial (the 0/1 lane mask is AccumulateViaAdd's).
 constexpr bool collapse_reduce_tile = get_compile_time_arg_val(14) != 0;
 static_assert(!(collapse_reduce_tile && mask_partial), "the masked partial-W collapse stays on AccumulateViaAdd");
+// Dense rinv (W_SPLIT): Σx² / rinv of up to dense_group tile-rows travel as ONE dense tile (column r = tile-row r)
+// — densify_block / finalize (dense) / expand_block below; cb_jsel holds the one-hot column selectors J_r.
+constexpr bool dense = get_compile_time_arg_val(15) != 0;
+constexpr uint32_t jsel_tiles = get_compile_time_arg_val(16);
+constexpr uint32_t dense_group = 32;
+static_assert(!dense || (is_wsplit && !mask_partial), "dense rinv: W_SPLIT, no masked partial-W tile");
+// rinv the normalize reads (per tile-row, broadcast across the row): sparse cb_rinv (multicast as is) | dense: the
+// expanded cb_rinv_col.
+constexpr uint32_t cb_rinv_norm = dense ? cb_rinv_col : cb_rinv;
 constexpr ReservePolicy norm_reserve = norm_block > 1 ? ReservePolicy::PerBlockSize : ReservePolicy::PerTile;
 constexpr PushPolicy norm_push = norm_block > 1 ? PushPolicy::PerBlockSize : PushPolicy::PerTile;
 
@@ -185,13 +197,15 @@ ALWI uint32_t sumsq_resident_block(uint32_t rows, uint32_t w_full, bool has_part
     return parts;
 }
 
+// Root: Σ over the line's w_split partials of each unit (a column-0 tile per tile-row, or a dense tile per group).
+template <uint32_t out_cb>
 ALWI void combine_block(uint32_t rows) {
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
         cb_gathered,
         cb_x /* scaler slot: unused */,
-        cb_rinv_col,
+        out_cb,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
         ReduceFp32Mode::Fast,
@@ -207,10 +221,12 @@ ALWI void combine_block(uint32_t rows) {
 // stride visits only the 8 vectors that hold column 0 (faces 0 and 2, even columns), and the three ops share one
 // load/store. The element still runs inside eltwise_chain (the chain owns DEST sync, CB credit and reconfig). The
 // result is column-0-valid; the Col broadcast that follows reads only column 0.
+// kDense (dense rinv: every lane is a tile-row's sum): the same body over all 8 vectors of each of the 4 faces.
 #ifdef TRISC_MATH
-template <bool kFastApprox>
+template <bool kFastApprox, bool kDense>
 sfpi_inline void rinv_column_body(uint32_t inv_w_bits, uint32_t eps_bits) {
-    for (int rg = 0; rg < 4; rg++) {
+    constexpr int kVectors = kDense ? 8 : 4;
+    for (int rg = 0; rg < kVectors; rg++) {
         // constants re-materialized per vector: the rsqrt body needs every LREG
         const sfpi::vFloat v = sfpi::dst_reg[0] * ckernel::sfpu::Converter::as_float(inv_w_bits) +
                                ckernel::sfpu::Converter::as_float(eps_bits);
@@ -219,13 +235,13 @@ sfpi_inline void rinv_column_body(uint32_t inv_w_bits, uint32_t eps_bits) {
             t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = t;
-        sfpi::dst_reg += 2;  // skip the odd-parity vector (columns 1, 3, .., 15: never column 0)
+        sfpi::dst_reg += kDense ? 1 : 2;  // column scope: skip the odd-parity vector (columns 1, 3, .., 15)
     }
 }
 #endif
 
-template <Dst Slot = Dst::D0>
-struct RinvColumn : UnaryOp<RinvColumn<Slot>, Slot> {
+template <bool kDense = false, Dst Slot = Dst::D0>
+struct RinvColumn : UnaryOp<RinvColumn<kDense, Slot>, Slot> {
     uint32_t inv_w_bits;
     uint32_t eps_bits;
     constexpr RinvColumn(uint32_t inv_w, uint32_t eps) noexcept : inv_w_bits(inv_w), eps_bits(eps) {}
@@ -233,13 +249,68 @@ struct RinvColumn : UnaryOp<RinvColumn<Slot>, Slot> {
     static ALWI void init() { rsqrt_tile_init(); }  // sqrt constants + SFPU address-mod setup
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         MATH((_llk_math_eltwise_unary_sfpu_params_(
-            rinv_column_body<rsqrt_approx>,
+            rinv_column_body<rsqrt_approx, kDense>,
             to_u32(Slot) + slot_offset,
-            ckernel::VectorMode::C,
+            kDense ? ckernel::VectorMode::RC : ckernel::VectorMode::C,
             inv_w_bits,
             eps_bits)));
     }
 };
+
+// Dense finalize (root): rinv = rsqrt(Σ*(1/W)+eps) over whole dense tiles, cb_dense_sum -> cb_rinv_bcast (the
+// multicast payload). No broadcast step: every core expands its own copy (expand_block).
+ALWI void finalize_dense_block(uint32_t units, uint32_t inv_w_bits, uint32_t eps_bits) {
+    eltwise_chain(
+        IterationShape::tiles(units),
+        CopyTile<input(cb_dense_sum)>{},
+        RinvColumn<true>{inv_w_bits, eps_bits},
+        PackTile<output(cb_rinv_bcast)>{});
+}
+
+// densify_block: per group of <= dense_group tile-rows, D = Σ_r S_r @ J_r (S_r = the tile-row's raw Σx² tile in
+// cb_sumsq_raw, J_r = ones in column r): column r of D = the row sums of S_r — the collapse of the whole group in
+// one K-accumulated matmul, landing dense in one cb_partial tile. Every other column of a J_r is 0, so a group's
+// rows never mix (columns past the group's rows stay 0). Data rides in0 (srcB), the exact 0/1 selector in1.
+ALWI void densify_block(uint32_t rows) {
+    CircularBuffer s_buf(cb_sumsq_raw);
+    CircularBuffer j_buf(cb_jsel);
+    CircularBuffer p_buf(cb_partial);
+    for (uint32_t r0 = 0; r0 < rows; r0 += dense_group) {
+        const uint32_t n = (rows - r0 < dense_group) ? (rows - r0) : dense_group;
+        matmul_block<
+            false,
+            false,
+            LastBlockTarget::Out,
+            OutputCBLayout::SubblockMajor,
+            matmul_config::InitMode::Short,
+            InputPolicy::WaitAndPopPerKBlock,
+            InputPolicy::NoWaitNoPop>(s_buf, j_buf, p_buf, p_buf, MatmulBlockShape::of(1, 1, 1, 1, n, 1));
+    }
+}
+
+// expand_block: per group, rinv_r = R @ J_rᵀ (transposed selector = ones in ROW r): every column of the output is
+// column r of the dense rinv R, i.e. tile-row r's rinv broadcast across the row — what normalize consumes.
+// cb_rinv (dense, popped per group) -> cb_rinv_col (one tile per tile-row).
+ALWI void expand_block(uint32_t rows) {
+    CircularBuffer r_buf(cb_rinv);
+    CircularBuffer j_buf(cb_jsel);
+    CircularBuffer o_buf(cb_rinv_col);
+    for (uint32_t r0 = 0; r0 < rows; r0 += dense_group) {
+        const uint32_t n = (rows - r0 < dense_group) ? (rows - r0) : dense_group;
+        uint32_t sw = n < DEST_AUTO_LIMIT ? n : DEST_AUTO_LIMIT;  // widest output subblock dividing n
+        while (n % sw != 0) {
+            --sw;
+        }
+        matmul_block<
+            true /* transpose in1: J_r -> J_rᵀ */,
+            false,
+            LastBlockTarget::Out,
+            OutputCBLayout::SubblockMajor,
+            matmul_config::InitMode::Short,
+            InputPolicy::WaitAndPopPerKBlock,
+            InputPolicy::NoWaitNoPop>(r_buf, j_buf, o_buf, o_buf, MatmulBlockShape::of(1, n / sw, 1, sw, 1, 1));
+    }
+}
 
 template <uint32_t out_cb>
 ALWI void finalize_rinv_block(uint32_t rows, uint32_t inv_w_bits, uint32_t eps_bits) {
@@ -280,7 +351,7 @@ ALWI void normalize_block(uint32_t rows) {
             BinaryFpu<
                 BinaryFpuOp::Mul,
                 input(cb_xg, xg_wait, xg_pop, norm_block > 1 ? InputTileMapping::Block : InputTileMapping::Scalar),
-                input(cb_rinv, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{},
+                input(cb_rinv_norm, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{},
             PackTile<output(cb_y, norm_reserve, norm_push)>{});
     } else if constexpr (has_gamma) {
         eltwise_chain(
@@ -291,7 +362,7 @@ ALWI void normalize_block(uint32_t rows) {
                 input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row)>{},
             DestReuseBinary<
                 BinaryFpuOp::Mul,
-                input(cb_rinv, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                input(cb_rinv_norm, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
                 DestReuseType::DEST_TO_SRCA>{},
             PackTile<output(cb_norm_out, norm_reserve, norm_push)>{});
     } else {
@@ -300,7 +371,7 @@ ALWI void normalize_block(uint32_t rows) {
             BinaryFpu<
                 BinaryFpuOp::Mul,
                 x_in,
-                input(cb_rinv, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{},
+                input(cb_rinv_norm, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{},
             PackTile<output(cb_norm_out, norm_reserve, norm_push)>{});
     }
 }
@@ -319,7 +390,7 @@ ALWI void gamma_chunk_ready() {
 //         its final position in the output shard (cb_y reserved for the block up front, pushed after).
 //   RM:   in place on cb_x tile-row by tile-row (per-tile credit, as normalize_block); rinv row r by Offset.
 ALWI void normalize_block_gamma_streamed(uint32_t rows) {
-    cb_wait_front(cb_rinv, rows);
+    cb_wait_front(cb_rinv_norm, rows);
     if constexpr (is_rm) {
         for (uint32_t r = 0; r < rows; ++r) {
             for (uint32_t j = 0; j < num_g_chunks; ++j) {
@@ -334,7 +405,7 @@ ALWI void normalize_block_gamma_streamed(uint32_t rows) {
                     DestReuseBinary<
                         BinaryFpuOp::Mul,
                         input(
-                            cb_rinv,
+                            cb_rinv_norm,
                             WaitPolicy::None,
                             PopPolicy::None,
                             InputTileMapping::Col,
@@ -366,7 +437,7 @@ ALWI void normalize_block_gamma_streamed(uint32_t rows) {
                     StridedTileRange{c0, core_w_tiles}},
                 DestReuseBinary<
                     BinaryFpuOp::Mul,
-                    input(cb_rinv, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
+                    input(cb_rinv_norm, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
                     DestReuseType::DEST_TO_SRCA>{},
                 PackTile<output(
                     cb_y, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Enabled, TileAddressing::Strided)>{
@@ -376,7 +447,7 @@ ALWI void normalize_block_gamma_streamed(uint32_t rows) {
         cb_push_back(cb_y, rows * core_w_tiles);
         cb_pop_front(cb_x, rows * core_w_tiles);
     }
-    cb_pop_front(cb_rinv, rows);
+    cb_pop_front(cb_rinv_norm, rows);
 }
 
 void kernel_main() {
@@ -438,7 +509,15 @@ void kernel_main() {
         };
 
         if constexpr (is_wsplit) {
-            collapse_block<cb_partial>(rows, parts, masked);
+            const uint32_t units = dense ? (rows + dense_group - 1) / dense_group : rows;
+            if constexpr (dense) {
+                if (b == 0) {
+                    cb_wait_front(cb_jsel, jsel_tiles);  // resident selectors (reader-generated after block 0's x)
+                }
+                densify_block(rows);
+            } else {
+                collapse_block<cb_partial>(rows, parts, masked);
+            }
             if constexpr (xg_prescale) {
                 if (!is_root) {  // non-root: fills the whole gather -> combine -> multicast wait
                     gamma_ready();
@@ -446,8 +525,13 @@ void kernel_main() {
                 }
             }
             if (is_root) {
-                combine_block(rows);
-                finalize_rinv_block<cb_rinv_bcast>(rows, inv_w_bits, eps_bits);
+                if constexpr (dense) {
+                    combine_block<cb_dense_sum>(units);
+                    finalize_dense_block(units, inv_w_bits, eps_bits);
+                } else {
+                    combine_block<cb_rinv_col>(rows);
+                    finalize_rinv_block<cb_rinv_bcast>(rows, inv_w_bits, eps_bits);
+                }
                 if constexpr (xg_prescale) {  // root: overlaps its own multicast (combine stays first)
                     gamma_ready();
                     prescale_block(rows);
@@ -460,6 +544,10 @@ void kernel_main() {
 
         if constexpr (!xg_prescale) {
             gamma_ready();  // (the prescale already made γ resident: RM γ must be tilized exactly once)
+        }
+
+        if constexpr (dense) {
+            expand_block(rows);  // received dense rinv -> per-row broadcast tiles
         }
 
         if constexpr (gamma_streams) {
@@ -476,6 +564,11 @@ void kernel_main() {
     if constexpr (has_gamma && !gamma_streams) {
         if (num_blocks > 0) {
             cb_pop_front(cb_gamma, core_w_tiles);
+        }
+    }
+    if constexpr (dense) {
+        if (num_blocks > 0) {
+            cb_pop_front(cb_jsel, jsel_tiles);
         }
     }
     if constexpr (mask_partial) {

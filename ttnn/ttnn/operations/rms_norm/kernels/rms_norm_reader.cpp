@@ -40,6 +40,7 @@ constexpr uint32_t cb_gathered = 6;
 constexpr uint32_t cb_rinv = 9;
 constexpr uint32_t cb_wmask = 12;
 constexpr uint32_t cb_reduce_scaler = 15;
+constexpr uint32_t cb_jsel = 17;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
@@ -85,7 +86,13 @@ void kernel_main() {
     constexpr uint32_t num_w_chunks = core_w_tiles / w_chunk_tiles;
     static_assert(!is_rm || num_w_chunks * w_chunk_tiles == core_w_tiles, "RM pitch is a chunk multiple");
     constexpr bool collapse_reduce_tile = get_compile_time_arg_val(18) != 0;
-    constexpr auto x_args = TensorAccessorArgs<19>();
+    // Dense rinv: Σx² / rinv travel as one dense tile per dense_group tile-rows; this kernel generates the
+    // one-hot column selectors (cb_jsel) the densify / expand matmuls use.
+    constexpr bool dense = get_compile_time_arg_val(19) != 0;
+    constexpr uint32_t jsel_tiles = get_compile_time_arg_val(20);
+    constexpr uint32_t int_tile_bytes = get_compile_time_arg_val(21);
+    constexpr uint32_t dense_group = TILE_DIM;
+    constexpr auto x_args = TensorAccessorArgs<22>();
     // Block-float input (bf8b: tile_bytes != 32*32*es) has no per-element addressing: the RM stick path and the
     // pad-lane zeroing must never be reached for it (host guard in create_program_descriptor).
     constexpr bool is_block_float = tile_bytes != TILE_DIM * TILE_DIM * es;
@@ -140,6 +147,46 @@ void kernel_main() {
             prepare_reduce_mask<cb_wmask, ReduceDim::REDUCE_ROW>(w_valid_last);
         }
     }
+
+    // Dense rinv selectors J_r (r < jsel_tiles): 1.0 in column r, 0 elsewhere. Column r lies in faces 0 and 2
+    // (r < 16) or 1 and 3 (r >= 16), at face column r % 16, so a selector is two copies of the one-hot face F_c
+    // (16 rows, each with a 1.0 at column c). Zero everything over the NoC, write F_c into face 0 of J_c (c < 16:
+    // 16 stores each), then assemble every other face with local 512 B NoC copies of those faces. Issued after the
+    // first x block is published so it overlaps compute's sumsq (it is first read by the densify).
+    auto gen_jsel = [&]() {
+        constexpr uint32_t es_int = int_tile_bytes / (TILE_DIM * TILE_DIM);
+        static_assert(!dense || es_int == 2 || es_int == 4, "selector tiles are Float16_b or Float32");
+        constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * es_int;
+        CircularBuffer jsel_buf(cb_jsel);
+        cb_reserve_back(cb_jsel, jsel_tiles);
+        noc.async_write_zeros(jsel_buf, jsel_tiles * int_tile_bytes);
+        noc.write_zeros_l1_barrier();
+        const uint32_t base = get_write_ptr(cb_jsel);
+        const uint32_t n_lo = jsel_tiles < FACE_DIM ? jsel_tiles : FACE_DIM;
+        for (uint32_t c = 0; c < n_lo; ++c) {
+            const uint32_t face0 = base + c * int_tile_bytes;
+            for (uint32_t i = 0; i < FACE_DIM; ++i) {
+                const uint32_t a = face0 + (i * FACE_DIM + c) * es_int;
+                if constexpr (es_int == 2) {
+                    *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(a) = 0x3F80;  // bf16 1.0
+                } else {
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a) = 0x3F800000;  // fp32 1.0
+                }
+            }
+        }
+        for (uint32_t r = 0; r < jsel_tiles; ++r) {
+            const uint32_t src = base + (r % FACE_DIM) * int_tile_bytes;  // F_{r % 16} (face 0 of J_{r % 16})
+            const uint32_t dst = base + r * int_tile_bytes;
+            if (r < FACE_DIM) {
+                noc_async_read(get_noc_addr(src), dst + 2 * face_bytes, face_bytes);  // face 2
+            } else {
+                noc_async_read(get_noc_addr(src), dst + face_bytes, face_bytes);  // face 1
+                noc_async_read(get_noc_addr(src), dst + 3 * face_bytes, face_bytes);  // face 3
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_jsel, jsel_tiles);
+    };
 
     auto load_x_block = [&](uint32_t block_idx) {
         const uint32_t row0 = block_idx * block_rows;
@@ -231,30 +278,42 @@ void kernel_main() {
     for (uint32_t b = 0; b < lookahead && b < num_blocks; ++b) {
         load_x_block(b);
     }
+    if constexpr (dense && lookahead > 0) {
+        if (num_blocks > 0) {
+            gen_jsel();  // block 0 already published
+        }
+    }
     for (uint32_t b = 0; b < num_blocks; ++b) {
         if (b + lookahead < num_blocks) {
             load_x_block(b + lookahead);
         }
+        if constexpr (dense && lookahead == 0) {
+            if (b == 0) {
+                gen_jsel();  // right after block 0's x
+            }
+        }
         if constexpr (is_wsplit) {
             const uint32_t row0 = b * block_rows;
             const uint32_t rows = (line_rows - row0 < block_rows) ? (line_rows - row0) : block_rows;
+            // partial / rinv tiles of this block: one per tile-row (sparse) or per dense group (dense)
+            const uint32_t units = dense ? (rows + dense_group - 1) / dense_group : rows;
             if (is_root) {
                 // gather rendezvous: every line core (root included) wrote its partial(b) into cb_gathered.
-                cb_reserve_back(cb_gathered, rows * w_split);
+                cb_reserve_back(cb_gathered, units * w_split);
                 sem_partials.wait_min((b + 1) * w_split);
-                cb_push_back(cb_gathered, rows * w_split);
+                cb_push_back(cb_gathered, units * w_split);
                 // rinv(b): delivered into this core's cb_rinv by its own writer's loopback multicast.
-                cb_reserve_back(cb_rinv, rows);
+                cb_reserve_back(cb_rinv, units);
                 sem_rinv_local.wait_min(b + 1);
-                cb_push_back(cb_rinv, rows);
+                cb_push_back(cb_rinv, units);
             } else {
-                cb_reserve_back(cb_rinv, rows);
+                cb_reserve_back(cb_rinv, units);
                 auto receiver = mcast.optional_receiver(noc);
                 ASSERT(receiver.has_value());
                 if (receiver) {
                     receiver->receive(b);
                 }
-                cb_push_back(cb_rinv, rows);
+                cb_push_back(cb_rinv, units);
             }
         }
     }

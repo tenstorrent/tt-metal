@@ -62,6 +62,16 @@ NORM_DEST_BLOCK = 8
 # CB_REDUCE_SCALER) instead of AccumulateViaAdd's SFPU lane reduce (~6x fewer cycles per tile). The masked
 # partial-W collapse (resident non-aligned W) keeps AccumulateViaAdd (its 0/1 lane mask is that datapath's).
 COLLAPSE_REDUCE_TILE = True
+# Dense rinv (W_SPLIT): the per-row Σx² of up to DENSE_GROUP tile-rows are packed into ONE dense tile (column r =
+# tile-row r of the group) by a matmul against one-hot column selectors (cb_jsel: J_r = ones in column r), so the
+# partial gather, the root's combine + rsqrt finalize and the rinv multicast all run on ⌈rows/32⌉ tiles instead of
+# `rows` (the sparse path keeps every row's 32 sums in column 0 of its own tile). Every core expands its received
+# dense rinv back to per-row broadcast tiles with the transposed selectors (rinv_r = R @ J_rᵀ). Applied to W_SPLIT
+# lines whose block holds >= DENSE_MIN_ROWS tile-rows (fewer: the sparse column-0 finalize is already cheaper) and
+# no masked partial-W tile.
+DENSE_RINV = True
+DENSE_MIN_ROWS = 4
+DENSE_GROUP = TILE  # tile-rows per dense tile: one column each
 
 # ---- CB indices (semantic names) ----
 CB_X_RM = 0
@@ -80,6 +90,8 @@ CB_WMASK = 12  # sharded TILE + non-aligned W: 0/1 lane mask for the partial-W t
 CB_GAMMA_STAGE = 13  # RM γ whose slice offset is not DRAM-aligned (RM shards): aligned DRAM window staging
 CB_XG = 14  # W_SPLIT TILE γ: x·γ of the block, computed while waiting for rinv (Blocking.xg_prescale)
 CB_REDUCE_SCALER = 15  # ones scaler of the ReduceTile collapse (COLLAPSE_REDUCE_TILE)
+CB_DENSE_SUM = 16  # dense rinv, root: combined dense Σx² (one tile per DENSE_GROUP tile-rows)
+CB_JSEL = 17  # dense rinv: one-hot column selectors J_0..J_{n-1} (resident, reader-generated)
 
 # ---- semaphore ids ----
 SEM_PARTIALS = 0  # root: count of partials landed in cb_gathered (cumulative)
@@ -134,6 +146,8 @@ class Blocking:
     # wait, so only y = xg·rinv is left after the rendezvous. Enabled only where cb_xg fits next to the chosen
     # block (it never shrinks block_rows).
     xg_prescale: bool = False
+    # Dense rinv (DENSE_RINV): Σx² / rinv travel as ⌈rows/DENSE_GROUP⌉ dense tiles per block (W_SPLIT only).
+    dense: bool = False
 
     @property
     def gamma_streams(self) -> bool:
@@ -181,6 +195,42 @@ def _per_row_bytes(g: OpGeometry, cw: int, k: int) -> int:
     return b
 
 
+def _dense_groups(rows: int) -> int:
+    return _div_up(rows, DENSE_GROUP)
+
+
+def _jsel_tiles(br: int) -> int:
+    return min(br, DENSE_GROUP)
+
+
+def _footprint_dense(g: OpGeometry, br: int, cw: int, wc: int, k: int) -> int:
+    """W_SPLIT dense-rinv CB footprint of a br-row block: per row cb_x (unless resident), cb_sumsq_raw, cb_rinv_col
+    (expanded rinv); per dense group cb_partial, cb_gathered (k), cb_rinv_bcast, cb_rinv, cb_dense_sum; the
+    resident selectors cb_jsel. No reduce scaler (the collapse is replaced by the densify matmul)."""
+    b = 0
+    if not g.x_resident:
+        b += br * ((X_BLOCK_DEPTH * cw * g.t_in) if g.is_tile else (cw * g.t_in))  # cb_x
+    b += br * 2 * g.t_int
+    b += _dense_groups(br) * (4 + k) * g.t_int
+    b += _jsel_tiles(br) * g.t_int
+    return b + _fixed_bytes(g, cw, wc, dense=True)
+
+
+def _dense_block_rows(g: OpGeometry, cw: int, wc: int, k: int, rows_max: int, budget: int) -> int:
+    """Largest block (<= rows_max tile-rows) whose dense footprint fits budget; 0 when dense is off or the block
+    would be under DENSE_MIN_ROWS (then the sparse schedule is used)."""
+    if not (DENSE_RINV and k > 1 and g.sumsq_parts == 1):
+        return 0
+    lo, hi = 0, rows_max
+    while lo < hi:  # footprint is monotone in br
+        mid = (lo + hi + 1) // 2
+        if _footprint_dense(g, mid, cw, wc, k) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo if lo >= DENSE_MIN_ROWS else 0
+
+
 def _gamma_depth(cw: int, wc: int) -> int:
     return 1 if wc >= cw else GAMMA_CHUNK_DEPTH
 
@@ -189,7 +239,7 @@ def _gamma_stage_bytes(g: OpGeometry, wc: int) -> int:
     return wc * TILE * g.es_g + 2 * g.dram_align if g.gamma_staged else 0
 
 
-def _fixed_bytes(g: OpGeometry, cw: int, wc: int = None) -> int:
+def _fixed_bytes(g: OpGeometry, cw: int, wc: int = None, dense: bool = False) -> int:
     wc = cw if wc is None else wc
     b = 0
     if g.has_gamma:
@@ -204,7 +254,7 @@ def _fixed_bytes(g: OpGeometry, cw: int, wc: int = None) -> int:
         b += X_RM_DEPTH * wc * g.t_in + OUT_RM_DEPTH * wc * g.t_in  # cb_x_rm, cb_out_rm
     if g.sumsq_parts > 1:
         b += g.t_int  # cb_wmask
-    if _collapse_reduce_tile(g):
+    if _collapse_reduce_tile(g) and not dense:
         b += ttnn.tile_size(ttnn.bfloat16)  # cb_reduce_scaler
     b += _gamma_stage_bytes(g, wc)  # cb_gamma_stage
     return b
@@ -218,11 +268,12 @@ def _round_up(a, b):
     return _div_up(a, b) * b
 
 
-def _xg_prescale(g: OpGeometry, br: int, cw: int, wc: int, k: int, budget: int) -> bool:
+def _xg_prescale(g: OpGeometry, br: int, cw: int, wc: int, k: int, budget: int, dense: bool = False) -> bool:
     """x·γ prescale (cb_xg, br·cw intermediate tiles) for a W_SPLIT TILE line with resident γ, if it fits."""
     if not (XG_PRESCALE and k > 1 and g.is_tile and g.has_gamma and wc >= cw):
         return False
-    return br * _per_row_bytes(g, cw, k) + _fixed_bytes(g, cw, wc) + br * cw * g.t_int <= budget
+    base = _footprint_dense(g, br, cw, wc, k) if dense else br * _per_row_bytes(g, cw, k) + _fixed_bytes(g, cw, wc)
+    return base + br * cw * g.t_int <= budget
 
 
 def select_blocking(
@@ -255,8 +306,12 @@ def select_blocking(
         line_rows_max = max(_div_up(n, rows_unit) for (_, n) in shard.line_units)
         block_rows = max(1, min(line_rows_max, br_fit))
         regime = "LOCAL" if k == 1 else "W_SPLIT"
-        xg = _xg_prescale(g, block_rows, cw, wc, k, budget)
-        return Blocking(regime, k, cw, len(shard.lines), block_rows, wc, xg)
+        br_dense = _dense_block_rows(g, cw, wc, k, line_rows_max, budget)
+        dense = br_dense > 0
+        if dense:
+            block_rows = br_dense
+        xg = _xg_prescale(g, block_rows, cw, wc, k, budget, dense)
+        return Blocking(regime, k, cw, len(shard.lines), block_rows, wc, xg, dense)
 
     k_fit = None
     for k in range(1, C + 1):
@@ -274,8 +329,12 @@ def select_blocking(
     br_fit = (L1_CB_BUDGET_BYTES - _fixed_bytes(g, cw)) // _per_row_bytes(g, cw, w_split)
     block_rows = max(1, min(line_rows_tiles_max, br_fit))
     regime = "LOCAL" if w_split == 1 else "W_SPLIT"
-    xg = _xg_prescale(g, block_rows, cw, cw, w_split, L1_CB_BUDGET_BYTES)
-    return Blocking(regime, w_split, cw, num_lines, block_rows, cw, xg)
+    br_dense = _dense_block_rows(g, cw, cw, w_split, line_rows_tiles_max, L1_CB_BUDGET_BYTES)
+    dense = br_dense > 0
+    if dense:
+        block_rows = br_dense
+    xg = _xg_prescale(g, block_rows, cw, cw, w_split, L1_CB_BUDGET_BYTES, dense)
+    return Blocking(regime, w_split, cw, num_lines, block_rows, cw, xg, dense)
 
 
 def _core_range_set(cores):
@@ -540,18 +599,25 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     cbs.append(_cb(CB_SUMSQ_RAW, geo.sumsq_parts * br, t_int, int_fmt, crs))
     if mask_partial:
         cbs.append(_cb(CB_WMASK, 1, t_int, int_fmt, crs))
-    collapse_rt = _collapse_reduce_tile(geo)
+    dense = blk.dense
+    collapse_rt = _collapse_reduce_tile(geo) and not dense
     if collapse_rt:
         cbs.append(_cb(CB_REDUCE_SCALER, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, crs))
     norm_block = _norm_block(is_tile, y_resident, br, cw)
+    # Σx² partial / rinv units per block: a tile per tile-row (sparse) or per DENSE_GROUP tile-rows (dense).
+    n_units = _dense_groups(br) if dense else br
+    jsel_tiles = _jsel_tiles(br) if dense else 0
     if is_ws:
-        cbs.append(_cb(CB_PARTIAL, br, t_int, int_fmt, crs))
-        cbs.append(_cb(CB_GATHERED, k * br, t_int, int_fmt, crs))
-        cbs.append(_cb(CB_RINV_BCAST, br, t_int, int_fmt, crs))
+        cbs.append(_cb(CB_PARTIAL, n_units, t_int, int_fmt, crs))
+        cbs.append(_cb(CB_GATHERED, k * n_units, t_int, int_fmt, crs))
+        cbs.append(_cb(CB_RINV_BCAST, n_units, t_int, int_fmt, crs))
+    if dense:
+        cbs.append(_cb(CB_DENSE_SUM, n_units, t_int, int_fmt, crs))
+        cbs.append(_cb(CB_JSEL, jsel_tiles, t_int, int_fmt, crs))
     if blk.xg_prescale:
         cbs.append(_cb(CB_XG, br * cw, t_int, int_fmt, crs))
-    cbs.append(_cb(CB_RINV_COL, br, t_int, int_fmt, crs))
-    cbs.append(_cb(CB_RINV, br, t_int, int_fmt, crs))
+    cbs.append(_cb(CB_RINV_COL, br, t_int, int_fmt, crs))  # sparse: collapse / combine out; dense: expanded rinv
+    cbs.append(_cb(CB_RINV, n_units, t_int, int_fmt, crs))
     if is_tile:
         if y_resident:
             cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_Y, output_tensor, core_ranges=crs))
@@ -646,6 +712,9 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         int(mask_partial),  # 16 owner of the partial-W tile fills cb_wmask
         wc,  # 17 w_chunk_tiles (RM staging chunk)
         int(collapse_rt),  # 18 fill the ReduceTile collapse's ones scaler (cb_reduce_scaler)
+        int(dense),  # 19 dense rinv: generate cb_jsel; gathered / rinv counts per dense group
+        jsel_tiles,  # 20 selector tiles in cb_jsel
+        t_int,  # 21 intermediate tile bytes (selector element width = t_int / 1024)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -696,6 +765,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         wc,  # 23 w_chunk_tiles (RM staging / γ chunk)
         int(gamma_streams),  # 24 γ streamed per block in w_chunk_tiles chunks
         int(GATHER_COL_FACES),  # 25 L4: partial gather sends faces 0 + 2 only
+        int(dense),  # 26 dense rinv: gather / multicast whole dense tiles, one per DENSE_GROUP tile-rows
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -727,6 +797,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         int(blk.xg_prescale),  # 12 x·γ into cb_xg before the rinv wait
         norm_block,  # 13 DEST window of the normalize / prescale chains (NORM_DEST_BLOCK, ring-safe)
         int(collapse_rt),  # 14 collapse on the ReduceTile datapath (COLLAPSE_REDUCE_TILE)
+        int(dense),  # 15 dense rinv (densify / dense finalize / expand)
+        jsel_tiles,  # 16 selector tiles in cb_jsel
     ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
