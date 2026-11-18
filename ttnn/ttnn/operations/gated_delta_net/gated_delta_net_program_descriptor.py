@@ -392,8 +392,8 @@ RMS_ONE_COPY = True
 # Row sums (L2 norm of q and k, RMS norm) whose rounding does not depend on the row: the SFPU row reduce pairs a row's
 # column partials by its 4-row group inside the face pair, so sequences that share a tile row got last bits that
 # depend on their row offset (identical users at 8 x 4, 4 x 8, 2 x 12 differed; a model's identical prompts diverged).
-# "auto": calls with more than one sequence and more than one token per sequence (decode and one-sequence prefill keep
-# the merged reduce, bit for bit).
+# "auto": calls with more than one sequence, decode included (8 users of a decode call at 8k / 16k prompts diverged
+# the same way); one-sequence calls keep the merged reduce, bit for bit.
 ROW_SUM_EVEN = "auto"
 # Per-block device profiler zones (GDN_ZONE in the kernels: compute blocks, reader / writer units and rows), on with
 # env GDN_PROFILE_ZONES=1, for --profile runs (never compiled under NoC tracing). Each zone execution spends 2 of a
@@ -1363,7 +1363,7 @@ def create_program_descriptor(
     if split:
         seqs, tokens, batch = segs, tokens // segs, 2 * segs - 1
     hold = tokens // TILE if split else 0  # tile rows of Oh a state core of a segment 1.. holds
-    row_sum_even = (seqs > 1 and not split and tokens > 1) if ROW_SUM_EVEN == "auto" else bool(ROW_SUM_EVEN)
+    row_sum_even = (seqs > 1 and not split) if ROW_SUM_EVEN == "auto" else bool(ROW_SUM_EVEN)
     # STATE_NORM_TAIL: tile rows per sequence the state cores normalize (every sequence keeps a row for the prep cores).
     tail = STATE_NORM_TAIL if norm_tail is None else norm_tail
     seq_rows_min = min(_seq_tile_rows(seq, tokens) for seq in range(batch))
