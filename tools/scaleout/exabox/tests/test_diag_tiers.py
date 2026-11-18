@@ -67,6 +67,9 @@ class TestShellWrappersAgree(unittest.TestCase):
         text = (SUITE_DIR / "run_diag_docker.sh").read_text()
         self.assertIn("[[ ${TIER} != flash ]]", text)
 
+    def test_only_flash_prints_the_eth_summary(self):
+        self.assertEqual({name for name, tier in TIERS.items() if tier.eth_summary}, {"flash"})
+
     def test_run_health_check_tier_choices(self):
         # parse_args() builds and parses in one go, so read the call instead.
         tree = ast.parse((SUITE_DIR / "test_infrastructure" / "run_health_check.py").read_text())

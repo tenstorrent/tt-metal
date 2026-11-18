@@ -106,6 +106,15 @@ TOPOLOGY_CHECKS = (
     "eth_status_cabling",
 )
 
+# Rows of the summary's WORST LINKS table, kept in eth_status_fec_uncorrected's data.
+WORST_LINKS = 5
+
+
+def _findings(status: str, items: list[str]) -> list[dict]:
+    """A check's offending items, one line each: ``data["findings"]`` on every
+    check here, which is what the flash summary lists under its verdict."""
+    return [{"status": status, "text": t} for t in items]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PCIe, from sysfs: nothing here opens a chip
@@ -169,6 +178,7 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
             + ("not answering" if f.vendor == 0xFFFF else f"memory decoding off (Command=0x{f.command:04x})")
             for f in dropped
         ]
+        data["findings"] = _findings(FAIL, [f"{item} on PCIe: do NOT reset, report it" for item in listing])
         return Check(
             name="eth_status_pcie_gate",
             status=FAIL,
@@ -392,7 +402,7 @@ def _link_state_checks(
             else f"{len(live)}/{len(live)} links up on {chips} chips"
             + (", none lost between the reads" if before is not None else "")
         ),
-        data={"links": len(live), "chips": chips, "down": down},
+        data={"links": len(live), "chips": chips, "down": down, "findings": _findings(FAIL, down)},
         ip="eth",
     )
 
@@ -408,7 +418,10 @@ def _link_state_checks(
             if beating
             else "check_eth_status reported no heartbeat"
         ),
-        data={"stopped": stopped},
+        data={
+            "stopped": stopped,
+            "findings": _findings(FAIL, [f"{w}: heartbeat not moving, the eth core has stopped" for w in stopped]),
+        },
         ip="eth",
     )
 
@@ -421,7 +434,7 @@ def _link_state_checks(
             if odd
             else f"no port {', '.join(sorted(ODD_PORT_STATES))}"
         ),
-        data={"odd": odd},
+        data={"odd": odd, "findings": _findings(WARN, odd)},
         ip="eth",
     )
     return [links_down, heartbeat, port_state]
@@ -459,14 +472,32 @@ def _counter_checks(
     span = f"over {interval_s:.0f}s" if interval_s else ""
     reset_note = f"; {reset_between} link(s) reset between the reads, not rated" if reset_between else ""
 
+    def rate(k: tuple[int, str], i: int) -> float | None:
+        r = rates.get(k)
+        return r[i] if r else None
+
     checks = []
     uncorr = {k: r[0] for k, r in rates.items() if r[0] is not None}
     totals = [l.uncorr for l in now.values() if l.uncorr is not None]
+    worst = sorted(now.items(), key=lambda kl: (rate(kl[0], 0) or 0, kl[1].uncorr or 0), reverse=True)
     data = {
         "max_per_s": max(uncorr.values(), default=None),
         "max_total": max(totals, default=None),
         "interval_s": interval_s,
         "reset_between": reset_between,
+        "worst_links": [
+            {
+                "link": where(l),
+                "uncorr_per_s": rate(k, 0),
+                "crc_per_s": rate(k, 1),
+                "uncorr_total": l.uncorr,
+                "retrains": l.retrain,
+                "err_stat": l.err_stat,
+            }
+            for k, l in worst[:WORST_LINKS]
+        ]
+        if totals
+        else [],
     }
     if not totals:
         status, details = SKIP, "check_eth_status reported no FEC counters"
@@ -475,6 +506,21 @@ def _counter_checks(
         bad = [f"{where(now[k])}: {v:,.0f}/s" for k, v in ranked if v >= UNCORR_FAIL_PER_S]
         high = [f"{where(now[k])}: {v:,.1f}/s" for k, v in ranked if UNCORR_WARN_PER_S <= v < UNCORR_FAIL_PER_S]
         data.update(fail=bad, warn=high)
+        data["findings"] = _findings(
+            FAIL,
+            [
+                f"{where(now[k])}: uncorrected FEC errors rising {v:,.0f}/s, the link corrupts data"
+                for k, v in ranked
+                if v >= UNCORR_FAIL_PER_S
+            ],
+        ) + _findings(
+            WARN,
+            [
+                f"{where(now[k])}: uncorrected FEC errors rising {v:,.1f}/s"
+                for k, v in ranked
+                if UNCORR_WARN_PER_S <= v < UNCORR_FAIL_PER_S
+            ],
+        )
         if bad:
             status = FAIL
             details = f"uncorrected FEC errors rising on {len(bad)} link(s), these links corrupt data: {_listing(bad)}"
@@ -489,8 +535,17 @@ def _counter_checks(
             details = f"max {worst:,.1f}/s {span} on {len(uncorr)} links (worst {where(now[worst_k])})"
         details += reset_note
     else:
-        many = [f"{where(l)}: {l.uncorr:,}" for l in now.values() if (l.uncorr or 0) >= UNCORR_WARN_TOTAL]
+        many_links = [l for l in now.values() if (l.uncorr or 0) >= UNCORR_WARN_TOTAL]
+        many = [f"{where(l)}: {l.uncorr:,}" for l in many_links]
         data.update(warn=many)
+        data["findings"] = _findings(
+            WARN,
+            [
+                f"{where(l)}: {l.uncorr:,} uncorrected FEC errors since the last reset, read once so not known "
+                f"whether still rising"
+                for l in many_links
+            ],
+        )
         status = WARN if many else PASS
         details = (
             f"{len(many)} link(s) with >= {UNCORR_WARN_TOTAL:,} uncorrected FEC errors since the last reset; "
@@ -501,13 +556,14 @@ def _counter_checks(
     checks.append(Check(name="eth_status_fec_uncorrected", status=status, details=details, data=data, ip="eth"))
 
     crc = {k: r[1] for k, r in rates.items() if r[1] is not None}
+    rising = [(k, v) for k, v in sorted(crc.items(), key=lambda kv: -kv[1]) if v >= CRC_WARN_PER_S]
+    high = [f"{where(now[k])}: {v:,.1f}/s" for k, v in rising]
     if not any(l.crc is not None for l in now.values()):
-        status, details, high = SKIP, "check_eth_status reported no CRC counters", []
+        status, details = SKIP, "check_eth_status reported no CRC counters"
     elif not crc:
-        status, details, high = SKIP, "one read only: a CRC rate needs two", []
+        status, details = SKIP, "one read only: a CRC rate needs two"
     else:
         ranked = sorted(crc.items(), key=lambda kv: -kv[1])
-        high = [f"{where(now[k])}: {v:,.1f}/s" for k, v in ranked if v >= CRC_WARN_PER_S]
         status = WARN if high else PASS
         details = (
             f"CRC errors (bad frames) rising on {len(high)} link(s): {_listing(high)}"
@@ -519,18 +575,28 @@ def _counter_checks(
             name="eth_status_crc_errors",
             status=status,
             details=details,
-            data={"max_per_s": max(crc.values(), default=None), "warn": high},
+            data={
+                "max_per_s": max(crc.values(), default=None),
+                "warn": high,
+                "findings": _findings(
+                    WARN, [f"{where(now[k])}: CRC errors (bad frames) rising {v:,.1f}/s" for k, v in rising]
+                ),
+            },
             ip="eth",
         )
     )
 
     flapping = {k: r[2] for k, r in rates.items() if r[2]}
-    many = [
-        f"{where(l)}: {l.retrain} since the last reset"
-        for k, l in now.items()
-        if k not in flapping and (l.retrain or 0) >= RETRAIN_WARN_TOTAL
-    ]
+    many_links = [l for k, l in sorted(now.items()) if k not in flapping and (l.retrain or 0) >= RETRAIN_WARN_TOTAL]
+    many = [f"{where(l)}: {l.retrain} since the last reset" for l in many_links]
     flap = [f"{where(now[k])}: {n}x" for k, n in sorted(flapping.items())]
+    retrain_findings = _findings(
+        FAIL,
+        [
+            f"{where(now[k])}: retrained {n}x during the check, the link is flapping"
+            for k, n in sorted(flapping.items())
+        ],
+    ) + _findings(WARN, [f"{where(l)}: {l.retrain} retrains since the last reset" for l in many_links])
     if not any(l.retrain is not None for l in now.values()):
         status, details = SKIP, "check_eth_status reported no retrain counts"
     elif flap:
@@ -549,12 +615,13 @@ def _counter_checks(
             name="eth_status_retrains",
             status=status,
             details=details,
-            data={"during": flap, "since_reset": many},
+            data={"during": flap, "since_reset": many, "findings": retrain_findings},
             ip="eth",
         )
     )
 
-    latched = [f"{where(l)}: 0x{l.err_stat:x}" for l in now.values() if l.err_stat]
+    latched_links = [l for l in now.values() if l.err_stat]
+    latched = [f"{where(l)}: 0x{l.err_stat:x}" for l in latched_links]
     if not any(l.err_stat is not None for l in now.values()):
         status, details = SKIP, "check_eth_status reported no ERR_STAT"
     else:
@@ -563,7 +630,18 @@ def _counter_checks(
             f"{len(latched)} link(s) with a latched link error: {_listing(latched)}" if latched else "none latched"
         )
     checks.append(
-        Check(name="eth_status_err_stat", status=status, details=details, data={"latched": latched}, ip="eth")
+        Check(
+            name="eth_status_err_stat",
+            status=status,
+            details=details,
+            data={
+                "latched": latched,
+                "findings": _findings(
+                    WARN, [f"{where(l)}: ERR_STAT 0x{l.err_stat:x} latched (a link error)" for l in latched_links]
+                ),
+            },
+            ip="eth",
+        )
     )
     return checks
 
@@ -591,26 +669,31 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
 
     linked = {(l.dev, l.channel) for l in live}
     builtin_off: list[str] = []
+    builtin_findings: list[str] = []
     half: list[str] = []
+    half_findings: list[str] = []
     qsfp_lanes: dict[int, dict[int, int]] = {}
     bi_have = bi_total = 0
     for (ptype, pid), lanes in sorted(UBB_ETH_PORTS.items()):
         for tray in range(1, 5):
             off = [(asic, ch) for asic, ch in lanes if (slot[tray, asic], ch) not in linked]
             lanes_txt = ", ".join(f"U{asic} ch{ch}" for asic, ch in off)
+            port = f"UBB{tray} {_port_name(ptype, pid)}"
             if ptype == "QSFP_DD":
                 qsfp_lanes.setdefault(pid, {})[tray] = len(lanes) - len(off)
                 if 0 < len(off) < len(lanes):
-                    half.append(
-                        f"UBB{tray} {_port_name(ptype, pid)}: {len(lanes) - len(off)} of {len(lanes)} lanes "
-                        f"({lanes_txt} not)"
+                    have = f"{len(lanes) - len(off)} of {len(lanes)} lanes"
+                    half.append(f"{port}: {have} ({lanes_txt} not)")
+                    half_findings.append(
+                        f"{port}: only {have} linked ({lanes_txt} not), the cable is there and part of it is dead"
                     )
             else:
                 bi_total += len(lanes)
                 bi_have += len(lanes) - len(off)
                 if off:
                     kind = BUILTIN_KIND.get(ptype, "linking board")
-                    builtin_off.append(f"UBB{tray} {_port_name(ptype, pid)}: {lanes_txt} ({kind})")
+                    builtin_off.append(f"{port}: {lanes_txt} ({kind})")
+                    builtin_findings.append(f"{port}: {lanes_txt} not linked ({kind})")
 
     uneven: list[str] = []
     for pid in QSFP_PORT_IDS:
@@ -649,7 +732,12 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
                 if builtin_off
                 else f"{bi_have}/{bi_total} built-in links linked (board traces and linking boards, 4 UBBs)"
             ),
-            data={"linked": bi_have, "total": bi_total, "not_linked": builtin_off},
+            data={
+                "linked": bi_have,
+                "total": bi_total,
+                "not_linked": builtin_off,
+                "findings": _findings(FAIL, builtin_findings),
+            },
             ip="eth",
         ),
         Check(
@@ -661,7 +749,10 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
                 if half
                 else "no QSFP port linked in part"
             ),
-            data={"partial": half},
+            data={
+                "partial": half,
+                "findings": _findings(FAIL, half_findings),
+            },
             ip="eth",
         ),
         Check(
@@ -673,7 +764,13 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
                 if uneven
                 else "no QSFP port linked on some UBBs and not on the others"
             ),
-            data={"uneven": uneven},
+            data={
+                "uneven": uneven,
+                "findings": _findings(
+                    WARN,
+                    [f"{item}: UBBs are normally cabled alike, a cable is probably dead or missing" for item in uneven],
+                ),
+            },
             ip="eth",
         ),
         Check(
@@ -686,8 +783,10 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
                 "lanes_per_port": {
                     str(pid): {f"UBB{t}": k for t, k in trays.items()} for pid, trays in qsfp_lanes.items()
                 },
+                "description": shape,
                 "links": len(live),
                 "builtin": bi_have,
+                "builtin_total": bi_total,
                 "on_cables": on_cables,
                 "unnamed_channels": unnamed,
             },

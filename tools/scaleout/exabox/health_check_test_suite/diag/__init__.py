@@ -12,6 +12,7 @@ decides what each tier asks of each phase. The phase modules:
     device_tests.py                   3  deployment gtests and pytest stress tests
     triage.py                         5  kmd_triage first-step tools
     eth_status.py                     6  ETH status read (two tt-triage check_eth_status reads, judged)
+    eth_summary.py                       the flash tier's end-of-run ETH link summary
     qsfp.py, qsfp_ingest.py           7  QSFP tests (ETH dump collection and its conversion to checks)
     sys_triage.py                     8  syseng sys-triage bundle
 

@@ -15,6 +15,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
@@ -33,8 +34,9 @@ from diag.eth_status import (  # noqa: E402
     run_eth_status,
     sysfs_chip_bdfs,
 )
+from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.galaxy import UBB_ETH_PORTS, expected_bdf  # noqa: E402
-from diag.model import FAIL, PASS, SKIP, WARN, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 
 ETH_HEADER = (
     "Dev,Loc,Port Status,Link,Heartbeat,Retrain Count,CRC Errors,Corr CW,Uncorr CW,RX Link Up,"
@@ -397,6 +399,111 @@ class TestRunEthStatus(unittest.TestCase):
         checks = self.run_phase()
         self.assertEqual(checks["eth_status_read"].data["chips_mapped_by"], "/dev/tenstorrent order")
         self.assertEqual(checks["eth_status_builtin_links"].status, PASS)
+
+
+GATE_OK = Check(
+    name="eth_status_pcie_gate", status=PASS, details="", data={"present": 32, "expected": 32, "dropped": []}, ip="pcie"
+)
+READ_OK = Check(name="eth_status_read", status=PASS, details="2 reads 30s apart", data={"interval_s": 30.0})
+
+
+def report_of(eth_checks, snapshot_checks=()) -> dict:
+    """A report as run_diag() writes it, with the snapshot and ETH status phases only."""
+    phases = {}
+    for name, checks in (("snapshot", snapshot_checks), ("eth_status", eth_checks)):
+        phase = Phase(name=name, checks=list(checks))
+        phase.rollup()
+        phases[name] = asdict(phase)
+    statuses = [p["status"] for p in phases.values()]
+    overall = FAIL if FAIL in statuses else WARN if WARN in statuses else PASS
+    return {
+        "host": "bh-glx-test",
+        "tier": "flash",
+        "started_utc": "2026-11-18T10:50:23.412+00:00",
+        "overall_status": overall,
+        "phases": phases,
+    }
+
+
+def judged_report(first_rows, second_rows=None, snapshot_checks=()) -> str:
+    second = links(second_rows if second_rows is not None else first_rows)
+    checks = judge_eth_status(links(first_rows), second, 30.0, CHIP_BDFS, 32)
+    return render_eth_summary(report_of([GATE_OK, READ_OK, *checks], snapshot_checks))
+
+
+class TestSummary(unittest.TestCase):
+    def test_healthy(self):
+        text = judged_report(galaxy_rows())
+        self.assertIn("VERDICT: HEALTHY - no fault found, no errors rising", text)
+        self.assertIn("2 reads 30 s apart", text)
+        self.assertIn("QSFP ports 1-2   (Y torus)   linked on all 4 UBBs", text)
+        self.assertIn("QSFP ports 7-14  (Z ports)   not linked inside this host", text)
+        self.assertIn("as in an XY torus", text)
+        self.assertNotIn("** WARNING **", text)
+        self.assertNotIn("** PROBLEM **", text)
+
+    def test_warning_lists_each_link(self):
+        rows = galaxy_rows(overrides={(1, 7, 2): {"Retrain Count": "5"}})
+        text = judged_report(rows)
+        self.assertIn("VERDICT: WARNING - nothing proven broken, worth a look (1 found)", text)
+        self.assertIn(f"- UBB1/U7 ch2 (TRACE P10, dev {CHIP_OF[1, 7]}): 5 retrains since the last reset", text)
+        self.assertRegex(text, r"retrains since last reset\s+1 link\(s\) at >= 3\s+< 3 per link\s+\*\* WARNING \*\*")
+
+    def test_problems_first_then_warnings(self):
+        rows = galaxy_rows(overrides={(1, 5, 0): {"Link": "Down"}, (1, 7, 2): {"Retrain Count": "5"}})
+        text = judged_report(rows)
+        self.assertIn("VERDICT: PROBLEM - links broken or corrupting data (1 found)", text)
+        self.assertLess(text.index("link down"), text.index("also worth a look:"))
+        self.assertLess(text.index("also worth a look:"), text.index("5 retrains since the last reset"))
+
+    def test_long_lists_are_cut_and_counted(self):
+        rows = galaxy_rows(overrides={(1, 5, ch): {"Link": "Down"} for ch in range(10)})
+        text = judged_report(rows)
+        self.assertIn("(8 found)", text)
+        rows = galaxy_rows(overrides={(t, 5, ch): {"Link": "Down"} for t in (1, 2) for ch in range(10)})
+        self.assertIn("... and 8 more", judged_report(rows))
+
+    def test_partial_cable_in_the_cabling_lines(self):
+        text = judged_report(galaxy_rows(drop={(3, 2, 1)}))
+        self.assertIn("QSFP port  4     (X torus)   linked on UBB1, UBB2, UBB4, in part on UBB3", text)
+        self.assertIn("only 1 of 2 lanes linked (U2 ch1 not), the cable is there and part of it is dead", text)
+
+    def test_snapshot_fault_without_findings_is_one_line(self):
+        snap = [Check(name="pcie_gen", status=WARN, details="U6 chips: 0000:46:00.0=Gen1(!)", ip="pcie")]
+        text = judged_report(galaxy_rows(), snapshot_checks=snap)
+        self.assertIn("- pcie_gen: U6 chips: 0000:46:00.0=Gen1(!)", text)
+        self.assertRegex(text, r"other tt-smi snapshot checks\s+0 fail, 1 warn")
+
+    def test_snapshot_failure_with_clean_links(self):
+        snap = [Check(name="dram_status", status=FAIL, details="31/32 dram_status=True", ip="gddr")]
+        text = judged_report(galaxy_rows(), snapshot_checks=snap)
+        self.assertIn("VERDICT: PROBLEM - no ETH link broken, but other checks failed (1 found)", text)
+
+    def test_dropped_chip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_sysfs(Path(tmp), {"0000:46:00.0": (0xFFFF, 0xFFFF)})
+            gate = pcie_gate_check(read_pcie_functions(Path(tmp)))
+        read = Check(name="eth_status_read", status=SKIP, details="links not read: a chip dropped off PCIe")
+        text = render_eth_summary(report_of([gate, read]))
+        self.assertIn("VERDICT: PROBLEM - a chip dropped off PCIe, the links were not read (1 found)", text)
+        self.assertIn("- 0000:46:00.0 (UBB2/U6) not answering on PCIe: do NOT reset, report it", text)
+        self.assertIn("Do NOT reset yet", text)
+        self.assertRegex(text, r"chips on PCIe\s+31 of 32 ok\s+32\s+\*\* PROBLEM \*\*")
+
+    def test_links_not_read(self):
+        text = render_eth_summary(report_of([Check(name="eth_status_read", status=SKIP, details="--skip-eth-status")]))
+        self.assertIn("VERDICT: NOT CHECKED - the links were not read: --skip-eth-status", text)
+        self.assertNotIn("HEALTHY", text)
+
+    def test_runner_prints_and_keeps_it(self):
+        import diag_runner
+
+        report = report_of([GATE_OK, READ_OK, *judge_eth_status(links(galaxy_rows()), None, None, CHIP_BDFS, 32)])
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            diag_runner._print_eth_summary(report, Path(tmp) / "diag_report.json", Path(tmp) / "logs")
+            kept = (Path(tmp) / "logs" / SUMMARY_FILE).read_text()
+        self.assertIn("VERDICT: HEALTHY - no fault found", out.getvalue())
+        self.assertIn(kept, out.getvalue())
 
 
 if __name__ == "__main__":

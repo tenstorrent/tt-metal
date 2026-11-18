@@ -68,6 +68,12 @@ class Tier:
     # stops before opening a chip if one has dropped off PCIe.
     eth_status: bool = False
 
+    # Print the ETH link summary at the end of the run (diag/eth_summary.py), for
+    # the person at the console rather than the dashboard: a verdict, what is
+    # broken and where, and the cabling found. Kept as logs/eth_status_summary.txt
+    # too. Needs eth_status.
+    eth_summary: bool = False
+
     # Collect a tt-bh-glx-cluster-debug ETH dump and check it. A minutes-long
     # ETH sweep; it sits in the same slot as triage, after the post-test reset.
     qsfp_tests: bool = False
@@ -90,9 +96,11 @@ TIERS: dict[str, Tier] = {
     # Quick ETH link health, based on Veljko Cankovic's script: the unit read as
     # found, the snapshot and two ETH status reads 30 s apart. No resets and no
     # tests, so nothing changes the state being read, and a fault is still
-    # there for whoever picks it up.
+    # there for whoever picks it up. The one tier anyone may run by hand, so it
+    # ends with the ETH link summary.
     "flash": Tier(
         eth_status=True,
+        eth_summary=True,
     ),
     # The scheduled run.
     "daily": Tier(
@@ -145,6 +153,8 @@ def _validate() -> None:
         ]
         problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
+        if tier.eth_summary and not tier.eth_status:
+            problems.append(f"{name}: eth_summary needs eth_status")
     problems += [
         f"{old}: alias for unknown tier {new!r}" for old, new in DEPRECATED_TIER_ALIASES.items() if new not in TIERS
     ]

@@ -39,6 +39,7 @@ if _SUITE_DIR not in sys.path:
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
+from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
@@ -209,6 +210,23 @@ def _print_overall(report: dict) -> None:
             print(f"    {phase_name:14} {status}{note} — {items}")
         else:
             print(f"    {phase_name:14} {status}{note}")
+
+
+def _print_eth_summary(report: dict, output: Path, logs_dir: Path) -> None:
+    """The ETH link summary, printed last and kept beside the logs. Rendered after
+    the report is written, so a fault here costs the summary and nothing else."""
+    summary_path = logs_dir / SUMMARY_FILE
+    try:
+        text = render_eth_summary(report, report_path=output, summary_path=summary_path)
+    except Exception as e:
+        log(f"could not render the ETH link summary: {e!r}")
+        return
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(text)
+    except OSError as e:
+        log(f"could not write {summary_path}: {e!r}")
+    print("\n" + text, end="", flush=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -478,6 +496,9 @@ def run_diag(
     log(f"wrote report: {output} (overall={report['overall_status']})")
 
     _print_overall(report)
+    # A dry run reads nothing, so there is nothing to summarise.
+    if plan.eth_summary and not dry_run:
+        _print_eth_summary(report, output, logs_dir)
     return (0 if report["overall_status"] != FAIL else 1), report
 
 

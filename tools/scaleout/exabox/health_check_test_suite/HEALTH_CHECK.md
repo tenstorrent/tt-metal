@@ -101,7 +101,8 @@ report records the new name.
 still there for whoever picks the ticket up, and no tests, so nothing has
 retrained or reset a link before it is read. The other phases are recorded as
 SKIP with the reason. Unlike the triage and QSFP phases, the ETH status phase
-gates the run, since it is the whole of what `flash` checks.
+gates the run, since it is the whole of what `flash` checks. `flash` is also the
+one tier that ends with a [summary for the person who ran it](#the-summary).
 
 What each tier runs is defined in one place, `TIERS` in
 [`tiers.py`](tiers.py): per tier, the pre-test resets, the tests, the post-test
@@ -368,6 +369,30 @@ The raw reads land in `<output_dir>/logs/eth_status_read_{1,2}.csv` (triage's
 own CSV tables) beside `eth_status_read_{1,2}.log` (command, exit code and
 stderr), so `collect_run_artifacts()` attaches them to the JIRA ticket with no
 extra wiring.
+
+### The summary
+
+A tier with `eth_summary` (only `flash`) ends, after the `OVERALL` block, with
+one screen for whoever ran it by hand, and keeps the same text in
+`<output_dir>/logs/eth_status_summary.txt`. It is `diag/eth_summary.py`,
+rendered from the report alone, so it says nothing the JSON does not:
+
+- **VERDICT** — the run's overall status in words (`HEALTHY`, `WARNING`,
+  `PROBLEM`, or `NOT CHECKED` when the links were not read), then every finding
+  one per line, problems before warnings, eight at most with a count of the
+  rest. ETH checks list each link at fault from their `data["findings"]`; any
+  other failing check, the snapshot's among them, gets one line of its own.
+- **LINKS** — the link counts and the cabling found.
+- **CHECK table** — one row per reading with its result, what is expected and
+  `OK` / `** WARNING **` / `** PROBLEM **` / `NOT CHECKED`, plus a row for the
+  firmware across chips and one for the rest of the tt-smi snapshot.
+- **CABLING FOUND** — each QSFP port group (Y torus, X torus, Z ports) and on
+  which UBBs it is linked; described, never judged.
+- **WORST LINKS** — the five links with the most uncorrected FEC errors.
+- **NOT CHECKED HERE**, then where the report, the raw reads and the summary are.
+
+It is skipped on `--dry-run`, which reads nothing. Rendering runs after the
+report is written, so a fault in it costs the summary and nothing else.
 
 ## QSFP tests phase
 
@@ -822,7 +847,7 @@ tools/scaleout/exabox/health_check_test_suite/
 ├── run_diag_docker.sh  # runs run_diag.sh inside the exabox-tools image; results land on the host
 ├── diag_runner.py      # CLI and the phase order. Also exposes run_diag() as a
 │                       #   programmatic entry point returning (exit_code, report_dict).
-├── tiers.py            # what each tier runs: resets, tests, triage, ETH status, QSFP, sys-triage
+├── tiers.py            # what each tier runs: resets, tests, triage, ETH status (+ summary), QSFP, sys-triage
 ├── diag/               # the phases and what they share
 │   ├── model.py            # Check / Phase result model
 │   ├── common.py           # subprocess, console and path helpers
@@ -835,6 +860,7 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
 │   ├── eth_status.py       # phase 6: ETH status read: PCIe gate, two tt-triage reads, and the
 │   │                       #   judgement of them (pure functions, tested at a desk)
+│   ├── eth_summary.py      # the flash tier's end-of-run ETH link summary, rendered from the report
 │   ├── qsfp.py             # phase 7: QSFP tests, collection
 │   ├── qsfp_ingest.py      # phase 7: cluster-debug JSONL dump -> checks. No hardware in it: a stored
 │   │                       #   dump is all it needs, so it is tested at a desk. Runnable standalone.
