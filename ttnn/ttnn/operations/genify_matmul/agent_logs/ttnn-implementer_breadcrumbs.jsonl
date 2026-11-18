@@ -41,3 +41,4 @@
 {"event":"test_run","refinement":14,"result":"pass","golden_concatK":"3/3","unit_new":"19/19","unit_regression":"132/132","perf_us":{"single_out_2304":[1425.9,1426.4],"final_2048":[1202.3,1201.7]},"ts":"2026-11-18T00:32:45+00:00"}
 {"event":"test_run","refinement":15,"what":"bank-local R1b + rotating injectors","result":"unit bank_local 14/14, stream_mcast 6/6; R15 set: FLUX non-swiglu <=1.11x roofline, qwen M=128 1.4-1.8x","ts":"2026-11-18T01:32:17+00:00"}
 {"event":"test_run","refinement":15,"result":"unit 240/240 across touched files; golden interleaved 375p/75xf, loose slice 19/19, feature 10/10; perf guard no regression >3%","outcome":"[x]","ts":"2026-11-18T01:54:07+00:00"}
+{"event":"test_run","status":"pass","tests":"tests/ttnn/unit_tests/operations/genify_matmul (all but precision_matrix)","count":242,"note":"R16 split lines + R1b depth fallback; perf guards (r11/r15/flux/guard/sharded) within noise","ts":"2026-11-18T03:13:09+00:00"}

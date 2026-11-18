@@ -122,8 +122,9 @@ R1A_SPLIT_LINES = True
 # ... on walks whose busiest line injector (split_cost's busiest-core read term, the fixed-injector R1a price) is at
 # least this fraction of the K-walk: data-movement-heavy walks. Measured (device us, fixed -> split): ratio ~1.0-1.1
 # (text encoder qkv / o_proj, Qwen3.8 M = 512 rows) -15..-26 %; 0.73 (Qwen3.8 M = 1024 qkvg / in_proj / down) -2..-10 %;
-# 0.52-0.55 (out_proj M = 1024 / 2048 / 4096, compute- and output-bound) flat to +3 %.
-R1A_SPLIT_MIN_RATIO = 0.6
+# 0.65 (Qwen3.8 qkvg M = 4096) +6 %; 0.52-0.55 (out_proj M = 1024 / 2048 / 4096, compute- and output-bound) flat to
+# +3 %. Above R1A_PREFETCH_MIN_RATIO the fixed injectors' prefetch keeps the walk (see _r1a_split_shape).
+R1A_SPLIT_MIN_RATIO = 0.7
 R1A_SPLIT_ACT_NOC = ttnn.NOC.NOC_1  # the writer RISC's NoC (BRISC, WriterConfigDescriptor)
 # The Perf 2 K head ramp (kernels/genify_matmul_kschedule.hpp) on every split-lines walk, the helper walk included:
 # the first rounds are a third .. five sixths of a K-block, so round 0's read and multicast land early.
@@ -231,6 +232,9 @@ ACT_STREAM_MIN_KBLOCK_BYTES = 32 * 1024
 # B read of a K-block gates the next broadcast; deeper rings give that coupling slack and let the B stream
 # run ahead of compute. PERF FOCUS 4: depth 2 / 3 / 4 = 683 / 666 / 633 us (B-stream floor 578 us).
 ACT_STREAM_DEPTH = 4
+# ... the shallowest ring choose_blocking falls back to so the K-walk keeps the core's rows in one M-block (B streamed
+# once); >= the rotating injectors + 1 (an injector reserves through its next turn).
+ACT_STREAM_MIN_DEPTH = 3
 # R1b injector stall-shadow: A K-blocks the injector keeps in flight (read trids), so the DRAM read of
 # K-block kb+1 overlaps the multicast of kb (clamped to the act ring depth). 1 = read, barrier, send.
 ACT_STREAM_AHEAD = 2
@@ -833,7 +837,12 @@ def _r1a_split_shape(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     ):
         return False
     walk, _, core_read, _ = split_cost_terms(geom, grid, blk)
-    return core_read >= R1A_SPLIT_MIN_RATIO * walk
+    # The A line moves to the writer RISC (NoC1), so it must be the lighter line: FLUX proj_out 2048x3072x128 (A line
+    # 1.18 MB per line vs 196 KB of B; A injectors ~2x the K-walk at HiFi4, ~4x at HiFi2) measured 69 -> 84 us at
+    # HiFi4 on the split lines (at HiFi2 the fixed injectors' prefetch keeps it: >= R1A_PREFETCH_MIN_RATIO).
+    a_line = grid.core_m_tiles * geom.tensor_k_tiles * geom.a_tile_bytes
+    b_line = grid.core_n_tiles * geom.tensor_k_tiles * geom.b_tile_bytes
+    return a_line <= b_line and R1A_SPLIT_MIN_RATIO * walk <= core_read < R1A_PREFETCH_MIN_RATIO * walk
 
 
 def r1a_split(geom: Geometry, grid: GridChoice, blk: "Blocking"):
@@ -1125,6 +1134,16 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
     blk = _choose_blocking(geom, grid, budget, depths)
     if depths is not None and operand_mode(geom, grid, blk) != 2:
         blk = _choose_blocking(geom, grid, budget)  # the solved K-block missed the R1b gate: plain depths
+    elif depths is not None and blk.block_m_tiles < grid.core_m_tiles:
+        # ACT_STREAM_MIN_DEPTH (Refinement 16): the deep rings made the solve split the core's rows into M-blocks,
+        # so every core streams its B columns once per M-block -- the R1b walk's dominant traffic. A shallower ring
+        # (down to ACT_STREAM_MIN_DEPTH) that keeps all rows in one block streams B once: text-encoder gate
+        # 512x5120x16384 (bfp8, 89 MB of B) two 8-row M-blocks at depth 4 477 us -> one 16-row block at depth 3 405 us.
+        for d in range(depths[0] - 1, ACT_STREAM_MIN_DEPTH - 1, -1):
+            shallow = _choose_blocking(geom, grid, budget, (d, d))
+            if operand_mode(geom, grid, shallow) == 2 and shallow.block_m_tiles == grid.core_m_tiles:
+                blk = shallow
+                break
     # R1A_SPLIT_LINES: re-solve with one more K-block of each operand (the line streams' staging buffers; the rings
     # keep their depth); kept only while the walk stays a split-lines R1a walk, the staging fits, and it costs only
     # K-block width: a staged solve that shrinks the output block re-reads operands per block (Qwen3.8 out_proj
