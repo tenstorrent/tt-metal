@@ -64,20 +64,28 @@ def test_dp_thread_budget(mesh_device):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("submesh", [(4, 2), (4, 4)], ids=["alone_4x2", "alone_4x4"])
-def test_single_replica_on_submesh(mesh_device, submesh):
-    """One replica on one submesh with the rest of the Galaxy idle: if its 2K latency matches the DP run's, the DP
-    slowdown is compute (fewer chips per replica); if it is much lower, it is host contention between replicas."""
+@pytest.mark.parametrize("size", [2048, 4096], ids=["2K", "4K"])
+def test_single_replica_on_submesh(mesh_device, submesh, size):
+    """One replica on one submesh with the rest of the Galaxy idle: if its latency matches the DP run's, the DP
+    slowdown is compute (fewer chips per replica); if it is much lower, it is host contention between replicas.
+    n / (its latency) bounds DP=n throughput without contention; the stage split shows what each stage costs."""
     weights = os.environ.get("MINIMAX_H3_IMAGE_MODEL_PATH")
     if not weights:
         pytest.skip("set MINIMAX_H3_IMAGE_MODEL_PATH")
     device = mesh_device.create_submeshes(ttnn.MeshShape(*submesh))[0]
     pipe = MiniMaxH3ImagePipeline(mesh_device=device, weights_dir=weights)
-    pipe(PROMPT, width=2048, height=2048, seed=0)  # warm
-    totals = [pipe(PROMPT, width=2048, height=2048, seed=1 + i).timings.total for i in range(3)]
-    logger.info(
-        f"RESULT alone_{submesh[0]}x{submesh[1]}_2048: latency mean {sum(totals) / 3:.2f}s "
-        f"(min {min(totals):.2f} max {max(totals):.2f})"
-    )
+    tag = f"alone_{submesh[0]}x{submesh[1]}_{size}"
+    pipe(PROMPT, width=size, height=size, seed=0)  # warm
+    totals = []
+    for i in range(3):
+        t = pipe(PROMPT, width=size, height=size, seed=1 + i).timings
+        totals.append(t.total)
+        steps = ", ".join(f"{s:.2f}" for s in t.denoise_steps)
+        logger.info(
+            f"RESULT {tag} run {i}: total {t.total:.2f}s = prompt {t.encode_prompt:.2f} + denoise {t.denoise:.2f} "
+            f"[{steps}] + decode {t.decode:.2f} (dynamic_length={pipe.dynamic_length})"
+        )
+    logger.info(f"RESULT {tag}: latency mean {sum(totals) / 3:.2f}s (min {min(totals):.2f} max {max(totals):.2f})")
 
 
 @pytest.mark.timeout(4 * 3600)
