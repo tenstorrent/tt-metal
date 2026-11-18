@@ -1,16 +1,22 @@
 ---
-# Chain-image producer: TorrentCI builds dockerfile/Dockerfile.torrentci-ci-build
-# (a standalone equivalent of the bake ci-build target, Ubuntu 24.04) and
-# keys it by its inputs, so an unchanged Dockerfile is a cache hit and the
-# image is reused. The context is the dockerfile/ directory, filtered to
-# nothing by Dockerfile.torrentci-ci-build.dockerignore: the whole repository
-# is over TorrentCI's 20 000-entry context limit.
+# Chain-image producer: TorrentCI builds the ci-build target of
+# dockerfile/docker-bake.hcl from tt-metal's own Dockerfiles, with the
+# Ubuntu 24.04 / Python 3.12 variables PR Gate's build-docker-images uses.
+# The bake contexts ci-build reaches (the Dockerfile.tools layers and
+# ci-build-venv) are built in the same job, each keyed by its own inputs, so
+# an unchanged tool or image is reused. SFPI comes from tt_metal/sfpi-version
+# through Dockerfile.tools, so the image matches the commit by construction.
+# resolve-tags pins the unpinned base images (mirror.gcr.io/ubuntu:24.04 and
+# the tools' bases) at seal, reused for 14 days. The build fetches from
+# hosts the cluster mirror does not cover yet, hence direct egress (#1754).
 jobs:
   - id: ci-build-image
-    description: Build the tt-metal CI build image (Ubuntu 24.04) as a chain image
+    description: Build the tt-metal CI build image (bake target ci-build, Ubuntu 24.04) as a chain image
     runs-on: {os: linux, arch: amd64}
+    temporary-direct-egress: "#1754"
     images:
-      build:
-        - name: tt-metal-ci-build
-          dockerfile: dockerfile/Dockerfile.torrentci-ci-build
-          context: dockerfile
+      resolve-tags: 14d
+      bake:
+        file: dockerfile/docker-bake.hcl
+        targets: [ci-build]
+        variables: {UBUNTU_VERSION: "24.04", PYTHON_VERSION: "3.12"}
