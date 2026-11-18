@@ -10,6 +10,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -49,11 +51,14 @@ fs::path package_soc_desc() {
            "tt_metal/third_party/umd/tests/soc_descs/mmk.yaml";
 }
 
-// A fresh, empty directory under gtest's temp dir, removed when the test ends.
+// A fresh, empty directory under gtest's temp dir, named for this process so that two runs cannot remove each other's,
+// and removed when the test ends.
 class TempDir {
 public:
     explicit TempDir(std::string_view name) :
-        path_(fs::path(::testing::TempDir()) / ("vcluster_descriptors_" + std::string(name))) {
+        path_(
+            fs::path(::testing::TempDir()) /
+            ("vcluster_descriptors_" + std::to_string(::getpid()) + "_" + std::string(name))) {
         fs::remove_all(path_);
         fs::create_directories(path_);
     }
@@ -630,7 +635,7 @@ TEST(VclusterDescriptors, EveryRefusalListed) {
 // --- The generator's entry point for a run ------------------------------------------------------------------------
 
 // § Descriptors: reads VCLUSTER_MANIFEST, VCLUSTER_PACKAGE_SOC_DESC and VCLUSTER_OUT, and generates; skipped when
-// VCLUSTER_MANIFEST is unset. The manifest must load and pass the checks first.
+// VCLUSTER_MANIFEST is unset. The generator runs check_manifest() itself; each row or refusal is a failure.
 TEST(VclusterGenerate, FromEnvironment) {
     const char* manifest_path = std::getenv("VCLUSTER_MANIFEST");
     if (manifest_path == nullptr || *manifest_path == '\0') {
@@ -641,13 +646,18 @@ TEST(VclusterGenerate, FromEnvironment) {
     ASSERT_TRUE(package != nullptr && *package != '\0') << "VCLUSTER_PACKAGE_SOC_DESC is not set";
     ASSERT_TRUE(out != nullptr && *out != '\0') << "VCLUSTER_OUT is not set";
     const Manifest manifest = load_manifest(manifest_path);
-    const auto findings = check_manifest(manifest, package_facts(package));
-    for (const auto& finding : findings) {
-        ADD_FAILURE() << "row " << static_cast<uint32_t>(finding.check) << ": " << finding.detail;
+    GeneratedDescriptors g;
+    try {
+        g = generate_descriptors(manifest, package, out);
+    } catch (const DescriptorGenerationError& error) {
+        for (const auto& row : error.rows()) {
+            ADD_FAILURE() << "row " << static_cast<uint32_t>(row.check) << ": " << row.detail;
+        }
+        for (const auto& finding : error.findings()) {
+            ADD_FAILURE() << "G" << static_cast<uint32_t>(finding.refusal) << ": " << finding.detail;
+        }
+        FAIL() << "the generator refused " << manifest_path;
     }
-    ASSERT_TRUE(findings.empty());
-    fs::create_directories(out);
-    const GeneratedDescriptors g = generate_descriptors(manifest, package, out);
     std::cout << "export the variables of " << g.env_emu.string() << " (emulator) or " << g.env_mock.string()
               << " (Mock)" << std::endl;
 }
