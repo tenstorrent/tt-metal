@@ -96,9 +96,9 @@ inline void llk_unpack_tilize_block(
     if constexpr (UnpackToDestEn) {
         _llk_unpack_tilize_to_dest_set_src_offset_(tensor_shape, l1_base_idx);
         for (std::uint32_t t = 0; t < block_c_tiles; t++) {
-            llk_unpack_wait_for_dest_available();
+            _llk_tile_regs_borrow_<ckernel::DstClient::MATH, ckernel::DstClient::UNPACK>();
             _llk_unpack_tilize_to_dest_(t + offset, 0 /*dst_tile_idx*/);
-            llk_unpack_dest_section_done<DST_ACCUM_MODE>();
+            _llk_tile_regs_return_<ckernel::DstClient::MATH, ckernel::DstClient::UNPACK>();
         }
     } else {
         _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + offset, block_c_tiles, tensor_shape);

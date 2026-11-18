@@ -8,9 +8,9 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_borrow.h"
 #include "llk_memory_checks.h"
 #include "quasar_test_common.h"
-#include "sfpu_stub.h"
 #include "tensor_shape.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -48,31 +48,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (unpack_to_dest)
     {
-        // Unpack-to-dest under the semaphore scheme. The placers carry no synchronization, so this thread runs the
-        // section handshake itself, as tt-metal's tile_regs_acquire / tile_regs_commit hooks do: stall until a DEST
-        // bank is free (UNPACK_PACK below its max, the count pack releases), place the tile, post UNPACK_PACK (bank
-        // occupied) and then UNPACK_MATH (data ready), and in SyncHalf move this thread to the other bank.
-        _llk_unpack_configure_unary_<p_unpacr::UNP_DEST>(static_cast<DataFormat>(formats.unpack_A_dst));
+        // Write Dest in the section's accumulation format so PACK reads the same format.
+        _llk_unpack_configure_unary_<p_unpacr::UNP_DEST>(static_cast<DataFormat>(formats.pack_src));
         _llk_unpack_dest_init_();
         _llk_unpack_unary_operand_to_dest_init_(bfd_a);
-        // Seed the semaphores this thread posts (max N = sections in flight: 1 in SyncFull, 2 in SyncHalf) in front of
-        // its first wait and post on them. Math spins until the first UNPACK_MATH post before its first wait, so no
-        // SEMINIT lands on a pending SEMWAIT.
-        constexpr std::uint32_t N = (dest_sync == ckernel::DstSync::SyncFull) ? 1 : 2;
-        _llk_sync_init_(semaphore::UNPACK_MATH, N /*max*/, 0 /*init*/);
-        _llk_sync_init_(semaphore::UNPACK_PACK, N /*max*/, 0 /*init*/);
         for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
-            _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::UNPACK_PACK);
+            if (block % 3 == 1)
+            {
+                _llk_tile_regs_borrow_<DstClient::PACK, DstClient::UNPACK>();
+            }
+            else
+            {
+                _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+            }
             for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
             {
                 _llk_unpack_unary_operand_to_dest_tile_(block * NUM_TILES_IN_BLOCK + tile /*l1_tile_idx*/, tile /*dst_tile_idx*/);
             }
-            _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);
-            _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
-            if constexpr (dest_sync == ckernel::DstSync::SyncHalf)
+            if (block % 3 == 1)
             {
-                _llk_unpack_dest_section_advance_<is_fp32_dest_acc_en>();
+                _llk_tile_regs_return_<DstClient::PACK, DstClient::UNPACK>();
+            }
+            else
+            {
+                _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
             }
         }
     }
@@ -113,21 +113,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (unpack_to_dest)
     {
-        // Middleman only, no FPU work. Seed MATH_PACK (the semaphore this thread posts). Per section: wait for the
-        // unpacker's data (first section: spin until its first UNPACK_MATH post, so the wait is armed only after its
-        // seed), hand the section to pack (MATH_PACK post and, in SyncHalf, the math-side bank flip), then release the
-        // unpacker's data-ready credit.
+        const auto src_format = static_cast<DataFormat>(formats.math);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
         _llk_math_pack_sync_init_<dest_sync>();
         for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
             _llk_math_wait_for_dest_available_();
-            if (block == 0)
+            if (block % 3 != 1)
             {
-                _llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);
+                _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                _llk_tile_regs_borrow_<DstClient::MATH, DstClient::SFPU>();
+                _llk_tile_regs_return_<DstClient::MATH, DstClient::SFPU>();
             }
-            _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-            _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
         }
     }
     else
@@ -185,17 +184,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
     if constexpr (unpack_to_dest)
     {
-        // Pack side of the unpack-to-dest handshake, as tt-metal's llk_pack_dest_section_done: behind the PACK0 drain,
-        // release the bank to the unpacker (UNPACK_PACK, the count it stalls on) and the section to math (MATH_PACK);
-        // in SyncHalf move the packer's DEST read base to the other bank. No ZEROACC: the unpacker overwrites the bank.
         for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
             _llk_packer_wait_for_math_done_();
+            if (block % 3 == 1)
+            {
+                _llk_tile_regs_borrow_<DstClient::PACK, DstClient::UNPACK>();
+                _llk_tile_regs_return_<DstClient::PACK, DstClient::UNPACK>();
+                _llk_tile_regs_borrow_<DstClient::PACK, DstClient::SFPU>();
+                _llk_tile_regs_return_<DstClient::PACK, DstClient::SFPU>();
+            }
             for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
             {
                 _llk_pack_(tile /*dest_idx*/, block * NUM_TILES_IN_BLOCK + tile, ckernel::DEFAULT_TENSOR_SHAPE);
             }
-            _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);
             _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
             if constexpr (dest_sync == ckernel::DstSync::SyncHalf)
             {
@@ -218,6 +220,62 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
         }
         _llk_pack_reduce_mask_clear_();
+    }
+}
+#endif
+
+#ifdef LLK_TRISC_ISOLATE_SFPU
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu/ckernel_sfpu_negative.h"
+#include "params.h"
+
+using namespace ckernel;
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+#endif
+    if constexpr (unpack_to_dest)
+    {
+        _llk_math_eltwise_sfpu_init_();
+        const auto num_blocks = dest_section_count(TILE_CNT, NUM_TILES_IN_BLOCK);
+        for (std::uint32_t block = 0; block < num_blocks; ++block)
+        {
+            if (block % 3 == 1)
+            {
+                _llk_tile_regs_borrow_<DstClient::PACK, DstClient::SFPU>();
+            }
+            else
+            {
+                _llk_tile_regs_borrow_<DstClient::MATH, DstClient::SFPU>();
+            }
+            const auto expected_base = dest_sync == DstSync::SyncHalf ? (block % 2) * (is_fp32_dest_acc_en ? 256 : 512) : 0;
+            LLK_ASSERT(trisc::_get_dest_buffer_base_() == expected_base, "SFPU borrowed the wrong DST bank");
+            for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+            {
+                if (static_cast<DataFormat>(formats.math) == DataFormat::Int32)
+                {
+                    _llk_math_eltwise_unary_sfpu_params_(sfpu::_calculate_negative_int_<false, 8>, tile);
+                }
+                else
+                {
+                    _llk_math_eltwise_unary_sfpu_params_(sfpu::_calculate_negative_<false, 8>, tile);
+                }
+            }
+            if (block % 3 == 1)
+            {
+                _llk_tile_regs_return_<DstClient::PACK, DstClient::SFPU>();
+            }
+            else
+            {
+                _llk_tile_regs_return_<DstClient::MATH, DstClient::SFPU>();
+            }
+        }
     }
 }
 #endif

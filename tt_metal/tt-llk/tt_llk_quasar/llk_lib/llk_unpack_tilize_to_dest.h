@@ -20,10 +20,9 @@ using namespace ckernel::trisc;
  * @file llk_unpack_tilize_to_dest.h
  * @brief Unpack-tilize of full 32x32 tiles straight into the math DEST register (UNP_DEST).
  *
- * Unpack-to-dest counterpart of the SrcA/SrcB family in llk_unpack_tilize.h. The unpacker is the DEST producer: math
- * runs no datacopy and only forwards each section, pack reads it out, and the three threads hand off through the
- * UNPACK_PACK / UNPACK_MATH / MATH_PACK semaphores, the protocol documented on @ref _llk_unpack_unary_operand_to_dest_init_.
- * UNP_DEST is driven through UNPACKER0's config and counters, so the UNP_A registers are programmed throughout.
+ * Like llk_unpack_tilize.h, but writes to DEST instead of SrcA or SrcB. With semaphore synchronization, the
+ * unpacker borrows a section from MATH or PACK. See @ref _llk_unpack_unary_operand_to_dest_init_ for the handshake.
+ * UNP_DEST uses UNPACKER0's config and counters, so this path programs the UNP_A registers.
  */
 
 /**
@@ -55,20 +54,16 @@ inline void _llk_unpack_tilize_to_dest_mop_config_(const std::uint32_t buf_desc_
 /**
  * @brief Initializes the unpacker to unpack-tilize full 32x32 tiles straight into DEST.
  *
- * Programs the UNPACKER0 tilize strides, with DST_Z_STRIDE set to one tile so each DEST Z step is one tile, and the
- * block_ct_dim-tile MOP. Per-op init: it does not touch the DEST bank tracking, so it is safe to call inside a tile loop; the once-per-program
- * bank reset is @ref _llk_unpack_dest_init_.
+ * Programs the UNPACKER0 tilize strides and the MOP for block_ct_dim tiles. DST_Z_STRIDE is set so each DEST Z step
+ * advances by one tile. This init leaves the DEST bank tracking unchanged, so it can run inside a tile loop.
+ * Call @ref _llk_unpack_dest_init_ once per program to reset the bank tracking.
  *
  * @param buf_desc_id: Buffer descriptor id, the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param full_ct_dim: Tiles in a row of the row-major input tensor
- * @param block_ct_dim: Tiles per @ref _llk_unpack_tilize_to_dest_ run, a divisor of full_ct_dim; at most the DEST section
- *        capacity
- * @param tensor_shape: Tile shape; 32x32 tiles only
- * @note Math thread (T1): no datacopy init, it only forwards UNPACK_MATH into MATH_PACK per section. Pack thread (T2):
- *       @ref _llk_pack_init_, per section get UNPACK_PACK then MATH_PACK. On this thread, per section: wait
- *       STALL_ON_MAX on UNPACK_PACK, any number of runs within the section capacity (@ref get_dest_max_tiles), then
- *       behind an UNPACK0 drain post UNPACK_PACK and UNPACK_MATH in that order; SyncHalf:
- *       @ref _llk_unpack_dest_section_advance_.
+ * @param block_ct_dim: Tiles per @ref _llk_unpack_tilize_to_dest_ run. Must divide full_ct_dim and fit in the DEST section.
+ * @param tensor_shape: Tile shape. Only 32x32 tiles are supported.
+ * @note Both threads must call _llk_tile_regs_borrow_ before the runs and _llk_tile_regs_return_ afterward.
+ *       The lender provides the bank base. Do not advance the unpack bank on return.
  */
 inline void _llk_unpack_tilize_to_dest_init_(
     const std::uint32_t buf_desc_id, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim, const TensorShape& tensor_shape)

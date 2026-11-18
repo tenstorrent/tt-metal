@@ -88,7 +88,7 @@ __attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t
 #if defined(ARCH_BLACKHOLE)
     return ckernel::semaphore::UNPACK_OPERAND_SYNC;
 #elif defined(ARCH_QUASAR)
-    return ckernel::trisc::semaphore::PACK_UNPACK;
+    return ckernel::trisc::semaphore::PACK_UNPACK_L1;
 #else
     // Other archs' LLKs do not define this index; fail only if a kernel actually constructs one.
     static_assert(always_false<core_type>, "compute semaphores are Blackhole and Quasar only");

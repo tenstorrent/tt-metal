@@ -76,10 +76,7 @@ def packer_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> st
 
 def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
     if config.uses_unpack_to_dest_pack_sync:
-        code = (
-            "_llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);\n"
-            "_llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);\n"
-        )
+        code = "_llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);\n"
         if operation.dest_sync == DestSync.Half:
             code += (
                 f"_update_dest_register_offset_<{config.dest_acc.cpp_enum_value}>();\n"
@@ -98,7 +95,7 @@ def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -
 
 def packer_sync_with_unpacker(config: "GlobalConfig", operation: "L1Operation") -> str:
     if operation.has_pack_consumer:
-        return "_llk_sync_post_<p_stall::PACK>(semaphore::PACK_UNPACK);\n"
+        return "_llk_sync_post_<p_stall::PACK>(semaphore::PACK_UNPACK_L1);\n"
     return ""
 
 

@@ -114,6 +114,8 @@ ALWI void dummy_unpack(std::uint32_t cb_id) { UNPACK((llk_unpack_dummy(cb_id)));
  * up to index n-1 (in a FIFO order). The DST register buffer must be in acquired state via
  * acquire_dst call. This call is blocking and is only available on the compute
  * engine.
+ * On Quasar with UnpackToDestEn, call tile_regs_borrow<FROM, DstClient::UNPACK>() before copying
+ * and tile_regs_return<FROM, DstClient::UNPACK>() afterward. FROM must own the Dest section.
  *
  * Return value: None
  *
@@ -144,6 +146,7 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
  * state via *acquire_dst* call, and `cb_wait_front(n)` must have made at least
  * `start_in_tile_index + ntiles` tiles available in the input CB. This call is blocking and is only
  * available on the compute engine.
+ * On Quasar, unpacking directly to Dest requires a loan, just like copy_tile.
  *
  * NOTE: In the future the blocking must be folded further into a hardware MOP / REPLAY buffer (as
  * is being done for Quasar) inside llk-lib, so the whole block issues as a single packed op, without

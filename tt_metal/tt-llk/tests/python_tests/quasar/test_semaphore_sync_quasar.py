@@ -46,10 +46,8 @@ from helpers.utils import passed_test, result_tensor
 SEMAPHORE_SECTION_SHAPES = [(4, 1), (1, 4), (4, 4), (8, 1), (8, 2)]
 
 
-# Two flows under the semaphore scheme. 16-bit and MX inputs run a reduce through SrcA / SrcB with the math-pack
-# semaphore pair. 32-bit inputs (dest_acc=Yes only: the source registers are 19-bit wide) unpack straight into DEST and
-# run the full unpack-to-dest protocol, UNPACK_PACK / UNPACK_MATH / MATH_PACK, with the kernel calling the
-# synchronization primitives itself around the sync-free placer, math-forward and pack calls; output = input.
+# Reduce tests MATH_PACK alone. Copies directly into Dest test all four borrowing pairs.
+# The lender changes independently of the bank, and BF16 covers the bank base at row 512.
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats(
@@ -61,6 +59,11 @@ SEMAPHORE_SECTION_SHAPES = [(4, 1), (1, 4), (4, 4), (8, 1), (8, 2)]
     + input_output_formats([DataFormat.Float32, DataFormat.Int32], same=True),
     dest_acc=get_valid_dest_accumulation_modes,
     dest_sync=[DestSync.Full, DestSync.Half],
+    force_unpack_to_dest=lambda formats, dest_acc: (
+        [False, True]
+        if formats.input_format == DataFormat.Float16_b and not dest_acc.value
+        else [False]
+    ),
     # Unpack-to-dest only: with no sections, only the semaphore setup runs, and every thread must still finish.
     zero_tiles=lambda formats: (
         [False, True] if formats.input_format.is_32_bit() else [False]
@@ -74,6 +77,7 @@ def test_semaphore_sync_quasar(
     formats,
     dest_acc,
     dest_sync,
+    force_unpack_to_dest,
     zero_tiles,
     sections,
 ):
@@ -96,12 +100,14 @@ def test_semaphore_sync_quasar(
     # result in srcA should be multiplied by 1 for pool_type = sum
     src_B = torch.full((1024,), 1)
 
-    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
+    unpack_to_dest = force_unpack_to_dest or unpacks_to_dest(
+        formats.input_format, dest_acc
+    )
     if unpack_to_dest:
-        # Datacopy through DEST: the unpacker writes the tiles, math only forwards the semaphores, pack reads them back.
+        # UNPACK fills the borrowed bank. TRISC3 borrows it next and negates the values before PACK reads them.
         generate_golden = get_golden_generator(DataCopyGolden)
         golden_tensor = generate_golden(
-            src_A,
+            -src_A,
             formats.output_format,
             num_faces=4,
             input_dimensions=input_dimensions,
@@ -146,6 +152,7 @@ def test_semaphore_sync_quasar(
             tile_count_A=tile_cnt,
             tile_count_B=1,
             tile_count_res=tile_cnt,
+            twos_complement=formats.input_format == DataFormat.Int32,
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,

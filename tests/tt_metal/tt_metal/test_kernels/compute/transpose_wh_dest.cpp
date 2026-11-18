@@ -28,8 +28,18 @@ void kernel_main() {
         dfb_out.reserve_back(1);
 
         tile_regs_acquire();
+#ifdef ARCH_QUASAR
+        if constexpr (UnpackToDestEn) {
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+        }
+#endif
         copy_init(dfb::in);
         copy_tile(dfb::in, 0, 0);
+#ifdef ARCH_QUASAR
+        if constexpr (UnpackToDestEn) {
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+        }
+#endif
 
         transpose_dest_init<DST_ACCUM_MODE, true /* transpose_of_faces */>(dfb::in);
         transpose_dest<DST_ACCUM_MODE, true /* transpose_of_faces */>(0);

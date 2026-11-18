@@ -93,7 +93,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     // TODO: once the Quasar compute API is ported to 2.0, move this into compute_semaphore_hw_startup()
     // (semaphore_compute_impl.h) as an ARCH_QUASAR branch, called from the 2.0 hw_startup, and drop it here.
     // https://github.com/tenstorrent/tt-metal/issues/60164
-    PACK((ckernel::trisc::t6_semaphore_init(ckernel::trisc::semaphore::PACK_UNPACK, 0, COMPUTE_SEMAPHORE_MAX)));
+    PACK((ckernel::trisc::t6_semaphore_init(ckernel::trisc::semaphore::PACK_UNPACK_L1, 0, COMPUTE_SEMAPHORE_MAX)));
 #endif
 #endif
 }

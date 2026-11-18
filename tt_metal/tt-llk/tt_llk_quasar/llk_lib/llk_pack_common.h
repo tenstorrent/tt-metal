@@ -268,7 +268,7 @@ inline void _llk_pack_set_l1_acc_(const bool l1_acc_en)
  */
 inline void _llk_packer_wait_for_math_done_()
 {
-    TTI_SEMWAIT(p_stall::STALL_TDMA, p_stall::STALL_ON_ZERO, 0, semaphore::t6_sem(semaphore::MATH_PACK));
+    TTI_SEMWAIT(p_stall::STALL_TDMA | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO, 0, semaphore::t6_sem(semaphore::MATH_PACK));
 }
 
 /**
