@@ -39,7 +39,8 @@ constexpr uint32_t in2_tile_size = get_compile_time_arg_val(10);
 constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
 constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
 constexpr uint32_t num_devices = get_compile_time_arg_val(13);
-constexpr uint32_t my_rank = get_compile_time_arg_val(14);
+// Compile-time arg 14 is unused: the rank is a common runtime arg, after the outputs, so every device of a range runs
+// one program.
 constexpr uint32_t in3_tile_size = get_compile_time_arg_val(15);
 constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(16);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(17);
@@ -66,13 +67,7 @@ constexpr uint32_t num_mux_clients = get_compile_time_arg_val(29);
 
 constexpr uint32_t mux_arg_count = 30;
 
-constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_forward =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<mux_arg_count>();
-
-constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_backward =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<
-        mux_arg_count + ccl_routing_utils::num_line_unicast_args>();
-
+// The unicast routes' compile-time slots are unused: the routes are common runtime args, after the rank.
 constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
 #else
 constexpr uint32_t ct_arg_count = 25;
@@ -124,6 +119,26 @@ void kernel_main() {
 
     // Output tensor addresses from common args
     const uint32_t out_addr_common_arg_start = cargidx;
+    // After the outputs, the values that differ per device: the rank, then the forward and backward unicast routes.
+    uint32_t device_arg_idx = out_addr_common_arg_start + N_chunks;
+    const uint32_t my_rank = get_common_arg_val<uint32_t>(device_arg_idx++);
+#ifdef USE_MUX
+    ccl_routing_utils::line_unicast_route_info_t unicast_route_info_forward;
+    unicast_route_info_forward.dst_mesh_id = get_common_arg_val<uint32_t>(device_arg_idx++);
+    unicast_route_info_forward.dst_chip_id = get_common_arg_val<uint32_t>(device_arg_idx++);
+    ccl_routing_utils::line_unicast_route_info_t unicast_route_info_backward;
+    unicast_route_info_backward.dst_mesh_id = get_common_arg_val<uint32_t>(device_arg_idx++);
+    unicast_route_info_backward.dst_chip_id = get_common_arg_val<uint32_t>(device_arg_idx++);
+#else
+    device_arg_idx += 4;  // the unicast routes, used with the mux only
+#endif
+    // The same on every core: the relay semaphores and the in0 chain's length and fabric-sender positions.
+    const uint32_t in0_sender_semaphore_id = get_common_arg_val<uint32_t>(device_arg_idx++);
+    const uint32_t in0_receiver_semaphore_id = get_common_arg_val<uint32_t>(device_arg_idx++);
+    const uint32_t in0_valid_semaphore_id = get_common_arg_val<uint32_t>(device_arg_idx++);
+    [[maybe_unused]] const uint32_t in0_core_order_size = get_common_arg_val<uint32_t>(device_arg_idx++);
+    const uint32_t forward_in0_core_order_index = get_common_arg_val<uint32_t>(device_arg_idx++);
+    const uint32_t backward_in0_core_order_index = get_common_arg_val<uint32_t>(device_arg_idx++);
 
     // Load per-core runtime args
     uint32_t argidx = 0;
@@ -132,9 +147,6 @@ void kernel_main() {
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_sender_semaphore_id = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_receiver_semaphore_id = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_valid_semaphore_id = get_arg_val<uint32_t>(argidx++);
     Semaphore<> in0_sender_sem(in0_sender_semaphore_id);
     Semaphore<> in0_receiver_sem(in0_receiver_semaphore_id);
     Semaphore<> in0_valid_sem(in0_valid_semaphore_id);
@@ -147,10 +159,6 @@ void kernel_main() {
     const uint8_t out_ready_sem_injector_noc0_x = get_arg_val<uint32_t>(argidx++);
     const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
-    [[maybe_unused]] const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
-    // Fabric-sender chain indices, supplied by the host (order: forward then backward)
-    const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
-    const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();

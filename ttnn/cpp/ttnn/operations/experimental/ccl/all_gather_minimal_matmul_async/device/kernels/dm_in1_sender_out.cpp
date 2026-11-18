@@ -40,7 +40,7 @@ void kernel_main() {
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
     constexpr uint32_t num_devices = get_compile_time_arg_val(13);
-    constexpr uint32_t my_rank = get_compile_time_arg_val(14);
+    // Compile-time arg 14 is unused: the rank is a common runtime arg, after the outputs.
     constexpr uint32_t N_chunks = get_compile_time_arg_val(15);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(16);
     // Per-chunk tile widths + prefix-sum offsets (from CHUNK_TILE_WIDTHS/CHUNK_TILE_OFFSETS defines).
@@ -102,6 +102,12 @@ void kernel_main() {
 
     // Output tensor addresses from common args
     const uint32_t out_addr_common_arg_start = cargidx;
+    // After the outputs, the rank: it differs per device, so every device of a range runs one program.
+    const uint32_t my_rank = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks);
+    // The relay semaphores, the same on every core.
+    const uint32_t in1_sender_semaphore_id = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks + 1);
+    const uint32_t in1_receiver_semaphore_id = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks + 2);
+    const uint32_t in1_valid_semaphore_id = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks + 3);
 
     // Load per-core runtime args
     uint32_t argidx = 0;
@@ -110,9 +116,6 @@ void kernel_main() {
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_sender_semaphore_id = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_receiver_semaphore_id = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_valid_semaphore_id = get_arg_val<uint32_t>(argidx++);
     Semaphore<> in1_sender_sem(in1_sender_semaphore_id);
     Semaphore<> in1_receiver_sem(in1_receiver_semaphore_id);
     Semaphore<> in1_valid_sem(in1_valid_semaphore_id);

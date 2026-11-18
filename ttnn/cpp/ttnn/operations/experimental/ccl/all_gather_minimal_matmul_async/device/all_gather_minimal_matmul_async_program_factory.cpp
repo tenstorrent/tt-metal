@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
+#include "ttnn/per_device_program_merge.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
 #include <algorithm>
 #include <bit>
@@ -1056,7 +1057,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         true,
         ring_size,
-        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
+        0u,  // unused: my_rank is a common runtime arg (it differs per device)
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -1126,7 +1127,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
+        0u,  // unused: my_rank is a common runtime arg (it differs per device)
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -1171,7 +1172,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
+        0u,  // unused: my_rank is a common runtime arg (it differs per device)
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -1188,10 +1189,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         in0_receiver_fabric_compile_time_args);
+    // Unused slots: the unicast routes are common runtime args (they differ per device).
     in0_receiver_fabric_compile_time_args.insert(
-        in0_receiver_fabric_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
-    in0_receiver_fabric_compile_time_args.insert(
-        in0_receiver_fabric_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+        in0_receiver_fabric_compile_time_args.end(), unicast_forward_args.size() + unicast_backward_args.size(), 0u);
     append_accessors(
         in0_receiver_fabric_compile_time_args,
         ag_output_tensor,
@@ -1234,7 +1234,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             in1_is_output_writer,
             (uint32_t)is_injector,  // is_injector_core
             ring_size,
-            skewed_rank,                      // my_rank (skewed for fsdp; == ring_index otherwise)
+            0u,                               // unused: my_rank is a common runtime arg
             N_chunks,                         // N_chunks
             N_tiles_per_chunk,                // N_tiles_per_chunk
             static_cast<uint32_t>(topology),  // topology
@@ -1456,6 +1456,27 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         for (const auto& mm_output_tensor : mm_output_tensors) {
             in0_common_args.push_back(allocated_buffer(mm_output_tensor, "matmul output"));
         }
+        // Per device, after the outputs: the rank, then the forward and backward unicast routes. Every device of a
+        // range then runs one program, differing in these words and the per-core fabric connection args
+        // (merge_per_device_program_descriptors).
+        in0_common_args.push_back(skewed_rank);  // smuggled-rta-ok: device rank, fixed per device
+        for (const uint32_t word : unicast_forward_args) {
+            in0_common_args.push_back(word);  // smuggled-rta-ok: fabric route, fixed per device
+        }
+        for (const uint32_t word : unicast_backward_args) {
+            in0_common_args.push_back(word);  // smuggled-rta-ok: fabric route, fixed per device
+        }
+        // Values the same on every core, so they are dispatched once instead of once per core: the relay semaphores,
+        // the in0 chain's length and the chain positions of its forward and backward fabric senders (beside the mux at
+        // the chain's far end).
+        const bool in0_increasing = (in0_noc == tt::tt_metal::NOC::NOC_0);
+        const uint32_t in0_core_order_size = in1_parallel_axis_cores;
+        in0_common_args.push_back(in0_sender_semaphore_id);
+        in0_common_args.push_back(in0_receiver_semaphore_id);
+        in0_common_args.push_back(in0_valid_semaphore_id);
+        in0_common_args.push_back(in0_core_order_size);
+        in0_common_args.push_back(in0_increasing ? in0_core_order_size - 1 : 1u);  // forward fabric sender
+        in0_common_args.push_back(in0_increasing ? in0_core_order_size - 2 : 2u);  // backward fabric sender
         desc.kernels[kIn0SenderKernelIdx].emplace_common_runtime_args(in0_common_args);
         desc.kernels[kIn0ReceiverFabricKernelIdx].emplace_common_runtime_args(in0_common_args);
         desc.kernels[kIn0ReceiverNoFabricKernelIdx].emplace_common_runtime_args(in0_common_args);
@@ -1486,6 +1507,11 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         for (const auto& mm_output_tensor : mm_output_tensors) {
             in1_common_args.push_back(allocated_buffer(mm_output_tensor, "matmul output"));
         }
+        in1_common_args.push_back(skewed_rank);  // smuggled-rta-ok: device rank, fixed per device
+        // The relay semaphores are the same on every core: dispatched once instead of once per core.
+        in1_common_args.push_back(in1_sender_semaphore_id);
+        in1_common_args.push_back(in1_receiver_semaphore_id);
+        in1_common_args.push_back(in1_valid_semaphore_id);
         desc.kernels[kIn1SenderKernelIdx].emplace_common_runtime_args(in1_common_args);
         desc.kernels[kIn1ReceiverKernelIdx].emplace_common_runtime_args(in1_common_args);
     }
@@ -1595,9 +1621,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
             (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
             (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
-            in0_sender_semaphore_id,
-            in0_receiver_semaphore_id,
-            in0_valid_semaphore_id,
             in0_idx,
             N_start_tile,
             N_end_tile,
@@ -1606,10 +1629,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             virtual_core.y,
             in0_injector_virtual_core.x,
             in0_injector_virtual_core.y,
-            in0_core_order_index,
-            in0_core_order.size(),
-            in0_fwd_idx,
-            in0_bwd_idx};
+            in0_core_order_index};
         if (in0_is_fabric_core) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
 
@@ -1699,9 +1719,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
             (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
             (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
-            in1_sender_semaphore_id,
-            in1_receiver_semaphore_id,
-            in1_valid_semaphore_id,
             in0_idx,
             N_start_tile,
             N_end_tile,
@@ -2110,9 +2127,7 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
     std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& coord : tensor_coords.coords()) {
-        tt::tt_metal::Program program{
-            build_program_descriptor_at(operation_attributes, coord, tensor_args, tensor_return_value)};
+    auto add = [&](const ttnn::MeshCoordinateRange& range, tt::tt_metal::Program program) {
         shared_variables_t sv{
             .in0_sender = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0SenderKernelIdx),
             .in0_receiver_no_fabric = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverNoFabricKernelIdx),
@@ -2121,9 +2136,34 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
             .in1_receiver = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1ReceiverKernelIdx),
             .compute = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx),
         };
-        const ttnn::MeshCoordinateRange range(coord);
         workload.add_program(range, std::move(program));
         shared_variables.emplace(range, sv);
+    };
+    // A ring's devices differ only in runtime-arg values (rank, routes, fabric connections), so each range runs one
+    // program with per-device runtime args. Where they differ in more (a line's ends, FSDP's ring index), the merge
+    // refuses and each device runs its own program. override_runtime_arguments writes only words that are the same
+    // on every device, which per-device values leave alone.
+    auto& mesh_device = *tensor_args.input_tensor.device();
+    for (const auto& range : tensor_coords.ranges()) {
+        std::vector<tt::tt_metal::ProgramDescriptor> descriptors;
+        descriptors.reserve(range.shape().mesh_size());
+        for (const auto& coord : range) {
+            descriptors.push_back(
+                build_program_descriptor_at(operation_attributes, coord, tensor_args, tensor_return_value));
+        }
+        auto merged =
+            descriptors.size() > 1 && tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(mesh_device, range)
+                ? ttnn::merge_per_device_program_descriptors(descriptors)
+                : std::nullopt;
+        if (merged.has_value()) {
+            add(range, tt::tt_metal::Program{mesh_device, merged->descriptor});
+            ttnn::apply_per_device_runtime_args(workload, range, merged->per_device_runtime_args);
+            continue;
+        }
+        size_t i = 0;
+        for (const auto& coord : range) {
+            add(ttnn::MeshCoordinateRange(coord), tt::tt_metal::Program{mesh_device, descriptors[i++]});
+        }
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
