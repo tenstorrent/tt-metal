@@ -15,18 +15,43 @@ namespace ttnn::operations::data_movement {
 void bind_unsqueeze(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Returns a tensor unsqueezed at the specified dimension
+        Returns `input_tensor` with a new dimension of size 1 inserted at position `dim`, like ``torch.unsqueeze``.
 
-        Equivalent pytorch code:
-
-        .. code-block:: python
-
-            input_tensor = torch.rand((1,1,256), dtype=torch.bfloat16)
-            output_tensor = torch.unsqueeze(input_tensor, 2) # tensor of shape (1,1,1,256), where at dimension 2 we added a new dim of size 1
+        When the new dimension comes before the last two dimensions of the output (`dim` in ``[-rank - 1, -3]`` or ``[0, rank - 2]``), the output is a view of `input_tensor`: it shares the input's buffer and no data moves.
 
         Args:
-            * :attr:`input_tensor`: Input Tensor.
-            * :attr:`dim`: Dim where we want to unsqueeze (add a new dimension of size 1)
+            input_tensor (ttnn.Tensor): the input tensor.
+            dim (int): the position of the new dimension in the output, in ``[-rank - 1, rank]``, where ``rank`` is the rank of `input_tensor`. Negative values count from the end of the output, so ``-1`` adds a last dimension.
+
+        Returns:
+            ttnn.Tensor: the output tensor, with one more dimension than `input_tensor` and the input's dtype, layout and memory configuration.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B, BFLOAT4_B
+                 - TILE
+
+            Also supported when the new dimension comes before the last two dimensions of the output:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - UINT16, UINT8
+                 - TILE, ROW_MAJOR
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1, when the new dimension comes before the last two dimensions of the output
         )doc";
 
     ttnn::bind_function<"unsqueeze">(
