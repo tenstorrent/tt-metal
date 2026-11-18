@@ -20,7 +20,6 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from math import prod
-from typing import Callable
 
 import numpy as np
 import ttnn
@@ -38,8 +37,6 @@ from ._coordinator import (
 )
 from ._errors import CheckpointError, CheckpointFatalError
 from ._index import (
-    FORMAT,
-    VERSION,
     FileRecord,
     begin_staging,
     check_json,
@@ -201,13 +198,6 @@ def _write_plan(
     return crcs
 
 
-def _file_metadata(world_rank: int, mesh: int) -> Callable[[tuple[int, ...]], dict]:
-    return lambda c: {
-        "ttml.format": f"{FORMAT}/{VERSION}",
-        "ttml.writer": {"world_rank": world_rank, "mesh_id": mesh, "coord": list(c)},
-    }
-
-
 def save(
     ckpt_dir: str,
     *,
@@ -326,7 +316,6 @@ def save(
             plan = create_save_plan(
                 [lt.info for lt in live],
                 file_for_coord=lambda c: data_file_name(world_rank, record.mesh_id, c),
-                file_metadata=_file_metadata(world_rank, record.mesh_id),
                 owner_of=election.owner_of(rank),
             )
             crcs = _write_plan(staging, plan, by_key, threads, max_inflight_bytes, stats)
