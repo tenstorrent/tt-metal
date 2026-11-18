@@ -38,7 +38,7 @@ class resnet50Stem:
             stride=2,
             padding=3,
             parameters=parameters.conv1,
-            kernel_fidelity=model_config,
+            model_config=model_config,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             **layer_optimisations.conv1,
         )
