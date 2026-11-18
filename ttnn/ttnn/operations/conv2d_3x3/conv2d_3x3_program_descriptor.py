@@ -60,6 +60,8 @@ CB_INPUT_TILES = 7
 # R4 only: every row peer's fp32 N-slice for this core's output columns, and their sum before the bias.
 CB_COMBINE_SLOTS = 8
 CB_COMBINED = 9
+# Tap-major only: 32 zero pixels, so an out-of-image tap run is one read instead of one per 512 B MEM_ZEROS chunk.
+CB_ZERO_SRC = 11
 
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
 SEM_COMBINE_CREDIT = 0
@@ -350,6 +352,31 @@ def _in0_stream_rows(g: Conv3x3Geometry, bm, bk, sb_h):
     return min(bm, max(IN0_STREAM_TILE_ROWS // sb_h, 1) * sb_h)
 
 
+def short_slice_lanes_zeroed(g: Conv3x3Geometry):
+    """A short last channel slice (K split, C_in not a multiple of the slice width) whose padded lanes the reader
+    keeps at zero in the slab: zeroed once, never read into. TILE needs the slice's real channels to be whole tiles;
+    lanes inside a real tile are the tensor's own tile padding, which no whole-tile zeroing reaches."""
+    if not g.k_split:
+        return False
+    short = g.c_in - (g.k_cols - 1) * g.c_in_p
+    return 0 < short < g.c_in_p and (not g.tile_input or short % TILE == 0)
+
+
+def tap_major_capable(g: Conv3x3Geometry):
+    """Tap-major im2col apart from the K-block: stride 1, whole-tile taps, and every slab lane a whole-pixel copy
+    may carry is data or zero."""
+    return (
+        TAP_MAJOR_IM2COL
+        and g.stride == 1
+        and g.c_in_p % TILE == 0
+        and (g.c_in == g.k_cols * g.c_in_p or short_slice_lanes_zeroed(g))
+    )
+
+
+def _tap_major(g: Conv3x3Geometry, bk):
+    return tap_major_capable(g) and bk % g.c_in_tiles == 0
+
+
 def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
     num_k_blocks = g.tensor_k_tiles // bk
     max_m_blocks = _div_up(core_m_tiles, bm)
@@ -377,6 +404,7 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
         slab_bytes
         + input_tile_bytes
         + (0 if face_direct_im2col(g, bk) else IM2COL_RM_DEPTH_ROWS * bk * TILE_BYTES_BF16)
+        + (TILE * g.c_in_p * BF16_BYTES if _tap_major(g, bk) else 0)
         + bm * bk * g.in0_tile_bytes
         + weight_depth * bk * bn * g.weight_tile_bytes
         + (ns * g.weight_tile_bytes if g.has_bias else 0)
@@ -422,6 +450,10 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     if g.face_direct_capable and FACE_DIRECT_WHOLE_K_BLOCK:
         bk_above_floor = [g.tensor_k_tiles] + bk_above_floor
     bk_below_floor = [d for d in divisors if d < tap_floor]
+    if tap_major_capable(g):
+        # Tap-major needs whole taps per K-block. Above the tap floor the only tap-splitting divisor of the kernel
+        # row (3 taps) is 1.5 taps; the row gather it would fall back to costs far more than the extra K-blocks.
+        bk_above_floor = [d for d in bk_above_floor if d % g.c_in_tiles == 0]
     if g.sharded_output:
         bm_candidates = [d for d in range(core_m_tiles, 0, -1) if core_m_tiles % d == 0]
     else:
@@ -481,14 +513,7 @@ def block_grid_shape(shard_spec):
 
 
 def tap_major_im2col(g: Conv3x3Geometry, b: Conv3x3Blocking):
-    return (
-        TAP_MAJOR_IM2COL
-        and g.stride == 1
-        and g.c_in_p % TILE == 0
-        # Every channel slice is all data: no lane needs excluding from a whole-pixel copy.
-        and g.c_in == g.k_cols * g.c_in_p
-        and b.block_k_tiles % g.c_in_tiles == 0
-    )
+    return _tap_major(g, b.block_k_tiles)
 
 
 def _slice_channels(g: Conv3x3Geometry, col):
@@ -647,6 +672,8 @@ def create_program_descriptor(
     if g.tile_input:
         input_tile_pages = INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows * g.c_in_tiles
         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
+    if tap_major_im2col(g, b):
+        cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
     if g.k_split:
         cbs.append(_cb(CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32, g.k_cols * bm * ns, cores))
         if has_bias:
@@ -725,6 +752,9 @@ def create_program_descriptor(
             int(gather_split),
             stream_rows,
             *gather_sem_ids,
+            # Short-slice lane zeroing: cb_input_tiles tile-row slots (TILE) / slab pixels (ROW_MAJOR).
+            INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows if g.tile_input else b.slab_px,
+            CB_ZERO_SRC,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args

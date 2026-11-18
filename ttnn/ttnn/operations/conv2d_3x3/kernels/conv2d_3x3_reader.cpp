@@ -43,6 +43,11 @@
 // then gathers every odd row group and counts them in gather_done, while the reader gathers the even ones. Only the
 // reader touches the CB's pointers; the writer writes into the reserved block, which starts at the CB base.
 //
+// Short last channel slice (K split, C_in not a multiple of the slice width): tap-major copies whole slab pixels, so
+// the slice's padded lanes must read as zero. They are zeroed once at kernel start and never read into: on TILE the
+// cb_input_tiles slots of the padding tile columns (the ring is whole batches, so each slot keeps its L1 offset),
+// on ROW_MAJOR the whole slab, after which every pixel fill reads only its real channels.
+//
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
 // zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
@@ -115,7 +120,9 @@ void kernel_main() {
     constexpr uint32_t in0_stream_rows = get_compile_time_arg_val(42);
     constexpr uint32_t gather_go_sem_id = get_compile_time_arg_val(43);
     constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(44);
-    constexpr auto input_args = TensorAccessorArgs<45>();
+    constexpr uint32_t lane_zero_rows = get_compile_time_arg_val(45);
+    constexpr uint32_t cb_zero_src = get_compile_time_arg_val(46);
+    constexpr auto input_args = TensorAccessorArgs<47>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
@@ -150,9 +157,14 @@ void kernel_main() {
     static_assert(
         !slab_split || (!tile_input && !channel_slice && input_shard_rows > 0),
         "the slab fill is split by owner shard of ROW_MAJOR HEIGHT pages");
+    // Tap-major with padded lanes is the short channel slice, whose lanes the reader keeps at zero.
+    constexpr bool zero_slab_lanes = tap_major && lanes_padded;
     static_assert(
-        !tap_major || (stride == 1 && !lanes_padded && !k_padded && block_k_cols % c_in_p == 0),
-        "tap-major rows are whole unpadded taps read in unit-stride pixel runs");
+        !zero_slab_lanes || (channel_slice && (!tile_input || c_in % TILE_DIM == 0)),
+        "zeroed slab lanes: a short channel slice, padded by whole tile columns on TILE");
+    static_assert(
+        !tap_major || (stride == 1 && !k_padded && block_k_cols % c_in_p == 0),
+        "tap-major rows are whole taps read in unit-stride pixel runs");
 
     using FaceGather = conv2d_3x3::FaceGather<
         output_width,
@@ -194,6 +206,21 @@ void kernel_main() {
         reads.noc.async_write_zeros(CircularBuffer(cb_im2col_rm), im2col_rm_bytes);
         reads.noc.write_zeros_l1_barrier();
     }
+    if constexpr (zero_slab_lanes) {
+        if constexpr (tile_input) {
+            constexpr uint32_t ring_row_bytes = c_in_tiles * input_page_bytes;
+            constexpr uint32_t real_row_bytes = (c_in / TILE_DIM) * input_page_bytes;
+            for (uint32_t r = 0; r < lane_zero_rows; ++r) {
+                reads.noc.async_write_zeros(
+                    CircularBuffer(cb_input_tiles),
+                    ring_row_bytes - real_row_bytes,
+                    {.offset_bytes = r * ring_row_bytes + real_row_bytes});
+            }
+        } else {
+            reads.noc.async_write_zeros(CircularBuffer(cb_halo_slab), lane_zero_rows * pixel_bytes);
+        }
+        reads.noc.write_zeros_l1_barrier();
+    }
     if constexpr (padding_only_faces) {
         reads.noc.async_write_zeros(CircularBuffer(cb_im2col_tiles), block_m_tiles * block_k_tiles * in0_tile_bytes);
         reads.noc.write_zeros_l1_barrier();
@@ -204,6 +231,23 @@ void kernel_main() {
         while (bytes > 0) {
             const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
             reads.read(zeros_noc, dst_l1, chunk);
+            dst_l1 += chunk;
+            bytes -= chunk;
+        }
+    };
+
+    // Tap-major zero-fills read a 32-pixel zero block, so an out-of-image run is one read.
+    [[maybe_unused]] uint64_t zero_src_noc = 0;
+    if constexpr (tap_major) {
+        reads.noc.async_write_zeros(CircularBuffer(cb_zero_src), TILE_DIM * pixel_bytes);
+        reads.noc.write_zeros_l1_barrier();
+        zero_src_noc = get_noc_addr(get_write_ptr(cb_zero_src));
+    }
+    [[maybe_unused]] auto zero_fill_px = [&](uint32_t dst_l1, uint32_t bytes) {
+        constexpr uint32_t zero_src_bytes = TILE_DIM * pixel_bytes;
+        while (bytes > 0) {
+            const uint32_t chunk = bytes < zero_src_bytes ? bytes : zero_src_bytes;
+            reads.read(zero_src_noc, dst_l1, chunk);
             dst_l1 += chunk;
             bytes -= chunk;
         }
@@ -228,13 +272,22 @@ void kernel_main() {
     // consecutive L1 from l1.
     constexpr uint32_t pages_per_row = tile_input ? c_in_tiles : 1;
     constexpr uint32_t row_bytes = pages_per_row * input_page_bytes;
+    // A row's real channels only, when its padded lanes stay zero in L1.
+    constexpr uint32_t real_row_bytes = tile_input ? (c_in / TILE_DIM) * input_page_bytes : c_in * ELEM_BYTES;
     auto read_rows = [&](uint32_t row, uint32_t end_row, uint32_t l1) {
         if constexpr (channel_slice) {
             while (row < end_row) {
                 const uint32_t shard_end = (row / input_shard_rows + 1) * input_shard_rows;
                 const uint32_t run_end = end_row < shard_end ? end_row : shard_end;
-                reads.read(
-                    input.get_noc_addr(row * row_page_stride + slice_page_offset), l1, (run_end - row) * row_bytes);
+                const uint64_t src = input.get_noc_addr(row * row_page_stride + slice_page_offset);
+                if constexpr (zero_slab_lanes) {
+                    // One owner shard stores the slice's rows back to back, row_bytes apart.
+                    for (uint32_t i = 0; i < run_end - row; ++i) {
+                        reads.read(src + i * row_bytes, l1 + i * row_bytes, real_row_bytes);
+                    }
+                } else {
+                    reads.read(src, l1, (run_end - row) * row_bytes);
+                }
                 l1 += (run_end - row) * row_bytes;
                 row = run_end;
             }
@@ -449,7 +502,7 @@ void kernel_main() {
                                 in_lo = in_hi = run;
                             }
                             if (in_lo > 0) {
-                                zero_fill(dst, in_lo * pixel_bytes);
+                                zero_fill_px(dst, in_lo * pixel_bytes);
                             }
                             if (in_hi > in_lo) {
                                 reads.read(
@@ -458,7 +511,7 @@ void kernel_main() {
                                     (in_hi - in_lo) * pixel_bytes);
                             }
                             if (run > in_hi) {
-                                zero_fill(dst + in_hi * pixel_bytes, (run - in_hi) * pixel_bytes);
+                                zero_fill_px(dst + in_hi * pixel_bytes, (run - in_hi) * pixel_bytes);
                             }
                             dst += run * pixel_bytes;
                             p += run;
