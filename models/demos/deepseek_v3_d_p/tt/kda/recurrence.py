@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     l1_when_it_fits,
     preparation_bytes,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import OutputNorm, RelayAffinePrefix, SlabEntry
+from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_outputs import OutputNorm, RelayChunkOutputs, SlabEntry
 
 
 def _group_summary_memory_config(
@@ -333,7 +333,7 @@ def _scan_sp_chunks(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
-    affine_relay: RelayAffinePrefix,
+    affine_relay: RelayChunkOutputs,
     output_norm: OutputNorm,
 ) -> RecurrenceResult:
     """One group per head: the summary writes the packed transform the relay carries (the identity for a rank without a
@@ -454,7 +454,7 @@ class KDARecurrence:
                 raise ValueError(
                     "the SP relay needs the ethernet link count of the SP axis; this system has none listed"
                 )
-            self._affine_relay = RelayAffinePrefix.shared(
+            self._affine_relay = RelayChunkOutputs.shared(
                 device,
                 sequence_parallel_axis=sequence_parallel_axis,
                 batch_heads=batch * heads,
@@ -654,7 +654,7 @@ class KDARecurrence:
         return self._sequence_parallel
 
     def reserve_affine_relay(self) -> None:
-        """Allocate the SP relay's L1 landing buffer for the next call (RelayAffinePrefix.reserve): a layer calls it
+        """Allocate the SP relay's L1 landing buffer for the next call (RelayChunkOutputs.reserve): a layer calls it
         before its first program, since the predecessor's relay may write into it while this rank is still ahead
         of its own. Without the relay, a no-op."""
         if self._affine_relay is not None:

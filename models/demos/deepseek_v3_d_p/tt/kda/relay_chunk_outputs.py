@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The sequence-parallel prefix as a relay along the SP axis (ttnn.experimental.kda.relay_affine_prefix): each rank
+"""The sequence-parallel prefix as a relay along the SP axis (ttnn.experimental.kda.relay_chunk_outputs): each rank
 applies its own summary, in complement form [E | B] (E = A - I), to the entry state S its predecessor sends as
 S + (E S + B) and forwards the result, and the last rank hands the final state to the first. On a ring that hand-off
 is one hop; on a line it crosses the SP axis (2D routing, or sp_size - 1 hops back on a 1D fabric). The first rank
@@ -63,7 +63,7 @@ class OutputNorm:
     memory_config: ttnn.MemoryConfig
 
 
-# A sender core's count semaphores, one per head it serves (relay_affine_prefix_max_heads_per_link).
+# A sender core's count semaphores, one per head it serves (relay_chunk_outputs_max_heads_per_link).
 _MAX_HEADS_PER_LINK = 14
 
 # A core's share of the emitted FP32 terms (F(0) and F(I) of its chunks) that stays in its L1; beyond it they stream
@@ -101,13 +101,13 @@ def reset_persistent_semaphores(mesh_device) -> None:
     ttnn.synchronize_device(mesh_device)
 
 
-class RelayAffinePrefix:
+class RelayChunkOutputs:
     """The SP relay's landing buffer and semaphores for one mesh and geometry."""
 
     _shared: dict = {}
 
     @classmethod
-    def shared(cls, mesh_device, **kwargs) -> RelayAffinePrefix:
+    def shared(cls, mesh_device, **kwargs) -> RelayChunkOutputs:
         """One relay per mesh and geometry (mesh ids are never reused): layers run one after another, so they share
         its L1 landing buffer."""
         key = (mesh_device.id(), tuple(sorted(kwargs.items())))
@@ -234,7 +234,7 @@ class RelayAffinePrefix:
         if isinstance(initial_state, SlabEntry):
             slab_kwargs = initial_state.op_kwargs()
             initial_state = initial_state.slab
-        result = ttnn.experimental.kda.relay_affine_prefix(
+        result = ttnn.experimental.kda.relay_chunk_outputs(
             packed,
             terms,
             initial_state,

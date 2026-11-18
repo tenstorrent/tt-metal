@@ -14,7 +14,7 @@
 
 namespace ttnn::experimental::prim {
 
-struct RelayAffinePrefixParams {
+struct RelayChunkOutputsParams {
     uint32_t sequence_parallel_axis;
     uint32_t local_rows;
     uint32_t num_links;
@@ -40,7 +40,7 @@ struct RelayAffinePrefixParams {
 // The landing buffer's K x K slots per head core: entry state, final state.
 inline constexpr uint32_t relay_landing_slots = 2;
 
-struct RelayAffinePrefixInputs {
+struct RelayChunkOutputsInputs {
     Tensor packed;
     // Per chunk, the output for a zero seed F(0) and an identity seed F(I): height-sharded so each core's F(0) rows,
     // then its F(I) rows, are in its own L1, or interleaved [B*H, 2, local rows, K] and streamed.
@@ -70,7 +70,7 @@ struct RelayStateGeometry {
     uint32_t heads;
     uint32_t key_dim;
 };
-inline RelayStateGeometry relay_state_geometry(const RelayAffinePrefixInputs& in) {
+inline RelayStateGeometry relay_state_geometry(const RelayChunkOutputsInputs& in) {
     const auto& state = in.initial_state.logical_shape();
     return in.slab_index ? RelayStateGeometry{state[1], state[2]} : RelayStateGeometry{state[0], state[1]};
 }

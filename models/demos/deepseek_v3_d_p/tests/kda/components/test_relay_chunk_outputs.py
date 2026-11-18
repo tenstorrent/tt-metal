@@ -26,9 +26,9 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _sp_links
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import (
+from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_outputs import (
     OutputNorm,
-    RelayAffinePrefix,
+    RelayChunkOutputs,
     reset_persistent_semaphores,
 )
 from tt_py_test_utils_common.realtime_profiler_utils import require_realtime_profiler
@@ -257,8 +257,8 @@ def _pack(mesh_device, a: torch.Tensor, b: torch.Tensor) -> ttnn.Tensor:
 
 def _relay(
     mesh_device, math_fidelity=_MATH_FIDELITY, max_cores=_PROGRAM_CONFIG.entry_correction_max_cores
-) -> RelayAffinePrefix:
-    return RelayAffinePrefix(
+) -> RelayChunkOutputs:
+    return RelayChunkOutputs(
         mesh_device,
         sequence_parallel_axis=0,
         batch_heads=_HEADS,
@@ -271,7 +271,7 @@ def _relay(
     )
 
 
-def _run(relay: RelayAffinePrefix, transforms: _Transforms, actual_start, actual_end=None):
+def _run(relay: RelayChunkOutputs, transforms: _Transforms, actual_start, actual_end=None):
     terms, final_e, final_b = transforms.inputs
     return relay(
         transforms.packed, terms, transforms.initial_tt, final_e, final_b, transforms.norm, actual_start, actual_end
@@ -306,7 +306,7 @@ def _bounds(mesh_device, name: str):
 
 @_MESH
 @pytest.mark.parametrize("interval", list(_INTERVALS))
-def test_relay_affine_prefix_matches_reference(mesh_device, interval):
+def test_relay_chunk_outputs_matches_reference(mesh_device, interval):
     start, end, actual_start, actual_end = _bounds(mesh_device, interval)
     relay = _relay(mesh_device)
     transforms = _Transforms(mesh_device, relay, seed=start + (end or 0))
@@ -321,7 +321,7 @@ _LAYOUTS = {"one-core-per-head": (_HEADS, ttnn.BufferType.DRAM), "two-cores-per-
 
 @_MESH
 @pytest.mark.parametrize("layout", list(_LAYOUTS))
-def test_relay_affine_prefix_core_layouts(mesh_device, layout):
+def test_relay_chunk_outputs_core_layouts(mesh_device, layout):
     max_cores, terms_buffer = _LAYOUTS[layout]
     relay = _relay(mesh_device, max_cores=max_cores)
     assert relay.terms_memory_config.buffer_type == terms_buffer
@@ -337,7 +337,7 @@ _NORM_CASES = {"float32-output": (1, ttnn.float32), "two-batches": (2, ttnn.bflo
 
 @_MESH
 @pytest.mark.parametrize("case", list(_NORM_CASES))
-def test_relay_affine_prefix_output_norm(mesh_device, case):
+def test_relay_chunk_outputs_output_norm(mesh_device, case):
     batch, output_dtype = _NORM_CASES[case]
     start, end, actual_start, actual_end = _bounds(mesh_device, "split-bounded")
     relay = _relay(mesh_device)
@@ -348,7 +348,7 @@ def test_relay_affine_prefix_output_norm(mesh_device, case):
 
 
 @_MESH
-def test_relay_affine_prefix_applies_the_complement_form(mesh_device):
+def test_relay_chunk_outputs_applies_the_complement_form(mesh_device):
     """Hand-checkable relay of the complement form: rank r carries A = I / 2 (E = -I / 2) and B = (r + 1) I, except
     rank 3, which carries the identity map, (0, 0) as an empty rank's summary publishes it. From S = 10 I every entry
     state is a small dyadic multiple of I, exact in FP32 and in the matmuls' source registers, so every rank's carry must
@@ -397,7 +397,7 @@ _TAIL_BOUNDS = {
 
 @_MESH
 @pytest.mark.parametrize("bounds", list(_TAIL_BOUNDS.values()), ids=list(_TAIL_BOUNDS))
-def test_relay_affine_prefix_applies_the_final_transition_of_a_separated_tail(mesh_device, bounds):
+def test_relay_chunk_outputs_applies_the_final_transition_of_a_separated_tail(mesh_device, bounds):
     """The carry is the relayed final state P, or P + E P + B with the first rank's final transition (E, B) when the
     interval ends in a separated tail. Every rank holds a distinct, non-zero final transition, so a carry formed
     from the wrong rank's transition, or one applied (or skipped) on the wrong side of the tail's start, cannot
@@ -453,7 +453,7 @@ def test_relay_affine_prefix_applies_the_final_transition_of_a_separated_tail(me
 
 
 @_MESH
-def test_relay_affine_prefix_adds_the_entry_state_and_b_in_fp32(mesh_device):
+def test_relay_chunk_outputs_adds_the_entry_state_and_b_in_fp32(mesh_device):
     """With E = 0 each hop is S + B: a random FP32 initial state and BF16 B with full mantissas must reach the carry as
     their FP32 sum over every hop, to FP32 rounding. A source register would truncate the entry state to TF32, and B
     in srcB to 6 mantissa bits at HiFi2: either is an error of order 1e-4 here, against the 1e-6 allowed."""
@@ -472,7 +472,7 @@ def test_relay_affine_prefix_adds_the_entry_state_and_b_in_fp32(mesh_device):
 
 
 @_MESH
-def test_relay_affine_prefix_rejects_low_fidelity(mesh_device, expect_error):
+def test_relay_chunk_outputs_rejects_low_fidelity(mesh_device, expect_error):
     """Below HiFi3 the norm's FPU products truncate 1 / rms and the squares: HiFi2 is refused."""
     relay = _relay(mesh_device, math_fidelity=ttnn.MathFidelity.HiFi2)
     transforms = _Transforms(mesh_device, relay, seed=0)
@@ -481,7 +481,7 @@ def test_relay_affine_prefix_rejects_low_fidelity(mesh_device, expect_error):
 
 
 @_MESH
-def test_relay_affine_prefix_back_to_back(mesh_device):
+def test_relay_chunk_outputs_back_to_back(mesh_device):
     """Back-to-back calls, separated only by every rank waiting for the previous call's final carry: the second call
     must be as exact as the first, from the landing buffers and arrival counters the first left."""
     # Rank-aligned starts, the second rotated.
@@ -497,7 +497,7 @@ def test_relay_affine_prefix_back_to_back(mesh_device):
 
 
 @_MESH
-def test_relay_affine_prefix_after_counter_reset(mesh_device):
+def test_relay_chunk_outputs_after_counter_reset(mesh_device):
     """Counts an aborted call left on the persistent counters are zeroed by reset_persistent_semaphores, and the next
     call is exact."""
     start = 640
@@ -515,7 +515,7 @@ _DETERMINISM_CALLS = 3
 
 
 @_MESH
-def test_relay_affine_prefix_determinism(mesh_device):
+def test_relay_chunk_outputs_determinism(mesh_device):
     """Every full interval's calls return bit-identical outputs and carries (a bounded interval leaves its invalid
     chunks unwritten)."""
     relay = _relay(mesh_device)
@@ -546,7 +546,7 @@ def test_relay_affine_prefix_determinism(mesh_device):
 _PERF_SAMPLES = 15
 # A full chunk that starts 320 rows into the second rank, as the layer gates place it: the relay starts mid-ring.
 _PERF_START = _ROWS + 320
-_PERF_KERNEL = "relay_affine_prefix"
+_PERF_KERNEL = "relay_chunk_outputs"
 
 
 def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us: float, margin: float):
@@ -566,9 +566,9 @@ _PERF_CASES = [
 @pytest.mark.parametrize(
     "mesh_device,device_params,reference_us,margin", _PERF_CASES, indirect=["mesh_device", "device_params"]
 )
-def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us, margin):
+def test_relay_chunk_outputs_kimi_k3_perf(mesh_device, reference_us, margin):
     """The model's relay: 24 heads per chip, the model's fidelity and cores, the terms in L1."""
-    require_realtime_profiler("the relay_affine_prefix device-time gate")
+    require_realtime_profiler("the relay_chunk_outputs device-time gate")
     layout = "SP{}xTP{}".format(*tuple(mesh_device.shape))
     relay = _relay(mesh_device)
     transforms = _Transforms(mesh_device, relay, seed=_PERF_START)
@@ -585,4 +585,4 @@ def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us, margin):
         ttnn.deallocate(tensor)
 
     median_us = median_device_us(mesh_device, call, _PERF_KERNEL, _PERF_SAMPLES)
-    assert_device_time(median_us, reference_us, margin, f"relay_affine_prefix Kimi-K3 {layout}")
+    assert_device_time(median_us, reference_us, margin, f"relay_chunk_outputs Kimi-K3 {layout}")

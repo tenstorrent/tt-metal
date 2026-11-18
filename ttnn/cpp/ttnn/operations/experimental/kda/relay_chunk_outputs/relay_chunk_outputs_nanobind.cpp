@@ -1,19 +1,19 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "relay_affine_prefix_nanobind.hpp"
+#include "relay_chunk_outputs_nanobind.hpp"
 
-#include "relay_affine_prefix.hpp"
+#include "relay_chunk_outputs.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-namespace ttnn::operations::experimental::kda::relay_affine_prefix::detail {
+namespace ttnn::operations::experimental::kda::relay_chunk_outputs::detail {
 
-void bind_relay_affine_prefix(nb::module_& mod) {
-    ttnn::bind_function<"relay_affine_prefix", "ttnn.experimental.kda.">(
+void bind_relay_chunk_outputs(nb::module_& mod) {
+    ttnn::bind_function<"relay_chunk_outputs", "ttnn.experimental.kda.">(
         mod,
         R"doc(
         The sequence-parallel prefix as a relay along the SP axis, with the chunk's final carry: rank ``p``
@@ -91,7 +91,7 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             ``K`` must be positive, tile aligned and at most the DST's tiles wide; the fabric payload must hold
             an FP32 tile. Inputs are not modified, except a slab's entry.
         )doc",
-        &ttnn::experimental::kda::relay_affine_prefix,
+        &ttnn::experimental::kda::relay_chunk_outputs,
         nb::arg("packed").noconvert(),
         nb::arg("terms").noconvert(),
         nb::arg("initial_state").noconvert(),
@@ -119,4 +119,4 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         nb::arg("slab_index_offset") = 0);
 }
 
-}  // namespace ttnn::operations::experimental::kda::relay_affine_prefix::detail
+}  // namespace ttnn::operations::experimental::kda::relay_chunk_outputs::detail

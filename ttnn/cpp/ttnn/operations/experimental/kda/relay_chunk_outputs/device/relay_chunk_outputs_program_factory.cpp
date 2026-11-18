@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/kda/relay_affine_prefix/device/relay_affine_prefix_program_factory.hpp"
+#include "ttnn/operations/experimental/kda/relay_chunk_outputs/device/relay_chunk_outputs_program_factory.hpp"
 
 #include <algorithm>
 #include <array>
@@ -63,15 +63,15 @@ constexpr uint32_t ack_semaphore_id = 0;
 constexpr uint32_t landed_semaphore_id = 1;
 // On the sender cores, ids 0, 1, ...: per head the sender serves, the head's finished columns.
 constexpr uint32_t first_notify_semaphore_id = 0;
-constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/relay_affine_prefix/device/kernels/";
+constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_outputs/device/kernels/";
 
 uint32_t xy(const tt::tt_metal::CoreCoord& noc) {
     return static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16);
 }
 
 tt::tt_metal::ProgramDescriptor build_program(
-    const RelayAffinePrefixParams& attrs,
-    const RelayAffinePrefixInputs& in,
+    const RelayChunkOutputsParams& attrs,
+    const RelayChunkOutputsInputs& in,
     const std::vector<Tensor>& outputs,
     const ttnn::MeshCoordinate& coord) {
     using tt::tt_metal::CoreCoord;
@@ -116,7 +116,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t heads_per_link = (batch_heads + attrs.num_links - 1) / attrs.num_links;
     const uint32_t num_chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
     const uint32_t cores_per_head =
-        relay_affine_prefix_cores_per_head(attrs.cores.size(), batch_heads, attrs.num_links);
+        relay_chunk_outputs_cores_per_head(attrs.cores.size(), batch_heads, attrs.num_links);
     const uint32_t core_chunks = num_chunks / cores_per_head;
     const uint32_t grid_x = mesh->compute_with_storage_grid_size().x;
     const uint32_t first_core = attrs.cores[0].y * grid_x + attrs.cores[0].x;
@@ -137,8 +137,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     if (unicast_peers) {
         // A connection takes two of a sender core's semaphores, beside one per head the sender serves.
         const uint32_t max_connections = std::min(
-            relay_affine_prefix_max_connections,
-            (relay_affine_prefix_sender_semaphores - heads_per_link) / relay_affine_prefix_connection_semaphores);
+            relay_chunk_outputs_max_connections,
+            (relay_chunk_outputs_sender_semaphores - heads_per_link) / relay_chunk_outputs_connection_semaphores);
         // Routes in one direction share its links, so a link's ETH core tells the direction.
         const auto same_direction = [&](const tt::tt_fabric::FabricNodeId& peer,
                                         const tt::tt_fabric::FabricNodeId& node) {
@@ -167,7 +167,7 @@ tt::tt_metal::ProgramDescriptor build_program(
                 const uint32_t s = carry_senders[1].connections.size() < max_connections ? 1 : 0;
                 TT_FATAL(
                     carry_senders[s].connections.size() < max_connections,
-                    "relay_affine_prefix: the routes from SP rank {} to the other ranks leave in more directions than "
+                    "relay_chunk_outputs: the routes from SP rank {} to the other ranks leave in more directions than "
                     "its two carry senders have semaphores for ({} connections each at {} heads per link)",
                     sp_rank,
                     max_connections,
@@ -206,7 +206,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     // columns at its own cb_eout address.
     const auto eout_set = head_set.merge(sender_set);
 
-    const uint32_t sender_slots = relay_affine_prefix_sender_slots(kt, mesh->arch());
+    const uint32_t sender_slots = relay_chunk_outputs_sender_slots(kt, mesh->arch());
     const uint32_t chron_slot_bytes =
         std::max(tt::tt_metal::hal::get_dram_alignment(), tt::tt_metal::hal::get_l1_alignment());
     // A K x K slot of the landing buffer on each head core, in place.
@@ -341,7 +341,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
-        sender_ct.end(), {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id});
+        sender_ct.end(), {kt * state_tile, relay_chunk_outputs_packet_bytes(), kt, sender_slots, ack_semaphore_id});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
     tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(sender_ct);
     sender_ct.insert(sender_ct.end(), slab_ct.begin(), slab_ct.end());
@@ -349,13 +349,13 @@ tt::tt_metal::ProgramDescriptor build_program(
     sender_ct.push_back(uint32_t(unicast_peers));
 
     tt::tt_metal::KernelDescriptor reader{
-        .kernel_source = std::string(kernel_dir) + "dataflow/reader_relay_affine_prefix.cpp",
+        .kernel_source = std::string(kernel_dir) + "dataflow/reader_relay_chunk_outputs.cpp",
         .core_ranges = correction_set,
         .compile_time_args = std::move(reader_ct),
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
     tt::tt_metal::KernelDescriptor writer{
-        .kernel_source = std::string(kernel_dir) + "dataflow/writer_relay_affine_prefix.cpp",
+        .kernel_source = std::string(kernel_dir) + "dataflow/writer_relay_chunk_outputs.cpp",
         .core_ranges = correction_set,
         .compile_time_args = std::move(writer_ct),
         .config = tt::tt_metal::WriterConfigDescriptor{},
@@ -370,7 +370,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         compute_config.unpack_to_dest_mode[cb_gate_factor] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     tt::tt_metal::KernelDescriptor compute{
-        .kernel_source = std::string(kernel_dir) + "compute/relay_affine_prefix.cpp",
+        .kernel_source = std::string(kernel_dir) + "compute/relay_chunk_outputs.cpp",
         .core_ranges = correction_set,
         .compile_time_args =
             {cb_e,
@@ -408,7 +408,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         .config = std::move(compute_config),
     };
     tt::tt_metal::KernelDescriptor sender{
-        .kernel_source = std::string(kernel_dir) + "dataflow/sender_relay_affine_prefix.cpp",
+        .kernel_source = std::string(kernel_dir) + "dataflow/sender_relay_chunk_outputs.cpp",
         .core_ranges = sender_set,
         .compile_time_args = std::move(sender_ct),
         // NoC 0, away from the head writers' DRAM copies (the writer default, NoC 1): the relay's hops are latency
@@ -465,7 +465,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto drain_core = mesh->worker_core_from_logical_core(sender_cores.front());
     TT_FATAL(
         links.size() >= attrs.num_links && back_links.size() >= attrs.num_links,
-        "relay_affine_prefix uses {} links; the hops towards the successor and predecessor have {} and {}",
+        "relay_chunk_outputs uses {} links; the hops towards the successor and predecessor have {} and {}",
         attrs.num_links,
         links.size(),
         back_links.size());
@@ -508,7 +508,7 @@ tt::tt_metal::ProgramDescriptor build_program(
                     const auto extra_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, node);
                     TT_FATAL(
                         extra_links.size() > link,
-                        "relay_affine_prefix uses {} links; a carry route from SP rank {} leaves on a direction with "
+                        "relay_chunk_outputs uses {} links; a carry route from SP rank {} leaves on a direction with "
                         "{}",
                         attrs.num_links,
                         sp_rank,
@@ -532,9 +532,9 @@ tt::tt_metal::ProgramDescriptor build_program(
 
 }  // namespace
 
-tt::tt_metal::WorkloadDescriptor RelayAffinePrefixProgramFactory::create_workload_descriptor(
-    const RelayAffinePrefixParams& attrs,
-    const RelayAffinePrefixInputs& in,
+tt::tt_metal::WorkloadDescriptor RelayChunkOutputsProgramFactory::create_workload_descriptor(
+    const RelayChunkOutputsParams& attrs,
+    const RelayChunkOutputsInputs& in,
     std::vector<Tensor>& outputs,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::WorkloadDescriptor workload;

@@ -29,7 +29,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import OutputNorm
+from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_outputs import OutputNorm
 
 pytestmark = run_for_blackhole()
 

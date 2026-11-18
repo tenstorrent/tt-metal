@@ -7,16 +7,16 @@
 #include <variant>
 
 #include "ttnn/operation.hpp"
-#include "relay_affine_prefix_program_factory.hpp"
+#include "relay_chunk_outputs_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct RelayAffinePrefixOperation {
-    using operation_attributes_t = RelayAffinePrefixParams;
-    using tensor_args_t = RelayAffinePrefixInputs;
+struct RelayChunkOutputsOperation {
+    using operation_attributes_t = RelayChunkOutputsParams;
+    using tensor_args_t = RelayChunkOutputsInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<RelayAffinePrefixProgramFactory>;
+    using program_factory_t = std::variant<RelayChunkOutputsProgramFactory>;
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -26,7 +26,7 @@ struct RelayAffinePrefixOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-std::tuple<Tensor, Tensor> relay_affine_prefix(
+std::tuple<Tensor, Tensor> relay_chunk_outputs(
     const Tensor& packed,
     const Tensor& terms,
     const Tensor& initial_state,

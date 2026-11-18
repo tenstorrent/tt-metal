@@ -109,7 +109,7 @@ class KDARecurrenceProgramConfig:
     summary_group_chunks: int = 20
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
-    # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayAffinePrefix):
+    # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayChunkOutputs):
     # each rank applies its own summary to the entry state it receives and forwards the result. The summary also emits
     # each chunk's output terms, from which the relay's program forms the chunk outputs once the entry state lands, all
     # chunks in parallel (the entry correction). Cores the entry correction may use: its products count toward the

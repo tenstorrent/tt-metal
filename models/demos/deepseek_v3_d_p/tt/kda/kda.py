@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     validate_convolution_page_channels,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import OutputNorm, SlabEntry, persistent_semaphores
+from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_outputs import OutputNorm, SlabEntry, persistent_semaphores
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL

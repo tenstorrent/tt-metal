@@ -16,7 +16,7 @@
 
 namespace ttnn::experimental::kda {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> relay_affine_prefix(
+std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_outputs(
     const ttnn::Tensor& packed,
     const ttnn::Tensor& terms,
     const ttnn::Tensor& initial_state,

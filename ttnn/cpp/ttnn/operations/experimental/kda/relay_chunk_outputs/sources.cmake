@@ -1,0 +1,9 @@
+set(TTNN_OP_EXPERIMENTAL_KDA_RELAY_CHUNK_OUTPUTS_API_HEADERS relay_chunk_outputs.hpp)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_RELAY_CHUNK_OUTPUTS_SRCS
+    relay_chunk_outputs.cpp
+    device/relay_chunk_outputs_device_operation.cpp
+    device/relay_chunk_outputs_program_factory.cpp
+)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_RELAY_CHUNK_OUTPUTS_NANOBIND_SRCS relay_chunk_outputs_nanobind.cpp)

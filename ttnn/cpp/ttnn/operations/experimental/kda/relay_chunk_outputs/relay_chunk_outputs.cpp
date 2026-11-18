@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "relay_affine_prefix.hpp"
+#include "relay_chunk_outputs.hpp"
 
-#include "device/relay_affine_prefix_device_operation.hpp"
+#include "device/relay_chunk_outputs_device_operation.hpp"
 
 namespace ttnn::experimental::kda {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> relay_affine_prefix(
+std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_outputs(
     const ttnn::Tensor& packed,
     const ttnn::Tensor& terms,
     const ttnn::Tensor& initial_state,
@@ -34,8 +34,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_affine_prefix(
     uint32_t slab_index_offset) {
     TT_FATAL(
         packed.storage_type() == StorageType::DEVICE && packed.is_allocated(),
-        "relay_affine_prefix: packed must be an allocated device tensor");
-    TT_FATAL(semaphores.size() == 3, "relay_affine_prefix: needs three global semaphores, got {}", semaphores.size());
+        "relay_chunk_outputs: packed must be an allocated device tensor");
+    TT_FATAL(semaphores.size() == 3, "relay_chunk_outputs: needs three global semaphores, got {}", semaphores.size());
     // The hop's, the correction's and the norm's products accumulate in an FP32 DST.
     const auto kernel_config = ttnn::init_device_compute_kernel_config(
         packed.device()->arch(),
@@ -44,7 +44,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_affine_prefix(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
-    return ttnn::experimental::prim::relay_affine_prefix(
+    return ttnn::experimental::prim::relay_chunk_outputs(
         packed,
         terms,
         initial_state,
