@@ -33,9 +33,14 @@ RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     8192: (224, 512),
     8320: (224, 512),
     8960: (160, 512),
-    # DP4 (SP4 x TP2) at 4096, every image / joined row count: SP4 has no shared-table key, so its default k chunk is 256 where
-    # SP8 x TP4's is 512, and the extra softmax merges cost 7 dB of image vs SP8 x TP4 (job 219220: 28.4 -> 35.3 dB with these)
-    **{rows: (224, 512) for rows in (16384, 16640, 16896, 17408, 17920, 18432, 20736, 20992, 21504)},
+}
+# SP4 x TP2 (DP4 groups) has no key in the shared table, whose default there is a 256 k chunk: twice SP8 x TP4's softmax
+# merges, 7 dB of image at 4096 (jobs 219146 / 219220). A length neither table has takes SP8 x TP4's default k 512 (q 128,
+# Klein's cap), and the 4096 image / single-stage rows (each reference and text bucket) take the (224, 512) measured there
+# (219220: 28.4 -> 35.3 dB of image vs SP8 x TP4; 219236, 4096 + 4 MP: 25.0 -> 31.2 dB).
+SP4_TP2_RING_SDPA_CHUNKS = (128, 512)
+SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
+    rows: (224, 512) for rows in (16384, 16640, 16896, 17408, 17920, 18432, 20736, 20992, 21504)
 }
 # The ring all-gather keeps the CCL row's cores x < 4 with 2 links
 RING_SDPA_CCL_ROW_START_X = 4
@@ -46,13 +51,17 @@ LINEAR1_MIN_ROWS = 8192
 
 class Flux3KleinAttention(Attention):
     """Ring SDPA on the streaming compute path with fp32 dest accumulation (bf16 score block), also on the CCL row's
-    cores from RING_SDPA_CCL_ROW_START_X on, with RING_SDPA_CHUNKS_BY_LOCAL_ROWS's chunks where it has the rows."""
+    cores from RING_SDPA_CCL_ROW_START_X on, with RING_SDPA_CHUNKS_BY_LOCAL_ROWS's chunks where it has the rows (SP4 x TP2:
+    SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS's first, SP4_TP2_RING_SDPA_CHUNKS where neither has them)."""
 
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
-        rows = per_device_seq_len // self.parallel_config.sequence_parallel.factor
+        sp = self.parallel_config.sequence_parallel.factor
+        rows = per_device_seq_len // sp
         key = ("local", rows)
         if key not in self.ring_sdpa_program_config:
             chunks = RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows)
+            if (sp, self.parallel_config.tensor_parallel.factor) == (4, 2):
+                chunks = SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows, chunks or SP4_TP2_RING_SDPA_CHUNKS)
             if chunks is None:
                 config = super().get_ring_sdpa_program_config(per_device_seq_len)
             else:
