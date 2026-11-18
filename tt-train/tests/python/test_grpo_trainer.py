@@ -1793,6 +1793,17 @@ def test_async_rollout_client_and_server_check_their_rank(monkeypatch, expect_er
     assert not bridge.connected and not queue_.connected
 
 
+def test_async_rollout_client_shuts_down_at_exit(monkeypatch):
+    monkeypatch.setattr(async_rollout, "_require_distributed_context", lambda owner: TTML_RANK)
+    registered = []
+    monkeypatch.setattr(async_rollout.atexit, "register", registered.append)
+    bridge, queue_ = _ScriptedBridge([]), _RecordingQueue()
+    client = async_rollout.AsyncRolloutClient(bridge=bridge, queue=queue_)
+    assert registered == [client.shutdown]
+    registered[0]()
+    assert bridge.closed and queue_.closed
+
+
 class _FakeAsyncClient:
     """pop() returns batches generated at the scripted versions, then None; records the pushed versions."""
 
