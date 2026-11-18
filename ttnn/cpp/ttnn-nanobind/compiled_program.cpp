@@ -40,8 +40,8 @@ void py_module(nb::module_& mod) {
             of the KERNEL_CONFIG window. Slow dispatch only. Experimental API; may change.
         )doc")
         .def_prop_ro(
-            "size",
-            [](const tt::tt_metal::experimental::KernelConfigBuffer& self) { return self.size(); },
+            "max_size",
+            [](const tt::tt_metal::experimental::KernelConfigBuffer& self) { return self.max_size(); },
             "Bytes of the largest shard, aligned to L1 alignment.")
         .def(
             "deallocate",

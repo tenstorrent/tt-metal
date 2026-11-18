@@ -57,7 +57,7 @@ std::shared_ptr<distributed::MeshBuffer> allocate_on(
 
 }  // namespace
 
-// The buffer covers the workload's cores and is placed per core: a core whose first free slot is
+// The buffer has a shard on each of the workload's cores and is placed per core: a core whose first free slot is
 // taken gets a different address from its neighbour.
 TEST_F(CustomKernelConfigBufferTest, CreatesPerCoreBufferForWorkload) {
     auto& device = *this->devices_[0];
@@ -66,9 +66,8 @@ TEST_F(CustomKernelConfigBufferTest, CreatesPerCoreBufferForWorkload) {
     auto workload = make_workload(device);
     auto buffer = experimental::CreateKernelConfigBuffer(device, workload);
 
-    EXPECT_EQ(buffer.cores().num_cores(), 2u);
-    EXPECT_TRUE(buffer.cores().contains(CoreRange(kBlockedCore, kFreeCore)));
-    EXPECT_GT(buffer.size(), 0u);
+    EXPECT_GT(buffer.size(kDevice, kBlockedCore), 0u);
+    EXPECT_GT(buffer.size(kDevice, kFreeCore), 0u);
     EXPECT_NE(buffer.address(kDevice, kBlockedCore), buffer.address(kDevice, kFreeCore));
 }
 
@@ -94,7 +93,7 @@ TEST_F(CustomKernelConfigBufferTest, SizesEachCoreForItsKernelGroup) {
     auto buffer = experimental::CreateKernelConfigBuffer(device, workload);
 
     EXPECT_LT(buffer.size(kDevice, kBlockedCore), buffer.size(kDevice, kFreeCore));
-    EXPECT_EQ(buffer.size(), buffer.size(kDevice, kFreeCore));
+    EXPECT_EQ(buffer.max_size(), buffer.size(kDevice, kFreeCore));
 }
 
 // A lockstep address: both cores' shards at one address, sized alike, so a program with Tensix program semaphores

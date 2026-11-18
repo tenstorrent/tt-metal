@@ -3985,6 +3985,12 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     return max_program_sizeB;
 }
 
+bool detail::ProgramImpl::kernel_config_fits_window(IDevice* device, HalProgrammableCoreType core_type) const {
+    const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
+    return program_config_sizes_[hal.get_programmable_core_type_index(core_type)] <=
+           get_ringbuffer_size(device, core_type);
+}
+
 void detail::ProgramImpl::check_kernel_config_fits_window(IDevice* device, bool tensix_from_buffer) {
     if (!is_finalized()) {
         return;
@@ -4013,11 +4019,11 @@ void detail::ProgramImpl::check_kernel_config_fits_window(
         if (tensix_from_buffer && programmable_core_type == HalProgrammableCoreType::TENSIX) {
             continue;
         }
-        const uint32_t size = program.program_config_sizes_[index];
-        const size_t max_size = get_ringbuffer_size(device, programmable_core_type);
-        if (size <= max_size) {
+        if (program.kernel_config_fits_window(device, programmable_core_type)) {
             continue;
         }
+        const uint32_t size = program.program_config_sizes_[index];
+        const size_t max_size = get_ringbuffer_size(device, programmable_core_type);
         // The layout finalize stored on the program, for the breakdown.
         const ProgramConfig& config = program.get_program_config(index);
         ProgramOffsetsState state;

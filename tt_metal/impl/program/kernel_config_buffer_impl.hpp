@@ -42,10 +42,8 @@ public:
     KernelConfigBufferImpl(
         std::vector<Shards> shards, bool lockstep_address, const distributed::MeshDevice* mesh_device = nullptr);
 
-    // Tensix cores with a shard, on any device.
-    const CoreRangeSet& cores() const { return cores_; }
     // The largest shard on any device.
-    uint32_t size() const { return size_; }
+    uint32_t max_size() const { return max_size_; }
     const distributed::MeshDevice* mesh_device() const { return mesh_device_; }
 
     // The shard on `core` of a device. Throws if there is none.
@@ -57,7 +55,7 @@ public:
     // The shards on `core` of `device_id`, or null.
     const Shards* find(ChipId device_id, const CoreCoord& core) const;
     // Whether the buffer has shards on `device_id`, a device local to this host.
-    bool has_shard_on(ChipId device_id) const { return shards_on_device_.contains(device_id); }
+    bool has_shard_on(ChipId device_id) const { return shard_map_.contains(device_id); }
     bool is_allocated() const;
     void deallocate();
     // Whether, on each device, every shard is at one address. Only such a buffer runs a program with Tensix program
@@ -70,11 +68,9 @@ private:
 
     std::vector<Shards> shards_;
     // Device, then core, to its index in shards_.
-    std::unordered_map<ChipId, std::unordered_map<CoreCoord, size_t>> shards_on_device_;
-    std::unordered_map<distributed::MeshCoordinate, ChipId> device_ids_;
+    std::unordered_map<ChipId, std::unordered_map<CoreCoord, size_t>> shard_map_;
     const distributed::MeshDevice* mesh_device_ = nullptr;
-    CoreRangeSet cores_;
-    uint32_t size_ = 0;
+    uint32_t max_size_ = 0;
     bool lockstep_address_ = false;
 };
 
@@ -83,9 +79,6 @@ private:
 // slow-dispatch check, since fast dispatch may be active.
 std::shared_ptr<KernelConfigBufferImpl> CreateKernelConfigBuffer(
     const std::vector<std::pair<IDevice*, Program*>>& programs, bool lockstep_address);
-
-// The largest Tensix kernel-config block among `program`'s kernel groups. The program must be laid out.
-uint32_t LargestTensixKernelConfigBlock(Program& program);
 
 // Checks that `program`, laid out, can run from `buffer` on `device_id`: each kernel group's block fits in the shard on
 // each of its cores there, and the program has no Tensix program semaphores unless the buffer has a lockstep address.

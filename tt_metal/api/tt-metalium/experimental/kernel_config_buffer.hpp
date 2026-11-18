@@ -36,10 +36,8 @@ class KernelConfigBuffer {
 public:
     explicit KernelConfigBuffer(std::shared_ptr<KernelConfigBufferImpl> impl);
 
-    // Tensix cores the buffer has a shard on, on any device.
-    const CoreRangeSet& cores() const;
     // Bytes of the largest shard on any device.
-    uint32_t size() const;
+    uint32_t max_size() const;
     // Bytes of the shard on `core` of the device at `device_coord`: sized for the block of the core's kernel group in
     // that device's program.
     uint32_t size(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const;
