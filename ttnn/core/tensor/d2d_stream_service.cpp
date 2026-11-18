@@ -1035,7 +1035,8 @@ struct RelayLocal {
     // What build_relay_* needs from the config (it runs after finalize_*).
     CommonPlan common;
     uint32_t max_lanes = 0;
-    std::map<distributed::MeshCoordinate, std::vector<DeviceAddr>> receiver_tensor_addrs;  // sender side only, [segment]
+    std::map<distributed::MeshCoordinate, std::vector<DeviceAddr>>
+        receiver_tensor_addrs;  // sender side only, [segment]
 
     // Fabric links of every relay-mode connection on this side, claimed in FabricLinkRegistry
     // (claim_relay_links) so that no router serves two workers of one chip. A (node, link)
@@ -1698,7 +1699,7 @@ uint32_t packed_slot_bytes(uint32_t max_payload, const std::vector<uint32_t>& pa
 
 // CT-arg layout must stay in sync with persistent_d2d_receiver.cpp.
 Program build_receiver_program(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const Buffer& output_buffer,
     const CoreCoord& service_core,
     uint32_t socket_config_addr,
@@ -1717,7 +1718,7 @@ Program build_receiver_program(
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const tt::tt_fabric::FabricNodeId& sender_node,
     uint32_t link_index) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
 
     // One packet header is enough for the receiver (control-flow notify only);
     // allocate two to mirror the sender and leave headroom.
@@ -1806,7 +1807,7 @@ struct SenderExtraSegment {
 // the master, streaming the whole tensor. The SAME full CT layout goes to both
 // kernels; per-lane fields differ.
 Program build_sender_program(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const Buffer& input_buffer,
     const CoreCoord& service_core,
     uint32_t socket_config_addr,
@@ -1829,7 +1830,7 @@ Program build_sender_program(
     const tt::tt_fabric::FabricNodeId& sender_node,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const std::vector<uint32_t>& link_indices) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
 
     const uint32_t total_pages = plan.num_socket_pages * plan.pages_per_chunk;
     const uint32_t half = (total_pages + 1) / 2;  // lane 0 takes the odd page
@@ -1964,7 +1965,7 @@ std::unique_ptr<distributed::MeshWorkload> build_lease_workload(
 
     auto workload = std::make_unique<distributed::MeshWorkload>();
     for (const auto& [coord, svc_core] : service_cores) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         // WAIT needs a 1-word L1 staging slot for the NoC read; RELEASE doesn't.
         if (is_wait) {
             auto cb_cfg = CircularBufferConfig(scratch_bytes, {{kLeaseScratchCb, tt::DataFormat::UInt32}})
@@ -2383,7 +2384,8 @@ ReceiverSideResources build_receiver_side(
     // Relay mode: allocate the relay state; build_relay_receiver builds the programs later.
     std::shared_ptr<RelayLocal> relay;
     if (cfg.relay) {
-        relay = allocate_relay(mesh, receiver_socket, service_cores, backings, coords, common, cfg, /*is_sender=*/false);
+        relay =
+            allocate_relay(mesh, receiver_socket, service_cores, backings, coords, common, cfg, /*is_sender=*/false);
         claim_relay_links(*mesh, *relay, cfg, /*is_sender=*/false, link_claims);
     }
     const std::vector<distributed::MeshCoordinate> no_coords;
@@ -3032,7 +3034,7 @@ Program build_exit_relay_program(
         credit_conn[k] = it->second;
     }
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh);
     const uint32_t max_page_size = relay_slot_bytes(common);
     const auto num_extra = static_cast<uint32_t>(backings.size() - 1);
     create_relay_cbs(program, core, max_page_size, backing.dtype());
@@ -3205,7 +3207,7 @@ Program build_entry_relay_program(
         "semaphores for",
         e);
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh);
     const uint32_t max_page_size = relay_slot_bytes(common);
     const auto num_extra = static_cast<uint32_t>(backings.size() - 1);
     create_relay_cbs(program, core, max_page_size, backing.dtype());

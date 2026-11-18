@@ -1055,6 +1055,63 @@ def test_minimax_h3_transformer_block(
     assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
 
 
+@GALAXY_RING
+def test_minimax_h3_transformer_block_prepared_modulation(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+    expect_error,
+) -> None:
+    """The block reading its step's rows of `prepare_modulation`'s table (`modulation_row_indices`) matches the block
+    projecting that step's temb: for a step whose rows reach the table's second 32-row tile, and for the last step
+    of a different schedule prepared after a release. Without a prepared table, `modulation_row_indices` raises."""
+    MIN_PCC = 0.9995  # against the torch reference, as test_minimax_h3_transformer_block
+    MIN_PCC_PROJECTED = 0.99999  # against the same block projecting the step's temb itself
+    NUM_STEPS = 49  # the denoising forwards of a 50-step request
+    TABLE_ROWS = 256  # the pipeline's ADALN_PREPARED_ROWS
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280)
+    slots = fixture.num_timesteps
+    assert NUM_STEPS * slots <= TABLE_ROWS
+
+    tt_model = MiniMaxH3TransformerBlock(**fixture.block_kwargs)
+    tt_model.load_torch_state_dict(fixture.torch_model.state_dict())
+    projected = fixture.run(tt_model)
+    assert_quality(fixture.torch_out, projected, pcc=MIN_PCC)
+
+    def rows_of(step: int) -> ttnn.Tensor:
+        """`modulation_row_indices` for `step`: its `slots` rows of the table, uint32 and replicated."""
+        rows = torch.arange(step * slots, (step + 1) * slots, dtype=torch.int32).reshape(1, slots)
+        return from_torch(rows, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR)
+
+    def prepare(step: int) -> None:
+        """Prepare a random schedule holding the fixture's temb at `step`, zero-padded like the pipeline's."""
+        rows = torch.zeros(TABLE_ROWS, TIME_EMBED_DIM)
+        rows[: NUM_STEPS * slots] = torch.randn(NUM_STEPS * slots, TIME_EMBED_DIM)
+        rows[step * slots : (step + 1) * slots] = fixture.temb_input
+        tt_rows = from_torch(rows.reshape(1, 1, TABLE_ROWS, TIME_EMBED_DIM), device=mesh_device, dtype=ttnn.float32)
+        tt_model.prepare_modulation(tt_rows)
+        ttnn.deallocate(tt_rows)
+
+    for step in (32 // slots, NUM_STEPS - 1):
+        tt_model.release_modulation()
+        prepare(step)
+        prepared = fixture.run(tt_model, temb=None, modulation_row_indices=rows_of(step))
+        logger.info(f"step {step} (rows {step * slots}..{(step + 1) * slots - 1}): prepared vs projected")
+        assert_quality(projected, prepared, pcc=MIN_PCC_PROJECTED)
+        assert_quality(fixture.torch_out, prepared, pcc=MIN_PCC)
+
+    tt_model.release_modulation()
+    with expect_error(RuntimeError, "modulation_row_indices needs prepare_modulation first"):
+        fixture.run(tt_model, temb=None, modulation_row_indices=rows_of(0))
+
+
 @GALAXY_RING_AND_LINE
 def test_minimax_h3_transformer_block_dynamic_length(
     mesh_device: ttnn.MeshDevice,

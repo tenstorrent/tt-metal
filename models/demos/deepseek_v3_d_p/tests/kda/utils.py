@@ -32,14 +32,20 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     kda_state_dict_sha256,
     load_kda_layer_state_dict,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, decode_tail
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, decode_tail, encode_tail
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
+    device_mismatch_marker,
+    marker_chips,
+    merge_device_mismatch_markers,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -96,14 +102,13 @@ class DeviceMismatch:
     def compare(self, reference: ttnn.Tensor, actual: ttnn.Tensor, name: str, ranks: set[int] | None = None):
         """Record whether ``actual`` differs from ``reference`` anywhere; only SP ``ranks`` count, if given (mesh axis
         0 is SP)."""
-        self._markers.append((name, ttnn.max(ttnn.ne(reference, actual, dtype=ttnn.bfloat16)), ranks))
+        self._markers.append((name, device_mismatch_marker(reference, actual), ranks))
 
     def assert_none(self) -> None:
         differing = []
         for name, marker, ranks in self._markers:
-            for index, shard in enumerate(ttnn.get_device_tensors(ttnn.from_device(marker))):
-                rank = index // self._tp_size
-                if (ranks is None or rank in ranks) and ttnn.to_torch(shard).float().item() != 0:
+            for index in marker_chips(marker):
+                if ranks is None or index // self._tp_size in ranks:
                     differing.append(f"{name} (device {index})")
             ttnn.deallocate(marker)
         self._markers.clear()
@@ -238,20 +243,12 @@ def collect_mesh_accuracy_and_determinism_results(
                     ttnn.deallocate(repeat_output)
                 raise ValueError("run returned output with different metadata")
             mismatch = ttnn.ne(reference, output, dtype=ttnn.bfloat16)
-            if mask is not None:
-                # The 0/1 mismatch is finite, so masking it by multiplication is exact.
-                defined_mismatch = ttnn.multiply(mismatch, mask)
+            if mask is not None:  # exact: the mismatch is 0/1
+                masked = ttnn.multiply(mismatch, mask)
                 ttnn.deallocate(mismatch)
-                mismatch = defined_mismatch
-            current_marker = ttnn.max(mismatch)
+                mismatch = masked
+            mismatch_marker = merge_device_mismatch_markers(mismatch_marker, ttnn.max(mismatch))
             ttnn.deallocate(mismatch)
-            if mismatch_marker is None:
-                mismatch_marker = current_marker
-            else:
-                updated_marker = ttnn.maximum(mismatch_marker, current_marker)
-                ttnn.deallocate(mismatch_marker)
-                ttnn.deallocate(current_marker)
-                mismatch_marker = updated_marker
         for output in outputs:
             ttnn.deallocate(output)
 
@@ -801,3 +798,58 @@ def upload_slab(slab: ttnn.Tensor, shards: list[torch.Tensor]) -> None:
     )
     ttnn.to_memory_config(staged, slab.memory_config(), output_tensor=slab)
     ttnn.deallocate(staged)
+
+
+def kda_state_patterns(geometry: KdaContractGeometry, slot: int, layer_idx: int):
+    """Global recurrent ``[H, D, D]`` and golden-order convolution ``[K-1, 3*H*D]`` with a per-(slot, layer) offset,
+    so a wrong head, band, branch, half, slot or layer reads back as a mismatch."""
+    tag = 1000.0 * (slot * 10 + layer_idx)
+    heads, dim = geometry.num_heads, geometry.head_dim
+    recurrent = (torch.arange(heads * dim * dim, dtype=torch.float32).reshape(heads, dim, dim) + tag).float()
+    width = 3 * heads * dim
+    convolution = (
+        torch.arange(geometry.conv_history * width, dtype=torch.int32).remainder(509) + slot * 7 + layer_idx
+    ).to(torch.bfloat16)
+    return recurrent, convolution.reshape(geometry.conv_history, width)
+
+
+def per_chip_convolution(geometry: KdaContractGeometry, convolution: torch.Tensor, tp_col: int) -> torch.Tensor:
+    """The chip's ``[q_local | k_local | v_local]`` row from the golden-order global tensor."""
+    heads, dim, local = geometry.num_heads, geometry.head_dim, geometry.local_heads
+    parts = [
+        convolution[:, branch * heads * dim + tp_col * local * dim : branch * heads * dim + (tp_col + 1) * local * dim]
+        for branch in range(3)
+    ]
+    return torch.cat(parts, dim=-1)
+
+
+def native_state_from_global(
+    mesh_device, geometry: KdaContractGeometry, recurrent, convolution, tp_axis: int
+) -> KdaState:
+    """TP-shard heads, replicate across SP, in the layout the layer itself produces."""
+    tp = geometry.tensor_parallel_size
+    rec_dims, conv_dims = [None, None], [None, None]
+    rec_dims[tp_axis], conv_dims[tp_axis] = 1, 1
+    stacked_conv = encode_tail(
+        torch.cat([per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1),
+        KDA_CONVOLUTION_PAGE_CHANNELS,
+    )
+    mesh_shape = tuple(mesh_device.shape)
+    return KdaState(
+        recurrent=ttnn.from_torch(
+            recurrent.unsqueeze(0),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(rec_dims), mesh_shape=mesh_shape),
+        ),
+        convolution=ttnn.from_torch(
+            stacked_conv.unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(conv_dims), mesh_shape=mesh_shape),
+        ),
+    )

@@ -51,14 +51,14 @@ from diag.snapshot import (  # noqa: E402
 from diag.snapshot_checks import validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
-from tiers import TIERS  # noqa: E402
+from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
 
 
 def build_diag_arg_parser() -> argparse.ArgumentParser:
     """Build the diag CLI parser. Exposed so callers (e.g. run_health_check's
     subprocess wrapper) can introspect the accepted flags and stay in sync."""
     ap = argparse.ArgumentParser(description="SYS-4365 diag tool")
-    ap.add_argument("--tier", choices=list(TIERS), required=True)
+    ap.add_argument("--tier", choices=[*TIERS, *DEPRECATED_TIER_ALIASES], required=True)
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
     ap.add_argument("--skip-reset", action="store_true", help="Skip phase 3 (reset loop) entirely.")
     ap.add_argument("--skip-tests", action="store_true", help="Skip phase 4 (gtest deployment binary) entirely.")
@@ -241,6 +241,9 @@ def run_diag(
     ``(exit_code, report_dict)``. ``exit_code`` is ``1`` on FAIL, else ``0`` —
     identical to the process exit code produced by ``main()``.
     """
+    if tier in DEPRECATED_TIER_ALIASES:
+        log(f"WARNING: tier '{tier}' is deprecated, running '{DEPRECATED_TIER_ALIASES[tier]}' instead")
+        tier = DEPRECATED_TIER_ALIASES[tier]
     if tier not in TIERS:
         raise ValueError(f"unknown tier {tier!r}; expected one of: {', '.join(TIERS)}")
     plan = TIERS[tier]

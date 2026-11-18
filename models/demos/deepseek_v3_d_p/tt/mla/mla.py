@@ -2571,13 +2571,13 @@ class ttMLA:
                 loaded = True
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_START`")
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_LOCAL_TOPK`")
-                # The KV gather's readers stream from DRAM on NoC0 concurrently; reading the logits on NoC1 keeps
-                # top-k off that traffic.
+                # Logits on NoC0: NoC1 reads here contend with the gather's fabric routers writing the KV prefix to
+                # DRAM on NoC1, which costs more than sharing NoC0 with the gather's link-worker reads.
                 local_indices = self._indexer.select_local(
                     selection_state,
                     subdevice_id=resources.topk_subdevice_id,
                     sub_core_grids=resources.topk_core_grid,
-                    dram_read_noc=ttnn.NOC.NOC_1,
+                    dram_read_noc=ttnn.NOC.NOC_0,
                 )
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_KV_GATHER`")
                 kvpe_dev = self._gather_kvpe_prefix(
