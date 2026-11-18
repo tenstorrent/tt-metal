@@ -397,8 +397,9 @@ In this layout:
   wrapped module. Useful to manually inspect a parameter's full value
   outside the training loop.
 - **`ttml.fsdp.is_fsdp_managed(param.tensor)`** returns `True` for any
-  parameter `fully_shard` has touched. The marker is what
-  `sync_gradients` uses to decide which axes to skip per parameter.
+  parameter `fully_shard` has touched. `sync_gradients` doesn't read
+  this marker: for each parameter it skips the axes the value's
+  topology label says it is sharded on.
 
 ---
 

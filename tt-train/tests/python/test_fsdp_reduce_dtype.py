@@ -30,14 +30,17 @@ def _gathered(shard) -> np.ndarray:
     return ttml.Sharding.from_tensor(tensor).gather(tensor).astype(np.float32)
 
 
-def _reduce_with_backward_post(values: np.ndarray, reduce_dtype) -> tuple:
+def _reduce_with_backward_post(values: np.ndarray, reduce_dtype, *, after_shard=None) -> tuple:
     """Shard one weight with ``reduce_dtype``, give device i the gathered gradient ``values[i]``, run backward_post.
+    ``after_shard`` runs in between, where ``train.py`` creates the optimizer.
 
     Returns the reduced gradient (gathered from the shards) and the shard dim.
     """
     layer = LinearLayer(values.shape[-1], values.shape[-2], has_bias=False)
     ttml.fsdp.fully_shard(layer, reduce_dtype=reduce_dtype)
     layer.unshard()  # backward_post expects the gathered weight and restores the cached shard
+    if after_shard is not None:
+        after_shard()
     ((parameter, shard_dim),) = layer._fsdp_state.managed
     parameter.tensor.set_grad(per_device_tensor(values).get_value())
 
@@ -90,6 +93,22 @@ def test_unset_reduce_dtype_takes_the_stored_default_unless_fully_shard_gets_one
     gradient_reduce_default(ttnn.DataType.BFLOAT16)
     np.testing.assert_array_equal(_reduce_with_backward_post(values, None)[0], bf16)
     np.testing.assert_array_equal(_reduce_with_backward_post(values, ttnn.DataType.FLOAT32)[0], fp32)
+
+
+# train.py shards the model first and create_optimizer stores the default afterwards, so backward_post reads the default
+# when it runs. A default resolved inside fully_shard would still be unset here and sum in bf16.
+@pytest.mark.requires_device
+def test_a_default_stored_after_fully_shard_is_used(fsdp_mesh, gradient_reduce_default):
+    values = make_gradients(64, 128, seed=6)
+    fp32, _ = _reduce_with_backward_post(values, ttnn.DataType.FLOAT32)
+    bf16, _ = _reduce_with_backward_post(values, None)
+    assert not np.array_equal(fp32, bf16)
+
+    def store_fp32_default():
+        ttml.core.apply_precision_config({"precision": {"reduce_dtype": "float32"}}, ttml.NamedParameters())
+
+    reduced, _ = _reduce_with_backward_post(values, None, after_shard=store_fp32_default)
+    np.testing.assert_array_equal(reduced, fp32)
 
 
 class _Block(AbstractModuleBase):
