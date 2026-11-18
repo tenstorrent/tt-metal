@@ -1,0 +1,39 @@
+# Full fine-tuning of Llama 3.1 8B Instruct on Alpaca, on a single chip.
+#
+#   python -m ttml.unified_trainer \
+#     --config tt-train/configs/training_configs/unified_trainer/llama_3_1_8b_instruct_alpaca.yaml
+#
+# No model.lora section: every weight is trained.
+model:
+  name: meta-llama/Llama-3.1-8B-Instruct
+  gradient_checkpointing: true
+
+dataset:
+  id: alpaca
+
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  weight_decay: 0.01
+
+device:
+  mesh: [1, 1]
+
+max_length: 256
+batch_size: 4
+seed: 0
+stopping_criteria:
+  type: step
+  limit: 500
+
+metrics:
+  train:
+    steps_freq: 10
+  validation:
+    steps_freq: 50
+
+checkpoint:
+  save_strategy:
+    type: step
+    frequency: 100
+  project_dir: runs/llama_3_1_8b_instruct_alpaca

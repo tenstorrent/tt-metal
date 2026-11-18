@@ -50,7 +50,9 @@ def custom_prompt_and_response(example: Mapping, template: str, column_mapping: 
     _check_template(template)
     instruction = example[column_mapping["instruction"]]
     input_column = column_mapping.get("input", "")
+    # Rows that omit the optional input column load as None once the file has any row that includes it.
     input_text = example[input_column] if input_column else ""
+    input_text = "" if input_text is None else str(input_text)
     input_section = CUSTOM_ALPACA_INPUT_BLOCK_TEMPLATE.substitute(input=input_text) if input_text.strip() else ""
     prompt = CUSTOM_ALPACA_PROMPT_TEMPLATE.substitute(instruction=instruction, input_section=input_section)
     return prompt, example[column_mapping["output"]]

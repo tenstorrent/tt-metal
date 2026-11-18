@@ -16,7 +16,7 @@ class ModelConfig(BaseModel):
 
     # An HF hub id or a local HF model directory.
     name: str = Field(min_length=1)
-    # The LoRA adapters to train. Unset would train every weight (full fine-tuning), which no trainer supports yet.
+    # The LoRA adapters to train. Unset trains every weight.
     lora: Optional[LoraConfig] = None
     # Build the model to recompute activations in the backward pass instead of keeping them.
     gradient_checkpointing: bool = False

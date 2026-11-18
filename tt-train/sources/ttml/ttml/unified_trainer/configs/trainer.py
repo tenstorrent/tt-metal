@@ -51,8 +51,8 @@ class TrainerConfig(BaseModel):
 
 
 class SFTTrainerConfig(TrainerConfig):
-    """``SFTTrainer``: supervised fine-tuning of a causal LM on prompt/response pairs. It trains LoRA adapters only
-    so far, so it needs ``model.lora``."""
+    """``SFTTrainer``: supervised fine-tuning of a causal LM on prompt/response pairs. ``model.lora`` trains those
+    adapters; without it, every weight is trained."""
 
     # Every batch is padded to this many tokens; longer examples are dropped.
     max_length: int = Field(gt=0)

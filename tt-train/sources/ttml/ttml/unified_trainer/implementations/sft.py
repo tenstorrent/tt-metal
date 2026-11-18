@@ -30,8 +30,8 @@ BATCH_SPEC = {
 
 
 class SFTTrainer(Trainer):
-    """Supervised fine-tuning of a causal LM on ttml, on a single chip. It trains LoRA adapters with AdamW; full
-    fine-tuning (every weight) is not supported yet, and a config without ``model.lora`` is rejected.
+    """Supervised fine-tuning of a causal LM on ttml, on a single chip. With ``model.lora`` it trains those adapters;
+    without it, every weight. AdamW is the optimizer.
 
     The model comes from a model provider (``ttml.models.provider``), which also decides whether the config can be
     trained at all, and loads and exports its weights; the batches come from SFT dataset providers
@@ -45,10 +45,6 @@ class SFTTrainer(Trainer):
     config: SFTTrainerConfig
 
     def _check_config(self) -> None:
-        if self.config.model.lora is None:
-            raise UnsupportedTrainingConfig(
-                "model.lora: only LoRA training is supported so far, not full fine-tuning; set model.lora"
-            )
         if self.config.dataset.id.lower() not in dataset_providers():
             raise UnsupportedTrainingConfig(
                 f"dataset.id: {self.config.dataset.id!r} is not one of {sorted(dataset_providers())}"
@@ -86,7 +82,7 @@ class SFTTrainer(Trainer):
         return model
 
     def _load_optimizer(self) -> CombinedOptimizer:
-        """The config's optimizers, each over its trainable parameters (the LoRA adapters), at a constant LR."""
+        """The config's optimizers, each over its trainable parameters, at a constant LR."""
         if self.config.max_grad_norm > 0:
             validate_clip_grad_norm(self.model)
         names = [name for name, tensor in self.model.parameters().items() if tensor.get_requires_grad()]

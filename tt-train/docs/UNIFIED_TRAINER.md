@@ -1,8 +1,26 @@
 # Unified Trainer
 
-`ttml.unified_trainer` fine-tunes HuggingFace models on Tenstorrent devices from one validated config. The same
-trainer runs from the command line and inside services such as tt-inference-server, which builds it once and runs one
-job after another on it.
+`ttml.unified_trainer` exists to productize training. A run is a config a product can validate, start, and run
+again, from the command line or from a service. tt-inference-server builds one trainer and runs one job after
+another on it; the same config drives both.
+
+Training is productized by splitting it into components that are built and improved on their own. The training
+loop, the model, the dataset, the optimizer, and checkpoints each have their own code and their own contract. A
+run is the join of the ones the config names. `setup` is that join: it checks the config, loads the dataset,
+opens the device, builds the model, loads a checkpoint when the config asks for one, and builds the optimizer.
+`train` then runs the loop over those pieces. Improving one component leaves the others in place, and the loop
+that joins them stays put.
+
+| Component | Built on its own as |
+|---|---|
+| Training loop | A trainer (`SFTTrainer` so far) in `ttml/unified_trainer/`. It owns the loop and the job lifecycle a host calls: `setup`, `train`, `cleanup`. |
+| Model | A model provider in `ttml/models/provider/`. It builds the model for an HF hub id, checks that the config can train it, and loads and exports its weights. |
+| Dataset | A dataset provider in `ttml/datasets/provider/`. It serves one dataset as the batches the loop consumes. |
+| Optimizer | An entry in `OPTIMIZERS` (`ttml/unified_trainer/configs/optimizer.py`), selected by the `optimizer` section. It names which weights train, and with which optimizer and settings. |
+| Checkpoints | The `checkpoint` section, written and read by the model provider. It names when to save, which checkpoints to keep, and which weights a run starts from. |
+
+A new model, dataset, optimizer, or trainer is registered next to the ones that exist. The rest of this document
+is the join as it stands today: what a run trains, the config that selects the components, and how to add one.
 
 `unified_trainer` is a working name. The existing `ttml.trainers` package is unchanged and works as before.
 
@@ -40,6 +58,9 @@ finally:
 
 ## What it trains
 
+What a run trains today is the components registered so far. A config joins the model, the optimizer, and the
+dataset described below.
+
 **Models.** The models `providers()` in `ttml/models/provider/__init__.py` lists, by HF hub id: Llama 3.2 1B and Llama
 3.1 8B, base and Instruct, in bf16. `model.name` is the hub id, or a local copy of the model in a directory
 named as the model, for example `/models/Llama-3.2-1B-Instruct`. Checkpoints the ttml Llama can't represent are
@@ -47,8 +68,8 @@ rejected before the device opens: quantized weights, attention or MLP biases, an
 scaling other than `llama3` or the default. Other models plug in as model providers (see
 [Adding a model](#adding-a-model)).
 
-**LoRA only.** A run trains the LoRA adapters its `model.lora` section describes, and nothing else. Full fine-tuning
-(every weight) is not supported yet: a config without `model.lora` is rejected. `target_modules` uses HF projection
+**LoRA or every weight.** With `model.lora`, a run trains those adapters and nothing else. Without it, every weight
+is trained. `target_modules` uses HF projection
 names, and takes any of them. ttml's Llama fuses some projections into one layer:
 
 | HF projections | ttml Llama layer |
@@ -95,7 +116,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 
 | Field | Default | Description |
 |---|---|---|
-| `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora` is the LoRA adapters to train, and a run needs it, as only LoRA training is supported so far: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`). `gradient_checkpointing` (`false`) builds the model to recompute activations in the backward pass, which saves memory. |
+| `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora`, when set, is the LoRA adapters to train: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`). Unset, every weight is trained. `gradient_checkpointing` (`false`) builds the model to recompute activations in the backward pass, which saves memory. |
 | `dataset` | | `id`, one of `sst2`, `alpaca` or `custom`, is required. `custom_options` is required when `id` is `custom`: `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
 | `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one supported so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
 | `device` | | `mesh` (`[1, 1]`), the size of each dimension of the device mesh the run opens, such as `[rows, columns]`. A single chip, `[1, 1]`, is the only mesh supported so far. |
@@ -274,7 +295,9 @@ It takes effect with or without `CheckpointCallback`, and a checkpoint that does
 
 ## Running inside a service
 
-A host builds one trainer with its callbacks and runs each job as:
+This is the product surface. A host hands the trainer a config, and the trainer joins the training loop, the
+model, the dataset, the optimizer, and the checkpoints that config names. The host builds one trainer with its
+callbacks and runs each job as:
 
 ```python
 try:
@@ -310,7 +333,8 @@ finally:
 
 ## Adding a model
 
-A model provider builds the ttml model for HF models, and loads and exports its weights. It subclasses
+The model is one component of the join. Adding one leaves the loop, the dataset, the optimizer, and checkpoints
+as they are. A model provider builds the ttml model for HF models, and loads and exports its weights. It subclasses
 `ModelProvider` in `ttml/models/provider/base.py`, which takes the config, as `self.config`, and implements its four
 methods:
 
@@ -332,7 +356,8 @@ the entry. `LlamaProvider` in `ttml/models/provider/llama.py` is the reference.
 
 ## Adding a dataset
 
-Dataset providers are grouped by training strategy: `ttml/datasets/provider/<strategy>/`, with what they share in
+The dataset is one component of the join. Adding one leaves the loop, the model, the optimizer, and checkpoints
+as they are. Dataset providers are grouped by training strategy: `ttml/datasets/provider/<strategy>/`, with what they share in
 `ttml/datasets/utils/<strategy>/`. SFT, the only strategy so far, is in `sft/`.
 
 An SFT dataset provider serves one split of a dataset as batches: the trainer builds one for training and one for
@@ -359,8 +384,9 @@ epoch is over; iterating it, which takes the batches left in the epoch; `len()`,
 
 ## Adding a trainer
 
-A trainer subclasses `Trainer` in `ttml/unified_trainer/implementations/base.py`, which runs the training loop, and
-implements its abstract methods:
+The training loop is one component of the join. A new trainer runs over the model, dataset, optimizer, and
+checkpoint components the config already names. It subclasses `Trainer` in
+`ttml/unified_trainer/implementations/base.py`, which runs the training loop, and implements its abstract methods:
 
 - Setup: `_load_dataloaders()`, the train and validation batches (`None` without validation data; `len()` of the
   train batches is the batches of an epoch);
