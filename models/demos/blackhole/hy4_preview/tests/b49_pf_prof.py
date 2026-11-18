@@ -195,6 +195,63 @@ def main():
             for line in sio.getvalue().splitlines():
                 print("CPROF " + line[:200], flush=True)
         if (
+            os.environ.get("OPLOG") == "1"
+        ):  # ordered ttnn call log of one layer-chunk of each type with the calling model line
+            import sys
+            import types
+
+            logs = {}
+            cur = {"layer": None}
+            wrapped = []
+
+            def wrapl(owner, nm, obj):
+                def w(*a, **k):
+                    f = sys._getframe(1)
+                    where = f"{os.path.basename(f.f_code.co_filename)}:{f.f_lineno}"
+                    t0 = time.perf_counter()
+                    try:
+                        return obj(*a, **k)
+                    finally:
+                        logs.setdefault(cur["layer"], []).append((nm, where, round((time.perf_counter() - t0) * 1e6)))
+
+                setattr(owner, nm, w)
+                wrapped.append((owner, nm, obj))
+
+            for owner in (ttnn, getattr(ttnn, "experimental", None), getattr(ttnn, "transformer", None)):
+                if owner is None:
+                    continue
+                for nm in dir(owner):
+                    if nm.startswith("_") or nm in (
+                        "synchronize_device",
+                        "get_device_tensors",
+                        "from_torch",
+                        "to_torch",
+                    ):
+                        continue
+                    try:
+                        obj = getattr(owner, nm)
+                    except Exception:
+                        continue
+                    if isinstance(obj, (type, types.ModuleType)) or not callable(obj):
+                        continue
+                    wrapl(owner, nm, obj)
+            orig = HC.Hy4ChainLayer.prefill_chunk
+
+            def counted(self, x4, start, ids_by_layer, taps=None):
+                cur["layer"] = f"L{self.L}"
+                logs[cur["layer"]] = []
+                return orig(self, x4, start, ids_by_layer, taps)
+
+            HC.Hy4ChainLayer.prefill_chunk = counted
+            run_chunks(K)
+            sync()
+            for lay in ("L1", "L2"):
+                for i, (nm, wh, us) in enumerate(logs.get(lay, [])):
+                    print(f"OPLOG {lay} {i:3d} {nm:34s} {wh:34s} {us}", flush=True)
+            for owner, nm, obj in wrapped:
+                setattr(owner, nm, obj)
+            HC.Hy4ChainLayer.prefill_chunk = orig
+        if (
             os.environ.get("OPCOUNT") == "1"
         ):  # host op counts / host time per ttnn callable for one layer of each type (fused path as configured)
             import types

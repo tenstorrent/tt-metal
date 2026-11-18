@@ -104,13 +104,24 @@ void kernel_main() {
         noc.async_read_barrier();
         cbxc.push_back(8);
     }
-    // ---- D
+    // ---- D (x again: the collapse is recomputed in the norm pass) with the norm weight tiles
     for (uint32_t jb = 0; jb < NTD; jb += 2) {
+        cbxc.reserve_back(8);
         cbn.reserve_back(2);
         for (uint32_t jj = 0; jj < 2; ++jj) {
-            noc.async_read(n_acc, cbn, 2048, {.page_id = jb + jj, .offset_bytes = 0}, {.offset_bytes = jj * 2048});
+            const uint32_t c = jb + jj;
+            for (uint32_t s = 0; s < 4; ++s) {
+                noc.async_read(
+                    x_acc,
+                    cbxc,
+                    4096,
+                    {.page_id = s * TR * NTD + r * NTD + c, .offset_bytes = 0},
+                    {.offset_bytes = (jj * 4 + s) * 4096});
+            }
+            noc.async_read(n_acc, cbn, 2048, {.page_id = c, .offset_bytes = 0}, {.offset_bytes = jj * 2048});
         }
         noc.async_read_barrier();
+        cbxc.push_back(8);
         cbn.push_back(2);
     }
 }
