@@ -391,6 +391,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.tilize": data_movement.test_tilize,
     "ttnn.tilize_with_val_padding": data_movement.test_tilize_with_val_padding,
     "ttnn.fill_rm": data_movement.test_fill_rm,
+    "ttnn.fold": data_movement.test_fold,
     "ttnn.fill_ones_rm": data_movement.test_fill_ones_rm,
     "ttnn.untilize": data_movement.test_untilize,
     "ttnn.untilize_with_unpadding": data_movement.test_untilize_with_unpadding,
