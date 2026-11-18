@@ -219,8 +219,8 @@ ACT_STREAM_INJECTOR = 0
 # R1b rotating injectors (Refinement 15): A K-block round r is read and multicast by injector r % n, each injector
 # reading its next turn while the others multicast (one injector reads + multicasts serially: Qwen3.8 M = 128 down
 # streamed its 1.1 MB A in 38 us). n cores evenly spaced in the split's row-wise order; clamped below the act ring
-# depth (an injector reserves through its next turn); one-rectangle splits only (the helper's rotating senders need
-# a rectangular receiver group: the bank-local split, a flat split of whole rows). Measured 1 / 2 / 3 on the R15 set:
+# depth (an injector reserves through its next turn); the bank-local split only (one rectangle, as the helper's
+# rotating senders need; a small flat split of thin rounds measured slower). Measured 1 / 2 / 3 on the R15 set:
 # M = 128 down 46.1 / 41.7 / 41.3 us, FLUX attn-out 113 / 109 / 107, context_embedder 260 / 253 / 251, the rest flat.
 # 1 = the single fixed injector (ACT_STREAM_INJECTOR).
 ACT_STREAM_INJECTORS = 3
@@ -257,6 +257,8 @@ BANK_LOCAL_ROW_FILL = True
 # its A injector (one rectangle: each A byte is multicast once) in streamed-byte equivalents (cf. ACT_STREAM_*).
 BANK_LOCAL_DRAM_BYTES_PER_CYCLE = 330
 BANK_LOCAL_INJECTOR_COST = 9
+# ... and the A stream's per-round floor (handshake + multicast latency of one K-block round, ~2 us measured).
+BANK_LOCAL_ROUND_CYCLES = 2700
 # N quantum on a 1-D N split (Refinement 9). Q_N_MAX makes a 4-wide subblock exist when a core owns one
 # tile row; when it owns all rows (grid_m == 1) a subblock of height h (the largest power of two <= 4
 # dividing core_m) needs only q_n = Q_N_MAX / h columns. FLUX FF1 256x6144x18432 swiglu: core_n 8 -> 6
@@ -871,8 +873,15 @@ def split_cost_terms(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     b_core = grid.core_batches * grid.core_n_tiles * geom.tensor_k_tiles * geom.b_tile_bytes * nb_m
     mode = operand_mode(geom, grid, blk)
     core_bytes = max(a_core, b_core) if mode == 1 else (0 if mode == 2 else a_core + b_core)
+    core_cycles = core_bytes / CORE_READ_BYTES_PER_CYCLE
+    if grid.placement == "bank":
+        # The bank-local split: its busiest core streams its own B run, and its A stream pays a handshake round per
+        # K-block of every block (64x16384x256, 16-bit DEST: 64 rounds of 32 KB on 8 working cores, 134 us vs 84 us
+        # on its R1 split).
+        rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
+        core_cycles = max(b_core / CORE_READ_BYTES_PER_CYCLE, rounds * blk.num_k_blocks * BANK_LOCAL_ROUND_CYCLES)
     core_out = grid.core_batches * grid.core_m_tiles * geom.out_block_n(grid.core_n_tiles) * geom.o_tile_bytes
-    return walk, dram, core_bytes / CORE_READ_BYTES_PER_CYCLE, core_out / CORE_WRITE_BYTES_PER_CYCLE
+    return walk, dram, core_cycles, core_out / CORE_WRITE_BYTES_PER_CYCLE
 
 
 def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
@@ -1540,9 +1549,11 @@ def create_program_descriptor(
     _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset, weight_offset)
     if act_stream:
         rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
-        # The helper's rotating senders need one rectangle (a flat split's partial row keeps the fixed injector).
-        rect = len(core_ranges.ranges()) == 1
-        injectors = act_stream_injectors(blk, rounds * blk.num_k_blocks) if rect and not blk.act_resident else 1
+        # Rotating injectors on the bank-local split only (one rectangle, as the helper's rotating senders need):
+        # on a small flat split of thin K-blocks the turn hand-over costs more than the parallel reads save
+        # (64x16384x256, 16-bit DEST, 8 cores x 64 rounds of 32 KB: 84 -> 92 us with 3).
+        bank = grid.placement == "bank"
+        injectors = act_stream_injectors(blk, rounds * blk.num_k_blocks) if bank else 1
         _attach_act_stream(descriptor, writer, core_ranges, device, injectors)
     else:
         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
