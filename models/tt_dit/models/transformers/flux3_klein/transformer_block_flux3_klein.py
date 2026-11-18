@@ -82,8 +82,9 @@ class Flux3KleinTransformerBlock(Module):
         linear1: bool = False,
     ) -> None:
         super().__init__()
-        if linear1 and (is_fsdp or ccl_manager.topology != ttnn.Topology.Ring):
-            raise ValueError("linear1 needs ring topology and resident (non-FSDP) weights")
+        tp_ring = ccl_manager.axis_topology(parallel_config.tensor_parallel.mesh_axis) == ttnn.Topology.Ring
+        if linear1 and (is_fsdp or not tp_ring):
+            raise ValueError("linear1 needs a ring TP axis and resident (non-FSDP) weights")
         if linear1 and device.compute_with_storage_grid_size().y < LINEAR1_N_CORES:
             raise ValueError(f"linear1 needs {LINEAR1_N_CORES} rows of cores")
 
@@ -291,6 +292,6 @@ class Flux3KleinTransformerBlock(Module):
             use_heuristic_mmcfg=True,
             core_grid=Attention.get_core_grid(x_norm.shape[-2], self._mesh_device.compute_with_storage_grid_size()),
         )
-        if self._ccl_manager.topology == ttnn.Topology.Ring:
+        if self._ccl_manager.axis_topology(self._parallel_config.tensor_parallel.mesh_axis) == ttnn.Topology.Ring:
             return self.proj_out.forward_fused_addcmul([attn, mlp], x, gate, scalar=1.0)
         return ttnn.addcmul(x, self.proj_out([attn, mlp]), gate)

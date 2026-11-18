@@ -221,7 +221,7 @@ class Flux3KleinPipeline:
                 device=mesh_device,
                 ccl_manager=self._ccl,
                 parallel_config=parallel,
-                linear1=topology == ttnn.Topology.Ring,
+                linear1=self._ccl.axis_topology(tp_axis) == ttnn.Topology.Ring,
             )
             cache.load_model(
                 transformer,
