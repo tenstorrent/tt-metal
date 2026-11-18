@@ -4744,3 +4744,49 @@ tasks:
       steady_wall_ms_p51200: '> 0'
       steady_wall_ms_p1024000: '> 0'
       resumed_wall_ms_p1024000: '> 0'
+- id: X.4
+  title: 'Milestone (owner 2026-11-18): rebase onto main 8a317f39a8d, Marko''s MoE block with split rows (6208 B fabric
+    payload: the intermittent 8x4 hang fix), non-matmul stock ops on the full 120-core grid; recorded and verified'
+  step: perf
+  deps:
+  - FIX.36
+  brief:
+    details: 'Records work done outside the ledger on 2026-11-18 (overseer agents, owner in a hurry), verified here on
+      the final tree. (1) Rebase of the whole branch (llk_helper_library''s commits + ours) onto main 8a317f39a8d (the
+      main of origin/mstaletovic/moe-block-65124-split-rows): 2,800 commits + build fixes c0964d90f18 / 840413e7fd2;
+      report /data/dnijemcevic/bringup/handoff_20261118/rebase_report.md; ladder last, determinism passed then.
+      (2) MoE port: Marko''s 11 commits + int32 snap cherry-picked; fork ttnn.bringup.moe_block (5963cd7fdb3) with
+      weights_nk, set_max_grid (110), x pieces; model 60add9f88f6: MOE_BLOCK_SRC=block (default), MOE_BLOCK_SPLIT_ROWS=on,
+      fabric payload 6208 B (was 10880); old block kept as MOE_BLOCK_SRC=main; report moe_port_report.md: ladder last
+      err_final_hidden 0.1268 (was 0.1325), determinism 0, positions 51k..1M device 78.9..95.4 ms (was 80.7..98.4).
+      (3) Hang: with the 6208 B payload test_skip_hang_loop ran 64 rounds = 11,776 chunks at p256000 / p1024000 with no
+      hang and determinism 0 every round (old payload: a hang every ~1,300-3,000 chunks; cause per
+      hang_origin_report.md and ring_indexer_write_pattern.md: a chip''s NOC1 wedged by the fabric router''s large
+      non-posted DRAM writes during the indexer ring score); soak log /scratch/dnijemcevic/phase_1117/soak/soak.log.
+      (4) ec4f1453425: NONMM_MAX_CORES (default 0 = full grid) for stock non-matmul ops; matmuls and the bring-up forks
+      stay at MAX_WORKER_CORES 110 (owner rule: only matmuls are capped); ladder metrics bit-identical, determinism 0,
+      positions within noise (uncap_report.md). This gate: the accuracy rung, both determinism checks, the decode-skip
+      and serving contract tests (not run since the rebase: models/demos/common/prefill took main''s side), and the
+      realistic positions under DECODER_SKIP=decode.'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed: == 0
+      acks_early: == 0
+      contract_checks_failed_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      steady_wall_ms_p51200: '> 0'
+      steady_wall_ms_p1024000: '> 0'
+  device: true
