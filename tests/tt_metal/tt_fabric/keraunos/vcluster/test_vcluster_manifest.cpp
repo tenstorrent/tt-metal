@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The virtual-cluster manifest's loader and its checks before the device is touched, from SPEC-0011 (docs 83ace99)
+// The virtual-cluster manifest's loader and its checks before the device is touched, from SPEC-0011 (docs 1966509)
 // § Manifest and § Checks before the device is touched, and its § Verification 1: one accepted manifest, one manifest
 // per row that trips that row and no other, one per kind of load error. No device. Rows 9 to 11 need a capture and
 // are not covered.
@@ -471,6 +471,42 @@ TEST(VclusterManifest, LoadErrorMissingKey) {
          }) {
         EXPECT_TRUE(load_fails(edit({{from, to}}))) << to;
     }
+}
+
+// SPEC-0011 (docs 1966509): `links`, and each device's `slots` and `regions`, are required; empty is well formed.
+TEST(VclusterManifest, LoadErrorMissingList) {
+    EXPECT_TRUE(load_fails(edit(
+        {{"links:\n  - {a: {device: A, port: 0}, b: {device: M, port: 0}, backend: noc}\n"
+          "  - {a: {device: M, port: 1}, b: {device: B, port: 0}, backend: ethernet}\n",
+          ""}})));
+    EXPECT_TRUE(load_fails(edit(
+        {{"    slots:\n      - {tile: 3, cce: 0, hart: 0, role: router, port: 0}\n"
+          "      - {tile: 3, cce: 0, hart: 1, role: worker}\n",
+          ""}})));
+    EXPECT_TRUE(load_fails(edit({{"    regions:\n      - {tile: 3, cce: 0, base: 0x0, size: 0x400000}\n", ""}})));
+}
+
+// SPEC-0011 (docs 1966509): integers are decimal, or hexadecimal with a `0x` prefix; `0` is accepted.
+TEST(VclusterManifest, IntegersDecimalOrHex) {
+    const Manifest m = load(edit(
+        {{"{tile: 3, cce: 0, base: 0x0, size: 0x400000}", "{tile: 3, cce: 0, base: 0, size: 4194304}"},
+         {"fabric_chip: 2", "fabric_chip: 10"},
+         {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 0x3, cce: 0, hart: 0x1, role: worker}"}}));
+    const Device& b = m.devices[2];
+    EXPECT_EQ(b.fabric_chip, 10u);
+    EXPECT_EQ(b.regions[0].base, 0u);
+    EXPECT_EQ(b.regions[0].size, kSram);
+    EXPECT_EQ(b.slots[1].tile, 3u);
+    EXPECT_EQ(b.slots[1].hart, 1u);
+}
+
+// SPEC-0011 (docs 1966509): a decimal with a leading zero, other than `0`, is a load error, not octal.
+TEST(VclusterManifest, LoadErrorLeadingZero) {
+    EXPECT_TRUE(load_fails(edit({{"fabric_chip: 2", "fabric_chip: 010"}})));
+    EXPECT_TRUE(
+        load_fails(edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 03, cce: 0, hart: 1, role: worker}"}})));
+    EXPECT_TRUE(load_fails(
+        edit({{"{tile: 3, cce: 0, base: 0x0, size: 0x400000}", "{tile: 3, cce: 0, base: 00, size: 0x400000}"}})));
 }
 
 TEST(VclusterManifest, LoadErrorRouterWithoutPort) {
