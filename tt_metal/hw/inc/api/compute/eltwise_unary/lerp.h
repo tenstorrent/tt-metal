@@ -17,6 +17,9 @@ namespace ckernel {
 /**
  * Performs elementwise linear interpolation (lerp): out = (1 - weight) * input + weight * end
  *
+ * On Blackhole with is_fp32_dest_acc_en == false the result is rounded for a 16-bit Dest store only,
+ * so Dest must not be in 32-bit mode.
+ *
  * | Argument | Description                                                | Type     | Valid Range                                           | Required |
  * |----------|------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0    | Index of the tile in DST register buffer (input/start)   | uint32_t | Must be less than the size of the DST register buffer | True     |

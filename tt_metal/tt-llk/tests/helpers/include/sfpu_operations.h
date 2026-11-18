@@ -2639,7 +2639,7 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::lerp)
     {
-        // lerp_init programs the dest auto-advance for the Wormhole two-row body (no-op elsewhere).
+        // lerp_init programs the dest auto-advance for the Wormhole and Blackhole two-row bodies (no-op elsewhere).
         SFPU_TERNARY_INIT_FN(lerp, sfpu::lerp_init, (APPROX_MODE));
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
