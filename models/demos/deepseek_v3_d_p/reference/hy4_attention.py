@@ -36,6 +36,8 @@ class Hy4AttnDims:
     qk_rope_head_dim: int = 64
     v_head_dim: int = 256
     rms_norm_eps: float = 1e-5
+    # q_a_layernorm / kv_a_layernorm: HF hy_v4's HYV4RMSNorm(rank) default eps, not rms_norm_eps.
+    low_rank_norm_eps: float = 1e-6
     rope_theta: float = 1e7
 
     @property
@@ -56,6 +58,11 @@ class Hy4AttnDims:
             qk_rope_head_dim=config.qk_rope_head_dim,
             v_head_dim=config.v_head_dim,
             rms_norm_eps=config.rms_norm_eps,
+            low_rank_norm_eps=(
+                config.rms_norm_eps
+                if getattr(config, "mla_low_rank_norm_eps", None) is None
+                else config.mla_low_rank_norm_eps
+            ),
             rope_theta=config.rope_theta,
         )
 
@@ -96,10 +103,10 @@ def mla_latents(hn: torch.Tensor, w: dict, dims: Hy4AttnDims, cos, sin):
     """Per-token stems: ``q_resid`` (``q_a_layernorm(q_a_proj(hn))``) and the cache line ``kvpe`` =
     ``kv_a_layernorm(latent) | rope(k_pe)`` (HF frame, half-split)."""
     L = dims.kv_lora_rank
-    q_resid = rms_norm(hn @ w["q_a_proj.weight"].to(F32).T, w["q_a_layernorm.weight"], dims.rms_norm_eps)
+    q_resid = rms_norm(hn @ w["q_a_proj.weight"].to(F32).T, w["q_a_layernorm.weight"], dims.low_rank_norm_eps)
     ckv = hn @ w["kv_a_proj_with_mqa.weight"].to(F32).T
     kvpe = torch.empty(hn.shape[0], L + dims.qk_rope_head_dim, dtype=F32)
-    kvpe[:, :L] = rms_norm(ckv[:, :L], w["kv_a_layernorm.weight"], dims.rms_norm_eps)
+    kvpe[:, :L] = rms_norm(ckv[:, :L], w["kv_a_layernorm.weight"], dims.low_rank_norm_eps)
     kvpe[:, L:] = apply_rope_half_split(ckv[:, L:], cos, sin)
     return q_resid, kvpe
 

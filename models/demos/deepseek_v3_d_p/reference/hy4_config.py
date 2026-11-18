@@ -94,6 +94,9 @@ class Hy4Config(GLM53Config):
     USE_OUTPUT_GATE = True
     # learnable_sink: one learnable logit per head joins the softmax denominator (sparse_sdpa attention_sink).
     USE_LEARNABLE_SINK = True
+    # q_a_layernorm / kv_a_layernorm eps. HF hy_v4 builds them as HYV4RMSNorm(rank) without an eps, so its default
+    # 1e-6 applies, not rms_norm_eps (1e-5, which the decoder norms use). GLM-5.3 keeps rms_norm_eps.
+    LOW_RANK_NORM_EPS = 1e-6
 
     # --- iHC hyper-connections (not implemented in the prefill stack yet; #65891) --------------
     ENABLE_IHC = True
@@ -297,6 +300,8 @@ def hy4_hf_config(
         mla_use_output_gate=bool(model_cfg.USE_OUTPUT_GATE),
         # Read by ttMLA: the per-head sink goes to sparse_sdpa as attention_sink, cached as attn_sink (#65921).
         mla_learnable_sink=bool(model_cfg.USE_LEARNABLE_SINK),
+        # Read by ttMLA (ttMLA.low_rank_norm_eps): the q_a / kv_a layernorm eps (HYV4RMSNorm's default).
+        mla_low_rank_norm_eps=model_cfg.LOW_RANK_NORM_EPS,
         # --- iHC (#65891); not read by the prefill stack yet ---
         enable_ihc=bool(model_cfg.ENABLE_IHC),
         hc_mult=model_cfg.HC_MULT,

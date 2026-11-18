@@ -15,6 +15,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -255,3 +258,61 @@ def test_matches_the_golden_reference_attention():
         model.hyper_connection, model.rms_norm = orig_hc, orig_norm
     got = (x4 - before)[:, 0]  # post == 1: the residual add is exactly the sublayer output
     torch.testing.assert_close(got, want, rtol=1e-4, atol=1e-5)
+
+
+# ---------------------------------------------------------------------------------------------- low-rank norm eps
+HF_MODELING_CANDIDATES = (
+    os.environ.get("HY4_HF_MODELING_PY", ""),
+    "/mnt/tt-data/Hy4-Preview/modeling_hy_v4.py",
+)
+
+
+def test_low_rank_norm_eps_is_hf_hyv4rmsnorm_default():
+    """HF hy_v4: ``q_a_layernorm = HYV4RMSNorm(q_lora_rank)`` and ``kv_a_layernorm = HYV4RMSNorm(kv_lora_rank)`` take
+    HYV4RMSNorm's default eps 1e-6; only the decoder norms pass ``rms_norm_eps`` (1e-5). Device and reference both use
+    1e-6 for those two; GLM-5.3 keeps rms_norm_eps."""
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+    from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4Config, hy4_hf_config
+    from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
+
+    cfg = hy4_hf_config()
+    assert cfg.rms_norm_eps == 1e-5 and Hy4Config.LOW_RANK_NORM_EPS == 1e-6
+    assert ttMLA.low_rank_norm_eps(cfg) == 1e-6
+    assert Hy4AttnDims.from_config(cfg).low_rank_norm_eps == 1e-6 and Hy4AttnDims().low_rank_norm_eps == 1e-6
+    glm = glm_5_3_hf_config()
+    assert ttMLA.low_rank_norm_eps(glm) == glm.rms_norm_eps
+    assert Hy4AttnDims.from_config(glm).low_rank_norm_eps == glm.rms_norm_eps
+
+
+def test_low_rank_norm_eps_matches_the_hf_source():
+    """When HF's modeling_hy_v4.py is on disk: the two latent norms are built without an eps and HYV4RMSNorm defaults
+    to the value Hy4Config.LOW_RANK_NORM_EPS holds."""
+    import re
+
+    from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4Config
+
+    path = next((Path(p) for p in HF_MODELING_CANDIDATES if p and Path(p).is_file()), None)
+    if path is None:
+        pytest.skip("HF modeling_hy_v4.py not found (set HY4_HF_MODELING_PY)")
+    src = path.read_text()
+    default = re.search(
+        r"class HYV4RMSNorm\(nn\.Module\):\s*def __init__\(self, hidden_size, eps: float = ([0-9.e-]+)\)", src
+    )
+    assert default and float(default.group(1)) == Hy4Config.LOW_RANK_NORM_EPS
+    assert re.search(r"self\.q_a_layernorm = HYV4RMSNorm\(self\.q_lora_rank\)", src)
+    assert re.search(r"self\.kv_a_layernorm = HYV4RMSNorm\(config\.kv_lora_rank\)", src)
+
+
+def test_reference_normalizes_the_latents_with_the_low_rank_eps(monkeypatch):
+    """reference/hy4_attention.py uses low_rank_norm_eps for both latent norms (rms_norm_eps is the decoder norms')."""
+    import models.demos.deepseek_v3_d_p.reference.hy4_attention as ref
+
+    seen = []
+    orig = ref.rms_norm
+    monkeypatch.setattr(ref, "rms_norm", lambda x, w, eps: seen.append(eps) or orig(x, w, eps))
+    d = Hy4AttnDims(
+        num_heads=4, q_lora_rank=64, kv_lora_rank=32, qk_nope_head_dim=16, qk_rope_head_dim=8, v_head_dim=16
+    )
+    w = _weights(d, hidden=64, seed=3)
+    ref.hy4_attention(torch.randn(8, 64), w, _random_topk(8, 4, seed=4), d, block=8)
+    assert seen and set(seen) == {d.low_rank_norm_eps} and d.low_rank_norm_eps != d.rms_norm_eps

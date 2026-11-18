@@ -59,6 +59,14 @@ class ttMLA:
         return ttMLA.MLA_WEIGHT_NAMES + (["g_proj"] if has_output_gate else []) + (["attn_sink"] if has_sink else [])
 
     @staticmethod
+    def low_rank_norm_eps(config) -> float:
+        """The eps of q_a_layernorm / kv_a_layernorm. Hy4 (HF ``hy_v4``) builds them as ``HYV4RMSNorm(rank)``, whose
+        default eps is 1e-6, not ``rms_norm_eps`` (1e-5), and sets ``mla_low_rank_norm_eps``. Every other model uses
+        ``rms_norm_eps``."""
+        eps = getattr(config, "mla_low_rank_norm_eps", None)
+        return config.rms_norm_eps if eps is None else eps
+
+    @staticmethod
     def softmax_scale(config) -> float:
         """The attention softmax scale: ``qk_head_dim ** -0.5``, times DeepSeek's YaRN ``mscale ** 2`` when
         ``rope_scaling`` carries a ``factor`` > 1 (and the model does not opt out, see __init__)."""
@@ -1548,7 +1556,7 @@ class ttMLA:
             self.mesh_device,
             semaphores,
             topology=self.tp_ccl_topology,
-            epsilon=self.config.rms_norm_eps,
+            epsilon=ttMLA.low_rank_norm_eps(self.config),
             weight=self._q_a_norm_weight_tp,
             persistent_output_buffer=stats,
             num_preferred_links=self.ccl_num_links,
@@ -1564,7 +1572,7 @@ class ttMLA:
         return ttnn.rms_norm(
             qr,
             weight=self.q_a_layernorm_weight,
-            epsilon=self.config.rms_norm_eps,
+            epsilon=ttMLA.low_rank_norm_eps(self.config),
             memory_config=norm_memory_config,
             compute_kernel_config=self.default_compute_kernel_config,
         )
@@ -1888,7 +1896,7 @@ class ttMLA:
         tt_kv_nope = ttnn.rms_norm(
             tt_kv_nope,
             weight=self.kv_a_layernorm_weight,
-            epsilon=self.config.rms_norm_eps,
+            epsilon=ttMLA.low_rank_norm_eps(self.config),
             memory_config=latent_mem,
             compute_kernel_config=self.default_compute_kernel_config,
         )
