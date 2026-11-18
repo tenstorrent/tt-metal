@@ -495,6 +495,19 @@ void kernel_main() {
     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
     uint32_t k_blocks_issued = 0;
     auto read_weight_k_block = [&](uint32_t l1) {
+#ifdef CONV2D_3X3_KW_FOLD
+        // kw-fold: K-block kh holds W'[kh Ct + c, kw N + n] = prepared tile ((kh * 3 + kw) Ct + c, n), c-major,
+        // (kw, n)-fastest (block_k_tiles = Ct, block_n_tiles = 3 N).
+        const uint32_t kh = k_blocks_issued % num_k_blocks;
+        for (uint32_t c = 0; c < block_k_tiles; ++c) {
+            for (uint32_t kw = 0; kw < 3; ++kw) {
+                const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles;
+                for (uint32_t n = 0; n < tensor_n_tiles; ++n, l1 += weight_tile_bytes) {
+                    noc_async_read_page(row_page + n, weights, l1);
+                }
+            }
+        }
+#else
         const uint32_t k_tile0 = (k_blocks_issued % num_k_blocks) * block_k_tiles;
         for (uint32_t k = 0; k < block_k_tiles; ++k) {
             const uint32_t row_page = (weight_k_tile_start + k_tile0 + k) * tensor_n_tiles + n_tile_start;
@@ -502,6 +515,7 @@ void kernel_main() {
                 noc_async_read_page(row_page + n, weights, l1);
             }
         }
+#endif
         noc_async_read_barrier();
     };
 
@@ -600,6 +614,10 @@ void kernel_main() {
         server_ack_noc = get_noc_addr(server_x, server_y, get_semaphore(server_ack_sem_id));
         noc_semaphore_inc(server_ack_noc, 1);
     }
+#ifdef CONV2D_3X3_KW_FOLD
+    // kw-fold seeds its accumulator with the bias before the first pack, so the bias cannot wait for round 0.
+    finish_late_bias();
+#endif
     auto issue_weight_k_block = [&]() {
         {
             // Back-pressure from compute's matmul.
@@ -1012,7 +1030,12 @@ void kernel_main() {
                 combine_round(m_block_idx);
             }
         } else {
+#if defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED
+            // kw-fold whole-K: the weights stay resident across this core's M-blocks: one stream.
+            while (k_blocks_issued < num_k_blocks) {
+#else
             while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
+#endif
                 issue_weight_k_block();
                 if constexpr (gather_split) {
                     gather_odd_groups(k_blocks_issued - 1);

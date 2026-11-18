@@ -22,7 +22,9 @@ void kernel_main() {
     constexpr uint32_t block_n_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(3);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
-    constexpr auto weight_args = TensorAccessorArgs<5>();
+    // kw-fold (conv2d_3x3_kw_fold.hpp): K-block kh is [C_in, 3 C_out] with (c, kw, n) order, block_n_tiles = 3 C_out.
+    constexpr bool kw_fold = get_compile_time_arg_val(5) != 0;
+    constexpr auto weight_args = TensorAccessorArgs<6>();
     constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
     static_assert(num_chunks >= 1 && num_chunks <= 8 && round_tiles % num_chunks == 0);
     constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
@@ -37,14 +39,26 @@ void kernel_main() {
         cb_reserve_back(cb_weights, round_tiles);
         const uint32_t l1 = get_write_ptr(cb_weights);
         MaybeDeviceZoneScope("server_read");
-        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path).
-        const uint32_t page0 = (r % num_k_blocks) * round_tiles;
+        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold reads the prepared
+        // tile ((kh * 3 + kw) C_in + c, n) for slot (c, kw, n).
+        const uint32_t kh = r % num_k_blocks;
+        const uint32_t page0 = kh * round_tiles;
+        auto page_of = [&](uint32_t t) -> uint32_t {
+            if constexpr (kw_fold) {
+                constexpr uint32_t n_tiles = block_n_tiles / 3;
+                const uint32_t n = t % n_tiles;
+                const uint32_t ck = t / n_tiles;
+                return ((kh * 3 + ck % 3) * block_k_tiles + ck / 3) * n_tiles + n;
+            } else {
+                return page0 + t;
+            }
+        };
         // Issue chunk c, then hand over chunk c - 1.
         for (uint32_t c = 0; c <= num_chunks; ++c) {
             if (c < num_chunks) {
                 reads.begin(1 + c);
                 for (uint32_t t = c * chunk_tiles; t < (c + 1) * chunk_tiles; ++t) {
-                    reads.read(weights.get_noc_addr(page0 + t), l1 + t * tile_bytes, tile_bytes);
+                    reads.read(weights.get_noc_addr(page_of(t)), l1 + t * tile_bytes, tile_bytes);
                 }
                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);
             }

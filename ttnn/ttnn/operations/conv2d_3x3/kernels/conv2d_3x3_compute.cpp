@@ -56,6 +56,9 @@
 #include "conv2d_3x3_narrow_untilize.hpp"
 #include "conv2d_3x3_wide_untilize.hpp"
 #include "conv2d_3x3_lean_tilize.hpp"
+#ifdef CONV2D_3X3_KW_FOLD
+#include "conv2d_3x3_kw_fold.hpp"
+#endif
 
 namespace ckl = compute_kernel_lib;
 
@@ -498,6 +501,32 @@ struct CenterTapIn0 {
 }  // namespace
 
 void kernel_main() {
+#ifdef CONV2D_3X3_KW_FOLD
+    // kw-fold + output-shift path (conv2d_3x3_kw_fold.hpp); runtime args 3, 4: the core's first output tile-row and
+    // its valid tile-rows; 0: its M-blocks.
+    conv2d_3x3::kw_fold::run<
+        get_compile_time_arg_val(14),  // cb_input_tiles: the slab
+        get_compile_time_arg_val(2),   // cb_weights
+        get_compile_time_arg_val(3),   // cb_bias
+        get_compile_time_arg_val(5),   // cb_output_tiles
+        get_compile_time_arg_val(4),   // cb_matmul_partials: the fp32 accumulator
+        get_compile_time_arg_val(23),  // cb_combined: the fp32 bias block
+        get_compile_time_arg_val(31),  // cb_ring_token: seeded-region tokens
+        get_compile_time_arg_val(40),  // cb_src_table: ACC-ready token (pack -> unpack)
+        get_compile_time_arg_val(21),  // N
+        get_compile_time_arg_val(17),  // C_in tiles
+        get_compile_time_arg_val(6),   // bm
+        KWF_D,
+        KWF_TPR,
+        KWF_SBW,
+        KWF_SBH,
+        get_compile_time_arg_val(13) != 0,                            // relu
+        get_compile_time_arg_val(18) * get_compile_time_arg_val(17),  // slab pages
+        KWF_M_TILES,
+        KWF_KBLOCKED != 0,
+        KWF_PLANE_BYTES,
+        KWF_NOINLINE != 0>(get_arg_val<uint32_t>(3), get_arg_val<uint32_t>(4), get_arg_val<uint32_t>(0));
+#else
     constexpr uint32_t cb_im2col_rm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_im2col_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t cb_weights = get_compile_time_arg_val(2);
@@ -1083,4 +1112,5 @@ void kernel_main() {
         bias.wait_front(out_n_tiles);
         bias.pop_front(out_n_tiles);
     }
+#endif
 }

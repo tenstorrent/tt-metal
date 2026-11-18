@@ -803,6 +803,37 @@ void kernel_main() {
             }
         }
 
+#ifdef CONV2D_3X3_KW_FOLD
+        {
+            // kw-fold (conv2d_3x3_kw_fold.hpp): no gather. Seed each valid ACC region (32 rows of one output tile-row)
+            // with the fp32 bias rows compute packed once, one self-aimed read per region, and hand it to compute.
+            MaybeDeviceZoneScope("reader_kwf_seed");
+            // ACC and the bias block are KWF_N / KWF_SBW column planes of sbw * 32 fp32 columns.
+            constexpr uint32_t pitch = KWF_SBW * 32 * 4;
+            constexpr uint32_t planes = KWF_N / KWF_SBW;
+            // Per M-block (the ACC is reused: a region's token reserve waits until compute popped the previous
+            // block's tokens, after its final pass read the ACC).
+            cb_wait_front(KWF_CB_BIAS_RM, 1);
+            const uint64_t src = get_noc_addr(get_read_ptr(KWF_CB_BIAS_RM));
+            const uint32_t acc = get_write_ptr(KWF_CB_ACC);
+            const uint32_t t0 = o_first / TILE_DIM;
+            const uint32_t img0 = (t0 - 1 + KWF_TPR) / KWF_TPR;
+            for (uint32_t i = 1; i <= block_valid_tiles; ++i) {
+                const uint32_t img = (t0 - 1 + i + KWF_TPR) / KWF_TPR;
+                const uint32_t row = KWF_D + 32 * i + KWF_D * (img - img0);
+                cb_reserve_back(KWF_CB_TOK, 1);
+                for (uint32_t p = 0; p < planes; ++p) {
+                    noc_async_read(src + p * 32 * pitch, acc + p * KWF_PLANE_BYTES + row * pitch, 32 * pitch);
+                }
+                noc_async_read_barrier();
+                cb_push_back(KWF_CB_TOK, 1);
+            }
+            if (m_block_idx + 1 == num_m_blocks_this_core) {
+                cb_pop_front(KWF_CB_BIAS_RM, 1);
+            }
+        }
+        continue;
+#endif
         // ---- gather_im2col_blocks: one K-block = block_m_tiles tile-rows x block_k_cols of kernel row kh.
         // Tile-row tile_row of K-block k_block_idx into rows_l1.
         [[maybe_unused]] auto gather_into = [&](uint32_t k_block_idx, uint32_t tile_row, uint32_t rows_l1) {

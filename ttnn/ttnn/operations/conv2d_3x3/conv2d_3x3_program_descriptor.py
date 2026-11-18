@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import functools
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import ttnn
@@ -1083,6 +1083,110 @@ def _work_items(input_tensor, g: Conv3x3Geometry, b: Conv3x3Blocking):
     return [(block_core(spec, row, col), row, col) for row in range(b.num_m_groups) for col in range(g.k_cols)]
 
 
+# kw-fold + output shift (kernels/conv2d_3x3_kw_fold.hpp): on HEIGHT-sharded TILE input at stride 1, padding ==
+# dilation, W % 32 == 0 and whole-tile C_in, the kernel rows are whole input tile-rows apart, so [Q_0 | Q_1 | Q_2] is
+# one matmul on the input's own tiles (K' = 3 C_in, N' = 3 C_out) and the kw shift moves to the output (fp32 packer
+# L1 accumulation at a +-d row offset). No untilize, gather or tilize. Measured against the K-blocked tap-direct walk
+# (Blackhole p150b, LoFi bf8_b, perf focus): stem.conv2 47.7 -> 40.6, stem.conv3 69.7 -> 60.2, center_head.1 21.6 ->
+# 16.4, inst res2.fuse_conv.0 44.4 -> 34.4, inst res3.fuse_conv.0 28.7 -> 26.2 us. Where it does not pay
+# (_kw_fold_pays) the K-blocked walk runs.
+KW_FOLD = True
+# K-blocked kw-fold packs every K-block's [Q_0 | Q_1 | Q_2] over bm + 2 tile-rows into the fp32 accumulator (three
+# passes) to save a tilize proportional to C_in * bm: it lost below Ct * bm / (N * (bm + 2)) = 0.8 (res3.x 0.6: +3.5%,
+# sem dec res3 fc0 0.75: +3.6%, fc1 0.6: +7.7%) and won above it (inst dec res2 fc0 0.83: -2.9%, res2 fc1 1.04: -22%,
+# inst dec res3 fc0 1.5: -8.5%).
+KW_FOLD_MIN_KBLOCK_RATIO = 0.8
+# Whole-K kw-fold exposes a fixed latency the K-blocked walk hides under its prelude: the bias read before its first pack
+# and the whole weight stream before its first matmul (~7 us on res2 / center_head.1). It pays only where the im2col it
+# removes (tilized taps plus the untilized slab, ~25 ns per tile) takes longer: res2 (4.4 us of im2col) measured
+# 16.9 -> 18.2 us, center_head.1 (8.8 us) 21.6 -> 16.4.
+KW_FOLD_WHOLE_K_EXPOSED_NS = 7000
+IM2COL_NS_PER_TILE = 25
+
+
+def kw_fold_mode(g, b, has_bias, l1_budget):
+    if not (KW_FOLD and has_bias and g.tile_input and g.sharded_output and not g.k_split):
+        return False
+    if g.stride != 1 or g.padding != g.dilation or not 1 <= g.dilation <= 32:
+        return False
+    if g.input_width % TILE or g.c_in % TILE or g.c_in_p != g.c_in:
+        return False
+    return _kw_fold_pays(g, b) and _kw_fold_cb_bytes(g, _kw_fold_blocking(g, b)) <= l1_budget
+
+
+def _kw_fold_pays(g, b):
+    """Whether kw-fold beats the K-blocked walk `b` would run (see KW_FOLD_MIN_KBLOCK_RATIO and
+    KW_FOLD_WHOLE_K_EXPOSED_NS)."""
+    ct, n, bm = g.c_in_tiles, g.tensor_n_tiles, b.block_m_tiles
+    if kw_fold_kblocked(g):
+        return ct * bm >= KW_FOLD_MIN_KBLOCK_RATIO * n * (bm + 2)
+    taps = 6 if b.center_mode != CENTER_NONE else 9
+    im2col_tiles = b.max_m_blocks_per_core * (taps * ct * bm + b.slab_tile_rows * ct)
+    return im2col_tiles * IM2COL_NS_PER_TILE >= KW_FOLD_WHOLE_K_EXPOSED_NS
+
+
+def _kw_fold_cb_bytes(g, kb):
+    """L1 of the kw-fold CBs (the descriptor's kwf CB list)."""
+    slabs = 2 if kb.max_m_blocks_per_core > 1 else 1
+    total = slabs * kb.slab_tile_rows * g.c_in_tiles * g.in0_tile_bytes
+    total += kb.weight_depth * kb.block_k_tiles * kb.block_n_tiles * g.weight_tile_bytes
+    total += _kw_fold_acc_bytes(g, kb.block_m_tiles)
+    total += g.tensor_n_tiles * (g.weight_tile_bytes + TILE_BYTES_FP32) + kb.block_m_tiles * RING_TOKEN_BYTES
+    total += TILE * g.c_in_p * BF16_BYTES  # cb_zero_src (tap-major reader start)
+    return total
+
+
+# K-blocked kw-fold (one pass per kernel row as its weights land, every pack accumulating) vs whole-K (one pass once
+# all weights landed: a third of the packs): K-blocked when the weights are at least KW_FOLD_KBLOCK_MIN_WEIGHT_TILES
+# tiles, where today's weight stream paces the walk (res3.x: 19.3 K-blocked vs 23.2 us whole-K; with the weights
+# stubbed whole-K wins, 13.0 vs 14.9 us).
+KW_FOLD_KBLOCK_MIN_WEIGHT_TILES = 128
+
+
+def kw_fold_kblocked(g):
+    return 9 * g.c_in_tiles * g.tensor_n_tiles >= KW_FOLD_KBLOCK_MIN_WEIGHT_TILES
+
+
+def _kw_fold_subblock(n_tiles):
+    sbw = _largest_divisor_at_most(n_tiles, DEST_TILES_FP32_HALF_SYNC)
+    return sbw, DEST_TILES_FP32_HALF_SYNC // sbw
+
+
+def _kw_fold_blocking(g, b):
+    bm, ct, n = b.block_m_tiles, g.c_in_tiles, g.tensor_n_tiles
+    r = g.dilation * g.input_width // TILE
+    ub = b.untilize_batch_rows if not b.ring else 4
+    slab_rows = _div_up(bm + 2 + 2 * r, ub) * ub
+    return replace(
+        b,
+        block_k_tiles=ct,
+        block_n_tiles=3 * n,
+        num_k_blocks=3,
+        # Whole-K multiplies once every K-block landed; K-blocked streams them (double-buffered).
+        weight_depth=2 if kw_fold_kblocked(g) else 3,
+        center_mode=CENTER_NONE,
+        center_slot_blocks=1,
+        ring=False,
+        slab_tile_rows=slab_rows,
+        untilize_batch_rows=ub,
+        in0_stream_rows=bm,
+    )
+
+
+def _kw_fold_plane_bytes(g, bm):
+    """One ACC column plane: [rows, sbw * 32] fp32; rows bound every core's rowbase(bm + 1) + 32 + d."""
+    tpr = g.input_width // TILE
+    rows = TILE * (bm + 3) + g.dilation * ((bm + 2) // tpr + 3)
+    sbw, _ = _kw_fold_subblock(g.tensor_n_tiles)
+    return rows * sbw * TILE * 4
+
+
+def _kw_fold_acc_bytes(g, bm):
+    sbw, _ = _kw_fold_subblock(g.tensor_n_tiles)
+    total = (g.tensor_n_tiles // sbw) * _kw_fold_plane_bytes(g, bm)
+    return _div_up(total, TILE_BYTES_FP32) * TILE_BYTES_FP32
+
+
 def create_program_descriptor(
     input_tensor,
     weight_tensor,
@@ -1096,6 +1200,17 @@ def create_program_descriptor(
 ) -> ttnn.ProgramDescriptor:
     g, b = geometry, blocking
     has_bias = bias_tensor is not None
+    resident = (
+        input_tensor.memory_config().shard_spec.shape[0] // TILE * g.c_in_tiles * g.in0_tile_bytes
+        + b.core_m_tiles * g.out_n_tiles * g.out_tile_bytes
+        if g.sharded_output and g.tile_input
+        else 0
+    )
+    kwf = kw_fold_mode(g, b, has_bias, l1_cb_budget_bytes(resident))
+    # The reader keeps the original K-blocking in its CT args (it only fills the slab: its K-block asserts stay true).
+    reader_bk, reader_nkb = b.block_k_tiles, b.num_k_blocks
+    if kwf:
+        b = _kw_fold_blocking(g, b)
     pixel_bytes = g.c_in_p * BF16_BYTES
     input_page_bytes = g.in0_tile_bytes if g.tile_input else pixel_bytes
     if input_tensor.buffer_aligned_page_size() != input_page_bytes:
@@ -1211,9 +1326,10 @@ def create_program_descriptor(
         cbs.append(_cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
     if tap_major_im2col(g, b):
         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
-    tap_direct = _tap_direct(g, bm, bk, b.nslice)
-    tap_direct_fifo_units = _tap_direct_fifo_units(g, bm, bk, b.nslice)
-    tap_direct_windows = _tap_direct_windows(g, bm, bk, b.nslice, b.center_mode)
+    # kw-fold has no gather (its reader only fills the slab) and owns CB_SRC_TABLE as its ACC-ready token.
+    tap_direct = not kwf and _tap_direct(g, bm, bk, b.nslice)
+    tap_direct_fifo_units = 0 if kwf else _tap_direct_fifo_units(g, bm, bk, b.nslice)
+    tap_direct_windows = not kwf and _tap_direct_windows(g, bm, bk, b.nslice, b.center_mode)
     if tap_direct_fifo_units:
         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 16, tap_direct_fifo_units, cores))
     elif tap_direct:
@@ -1229,6 +1345,31 @@ def create_program_descriptor(
         if has_bias and not b.nslice:
             cbs.append(_cb(CB_COMBINED, ttnn.float32, TILE_BYTES_FP32, bm * ns, cores))
 
+    if kwf:
+        # kw-fold CBs: the whole slab (input tiles), the whole weights (3 K-blocks of [C_in, 3 C_out] tiles), the fp32
+        # accumulator, the fp32 bias block, the seeded-region tokens, the bias and the output shard.
+        alias_ring = False
+        input_ring_batches = (2 if b.max_m_blocks_per_core > 1 else 1) * (b.slab_tile_rows // b.untilize_batch_rows)
+        cbs = [
+            # Two slabs with more than one M-block per core: the next block's fill lands during this block's walk.
+            _cb(
+                CB_INPUT_TILES,
+                input_tensor.dtype,
+                g.in0_tile_bytes,
+                (2 if b.max_m_blocks_per_core > 1 else 1) * b.slab_tile_rows * g.c_in_tiles,
+                cores,
+            ),
+            _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * bk * bn, cores),
+            _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, _kw_fold_acc_bytes(g, bm) // TILE_BYTES_FP32, cores),
+            output_cb,
+            _cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores),
+            _cb(CB_COMBINED, ttnn.float32, ns * TILE_BYTES_FP32, 1, cores),
+            _cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, bm, cores),
+            # ACC-ready token, compute pack -> compute unpack, once per M-block.
+            _cb(CB_SRC_TABLE, ttnn.float32, RING_TOKEN_BYTES, 1, cores),
+        ]
+        if tap_major_im2col(g, b):
+            cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
     # Channel-slice reads (R4): the core's slice of input row v is page v * row_page_stride + col offset,
     # and one owner shard holds input_shard_rows consecutive rows of it contiguously.
     slab_split = SLAB_SPLIT_NOCS and g.sharded_output and not g.tile_input and not g.k_split
@@ -1329,9 +1470,9 @@ def create_program_descriptor(
             g.stride,
             g.dilation,
             bm,
-            bk,
+            reader_bk,
             g.tensor_kkh_tiles,
-            b.num_k_blocks,
+            reader_nkb,
             b.band_stride_px,
             int(g.tile_input),
             input_page_bytes,
@@ -1603,6 +1744,8 @@ def create_program_descriptor(
             + [int(split_of(core))]
         )
         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+        if kwf:
+            compute_args += [m_tile_start, actual_m_tiles]
         if b.ring:
             # Per M-block: tile-rows to untilize, and the unread tail rows of its last cb_input_tiles batch.
             ub = b.untilize_batch_rows
@@ -1634,12 +1777,42 @@ def create_program_descriptor(
             + server_rt_args(core)
         )
 
+    # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).
+    _kwf_dm_defines, _kwf_compute_defines = [], []
+    if kwf:
+        _sbw, _sbh = _kw_fold_subblock(g.tensor_n_tiles)
+        _tpr = g.input_width // TILE
+        _kwf_dm_defines = [
+            ("CONV2D_3X3_KW_FOLD", "1"),
+            ("KWF_N", str(g.tensor_n_tiles)),
+            ("KWF_D", str(g.dilation)),
+            ("KWF_TPR", str(_tpr)),
+            ("KWF_CB_ACC", str(CB_MATMUL_PARTIALS)),
+            ("KWF_CB_BIAS_RM", str(CB_COMBINED)),
+            ("KWF_CB_TOK", str(CB_RING_TOKEN)),
+            ("KWF_SBW", str(_sbw)),
+            ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
+            ("KWF_KBLOCKED", str(int(kw_fold_kblocked(g)))),
+        ]
+        _kwf_compute_defines = [
+            ("CONV2D_3X3_KW_FOLD", "1"),
+            ("KWF_D", str(g.dilation)),
+            ("KWF_TPR", str(_tpr)),
+            ("KWF_SBW", str(_sbw)),
+            ("KWF_SBH", str(_sbh)),
+            ("KWF_M_TILES", str(g.tensor_m_tiles)),
+            ("KWF_KBLOCKED", str(int(kw_fold_kblocked(g)))),
+            ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
+            # Out-of-line subblock (see conv2d_3x3_kw_fold.hpp): whole-K with multi-row subblocks.
+            ("KWF_NOINLINE", str(int(not kw_fold_kblocked(g) and _sbh > 1))),
+        ]
     readers = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
             core_ranges=_core_range_set(reader_cores),
             compile_time_args=reader_ct_args(*slice_channels),
             runtime_args=reader_rt,
+            defines=_kwf_dm_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
@@ -1650,6 +1823,7 @@ def create_program_descriptor(
             core_ranges=_core_range_set(writer_cores),
             compile_time_args=writer_ct_args_for(*slice_channels),
             runtime_args=writer_rt,
+            defines=_kwf_dm_defines,
             config=ttnn.WriterConfigDescriptor(),
         )
         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
@@ -1659,6 +1833,7 @@ def create_program_descriptor(
         core_ranges=cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
+        defines=_kwf_compute_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,
@@ -1676,7 +1851,12 @@ def create_program_descriptor(
             if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
                 pages = cb.total_size // g.weight_tile_bytes
                 cbs[i] = _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, pages, sem_cores)
-        num_rounds = max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
+        # Whole-K kw-fold keeps its weights resident across M-blocks: one stream.
+        num_rounds = (
+            b.num_k_blocks
+            if kwf and not kw_fold_kblocked(g)
+            else max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
+        )
         num_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
         server_reader_rt = ttnn.RuntimeArgs()
         server_writer_rt = ttnn.RuntimeArgs()
@@ -1698,7 +1878,7 @@ def create_program_descriptor(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
                 core_ranges=server_cores,
-                compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks]
+                compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks, int(kwf)]
                 + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
                 runtime_args=server_reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
