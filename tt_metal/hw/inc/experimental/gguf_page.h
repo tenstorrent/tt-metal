@@ -213,7 +213,8 @@ inline __attribute__((always_inline)) void lookup_grid(
         constexpr bool xs = FMT == Format::IQ2_XS;
         constexpr std::uint32_t w_bits = FMT == Format::IQ2_S ? 2 : 3;
         constexpr std::uint32_t lo = 0x00ff00ffu;
-        constexpr std::uint32_t hi_mask = FMT == Format::IQ2_S ? 0x03000300u : xs ? 0x01000100u : 0x07000700u;
+        constexpr std::uint32_t hi_bits = xs ? 1 : w_bits;
+        constexpr std::uint32_t hi_mask = ((1u << hi_bits) - 1) * 0x01000100u;
 #pragma GCC unroll 1
         for (std::uint32_t m0 = m_begin; m0 < m_end; m0 += 8) {
             std::uint32_t x[8], hh[8];
@@ -236,10 +237,17 @@ inline __attribute__((always_inline)) void lookup_grid(
 #pragma GCC unroll 8
             for (std::uint32_t b = 0; b < 8; b++) {
                 const std::uint32_t h = hh[xs ? b : b / 2];
-                const std::uint32_t h_ac = (xs ? h << 1 : b % 2 ? h << 8 : h) & hi_mask;
-                const std::uint32_t h_bd = (xs ? h >> 7 : b % 2 ? h << (8 - w_bits) : h >> w_bits) & hi_mask;
-                const std::uint32_t ac = (x[b] & lo) | h_ac;
-                const std::uint32_t bd = ((x[b] >> 8) & lo) | h_bd;
+                std::uint32_t h_ac = h;
+                std::uint32_t h_bd = h >> w_bits;
+                if constexpr (xs) {
+                    h_ac = h << 1;
+                    h_bd = h >> 7;
+                } else if (b % 2) {
+                    h_ac = h << 8;
+                    h_bd = h << (8 - w_bits);
+                }
+                const std::uint32_t ac = (x[b] & lo) | (h_ac & hi_mask);
+                const std::uint32_t bd = ((x[b] >> 8) & lo) | (h_bd & hi_mask);
                 const std::uint32_t g0 = table[ac & 0xffff];
                 const std::uint32_t g1 = table[bd & 0xffff];
                 const std::uint32_t g2 = table[ac >> 16];

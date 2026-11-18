@@ -76,7 +76,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SrcaForcedExpBfp2ThenBf16) {
             w2[r * 32 + c] = bf16_value(bf16[face_index(r, c)]);
             // BFP2 code: sign in bit 1, magnitude in bit 0 (0 -> +0, 1 -> +1, 3 -> -1; 2 would read as -inf).
             const std::uint32_t code = std::array<std::uint32_t, 3>{0, 1, 3}[rng() % 3];
-            w1[r * 32 + c] = code == 0 ? 0.0f : code == 1 ? 1.0f : -1.0f;
+            w1[r * 32 + c] = std::array<float, 4>{0.0f, 1.0f, 0.0f, -1.0f}[code];
             const std::uint32_t e = face_index(r, c);
             mant[e / 4] |= static_cast<std::uint8_t>(code << (2 * (e % 4)));
         }

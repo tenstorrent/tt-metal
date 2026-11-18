@@ -155,8 +155,9 @@ Inputs make_inputs(const Case& c, std::mt19937& rng) {
                     page[scale_word + w] = e[col] | e[col + 1] << 8 | e[32 + col] << 16 | e[32 + col + 1] << 24;
                 }
             } else if (c.fmt == kQ4_K) {  // 12 scale bytes per column (rows 0..2, next column 3..5), d, dmin
+                const std::array<std::uint32_t, 3> fields = {sc, m, sc | m << 4};
                 for (std::uint32_t r = 0; r < 6; r++) {
-                    page[scale_word + 16 * r + w] = (r % 3 == 0 ? sc : r % 3 == 1 ? m : sc | m << 4) * 0x01010101u;
+                    page[scale_word + 16 * r + w] = fields[r % 3] * 0x01010101u;
                 }
                 page[scale_word + 16 * 6 + w] = d[col] | d[col + 1] << 16;
                 page[scale_word + 16 * 7 + w] = dmin[col] | dmin[col + 1] << 16;
@@ -266,7 +267,14 @@ std::vector<std::uint32_t> run(distributed::MeshDevice& mesh, const Case& c, con
 }
 
 std::string name(const Case& c) {
-    const std::string fmt = c.fmt == kQ8_0 ? "Q8_0" : c.fmt == kQ4_0 ? "Q4_0" : c.fmt == kMXFP4 ? "MXFP4" : "Q4_K";
+    std::string fmt = "Q4_K";
+    if (c.fmt == kQ8_0) {
+        fmt = "Q8_0";
+    } else if (c.fmt == kQ4_0) {
+        fmt = "Q4_0";
+    } else if (c.fmt == kMXFP4) {
+        fmt = "MXFP4";
+    }
     return fmt + " k_tiles=" + std::to_string(c.k_tiles) + " in0_rows=" + std::to_string(c.in0_rows) +
            " overlap=" + std::to_string(c.overlap) + " split=" + std::to_string(c.split) +
            " full_sync=" + std::to_string(c.full_sync) + " group_copy=" + std::to_string(c.group_copy);
