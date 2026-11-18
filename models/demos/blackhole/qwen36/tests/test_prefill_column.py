@@ -34,11 +34,7 @@ BLOCK = 64
 PREFIX_ALIGN = 128
 PERF_TEXT_MS = 62.0  # Galaxy column: trace ~49 ms + the logits read over x1 PCIe
 _REPO = Path(__file__).resolve().parents[5]
-_IMAGES = (
-    "models/demos/multimodal/gemma3/dog.jpg",
-    "models/sample_data/ILSVRC2012_val_00048736.JPEG",
-    "models/demos/stable_diffusion_xl_base/reference/output/sdxl_input_1024x1024.jpg",
-)
+_IMAGE = "models/demos/multimodal/gemma3/dog.jpg"
 _SCAFFOLD = (
     "Reference images follow in order (the first image, the second image, ...).\nUser request: {}\nOutput the caption."
 )
@@ -55,19 +51,17 @@ REQUESTS = {
 
 
 def _images(n, size):
-    from PIL import Image, ImageOps
+    """n (0 or 1) reference images: the centre square of _IMAGE at size x size."""
+    from PIL import Image
 
-    srcs = [Image.open(_REPO / f).convert("RGB") for f in _IMAGES]
-    out = []
-    for i in range(n):
-        im, v = srcs[i % len(srcs)], i // len(srcs)
-        w, h = im.size
-        s = min(w, h) if v == 0 else int(min(w, h) * (0.85 - 0.1 * (v % 3)))
-        x0 = ((w - s) // 2, 0, w - s, (w - s) // 3)[v % 4]
-        y0 = ((h - s) // 2, h - s, 0, (h - s) // 2)[v % 4]
-        c = im.crop((x0, y0, x0 + s, y0 + s)).resize((size, size), Image.BICUBIC)
-        out.append(ImageOps.mirror(c) if v % 2 else c)
-    return out
+    assert n in (0, 1), n
+    if n == 0:
+        return []
+    im = Image.open(_REPO / _IMAGE).convert("RGB")
+    w, h = im.size
+    s = min(w, h)
+    x0, y0 = (w - s) // 2, (h - s) // 2
+    return [im.crop((x0, y0, x0 + s, y0 + s)).resize((size, size), Image.BICUBIC)]
 
 
 def build_request(ckpt_dir, name):
