@@ -4,6 +4,7 @@
 
 """index.json round trip, directory naming, completeness and the staging directory."""
 
+import gc
 import json
 import os
 import shutil
@@ -132,6 +133,22 @@ def test_index_round_trips_through_json_with_columnar_chunks():
     assert decoded.scalars == index.scalars and type(decoded.scalars["optimizer/amsgrad"]) is bool
     assert decoded.live_key_map()["model/Llama/tok_emb/weight"] == "model/Llama/fc/weight"
     assert all(entry["tp_split"] == [1, 1, 2, 1] for entry in encoded["state"].values()), "every entry records it"
+
+
+def test_the_index_is_written_compact_and_a_paused_gc_stays_paused(tmp_path):
+    directory = str(tmp_path)
+    write_index(directory, _index())
+    text = (tmp_path / "index.json").read_text()
+    assert "\n" not in text and '": ' not in text, "no indentation and no spaces after separators"
+    assert read_index(directory).entries == _index().entries
+    assert gc.isenabled(), "writing and reading pause the GC only while they run"
+    gc.disable()
+    try:
+        write_index(directory, _index())
+        read_index(directory)
+        assert not gc.isenabled(), "a GC the caller paused stays paused"
+    finally:
+        gc.enable()
 
 
 def test_a_malformed_tp_split_is_refused(expect_error):

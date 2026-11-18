@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import datetime
 import errno
+import gc
 import json
 import math
 import os
@@ -29,8 +30,9 @@ import re
 import secrets
 import shutil
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 from ._boxes import Box
 from ._errors import CheckpointError, IncompleteCheckpointError, VersionError
@@ -448,20 +450,37 @@ def check_json(name: str, value: Any) -> Any:
     return walk(value, "")
 
 
-def _atomic_write_json(path: str, value: Any) -> None:
+def _atomic_write_text(path: str, text: str) -> None:
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(value, f, indent=1, sort_keys=False)
+        f.write(text)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
     _fsync_dir(os.path.dirname(path) or ".")
 
 
+@contextmanager
+def _gc_paused() -> Iterator[None]:
+    """The cyclic garbage collector paused, for building or parsing an index: both allocate millions of small objects
+    that form no cycles, so the collections their allocation triggers would scan them for nothing."""
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
+
+
 def write_index(directory: str, index: Index) -> None:
+    """``index.json`` as compact JSON: about a third of the indented size, and written by CPython's C encoder, which
+    any ``indent`` replaces with the pure-Python one. Unlike ``header.json``, it is read by machines."""
     if not index.created:
         index.created = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _atomic_write_json(os.path.join(directory, INDEX_NAME), index.to_json())
+    with _gc_paused():
+        text = json.dumps(index.to_json(), separators=(",", ":"))
+    _atomic_write_text(os.path.join(directory, INDEX_NAME), text)
 
 
 def _refuse_staging(directory: str) -> None:
@@ -479,7 +498,7 @@ def read_index(directory: str) -> Index:
     if not os.path.isfile(path):
         raise IncompleteCheckpointError(f"{directory} has no {INDEX_NAME}; it is not a complete checkpoint")
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f, _gc_paused():
             return Index.from_json(json.load(f))
     except CheckpointError as err:
         raise type(err)(f"{path}: {err}") from err
@@ -490,7 +509,7 @@ def read_index(directory: str) -> Index:
 
 
 def write_header(directory: str, header: dict) -> None:
-    _atomic_write_json(os.path.join(directory, HEADER_NAME), header)
+    _atomic_write_text(os.path.join(directory, HEADER_NAME), json.dumps(header, indent=1))
 
 
 def read_header_json(directory: str) -> dict:
