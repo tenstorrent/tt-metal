@@ -122,64 +122,6 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidirDist) {
 
     print_summary(errors);
     ASSERT_TRUE(errors.empty());
-#if 0
-	const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
-
-    vector<LinkError> errors;
-    int n = 0;
-
-    vector<uint32_t> inputs = generate_uniform_random_vector<uint32_t>(0, 100, 1 << 20);
-
-    for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
-        for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
-
-            log_info(
-                tt::LogTest,
-                "sender device id: {} ({}, {}), receiver device id: {} ({}, {})",
-                sender_device->id(),
-                pci_bdf_for_device_id(sender_device->id()),
-                get_ubb(sender_device),
-                receiver_device->id(),
-                pci_bdf_for_device_id(receiver_device->id()),
-                get_ubb(receiver_device));
-
-            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
-                if (!eth_core_connects_within_cluster(sender_device, sender_core)) {
-                    continue;
-                }
-                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
-                if (receiver_device->id() != device_id) {
-                    continue;
-                }
-
-                log_info(
-                    tt::LogTest, "  {}", format_link_info(sender_device, sender_core, receiver_device, receiver_core));
-
-                for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
-                    const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-
-                    log_info(tt::LogTest, "    running on {}", processor);
-                    bool passed = run_test_bandwidth_bidir(
-                        this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor, inputs);
-                    if (!passed) {
-                        errors.emplace_back(
-                            sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
-                    }
-                    log_info(tt::LogTest, "    done");
-
-                    n++;
-                }
-            }
-        }
-    }
-
-    log_info(tt::LogTest, "Ran {} tests", n);
-
-    print_summary(errors);
-    ASSERT_TRUE(errors.empty());
-#endif
 }
 
 }  // namespace tt::tt_metal
