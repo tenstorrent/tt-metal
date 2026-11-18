@@ -384,14 +384,14 @@ class TtLlamaMLP(LightweightModule):
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
-        # LLAMA_GALAXY_PREFILL_MINMM=mlp2048: minimal matmuls (FF2 fused with its all-gather) at 2048 too.
+        # LLAMA_GALAXY_PREFILL_MINMM=mlp2048 / mlp3072: minimal matmuls (FF2 fused with its all-gather) at 2048 /
+        # 3072 too (the 1024-row slab input [1, S/1024, 1024, 2048] goes to minimal_matmul as is, as at 2048).
         mlp_minmm = (
-            seq_len == 2048
+            ((seq_len == 2048 and prefill_minmm("mlp2048")) or (seq_len == 3072 and prefill_minmm("mlp3072")))
             and batch_size == 1
             and self.args.use_prefetcher
             and not self.args.is_blackhole
             and not self.args.is_qwen
-            and prefill_minmm("mlp2048")
         )
         if mlp_minmm:
             use_w1_w3_interleaved = True

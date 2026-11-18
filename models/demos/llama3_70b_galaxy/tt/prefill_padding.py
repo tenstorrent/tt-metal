@@ -94,16 +94,20 @@ def prefill_sdpa_q64_2048_enabled():
 #   qkv     : the QKV matmul at every batch-1 prefill length >= 2048 (unslabbed [1, 1, S, 2048] input)
 #   mlp2048 : FF1/FF3 (minimal) and FF2 (fused AG + minimal) at 2048
 #   wo2048  : WO at 2048
+#   mlp3072 : FF1/FF3 (minimal) and FF2 (fused AG + minimal) at 3072 (not part of "1")
 PREFILL_MINMM_ENV = "LLAMA_GALAXY_PREFILL_MINMM"
-PREFILL_MINMM_PARTS = ("qkv", "mlp2048", "wo2048")
+PREFILL_MINMM_PARTS = ("qkv", "mlp2048", "wo2048", "mlp3072")
+PREFILL_MINMM_ALL = ("qkv", "mlp2048", "wo2048")  # what "1" turns on
 
 
 def prefill_minmm(part):
     value = os.environ.get(PREFILL_MINMM_ENV, "").strip()
     if value in ("", "0"):
         return False
-    parts = PREFILL_MINMM_PARTS if value == "1" else tuple(p.strip() for p in value.replace("+", ",").split(","))
+    parts = PREFILL_MINMM_ALL if value == "1" else tuple(p.strip() for p in value.replace("+", ",").split(","))
     for p in parts:
         if p not in PREFILL_MINMM_PARTS:
-            raise ValueError(f"{PREFILL_MINMM_ENV}={value!r}: unknown part {p!r}; use 1 or a list of {PREFILL_MINMM_PARTS}")
+            raise ValueError(
+                f"{PREFILL_MINMM_ENV}={value!r}: unknown part {p!r}; use 1 or a list of {PREFILL_MINMM_PARTS}"
+            )
     return part in parts
