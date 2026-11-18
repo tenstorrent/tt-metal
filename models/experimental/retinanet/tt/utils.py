@@ -147,6 +147,9 @@ class TTConv2D:
         self.math_approx_mode = math_approx_mode
         self.input_channels_alignment = input_channels_alignment
         self.reshard_if_not_optimal = reshard_if_not_optimal
+        # conv2d replaces self.weights with its prepared tensor after the first call, which no
+        # longer has the OIHW shape.
+        self.in_channels = self.weights.shape[1]
         self.out_channels = self.weights.shape[0]
         self.act_block_h = act_block_h
         self.act_block_w = act_block_w
@@ -180,7 +183,7 @@ class TTConv2D:
         of its bfloat16 weights takes at most 1/WEIGHT_L1_FRACTION of a core's L1; 1 if whole.
         Width sharding first splits the channels over the grid's cores, and each block must stay
         whole tiles of a core's share; conv2d does not reject a split that breaks a tile."""
-        in_channels = self.weights.shape[1]
+        in_channels = self.in_channels
         weight_bytes = in_channels * self.kernel_size[0] * self.kernel_size[1] * self.out_channels * 2
         budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank // self.WEIGHT_L1_FRACTION
         grid = device.compute_with_storage_grid_size()
@@ -293,7 +296,7 @@ class TTConv2D:
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
-            in_channels=self.weights.shape[1],
+            in_channels=self.in_channels,
             out_channels=self.out_channels,
             device=device,
             kernel_size=self.kernel_size,
