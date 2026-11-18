@@ -25,89 +25,8 @@ from models.experimental.retinanet.tt.custom_preprocessor import (
     preprocess_classification_head_parameters,
 )
 
-# LUT
-COCO_INSTANCE_CATEGORY_NAMES = [
-    "person",
-    "bicycle",
-    "car",
-    "motorcycle",
-    "airplane",
-    "bus",
-    "train",
-    "truck",
-    "boat",
-    "traffic light",
-    "fire hydrant",
-    "stop sign",
-    "parking meter",
-    "bench",
-    "bird",
-    "cat",
-    "sheep",
-    "horse",
-    "dog",
-    "cow",
-    "elephant",
-    "bear",
-    "zebra",
-    "giraffe",
-    "backpack",
-    "umbrella",
-    "handbag",
-    "tie",
-    "suitcase",
-    "frisbee",
-    "skis",
-    "snowboard",
-    "sport ball",
-    "kite",
-    "baseball bat",
-    "baseball glove",
-    "skateboard",
-    "surfboard",
-    "tennis racket",
-    "bottle",
-    "wineglass",
-    "cup",
-    "fork",
-    "knife",
-    "spoon",
-    "bowl",
-    "banana",
-    "apple",
-    "sandwich",
-    "orange",
-    "broccoli",
-    "carrot",
-    "hotdog",
-    "pizza",
-    "donut",
-    "cake",
-    "chair",
-    "couch",
-    "potted plant",
-    "bed",
-    "dining table",
-    "toilet",
-    "tv",
-    "laptop",
-    "mouse",
-    "remote",
-    "keyboard",
-    "cell phone",
-    "microwave",
-    "oven",
-    "toaster",
-    "sink",
-    "refrigerator",
-    "book",
-    "clock",
-    "vase",
-    "scissors",
-    "teddy bear",
-    "hair drier",
-    "toothbrush",
-]
+# torchvision's 91 COCO category slots, which the labels index; unused slots are N/A.
+CATEGORY_NAMES = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT.meta["categories"]
 
 device = ttnn.open_device(device_id=0, l1_small_size=24576)
 
@@ -250,8 +169,6 @@ class Demo:
         from PIL import Image, ImageDraw, ImageFont
         import os
 
-        label_map = {i: name for i, name in enumerate(COCO_INSTANCE_CATEGORY_NAMES)}
-
         image = Image.open(image_path).convert("RGB")
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
@@ -267,11 +184,8 @@ class Demo:
             x1, y1, x2, y2 = box.tolist()
             draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
 
-            if label_map:
-                class_name = label_map.get(label.item(), str(label.item()))
-                print(f"{class_name} : {score}")
-            else:
-                class_name = str(label.item())
+            class_name = CATEGORY_NAMES[label.item()]
+            print(f"{class_name} : {score}")
 
             text = f"{class_name}: {score:.2f}"
             draw.text((x1 + 5, y1 + 5), text, fill="yellow", font=font)
