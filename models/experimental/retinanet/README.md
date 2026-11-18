@@ -25,7 +25,8 @@ From the repository root, run inference on an image:
 python models/experimental/retinanet/demo/demo.py --input <path/to/image>
 ```
 
-The image is resized to 512x512. `--threshold` (default 0.5) sets the lowest score that is drawn.
+The image is resized to 512x512, without keeping its aspect ratio. `--threshold` (default 0.5)
+sets the lowest score that is drawn; scores below torchvision's 0.05 are dropped before that.
 The annotated result is written to `result.jpg` in `--output`, which defaults to
 `models/experimental/retinanet/resources/outputs/`. The demo opens device 0.
 
@@ -92,7 +93,7 @@ Every kernel of the full model still runs with `N=1`.
 ```
 models/experimental/retinanet/
 ├── num_layers.py          # RETINANET_NUM_LAYERS: reduces the reference model
-├── demo/demo.py           # Image CLI with host postprocessing
+├── demo/demo.py           # Image CLI: runs the model and draws its detections
 ├── resources/             # Demo image and outputs
 ├── tests/
 │   ├── pcc/               # Module and E2E PCC tests against torchvision
@@ -217,7 +218,7 @@ tt/custom_preprocessor.py
     every module's parameters, taken from the torchvision model
 
 demo/demo.py, on the host
-    transform's normalization and resize
+    transform's normalization; a fixed 512x512 resize in place of its aspect-preserving one
 ```
 
 ## Details

@@ -56,7 +56,8 @@ def retinanet_anchors(image_size):
 
 class TTDetectionDecoder:
     """Per level: top-k over the flattened (anchor, class) logits, then the boxes of the selected
-    anchors decoded with torchvision's BoxCoder (unit weights) and clipped to the image."""
+    anchors decoded with torchvision's BoxCoder (unit weights) and clipped to the image. The
+    default ``topk_candidates`` is torchvision RetinaNet's."""
 
     def __init__(self, device, image_size=(512, 512), topk_candidates=1000):
         self.device = device
@@ -142,7 +143,8 @@ class TTDetectionDecoder:
 
 def select_detections(boxes, scores, labels, score_thresh=0.05, nms_thresh=0.5, detections_per_img=300):
     """Host side of the postprocessing for the device candidates of ``TTDetectionDecoder``: the
-    score threshold and class-wise NMS. Returns torchvision's detection dict for the image."""
+    score threshold and class-wise NMS. Returns torchvision's detection dict for the image. The
+    defaults are torchvision RetinaNet's."""
     boxes = torch.cat([ttnn.to_torch(level).reshape(4, -1).T for level in boxes]).float()
     scores = torch.cat([ttnn.to_torch(level).reshape(-1) for level in scores]).float()
     labels = torch.cat([ttnn.to_torch(level).reshape(-1) for level in labels]).long()
