@@ -50,3 +50,4 @@
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-18T12:50:32+00:00"}
 {"event":"test_run","what":"R19 WIP: A in-flight cap + R1 B one-shot mcast + row reuse + cost model","result":"unit 132 pass, golden loose+feature 108 pass; res3_conv1 41.2->28.0, res4_conv1 27.3->21.4, dec_res2 25.0->13.7, dec_res3 12.4->10.7, res3_short 20.1->17.0","ts":"2026-11-18T13:18:59+00:00"}
 {"event":"fix_applied","what":"cap gated to M-only splits (batched guard +6% under it), cap 4, bank stagger, distributed B parked (concurrent multicasts serialize: 20.6->57us; ordered 2/4 slices 23.9/25.0)","note":"re-applied after an A/B loop restored HEAD over uncommitted edits","ts":"2026-11-18T14:02:50+00:00"}
+{"event":"test_run","what":"R19 final","result":"res3_conv1 41.6->27.6, res4_conv1 27.4->20.6, dec_res2 22.6->12.1, dec_res3 12.3->9.8, res3_short 20.0->16.8; guard clean; unit 268+13 pass; golden slice 213 pass 21 xfail","ts":"2026-11-18T14:14:11+00:00"}

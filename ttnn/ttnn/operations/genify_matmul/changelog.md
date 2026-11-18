@@ -1451,3 +1451,145 @@ Precision: no option traded precision. Every candidate was bit-identical to HEAD
 | `dataflow_kernel_lib::ReceiverPipe::receive(round)` (mcast pipe, `mcast_pipe.inl`) | capability | `receive()` fuses "ack round r's sender" (consumer_ready.up) with "wait for / clear round r's data-ready flag" in one call. A rotating injector therefore cannot ack round r+1 and THEN spend its idle time issuing its next turn's reads: the work sits either before its own send or before its ack (which gates the next sender). Needed: `receive_ack(round)` / `ready(round)` (non-blocking poll) / `receive_wait(round)` as separate calls. Also: a data-ready flag carrying the round number, so acking one round ahead would be safe by construction (it is not today, so that faster option was left out). | 47400 (A stream alone, focus, bank split); 248400 (f256_ctx whole op) | 41600; 230700 | `kernels/genify_matmul_writer.cpp:300` → `kernels/genify_matmul_rx_split.hpp` |
 
 The exchange itself uses no raw LLK: standard dataflow API (`noc_async_write`, semaphores) and the existing `eltwise_chain` SwiGluMul epilogue.
+
+## Refinement 19 — Interleaved tall, narrow matmuls on all cores (PDL 1×1 convs read in place)
+- Date: 2026-11-18
+- **Type:** perf. No SUPPORTED change.
+- **Bench:** `tests/.../perf/test_genify_matmul_perf_r19.py` (the ten `placement=interleaved` PDL LOOSE_CASES at PDL's config: bfp8 × bfp8 → bfp8, bfp8 bias, LoFi, fp32 DEST, L1 output). Knobs: `GENIFY_MATMUL_KNOBS`, `_ONLY`, `_PLAN`, `_CHECK`, `_FORCE="grid_m,grid_n[,placement]"`. Scripts: `agent_logs/r19_run.sh`, `r19_timeline.py` (per-core zone timeline), `r19_guard.sh` (all perf files, base vs new).
+
+### Measured breakdown (before)
+- **decoder res2** (32768×256×32, A in L1) on the chosen 49-core flat split: 25.0 µs.
+  - The reader sat in `rd_barrier` 12.7 µs. A arrived at ~9 GB/s per core and ~425 GB/s across the grid.
+  - Forcing all 103 cores did not help (25.9 µs). Every core's first K-block barrier ended at the **same instant** (~17 µs), so this was not a per-core limit.
+  - Ablations at 103 cores:
+    - A reads off: 10.3 µs.
+    - A, B and bias reads all off: 4.3 µs.
+    - A read from the core's own L1 (zero distance): 10.6 µs.
+    - Barrier every 8 A tiles: **16.1 µs**.
+  - Conclusion: when the whole grid bursts its K-block reads at once, the all-to-all L1-interleaved reads collapse the NoC.
+- **res3.0 conv1** (32768×256×128, A in DRAM) on 27 cores: 41.2 µs.
+  - At 103 cores (45.1 µs) the first K-block's issue and barrier ranged from 3 to 32 µs per core.
+  - Stubbing the B and bias reads took 17 µs off.
+  - Cause: every core read the same 32 B tiles (4 pages per bank), and re-read the same 4 bias tiles on every M-block. These are bank-serialized DRAM hot spots of ~450 KB per bank each.
+- `choose_split` priced the L1 output as DRAM traffic and every core's B read as aggregate traffic. It therefore preferred 27–49 cores.
+
+### What landed (all R1, plain mode 0; new regime row R1e in op_design.md)
+1. **B multicast per rectangle** (`R1_B_MCAST`, `rect_groups`, `_attach_r1_b_mcast`, reader `GM_R1_B_MCAST`).
+   - Applies to an M-only split (`grid_b = grid_n = 1`, single B) with B resident.
+   - The walk is forced weight-resident ahead of S1's K split, in M-blocks of `RESIDENT_SPLIT_BLOCKS`.
+   - One fixed injector per rectangle of the split reads B plus the bias / gate row into `cb_weight_tiles`' tail, then multicasts both in one handshake-free delivery. This reuses the R2a one-shot channel.
+   - A one-core rectangle reads its own B.
+2. **Row kept across M-blocks** (R1 family, `nb_n == 1`). `cb_row` holds exactly one row, so the re-reserved slot still holds it. Only a reserve / push, no re-read.
+3. **A in-flight cap** (`R1_A_INFLIGHT_TILES = 4`, reader `GM_A_INFLIGHT`).
+   - A two-chunk trid ring (trids 13 / 14), so at most 8 A tiles per core are on the NoC.
+   - Gated to M-only splits of at least `R1_A_INFLIGHT_MIN_CORES = 64` cores. Below that it costs:
+     - dec res3 on 37 cores: 12.4 → 16.8 µs at 2.
+     - The batched guard (32×2×1, A resident): 67 → 71 µs.
+   - Swept on dec res2 / res3.0 conv1 / dec res3 (µs):
+
+     | cap | dec res2 | res3.0 conv1 | dec res3 |
+     |---|---|---|---|
+     | 2 | 13.8 | 28.0 | 10.9 |
+     | **4** | **12.1** | **27.5** | **9.9** |
+     | 8 | 12.3 | 29.6 | 15.1 |
+     | off | 21.7 | 30.0 | 20.3 |
+
+   - The plain issue loop is kept byte-for-byte wherever the cap and stagger are off. A multiply-per-tile version cost the R1a guard 2048×256×512 +0.2 µs.
+4. **DRAM bank stagger** (`R1_A_STAGGER`, reader `GM_A_STAGGER`, on the capped walk).
+   - Row r's K tiles start at `row % K`. With K a multiple of 8 every row starts on bank 0 (master.md `bank_stagger`).
+   - res4.0 conv1 21.6 → 20.6 µs; the rest flat.
+5. **Split cost model.**
+   - An L1 output's bytes weigh `L1_READ_COST` in the DRAM term (`Geometry.out_in_l1`).
+   - An R1e split reads B once per group (`R1_B_MCAST_GROUPS = 2`).
+   - The busiest core is the injector (its A plus all of B). Pricing it as half of B picked a 64-core split for ASPP 1×1 with a 557 KB B (35.5 µs against 28.5 on R1a); priced correctly, R1a is kept.
+
+**Parked (correct, at a byte-identical default):** `R1_B_DISTRIBUTED = False`.
+- Up to `GM_R1_B_SLICES` group cores each read a K-row slice of B and multicast it (rotating senders, Counter signal, sends in slice order).
+- Every setting loses to the one injector:
+  - Every core sending at once: res4.0 conv1 20.6 → 57 µs. Concurrent multicasts into one rectangle serialize, as Refinement 18 found for row multicasts.
+  - Ordered 2 / 4 slices: 23.9 / 25.0 µs.
+- Covered by `test_tall_split_knobs[distributed_b]`.
+
+### Results (device µs, one fresh run per variant, base = the queued commit cd1da55)
+
+| case | base | now | cores | achievable / 1.5× roofline | verdict |
+|---|---|---|---|---|---|
+| res3.0 conv1 32768×256×128 | 41.6 | **27.6** | 27 → 64 | 9.4 / 29.1 | **within 1.5× roofline** |
+| res4.0 conv1 8192×512×256 | 27.4 | **20.6** | 88 → 64 | 16.6 / 15.0 | floor below |
+| res5.0 conv1 2048×1024×512 | 17.4 | 17.3 | 88 (R1a) | 10.6 / 9.2 | unchanged (R1a) |
+| res5.0 shortcut 2048×1024×2048 | 33.9 | 33.5 | 110 (R1a) | **72.4** / 30.3 | **under achievable** |
+| decoder res2 32768×256×32 | 22.6 | **12.1** | 49 → 79 | 3.6 / 2.0 | floor below |
+| decoder res3 8192×512×64 | 12.3 | **9.8** | 37 → 86 | 4.65 / 2.0 | floor below |
+| ASPP 1×1 2048×2048×256 | 28.5 | 28.6 | 88 (R1a) | 13.8 / 7.5 | unchanged (R1a) |
+| ASPP projection 2048×1280×256 | 18.9 | 18.9 | 88 (R1a) | 16.8 / 4.8 | unchanged (R1a) |
+| res3 shortcut 8192×256×512 (bf16 A) | 20.0 | **16.8** | 88 → 86 | 13.1 / 7.5 | floor below |
+| res4 shortcut 2048×512×1024 (bf16 A) | 16.8 | 16.6 | 88 (R1a) | 16.2 / 7.5 | +2.4 % over achievable (noise band) |
+
+- **In-model total** (with the call counts): about 322 → 271 µs per inference for these ten convs (bench numbers × call counts).
+- **Also faster:** the guard's PDL upsample W pass (L1 output), 12.8 → 11.3 µs. The L1-output cost term moved it from 64 to 110 cores.
+
+**Measured floors** (cumulative ablation on the new plans; A = `GM_ABLATE_A_RD`, C = `SKIP_COMPUTE`, B = `GM_ABLATE_B`), µs:
+
+| case | full | −C | −A | −A−C | −A−C−B |
+|---|---|---|---|---|---|
+| res3.0 conv1 | 27.6 | 26.1 | 14.0 | 11.1 | 10.0 |
+| res4.0 conv1 | 20.7 | 18.0 | 16.8 | 11.3 | 7.9 |
+| decoder res2 | 11.9 | 11.4 | 5.7 | 4.5 | 4.3 |
+| res3 shortcut | 16.8 | 13.7 | 16.6 | 13.9 | 10.6 |
+
+- With every operand payload and the compute stubbed, what remains is the L1-interleaved output write plus sync: 4.3–10.6 µs. That floor alone is above decoder res2's 3.6 µs achievable. Stock's number reads A from its own shard and writes the output in place.
+- **decoder res2 / res3:** the rest is the all-to-all L1-interleaved A read. The local-read floor is ~6 µs under it at 103 cores.
+- **res4.0 conv1:** binds on the A DRAM stream at ~300 GB/s (4.46 MB), plus the B delivery (+3.4 µs: one core reads 139 KB while 63 cores stream A).
+- **res3 shortcut:** binds on the output-write floor plus the B delivery (~3 µs); A is free.
+
+### Not moved: the M = 2048 R1a cases
+- ASPP 1×1 / projection, res5.0 conv1, res4 shortcut.
+- Their walks are 4–8 serialized line-multicast rounds (ASPP 1×1: ~3.2 µs per round, A K-block of 52 KB read from L1 and multicast).
+- No existing knob moved them: split lines forced on (`R1A_SPLIT_MIN_RATIO = 0`) were flat, and turning the injector prefetch off cost +2–8 %.
+- The M-only alternative needs all of B (0.35–0.56 MB) per core from one injector. Measured 35.5 µs on ASPP 1×1.
+- These need either a B delivery that is not single-core-read-bound without concurrent multicasts, or a deeper R1a round pipeline.
+
+### Guard (no regression)
+- All 196 perf cases were run, base vs new, same session.
+- Beyond ±3 % (slower):
+  - The sharded ASPP-pool pair: #40 −7.5 % / #41 +7.1 %. This pair is known-noisy, and the path is untouched: the row reuse is R1-family only.
+  - The R1a guard 2048×256×512 bias_relu: +3.0 %. Re-measured 3× alternating: 9.8 / 9.8 / 9.8 base vs 9.9 / 9.8 / 9.9 new, same plan.
+  - Earlier flags re-measured 3× alternating, all overlapping ranges or noise:
+    - q128_down: 41.9 / 42.4 / 41.0 base vs 40.8 / 43.6 / 43.2 new.
+    - flux r1b_guard: 455.7 / 431.5 / 430.7 base vs 431.5 / 431.8 / 429.8 new.
+- Faster beyond 3 %:
+  - All six moved R19 cells.
+  - Upsample W pass −11.7 %.
+  - Guard 256×9216×6144 −4.4 %, r17 #6 −5.2 %. Both are noise-level and on untouched paths.
+
+### Accuracy and tests
+- **Accuracy achieved:** unchanged math (same K order per output tile; only the issue order and the B / row source changed). R19 bench PCC:
+
+  | case | PCC |
+  |---|---|
+  | res3.0 conv1 | 0.999865 |
+  | res4.0 conv1 | 1.000000 |
+  | decoder res2 | 0.999994 |
+  | decoder res3 | 0.999774 |
+  | res3 shortcut | 0.999796 |
+
+  Golden tolerances hold (below).
+- **Golden test progress** (slices):
+  - `test_op_loose or test_op_feature` plus the interleaved `A1x1x2048x256` cartesian cells plus `A1x384x1536` interleaved bias cells: 213 passed, 21 xfailed (the permanent EXCLUSIONs).
+  - Earlier, loose + feature alone: 108 / 108.
+- **Unit:** every `test_genify_matmul*.py` except the precision matrix: 268 passed. The new file: 13 passed.
+- **Tests added:**
+  - `tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_tall_split.py`:
+    - Plan pins: M-only split, B resident and multicast, cap on.
+    - Numerics for every epilogue family: A in DRAM / L1, ragged M, addcmul gate row.
+    - The parked / alternate knobs.
+    - A split whose last rectangle is one core.
+  - `perf/test_genify_matmul_perf_r19.py` (perf guard representative of the new path).
+
+### Issues encountered
+- Concurrent multicasts from every core of a rectangle serialize (distributed B: 57 µs); parked.
+- The cap measured differently on DRAM A and L1 A, and by core count; hence the M-only, ≥ 64-core gate.
+- An A/B script restored the descriptor and reader from HEAD over uncommitted edits once. They were re-applied from the session's patches and re-verified: the same R19 numbers and the tall-split tests 13 / 13. Every later A/B ran only on committed trees.
+
+### Helper bypasses
+None. The B delivery uses `dataflow_kernel_lib` `McastArgs` faces (one-shot fixed sender; parked: rotating + Counter). A uses `TensorAccessor` plus `set_read_trid` / `async_read_barrier_with_trid`. Compute is unchanged.

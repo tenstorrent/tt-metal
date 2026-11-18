@@ -673,7 +673,7 @@ Measured floors for the rest (ablation, handshakes kept):
 
 Next lever, not done: an R3a A exchange without the per-round loopback write barrier (each sender's include-source multicast waits for all write acks before it can ack the next round). It needs a send-without-loopback mode in the shared Mcast helper, outside this op. The one-shot concurrent exchange was tried and measured worse (parked: `BS_A_ONE_SHOT`).
 
-### [ ] Refinement 19 — Interleaved tall, narrow matmuls on all cores (PDL 1×1 convs read in place)
+### [x] Refinement 19 — Interleaved tall, narrow matmuls on all cores (PDL 1×1 convs read in place)
 
 **Type**: perf
 
@@ -711,3 +711,22 @@ Start from a measured breakdown of decoder res2 (32768×256×32) and res3.0 conv
   - its remaining gap is explained by a measured floor.
 - Golden is green.
 - No other model case is slower beyond ±3% (the Qwen3.8 PERF FOCUS cases and the sharded PDL cases are guards).
+
+**Outcome**: the tall cases now take an M-only split over 64–86 cores (was 27–49). It adds: B and the bias row multicast once per rectangle (`R1_B_MCAST`), the row kept across M-blocks, at most 8 A tiles in flight per core (`R1_A_INFLIGHT_TILES = 4`, against a NoC collapse when the whole grid bursts its K-block reads), a DRAM bank stagger, and L1-output and per-group-B terms in `split_cost`. Device µs (bench), before → after:
+- res3.0 conv1: 41.6 → 27.6, within 1.5× of its roofline.
+- res4.0 conv1: 27.4 → 20.6.
+- decoder res2: 22.6 → 12.1.
+- decoder res3: 12.3 → 9.8.
+- res3 shortcut: 20.0 → 16.8.
+- res5.0 shortcut: 33.5, under its achievable.
+
+In-model, these ten calls drop from ≈322 to ≈271 µs per inference (bench numbers × call counts). Upsample W pass: 12.8 → 11.3 µs. No guard cell is slower outside noise.
+
+**What binds now (measured floors):**
+- With every operand payload and the compute stubbed, the L1-interleaved output write plus sync alone takes 4.3–10.6 µs. That is above decoder res2's 3.6 µs achievable; stock reads A from its own shard and writes in place.
+- decoder res2 / res3: the all-to-all L1 A read, ~6 µs over the local-read floor.
+- res4.0 conv1: the A DRAM stream at ~300 GB/s, plus the single injector's 139 KB B read (+3.4 µs).
+- res3 shortcut: the output-write floor plus the B delivery.
+- The M = 2048 R1a cases (ASPP 1×1 28.6, ASPP projection 18.9, res5.0 conv1 17.3, res4 shortcut 16.6) did not move: 4–8 serialized line-multicast rounds of ~3 µs.
+
+**Next, and why not here:** a B delivery not bound by one core's DRAM read rate. The distributed slices are built and parked (`R1_B_DISTRIBUTED`): concurrent multicasts into one rectangle serialize (20.6 → 57 µs), and ordered 2 / 4 slices lose (23.9 / 25.0). Also a deeper R1a round pipeline for the M = 2048 cases. Neither had a winning setting within this refinement.
