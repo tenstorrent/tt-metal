@@ -39,6 +39,8 @@ RMS_SEM = 13  # program semaphore of the spread gated norm's partial sums (MkLay
 # it (tp_stack reserved_sems = the layer's extra semaphores)
 CHAIN_SEM = 15
 PSUM_CB = 30  # spread: the partial sum of squares (owners: 29 = park, 31 = probe); CB_PIN = cb_x0 + 3 (the debug tap)
+# v2 spread 2 (GLM53_SPEC_REC_SPLIT): REC_CB_PSUM = REC_CB0 + 1 (CB_K's slot; kda_rec_common.hpp), not 30 = MkStack's
+# MK_ARG_CB (and outside the stack's per-layer CB rewind ranges)
 # CB slots: 14 at cb_base + n, 3 at cb_x0 + n (kernels/kda_rec/kda_rec_common.hpp)
 CB = dict(Q=0, K=1, V=2, G=3, BETA=4, S0=5, QCOL=6, KCOL=7, KFULL=8, DCOL=9, ST=10, O=11, GO=12, ON=13)
 CBX = dict(SCR=0, W=1, OT=2, TAP=3)
@@ -97,13 +99,15 @@ class KdaRec:
         self.n_active = self.hs * self.ug
         self.rms_sem = int(getattr(kda, "kda_rec_rms_sem", RMS_SEM))  # MkSparseLayer: 13 is its SEM_LOGITS -> 14
         # Stage 14c (GLM53_REC_MODE=v2): fused SFPI recurrence (kernels/kda_rec/kda_rec_v2_sfpu.hpp), one compact vector
-        # tile per item; one head per core (spread 1; user groups for parallelism), no debug tap
+        # tile per item; one head per core (spread 1; user groups for parallelism), no debug tap. Spread 2
+        # (GLM53_SPEC_REC_SPLIT=2, the speculative verify's programs): a head's 128 value columns on 2 cores, the raw o
+        # planes exchanged for the gated norm (bitwise the spread-1 outputs and state)
         self.v2 = os.environ.get("GLM53_REC_MODE") == "v2"
         if self.v2:  # v2 has its own reader / CB layout (one state slot per input slot): no 7a state slot
             self.s_depth = self.depth
         assert not self.v2 or (
-            self.spread == 1 and not debug and self.dk == 128 and self.dv == 128
-        ), "kda_rec v2: spread 1, head dim 128, no debug tap"
+            self.spread in (1, 2) and not debug and self.dk == 128 and self.dv == 128
+        ), "kda_rec v2: spread 1 / 2, head dim 128, no debug tap"
         # v2 composes with user groups (each group core runs its own rows' items; device-validated: 14c chip 7 watched
         # 03:31Z, Stage 14 TP2 native B=8 / 32 vs Stage 3 0.999959 / 0.999970, job 3432); GLM53_REC_V2_UG is inert
         # Stage 17 speculative verify (kda.kda_verify_sel = the [1, 32] uint32 selector page, set only while a verify
@@ -119,13 +123,16 @@ class KdaRec:
                 self.s_depth,
                 self.depth,
             )
+            # (v1's spread exchange keeps CB_PSUM at 30 = MkStack's ARG_CB: the verify runs as a stack program)
+            assert self.spread == 1 or self.v2, ("REC_CHAIN with kda_rec spread > 1: v2 only", self.spread)
         self.last_tap = None
         self._taps = {}
         self.defines = (
             [("REC_CB0", str(cb_base)), ("REC_CB_X0", str(self.cb_x0)), ("REC_DEPTH", str(self.depth))]
             # the reader's revision (a kernel binary is cached per path + args + defines: a changed reader needs a new
-            # key in a long-lived process); 2 = read_state() / REC_S_FIRST; 3 = no weight read on a 0-row core
-            + [("REC_REV", "3")]
+            # key in a long-lived process); 2 = read_state() / REC_S_FIRST; 3 = no weight read on a 0-row core; 4 = v2
+            # spread 2 (value-column split, o-plane exchange, REC_RMS_SEM restarts per stacked layer)
+            + [("REC_REV", "4")]
             + ([("REC_S_FIRST", "1")] if self.s_depth > self.depth else [])
             + ([("MK_OPT_SIZE", "1")] if opt_size else [])
             + ([("REC_DEBUG", "1")] if debug else [])
@@ -270,6 +277,11 @@ class KdaRec:
                 self._cb(self.cb_x0 + CBX["SCR"], FP32, t32, 1), self._cb(self.cb_x0 + CBX["W"], FP32, t32, 1),
                 self._cb(self.cb_x0 + CBX["OT"], BF16, t16, vt),
             ]  # fmt: skip
+            if self.spread > 1:  # REC_CB_PSUM = REC_CB0 + 1 (this core's packed o tile), REC_CB_PIN (2 item slots)
+                cbs += [
+                    c("K", FP32, t32, 1),
+                    self._cb(self.cb_x0 + CBX["TAP"], FP32, t32, 2 * (self.spread - 1)),
+                ]
             io = list(tensors) + [on] + ([vsel] if vsel is not None else [])
             return dict(reader=reader, writer=writer, compute=compute), cbs, io
         cbs = [
@@ -315,13 +327,15 @@ class KdaRec:
         return (int(c.x), int(c.y))
 
     def l1_bytes(self) -> int:
-        kt, vt = self.dk // TILE, self.dv // TILE
+        kt, vt = self.dk // TILE, self.dv // TILE // self.spread  # this core's value tiles (as parts())
         dp = self.depth
+        xch = 4096 * (1 + 2 * (self.spread - 1)) if self.spread > 1 else 0  # CB_PSUM + CB_PIN
         if self.v2:
-            return 4096 * (dp + dp * kt * vt + 2 + kt * vt + 2) + 2048 * 3 * vt
+            return 4096 * (dp + dp * kt * vt + 2 + kt * vt + 2) + 2048 * 3 * vt + xch
         return (
             4096 * (3 * dp * kt + dp * vt + dp + self.s_depth * kt * vt + 4 * kt + kt * vt + vt + dp * vt + 1 + vt)
             + 2048 * 3 * vt
+            + xch
         )
 
     def __call__(self, q, k, v, g, beta, gate_out, state, *, rows: int, out_memory_config=L1, on=None):

@@ -19,7 +19,9 @@
 // page (b % 2) * (S - 1) + slot of each peer's CB_PIN (slot = this block's rank among the peer's peers) + REC_RMS_SEM
 // increment; once the peers' S - 1 partials of item b landed, CB_PIN's S - 1 pages are pushed to compute. Two item
 // slots suffice: a peer's partial of item b + 2 is causally after this core's partial of item b + 1, which compute
-// packs only after it popped item b's pages.
+// packs only after it popped item b's pages. REC_V2 (REC_SPREAD 2): CB_PSUM is the packed o tile and its first 256 B
+// (face 0 rows 0..3 = DST planes 0..1 = this core's two o planes) go to the peer instead of the 64 B partial. The
+// REC_RMS_SEM count restarts at 0 after the last item (a stack program runs the phase once per layer, MK_LAYERS).
 
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mk/opt_size.hpp"
 #include <cstdint>
@@ -122,8 +124,13 @@ void kernel_main() {
             cpsum.wait_front(1);
             const uint32_t src = cpsum.get_read_ptr();
             const uint32_t off = (bl % 2) * NP * pin_page;
+#if defined(REC_V2)
+            constexpr uint32_t XBYTES = 256;  // v2: planes 0..1 of the o tile (face 0 rows 0..3)
+#else
+            constexpr uint32_t XBYTES = 64;  // row 0 of face 0: [0][0] is the item's partial
+#endif
             for (uint32_t i = 0; i < NP; i++) {
-                noc_async_write(src, peer_pin[i] + off, 64);  // row 0 of face 0: [0][0] is the item's partial
+                noc_async_write(src, peer_pin[i] + off, XBYTES);
             }
             noc_async_write_barrier();
             for (uint32_t i = 0; i < NP; i++) {
@@ -131,6 +138,11 @@ void kernel_main() {
             }
             cpsum.pop_front(1);
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_sem), NP * (bl + 1));
+            if (bl + 1 == items) {
+                // every peer increment of this phase has landed (the count is NP * items): restart at 0 for the next
+                // layer of a stack program; the peers' next increments are causally after this core's o_proj hand-off
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_sem), 0);
+            }
             REC_MARK();  // item b: the head's norm partials exchanged
             cpin.reserve_back(NP);
             cpin.push_back(NP);

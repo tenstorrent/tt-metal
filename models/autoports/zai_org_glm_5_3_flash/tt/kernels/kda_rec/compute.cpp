@@ -420,6 +420,10 @@ ALWI void gated_norm(uint32_t blk) {
 //   W2..W5, per key tile mi: S[mi][0..3], VEC2, DELTA -> d / kn band broadcasts, pass 2 (S d + kn delta) -> CB_ST;
 //   W6: DELTA (o), VEC2 (gate_out), W -> gated norm -> row 0 of slots 0..3 -> CB_ON (bf16).
 // (DST does not persist across a commit / release, so VEC and OD go through L1 between the windows.)
+// REC_SPREAD 2 (GLM53_SPEC_REC_SPLIT): VTC = 2 value tiles per core (state tiles mi * VTC + ni); W1 also packs OD to
+// CB_PSUM (the writer sends its planes 0..1 = this core's o to the peer's CB_PIN); W6 puts block 0's o planes in slot
+// 2, block 1's in slot 3 (its own from CB_DELTA, the peer's from CB_PIN) and the norm sums them in global value-tile
+// order (bitwise the spread-1 1 / rms); slots 0..1 = this core's output tiles.
 namespace {
 template <int A, int B>
 ALWI void v2_bcast(uint32_t mi) {
@@ -448,18 +452,22 @@ void kernel_main() {
     namespace v2 = ckernel::sfpu::kdav2;
     const uint32_t items = get_arg_val<uint32_t>(ph_rt0 + 0) & 0xFFFF;
     const uint32_t hc = get_arg_val<uint32_t>(ph_rt0 + 1);
-    if (hc >= REC_HEADS || items == 0) {
+    if (hc / REC_SPREAD >= REC_HEADS || items == 0) {
         return;
     }
-    static_assert(REC_SPREAD == 1 && Kt == 4 && Vt == 4, "kda_rec v2: one head per core, head dim 128");
+    static_assert((REC_SPREAD == 1 || REC_SPREAD == 2) && Kt == 4 && Vt == 4, "kda_rec v2: head dim 128, spread 1 / 2");
+    [[maybe_unused]] const uint32_t blk = hc % REC_SPREAD;
     compute_kernel_hw_startup(CB_Q, CB_Q, CB_ST);
     cb_wait_front(CB_W, 1);
     for (uint32_t it = 0; it < items; it++) {
         // ---- W1: prep, pass 1, mid
         cb_wait_front(CB_Q, 1);
-        cb_wait_front(CB_S0, KV);
+        cb_wait_front(CB_S0, KVC);
         cb_reserve_back(CB_VEC2, 1);
         cb_reserve_back(CB_DELTA, 1);
+#if REC_SPREAD > 1
+        cb_reserve_back(CB_PSUM, 1);
+#endif
         tile_regs_acquire();
         copy_init(CB_Q);
         copy_tile(CB_Q, 0, 4);
@@ -467,39 +475,44 @@ void kernel_main() {
         MATH((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_prep, (SCALE_BITS), 0, VectorMode::RC_custom)));
         for (uint32_t mi = 0; mi < Kt; mi++) {
             copy_init(CB_S0);
-            for (uint32_t ni = 0; ni < Vt; ni++) {
-                copy_tile(CB_S0, mi * Vt + ni, ni);
+            for (uint32_t ni = 0; ni < VTC; ni++) {
+                copy_tile(CB_S0, mi * VTC + ni, ni);
             }
             MATH((SFPU_UNARY_INIT(unused)));
             v2_bcast<v2::VK, v2::VQ>(mi);
             if (mi == 0) {
                 MATH((SFPU_UNARY_CALL(
-                    DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_pass1, (true), 0, VectorMode::RC_custom)));
+                    DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_pass1, (true, VTC), 0, VectorMode::RC_custom)));
             } else {
                 MATH((SFPU_UNARY_CALL(
-                    DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_pass1, (false), 0, VectorMode::RC_custom)));
+                    DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_pass1, (false, VTC), 0, VectorMode::RC_custom)));
             }
         }
-        MATH((
-            SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_mid, 0, VectorMode::RC_custom)));
+        MATH((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_mid, (VTC), 0, VectorMode::RC_custom)));
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(4, CB_VEC2);
         pack_tile(7, CB_DELTA);
+#if REC_SPREAD > 1
+        pack_tile(7, CB_PSUM);  // this core's o planes for the peer (writer.cpp)
+#endif
         tile_regs_release();
         cb_push_back(CB_VEC2, 1);
         cb_push_back(CB_DELTA, 1);
+#if REC_SPREAD > 1
+        cb_push_back(CB_PSUM, 1);
+#endif
         cb_pop_front(CB_Q, 1);
 
         // ---- W2..W5: pass 2 per key tile
         cb_wait_front(CB_VEC2, 1);
         cb_wait_front(CB_DELTA, 1);
-        cb_reserve_back(CB_ST, KV);
+        cb_reserve_back(CB_ST, KVC);
         for (uint32_t mi = 0; mi < Kt; mi++) {
             tile_regs_acquire();
             copy_init(CB_S0);
-            for (uint32_t ni = 0; ni < Vt; ni++) {
-                copy_tile(CB_S0, mi * Vt + ni, ni);
+            for (uint32_t ni = 0; ni < VTC; ni++) {
+                copy_tile(CB_S0, mi * VTC + ni, ni);
             }
             copy_init(CB_VEC2);
             copy_tile(CB_VEC2, 0, 4);
@@ -509,8 +522,7 @@ void kernel_main() {
             MATH((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
                 DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_masks, 0, VectorMode::RC_custom)));
             v2_bcast<v2::VG, v2::VKN>(mi);
-            MATH((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-                DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_pass2, 0, VectorMode::RC_custom)));
+            MATH((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_pass2, (VTC), 0, VectorMode::RC_custom)));
 #if defined(REC_V2_PROBE)
             if (mi == 0) {
                 MATH((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
@@ -519,37 +531,61 @@ void kernel_main() {
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t ni = 0; ni < Vt; ni++) {
-                pack_tile<true>(ni, CB_ST, mi * Vt + ni);
+            for (uint32_t ni = 0; ni < VTC; ni++) {
+                pack_tile<true>(ni, CB_ST, mi * VTC + ni);
             }
             tile_regs_release();
         }
-        cb_push_back(CB_ST, KV);
-        cb_pop_front(CB_S0, KV);
+        cb_push_back(CB_ST, KVC);
+        cb_pop_front(CB_S0, KVC);
 
         // ---- W6: gated norm -> CB_ON
-        cb_reserve_back(CB_ON, Vt);
+        cb_reserve_back(CB_ON, VTC);
+#if REC_SPREAD > 1
+        cb_wait_front(CB_PIN, REC_SPREAD - 1);  // the peer's o tile (its planes 0..1) landed (writer.cpp)
+#endif
         tile_regs_acquire();
         copy_init(CB_DELTA);
         copy_tile(CB_DELTA, 0, 7);
+#if REC_SPREAD > 1
+        copy_tile(CB_DELTA, 0, 2 + blk);  // this core's o planes at its block's slot (block 0: slot 2, block 1: slot 3)
+#endif
         copy_init(CB_VEC2);
         copy_tile(CB_VEC2, 0, 4);
         copy_init(CB_W);
         copy_tile(CB_W, 0, 5);
+#if REC_SPREAD > 1
+        copy_init(CB_PIN);
+        copy_tile(CB_PIN, 0, 3 - blk);  // the peer's o planes at the other block's slot
+#endif
         MATH((SFPU_UNARY_INIT(unused)));
+#if REC_SPREAD > 1
+        // the head's four o planes in global value-tile order: block 0's (slot 2 planes 0..1), block 1's (slot 3)
+        MATH((SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            kda_rec_v2_norm,
+            (NORM_EPS_BITS, INV_V_BITS, VTC, 2 * v2::PT, 2 * v2::PT + 1, 3 * v2::PT, 3 * v2::PT + 1),
+            0,
+            VectorMode::RC_custom)));
+#else
         MATH((SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, kda_rec_v2_norm, (NORM_EPS_BITS, INV_V_BITS), 0, VectorMode::RC_custom)));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(CB_ON);
-        for (uint32_t ni = 0; ni < Vt; ni++) {
+        for (uint32_t ni = 0; ni < VTC; ni++) {
             pack_tile(ni, CB_ON);
         }
         pack_reconfig_data_format(CB_ST);
         tile_regs_release();
-        cb_push_back(CB_ON, Vt);
+        cb_push_back(CB_ON, VTC);
         cb_pop_front(CB_VEC2, 1);
         cb_pop_front(CB_DELTA, 1);
+#if REC_SPREAD > 1
+        cb_pop_front(CB_PIN, REC_SPREAD - 1);
+#endif
     }
     cb_pop_front(CB_W, 1);
 }

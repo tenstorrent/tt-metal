@@ -25,12 +25,20 @@
 // REC_SPREAD (Stage 14 TP: a chip's few heads over more cores): cores per head; core c of the list serves head
 // c / REC_SPREAD, value-column block c % REC_SPREAD (Vt / REC_SPREAD tiles of S, v, gate_out, o). The recurrence
 // is column-independent; only the gated RMSNorm's sum of squares crosses cores: each core sends its partial (one
-// value per item) to the head's other cores (REC_RMS_SEM counts them).
+// value per item) to the head's other cores (REC_RMS_SEM counts them). v2 (REC_SPREAD 2 only): each core sends its RAW
+// o planes (the packed OD tile's bytes 0..255 = planes 0..1) instead, and both cores sum the four o planes in the
+// global value-tile order — the spread-1 norm's exact SFPU sequence (a partial-sum exchange cannot reproduce its bits).
 #ifndef REC_SPREAD
 #define REC_SPREAD 1
 #endif
 #ifndef REC_CB_PSUM
+#if defined(REC_V2)
+// v2 (REC_SPREAD 2, GLM53_SPEC_REC_SPLIT): the packed o tile (OD) whose planes 0..1 go to the peer; CB_K's slot (v2
+// allocates no CB_K). Not 30: that is MkStack's MK_ARG_CB, and the stack rewinds only 0..28 / 32..63 per layer
+#define REC_CB_PSUM (REC_CB0 + 1)
+#else
 #define REC_CB_PSUM 30  // fp32 partial sum of squares (1 page), packed by compute, sent to the peers by the writer
+#endif
 #endif
 #ifndef REC_CB_PIN
 #define REC_CB_PIN (REC_CB_X0 + 3)  // the peers' partials, 2 x (S - 1) pages (shares the debug tap's index)

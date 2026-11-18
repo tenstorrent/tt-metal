@@ -23,6 +23,11 @@
 // (o = qn . S' expanded: qn . (d S) + (qn . kn) delta.) Cross-lane steps: a sub-row sum / spread by the cyclic
 // rotate-and-add over the 8 SFPU columns (SFPSHFT2 subvec rotate), a sum over sub-rows by the 4 x 4 sub-row
 // transpose of 4 registers (SFPTRANSP).
+// NV (REC_SPREAD 2, GLM53_SPEC_REC_SPLIT: 2): the value tiles of this core — slots 0..NV-1, value planes VV / VGO + ni,
+// ACC / OD per ni as above for ni < NV (the core's own value block, local index ni); the key side is unchanged. Each
+// value tile's arithmetic is independent of the others, so a core's NV tiles are bitwise the spread-1 core's tiles of
+// its block; the norm takes the four o planes in GLOBAL value-tile order (P0..P3: block 0's o planes in DST slot 2,
+// block 1's in slot 3, compute.cpp W6).
 #pragma once
 
 // the plane map (every TRISC compiles it: the compute kernel names these outside MATH(...))
@@ -194,11 +199,11 @@ inline void kda_rec_v2_bcast() {
 
 // pass 1 over key tile mi (slots 0..3): ACC[4 ni + cg] (+)= sum_bands S * kd, ACC[16 + 4 ni + cg] (+)= sum_bands S * qd
 // (per lane: sub-row = row in band, column = column in group)
-template <bool FIRST>
+template <bool FIRST, int NV = 4>
 inline void kda_rec_v2_pass1() {
     using namespace kdav2;
 #pragma GCC unroll 4
-    for (int ni = 0; ni < 4; ni++) {
+    for (int ni = 0; ni < NV; ni++) {
 #pragma GCC unroll 4
         for (int cg = 0; cg < 4; cg++) {
             sfpi::vFloat au = 0.0f, aw = 0.0f;
@@ -221,10 +226,11 @@ inline void kda_rec_v2_pass1() {
 
 // after pass 1: u, w (u-layout) by the sub-row transpose, delta, o -> OD; the delta pattern of each (ni, cg) (its 8
 // values in every sub-row) -> OD 4 + 4 ni + cg
+template <int NV = 4>
 inline void kda_rec_v2_mid() {
     using namespace kdav2;
 #pragma GCC unroll 4
-    for (int ni = 0; ni < 4; ni++) {
+    for (int ni = 0; ni < NV; ni++) {
         kdav2_subrow_sum(ACC + 4 * ni, OD + OD_U);
         kdav2_subrow_sum(ACC + 16 + 4 * ni, OD + OD_W);
         {
@@ -240,10 +246,11 @@ inline void kda_rec_v2_mid() {
 }
 
 // pass 2 over key tile mi (slots 0..3; BC_A = d, BC_B = kn broadcasts of mi): S <- S d + kn delta
+template <int NV = 4>
 inline void kda_rec_v2_pass2() {
     using namespace kdav2;
 #pragma GCC unroll 4
-    for (int ni = 0; ni < 4; ni++) {
+    for (int ni = 0; ni < NV; ni++) {
 #pragma GCC unroll 4
         for (int cg = 0; cg < 4; cg++) {
             const sfpi::vFloat dl = sfpi::dst_reg[OD + OD_D + 4 * ni + cg];
@@ -259,15 +266,25 @@ inline void kda_rec_v2_pass2() {
 }
 
 // gated norm: on = o / sqrt(mean(o^2) + eps) * w * sigmoid(gate_out) (o: OD 0..3, w: slot 5 planes 0..3, gate_out: VEC
-// 16..19, all u-layout) -> row 0 of slots 0..3 (value tile ni in slot ni; the other rows are don't-care)
-template <uint32_t EPS_BITS, uint32_t INV_V_BITS>
+// 16..19, all u-layout) -> row 0 of slots 0..3 (value tile ni in slot ni; the other rows are don't-care).
+// NV < 4 (REC_SPREAD 2): the sum of squares over the DST planes P0..P3 = the head's four o planes in global value-tile
+// order (block 0's o in slot 2, block 1's in slot 3: compute.cpp W6) — the same SFPMAD chain and total as spread 1,
+// so 1 / rms is bitwise the spread-1 value on both cores; the output covers this core's NV tiles (OD 0..NV-1)
+template <
+    uint32_t EPS_BITS,
+    uint32_t INV_V_BITS,
+    int NV = 4,
+    int P0 = kdav2::OD + kdav2::OD_O,
+    int P1 = kdav2::OD + kdav2::OD_O + 1,
+    int P2 = kdav2::OD + kdav2::OD_O + 2,
+    int P3 = kdav2::OD + kdav2::OD_O + 3>
 inline void kda_rec_v2_norm() {
     using namespace kdav2;
     {
         sfpi::vFloat ss = 0.0f;
 #pragma GCC unroll 4
-        for (int ni = 0; ni < 4; ni++) {
-            const sfpi::vFloat o = sfpi::dst_reg[OD + OD_O + ni];
+        for (int m = 0; m < 4; m++) {
+            const sfpi::vFloat o = sfpi::dst_reg[m == 0 ? P0 : (m == 1 ? P1 : (m == 2 ? P2 : P3))];
             ss = ss + o * o;
         }
         kdav2_total(OD + OD_U, ss);
@@ -275,7 +292,7 @@ inline void kda_rec_v2_norm() {
     sfpi::dst_reg[OD + OD_U] = kdav2_rsqrt(
         sfpi::vFloat(sfpi::dst_reg[OD + OD_U]) * Converter::as_float(INV_V_BITS) + Converter::as_float(EPS_BITS));
 #pragma GCC unroll 4
-    for (int ni = 0; ni < 4; ni++) {
+    for (int ni = 0; ni < NV; ni++) {
         {
             sfpi::vFloat on = sfpi::vFloat(sfpi::dst_reg[OD + OD_O + ni]) * sfpi::dst_reg[OD + OD_U];
             on = on * sfpi::dst_reg[ACC + ni];

@@ -84,7 +84,10 @@ constexpr Geometry geometry() {
 // Stage 14c v2 reader: per item ONE compact fp32 vector tile (kda_rec_common.hpp / kda_rec_v2_sfpu.hpp layout): q, k, g
 // at their key-side positions, v / gate_out in the u-layout, beta in every lane of plane V2_BETA; the rows are read
 // whole (2 face rows per tile) into scratch and scattered by this RISC; the o_norm weight once, u-layout, into CB_W.
-// Same compile-time / runtime arguments as v1 (one head per core, REC_SPREAD 1).
+// Same compile-time / runtime arguments as v1. REC_SPREAD 2 (GLM53_SPEC_REC_SPLIT): core hc serves head hc / 2, value
+// columns 64 (hc % 2) .. + 63 (state tiles (mi, 2 blk + nl) at CB tile 2 mi + nl; v / gate_out / weight values j of the
+// block at u-layout position j - 64 blk: the plane index drops by 2 blk, the lane is unchanged); the key side (q, k, g,
+// beta) is read in full by both cores of a head.
 void kernel_main() {
     using namespace kda_rec;
     constexpr uint32_t H = get_compile_time_arg_val(PH_CT0 + 0);
@@ -105,10 +108,14 @@ void kernel_main() {
     constexpr auto s_a = TensorAccessorArgs<go_a.next_compile_time_args_offset()>();
     constexpr auto w_a = TensorAccessorArgs<s_a.next_compile_time_args_offset()>();
     constexpr uint32_t KV = Kt * Vt;
-    static_assert(REC_SPREAD == 1 && Kt == 4 && Vt == 4, "kda_rec v2: one head per core, head dim 128");
+    static_assert((REC_SPREAD == 1 || REC_SPREAD == 2) && Kt == 4 && Vt == 4, "kda_rec v2: head dim 128, spread 1 / 2");
+    constexpr uint32_t VTC = Vt / REC_SPREAD;  // this core's value tiles
+    constexpr uint32_t KVC = Kt * VTC;         // this core's state tiles per item
+    constexpr uint32_t VC = VTC * 32;          // this core's value columns
 
     const uint32_t hc = get_arg_val<uint32_t>(ph_rt0 + 0);
-    const uint32_t h = hc;
+    const uint32_t h = hc / REC_SPREAD, blk = hc % REC_SPREAD;  // head, value-column block
+    const uint32_t c0 = blk * VC;                               // the block's first value column
     const uint32_t items = get_arg_val<uint32_t>(ph_rt0 + 1) & 0xFFFF;
     const uint32_t b0 = get_arg_val<uint32_t>(ph_rt0 + 1) >> 16;
     if (h >= H) {
@@ -158,8 +165,8 @@ void kernel_main() {
         noc.async_read_barrier();
         cw.reserve_back(1);
         volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cw.get_write_ptr());
-        for (uint32_t j = 0; j < 128; j++) {
-            w[val_off(0, j)] = sc[j];
+        for (uint32_t j = 0; j < VC; j++) {
+            w[val_off(0, j)] = sc[c0 + j];
         }
         cw.push_back(1);
     }
@@ -188,9 +195,16 @@ void kernel_main() {
     // requested before the kda_pre hand-off; the first loop iteration skips them (same reserved pages, landed by its
     // barrier)
     if (items > 0) {
-        cs.reserve_back(KV);
-        for (uint32_t i = 0; i < KV; i++) {
-            noc.async_read(s_acc, cs, tb, {.page_id = src0 * H * KV + h * KV + i}, {.offset_bytes = i * tb});
+        cs.reserve_back(KVC);
+        for (uint32_t mi = 0; mi < Kt; mi++) {
+            for (uint32_t nl = 0; nl < VTC; nl++) {
+                noc.async_read(
+                    s_acc,
+                    cs,
+                    tb,
+                    {.page_id = src0 * H * KV + h * KV + mi * Vt + blk * VTC + nl},
+                    {.offset_bytes = (mi * VTC + nl) * tb});
+            }
         }
     }
 #endif
@@ -226,8 +240,10 @@ void kernel_main() {
             vec[key_off(V2_Q, r)] = sc[r];
             vec[key_off(V2_K, r)] = sc[ROW / 4 + r];
             vec[key_off(V2_G, r)] = sc[2 * ROW / 4 + r];
-            vec[val_off(V2_V, r)] = sc[3 * ROW / 4 + r];
-            vec[val_off(V2_GO, r)] = sc[4 * ROW / 4 + r];
+        }
+        for (uint32_t j = 0; j < VC; j++) {  // this core's value block (spread 1: all 128 values)
+            vec[val_off(V2_V, j)] = sc[3 * ROW / 4 + c0 + j];
+            vec[val_off(V2_GO, j)] = sc[4 * ROW / 4 + c0 + j];
         }
         const uint32_t beta_bits = sc[5 * ROW / 4 + bl.col % 16];
         for (uint32_t t = 0; t < 32; t++) {
@@ -247,13 +263,20 @@ void kernel_main() {
 #else
             const uint32_t srow = b0 + b;
 #endif
-            cs.reserve_back(KV);
-            for (uint32_t i = 0; i < KV; i++) {
-                noc.async_read(s_acc, cs, tb, {.page_id = srow * H * KV + h * KV + i}, {.offset_bytes = i * tb});
+            cs.reserve_back(KVC);
+            for (uint32_t mi = 0; mi < Kt; mi++) {
+                for (uint32_t nl = 0; nl < VTC; nl++) {
+                    noc.async_read(
+                        s_acc,
+                        cs,
+                        tb,
+                        {.page_id = srow * H * KV + h * KV + mi * Vt + blk * VTC + nl},
+                        {.offset_bytes = (mi * VTC + nl) * tb});
+                }
             }
         }
         noc.async_read_barrier();
-        cs.push_back(KV);
+        cs.push_back(KVC);
     }
 }
 #else

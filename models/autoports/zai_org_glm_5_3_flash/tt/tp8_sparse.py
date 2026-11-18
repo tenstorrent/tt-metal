@@ -111,7 +111,9 @@ class TPSparseKDALayer(TPDenseKDALayer):
             sh, attn = weights.shards, weights.attn
             self.shards, self.attn = sh, attn
             attn.kda_rec_ugroups = int(os.environ.get("GLM53_REC_UGROUPS", "1"))
-            assert attn.kda_rec_ugroups * rec_spread * sh.h <= 64
+            # (the verify builds may set kda_rec_spread above the weights' spread: GLM53_SPEC_REC_SPLIT, spec_mtp)
+            spread = int(getattr(attn, "kda_rec_spread", rec_spread))
+            assert attn.kda_rec_ugroups * spread * sh.h <= 64, (attn.kda_rec_ugroups, spread, sh.h)
             attn.kda_pre_rsplit = int(os.environ.get("GLM53_KDA_RSPLIT", "1"))  # (read by KdaPre at build)
             assert (
                 attn.kda_pre_spread * sh.h * attn.kda_pre_rsplit <= 64

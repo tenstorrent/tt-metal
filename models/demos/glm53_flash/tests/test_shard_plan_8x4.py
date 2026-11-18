@@ -1717,6 +1717,136 @@ def test_reader_place_errors():
         RP.plan(opts, GRID, 2, "diag")
 
 
+# ---- kda_rec v2 value-column split (GLM53_SPEC_REC_SPLIT, tt/spec_mtp.py rec_split; kernels/kda_rec): the index maps
+# as the kernels write them (page / CB-tile expressions read from the sources and evaluated here)
+
+
+def _rec_src(name: str) -> str:
+    import os
+
+    path = (
+        os.path.join(SP.KDIR, "kda_rec", name) if name != "kda_rec.py" else os.path.join(os.path.dirname(SP.KDIR), name)
+    )
+    with open(path) as fh:
+        return fh.read()
+
+
+def _rec_v2_part(src: str) -> str:
+    """the REC_V2 kernel_main of a kda_rec kernel source (reader / compute: up to the v1 kernel_main)"""
+    i = src.index("#if defined(REC_V2)\n// Stage 14c v2")
+    return src[i : src.index("\n#else\nvoid kernel_main()", i)]
+
+
+def _rec_plane_off(p: int, t: int) -> int:  # kda_rec_common.hpp plane_off: fp32 word of DST plane p, lane t
+    return (p >> 3) * 256 + (((p & 7) >> 1) * 4 + (t >> 3)) * 16 + 2 * (t & 7) + (p & 1)
+
+
+def _rec_val_pl(j: int) -> tuple:  # kda_rec_common.hpp val_off(0, j) as (plane, lane)
+    return j >> 5, 8 * (2 * ((j >> 4) & 1) + (j & 1)) + ((j >> 1) & 7)
+
+
+@pytest.mark.parametrize("spread", [1, 2])
+def test_kda_rec_v2_split_maps(spread):
+    """kda_rec v2 at REC_SPREAD s (core hc = head hc / s, value block hc % s, VTC = 4 / s value tiles): the reader's
+    state reads (prefetch + item loop), the writer's state writes and the compute's DST slots cover every state tile of
+    every (row, head) exactly once, page <-> CB tile round-trips, s = 1 is today's page order; the value side keeps its
+    lanes (plane - 2 blk); the o exchange (writer: first 256 B of the packed OD tile) is exactly DST planes 0..1; the
+    norm sums block 0's then block 1's o planes (global value-tile order on both cores)."""
+    H, Kt, Vt, KV, rows = 2, 4, 4, 16, 16
+    VTC = Vt // spread
+    rd, wr, cp = (_rec_v2_part(_rec_src("reader.cpp")), _rec_src("writer.cpp"), _rec_v2_part(_rec_src("compute.cpp")))
+    # reader: {.page_id = <page>}, {.offset_bytes = (<tile>) * tb} (src0 = the prefetch, srow = the item loop)
+    reads = re.findall(r"\{\.page_id = ([^}]+)\},\s*\{\.offset_bytes = \(([^)]+)\) \* tb\}", rd)
+    assert [p.split(" ")[0] for p, _ in reads] == ["src0", "srow"], reads
+    # writer: {.offset_bytes = (<tile>) * tb32}, {.page_id = <page>}
+    writes = re.findall(r"\{\.offset_bytes = \(([^)]+)\) \* tb32\},\s*\{\.page_id = ([^}]+)\}", wr)
+    assert len(writes) == 1, writes
+    ((w_tile, w_page),) = writes
+    c_tile = re.findall(r"copy_tile\(CB_S0, ([^,]+), ni\)", cp)
+    p_tile = re.findall(r"pack_tile<true>\(ni, CB_ST, ([^)]+)\)", cp)
+    assert set(c_tile) == {"mi * VTC + ni"} and p_tile == ["mi * VTC + ni"], (c_tile, p_tile)
+    for srow in range(rows):
+        seen = {}
+        for hc in range(H * spread):
+            h, blk = hc // spread, hc % spread
+            item = srow * H + h
+            env = dict(H=H, KV=KV, Vt=Vt, VTC=VTC, h=h, blk=blk, src0=srow, srow=srow, item=item)
+            for mi in range(Kt):
+                for nl in range(VTC):
+                    env.update(mi=mi, nl=nl, ni=nl)
+                    pages = {eval(p, {}, env) for p, _ in reads}
+                    tiles = {eval(t, {}, env) for _, t in reads}
+                    assert len(pages) == 1 and len(tiles) == 1, (pages, tiles)
+                    page, tile = pages.pop(), tiles.pop()
+                    # the writer puts CB tile `tile` back to `page`; the compute's DST slot nl holds that tile
+                    assert eval(w_tile, {}, env) == tile and eval(w_page, {}, env) == page, (hc, mi, nl)
+                    assert eval(c_tile[0], {}, env) == tile
+                    assert page == item * KV + mi * Vt + blk * VTC + nl  # state tile (mi, global value tile)
+                    assert tile < Kt * VTC and page not in seen, (page, seen.get(page))
+                    seen[page] = (hc, mi, nl)
+                    if spread == 1:  # today's order: page srow * H * KV + h * KV + i at CB tile i
+                        assert tile == mi * Vt + nl and page == srow * H * KV + h * KV + tile
+        assert sorted(seen) == list(range(srow * H * KV, (srow + 1) * H * KV))  # every tile of the row, once
+    # value side: core block blk scatters value j (global) to u-layout position j - 64 blk (val_off(V2_V, local))
+    assert "vec[val_off(V2_V, j)] = sc[3 * ROW / 4 + c0 + j]" in rd and "w[val_off(0, j)] = sc[c0 + j]" in rd
+    assert "const uint32_t c0 = blk * VC;" in rd and "constexpr uint32_t VC = VTC * 32;" in rd
+    for blk in range(spread):
+        pos = set()
+        for loc in range(VTC * 32):
+            j = blk * VTC * 32 + loc
+            (pl, ln), (pg, lg) = _rec_val_pl(loc), _rec_val_pl(j)
+            assert ln == lg and pl == pg - VTC * blk and 0 <= pl < VTC, (j, pl, ln)
+            pos.add(_rec_plane_off(12 + pl, ln))
+        assert pos == {_rec_plane_off(12 + p, t) for p in range(VTC) for t in range(32)}  # every lane once
+    # the o exchange: 256 B of the packed OD tile = DST planes 0..1 (the core's two o tiles), nothing else
+    assert "XBYTES = 256" in wr
+    first = {4 * _rec_plane_off(p, t) + b for p in range(2) for t in range(32) for b in range(4)}
+    assert first == set(range(256))
+    assert all(4 * _rec_plane_off(p, t) >= 256 for p in range(2, 32) for t in range(32))
+    # the norm's planes: block 0's o in slot 2, block 1's in slot 3 on BOTH cores -> global tiles 0, 1, 2, 3
+    assert "copy_tile(CB_DELTA, 0, 2 + blk)" in cp and "copy_tile(CB_PIN, 0, 3 - blk)" in cp
+    assert "(NORM_EPS_BITS, INV_V_BITS, VTC, 2 * v2::PT, 2 * v2::PT + 1, 3 * v2::PT, 3 * v2::PT + 1)" in cp
+    for blk in range(2):
+        holder = {2 + blk: blk, 3 - blk: 1 - blk}  # DST slot -> the block whose o it holds
+        assert [2 * holder[pl // 32] + pl % 32 for pl in (64, 65, 96, 97)] == [0, 1, 2, 3]
+
+
+def test_kda_rec_v2_split_cores_and_cbs():
+    """TP32 speculative verify (8 user groups x K + 1 = 2 chained rows, 2 heads per chip): the split's 8 x 2 x 2 = 32
+    kda_rec cores (KdaRec._hc / _items / _peers, KdaPre.consumers, the o_proj wait count h * spread * ug) as plain t =
+    16's 16 x 2 x 1; the v2 exchange CBs (CB_PSUM = REC_CB0 + 1, CB_PIN = cb_x0 + 3, 2 item slots), never MkStack's ARG_CB
+    and inside the stack's per-layer rewind ranges; REC_RMS_SEM restarts after the last item."""
+    h, rows = 2, 16
+    for ug, spread in ((8, 2), (16, 1)):
+        hs = h * spread
+        n_active = hs * ug
+        assert n_active == 32 and h * spread * ug == n_active <= 64  # the o_proj readers' SEM_ON count
+        per = -(-rows // ug)
+        cores = {}
+        for c in range(n_active):
+            hc = c % hs  # KdaRec._hc
+            b0, n = (c // hs) * per, min(rows, (c // hs) * per + per) - (c // hs) * per  # KdaRec._items
+            g0 = (c // hs) * hs
+            head, blk = divmod(c - g0, spread)
+            assert (hc // spread, hc % spread) == (head, blk)
+            peers = [g0 + head * spread + p for p in range(spread) if p != blk]  # KdaRec._peers
+            assert all(q // hs == c // hs and (q % hs) // spread == head for q in peers)
+            cores[(c // hs, head, blk)] = (b0, n)
+        assert len(cores) == n_active and all(n == per for _, n in cores.values())
+        assert sorted({b0 for b0, _ in cores.values()}) == list(range(0, rows, per))
+        for hh in range(h):  # KdaPre.consumers: head hh's rec cores u h rs + hh rs + j = every core of head hh
+            cons = {u * h * spread + hh * spread + j for u in range(ug) for j in range(spread)}
+            assert cons == {c for c in range(n_active) if (c % hs) // spread == hh}
+    hdr, py, wr = _rec_src("kda_rec_common.hpp"), _rec_src("kda_rec.py"), _rec_src("writer.cpp")
+    assert "#if defined(REC_V2)" in hdr and "#define REC_CB_PSUM (REC_CB0 + 1)" in hdr
+    assert 'c("K", FP32, t32, 1),' in py  # the v2 spread CB list: PSUM at cb_base + CB["K"]
+    arg_cb = 30  # tt/mk_stack.py ARG_CB (MkStack rewinds 0..28 and 32..63 per layer)
+    for cb_base, cb_x0 in ((50, 14), (0, 14)):  # the megakernel owners' REC_CB0 / REC_CB_X0, standalone
+        psum, pin = cb_base + 1, cb_x0 + 3
+        assert arg_cb not in (psum, pin) and all(c < 29 or 32 <= c < 64 for c in (psum, pin))
+    assert "noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_sem), 0);" in wr
+
+
 def test_zz_no_ttnn_was_imported_by_the_suite():
     """The unit CI runs this file without the root conftest: a host suite must never pull ttnn in (it would open
     every chip of the box beside a running mesh job)."""
