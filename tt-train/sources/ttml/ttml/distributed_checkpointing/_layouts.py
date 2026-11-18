@@ -336,8 +336,9 @@ def declared_transform(
 
     - A fused dim sharded by more than one mesh axis. The interleave comes from the tensor-parallel shards alone; a
       second axis (FSDP) splitting the same rows would make the label's shard count describe a layout the weight does
-      not have, and a load onto another TP size would scramble the segments. ``fully_shard`` picks another dim by
-      default; only an explicit ``shard_dim`` on the fused rows gets here.
+      not have, and a load onto another TP size would scramble the segments. ``fully_shard`` cannot build such a
+      label: it picks another dim by default, and with an explicit ``shard_dim`` on the fused rows ttnn's mesh mapper
+      refuses two placements sharding one dim. The check guards labels built by hand.
     - Fusion and padding on the same dim. Under TP every shard would hold its own padding inside its segments, which
       neither ``Pad`` (a tail of padding rows) nor ``Segments`` describes. No layer builds such a weight today;
       supporting one needs a transform for per-shard padding, and this refusal is the place to change.
