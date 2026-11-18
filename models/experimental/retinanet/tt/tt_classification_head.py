@@ -6,6 +6,7 @@ from typing import List
 from models.experimental.retinanet.tt.utils import (
     Conv2dNormActivation,
     activation_memory_config,
+    conv2d_with_level_weights,
     cls_logits_slice_config,
     group_norm_grid,
     head_conv_config,
@@ -119,9 +120,9 @@ def ttnn_retinanet_classification_head(
     model_config: dict = None,
     optimization_profile: str = "optimized",
 ) -> ttnn.Tensor:
-    """
-    TTNN implementation of RetinaNet classification head.
-    """
+    """The classification head on ``feature_maps``, the five pyramid levels as NHWC TILE tensors.
+    ``parameters`` come from preprocess_classification_head_parameters for the same device; the
+    head runs as many conv blocks as they hold. Returns the class logits, [1, anchors, 91]."""
     if input_shapes is None:
         input_shapes = [(fm.shape[1], fm.shape[2]) for fm in feature_maps]
 
@@ -162,12 +163,12 @@ def ttnn_retinanet_classification_head(
                 conv_config=fpn_conv_config,
             )
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W)
+            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W, level=fpn_idx)
 
-        cls_logits = ttnn.conv2d(
+        cls_logits, _, _ = conv2d_with_level_weights(
+            parameters["cls_logits"],
+            fpn_idx,
             input_tensor=x,
-            weight_tensor=parameters["cls_logits"]["weight"],
-            bias_tensor=parameters["cls_logits"]["bias"],
             in_channels=in_channels,
             out_channels=num_anchors * num_classes,
             device=device,
@@ -180,7 +181,6 @@ def ttnn_retinanet_classification_head(
             compute_config=compute_config,
             conv_config=fpn_final_config,
             memory_config=activation_memory_config(device),
-            # Prepared for this same slicing (custom_preprocessor).
             slice_config=cls_logits_slice_config(device),
         )
 

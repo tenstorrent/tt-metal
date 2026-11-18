@@ -5,6 +5,7 @@ import ttnn
 from models.experimental.retinanet.tt.utils import (
     Conv2dNormActivation,
     bbox_reg_slice_config,
+    conv2d_with_level_weights,
     group_norm_grid,
     head_conv_config,
 )
@@ -105,7 +106,6 @@ retinanet_head_optimizations = {
 }
 
 
-# Usage in ttnn_retinanet_regression_head
 def ttnn_retinanet_regression_head(
     feature_maps: List[ttnn.Tensor],
     parameters: dict,
@@ -117,6 +117,9 @@ def ttnn_retinanet_regression_head(
     model_config: dict = None,
     optimization_profile: str = "optimized",
 ) -> ttnn.Tensor:
+    """The regression head on ``feature_maps``, the five pyramid levels as NHWC TILE tensors.
+    ``parameters`` come from preprocess_regression_head_parameters for the same device; the head
+    runs as many conv blocks as they hold. Returns the box deltas, [1, anchors, 4]."""
     opt_config = retinanet_head_optimizations[optimization_profile]
 
     fpn_conv_configs = [
@@ -176,18 +179,18 @@ def ttnn_retinanet_regression_head(
         x = feature_map
         for conv_idx, conv_block in enumerate(conv_blocks):
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W)
+            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W, level=fpn_idx)
 
         # Final bbox_reg conv layer with config
         bbox_reg_config = head_conv_config(device, final_conv_config)
 
-        bbox_regression = ttnn.conv2d(
+        bbox_regression, _, _ = conv2d_with_level_weights(
+            parameters["bbox_reg"],
+            fpn_idx,
             input_tensor=x,
-            weight_tensor=parameters["bbox_reg"]["weight"],
             in_channels=in_channels,
             out_channels=num_anchors * 4,
             device=device,
-            bias_tensor=parameters["bbox_reg"]["bias"],
             kernel_size=(3, 3),
             stride=(1, 1),
             padding=(1, 1),
