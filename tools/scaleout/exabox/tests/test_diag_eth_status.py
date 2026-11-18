@@ -229,6 +229,16 @@ class TestCounters(unittest.TestCase):
         rows = galaxy_rows(overrides={(1, 7, 2): {"Retrain Count": "5"}})
         self.assertEqual(judge(rows, rows)["eth_status_retrains"].status, WARN)
 
+    def test_flapping_link_at_threshold_is_counted_since_reset_too(self):
+        first = galaxy_rows(overrides={(1, 7, 2): {"Retrain Count": "2"}})
+        second = galaxy_rows(overrides={(1, 7, 2): {"Retrain Count": "3"}})
+        c = judge(first, second)["eth_status_retrains"]
+        self.assertEqual(c.status, FAIL)
+        self.assertEqual(len(c.data["during"]), 1)
+        self.assertEqual(len(c.data["since_reset"]), 1)
+        # One finding for the link, the FAIL, not a WARN beside it.
+        self.assertEqual([f["status"] for f in c.data["findings"]], [FAIL])
+
     def test_err_stat_warns(self):
         rows = galaxy_rows(overrides={(1, 7, 2): {"ERR_STAT": "0x4"}})
         self.assertEqual(judge(rows, rows)["eth_status_err_stat"].status, WARN)
@@ -276,15 +286,22 @@ class TestTopology(unittest.TestCase):
             self.assertIn("only 31 of 32 chips on PCIe", checks[name].details)
 
 
-def fake_sysfs(root: Path, bad: dict | None = None, count: int = 32) -> None:
-    """32 Tenstorrent functions; ``bad`` maps a BDF to (vendor, command) read from config."""
+def fake_sysfs(root: Path, bad: dict | None = None, count: int = 32, unreadable: dict | None = None) -> None:
+    """32 Tenstorrent functions; ``bad`` maps a BDF to (vendor, command) read from config.
+    ``unreadable`` maps a BDF to how its config fails: "short" (a truncated read) or
+    "error" (a directory in its place, so opening it raises on any uid)."""
     bad = bad or {}
+    unreadable = unreadable or {}
     for chip, bdf in list(sorted(CHIP_BDFS.items()))[:count]:
         dev = root / "bus" / "pci" / "devices" / bdf
         dev.mkdir(parents=True)
         (dev / "vendor").write_text("0x1e52\n")
         vendor, command = bad.get(bdf, (0x1E52, 0x0006))
-        (dev / "config").write_bytes(vendor.to_bytes(2, "little") + b"\x40\xb1" + command.to_bytes(2, "little"))
+        if unreadable.get(bdf) == "error":
+            (dev / "config").mkdir()
+        else:
+            config = vendor.to_bytes(2, "little") + b"\x40\xb1" + command.to_bytes(2, "little")
+            (dev / "config").write_bytes(config[:3] if unreadable.get(bdf) == "short" else config)
         node = root / "class" / "tenstorrent" / f"tenstorrent!{chip}"
         node.mkdir(parents=True)
         (node / "device").symlink_to(dev)
@@ -305,6 +322,24 @@ class TestPcieGate(unittest.TestCase):
         self.assertEqual(gate.status, FAIL)
         self.assertIn("0000:46:00.0 (UBB2/U6) not answering", gate.details)
         self.assertIn("0000:c3:00.0 (UBB3/U3) memory decoding off (Command=0x0004)", gate.details)
+
+    def test_unreadable_config_is_kept_and_stops_the_read(self):
+        for how in ("short", "error"):
+            with tempfile.TemporaryDirectory() as tmp:
+                fake_sysfs(Path(tmp), unreadable={"0000:46:00.0": how})
+                functions = read_pcie_functions(Path(tmp))
+                gate = pcie_gate_check(functions)
+            self.assertEqual(len(functions), 32, how)
+            self.assertEqual(gate.status, WARN, how)
+            self.assertEqual(gate.data["unverified"], ["0000:46:00.0"], how)
+            self.assertIn("0000:46:00.0 (UBB2/U6)", gate.details, how)
+
+    def test_dropped_and_unreadable_together_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_sysfs(Path(tmp), {"0000:46:00.0": (0xFFFF, 0xFFFF)}, unreadable={"0000:01:00.0": "short"})
+            gate = pcie_gate_check(read_pcie_functions(Path(tmp)))
+        self.assertEqual(gate.status, FAIL)
+        self.assertIn("1 more could not be checked: 0000:01:00.0 (UBB1/U1)", gate.details)
 
     def test_no_chip_skips(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -382,6 +417,26 @@ class TestRunEthStatus(unittest.TestCase):
         self.assertEqual(checks["eth_status_pcie_gate"].status, FAIL)
         self.assertEqual(checks["eth_status_read"].status, SKIP)
         self.assertFalse(self.ran.exists())
+
+    def test_unreadable_config_stops_before_opening_any(self):
+        fake_sysfs(self.sys_root, unreadable={"0000:46:00.0": "error"})
+        checks = self.run_phase()
+        self.assertEqual(checks["eth_status_pcie_gate"].status, WARN)
+        self.assertEqual(checks["eth_status_read"].status, SKIP)
+        self.assertIn("could not be read", checks["eth_status_read"].details)
+        self.assertFalse(self.ran.exists())
+
+    def test_inspector_kept_out_of_both_reads(self):
+        fake_sysfs(self.sys_root)
+        checks = self.run_phase()
+        for read in checks["eth_status_read"].data["reads"]:
+            # Nothing can listen on TCP port 0, so a live Inspector RPC server is never reached;
+            # the log path is never created, so saved Inspector logs are not loaded either.
+            self.assertIn("--inspector-rpc-host=127.0.0.1", read["command"])
+            self.assertIn("--inspector-rpc-port=0", read["command"])
+            self.assertIn("--inspector-disable-rank", read["command"])
+            self.assertIn(f"--inspector-log-path={self.logs / 'eth_status_no_inspector'}", read["command"])
+        self.assertFalse((self.logs / "eth_status_no_inspector").exists())
 
     def test_missing_triage_requirements_skip(self):
         fake_sysfs(self.sys_root)
@@ -489,6 +544,19 @@ class TestSummary(unittest.TestCase):
         self.assertIn("- 0000:46:00.0 (UBB2/U6) not answering on PCIe: do NOT reset, report it", text)
         self.assertIn("Do NOT reset yet", text)
         self.assertRegex(text, r"chips on PCIe\s+31 of 32 ok\s+32\s+\*\* PROBLEM \*\*")
+
+    def test_unreadable_pcie_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_sysfs(Path(tmp), unreadable={"0000:46:00.0": "short"})
+            gate = pcie_gate_check(read_pcie_functions(Path(tmp)))
+        read = Check(
+            name="eth_status_read", status=SKIP, details="links not read: the PCIe state of a chip could not be read"
+        )
+        text = render_eth_summary(report_of([gate, read]))
+        self.assertIn(
+            "VERDICT: NOT CHECKED - the links were not read: the PCIe state of a chip could not be read", text
+        )
+        self.assertRegex(text, r"chips on PCIe\s+31 of 32 ok\s+32\s+\*\* WARNING \*\*")
 
     def test_links_not_read(self):
         text = render_eth_summary(report_of([Check(name="eth_status_read", status=SKIP, details="--skip-eth-status")]))

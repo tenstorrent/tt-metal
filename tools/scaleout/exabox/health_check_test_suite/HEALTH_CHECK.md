@@ -275,9 +275,11 @@ in the container's PID namespace — the holder count is right, the names are no
 
 ```bash
 <python> tools/triage/triage.py --run=device_info --run=check_eth_status --dev=all --llm-output \
+    --inspector-rpc-host=127.0.0.1 --inspector-rpc-port=0 --inspector-disable-rank \
     --inspector-log-path=<output_dir>/logs/eth_status_no_inspector
 sleep 30
 <python> tools/triage/triage.py --run=check_eth_status --dev=all --llm-output \
+    --inspector-rpc-host=127.0.0.1 --inspector-rpc-port=0 --inspector-disable-rank \
     --inspector-log-path=<output_dir>/logs/eth_status_no_inspector
 ```
 
@@ -289,10 +291,13 @@ python running the suite, which in the `exabox-tools` image is its venv. Before
 the first read the phase checks that this python can import triage's
 requirements, and SKIPs naming the missing module if it cannot.
 
-- **`--inspector-log-path` points at a path that does not exist**, which keeps
-  Inspector out. By default triage loads `/tmp/tt-metal/inspector`, where the
-  last metal run on the host left the eth cores *it* found trained, and would
-  check those instead of the links as they are now.
+- **Inspector is kept out.** Triage asks a running Inspector RPC server
+  (`localhost:50051`, reachable from the container through `--network host`)
+  first and its saved logs (`/tmp/tt-metal/inspector`) second, and either would
+  have it check the eth cores a metal run found trained rather than the links as
+  they are now. Triage has no switch to turn Inspector off, so the RPC is aimed
+  at TCP port 0, which nothing can listen on, and the log path at one that does
+  not exist; `--inspector-disable-rank` stops an MPI rank from moving either.
 - **`TT_METAL_VISIBLE_DEVICES` is dropped** from triage's environment, so every
   chip is read whatever the caller left visible to metal.
 - **`device_info`** on the first read gives each triage chip id its PCI address,
@@ -307,7 +312,9 @@ config space from sysfs. A chip whose vendor ID reads `0xFFFF`, or whose
 Command register has memory decoding off, has dropped off PCIe:
 `eth_status_pcie_gate` FAILs naming it, and the links are **not read**. Opening
 that chip could hang the read, and a reset to recover it wipes the evidence, so
-the unit is left as it was found. A chip that is simply missing is
+the unit is left as it was found. A chip whose config space cannot be read at
+all is not proof of anything, but it cannot be cleared either, so the gate
+WARNs naming it and the links are not read. A chip that is simply missing is
 `pcie_enum_count`'s finding; here it only means which links are there cannot be
 judged, since the links to it cannot come up.
 
@@ -338,7 +345,8 @@ cabled alike.
 ### Statuses
 
 - **SKIP** — no reading: triage is not in the tree, its requirements do not
-  import, no chip is on PCIe, or one dropped off it.
+  import, no chip is on PCIe, one dropped off it, or one's PCIe state could not
+  be read.
 - **WARN on `eth_status_read`** — triage ran but listed no eth core (its last
   output lines are in `details`; a chip that stopped answering shows up as a
   register timeout there), or only the first read did, and the counters were
@@ -704,7 +712,7 @@ for how they are taken and the thresholds. Links are named
 
 | Check | Rule | On fail |
 |---|---|---|
-| `eth_status_pcie_gate` | Every Tenstorrent PCI function answers in config space with memory decoding on. Read from sysfs before any chip is opened. | **FAIL**, naming the chips, and the links are not read. **SKIP** with no chip on PCIe. |
+| `eth_status_pcie_gate` | Every Tenstorrent PCI function answers in config space with memory decoding on. Read from sysfs before any chip is opened. | **FAIL**, naming the chips, and the links are not read. **WARN** when a chip's config space cannot be read, and the links are not read either. **SKIP** with no chip on PCIe. |
 | `eth_status_read` | Both triage reads listed eth cores | **WARN** when triage listed none (with its last output lines) or only the first read did. **SKIP** when it could not start: triage absent, its requirements missing, or the PCIe gate stopped it. |
 | `eth_status_links_down` | Every listed link not on an unused port is up and readable, and none went away between the reads | **FAIL**, naming the links |
 | `eth_status_heartbeat` | No eth core's heartbeat stood still between triage's two samples (a core released to metal is fine) | **FAIL** — the core has stopped |

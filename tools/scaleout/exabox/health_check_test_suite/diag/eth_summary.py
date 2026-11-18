@@ -112,7 +112,7 @@ def _table(report: dict, checks: dict[str, dict], interval: float | None, links_
     gate, enum = checks.get("eth_status_pcie_gate"), checks.get("pcie_enum_count")
     gate_data = (gate or {}).get("data") or {}
     if "present" in gate_data:
-        ok = gate_data["present"] - len(gate_data.get("dropped") or [])
+        ok = gate_data["present"] - len(gate_data.get("dropped") or []) - len(gate_data.get("unverified") or [])
         statuses = [gate["status"]] + ([enum["status"]] if enum else [])
         add("chips on PCIe", f"{ok} of {gate_data['expected']} ok", str(gate_data["expected"]), _worst(statuses))
     elif enum:
@@ -315,6 +315,7 @@ def render_eth_summary(report: dict, report_path: Path | None = None, summary_pa
         head = f"PROBLEM - {why} ({len(problems)} found)"
     elif not links_read:
         reason = _one_line(read)[len("eth_status_read: ") :] if read else "the ETH status phase did not run"
+        reason = reason.removeprefix("links not read: ")
         head = f"NOT CHECKED - the links were not read: {reason}"
     elif overall == WARN:
         head = f"WARNING - nothing proven broken, worth a look ({len(warnings)} found)"

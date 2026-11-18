@@ -124,12 +124,18 @@ def _findings(status: str, items: list[str]) -> list[dict]:
 @dataclass(frozen=True)
 class PcieFunction:
     bdf: str
-    vendor: int  # read live from config space: 0xFFFF once the chip no longer answers
-    command: int  # the PCI Command register
+    # Read live from config space: 0xFFFF once the chip no longer answers. Both
+    # are None when config space could not be read at all.
+    vendor: int | None
+    command: int | None  # the PCI Command register
+
+    @property
+    def unverified(self) -> bool:
+        return self.vendor is None or self.command is None
 
     @property
     def dropped(self) -> bool:
-        return self.vendor == 0xFFFF or not self.command & PCI_COMMAND_MEMORY
+        return not self.unverified and (self.vendor == 0xFFFF or not self.command & PCI_COMMAND_MEMORY)
 
 
 def read_pcie_functions(sys_root: Path = Path("/sys")) -> list[PcieFunction]:
@@ -137,21 +143,27 @@ def read_pcie_functions(sys_root: Path = Path("/sys")) -> list[PcieFunction]:
 
     The ``vendor`` attribute is cached at enumeration, so it still names a chip
     that has since dropped off the bus; config space is read live. A function
-    whose config space cannot be read is left out rather than guessed at.
+    whose config space cannot be read is kept, as unverified: triage opens every
+    chip, so one that cannot be checked must stop the read like one that failed.
     """
     found = []
     for dev in sorted((sys_root / "bus" / "pci" / "devices").glob("*")):
         try:
             if (dev / "vendor").read_text().strip().lower() != TT_PCI_VENDOR:
                 continue
+        except OSError:
+            continue
+        try:
             with (dev / "config").open("rb") as f:
                 config = f.read(6)
         except OSError:
-            continue
+            config = b""
         if len(config) == 6:
             found.append(
                 PcieFunction(dev.name, int.from_bytes(config[0:2], "little"), int.from_bytes(config[4:6], "little"))
             )
+        else:
+            found.append(PcieFunction(dev.name, None, None))
     return found
 
 
@@ -159,11 +171,14 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
     """Whether the chips can be opened. A missing chip is pcie_enum_count's
     finding, so here it only narrows what the topology checks can judge."""
     dropped = [f for f in functions if f.dropped]
+    unverified = [f for f in functions if f.unverified]
     data = {
         "present": len(functions),
         "expected": EXPECTED_CHIP_COUNT,
         "dropped": [{"bdf": f.bdf, "vendor": f"0x{f.vendor:04x}", "command": f"0x{f.command:04x}"} for f in dropped],
+        "unverified": [f.bdf for f in unverified],
     }
+    unread = f"{len(unverified)} more could not be checked: {_listing([format_bdf(f.bdf) for f in unverified])}"
     if not functions:
         return Check(
             name="eth_status_pcie_gate",
@@ -183,8 +198,25 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
             name="eth_status_pcie_gate",
             status=FAIL,
             details=(
-                f"{len(dropped)} of {len(functions)} chip(s) dropped off PCIe: {_listing(listing)}. "
-                f"Links not read and the unit left as found: report it before resetting, a reset wipes the evidence"
+                f"{len(dropped)} of {len(functions)} chip(s) dropped off PCIe: {_listing(listing)}"
+                + (f"; {unread}" if unverified else "")
+                + ". Links not read and the unit left as found: report it before resetting, a reset wipes the evidence"
+            ),
+            data=data,
+            ip="pcie",
+        )
+    if unverified:
+        listing = [format_bdf(f.bdf) for f in unverified]
+        data["findings"] = _findings(
+            WARN,
+            [f"{item}: PCI config space unreadable, so whether it is safe to open is not known" for item in listing],
+        )
+        return Check(
+            name="eth_status_pcie_gate",
+            status=WARN,
+            details=(
+                f"PCI config space of {len(unverified)} of {len(functions)} chip(s) could not be read: "
+                f"{_listing(listing)}. Whether they are safe to open is not known, so the links were not read"
             ),
             data=data,
             ip="pcie",
@@ -587,7 +619,11 @@ def _counter_checks(
     )
 
     flapping = {k: r[2] for k, r in rates.items() if r[2]}
-    many_links = [l for k, l in sorted(now.items()) if k not in flapping and (l.retrain or 0) >= RETRAIN_WARN_TOTAL]
+    # since_reset is every link at the threshold; the WARNs leave out the
+    # flapping ones, which already have a FAIL of their own.
+    at_threshold = [(k, l) for k, l in sorted(now.items()) if (l.retrain or 0) >= RETRAIN_WARN_TOTAL]
+    since_reset = [f"{where(l)}: {l.retrain} since the last reset" for _, l in at_threshold]
+    many_links = [l for k, l in at_threshold if k not in flapping]
     many = [f"{where(l)}: {l.retrain} since the last reset" for l in many_links]
     flap = [f"{where(now[k])}: {n}x" for k, n in sorted(flapping.items())]
     retrain_findings = _findings(
@@ -615,7 +651,7 @@ def _counter_checks(
             name="eth_status_retrains",
             status=status,
             details=details,
-            data={"during": flap, "since_reset": many, "findings": retrain_findings},
+            data={"during": flap, "since_reset": since_reset, "findings": retrain_findings},
             ip="eth",
         )
     )
@@ -845,12 +881,24 @@ def resolve_triage_python(tt_metal: Path) -> str:
 
 
 def triage_command(python: str, script: Path, scripts: Sequence[str], no_inspector: Path) -> list[str]:
+    """The triage command line, with Inspector kept out of it.
+
+    Triage tries the Inspector RPC server first and its saved logs second, and
+    either would tell check_eth_status which eth cores a metal run found trained
+    rather than the links as they are now. It has no switch to turn Inspector
+    off, so both sources are pointed at nothing: TCP port 0 can never have a
+    listener, so the RPC connect fails at once, and ``no_inspector`` must be a
+    path that does not exist. Rank offsets are disabled so neither moves.
+    """
     return [
         python,
         str(script),
         *(f"--run={s}" for s in scripts),
         "--dev=all",
         "--llm-output",
+        "--inspector-rpc-host=127.0.0.1",
+        "--inspector-rpc-port=0",
+        "--inspector-disable-rank",
         f"--inspector-log-path={no_inspector}",
     ]
 
@@ -906,10 +954,8 @@ def run_eth_status(
         phase.add(Check(name="eth_status_read", status=SKIP, details=f"not present: {script}", ip="other"))
         return
     python = resolve_triage_python(tt_metal)
-    # A log path that does not exist keeps Inspector out of the read. By default
-    # triage loads /tmp/tt-metal/inspector, where the last metal run on this host
-    # left the eth cores it found trained back then, and would check those
-    # rather than the links as they are now.
+    # Never created: see triage_command. Without it triage would load
+    # /tmp/tt-metal/inspector, left by the last metal run on this host.
     no_inspector = logs_dir / "eth_status_no_inspector"
     reads = (("eth_status_read_1", FIRST_READ_SCRIPTS), ("eth_status_read_2", SECOND_READ_SCRIPTS))
     commands = [triage_command(python, script, scripts, no_inspector) for _, scripts in reads]
@@ -929,7 +975,10 @@ def run_eth_status(
     gate = pcie_gate_check(functions)
     phase.add(gate)
     if gate.status != PASS:
-        reason = "a chip dropped off PCIe" if gate.status == FAIL else "no chip on PCIe"
+        reason = {
+            FAIL: "a chip dropped off PCIe",
+            WARN: "the PCIe state of a chip could not be read",
+        }.get(gate.status, "no chip on PCIe")
         phase.add(Check(name="eth_status_read", status=SKIP, details=f"links not read: {reason}", ip="other"))
         return
 
