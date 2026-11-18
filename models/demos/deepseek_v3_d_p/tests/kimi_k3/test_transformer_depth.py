@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_pipeline_split import RECOVERY_FROM, RECOVERY_PCC
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
@@ -414,8 +415,11 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, sp_axis, tp_axi
 #   - 4x4-sp1: 4x4 stages 0 and 1, two runtimes on one tray half. Per chunk, rank 0's output activation
 #     (eager, the tensor the runner sends over D2D) goes straight into rank 1, as a lossless bf16 handoff.
 #     This is the K3.1 pipeline split on real weights. The cut at layer 12 is the runner's stage boundary,
-#     and the oracle is the trace, since there is no undivided 4x4 stack to compare against. Layers 12-23
-#     read the sealed block that crossed the cut.
+#     and the oracle is the trace. Layers 12-23 read the sealed block that crossed the cut, so a split ladder
+#     also holds K3's split check (test_transformer_pipeline_split.py): layers RECOVERY_FROM+ recover to
+#     RECOVERY_PCC, which an inherited set that never arrived would not.
+#   - 4x4-sp1-undivided: layers 0-23 as one 4x4 stack on one tray half (not a deployed stage; K3 keeps the
+#     same row), the baseline that tells the cut's effect from 4x4 numerics.
 # * The prompt is the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced: two 5120-token chunks
 #   on 8x4 and four 2560-token chunks on 4x4. Each chunk's DSA layers read the earlier chunks' KV, and its KDA
 #   layers continue their carry. The bar is held per chunk on prompt rows (on 8x4, chunk 0 is [0, 5120) and
@@ -447,6 +451,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, sp_axis, tp_axi
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-torus-xy-8x4]"
 #     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-4x4-sp1]"
+#     (and [blackhole-4x4-sp1-undivided])
 #
 # The ladder's depth: K3 sets per-layer bars through layer 23 only.
 K31_DEPTH = 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE
@@ -454,7 +459,7 @@ K31_DEPTH = 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE
 
 def k31_layer_pcc(layer: int) -> float:
     """K3's per-layer bar for a layer of the ladder (see above)."""
-    assert layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE, f"layer {layer}: K3 sets no bar past depth 24"
+    assert layer < K31_DEPTH, f"layer {layer}: K3 sets no bar past depth {K31_DEPTH}"
     return SHALLOW_LAYER_PCC if layer < KimiK3Config.ATTN_RES_BLOCK_SIZE else DEEP_LAYER_PCC
 
 
@@ -523,6 +528,14 @@ def test_topk_recall_counts_each_trace_key_once():
 K31_RUNGS = {"L24": TRACE_K31, "L24-128k": TRACE_K31_128K}
 
 
+# (mesh_device, device_params, undivided): each layout's deployed stages, and 4x4's layers 0-23 undivided.
+K31_LADDERS = [pytest.param(*p.values, False, marks=p.marks, id=p.id) for p in k31_stage.PLACEMENT] + [
+    pytest.param(*p.values, True, marks=p.marks, id=f"{p.id}-undivided")
+    for p in k31_stage.PLACEMENT
+    if p.values[0] == k31_stage.MESH_4X4
+]
+
+
 def _k31_sequence(trace) -> tuple[list[int], int]:
     """The trace's whole teacher-forced sequence (prompt, then the ids vLLM decoded): (ids, prompt length)."""
     ids = trace.metadata["token_ids"] + trace.metadata["completion_token_ids"]
@@ -531,8 +544,10 @@ def _k31_sequence(trace) -> tuple[list[int], int]:
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
 @pytest.mark.timeout(0)
-@pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=True)
-def test_k31_depth_ladder_matches_golden(mesh_device, device_params):
+@pytest.mark.parametrize(
+    "mesh_device, device_params, undivided", K31_LADDERS, indirect=["mesh_device", "device_params"]
+)
+def test_k31_depth_ladder_matches_golden(mesh_device, device_params, undivided):
     traces = {rung: resolve_trace(path) for rung, path in K31_RUNGS.items()}
     missing = [f"{rung} ({K31_RUNGS[rung]})" for rung, trace in traces.items() if trace is None]
     assert not missing, f"no K3.1 golden for {', '.join(missing)}"
@@ -544,12 +559,18 @@ def test_k31_depth_ladder_matches_golden(mesh_device, device_params):
     stage_ids = [s for s, (first, _) in enumerate(layout.stages) if first < K31_DEPTH]
     last_first, last_count = layout.stages[stage_ids[-1]]
     assert last_first + last_count == K31_DEPTH, f"{mesh_shape} stages {layout.stages} do not end at {K31_DEPTH}"
+    if undivided:
+        assert len(stage_ids) > 1, f"{mesh_shape}: layers [0, {K31_DEPTH}) are one stage already"
+        windows = [
+            k31_stage.window_params(mesh_shape, 0, K31_DEPTH, max_seq_len, is_first_rank=True, is_last_rank=False)
+        ]
+    else:
+        windows = [k31_stage.stage_params(mesh_shape, s, max_seq_len) for s in stage_ids]
 
     stages = []  # (params, runtime), rank order
     failures = {}
     try:
-        for s in stage_ids:
-            hf_config, params = k31_stage.stage_params(mesh_shape, s, max_seq_len)
+        for hf_config, params in windows:
             runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
             stages.append((params, runtime))
         for rung, trace in traces.items():
@@ -724,4 +745,11 @@ def _k31_rung(rung, trace, mesh_device, hf_config, stages) -> list[str]:
         failures.append("device top-k selects a different number of keys: " + "; ".join(topk_miscounted))
     if topk_failures:
         failures.append(f"top-k recall below {K31_TOPK_RECALL[golden_path]}: " + "; ".join(topk_failures))
+    if len(stages) > 1:
+        # The ladder crosses a stage boundary: K3's split check (test_transformer_pipeline_split.py). A rank whose
+        # inherited sealed set never arrived degrades through its block instead of recovering by its end.
+        tail = min(v for (l, _), v in scores.items() if l >= RECOVERY_FROM)
+        logger.info(f"K31 {rung} recovery: min PCC over layers {RECOVERY_FROM}+ {tail:.7f} (bar {RECOVERY_PCC})")
+        if tail < RECOVERY_PCC:
+            failures.append(f"no recovery by layer {RECOVERY_FROM}+ ({tail:.6f} < {RECOVERY_PCC})")
     return failures

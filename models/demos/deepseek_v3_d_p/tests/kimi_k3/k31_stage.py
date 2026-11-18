@@ -110,16 +110,32 @@ def weight_cache_path(mesh_shape: tuple) -> Path:
 def stage_params(mesh_shape: tuple, stage: int, max_seq_len: int):
     """(hf_config, PrefillRunParams) for one stage of the layout on `mesh_shape`, one user, eager, with the K3
     manifest's knobs as the runner sets them; stage 0 is the first rank, the layout's last stage the last."""
+    stages = STAGE_LAYOUTS[mesh_shape].stages
+    return window_params(
+        mesh_shape, *stages[stage], max_seq_len, is_first_rank=stage == 0, is_last_rank=stage == len(stages) - 1
+    )
+
+
+def window_params(
+    mesh_shape: tuple,
+    first_layer_idx: int,
+    num_layers: int,
+    max_seq_len: int,
+    *,
+    is_first_rank: bool,
+    is_last_rank: bool,
+):
+    """`stage_params` for any window of layers on the layout's mesh, e.g. two 4x4 stages' layers as one
+    undivided stack (K3's undivided 4x4 ladder)."""
     layout = STAGE_LAYOUTS[mesh_shape]
-    first_layer_idx, num_layers = layout.stages[stage]
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = max_seq_len
     params = PrefillRunParams(
         mesh_shape=mesh_shape,
         num_layers=num_layers,
         first_layer_idx=first_layer_idx,
-        is_first_rank=stage == 0,
-        is_last_rank=stage == len(layout.stages) - 1,
+        is_first_rank=is_first_rank,
+        is_last_rank=is_last_rank,
         max_seq_len=max_seq_len,
         chunk_size=layout.chunk,
         num_users=1,
@@ -135,7 +151,7 @@ def stage_params(mesh_shape: tuple, stage: int, max_seq_len: int):
         use_trace=False,
     )
     logger.info(
-        f"K3.1 {mesh_shape[0]}x{mesh_shape[1]} stage {stage}: layers [{first_layer_idx}, {first_layer_idx + num_layers}) "
+        f"K3.1 {mesh_shape[0]}x{mesh_shape[1]} layers [{first_layer_idx}, {first_layer_idx + num_layers}) first={is_first_rank} last={is_last_rank} "
         f"sp_axis={layout.sp_axis} chunk={layout.chunk} max_seq_len={max_seq_len} "
         f"kvpe={params.sparse_kv_cache_format} cache={params.weight_cache_path}"
     )
