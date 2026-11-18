@@ -17,37 +17,58 @@ namespace ttnn::operations::data_movement::detail {
 
 void bind_moe_routing_remap(nb::module_& mod) {
     const auto* doc = R"doc(
+        Splits the non-zero MoE routing weights among the devices along one axis of the mesh. The non-zero weights of
+        `routing_weights_tensor`, in increasing expert order, form `expert_parallel_size` consecutive groups of
+        ``non_zero_weight_size / expert_parallel_size`` weights. Device ``i`` along `cluster_axis`, counting from 0,
+        keeps the weights of group ``i`` at their expert positions, and 0 for every other expert.
 
-Remap MoE routing weights to local device routing weights. Partitions groups of non-zero weights, which may be
-non-uniformly distributed, and maps them to devices along the specified cluster axis.
+        For example, with 16 experts, ``non_zero_weight_size=8`` and 4 devices along `cluster_axis`
+        (``expert_parallel_size=4``), each device keeps 2 weights:
 
-for example:,
+        .. list-table::
+           :header-rows: 1
 
-non_zero_weight_size=8,
-expert_parallel_size=4,
-Total experts= 32
-routing_weights_tensor (1,total_experts): [0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 3, 0, 0, 4, 5, 0, 0, 0, 6,0, 0, 0, 7, 0, 8, 0, 0, 0, 0, 0, 0, 0]
+           * - Tensor
+             - Weights
+           * - `routing_weights_tensor`, on every device
+             - ``[0, 1, 0, 2, 0, 0, 3, 4, 0, 5, 0, 0, 6, 7, 0, 8]``
+           * - Output of device 0 along `cluster_axis`
+             - ``[0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]``
+           * - Output of device 1 along `cluster_axis`
+             - ``[0, 0, 0, 0, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0]``
+           * - Output of device 2 along `cluster_axis`
+             - ``[0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 6, 0, 0, 0]``
+           * - Output of device 3 along `cluster_axis`
+             - ``[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 8]``
 
-Each device will have 2 non-zero values in their output.
+        On a single device, `expert_parallel_size` is 1 and the output equals `routing_weights_tensor`.
 
-cluster device 0: [0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-cluster device 1: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 4, 0, 0, 0, 0, 0,0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-cluster device 2: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 6,0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-cluster device 3: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0, 0, 0, 7, 0, 8, 0, 0, 0, 0, 0, 0, 0]
+        Args:
+            routing_weights_tensor (ttnn.Tensor): the routing weights, of shape ``[1, experts]``, replicated on every device: one weight per expert. Exactly `non_zero_weight_size` weights must be non-zero, and the others ``0`` (``+0.0`` for BFLOAT16 and FLOAT32).
+            non_zero_weight_size (int): the number of non-zero weights in `routing_weights_tensor`. Must be greater than 0, at most ``experts``, and a multiple of `expert_parallel_size`.
+            expert_parallel_size (int): the number of groups to split the non-zero weights into. Must equal the number of devices along `cluster_axis` of the mesh (1 on a single device), and divide ``experts``.
+            cluster_axis (int): the mesh axis to split the weights along: 0 or 1. The device at mesh coordinate ``(row, column)`` is device ``row`` along axis 0 and device ``column`` along axis 1.
 
-Args:
-    routing_weights_tensor (ttnn.Tensor): tensor of weights for selected experts, replicated on all devices `[1, total_experts]`
-    non_zero_weight_size (integer): Total number of selected experts, non-zero weights in routing_weights_tensor.
-    expert_parallel_size (integer): Number of devices in a cluster.
-    cluster_axis (integer): Device mesh axis of cluster, 0: rows, 1: columns.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. It must be interleaved. Defaults to `None`, which uses the memory configuration of `routing_weights_tensor`.
+            optional_output_tensor (ttnn.Tensor, optional): Preallocated tensor for the output. It must have the shape, dtype and layout of `routing_weights_tensor`, and the output memory configuration that `memory_config` gives. Defaults to `None`.
 
-Keyword Args:
-    memory_config (ttnn.MemoryConfig, optional): Optional memory configuration for the output. Defaults to `None`.
-    optional_output_tensor (ttnn.Tensor, optional): Optional output buffer.
+        Returns:
+            ttnn.Tensor: on each device, the weights of the device's group at their expert positions and 0 for the other experts, with the shape, dtype and layout of `routing_weights_tensor`.
 
-Returns:
-    ttnn.Tensor: Tensor containing the device partitioned local weights, `[devices/devices, total_experts]`
+        Note:
+            Supported dtypes and layouts:
 
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
+                 - ROW_MAJOR
+
+        Memory Support:
+            - Interleaved: DRAM and L1
     )doc";
 
     ttnn::bind_function<"moe_routing_remap">(
