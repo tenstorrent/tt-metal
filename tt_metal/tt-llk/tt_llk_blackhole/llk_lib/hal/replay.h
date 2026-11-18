@@ -54,6 +54,16 @@ constexpr std::uint32_t get_operation(const BufferRange range)
     return TT_OP_REPLAY(range.start, range.count, false, false);
 }
 
+inline __attribute__((always_inline)) void assert_valid(const BufferRange range)
+{
+    LLK_ASSERT(is_valid(range), "Replay range requires count >= 1 and start + count <= 32");
+}
+
+// Not constexpr: reaching it during constant evaluation makes an invalid range a compile error.
+inline void invalid_range_in_constant_expression()
+{
+}
+
 template <BufferRange Range, RecordBehavior Behavior>
 inline __attribute__((always_inline)) void begin_recording()
 {
@@ -61,15 +71,8 @@ inline __attribute__((always_inline)) void begin_recording()
 }
 
 template <RecordBehavior Behavior>
-inline __attribute__((always_inline)) void begin_recording(BufferRange range)
+inline __attribute__((always_inline)) void begin_recording(const BufferRange range)
 {
-    // With LLK_ASSERT enabled, jump threading can specialize the range check's failure path for
-    // count == 0, and the recording intrinsic rejects that constant at compile time. Hiding a
-    // runtime count from the optimizer prevents it; a constant count keeps the immediate REPLAY.
-    if (!__builtin_constant_p(range.count))
-    {
-        asm("" : "+r"(range.count));
-    }
     lltt::record<exec_while_recording(Behavior)>(range.start, range.count);
 }
 
@@ -188,10 +191,21 @@ constexpr std::uint32_t get_operation()
  *
  * @param range: Buffer range the encoded operation will replay.
  * @note Use the result where another expander accepts an encoded operation, such as a MOP field.
+ * @note Usable in constant expressions, where an invalid range is a compile error.
  */
-inline __attribute__((always_inline)) std::uint32_t get_operation(const BufferRange range)
+constexpr __attribute__((always_inline)) std::uint32_t get_operation(const BufferRange range)
 {
-    LLK_ASSERT(detail::is_valid(range), "Replay range requires count >= 1 and start + count <= 32");
+    if (__builtin_is_constant_evaluated())
+    {
+        if (!detail::is_valid(range))
+        {
+            detail::invalid_range_in_constant_expression();
+        }
+    }
+    else
+    {
+        detail::assert_valid(range);
+    }
 
     return detail::get_operation(range);
 }
