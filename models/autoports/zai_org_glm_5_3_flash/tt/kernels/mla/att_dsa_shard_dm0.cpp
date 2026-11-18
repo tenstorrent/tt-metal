@@ -28,7 +28,9 @@
 // Rev 61 MLA_DSA_ONE_SLOT (Stage 17's speculative verify on the shard, dsa/spec_on_shard_design.md): the rows are
 //   consecutive positions of the launch's slot -> every row scores that slot's local pooled keys (att_dsa_dm0.cpp's
 //   rev 56 addressing); each row's closed-pool bound stays its own (n_closed_local(p)), and IXR_SEM (ix_dm1: every
-//   row's ring / pooled-key writes, in row order) precedes the first sparse row's pooled-key reads.
+//   row's ring / pooled-key writes, in row order; under MLA_DSA_BATON_GROUPS in row order inside each user's row group
+//   only, a lane signalling after its own rows, when every earlier row of their groups has landed) precedes the first
+//   sparse row's pooled-key reads.
 // Rev 63 MLA_DSA_PAGED_POOLS (doc/ttnn/12-fast-start/paged_pooled_keys.md rev 3, the padded layout): `pools` is the
 //   per-chip paged store [nb_local, 1, 32, 128] (local latent block lb = page lb, its 16 pools at rows 0..15); a unit
 //   tile = the top halves (faces 0-1) of pages row[2u], row[2u + 1] of the token's local page-table row. TP_TILES and

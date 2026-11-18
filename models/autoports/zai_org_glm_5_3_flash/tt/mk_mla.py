@@ -32,6 +32,7 @@ import struct
 from dataclasses import dataclass
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt import mhc_post as _mpost
@@ -349,6 +350,7 @@ def shard_coord_words(chunks: int, C: int) -> int:
 
 
 _SRC = {}
+_BATON_GROUPS_SKIP_LOGGED: list = []  # GLM53_MLA_DSA_BATON_GROUPS requested where a build cannot apply it (logged once)
 
 
 def mla_src() -> str:
@@ -1948,6 +1950,8 @@ class MkMla(_MlaBase):
         if os.environ.get("GLM53_MLA_DSA_IX_ROWS", "1") == "1":  # rev 46 (card0 u42: 20 us per row of full-tile RMWs)
             rev.append(("MLA_DSA_IX_ROWS", "1"))
         baton = bool(st.get("one_slot")) and shard is not None and self._baton(t)
+        # GLM53_MLA_DSA_BATON_GROUPS on a lane-baton verify: applied (True) / requested but not applicable (False)
+        baton_groups = None
         if st.get("one_slot"):  # rev 56: a speculative verify (needs the row-granular writes on one index core)
             if ("MLA_DSA_IX_ROWS", "1") not in rev or (nx > 1 and not baton):
                 raise ValueError(
@@ -1961,10 +1965,17 @@ class MkMla(_MlaBase):
                 rev += [("MLA_DSA_ONE_SLOT_BATON", "1"), ("MLA_DSA_BATON_SEM", str(SEM_BATON)),
                         ("MLA_DSA_DONE_SEM", str(SEM_DONE))]  # fmt: skip
                 gr = int(st.get("group_rows") or 0)
-                if os.environ.get("GLM53_MLA_DSA_BATON_GROUPS", "0") == "1" and gr > 1 and nx % gr == 0:
-                    # the baton inside each user's group of rows only (ix_dm1.cpp MLA_DSA_BATON_GROUPS): the 8 x 1
-                    # verify's 16 rows were one 16-step chain across the lanes, now 8 independent 2-row chains
-                    rev.append(("MLA_DSA_BATON_GROUPS", "1"))
+                if os.environ.get("GLM53_MLA_DSA_BATON_GROUPS", "0") == "1":
+                    baton_groups = gr > 1 and nx % gr == 0
+                    if baton_groups:
+                        # the baton inside each user's group of rows only (ix_dm1.cpp MLA_DSA_BATON_GROUPS): the 8 x 1
+                        # verify's 16 rows were one 16-step chain across the lanes, now 8 independent 2-row chains
+                        rev.append(("MLA_DSA_BATON_GROUPS", "1"))
+                    elif not _BATON_GROUPS_SKIP_LOGGED:  # (the galaxy default: a lone-user verify has no groups)
+                        _BATON_GROUPS_SKIP_LOGGED.append(True)
+                        logger.info(f"GLM53_MLA_DSA_BATON_GROUPS=1 not applied to a verify build with {gr} group rows "
+                                    f"on {nx} token lanes (needs group rows > 1 dividing the lanes): the lane baton "
+                                    f"orders every row (logged once; MkMla.last_baton_groups per build)")  # fmt: skip
         if int(st.get("slot_stride", 1) or 1) > 1 and not st.get("one_slot"):  # rev 74: plain rows on strided slots
             rev.append(("MLA_DSA_SLOT_STRIDE", str(int(st["slot_stride"]))))
         if os.environ.get("GLM53_MLA_DSA_HSUM", "1") == "0":  # rev 52: the coordinator's old histogram sum (A/B)
@@ -1999,6 +2010,7 @@ class MkMla(_MlaBase):
             rev.append(("MLA_DSA_MCAST", "1"))
         # rev 53 (review S2): what actually ran (the knob drops silently past MCAST_MAX rectangles)
         self.last_mcast = None if mc is None else [len(r) for r in mc]
+        self.last_baton_groups = baton_groups  # (likewise: the knob is dropped where the build cannot apply it)
         mcast = lambda l: (
             [] if mc is None else [len(mc[l])] + [v for r in mc[l] for v in r] + [0] * (5 * (MCAST_MAX - len(mc[l])))
         )  # noqa: E731  # fmt: skip

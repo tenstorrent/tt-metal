@@ -2808,8 +2808,8 @@ def test_spec_plan_for_the_lone_user():
         gvs.fused_sample_block([dict(n=1, a=[5, 6]), dict(n=0, a=[7, 1])], 0, 4, 2, -1)
 
 
-def _spec_adapter(K: int = 3, good=lambda step: 3):
-    backend = _MockSpecBackend(B, K, good)
+def _spec_adapter(K: int = 3, good=lambda step: 3, backend_cls=None):
+    backend = (backend_cls or _MockSpecBackend)(B, K, good)
     gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
     ad = GLM53StackForCausalLM(gen, B, SEQ, spec=True)
     kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
@@ -2874,36 +2874,72 @@ def _fused_verify(ad, kv, Kp: int, rows: dict, table):
     return ids, counts
 
 
-def _served_chain_lone(monkeypatch):
+def _served_chain_lone(monkeypatch, sharded: bool = False):
     """GLM53_SPEC_STEPS_PER_CALL = 3 on the lone-user served path: effective_k 3 (K + 1) - 1 = 11; propose hands the
     device's K drafts in the 11-wide block, the verify (fused_sample) chains 3 device steps -- every record collected
     after the last replay -- and commits all their tokens at once; the stream equals plain greedy and each proposal
     continues the chain's last step (the plugin's count = the 3 steps' total); a second live row: the ordinary decode
     answers one token per row (count 1). The block table grows as vLLM's does (the block's positions allocated per
     verify): the rows that only gained blocks are written behind the first replay (GLM53_SPEC_PT_DEFER, default on) and
-    the mock step asserts every position it addresses is mapped in the published table"""
+    the mock step asserts every position it addresses is mapped in the published table. Never deferred (written before
+    the first replay, which reads the new row): a first step that reaches past the published coverage (the first
+    verify at 122 over 2 published blocks) and a row that CHANGES a covered entry (column 0 on another block).
+    sharded: the owner-aware pool (_MockSpecPrefixBackend; no changed entry: a computed column's block must keep its
+    content) -- a deferred publish leaves the covered physical entries the first replay reads as they were"""
     monkeypatch.setenv("GLM53_SPEC_STEPS_PER_CALL", "3")
+    if sharded:
+        monkeypatch.setenv("GLM53_SPEC_ON_SHARD", "1")  # (the prefix mock's sequence-sharded pool)
     K, M = 3, 3
     Kp = gvs.spec_plugin_k(K, M)
-    ad, backend, gen, kv = _spec_adapter(K, good=lambda step: step % (K + 1))
+    ad, backend, gen, kv = _spec_adapter(K, good=lambda step: step % (K + 1),
+                                         backend_cls=_MockSpecPrefixBackend if sharded else None)  # fmt: skip
     assert ad.spec_steps_per_call == M and Kp == 11
-    prompt = _prompt(100, 7)
-    table = _table([_blocks(0, 101)], B)
-    out, _ = ad.prefill_forward(_history([prompt]), page_table=table, kv_cache=kv, prompt_lens=[100], start_pos=[0],
+    prompt = _prompt(121, 7)
+    table = _table([_blocks(0, 122)], B)
+    out, _ = ad.prefill_forward(_history([prompt]), page_table=table, kv_cache=kv, prompt_lens=[121], start_pos=[0],
                                 empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
-    stream, pos = [int(out[0, 0])], 100
+    stream, pos = [int(out[0, 0])], 121
     ids = ad.decode_forward(torch.tensor([[stream[-1]], [0], [0], [0]]), torch.tensor([pos, -1, -1, -1]),
                             page_table=table, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
     stream.append(int(ids[0, 0]))
     pos += 1
     ct, cp, ac = _block({0: ([stream[-1]], pos)}, Kp)
     s0, r0 = backend.spec.counters["steps"], gen.counters["page_table_refresh"]
-    for _ in range(4):
+    b, ev, step0, write0 = gen._binding(kv), [], backend.spec.step, gen._write_page_rows
+
+    def step(*a, **kw):  # (each replay with the published table it reads)
+        ev.append(("step", backend.io.page_table.t[0].clone()))
+        return step0(*a, **kw)
+
+    def write(*a, **kw):
+        ev.append(("write", None))
+        return write0(*a, **kw)
+
+    monkeypatch.setattr(backend.spec, "step", step)
+    monkeypatch.setattr(gen, "_write_page_rows", write)
+    swap = None
+    for case in ("past", "grow", "grow", "grow") if sharded else ("past", "change", "grow", "grow"):
         do = ad.propose_draft_tokens(Kp, ct, cp, ac)
         assert do.num_valid.tolist() == [K, 0, 0, 0] and tuple(do.draft_token_ids.shape) == (B, Kp)
         drafts = [int(v) for v in do.draft_token_ids[0, :K].tolist()]
-        table = _table([_blocks(0, pos + 2 * (Kp + 1))], B)  # (vLLM: the block's positions + lookahead allocated)
+        row = _blocks(0, pos + 2 * (Kp + 1))  # (vLLM: the block's positions + lookahead allocated)
+        swap = _blocks(3, 1)[0] if case == "change" else swap
+        row[0] = row[0] if swap is None else swap
+        table = _table([row], B)
+        L0, cov0, pub0, n0 = int(b.slots[0].seq_len), int(b.coverage[0]), backend.io.page_table.t[0].clone(), len(ev)
+        d0, ph0 = gen.counters.get("page_rows_deferred", 0), b.phys.clone() if sharded else None
         acc, counts = _fused_verify(ad, kv, Kp, {0: (stream[-1], pos, drafts)}, table)
+        kinds, seen = [k for k, _t in ev[n0:]], next(t for k, t in ev[n0:] if k == "step")
+        assert (L0 + 2 * K + 1 > cov0 * BLOCK_SIZE) == (case == "past"), (case, L0, cov0)
+        if case == "grow":  # behind the first replay, which reads the published table
+            assert kinds[:2] == ["step", "write"] and gen.counters["page_rows_deferred"] == d0 + 1, (case, kinds)
+            assert torch.equal(seen, pub0)
+            if sharded:
+                assert torch.equal(b.phys[:, :cov0], ph0[:, :cov0]), "a deferred publish moved a covered entry"
+        else:  # before the first replay, which reads the call's row
+            assert kinds[:2] == ["write", "step"] and gen.counters.get("page_rows_deferred", 0) == d0, (case, kinds)
+            assert torch.equal(seen.to(torch.int64), (b.phys if sharded else b.pt_shadow)[0].to(torch.int64))
+            assert sharded or seen[: len(row)].tolist() == row
         new = [int(v) for v in acc[0, : int(counts[0])].tolist()]
         assert M <= len(new) <= M * (K + 1) and counts[1:].tolist() == [1, 1, 1]
         ct, cp, ac = _block({0: (new, pos + 1)}, Kp)
@@ -3038,6 +3074,7 @@ def test_served_spec_lone_user_flow(monkeypatch):
     ad.release_request(0)  # released while speculating: abort, no leave
     assert backend.spec.counters.get("aborts") == 1 and getattr(gen._binding(kv), "spec", None) is None
     _served_chain_lone(monkeypatch)
+    _served_chain_lone(monkeypatch, sharded=True)
     assert "ttnn" not in sys.modules
 
 
@@ -4338,6 +4375,121 @@ class _MockAsyncHostTierBackend(_MockHostTierBackend):
         return finish, self.BOUND
 
 
+_ASYNC_EXPORT_CHILD = r"""
+import sys
+from types import SimpleNamespace
+from unittest import mock
+
+import torch
+
+sys.modules["ttnn"] = mock.MagicMock()  # stack_model's module-level ttnn import; the device reads are faked below
+import ttnn  # noqa: E402
+
+from models.autoports.zai_org_glm_5_3_flash.tt import stack_model as STM  # noqa: E402
+
+assert not STM.MOCK  # (the real staging reads: the fake device below, not the mock stub's zeros)
+MEM = {}  # buffer address -> the fake device buffer's tiles [chips, tiles, 32, 32]
+
+
+class Copy:  # ttnn.from_device(blocking=False): the staging's tiles when the read is enqueued (queue order)
+    def __init__(self, data):
+        self.data = data.clone()
+
+
+def buf(chips, tiles, dt, gen=None):
+    a = 0x1000 * (len(MEM) + 1)
+    MEM[a] = torch.zeros(chips, tiles, 32, 32, dtype=dt) if gen is None else torch.randn(
+        chips, tiles, 32, 32, generator=gen).to(dt)
+    return SimpleNamespace(padded_shape=(tiles, 1, 32, 32), dtype=ttnn.float32 if dt == torch.float32 else
+                           ttnn.bfloat16, buffer_address=lambda a=a: a)
+
+
+def run(ops):  # SlotOps: kind 1 = tile copy, kind 2 = conv row (src row << 16 | dst row) of every tile
+    for kind, sa, s0, da, d0, n, _nb, rows in ops:
+        if kind == 1:
+            MEM[da][:, d0 : d0 + n] = MEM[sa][:, s0 : s0 + n]
+        else:
+            MEM[da][:, :n, rows & 0xFFFF, :] = MEM[sa][:, :n, rows >> 16, :]
+
+
+ttnn.from_device = lambda t, blocking=True: Copy(MEM[t.buffer_address()])
+ttnn.to_torch = lambda t, mesh_composer=None: (t.data if isinstance(t, Copy) else MEM[t.buffer_address()]).clone()
+CHUNK, MB, ENTRIES, CH, N_S = 4, 4, 4, 2, 2  # 2 chips; the entries are virtual slots 4..7 (state chunk 1)
+SEQ = [dict(L=0, sparse=None), dict(L=1, sparse="dsa"), dict(L=2, sparse=None), dict(L=3, sparse=None),
+       dict(L=4, sparse="dsa")]
+
+
+def rig(shard, rep, paged, seed):
+    gen = torch.Generator().manual_seed(seed)
+    MEM.clear()
+    states = [[None if e["sparse"] else (buf(CH, CHUNK * N_S, torch.float32, gen), buf(CH, 3, torch.bfloat16, gen))
+               for e in SEQ] for _c in range(2)]
+    dsa = {i: dict(pools=buf(CH, 2 * MB * 8, torch.bfloat16, gen), ring=buf(CH, 2 * MB * 2, torch.bfloat16, gen),
+                   slots=2 * MB, paged=paged) for i, e in enumerate(SEQ) if e["sparse"]}
+    if rep:  # every chip holds the same DSA rows
+        for st in dsa.values():
+            for t in (st["pools"], st["ring"]):
+                MEM[t.buffer_address()][1:] = MEM[t.buffer_address()][:1]
+    extra = dict(snapshot_entries=ENTRIES, dsa=dsa, kda_stage_s=buf(CH, 2 * N_S, torch.float32),
+                 kda_stage_c=buf(CH, 3, torch.bfloat16), dsa_stage=buf(CH, 6, torch.bfloat16))
+    if shard:
+        extra["dsa_shard"] = (CH, 10**6, 2)
+    kv = SimpleNamespace(extra=extra, states=states, max_batch=MB)
+    be = STM.StackBackend.__new__(STM.StackBackend)
+    be.mesh, be.tp, be.chunk, be.seq, be.counters = SimpleNamespace(), CH, CHUNK, SEQ, {"slot_ops": 0}
+    be.slot_ops = SimpleNamespace(run=run)
+    return be, kv
+
+
+def same(a, b, where="blob"):
+    assert type(a) is type(b), (where, type(a), type(b))
+    if isinstance(a, dict):
+        assert a.keys() == b.keys(), (where, a.keys(), b.keys())
+        for k in a:
+            same(a[k], b[k], f"{where}.{k}")
+    elif isinstance(a, list):
+        assert len(a) == len(b), (where, len(a), len(b))
+        for i, (x, y) in enumerate(zip(a, b)):
+            same(x, y, f"{where}[{i}]")
+    elif isinstance(a, torch.Tensor):
+        assert a.dtype == b.dtype and a.shape == b.shape and torch.equal(a, b), (where, a.shape, b.shape)
+    else:
+        assert a == b, (where, a, b)
+
+
+KEYS = ("dsa_exports", "dsa_export_bytes", "dsa_export_replicated", "kda_pack_exports", "slot_ops")
+n_cases = 0
+for shard in (False, True):
+    for rep in (False, True):
+        for paged in (False, True):
+            for n_tokens in (300, None):
+                be, kv = rig(shard, rep, paged, seed=n_cases)
+                c0 = {k: be.counters.get(k, 0) for k in KEYS}
+                blob = be.export_snapshot(kv, 2, n_tokens=n_tokens)
+                c1 = {k: be.counters.get(k, 0) for k in KEYS}
+                finish, bound = be.export_snapshot_async(kv, 2, n_tokens=n_tokens)
+                for t in MEM.values():  # a later prefill / import rewrites the entry and the staging: the reads
+                    t.add_(1)  # were taken in queue order at the enqueue
+                got = finish()
+                c2 = {k: be.counters.get(k, 0) for k in KEYS}
+                same(blob, got)
+                assert [k for d in blob for k in d] == ["kda", "dsa"]
+                dsa = blob[1]["dsa"]
+                assert dsa["layout"] == ("unit" if shard else "chip") and dsa["pools"] == (not paged)
+                assert dsa["units"] == (0 if paged else None if n_tokens is None else 3)
+                assert dsa["replicated"] == rep, (shard, rep, paged, dsa["replicated"])
+                assert all(c2[k] - c1[k] == c1[k] - c0[k] for k in KEYS), (c0, c1, c2)
+                assert c1["dsa_export_bytes"] - c0["dsa_export_bytes"] == sum(
+                    v.numel() * v.element_size() for v in dsa["tensors"].values()) > 0
+                kda = blob[0]["kda"]
+                assert bound >= sum(v.numel() * v.element_size() for v in (kda["S"], kda["C"])) + c1[
+                    "dsa_export_bytes"] - c0["dsa_export_bytes"], "the admission bound covers the blob"
+                n_cases += 1
+assert n_cases == 16
+print("ASYNC_EXPORT_OK")
+"""
+
+
 def test_prefix_cache_async_export_ordering(monkeypatch):
     """GLM53_PREFIX_ASYNC_EXPORT: a full pool's LRU entry is spilled with its transfer in flight -- the snapshot that
     evicted it reuses the device entry at once, yet the blob holds the evicted state (taken in queue order at the
@@ -4414,6 +4566,12 @@ def test_prefix_cache_async_export_ordering(monkeypatch):
     assert pc.stats["export_failed"] == 2 and len(gone) == 2 and not pc._exports
     assert pc.store.host_used == sum(e.bytes for e in pc.store.entries.values() if e.tier == "host")
     assert backend.exports == [] and "ttnn" not in sys.modules
+    # ---- the device side (StackBackend over a fake device, a stub-ttnn child): export_snapshot_async's finish() returns
+    #      export_snapshot's blob -- keys, shapes, bytes, units, layout, replicated flag; shard / non-shard, replicated
+    #      or not, per-slot or paged pools, a cut or the whole slot -- and moves the same counters (dsa_export_bytes /
+    #      dsa_export_replicated included); its reads are the staging at the enqueue, and its bound covers the blob
+    _stub_child(_ASYNC_EXPORT_CHILD, "ASYNC_EXPORT_OK")
+    assert "ttnn" not in sys.modules
 
 
 # ------------------------------------------------------------------- GLM53_PF_TAIL_SPLIT (Glm53Generator._tail_split)

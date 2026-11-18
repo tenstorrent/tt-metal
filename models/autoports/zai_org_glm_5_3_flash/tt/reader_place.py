@@ -31,13 +31,14 @@ MODES = ("row", "col")
 
 
 def mesh_base(opts: list, banks: list) -> dict:
-    """{bank: (x, y)}: per bank the largest optimal x over the chips (east of the DRAM column everywhere) and the most
-    common optimal y (rows are not harvested on Blackhole: every chip agrees unless its DRAM endpoints differ)"""
+    """{bank: (x, y)}: per bank the largest optimal x and the largest optimal y over the chips -- east of the DRAM
+    column and not north of the optimal row on any chip, so north() is 0 for the base cores by construction (rows are
+    not harvested on Blackhole: every chip agrees on y unless its DRAM endpoints differ)"""
     out = {}
     for b in banks:
         xs = [int(o[b][0]) for o in opts]
         ys = [int(o[b][1]) for o in opts]
-        out[b] = (max(xs), max(set(ys), key=lambda v: (ys.count(v), -v)))
+        out[b] = (max(xs), max(ys))
     return out
 
 

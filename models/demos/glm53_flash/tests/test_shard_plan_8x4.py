@@ -260,7 +260,9 @@ def test_decode_probe_round_marks():
 def test_8x4_byte_formats_round_trip():
     """The 8x4 compact formats mirrored from kernels/mla/dsa_shard.hpp: the 2-row q piece (lat_dm1.cpp's write ->
     ix_dm1.cpp's 16-piece assembly = the whole tile, one page of 16 x 128 B), the round-1 8-row and round-2 2-row slice
-    ship -> land round trips (att_dsa_shard_dm1.cpp), the page / offset helpers and the slice chunk layouts."""
+    ship -> land round trips (att_dsa_shard_dm1.cpp), the page / offset helpers and the slice chunk layouts. The
+    speculative verify's kda_rec v2 value-column split (_kda_rec_v2_split_maps at spread 1 / 2: the page / CB-tile / DST
+    maps and the o exchange's bytes; _kda_rec_v2_split_cores_and_cbs: its cores and exchange CBs)."""
     geo = SP.Geometry(8, 4)
     assert (geo.piece_rows, geo.rs1_rows, geo.rs2_rows) == (2, 8, 2)
     assert SP.piece_bytes(2) == 128 and SP.pieces_per_page(2) == 16  # "128 B x 16 tiles = ONE page"
@@ -293,6 +295,10 @@ def test_8x4_byte_formats_round_trip():
     lay = SP.rs_layout(2, otb=4096)
     assert lay[-1][2] + 4096 * 2 // 32 == 16 * 256 + 2 * 256 <= SP.RS2B_PPC * SP.TB
     assert SP.rs2_layout(4096) == SP.rs_layout(8, 4096)
+    # the kda_rec v2 value-column split of the speculative verify (GLM53_SPEC_REC_SPLIT)
+    for spread in (1, 2):
+        _kda_rec_v2_split_maps(spread)
+    _kda_rec_v2_split_cores_and_cbs()
 
 
 # ------------------------------------------------------------------ rev 64: KPH chips per merge helper (the 8x4)
@@ -712,7 +718,10 @@ def test_fold2_tiles_layout(j1, lpos, stale):
 
 def test_fold_tiles_tf32_close():
     """the whole-tile emulation with tf32 matmul operands (FOLD / diag coefficients exact in tf32, O and c l rounded
-    once) stays within tf32 rounding of the fp32 fold; M never passes the FPU"""
+    once) stays within tf32 rounding of the fp32 fold; M never passes the FPU. Both rounds (fold1 on 4 column groups of
+    8 sources, then fold2 over their send tiles: c l, L and G' = diag(1 / L) G also tf32 operands) on a real cache's
+    stats, a few seeds: within the tf32 floor of the f64 combine of all 32 sources and of rev 64's pairwise chains +
+    finalise (each round's chain with tf32 O operands, l exact fp32), never more than 2.5x the chain's error"""
     gen = torch.Generator().manual_seed(303)
     src = [_send_tiles(gen) for _ in range(8)]
     M, L, O = SP.fold1_tiles(src, 2, _junk(gen))
@@ -722,6 +731,25 @@ def test_fold_tiles_tf32_close():
     assert torch.equal(M, Mt)
     torch.testing.assert_close(Lt, L, rtol=1e-3, atol=0)
     torch.testing.assert_close(Ot, O, rtol=3e-3, atol=3e-3 * float(O.abs().max()))
+    rel = lambda a, b: float((a.double() - b.double()).abs().mean() / b.double().abs().mean())  # noqa: E731
+    for seed in range(4):
+        gen = torch.Generator().manual_seed(7000 + seed)
+        j1, lpos = seed, (3 * seed + 1) % 4
+        j2 = 4 * j1 + lpos
+        rows = slice(2 * j2, 2 * j2 + 2)
+        groups = [_real_send(gen, 8, empty=(seed + 2,) if g == 1 else ()) for g in range(4)]
+        sent = [SP.fold1_tiles(s_, j1, _junk(gen), tf32_ops=True) for s_ in groups]
+        o = _rows_of(SP.fold2_tiles(sent, j1, lpos, _junk(gen), tf32_ops=True), 2 * j2, 2)
+        parts = [[(m[rows, 0], l_[rows, 0], _rows_of(O_, 2 * j2, 2)) for m, l_, O_ in s_] for s_ in groups]
+        ref = SP.fold_combine([tuple(v.double() for v in p) for g in parts for p in g])
+        o_ref = ref[2] / ref[1][:, None]
+        cols = [SP.combine_chain(g, tf32_ops=True) for g in parts]
+        _Mc, Lc, Oc = SP.combine_chain([cols[s] for s in [lpos] + [s for s in range(4) if s != lpos]], tf32_ops=True)
+        o_chain = Oc / Lc[:, None]
+        e_fold, e_chain = rel(o, o_ref), rel(o_chain, o_ref)
+        assert torch.isfinite(o).all() and e_fold < 1e-3 and rel(o, o_chain) < 1e-3, (seed, e_fold, e_chain)
+        assert float((o.double() - o_ref).abs().max() / o_ref.abs().max()) < 2e-3, seed
+        assert e_fold < 2.5 * e_chain, (seed, e_fold, e_chain)
 
 
 def _real_send(gen, src_count: int, empty=()) -> list:
@@ -1353,7 +1381,8 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     bit-identical to knob-off over 3 runs; 32 K x 4 ids identical), the fused prefill mHC mix and COMB (2026-11-18:
     not bitwise -- ids move at near-ties -- gated on tau / coherence and the served 1 M / AgentX rows); an
     explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
-    default); other meshes get nothing"""
+    default, an explicit GLM53_MLA_ATT_OBF16=1 the COMB default); the speculative verify's step cuts; the 1 M prefill
+    window ladder; other meshes get nothing"""
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
 
     assert GD.KNOBS["GLM53_DSA_SHARD_AGK"] == "1"
@@ -1366,6 +1395,11 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert GD.KNOBS["GLM53_DSA_SHARD_SEL2"] == "1"
     # rev 75 / 76 (6e2be954194): the exact merge pre-filter and RS1 over both fabric links
     assert GD.KNOBS["GLM53_DSA_SHARD_PREFILTER"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_RS1_SPLIT"] == "1"
+    # the speculative verify's step cuts (abd539b80fc) and the 1 M window ladder (6c9e3c29f0b / 8bf49e5cddb)
+    assert GD.KNOBS["GLM53_MLA_DSA_BATON_GROUPS"] == "1" and GD.KNOBS["GLM53_MK_READER_PLACE"] == "row"
+    assert GD.KNOBS["GLM53_KDA_VERIFY_PIPE"] == "1"
+    ladder_1m = "32768,65536,98304,131072,196608,262144,524288,786432,1048576"
+    assert GD.SPARSE_T[1 << 20] == GD.sparse_t(1 << 20) == ladder_1m
     assert all(
         GD.KNOBS[k] == "1"
         for k in ("GLM53_DSA_POOL_BORROW", "GLM53_STACK_DEFER", "GLM53_MK_MOE_DEFER_INV", "GLM53_MHC_MS1")
@@ -1384,7 +1418,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
         )
     )
     keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
-    keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB"]
+    keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB", "GLM53_MLA_ATT_OBF16"]
     _protect_env(monkeypatch, keys)
     assert GD.apply((2, 4), 4096) == {} and not SP.shard_agk(8)
     got = GD.apply((8, 4), 4096, 4096)
@@ -1404,6 +1438,8 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_PREFILTER"] == "1" and SP.shard_prefilter(8)
     assert got["GLM53_DSA_SHARD_RS1_SPLIT"] == "1" and SP.shard_rs1_split(8)
     assert not SP.shard_prefilter(2) and not SP.shard_rs1_split(2)  # (the pair / the 2x4 never take them)
+    assert got["GLM53_MLA_DSA_BATON_GROUPS"] == got["GLM53_KDA_VERIFY_PIPE"] == "1"
+    assert got["GLM53_MK_READER_PLACE"] == "row"
     assert all(
         got[k] == "1" for k in ("GLM53_DSA_POOL_BORROW", "GLM53_STACK_DEFER", "GLM53_MK_MOE_DEFER_INV", "GLM53_MHC_MS1")
     )
@@ -1432,6 +1468,23 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert "GLM53_DSA_SHARD_RSB" not in got and not SP.shard_rsb(8)
     assert "GLM53_DSA_SHARD_RSNP" not in got and not SP.shard_rsnp(8)  # no RSNP-needs-RSB error
     assert got["GLM53_DSA_SHARD_AGB"] == got["GLM53_DSA_SHARD_R8"] == "1"
+    _protect_env(monkeypatch, keys)
+    monkeypatch.setenv("GLM53_MLA_ATT_OBF16", "1")  # bf16 O partials: COMB would raise at the MLA build
+    got = GD.apply((8, 4), 4096, 4096)
+    assert "GLM53_DSA_SHARD_COMB" not in got and not SP.shard_comb(8)
+    assert got["GLM53_DSA_SHARD_RS1_EARLY"] == got["GLM53_DSA_SHARD_RSB"] == "1"
+    # GLM53_MK_READER_PLACE (tt/reader_place.py; "row" is the default): both modes' plans on heterogeneously harvested
+    # Galaxies keep NOC 0 reads east / south of every bank on every chip; the port's placement wraps there; the refusals
+    for mode in RP.MODES:
+        for readers in (1, 2, 3, 4):
+            for seed in (0, 1, 2):
+                _reader_place_noc0_east(mode, readers, seed)
+    _reader_place_port_wraps()
+    _reader_place_errors()
+    _protect_env(monkeypatch, keys)  # the 1 M cache: its ladder and trace region
+    got = GD.apply((8, 4), 1 << 20)
+    assert got["GLM53_PF_SPARSE_T"] == ladder_1m and got["GLM53_MODEL_TRACE_MB"] == "8192"
+    assert got["GLM53_DSA_SHARD_COMB"] == "1"
 
 
 def test_rs1_split_build_refusals(monkeypatch):
@@ -1668,10 +1721,7 @@ def _port_like(ref: dict, grid: tuple, readers: int) -> list:
     return out
 
 
-@pytest.mark.parametrize("mode", RP.MODES)
-@pytest.mark.parametrize("readers", [1, 2, 3, 4])
-@pytest.mark.parametrize("seed", [0, 1, 2])
-def test_reader_place_noc0_east_everywhere(mode, readers, seed):
+def _reader_place_noc0_east(mode, readers, seed):
     """every placed reader sits at or east of its bank's optimal column and at or below its optimal row on EVERY chip
     (NOC 0 read data never wraps); one core per (bank, index); the port's order (index-major, bank-minor)"""
     opts = _galaxy_opts(seed)
@@ -1691,7 +1741,7 @@ def test_reader_place_noc0_east_everywhere(mode, readers, seed):
             assert [c[0] for c in cells] == list(range(base[b][0], base[b][0] + readers))
 
 
-def test_reader_place_port_wraps_on_heterogeneous_chips():
+def _reader_place_port_wraps():
     """the port's placement (the reference chip's optimal cores + nearest logical neighbours) puts readers west of /
     above their bank's optimal core on chips harvested unlike the reference: the case GLM53_MK_READER_PLACE removes"""
     opts = _galaxy_opts(0)
@@ -1707,7 +1757,8 @@ def test_reader_place_port_wraps_on_heterogeneous_chips():
     assert max(RP.wrapped(port_h, homo[1:])) + max(RP.north(port_h, homo[1:])) > 0
 
 
-def test_reader_place_errors():
+def _reader_place_errors():
+    """RP.plan refuses a base column past the grid, too few free cores and an unknown mode"""
     opts = _galaxy_opts(0)
     with expect_error(ValueError, "outside the 2 x 2 grid"):
         RP.plan(opts, (2, 2), 1, "row")  # the east banks' base column is past a 2-wide grid
@@ -1745,8 +1796,7 @@ def _rec_val_pl(j: int) -> tuple:  # kda_rec_common.hpp val_off(0, j) as (plane,
     return j >> 5, 8 * (2 * ((j >> 4) & 1) + (j & 1)) + ((j >> 1) & 7)
 
 
-@pytest.mark.parametrize("spread", [1, 2])
-def test_kda_rec_v2_split_maps(spread):
+def _kda_rec_v2_split_maps(spread):
     """kda_rec v2 at REC_SPREAD s (core hc = head hc / s, value block hc % s, VTC = 4 / s value tiles): the reader's
     state reads (prefetch + item loop), the writer's state writes and the compute's DST slots cover every state tile of
     every (row, head) exactly once, page <-> CB tile round-trips, s = 1 is today's page order; the value side keeps its
@@ -1811,39 +1861,82 @@ def test_kda_rec_v2_split_maps(spread):
         assert [2 * holder[pl // 32] + pl % 32 for pl in (64, 65, 96, 97)] == [0, 1, 2, 3]
 
 
-def test_kda_rec_v2_split_cores_and_cbs():
+def _kda_rec_methods() -> dict:
+    """KdaRec._hc / _items / _peers compiled from tt/kda_rec.py's source (the module imports ttnn at module level)"""
+    import ast
+
+    tree = ast.parse(_rec_src("kda_rec.py"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "KdaRec")
+    fns = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in ("_hc", "_items", "_peers")]
+    assert sorted(n.name for n in fns) == ["_hc", "_items", "_peers"], [n.name for n in fns]
+    ns: dict = {}
+    exec(compile(ast.Module(body=fns, type_ignores=[]), "kda_rec.py", "exec"), ns)
+    return ns
+
+
+def _kda_rec_v2_split_cores_and_cbs():
     """TP32 speculative verify (8 user groups x K + 1 = 2 chained rows, 2 heads per chip): the split's 8 x 2 x 2 = 32
-    kda_rec cores (KdaRec._hc / _items / _peers, KdaPre.consumers, the o_proj wait count h * spread * ug) as plain t =
-    16's 16 x 2 x 1; the v2 exchange CBs (CB_PSUM = REC_CB0 + 1, CB_PIN = cb_x0 + 3, 2 item slots), never MkStack's ARG_CB
-    and inside the stack's per-layer rewind ranges; REC_RMS_SEM restarts after the last item."""
-    h, rows = 2, 16
-    for ug, spread in ((8, 2), (16, 1)):
+    kda_rec cores (KdaRec._hc / _items / _peers run from kda_rec.py's source, KdaPre.consumers, the o_proj wait count
+    h * spread * ug) as plain t = 16's 16 x 2 x 1; odd user-group counts (3, 5) with rows % ug != 0 (a short last group,
+    an empty one): every core of a group runs the group's rows and the groups tile [0, rows) once; the v2 exchange CBs
+    (CB_PSUM = REC_CB0 + 1, CB_PIN = cb_x0 + 3, 2 item slots), never MkStack's ARG_CB and inside the per-layer rewind
+    ranges the owner kernels declare (mk::cb_rewind_range in owner_dm0 / owner_dm1 / owner_c); REC_RMS_SEM restarts
+    after the last item."""
+    import os
+    from types import SimpleNamespace
+
+    KR = _kda_rec_methods()
+    h = 2
+    for ug, spread, rows in ((8, 2, 16), (16, 1, 16), (3, 2, 16), (3, 1, 8), (5, 2, 16)):
         hs = h * spread
         n_active = hs * ug
-        assert n_active == 32 and h * spread * ug == n_active <= 64  # the o_proj readers' SEM_ON count
+        assert h * spread * ug == n_active <= 64  # the o_proj readers' SEM_ON count
+        if ug in (8, 16):
+            assert n_active == 32
+        me = SimpleNamespace(ug=ug, hs=hs, n_active=n_active, spread=spread,
+                             core_list=[SimpleNamespace(x=c, y=0) for c in range(64)],
+                             device=SimpleNamespace(worker_core_from_logical_core=lambda c: c))  # fmt: skip
         per = -(-rows // ug)
         cores = {}
         for c in range(n_active):
-            hc = c % hs  # KdaRec._hc
-            b0, n = (c // hs) * per, min(rows, (c // hs) * per + per) - (c // hs) * per  # KdaRec._items
+            hc, it = KR["_hc"](me, c), KR["_items"](me, c, rows)
+            b0, n = it >> 16, it & 0xFFFF
             g0 = (c // hs) * hs
             head, blk = divmod(c - g0, spread)
-            assert (hc // spread, hc % spread) == (head, blk)
-            peers = [g0 + head * spread + p for p in range(spread) if p != blk]  # KdaRec._peers
+            assert hc == c % hs and (hc // spread, hc % spread) == (head, blk)
+            peers = KR["_peers"](me, c)[0::2]  # (x, y) pairs; the stand-in's x is the core
+            assert peers == [g0 + head * spread + p for p in range(spread) if p != blk]
             assert all(q // hs == c // hs and (q % hs) // spread == head for q in peers)
+            assert b0 == min((c // hs) * per, rows)
             cores[(c // hs, head, blk)] = (b0, n)
-        assert len(cores) == n_active and all(n == per for _, n in cores.values())
-        assert sorted({b0 for b0, _ in cores.values()}) == list(range(0, rows, per))
+        assert len(cores) == n_active
+        assert KR["_hc"](me, n_active) == n_active and KR["_items"](me, n_active, rows) == rows  # (idle cores)
+        groups = {u: {v for k, v in cores.items() if k[0] == u} for u in range(ug)}
+        assert all(len(v) == 1 for v in groups.values()), groups  # every core of a group: the group's rows
+        spans = [r for u in range(ug) for b0, n in groups[u] for r in range(b0, b0 + n)]
+        assert spans == list(range(rows)), (ug, rows, groups)
+        if rows % ug == 0:
+            assert all(n == per for _, n in cores.values())
+            assert sorted({b0 for b0, _ in cores.values()}) == list(range(0, rows, per))
         for hh in range(h):  # KdaPre.consumers: head hh's rec cores u h rs + hh rs + j = every core of head hh
             cons = {u * h * spread + hh * spread + j for u in range(ug) for j in range(spread)}
             assert cons == {c for c in range(n_active) if (c % hs) // spread == hh}
     hdr, py, wr = _rec_src("kda_rec_common.hpp"), _rec_src("kda_rec.py"), _rec_src("writer.cpp")
     assert "#if defined(REC_V2)" in hdr and "#define REC_CB_PSUM (REC_CB0 + 1)" in hdr
     assert 'c("K", FP32, t32, 1),' in py  # the v2 spread CB list: PSUM at cb_base + CB["K"]
-    arg_cb = 30  # tt/mk_stack.py ARG_CB (MkStack rewinds 0..28 and 32..63 per layer)
+    with open(os.path.join(os.path.dirname(SP.KDIR), "mk_stack.py")) as fh:
+        arg_cb = int(re.search(r"^ARG_CB = (\d+)", fh.read(), re.M).group(1))  # MkStack's argument-row CB
+    ranges = []
+    for name in ("owner_dm0.cpp", "owner_dm1.cpp", "owner_c.cpp"):  # the stack's per-layer CB rewinds
+        with open(os.path.join(SP.KDIR, "mk", name)) as fh:
+            calls = re.findall(r"\bmk::cb_rewind_range\(\s*(\d+)\s*,\s*(\d+)\s*\)", fh.read())
+        ranges.append(sorted({(int(a), int(n)) for a, n in calls}))
+    assert ranges[0] and ranges[0] == ranges[1] == ranges[2], ranges
+    rewound = {c for a, n in ranges[0] for c in range(a, a + n)}
+    assert arg_cb not in rewound, (arg_cb, ranges[0])
     for cb_base, cb_x0 in ((50, 14), (0, 14)):  # the megakernel owners' REC_CB0 / REC_CB_X0, standalone
         psum, pin = cb_base + 1, cb_x0 + 3
-        assert arg_cb not in (psum, pin) and all(c < 29 or 32 <= c < 64 for c in (psum, pin))
+        assert arg_cb not in (psum, pin) and {psum, pin} <= rewound, (psum, pin, ranges[0])
     assert "noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_sem), 0);" in wr
 
 

@@ -65,11 +65,15 @@ KNOBS = {
     # the 1 M warm turn (B attached == B_cold); served 1 M x 2 / 4 / 8 decode +4.3 / +6.4 / +7.1 %, 1-user text unchanged
     "GLM53_DSA_SHARD_RS1_SPLIT": "1",
     # GLM53_DSA_SHARD_COMB (rev 65): the fold combine on the lane roots -- each RS round's slices combined in one pass
-    # (FOLD1 / FOLD2 matmuls, every operand rounded to tf32 once instead of once per pairwise chain step). Correct but
-    # not bitwise: the fp32 order moves near-ties. Full 45-layer plain step at 32 K x 16 rows 29.25 -> 27.95 ms (-4.5 %,
-    # reproduced twice); metal 32 K x 8 (8 x 1) in-loop step 33.5 -> 32.1 ms, tau 1.904 -> 1.909, 5 / 8 users' ids
-    # identical, the others leave at near-ties onto existing sequences (chain_knob_1 / chain_knob_2, 2026-11-18).
-    # Needs fp32 O partials (raises with GLM53_MLA_ATT_OBF16, the t = 32 default): the 8x4 builds run t <= 16
+    # (FOLD1 / FOLD2 matmuls, kernels/mla/att_c.cpp fold1 / fold2). Correct but not bitwise: the FPU rounds the matmul
+    # operands to tf32 -- the O partials once instead of once per pairwise chain step, but also the softmax
+    # denominator's terms c l (L = FOLD X, X = c l, where the chain summed a l_a + b l_b in exact fp32 SFPU) and, in
+    # round 2, the normalized weights G' = diag(1 / L) G again before o = G' P -- and the fp32 order moves near-ties
+    # (host bound: test_fold_tiles_tf32_close, both rounds on real-cache stats). Full 45-layer plain step at 32 K x 16
+    # rows 29.25 -> 27.95 ms (-4.5 %, reproduced twice); metal 32 K x 8 (8 x 1) in-loop step 33.5 -> 32.1 ms, tau
+    # 1.904 -> 1.909, 5 / 8 users' ids identical, the others leave at near-ties onto existing sequences (chain_knob_1 /
+    # chain_knob_2, 2026-11-18). Needs fp32 O partials: GLM53_MLA_ATT_OBF16 resolves on by default at t = 32 (NKMAX >
+    # 3), where the MLA build raises -- the 8x4 builds run t <= 16; an explicit GLM53_MLA_ATT_OBF16=1 drops this default
     "GLM53_DSA_SHARD_COMB": "1",
     # the speculative verify (8 x 1 / 4 x 3 on 16 rows, AgentX at 8 users): ix_dm1 MLA_DSA_BATON_GROUPS keeps the ring /
     # pooled-key write order only inside each user row group (rows of different users are different slots), the
@@ -124,10 +128,11 @@ SPARSE_T = {
     524288: "131072,262144,393216,524288",
     # 1 M (2026-11-18): rungs at 32 K / 64 K / 96 K / 128 K / 192 K -- the DSA prefill's pool gather, score, top-k and latent
     # gather are sized by the captured window, so a warm chunk at 33-260 K no longer runs on the 262,144 window: warm
-    # 2 K chunk at 32 K 490 -> 400 ms (DSA x11 268 -> 175), served AgentX c8 decode 40.5 -> 42.2 tok/s/u, prefill share
-    # 33.6 -> 29.9 %, TTFT p90 14.4 -> 9.4 s; not bitwise (top-k ties over a different plane width; the 1 M text stays
-    # coherent, errors [] at 1 / 2 / 4 / 8 users); the 96 K / 192 K rungs: AgentX c8 42.2 -> 42.7 tok/s/u, 24,564 -> 25,145
-    # tok/s, TTFT p90 9.4 -> 8.8 s; 32 prefill trace keys instead of 17 (+~210 s of capture at boot)
+    # 2 K chunk at 32 K 490 -> 400 ms (its DSA x11 + KDA x4 subset 268 -> 175 ms), served AgentX c8 decode 40.5 -> 42.2
+    # tok/s/u, prefill share 33.6 -> 29.9 %, TTFT p90 14.4 -> 9.4 s; not bitwise (top-k ties over a different plane
+    # width; the 1 M text stays coherent, errors [] at 1 / 2 / 4 / 8 users); the 96 K / 192 K rungs: AgentX c8 42.2 ->
+    # 42.7 tok/s/u, 24,564 -> 25,145 tok/s, TTFT p90 9.4 -> 8.8 s; 32 prefill trace keys instead of 17 (the served
+    # AgentX server ready 796 -> 1,126 s)
     1048576: "32768,65536,98304,131072,196608,262144,524288,786432,1048576",
 }
 
@@ -157,6 +162,8 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
         want.pop("GLM53_DSA_SHARD_AGB")  # AGB rides on AGK: an explicit AGK=0 drops the AGB default with it
     if os.environ.get("GLM53_DSA_SHARD_RSB", want["GLM53_DSA_SHARD_RSB"]) != "1":
         want.pop("GLM53_DSA_SHARD_RSNP")  # RSNP rides on RSB: an explicit RSB=0 drops the RSNP default with it
+    if os.environ.get("GLM53_MLA_ATT_OBF16") == "1":
+        want.pop("GLM53_DSA_SHARD_COMB")  # COMB needs fp32 O partials: an explicit OBF16=1 drops the COMB default
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))
     ladder = sparse_t(int(seq))
     if ladder:

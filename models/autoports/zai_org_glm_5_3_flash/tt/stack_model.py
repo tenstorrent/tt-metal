@@ -2037,14 +2037,19 @@ class StackBackend(ModelBackend):
             host = self._stage_read(stage)
             for k, _t0, n, s0 in rnd:
                 parts[k].append(host[:, s0 : s0 + n].clone())
+        shard = kv.extra.get("dsa_shard")
+        return self._dsa_blob(parts, paged, units, n_tokens, pools, None if shard is None else int(shard[0]))
+
+    def _dsa_blob(self, parts: dict, paged: dict, units: Optional[int], n_tokens: Optional[int], pools: bool,
+                  C: Optional[int]) -> dict:  # fmt: skip
+        """export_dsa_state's record (and export_snapshot_async's finish: the same record and counters) from the staging
+        rounds' host tiles, parts = {key: [[chips, tiles, 32, 32] per round]}; C: the GLM53_DSA_SHARD owner chips"""
         n_chips = next((v[0].shape[0] for v in parts.values() if v), 1)
         # a store with no rows to move (pools=False, or units 0) leaves an empty [chips, 0, 32, 32] record
         out = {k: torch.cat(v, dim=1) if v else torch.zeros(n_chips, 0, 32, 32, dtype=torch.bfloat16)
                for k, v in parts.items()}  # fmt: skip
         chips = next(iter(out.values())).shape[0]
-        shard = kv.extra.get("dsa_shard")
-        if shard is not None:  # per key: unit-paged stores -> global unit order; the rest kept once when equal
-            C = int(shard[0])
+        if C is not None:  # per key: unit-paged stores -> global unit order; the rest kept once when equal
             for k, v in out.items():
                 if paged[k]:
                     out[k] = dsa_units_to_unit_order(v, C, units, self.DSA_TILES_PER_UNIT)
@@ -2062,7 +2067,7 @@ class StackBackend(ModelBackend):
             v.numel() * v.element_size() for v in out.values())  # fmt: skip
         self.counters["dsa_export_replicated"] = self.counters.get("dsa_export_replicated", 0) + int(same)
         return dict(kind=self.DSA_BLOB, unit_tokens=self.DSA_UNIT, units=units, n_tokens=n_tokens, chips=chips,
-                    replicated=same, layout="unit" if shard is not None else "chip", pools=bool(pools),
+                    replicated=same, layout="unit" if C is not None else "chip", pools=bool(pools),
                     tensors=out)  # fmt: skip
 
     def rebuild_window(self, kv: StackCache, slot: int, start: int, blocks) -> int:
@@ -2284,26 +2289,7 @@ class StackBackend(ModelBackend):
                     for k, s0, n in items:
                         parts[k].append(hd[:, s0 : s0 + n].clone())
                     del hd
-                n_chips = next((v[0].shape[0] for v in parts.values() if v), 1)
-                res = {k: torch.cat(v, dim=1) if v else torch.zeros(n_chips, 0, 32, 32, dtype=torch.bfloat16)
-                       for k, v in parts.items()}  # fmt: skip
-                nch = next(iter(res.values())).shape[0]
-                if shard_c is not None:
-                    for k, v in res.items():
-                        if paged_[k]:
-                            res[k] = dsa_units_to_unit_order(v, shard_c, units_, self.DSA_TILES_PER_UNIT)
-                        elif all(torch.equal(v.view(torch.int16)[i], v.view(torch.int16)[0]) for i in range(nch)):
-                            res[k] = v[:1].clone()
-                    same = all(v.shape[0] == 1 for v in res.values())
-                else:
-                    same = all(torch.equal(v.view(torch.int16)[i], v.view(torch.int16)[0]) for v in res.values()
-                               for i in range(nch))  # fmt: skip
-                    if same:
-                        res = {k: v[:1].clone() for k, v in res.items()}
-                self.counters["dsa_exports"] = self.counters.get("dsa_exports", 0) + 1
-                out.append(dict(dsa=dict(kind=self.DSA_BLOB, unit_tokens=self.DSA_UNIT, units=units_, n_tokens=n_tokens,
-                                         chips=nch, replicated=same, layout="unit" if shard_c is not None else "chip",
-                                         pools=bool(pools_), tensors=res)))  # fmt: skip
+                out.append(dict(dsa=self._dsa_blob(parts, paged_, units_, n_tokens, pools_, shard_c)))
             self._time("export_async_finish", _time.perf_counter() - t1)
             return out
 

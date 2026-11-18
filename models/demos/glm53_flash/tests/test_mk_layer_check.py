@@ -18,6 +18,12 @@ verify stacks). GLM53_SPEC_REC_SPLIT=2: also the verify (and the plain launch) w
 asserted BYTE-identical to spread 1 on every chip (outputs, state, conv history), after a split-1 determinism control.
     GLM53_MESH_SHAPE=8,4 GLM53_MK_VTP=32 GLM53_MK_VG_USERS=8 GLM53_MK_VG_K=1 GLM53_MK_VG_LAYERS=4,5 \
       GLM53_SPEC_REC_SPLIT=2 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
+The split's odd-item cases: an odd item count per core (one user, K 2: 3 chained rows; the plain t = 3 launch on 3
+user groups) and user groups that do not divide the plain rows (GLM53_MK_VG_PLAIN_UGROUPS=3 on W = 8: 3 / 3 / 2 rows):
+    GLM53_MESH_SHAPE=8,4 GLM53_MK_VTP=32 GLM53_MK_VG_USERS=1 GLM53_MK_VG_K=2 GLM53_MK_VG_LAYERS=4,5 \
+      GLM53_SPEC_REC_SPLIT=2 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
+    GLM53_MESH_SHAPE=8,4 GLM53_MK_VTP=32 GLM53_MK_VG_USERS=4 GLM53_MK_VG_K=1 GLM53_MK_VG_LAYERS=4,5 \
+      GLM53_MK_VG_PLAIN_UGROUPS=3 GLM53_SPEC_REC_SPLIT=2 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
 """
 
 from __future__ import annotations
@@ -121,6 +127,9 @@ VG_LAYERS = [int(v) for v in os.environ.get("GLM53_MK_VG_LAYERS", str(LAYER)).sp
 # determinism control (the split-1 verify twice); GLM53_MK_VG_PLAIN_SPLIT=1 (default on with the split): the plain
 # t = W launch with the split too (its GLM53_REC_UGROUPS groups x 2 cores per head), byte-identical to the plain one
 VG_PLAIN_SPLIT = os.environ.get("GLM53_MK_VG_PLAIN_SPLIT", "1") == "1"
+# GLM53_MK_VG_PLAIN_UGROUPS = u: the plain t = W programs (and plain_split) on u kda_rec user groups instead of
+# set_knobs' pick for the width -- a u that does not divide W gives a short (or an empty) last group
+VG_PLAIN_UG = os.environ.get("GLM53_MK_VG_PLAIN_UGROUPS")
 
 
 def _snap(t) -> torch.Tensor:
@@ -171,6 +180,8 @@ def test_mk_layer_verify_groups(mesh_device):
     H = cfg.hidden_size
     if os.environ.get("GLM53_MK_KNOBS", "1") == "1":
         set_knobs(sparse, VTP, W)
+    if VG_PLAIN_UG:  # (after set_knobs: the layers' construction and first builds read it; the verify sets its own)
+        os.environ["GLM53_REC_UGROUPS"] = VG_PLAIN_UG
     source = RawHFSource(snapshot, VG_LAYERS)
     t0 = time.perf_counter()
     if sparse:
@@ -222,7 +233,11 @@ def test_mk_layer_verify_groups(mesh_device):
         progs["verify_split"] = variant(split, True)
         if VG_PLAIN_SPLIT:
             progs["plain_split"] = variant(split, False)
-    logger.info(f"{sorted(kinds)} layers {VG_LAYERS} built in {time.perf_counter() - t0:.0f} s: {sorted(progs)}")
+    ugs = {k: ls[0].mk.rec.ug for k, ls in progs.items()}  # (the kda_rec user groups of each program)
+    logger.info(f"{sorted(kinds)} layers {VG_LAYERS} built in {time.perf_counter() - t0:.0f} s: {sorted(progs)}, "
+                f"kda_rec user groups {ugs}, rows {W}")  # fmt: skip
+    if VG_PLAIN_UG:
+        assert all(ugs[k] == int(VG_PLAIN_UG) for k in ("plain", "plain_split") if k in ugs), ugs
     states = [tp.attn.allocate_state(32) for tp in tps]
     hists, ss = [s.C for s in states], [s.S for s in states]
     all_on = layer.masks(torch.ones(W))
