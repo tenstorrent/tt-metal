@@ -25,26 +25,26 @@
   },
   "nightly": {
     "blackhole": {
-      "threshold": "0.02",
+      "threshold": "0.01",
       "min_cycles": "30",
       "module_thresholds": ""
     },
     "wormhole": {
-      "threshold": "0.10",
+      "threshold": "0.01",
       "min_cycles": "30",
-      "module_thresholds": "perf_matmul=0.25,perf_math_matmul=0.25"
+      "module_thresholds": ""
     }
   },
   "nightly_sol": {
     "blackhole": {
-      "threshold": "0.02",
+      "threshold": "0.01",
       "min_cycles": "30",
       "module_thresholds": ""
     },
     "wormhole": {
-      "threshold": "0.03",
+      "threshold": "0.01",
       "min_cycles": "30",
-      "module_thresholds": "perf_matmul=0.10,perf_math_matmul=0.10"
+      "module_thresholds": ""
     }
   }
 }
