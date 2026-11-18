@@ -12,7 +12,11 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-count-anomaly-second-end.cpp 2>&1 | FileCheck %s --check-prefix=ANOMALY
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-outer-count-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=COUNT_WIDTH
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-inner-count-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=COUNT_WIDTH
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-unsupported-end-op1.cpp 2>&1 | FileCheck %s --check-prefix=UNSUPPORTED_END_OP1
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-unsupported-end-op1-second-end.cpp 2>&1 | FileCheck %s --check-prefix=UNSUPPORTED_END_OP1
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-zero-outer-count.cpp 2>&1 | FileCheck %s --check-prefix=ISSUES_NOTHING
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-empty-inner.cpp 2>&1 | FileCheck %s --check-prefix=PATCH_EMPTY
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-last-inner-single-outer.cpp 2>&1 | FileCheck %s --check-prefix=PATCH_LAST_INNER
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-not-last-op.cpp 2>&1 | FileCheck %s --check-prefix=PATCH_FIELD
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/update-empty.cpp 2>&1 | FileCheck %s --check-prefix=UPDATE_EMPTY
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/update-duplicate.cpp 2>&1 | FileCheck %s --check-prefix=UPDATE_UNIQUE
@@ -36,12 +40,21 @@
 // ANOMALY: in 'constexpr' expansion of 'hal::mop::loop(
 // ANOMALY: in 'constexpr' expansion of '{{.*}}check<assert_no_count_anomaly>
 // ANOMALY: error: '__builtin_trap()' is not a constant expression
+// UNSUPPORTED_END_OP1: in 'constexpr' expansion of 'hal::mop::loop(
+// UNSUPPORTED_END_OP1: in 'constexpr' expansion of '{{.*}}check<assert_no_unsupported_end_op1_read>
+// UNSUPPORTED_END_OP1: error: '__builtin_trap()' is not a constant expression
+// ISSUES_NOTHING: in 'constexpr' expansion of 'hal::mop::loop(
+// ISSUES_NOTHING: in 'constexpr' expansion of '{{.*}}check<assert_issues_something>
+// ISSUES_NOTHING: error: '__builtin_trap()' is not a constant expression
 // COUNT_WIDTH: in 'constexpr' expansion of 'hal::mop::loop(
 // COUNT_WIDTH: in 'constexpr' expansion of '{{.*}}check<assert_valid_count>
 // COUNT_WIDTH: error: '__builtin_trap()' is not a constant expression
 // PATCH_EMPTY: in 'constexpr' expansion of '{{.*}}::patch<7>
 // PATCH_EMPTY: in 'constexpr' expansion of '{{.*}}check<assert_patch_reachable>
 // PATCH_EMPTY: error: '__builtin_trap()' is not a constant expression
+// PATCH_LAST_INNER: in 'constexpr' expansion of '{{.*}}::patch<8>
+// PATCH_LAST_INNER: in 'constexpr' expansion of '{{.*}}check<{{.*}}assert_last_inner_reachable>
+// PATCH_LAST_INNER: error: '__builtin_trap()' is not a constant expression
 // OPERATION_COUNT: in 'constexpr' expansion of '{{.*}}Runner<hal::mop::MopTemplate::Template0>::operation()
 // OPERATION_COUNT: in 'constexpr' expansion of '{{.*}}check<assert_valid_run_count>
 // OPERATION_COUNT: error: '__builtin_trap()' is not a constant expression
@@ -91,6 +104,22 @@ constexpr auto bad = mop::loop(4, mop::loop(0, OP), OP);
 // With EndOp1 set the anomaly still triggers when the outer count is 1.
 constexpr auto bad = mop::loop(1, mop::loop(0, OP), OP, OP);
 
+//--- template1-unsupported-end-op1.cpp
+#include "configs.h"
+
+constexpr auto bad = mop::loop(4, mop::loop(0, OP));
+
+//--- template1-unsupported-end-op1-second-end.cpp
+#include "configs.h"
+
+// A NOP EndOp0 disables EndOp1, so the second end op does not make the loop supported.
+constexpr auto bad = mop::loop(4, mop::loop(0, OP), TT_OP_NOP, OP);
+
+//--- template1-zero-outer-count.cpp
+#include "configs.h"
+
+constexpr auto bad = mop::loop(0, mop::loop(1, OP));
+
 //--- template1-outer-count-too-wide.cpp
 #include "configs.h"
 
@@ -105,6 +134,11 @@ constexpr auto bad = mop::loop(1, mop::loop(1024, OP));
 #include "configs.h"
 
 constexpr auto bad = mop::loop(1, OP, mop::loop(0, OP)).patch(mop::last_outer, OP);
+
+//--- patch-last-inner-single-outer.cpp
+#include "configs.h"
+
+constexpr auto bad = mop::loop(1, mop::loop(1, OP)).patch(mop::last_inner, OP);
 
 //--- patch-not-last-op.cpp
 #include "configs.h"
