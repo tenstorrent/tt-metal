@@ -29,9 +29,10 @@ def _header_layouts():
     ids = {name: int(v) for name, v in re.findall(r"^\s+(\w+)\s+= (\d+),$", text, re.M)}
     args = {
         name: _layout_args(values)
-        for name, values in re.findall(
-            r"case (\w+):\s+return make_layout\(([^)]*)\);", text
+        for names, values in re.findall(
+            r"((?:case \w+:\s+)+)return make_layout\(([^)]*)\);", text
         )
+        for name in re.findall(r"case (\w+):", names)
     }
     assert ids and set(ids) == set(args), f"{_PAGE_H}: format ids and layouts differ"
     return ids, args
