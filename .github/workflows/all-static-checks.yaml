@@ -223,15 +223,7 @@ jobs:
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
   cmake-version:
-    # Floor check for cmake_minimum_required(VERSION 3.25...4.2). The CI image
-    # ships CMake 4.2.3, so configure runs inside ubuntu-24.04 ci-build-light
-    # (toolchain, Python headers, libnuma, libhwloc, ULFM MPI already installed)
-    # with a CMake ~3.25 binary ahead of /usr/local/bin/cmake. No apt.
-    # The image tag is the content hash, so a CMake-only change pulls an image
-    # that already exists. A PR that also changes the Dockerfile or
-    # install_dependencies.sh gets a new hash that may not be pushed yet.
-    # A workflow-only edit still runs the configure: find-changed-files treats
-    # workflow changes as cmake-changed. The pull is skipped otherwise.
+    # Configure with CMake 3.25 inside ci-build to avoid apt at job time.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -245,13 +237,13 @@ jobs:
       - name: Look for changed CMake files
         id: find-changes
         uses: ./.github/actions/find-changed-files
-      - name: Resolve ci-build-light image
+      - name: Resolve ci-build image
         id: image
         if: steps.find-changes.outputs.cmake-changed == 'true'
         run: |
           set -euo pipefail
           DATA=$(.github/scripts/compute-platform-data.sh 24.04 "${{ github.repository }}" --no-check-exists)
-          IMAGE=$(echo "$DATA" | jq -er .ci_build_light_tag)
+          IMAGE=$(echo "$DATA" | jq -er .ci_build_tag)
           echo "tag=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "Using $IMAGE"
       - name: Log in to GHCR
@@ -261,7 +253,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull ci-build-light image
+      - name: Pull ci-build image
         if: steps.find-changes.outputs.cmake-changed == 'true'
         run: docker pull "${{ steps.image.outputs.tag }}"
       - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60 # v3.30.5
@@ -275,9 +267,6 @@ jobs:
           CMAKE_GENERATOR: Ninja
         run: |
           set -euo pipefail
-          # Mount the whole install prefix: cmake finds its Modules directory
-          # relative to the binary (../share/cmake-<ver>), so bin/ alone fails
-          # with "Could not find CMAKE_ROOT".
           CMAKE_PREFIX=$(dirname "$(dirname "$(command -v cmake)")")
           docker run --rm \
             -u "$(id -u):$(id -g)" \
