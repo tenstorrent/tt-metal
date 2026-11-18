@@ -34,8 +34,8 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import packed_padding
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import packed_padding
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
