@@ -105,6 +105,8 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
             sfpi::vFloat t = c - sfpi::vConstFloatPrgm2;
             sfpi::vFloat nan = std::numeric_limits<float>::quiet_NaN();  // nan for fp32, inf for bf16
             y = y * (c * t + sfpi::vConstFloatPrgm1);
+            // -0.5 built by SFPDIVP2: a literal would be folded into an in-place SFPMULI on xy,
+            // which needs a copy of xy first.
             sfpi::vFloat negative_half = sfpi::addexp(sfpi::vFloat(-1.0f), -1);
             xy = x * y;
             sfpi::vFloat xyy_minus_one = y * xy - 1.0f;
@@ -112,15 +114,19 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
             // If x == inf, we need to skip to avoid y = inf - inf = nan; y will already be inf.
             // Keep this as `<`, not `!=`: it skips positive NaN, which would otherwise run the
             // step and come back sign-flipped (a bf16 pack then makes that -inf). Negative NaN
-            // does run the step -- the compare wraps -- but the clamp below rewrites it.
-            v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) { y = xyy_minus_one * negative_half_xy + xy; }
+            // does run the step (|x| keeps its sign bit), but the clamp below rewrites it.
+            // Testing |x| rather than x lets -0 run the step too, which maps +/-0 to 0; every
+            // other negative also runs it and is rewritten by the clamp.
+            sfpi::vInt guard_bits = FAST_APPROX ? sfpi::as<sfpi::vInt>(x) : magnitude_bits;
+            v_if(guard_bits < infinity_bits) { y = xyy_minus_one * negative_half_xy + xy; }
             v_endif;
             if constexpr (!FAST_APPROX) {
-                // `x < 0.0F` is a sign-bit test, so it claims -0.0 as well; zero magnitudes are
-                // answered first. sqrt(+/-0) = +/-0: return x, because the refinement cannot
-                // produce a signed zero.
-                v_if(magnitude_bits == 0) { y = x; }
-                v_elseif(x < 0.0F) { y = nan; }
+                // SFPMAD drops the sign of a zero result, so sqrt(-0) = -0 needs x's sign back;
+                // y is non-negative for every x the clamp doesn't rewrite. The clamp then tests
+                // y, not x, so x is dead and SFPSETSGN overwrites it in place (no copy).
+                y = sfpi::copysgn(y, x);
+                // `y < 0.0F` is a sign-bit test, so it claims -0.0 as well.
+                v_if(y < 0.0F && magnitude_bits != 0) { y = nan; }
                 v_endif;
             }
         }
