@@ -12,7 +12,7 @@ from helpers.param_config import build_param_id
 
 # (operation, approximation mode of the replaced instance, max ULP); max ULP 0 is an exact fit.
 _BF16_EXHAUSTIVE_OPS = [
-    (MathOperation.Expm1, ApproximationMode.No, 1),
+    (MathOperation.Expm1, ApproximationMode.No, 0),
 ]
 # Boards where the op keeps its stock kernel, which this sweep does not test.
 _BF16_STOCK_BOARDS = {
