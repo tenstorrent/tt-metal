@@ -43,6 +43,11 @@ void build_and_run_program(
     uint32_t MAX_LOOP,
     uint32_t page_size,
     bool mix_noc_mode) {
+    const uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
+    if (num_nocs < 2) {
+        GTEST_SKIP() << "Dynamic NOC mode needs 2 NOCs, but " << tt::arch_to_str(device->arch()) << " has only "
+                     << num_nocs;
+    }
     // Make random
     auto random_seed = 0; // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
@@ -179,6 +184,18 @@ void build_and_run_program_ethernet(
     uint32_t MAX_LOOP,
     uint32_t page_size,
     bool mix_noc_mode) {
+    auto* device_0 = device->impl().get_devices()[0];
+
+    // Query the number of ethernet ERISCs
+    const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+
+    const auto active_eth_cores = device_0->get_active_ethernet_cores(true);
+    if (erisc_count == 0 || active_eth_cores.empty()) {
+        GTEST_SKIP() << "Device has no active ethernet cores";
+        return;
+    }
+
     if (not slow_dispatch) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
         return;
@@ -189,23 +206,10 @@ void build_and_run_program_ethernet(
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    auto* device_0 = device->impl().get_devices()[0];
-
-    // Query the number of ethernet ERISCs
-    const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-
     // We need at least 2 ERISCs (ERISC0 and ERISC1) to run this test
     if (erisc_count < 2) {
         GTEST_SKIP() << "Skipping test as this test requires at least 2 ERISCs, but only " << erisc_count
                      << " available.";
-        return;
-    }
-
-    // Get active ethernet cores
-    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    if (active_eth_cores.empty()) {
-        GTEST_SKIP() << "Skipping test as this test requires at least 1 active ethernet core, but none are available.";
         return;
     }
 
