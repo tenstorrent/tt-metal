@@ -7,6 +7,7 @@ set(UNIT_TESTS_DEVICE_SMOKE_SOURCES
     test_rtoptions_qsr_s1_simulator.cpp
     test_rtoptions_simulator_dram_uncapped.cpp
     test_configure_without_launch.cpp
+    test_firmware_extension.cpp
     test_device_cluster_api.cpp
     test_device_pool.cpp
     test_device.cpp

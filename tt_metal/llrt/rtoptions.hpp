@@ -1079,6 +1079,8 @@ public:
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
     BriscFirmwareVariant get_brisc_firmware_variant() const { return brisc_firmware_variant; }
     const std::string& get_brisc_firmware_header() const { return brisc_firmware_header; }
+    // Same checks as TT_METAL_FW_SRC_BRISC / TT_METAL_FW_HEADER_BRISC. Takes effect at the next device open.
+    void set_brisc_firmware_variant(BriscFirmwareVariant variant, const std::string& header);
 
     uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
     void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }

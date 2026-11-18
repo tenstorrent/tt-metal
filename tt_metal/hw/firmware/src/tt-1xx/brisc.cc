@@ -36,6 +36,7 @@
 #include "internal/debug/stack_usage.h"
 #include "api/debug/checkpoint.h"
 #if defined(BLAZE_RUNTIME_RELOAD)
+#include "internal/firmware_extension.h"
 #include "runtime_reload.h"
 #else
 #include "internal/runtime_reload.h"
@@ -576,6 +577,9 @@ int main() {
 
             uint32_t reload_stage = 0;
             uint32_t reload_round = 0;
+#if defined(BLAZE_RUNTIME_RELOAD)
+            internal::fw_ext::Launch reload_launch(launch_msg_address);
+#endif
             do {
                 uint32_t enables = launch_msg_address->kernel_config.enables;
                 // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
@@ -724,7 +728,12 @@ int main() {
                 }
 #endif
 
+            // Extension contract: internal/firmware_extension.h.
+#if defined(BLAZE_RUNTIME_RELOAD)
+            } while (reload_next_stage(reload_launch, reload_stage, reload_round));
+#else
             } while (reload_next_stage(launch_msg_address, reload_stage, reload_round));
+#endif
 
             // Look the go message up again: a preloaded launch can leave the wait loop holding the row from before a
             // sub-device reconfigure, and its go then arrives on the new row.
