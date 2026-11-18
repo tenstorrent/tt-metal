@@ -29,7 +29,7 @@ from gevent.os import make_nonblocking, nb_write
 from typed_configparser import ConfigParser
 
 from result_parser import process_logs
-from testenums import TestCase, DistTestCase, prepare_filter
+from testenums import TestCase, DistTestCase, prepare_filter, ALLTESTS
 
 from exceptiongroup import ExceptionGroup
 
@@ -77,6 +77,11 @@ def parse_config(p: str) -> tuple[GeneralSettings, list[HostSettings]]:
         h.prepare_config(hn)
 
     return general, host_configs
+
+
+def validate_test_arg(t: str):
+    if t not in ALLTESTS:
+        raise Exception(f"Unknown test {t}")
 
 
 asicsquery = """
@@ -608,11 +613,15 @@ def main() -> int:
     runid = opts.r if opts.r else "run_id"
 
     test_pass = True
-    if opts.t in [t.value for t in TestCase]:
+
+    testname = opts.t
+    validate_test_arg(testname)
+
+    if testname in [t.value for t in TestCase]:
         with prepare_test_runner(dbpath, mergeid, runid) as wfd:
             test_pass = test_pass and test_single(db, [TestCase(opts.t)], hs, links, wfd)
 
-    if opts.t in [t.value for t in DistTestCase]:
+    if testname in [t.value for t in DistTestCase]:
         with prepare_dist_test_runner(dbpath, mergeid, runid, links) as wfds:
             test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links, wfds)
 
