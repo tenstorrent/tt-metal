@@ -24,7 +24,7 @@ SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
 from diag.galaxy import EXPECTED_CHIP_COUNT  # noqa: E402
-from diag.model import FAIL, PASS, WARN, Check, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.resets import fold_post_reset_snapshots, reset_loop  # noqa: E402
 
 FAKE_TT_SMI = """\
@@ -81,6 +81,16 @@ class TestFoldPostResetSnapshots(unittest.TestCase):
     def test_changed_status_still_warns(self):
         _, stable = self.fold([Check(name="eth_links_up", status=FAIL)], [Check(name="eth_links_up", status=PASS)])
         self.assertEqual(stable["status"], WARN)
+
+    def test_no_snapshot_captured_is_skip(self):
+        failed = Check(name="snapshot_capture", status=FAIL)
+        _, stable = self.fold([failed, Check(name="host_fru_info", status=PASS)], [failed], [failed])
+        self.assertEqual(stable["status"], SKIP, stable["details"])
+
+    def test_capture_after_failed_initial_still_warns(self):
+        failed = Check(name="snapshot_capture", status=FAIL)
+        _, stable = self.fold([failed], [failed], [Check(name="eth_links_up", status=PASS)])
+        self.assertEqual(stable["status"], WARN, stable["details"])
 
 
 if __name__ == "__main__":
