@@ -29,6 +29,17 @@
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
+- id: fabric-cpu-fabric-builder
+  name: fabric cpu unit tests (fabric-builder)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group fabric-builder
+  skus:
+    cpu_medium:
+      timeout: 10
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U06US5C7M7X # Sean Nijjar
+
 - id: fabric-cpu-bh-pod-pipeline-revab
   name: fabric cpu unit tests (bh-pod-pipeline-revAB)
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revAB --grep-exclude llama_8b

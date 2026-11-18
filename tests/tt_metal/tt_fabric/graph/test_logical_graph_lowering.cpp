@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -341,6 +342,79 @@ TEST(FabricGraphValidation, ChannelLimits) {
     // Interior router: worker + 3 producers = 4 VC0 senders (stock 2D shape).
     EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{.max_sender_channels_per_vc = 4}).empty());
     EXPECT_FALSE(find_problems(g, *rules, ValidationLimits{.max_sender_channels_per_vc = 3}).empty());
+}
+
+// Each case breaks a valid graph one way: validation names the problem and validate() throws.
+TEST(FabricGraphValidation, RejectsEachMalformation) {
+    // chip 5 is interior, so its routers have a worker and forwarding senders
+    const auto sender = [](const LogicalGraph& g, const std::string& router, bool injection) {
+        for (ChannelIndex c : g.channels_of(*g.find_router(router), ChannelKind::Sender)) {
+            if (g.channels[c].injection == injection) {
+                return c;
+            }
+        }
+        return ChannelIndex{~0u};
+    };
+    const auto rx = [](const LogicalGraph& g, const std::string& router) {
+        return *g.receiver(*g.find_router(router), 0);
+    };
+    const auto eth_edge = [](LogicalGraph& g, ChannelIndex c) -> LogicalEdge& {
+        return *std::find_if(g.edges.begin(), g.edges.end(), [c](const LogicalEdge& e) {
+            return e.from == c && e.transport == Transport::Eth;
+        });
+    };
+
+    struct Case {
+        std::string expected;
+        std::function<void(LogicalGraph&)> mutate;
+        ValidationLimits limits{};
+    };
+    const std::vector<Case> cases = {
+        {"does not reach",
+         [&](LogicalGraph& g) { eth_edge(g, sender(g, "m0.c5.N.p0", true)).to = rx(g, "m0.c5.E.p0"); }},
+        {"edge, found 2",
+         [&](LogicalGraph& g) { g.edges.push_back(eth_edge(g, sender(g, "m0.c5.N.p0", true))); }},
+        {"no inbound noc edge",
+         [&](LogicalGraph& g) {
+             const auto fwd = sender(g, "m0.c5.N.p0", false);
+             std::erase_if(
+                 g.edges, [fwd](const LogicalEdge& e) { return e.to == fwd && e.transport == Transport::Noc; });
+         }},
+        {"must run receiver -> sender",
+         [&](LogicalGraph& g) {
+             g.edges.push_back({sender(g, "m0.c5.E.p0", true), sender(g, "m0.c5.N.p0", false), Transport::Noc});
+         }},
+        {"U-turn",
+         [&](LogicalGraph& g) {
+             g.edges.push_back({rx(g, "m0.c5.N.p0"), sender(g, "m0.c5.N.p0", false), Transport::Noc});
+         }},
+        {"leaves its chip",
+         [&](LogicalGraph& g) {
+             g.edges.push_back({rx(g, "m0.c6.E.p0"), sender(g, "m0.c5.N.p0", false), Transport::Noc});
+         }},
+        {"changes VC", [&](LogicalGraph& g) { g.channels[rx(g, "m0.c5.E.p0")].vc = 1; }},
+        {"receiver channels, limit 1",
+         [&](LogicalGraph& g) {
+             const auto n5 = *g.find_router("m0.c5.N.p0");
+             g.channels.push_back({.router = n5, .vc = 0, .kind = ChannelKind::Receiver});
+             g.routers[n5].channels.push_back(static_cast<ChannelIndex>(g.channels.size() - 1));
+         },
+         {.max_receiver_channels_per_vc = 1}},
+    };
+
+    for (const auto& [expected, mutate, limits] : cases) {
+        auto [ports, g, rules] = lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D);
+        ASSERT_TRUE(find_problems(g, *rules, limits).empty()) << expected;
+        mutate(g);
+        const auto problems = find_problems(g, *rules, limits);
+        EXPECT_TRUE(std::any_of(
+            problems.begin(),
+            problems.end(),
+            [&](const std::string& p) { return p.find(expected) != std::string::npos; }))
+            << "expected \"" << expected << "\", got " << problems.size() << " problem(s)"
+            << (problems.empty() ? std::string{} : ", first: " + problems.front());
+        EXPECT_ANY_THROW(validate(g, *rules, limits)) << expected;
+    }
 }
 
 // ---------------------------------------------------------------- inter-mesh

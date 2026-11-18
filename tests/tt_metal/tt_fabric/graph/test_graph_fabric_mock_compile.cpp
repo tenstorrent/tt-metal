@@ -2,12 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Mock fabric compile through the graph build session, for every base fabric config.
+// Mock fabric compile through the graph build session, for every base fabric config, and the stock fallback.
 // Needs a mock cluster (TT_METAL_MOCK_CLUSTER_DESC_PATH, or tt-run with a mock rank binding).
 
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <optional>
+#include <utility>
+#include <vector>
 
 #include <enchantum/enchantum.hpp>
 
@@ -20,11 +23,12 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/graph/graph_fabric_build_session.hpp"
 
 namespace tt::tt_fabric::graph {
 namespace {
 
-class GraphFabricMockCompile : public ::testing::TestWithParam<FabricConfig> {
+class GraphFabricMockTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
@@ -47,6 +51,8 @@ protected:
     bool was_graph_ = false;
 };
 
+class GraphFabricMockCompile : public GraphFabricMockTest, public ::testing::WithParamInterface<FabricConfig> {};
+
 TEST_P(GraphFabricMockCompile, BuildsRoutersOnEveryChip) {
     SetFabricConfig(GetParam());
     using namespace tt::tt_metal::distributed;
@@ -58,6 +64,29 @@ TEST_P(GraphFabricMockCompile, BuildsRoutersOnEveryChip) {
         EXPECT_GT(builder_context.get_num_fabric_initialized_routers(id), 0u) << "chip " << id;
     }
     mesh->close();
+}
+
+// Tensix mux and UDM fabrics aren't in the graph yet: the session falls back to the stock builder.
+TEST_F(GraphFabricMockTest, TensixFabricsUseStockBuilder) {
+    using namespace tt::tt_metal::distributed;
+    const std::vector<std::pair<FabricTensixConfig, FabricUDMMode>> modes = {
+        {FabricTensixConfig::DISABLED, FabricUDMMode::DISABLED},
+        {FabricTensixConfig::MUX, FabricUDMMode::DISABLED},
+        {FabricTensixConfig::UDM, FabricUDMMode::ENABLED}};
+    for (const auto& [tensix, udm] : modes) {
+        SetFabricConfig(
+            FabricConfig::FABRIC_2D, FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, std::nullopt, tensix, udm);
+        auto mesh = MeshDevice::create(MeshDeviceConfig(SystemMesh::instance().shape()));
+        auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const bool graph = tensix == FabricTensixConfig::DISABLED && std::getenv("TT_FABRIC_GRAPH_STOCK") == nullptr;
+        EXPECT_EQ(GraphFabricBuildSession(fabric_context).uses_graph(), graph) << enchantum::to_string(tensix);
+        for (const auto id : mesh->get_device_ids()) {
+            EXPECT_GT(fabric_context.get_builder_context().get_num_fabric_initialized_routers(id), 0u)
+                << enchantum::to_string(tensix) << " chip " << id;
+        }
+        mesh->close();
+        SetFabricConfig(FabricConfig::DISABLED);
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(

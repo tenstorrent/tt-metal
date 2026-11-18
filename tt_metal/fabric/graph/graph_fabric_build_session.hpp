@@ -24,6 +24,9 @@ public:
         FabricContext& fabric_context,
         CoreType dispatch_core_type) const override;
 
+    // false when the fabric fell back to the stock builder
+    bool uses_graph() const { return graph_.has_value(); }
+
 private:
     std::optional<PhysicalGraph> graph_;
 };
