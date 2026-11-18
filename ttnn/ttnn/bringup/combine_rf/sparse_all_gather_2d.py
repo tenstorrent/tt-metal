@@ -1019,7 +1019,9 @@ def sparse_all_gather_2d(
                 streams += [on, v.x, v.y, k] if on else [0, 0, 0, 0]
             args = [out_addr, ready_addr, rc.x, rc.y, int(pn.mesh_id), int(pn.chip_id), man_addr, ring_offs]
             args += cnt_addrs + streams + [peer[0], peer[1], DIRS.index(d)]
-            args += list(ttnn.setup_fabric_connection(node(coord), pn, ports[d]["links"][li], program, core))
+            args += list(
+                ttnn.setup_fabric_connection(mesh_device, node(coord), pn, ports[d]["links"][li], program, core)
+            )
             sender_rt[core.x][core.y] = args
         program.kernels = [
             ttnn.KernelDescriptor(

@@ -377,7 +377,7 @@ class SnapshotSend:
                     pn = node(peer)
                     args = io_head + list(v["ports"][d]) + list(self.sem_addr)
                     args += [self.home_xy[0], self.home_xy[1], int(pn.mesh_id), int(pn.chip_id)]
-                    args += list(ttnn.setup_fabric_connection(node((r, c)), pn, port["links"][0], prog, pc))
+                    args += list(ttnn.setup_fabric_connection(self.mesh, node((r, c)), pn, port["links"][0], prog, pc))
                     prt[pc.x][pc.y] = args
                 kernels.append(
                     ttnn.KernelDescriptor(

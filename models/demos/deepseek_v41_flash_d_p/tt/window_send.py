@@ -302,7 +302,7 @@ class WindowSend:
             dn = node(dst)
             args = [0, 0, int(q == self.n - 1), sem_addr, v.x, v.y, int(dn.mesh_id), int(dn.chip_id)]
             link = (node(src), node(port["peer"]), port["links"][0])
-            args += list(ttnn.setup_fabric_connection(*link, prog, cc))
+            args += list(ttnn.setup_fabric_connection(mesh, *link, prog, cc))
             self._chips[q] = (prog, args, crs)
             self._links[q] = (link, args[:8], slot)  # (ATTN_FUSE=on: the fused program sets up its own connection)
         self._pp = None
@@ -373,7 +373,7 @@ class WindowSend:
                     format_descriptors=[ttnn.CBFormatDescriptor(1, ttnn.uint8, COPY_BATCH * self.page_bytes + 64)],
                 ),
             ]
-            args = list(args) + list(ttnn.setup_fabric_connection(*link, fp, cc))
+            args = list(args) + list(ttnn.setup_fabric_connection(self.mesh, *link, fp, cc))
             rt = ttnn.RuntimeArgs()
             rt[cc.x][cc.y] = [a[0], a[1], a[2]] + args[2:]
             crt = ttnn.RuntimeArgs()

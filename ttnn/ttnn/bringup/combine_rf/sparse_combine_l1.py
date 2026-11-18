@@ -899,7 +899,9 @@ def sparse_combine_l1_prepare(
                     args += [v.x, v.y]
                 args += [rc.x, rc.y, peer[0], peer[1]] + pxy
                 args += [int(dbg_t.buffer_address()), DIRS.index(d) * 2 + li]
-                args += list(ttnn.setup_fabric_connection(node(ch), pn, ports[d]["links"][li], program, core))
+                args += list(
+                    ttnn.setup_fabric_connection(mesh_device, node(ch), pn, ports[d]["links"][li], program, core)
+                )
                 ps_rt[core.x][core.y] = args
             ar_rt, ac_rt, aw_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for i, core in enumerate(acc_cores):

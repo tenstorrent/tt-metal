@@ -897,7 +897,7 @@ def routing_a2a_planner_prepare(
                     if nr_:
                         peer = chips[ch][k_[1]]["peer"]
                         link = chips[ch][k_[1]]["links"][k_[2]]
-                        args += list(ttnn.setup_fabric_connection(node(ch), node(peer), link, pd, core))
+                        args += list(ttnn.setup_fabric_connection(mesh_device, node(ch), node(peer), link, pd, core))
                     rta = ttnn.RuntimeArgs()
                     rta[core.x][core.y] = args
                     src = _sub(

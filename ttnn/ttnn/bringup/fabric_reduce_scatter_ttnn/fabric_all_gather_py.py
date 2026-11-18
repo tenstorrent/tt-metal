@@ -451,7 +451,7 @@ def probe_ethernet_cores(mesh_device, connections, allowed):
         for i, (peer, link) in enumerate(conns):
             peer_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*peer))
             rt[cores[i].x][cores[i].y] = [slot_addr] + list(
-                ttnn.setup_fabric_connection(me, peer_node, link, program, cores[i])
+                ttnn.setup_fabric_connection(mesh_device, me, peer_node, link, program, cores[i])
             )
             used.append(cores[i])
         if used:
@@ -874,7 +874,9 @@ def create_mesh_program_descriptor(
                 pc = virt(chips[peer]["ports"][(j, d, l)])
                 pn = node(peer)
                 args += [pc.x, pc.y, int(pn.mesh_id), int(pn.chip_id), len(sends)] + packed
-                args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][l], program, core))
+                args += list(
+                    ttnn.setup_fabric_connection(mesh_device, node(coord), pn, rg[f"{d}_links"][l], program, core)
+                )
             else:
                 args += [0, 0, 0, 0, 0]
             sender_rt[core.x][core.y] = args

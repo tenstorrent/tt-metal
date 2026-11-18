@@ -216,7 +216,9 @@ class TailSend:
                     if fabric:
                         port = self.chips[chip][port_dir]
                         args += list(
-                            ttnn.setup_fabric_connection(node(chip), node(port["peer"]), port["links"][0], prog, cc)
+                            ttnn.setup_fabric_connection(
+                                self.mesh, node(chip), node(port["peer"]), port["links"][0], prog, cc
+                            )
                         )
                     rt = ttnn.RuntimeArgs()
                     rt[cc.x][cc.y] = [int(src.buffer_address()), int(dst.buffer_address())] + args[2:]

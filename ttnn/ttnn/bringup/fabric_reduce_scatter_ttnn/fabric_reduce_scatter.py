@@ -809,10 +809,16 @@ def create_mesh_program_descriptor(
                     int(pn.chip_id),
                     len(blocks),
                 ] + packed
-                args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][l], program, core))
+                args += list(
+                    ttnn.setup_fabric_connection(mesh_device, node(coord), pn, rg[f"{d}_links"][l], program, core)
+                )
             elif send_ready:
                 args += [0] * 8 + [*(lambda n: (int(n.mesh_id), int(n.chip_id)))(node(peer)), 0]
-                args += list(ttnn.setup_fabric_connection(node(coord), node(peer), rg[f"{d}_links"][l], program, core))
+                args += list(
+                    ttnn.setup_fabric_connection(
+                        mesh_device, node(coord), node(peer), rg[f"{d}_links"][l], program, core
+                    )
+                )
             else:
                 args += [0] * 11
             ps_rt[core.x][core.y] = args

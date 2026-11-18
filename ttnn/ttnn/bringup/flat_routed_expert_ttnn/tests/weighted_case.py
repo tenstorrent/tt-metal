@@ -134,7 +134,7 @@ def _column_barrier(mesh, core) -> tuple:
             args += [int(node(pr).chip_id), dirs.index(d)]
         for d in dirs:
             args += list(
-                ttnn.setup_fabric_connection(node((r, c)), node(ports[d]["peer"]), ports[d]["links"][0], prog, cc)
+                ttnn.setup_fabric_connection(mesh, node((r, c)), node(ports[d]["peer"]), ports[d]["links"][0], prog, cc)
             )
         rt = ttnn.RuntimeArgs()
         rt[cc.x][cc.y] = args

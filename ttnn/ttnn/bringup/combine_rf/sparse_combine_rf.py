@@ -2614,7 +2614,9 @@ def sparse_combine_rf_prepare(
                 args += [int(hcache_t.buffer_address()), DIRS.index(d) * 2 + li]
                 for lj in range(n_conn) if PER_DIR else [li]:
                     args += list(
-                        ttnn.setup_fabric_connection(node(ch), node(peer), ports[d]["links"][lj], program, core)
+                        ttnn.setup_fabric_connection(
+                            mesh_device, node(ch), node(peer), ports[d]["links"][lj], program, core
+                        )
                     )
                 if FUSED:  # (the hand-off receiver's args, then the accumulator writer's)
                     ai = [(c.x, c.y) for c in accs].index((core.x, core.y))
