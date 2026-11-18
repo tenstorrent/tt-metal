@@ -41,8 +41,8 @@ import ttnn
 from models.common.multimedia_store.reader import FetchRequest
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.media import build_media_partials, warm_media_refs
-from models.demos.common.prefill.media_partials import MediaPartials
+from models.demos.common.prefill.media_embedding import plan_media_splice, warm_media_refs
+from models.demos.common.prefill.media_splice import MediaSpliceBuffers
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.minimax_m3.multimodal import format as media_format
 from models.demos.minimax_m3.tt.residual import activation_mapper
@@ -141,7 +141,7 @@ class TtPrefillRuntime:
         self.hf_config = hf_config
         self.config = config
         self.media_embedding_reader = media_embedding_reader
-        self._media_partials_cache = None
+        self._media_splice_buffers = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -371,7 +371,9 @@ class TtPrefillRuntime:
         The media hook is a lookup into the table and a where, so a height needs one embedding call
         rather than a prefill forward. warm_media_refs climbs table_height's ladder up to the tallest table
         images filling all n_chunks chunks can need, so nothing compiles while serving whatever the image
-        count. StubEmbeddingReader stands in for the store, which need not be reachable at compile time."""
+        count. Each height's tables are released once it is warmed: the program cache keys on shapes, not
+        buffers, so serving allocates only the heights it reaches. StubEmbeddingReader stands in for the
+        store, which need not be reachable at compile time."""
         from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
 
         chunks = [PrefillChunk(k, 0, chunk) for k in range(n_chunks)]
@@ -382,21 +384,22 @@ class TtPrefillRuntime:
             by_position = not self.model.embedding.shard_vocab_on_sp
             for height, refs in warm_media_refs(self.config.sp_factor, chunk, n_chunks, by_position):
                 inp = self.make_forward_input([[0] * chunk] * n_chunks, [0] * n_chunks)
-                x = self._embed_tokens(inp, media_fn=lambda: self._media_partials(chunks, refs))
+                x = self._embed_tokens(inp, media_fn=lambda: self._media_splice(chunks, refs))
                 ttnn.deallocate(x)
                 ttnn.deallocate(inp)
+                self._media_splice_buffers.release_tables()
                 warmed.append(height)
             logger.info(f"TtPrefillRuntime.compile() — media table heights warmed: {warmed}")
         finally:
             self.media_embedding_reader = real_reader
 
-    def _media_partials(self, chunks: list, media_refs: list):
+    def _media_splice(self, chunks: list, media_refs: list):
         """The forward's image rows per SP row, refilled into buffers kept per table height."""
         if not media_refs:
             return None
         cfg = self.config
         by_position = not self.model.embedding.shard_vocab_on_sp
-        height, lookup, is_img, runs = build_media_partials(
+        plan = plan_media_splice(
             media_refs,
             chunks,
             _media_rows_of(self.media_embedding_reader, self.hf_config.hidden_size, media_refs),
@@ -404,19 +407,19 @@ class TtPrefillRuntime:
             cfg.chunk_size // cfg.sp_factor,
             by_position,
         )
-        buffers = self._media_partials_cache
+        buffers = self._media_splice_buffers
         if buffers is None:
-            buffers = self._media_partials_cache = MediaPartials(
+            buffers = self._media_splice_buffers = MediaSpliceBuffers(
                 self.mesh_device,
                 sp=cfg.sp_factor,
                 hidden=self.hf_config.hidden_size,
-                s_total=is_img.numel(),
+                s_total=plan.is_img.numel(),
                 mesh_shape=cfg.mesh_shape,
                 sp_axis=cfg.sp_axis,
                 tp_axis=cfg.tp_axis,
                 by_position=by_position,
             )
-        buffers.refill(height, runs, lookup, is_img)
+        buffers.refill(plan)
         return buffers
 
     def compile(self, kv_cache) -> None:
@@ -569,7 +572,7 @@ class TtPrefillRuntime:
         if cfg.is_first_rank:
             # The embedding calls this after enqueuing the token lookup, so the host's fetch and upload
             # overlap that work rather than delaying it.
-            media_fn = (lambda: self._media_partials(chunks, media_refs)) if media_refs else None
+            media_fn = (lambda: self._media_splice(chunks, media_refs)) if media_refs else None
             try:
                 x_embd = self._embed_tokens(input_tensor, media_fn=media_fn)
             finally:

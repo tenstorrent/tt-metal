@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only: build_media_partials delivers each media row where pack_forward_tokens puts that position's token."""
+"""Host-only: plan_media_splice delivers each media row where pack_forward_tokens puts that position's token."""
 
 import pytest
 import torch
 
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
-from models.demos.common.prefill.media import _positions, build_media_partials, table_height, warm_media_refs
+from models.demos.common.prefill.media_embedding import _positions, plan_media_splice, table_height, warm_media_refs
 from models.demos.common.prefill.prefill_chunk import EMPTY_CHUNK, MediaRef, PrefillChunk
 
 SP, LOCAL, HIDDEN = 4, 32, 8
@@ -69,14 +69,12 @@ def test_positions_match_the_chunk_layout(sp, chunk_local):
     ],
 )
 @pytest.mark.parametrize("by_position", [False, True], ids=["summed_2d", "by_position_1d"])
-def test_partials_deliver_the_image_rows(chunks, refs, by_position):
+def test_plan_delivers_the_image_rows(chunks, refs, by_position):
     """2D: summing every SP row's lookup over all positions gives the image rows. 1D: each SP row's lookup over its own
     positions does."""
     embs = {r.media_key: torch.randn(r.num_tokens, HIDDEN).to(torch.bfloat16) for r in refs}
-    height, lookup, is_img, runs = build_media_partials(
-        refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL, by_position
-    )
-    table = table_of(height, runs)
+    plan = plan_media_splice(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL, by_position)
+    table, lookup, is_img = table_of(plan.height, plan.runs), plan.lookup, plan.is_img
     want_rows, want_mask = expected(chunks, refs, embs)
 
     gathered = torch.stack([table[r][lookup[r].long()] for r in range(SP)])
@@ -89,20 +87,17 @@ def test_partials_deliver_the_image_rows(chunks, refs, by_position):
 
 
 @pytest.mark.parametrize("by_position", [False, True], ids=["2d", "1d"])
-def test_partials_are_contiguous_blocks_per_sp_row(by_position):
+def test_plan_gives_contiguous_blocks_per_sp_row(by_position):
     """Each SP row's slots are 1..k with no holes, so filling it is one copy, and the table holds the
     fullest row."""
     chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 0, SP * 4, 1)]
     embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
-    height, lookup, _, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL, by_position)
+    plan = plan_media_splice(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL, by_position)
+    lookup = plan.lookup
     for r in range(SP):
         slots = sorted(lookup[r][lookup[r] > 0].tolist())
         assert slots == list(range(1, len(slots) + 1)), (r, slots)
-    assert max((lookup[r] > 0).sum().item() for r in range(SP)) + 1 <= height
-
-
-def test_partials_text_only():
-    assert build_media_partials([], [PrefillChunk(0, 0, C)], None, SP, LOCAL) is None
+    assert max((lookup[r] > 0).sum().item() for r in range(SP)) + 1 <= plan.height
 
 
 @pytest.mark.parametrize(
@@ -118,11 +113,9 @@ def test_table_is_bucketed_and_row_zero_is_never_written(by_position):
     use are not read — lookup never points at them — so the persistent host table may leave them stale."""
     chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 10, 40, 1)]
     embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
-    height, lookup, _, runs = build_media_partials(
-        refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL, by_position
-    )
-    assert height == table_height(int(lookup.max()) + 1)
-    assert min(slot for _, slot, _ in runs) == 1, "the sentinel row must not be written"
+    plan = plan_media_splice(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL, by_position)
+    assert plan.height == table_height(int(plan.lookup.max()) + 1)
+    assert min(run.slot for run in plan.runs) == 1, "the sentinel row must not be written"
 
 
 @pytest.mark.parametrize("by_position", [False, True], ids=["2d", "1d"])
@@ -134,5 +127,5 @@ def test_warm_plan_reaches_the_tallest_table(n_chunks, by_position):
     zeros = lambda r: u16(torch.zeros(r.num_tokens, HIDDEN, dtype=torch.bfloat16))
     plan = warm_media_refs(SP, C, n_chunks, by_position)
     for height, refs in plan:
-        assert build_media_partials(refs, chunks, zeros, SP, LOCAL, by_position)[0] == height
+        assert plan_media_splice(refs, chunks, zeros, SP, LOCAL, by_position).height == height
     assert plan[-1][0] == table_height(n_chunks * C // SP + 1)

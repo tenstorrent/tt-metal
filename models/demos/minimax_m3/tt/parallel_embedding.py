@@ -48,7 +48,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.common.prefill.media_partials import splice_media
+from models.demos.common.prefill.media_splice import splice_media
 from models.demos.minimax_m3.tt.residual import use_sharded_residual
 from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.profiler_utils import COARSE, zone
@@ -174,7 +174,7 @@ class TtParallelEmbedding(LightweightModule):
         [1, 1, s_local, emb_dim] full hidden replicated across the TP cols, or [1, 1, s_local,
         emb_dim / tp] under a sharded residual — the M3 residual-stream contract either way.
 
-        media_fn: called to get the MediaPartials whose image rows replace the token embeddings at the image
+        media_fn: called to get the MediaSpliceBuffers whose image rows replace the token embeddings at the image
         positions (_splice). It is a callable, not a value, so the host fetch runs while the token lookup is
         already executing on the device."""
         if not self.shard_vocab_on_sp:
@@ -213,7 +213,7 @@ class TtParallelEmbedding(LightweightModule):
         if len(emb.shape) == 3:
             emb = ttnn.unsqueeze_to_4D(emb)  # [1,1,s_total,emb_dim/tp]
 
-        # 2b) Image rows, if any. Each is assigned to ONE SP row (build_media_partials), so this row
+        # 2b) Image rows, if any. Each is assigned to ONE SP row (plan_media_splice), so this row
         #     supplies it and every other row contributes zero at that position — the reduce-scatter
         #     below then sums it into place, exactly, with no new collective.
         emb = self._splice(emb, media_fn)
@@ -236,4 +236,4 @@ class TtParallelEmbedding(LightweightModule):
         if media is None:
             return emb
         with zone("media_splice", COARSE):
-            return splice_media(emb, media, self.dtype)
+            return splice_media(emb, media)
