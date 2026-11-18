@@ -55,6 +55,34 @@ Nothing was changed, so the before and after trees are the same tree: sentinel s
 
 ### Noticed, not done
 
-- **Packet headers come from `PacketHeaderPool`** (`minimal_default_writer.cpp:71-73,80`), not from a DFB, so the op has no
+- **Packet headers come from `PacketHeaderPool`** (`minimal_default_writer.cpp:70,72,80`), not from a DFB, so the op has no
   packet-header self-loop (unlike `point_to_point` before its pass). Whether `PacketHeaderPool` is available on Gen2 is a
   Quasar-uplift question outside this recipe.
+
+## Pass 3 — Add the Gen2 hardware configs (`semantic/gen2_hardware_configs.md`)
+
+### Outcome
+
+**NO SITES FOUND.** Every `hw_config` is shape 1 (DM config from the arch-agnostic TTNN helper). No compute kernel, no
+hand-written `DataMovementGen1Config` / `ComputeGen1Config`, no field set on a config after the fact. Nothing was changed.
+
+### Sites
+
+None. The survey (`grep -rn "hw_config\|to_compute_hardware_config\|Gen1Config\|std::get<\|std::get_if<\|holds_alternative"`
+over the op directory) found two hits, both shape 1:
+
+- `device/slice_reshard_async_program_factory.cpp:230` — `ttnn::create_reader_datamovement_config()` (every reader).
+- `device/slice_reshard_async_program_factory.cpp:303` — `ttnn::create_writer_datamovement_config()` (every writer).
+
+On this branch the helpers take no `arch`; they fill the Gen1 reader/writer pins and also set `config_2xx`, so the Gen2
+alternative is already present.
+
+### Verification
+
+Nothing was changed, so the before and after trees are the same tree: sentinel set green (5 passed). Nothing here checks the
+Gen2 values (see the recipe), and no Gen2 value was written.
+
+### Noticed, not done
+
+- See Pass 1: `disable_dfb_implicit_sync_for_all` stays at its default `false` on both helpers. This pass does not set it,
+  because it is a Gen2 behavior choice, not a transcription of a Gen1 field.
