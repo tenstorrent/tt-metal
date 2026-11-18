@@ -170,7 +170,7 @@ TEST_F(GraphFabricInterDomain, PerimeterLeavesTheDomain) {
     }
 
     // a router on every trained port, with a VC2 receiver for the peer to send into
-    const auto api_ports = experimental::get_inter_domain_ports();
+    const auto api_ports = experimental::get_inter_domain_ports(*mesh);
     EXPECT_EQ(api_ports.size(), ports.size());
     for (const auto& port : api_ports) {
         if (!port.has_router) {
