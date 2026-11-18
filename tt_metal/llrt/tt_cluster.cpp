@@ -113,11 +113,23 @@ const std::string& emu_package_soc_desc(const tt::llrt::RunTimeOptions& rtoption
     return package;
 }
 
-// `node` on one line, in YAML flow style, for a message.
+// `node`, which is defined, on one line in YAML flow style for a message, whatever style its file wrote it in.
 std::string yaml_flow(const YAML::Node& node) {
-    YAML::Emitter out;
-    out << YAML::Flow << node;
-    return out.c_str();
+    std::vector<std::string> parts;
+    switch (node.Type()) {
+        case YAML::NodeType::Scalar: return node.Scalar();
+        case YAML::NodeType::Sequence:
+            for (const auto& entry : node) {
+                parts.push_back(yaml_flow(entry));
+            }
+            return fmt::format("[{}]", fmt::join(parts, ", "));
+        case YAML::NodeType::Map:
+            for (const auto& entry : node) {
+                parts.push_back(fmt::format("{}: {}", entry.first.Scalar(), yaml_flow(entry.second)));
+            }
+            return fmt::format("{{{}}}", fmt::join(parts, ", "));
+        default: return "~";
+    }
 }
 
 // Structural equality: scalars by text, sequences in order, maps by key; an absent node equals only an absent one.
