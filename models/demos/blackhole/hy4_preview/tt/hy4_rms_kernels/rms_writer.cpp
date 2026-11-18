@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
-// B47c fused MTP RMSNorm, writer (BRISC): builds the ones tile, writes the bf16 normalised tiles (page OOFF + j) and,
+// B47c fused MTP RMSNorm, writer (BRISC): writes the bf16 normalised tiles (page OOFF + j) and,
 // if OUT_X, the fp32 sum x + residual (page j).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -9,7 +9,7 @@
 void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_xo = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_ones = get_compile_time_arg_val(2);
+    constexpr uint32_t unused_ = get_compile_time_arg_val(2);
     constexpr uint32_t GPC = get_compile_time_arg_val(3);
     constexpr uint32_t OUT_X = get_compile_time_arg_val(4);
     constexpr uint32_t OOFF = get_compile_time_arg_val(5);
@@ -22,16 +22,7 @@ void kernel_main() {
     Noc noc;
     const auto o_acc = TensorAccessor(o_args, o_addr, 2048);
     const auto x_acc = TensorAccessor(x_args, xo_addr, 4096);
-    experimental::CB out(cb_out), xo(cb_xo), ones(cb_ones);
-
-    ones.reserve_back(1);
-    {
-        volatile tt_l1_ptr uint32_t* o = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones.get_write_ptr());
-        for (uint32_t i = 0; i < 1024; ++i) {
-            o[i] = 0x3F800000u;
-        }
-    }
-    ones.push_back(1);
+    experimental::CB out(cb_out), xo(cb_xo);
 
     if constexpr (OUT_X) {
         xo.wait_front(GPC);

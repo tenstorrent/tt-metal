@@ -75,19 +75,18 @@ def rms_fused(x, w, eps, res=None, out=None, out_off=0, out_x=False):
     for k, (cx, cy) in enumerate(cores):
         rt[cx][cy] = [k]
     f32, bf = ttnn.float32, ttnn.bfloat16
-    X, R, W, ONES, XN, XO, SQ, P, TOT, RS, O, SLOT = range(12)
+    X, R, W, XN, XO, P, TOT, RS, RSB, O, SLOT = range(11)
     xp = 4096 if xf32 else 2048
     cbs = [
         _cb(core_set, X, gpc, xp, f32 if xf32 else bf),
         _cb(core_set, R, gpc if has_r else 1, 2048, bf),
         _cb(core_set, W, gpc, 4096, f32),
-        _cb(core_set, ONES, 1, 4096, f32),
         _cb(core_set, XN, gpc if has_r else 1, 4096, f32),
         _cb(core_set, XO, gpc if out_x else 1, 4096, f32),
-        _cb(core_set, SQ, gpc, 4096, f32),
         _cb(core_set, P, 1, 4096, f32),
         _cb(core_set, TOT, 1, 4096, f32),
         _cb(core_set, RS, 1, 4096, f32),
+        _cb(core_set, RSB, 1, 4096, f32),
         _cb(core_set, O, gpc, 2048, bf),
         _cb(core_set, SLOT, 2, 4096, f32),
     ]
@@ -95,7 +94,10 @@ def rms_fused(x, w, eps, res=None, out=None, out_off=0, out_x=False):
     reader = _kernel(
         "rms_reader.cpp",
         core_set,
-        [X, R, W, P, SLOT, TOT, T, gpc, NC, p0.x, p0.y, GX, int(xf32), int(has_r)] + _acc(x) + _acc(r_t) + _acc(w),
+        [X, R, W, P, SLOT, TOT, T, gpc, NC, p0.x, p0.y, GX, int(xf32), int(has_r), RS, RSB]
+        + _acc(x)
+        + _acc(r_t)
+        + _acc(w),
         rt,
         ttnn.ReaderConfigDescriptor(),
         common=[x.buffer_address(), r_t.buffer_address(), w.buffer_address()],
@@ -103,17 +105,27 @@ def rms_fused(x, w, eps, res=None, out=None, out_off=0, out_x=False):
     writer = _kernel(
         "rms_writer.cpp",
         core_set,
-        [O, XO, ONES, gpc, int(out_x), int(out_off)] + _acc(out) + _acc(xo_t),
+        [O, XO, 0, gpc, int(out_x), int(out_off)] + _acc(out) + _acc(xo_t),
         rt,
         ttnn.WriterConfigDescriptor(),
         common=[out.buffer_address(), xo_t.buffer_address()],
     )
+    cc = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    for c in ((X,) if xf32 else ()) + (
+        XN,
+        W,
+        TOT,
+        RSB,
+    ):  # fp32 tiles read by copy_tile must be unpacked straight into dest (exact fp32)
+        modes[c] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    cc.unpack_to_dest_mode = modes
     compute = _kernel(
         "rms_compute.cpp",
         core_set,
-        [X, R, W, ONES, XN, XO, SQ, P, TOT, RS, O, gpc, eps_bits, int(has_r), int(out_x)],
+        [X, R, W, XN, XO, P, TOT, RS, RSB, O, gpc, eps_bits, int(has_r), int(out_x)],
         ttnn.RuntimeArgs(),
-        ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
+        cc,
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     prog.custom_program_hash = (0x4B47 << 40) | (

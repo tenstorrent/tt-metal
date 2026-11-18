@@ -78,19 +78,31 @@ def main():
             [rms6(ttnn.typecast(xb, ttnn.float32), wsc1), rms6(ttnn.typecast(rb, ttnn.float32), wsc1)], dim=3
         )
         cmp("cat", d0(cat), d0(ref), S)
-        # timing (eager, synchronized)
-        ttnn.synchronize_device(md)
-        t0 = time.time()
-        for _ in range(50):
-            RF.rms_fused(x32, wsc, EPS, res=rb, out_x=True)
-        ttnn.synchronize_device(md)
-        t1 = time.time()
-        for _ in range(50):
+
+        # device time per call: trace of 20 calls, executed 5 times
+        def timed(fn, name):
+            fn()
+            ttnn.synchronize_device(md)
+            tid = ttnn.begin_trace_capture(md, cq_id=0)
+            for _ in range(20):
+                fn()
+            ttnn.end_trace_capture(md, tid, cq_id=0)
+            ttnn.synchronize_device(md)
+            t0 = time.time()
+            for _ in range(5):
+                ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(md)
+            res(**{name: (time.time() - t0) / 100 * 1e6})
+            ttnn.release_trace(md, tid)
+
+        def stockB():
             sr = ttnn.add(x32, ttnn.typecast(rb, ttnn.float32))
             rms6(sr, wsc1)
-        ttnn.synchronize_device(md)
-        t2 = time.time()
-        res(fused_us=(t1 - t0) / 50 * 1e6, stock_us=(t2 - t1) / 50 * 1e6)
+
+        timed(lambda: RF.rms_fused(x32, wsc, EPS, res=rb, out_x=True), "fused_B_us")
+        timed(stockB, "stock_B_us")
+        timed(lambda: RF.rms_fused(xb, wsc, EPS), "fused_A_us")
+        timed(lambda: rms6(ttnn.typecast(xb, ttnn.float32), wsc1), "stock_A_us")
     finally:
         close_row(full, md)
 

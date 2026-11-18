@@ -27,7 +27,9 @@ void kernel_main() {
     constexpr uint32_t MW = get_compile_time_arg_val(11);
     constexpr uint32_t XF32 = get_compile_time_arg_val(12);   // x tiles fp32 (else bf16)
     constexpr uint32_t HAS_R = get_compile_time_arg_val(13);  // bf16 residual tiles
-    constexpr auto x_args = TensorAccessorArgs<14>();
+    constexpr uint32_t cb_rs = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_rsb = get_compile_time_arg_val(15);
+    constexpr auto x_args = TensorAccessorArgs<16>();
     constexpr auto r_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<r_args.next_compile_time_args_offset()>();
     constexpr uint32_t XP = XF32 ? 4096 : 2048;  // x tile bytes
@@ -46,7 +48,8 @@ void kernel_main() {
     const auto x_acc = TensorAccessor(x_args, x_addr, XP);
     const auto r_acc = TensorAccessor(r_args, r_addr, 2048);
     const auto w_acc = TensorAccessor(w_args, w_addr, 4096);
-    experimental::CB cbx(cb_x), cbr(cb_r), cbw(cb_w), cbp(cb_p), cbslot(cb_slot), cbtot(cb_tot);
+    experimental::CB cbx(cb_x), cbr(cb_r), cbw(cb_w), cbp(cb_p), cbslot(cb_slot), cbtot(cb_tot), cbrs(cb_rs),
+        cbrsb(cb_rsb);
 
     cbslot.reserve_back(1);
     const uint32_t slot_base = cbslot.get_write_ptr();
@@ -116,5 +119,21 @@ void kernel_main() {
     for (uint32_t kk = 0; kk < NC; ++kk) {
         slots[kk * SW + SW - 1] = 0;
     }
+    // rs (row results in column 0 of the SFPU row reduce) -> broadcast tile: every column of row t = rs[t]
+    cbrsb.reserve_back(1);
+    noc.async_write_zeros(cbrsb, 4096, {.offset_bytes = 0});
+    noc.write_zeros_l1_barrier();
+    cbrs.wait_front(1);
+    volatile tt_l1_ptr uint32_t* rsp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbrs.get_read_ptr());
+    volatile tt_l1_ptr uint32_t* rb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbrsb.get_write_ptr());
+    for (uint32_t t = 0; t < T; ++t) {
+        const uint32_t v = rsp[RW(t)];
+        for (uint32_t c = 0; c < 16; ++c) {
+            rb[RW(t) + c] = v;
+            rb[RW(t) + 256 + c] = v;
+        }
+    }
+    cbrs.pop_front(1);
+    cbrsb.push_back(1);
     noc_async_write_barrier();
 }
