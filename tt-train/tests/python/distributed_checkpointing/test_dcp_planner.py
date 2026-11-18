@@ -188,6 +188,28 @@ def test_padded_vocab_across_tp_sizes_fills_new_padding_and_keeps_old_padding_on
     assert plan.fast_path_keys == ["w"] and not plan.keys["w"].fills
 
 
+def test_shards_that_hold_only_padding_are_filled_without_reads():
+    # 68 vocab rows, padded to 96 on one device and to 256 (a multiple of 32 * 8) at TP8, where shards 3 to 7 (rows
+    # 96 to 255) are all padding. Saved padding rows hold -1, so a copy is distinguishable from a fill.
+    plan, shards, expected = _round_trip(
+        SINGLE,
+        Pad(2, 68, 96),
+        TP8,
+        Pad(2, 68, 256),
+        (1, 1, 96, 16),
+        canonical_shape=(1, 1, 68, 16),
+        pad_value=-1.0,
+    )
+    assert_shards_equal(shards, expected)
+    kplan = plan.keys["w"]
+    read_groups = {r.group for r in kplan.reads}
+    assert sorted(read_groups) == [(0,), (1,), (2,)], "only shards 0 to 2 hold vocab rows"
+    for group in [(3,), (4,), (5,), (6,), (7,)]:
+        assert [f.dst for f in kplan.fills if f.group == group] == [Box.whole(kplan.boxes[group].sizes)]
+        assert (shards[group] == 0).all(), f"shard {group} is padding only, filled with zeros"
+    assert (shards[(2,)][:, :, 4:, :] == 0).all(), "shard 2's padding rows 68 to 95 are filled, not copied"
+
+
 def test_collapsed_source_label_loads_onto_an_nd_destination_and_back():
     _, shards, expected = _round_trip(
         COLLAPSED_TP8_ON_2X4, Identity(), world([R(), S(2)], (2, 4)), Identity(), (1, 1, 256, 64)
