@@ -61,7 +61,7 @@ void RunTest(
     Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     /* Creating input CB. Page size of CB = tile size. Each tile is a separate page for CB. */
     uint32_t tile_size = tt::tile_size(data_format);

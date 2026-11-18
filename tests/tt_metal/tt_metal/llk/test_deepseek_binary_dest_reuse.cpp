@@ -83,7 +83,7 @@ void run_deepseek_binary_dest_reuse(
             source[iteration * input_tile_elements + lane] = bfloat16(lane % 2 == 0 ? magnitude : -magnitude);
         }
     }
-    auto& cq = mesh.mesh_command_queue();
+    auto& cq = mesh.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, input, pack_bfloat16_vec_into_uint32_vec(source), true);
     SetRuntimeArgs(program, reader, core, {input->address(), 0, iterations});
     SetRuntimeArgs(program, writer, core, {output->address(), 0, iterations * dest_tiles});

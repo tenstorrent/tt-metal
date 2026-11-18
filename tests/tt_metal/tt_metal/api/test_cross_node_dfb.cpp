@@ -508,8 +508,8 @@ static Program& run_on_mesh_device(
     const auto device_range = unit_mesh_device_range();
     workload_out = distributed::MeshWorkload{};
     workload_out.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_out, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload_out, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     return workload_out.get_programs().at(device_range);
 }
 
@@ -1384,8 +1384,8 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
     // Re-launching the same workload refreshes the dedicated config Buffer from the
     // host page image. Fast dispatch inserts a pre-config stall on this CQ before
     // rewriting the shared program-owned page.
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload1, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload1, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     slow_dispatch::ReadFromL1(
         device,
         sender_core,
@@ -1448,9 +1448,9 @@ TEST_F(CrossNodeDFBFixture, BackToBackRelaunchOrdersConfigRewrite) {
     const auto device_range = unit_mesh_device_range();
     workload.add_program(device_range, std::move(program));
     for (uint32_t i = 0; i < num_launches; ++i) {
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
     }
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     Program& program_ref = workload.get_programs().at(device_range);
 
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
@@ -1567,7 +1567,7 @@ void expect_1to1_ring_and_credits(
 TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_OrdersConfigRewrite) {
     auto mesh_device = devices_[0];
     auto ctx = make_1to1_trace_push_pop(*mesh_device);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     // Warmup: capture cannot load binaries.
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
@@ -1592,7 +1592,7 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_OrdersConfigRewrite) {
 TEST_F(CrossNodeDFBTraceFixture, ReplayThenRelaunch_OrdersConfigRewrite) {
     auto mesh_device = devices_[0];
     auto ctx = make_1to1_trace_push_pop(*mesh_device);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
 
@@ -1668,7 +1668,7 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
     distributed::MeshWorkload workload;
     workload.add_program(unit_mesh_device_range(), std::move(program));
     Program& program_ref = workload.get_programs().at(unit_mesh_device_range());
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 

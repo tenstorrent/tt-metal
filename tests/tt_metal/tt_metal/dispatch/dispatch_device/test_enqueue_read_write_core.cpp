@@ -24,7 +24,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestBasicReadWriteL1) {
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
 
         const distributed::MeshCoordinate device_coord =
@@ -54,7 +54,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestHostTransferStatsCountCoreWr
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const distributed::MeshCoordinate device_coord =
             mesh_device->get_view().find_device(mesh_device->get_device_ids()[0]);
         const distributed::DeviceMemoryAddress device_memory_address = {
@@ -86,7 +86,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestBasicReadL1) {
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
         const auto device_id = mesh_device->get_device_ids()[0];
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, src_data, address);
@@ -98,7 +98,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestBasicReadL1) {
         fd_cq.enqueue_read_shard_from_core(
             device_memory_address, dst_data.data(), num_elements * sizeof(uint32_t), false);
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         EXPECT_EQ(src_data, dst_data);
     }
@@ -113,7 +113,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestBasicWriteL1) {
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
         const auto device_id = mesh_device->get_device_ids()[0];
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
@@ -122,7 +122,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestBasicWriteL1) {
         fd_cq.enqueue_write_shard_to_core(
             device_memory_address, src_data.data(), num_elements * sizeof(uint32_t), false);
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         const std::vector<uint32_t> dst_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device_id, virtual_core, address, num_elements * sizeof(uint32_t));
@@ -143,7 +143,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestInvalidReadWriteAddressL1) {
     const DeviceAddr address = l1_end_address + l1_end_address_offset;
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
         const auto device_id = mesh_device->get_device_ids()[0];
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
@@ -169,7 +169,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestReadWriteMultipleCoresL1) {
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const auto device_id = mesh_device->get_device_ids()[0];
         for (uint32_t core_x = 0; core_x < mesh_device->compute_with_storage_grid_size().x; ++core_x) {
             for (uint32_t core_y = 0; core_y < mesh_device->compute_with_storage_grid_size().y; ++core_y) {
@@ -198,7 +198,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestReadWriteMultipleCoresL1) {
             }
         }
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         for (const std::vector<uint32_t>& dst_data : all_cores_dst_data) {
             EXPECT_EQ(src_data, dst_data);
@@ -213,7 +213,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestReadWriteZeroElementsL1) {
     const std::vector<uint32_t> src_data = {};
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
         const auto device_id = mesh_device->get_device_ids()[0];
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
@@ -224,7 +224,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestReadWriteZeroElementsL1) {
         std::vector<uint32_t> dst_data;
         fd_cq.enqueue_read_shard_from_core(device_memory_address, dst_data.data(), 0, false);
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         EXPECT_TRUE(dst_data.empty());
     }
@@ -240,7 +240,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestReadWriteEntireL1) {
     const std::vector<uint32_t> src_data = generate_arange_vector(size);
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
         const auto device_id = mesh_device->get_device_ids()[0];
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
@@ -251,7 +251,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestReadWriteEntireL1) {
         std::vector<uint32_t> dst_data(num_elements, 0);
         fd_cq.enqueue_read_shard_from_core(device_memory_address, dst_data.data(), size, true);
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         EXPECT_EQ(src_data, dst_data);
     }
@@ -266,7 +266,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, ActiveEthTestReadWriteEntireL1) {
     const std::vector<uint32_t> src_data = generate_arange_vector(size);
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "No active ethernet cores found";
@@ -283,7 +283,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, ActiveEthTestReadWriteEntireL1) {
         std::vector<uint32_t> dst_data(num_elements, 0);
         fd_cq.enqueue_read_shard_from_core(device_memory_address, dst_data.data(), size, true);
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         EXPECT_EQ(src_data, dst_data);
     }
@@ -296,7 +296,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, ActiveEthTestReadWriteMultipleCoresL1)
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "No active ethernet cores found";
@@ -325,7 +325,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, ActiveEthTestReadWriteMultipleCoresL1)
             i++;
         }
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         for (const std::vector<uint32_t>& dst_data : all_cores_dst_data) {
             EXPECT_EQ(src_data, dst_data);
@@ -344,7 +344,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestReadWriteEntireL1) {
     const std::vector<uint32_t> src_data = generate_arange_vector(size);
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_idle_eth_cores(device)) {
             GTEST_SKIP() << "No idle ethernet cores found";
@@ -362,7 +362,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestReadWriteEntireL1) {
         std::vector<uint32_t> dst_data(num_elements, 0);
         fd_cq.enqueue_read_shard_from_core(device_memory_address, dst_data.data(), size, true);
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         EXPECT_EQ(src_data, dst_data);
     }
@@ -381,7 +381,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestInvalidReadWriteAddressL1) 
     const DeviceAddr address = l1_end_address + l1_end_address_offset;
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_idle_eth_cores(device)) {
             GTEST_SKIP() << "No idle ethernet cores found";
@@ -416,7 +416,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestReadWriteMultipleCoresL1) {
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_idle_eth_cores(device)) {
             GTEST_SKIP() << "No idle ethernet cores found";
@@ -455,7 +455,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestReadWriteMultipleCoresL1) {
             i++;
         }
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         for (const std::vector<uint32_t>& dst_data : all_cores_dst_data) {
             EXPECT_EQ(src_data, dst_data);
@@ -465,7 +465,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestReadWriteMultipleCoresL1) {
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, TestInvalidReadWriteAddressDRAM) {
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const uint32_t num_elements = 1010;
         const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -497,7 +497,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TestInvalidReadWriteAddressDRAM) {
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, TestReadWriteMultipleCoresDRAM) {
     for (const auto& mesh_device : this->devices_) {
-        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
         const auto device_id = mesh_device->get_device_ids()[0];
         const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
         const uint32_t num_elements = 1000;
@@ -533,7 +533,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TestReadWriteMultipleCoresDRAM) {
             }
         }
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         uint32_t expected_dram_core_value = 1;
         for (const std::vector<uint32_t>& dst_data : all_cores_dst_data) {

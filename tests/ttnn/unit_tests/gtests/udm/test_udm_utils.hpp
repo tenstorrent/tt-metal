@@ -610,10 +610,10 @@ inline void run_program(
         mesh_workload.add_program(
             tt::tt_metal::distributed::MeshCoordinateRange(coord), std::move(mesh_program.program_at(coord)));
 
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, false);
     }
 
-    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue(0));
 }
 
 }  // namespace tt::tt_metal::experimental::udm_tests

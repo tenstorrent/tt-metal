@@ -53,7 +53,7 @@ std::shared_ptr<distributed::MeshBuffer> flat_write_l1_buffer(distributed::MeshD
 void expect_flat_write_lands(
     distributed::MeshDevice& device, ChipId source, ChipId target, size_t access_point_index, bool posted) {
     auto& cluster = MetalContext::instance().get_cluster();
-    distributed::MeshCommandQueue& cq = device.mesh_command_queue();
+    distributed::MeshCommandQueue& cq = device.mesh_command_queue(0);
 
     auto src = flat_write_l1_buffer(device);
     auto guard = flat_write_l1_buffer(device);

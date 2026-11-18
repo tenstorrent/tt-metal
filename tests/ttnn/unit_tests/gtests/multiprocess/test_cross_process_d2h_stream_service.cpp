@@ -230,7 +230,7 @@ void run_owner(
         auto host_src = ttnn::distributed::distribute_tensor(Tensor::from_vector<uint32_t>(data, global_spec), *mapper);
         auto& backing = const_cast<Tensor&>(service.get_backing_tensor());
         copy_to_device(host_src, backing);
-        Finish(mesh_device->mesh_command_queue());
+        Finish(mesh_device->mesh_command_queue(0));
         service.notify_backing_ready();
         g_cross_rank_world->barrier();
         g_cross_rank_world->barrier();
@@ -302,7 +302,7 @@ void run_owner_sharded(
         auto host_src = ttnn::distributed::distribute_tensor(Tensor::from_vector<uint32_t>(data, global_spec), *mapper);
         auto& backing = const_cast<Tensor&>(service.get_backing_tensor());
         copy_to_device(host_src, backing);
-        Finish(mesh_device->mesh_command_queue());
+        Finish(mesh_device->mesh_command_queue(0));
         service.notify_backing_ready();
         g_cross_rank_world->barrier();
         g_cross_rank_world->barrier();
@@ -397,10 +397,10 @@ void run_owner_metadata(
     for (uint32_t iter = 0; iter < cs.num_iterations; ++iter) {
         const auto metadata = make_metadata_pattern(iter, cs.metadata_size_bytes);
         write_worker_metadata(mesh_device, service, worker_cores, metadata);
-        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), worker_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), worker_workload, /*blocking=*/false);
         g_cross_rank_world->barrier();
         g_cross_rank_world->barrier();
-        Finish(mesh_device->mesh_command_queue());
+        Finish(mesh_device->mesh_command_queue(0));
     }
     g_cross_rank_world->barrier();
 }
@@ -475,7 +475,7 @@ void run_owner_metadata_only(
         ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
         g_cross_rank_world->barrier();  // release the connector to read this iteration's record
         g_cross_rank_world->barrier();  // wait until it has finished reading
-        Finish(mesh_device->mesh_command_queue());
+        Finish(mesh_device->mesh_command_queue(0));
     }
     g_cross_rank_world->barrier();
 }

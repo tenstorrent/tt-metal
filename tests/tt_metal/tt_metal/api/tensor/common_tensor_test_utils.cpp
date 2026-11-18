@@ -46,7 +46,7 @@ void test_tensor_on_device(
 
     auto tensor = MeshTensor::allocate_on_device(device, TensorSpec(input_shape, layout));
 
-    auto& cq = device.mesh_command_queue();
+    auto& cq = device.mesh_command_queue(0);
     enqueue_write_tensor(cq, host_data.data(), tensor);
     enqueue_read_tensor(cq, tensor, readback_data.data());
 

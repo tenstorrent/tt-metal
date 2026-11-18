@@ -158,13 +158,13 @@ void run_eltwise_binary_test(
 }  // namespace
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryAdd) {
-    run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::ADD));
+    run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(0), static_cast<int>(EltwiseOp::ADD));
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinarySub) {
-    run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::SUB));
+    run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(0), static_cast<int>(EltwiseOp::SUB));
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryMul) {
-    run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::MUL));
+    run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(0), static_cast<int>(EltwiseOp::MUL));
 }

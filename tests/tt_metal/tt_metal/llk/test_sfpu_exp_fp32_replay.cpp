@@ -152,7 +152,7 @@ std::vector<uint32_t> run_exp(
     const std::vector<uint32_t>& input,
     bool plain_path,
     std::optional<uint16_t> scale = std::nullopt) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const auto zero_coord = distributed::MeshCoordinate(0, 0);
     const auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
@@ -304,7 +304,7 @@ std::vector<uint32_t> run_matmul_exp_matmul(
     const std::vector<uint32_t>& a,
     const std::vector<uint32_t>& b,
     bool exp_between) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const auto zero_coord = distributed::MeshCoordinate(0, 0);
     const auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;

@@ -150,7 +150,7 @@ struct ReceiverContiguousCase {
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), weight_memory_config));
         weight = Tensor::from_vector(std::move(values), weight_spec).to_device(device);
         if (weight_write == WeightWrite::Finished) {
-            tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+            tt::tt_metal::distributed::Finish(device->mesh_command_queue(0));
         }
     }
 
@@ -178,7 +178,7 @@ void queue_layers(
     const std::vector<metal_exp::TensorPrefetcherInput> inputs(
         num_layers, metal_exp::TensorPrefetcherInput{prefetch.weight.mesh_tensor(), prefetch.block_count});
     metal_exp::QueueTensorPrefetcherRequest(
-        *device, prefetch.pipe_refs(), std::nullopt, inputs, &device->mesh_command_queue());
+        *device, prefetch.pipe_refs(), std::nullopt, inputs, &device->mesh_command_queue(0));
 }
 
 // Validates every entry of `num_layers` copies of the weight as the receivers consume them: of a grouped
@@ -253,7 +253,7 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, FencesRequestsAgainstCommandQueue)
     metal_exp::StartTensorPrefetcher(*device_, {});
     ReceiverContiguousCase prefetch(
         device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, /*num_groups=*/1, WeightWrite::InFlight);
-    metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(), std::nullopt);
+    metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(0), std::nullopt);
     queue_layers(device_, prefetch, /*num_layers=*/1);
     validate_layers(device_, prefetch, /*num_layers=*/1);
     metal_exp::StopTensorPrefetcher(*device_);
@@ -295,7 +295,7 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversTheGroupsAMaskSelects) {
         MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, ShardSpec(mask_core, {1, kNumGroups})));
     metal_exp::StartTensorPrefetcher(*device_, {});
     // The masks were written through the command queue, which the prefetcher does not follow on its own.
-    metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(), std::nullopt);
+    metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(0), std::nullopt);
 
     queue_layers(device_, prefetch, /*num_layers=*/1);
     validate_layers(device_, prefetch, /*num_layers=*/1);
@@ -316,7 +316,7 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversTheGroupsAMaskSelects) {
              .block_count = block_count,
              .group_selector = metal_exp::TensorPrefetcherGroupSelector{mask->mesh_tensor()}}};
         metal_exp::QueueTensorPrefetcherRequest(
-            *device_, prefetch.pipe_refs(), std::nullopt, inputs, &device_->mesh_command_queue());
+            *device_, prefetch.pipe_refs(), std::nullopt, inputs, &device_->mesh_command_queue(0));
         if (groups.has_value()) {
             validate_layers(device_, prefetch, /*num_layers=*/1, *groups);
         }
@@ -328,7 +328,7 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversTheGroupsAMaskSelects) {
 TEST_F(DispatchEngineTensorPrefetcherFixture, SendsTracedRequestOnEveryReplay) {
     ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2);
     metal_exp::StartTensorPrefetcher(*device_, {});
-    auto& cq = device_->mesh_command_queue();
+    auto& cq = device_->mesh_command_queue(0);
     auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
         device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
     // A trace cannot load the validator's binaries, so run it once first, on a request sent at once.
@@ -356,11 +356,11 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, SendsRecordedRequestOnEveryCommand
         builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, inputs);
         auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
             device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
-        builder.add(device_->mesh_command_queue(), validator);
-        auto command_list = builder.build(device_->mesh_command_queue());
+        builder.add(device_->mesh_command_queue(0), validator);
+        auto command_list = builder.build(device_->mesh_command_queue(0));
         builder.deallocate();
         for (uint32_t i = 0; i < kReplayCount; ++i) {
-            metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
+            metal_exp::EnqueueCommandList(device_->mesh_command_queue(0), command_list, /*blocking=*/true);
         }
         command_list.deallocate();
     }

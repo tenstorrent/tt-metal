@@ -229,8 +229,8 @@ int main(int argc, char** argv) {
         mesh_workload.add_program(device_range, std::move(program));
         log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
         auto begin = std::chrono::steady_clock::now();
-        tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-        tt_metal::distributed::Finish(device->mesh_command_queue());
+        tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workload, false);
+        tt_metal::distributed::Finish(device->mesh_command_queue(0));
         auto end = std::chrono::steady_clock::now();
         auto elapsed_us = duration_cast<microseconds>(end - begin).count();
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);

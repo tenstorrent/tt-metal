@@ -226,12 +226,12 @@ int main() {
         std::move(*subtract_program));  // Subtraction runs on the bottom row (sub device 2)
 
     // =========== Step 4: Compile and Load Workloads on the Mesh ===========
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, true);
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), add_mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), multiply_and_subtract_mesh_workload, true);
     // =========== Step 5: Trace the MeshWorkloads using the Workload Dispatch CQ ===========
     auto trace_id = mesh_device->begin_mesh_trace(workload_cq);
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, false);
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), add_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), multiply_and_subtract_mesh_workload, false);
     mesh_device->end_mesh_trace(workload_cq, trace_id);
 
     // =========== Step 6: Populate inputs ===========

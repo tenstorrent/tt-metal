@@ -347,8 +347,8 @@ bool RunWriteBWTest(
     receiver_workload.add_program(device_range, std::move(receiver_program_));
     auto& receiver_program = receiver_workload.get_programs().at(device_range);
 
-    auto& sender_cq = sender_mesh_device->mesh_command_queue();
-    auto& receiver_cq = receiver_mesh_device->mesh_command_queue();
+    auto& sender_cq = sender_mesh_device->mesh_command_queue(0);
+    auto& receiver_cq = receiver_mesh_device->mesh_command_queue(0);
 
     std::vector<CoreCoord> worker_cores;
     {
@@ -642,7 +642,7 @@ bool RunWriteBWTest(
         std::fill(readback_data_vec.begin(), readback_data_vec.end(), 0);
 
         distributed::ReadShard(
-            output_buffer->device()->mesh_command_queue(),
+            output_buffer->device()->mesh_command_queue(0),
             readback_data_vec,
             output_buffer,
             distributed::MeshCoordinate(0, 0));

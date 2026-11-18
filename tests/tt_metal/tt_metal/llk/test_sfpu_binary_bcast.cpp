@@ -272,7 +272,7 @@ std::vector<float> run_bcast_program(
     std::vector<uint32_t> src_a_tiled,  // by value: WriteShard takes a mutable vector
     std::vector<uint32_t> src_b_tiled,
     bool dst_full_sync) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 

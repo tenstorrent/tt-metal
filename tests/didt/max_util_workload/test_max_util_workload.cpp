@@ -1034,7 +1034,7 @@ static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_p
 static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_device, MaxUtilConfig& cfg) {
     IDevice* device = mesh_device->impl().get_device(0);
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto target =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate({0, 0}), distributed::MeshCoordinate({0, 0}));
 
@@ -1131,7 +1131,7 @@ static bool run_all_devices(
         auto prefill_program = build_prefill_program(*mesh_device, device, cfg);
         auto prefill_workload = distributed::MeshWorkload();
         prefill_workload.add_program(target, std::move(prefill_program.program));
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         distributed::EnqueueMeshWorkload(cq, prefill_workload, /*blocking=*/true);
         distributed::Finish(cq);
         log_info(LogTest, "Pre-fill complete: device={}", device->id());
@@ -1157,7 +1157,7 @@ static bool run_all_devices(
         bool is_last = (i == num_iterations - 1);
         bool is_log_iter = ((i + 1) % 100 == 0) || is_last;
         for (auto& run : runs) {
-            auto& cq = run.mesh_device->mesh_command_queue();
+            auto& cq = run.mesh_device->mesh_command_queue(0);
             distributed::EnqueueMeshWorkload(cq, *run.main_workload, /*blocking=*/false);
             if (run.slow_workload != nullptr) {
                 distributed::EnqueueMeshWorkload(cq, *run.slow_workload, /*blocking=*/false);
@@ -1172,7 +1172,7 @@ static bool run_all_devices(
         }
     }
     for (auto& run : runs) {
-        distributed::Finish(run.mesh_device->mesh_command_queue());
+        distributed::Finish(run.mesh_device->mesh_command_queue(0));
     }
 
     // Report FPU utilization and per-ETH-core DRAM bandwidth for every device.

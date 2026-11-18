@@ -111,7 +111,7 @@ bool single_core_reconfig(
 
     CoreCoord core = {0, 0};
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
@@ -357,7 +357,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     const std::uint32_t out_bytes = kNumOps * f16_tile_size;
 
     const CoreCoord core = {0, 0};
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const NodeCoord node{static_cast<std::uint32_t>(core.x), static_cast<std::uint32_t>(core.y)};
 
@@ -689,7 +689,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     const std::uint32_t f32_tile_size = tt::tile_size(tt::DataFormat::Float32);
 
     const CoreCoord core = {0, 0};
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const NodeCoord node{static_cast<std::uint32_t>(core.x), static_cast<std::uint32_t>(core.y)};
 
@@ -1265,7 +1265,7 @@ std::vector<std::uint32_t> run_reconfig_format_and_geometry(
         core,
         ComputeConfig{.fp32_dest_acc_en = true, .compile_args = {num_tiles}, .defines = defines});
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
     if (srcb) {
         distributed::EnqueueWriteMeshBuffer(

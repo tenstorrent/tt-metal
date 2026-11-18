@@ -458,7 +458,7 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
 // Reads the tensor back and returns the contents of its shard on device (0, 0).
 template <typename T>
 std::vector<T> read_shard_as(tt_metal::distributed::MeshDevice& device, const tt_metal::MeshTensor& tensor) {
-    const auto host_tensor = device.mesh_command_queue().enqueue_read_tensor(tensor);
+    const auto host_tensor = device.mesh_command_queue(0).enqueue_read_tensor(tensor);
     const auto shard = host_tensor.buffer().get_shard(tt_metal::distributed::MeshCoordinate(0, 0));
     TT_FATAL(shard.has_value(), "Tensor has no shard on device (0, 0)");
     const auto values = shard->view_as<T>();
@@ -593,8 +593,8 @@ tt_metal::MeshTensor create_and_transfer_data_sharded_cb(
 
     auto tensor = tt_metal::MeshTensor::allocate_on_device(device, spec);
     const auto host_tensor = tt_metal::HostTensor::from_buffer(tt_metal::HostBuffer(input_vec), spec);
-    device.mesh_command_queue().enqueue_write_tensor(host_tensor, tensor);
-    tt_metal::distributed::Finish(device.mesh_command_queue());
+    device.mesh_command_queue(0).enqueue_write_tensor(host_tensor, tensor);
+    tt_metal::distributed::Finish(device.mesh_command_queue(0));
 
     log_info(tt::LogTest, "created sharded tensor");
     return tensor;
@@ -875,18 +875,18 @@ int main(int argc, char** argv) {
         for (uint32_t i = 0; i < num_tests; ++i) {
             if (use_sub_devices) {
                 // Enqueue the sender program
-                tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workloads[0], false);
+                tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workloads[0], false);
                 device->set_sub_device_stall_group(receiver_sub_device_ids);
                 for (uint32_t j = 1; j < mesh_workloads.size(); ++j) {
-                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workloads[j], false);
+                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workloads[j], false);
                 }
                 device->reset_sub_device_stall_group();
             } else {
                 for (auto& mesh_workload : mesh_workloads) {
-                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workload, false);
                 }
             }
-            tt_metal::distributed::Finish(device->mesh_command_queue());
+            tt_metal::distributed::Finish(device->mesh_command_queue(0));
             for ([[maybe_unused]] auto& mesh_workload : mesh_workloads) {
                 tt_metal::ReadMeshDeviceProfilerResults(*device);
             }

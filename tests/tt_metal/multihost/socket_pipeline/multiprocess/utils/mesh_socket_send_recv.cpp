@@ -212,7 +212,7 @@ void send_async(
     workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
 
     // Enqueue the workload
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 }
 
 }  // namespace tt::tt_metal

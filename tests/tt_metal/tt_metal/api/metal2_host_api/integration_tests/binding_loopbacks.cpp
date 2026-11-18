@@ -74,7 +74,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
         distributed::ReplicatedBufferConfig{.size = total_bytes},
         {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
         mesh_device.get());
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     // -------------------------------------------------------
     // Build ProgramSpec
@@ -356,7 +356,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     for (size_t i = 0; i < input_data.size(); i++) {
         input_data[i] = bfloat16(static_cast<float>(i));
     }
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto input_host = HostTensor::from_vector(input_data, tensor_spec);
     cq.enqueue_write_tensor(input_host, input_tensor);
 

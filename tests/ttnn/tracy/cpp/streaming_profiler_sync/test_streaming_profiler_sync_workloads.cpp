@@ -196,7 +196,7 @@ int run() {
     SetRuntimeArgs(program, kernel, core, {worker_l1.flag(), kRounds});
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
 
     // ReadFromDeviceL1 barriers every core on the chip first, which takes about 0.5 ms and would widen each window by
@@ -438,7 +438,7 @@ void run(distributed::MeshDevice& mesh, uint32_t runtime_id) {
     }
     clear_flags(worker_l1, flag_cores);
     distributed::MeshWorkload workload = make_multicast(mesh, worker_l1, runtime_id);
-    run_once(mesh.mesh_command_queue(), workload);
+    run_once(mesh.mesh_command_queue(0), workload);
     std::printf(
         "[multicast] %zux%zu Tensix cores x %u rounds (%u per NoC) on %zu chips\n",
         cores.grid_size().x,
@@ -669,7 +669,7 @@ Run run(distributed::MeshDevice& mesh_device, uint32_t runtime_id) {
     }
     const WorkerL1 worker_l1 = reserve_worker_l1(mesh_device);
     distributed::MeshWorkload workload = build_workload(mesh_device, worker_l1, result.pairs, chips, runtime_id);
-    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue(0);
     const auto start = Clock::now();
     do {
         clear_flags(worker_l1, flag_cores);

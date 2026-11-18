@@ -499,7 +499,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto workload = unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 2);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -549,7 +549,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
 
 TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsCompute) {
     for (auto& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         // First run the program with the initial runtime args
@@ -586,7 +586,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsCompute) {
 // Don't cover all cores of kernel with SetRuntimeArgs. Verify that correct offset used to access common runtime args.
 TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
     for (auto& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         // First run the program with the initial runtime args
@@ -620,7 +620,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
 // Different unique runtime args per core. Not overly special, but verify that it works.
 TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
     for (auto& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         // First run the program with the initial runtime args
@@ -659,7 +659,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
 // that common runtime args are appropriately offset by amount from core(s) with most unique runtime args.
 TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
     for (auto& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         // First run the program with the initial runtime args
@@ -747,7 +747,7 @@ TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
 
 TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
     for (auto& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         // First run the program with the initial runtime args
@@ -823,7 +823,7 @@ TEST_F(MeshDeviceFixture, Metal2RejectsLegacyRuntimeArgsAPIs) {
 
 TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
     for (auto& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         auto grid_size = mesh_device->logical_grid_size();
@@ -1037,7 +1037,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
     std::vector<uint32_t> common_rtas{0xdeadbeef, 0xabcd1234, 0x101};
     // Single kernel on all 6 user DMs (DM2..DM7): all DMs should receive identical CRTAs
@@ -1080,7 +1080,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> base_crtas = {0x101, 0x202, 0x303};
     // One kernel per user DM (DM2..DM7): each kernel gets its own CRTA offset
     constexpr uint32_t num_kernels = unit_tests::runtime_args::kQuasarNumUserDms;
@@ -1173,7 +1173,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue(0);
 
     const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);

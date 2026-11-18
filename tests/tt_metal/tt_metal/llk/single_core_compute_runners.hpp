@@ -81,7 +81,7 @@ inline vector<std::uint32_t> run_unary(
         core,
         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {num_tiles}});
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
@@ -153,7 +153,7 @@ inline vector<std::uint32_t> run_unary_tiled(
         core,
         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {num_tiles}});
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
@@ -230,7 +230,7 @@ inline vector<std::uint32_t> run_binary(
         core,
         ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compile_args, .defines = compute_defines});
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, src0_buffer, src0_vec, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src1_buffer, src1_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, num_tiles});
@@ -292,7 +292,7 @@ inline vector<std::uint32_t> run_matmul_single(
     CreateKernel(
         program, compute_kernel, core, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {1, 1, 1, 1, 1, 1, 1}});
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, src0_buffer, src0_vec, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src1_buffer, src1_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, 1});
@@ -365,7 +365,7 @@ inline vector<std::uint32_t> run_matmul_block(
         core,
         ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {ct_dim, rt_dim, kt_dim}});
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, src0_buffer, src0_vec, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src1_buffer, src1_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, in0_tiles});

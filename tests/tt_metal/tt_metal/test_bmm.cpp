@@ -324,7 +324,7 @@ BmmSingleNode setup_bmm_single_node(distributed::MeshDevice& mesh_device, const 
     };
     set_bmm_run_args(bmm.workload.get_programs().begin()->second, p, tensors, node);
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     cq.enqueue_write_tensor(HostTensor::from_vector(bmm.inputs.src0, tensors.src0.tensor_spec()), tensors.src0);
     cq.enqueue_write_tensor(HostTensor::from_vector(bmm.inputs.src1, tensors.src1.tensor_spec()), tensors.src1);
     return bmm;
@@ -333,7 +333,7 @@ BmmSingleNode setup_bmm_single_node(distributed::MeshDevice& mesh_device, const 
 void run_bmm_single_node(distributed::MeshDevice& mesh_device, const BmmParams& p) {
     BmmTensors tensors = create_bmm_tensors(mesh_device, p);
     BmmSingleNode bmm = setup_bmm_single_node(mesh_device, p, tensors);
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, bmm.workload, /*blocking=*/true);
     check_bmm_output(cq, p, tensors, bmm.inputs);
 }
@@ -430,7 +430,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TraceBmm) {
     const BmmParams p = single_node_bmm_params(mesh_device.arch());
     BmmTensors tensors = create_bmm_tensors(mesh_device, p);
     BmmSingleNode bmm = setup_bmm_single_node(mesh_device, p, tensors);
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
 
     // Warm up
     distributed::EnqueueMeshWorkload(cq, bmm.workload, /*blocking=*/true);

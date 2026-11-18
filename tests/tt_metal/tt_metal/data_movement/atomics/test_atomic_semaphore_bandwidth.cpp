@@ -145,7 +145,7 @@ bool run_atomic_semaphore_test(distributed::MeshDevice& mesh_device, const Atomi
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 

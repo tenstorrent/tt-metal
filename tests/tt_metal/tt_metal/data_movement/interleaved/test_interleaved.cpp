@@ -43,7 +43,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const InterleavedConfig& test_
 
     const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::ReplicatedBufferConfig global_config{.size = total_size_bytes};
     distributed::DeviceLocalBufferConfig local_config{
         .page_size = test_config.page_size_bytes,

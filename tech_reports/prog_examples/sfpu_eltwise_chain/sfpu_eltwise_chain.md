@@ -38,7 +38,7 @@ The data pipeline is:
 
 ```cpp
 std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
-distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 distributed::Program program = distributed::CreateProgram(*mesh_device);

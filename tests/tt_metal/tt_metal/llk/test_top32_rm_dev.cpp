@@ -164,7 +164,7 @@ bool verify_top32_outputs(
 
 bool run_top32_rm_dev(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t row_elements, uint32_t seed) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;

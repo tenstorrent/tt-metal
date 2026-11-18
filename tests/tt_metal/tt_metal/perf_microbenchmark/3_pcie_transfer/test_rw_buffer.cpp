@@ -146,8 +146,8 @@ int main(int argc, char** argv) {
             // Execute application
             if (!skip_write) {
                 auto t_begin = std::chrono::steady_clock::now();
-                tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), buffer, src_vec, false);
-                tt_metal::distributed::Finish(device->mesh_command_queue());
+                tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(0), buffer, src_vec, false);
+                tt_metal::distributed::Finish(device->mesh_command_queue(0));
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 float write_bw = transfer_size / (elapsed_us * 1000.0);
@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
             if (!skip_read) {
                 auto t_begin = std::chrono::steady_clock::now();
                 tt_metal::distributed::ReadShard(
-                    device->mesh_command_queue(),
+                    device->mesh_command_queue(0),
                     result_vec,
                     buffer,
                     tt_metal::distributed::MeshCoordinate(0, 0),

@@ -239,7 +239,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
             slow_dispatch::WriteToL1(*mesh_device, logical_core, write_address, host_input);
         }
 
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -304,7 +304,7 @@ TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
 TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto mesh_device = this->devices_.at(0);
     auto* device = mesh_device->impl().get_devices()[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -394,7 +394,7 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 
     tt_metal::SetRuntimeArgs(program_, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
 
-    auto& cq = this->device().mesh_command_queue();
+    auto& cq = this->device().mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
@@ -408,7 +408,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     std::map<CoreCoord, CoreCoord> logical_to_virtual_map;
 
     auto mesh_device = this->devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -564,7 +564,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     mesh_workload.add_program(device_range, std::move(program));
 
     // Launch workload using mesh command queue
-    auto& mesh_cq = mesh_device->mesh_command_queue();
+    auto& mesh_cq = mesh_device->mesh_command_queue(0);
     EnqueueMeshWorkload(mesh_cq, mesh_workload, true);  // blocking = true
 
     // Verify the data was written correctly to pinned memory
@@ -620,7 +620,7 @@ TEST_F(MeshDeviceFixture, WriteWithStateAnyLenUpdatesRetAddrMidOnCarry) {
     MeshWorkload workload;
     MeshCoordinateRange device_range(target_coord, target_coord);
     workload.add_program(device_range, std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, true);
 
     std::vector<uint32_t> result;
     tt_metal::detail::ReadFromDeviceL1(device, logical_core, result_addr, 4 * sizeof(uint32_t), result);
@@ -676,11 +676,11 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
 
         std::vector<uint32_t> src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
         std::iota(src_vec.begin(), src_vec.end(), 42);
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), mesh_buffer, src_vec);
-        Finish(mesh_device->mesh_command_queue());
+        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(0), mesh_buffer, src_vec);
+        Finish(mesh_device->mesh_command_queue(0));
 
         std::vector<uint32_t> dst_vec = {};
-        EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst_vec, mesh_buffer, true);
+        EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(0), dst_vec, mesh_buffer, true);
         EXPECT_EQ(dst_vec, src_vec) << "Buffer operations failed with full grid in slow dispatch mode";
     }
 }

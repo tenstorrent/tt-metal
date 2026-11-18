@@ -69,7 +69,7 @@ bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh
     CreateKernel(
         program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
     mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, true);
     return pass;
 }
 }  // namespace unit_tests_common::basic::test_device_init

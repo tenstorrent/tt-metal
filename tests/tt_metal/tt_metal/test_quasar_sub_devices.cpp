@@ -226,7 +226,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDevicePartitionsWorkerGrid) {
 
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<distributed::MeshWorkload> workloads;
     workloads.reserve(partitions.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
@@ -312,7 +312,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation
         }
     }
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<std::vector<uint32_t>> inputs(partitions.size());
     std::vector<std::vector<uint32_t>> outputs(partitions.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
@@ -356,7 +356,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceStallGroup) {
     mesh_device->load_sub_device_manager(manager);
     auto sync = create_sync_workloads(mesh_device, incrementer_sub_device, waiter_sub_device);
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, sync.waiter, /*blocking=*/false);
     mesh_device->set_sub_device_stall_group({{SubDeviceId{0}}});
     distributed::EnqueueMeshWorkload(cq, sync.syncer, /*blocking=*/true);
@@ -391,7 +391,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
     const auto split_manager = mesh_device->create_sub_device_manager(split_sub_devices, kLocalL1Size);
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     mesh_device->load_sub_device_manager(combined_manager);
     std::vector<std::pair<NodeCoord, uint32_t>> combined_addresses;

@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
     CoreCoord core = {0, 0};
     const auto device_coord = distributed::MeshCoordinate(0, 0);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     const uint32_t n_tiles = 64;
     const uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
     // Create 3 buffers on DRAM. These will hold the input and output data. A and B are the input buffers, C is the

@@ -247,14 +247,14 @@ std::pair<double, double> run_d2h_throughput(
     std::vector<uint32_t> src_vec(page_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(page_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
-    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord, true);
+    WriteShard(mesh_device->mesh_command_queue(0), sender_data_buffer, src_vec, sender_core.device_coord, true);
     execute_program_on_device(*mesh_device, sender_core.device_coord, std::move(send_program));
 
     for (uint32_t i = 0; i < num_iterations; i++) {
         output_socket.read(dst_vec.data(), 1);
     }
     output_socket.barrier();
-    Finish(mesh_device->mesh_command_queue());
+    Finish(mesh_device->mesh_command_queue(0));
 
     uint64_t total_cycles = read_l1_uint64(*mesh_device, sender_core, measurement_buffer->address());
     double per_page_cycles = static_cast<double>(total_cycles) / num_iterations;
@@ -303,7 +303,7 @@ std::vector<uint64_t> run_d2h_latency(
         output_socket.read(dst_vec.data(), 1);
     }
     output_socket.barrier();
-    Finish(mesh_device->mesh_command_queue());
+    Finish(mesh_device->mesh_command_queue(0));
 
     std::vector<uint64_t> cycles(num_iterations);
     read_l1_uint64s(*mesh_device, sender_core, measurement_buffer->address(), cycles);
@@ -351,7 +351,7 @@ std::vector<uint64_t> measure_d2h_handshake_overhead(
         output_socket.read(dst_vec.data(), 1);
     }
     output_socket.barrier();
-    Finish(mesh_device->mesh_command_queue());
+    Finish(mesh_device->mesh_command_queue(0));
 
     std::vector<uint64_t> cycles(num_iterations);
     read_l1_uint64s(*mesh_device, sender_core, measurement_buffer->address(), cycles);

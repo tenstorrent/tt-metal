@@ -254,7 +254,7 @@ tt::tt_metal::MeshTensor create_and_transfer_data_sharded_cb(
 // Reads the tensor back and returns the contents of its shard on device (0, 0).
 template <typename T>
 std::vector<T> read_shard_as(tt::tt_metal::distributed::MeshDevice& device, const tt::tt_metal::MeshTensor& tensor) {
-    const auto host_tensor = device.mesh_command_queue().enqueue_read_tensor(tensor);
+    const auto host_tensor = device.mesh_command_queue(0).enqueue_read_tensor(tensor);
     const auto shard = host_tensor.buffer().get_shard(tt::tt_metal::distributed::MeshCoordinate(0, 0));
     TT_FATAL(shard.has_value(), "Tensor has no shard on device (0, 0)");
     const auto values = shard->view_as<T>();
@@ -624,7 +624,7 @@ int main(int argc, char** argv) {
         for (uint32_t i = 0; i < num_tests; ++i) {
             if (!fast_dispatch_mode) {
                 log_debug(LogTest, "calling EnqueueMeshWorkload");
-                tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, true);
+                tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workload, true);
                 log_debug(LogTest, "EnqueueMeshWorkload done");
 
                 uint64_t t0_to_any_riscfw_end =
@@ -645,8 +645,8 @@ int main(int argc, char** argv) {
                 log_debug(LogTest, "calling EnqueueMeshWorkload");
                 std::chrono::duration<double, std::nano> duration{};
                 auto t_begin = std::chrono::high_resolution_clock::now();
-                tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-                tt_metal::distributed::Finish(device->mesh_command_queue());
+                tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workload, false);
+                tt_metal::distributed::Finish(device->mesh_command_queue(0));
                 auto t_end = std::chrono::high_resolution_clock::now();
                 log_debug(LogTest, "EnqueueMeshWorkload done");
                 tt_metal::ReadMeshDeviceProfilerResults(*device);
@@ -1676,7 +1676,7 @@ tt::tt_metal::MeshTensor create_and_transfer_data_sharded_cb(
 
     auto tensor = tt::tt_metal::MeshTensor::allocate_on_device(device, spec);
     const auto host_tensor = tt::tt_metal::HostTensor::from_buffer(tt::tt_metal::HostBuffer(packed_tiles), spec);
-    device.mesh_command_queue().enqueue_write_tensor(host_tensor, tensor);
-    tt::tt_metal::distributed::Finish(device.mesh_command_queue());
+    device.mesh_command_queue(0).enqueue_write_tensor(host_tensor, tensor);
+    tt::tt_metal::distributed::Finish(device.mesh_command_queue(0));
     return tensor;
 }

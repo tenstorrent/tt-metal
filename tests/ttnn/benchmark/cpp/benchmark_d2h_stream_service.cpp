@@ -428,7 +428,7 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         total_iters,
         coords.size());
     tt::tt_metal::distributed::EnqueueMeshWorkload(
-        g_mesh_device->mesh_command_queue(), producer_workload, /*blocking=*/false);
+        g_mesh_device->mesh_command_queue(0), producer_workload, /*blocking=*/false);
 
     std::vector<uint32_t> host_storage(global_shape.volume(), 0u);
     auto host_mapper =
@@ -498,7 +498,7 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
 
         log_info(tt::LogTest, "[{}] Starting final untimed producer Finish() tail", cs.label);
         const auto finish_t0 = std::chrono::steady_clock::now();
-        tt::tt_metal::distributed::Finish(g_mesh_device->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(g_mesh_device->mesh_command_queue(0));
         const auto finish_t1 = std::chrono::steady_clock::now();
 
         const double elapsed_s = std::chrono::duration<double>(t1 - t0).count();

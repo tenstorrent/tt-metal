@@ -70,7 +70,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
-    tt_metal::distributed::Finish(test_fixture.mesh_device_->mesh_command_queue(), {{SubDeviceId(0)}});
+    tt_metal::distributed::Finish(test_fixture.mesh_device_->mesh_command_queue(0), {{SubDeviceId(0)}});
 
     log_info(tt::LogTest, "Finished");
 }

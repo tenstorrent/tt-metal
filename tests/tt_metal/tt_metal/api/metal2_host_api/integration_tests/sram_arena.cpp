@@ -92,7 +92,7 @@ TensorSpec OutputSpec(uint32_t num_nodes, uint32_t entry_size) {
 
 MeshTensor CreateSentinelTensor(distributed::MeshDevice& device, const TensorSpec& spec) {
     auto tensor = MeshTensor::allocate_on_device(device, spec);
-    auto& cq = device.mesh_command_queue();
+    auto& cq = device.mesh_command_queue(0);
     auto host = HostTensor::from_vector(std::vector<uint32_t>(spec.logical_shape().volume(), kSentinel), spec);
     cq.enqueue_write_tensor(host, tensor);
     distributed::Finish(cq);
@@ -119,7 +119,7 @@ std::vector<uint32_t> ReadArena(distributed::MeshDevice& device, NodeCoord node,
 void Execute(distributed::MeshDevice& device, Program program) {
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(device.shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(device.mesh_command_queue(0), workload, /*blocking=*/true);
 }
 
 // One report row per node. Unwritten fields and alignment padding must retain their sentinel.
@@ -216,10 +216,12 @@ protected:
         return args;
     }
 
-    void Enqueue() { distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true); }
+    void Enqueue() {
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true);
+    }
 
     uint32_t ReportedAddress() {
-        return mesh_device->mesh_command_queue().enqueue_read_tensor(*report).to_vector<uint32_t>().at(0);
+        return mesh_device->mesh_command_queue(0).enqueue_read_tensor(*report).to_vector<uint32_t>().at(0);
     }
 
     std::vector<uint32_t> ReadReservation(const SRAMArena& allocation) {
@@ -384,11 +386,11 @@ protected:
     }
 
     void Enqueue() {
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), fixture_workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), fixture_workload, /*blocking=*/true);
     }
 
     std::vector<uint32_t> ReadTensor(const MeshTensor& tensor) {
-        return mesh_device->mesh_command_queue().enqueue_read_tensor(tensor).to_vector<uint32_t>();
+        return mesh_device->mesh_command_queue(0).enqueue_read_tensor(tensor).to_vector<uint32_t>();
     }
 
     std::vector<uint32_t> ReadReservation(const SRAMArena& allocation) {
@@ -494,7 +496,7 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadDefaultOffset) {
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
@@ -546,7 +548,7 @@ TEST_F(SRAMArenaRangeLockstep, DFBDefaultOffset) {
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
@@ -598,7 +600,7 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadNonzeroOffset) {
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
@@ -650,7 +652,7 @@ TEST_F(SRAMArenaRangeLockstep, DFBNonzeroOffset) {
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
@@ -714,7 +716,7 @@ TEST_F(SRAMArenaRangeLockstep, BorrowingAcrossNodes) {
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     for (const auto& node : nodes) {
         ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, node, base, initial_arena));
@@ -794,7 +796,7 @@ TEST_F(SRAMArenaRangeLockstep, SharedByScratchpadAndDFB) {
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
@@ -850,7 +852,7 @@ TEST_F(SRAMArenaLockstep, ScratchpadDefaultOffset) {
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
@@ -901,7 +903,7 @@ TEST_F(SRAMArenaLockstep, DFBDefaultOffset) {
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
@@ -952,7 +954,7 @@ TEST_F(SRAMArenaLockstep, ScratchpadNonzeroOffset) {
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
@@ -1003,7 +1005,7 @@ TEST_F(SRAMArenaLockstep, DFBNonzeroOffset) {
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
@@ -1066,7 +1068,7 @@ TEST_F(SRAMArenaLockstep, BorrowingAcrossNodes) {
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     for (const auto& node : nodes) {
         ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, node, base, initial_arena));
@@ -1145,7 +1147,7 @@ TEST_F(SRAMArenaLockstep, SharedByScratchpadAndDFB) {
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 

@@ -145,7 +145,7 @@ static void build_and_enqueue(
                 MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range
                 mesh_workload.add_program(device_range, std::move(*programs[i]));
-                tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(), mesh_workload, false);
+                tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(0), mesh_workload, false);
             } else {
                 if (!enqueue_only) {
                     programs[i].impl().compile(devices[i].get());
@@ -153,7 +153,7 @@ static void build_and_enqueue(
                 MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range
                 mesh_workload.add_program(device_range, std::move(programs[i]));
-                tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(), mesh_workload, false);
+                tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(0), mesh_workload, false);
             }
         }));
     }
@@ -165,6 +165,7 @@ static void build_and_enqueue(
 }
 
 static void wait_for_worker_program_completion(const std::vector<std::shared_ptr<MeshDevice>>& devices) {
-    std::ranges::for_each(
-        devices, [&](const std::shared_ptr<MeshDevice>& d) { tt_metal::distributed::Finish(d->mesh_command_queue()); });
+    std::ranges::for_each(devices, [&](const std::shared_ptr<MeshDevice>& d) {
+        tt_metal::distributed::Finish(d->mesh_command_queue(0));
+    });
 }

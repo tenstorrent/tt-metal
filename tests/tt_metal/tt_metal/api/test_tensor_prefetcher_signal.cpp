@@ -99,7 +99,7 @@ void run_signal_kernel(
     SetRuntimeArgs(program, kernel, core, {signal_addr, num_signals});
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 }
 
 TEST_P(TensorPrefetcherSignalNocFixture, TensixSignalIncrementsEveryBanksCounter) {

@@ -158,7 +158,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     // -------------------------------------------------------
     // Dispatch via the fast/mesh path (blocking).
     // -------------------------------------------------------
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     workload.add_program(device_range, std::move(program));
@@ -301,7 +301,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
     // -------------------------------------------------------
     // Dispatch via the fast/mesh path (blocking).
     // -------------------------------------------------------
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     workload.add_program(device_range, std::move(program));

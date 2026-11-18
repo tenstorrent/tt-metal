@@ -301,7 +301,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
 TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     CreateDevices(2048);
     auto mesh_device = this->devices_[0];
-    auto& mesh_command_queue = mesh_device->mesh_command_queue();
+    auto& mesh_command_queue = mesh_device->mesh_command_queue(0);
 
     distributed::ReplicatedBufferConfig replicated_config{.size = 2048};
     distributed::DeviceLocalBufferConfig device_config{.page_size = 2048, .buffer_type = BufferType::DRAM};
@@ -344,7 +344,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
 TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
     CreateDevices(2048);
     auto mesh_device = this->devices_[0];
-    auto& mesh_command_queue = mesh_device->mesh_command_queue();
+    auto& mesh_command_queue = mesh_device->mesh_command_queue(0);
 
     distributed::ReplicatedBufferConfig replicated_config{.size = 2048};
     distributed::DeviceLocalBufferConfig device_config{.page_size = 2048, .buffer_type = BufferType::DRAM};
@@ -400,7 +400,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
 TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
     CreateDevices(2048);
     auto mesh_device = this->devices_[0];
-    auto& mesh_command_queue = mesh_device->mesh_command_queue();
+    auto& mesh_command_queue = mesh_device->mesh_command_queue(0);
 
     distributed::ReplicatedBufferConfig replicated_config{.size = 2048};
     distributed::DeviceLocalBufferConfig device_config{.page_size = 2048, .buffer_type = BufferType::DRAM};
@@ -461,7 +461,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     CreateDevices(6144);
     // Get command queue from device for this test, since its running in async mode
     auto mesh_device = this->devices_[0];
-    auto& mesh_command_queue = mesh_device->mesh_command_queue();
+    auto& mesh_command_queue = mesh_device->mesh_command_queue(0);
 
     distributed::ReplicatedBufferConfig replicated_config{.size = 2048};
     distributed::DeviceLocalBufferConfig device_config{.page_size = 2048, .buffer_type = BufferType::DRAM};
@@ -551,7 +551,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
 TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     CreateDevices(6144);
     auto mesh_device = this->devices_[0];
-    auto& mesh_command_queue = mesh_device->mesh_command_queue();
+    auto& mesh_command_queue = mesh_device->mesh_command_queue(0);
 
     distributed::ReplicatedBufferConfig replicated_config{.size = 2048};
     distributed::DeviceLocalBufferConfig device_config{.page_size = 2048, .buffer_type = BufferType::DRAM};
@@ -645,7 +645,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
 }  // end namespace basic_tests
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -671,7 +671,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -697,7 +697,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -725,7 +725,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -751,7 +751,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -782,7 +782,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -819,7 +819,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndSmallProgramsTrace) {
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -846,7 +846,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndS
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowedBySmallProgramsTrace) {
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -873,7 +873,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowed
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSmallProgramsTrace) {
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
@@ -900,7 +900,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSma
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     std::vector<distributed::MeshTraceId> trace_ids;
     std::unordered_map<uint64_t, distributed::MeshTraceId> program_ids_to_trace_ids;
@@ -949,7 +949,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     std::vector<distributed::MeshTraceId> trace_ids;
     std::unordered_map<uint64_t, distributed::MeshTraceId> program_ids_to_trace_ids;
@@ -1005,7 +1005,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
-    auto& mesh_command_queue = this->device_->mesh_command_queue();
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     std::vector<distributed::MeshTraceId> trace_ids;
     std::unordered_map<uint64_t, distributed::MeshTraceId> program_ids_to_trace_ids;

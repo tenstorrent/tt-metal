@@ -125,8 +125,8 @@ bool RunDeviceMcastWrapAroundTest(
     distributed::MeshCoordinate zero_coord{0, 0};
     distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device.mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device.mesh_command_queue(0));
 
     for (const auto& receiver_core : receiver_cores) {
         std::vector<uint32_t> readback_data;

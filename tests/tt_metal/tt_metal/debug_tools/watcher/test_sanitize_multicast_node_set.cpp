@@ -68,7 +68,7 @@ void RunMulticastNodeSetTest(
     if (grid.x < 3 || grid.y < 2) {
         GTEST_SKIP() << "Needs a 3x2 worker grid";
     }
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
 
     const TensorSpec source_spec = MakeTileShardedSpec(NodeRangeSet(sender));
     const TensorSpec target_spec = MakeTileShardedSpec(NodeRangeSet(NodeRange({0, 0}, {1, 0})));

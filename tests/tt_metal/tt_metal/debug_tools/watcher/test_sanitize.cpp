@@ -172,7 +172,7 @@ void RunTestOnCore(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram(*mesh_device);
     auto* device = mesh_device->impl().get_devices()[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     CoreCoord virtual_core;
     if (is_eth_core) {

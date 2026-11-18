@@ -144,7 +144,7 @@ static void run_pcie_mid_cleanup(const std::shared_ptr<distributed::MeshDevice>&
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate({0, 0}));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 

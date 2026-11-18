@@ -175,7 +175,7 @@ void PerDeviceRuntimeArgsChecks::unique_and_common_fields_eager() {
         }
     };
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     set_fields(0);
     EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
@@ -208,7 +208,7 @@ void PerDeviceRuntimeArgsChecks::same_values_keep_version() {
     for (uint32_t i = 0; i < num_devices; i++) {
         values[i] = 8000 + i;
     }
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     auto run_and_check = [&] {
         EnqueueMeshWorkload(cq, workload, false);
         Finish(cq);
@@ -303,7 +303,7 @@ void PerDeviceRuntimeArgsChecks::legacy_program_moved_away_and_back() {
     SetRuntimeArgsPerDevice(second, range, kernel, core, 2, 1, other);
     first.get_programs().at(range) = std::move(second.get_programs().at(range));
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     EnqueueMeshWorkload(cq, first, false);
     Finish(cq);
     uint32_t idx = 0;
@@ -337,7 +337,7 @@ void PerDeviceRuntimeArgsChecks::own_args_change_between_enqueues() {
     const auto cleared = *range.begin();
     tt::tt_metal::experimental::UnsetRuntimeArgsForDevice(workload, range, cleared, kernel, core, 4);
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     auto run_and_check = [&](uint32_t word0, uint32_t word4) {
         EnqueueMeshWorkload(cq, workload, false);
         Finish(cq);
@@ -400,7 +400,7 @@ void PerDeviceRuntimeArgsChecks::trace_replays_capture_time_values() {
         }
     };
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     set_fields(10000);
     EnqueueMeshWorkload(cq, workload, false);  // compiles and loads the program
     Finish(cq);
@@ -456,7 +456,7 @@ void PerDeviceRuntimeArgsChecks::field_after_kernel_without_args_on_core() {
             workload, range, coord, kernel_b, core1, 0, std::vector<uint32_t>{9000 + idx, 9500 + idx});
         idx++;
     }
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
     // A cache-hit update of B on core1 through the program's view lands in B's words too.
@@ -490,7 +490,7 @@ void PerDeviceRuntimeArgsChecks::slot_field_removed_then_neighbour_set() {
     SetCommonRuntimeArgs(program, kernel, default_common_args());
     MeshWorkload workload;
     workload.add_program(range, std::move(program));
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
 
     // [2, 4) first, so removing it removes a field ahead of one that stays (the removal compacts the field list).
     uint32_t idx = 0;
@@ -640,7 +640,7 @@ void PerDeviceRuntimeArgsChecks::program_on_sub_range() {
         tt::tt_metal::experimental::SetRuntimeArgsForDevice(
             workload, range, coord, kernel, core, 4, std::vector<uint32_t>{6000 + coord[0] * 100 + coord[1]});
     }
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
     for (const auto& coord : range) {
@@ -685,7 +685,7 @@ void PerDeviceRuntimeArgsChecks::trace_node_in_several_partitions() {
     MeshWorkload other_workload;
     other_workload.add_program(first, std::move(other));
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     EnqueueMeshWorkload(cq, workload, false);
     EnqueueMeshWorkload(cq, other_workload, false);
     Finish(cq);
@@ -812,7 +812,7 @@ void PerDeviceRuntimeArgsChecks::command_sequence_beyond_one_fetch() {
         }
     };
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     set_fields(1);
     EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);

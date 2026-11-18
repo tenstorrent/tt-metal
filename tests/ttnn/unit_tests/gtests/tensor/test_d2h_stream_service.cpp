@@ -247,12 +247,12 @@ void run_d2h_worker_sync_case(
         }
 
         tt::tt_metal::distributed::EnqueueMeshWorkload(
-            mesh_device->mesh_command_queue(), worker_workload, /*blocking=*/false);
+            mesh_device->mesh_command_queue(0), worker_workload, /*blocking=*/false);
         std::vector<std::byte> out(service.payload_size_bytes());
         std::vector<std::byte> metadata_out(metadata_size_bytes);
         service.read_from_tensor(out, metadata_out);
         service.barrier();
-        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue(0));
         std::vector<uint32_t> read_vec(out.size() / sizeof(uint32_t));
         std::memcpy(read_vec.data(), out.data(), out.size());
         EXPECT_EQ(read_vec, expected) << "worker-sync read mismatch";
@@ -312,14 +312,14 @@ void run_d2h_worker_sync_case_per_shard(
         }
 
         tt::tt_metal::distributed::EnqueueMeshWorkload(
-            mesh_device->mesh_command_queue(), worker_workload, /*blocking=*/false);
+            mesh_device->mesh_command_queue(0), worker_workload, /*blocking=*/false);
 
         auto read_host = distribute_tensor(
             Tensor::from_vector<uint32_t>(std::vector<uint32_t>(global_volume, 0), global_spec), *read_mapper);
         std::vector<std::byte> metadata_out(metadata_size_bytes);
         service.read_from_tensor(read_host, metadata_out);
         service.barrier();
-        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue(0));
 
         const auto& read_buf = read_host.host_storage().host_tensor().buffer();
         for (const auto& coord : service.get_backing_tensor().tensor_topology().mesh_coords()) {
@@ -402,7 +402,7 @@ void run_d2h_stream_service_case(
         auto host_src = distribute_tensor(Tensor::from_vector<uint32_t>(src, global_spec), *mapper);
         auto& backing = const_cast<Tensor&>(service.get_backing_tensor());
         ttnn::copy_to_device(host_src, backing);
-        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue(0));
 
         if (output_path == OutputPath::Tensor) {
             auto read_host = distribute_tensor(
@@ -474,7 +474,7 @@ void run_d2h_metadata_only_case(
         std::vector<std::byte> out(metadata_size_bytes);
         service.read_metadata(out);
         service.barrier();  // drain the socket before flushing the CQ / reusing record_dev
-        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue(0));
 
         std::vector<uint8_t> got(metadata_size_bytes);
         std::memcpy(got.data(), out.data(), metadata_size_bytes);
@@ -539,7 +539,7 @@ void run_layer_ack_service_case(
         ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
     }
     // Ensure every device op has executed and pushed its record to the socket.
-    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue(0));
 
     // The reader pushes asynchronously; poll the ring until every record is out (bounded, so a
     // stuck reader fails the test instead of hanging it). Records arrive in FIFO order from the

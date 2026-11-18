@@ -92,7 +92,7 @@ static void run_basic_checkpoint(
     DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     using namespace dp_ckpt;
     SingleCoreSetup s(mesh_device);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     auto reader = CreateKernel(
         *s.program,
@@ -146,7 +146,7 @@ static void run_checkpoint_loop(
     DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     using namespace dp_ckpt;
     SingleCoreSetup s(mesh_device);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     auto reader = CreateKernel(
         *s.program,
@@ -213,7 +213,7 @@ static void run_global_checkpoint(
     Program prog = CreateProgram(*mesh_device);
     workload.add_program(dr, std::move(prog));
     auto& program = workload.get_programs().at(dr);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     uint32_t sem_id = CreateSemaphore(program, cores, 0);
 
@@ -305,7 +305,7 @@ TEST_F(DevicePrintCheckpointTest, GlobalCheckpoint) {
 static void run_dump_cb(DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     using namespace dp_ckpt;
     SingleCoreSetup s(mesh_device);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     auto reader = CreateKernel(
         *s.program,
@@ -362,7 +362,7 @@ TEST_F(DevicePrintCheckpointTest, DumpCB) {
 static void run_dump_l1(DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     using namespace dp_ckpt;
     SingleCoreSetup s(mesh_device);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     auto reader = CreateKernel(
         *s.program,
@@ -418,7 +418,7 @@ TEST_F(DevicePrintCheckpointTest, DumpL1) {
 static void run_dump_typed(DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     using namespace dp_ckpt;
     SingleCoreSetup s(mesh_device);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     auto reader = CreateKernel(
         *s.program,

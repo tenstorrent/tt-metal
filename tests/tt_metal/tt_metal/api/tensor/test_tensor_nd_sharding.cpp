@@ -1223,7 +1223,7 @@ TEST_P(NDShardingTests, LoopbackTest) {
     std::iota(data.begin(), data.end(), uint16_t{0});
 
     auto host_tensor = HostTensor::from_vector(data, tensor_spec);
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     auto tensor = cq.enqueue_write_tensor(host_tensor);
     EXPECT_TRUE(tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec().has_value());
     auto readback_data = cq.enqueue_read_tensor(tensor).to_vector<uint16_t>();
@@ -1248,7 +1248,7 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
 
     std::vector<uint16_t> empty_data(volume);
     auto host_empty = HostTensor::from_vector(empty_data, tensor_spec);
-    auto tensor = mesh_device_->mesh_command_queue().enqueue_write_tensor(host_empty);
+    auto tensor = mesh_device_->mesh_command_queue(0).enqueue_write_tensor(host_empty);
 
     const auto& buffer = tensor.mesh_buffer();
 
@@ -1273,13 +1273,13 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
             distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}
                 .host_data(reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset)
                 .region(buffer_region);
-        mesh_device_->mesh_command_queue().enqueue_write_shards(shared_mesh_buffer, {write_shard_data_transfer}, true);
-        mesh_device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, shared_mesh_buffer, true);
+        mesh_device_->mesh_command_queue(0).enqueue_write_shards(shared_mesh_buffer, {write_shard_data_transfer}, true);
+        mesh_device_->mesh_command_queue(0).enqueue_read_shards({read_shard_data_transfer}, shared_mesh_buffer, true);
     }
     EXPECT_EQ(tensor_data, partial_readback_data);
 
     distributed::ReadShard(
-        mesh_device_->mesh_command_queue(),
+        mesh_device_->mesh_command_queue(0),
         full_readback_data,
         shared_mesh_buffer,
         distributed::MeshCoordinate(0, 0),
@@ -1330,7 +1330,7 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
 
         auto start = std::chrono::high_resolution_clock::now();
         auto device_tensor =
-            mesh_device_->mesh_command_queue().enqueue_write_tensor(host_tensor, tensor_spec.memory_config());
+            mesh_device_->mesh_command_queue(0).enqueue_write_tensor(host_tensor, tensor_spec.memory_config());
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
         return duration.count();

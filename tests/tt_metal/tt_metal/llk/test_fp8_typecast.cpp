@@ -103,7 +103,7 @@ static vector<std::uint32_t> run_fp8_typecast(
         core,
         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {num_tiles}});
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});

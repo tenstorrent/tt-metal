@@ -113,7 +113,7 @@ static void RunPrograms(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
         program.set_runtime_id(static_cast<uint64_t>(i) + 1);
 
         workload.add_program(device_range, std::move(program));
-        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
     }
 }
 

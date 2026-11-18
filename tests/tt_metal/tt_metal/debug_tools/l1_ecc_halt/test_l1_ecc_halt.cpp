@@ -112,7 +112,7 @@ TEST_F(L1EccHaltTest, EmulatedHaltIsReported) {
     // The record survives until the next firmware init, so it can be written before the launch.
     MetalContext::instance().get_cluster().write_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     auto workload = single_core_workload(hang_kernel, {0});
-    auto& cq = devices_[0]->mesh_command_queue();
+    auto& cq = devices_[0]->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     expect_halt_reported_by([&] { distributed::Finish(cq); });
     EXPECT_TRUE(MetalContext::instance().l1_ecc_halt_detected());
@@ -141,7 +141,7 @@ TEST_F(L1EccHaltTest, EventSynchronizeReportsHalt) {
     record_.view().reason() = L1_ECC_HALT_REASON_UNEXPECTED;
     MetalContext::instance().get_cluster().write_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     auto workload = single_core_workload(hang_kernel, {0});
-    auto& cq = devices_[0]->mesh_command_queue();
+    auto& cq = devices_[0]->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     auto event = cq.enqueue_record_event_to_host();
     expect_halt_reported_by([&] { distributed::EventSynchronize(event); });
@@ -216,7 +216,7 @@ TEST_F(L1EccHaltTest, MretWithAliasedBranchReturns) {
 TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     auto& ctx = MetalContext::instance();
     auto workload = single_core_workload(hang_kernel, {1});  // raises IRQ 3
-    auto& cq = devices_[0]->mesh_command_queue();
+    auto& cq = devices_[0]->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     expect_halt_reported_by([&] { distributed::Finish(cq); });
 

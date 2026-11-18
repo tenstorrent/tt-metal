@@ -56,7 +56,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
     uint32_t expected_event_id = 0;
     uint32_t last_read_address = 0;
     auto mesh_device = this->devices_[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto* device = mesh_device->impl().get_devices()[0];
 
     for (const DataMovementMode data_movement_mode : {DataMovementMode::READ, DataMovementMode::WRITE}) {
@@ -110,7 +110,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
 // Basic test, record events, check that Event struct was updated. Enough commands to trigger issue queue wrap.
 TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     auto mesh_device = this->devices_[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const size_t num_events = 100000;  // Enough to wrap issue queue. 768MB and cmds are 22KB each, so 35k cmds.
     uint32_t cmds_issued_per_cq = 0;
 
@@ -131,7 +131,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
 // Test where Host synchronously waits for event to be completed.
 TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
     auto mesh_device = this->devices_[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const size_t num_events = 100;
     const size_t num_events_between_sync = 10;
 
@@ -162,7 +162,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 // Device sync. Single CQ here, less interesting than 2CQ but still useful. Ensure no hangs.
 TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
     auto mesh_device = this->devices_[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const size_t num_events = 50;
     const size_t num_events_between_sync = 5;
 
@@ -194,7 +194,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
 // Device sync. Single CQ here, less interesting than 2CQ but still useful. Ensure no hangs.
 TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
     auto mesh_device = this->devices_[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const size_t num_events = 50;
     const size_t num_events_between_query = 5;
     bool event_status;
@@ -242,7 +242,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
 // Mix of WritesBuffers, RecordEvent, WaitForEvent, EventSynchronize with some checking.
 TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
     auto mesh_device = this->devices_[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto* device = mesh_device->impl().get_devices()[0];
     const size_t num_buffers = 2;
     const uint32_t page_size = 2048;

@@ -417,8 +417,8 @@ void run_pipeline(
                 has_outbound ? make_downstream_producer(*d2d[i].first) : make_downstream_terminal(output_tensor);
             MeshWorkload relay =
                 build_relay_workload(*stages[i], workers, /*num_iters=*/1, up, down, metadata_size_bytes);
-            EnqueueMeshWorkload(stages[i]->mesh_command_queue(), relay, /*blocking=*/false);
-            Finish(stages[i]->mesh_command_queue());
+            EnqueueMeshWorkload(stages[i]->mesh_command_queue(0), relay, /*blocking=*/false);
+            Finish(stages[i]->mesh_command_queue(0));
 
             // (4) grant my OUTBOUND sender — AFTER my op — so it forwards my output (the
             //     downstream host grants its receiver at the start of ITS turn, completing

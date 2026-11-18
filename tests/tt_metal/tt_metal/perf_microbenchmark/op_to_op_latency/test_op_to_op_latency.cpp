@@ -1047,7 +1047,7 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> input_data =
             create_random_vector_of_bfloat16(buffer_size_bytes, /*rand_max_float=*/100, seed);
 
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/false);
         // Drain the input upload before trace capture: host writes are not allowed while
         // a trace is being recorded (see FDMeshCommandQueue "Writes are not supported

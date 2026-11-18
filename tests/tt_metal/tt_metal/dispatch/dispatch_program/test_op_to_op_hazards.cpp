@@ -101,7 +101,7 @@ MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
 
 void dope(MeshTensor& t, uint32_t pattern) {
     std::vector<uint32_t> v(kWords, pattern);
-    auto& cq = t.mutable_device().mesh_command_queue();
+    auto& cq = t.mutable_device().mesh_command_queue(0);
     enqueue_write_tensor(cq, reinterpret_cast<const std::byte*>(v.data()), t);
     distributed::Finish(cq);  // the write is non-blocking and `v` goes out of scope here
 }
@@ -346,7 +346,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
     if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
-    auto& cq = md->mesh_command_queue();
+    auto& cq = md->mesh_command_queue(0);
     distributed::MeshCoordinateRange range(md->shape());
     auto x = alloc(*md, BufferType::DRAM);
     auto y = alloc(*md, BufferType::DRAM);
@@ -369,7 +369,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
     if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
-    auto& cq = md->mesh_command_queue();
+    auto& cq = md->mesh_command_queue(0);
     distributed::MeshCoordinateRange range(md->shape());
     auto x = alloc(*md, BufferType::L1);
     auto y = alloc(*md, BufferType::DRAM);
@@ -393,7 +393,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
     if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
-    auto& cq = md->mesh_command_queue();
+    auto& cq = md->mesh_command_queue(0);
     distributed::MeshCoordinateRange range(md->shape());
     auto x = alloc(*md, BufferType::DRAM);
     auto z = alloc(*md, BufferType::DRAM);
@@ -420,7 +420,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
     if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
-    auto& cq = md->mesh_command_queue();
+    auto& cq = md->mesh_command_queue(0);
     distributed::MeshCoordinateRange range(md->shape());
     auto x = alloc(*md, BufferType::DRAM);
     auto y = alloc(*md, BufferType::DRAM);
@@ -445,7 +445,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
     if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
-    auto& cq = md->mesh_command_queue();
+    auto& cq = md->mesh_command_queue(0);
     distributed::MeshCoordinateRange range(md->shape());
     auto z = alloc(*md, BufferType::DRAM);
     auto y = alloc(*md, BufferType::DRAM);
@@ -470,7 +470,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
     if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
-    auto& cq = md->mesh_command_queue();
+    auto& cq = md->mesh_command_queue(0);
     distributed::MeshCoordinateRange range(md->shape());
     auto x = alloc(*md, BufferType::DRAM);
     // WAW is a write-ORDERING hazard on one buffer -- no reader needed. Two writers to x on DIFFERENT
@@ -492,7 +492,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
     if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
-    auto& cq = md->mesh_command_queue();
+    auto& cq = md->mesh_command_queue(0);
     distributed::MeshCoordinateRange range(md->shape());
     auto x = alloc(*md, BufferType::DRAM);
     auto unrelated = alloc(*md, BufferType::DRAM);
@@ -521,7 +521,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
     if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
-    auto& cq = md->mesh_command_queue();
+    auto& cq = md->mesh_command_queue(0);
     distributed::MeshCoordinateRange range(md->shape());
     auto x = alloc(*md, BufferType::DRAM);
     auto y = alloc(*md, BufferType::DRAM);
@@ -550,7 +550,7 @@ TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
-    auto& cq = md->mesh_command_queue();
+    auto& cq = md->mesh_command_queue(0);
     distributed::MeshCoordinateRange range(md->shape());
     auto in0 = alloc(*md, BufferType::DRAM);
     auto in1 = alloc(*md, BufferType::DRAM);  // bound but never accessed by the kernel

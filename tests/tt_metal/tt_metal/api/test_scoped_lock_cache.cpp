@@ -221,7 +221,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     // Kernels write their in-kernel verification read-back (via the non-cacheable alias so the result lands
     // in TL1) to the result buffer; the host reads it directly.
@@ -520,7 +520,7 @@ std::vector<uint32_t> run_scoped_lock_cache_test(distributed::MeshDevice& mesh_d
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     std::vector<uint32_t> result;
     slow_dispatch::ReadFromL1(mesh_device, core, result_addr, SCOPED_LOCK_CACHE_NUM_LINES * sizeof(uint32_t), result);

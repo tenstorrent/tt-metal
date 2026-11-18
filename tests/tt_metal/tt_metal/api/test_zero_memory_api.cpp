@@ -254,7 +254,7 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     // ----- In-kernel verdict -----
     std::vector<uint32_t> flag_out;
@@ -390,7 +390,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, /*blocking=*/true);
 
     // ----- Host verifies -----
     // L1: kernel reports its in-kernel verify result via the flag word.
@@ -497,7 +497,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, /*blocking=*/true);
 
     // The batched producer's in-kernel verify is the primary signal: kStatusOk only if
     // every byte across all chunks is zero after the single barrier.
@@ -662,7 +662,7 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     std::vector<uint32_t> flag_out;
     slow_dispatch::ReadFromL1(mesh_device, node, flag_addr, sizeof(uint32_t), flag_out);

@@ -45,7 +45,7 @@ TEST_F(UnitMeshFixture, AddTwoInts) {
 
     // First run
     SetRuntimeArgs(program, add_two_ints_kernel, core, first_runtime_args);
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, /*blocking=*/true);
 
     std::vector<uint32_t> first_kernel_result;
     slow_dispatch::ReadFromL1(this->device(), core, l1_unreserved_base, sizeof(int), first_kernel_result);
@@ -53,7 +53,7 @@ TEST_F(UnitMeshFixture, AddTwoInts) {
 
     // Second run with updated args
     SetRuntimeArgs(program, add_two_ints_kernel, core, second_runtime_args);
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, /*blocking=*/true);
 
     std::vector<uint32_t> second_kernel_result;
     slow_dispatch::ReadFromL1(this->device(), core, l1_unreserved_base, sizeof(int), second_kernel_result);

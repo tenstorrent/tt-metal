@@ -88,7 +88,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
         distributed::ReplicatedBufferConfig{.size = total_bytes},
         {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
         mesh_device.get());
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     ProgramSpec spec;
     spec.name = "named_args_loopback";
@@ -285,7 +285,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
         distributed::ReplicatedBufferConfig{.size = total_bytes},
         {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
         mesh_device.get());
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     ProgramSpec spec;
     spec.name = "tt_kernel_named_args_loopback";
@@ -468,7 +468,7 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
         distributed::ReplicatedBufferConfig{.size = entry_size},
         {.page_size = entry_size, .buffer_type = BufferType::DRAM},
         mesh_device.get());
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     // Input tensor for the tensor-binding section (interleaved DRAM). The producer reads its page 0 through
     // the binding and reports the first word, so the host fills it with known data.
@@ -588,7 +588,7 @@ void kernel_main() {
 
     // Blocking launch, then read back the seven staged words.
     auto launch_and_read = [&]() {
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true);
         std::vector<uint32_t> out;
         distributed::EnqueueReadMeshBuffer(cq, out, output_buffer, /*blocking=*/true);
         EXPECT_GE(out.size(), 7u);
@@ -751,7 +751,7 @@ TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
             std::vector<uint32_t> zeros(kReportWords, 0u);
             slow_dispatch::WriteToL1(*mesh_device, node, report_address(reader), zeros);
         }
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true);
     };
     auto read_report = [&](const Reader& reader) {
         std::vector<uint32_t> report;

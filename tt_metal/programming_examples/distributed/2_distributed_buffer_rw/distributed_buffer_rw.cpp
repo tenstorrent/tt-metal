@@ -23,7 +23,7 @@ int main() {
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     // Define the shape of the shard and the distributed buffer.
     // We will create a distributed buffer with 8 shards of {32, 32} and distribute it across the devices in the mesh.

@@ -210,8 +210,8 @@ void run_owner(
         SCOPED_TRACE(::testing::Message() << "iter=" << iter);
 
         tt::tt_metal::distributed::EnqueueMeshWorkload(
-            mesh_device->mesh_command_queue(), worker_workload, /*blocking=*/false);
-        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+            mesh_device->mesh_command_queue(0), worker_workload, /*blocking=*/false);
+        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue(0));
 
         auto data = make_iter_data(iter, volume);
         auto distributed_host =

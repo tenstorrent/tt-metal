@@ -178,7 +178,7 @@ void RunCounterHub(distributed::MeshDevice& mesh_device, HubMode hub_mode) {
     std::vector<uint32_t> sentinel{0xFFFFFFFF, 0xFFFFFFFF};
     slow_dispatch::WriteToL1(mesh_device, kHub, report_addr, sentinel);
 
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     std::vector<uint32_t> report;
     slow_dispatch::ReadFromL1(mesh_device, kHub, report_addr, 2 * sizeof(uint32_t), report);
@@ -198,7 +198,7 @@ TEST_F(GlobalSemaphoreMetal2Test, ValuePersistsAcrossPrograms) {
     auto sem = CreateGlobalSemaphore(mesh_device, kHubAndSenders, 0);
     for (int run = 0; run < 2; run++) {
         auto workload = MakeCounterWorkload(mesh_device, HubMode::NONE, sem);
-        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
     }
     EXPECT_EQ(ReadWord(mesh_device, kHub, sem.address()), 2 * kPerRun);
 }
@@ -207,7 +207,7 @@ TEST_F(GlobalSemaphoreMetal2Test, ValuePersistsAcrossPrograms) {
 // new semaphore.
 TEST_F(GlobalSemaphoreMetal2Test, UpdateProgramRunArgsSwitchesSemaphore) {
     auto& mesh_device = *devices_.at(0);
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     auto first = CreateGlobalSemaphore(mesh_device, kHubAndSenders, 0);
     auto second = CreateGlobalSemaphore(mesh_device, kHubAndSenders, 0);
     ASSERT_NE(first.address(), second.address());
@@ -227,7 +227,7 @@ TEST_F(GlobalSemaphoreMetal2Test, UpdateProgramRunArgsSwitchesSemaphore) {
 // A trace keeps the address it was captured with; a later update only affects non-traced launches.
 TEST_F(GlobalSemaphoreMetal2TraceTest, TraceReplayUsesCaptureTimeAddress) {
     auto& mesh_device = *devices_.at(0);
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     auto first = CreateGlobalSemaphore(mesh_device, kHubAndSenders, 0);
     auto second = CreateGlobalSemaphore(mesh_device, kHubAndSenders, 0);
 
@@ -288,7 +288,7 @@ void RunMcast(distributed::MeshDevice& mesh_device, bool increment, uint32_t ini
     Program program(mesh_device, spec);
     program.set_program_run_args(args);
     auto workload = MakeWorkload(mesh_device, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     const uint32_t expected_dest = increment ? initial + 2 * value : value;
     const uint32_t expected_sender = increment ? initial : value;
@@ -326,7 +326,7 @@ TEST_F(GlobalSemaphoreMetal2Test, StopFlagSeenThroughValue) {
 
     Program program(mesh_device, spec);
     program.set_program_run_args(args);
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     auto workload = MakeWorkload(mesh_device, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     std::vector<uint32_t> stop_value{7};
@@ -448,7 +448,7 @@ TEST_F(GlobalSemaphoreQuasarTest, ManyToOneUpThenDown) {
     slow_dispatch::WriteToL1(mesh_device, nodes[0], report_addr, sentinel);
 
     auto workload = MakeWorkload(mesh_device, MakeQuasarCounterProgram(mesh_device, nodes, /*with_hub=*/true, sem));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     std::vector<uint32_t> report;
     slow_dispatch::ReadFromL1(mesh_device, nodes[0], report_addr, 2 * sizeof(uint32_t), report);
@@ -460,7 +460,7 @@ TEST_F(GlobalSemaphoreQuasarTest, ManyToOneUpThenDown) {
 // The value persists across programs, and Program::update_program_run_args switches the program to another semaphore.
 TEST_F(GlobalSemaphoreQuasarTest, ValuePersistsAndUpdateSwitchesSemaphore) {
     auto& mesh_device = *devices_.at(0);
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     const auto nodes = QuasarNodes(mesh_device);
     auto first = CreateGlobalSemaphore(mesh_device, ToCoreRangeSet(nodes), 0);
     auto second = CreateGlobalSemaphore(mesh_device, ToCoreRangeSet(nodes), 0);
@@ -517,7 +517,7 @@ TEST_F(GlobalSemaphoreQuasarTest, MulticastSetAndInc) {
         Program program(mesh_device, spec);
         program.set_program_run_args(args);
         auto workload = MakeWorkload(mesh_device, std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
         EXPECT_EQ(ReadWord(mesh_device, nodes[1], sem.address()), increment ? 5u + 2 * 3u : 3u)
             << (increment ? "inc_multicast" : "set_multicast");

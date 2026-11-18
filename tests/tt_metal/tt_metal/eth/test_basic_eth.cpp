@@ -233,7 +233,7 @@ bool noc_reader_and_writer_kernels(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     auto* device = mesh_device->impl().get_devices()[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     distributed::DeviceLocalBufferConfig dram_config{.page_size = byte_size, .buffer_type = tt_metal::BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = byte_size};

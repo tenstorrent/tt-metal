@@ -727,7 +727,7 @@ TEST_F(UnitMeshAnyDispatchFixture, IdleCoreStaleLaunchSlot_DMDM) {
     slow_dispatch::WriteToBuffer(out_tensor.mesh_buffer(), std::vector<uint32_t>(input.size(), 0u));
 
     // Seed core_b while the device is idle, so neither firmware nor dispatch is touching its launch ring.
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::Finish(cq);
 
     const auto& hal = MetalContext::instance().hal();

@@ -47,7 +47,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAcceptsBoundScratchpad) {
     program.set_program_run_args(MakeArenaRunArgsForTest(arena));
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
-    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false));
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(0), workload, false));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAcceptsScratchpadAfterOmittedArenaUpdate) {
@@ -59,7 +59,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAcceptsScratchpadAfterOmitted
     program.update_program_run_args({});
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
-    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false));
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(0), workload, false));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAllowsLocalScratchpadWithoutRunArgs) {
@@ -71,7 +71,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAllowsLocalScratchpadWithoutR
     Program program(fixture_device, spec);
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
-    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false));
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(0), workload, false));
 }
 
 }  // namespace

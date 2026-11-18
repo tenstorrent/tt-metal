@@ -20,7 +20,7 @@ Create a 1x1 mesh device, get the mesh command queue, construct a workload and d
 constexpr CoreCoord core = {0, 0};
 int device_id = 0;
 auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
-distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 Program program = CreateProgram(*mesh_device);

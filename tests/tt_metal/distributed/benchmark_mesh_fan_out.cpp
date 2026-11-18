@@ -58,7 +58,7 @@ std::vector<ShardDataTransfer> transfers_for_every_device(void* host_data) {
 }
 
 void BM_RecordEvent(benchmark::State& state) {
-    auto& cq = mesh_device().mesh_command_queue();
+    auto& cq = mesh_device().mesh_command_queue(0);
     for ([[maybe_unused]] auto _ : state) {
         benchmark::DoNotOptimize(cq.enqueue_record_event());
     }
@@ -69,7 +69,7 @@ void BM_WriteReplicated(benchmark::State& state) {
     const auto bytes = static_cast<uint32_t>(state.range(0));
     auto buffer = replicated_buffer(bytes);
     std::vector<uint32_t> data(bytes / sizeof(uint32_t), 1);
-    auto& cq = mesh_device().mesh_command_queue();
+    auto& cq = mesh_device().mesh_command_queue(0);
     for ([[maybe_unused]] auto _ : state) {
         EnqueueWriteMeshBuffer(cq, buffer, data, /*blocking=*/false);
     }
@@ -82,7 +82,7 @@ void BM_WriteShards(benchmark::State& state) {
     auto buffer = sharded_buffer(bytes);
     std::vector<uint32_t> data(bytes / sizeof(uint32_t), 1);
     const auto transfers = transfers_for_every_device(data.data());
-    auto& cq = mesh_device().mesh_command_queue();
+    auto& cq = mesh_device().mesh_command_queue(0);
     for ([[maybe_unused]] auto _ : state) {
         cq.enqueue_write_shards(buffer, transfers, /*blocking=*/false);
     }
@@ -101,7 +101,7 @@ void BM_ReadShards(benchmark::State& state) {
     for (const auto& coord : MeshCoordinateRange(mesh_device().shape())) {
         transfers.push_back(ShardDataTransfer{coord}.host_data(data[i++].data()));
     }
-    auto& cq = mesh_device().mesh_command_queue();
+    auto& cq = mesh_device().mesh_command_queue(0);
     for ([[maybe_unused]] auto _ : state) {
         cq.enqueue_read_shards(transfers, buffer, /*blocking=*/true);
     }

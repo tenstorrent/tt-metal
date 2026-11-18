@@ -405,7 +405,7 @@ void send_async_rate(
         create_send_async_rate_program(mesh_socket, input_buffer, input_data_format, mesh_device, num_iterations);
     workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 }
 
 void socket_forward_rate(
@@ -428,7 +428,7 @@ void socket_forward_rate(
     auto program = create_socket_forward_rate_program(send_socket, recv_socket, num_bytes, mesh_device, num_iterations);
     workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 }
 
 void recv_async_rate(
@@ -449,7 +449,7 @@ void recv_async_rate(
         create_recv_async_rate_program(recv_socket, num_bytes, mesh_device, num_iterations, enable_correctness_check);
     workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 }
 
 }  // namespace tt::tt_metal

@@ -116,7 +116,7 @@ BenchResult run_bench(distributed::MeshDevice& mesh_device, const BenchParams& p
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     BenchResult r;
     slow_dispatch::ReadFromL1(mesh_device, core, result_addr, NUM_RESULT_WORDS * sizeof(uint32_t), r.words);

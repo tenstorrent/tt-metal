@@ -131,7 +131,7 @@ void raise_op_signal(
     SetRuntimeArgs(program, kernel, core, {signal_addr, num_signals});
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 }
 
 }  // namespace
@@ -210,12 +210,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineWaitsOnS
     }
     EXPECT_EQ(region.wait_for_retired(written + 1), written + 1) << "the kernels never passed the signalled wait";
 
-    experimental::WaitForCqOnTensorPrefetcher(mesh_device.mesh_command_queue(), std::nullopt);
+    experimental::WaitForCqOnTensorPrefetcher(mesh_device.mesh_command_queue(0), std::nullopt);
     // The fence is a dispatcher write. Let it run before looking for its effect: a simulator advances fast
     // dispatch only while the host drives the command queue, not while it polls L1.
-    distributed::Finish(mesh_device.mesh_command_queue());
+    distributed::Finish(mesh_device.mesh_command_queue(0));
     EXPECT_EQ(region.wait_for_retired(written + 2), written + 2) << "the kernels never passed the CQ fence";
-    EXPECT_NE(region.read(fifo::signal_slot_offset(mesh_device.mesh_command_queue().id())), 0u)
+    EXPECT_NE(region.read(fifo::signal_slot_offset(mesh_device.mesh_command_queue(0).id())), 0u)
         << "the dispatcher never wrote the CQ's fence slot";
     experimental::StopTensorPrefetcher(mesh_device);
 }

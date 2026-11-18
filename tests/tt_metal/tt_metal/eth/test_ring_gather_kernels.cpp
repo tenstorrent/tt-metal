@@ -352,7 +352,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         const auto device_id = device->get_device_ids()[0];
         workloads[device_id].add_program(device_range, std::move(programs[device_id]));
         ths.emplace_back([device, device_id, &workloads] {
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workloads[device_id], false);
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workloads[device_id], false);
         });
     }
     for (auto& th : ths) {
@@ -435,12 +435,12 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             distributed::ReplicatedBufferConfig{.size = cfg.size_bytes},
             {.page_size = cfg.page_size_bytes, .buffer_type = cfg.input_buffer_type},
             device.get());
-        distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, inputs[i], true);
+        distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(0), input_buffer, inputs[i], true);
         output_buffers.emplace_back(distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = cfg.size_bytes * sender_receivers.size()},
             {.page_size = cfg.page_size_bytes, .buffer_type = cfg.output_buffer_type},
             device.get()));
-        distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), output_buffers[i], all_zeros, true);
+        distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(0), output_buffers[i], all_zeros, true);
 
         auto eth_sender_kernel = tt_metal::CreateKernel(
             program,
@@ -519,7 +519,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
         const auto device_id = device->get_device_ids()[0];
         workloads[device_id].add_program(device_range, std::move(programs[device_id]));
         ths.emplace_back([device, device_id, &workloads] {
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workloads[device_id], false);
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workloads[device_id], false);
         });
     }
     for (auto& th : ths) {
@@ -529,7 +529,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
         const auto& device = std::get<0>(sender_receivers[i]);
         const auto& core = std::get<2>(sender_receivers[i]);
         std::vector<uint32_t> readback_vec;
-        distributed::EnqueueReadMeshBuffer(device->mesh_command_queue(), readback_vec, output_buffers[i], true);
+        distributed::EnqueueReadMeshBuffer(device->mesh_command_queue(0), readback_vec, output_buffers[i], true);
         auto a = std::mismatch(full_input.begin(), full_input.end(), readback_vec.begin());
         bool p = (a.first == full_input.end());
         pass &= p;

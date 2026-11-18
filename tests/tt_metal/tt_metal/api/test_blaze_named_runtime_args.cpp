@@ -39,7 +39,7 @@ using NamedArgsTest = MeshDevice1x1Fixture;
 
 TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     CoreCoord core0 = {0, 0};
@@ -83,7 +83,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
 
 TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     CoreCoord core = {0, 0};
@@ -134,7 +134,7 @@ TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
 // Both header channels must remain usable together on the data-movement path.
 TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     CoreCoord core = {0, 0};
@@ -175,7 +175,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
 
 TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     CoreCoord core0 = {0, 0};
@@ -233,7 +233,7 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
 // the Blaze header included by build_trisc_prolog. Both values must reach device L1.
 TEST_F(NamedArgsTest, TensixTestMixedNamedCompileTimeArgsComputeKernel) {
     auto mesh_device = get_mesh_device();
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     CoreCoord core = {0, 0};
@@ -276,7 +276,7 @@ TEST_F(NamedArgsTest, TensixTestMixedNamedCompileTimeArgsComputeKernel) {
 // is correct: positional at [0..N-1], named at [N..].
 TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     CoreCoord core = {0, 0};
@@ -324,7 +324,7 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
 // Test 2a: The legacy field still accepts repeated names with the same value.
 TEST_F(NamedArgsTest, TensixTestLegacyCTArgDedupSameValue) {
     auto mesh_device = get_mesh_device();
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     CoreCoord core = {0, 0};

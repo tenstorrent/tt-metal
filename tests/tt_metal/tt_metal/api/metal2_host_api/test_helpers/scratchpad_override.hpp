@@ -136,7 +136,7 @@ inline std::vector<std::vector<uint32_t>> ExpectedScratchpadResultsForTest(uint3
 inline void EnqueueScratchpadOverrideForTest(
     distributed::MeshDevice& device, distributed::MeshWorkload& workload, bool fast_dispatch) {
     if (fast_dispatch) {
-        distributed::EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
+        distributed::EnqueueMeshWorkload(device.mesh_command_queue(0), workload, true);
     } else {
         auto& [range, program] = *workload.get_programs().begin();
         // LaunchProgram transfers ownership into its returned workload.

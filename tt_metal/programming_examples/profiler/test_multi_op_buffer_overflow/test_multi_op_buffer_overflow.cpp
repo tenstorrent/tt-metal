@@ -48,7 +48,7 @@ void RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
         program.set_runtime_id(program_runtime_id++);
         workload.add_program(device_range, std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
     }
 }
 

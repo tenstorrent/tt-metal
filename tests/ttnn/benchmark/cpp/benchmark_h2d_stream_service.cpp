@@ -410,7 +410,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         total_iters,
         coords.size());
     tt::tt_metal::distributed::EnqueueMeshWorkload(
-        g_mesh_device->mesh_command_queue(), drain_workload, /*blocking=*/false);
+        g_mesh_device->mesh_command_queue(0), drain_workload, /*blocking=*/false);
 
     // Distributed-tensor input path. Build the distributed host tensor once and reuse it every push;
     // the values are irrelevant since the benchmark does not verify contents.
@@ -476,7 +476,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
 
         log_info(tt::LogTest, "[{}] Starting final untimed drain Finish() tail", case_name);
         const auto finish_t0 = std::chrono::steady_clock::now();
-        tt::tt_metal::distributed::Finish(g_mesh_device->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(g_mesh_device->mesh_command_queue(0));
         const auto finish_t1 = std::chrono::steady_clock::now();
 
         const double elapsed_s = std::chrono::duration<double>(t1 - t0).count();

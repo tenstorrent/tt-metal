@@ -995,7 +995,7 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         host_buf.resize(d2h_service->payload_size_bytes());
     }
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     for (uint32_t iter = 0; iter < kNumIters; ++iter) {
         // (a) Outbound overwrite-gate — the SEPARATE d2d_sync op, BEFORE the op: waits the
         //     prior forward to drain (sender consumed_sem) so the op doesn't overwrite the
@@ -1207,7 +1207,7 @@ void run_forward_chain_stress(
         host_buf.resize(d2h_service->payload_size_bytes());
     }
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         // (a) COMPUTE (all cores): fused gate (skipped iter 0 / no outbound) + wait inbound
         //     + mutate (+1) this worker's slice + ack inbound consumed. No data_ready yet.

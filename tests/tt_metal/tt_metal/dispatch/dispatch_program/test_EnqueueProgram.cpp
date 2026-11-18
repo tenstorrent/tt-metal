@@ -270,7 +270,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     }
     tt::tt_metal::SetRuntimeArgs(program, dummy_kernel0, eth_core_coord, dummy_kernel0_args);
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
@@ -1069,8 +1069,8 @@ bool test_increment_runtime_args_sanity(
 
     // Compile and Launch the Program now.
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    Finish(mesh_device->mesh_command_queue(0));
 
     // Read all cores for all kernels
     constexpr uint32_t unique_arg_incr_val = 10;
@@ -1288,8 +1288,8 @@ TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
         }
 
         workload.add_program(device_range_, std::move(program));
-        distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
-        Finish(device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, false);
+        Finish(device->mesh_command_queue(0));
     }
 }
 }  // namespace compiler_workaround_hardware_bug_tests
@@ -1305,7 +1305,7 @@ TEST_F(UnitMeshCQFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
 
     for (const auto& device : devices_) {
         EXPECT_TRUE(
-            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1323,7 +1323,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
 
     for (const auto& device : devices_) {
         EXPECT_TRUE(
-            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1341,7 +1341,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) 
 
     for (const auto& device : devices_) {
         EXPECT_TRUE(
-            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1375,8 +1375,8 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
 
         local_test_functions::initialize_dummy_kernels(program_, cr_set);
 
-        distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
-        Finish(device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, false);
+        Finish(device->mesh_command_queue(0));
 
         vector<uint32_t> cb_config_vector;
 
@@ -1410,7 +1410,7 @@ TEST_F(UnitMeshCQFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeSentSingleC
 
     for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
-            device, device->mesh_command_queue(), config));
+            device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1422,7 +1422,7 @@ TEST_F(UnitMeshCQFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore
 
     for (const auto& device : devices_) {
         EXPECT_TRUE(
-            local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->mesh_command_queue(), config));
+            local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1449,8 +1449,8 @@ TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatch
             cr_set,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
-        Finish(device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, false);
+        Finish(device->mesh_command_queue(0));
     }
 }
 
@@ -1518,7 +1518,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
         GTEST_SKIP() << "Skipping test as this test requires 2 ethernet cores";
     }
     for (const auto& mesh_device : devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         distributed::MeshCoordinate zero_coord =
             distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -1642,7 +1642,7 @@ TEST_F(UnitMeshCQFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 15, 1));
+            device, device->mesh_command_queue(0), dummy_program_config, 9, 12, 15, 1));
     }
 }
 
@@ -1666,7 +1666,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
         DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = cb_config_vector};
 
         EXPECT_TRUE(
-            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1687,7 +1687,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore
         DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = cb_config_vector};
 
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
-            device, device->mesh_command_queue(), config));
+            device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1708,7 +1708,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCo
         DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = cb_config_vector};
 
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
-            device, device->mesh_command_queue(), config));
+            device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1732,7 +1732,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges)
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
         EXPECT_TRUE(
-            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
+            local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1756,7 +1756,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleC
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
-            device, device->mesh_command_queue(), config));
+            device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1780,7 +1780,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultipl
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
-            device, device->mesh_command_queue(), config));
+            device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1793,7 +1793,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
 
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
         EXPECT_TRUE(
-            local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->mesh_command_queue(), config));
+            local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->mesh_command_queue(0), config));
     }
 }
 
@@ -1833,7 +1833,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCore
         distributed::MeshWorkload workload;
         workload.add_program(device_range_, std::move(program));
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(
-            device, device->mesh_command_queue(), workload, config, expected_semaphore_vals));
+            device, device->mesh_command_queue(0), workload, config, expected_semaphore_vals));
     }
 }
 
@@ -1846,7 +1846,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 13, 17, 19, 1));
+            device, device->mesh_command_queue(0), dummy_program_config, 13, 17, 19, 1));
     }
 }
 
@@ -1860,7 +1860,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_MaxRunt
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         auto n_rt = tt::tt_metal::max_runtime_args;
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, n_rt, n_rt, n_rt, 1));
+            device, device->mesh_command_queue(0), dummy_program_config, n_rt, n_rt, n_rt, 1));
     }
 }
 
@@ -1874,7 +1874,7 @@ TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->mesh_command_queue(), dummy_program_config, 12, 9, 2));
+            device, device->mesh_command_queue(0), dummy_program_config, 12, 9, 2));
     }
 }
 
@@ -1889,7 +1889,7 @@ TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiNonOverlappingCoreRange)
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 2));
+            device, device->mesh_command_queue(0), dummy_program_config, 9, 12, 2));
     }
 }
 
@@ -1907,7 +1907,7 @@ TEST_F(UnitMeshCQFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->mesh_command_queue(), dummy_program_config, 9, 31, 10));
+            device, device->mesh_command_queue(0), dummy_program_config, 9, 31, 10));
     }
 }
 
@@ -2049,8 +2049,8 @@ TEST_F(UnitMeshCQFixture, TensixLargeUniqueRuntimeArgsPatchedAcrossRuns) {
                     SetRuntimeArgs(prog, kernel, core, make_args(core, 1));
                 }
             }
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
-            Finish(device->mesh_command_queue());
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, false);
+            Finish(device->mesh_command_queue(0));
 
             for (const CoreCoord& core : cr) {
                 std::vector<uint32_t> readback;
@@ -2584,7 +2584,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         log_info(tt::LogTest, "Running {} MeshWorkloads on cq {} for cache warmup.", workloads.size(), (uint32_t)cq_id);
         // This loop caches program and runs
         for (distributed::MeshWorkload& wl : workloads) {
-            distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), wl, false);
+            distributed::EnqueueMeshWorkload(device_->mesh_command_queue(0), wl, false);
         }
 
         // This loops assumes already cached
@@ -2611,7 +2611,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
                     NUM_ITERATIONS);
             }
             for (distributed::MeshWorkload& wl : workloads) {
-                EnqueueMeshWorkload(device_->mesh_command_queue(), wl, false);
+                EnqueueMeshWorkload(device_->mesh_command_queue(0), wl, false);
             }
         }
 
@@ -2631,7 +2631,7 @@ TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
 
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 256, 256, 256, NUM_ITER));
+            device, device->mesh_command_queue(0), dummy_program_config, 256, 256, 256, NUM_ITER));
     }
 }
 
@@ -2884,7 +2884,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     log_info(tt::LogTest, "Running {} programs for cache warmup.", workloads.size());
     // This loop caches program and runs
     for (distributed::MeshWorkload& wl : workloads) {
-        distributed::EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+        distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), wl, false);
     }
 
     // This loops assumes already cached
@@ -2901,12 +2901,12 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
                 tt::LogTest, "Enqueuing {} programs for iter: {}/{} now.", workloads.size(), i + 1, NUM_ITERATIONS);
         }
         for (distributed::MeshWorkload& wl : workloads) {
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), wl, false);
         }
     }
 
     log_info(tt::LogTest, "Calling Finish.");
-    Finish(device->mesh_command_queue());
+    Finish(device->mesh_command_queue(0));
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
@@ -2916,10 +2916,10 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
         }
         distributed::MeshWorkload workload;
         workload.add_program(device_range_, this->create_program_with_kernel(CoreType::WORKER, true));
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(0), workload, false);
     }
 
-    Finish(device_->mesh_command_queue());
+    Finish(device_->mesh_command_queue(0));
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
@@ -2950,10 +2950,10 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
             this->create_kernel(program_, CoreType::WORKER, true);
         }
 
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(0), workload, false);
     }
 
-    Finish(device_->mesh_command_queue());
+    Finish(device_->mesh_command_queue(0));
 }
 
 TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
@@ -2980,10 +2980,10 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
         this->create_kernel(program_, CoreType::ETH, true);
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(0), workload, false);
     }
 
-    Finish(device_->mesh_command_queue());
+    Finish(device_->mesh_command_queue(0));
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
@@ -3022,10 +3022,10 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
             this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
         }
 
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(0), workload, false);
     }
 
-    Finish(device_->mesh_command_queue());
+    Finish(device_->mesh_command_queue(0));
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms) {
@@ -3043,10 +3043,10 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms)
 
         workload.add_program(
             device_range_, this->create_program_with_kernel(CoreType::WORKER, false, kernel_properties));
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(0), workload, false);
     }
 
-    Finish(device_->mesh_command_queue());
+    Finish(device_->mesh_command_queue(0));
 }
 
 TEST_F(UnitMeshRandomProgramFixture, NIGHTLY_TensixTestLargeProgramFollowedBySmallPrograms) {
@@ -3065,10 +3065,10 @@ TEST_F(UnitMeshRandomProgramFixture, NIGHTLY_TensixTestLargeProgramFollowedBySma
 
         workload.add_program(
             device_range_, this->create_program_with_kernel(CoreType::WORKER, false, kernel_properties));
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(0), workload, false);
     }
 
-    Finish(device_->mesh_command_queue());
+    Finish(device_->mesh_command_queue(0));
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
@@ -3086,10 +3086,10 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPro
 
         workload.add_program(
             device_range_, this->create_program_with_kernel(CoreType::WORKER, false, kernel_properties));
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(0), workload, false);
     }
 
-    Finish(device_->mesh_command_queue());
+    Finish(device_->mesh_command_queue(0));
 }
 
 }  // namespace stress_tests

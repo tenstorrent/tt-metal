@@ -55,7 +55,7 @@ void validate_cb_address(
     std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& cr_set,
     const std::map<CoreCoord, std::map<uint8_t, uint32_t>>& core_to_address_per_buffer_index) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     uint32_t max_dfbs = MetalContext::instance().hal().get_num_dataflow_buffers();
 
@@ -213,7 +213,7 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
 
 TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
     for (auto& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -301,7 +301,7 @@ TEST_F(MeshDeviceFixture, TensixTestValidUpdateCircularBufferSize) {
 
 TEST_F(MeshDeviceFixture, TensixTestInvalidUpdateCircularBufferSize) {
     for (auto& device : this->devices_) {
-        auto& cq = device->mesh_command_queue();
+        auto& cq = device->mesh_command_queue(0);
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -491,7 +491,7 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromM
 
 TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
     for (auto& device : this->devices_) {
-        auto& cq = device->mesh_command_queue();
+        auto& cq = device->mesh_command_queue(0);
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -582,7 +582,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
 
 TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
     for (auto& device : this->devices_) {
-        auto& cq = device->mesh_command_queue();
+        auto& cq = device->mesh_command_queue(0);
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);

@@ -82,7 +82,7 @@ std::vector<KernelHandle> add_kernels(Program& program) {
 
 template <typename BeforeEnqueue = void (*)()>
 void run(benchmark::State& state, MeshWorkload& workload, BeforeEnqueue before_enqueue = [] {}) {
-    auto& cq = mesh_device().mesh_command_queue();
+    auto& cq = mesh_device().mesh_command_queue(0);
     before_enqueue();
     EnqueueMeshWorkload(cq, workload, false);  // compile, load, assemble
     Finish(cq);

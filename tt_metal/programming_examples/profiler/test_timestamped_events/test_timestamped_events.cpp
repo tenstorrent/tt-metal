@@ -122,10 +122,10 @@ void RunFillUpAllBuffers(
     if (fast_dispatch && mesh_device->arch() != tt::ARCH::QUASAR) {
         for (int i = 0; i < enqueue_times; i++) {
             // Enqueue the same mesh workload multiple times to generate profiler events
-            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
         }
     } else {
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
     }
 }
 

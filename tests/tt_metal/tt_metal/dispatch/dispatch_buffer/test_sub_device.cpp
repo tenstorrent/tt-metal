@@ -127,9 +127,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
 
     auto buffer_1 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
     EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->aligned_page_size());
-    distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buffer_1, input_1, false);
+    distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(0), buffer_1, input_1, false);
     std::vector<uint32_t> output_1;
-    distributed::ReadShard(mesh_device->mesh_command_queue(), output_1, buffer_1, zero_coord_, true);
+    distributed::ReadShard(mesh_device->mesh_command_queue(0), output_1, buffer_1, zero_coord_, true);
     EXPECT_EQ(input_1, output_1);
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {
@@ -152,9 +152,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
 
     auto buffer_3 = distributed::MeshBuffer::create(replicated_config_2, local_config_2, mesh_device.get());
     EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->aligned_page_size());
-    distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buffer_3, input_2, false);
+    distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(0), buffer_3, input_2, false);
     std::vector<uint32_t> output_2;
-    distributed::ReadShard(mesh_device->mesh_command_queue(), output_2, buffer_3, zero_coord_, true);
+    distributed::ReadShard(mesh_device->mesh_command_queue(0), output_2, buffer_3, zero_coord_, true);
     EXPECT_EQ(input_2, output_2);
     auto input_2_it = input_2.begin();
     for (const auto& physical_core : physical_cores_2) {
@@ -530,7 +530,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffers
         CoreCoord{0, 0},
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, true);
 
     auto unsafe = distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id);
     auto buffers_after = mesh_device->allocator()->get_allocated_buffers();

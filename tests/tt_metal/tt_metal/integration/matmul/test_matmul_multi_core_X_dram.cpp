@@ -335,7 +335,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 
     log_debug(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
     log_debug(LogTest, "Matmul test done");
@@ -572,7 +572,7 @@ bool matmul_multi_core_multi_dram(
     log_debug(LogTest, "Writing kernel runtime args to device complete");
 
     log_debug(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 
     log_debug(LogTest, "Matmul test done");
     log_debug(LogTest, "Gathering data back from dram and checking against golden");

@@ -109,7 +109,7 @@ protected:
             ComputeConfig{});
 
         workload.add_program(device_range, std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, false);
     }
 
     void WriteProgramsPerfDataToJson(

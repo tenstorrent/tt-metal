@@ -285,8 +285,8 @@ void run_h2d_stream_service_case(
 
     auto consume_one = [&]() {
         tt::tt_metal::distributed::EnqueueMeshWorkload(
-            mesh_device->mesh_command_queue(), worker_workload, /*blocking=*/false);
-        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+            mesh_device->mesh_command_queue(0), worker_workload, /*blocking=*/false);
+        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue(0));
     };
 
     auto verify = [&](const std::vector<uint32_t>& src, const std::vector<std::byte>& expected_meta) {

@@ -37,7 +37,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     const NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
@@ -194,7 +194,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     const NodeCoord node_0{0, 0};
     const NodeCoord node_1{1, 0};
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
@@ -582,7 +582,7 @@ static void run_snake_chain(
         }
     }
 
-    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
     Program program(mesh_device, spec);
@@ -725,7 +725,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
     Program program(this->device(), spec);
     program.set_program_run_args(params);
     workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, true);
 
     uint32_t ok = 0, fail = 0;
     for (uint32_t y = 0; y < g.y; ++y) {
@@ -820,7 +820,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
     Program program(this->device(), spec);
     program.set_program_run_args(params);
     workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, true);
 
     uint32_t ok = 0, fail = 0;
     for (uint32_t y = 0; y < g.y; ++y) {
@@ -892,7 +892,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     const uint32_t num_signalers = g.x * g.y - 1;  // everyone except the target
     // The target's result slot is a single-core L1 MeshBuffer on the target node, result_addr is
     // threaded into the kernel and host I/O (seed + read-back) goes through the mesh command queue.
-    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue(0);
     const CoreRangeSet result_grid(CoreRange(target, target));
     const ShardSpecBuffer result_shard(
         result_grid,

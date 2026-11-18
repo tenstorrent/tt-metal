@@ -120,7 +120,7 @@ static void test_single_core_reshard(
 
     auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, true);
 
     auto output_tensor_cpu = output_tensor.cpu(true);
 
@@ -197,7 +197,7 @@ static void test_multi_core_copy(
 
     auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, true);
 
     auto output_tensor_cpu = output_tensor.cpu(true);
 
@@ -307,7 +307,7 @@ static void test_multi_core_interleaved_copy(
 
     auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, true);
 
     auto output_tensor_cpu = output_tensor.cpu(true);
     Tensor output_tensor_device = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
@@ -399,7 +399,7 @@ static void test_single_core_copy(
 
     auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, true);
 
     auto output_tensor_cpu = output_tensor.cpu(true);
 
@@ -469,7 +469,7 @@ static void test_single_core_copy_abstract_wrapper(
 
     auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, true);
 
     auto output_tensor_cpu = output_tensor.cpu(true);
     Tensor output_tensor_device = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
@@ -554,7 +554,7 @@ static void test_single_core_copy_num_contiguous_pages(
 
     auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, true);
 
     auto output_tensor_cpu = output_tensor.cpu(true);
     Tensor output_tensor_device = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();

@@ -182,7 +182,7 @@ void kernel_main() {
         for (const NodeCoord& node : {node0, node1}) {
             slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
         }
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true);
         for (const NodeCoord& node : {node0, node1}) {
             std::vector<uint32_t> report;
             slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), report);

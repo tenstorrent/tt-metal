@@ -263,12 +263,12 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device.get());
         std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(fd_src_vec.begin(), fd_src_vec.end(), 100);
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), fd_buf, fd_src_vec);
-        Finish(mesh_device->mesh_command_queue());
+        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(0), fd_buf, fd_src_vec);
+        Finish(mesh_device->mesh_command_queue(0));
 
         for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device->mesh_command_queue(), dst, fd_buf, coord);
+            ReadShard(mesh_device->mesh_command_queue(0), dst, fd_buf, coord);
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 readback failed in FD mode at " << coord;
         }
         assert_counter_incrementing(read_counter, "FD steady-state (cycle " + std::to_string(cycle) + ")");
@@ -278,8 +278,8 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
 
         // Dispatch a trivial workload to stress the dispatch path
         auto stressor = make_trivial_workload(*mesh_device, device);
-        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *stressor, true);
-        Finish(mesh_device->mesh_command_queue());
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *stressor, true);
+        Finish(mesh_device->mesh_command_queue(0));
 
         // Phase 4: stop kernel, wait via service_done_addr
         const uint32_t one = 1;
@@ -485,10 +485,10 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
     }
     auto svc_workload = std::make_shared<MeshWorkload>();
     svc_workload->add_program(MeshCoordinateRange(MeshCoordinate{0, 0}, MeshCoordinate{0, 0}), std::move(svc_prog));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *svc_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *svc_workload, false);
 
     // Launch-once: re-enqueuing the same (already-launched) service workload must TT_FATAL.
-    EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *svc_workload, false), std::exception);
+    EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *svc_workload, false), std::exception);
 
     // Pick a single representative service workload core for sanity checks
     const CoreCoord rep_core = claimable[0];
@@ -504,9 +504,9 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
 
     // Launch FD workloads on the regular worker grid while the service kernel runs.
     auto fd_workload = make_trivial_workload(*mesh_device, device);
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *fd_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *fd_workload, false);
     assert_counter_incrementing(read_counter, "during FD workload");
-    Finish(mesh_device->mesh_command_queue());
+    Finish(mesh_device->mesh_command_queue(0));
     assert_counter_incrementing(read_counter, "after all FD workloads complete");
 
     // Stop all service kernels and wait for clean exit on each.
@@ -561,17 +561,17 @@ TEST_F(ServiceCoreFdFixture, ServiceWorkloadReenqueueRequiresRelease) {
     MetalContext::instance().get_service_core_manager().claim(device, {svc_core});
 
     auto workload = build_service_workload();
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *workload, false);
 
     // Re-enqueue without releasing: launch-once TT_FATALs.
-    EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false), std::exception);
+    EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *workload, false), std::exception);
 
     // Release and re-claim, then enqueue a fresh workload: now allowed (the core's launched flag was
     // cleared by release, and a new workload classifies from scratch).
     MetalContext::instance().get_service_core_manager().release(device, {svc_core});
     MetalContext::instance().get_service_core_manager().claim(device, {svc_core});
     auto workload2 = build_service_workload();
-    EXPECT_NO_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload2, false));
+    EXPECT_NO_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *workload2, false));
 
     MetalContext::instance().get_service_core_manager().release(device, {svc_core});
 }
@@ -599,7 +599,7 @@ TEST_F(ServiceCoreFdFixture, ServiceWorkloadMixingFatal) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     auto workload = std::make_shared<MeshWorkload>();
     workload->add_program(MeshCoordinateRange(MeshCoordinate{0, 0}, MeshCoordinate{0, 0}), std::move(prog));
-    EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false), std::exception);
+    EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *workload, false), std::exception);
 
     MetalContext::instance().get_service_core_manager().release(device, {svc_core});
 }
@@ -645,11 +645,11 @@ TEST_F(ServiceCoreFdFixture, CachedL1ValidationWithServiceClaims) {
     // Worker-grid CBs: the first enqueue validates fully and caches; later enqueues take the shortcut.
     auto workload = make_workload(worker_core);
     auto& prog = workload->get_programs().begin()->second.impl();
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
-    Finish(mesh_device->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *workload, false);
+    Finish(mesh_device->mesh_command_queue(0));
     EXPECT_TRUE(prog.simple_l1_validation_usable(mesh));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
-    Finish(mesh_device->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *workload, false);
+    Finish(mesh_device->mesh_command_queue(0));
     EXPECT_TRUE(prog.simple_l1_validation_usable(mesh));
 
     // The shortcut still catches an L1 buffer growing into the CB region.

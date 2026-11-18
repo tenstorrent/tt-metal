@@ -146,7 +146,7 @@ so per-test setup is bounded to copying a few handles.
 
    TEST_F(LLKMeshDeviceFixture, MyNewThing) {
        auto& mesh_device = *devices_[0];
-       auto& cq = mesh_device.mesh_command_queue();
+       auto& cq = mesh_device.mesh_command_queue(0);
 
        Program program = CreateProgram(mesh_device);
        // ... CreateBuffer, CreateCircularBuffer, CreateKernel, SetRuntimeArgs ...

@@ -61,7 +61,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     const NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
@@ -148,7 +148,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
 
     std::vector<uint32_t> src(num_nodes);
     std::iota(src.begin(), src.end(), 0u);
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, buf, src);
     std::vector<uint32_t> dst;
     distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
@@ -197,7 +197,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
         }
     }
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
 
@@ -286,7 +286,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
         }
     }
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
 
@@ -375,7 +375,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
     const CoreCoord p_hi = mesh_device->worker_core_from_logical_core(NodeCoord{grid.x - 1, grid.y - 1});
     const uint32_t num_dests = grid.x * grid.y - 1;  // rectangle minus the (auto-excluded) source
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
 

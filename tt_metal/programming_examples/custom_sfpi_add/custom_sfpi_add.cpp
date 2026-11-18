@@ -31,7 +31,7 @@ int main() {
         auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Submit work via the mesh command queue: uploads/downloads and program execution.
-        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
         // Define some constants that will be used throughout the program.
         // * Processing 64 tiles

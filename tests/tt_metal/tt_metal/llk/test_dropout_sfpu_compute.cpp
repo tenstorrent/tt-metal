@@ -114,7 +114,7 @@ bool test_dropout_standalone(
         /*
          * Setup program to execute along with its buffers and kernels to use
          */
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;

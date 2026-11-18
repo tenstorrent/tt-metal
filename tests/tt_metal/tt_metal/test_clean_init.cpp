@@ -67,7 +67,7 @@ int main(int argc, char** /*argv*/) {
             /*
              * Setup program and command queue to execute along with its buffers and kernels to use
              */
-            auto& cq = device->mesh_command_queue();
+            auto& cq = device->mesh_command_queue(0);
 
             constexpr uint32_t single_tile_size = 2 * (32 * 32);
             constexpr uint32_t num_tiles = 50;

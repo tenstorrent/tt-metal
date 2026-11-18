@@ -24,7 +24,7 @@ We first must get information on the layout of the entire chip. This means the g
 ``` cpp
 constexpr int device_id = 0;
 auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
-distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 Program program = CreateProgram(*mesh_device);

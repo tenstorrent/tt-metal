@@ -89,7 +89,7 @@ bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestCo
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
     workload.add_program(device_range, std::move(program));
 
-    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     // Read back and verify
@@ -171,7 +171,7 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
     workload.add_program(device_range, std::move(program));
 
-    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     // Read back and verify

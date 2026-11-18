@@ -79,7 +79,7 @@ static std::vector<std::uint32_t> generate_copy_block_stimulus(
 
 void run_single_core_copy_block_matmul_partials(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CopyBlockMatmulPartialsConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const NodeCoord node{0, 0};
 

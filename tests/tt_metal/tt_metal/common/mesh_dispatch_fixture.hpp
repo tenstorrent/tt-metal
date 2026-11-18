@@ -40,27 +40,27 @@ public:
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         distributed::MeshWorkload& workload,
         const bool skip_finish = false) {
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
         if (!skip_finish) {
-            distributed::Finish(mesh_device->mesh_command_queue());
+            distributed::Finish(mesh_device->mesh_command_queue(0));
         }
     }
     void FinishCommands(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
     }
     void WriteBuffer(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::shared_ptr<distributed::MeshBuffer>& in_buffer,
         std::vector<uint32_t>& src_vec) {
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), in_buffer, src_vec, distributed::MeshCoordinate(0, 0));
+            mesh_device->mesh_command_queue(0), in_buffer, src_vec, distributed::MeshCoordinate(0, 0));
     }
     void ReadBuffer(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::shared_ptr<distributed::MeshBuffer>& out_buffer,
         std::vector<uint32_t>& dst_vec) {
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), dst_vec, out_buffer, distributed::MeshCoordinate(0, 0));
+            mesh_device->mesh_command_queue(0), dst_vec, out_buffer, distributed::MeshCoordinate(0, 0));
     }
     int NumDevices() { return this->devices_.size(); }
     bool IsSlowDispatch() const { return this->slow_dispatch_; }

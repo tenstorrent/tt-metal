@@ -35,7 +35,7 @@ std::shared_ptr<MeshBuffer> make_l1_mesh_buffer(MeshDevice* mesh_device, const C
 void execute_program_on_device(MeshDevice& device, const MeshCoordinate& device_coord, Program program) {
     auto workload = MeshWorkload();
     workload.add_program(MeshCoordinateRange(device_coord), std::move(program));
-    EnqueueMeshWorkload(device.mesh_command_queue(), workload, false);
+    EnqueueMeshWorkload(device.mesh_command_queue(0), workload, false);
 }
 
 uint64_t read_l1_uint64(const MeshDevice& device, const MeshCoreCoord& core, uint64_t addr) {

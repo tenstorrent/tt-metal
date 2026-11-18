@@ -70,7 +70,7 @@ void matmul_multicore_reuse_mcast(
      * Setup program to execute along with its buffers and kernels to use
      * Core range is just single core
      */
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram(*mesh_device);

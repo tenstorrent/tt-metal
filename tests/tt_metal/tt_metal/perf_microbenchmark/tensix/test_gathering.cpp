@@ -38,7 +38,7 @@ int main() {
 
     tt_metal::distributed::MeshWorkload workload;
     workload.add_program(tt_metal::distributed::MeshCoordinateRange(device->shape()), std::move(program));
-    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, true);
+    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, true);
     tt_metal::ReadMeshDeviceProfilerResults(*device);
     device->close();
 }

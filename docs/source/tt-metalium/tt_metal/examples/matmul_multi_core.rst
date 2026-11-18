@@ -74,7 +74,7 @@ Device initialization and parameter setup are similar to the single core example
     src1_vec = tilize_nfaces(src1_vec, K, N);
 
     // Set up mesh command queue, workload, and program
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram(*mesh_device);

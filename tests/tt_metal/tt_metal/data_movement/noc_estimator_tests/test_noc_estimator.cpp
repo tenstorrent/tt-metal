@@ -168,7 +168,7 @@ static void execute_program(distributed::MeshDevice& mesh_device, Program progra
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 }
@@ -627,7 +627,7 @@ static bool run_dram_accessor(
 
     uint32_t num_pages = num_dram_banks;
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     auto dram_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = (size_t)num_pages * bytes_per_txn},
         {.page_size = (uint32_t)bytes_per_txn, .buffer_type = BufferType::DRAM},

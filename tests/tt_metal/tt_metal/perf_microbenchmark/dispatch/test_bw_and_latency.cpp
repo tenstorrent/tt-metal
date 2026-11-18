@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
     bool pass = true;
     try {
         auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0 /*device_id*/);
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto device_id = mesh_device->get_device_ids()[0];
 
         auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();

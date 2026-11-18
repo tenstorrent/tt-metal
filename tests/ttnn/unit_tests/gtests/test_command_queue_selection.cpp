@@ -49,7 +49,7 @@ TEST_F(CommandQueueSelectionFixture, ExplicitQueueWinsOverThreadScope) {
 // why every TTNN call site resolves its queue through current_mesh_command_queue.
 TEST_F(CommandQueueSelectionFixture, MetalNoArgQueueIsZeroInsideTtnnScope) {
     auto guard = ttnn::with_command_queue_id(QueueId(1));
-    EXPECT_EQ(device_->mesh_command_queue().id(), 0);
+    EXPECT_EQ(device_->mesh_command_queue(0).id(), 0);
     EXPECT_EQ(ttnn::core::current_mesh_command_queue(*device_).id(), 1);
 }
 

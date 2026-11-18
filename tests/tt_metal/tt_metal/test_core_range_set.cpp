@@ -188,7 +188,7 @@ TEST_F(UnitMeshFixture, CoreRangeSet) {
              num_tiles});
     }
 
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, /*blocking=*/true);
 
     check_semaphores_are_initialized(this->device(), program, core_ranges, golden_sem_values);
 

@@ -122,7 +122,7 @@ inline std::vector<std::uint32_t> run(distributed::MeshDevice& mesh_device, cons
 
     Program program(mesh_device, spec);
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     ProgramRunArgs params;
     for (std::size_t i = 0; i < p.inputs.size(); i++) {
         const Input& in = p.inputs[i];

@@ -227,7 +227,7 @@ TEST_P(StochasticRoundingSingleCardFixture, TensixStochasticRoundingCorrectness)
         test_config.seed,
         test_config.base_value);
 
-    auto result = run_stochastic_rounding(devices_.at(0)->mesh_command_queue(), test_config);
+    auto result = run_stochastic_rounding(devices_.at(0)->mesh_command_queue(0), test_config);
     EXPECT_EQ(result.count_rounded_down + result.count_rounded_up, result.total);
 }
 
@@ -260,7 +260,7 @@ TEST_P(StochasticRoundingDistributionFixture, TensixStochasticRoundingDistributi
         test_config.base_value,
         test_config.fraction);
 
-    auto result = run_stochastic_rounding(devices_.at(0)->mesh_command_queue(), test_config);
+    auto result = run_stochastic_rounding(devices_.at(0)->mesh_command_queue(0), test_config);
 
     float actual_ratio = static_cast<float>(result.count_rounded_up) / static_cast<float>(result.total);
     float expected_ratio = test_config.fraction;

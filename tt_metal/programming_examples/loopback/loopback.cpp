@@ -35,7 +35,7 @@ int main() {
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Submit work via the mesh command queue: uploads/downloads and program execution.
-        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
         // Data on Tensix is stored in tiles. A tile is a 2D array of (usually) 32x32 values. And the Tensix uses
         // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.

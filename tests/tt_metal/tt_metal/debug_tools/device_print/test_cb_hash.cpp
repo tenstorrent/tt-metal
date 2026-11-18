@@ -120,7 +120,7 @@ uint32_t run_once(
     tt::DataFormat fmt,
     const std::vector<uint32_t>& input) {
     Setup s(mesh_device, fmt);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     auto reader = CreateKernel(
         *s.program,
@@ -166,7 +166,7 @@ uint32_t run_once_sfpu(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::vector<uint32_t>& input) {
     Setup s(mesh_device, tt::DataFormat::Int32);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     auto reader = CreateKernel(
         *s.program,

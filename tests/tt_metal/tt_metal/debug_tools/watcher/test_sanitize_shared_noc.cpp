@@ -61,7 +61,7 @@ void RunSharedNocCmdBufTest(
     }
 
     auto* device = mesh_device->get_devices()[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const auto zero_coord = distributed::MeshCoordinate(0, 0);
     const auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 

@@ -207,7 +207,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadBaseReDeliveredAfterDfbResize) {
         distributed::ReplicatedBufferConfig{.size = entry_size},
         {.page_size = entry_size, .buffer_type = BufferType::DRAM},
         mesh_device.get());
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     ProgramSpec spec;
     spec.name = "scratchpad_base_redelivered_after_dfb_resize";
@@ -290,7 +290,7 @@ void kernel_main() {
         params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"stage"}, .num_entries = dfb_num_entries});
         program.set_program_run_args(params);
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true);
 
         std::vector<uint32_t> out;
         distributed::EnqueueReadMeshBuffer(cq, out, output_buffer, /*blocking=*/true);
