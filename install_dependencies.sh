@@ -174,9 +174,17 @@ init_packages() {
                     gpp_package="g++-12"
                     echo "[INFO] Using g++-12 for Ubuntu 22.04 (gcc-12 will be installed as dependency)"
                     ;;
-                "noble") # 24.04
+                "noble"|"resolute") # 24.04, 26.04
+                    # Both carry g++-14 in their own archive. Installing it by
+                    # name keeps the two LTS releases on one compiler: 26.04's
+                    # default g++ is 15.2.0 against 24.04's 13.2.0.
+                    # This only installs it. Unversioned gcc/g++ are repointed by
+                    # configure_compiler_alternatives, which the installer runs
+                    # for --docker builds only, so a host install still leaves
+                    # /usr/bin/g++ on the distro default -- as it already does on
+                    # 24.04. Out of scope here; CI builds are the --docker path.
                     gpp_package="g++-14"
-                    echo "[INFO] Using g++-14 for Ubuntu 24.04 (gcc-14 will be installed as dependency)"
+                    echo "[INFO] Using g++-14 for Ubuntu $OS_VERSION (gcc-14 will be installed as dependency)"
                     ;;
                 *)
                     echo "[INFO] Using default g++ for $OS_ID $OS_VERSION"
@@ -268,6 +276,51 @@ prep_system() {
     esac
 }
 
+# Drop the apt sources and pin that this script owns, so prep_ubuntu_system can
+# recreate exactly the ones the probe below confirms. The llvm-*.list namespace
+# in sources.list.d is this script's; a hand-rolled source wanting to survive
+# belongs under a different name.
+reset_llvm_apt_sources() {
+    if ! is_debian_based; then
+        return
+    fi
+
+    rm -f /etc/apt/sources.list.d/llvm-*.list /etc/apt/preferences.d/llvm-23
+}
+
+# Add the apt.llvm.org repository for one LLVM major version, but only if
+# upstream publishes it for this release. apt.llvm.org lags new Ubuntu releases
+# both by version and by date: 26.04 (resolute) has no llvm-toolchain-resolute-20
+# at all, and -23 only appeared on 2026-11-02. apt-get update exits 100 on a
+# source whose Release file 404s, so probe every version instead of assuming the
+# ones that happen to be there today. Returns 0 when the repository was added.
+#
+# Only a 404 means "not published". Any other probe failure is fatal: reading a
+# network blip as absence would quietly produce an image missing the LLVM
+# packages, which is far harder to diagnose later than failing here.
+add_llvm_apt_repo() {
+    local version="$1"
+    local keyring="$2"
+    local url="https://apt.llvm.org/$OS_CODENAME/dists/llvm-toolchain-$OS_CODENAME-$version/Release"
+    # Declared before the assignment on purpose: `local probe="$(...)"` would
+    # mask the exit status of the command substitution behind local's own.
+    local probe
+
+    if probe="$(wget -S --spider --tries=3 --timeout=20 "$url" 2>&1)"; then
+        echo "deb [signed-by=$keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-$version main" | tee "/etc/apt/sources.list.d/llvm-$version.list"
+        return 0
+    fi
+
+    if echo "$probe" | grep -qE '404 Not Found|Remote file does not exist'; then
+        echo "[INFO] apt.llvm.org has no LLVM $version repository for $OS_CODENAME; using the distro archive"
+        return 1
+    fi
+
+    echo "[ERROR] Could not reach apt.llvm.org to check for LLVM $version ($OS_CODENAME):" >&2
+    echo "$probe" >&2
+    exit 1
+}
+
 prep_ubuntu_system() {
     echo "[INFO] Preparing Ubuntu/Debian system..."
     # Update package lists and install basic tools
@@ -281,24 +334,19 @@ prep_ubuntu_system() {
     ( set -o pipefail; wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor --batch --yes --no-tty -o "$llvm_keyring_tmp" )
     chmod 0644 "$llvm_keyring_tmp"
     mv -f "$llvm_keyring_tmp" "$llvm_keyring"
-    # apt.llvm.org doesn't publish v20 for newer releases (e.g. Ubuntu 26.04, whose
-    # own archive ships clang-20), and a missing repo makes apt-get update fail.
-    if wget -q --spider "https://apt.llvm.org/$OS_CODENAME/dists/llvm-toolchain-$OS_CODENAME-20/Release"; then
-        echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
-    else
-        echo "[INFO] apt.llvm.org has no LLVM 20 repository for $OS_CODENAME; using the distro archive"
-    fi
-    # Also v23
-    echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-23 main" | tee /etc/apt/sources.list.d/llvm-23.list
+    add_llvm_apt_repo 20 "$llvm_keyring" || true
 
-    # Without this, apt resolves shared package names (e.g. libc++1) to the
-    # highest major version across repos, breaking libc++-20-dev ("held broken
-    # packages"). Exact-name packages like clang-tidy-23 still install fine.
-    cat <<EOF | tee /etc/apt/preferences.d/llvm-23
+    if add_llvm_apt_repo 23 "$llvm_keyring"; then
+        # Without this, apt resolves shared package names (e.g. libc++1) to the
+        # highest major version across repos, breaking libc++-20-dev ("held broken
+        # packages"). Exact-name packages like clang-tidy-23 still install fine.
+        # Only meaningful when the v23 repo exists; without it nothing competes.
+        cat <<EOF | tee /etc/apt/preferences.d/llvm-23
 Package: *
 Pin: release n=llvm-toolchain-$OS_CODENAME-23
 Pin-Priority: 100
 EOF
+    fi
 
     # Install CMake from GitHub releases (skip in Docker, cmake provided via tool image)
     if [ "$docker" -ne 1 ]; then
@@ -365,7 +413,7 @@ configure_compiler_alternatives() {
                 update-alternatives --set g++ /usr/bin/g++-12 2>/dev/null || true
             fi
             ;;
-        24.04*)
+        24.04*|26.04*)
             if [ -x /usr/bin/gcc-14 ]; then
                 echo "[INFO] Setting gcc-14/g++-14 as defaults via update-alternatives"
                 update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 140 || true
@@ -417,9 +465,17 @@ install_llvm() {
     echo "[INFO] Checking if clang-tidy-23 is already installed..."
     if command -v clang-tidy-23 &> /dev/null; then
         echo "[INFO] clang-tidy-23 is already installed. Skipping installation."
-    else
+    elif apt-cache show clang-tidy-23 > /dev/null 2>&1; then
         echo "[INFO] Installing clang-tidy-23..."
         apt-get install -y --no-install-recommends clang-tidy-23
+    else
+        # Reached on a release that neither apt.llvm.org nor the distro archive
+        # carries clang-tidy-23 for. Ubuntu's own archive stops at 22, so this
+        # rests entirely on upstream having published for the codename. Warn
+        # rather than fail: the clang-tidy CI job runs in the 22.04 dev image,
+        # where it is present, and nothing else in the build needs it.
+        echo "[WARNING] clang-tidy-23 is not available for $OS_ID $OS_VERSION ($OS_CODENAME)."
+        echo "[WARNING] Skipping it; run clang-tidy builds in the CI Docker image instead."
     fi
 }
 
@@ -544,6 +600,13 @@ configure_hugepages() {
 
 install() {
     echo "[INFO] Installing TT-Metalium dependencies for $OS_ID ($PKG_MANAGER)..."
+
+    # Must precede the update below: a leftover llvm-*.list from an earlier run
+    # can point at a suite apt.llvm.org never published for this release (older
+    # versions of this script wrote llvm-17 and llvm-20 unconditionally), and
+    # apt-get update exits 100 on it. Re-running the fixed script would then die
+    # on the stale source before the probe that was meant to avoid it.
+    reset_llvm_apt_sources
 
     # Update package cache first
     update_package_cache
