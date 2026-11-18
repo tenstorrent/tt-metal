@@ -14,7 +14,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from tests.ttnn.unit_tests.operations.qwen_mlp.multi_op_mlp import multi_op_partial_mlp
+from ttnn.operations.qwen_mlp import qwen_mlp_partial
 
 H = 5120
 I = 17408
@@ -32,7 +32,7 @@ CORES_USED = 99
 BFP4_BYTES_PER_ELEMENT = 576 / 1024
 BF16_BYTES = 2
 
-mlp_under_test = multi_op_partial_mlp
+mlp_under_test = qwen_mlp_partial
 
 
 def roofline_seconds(S):
