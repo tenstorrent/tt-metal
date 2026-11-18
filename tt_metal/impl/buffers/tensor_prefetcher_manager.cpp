@@ -59,6 +59,10 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
+static_assert(
+    kNumOpSignalSlots == experimental::kTensorPrefetcherNumSignals,
+    "Every op signal needs its slot in the signal slot table");
+
 constexpr uint32_t kNumGddrSubchannelsPerBank = 3;
 // Blackhole MPFE round-robin weights occupy the 3-bit field defined by
 // GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_MASK in the DRISC-only register map.
@@ -996,8 +1000,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     // kernels; the kernel's WAIT_SIGNAL handler polls them. One L1 alignment apiece rather than
     // packed — see signal_slot_stride_.
     signal_slot_stride_ = l1_alignment;
-    const uint32_t signal_slots_bytes =
-        (kNumCqSignalSlots + experimental::kTensorPrefetcherNumSignals) * signal_slot_stride_;
+    const uint32_t signal_slots_bytes = kNumSignalSlots * signal_slot_stride_;
     signal_slots_l1_addr_ = align_up(kernel_region_base, l1_alignment);
     socket_config_l1_addr_ = align_up(signal_slots_l1_addr_ + signal_slots_bytes, pcie_alignment_for_layout);
     socket_data_l1_addr_ = align_up(socket_config_l1_addr_ + socket_config_bytes, pcie_alignment_for_layout);
@@ -1465,10 +1468,6 @@ void TensorPrefetcherManager::queue(
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
     validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherRequest");
-    TT_FATAL(
-        trace_capture_cq == nullptr || !trace_capture_cq->trace_id().has_value() || !on_dispatch_engine(),
-        "QueueTensorPrefetcherRequest: trace capture is not supported when fast dispatch runs the Tensor prefetcher "
-        "(#65545)");
     send_or_capture(build_requests(target, device_subset, tensors), trace_capture_cq);
 }
 
@@ -1607,10 +1606,6 @@ void TensorPrefetcherManager::capture(
     auto lock = lock_api_function_();
     TT_FATAL(active_, "CommandListBuilder::add_tensor_prefetcher_request called before StartTensorPrefetcher");
     TT_FATAL(
-        !on_dispatch_engine(),
-        "CommandListBuilder::add_tensor_prefetcher_request is not supported when fast dispatch runs the Tensor "
-        "prefetcher (#65545)");
-    TT_FATAL(
         captured.requests.empty() || captured.run_id == run_id_,
         "CommandListBuilder::add_tensor_prefetcher_request: the builder holds requests from a Tensor prefetcher that "
         "has since been stopped. Call clear() on the builder after StopTensorPrefetcher.");
@@ -1663,6 +1658,22 @@ std::vector<uint8_t> TensorPrefetcherManager::wait_signal_page(uint32_t slot_ind
     return page;
 }
 
+void TensorPrefetcherManager::add_op_signal_wait_page(std::shared_ptr<const Request>& request) {
+    if (!request->op_signal.has_value()) {
+        return;
+    }
+    // The n-th wait on a signal handed to the worker since start waits for the count the device reaches with the
+    // signal that pairs with it, n times the increments each signal makes; the count wraps with the slot, and
+    // the kernel's compare is wrap-safe. Assigned here rather than at queue time, so a wait captured into a trace
+    // waits for a new count on every replay. The page goes on a copy because a captured request is shared with
+    // every replay; a wait carries no other page, so the copy is cheap.
+    const uint32_t signal_id = *request->op_signal;
+    auto with_page = std::make_shared<Request>(*request);
+    with_page->sender_pages.push_back(
+        wait_signal_page(op_signal_slot_index(signal_id), ++op_signal_waits_[signal_id] * op_signal_increments_));
+    request = std::move(with_page);
+}
+
 void TensorPrefetcherManager::validate_signal_id(uint32_t signal_id, std::string_view api_name) {
     TT_FATAL(
         signal_id < experimental::kTensorPrefetcherNumSignals,
@@ -1679,9 +1690,6 @@ uint32_t TensorPrefetcherManager::signal_slot_addr(uint32_t slot_index) const {
 uint32_t TensorPrefetcherManager::signal_address(uint32_t signal_id) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "GetTensorPrefetcherSignalAddress called before StartTensorPrefetcher");
-    TT_FATAL(
-        !on_dispatch_engine(),
-        "GetTensorPrefetcherSignalAddress is not supported when fast dispatch runs the Tensor prefetcher (#65545)");
     validate_signal_id(signal_id, "GetTensorPrefetcherSignalAddress");
     return signal_slot_addr(op_signal_slot_index(signal_id));
 }
@@ -1689,9 +1697,6 @@ uint32_t TensorPrefetcherManager::signal_address(uint32_t signal_id) {
 void TensorPrefetcherManager::queue_wait_for_signal(uint32_t signal_id, MeshCommandQueue* trace_capture_cq) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherWaitForSignal called before StartTensorPrefetcher");
-    TT_FATAL(
-        !on_dispatch_engine(),
-        "QueueTensorPrefetcherWaitForSignal is not supported when fast dispatch runs the Tensor prefetcher (#65545)");
     validate_signal_id(signal_id, "QueueTensorPrefetcherWaitForSignal");
     validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherWaitForSignal");
 
@@ -1733,10 +1738,6 @@ bool TensorPrefetcherManager::enqueue_cq_signal_and_wait_if_active(MeshCommandQu
 void TensorPrefetcherManager::enqueue_cq_signal_and_wait_locked(
     MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset) {
     validate_own_cq(&cq, "WaitForCqOnTensorPrefetcher");
-    TT_FATAL(
-        !on_dispatch_engine(),
-        "WaitForCqOnTensorPrefetcher is not supported when fast dispatch runs the Tensor prefetcher (#65545); "
-        "create PrefetcherPipes before StartTensorPrefetcher");
     const uint32_t cq_id = cq.id();
     TT_FATAL(
         cq_id < cq_signal_counter_.size(),
@@ -1761,22 +1762,26 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait_locked(
         }
     }
 
-    // Destination of the dispatcher write: the full device address (the kernel's
-    // local slot base plus the programmable-DRAM-core L1 NOC offset), so the
-    // dispatcher must NOT apply a bank offset.
-    const uint64_t dram_l1_noc_offset =
-        mesh_device_->impl().metal_env().get_hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
-    const uint64_t slot_addr = static_cast<uint64_t>(signal_slot_addr(cq_id)) + dram_l1_noc_offset;
+    // Destination of the dispatcher write: the full device address of the CQ's fence slot, so the dispatcher
+    // must NOT apply a bank offset. Every core that keeps a signal slot table gets the write: each sender's
+    // DRAM core, or the one dispatch engine that keeps the table for all of them.
+    const uint64_t slot_addr = dram_sender_l1_noc_addr(*mesh_device_, signal_slot_addr(cq_id));
 
     std::vector<DeviceMemoryAddress> targets;
     targets.reserve(target_devices.size() * num_senders_);
     for (const auto& coord : target_devices) {
         IDevice* device = devices_[device_index_by_coord_.at(coord)];
+        const size_t device_targets_begin = targets.size();
         for (uint32_t s = 0; s < num_senders_; ++s) {
             // Per-device translation; see metal_SocDescriptor::dram_bank_endpoint_coords.
-            const CoreCoord virtual_core =
-                device->virtual_core_from_logical_core(sender_logical_cores_[s], CoreType::DRAM);
-            targets.push_back(DeviceMemoryAddress{coord, virtual_core, slot_addr});
+            const CoreCoord virtual_core = dram_sender_virtual_core(*mesh_device_, device, sender_logical_cores_[s]);
+            const bool already_targeted = std::any_of(
+                targets.begin() + device_targets_begin, targets.end(), [&](const DeviceMemoryAddress& target) {
+                    return target.virtual_core_coord == virtual_core;
+                });
+            if (!already_targeted) {
+                targets.push_back(DeviceMemoryAddress{coord, virtual_core, slot_addr});
+            }
         }
     }
 
@@ -1841,18 +1846,7 @@ void TensorPrefetcherManager::worker_loop() {
     std::deque<TakenRequest> taken;
 
     const auto take_request = [&](std::shared_ptr<const Request>&& request) {
-        if (request->op_signal.has_value()) {
-            // The n-th wait on a signal handed to the worker since start waits for count n, the one the device
-            // reaches with the signal that pairs with it; the count wraps with the slot, and the kernel's
-            // compare is wrap-safe. Assigned here rather than at queue time, so a wait captured into a trace
-            // waits for a new count on every replay. The page goes on a copy because a captured request is
-            // shared with every replay; a wait carries no other page, so the copy is cheap.
-            const uint32_t signal_id = *request->op_signal;
-            auto with_page = std::make_shared<Request>(*request);
-            with_page->sender_pages.push_back(
-                wait_signal_page(op_signal_slot_index(signal_id), ++op_signal_waits_[signal_id]));
-            request = std::move(with_page);
-        }
+        add_op_signal_wait_page(request);
         TakenRequest& taken_request = taken.emplace_back(TakenRequest{.request = std::move(request)});
         const Request& req = *taken_request.request;
         // PREFETCH targets only the sender cores of its pipes. STOP / WAIT_SIGNAL / DRAIN leave

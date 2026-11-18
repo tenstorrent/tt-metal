@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -21,6 +22,9 @@
 #include <thread>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -79,6 +83,21 @@ void TensorPrefetcherManager::start_on_dispatch_engine() {
             devices_[d]->id(),
             written - fifo_slots_retired(d));
     }
+
+    // The engine keeps the one signal slot table its kernels wait on. Zero it before anything can signal, as a
+    // DRAM-core start does for its kernels; the kernels are idle, so none is waiting on a slot. The host counts
+    // of waits restart with the slots, before the worker that owns them starts.
+    signal_slots_l1_addr_ = fifo_region_base_ + fifo::signal_slot_offset(0);
+    signal_slot_stride_ = fifo::kLineBytes;
+    const std::vector<std::byte> zero_slots(kNumSignalSlots * signal_slot_stride_, std::byte{0});
+    for (IDevice* device : devices_) {
+        write_dram_sender_l1(*mesh_device_, device, sender_logical_cores_.front(), signal_slots_l1_addr_, zero_slots);
+        mesh_device_->impl().metal_env().get_cluster().l1_barrier(device->id());
+    }
+    op_signal_waits_.fill(0);
+    // A signal increments the counter of every DRAM bank (tensor_prefetcher_signal.h), and every bank's counter
+    // is the engine's one slot, so each signal raises it by the bank count.
+    op_signal_increments_ = mesh_device_->allocator()->get_num_banks(BufferType::DRAM);
 
     stop_requested_.store(false);
     host_worker_ = std::thread(&TensorPrefetcherManager::worker_loop_dispatch_engine, this);
@@ -218,18 +237,23 @@ void TensorPrefetcherManager::wait_for_fifo_idle() const {
 void TensorPrefetcherManager::worker_loop_dispatch_engine() {
     // One slot per request and device: the header, then the request page of each lane in use. A PREFETCH
     // request becomes one slot whose lanes are its senders' pages, so the kernels serve all of its
-    // receivers together. A DRAIN request's lanes are independent, so it may take several slots.
+    // receivers together. A DRAIN request's lanes are independent, so it may take several slots. A WAIT_SIGNAL
+    // names no sender: its one page is a slot of its own, which every kernel waits out.
     const auto slots_for = [this](const Request& request) {
+        const bool names_senders = !request.target_sender_indices.empty();
+        const size_t num_pages = names_senders ? request.target_sender_indices.size() : 1;
         std::vector<std::vector<uint8_t>> slots;
-        for (size_t first = 0; first < request.target_sender_indices.size(); first += fifo_layout_.lanes) {
-            const size_t num_lanes = std::min<size_t>(fifo_layout_.lanes, request.target_sender_indices.size() - first);
+        for (size_t first = 0; first < num_pages; first += fifo_layout_.lanes) {
+            const size_t num_lanes = std::min<size_t>(fifo_layout_.lanes, num_pages - first);
             std::vector<uint8_t> slot(fifo::kSlotHeaderBytes + num_lanes * fifo::kLanePageBytes, 0);
             fifo::SlotHeader header{};
             header.command = fifo::kSlotRequest;
             header.num_lanes = static_cast<uint32_t>(num_lanes);
             for (size_t l = 0; l < num_lanes; ++l) {
-                const uint32_t sender = request.target_sender_indices[first + l];
-                header.lane_bank_id[l] = static_cast<uint8_t>(sender_logical_cores_[sender].x);
+                if (names_senders) {
+                    const uint32_t sender = request.target_sender_indices[first + l];
+                    header.lane_bank_id[l] = static_cast<uint8_t>(sender_logical_cores_[sender].x);
+                }
                 const auto& page = request.sender_pages[request.sender_pages.size() == 1 ? 0 : first + l];
                 // validate_request_pages holds every page to exactly one lane.
                 std::memcpy(
@@ -252,7 +276,8 @@ void TensorPrefetcherManager::worker_loop_dispatch_engine() {
             incoming.swap(pending_);
             has_pending_.store(false);
         }
-        for (const auto& request : incoming) {
+        for (auto& request : incoming) {
+            add_op_signal_wait_page(request);
             const auto slots = slots_for(*request);
             for (const auto& coord : request->target_devices) {
                 const auto it = device_index_by_coord_.find(coord);

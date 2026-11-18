@@ -33,7 +33,13 @@ inline constexpr uint32_t kTerminateOffset = 0 * kLineBytes;
 inline constexpr uint32_t kFifoWrOffset = 1 * kLineBytes;
 // Slots kernel `k` (its index in tensor_prefetcher_kernels()) has retired so far (monotonic).
 constexpr uint32_t fifo_rd_offset(uint32_t k) { return (2 + k) * kLineBytes; }
-inline constexpr uint32_t kControlBytes = fifo_rd_offset(kMaxKernels);
+// Signal slot `slot_index` (tensor_prefetcher_request.hpp), which a WAIT_SIGNAL request names: the dispatcher
+// writes a CQ fence slot and device kernels increment an op signal slot. A line apiece, which also keeps each
+// slot L1-aligned, as a dispatcher write must be. Zeroed by the host at Start.
+constexpr uint32_t signal_slot_offset(uint32_t slot_index) {
+    return fifo_rd_offset(kMaxKernels) + slot_index * kLineBytes;
+}
+inline constexpr uint32_t kControlBytes = signal_slot_offset(kNumSignalSlots);
 
 // Request slots in the FIFO.
 inline constexpr uint32_t kFifoSlots = 16;

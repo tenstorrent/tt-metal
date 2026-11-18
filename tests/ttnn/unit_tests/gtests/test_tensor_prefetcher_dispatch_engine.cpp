@@ -4,8 +4,10 @@
 
 // The Tensor prefetcher where fast dispatch runs it on a dispatch engine: the same Start / Queue / Stop and
 // the same PrefetcherPipes as on a DRAM-core prefetcher, with a reader and a pusher on the dispatch engine
-// streaming a receiver-contiguous weight to the PrefetcherPipe validator. The validator checks every entry
-// against the weight in DRAM and hangs on a mismatch, so a run that finishes delivered every block intact.
+// streaming a receiver-contiguous weight to the PrefetcherPipe validator, whether the request is queued
+// directly, behind a CQ fence or an op signal, or replayed from a trace or a CommandList. The validator checks
+// every entry against the weight in DRAM and hangs on a mismatch, so a run that finishes delivered every block
+// intact.
 
 #include <gtest/gtest.h>
 
@@ -19,9 +21,12 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_validator.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -51,9 +56,15 @@ using ::tt::tt_metal::TensorSpec;
 constexpr uint32_t kTilesPerReceiver = 2;
 constexpr uint32_t kKBlockTiles = 2;
 constexpr uint32_t kBfloat16TileBytes = TILE_HEIGHT * TILE_WIDTH * sizeof(uint16_t);
+constexpr uint32_t kReplayCount = 2;
+// Traces and CommandList command buffers come out of the trace region; these hold a request and one
+// validator program.
+constexpr int kTraceRegionSize = 4 << 20;
 
 class DispatchEngineTensorPrefetcherFixture : public TTNNFixtureWithDevice {
 protected:
+    DispatchEngineTensorPrefetcherFixture() : TTNNFixtureWithDevice(kTraceRegionSize, DEFAULT_L1_SMALL_SIZE) {}
+
     void SetUp() override {
         if (!check_dispatch_mode()) {
             GTEST_SKIP() << "The dispatch-engine Tensor prefetcher runs with fast dispatch";
@@ -65,13 +76,22 @@ protected:
     }
 };
 
+// How a case leaves its weight's write. to_device only enqueues it, and a prefetch request is not ordered against
+// the command queue, so the reader could stage DRAM the write has not reached yet. Most tests finish the queue
+// first; a test of a device-side ordering (a CQ fence, an op signal raised behind the write) leaves the write in
+// flight so that the ordering is what protects the weight.
+enum class WeightWrite { Finished, InFlight };
+
 // A receiver-contiguous weight -- one (K, N / receivers) slab per receiver, round-robin over the DRAM banks --
 // and the PrefetcherPipes that deliver it to `receivers_per_bank` receivers of every bank, `ring_entries`
 // blocks deep per receiver. A dispatch engine holds one sender endpoint per bank, so each bank's
 // receivers share one pipe.
 struct ReceiverContiguousCase {
     ReceiverContiguousCase(
-        tt::tt_metal::distributed::MeshDevice* device, uint32_t receivers_per_bank, uint32_t ring_entries) {
+        tt::tt_metal::distributed::MeshDevice* device,
+        uint32_t receivers_per_bank,
+        uint32_t ring_entries,
+        WeightWrite weight_write = WeightWrite::Finished) {
         const uint32_t num_banks = device->dram_grid_size().x;
         const uint32_t num_receivers = receivers_per_bank * num_banks;
         const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -124,9 +144,9 @@ struct ReceiverContiguousCase {
             ttnn::Shape({1, 1, k, n}),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), weight_memory_config));
         weight = Tensor::from_vector(std::move(values), weight_spec).to_device(device);
-        // to_device only enqueues the write, and a prefetch request is not ordered against the command queue:
-        // without this the reader can stage DRAM the write has not reached yet.
-        tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+        if (weight_write == WeightWrite::Finished) {
+            tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+        }
     }
 
     std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> pipe_refs() const {
@@ -197,11 +217,73 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverC
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
-// The dispatch engine's kernels have no op-signal slots, so asking for one's address fails instead of
-// returning an address nothing watches.
-TEST_F(DispatchEngineTensorPrefetcherFixture, RejectsSignalAddressQuery) {
+// Pipes created while the prefetcher runs are fenced against the command queue that writes their receivers'
+// config pages, and an explicit fence holds the next request until the queue reaches it. Both fences are
+// dispatcher writes into the dispatch engine's own L1 that every kernel waits on.
+TEST_F(DispatchEngineTensorPrefetcherFixture, FencesRequestsAgainstCommandQueue) {
     metal_exp::StartTensorPrefetcher(*device_, {});
-    EXPECT_ANY_THROW(metal_exp::GetTensorPrefetcherSignalAddress(*device_, /*signal_id=*/0));
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, WeightWrite::InFlight);
+    metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(), std::nullopt);
+    queue_layers(device_, prefetch, /*num_layers=*/1);
+    validate_layers(device_, prefetch, /*num_layers=*/1);
+    metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// A request queued behind a wait on an op signal is served once an op raises the signal: the consumer enqueued
+// after the signalling op gets every block intact only if every kernel held at the wait.
+TEST_F(DispatchEngineTensorPrefetcherFixture, ServesRequestAfterOpSignal) {
+    constexpr uint32_t kSignalId = 1;
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, WeightWrite::InFlight);
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    for (uint32_t layer = 0; layer < 2; ++layer) {
+        metal_exp::QueueTensorPrefetcherWaitForSignal(*device_, kSignalId, /*trace_capture_cq=*/nullptr);
+        queue_layers(device_, prefetch, /*num_layers=*/1);
+        ttnn::operations::experimental::signal_tensor_prefetcher(device_, kSignalId, CoreCoord(0, 0));
+        validate_layers(device_, prefetch, /*num_layers=*/1);
+    }
+    metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// A request queued while the command queue captures a trace is sent on every replay of the trace.
+TEST_F(DispatchEngineTensorPrefetcherFixture, SendsTracedRequestOnEveryReplay) {
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2);
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    auto& cq = device_->mesh_command_queue();
+    auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
+        device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
+    // A trace cannot load the validator's binaries, so run it once first, on a request sent at once.
+    queue_layers(device_, prefetch, /*num_layers=*/1);
+    tt::tt_metal::distributed::EnqueueMeshWorkload(cq, validator, /*blocking=*/true);
+    const auto trace_id = device_->begin_mesh_trace(cq);
+    queue_layers(device_, prefetch, /*num_layers=*/1);
+    tt::tt_metal::distributed::EnqueueMeshWorkload(cq, validator, /*blocking=*/false);
+    device_->end_mesh_trace(cq, trace_id);
+    for (uint32_t i = 0; i < kReplayCount; ++i) {
+        device_->replay_mesh_trace(cq, trace_id, /*blocking=*/true);
+    }
+    device_->release_mesh_trace(trace_id);
+    metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// A request recorded into a CommandList is sent on every replay of the list.
+TEST_F(DispatchEngineTensorPrefetcherFixture, SendsRecordedRequestOnEveryCommandListReplay) {
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2);
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    {
+        const std::vector<metal_exp::TensorPrefetcherInput> inputs = {
+            {prefetch.weight.mesh_tensor(), prefetch.block_count}};
+        metal_exp::CommandListBuilder builder(*device_);
+        builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, inputs);
+        auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
+            device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
+        builder.add(device_->mesh_command_queue(), validator);
+        auto command_list = builder.build(device_->mesh_command_queue());
+        builder.deallocate();
+        for (uint32_t i = 0; i < kReplayCount; ++i) {
+            metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
+        }
+        command_list.deallocate();
+    }
     metal_exp::StopTensorPrefetcher(*device_);
 }
 

@@ -93,8 +93,13 @@ inline constexpr uint32_t kRequestPageBytes = 128;
 //     to know which count each new wait needs. Signals reach only each bank's free sender, which
 //     copies its count into the same slot of the bank's NOC1-endpoint sender each time it passes a
 //     wait on it.
-// The host zeroes the table before launching the kernels.
+// The host zeroes the table before launching the kernels. When the DRAM senders run on a dispatch engine
+// instead, the engine keeps the one table (tensor_prefetcher_fifo.hpp), and the host zeroes it at Start.
 constexpr uint32_t kNumCqSignalSlots = 2;
+// One op signal slot per op signal: experimental::kTensorPrefetcherNumSignals, which the host checks it
+// matches.
+constexpr uint32_t kNumOpSignalSlots = 8;
+constexpr uint32_t kNumSignalSlots = kNumCqSignalSlots + kNumOpSignalSlots;
 
 // Index in the signal slot table of op signal `signal_id`.
 constexpr uint32_t op_signal_slot_index(uint32_t signal_id) { return kNumCqSignalSlots + signal_id; }
