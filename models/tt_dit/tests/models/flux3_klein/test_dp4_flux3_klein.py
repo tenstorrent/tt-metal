@@ -6,8 +6,12 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 import ttnn
 
+from ....layers.module import Module
+from ....models.transformers.flux3_klein import transformer_flux3_klein
 from ....models.transformers.flux3_klein.transformer_block_flux3_klein import (
     LINEAR1_N_CORES,
     Flux3KleinTransformerBlock,
@@ -46,6 +50,56 @@ def test_linear1_takes_a_ring_tp_axis(expect_error) -> None:
     # past the topology check: the stub grid, one row short of LINEAR1_N_CORES, stops it at the core-count check
     with expect_error(ValueError, "rows of cores"):
         _block((4, 8), tp_axis=0)
+
+
+@pytest.mark.parametrize(("mesh_shape", "tp_axis", "path"), [((4, 8), 0, "fused"), ((4, 2), 1, "addcmul")])
+def test_proj_out_fuses_its_reduce_scatter_only_on_a_ring_tp_axis(monkeypatch, mesh_shape, tp_axis, path) -> None:
+    used = []
+
+    class ProjOut:
+        def __call__(self, parts):
+            return "out"
+
+        def forward_fused_addcmul(self, *args, **kwargs):
+            used.append("fused")
+
+    block = SimpleNamespace(
+        norm=lambda x, **kwargs: x,
+        attn=SimpleNamespace(forward=lambda **kwargs: ("attn", None)),
+        proj_mlp=lambda x, **kwargs: "mlp",
+        proj_out=ProjOut(),
+        _linear1=False,
+        _ccl_manager=_ccl(mesh_shape),
+        _parallel_config=SimpleNamespace(tensor_parallel=SimpleNamespace(mesh_axis=tp_axis)),
+        _mesh_device=SimpleNamespace(compute_with_storage_grid_size=lambda: ttnn.CoreCoord(12, 10)),
+    )
+    monkeypatch.setattr(ttnn, "unsqueeze", lambda x, dim: x)
+    monkeypatch.setattr(ttnn, "squeeze", lambda x, dim: x)
+    monkeypatch.setattr(ttnn, "addcmul", lambda *args: used.append("addcmul"))
+    x = SimpleNamespace(padded_shape=(1, 1024, 768), shape=(1, 1024, 768))
+    Flux3KleinTransformerBlock.forward(block, x, rope=None, mod=("shift", "scale", "gate"), logical_length=1024)
+    assert used == [path]
+
+
+@pytest.mark.parametrize(("mesh_shape", "tp_axis", "ring"), [((4, 8), 0, True), ((4, 2), 1, False)])
+def test_early_stacks_clone_only_on_a_ring_tp_axis(monkeypatch, mesh_shape, tp_axis, ring) -> None:
+    class Block(Module):
+        def __init__(self, **kwargs) -> None:
+            super().__init__()
+
+        def forward(self, x, **kwargs):
+            return x
+
+    monkeypatch.setattr(transformer_flux3_klein, "Flux3KleinTransformerBlock", Block)
+    monkeypatch.setattr(ttnn, "clone", lambda x: ("clone", x))
+    stacks = transformer_flux3_klein.Flux3KleinEarlyStacks(
+        device=None,
+        ccl_manager=_ccl(mesh_shape),
+        parallel_config=SimpleNamespace(tensor_parallel=SimpleNamespace(mesh_axis=tp_axis)),
+        is_fsdp=False,
+        linear1=False,
+    )
+    assert stacks.forward("image", "x") == (("clone", "x") if ring else "x")
 
 
 def test_dp4_mlp_rows_are_the_served_layouts() -> None:
