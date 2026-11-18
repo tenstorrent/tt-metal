@@ -90,11 +90,10 @@ def test_tanh_bf16_nonfinite_inputs(device):
 
 
 def test_tanh_bf16_exhaustive_inputs(device):
-    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word per board.
+    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word.
 
-    SKIP lists inputs the LLK sweep judges instead. MODEL: per board, the kernel's offset in BF16 steps from torch's word.
+    SKIP lists inputs the LLK sweep judges instead. MODEL: the kernel's offset in BF16 steps from torch's word.
     """
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     STOCK = {0x3F80: [(0x7F81, 0x7FFF)], 0xBF80: [(0xFF81, 0xFFFF)]}
     STEPS = 1
     SKIP = [(0x0002, 0x007F), (0x8002, 0x807F)]
