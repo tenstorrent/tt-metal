@@ -556,12 +556,23 @@ class TtServedRows:
             self.history_key = (self.history_rows, int(layer)) if hide else None
             hs = self.stripe // self.ratio
             self._history_tails = (hs, 2 * hs) if hide else ()
+            self._history_bfp4 = history_gather.bfp4_on()  # P.77: HISTORY_FORMAT at the buffers' allocation
             history_gather.acquire(
-                self.mesh, self.history_rows, self.history_key, owners=self.owners, tails=self._history_tails
+                self.mesh,
+                self.history_rows,
+                self.history_key,
+                owners=self.owners,
+                tails=self._history_tails,
+                bfp4=self._history_bfp4,
             )
         elif not on and self.history_rows is not None:
             history_gather.release(
-                self.mesh, self.history_rows, self.history_key, owners=self.owners, tails=self._history_tails
+                self.mesh,
+                self.history_rows,
+                self.history_key,
+                owners=self.owners,
+                tails=self._history_tails,
+                bfp4=self._history_bfp4,
             )
             self.history_rows = self.history_key = None
             self._history_tails = ()

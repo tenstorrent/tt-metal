@@ -294,16 +294,18 @@ class TtSparseAttention(TtWindowAttention):
         dealloc(src)
         return out
 
-    def _index_region(self, topk: ttnn.Tensor, ckv_cache, stride: int, cls: int) -> ttnn.Tensor:
+    def _index_region(self, topk: ttnn.Tensor, ckv_cache, stride: int, cls: int, win=None) -> ttnn.Tensor:
         """STATIC_TABLES=off with the per-chip bf16 window region (WINDOW_KV_FORMAT=bf16_tiles, P.72): the chip's
         index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR = [region window ids | top-k rows of the gathered history
-        (offset 0)], not compacted (the fork's BF16 kv_window takes the two sentinel tails apart)."""
+        (offset 0)], not compacted (the fork's BF16 kv_window takes the two sentinel tails apart). ``win`` (P.77,
+        HISTORY_FORMAT=bfp4 without a region): other window ids (the [carry | chunk] table's, as kv_window)."""
         assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
         mine = self._mine(topk)
         rows = self._topk_rows(mine, ckv_cache, stride, 0)
         if mine is not topk:
             dealloc(mine)
-        out = ttnn.concat([self.tables.region_index[cls], rows], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
+        win = self.tables.region_index[cls] if win is None else win
+        out = ttnn.concat([win, rows], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         dealloc(rows)
         return out
 
@@ -432,7 +434,10 @@ class TtSparseAttention(TtWindowAttention):
             comp, nb, stride = hit
         held = isinstance(comp, history_gather.Held)  # (the persistent buffer: never freed here)
         comp_t = comp.tensor if held else comp
-        if region:
+        # HISTORY_FORMAT=bfp4 (P.77): the history as 320 B bfloat4_b records, read by the sdpa fork's ROW_BFP4 with the
+        # window a bf16 kv_window (the region, or without one the [carry | chunk] rows): never concatenated
+        rec = comp_t.dtype == ttnn.uint8
+        if region or rec:
             table = comp_t
         else:
             table = ttnn.concat([window, comp_t], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
@@ -442,18 +447,21 @@ class TtSparseAttention(TtWindowAttention):
             if held:  # the [window | history] concat: the history's rows move by the window's 128 + S
                 held = False
         cls = cache.carry_class(start)  # (DECODER_SKIP=exact, P.30)
-        index = memo.get(("index", sources[1]), ckey + (cls, region)) if shared else None
+        index = memo.get(("index", sources[1]), ckey + (cls, region, rec)) if shared else None
         if index is None:
-            index = (
-                self._index_region(topk, ckv_cache, stride, cls)
-                if region
-                else self._index(topk, ckv_cache, stride, start, cls)
-            )
+            if region:
+                index = self._index_region(topk, ckv_cache, stride, cls)
+            elif rec:  # (P.77: [window ids of the [carry | chunk] rows | top-k rows of the records, offset 0])
+                index = self._index_region(topk, ckv_cache, stride, cls, win=self.tables.index[cls])
+            else:
+                index = self._index(topk, ckv_cache, stride, start, cls)
             if shared:
-                memo.put(("index", sources[1]), ckey + (cls, region), index)
+                memo.put(("index", sources[1]), ckey + (cls, region, rec), index)
         q_rm = self._q(q_resid, cos, sin)
-        o = self._sdpa(q_rm, table, index, window=window if region else None)
+        o = self._sdpa(q_rm, table, index, window=window if (region or rec) else None)
         dealloc(q_rm)
+        if rec and not region:
+            dealloc(window)
         if not (region and shared) and not held:
             dealloc(table)
         if not shared:

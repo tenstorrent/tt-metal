@@ -260,6 +260,20 @@ TABLE = {
         "buffer per gathered source instead of one per size. off = P.74 (the whole [0, nb S) gathered at the source's "
         "layer into the buffer shared by every source of a size)",
     ),
+    "HISTORY_FORMAT": Setting(
+        "bfp4",
+        ("bf16", "bfp4"),
+        "P.77 (OWNER DECISION 2026-11-18: everything optimized from now on is on a 4-bit compressed-KV path, as the "
+        "reference: fp4 e2m1 + e4m3 per 16, ds41_ref.py:78; only with STATIC_TABLES=off, HISTORY_GATHER=rows): the "
+        "format of the compressed history sparse attention reads. bfp4 = every chip packs ITS OWN served bf16 rows into "
+        "320 B bfloat4_b row records (slice + tilize + ttnn.bringup.ckv_bfp4, SFPU round to nearest even) into a local "
+        "record buffer BEFORE the gather (P.11's pack-before-gather), every chunk from the served rows (no private "
+        "copy: right whoever wrote the slot); the whole-mesh high_bw_all_gather moves the records (320 instead of 1024 B "
+        "a row) into the persistent history buffers (3.2x smaller), read by the sdpa fork's ROW_BFP4 + kv_window (the "
+        "bf16 window region). The chunk's own rows (P.75's tail) packed the same way before their tail gather. The "
+        "served compress_kv cache stays bf16 (decode reads it; owner). bf16 = the P.74 / P.75 bf16 history (BF16 + "
+        "kv_window)",
+    ),
     "BF16_ACTIVATIONS": Setting(
         "on",
         ("on", "off"),
