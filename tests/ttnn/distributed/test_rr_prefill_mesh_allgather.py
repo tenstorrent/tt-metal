@@ -101,7 +101,8 @@ def test_ring_all_gather_on_every_chip(rr_mesh, axis, num_links):
         shard = buffer.get_shard(coord)
         if shard is None:
             continue
-        got = np.from_dlpack(shard).astype(np.float32).reshape(-1)
+        # The host buffer is exposed as raw bytes; the tensor is float32 row-major.
+        got = np.ascontiguousarray(np.from_dlpack(shard)).view(np.float32).reshape(-1)
         want = expected_gather(axis, int(coord[0]), int(coord[1])).reshape(-1)
         assert np.array_equal(got, want), (
             f"rank {rank} chip ({coord[0]},{coord[1]}) axis {axis} links {num_links}: got {got.size} values, "
