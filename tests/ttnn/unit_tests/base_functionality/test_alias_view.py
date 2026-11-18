@@ -356,7 +356,8 @@ def test_alias_view_slices_follow_the_input_shape_not_its_buffer(device, expect_
     banks = _num_banks(device)
     half = _bf8_aligned_block_size(banks) // 2
     k = _bf8_owner(device, NUM_BLOCKS, half)
-    first = ttnn.experimental.view(k, ttnn.Shape([NUM_BLOCKS // 2, 1, half, 256]))
+    # reshape with a ttnn.Shape returns a zero-copy view for matching last dims before it checks the volume.
+    first = ttnn.reshape(k, ttnn.Shape([NUM_BLOCKS // 2, 1, half, 256]))
     assert first.buffer_address() == k.buffer_address()
     with expect_error(RuntimeError, "not a multiple of the view's"):
         ttnn.experimental.alias_view(first, ttnn.Shape([NUM_BLOCKS // 2, 1, 32, 32 * banks]), ttnn.float32)
