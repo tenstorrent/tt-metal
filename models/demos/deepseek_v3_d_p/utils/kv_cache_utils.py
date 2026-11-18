@@ -19,6 +19,7 @@ from models.demos.common.prefill.runners.kv_bank_alignment import (
     check_kv_bank_aligned,
 )
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
+from models.demos.common.prefill.runners.stage_layout import chip_host_tag
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -534,18 +535,20 @@ def populate_kv_chunk_address_table_block_cyclic(
         for stage in stage_layout:
             dram_bank_base_addr = stage["base_addr"]
             num_dram_banks = stage["num_banks"]
-            host_name = f"host-{stage['host_tag']:08x}"  # crc32 tag rebuilt to a string (int-only allgather)
             first = stage["first_layer"]
             count = stage["count"]
             stage_fnids = stage["fnids"]
             for row in range(rows):
                 # fnids are indexed by raw mesh coordinate; SP row `row` is a mesh column at sp_axis=1.
-                sp_row_fnids = [stage_fnids[r][c] for r, c in _sp_row_coords(mesh_shape, sp_axis, row)]
+                sp_row_coords = _sp_row_coords(mesh_shape, sp_axis, row)
+                sp_row_fnids = [stage_fnids[r][c] for r, c in sp_row_coords]
+                for r, c in sp_row_coords:
+                    lookup_table.set_fabric_node_host(
+                        stage_fnids[r][c], host_name=f"host-{chip_host_tag(stage, r, c):08x}"
+                    )
                 row_groups = [[fid] for fid in sp_row_fnids] if tp_axis is not None else [sp_row_fnids]
                 for col, fnids_dev in enumerate(row_groups):
                     group_idx = lookup_table.add_device_group(fnids_dev)
-                    for fid in fnids_dev:
-                        lookup_table.set_fabric_node_host(fid, host_name=host_name)
                     curr_bank_id = 0
                     curr_bank_offset = 0
                     for slot in range(num_users):
@@ -1050,7 +1053,6 @@ def populate_kv_chunk_address_table_kda(
             continue
         base = int(stage["base_addr"])
         num_banks = int(stage["num_banks"])
-        host_name = f"host-{stage['host_tag']:08x}"  # crc32 tag rebuilt to a string (int-only allgather)
         first = int(stage["first_layer"])
         fnids = stage["fnids"]
         for tp_col in range(tp):
@@ -1058,8 +1060,8 @@ def populate_kv_chunk_address_table_kda(
             coords = [_sp_row_coords(mesh_shape, sp_axis, sp_row)[tp_col] for sp_row in range(sp)]
             members = [fnids[r][c] for r, c in coords]
             group_idx = lookup_table.add_device_group(members)
-            for fid in members:
-                lookup_table.set_fabric_node_host(fid, host_name=host_name)
+            for r, c in coords:
+                lookup_table.set_fabric_node_host(fnids[r][c], host_name=f"host-{chip_host_tag(stage, r, c):08x}")
             local_segments = _kda_local_segments(geometry, kind, tp_col)
             for slot in range(num_users):
                 for local_layer in range(count):

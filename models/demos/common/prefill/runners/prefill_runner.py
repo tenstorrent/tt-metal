@@ -1478,7 +1478,7 @@ def _serve_request(
         GLOBAL_MESH_SHAPE,
         rank=rank,
         num_ranks=layout.num_ranks,
-        leader_ranks=layout.leader_ranks(),
+        stage_layout=layout,
         # The table's layer space, from 0. Under PREFILL_PP_LAYER_OFFSET no table is built (setup_kv_chunk_table).
         first_layer_idx=first_layer_idx,
         num_my_layers=num_my_layers,

@@ -6,7 +6,7 @@ ttnn-free."""
 
 import pytest
 
-from models.demos.common.prefill.runners.stage_layout import BoundaryPair, StageLayout, keep_stage_leaders, single_peer
+from models.demos.common.prefill.runners.stage_layout import BoundaryPair, StageLayout, chip_host_tag, collapse_to_stages, single_peer
 
 SC4 = StageLayout((1, 2, 1, 2, 1, 2, 1, 2))
 TSR = StageLayout((1, 2, 1))
@@ -94,15 +94,37 @@ def test_the_last_stage_has_no_outbound_boundary():
         TSR.boundary_pairs(2, 4)
 
 
-def test_gathered_stage_entries_keep_one_per_stage():
-    gathered = [[{"rank": r, "first_layer": 0} for r in range(4)]]
-    kept = keep_stage_leaders(gathered, TSR.leader_ranks())
-    assert [e["rank"] for e in kept[0]] == [0, 1, 3]
+def _gathered(ranks, cols=4, rows=4):
+    return [
+        [
+            {"rank": r, "first_layer": 0, "host_tag": 100 + r, "fnids": [[(r, row, c) for c in range(cols)] for row in range(rows)]}
+            for r in ranks
+        ]
+    ]
 
 
-def test_without_leaders_every_entry_stays():
-    gathered = [[{"rank": r} for r in range(3)]]
-    assert keep_stage_leaders(gathered, None) == gathered
+def test_gathered_entries_collapse_to_one_per_stage():
+    collapsed = collapse_to_stages(_gathered(range(4)), TSR, 4)
+    assert [e["rank"] for e in collapsed[0]] == [0, 1, 3]
+
+
+def test_a_seam_stage_records_the_host_of_every_chip():
+    seam = collapse_to_stages(_gathered(range(4)), TSR, 4)[0][1]
+    assert [[chip_host_tag(seam, r, c) for c in range(4)] for r in range(4)] == [[101] * 4, [101] * 4, [102] * 4, [102] * 4]
+
+
+def test_a_single_host_stage_has_one_host_for_every_chip():
+    torus = collapse_to_stages(_gathered(range(4)), TSR, 4)[0][0]
+    assert {chip_host_tag(torus, r, c) for r in range(4) for c in range(4)} == {100}
+
+
+def test_an_entry_without_per_chip_hosts_uses_its_rank_host():
+    assert chip_host_tag({"host_tag": 5}, 3, 3) == 5
+
+
+def test_without_a_layout_every_entry_stays():
+    gathered = _gathered(range(3))
+    assert collapse_to_stages(gathered, None, 4) == gathered
 
 
 def test_equal_host_stages_have_one_peer_per_side():
@@ -115,7 +137,7 @@ def test_equal_host_stages_have_one_peer_per_side():
 @pytest.mark.parametrize("rank, direction", [(0, "outbound"), (3, "inbound")])
 def test_a_boundary_split_over_two_peers_is_refused_until_ttnn_can_serve_it(rank, direction):
     pairs = TSR.outbound_pairs(rank, 4) if direction == "outbound" else TSR.inbound_pairs(rank, 4)
-    with pytest.raises(NotImplementedError, match="per-host-block service"):
+    with pytest.raises(NotImplementedError, match="one service per host row block"):
         single_peer(pairs, 4, direction, rank)
 
 

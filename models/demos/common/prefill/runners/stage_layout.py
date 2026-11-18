@@ -133,22 +133,46 @@ class StageLayout:
         return [p for p in self.boundary_pairs(stage, mesh_rows) if p.sender_rank == rank]
 
 
-def keep_stage_leaders(stage_layouts: list, leader_ranks) -> list:
-    """Drop the gathered entries of ranks that are not a stage's leader. Every host of a multi-host stage
-    gathers the same layer range and the stage's whole-mesh fabric node ids, so keeping them all would list
-    that range once per host."""
-    if leader_ranks is None:
-        return stage_layouts
-    leaders = set(leader_ranks)
-    return [[entry for entry in layout if entry["rank"] in leaders] for layout in stage_layouts]
+def collapse_to_stages(gathered: list, layout: StageLayout | None, mesh_rows: int) -> list:
+    """One entry per pipeline stage from the per-rank entries an all-gather returns, each carrying the host that
+    owns every chip.
+
+    Every host of a multi-host stage gathers the same layer range and the stage's whole-mesh fabric node ids, so
+    keeping all entries would list that range once per host. The stage's first rank's entry is kept, with
+    ``chip_host_tags[row][col]`` added: the ``host_tag`` of the rank whose rows contain mesh row ``row``. A stage
+    spanning two hosts thus keeps a per-chip host, not one host for the stage. ``layout`` None: every rank is a
+    stage and the entries are returned as they are."""
+    if layout is None:
+        return gathered
+    collapsed = []
+    for entries in gathered:
+        by_rank = {entry["rank"]: entry for entry in entries}
+        stage_entries = []
+        for stage in range(layout.num_stages):
+            leader = dict(by_rank[layout.first_rank(stage)])
+            cols = len(leader["fnids"][0])
+            row_tags = {}
+            for rank in layout.ranks_of(stage):
+                lo, hi = layout.host_rows(rank, mesh_rows)
+                row_tags.update({row: by_rank[rank]["host_tag"] for row in range(lo, hi)})
+            leader["chip_host_tags"] = [[row_tags[row]] * cols for row in range(mesh_rows)]
+            stage_entries.append(leader)
+        collapsed.append(stage_entries)
+    return collapsed
+
+
+def chip_host_tag(stage_entry: dict, row: int, col: int) -> int:
+    """The host tag of chip (row, col) of a gathered stage: its own when the stage records one per chip."""
+    tags = stage_entry.get("chip_host_tags")
+    return stage_entry["host_tag"] if tags is None else tags[row][col]
 
 
 def single_peer(pairs: list, mesh_rows: int, direction: str, rank: int) -> int | None:
     """The one peer rank of a boundary side, None when the rank has no such boundary.
 
-    One D2D service connects one sender rank to one receiver rank over every mesh coordinate. A boundary
-    where a rank's mesh coordinates are split across two peer ranks (a one-host stage next to a two-host
-    seam stage) needs a service restricted to a block of rows, which ttnn does not offer yet."""
+    One D2D service on a whole stage mesh connects one sender rank to one receiver rank over every mesh
+    coordinate. A boundary where a rank's mesh coordinates are split across two peer ranks (a one-host
+    stage next to a two-host seam stage) needs a service per row block, built on a submesh of that block."""
     if not pairs:
         return None
     peers = {(p.receiver_rank if direction == "outbound" else p.sender_rank) for p in pairs}
@@ -157,6 +181,8 @@ def single_peer(pairs: list, mesh_rows: int, direction: str, rank: int) -> int |
         raise NotImplementedError(
             f"[pp rank {rank}] {direction} boundary needs {len(pairs)} D2D services over rows "
             f"{[p.rows for p in pairs]} of {mesh_rows}: D2DStreamService connects whole meshes rank to rank, "
-            "so a boundary between stages with different host counts needs a per-host-block service in ttnn"
+            "so a boundary between stages with different host counts needs one service per host row block, on a submesh "
+            "(tests/ttnn/distributed/test_rr_prefill_d2d_seam.py), and the runner does not yet move activations "
+            "between the stage mesh and those submeshes"
         )
     return peers.pop()
