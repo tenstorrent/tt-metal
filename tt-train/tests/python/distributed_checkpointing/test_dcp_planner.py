@@ -367,10 +367,15 @@ def test_rank_plans_only_its_coordinates():
         return sorted(reads, key=lambda r: (r.group, r.chunk))
 
     assert by_group(parts[0].reads + parts[1].reads) == by_group(whole.reads)
-    # A replicated group is planned by every rank holding one of its coordinates: DP row 0 holds one of each.
-    row0 = {c for c in TP8_DP4.mesh_coords if c[0] == 0}
-    replicated = create_load_plan(ckpt.index, [info("w", TP8_DP4, canonical.shape, Identity())], local_coords=row0)
-    assert len(replicated.keys["w"].boxes) == 8
+    # A replicated group is planned by every rank holding one of its coordinates, not only the rank holding its first
+    # replica: each DP row holds one replica of every group, and the last TP column one group in every row.
+    tp8_dp4 = [info("w", TP8_DP4, canonical.shape, Identity())]
+    for row in range(4):
+        coords = {c for c in TP8_DP4.mesh_coords if c[0] == row}
+        planned = create_load_plan(ckpt.index, tp8_dp4, local_coords=coords).keys["w"]
+        assert sorted(planned.boxes) == [(j,) for j in range(8)], f"DP row {row}"
+    last_column = {c for c in TP8_DP4.mesh_coords if c[1] == 7}
+    assert list(create_load_plan(ckpt.index, tp8_dp4, local_coords=last_column).keys["w"].boxes) == [(7,)]
 
 
 def test_a_missing_chunk_is_a_coverage_error(expect_error):
