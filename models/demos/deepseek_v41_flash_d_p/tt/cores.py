@@ -4,9 +4,11 @@
 """FIX.15 (agent rule 18, owner 2026-10-30): the Tensix-core cap of one op on a Galaxy (setting MAX_WORKER_CORES).
 
 The Galaxy chassis' power supply trips when a chip's current rises too fast (di/dt); the full 12 x 10 = 120-core grid
-can do it, so no op may run on more than MAX_WORKER_CORES (110) cores of a chip there. Every op of the model that
-picks a core grid takes it from here: the matmul program configs (tt/mm_configs.py: ``worker_grid``), the bring-up
-forks (their ``max_grid`` option: ``max_grid``), the stock ops with a ``sub_core_grids`` option (``sub_cores``).
+can do it, so no MATMUL may run on more than MAX_WORKER_CORES (110) cores of a chip there (owner 2026-11-18: the rule
+is the matmuls'). Every op of the model that picks a core grid takes it from here: the matmul program configs
+(tt/mm_configs.py: ``worker_grid``), the bring-up forks (their ``max_grid`` option: ``max_grid``; a fork's
+``sub_core_grids``: ``mm_cores``), all at MAX_WORKER_CORES; the stock non-matmul ops with a ``sub_core_grids`` option
+(``sub_cores``) at NONMM_MAX_CORES (the full grid by default).
 Off a Galaxy (or MAX_WORKER_CORES=0) ``max_grid`` / ``sub_cores`` are None: every call is the one it was.
 
 ``init_caps(mesh)`` (model / module construction, tt/common.compute_config) records the mesh, so ``sub_cores()`` with no
@@ -43,11 +45,10 @@ def max_worker_cores(mesh) -> int:
     return min(cap, full) if cap > 0 and is_galaxy() else full
 
 
-def worker_grid(mesh) -> ttnn.CoreCoord:
-    """The compute grid an op may use under max_worker_cores: the full grid's rows, as many columns as fit (12 x 10
-    -> 11 x 10 under 110). A rectangle starting at (0, 0), so a program config's compute_with_storage_grid_size."""
+def _grid_under(mesh, cap: int) -> ttnn.CoreCoord:
+    """The compute grid cut to ``cap`` cores: the full grid's rows, as many columns as fit (12 x 10 -> 11 x 10 under
+    110). A rectangle starting at (0, 0)."""
     g = mesh.compute_with_storage_grid_size()
-    cap = max_worker_cores(mesh)
     if g.x * g.y <= cap:
         return ttnn.CoreCoord(g.x, g.y)
     if cap >= g.y:
@@ -55,33 +56,54 @@ def worker_grid(mesh) -> ttnn.CoreCoord:
     return ttnn.CoreCoord(cap, 1)
 
 
-def worker_cores(mesh) -> ttnn.CoreRangeSet:
-    """worker_grid as a CoreRangeSet (an op's sub_core_grids / core_grid option)."""
-    w = worker_grid(mesh)
+def _crs(w: ttnn.CoreCoord) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(w.x - 1, w.y - 1))})
 
 
-_CAPS = {}  # mesh id -> (max_grid CoreCoord | None, sub_core_grids CoreRangeSet | None)
+def worker_grid(mesh) -> ttnn.CoreCoord:
+    """The compute grid a MATMUL may use under max_worker_cores (11 x 10 under 110 on the Galaxy's 12 x 10): a
+    program config's compute_with_storage_grid_size."""
+    return _grid_under(mesh, max_worker_cores(mesh))
+
+
+def nonmm_max_cores(mesh) -> int:
+    """Setting NONMM_MAX_CORES (owner 2026-11-18): the most Tensix cores of a chip one stock NON-matmul op may run on
+    where the matmul cap applies (0: the full grid). The full grid elsewhere."""
+    g = mesh.compute_with_storage_grid_size()
+    full = g.x * g.y
+    cap = int(settings.get("NONMM_MAX_CORES"))
+    return min(cap, full) if cap > 0 and is_galaxy() else full
+
+
+def worker_cores(mesh) -> ttnn.CoreRangeSet:
+    """worker_grid as a CoreRangeSet (an op's sub_core_grids / core_grid option)."""
+    return _crs(worker_grid(mesh))
+
+
+_CAPS = {}  # mesh id -> (max_grid | None, matmul sub_core_grids | None, non-matmul sub_core_grids | None)
+_NONE = (None, None, None)
 
 
 def _caps(dev) -> tuple:
-    """(max_grid, sub_core_grids) of the model's mesh (init_caps: one mesh a process, a dict lookup a call), else of
+    """(max_grid, mm_cores, sub_cores) of the model's mesh (init_caps: one mesh a process, a dict lookup a call), else of
     ``dev`` (a mesh or a tensor on one; a host tensor or None: no cap)."""
     hit = _CAPS.get(None)
     if hit is not None:
         return hit
     if dev is None:
-        return (None, None)
+        return _NONE
     if not hasattr(dev, "compute_with_storage_grid_size"):
         dev = dev.device() if hasattr(dev, "device") else None
         if dev is None:
-            return (None, None)
+            return _NONE
     key = dev.id()
     hit = _CAPS.get(key)
     if hit is None:
         g, w = dev.compute_with_storage_grid_size(), worker_grid(dev)
         capped = w.x * w.y < g.x * g.y
-        hit = _CAPS[key] = (w, worker_cores(dev)) if capped else (None, None)
+        # (non-matmul ops: their own cap, NONMM_MAX_CORES, the full grid by default; still an explicit grid where the
+        # matmul cap applies, so every capped code path stays the one it was, only on more cores)
+        hit = _CAPS[key] = (w, _crs(w), _crs(_grid_under(dev, nonmm_max_cores(dev)))) if capped else _NONE
     return hit
 
 
@@ -96,10 +118,17 @@ def max_grid(dev=None):
     return _caps(dev)[0]
 
 
-def sub_cores(dev=None):
-    """The ``sub_core_grids`` of a stock op (FIX.15, MAX_WORKER_CORES) for a mesh or a tensor on it: the capped
-    grid's cores, or None where no cap applies (the op picks its grid, the call as before)."""
+def mm_cores(dev=None):
+    """The ``sub_core_grids`` of a stock op doing matmul work or of a bring-up fork (FIX.15, MAX_WORKER_CORES): the
+    matmul-capped grid's cores (110 on a Galaxy), or None where no cap applies."""
     return _caps(dev)[1]
+
+
+def sub_cores(dev=None):
+    """The ``sub_core_grids`` of a stock NON-matmul op for a mesh or a tensor on it: the NONMM_MAX_CORES grid's cores
+    (the full 120 on a Galaxy by default; owner 2026-11-18: only matmuls are held to MAX_WORKER_CORES), or None where
+    no cap applies (the op picks its grid, the call as before)."""
+    return _caps(dev)[2]
 
 
 def to_rm(x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:

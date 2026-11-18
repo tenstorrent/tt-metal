@@ -63,7 +63,7 @@ from . import ccl, cores
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, gemm_dtype, gemm_input, tp_sum
-from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
+from .cores import from_torch, max_grid, mm_cores, sub_cores, sub_cores_tiled, to_rm
 from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_chain, rope_chains, rope_heads, rope_stock
 from .settings import settings
 
@@ -100,7 +100,7 @@ def topk_large_indices(x: ttnn.Tensor, **kw) -> ttnn.Tensor:
         if settings.get("INDEX_TOPK_OP") == "fork"
         else ttnn.experimental.topk_large_indices
     )
-    return op(x, sub_core_grids=sub_cores(x), **kw)  # FIX.15: the capped grid (MAX_WORKER_CORES), None elsewhere
+    return op(x, sub_core_grids=mm_cores(x), **kw)  # FIX.15: a fork: the matmul cap (MAX_WORKER_CORES), None elsewhere
 
 
 def _upload(mesh, t, dtype, layout=ttnn.TILE_LAYOUT, dims=None):

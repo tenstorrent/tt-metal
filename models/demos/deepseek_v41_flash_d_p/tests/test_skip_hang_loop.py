@@ -15,8 +15,10 @@ steady chunk at the first point (the last full layer, model.decoder[0] - 1) is r
     HANGLOOP_PROFILE   1: the rt profiler around the last run of each kind, as the test (default 1)
     HANGLOOP_MINUTES   stop after this many minutes (default 20); HANGLOOP_ROUNDS caps the rounds (default 1000)
     HANGLOOP_WATCH     1 (default): a real-time profiler callback for the whole loop keeps, per kernel set, the
-                       most cores any program ran on (rule 18: anything over tt/cores.max_worker_cores is printed as
-                       OVER at the end of every round), and per chip the last programs that finished; on an error
+                       most cores any program ran on (rule 18, owner 2026-11-18: a MATMUL program over
+                       tt/cores.max_worker_cores, or any program over tt/cores.nonmm_max_cores, is printed as OVER at
+                       the end of every round; non-matmul programs over the matmul cap are listed as UNCAPPED), and
+                       per chip the last programs that finished; on an error
                        (a hang) it prints those per chip before the teardown: the program after them is the one in
                        flight (FIX.36)
     HANGLOOP_GATHER_ROWS  P.73: "alt" alternates the STATIC_TABLES=off history gather per round (even rounds as
@@ -42,7 +44,7 @@ from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.testing import batch, profiler
 from models.demos.common.bringup.testing.harness import mesh_parametrize, spec
 from models.demos.common.bringup.testing.profile import PositionGolden
-from models.demos.deepseek_v41_flash_d_p.tt.cores import max_worker_cores
+from models.demos.deepseek_v41_flash_d_p.tt.cores import max_worker_cores, nonmm_max_cores
 from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
 S = spec()
@@ -50,13 +52,23 @@ BATCH_SHARED = True
 REPLAY = 128
 
 
+# a program doing matmul work, by its kernels' file names (stock matmul / bmm / sdpa, the MoE block's gate-up / down,
+# the experts, the indexer score): held to MAX_WORKER_CORES (owner 2026-11-18); every other program to NONMM_MAX_CORES
+_MM_KERNEL = ("matmul", "bmm", "sdpa", "mm_", "gate_up", "down_", "expert", "score", "attn")
+
+
+def _is_mm(key) -> bool:
+    return any(m in k.lower() for k in key for m in _MM_KERNEL)
+
+
 class _Watch:
     """FIX.36: the real-time profiler's records for the whole loop (see HANGLOOP_WATCH)."""
 
-    def __init__(self, cap: int):
+    def __init__(self, cap: int, nonmm_cap: int):
         import ttnn
 
         self.cap = cap
+        self.nonmm_cap = nonmm_cap
         self.lock = threading.Lock()
         self.cores = {}  # kernel set -> (most cores, programs seen)
         self.last = collections.defaultdict(lambda: collections.deque(maxlen=6))  # chip -> recent records
@@ -81,16 +93,22 @@ class _Watch:
 
     def over(self) -> list:
         with self.lock:
-            return sorted(((m, k, key) for key, (m, k) in self.cores.items() if m > self.cap), reverse=True)
+            return sorted(((m, k, key) for key, (m, k) in self.cores.items() if self._over(m, key)), reverse=True)
+
+    def _over(self, m: int, key) -> bool:
+        return m > (self.cap if _is_mm(key) else self.nonmm_cap)
 
     def report(self, tag: str) -> None:
         with self.lock:
             print(
                 f"HANGWATCH {tag}: {self.n} records, {self.dropped} dropped, {len(self.cores)} kernel sets", flush=True
             )
-            top = sorted(((m, k, key) for key, (m, k) in self.cores.items()), reverse=True)[:8]
-        for m, k, key in top:
-            print(f"HANGWATCH cores {m}{' OVER' if m > self.cap else ''} x{k}: {' '.join(key)}", flush=True)
+            top = sorted(((m, k, key) for key, (m, k) in self.cores.items()), reverse=True)
+            n_unc = sum(1 for m, _, key in top if m > self.cap and not _is_mm(key))
+        print(f"HANGWATCH {n_unc} non-matmul kernel sets over {self.cap} cores (allowed up to {self.nonmm_cap})")
+        for m, k, key in top[:8]:
+            flag = " OVER" if self._over(m, key) else (" UNCAPPED" if m > self.cap else "")
+            print(f"HANGWATCH cores {m}{flag} x{k}: {' '.join(key)}", flush=True)
 
     def dump_last(self) -> None:
         with self.lock:
@@ -133,7 +151,11 @@ def test_skip_hang_loop(mesh_device, monkeypatch):
     if loaded != "decode":
         model.use_decoder_skip("decode")
     keep_layer = model.decoder[0] - 1  # (model.decoder: the skipped layers 20..39; 19 is the last full one)
-    watch = _Watch(max_worker_cores(mesh_device)) if os.environ.get("HANGLOOP_WATCH", "1") == "1" else None
+    watch = (
+        _Watch(max_worker_cores(mesh_device), nonmm_max_cores(mesh_device))
+        if os.environ.get("HANGLOOP_WATCH", "1") == "1"
+        else None
+    )
     print(
         f"HANGLOOP points {points} runs {runs} profile {prof} minutes {minutes} watch {watch is not None}", flush=True
     )
@@ -254,5 +276,5 @@ def test_skip_hang_loop(mesh_device, monkeypatch):
     if watch is not None:
         over = watch.over()
         metrics.record("hangloop_programs_over_cap", len(over))
-        assert not over, f"programs over {watch.cap} cores (rule 18): {over[:5]}"
+        assert not over, f"matmul programs over {watch.cap} / others over {watch.nonmm_cap} cores (rule 18): {over[:5]}"
     print(f"HANGLOOP CLEAN: {rnd} rounds {dict(rounds_of)}, {chunks} chunks, {time.time() - t_start:.0f} s", flush=True)

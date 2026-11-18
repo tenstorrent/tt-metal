@@ -1256,6 +1256,15 @@ TABLE = {
         "= 110 on the Galaxy's 12 x 10). Other boxes keep the full grid. 0 = no cap anywhere (the grid each op picks "
         "itself: the path before FIX.15, for comparison only; never on a Galaxy in service)",
     ),
+    "NONMM_MAX_CORES": Setting(
+        0,
+        None,
+        "owner 2026-11-18: the core cap of the stock NON-matmul ops (tt/cores.py sub_cores and its helpers: to_rm, "
+        "to_tile, maximum, typecast) where MAX_WORKER_CORES applies: only matmuls must stay within MAX_WORKER_CORES "
+        "(PSU di/dt). 0 = the full grid (120 on the Galaxy). MAX_WORKER_CORES still caps the matmul program configs "
+        "(worker_grid), the bring-up forks (max_grid, incl. the MoE block) and the forks given a sub_core_grids "
+        "(mm_cores). 110 = the behaviour before",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8
