@@ -174,31 +174,16 @@ protected:
     }
 
     // Quasar: the same vadd kernel with no RVV opt-in and the same positional compile args, built
-    // through Metal 2.0 and compiled.
+    // through Metal 2.0 and compiled. The kernel reads the args only under TRISC_PACK with RVV enabled,
+    // so this knob-off build never reaches the reads.
     std::shared_ptr<Kernel> compile_rvv_kernel_metal2_knob_off() {
-        const KernelSpecName kernel_name{"trisc2_rvv_vadd"};
         KernelSpec kernel_spec{
-            .unique_id = kernel_name,
+            .unique_id = KernelSpecName{"trisc2_rvv_vadd"},
             .source = std::filesystem::path(kRvvKernelPath),
             .hw_config = ComputeHardwareConfig{},
         };
-        // Positional compile-time args, as on the legacy path. The kernel reads them only under
-        // TRISC_PACK with RVV enabled, so this knob-off build never reaches the reads.
         kernel_spec.advanced_options.compile_time_varargs = {kVaddScratchBase, kVaddNumElements};
-        ProgramSpec spec{
-            .name = "trisc2_rvv_knob_off",
-            .kernels = {kernel_spec},
-            .work_units = {WorkUnitSpec{
-                .name = "main",
-                .kernels = {kernel_name},
-                .target_nodes = CoreCoord{0, 0},
-            }},
-        };
-        Program program = build_program_from_spec(spec);
-        // Plain compile is the first step of the compile_and_allocate that MakeProgramFromSpec runs;
-        // allocation is not needed to read the recipes.
-        program.impl().compile(devices_.at(0).get());
-        return program.impl().get_kernel(0);  // The spec's only kernel.
+        return compile_single_kernel_spec(std::move(kernel_spec));
     }
 
     // Path of the kernel's compiled ELF for one compute processor (0=unpack, 1=math, 2=pack).
@@ -222,11 +207,6 @@ protected:
 
     bool kernel_elf_has_vector_code(const std::shared_ptr<Kernel>& kernel, int processor_id) {
         return elf_contains_vector_instructions(kernel_elf_path(kernel, processor_id));
-    }
-
-    // The kernel's exported compile recipe cflags for one compute processor (a binary_processor_types() value).
-    std::string recipe_cflags(const std::shared_ptr<Kernel>& kernel, uint32_t processor_id) {
-        return kernel_build_state(*kernel, processor_id).export_target_recipe(kernel.get()).cflags;
     }
 };
 

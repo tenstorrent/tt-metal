@@ -6,8 +6,9 @@
 
 #include <cstdint>
 #include <exception>
-#include <optional>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -18,6 +19,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/program_spec/program_spec_internal.hpp"
+#include "impl/program/program_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/rtoptions.hpp"
@@ -39,22 +41,18 @@ protected:
     // Device setup happens at suite scope (MeshDispatchFixture::SetUpTestSuite), so the mock must be
     // registered there, before the base fixture opens its shared devices.
     static void SetUpTestSuite() {
-        suite_skip_reason().clear();
         // A local RunTimeOptions: probing through MetalContext::instance() would bring up the default
         // context (and its cluster) before the mock is registered.
         const llrt::RunTimeOptions rtoptions;
-        if (runner_is_quasar(rtoptions)) {
-            const auto target = rtoptions.get_target_device();
-            if (target == tt::TargetDevice::Mock || target == tt::TargetDevice::Emule) {
-                suite_skip_reason() =
-                    "JIT compile is a no-op on a mock/emulated Quasar (Program::compile returns early); "
-                    "run on a Quasar simulator or device";
-                return;
-            }
-            MeshDispatchFixture::SetUpTestSuite();
+        const bool quasar = runner_is_quasar(rtoptions);
+        const auto target = rtoptions.get_target_device();
+        skip_suite_ = quasar && (target == tt::TargetDevice::Mock || target == tt::TargetDevice::Emule);
+        if (skip_suite_) {
             return;
         }
-        experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
+        if (!quasar) {
+            experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
+        }
         MeshDispatchFixture::SetUpTestSuite();
     }
     static void TearDownTestSuite() {
@@ -63,31 +61,20 @@ protected:
     }
 
     void SetUp() override {
-        if (!suite_skip_reason().empty()) {
-            GTEST_SKIP() << suite_skip_reason();
+        if (skip_suite_) {
+            GTEST_SKIP() << "JIT compile is a no-op on a mock/emulated Quasar (Program::compile returns early); "
+                            "run on a Quasar simulator or device";
         }
         MeshDispatchFixture::SetUp();
     }
     void TearDown() override {
-        if (!suite_skip_reason().empty()) {
+        if (skip_suite_) {
             return;
         }
         MeshDispatchFixture::TearDown();
     }
 
     bool is_quasar() const { return devices_.at(0)->arch() == tt::ARCH::QUASAR; }
-
-    // A second logical worker core besides {0, 0}, from the queried compute grid; nullopt on a 1-core grid.
-    std::optional<CoreCoord> second_worker_core() const {
-        const CoreCoord grid = devices_.at(0)->compute_with_storage_grid_size();
-        if (grid.x > 1) {
-            return CoreCoord{1, 0};
-        }
-        if (grid.y > 1) {
-            return CoreCoord{0, 1};
-        }
-        return std::nullopt;
-    }
 
     // HAL processor type of each binary the kernel builds (BH compute: unpack, math, pack; Quasar
     // compute: one per TRISC slot in use). Pass these to kernel_build_state().
@@ -104,6 +91,19 @@ protected:
         return BuildProgramFromSpec(*devices_.at(0), spec);
     }
 
+    // Builds `kernel` alone on core {0, 0} through Metal 2.0, compiles it, and returns it. Plain compile is
+    // the first step of MakeProgramFromSpec's compile_and_allocate; allocation is not needed to read recipes.
+    std::shared_ptr<Kernel> compile_single_kernel_spec(KernelSpec kernel) {
+        const KernelSpecName name = kernel.unique_id;
+        Program program = build_program_from_spec(ProgramSpec{
+            .name = "jit_build_single_kernel",
+            .kernels = {std::move(kernel)},
+            .work_units = {WorkUnitSpec{.name = "main", .kernels = {name}, .target_nodes = CoreCoord{0, 0}}},
+        });
+        program.impl().compile(devices_.at(0).get());
+        return program.impl().get_kernel(0);
+    }
+
     // Build state for one of the kernel's processors (a value from binary_processor_types()). Core
     // and class are derived from the kernel, so this works for any kernel type and architecture.
     const JitBuildState& kernel_build_state(const Kernel& kernel, uint32_t processor_id) {
@@ -116,13 +116,17 @@ protected:
             .get_kernel_build_state(device->build_id(), core_idx, class_idx, processor_id);
     }
 
+    // The kernel's exported compile recipe cflags for one of its processors (a binary_processor_types() value).
+    std::string recipe_cflags(const std::shared_ptr<Kernel>& kernel, uint32_t processor_id) {
+        return kernel_build_state(*kernel, processor_id).export_target_recipe(kernel.get()).cflags;
+    }
+
 private:
-    // True only when the runner is a Quasar simulator or device (or a mock/emulated Quasar, which the
-    // caller skips). Built to leave non-Quasar runners as they were before this fixture existed:
+    // True when the runner is a Quasar simulator, device, or mock/emulated Quasar (which the caller skips).
     //  - Simulator: decided from the soc_descriptor.yaml a Quasar simulator must ship, never by loading
     //    the simulator image (get_simulator_architecture would load libttsim for a WH/BH .so).
     //  - Any probe failure (bad simulator path, unreadable mock descriptor, mixed-arch PCI cards)
-    //    falls back to the mock Blackhole, as before.
+    //    falls back to the mock Blackhole.
     static bool runner_is_quasar(const llrt::RunTimeOptions& rtoptions) {
         try {
             switch (rtoptions.get_target_device()) {
@@ -141,10 +145,8 @@ private:
         }
     }
 
-    static std::string& suite_skip_reason() {
-        static std::string reason;
-        return reason;
-    }
+    // Set per suite by SetUpTestSuite: the runner is a mock/emulated Quasar, where compile is a no-op.
+    inline static bool skip_suite_ = false;
 };
 
 // GTEST_SKIP()s the current test on Quasar with the given reason.
