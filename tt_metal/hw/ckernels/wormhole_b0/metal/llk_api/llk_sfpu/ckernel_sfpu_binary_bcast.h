@@ -145,9 +145,9 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects col
 //   (mean and inverse standard deviation); LREG1 is LREG_DATA0 and is only
 //   loaded once the chains have finished. It replays the dual broadcast block
 //   that sfpu_bcast_col_init() records into slots [0, 16) (COL add/sub/mul
-//   record the same block per call and use both chains for two row bands), so
-//   it needs that init re-run after any other op that rewrites the SFPU
-//   replay slots; see the dual broadcast and normalize sections below.
+//   replay the same block and use both chains for two row bands), so it
+//   needs that init re-run after any other op that rewrites the SFPU replay
+//   slots; see the dual broadcast and normalize sections below.
 //
 // BCAST_SCALAR normalize path:
 //   LREG6/LREG7 retain the negated scalar mean and inverse standard deviation for the
@@ -320,8 +320,7 @@ inline void _broadcast_stage3_preserve_data_() {
 // The chain A mask + stage 1 + stage 2 + first half of stage 3 (16 ops, no
 // addresses) are recorded into replay slots [0, 16). This stays inside the
 // SFPU half of the replay buffer (FPU kernels own [replay_buf_offset, 32)).
-// The COL init records the block (normalize replays it); add/sub/mul record
-// the identical block again with Exec while their first band pair runs.
+// The COL init records the block; add/sub/mul and normalize replay it.
 // Chain B is masked before the block: an SFPAND may not follow an SFPSHFT2
 // ROR1 directly, so it cannot take the slot after chain A's first shift.
 
@@ -414,11 +413,12 @@ sfpi_inline void _dual_broadcast_finish_() {
 // ops, against 2 x 30 (+2 for SUB) for the serial broadcast with its SFPNOP
 // slots.
 //
-// The dual broadcast block is recorded with Exec while the first pair runs,
-// so the recording costs no SFPU time and the op depends only on the
-// LREG_MASK built by the init, not on any replay program left by it. The
-// block is the one the COL init records, so a normalize after add/sub/mul
-// still replays the right program.
+// Every pair replays the dual broadcast block that sfpu_bcast_col_init()
+// records into slots [0, 16), as the normalize variants do. Like the
+// LREG_MASK it depends on, the block must still be intact: re-run the COL
+// init after any op that rewrites the SFPU replay slots (ROW bcast, scalar
+// normalize, reduce, ...). Recording it per call instead would cost 16
+// RISC-issued instructions per tile.
 
 template <BinaryOp BINOP, std::uint32_t BCAST_LREG, std::uint32_t BAND_OFF>
 sfpi_inline void _col_bcast_binop_band_store_(std::uint32_t out_rel) {
@@ -470,12 +470,7 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
             TT_SFPLOAD(LREG_DUAL_A, IM, ADDR_MOD_3, bcast_rel);
             TT_SFPLOAD(LREG_DUAL_B, IM, ADDR_MOD_3, bcast_next_rel);
             _dual_broadcast_mask_b_();
-            if (half == 0 && pair == 0) {
-                lltt::record<lltt::Exec>(REPLAY_SLOT_DUAL_BROADCAST, REPLAY_LEN_DUAL_BROADCAST);
-                _dual_broadcast_body_();
-            } else {
-                lltt::replay(REPLAY_SLOT_DUAL_BROADCAST, REPLAY_LEN_DUAL_BROADCAST);
-            }
+            lltt::replay(REPLAY_SLOT_DUAL_BROADCAST, REPLAY_LEN_DUAL_BROADCAST);
             _dual_broadcast_finish_();
             _col_bcast_binop_band_store_<BINOP, LREG_DUAL_A, 0>(out_rel);
             _col_bcast_binop_band_store_<BINOP, LREG_DUAL_B, ROW_BAND_STRIDE>(out_rel);
@@ -503,7 +498,7 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
 //
 // Dest addressing is RWC-relative, as for add/sub/mul (see the BCAST_COL
 // dest addressing section above). The dual broadcast block is replayed from
-// slots [0, 16) as the COL init (or a COL add/sub/mul since) recorded it.
+// slots [0, 16) as the COL init recorded it.
 
 constexpr std::uint32_t LREG_NORM_MEAN = LREG_DUAL_A;
 constexpr std::uint32_t LREG_NORM_MEAN_TMP = LREG_DUAL_A_TMP;
@@ -1017,8 +1012,8 @@ inline void _sfpu_binary_bcast_init_() {
         // Build persistent col-0 lane mask in LREG_MASK.
         _build_lane_mask_col0_();
 
-        // Record the dual broadcast block into replay slot 0 (the normalize
-        // variants replay it; add/sub/mul record it again per call).
+        // Record the dual broadcast block into replay slot 0 (add/sub/mul and
+        // the normalize variants replay it).
         _record_dual_broadcast_replay_();
     }
     // BCAST_ROW: nothing persists from the init. Each full-tile call records
