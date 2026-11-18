@@ -8,6 +8,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -529,4 +530,121 @@ TEST_F(VariableMatmulTest, CacheHit_InputAndOutputRow_VaryingM) {
             << "variable(InputAndOutputRow) cache-hit result wrong at offsets_start_index=" << s << " rows [" << m_lo
             << "," << m_hi << ")";
     }
+}
+
+// ---------------------------------------------------------------------------
+// Program-cache hits on fresh tensors. The tests above reuse one set of tensors, so their hits never move a buffer.
+// These launch once, keep that launch's tensors alive, and launch again on new tensors with another M and matmul-K,
+// which the program hash leaves out: the hit must re-derive them and read and write the new buffers on every core.
+// ---------------------------------------------------------------------------
+
+TEST_F(VariableMatmulTest, CacheHit_InputAndWeightK_FreshTensorsWithOtherMAndK) {
+    using ttml::test_utils::CacheExpectation;
+    auto* device = &ttml::test_utils::device_with_empty_program_cache();
+
+    // in0 is stored [K_parent, M] (transpose_a). Both launches keep M below N, so the grid orientation, which the
+    // hash keys on, is the same.
+    const uint32_t N = 256U;
+    const uint32_t first_K_parent = 512U, first_M = 128U;
+    const uint32_t second_K_parent = 640U, second_M = 192U;
+    auto first_in0 = create_random_device_tensor(first_K_parent, first_M, device, /*seed=*/61U);
+    auto first_in1 = create_random_device_tensor(first_K_parent, N, device, /*seed=*/62U);
+    auto first_offsets = make_offsets({0U, 64U, 192U, 256U, 512U}, device);  // start 1: K rows [64, 192)
+    auto second_in0 = create_random_device_tensor(second_K_parent, second_M, device, /*seed=*/63U);
+    auto second_in1 = create_random_device_tensor(second_K_parent, N, device, /*seed=*/64U);
+    auto second_offsets = make_offsets({0U, 128U, 384U, 640U}, device);  // start 2: K rows [384, 640)
+
+    auto launch = [](const ttnn::Tensor& in0, const ttnn::Tensor& in1, const ttnn::Tensor& offsets, uint32_t start) {
+        return ttml::metal::variable_matmul_k_sliced(
+            in0, in1, kConfig, offsets, start, /*transpose_a=*/true, /*transpose_b=*/false);
+    };
+
+    auto entries = device->num_program_cache_entries();
+    const auto first_result = launch(first_in0, first_in1, first_offsets, /*start=*/1U);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Miss, "first launch");
+    const auto first_snapshot = ttml::core::to_xtensor(first_result);
+
+    entries = device->num_program_cache_entries();
+    const auto second_result = launch(second_in0, second_in1, second_offsets, /*start=*/2U);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Hit, "second launch");
+
+    ttml::test_utils::expect_new_buffers(
+        {first_in0, first_in1, first_offsets, first_result},
+        {second_in0, second_in1, second_offsets, second_result},
+        "second launch");
+    ttml::test_utils::expect_unchanged(first_result, first_snapshot, "first launch's output");
+    const auto ref = expert_k_reference(second_in0, second_in1, /*k_lo=*/384U, /*K_active=*/256U, second_M, N, kConfig);
+    EXPECT_EQ(max_abs_error(second_result, ref), 0.0F) << "the cache hit on fresh tensors is not bit-exact";
+}
+
+TEST_F(VariableMatmulTest, CacheHit_InputAndOutputRow_FreshTensorsWithOtherMAndK) {
+    using ttml::test_utils::CacheExpectation;
+    auto* device = &ttml::test_utils::device_with_empty_program_cache();
+
+    // Both launches keep expected_M_tiles above N's tile count, so the grid orientation is the same.
+    const uint32_t N = 64U;
+    const uint32_t first_M_parent = 320U, first_K = 128U;
+    const uint32_t second_M_parent = 256U, second_K = 256U;
+    constexpr uint32_t m_lo = 128U, m_hi = 224U;  // the second launch's rows: start 2 of its offsets
+    auto first_input = create_random_device_tensor(first_M_parent, first_K, device, /*seed=*/65U);
+    auto first_weight = create_random_device_tensor(first_K, N, device, /*seed=*/66U);
+    auto first_out = create_random_device_tensor(first_M_parent, N, device, /*seed=*/67U);
+    auto first_offsets = make_offsets({0U, 32U, 96U, 160U, 224U, 288U}, device);  // start 2: rows [96, 160)
+    auto second_input = create_random_device_tensor(second_M_parent, second_K, device, /*seed=*/68U);
+    auto second_weight = create_random_device_tensor(second_K, N, device, /*seed=*/69U);
+    auto second_out = create_random_device_tensor(second_M_parent, N, device, /*seed=*/70U);
+    auto second_offsets = make_offsets({0U, 64U, m_lo, m_hi, second_M_parent}, device);
+    const auto second_out_before = ttml::core::to_vector<float>(second_out);
+
+    auto launch = [](const ttnn::Tensor& input,
+                     const ttnn::Tensor& weight,
+                     const ttnn::Tensor& offsets,
+                     const ttnn::Tensor& out,
+                     uint32_t M_parent) {
+        ttml::metal::variable_matmul_into_rows(
+            input,
+            weight,
+            kConfig,
+            offsets,
+            out,
+            /*offsets_start_index=*/2U,
+            /*expected_M_tiles=*/M_parent / 32U,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false);
+    };
+
+    auto entries = device->num_program_cache_entries();
+    launch(first_input, first_weight, first_offsets, first_out, first_M_parent);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Miss, "first launch");
+    const auto first_snapshot = ttml::core::to_xtensor(first_out);
+
+    entries = device->num_program_cache_entries();
+    launch(second_input, second_weight, second_offsets, second_out, second_M_parent);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Hit, "second launch");
+
+    ttml::test_utils::expect_new_buffers(
+        {first_input, first_weight, first_offsets, first_out},
+        {second_input, second_weight, second_offsets, second_out},
+        "second launch");
+    ttml::test_utils::expect_unchanged(first_out, first_snapshot, "first launch's output");
+
+    auto input_slice = ttnn::slice(
+        second_input,
+        ttsl::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
+        ttsl::SmallVector<uint32_t>{1U, 1U, m_hi, second_K},
+        ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+    const auto ref_vec = ttml::core::to_vector<float>(minimal_matmul_hifi4(input_slice, second_weight, kConfig));
+    const auto written_vec = ttml::core::to_vector<float>(second_out);
+    EXPECT_EQ(subregion_max_abs_error(written_vec, ref_vec, m_lo, m_hi - m_lo, N), 0.0F)
+        << "the cache hit on fresh tensors is not bit-exact at rows [" << m_lo << ", " << m_hi << ")";
+    float untouched_err = 0.0F;
+    for (uint32_t m = 0; m < second_M_parent; ++m) {
+        if (m >= m_lo && m < m_hi) {
+            continue;
+        }
+        for (uint32_t n = 0; n < N; ++n) {
+            untouched_err = std::max(untouched_err, std::abs(written_vec[m * N + n] - second_out_before[m * N + n]));
+        }
+    }
+    EXPECT_EQ(untouched_err, 0.0F) << "the cache hit wrote outside its rows";
 }
