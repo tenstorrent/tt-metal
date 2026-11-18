@@ -12,8 +12,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
@@ -31,24 +31,24 @@ namespace {
 // convert_to_hwc factory's names in the unity build (both ops' factories compile into one
 // translation unit).
 namespace chw {
-const tt::tt_metal::experimental::KernelSpecName READER{"reader"};
-const tt::tt_metal::experimental::KernelSpecName WRITER{"writer"};
-const tt::tt_metal::experimental::KernelSpecName COMPUTE{"compute"};
-const tt::tt_metal::experimental::DFBSpecName IN{"in"};
-const tt::tt_metal::experimental::DFBSpecName OUT{"out"};
-const tt::tt_metal::experimental::DFBSpecName IN_TRANSPOSE{"in_transpose"};
-const tt::tt_metal::experimental::TensorParamName INPUT{"input"};
-const tt::tt_metal::experimental::TensorParamName OUTPUT{"output"};
+const tt::tt_metal::KernelSpecName READER{"reader"};
+const tt::tt_metal::KernelSpecName WRITER{"writer"};
+const tt::tt_metal::KernelSpecName COMPUTE{"compute"};
+const tt::tt_metal::DFBSpecName IN{"in"};
+const tt::tt_metal::DFBSpecName OUT{"out"};
+const tt::tt_metal::DFBSpecName IN_TRANSPOSE{"in_transpose"};
+const tt::tt_metal::TensorParamName INPUT{"input"};
+const tt::tt_metal::TensorParamName OUTPUT{"output"};
 }  // namespace chw
 
 // Helper function to set runtime arguments for reader, writer, and compute kernels
 void set_runtime_args_for_all_kernels(
-    tt::tt_metal::experimental::KernelRunArgs& reader_run_args,
-    tt::tt_metal::experimental::KernelRunArgs& writer_run_args,
-    tt::tt_metal::experimental::KernelRunArgs& compute_run_args,
+    tt::tt_metal::KernelRunArgs& reader_run_args,
+    tt::tt_metal::KernelRunArgs& writer_run_args,
+    tt::tt_metal::KernelRunArgs& compute_run_args,
     const std::vector<tt::tt_metal::CoreCoord>& cores,
     uint32_t total_tiles_per_core) {
-    using tt::tt_metal::experimental::AddRuntimeArgsForNode;
+    using tt::tt_metal::AddRuntimeArgsForNode;
     std::for_each(cores.cbegin(), cores.cend(), [&](const tt::tt_metal::CoreCoord& core) {
         AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"total_tiles", total_tiles_per_core}});
         AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"total_tiles", total_tiles_per_core}});
@@ -59,7 +59,7 @@ void set_runtime_args_for_all_kernels(
 
 ttnn::device_operation::ProgramArtifacts ConvertToCHWProgramFactory::create_program_artifacts(
     const ConvertToCHWParams& /*operation_attributes*/, const Tensor& tensor_args, Tensor& tensor_return_value) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
     using namespace chw;
 
     const auto& a = tensor_args;
@@ -228,12 +228,12 @@ ttnn::device_operation::ProgramArtifacts ConvertToCHWProgramFactory::create_prog
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs ConvertToCHWProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs ConvertToCHWProgramFactory::override_runtime_arguments(
     const ConvertToCHWParams& /*operation_attributes*/,
     const Tensor& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
     using namespace chw;
 
     // buffers are not provided so we take them from output/input tensors

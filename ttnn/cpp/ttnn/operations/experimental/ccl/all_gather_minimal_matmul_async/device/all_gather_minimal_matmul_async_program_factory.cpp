@@ -7,21 +7,32 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
 #include <algorithm>
 #include <bit>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <variant>
+#include <array>
+#include <optional>
 #include <vector>
 
 namespace {
+// The in1 injector reads a column chunk under one NoC transaction id; keep a chunk's reads within the
+// (NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2 outstanding reads per id that the NoC API allows.
+constexpr uint32_t kMaxReadsPerTransactionId = 128;
+// A block goes in at most this many in1 chunks: each later chunk has its own multicast pipe.
+constexpr uint32_t kMaxIn1Chunks = 3;
 
 // Push order of desc.kernels. The FSDP mux kernel, when present, is last so these stay fixed.
 constexpr uint32_t kIn0SenderKernelIdx = 0;
@@ -189,19 +200,41 @@ void fabric_mux_connection_rt_args(
     tt::tt_metal::CoreCoord termination_master_virtual_core,
     uint32_t num_mux_clients,
     uint32_t termination_sync_id,
-    std::vector<uint32_t>& worker_rt_args) {
-    ttnn::ccl::fabric_mux_connection_rt_args(
-        mux_connection_valid,
-        is_termination_master,
-        channel_type,
-        mux_virtual_core,
-        worker_id,
-        worker_logical_core,
-        mux_kernel_config,
-        desc,
-        termination_master_virtual_core,
-        worker_rt_args,
-        termination_sync_id);
+    std::vector<uint32_t>& worker_rt_args,
+    const std::optional<std::array<uint32_t, 4>>& client_semaphore_ids = std::nullopt) {
+    if (client_semaphore_ids.has_value()) {
+        // Client words of ttnn::ccl::fabric_mux_connection_rt_args (same order). The client semaphores share ids, so
+        // the launch writes them in one multicast instead of one write per client core.
+        worker_rt_args.insert(
+            worker_rt_args.end(),
+            {static_cast<uint32_t>(mux_connection_valid),
+             static_cast<uint32_t>(is_termination_master),
+             static_cast<uint32_t>(mux_virtual_core.x),
+             static_cast<uint32_t>(mux_virtual_core.y),
+             static_cast<uint32_t>(mux_kernel_config.get_channel_base_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_connection_info_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_connection_handshake_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_flow_control_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_buffer_index_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id)),
+             termination_sync_id});
+        worker_rt_args.insert(worker_rt_args.end(), client_semaphore_ids->begin(), client_semaphore_ids->end());
+        worker_rt_args.push_back(termination_master_virtual_core.x);
+        worker_rt_args.push_back(termination_master_virtual_core.y);
+    } else {
+        ttnn::ccl::fabric_mux_connection_rt_args(
+            mux_connection_valid,
+            is_termination_master,
+            channel_type,
+            mux_virtual_core,
+            worker_id,
+            worker_logical_core,
+            mux_kernel_config,
+            desc,
+            termination_master_virtual_core,
+            worker_rt_args,
+            termination_sync_id);
+    }
     worker_rt_args.push_back(num_mux_clients);  // num_mux_clients (this mux)
 }
 
@@ -273,7 +306,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
-    bool fuse_swiglu = false) {
+    bool fuse_swiglu = false,
+    const std::optional<ttnn::MeshCoordinate>& linear_far_end_coord = std::nullopt) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* device = input_tensor.device();
 
@@ -458,6 +492,26 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // SwiGLU writes half the N tiles per block (one per gate/up pair); the intermediate
     // still holds the full (2N) block.
     uint32_t out_cb_num_tiles = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;  // single-buffered
+    // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
+    // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    // Fabric2D Linear: the 1D path's one-way ring (each rank sends to rank - 1, rank 0 to the last rank), routed by
+    // fabric node. The two ends of the line reach each other through it (linear_far_end_coord).
+    const bool linear_2d = fabric_2d && topology == ttnn::ccl::Topology::Linear;
+    // Fabric2D (the KDA Galaxy path): input blocks reach a whole row or column of the matmul grid in one multicast
+    // write instead of hopping core to core. Every other configuration keeps the core-to-core relay.
+    const bool mcast = fabric_2d && !transpose_core_grid;
+    // Multicast path: the last K block packs straight to the output over its FP32 partials. Needs a plain output (no
+    // bias, ternary, SwiGLU or activation), 1-tile-high subblocks, whole subblocks per N block.
+    const bool direct_out = mcast && !fuse_swiglu && !use_bias && !use_fused_ternary && !fused_activation.has_value() &&
+                            subblock_h == 1 && fp32_dest_acc_en && K_blocks > 1 &&
+                            N_tiles_per_core % N_block_tiles == 0 && N_block_tiles % subblock_w == 0;
+    // With direct output, a core whose only output block is this one has it packed and written a row at a time, so one
+    // row of output buffer is enough; frees M_block - 1 rows of L1 for larger K blocks.
+    if (direct_out && N_blocks_per_core == 1 &&
+        ttnn::experimental::prim::agmm_single_m_block(M_tiles, M_block_tiles, in0_parallel_axis_cores)) {
+        out_cb_num_tiles = N_block_tiles;
+    }
     uint32_t interm_cb_num_tiles = out_block_num_tiles;                                         // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;                                            // not double buffered
 
@@ -491,12 +545,14 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         });
         return id;
     };
-    auto in0_sender_semaphore_id = add_grid_semaphore(INVALID);
-    auto in0_receiver_semaphore_id = add_grid_semaphore(INVALID);
-    auto in0_valid_semaphore_id = add_grid_semaphore(VALID);
-    auto in1_sender_semaphore_id = add_grid_semaphore(INVALID);
-    auto in1_receiver_semaphore_id = add_grid_semaphore(INVALID);
-    auto in1_valid_semaphore_id = add_grid_semaphore(VALID);
+    // The core-to-core relay's handshakes; the multicast pipes replace them (their ids are then unused, 0).
+    auto add_relay_semaphore = [&](uint32_t initial_value) { return mcast ? 0u : add_grid_semaphore(initial_value); };
+    auto in0_sender_semaphore_id = add_relay_semaphore(INVALID);
+    auto in0_receiver_semaphore_id = add_relay_semaphore(INVALID);
+    auto in0_valid_semaphore_id = add_relay_semaphore(VALID);
+    auto in1_sender_semaphore_id = add_relay_semaphore(INVALID);
+    auto in1_receiver_semaphore_id = add_relay_semaphore(INVALID);
+    auto in1_valid_semaphore_id = add_relay_semaphore(VALID);
 
     // Mux termination-sync semaphores. Created ONCE on the full grid so every mux client
     // (master and peers) sees this semaphore at the SAME L1 address — required because peers
@@ -505,6 +561,13 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // Separate ids for in0 vs in1 so an overlap core's two muxes don't share a termination slot.
     auto in0_term_sync_id = add_grid_semaphore(0);
     auto in1_term_sync_id = add_grid_semaphore(0);
+    // Fabric2D: the in0 fabric cores' mux-client semaphores (status, flow control, teardown, buffer index) on the
+    // whole grid, so the launch writes them in one multicast rather than one write per fabric core.
+    std::optional<std::array<uint32_t, 4>> in0_mux_client_semaphore_ids;
+    if (fabric_2d) {
+        in0_mux_client_semaphore_ids = std::array<uint32_t, 4>{
+            add_grid_semaphore(0), add_grid_semaphore(0), add_grid_semaphore(0), add_grid_semaphore(0)};
+    }
 
     auto add_cb = [&](uint32_t cb_id, uint32_t tile_size, uint32_t num_tiles, tt::DataFormat data_format) {
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -666,12 +729,15 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // direction now applies to every device. Ring is genuinely bidirectional, so keep the
     // neighbor-existence gate there.
     const uint32_t in0_uni_dir = backward_coord.has_value() ? 1u : 0u;
-    const auto mux_connection_valid = [&backward_coord, &forward_coord, &topology, in0_uni_dir](const uint32_t dir) {
-        if (topology == ttnn::ccl::Topology::Linear) {
-            return dir == in0_uni_dir;
-        }
-        return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
-    };
+    // Fabric2D Linear keeps both directions, as Ring does: a rank sends its blocks one way and announces its entry
+    // (the barrier in dm_in0_sender.cpp) to the rank that writes into it, the other way.
+    const auto mux_connection_valid =
+        [&backward_coord, &forward_coord, &topology, linear_2d, in0_uni_dir](const uint32_t dir) {
+            if (topology == ttnn::ccl::Topology::Linear && !linear_2d) {
+                return dir == in0_uni_dir;
+            }
+            return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
+        };
 
     std::vector<tt::tt_metal::CoreRange> mux_core_ranges;
     mux_core_ranges.reserve(num_mux_cores);
@@ -786,6 +852,37 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
     }
 
+    // in1 in 2-3 column chunks per K block, so compute starts on the first chunk while the rest is in flight. Needs one
+    // N block per core and whole K blocks per device; chunk = widest whole-subblock split whose reads fit one trid.
+    uint32_t in1_chunk_w = 0;
+    if (mcast && N_blocks_per_core == 1 && N_tiles_per_core == N_block_tiles &&
+        K_tiles_per_device % K_block_tiles == 0) {
+        for (uint32_t w = subblock_w; 2 * w <= N_block_tiles; w += subblock_w) {
+            if (N_block_tiles % w == 0 && N_block_tiles / w <= kMaxIn1Chunks &&
+                w * K_block_tiles <= kMaxReadsPerTransactionId) {
+                in1_chunk_w = w;
+            }
+        }
+    }
+    if (fabric_2d) {
+        defines["FABRIC_2D"] = "1";
+    }
+    // Blackhole, full 32x32 tiles: one MOP run walks a whole reuse row of the subblock (row_mop of
+    // matmul_block_init / matmul_block_k, api/compute/matmul.h).
+    const auto full_tile = [](const tt::tt_metal::Tile& tile) {
+        return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    };
+    const bool row_mop = mcast && device->arch() == tt::ARCH::BLACKHOLE &&
+                         full_tile(input_tensor.tensor_spec().tile()) && full_tile(weight_tensor.tensor_spec().tile());
+    // Multicast path options, read by the kernels as constexprs.
+    const tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs agmm_named_args = {
+        {"mcast", mcast},
+        {"row_mop", row_mop},
+        {"direct_out", direct_out},
+        {"in1_chunk_w", in1_chunk_w},
+        {"out_piece_w", direct_out ? subblock_w : N_block_tiles},
+        {"in0_cb_blocks", double_buffer_factor}};
+
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";
@@ -798,12 +895,52 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in1_defines["USE_MUX"] = "1";
     }
 
+    // Fabric2D Ring: both neighbours must be one link away (get_usable_topology already picks Linear on an open axis).
+    if (fabric_2d && topology == ttnn::ccl::Topology::Ring) {
+        const auto self_node = device->get_fabric_node_id(sender_device_coord);
+        for (const auto& neighbour : {forward_coord, backward_coord}) {
+            const auto node = device->get_fabric_node_id(neighbour.value());
+            const auto direction = tt::tt_fabric::pipeline_get_forwarding_direction(*device, self_node, node);
+            const auto adjacent = direction.has_value()
+                                      ? tt::tt_fabric::pipeline_get_chip_neighbors(*device, self_node, *direction)
+                                      : std::map<uint32_t, std::vector<uint32_t>>{};
+            const auto chips = adjacent.find(*node.mesh_id);
+            TT_FATAL(
+                chips != adjacent.end() &&
+                    std::find(chips->second.begin(), chips->second.end(), node.chip_id) != chips->second.end(),
+                "all_gather_minimal_matmul_async: Fabric2D Ring needs the fabric to wrap this axis; use Linear");
+        }
+    }
+
+    // Fabric2D Linear: rank 0 and the last rank address each other along the line, so the first hop must be the line
+    // link; on an axis the fabric wraps it is not.
+    std::optional<tt::tt_fabric::FabricNodeId> linear_far_end_node;
+    if (linear_2d && (ring_index == 0 || ring_index == ring_size - 1)) {
+        TT_FATAL(
+            linear_far_end_coord.has_value(), "Fabric2D Linear: rank {} needs the far end of the line", ring_index);
+        linear_far_end_node = device->get_fabric_node_id(*linear_far_end_coord);
+        const auto& line_neighbour = ring_index == 0 ? forward_coord : backward_coord;
+        TT_FATAL(line_neighbour.has_value(), "Fabric2D Linear needs a ring of at least 2 devices");
+        const auto self_node = device->get_fabric_node_id(sender_device_coord);
+        TT_FATAL(
+            tt::tt_fabric::pipeline_get_forwarding_direction(*device, self_node, *linear_far_end_node) ==
+                tt::tt_fabric::pipeline_get_forwarding_direction(
+                    *device, self_node, device->get_fabric_node_id(*line_neighbour)),
+            "all_gather_minimal_matmul_async: Fabric2D Linear needs the line's far end routed along the line; this "
+            "axis wraps, so use Ring");
+    }
+
     // Linear uni-ring routing: Dev 0's forward unicast routes N-1 hops to Dev N-1
     // (rather than 1 hop to Dev 1). fabric_set_unicast_route<false>(hdr, distance)
     // sends the packet to the device `distance` hops away, with no intermediate
     // deliveries.
+    // On Fabric2D the same send is addressed to the last rank's fabric node.
     if (topology == ttnn::ccl::Topology::Linear && ring_index == 0) {
-        unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
+        if (linear_2d) {
+            unicast_forward_args = {*linear_far_end_node->mesh_id, linear_far_end_node->chip_id};
+        } else {
+            unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
+        }
     }
 
     const bool fsdp_fused = persistent_weight_buffer.has_value();
@@ -1164,6 +1301,11 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_parallel_axis_cores};
 
     auto compute_defines = defines;
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (direct_out) {
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[intermediate_cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     if (topology == ttnn::ccl::Topology::Linear) {
         compute_defines["IS_LINEAR"] = "1";
     }
@@ -1189,6 +1331,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
         };
         desc.kernels.push_back(std::move(compute_kernel));
@@ -1290,7 +1433,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
 
     // Common runtime args (same for all cores). Buffer addresses, global-semaphore addresses, the row
     // count M_tiles and the fused-ternary scalar are re-applied in override_runtime_arguments.
-    // A repeated input Buffer* empties resolve_bindings; this workload path does not rebuild.
     // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, M_tiles,
     // [ternary_a, ternary_b, broadcast], output_addrs...]
     {
@@ -1358,6 +1500,31 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
         desc.kernels[kComputeKernelIdx].emplace_common_runtime_args(compute_common_args);
     }
+
+    // Fabric2D in0 fabric core roles: [sends, announces, announce mesh, announce chip] (dm_in0_sender.cpp). A core
+    // waits for the device it writes into and announces to the one writing into it (Linear: r writes to r - 1).
+    const auto append_fabric_2d_roles = [&](std::vector<uint32_t>& args, bool backward_sender) {
+        const bool connected = mux_connection_valid(backward_sender ? 0 : 1);
+        const auto& neighbour = backward_sender ? forward_coord : backward_coord;
+        bool sends = connected;
+        std::optional<tt::tt_fabric::FabricNodeId> announce_node;
+        if (connected) {
+            announce_node = device->get_fabric_node_id(*neighbour);
+        }
+        if (linear_2d) {
+            if (backward_sender) {
+                sends = connected && ring_index == 0;
+            } else {
+                announce_node = (ring_index == ring_size - 1) ? linear_far_end_node : std::nullopt;
+            }
+        }
+        args.insert(
+            args.end(),
+            {static_cast<uint32_t>(sends),
+             static_cast<uint32_t>(announce_node.has_value()),
+             announce_node.has_value() ? static_cast<uint32_t>(*announce_node->mesh_id) : 0u,
+             announce_node.has_value() ? static_cast<uint32_t>(announce_node->chip_id) : 0u});
+    };
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         tt::tt_metal::CoreCoord core = cores.at(core_id);
@@ -1481,7 +1648,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                     termination_master_virtual_core_backward,
                     in0_mux_clients,
                     in0_term_sync_id,
-                    in0_args);
+                    in0_args,
+                    in0_mux_client_semaphore_ids);
             } else {
                 // Forward fabric sender (in0_core_order_index == in0_fwd_idx).
                 auto termination_master_logical_core_forward =
@@ -1505,7 +1673,11 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                     termination_master_virtual_core_forward,
                     in0_mux_clients,
                     in0_term_sync_id,
-                    in0_args);
+                    in0_args,
+                    in0_mux_client_semaphore_ids);
+            }
+            if (fabric_2d) {
+                append_fabric_2d_roles(in0_args, is_in0_backward_sender);
             }
         }
         if (in0_core_order_index == 0) {
@@ -1692,6 +1864,64 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         desc.kernels[kComputeKernelIdx].emplace_runtime_args(core, as_runtime_args(compute_runtime_args));
     }
 
+    for (const uint32_t k :
+         {kIn0SenderKernelIdx,
+          kIn0ReceiverNoFabricKernelIdx,
+          kIn0ReceiverFabricKernelIdx,
+          kIn1SenderKernelIdx,
+          kIn1ReceiverKernelIdx,
+          kComputeKernelIdx}) {
+        desc.kernels[k].named_compile_time_args = agmm_named_args;
+    }
+
+    // in1 down each column from row 0, in0 along each row from x = 0; without multicast the channels are absent.
+    std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 2> in1_targets{
+        desc.kernels[kIn1SenderKernelIdx], desc.kernels[kIn1ReceiverKernelIdx]};
+    std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 3> in0_targets{
+        desc.kernels[kIn0SenderKernelIdx],
+        desc.kernels[kIn0ReceiverNoFabricKernelIdx],
+        desc.kernels[kIn0ReceiverFabricKernelIdx]};
+    // A block's later in1 column chunks: one pipe each, no handshake (the first chunk's covers the block).
+    constexpr std::array<std::string_view, kMaxIn1Chunks - 1> in1_chunk_channels = {
+        "in1_chunk1_mcast", "in1_chunk2_mcast"};
+    if (!mcast) {
+        for (auto& kernel : in1_targets) {
+            ttnn::kernel_lib::host::attach_absent_mcast(kernel.get(), "in1_mcast");
+            for (const auto& channel : in1_chunk_channels) {
+                ttnn::kernel_lib::host::attach_absent_mcast(kernel.get(), channel);
+            }
+        }
+        for (auto& kernel : in0_targets) {
+            ttnn::kernel_lib::host::attach_absent_mcast(kernel.get(), "in0_mcast");
+        }
+        return desc;
+    }
+    const auto column_mcast = [&](bool handshake) {
+        return ttnn::kernel_lib::host::Mcast(
+            *device,
+            ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .handshake = handshake},
+            tt::tt_metal::CoreRangeSet(core_grid),
+            grid_size.y,
+            ttnn::kernel_lib::host::McastFixedSenderConfig{},
+            ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
+    };
+    auto in1_mcast = column_mcast(/*handshake=*/true);
+    in1_mcast.attach(desc, "in1_mcast", in1_targets, next_semaphore_id);
+    uint32_t mcast_semaphore_id = in1_mcast.next_semaphore_id();
+    for (const auto& channel : in1_chunk_channels) {
+        auto in1_chunk_mcast = column_mcast(/*handshake=*/false);
+        in1_chunk_mcast.attach(desc, channel, in1_targets, mcast_semaphore_id);
+        mcast_semaphore_id = in1_chunk_mcast.next_semaphore_id();
+    }
+    ttnn::kernel_lib::host::Mcast in0_mcast(
+        *device,
+        ttnn::kernel_lib::host::McastConfig{.noc = in0_noc},
+        tt::tt_metal::CoreRangeSet(core_grid),
+        grid_size.x,
+        ttnn::kernel_lib::host::McastFixedSenderConfig{},
+        ttnn::kernel_lib::host::McastCoreOrder::RowMajor);
+    in0_mcast.attach(desc, "in0_mcast", in0_targets, mcast_semaphore_id);
+
     return desc;
 }
 
@@ -1738,7 +1968,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    const std::optional<MeshCoordinate>& linear_far_end_coord) {
     return ::detail::all_gather_minimal_matmul_async_factory_helper(
         input_tensor,
         weight_tensor,
@@ -1773,7 +2004,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         fsdp_ring_index,
         fsdp_semaphore,
         fsdp_topology,
-        fuse_swiglu);
+        fuse_swiglu,
+        linear_far_end_coord);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
@@ -1789,6 +2021,20 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
     std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input_tensor, mesh_coordinate, -1, attributes.topology, attributes.cluster_axis);
+
+    // Fabric2D Linear: the two ends of the line send to each other (factory helper, linear_far_end_coord).
+    std::optional<MeshCoordinate> linear_far_end_coord;
+    if (attributes.topology == ttnn::ccl::Topology::Linear &&
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) && attributes.ring_size > 1 &&
+        (device_index == 0 || device_index == attributes.ring_size - 1)) {
+        const int far_end_offset = static_cast<int>(attributes.ring_size) - 1;
+        linear_far_end_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor,
+            mesh_coordinate,
+            device_index == 0 ? far_end_offset : -far_end_offset,
+            attributes.topology,
+            attributes.cluster_axis);
+    }
 
     // FSDP neighbor lookup along fsdp_cluster_axis (only when FSDP fusion is active).
     std::optional<MeshCoordinate> fsdp_forward_coord;
@@ -1852,37 +2098,44 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         fsdp_ring_index,
         attributes.fsdp_semaphore,
         attributes.fsdp_topology,
-        attributes.fuse_swiglu);
+        attributes.fuse_swiglu,
+        linear_far_end_coord);
 }
 
-tt::tt_metal::WorkloadDescriptor AllGatherMinimalMatmulAsyncProgramFactory::create_workload_descriptor(
+AllGatherMinimalMatmulAsyncProgramFactory::cached_mesh_workload_t
+AllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
     const AllGatherMinimalMatmulAsyncParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const AllGatherMinimalMatmulAsyncInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    workload_descriptor.programs.reserve(tensor_coords.coords().size());
+    std::vector<ttnn::Tensor>& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& coord : tensor_coords.coords()) {
-        auto desc = build_program_descriptor_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+        tt::tt_metal::Program program{
+            build_program_descriptor_at(operation_attributes, coord, tensor_args, tensor_return_value)};
+        shared_variables_t sv{
+            .in0_sender = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0SenderKernelIdx),
+            .in0_receiver_no_fabric = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverNoFabricKernelIdx),
+            .in0_receiver_fabric = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverFabricKernelIdx),
+            .in1_sender = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1SenderKernelIdx),
+            .in1_receiver = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1ReceiverKernelIdx),
+            .compute = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx),
+        };
+        const ttnn::MeshCoordinateRange range(coord);
+        workload.add_program(range, std::move(program));
+        shared_variables.emplace(range, sv);
     }
-    return workload_descriptor;
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
 void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
+    cached_mesh_workload_t& cached_workload,
     const AllGatherMinimalMatmulAsyncParams& operation_attributes,
     const AllGatherMinimalMatmulAsyncInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
-    (void)mesh_coordinate;
-    // Derive has_fused_ternary from scalar presence, matching validate and create.
-    // validate guarantees that scalar and tensors are always provided together.
+    std::vector<ttnn::Tensor>& tensor_return_value) {
+    // The call's values are the same on every device: computed once, then written into each program's common args.
     const bool has_fused_ternary = operation_attributes.fused_ternary_scalar.has_value();
-    // Same gate as create: persistent_weight_buffer is passed iff fsdp_cluster_axis is set.
     const bool fsdp_fused = operation_attributes.fsdp_cluster_axis.has_value();
-
-    // Repeated input buffers empty resolve_bindings, and this workload path does not rebuild.
     auto required_address = [](const ttnn::Tensor& tensor) -> uint32_t {
         auto* buffer = tensor.buffer();
         TT_FATAL(buffer != nullptr, "all_gather_minimal_matmul_async cache hit requires an allocated buffer");
@@ -1894,18 +2147,43 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     const uint32_t input_addr = required_address(tensor_args.input_tensor);
     const uint32_t in1_addr =
         fsdp_fused ? required_address(tensor_return_value.at(1)) : required_address(tensor_args.weight_tensor);
-
     const uint32_t sem_backward = operation_attributes.semaphore.at(0).address();
     const uint32_t sem_forward = operation_attributes.semaphore.at(1).address();
     const uint32_t barrier_sem =
         operation_attributes.barrier_semaphore.has_value() ? operation_attributes.barrier_semaphore->address() : 0u;
-    const auto& act_tensor = tensor_args.input_tensor;
-    const uint32_t M_tiles = operations::common::folded_rows(act_tensor) / tt::constants::TILE_HEIGHT;
+    const uint32_t M_tiles = operations::common::folded_rows(tensor_args.input_tensor) / tt::constants::TILE_HEIGHT;
 
-    auto& in0_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0SenderKernelIdx);
-    auto& in0_receiver_fabric_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverFabricKernelIdx);
-    auto& in0_receiver_no_fabric_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverNoFabricKernelIdx);
-    auto write_in0 = [&](auto& common) {
+    uint32_t ternary_a_addr = 0;
+    uint32_t ternary_b_addr = 0;
+    uint32_t broadcast_ternary_b = 0;
+    if (has_fused_ternary) {
+        ternary_a_addr = required_address(tensor_args.fused_ternary_input_a.value());
+        ternary_b_addr = required_address(tensor_args.fused_ternary_input_b.value());
+        broadcast_ternary_b = broadcast_ternary_b_flag(tensor_args.fused_ternary_input_b.value());
+    }
+    uint32_t local_weight_addr = 0;
+    uint32_t fsdp_sem_backward = 0;
+    uint32_t fsdp_sem_forward = 0;
+    if (fsdp_fused) {
+        local_weight_addr = required_address(tensor_args.weight_tensor);
+        fsdp_sem_backward = operation_attributes.fsdp_semaphore.at(0).address();
+        fsdp_sem_forward = operation_attributes.fsdp_semaphore.at(1).address();
+    }
+    const size_t mm_outputs_start = 1 + (fsdp_fused ? 1 : 0);
+    TT_FATAL(
+        tensor_return_value.size() > mm_outputs_start,
+        "all_gather_minimal_matmul_async cache hit is missing matmul outputs");
+    std::vector<uint32_t> output_addrs;
+    output_addrs.reserve(tensor_return_value.size() - mm_outputs_start);
+    for (size_t i = mm_outputs_start; i < tensor_return_value.size(); ++i) {
+        output_addrs.push_back(required_address(tensor_return_value[i]));
+    }
+    const uint32_t in0_out_slot = in0_output_start_slot(has_fused_ternary);
+    const uint32_t in1_out_slot = in1_output_start_slot(has_fused_ternary, fsdp_fused);
+    const uint32_t ternary_scalar =
+        has_fused_ternary ? std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value()) : 0u;
+
+    auto write_in0 = [&](tt::tt_metal::RuntimeArgsData& common) {
         common[kIn0BufferSlot] = ag_output_addr;
         common[kIn0BiasSlot] = bias_addr;
         common[kIn0InputSlot] = input_addr;
@@ -1913,79 +2191,49 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         common[kIn0SemForwardSlot] = sem_forward;
         common[kIn0BarrierSemSlot] = barrier_sem;
         common[kIn0LenSlot] = M_tiles;
+        if (has_fused_ternary) {
+            common[kIn0TernaryASlot] = ternary_a_addr;
+            common[kIn0TernaryASlot + 1] = ternary_b_addr;
+            common[kIn0TernaryASlot + 2] = broadcast_ternary_b;
+        }
+        for (size_t i = 0; i < output_addrs.size(); ++i) {
+            common[in0_out_slot + i] = output_addrs[i];
+        }
     };
-    write_in0(in0_sender_common);
-    write_in0(in0_receiver_fabric_common);
-    write_in0(in0_receiver_no_fabric_common);
-
-    auto& in1_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1SenderKernelIdx);
-    auto& in1_receiver_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1ReceiverKernelIdx);
-    auto write_in1_fixed = [&](auto& common) {
+    auto write_in1 = [&](tt::tt_metal::RuntimeArgsData& common) {
         common[kIn1BufferSlot] = in1_addr;
         common[kIn1BiasSlot] = bias_addr;
         common[kIn1LenSlot] = M_tiles;
+        if (has_fused_ternary) {
+            common[kIn1FixedArgCount] = ternary_a_addr;
+            common[kIn1FixedArgCount + 1] = ternary_b_addr;
+            common[kIn1FixedArgCount + 2] = broadcast_ternary_b;
+        }
+        if (fsdp_fused) {
+            common[in1_local_weight_slot(has_fused_ternary)] = local_weight_addr;
+            common[in1_fsdp_sem_backward_slot(has_fused_ternary)] = fsdp_sem_backward;
+            common[in1_fsdp_sem_forward_slot(has_fused_ternary)] = fsdp_sem_forward;
+        }
+        for (size_t i = 0; i < output_addrs.size(); ++i) {
+            common[in1_out_slot + i] = output_addrs[i];
+        }
     };
-    write_in1_fixed(in1_sender_common);
-    write_in1_fixed(in1_receiver_common);
-
-    if (has_fused_ternary) {
-        const uint32_t ternary_a_addr = required_address(tensor_args.fused_ternary_input_a.value());
-        const uint32_t ternary_b_addr = required_address(tensor_args.fused_ternary_input_b.value());
-        const uint32_t broadcast_ternary_b = broadcast_ternary_b_flag(tensor_args.fused_ternary_input_b.value());
-        auto write_ternary = [&](auto& common, uint32_t ternary_a_slot) {
-            common[ternary_a_slot] = ternary_a_addr;
-            common[ternary_a_slot + 1] = ternary_b_addr;
-            common[ternary_a_slot + 2] = broadcast_ternary_b;
-        };
-        write_ternary(in0_sender_common, kIn0TernaryASlot);
-        write_ternary(in0_receiver_fabric_common, kIn0TernaryASlot);
-        write_ternary(in0_receiver_no_fabric_common, kIn0TernaryASlot);
-        write_ternary(in1_sender_common, kIn1FixedArgCount);
-        write_ternary(in1_receiver_common, kIn1FixedArgCount);
-    }
-
-    if (fsdp_fused) {
-        const uint32_t local_weight_addr = required_address(tensor_args.weight_tensor);
-        const uint32_t local_weight_slot = in1_local_weight_slot(has_fused_ternary);
-        const uint32_t fsdp_sem_backward_slot = in1_fsdp_sem_backward_slot(has_fused_ternary);
-        const uint32_t fsdp_sem_forward_slot = in1_fsdp_sem_forward_slot(has_fused_ternary);
-        const uint32_t fsdp_sem_backward = operation_attributes.fsdp_semaphore.at(0).address();
-        const uint32_t fsdp_sem_forward = operation_attributes.fsdp_semaphore.at(1).address();
-        auto write_fsdp = [&](auto& common) {
-            common[local_weight_slot] = local_weight_addr;
-            common[fsdp_sem_backward_slot] = fsdp_sem_backward;
-            common[fsdp_sem_forward_slot] = fsdp_sem_forward;
-        };
-        write_fsdp(in1_sender_common);
-        write_fsdp(in1_receiver_common);
-    }
-
-    const size_t mm_outputs_start = 1 + (fsdp_fused ? 1 : 0);
-    TT_FATAL(
-        tensor_return_value.size() > mm_outputs_start,
-        "all_gather_minimal_matmul_async cache hit is missing matmul outputs");
-    const uint32_t in0_out_slot = in0_output_start_slot(has_fused_ternary);
-    const uint32_t in1_out_slot = in1_output_start_slot(has_fused_ternary, fsdp_fused);
-    const uint32_t last_offset = static_cast<uint32_t>(tensor_return_value.size() - mm_outputs_start - 1);
-    TT_FATAL(
-        in0_out_slot + last_offset < in0_sender_common.size() && in1_out_slot + last_offset < in1_sender_common.size(),
-        "all_gather_minimal_matmul_async output runtime-arg slots exceed common args");
-    for (size_t i = mm_outputs_start; i < tensor_return_value.size(); ++i) {
-        const uint32_t addr = required_address(tensor_return_value[i]);
-        const uint32_t offset = static_cast<uint32_t>(i - mm_outputs_start);
-        in0_sender_common[in0_out_slot + offset] = addr;
-        in0_receiver_fabric_common[in0_out_slot + offset] = addr;
-        in0_receiver_no_fabric_common[in0_out_slot + offset] = addr;
-        in1_sender_common[in1_out_slot + offset] = addr;
-        in1_receiver_common[in1_out_slot + offset] = addr;
-    }
-
-    auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx);
-    compute_common[kComputeLenSlot] = M_tiles;
-    // Same gate as create: the scalar slots exist only when the scalar is set.
-    if (has_fused_ternary) {
-        compute_common[kComputeScalarSlot] = std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value());
-        compute_common[kComputeBroadcastSlot] = broadcast_ternary_b_flag(tensor_args.fused_ternary_input_b.value());
+    for (auto& [range, sv] : cached_workload.shared_variables) {
+        TT_FATAL(
+            in0_out_slot + output_addrs.size() <= sv.in0_sender.get().size() &&
+                in1_out_slot + output_addrs.size() <= sv.in1_sender.get().size(),
+            "all_gather_minimal_matmul_async output runtime-arg slots exceed common args");
+        write_in0(sv.in0_sender.get());
+        write_in0(sv.in0_receiver_fabric.get());
+        write_in0(sv.in0_receiver_no_fabric.get());
+        write_in1(sv.in1_sender.get());
+        write_in1(sv.in1_receiver.get());
+        auto& compute = sv.compute.get();
+        compute[kComputeLenSlot] = M_tiles;
+        if (has_fused_ternary) {
+            compute[kComputeScalarSlot] = ternary_scalar;
+            compute[kComputeBroadcastSlot] = broadcast_ternary_b;
+        }
     }
 }
 

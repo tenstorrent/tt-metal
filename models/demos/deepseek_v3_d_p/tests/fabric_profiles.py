@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
     get_max_payload_size,
@@ -21,6 +23,16 @@ def moe_fabric_payload(model_config):
     """The payload for a mesh running TtMoe: room for the routed expert / combine overlap on Blackhole, the
     model's own FABRIC_PAYLOAD_SIZE everywhere else. See init_helpers.moe_fabric_payload_size."""
     return moe_fabric_payload_size(model_config)
+
+
+# Each model opens the fabric at its production packet size; other variants at the arch maximum.
+MODEL_PAYLOAD_CONFIGS = {"kimi_k3_1": KimiK31Config, "glm_5_3": GLM53Config}
+
+
+def model_fabric_payload(variant_name):
+    """The production fabric packet size for `variant_name`, or None (the arch maximum) for a variant without one."""
+    config = MODEL_PAYLOAD_CONFIGS.get(variant_name)
+    return moe_fabric_payload(config) if config else None
 
 
 def fabric2d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
@@ -118,8 +130,8 @@ def torus_xy_device_params(*, fabric_payload_size=None, **overrides) -> dict:
     return params
 
 
-def assert_torus_xy_descriptor(path: str) -> None:
-    """Fail before device open unless every declared device mesh is 8x4 Ring/Ring."""
+def _device_topologies(path: str) -> tuple[Path, list[tuple[str, str, str, str]]]:
+    """(dims..., dim_types...) of every device mesh a descriptor declares; fails on a non-2D one."""
     descriptor_path = Path(path).resolve()
     text = descriptor_path.read_text()
     declared = len(re.findall(r"device_topology\s*\{", text))
@@ -131,11 +143,40 @@ def assert_torus_xy_descriptor(path: str) -> None:
     assert topologies, f"{descriptor_path}: no two-dimensional device topology found"
     assert len(topologies) == declared, (
         f"{descriptor_path}: {declared} device_topology block(s) declared but only "
-        f"{len(topologies)} are two-dimensional; TorusXY requires every mesh to be 8x4 Ring/Ring"
+        f"{len(topologies)} are two-dimensional; a certified torus requires every mesh to be 2D"
     )
+    return descriptor_path, topologies
+
+
+def mesh_descriptor_topologies(path: str) -> list[tuple[str, str, str, str]]:
+    """(dims..., dim_types...) of every device mesh a mesh graph descriptor declares."""
+    return _device_topologies(path)[1]
+
+
+def assert_torus_xy_descriptor(path: str) -> None:
+    """Fail before device open unless every declared device mesh is 8x4 Ring/Ring."""
+    descriptor_path, topologies = _device_topologies(path)
     assert all(
         topology == ("8", "4", "RING", "RING") for topology in topologies
     ), f"{descriptor_path}: TorusXY requires every device topology to be 8x4 Ring/Ring; found {topologies}"
+
+
+# One tray half as a 4x4 prefill stage: SP on the axis-1 ring, TP on the axis-0 line.
+STAGE_4X4_TOPOLOGY = ("4", "4", "LINE", "RING")
+
+
+def certified_torus_fabric(path: str) -> ttnn.FabricConfig:
+    """The wrapped fabric a cabling-certified Galaxy may open under this explicit descriptor.
+
+    8x4 Ring/Ring is the production TorusXY. A 4x4 Line/Ring descriptor is one tray half (the
+    4x4 stage), whose axis-1 rings are the certified torus's own X wraps, so it certifies TorusX.
+    Anything else fails before device open.
+    """
+    _, topologies = _device_topologies(path)
+    if all(topology == STAGE_4X4_TOPOLOGY for topology in topologies):
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_X
+    assert_torus_xy_descriptor(path)
+    return ttnn.FabricConfig.FABRIC_2D_TORUS_XY
 
 
 _REQUESTS_TP_WRAP = frozenset(
@@ -162,7 +203,7 @@ def tp_axis_is_wrapped(mesh_device) -> bool:
 
     def direction(src, dst):
         node = lambda col: ttnn.FabricNodeId(mesh_id, col)  # noqa: E731 -- row 0, so chip id is the column
-        value = ttnn.get_eth_forwarding_direction(node(src), node(dst))
+        value = ttnn.get_eth_forwarding_direction(mesh_device, node(src), node(dst))
         assert value is not None, f"no TP route from column {src} to {dst}"
         return value
 
