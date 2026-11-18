@@ -16,7 +16,9 @@ inline void llk_math_dest_srca_mm_init() {
     LLK_ASSERT(false, "dest_srca_mm is Blackhole-only; not supported on Quasar");
 }
 
-inline void llk_math_dest_srca_mm_uninit() { LLK_ASSERT(false, "dest_srca_mm is Blackhole-only; not supported on Quasar"); }
+inline void llk_math_dest_srca_mm_uninit() {
+    LLK_ASSERT(false, "dest_srca_mm is Blackhole-only; not supported on Quasar");
+}
 
 inline void llk_math_dest_srca_mm_page_post([[maybe_unused]] const std::uint32_t dst_index) {
     LLK_ASSERT(false, "dest_srca_mm is Blackhole-only; not supported on Quasar");
