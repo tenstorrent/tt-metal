@@ -84,6 +84,12 @@ KNOBS = {
     "GLM53_MLA_DSA_BATON_GROUPS": "1",
     "GLM53_MK_READER_PLACE": "row",
     "GLM53_KDA_VERIFY_PIPE": "1",
+    # the verify programs' kda_rec value-column split (tt/spec_mtp.py rec_split: each head's 128 value columns on 2
+    # cores, the o planes exchanged for the gated norm; 8 user groups x 2 heads x 2 = 32 owners on TP32): bitwise vs
+    # spread 1 on the 8x4 S2 byte checks (test_mk_layer_verify_groups); metal 32 K x 8 (8 x 1) verify step 32.1 -> 31.5
+    # ms, ids identical (chain_split_3, 2026-11-18). Not a GLM53_SPEC_* name: apply() runs before apply_spec, which
+    # treats any GLM53_SPEC_* variable as an explicit speculation config and sets none of its defaults
+    "GLM53_REC_SPLIT_VERIFY": "2",
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",

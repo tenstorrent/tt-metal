@@ -33,7 +33,7 @@
 #endif
 #ifndef REC_CB_PSUM
 #if defined(REC_V2)
-// v2 (REC_SPREAD 2, GLM53_SPEC_REC_SPLIT): the packed o tile (OD) whose planes 0..1 go to the peer; CB_K's slot (v2
+// v2 (REC_SPREAD 2, GLM53_REC_SPLIT_VERIFY): the packed o tile (OD) whose planes 0..1 go to the peer; CB_K's slot (v2
 // allocates no CB_K). Not 30: that is MkStack's MK_ARG_CB, and the stack rewinds only 0..28 / 32..63 per layer
 #define REC_CB_PSUM (REC_CB0 + 1)
 #else

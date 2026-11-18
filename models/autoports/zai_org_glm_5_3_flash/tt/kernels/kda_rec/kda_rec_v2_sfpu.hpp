@@ -23,11 +23,11 @@
 // (o = qn . S' expanded: qn . (d S) + (qn . kn) delta.) Cross-lane steps: a sub-row sum / spread by the cyclic
 // rotate-and-add over the 8 SFPU columns (SFPSHFT2 subvec rotate), a sum over sub-rows by the 4 x 4 sub-row
 // transpose of 4 registers (SFPTRANSP).
-// NV (REC_SPREAD 2, GLM53_SPEC_REC_SPLIT: 2): the value tiles of this core — slots 0..NV-1, value planes VV / VGO + ni,
-// ACC / OD per ni as above for ni < NV (the core's own value block, local index ni); the key side is unchanged. Each
-// value tile's arithmetic is independent of the others, so a core's NV tiles are bitwise the spread-1 core's tiles of
-// its block; the norm takes the four o planes in GLOBAL value-tile order (P0..P3: block 0's o planes in DST slot 2,
-// block 1's in slot 3, compute.cpp W6).
+// NV (REC_SPREAD 2, GLM53_REC_SPLIT_VERIFY: 2): the value tiles of this core — slots 0..NV-1, value planes VV / VGO
+// + ni, ACC / OD per ni as above for ni < NV (the core's own value block, local index ni); the key side is unchanged.
+// Each value tile's arithmetic is independent of the others, so a core's NV tiles are bitwise the spread-1 core's
+// tiles of its block; the norm takes the four o planes in GLOBAL value-tile order (P0..P3: block 0's o planes in DST
+// slot 2, block 1's in slot 3, compute.cpp W6).
 #pragma once
 
 // the plane map (every TRISC compiles it: the compute kernel names these outside MATH(...))

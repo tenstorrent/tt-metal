@@ -420,7 +420,7 @@ ALWI void gated_norm(uint32_t blk) {
 //   W2..W5, per key tile mi: S[mi][0..3], VEC2, DELTA -> d / kn band broadcasts, pass 2 (S d + kn delta) -> CB_ST;
 //   W6: DELTA (o), VEC2 (gate_out), W -> gated norm -> row 0 of slots 0..3 -> CB_ON (bf16).
 // (DST does not persist across a commit / release, so VEC and OD go through L1 between the windows.)
-// REC_SPREAD 2 (GLM53_SPEC_REC_SPLIT): VTC = 2 value tiles per core (state tiles mi * VTC + ni); W1 also packs OD to
+// REC_SPREAD 2 (GLM53_REC_SPLIT_VERIFY): VTC = 2 value tiles per core (state tiles mi * VTC + ni); W1 also packs OD to
 // CB_PSUM (the writer sends its planes 0..1 = this core's o to the peer's CB_PIN); W6 puts block 0's o planes in slot
 // 2, block 1's in slot 3 (its own from CB_DELTA, the peer's from CB_PIN) and the norm sums them in global value-tile
 // order (bitwise the spread-1 1 / rms); slots 0..1 = this core's output tiles.

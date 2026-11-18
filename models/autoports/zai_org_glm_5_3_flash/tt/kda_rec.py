@@ -39,7 +39,7 @@ RMS_SEM = 13  # program semaphore of the spread gated norm's partial sums (MkLay
 # it (tp_stack reserved_sems = the layer's extra semaphores)
 CHAIN_SEM = 15
 PSUM_CB = 30  # spread: the partial sum of squares (owners: 29 = park, 31 = probe); CB_PIN = cb_x0 + 3 (the debug tap)
-# v2 spread 2 (GLM53_SPEC_REC_SPLIT): REC_CB_PSUM = REC_CB0 + 1 (CB_K's slot; kda_rec_common.hpp), not 30 = MkStack's
+# v2 spread 2 (GLM53_REC_SPLIT_VERIFY): REC_CB_PSUM = REC_CB0 + 1 (CB_K's slot; kda_rec_common.hpp), not 30 = MkStack's
 # MK_ARG_CB (and outside the stack's per-layer CB rewind ranges)
 # CB slots: 14 at cb_base + n, 3 at cb_x0 + n (kernels/kda_rec/kda_rec_common.hpp)
 CB = dict(Q=0, K=1, V=2, G=3, BETA=4, S0=5, QCOL=6, KCOL=7, KFULL=8, DCOL=9, ST=10, O=11, GO=12, ON=13)
@@ -100,8 +100,8 @@ class KdaRec:
         self.rms_sem = int(getattr(kda, "kda_rec_rms_sem", RMS_SEM))  # MkSparseLayer: 13 is its SEM_LOGITS -> 14
         # Stage 14c (GLM53_REC_MODE=v2): fused SFPI recurrence (kernels/kda_rec/kda_rec_v2_sfpu.hpp), one compact vector
         # tile per item; one head per core (spread 1; user groups for parallelism), no debug tap. Spread 2
-        # (GLM53_SPEC_REC_SPLIT=2, the speculative verify's programs): a head's 128 value columns on 2 cores, the raw o
-        # planes exchanged for the gated norm (bitwise the spread-1 outputs and state)
+        # (GLM53_REC_SPLIT_VERIFY=2, the speculative verify's programs): a head's 128 value columns on 2 cores, the raw
+        # o planes exchanged for the gated norm (bitwise the spread-1 outputs and state)
         self.v2 = os.environ.get("GLM53_REC_MODE") == "v2"
         if self.v2:  # v2 has its own reader / CB layout (one state slot per input slot): no 7a state slot
             self.s_depth = self.depth

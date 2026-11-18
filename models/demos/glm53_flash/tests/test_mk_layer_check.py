@@ -14,16 +14,17 @@ stepping each user's K + 1 tokens one launch at a time from the same state: per 
 state / conv history equal the plain ones (PCC, max |diff| logged).
     GLM53_MESH_SHAPE=1,1 GLM53_MK_VG_USERS=4 GLM53_MK_VG_K=3 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
 GLM53_MK_VG_LAYERS=4,5 (one KDA kind, dense or sparse): the layers as ONE stack program per launch (the backend's
-verify stacks). GLM53_SPEC_REC_SPLIT=2: also the verify (and the plain launch) with the kda_rec value-column split,
+verify stacks). GLM53_REC_SPLIT_VERIFY=2: also the verify (and the plain launch) with the kda_rec value-column split,
 asserted BYTE-identical to spread 1 on every chip (outputs, state, conv history), after a split-1 determinism control.
     GLM53_MESH_SHAPE=8,4 GLM53_MK_VTP=32 GLM53_MK_VG_USERS=8 GLM53_MK_VG_K=1 GLM53_MK_VG_LAYERS=4,5 \
-      GLM53_SPEC_REC_SPLIT=2 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
+      GLM53_REC_SPLIT_VERIFY=2 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
 The split's odd-item cases: an odd item count per core (one user, K 2: 3 chained rows; the plain t = 3 launch on 3
 user groups) and user groups that do not divide the plain rows (GLM53_MK_VG_PLAIN_UGROUPS=3 on W = 8: 3 / 3 / 2 rows):
     GLM53_MESH_SHAPE=8,4 GLM53_MK_VTP=32 GLM53_MK_VG_USERS=1 GLM53_MK_VG_K=2 GLM53_MK_VG_LAYERS=4,5 \
-      GLM53_SPEC_REC_SPLIT=2 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
+      GLM53_REC_SPLIT_VERIFY=2 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
     GLM53_MESH_SHAPE=8,4 GLM53_MK_VTP=32 GLM53_MK_VG_USERS=4 GLM53_MK_VG_K=1 GLM53_MK_VG_LAYERS=4,5 \
-      GLM53_MK_VG_PLAIN_UGROUPS=3 GLM53_SPEC_REC_SPLIT=2 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
+      GLM53_MK_VG_PLAIN_UGROUPS=3 GLM53_REC_SPLIT_VERIFY=2 \
+      pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
 """
 
 from __future__ import annotations
@@ -122,8 +123,8 @@ VG_K = int(os.environ.get("GLM53_MK_VG_K", "3"))  # drafts per user: K + 1 verif
 # backend's verify runs; a stack repeats every phase per layer inside one program); default: GLM53_MK_LAYER alone as
 # its own layer program (the original check)
 VG_LAYERS = [int(v) for v in os.environ.get("GLM53_MK_VG_LAYERS", str(LAYER)).split(",")]
-# with GLM53_SPEC_REC_SPLIT = 2 (tt/spec_mtp.py rec_split): also the verify with the kda_rec value-column split; it must
-# be BYTE-identical to the split-1 verify (outputs, every layer's state and conv history, every chip), after a
+# with GLM53_REC_SPLIT_VERIFY = 2 (tt/spec_mtp.py rec_split): also the verify with the kda_rec value-column split; it
+# must be BYTE-identical to the split-1 verify (outputs, every layer's state and conv history, every chip), after a
 # determinism control (the split-1 verify twice); GLM53_MK_VG_PLAIN_SPLIT=1 (default on with the split): the plain
 # t = W launch with the split too (its GLM53_REC_UGROUPS groups x 2 cores per head), byte-identical to the plain one
 VG_PLAIN_SPLIT = os.environ.get("GLM53_MK_VG_PLAIN_SPLIT", "1") == "1"
@@ -341,4 +342,4 @@ def test_mk_layer_verify_groups(mesh_device):
                 verdicts.append((name, ok, bad))
         logger.info(f"MK_VERIFY_SPLIT_SUMMARY: {[(n, ok) for n, ok, _ in verdicts]}")
     assert worst > 0.9999, f"verify groups vs plain: worst pcc {worst}"
-    assert all(ok for _, ok, _ in verdicts), f"GLM53_SPEC_REC_SPLIT={split}: not byte-identical {verdicts}"
+    assert all(ok for _, ok, _ in verdicts), f"GLM53_REC_SPLIT_VERIFY={split}: not byte-identical {verdicts}"

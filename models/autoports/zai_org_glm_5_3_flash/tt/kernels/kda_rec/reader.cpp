@@ -84,7 +84,7 @@ constexpr Geometry geometry() {
 // Stage 14c v2 reader: per item ONE compact fp32 vector tile (kda_rec_common.hpp / kda_rec_v2_sfpu.hpp layout): q, k, g
 // at their key-side positions, v / gate_out in the u-layout, beta in every lane of plane V2_BETA; the rows are read
 // whole (2 face rows per tile) into scratch and scattered by this RISC; the o_norm weight once, u-layout, into CB_W.
-// Same compile-time / runtime arguments as v1. REC_SPREAD 2 (GLM53_SPEC_REC_SPLIT): core hc serves head hc / 2, value
+// Same compile-time / runtime arguments as v1. REC_SPREAD 2 (GLM53_REC_SPLIT_VERIFY): core hc serves head hc / 2, value
 // columns 64 (hc % 2) .. + 63 (state tiles (mi, 2 blk + nl) at CB tile 2 mi + nl; v / gate_out / weight values j of the
 // block at u-layout position j - 64 blk: the plane index drops by 2 blk, the lane is unchanged); the key side (q, k, g,
 // beta) is read in full by both cores of a head.

@@ -295,7 +295,7 @@ def test_8x4_byte_formats_round_trip():
     lay = SP.rs_layout(2, otb=4096)
     assert lay[-1][2] + 4096 * 2 // 32 == 16 * 256 + 2 * 256 <= SP.RS2B_PPC * SP.TB
     assert SP.rs2_layout(4096) == SP.rs_layout(8, 4096)
-    # the kda_rec v2 value-column split of the speculative verify (GLM53_SPEC_REC_SPLIT)
+    # the kda_rec v2 value-column split of the speculative verify (GLM53_REC_SPLIT_VERIFY)
     for spread in (1, 2):
         _kda_rec_v2_split_maps(spread)
     _kda_rec_v2_split_cores_and_cbs()
@@ -1381,8 +1381,11 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     bit-identical to knob-off over 3 runs; 32 K x 4 ids identical), the fused prefill mHC mix and COMB (2026-11-18:
     not bitwise -- ids move at near-ties -- gated on tau / coherence and the served 1 M / AgentX rows); an
     explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
-    default, an explicit GLM53_MLA_ATT_OBF16=1 the COMB default); the speculative verify's step cuts; the 1 M prefill
-    window ladder; other meshes get nothing"""
+    default, an explicit GLM53_MLA_ATT_OBF16=1 the COMB default); the speculative verify's step cuts and its kda_rec
+    value split (GLM53_REC_SPLIT_VERIFY: no default is a GLM53_SPEC_* name, so apply_spec's speculative defaults still
+    follow apply); the 1 M prefill window ladder; other meshes get nothing"""
+    import os
+
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
 
     assert GD.KNOBS["GLM53_DSA_SHARD_AGK"] == "1"
@@ -1397,7 +1400,8 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert GD.KNOBS["GLM53_DSA_SHARD_PREFILTER"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_RS1_SPLIT"] == "1"
     # the speculative verify's step cuts (abd539b80fc) and the 1 M window ladder (6c9e3c29f0b / 8bf49e5cddb)
     assert GD.KNOBS["GLM53_MLA_DSA_BATON_GROUPS"] == "1" and GD.KNOBS["GLM53_MK_READER_PLACE"] == "row"
-    assert GD.KNOBS["GLM53_KDA_VERIFY_PIPE"] == "1"
+    assert GD.KNOBS["GLM53_KDA_VERIFY_PIPE"] == "1" and GD.KNOBS["GLM53_REC_SPLIT_VERIFY"] == "2"
+    assert not [k for k in GD.KNOBS if k.startswith("GLM53_SPEC_")]
     ladder_1m = "32768,65536,98304,131072,196608,262144,524288,786432,1048576"
     assert GD.SPARSE_T[1 << 20] == GD.sparse_t(1 << 20) == ladder_1m
     assert all(
@@ -1439,7 +1443,10 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_RS1_SPLIT"] == "1" and SP.shard_rs1_split(8)
     assert not SP.shard_prefilter(2) and not SP.shard_rs1_split(2)  # (the pair / the 2x4 never take them)
     assert got["GLM53_MLA_DSA_BATON_GROUPS"] == got["GLM53_KDA_VERIFY_PIPE"] == "1"
-    assert got["GLM53_MK_READER_PLACE"] == "row"
+    assert got["GLM53_MK_READER_PLACE"] == "row" and got["GLM53_REC_SPLIT_VERIFY"] == "2"
+    _protect_env(monkeypatch, [k for k in os.environ if k.startswith("GLM53_SPEC_")] + list(GD.SPEC_KNOBS_B16))
+    spec_set, spec_mode, spec_why = GD.apply_spec((8, 4), 16, 4)  # (after apply, as test_mk_e2e runs them)
+    assert spec_mode == "spec" and spec_set["GLM53_SPEC_K"] == "3", (spec_mode, spec_why)
     assert all(
         got[k] == "1" for k in ("GLM53_DSA_POOL_BORROW", "GLM53_STACK_DEFER", "GLM53_MK_MOE_DEFER_INV", "GLM53_MHC_MS1")
     )
@@ -1768,7 +1775,7 @@ def _reader_place_errors():
         RP.plan(opts, GRID, 2, "diag")
 
 
-# ---- kda_rec v2 value-column split (GLM53_SPEC_REC_SPLIT, tt/spec_mtp.py rec_split; kernels/kda_rec): the index maps
+# ---- kda_rec v2 value-column split (GLM53_REC_SPLIT_VERIFY, tt/spec_mtp.py rec_split; kernels/kda_rec): the index maps
 # as the kernels write them (page / CB-tile expressions read from the sources and evaluated here)
 
 

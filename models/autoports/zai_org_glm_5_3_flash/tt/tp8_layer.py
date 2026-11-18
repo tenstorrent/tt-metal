@@ -135,7 +135,7 @@ class TPDenseKDALayer:
             self.attn_args, self.ffn_args = weights.attn_args, weights.ffn_args
             # the per-program knob read by KdaRec / KdaPre at program build
             self.attn.kda_rec_ugroups = int(os.environ.get("GLM53_REC_UGROUPS", "1"))
-            # (the verify builds may set kda_rec_spread above the weights' spread: GLM53_SPEC_REC_SPLIT, spec_mtp)
+            # (the verify builds may set kda_rec_spread above the weights' spread: GLM53_REC_SPLIT_VERIFY, spec_mtp)
             spread = int(getattr(self.attn, "kda_rec_spread", rec_spread))
             assert self.attn.kda_rec_ugroups * spread * self.shards.h <= 64, (self.attn.kda_rec_ugroups, spread)
             self.attn.kda_pre_rsplit = int(os.environ.get("GLM53_KDA_RSPLIT", "1"))  # (read by KdaPre at build)

@@ -145,12 +145,13 @@ SHARED_ATTN_KNOBS = ("kda_rec_ugroups", "kda_rec_spread", "kda_pre_rsplit", "kda
 
 
 def rec_split() -> int:
-    """GLM53_SPEC_REC_SPLIT = s (default 1 = the plain builds): the speculative verify programs' kda_rec runs each head's
-    128 value columns on s cores (kda.kda_rec_spread; v2 only: kernels/kda_rec, the o planes exchanged for the gated
-    norm, bitwise the s = 1 outputs and state). The verify's 8 user groups x 2 heads x 2 = 32 of the 64 owners on TP32
-    """
-    s = int(os.environ.get("GLM53_SPEC_REC_SPLIT", "1") or 1)
-    assert s in (1, 2), ("GLM53_SPEC_REC_SPLIT: 1 or 2", s)
+    """GLM53_REC_SPLIT_VERIFY = s (default 1 = the plain builds; the 8x4 galaxy default 2, tt/galaxy_defaults.py): the
+    speculative verify programs' kda_rec runs each head's 128 value columns on s cores (kda.kda_rec_spread; v2 only:
+    kernels/kda_rec, the o planes exchanged for the gated norm, bitwise the s = 1 outputs and state). The verify's 8 user
+    groups x 2 heads x 2 = 32 of the 64 owners on TP32. Not a GLM53_SPEC_* name: any of those set explicitly turns off
+    galaxy_defaults.apply_spec's speculative defaults"""
+    s = int(os.environ.get("GLM53_REC_SPLIT_VERIFY", "1") or 1)
+    assert s in (1, 2), ("GLM53_REC_SPLIT_VERIFY: 1 or 2", s)
     return s
 
 
@@ -861,7 +862,7 @@ class SpecMTP:
                 # (GLM53_REC_DEPTH=s would build a second, unchained kda_rec lazily at call time, after kda_verify_sel)
                 # GLM53_SPEC_MULTI: one user group per user (REC_CHAIN_GROUPS: each group chained from sel[u])
                 assert os.environ.get("GLM53_REC_DEPTH", "1") != "s", "spec verify: GLM53_REC_DEPTH=s is not chained"
-                if split > 1:  # GLM53_SPEC_REC_SPLIT: the verify's kda_rec value-column split (restored via keep)
+                if split > 1:  # GLM53_REC_SPLIT_VERIFY: the verify's kda_rec value-column split (restored via keep)
                     wts.attn.kda_rec_spread = split
                 with env(GLM53_REC_UGROUPS=str(self.groups) if self.groups else "1"):
                     if kind == DENSE_KDA:
@@ -878,7 +879,7 @@ class SpecMTP:
                 for a, v in keep.items():
                     setattr(wts.attn, a, v)
             assert tp.mk.rec.verify_sel is self.sel and tp.mk.kda.verify_sel is self.sel, L
-            assert split == 1 or (tp.mk.rec.spread == split and tp.mk.kda.rec_spread == split), (L, "SPEC_REC_SPLIT")
+            assert split == 1 or (tp.mk.rec.spread == split and tp.mk.kda.rec_spread == split), (L, "REC_SPLIT_VERIFY")
             assert not self.groups or (tp.mk.rec.chain_groups and tp.mk.rec.ug == self.groups
                                        and tp.mk.kda.verify_groups == self.groups), (L, "GLM53_SPEC_MULTI groups")  # fmt: skip
             seq.append(dict(L=L, mk=tp.mk, sparse=kind == SPARSE_KDA, kda=tp.attn, tp=tp))
