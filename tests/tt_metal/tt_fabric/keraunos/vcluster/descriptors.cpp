@@ -151,20 +151,19 @@ std::vector<GenerationFinding> refusals(
     }
 
     for (const Device& device : manifest.devices) {
-        const std::vector<Slot> routers = routers_by_port(device);
-        for (std::size_t port = 0; port < routers.size(); port++) {
-            if (*routers[port].port != port) {
-                std::vector<uint32_t> ports;
-                for (const Slot& s : routers) {
-                    ports.push_back(*s.port);
-                }
+        std::vector<uint32_t> ports;
+        for (const Slot& slot : routers_by_port(device)) {
+            ports.push_back(*slot.port);
+        }
+        for (std::size_t port = 0; port < ports.size(); port++) {
+            if (ports[port] != port) {
                 findings.push_back(
                     {GenerationRefusal::RouterPortsNotDense,
                      fmt::format(
                          "device {} router ports {} are not 0 to {}",
                          device.name,
                          fmt::join(ports, ", "),
-                         routers.size() - 1)});
+                         ports.size() - 1)});
                 break;
             }
         }
@@ -350,6 +349,18 @@ std::string mesh_graph_desc(uint32_t num_chips) {
 
 namespace {
 
+PackageFacts facts_of(const YAML::Node& package, const std::filesystem::path& package_soc_desc) {
+    PackageFacts facts;
+    for (const auto& entry :
+         package_key(package_key(package, "keraunos", package_soc_desc), "cores", package_soc_desc)) {
+        facts.cores.push_back(CceId{entry["hsio"].as<uint32_t>(), entry["cce"].as<uint32_t>()});
+    }
+    facts.harts_per_cce = MEM_IERISC_LOCAL_HARTS;
+    facts.sram_bytes_per_cce = package_key(package, "eth_l1_size", package_soc_desc).as<uint64_t>();
+    facts.ethernet_tile_pairs = kWiredEthernetTilePairs;
+    return facts;
+}
+
 GeneratedDescriptors generate(
     const Manifest& manifest, const std::filesystem::path& package_soc_desc, const std::filesystem::path& out_dir) {
     TT_FATAL(!manifest.devices.empty(), "Manifest::devices is empty; parse_manifest() never returns one");
@@ -359,7 +370,7 @@ GeneratedDescriptors generate(
     const YAML::Node dram_views = package_key(package, "dram_views", package_soc_desc);
     const std::vector<YAML::Node> views(dram_views.begin(), dram_views.end());
 
-    std::vector<ManifestFinding> rows = check_manifest(manifest, package_facts(package_soc_desc));
+    std::vector<ManifestFinding> rows = check_manifest(manifest, facts_of(package, package_soc_desc));
     std::vector<GenerationFinding> findings = refusals(manifest, eth, cores, views);
     if (!rows.empty() || !findings.empty()) {
         std::stable_sort(
@@ -409,19 +420,6 @@ GeneratedDescriptors generate(
     return generated;
 }
 
-PackageFacts read_package_facts(const std::filesystem::path& package_soc_desc) {
-    const YAML::Node package = load_package(package_soc_desc);
-    PackageFacts facts;
-    for (const auto& entry :
-         package_key(package_key(package, "keraunos", package_soc_desc), "cores", package_soc_desc)) {
-        facts.cores.push_back(CceId{entry["hsio"].as<uint32_t>(), entry["cce"].as<uint32_t>()});
-    }
-    facts.harts_per_cce = MEM_IERISC_LOCAL_HARTS;
-    facts.sram_bytes_per_cce = package_key(package, "eth_l1_size", package_soc_desc).as<uint64_t>();
-    facts.ethernet_tile_pairs = kWiredEthernetTilePairs;
-    return facts;
-}
-
 }  // namespace
 
 // A package value that is missing or of the wrong type surfaces as a YAML::Exception from a read of an entry; it is
@@ -455,7 +453,7 @@ std::vector<std::pair<uint32_t, uint32_t>> noc_links(const Manifest& manifest) {
 
 PackageFacts package_facts(const std::filesystem::path& package_soc_desc) {
     try {
-        return read_package_facts(package_soc_desc);
+        return facts_of(load_package(package_soc_desc), package_soc_desc);
     } catch (const YAML::Exception& e) {
         TT_THROW("The package SoC descriptor {} has an unexpected value: {}", package_soc_desc.string(), e.what());
     }
