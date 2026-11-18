@@ -115,3 +115,34 @@ extern "C" __attribute__((noinline, used)) void reference_program_mop_with_repla
     mop_cfg[7] = replay_op;
     mop_cfg[8] = replay_op;
 }
+
+// A const local initialized from a constant is a constant expression, so it selects
+// the compile-time form.
+extern "C" __attribute__((noinline, used)) void run_const_local_range()
+{
+    const std::uint32_t count = 6;
+    replay::run<replay::BufferRange {0, count}>();
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_const_local_range()
+{
+    TTI_REPLAY(0 /*start_idx*/, 6 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+}
+
+// The runtime overload also encodes during constant evaluation, for ranges found by a
+// constexpr search.
+constexpr std::uint32_t replay_fragment(const std::uint32_t base, const std::uint32_t offset, const std::uint32_t count)
+{
+    return replay::get_operation({base + offset, count});
+}
+
+extern "C" __attribute__((noinline, used)) std::uint32_t get_operation_constant_evaluated()
+{
+    constexpr std::uint32_t fragment = replay_fragment(16, 2, 4);
+    return fragment;
+}
+
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_get_operation_constant_evaluated()
+{
+    return TT_OP_REPLAY(18 /*start_idx*/, 4 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+}

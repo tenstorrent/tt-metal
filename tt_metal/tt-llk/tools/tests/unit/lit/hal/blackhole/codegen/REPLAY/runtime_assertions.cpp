@@ -54,3 +54,32 @@ extern "C" __attribute__((noinline, used)) std::uint32_t reference_get_operation
     LLK_ASSERT(valid, "Replay range requires count >= 1 and start + count <= 32");
     return TT_OP_REPLAY(start, count, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 }
+
+// Both selectable counts are valid, so the check folds away and each path keeps
+// its immediate REPLAY.
+extern "C" __attribute__((noinline, used)) void record_selected_count(const bool partial_face)
+{
+    const std::uint32_t count = partial_face ? 3 : 2;
+    replay::record(
+        {0, count},
+        [partial_face]
+        {
+            scalar::set_low<1>(hal::gpr<1>());
+            if (partial_face)
+            {
+                scalar::set_low<2>(hal::gpr<2>());
+            }
+            scalar::set_low<3>(hal::gpr<3>());
+        });
+}
+
+extern "C" __attribute__((noinline, used)) void reference_record_selected_count(const bool partial_face)
+{
+    lltt::record(0 /*start*/, partial_face ? 3 : 2);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
+    if (partial_face)
+    {
+        TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 2 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 4 /*RegIndex16b*/);
+    }
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 3 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 6 /*RegIndex16b*/);
+}
