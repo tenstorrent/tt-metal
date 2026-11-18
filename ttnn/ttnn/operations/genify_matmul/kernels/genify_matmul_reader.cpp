@@ -117,6 +117,7 @@
 #include "ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/a_segments.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/line_stream.hpp"
 
 // R1a injector stall-shadow (Refinement 11, host R1A_INJECTOR_AHEAD): a line injector issues K-block kb+1's
 // DRAM reads (own transaction id) before it multicasts kb, so its line's read and multicast overlap instead
@@ -142,6 +143,23 @@
 #endif
 #ifndef GM_R1A_DEPTH
 #define GM_R1A_DEPTH 2
+#endif
+// R1a split lines (Refinement 16, host R1A_SPLIT_LINES; line_stream.hpp): the A row lines run on the writer RISC
+// (it produces cb_act_tiles), this reader runs only the B column line, with rotating injectors (round r of a column
+// is read + multicast by its core r % grid_m). 0 = both lines here, one fixed injector per line.
+#ifndef GM_R1A_SPLIT
+#define GM_R1A_SPLIT 0
+#endif
+// The line stream's staging buffer (one K-block of the operand; scratch CB owned by this RISC).
+#ifndef GM_LINE_STAGE_CB
+#define GM_LINE_STAGE_CB 0
+#endif
+// ... and the rounds ahead over which an injector spreads its turn's reads (host R1A_LINE_WINDOW).
+#ifndef GM_LINE_WINDOW
+#define GM_LINE_WINDOW 2
+#endif
+#ifndef GM_LINE_STARTUP
+#define GM_LINE_STARTUP 1
 #endif
 
 namespace {
@@ -246,6 +264,7 @@ void kernel_main() {
     // A and B), 2 = R1b (A K-blocks arrive on the WRITER's broadcast stream; this reader streams B only).
     constexpr uint32_t operand_mode = get_compile_time_arg_val(22);
     constexpr bool operand_mcast = operand_mode == 1;                      // regime R1a
+    constexpr bool r1a_split = operand_mcast && GM_R1A_SPLIT != 0;         // R1a split lines (A on the writer)
     constexpr bool act_on_writer = operand_mode == 2;                      // regime R1b
     constexpr bool a_sends = get_compile_time_arg_val(23) != 0;            // A-line injector (R1a)
     constexpr bool b_sends = get_compile_time_arg_val(24) != 0;            // B-line injector (R1a)
@@ -294,9 +313,14 @@ void kernel_main() {
         "the head ramp runs on the R1 / R1a K-walk only");
     // R1: every core reads both operands. R1a: only the line injectors read from DRAM. R1b: B only (A is
     // produced into cb_act_tiles by the writer).
-    constexpr bool reads_act = !act_on_writer && (!operand_mcast || a_sends);
-    constexpr bool reads_weight = !operand_mcast || b_sends;
+    constexpr bool reads_act = !act_on_writer && !r1a_split && (!operand_mcast || a_sends);
+    constexpr bool reads_weight = !r1a_split && (!operand_mcast || b_sends);
     constexpr bool r1a_prefetch = GM_R1A_AHEAD > 1;
+#ifdef GM_ABLATE_DM
+    constexpr bool gm_ablate_dm = true;
+#else
+    constexpr bool gm_ablate_dm = false;
+#endif
     constexpr uint32_t r1a_depth = GM_R1A_DEPTH;
     static_assert(
         !r1a_prefetch || (GM_R1A_AHEAD == 2 && r1a_depth >= 3 && operand_mcast && !gm_ks::ramp && !weight_resident &&
@@ -310,7 +334,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("weight_ct_offset"),
         get_named_compile_time_arg_val("weight_rt_offset")>();
     static_assert(
-        mc_act.active == (operand_mcast || (dram_sharded && ds_reader_act) || bs_mcast) &&
+        mc_act.active == ((operand_mcast && !r1a_split) || (dram_sharded && ds_reader_act) || bs_mcast) &&
         mc_weight.active == (operand_mcast || bs_b_mcast));
     static_assert(
         !bs_b_mcast ||
@@ -434,8 +458,8 @@ void kernel_main() {
     [[maybe_unused]] const auto res_acc = TensorAccessor(res_args, res_addr, res_page_bytes);
 
     Noc noc;
-    [[maybe_unused]] auto act_pipe = make_line_pipe<a_sends, operand_mcast>(mc_act, noc);
-    [[maybe_unused]] auto weight_pipe = make_line_pipe<b_sends, operand_mcast>(mc_weight, noc);
+    [[maybe_unused]] auto act_pipe = make_line_pipe < a_sends, operand_mcast && !r1a_split > (mc_act, noc);
+    [[maybe_unused]] auto weight_pipe = make_line_pipe < b_sends, operand_mcast && !r1a_split > (mc_weight, noc);
 
     // A broadcast faces (std::nullopt where this core has no such role): R4's rotating A rounds (when
     // they run on the reader) and R3a's rotating row multicast.
@@ -559,6 +583,42 @@ void kernel_main() {
             noc_async_read(b_acc.get_noc_addr(k0j * tensor_n_tiles + col0), l1, kvj * block_n_tiles * b_tile_bytes);
         }
     };
+
+    // R1a split lines: this core's B column line (rotating injectors). Round r = (block, K-block) of the walk.
+    static_assert(
+        !r1a_split ||
+        (block_batches == 1 && !weight_resident && !act_resident && !r1a_prefetch && GM_BANK_STRIDE == 0));
+    [[maybe_unused]] auto b_line_sender = make_bs_face<r1a_split, true>(mc_weight, noc);
+    [[maybe_unused]] auto b_line_receiver = make_bs_face<r1a_split, false>(mc_weight, noc);
+    constexpr uint32_t b_line_span = r1a_split ? mc_weight.num_senders : 1;
+    // Round r = delivery r % KS::n of block r / KS::n (the head ramp's deliveries under GM_K_RAMP).
+    [[maybe_unused]] auto b_line_read = [&](uint32_t r, uint32_t l1, uint32_t k_lo, uint32_t k_hi) {
+        const uint32_t d = r % KS::n;
+        const uint32_t kv = KS::kv(d);
+        const uint32_t c0 = ((r / KS::n) % nb_n) * block_n_tiles;
+        if (k_lo < kv) {
+            read_weight(
+                l1 + k_lo * block_n_tiles * b_tile_bytes,
+                col0 + (c0 / unit_cols) * unit_stride,
+                KS::k0(d) + k_lo,
+                (k_hi < kv ? k_hi : kv) - k_lo,
+                block_extent(cols_valid, c0, block_n_tiles));
+        }
+    };
+    using BLine = gm_line::Stream<
+        cb_weight_tiles,
+        weight_block_tiles,
+        weight_block_bytes,
+        GM_R1A_DEPTH,
+        b_line_span,
+        1,
+        block_k_tiles,
+        GM_LINE_WINDOW,
+        GM_LINE_STARTUP>;
+    [[maybe_unused]] BLine b_line(
+        r1a_split ? nb_m * nb_n * KS::n : 0,
+        r1a_split ? gm_line::first_turn<b_line_span>(mc_weight) : b_line_span,
+        r1a_split ? get_write_ptr(GM_LINE_STAGE_CB) : 0);
 
     for (uint32_t bb = 0; bb < nb_b; ++bb) {
         const uint32_t blk_b0 = bb * block_batches;
@@ -730,6 +790,16 @@ void kernel_main() {
                                     get_write_ptr(cb_row),
                                     block_n_tiles * row_tile_bytes);
                             }
+                        } else if constexpr (r1a_split) {
+                            // R1a split lines: B round of this K-block (A arrives on the writer's row line).
+                            // B's valid rows of a short (head ramp) delivery are a prefix of its slot.
+                            gm_line::round_if<r1a_split>(
+                                b_line,
+                                noc,
+                                b_line_sender,
+                                b_line_receiver,
+                                b_line_read,
+                                (gm_ks::ramp ? k_valid * block_n_tiles : weight_block_tiles) * b_tile_bytes);
                         } else {
                             // B residency: the core's one B block (one K-block, its whole column range)
                             // is read on the first M-block only; compute keeps it fronted for the rest.
@@ -791,7 +861,9 @@ void kernel_main() {
                                     MaybeDeviceZoneScope("rd_barrier");
                                     dataflow_kernel_lib::async_read_barrier_with_trid(noc, r1a_seq % 2 + 1);
                                 }
-                            } else if constexpr (reads_act || reads_weight) {
+                            }
+#ifndef GM_ABLATE_DM
+                            else if constexpr (reads_act || reads_weight) {
                                 {
                                     MaybeDeviceZoneScope("rd_issue");
                                     if (batch_valid && reads_act && load_act) {
@@ -810,8 +882,11 @@ void kernel_main() {
                                 MaybeDeviceZoneScope("rd_barrier");
                                 noc_async_read_barrier();  // one barrier per K-block, both operands
                             }
+#endif
                             // R1a: A over its line, then B over its line (fixed order on every core).
-                            if constexpr (operand_mcast) {
+                            // GM_ABLATE_DM (perf tooling): the operand reads and line deliveries are stubbed
+                            // (reserve / push only), so the walk times compute + the output stream alone.
+                            if constexpr (operand_mcast && !gm_ablate_dm) {
                                 if (load_act) {
                                     MaybeDeviceZoneScope("rd_mcast_a");
                                     // Head ramp: only the delivery's valid tiles go on the wire (A compact

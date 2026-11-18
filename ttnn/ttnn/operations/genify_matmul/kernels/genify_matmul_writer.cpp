@@ -22,6 +22,11 @@
 // so this RISC produces cb_act_tiles: before each block's output it walks the block's K-blocks, the
 // injector (the channel's fixed sender) reading each A K-block from DRAM / L1 into its slot and
 // multicasting it to every core's same slot, the others acking and waiting. The reader streams only B.
+//
+// Regime R1a split lines (`act_mode` = 3, Refinement 16, host R1A_SPLIT_LINES): this RISC runs the A ROW LINE of
+// R1a (line_stream.hpp: rotating injectors, each line core reading + multicasting every grid_n-th A K-block of its
+// row region) and produces cb_act_tiles; the reader runs the B column line. Per block: its K-walk of A, then its
+// output.
 
 // Per-stage device zones (Perf 1, PERMANENT -- free with the profiler off; never remove, extend instead):
 //   wr_wait_out   cb_wait_front on a row-group batch   (starved: compute has not packed it yet)
@@ -45,6 +50,8 @@
 #include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/a_segments.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/line_stream.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
 
 // R1b bank-local stream (Refinement 15): output column c of a core's region is col0 + c * GM_OUT_STRIDE (the B
 // units' bank stride, in output columns); 1 = adjacent columns.
@@ -60,6 +67,17 @@
 // send on compute (blocking cost FLUX attn-out 107 -> 135 us). 1 = one fixed injector.
 #ifndef GM_ACT_INJECTORS
 #define GM_ACT_INJECTORS 1
+#endif
+// R1a split lines (Refinement 16): the A line stream's staging buffer (one A K-block; scratch CB owned by this RISC).
+#ifndef GM_LINE_STAGE_CB
+#define GM_LINE_STAGE_CB 0
+#endif
+// ... and the rounds ahead over which an injector spreads its turn's reads (host R1A_LINE_WINDOW).
+#ifndef GM_LINE_WINDOW
+#define GM_LINE_WINDOW 2
+#endif
+#ifndef GM_LINE_STARTUP
+#define GM_LINE_STARTUP 1
 #endif
 
 namespace {
@@ -86,6 +104,7 @@ void kernel_main() {
     constexpr uint32_t act_mode = get_compile_time_arg_val(8);
     constexpr bool ds_act = act_mode == 1;      // R4: the A rounds run here
     constexpr bool act_stream = act_mode == 2;  // R1b: the A K-block broadcast runs here
+    constexpr bool act_line = act_mode == 3;    // R1a split lines: the A row line runs here
     constexpr bool ds_worker = get_compile_time_arg_val(9) != 0;
     constexpr uint32_t cb_act_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t block_k_tiles = get_compile_time_arg_val(11);
@@ -129,10 +148,11 @@ void kernel_main() {
     const uint32_t out_n_tiles = get_arg_val<uint32_t>(arg++);
     // R4 A rounds: the A shard's L1 address. R1b: A's buffer address.
     [[maybe_unused]] const uint32_t a_addr = act_mode != 0 ? get_arg_val<uint32_t>(arg++) : 0;
-    [[maybe_unused]] const uint32_t tensor_k_tiles = act_stream ? get_arg_val<uint32_t>(arg++) : 0;  // R1b
+    [[maybe_unused]] const uint32_t tensor_k_tiles =
+        (act_stream || act_line) ? get_arg_val<uint32_t>(arg++) : 0;  // R1b / R1a split
     // Refinement 14: R1b's A as K segments (a_segments.hpp): the segment table follows (GM_A_SEGMENTS > 1).
     [[maybe_unused]] a_segments::Table a_tab{};
-    if constexpr (act_stream) {
+    if constexpr (act_stream || act_line) {
         a_tab = a_segments::read_table(a_addr, tensor_k_tiles, arg);
     }
     // Refinement 13 split output: chunk 0 is out_addr, chunks 1.. follow (out_chunks.hpp).
@@ -143,7 +163,15 @@ void kernel_main() {
     constexpr auto mc_act = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("act_ct_offset"), get_named_compile_time_arg_val("act_rt_offset")>();
     static_assert(mc_act.active == (act_mode != 0));
-    static_assert(!act_stream || block_batches == 1);
+    static_assert(!(act_stream || act_line) || block_batches == 1);
+    static_assert(!act_line || (!act_resident && act_ahead == 1));
+    // K deliveries of a block (the Perf 2 head ramp, genify_matmul_kschedule.hpp, on the R1a split A line only; the
+    // identity [block_k.., last] everywhere else): an A round is one delivery, laid out with row stride block_k, or
+    // the delivery's width kv under GM_COMPACT_A.
+    // (Writers without an A stream carry placeholder K args: give them the trivially consistent nominal schedule.)
+    using KS = gm_ks::Sched<block_k_tiles, num_k_blocks, (act_line || act_stream) ? last_block_k_tiles : block_k_tiles>;
+    static_assert(!gm_ks::ramp || act_line);
+    constexpr uint32_t k_deliveries = KS::n;
     static_assert(act_ahead >= 1 && (!act_stream || act_ahead <= act_cb_blocks));
     constexpr uint32_t act_injectors = GM_ACT_INJECTORS;
     // An injector reserves through its next turn r + injectors while compute may still hold round r (packing its
@@ -188,10 +216,10 @@ void kernel_main() {
     };
     // Rotating injectors: the ring base (the CB is exactly act_cb_blocks K-blocks) and this core's pending turn.
     [[maybe_unused]] const uint32_t act_ring_base = get_write_ptr(cb_act_tiles);
-    [[maybe_unused]] const uint32_t act_rounds = nb_b * nb_m * nb_n * num_k_blocks;
+    [[maybe_unused]] const uint32_t act_rounds = nb_b * nb_m * nb_n * k_deliveries;
     // Round r's block rows: rounds walk (mb, nbk, kb) with kb fastest (nb_b = block_batches = 1 under R1b).
     [[maybe_unused]] auto round_rows = [&](uint32_t r, uint32_t& blk_r0, uint32_t& blk_rows) {
-        blk_r0 = ((r / num_k_blocks) / nb_n % nb_m) * block_m_tiles;
+        blk_r0 = ((r / k_deliveries) / nb_n % nb_m) * block_m_tiles;
         blk_rows = block_extent(rows_valid, blk_r0, block_m_tiles);
     };
     // Issue this core's read for its turn `r` (r >= act_seq): reserve through r's slot, read under the turn's trid
@@ -215,6 +243,61 @@ void kernel_main() {
             }
         }
     }
+    // R1a split lines: this core's A row line (rotating injectors); round r = (block, K-block) of the walk.
+    constexpr uint32_t a_line_span = act_line ? mc_act.num_senders : 1;
+    // K tiles [k_lo, k_hi) of round r's A K-block (its block rows), into the slot-shaped buffer at `l1` (the line
+    // stream's staging buffer, so its row stride is the slot's: block_k).
+    [[maybe_unused]] auto a_line_read = [&](uint32_t r, uint32_t l1, uint32_t k_lo, uint32_t k_hi) {
+        uint32_t blk_r0, blk_rows;
+        round_rows(r, blk_r0, blk_rows);
+        const uint32_t d = r % k_deliveries;
+        const uint32_t kv = KS::kv(d);
+        if (k_lo >= kv) {
+            return;
+        }
+        const uint32_t n = (k_hi < kv ? k_hi : kv) - k_lo;
+        const uint32_t k0 = KS::k0(d) + k_lo;
+        const uint32_t a_stride = gm_ks::compact_a ? kv : block_k_tiles;
+        if constexpr (a_segments::num > 1) {
+            const a_segments::Pos at = a_segments::locate(a_tab, k0);
+            for (uint32_t rr = 0; rr < blk_rows; ++rr) {
+                a_segments::read_row(
+                    a_args,
+                    a_tab,
+                    a_page_bytes,
+                    a_tile_bytes,
+                    l1 + (rr * a_stride + k_lo) * a_tile_bytes,
+                    row0 + blk_r0 + rr,
+                    at,
+                    n);
+            }
+        } else {
+            for (uint32_t rr = 0; rr < blk_rows; ++rr) {
+                const uint32_t page = (row0 + blk_r0 + rr) * tensor_k_tiles + k0;
+                uint32_t dst = l1 + (rr * a_stride + k_lo) * a_tile_bytes;
+                for (uint32_t k = 0; k < n; ++k) {
+#ifndef GM_ABLATE_A
+                    noc_async_read(a_acc.get_noc_addr(page + k), dst, a_tile_bytes);
+#endif
+                    dst += a_tile_bytes;
+                }
+            }
+        }
+    };
+    using ALine = gm_line::Stream<
+        cb_act_tiles,
+        act_block_tiles,
+        act_block_bytes,
+        act_cb_blocks,
+        a_line_span,
+        1,
+        block_k_tiles,
+        GM_LINE_WINDOW,
+        GM_LINE_STARTUP>;
+    [[maybe_unused]] ALine a_line(
+        act_line ? act_rounds : 0,
+        act_line ? gm_line::first_turn<a_line_span>(mc_act) : a_line_span,
+        act_line ? get_write_ptr(GM_LINE_STAGE_CB) : 0);
     if constexpr (ds_act && !ds_worker) {
         genify_ds::send_only(
             ds_blocks, mc_act, a_sender, get_write_ptr(cb_act_tiles), act_cb_blocks, nb_m, num_k_blocks);
@@ -250,6 +333,14 @@ void kernel_main() {
                 const uint32_t blk_c0 = nbk * out_block_n_tiles;
                 const uint32_t blk_cols = block_extent(cols_valid, blk_c0, out_block_n_tiles);
                 const out_chunks::Col blk_col = out_chunks::locate(out_tab, col0 + blk_c0 * GM_OUT_STRIDE);
+                if constexpr (act_line) {
+                    for (uint32_t d = 0; d < k_deliveries; ++d) {
+                        // Only the delivery's valid A tiles go on the wire under GM_COMPACT_A (else the full slot).
+                        const uint32_t bytes =
+                            (gm_ks::compact_a ? block_m_tiles * KS::kv(d) : act_block_tiles) * a_tile_bytes;
+                        gm_line::round_if<act_line>(a_line, noc, a_sender, a_receiver, a_line_read, bytes);
+                    }
+                }
                 if constexpr (act_stream) {
                     // R1b: this block's K-walk of A (once per M-block when A is resident across N-blocks).
                     // Every core walks the same nominal sequence, so the cb_act_tiles write pointers are in

@@ -53,6 +53,10 @@ CB_BIAS_ROW = 2  # bias N-block row (bias / bias_relu), reader -> compute, one p
 CB_GATE_ROW = 3  # gate N-block row (addcmul), reader -> compute, one per block
 CB_RESIDUAL_TILES = 4  # residual row groups (addcmul), reader -> compute
 CB_ACT_SHARD = 5  # R3: A's own L1 shard (zero-copy), reader (push only) -> compute (own K-block)
+# R1a split lines (Refinement 16): one K-block staging buffer per line stream, raw scratch of ONE RISC (no CB protocol):
+# the injector reads its next turn there, then multicasts it into the line's ring slot.
+CB_ACT_STAGE = 6  # A row line, writer
+CB_WEIGHT_STAGE = 7  # B column line, reader
 CB_OUTPUT_TILES = 16  # output row groups, compute -> writer
 CB_OUTPUT_SHARD = 17  # R4: the output's own L1 shard (zero-copy), compute -> writer (wait/pop only)
 CB_PARTIALS = 24  # K-accumulator (packer L1 acc), compute -> compute; num_k_blocks > 1 or epilogue != none
@@ -106,6 +110,28 @@ MIN_K_BLOCKS = 8
 R1A_INJECTOR_AHEAD = 2
 R1A_PREFETCH_DEPTH = 3
 R1A_PREFETCH_MIN_RATIO = 2.0
+# R1a split lines (Refinement 16, kernels/line_stream.hpp). The R1a reader ran both lines: per K-block it received
+# (or read + multicast) A, then B, so a core acked B(kb) only after A(kb) landed, and ONE fixed core per line issued
+# every tile read of its line (text encoder / Qwen3.8 M = 512: a B line is 1920 bfp4 tile reads at ~35 RISC cycles
+# each -- 50 us of a 97 us data-movement-only walk, with the whole line waiting on it). True: the A row lines move to
+# the writer RISC (BRISC / NoC1, which then produces cb_act_tiles, as R1b's A stream), the B column lines stay on the
+# reader, and both rotate their injectors over the line (round r from line core r % line length), each injector
+# issuing its next turn's reads as soon as that turn's ring slot is free. Plain R1a helper walks without the head
+# ramp, operand residency, the injector prefetch or batches. False: the fixed-injector R1a reader.
+R1A_SPLIT_LINES = True
+# ... on walks whose busiest line injector (split_cost's busiest-core read term, the fixed-injector R1a price) is at
+# least this fraction of the K-walk: data-movement-heavy walks. Measured (device us, fixed -> split): ratio ~1.0-1.1
+# (text encoder qkv / o_proj, Qwen3.8 M = 512 rows) -15..-26 %; 0.73 (Qwen3.8 M = 1024 qkvg / in_proj / down) -2..-10 %;
+# 0.52-0.55 (out_proj M = 1024 / 2048 / 4096, compute- and output-bound) flat to +3 %.
+R1A_SPLIT_MIN_RATIO = 0.6
+R1A_SPLIT_ACT_NOC = ttnn.NOC.NOC_1  # the writer RISC's NoC (BRISC, WriterConfigDescriptor)
+# The Perf 2 K head ramp (kernels/genify_matmul_kschedule.hpp) on every split-lines walk, the helper walk included:
+# the first rounds are a third .. five sixths of a K-block, so round 0's read and multicast land early.
+R1A_SPLIT_RAMP = True
+# Rounds ahead over which a split-lines injector spreads its turn's reads (kernels/line_stream.hpp, issue pacing).
+R1A_LINE_WINDOW = 2
+# ... and at round 0 a later turn spreads its share over this many extra rounds (round 0's own read stays ahead).
+R1A_LINE_STARTUP_SHARE = 1
 # Epilogue-none K-walk (Refinement 11): True runs an R1 / R1a / R1b epilogue-none multi-K-block walk with 1 x sb_w
 # subblocks on the raw K-walk (kw::matmul_accumulate_interm, Perf 1: no per-tile DEST-offset write) into
 # cb_partials, then an identity copy to the output, instead of matmul_block<Out>'s last-K-block partials reload.
@@ -422,6 +448,9 @@ class Blocking:
     # ACT_STREAM_DEPTH on an R1b K-walk. The L1 solve and the CB sizes both read them here.
     depth_act: int = DEPTH_ACT
     depth_weight: int = DEPTH_WEIGHT
+    # R1a split lines (Refinement 16): one K-block staging buffer per operand line stream (CB_ACT_STAGE /
+    # CB_WEIGHT_STAGE), priced by the L1 solve. Only a walk solved with it runs the split lines.
+    line_staging: bool = False
 
     @property
     def use_partials(self):
@@ -739,7 +768,7 @@ def uses_act_stream(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     )
 
 
-def k_head_ramp(blk: "Blocking", mode: int, epilogue: str):
+def k_head_ramp(blk: "Blocking", mode: int, epilogue: str, split: bool = False):
     """Perf 2 head ramp (kernels/genify_matmul_kschedule.hpp) -> (ramp, compact_a) for an R1-descriptor walk.
 
     The ramp is the K-walk's delivery schedule wherever it can be expressed. Carve-outs (inexpressible, not
@@ -749,23 +778,25 @@ def k_head_ramp(blk: "Blocking", mode: int, epilogue: str):
         packer L1 accumulation where K accumulates wholly in DEST -- a precision change, not a speedup);
       - R1a on the matmul_block helper walk (epilogue none, sb_h > 1): the helper strides A rows by block_k, so A
         cannot be compacted and a short head delivery still multicasts a full A slot (the ramp's mechanism is
-        gone: measured flat to +2.3%).
+        gone: measured flat to +2.3%). Not under the split lines (`split`, Refinement 16): there the A slot goes out on
+        its own RISC and the ramp's short head is what lets the first round land early (R1A_SPLIT_RAMP).
     compact_a: A laid out with the delivery's row stride -- the raw K-walk only (epilogue, 1 x sb_w subblocks).
     """
     raw_walk = epilogue != "none" and blk.sb_h == 1 and not (blk.weight_resident or blk.act_resident)
     if mode == 2 or blk.weight_resident or blk.act_resident or blk.num_k_blocks <= 1:
         return False, False
-    if mode == 1 and not raw_walk:
+    if mode == 1 and not raw_walk and not (split and R1A_SPLIT_RAMP):
         return False, False
     return True, raw_walk
 
 
-def _attach_k_head_ramp(readers, compute, blk, mode, epilogue):
-    ramp, compact_a = k_head_ramp(blk, mode, epilogue)
+def _attach_k_head_ramp(readers, compute, blk, mode, epilogue, writer=None):
+    """`writer`: the split lines' A-line writer (it walks the same deliveries), else None."""
+    ramp, compact_a = k_head_ramp(blk, mode, epilogue, split=writer is not None)
     if not ramp:
         return
     defs = [("GM_K_RAMP", "1"), ("GM_COMPACT_A", "1" if compact_a else "0")]
-    for k in [*readers, compute]:
+    for k in [*readers, compute] + ([writer] if writer is not None else []):
         k.defines = list(k.defines) + defs
 
 
@@ -781,6 +812,33 @@ def r1a_prefetch(geom: Geometry, grid: GridChoice, blk: "Blocking"):
         and not k_head_ramp(blk, mode, geom.epilogue)[0]
         and blk.depth_act == blk.depth_weight >= R1A_PREFETCH_DEPTH  # one ring depth addresses both
     )
+
+
+def staging_bytes(geom: Geometry, blk: "Blocking"):
+    """The split lines' staging buffers: one K-block of each operand."""
+    return blk.block_k_tiles * (blk.block_m_tiles * geom.a_tile_bytes + blk.block_n_tiles * geom.b_tile_bytes)
+
+
+def _r1a_split_shape(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """An R1a walk the split line streams can express (one batch per block, no residency, not the injector
+    prefetch) and pay for (R1A_SPLIT_MIN_RATIO), whether or not it was solved with staging."""
+    mode = operand_mode(geom, grid, blk)
+    if not (
+        R1A_SPLIT_LINES
+        and mode == 1
+        and blk.block_batches == 1
+        and geom.tensor_batches == 1
+        and not (blk.weight_resident or blk.act_resident)
+        and not r1a_prefetch(geom, grid, blk)
+    ):
+        return False
+    walk, _, core_read, _ = split_cost_terms(geom, grid, blk)
+    return core_read >= R1A_SPLIT_MIN_RATIO * walk
+
+
+def r1a_split(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """R1A_SPLIT_LINES: the walk runs the split line streams (solved with their staging buffers)."""
+    return blk.line_staging and _r1a_split_shape(geom, grid, blk)
 
 
 def operand_mode(geom: Geometry, grid: GridChoice, blk: "Blocking"):
@@ -1067,6 +1125,29 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
     blk = _choose_blocking(geom, grid, budget, depths)
     if depths is not None and operand_mode(geom, grid, blk) != 2:
         blk = _choose_blocking(geom, grid, budget)  # the solved K-block missed the R1b gate: plain depths
+    # R1A_SPLIT_LINES: re-solve with one more K-block of each operand (the line streams' staging buffers; the rings
+    # keep their depth); kept only while the walk stays a split-lines R1a walk, the staging fits, and it costs only
+    # K-block width: a staged solve that shrinks the output block re-reads operands per block (Qwen3.8 out_proj
+    # 4096x1536x5120: 13x15 -> two 7x16 M-blocks, 226 -> 268 us).
+    if _r1a_split_shape(geom, grid, blk):
+        staged = _choose_blocking(geom, grid, budget, (blk.depth_act + 1, blk.depth_weight + 1))
+        staged = replace(staged, depth_act=blk.depth_act, depth_weight=blk.depth_weight, line_staging=True)
+        fits = (
+            _footprint(
+                geom,
+                staged.block_m_tiles,
+                staged.block_n_tiles,
+                staged.block_k_tiles,
+                staged.use_partials,
+                depth_weight=staged.depth_weight,
+                depth_act=staged.depth_act,
+            )
+            + staging_bytes(geom, staged)
+            <= budget
+        )
+        same_block = (staged.block_m_tiles, staged.block_n_tiles) == (blk.block_m_tiles, blk.block_n_tiles)
+        if fits and same_block and _r1a_split_shape(geom, grid, staged):
+            blk = staged
     # MIN_K_BLOCKS: an R1a walk without the head ramp (the ramp already shortens the fill on the raw walk:
     # 384x1536x1024 bias +5% re-split under it).
     mode = operand_mode(geom, grid, blk)
@@ -1080,7 +1161,12 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
     d = R1A_PREFETCH_DEPTH
     deeper = replace(blk, depth_act=max(d, blk.depth_act), depth_weight=max(d, blk.depth_weight))
     walk, _, core_read, _ = split_cost_terms(geom, grid, blk)
-    if R1A_INJECTOR_AHEAD > 1 and core_read >= R1A_PREFETCH_MIN_RATIO * walk and r1a_prefetch(geom, grid, deeper):
+    if (
+        R1A_INJECTOR_AHEAD > 1
+        and not blk.line_staging
+        and core_read >= R1A_PREFETCH_MIN_RATIO * walk
+        and r1a_prefetch(geom, grid, deeper)
+    ):
         bm, bn = blk.block_m_tiles, blk.block_n_tiles
         depths = (deeper.depth_act, deeper.depth_weight)
         bk_max = min(blk.block_k_tiles, _block_k_max(geom, bm, bn, budget, depths))
@@ -1100,7 +1186,7 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
         blk.use_partials,
         depth_weight=blk.depth_weight,
         depth_act=blk.depth_act,
-    )
+    ) + (staging_bytes(geom, blk) if blk.line_staging else 0)
     for batch in sorted((d for d in _divisors(groups) if d <= OUT_WRITE_BATCH_ROW_GROUPS), reverse=True):
         if base + DEPTH_OUT * (batch - 1) * row_group_bytes <= budget:
             return replace(blk, write_batch=batch)
@@ -1286,13 +1372,21 @@ def _reader_accessor_ct(a, b, row_t, res_t):
 
 
 def _writer_ct(
-    cb_out, blk, out_block_n_tiles, geom, out, out_in_place, ds_act_role=_DS_WRITER_ACT_ABSENT, act_stream_a=None
+    cb_out,
+    blk,
+    out_block_n_tiles,
+    geom,
+    out,
+    out_in_place,
+    ds_act_role=_DS_WRITER_ACT_ABSENT,
+    act_stream_a=None,
+    act_mode=2,
 ):
     """`ds_act_role`: the R4 A-round role (CT [8, 16)). `act_stream_a`: A, when this writer runs R1b's A
-    stream (CT 8 = 2 overrides the absent R4 role; A's accessor follows the output's)."""
+    stream (CT 8 = `act_mode` 2) or R1a's A row line (3, split lines); A's accessor follows the output's."""
     role = list(ds_act_role)
     if act_stream_a is not None:
-        role = [2, 1, CB_ACT_TILES, blk.block_k_tiles, blk.num_k_blocks, 1, geom.a_tile_bytes, blk.depth_act]
+        role = [act_mode, 1, CB_ACT_TILES, blk.block_k_tiles, blk.num_k_blocks, 1, geom.a_tile_bytes, blk.depth_act]
     a_t = act_stream_a if act_stream_a is not None else out  # stand-in accessor (never dereferenced)
     return [
         cb_out,
@@ -1308,7 +1402,7 @@ def _writer_ct(
         blk.last_block_k_tiles,
         a_t.buffer_aligned_page_size(),
         int(blk.act_resident),
-        max(1, min(ACT_STREAM_AHEAD, blk.depth_act)) if act_stream_a is not None else 1,  # R1b act_ahead
+        max(1, min(ACT_STREAM_AHEAD, blk.depth_act)) if act_stream_a is not None and act_mode == 2 else 1,  # R1b
         *ttnn.TensorAccessorArgs(out).get_compile_time_args(),
         *ttnn.TensorAccessorArgs(a_t).get_compile_time_args(),
     ]
@@ -1439,9 +1533,21 @@ def create_program_descriptor(
     mode = operand_mode(geom, grid, blk)
     operand_mcast = mode == 1  # R1a
     act_stream = mode == 2  # R1b
+    split = r1a_split(geom, grid, blk)  # R1a split lines: A row lines on the writer, both lines rotating
+    if split:
+        # The line streams' staging buffers (one K-block each; raw scratch of the writer / the reader).
+        cbs.append(_cb(CB_ACT_STAGE, a.dtype, geom.a_tile_bytes, blk.block_m_tiles * blk.block_k_tiles, core_ranges))
+        cbs.append(_cb(CB_WEIGHT_STAGE, b.dtype, geom.b_tile_bytes, blk.block_k_tiles * blk.block_n_tiles, core_ranges))
     act_offset, weight_offset = injector_offsets(grid)
     writer_ct = _writer_ct(
-        CB_OUTPUT_TILES, blk, out_block_n_tiles, geom, out, out_in_place=False, act_stream_a=a if act_stream else None
+        CB_OUTPUT_TILES,
+        blk,
+        out_block_n_tiles,
+        geom,
+        out,
+        out_in_place=False,
+        act_stream_a=a if (act_stream or split) else None,
+        act_mode=3 if split else 2,
     )
     compute_ct = _compute_ct(CB_OUTPUT_TILES, blk, epilogue, cb_row, out, swiglu_natural_pairs=False)
 
@@ -1472,7 +1578,7 @@ def create_program_descriptor(
             nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
             reader_roles[(core.x, core.y)] = (
                 (int(j == (act_offset + i) % grid.grid_n), int(i == (weight_offset + j) % grid.grid_m))
-                if operand_mcast
+                if operand_mcast and not split
                 else (0, 0)
             )
         else:
@@ -1495,7 +1601,8 @@ def create_program_descriptor(
         ]
         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
-        a_stream_rt = [a_addr, geom.tensor_k_tiles, *a_seg_table] if act_stream else []  # R1b: the writer reads A
+        # R1b / R1a split lines: the writer reads A.
+        a_stream_rt = [a_addr, geom.tensor_k_tiles, *a_seg_table] if (act_stream or split) else []
         wrt = [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *a_stream_rt, *chunk_addrs]
         # Tail write split (Perf 2): the reader serves part of the last block's writes on NoC0.
         reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *chunk_addrs]
@@ -1546,7 +1653,25 @@ def create_program_descriptor(
         config=compute_config,
     )
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
-    _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset, weight_offset)
+    if split:
+        _attach_split_lines(descriptor, readers, writer, grid, core_ranges, device)
+        for k in readers:
+            k.defines = list(k.defines) + [
+                ("GM_R1A_SPLIT", "1"),
+                ("GM_R1A_DEPTH", str(blk.depth_weight)),
+                ("GM_LINE_STAGE_CB", str(CB_WEIGHT_STAGE)),
+                ("GM_LINE_WINDOW", str(R1A_LINE_WINDOW)),
+                ("GM_LINE_STARTUP", str(R1A_LINE_STARTUP_SHARE)),
+            ]
+        writer.defines = list(writer.defines) + [
+            ("GM_LINE_STAGE_CB", str(CB_ACT_STAGE)),
+            ("GM_LINE_WINDOW", str(R1A_LINE_WINDOW)),
+            ("GM_LINE_STARTUP", str(R1A_LINE_STARTUP_SHARE)),
+        ]
+    else:
+        _attach_operand_channels(
+            descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset, weight_offset
+        )
     if act_stream:
         rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
         # Rotating injectors on the bank-local split only (one rectangle, as the helper's rotating senders need):
@@ -1555,7 +1680,7 @@ def create_program_descriptor(
         bank = grid.placement == "bank"
         injectors = act_stream_injectors(blk, rounds * blk.num_k_blocks) if bank else 1
         _attach_act_stream(descriptor, writer, core_ranges, device, injectors)
-    else:
+    elif not split:  # (split: the writer's `act` channel is the A row line, attached above)
         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
     _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
     if len(outs) > 1:
@@ -1573,7 +1698,7 @@ def create_program_descriptor(
                 ("GM_OUT_STRIDE", str(U)),
             ]
         writer.defines = list(writer.defines) + [("GM_OUT_STRIDE", str(U))]
-    _attach_k_head_ramp(readers, compute, blk, mode, epilogue)
+    _attach_k_head_ramp(readers, compute, blk, mode, epilogue, writer if split else None)
     walk, *streams = split_cost_terms(geom, grid, blk)
     if NONE_RAW_WALK and epilogue == "none" and walk >= NONE_RAW_WALK_MIN_RATIO * max(streams):
         compute.defines = list(compute.defines) + [("GM_NONE_RAW_WALK", "1")]
@@ -1637,6 +1762,34 @@ def _attach_act_stream(descriptor, writer, core_ranges, device, injectors=1):
         sender = ttnn.McastFixedSenderConfig(sender_index=ACT_STREAM_INJECTOR)
     mc = ttnn.Mcast(device, config, core_ranges, core_ranges.num_cores(), sender, ttnn.McastCoreOrder.RowMajor)
     mc.attach(descriptor, "act", [writer], 0)  # the only channel of an R1b program (R1a's are absent)
+
+
+def _attach_split_lines(descriptor, readers, writer, grid, core_ranges, device):
+    """R1a split lines: `act` (A row lines: the cores sharing a row region) on the writer RISC's NoC, `weight` (B
+    column lines) on the readers', both with rotating senders over the whole line (round r from its core r % length,
+    in line order). The readers carry no `act` channel."""
+    row_major, col_major = ttnn.McastCoreOrder.RowMajor, ttnn.McastCoreOrder.ColumnMajor
+    act_order, weight_order = (row_major, col_major) if grid.placement == "rect" else (col_major, row_major)
+    mc_act = ttnn.Mcast(
+        device,
+        ttnn.McastConfig(noc=R1A_SPLIT_ACT_NOC, handshake=True),
+        core_ranges,
+        grid.grid_n,
+        ttnn.McastRotatingSenderConfig(),
+        act_order,
+    )
+    mc_weight = ttnn.Mcast(
+        device,
+        ttnn.McastConfig(handshake=True),
+        core_ranges,
+        grid.grid_m,
+        ttnn.McastRotatingSenderConfig(),
+        weight_order,
+    )
+    mc_act.attach(descriptor, "act", [writer], 0)
+    for reader in readers:
+        ttnn.attach_absent_mcast(reader, "act")
+    mc_weight.attach(descriptor, "weight", readers, mc_act.next_semaphore_id())
 
 
 def _attach_operand_channels(
