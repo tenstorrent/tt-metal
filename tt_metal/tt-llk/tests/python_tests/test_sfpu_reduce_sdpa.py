@@ -83,7 +83,7 @@ def _run_sfpu_reduce_sdpa(
         tile_count = (input_dimensions[0] // TILE_DIMENSIONS[0]) * (
             input_dimensions[1] // TILE_DIMENSIONS[1]
         )
-        # Keep this name literal so schema v4 can derive the perf compile parameters.
+        # Keep this name literal so the schema gate can derive the perf compile parameters.
         templates = [
             MATH_OP(mathop=mathop, pool_type=pool_type),
             generate_input_dim(
