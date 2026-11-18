@@ -229,7 +229,7 @@ void KeraunosCoLaunchedWorkers::TearDown() {
     }
 }
 
-void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
+void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, const AfterOpen& after_open) {
     if (MetalContext::instance().get_cluster().arch() != tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Keraunos test lines only";
     }
@@ -262,6 +262,12 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
     });
     DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
     ASSERT_GE(devices_.size(), 2u);
+    if (after_open) {
+        after_open();
+        if (HasFatalFailure()) {
+            return;
+        }
+    }
 
     const Line line = line_ends();
     const auto& sender_device = devices_map_.at(line.sender.chip);
