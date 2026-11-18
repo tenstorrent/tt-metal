@@ -1155,13 +1155,29 @@ class _EchoSampler(RolloutSampler):
         self.closed = True
 
 
+class _LoopbackContext:
+    """In-memory two-rank communicator for both ranks; a message to ``dest`` waits in ``queues[(dest, tag)]``."""
+
+    def __init__(self, queues):
+        self._queues = queues
+
+    def send(self, data, dest, tag):
+        self._queues[(dest, tag)].put(bytes(data))
+
+    def recv(self, nbytes, source, tag):
+        data = self._queues[(1 - source, tag)].get(timeout=30)
+        assert len(data) == nbytes
+        return data
+
+
 @pytest.fixture
 def mpi_loopback(monkeypatch):
-    """Replace MPI with one in-memory queue per tag; returns (queues, atexit hooks)."""
+    """Replace MPI with a _LoopbackContext; returns (queues, atexit hooks)."""
     queues = collections.defaultdict(queue.Queue)
     at_exit = []
-    monkeypatch.setattr(mpi_rollout, "_mpi_send_bytes", lambda data, peer, tag: queues[tag].put(bytes(data)))
-    monkeypatch.setattr(mpi_rollout, "_mpi_recv_bytes", lambda n, peer, tag: queues[tag].get(timeout=30))
+    loopback = _LoopbackContext(queues)
+    monkeypatch.setattr(mpi_rollout, "_mpi_send_bytes", loopback.send)
+    monkeypatch.setattr(mpi_rollout, "_mpi_recv_bytes", loopback.recv)
     monkeypatch.setattr(
         mpi_rollout,
         "_require_distributed_context",
@@ -1300,7 +1316,7 @@ def test_failed_trainer_shuts_down_the_rollout_server(
     assert not getattr(sampler, "closed", False)
     assert at_exit == [client.shutdown]
     at_exit[0]()
-    assert queues[mpi_rollout._INFER_REQ_HDR_TAG].empty()
+    assert queues[(TTT_RANK, mpi_rollout._INFER_REQ_HDR_TAG)].empty()
 
 
 def test_serve_rollouts_closes_the_sampler_and_the_mesh(monkeypatch):
@@ -1529,22 +1545,6 @@ def test_sync_remote_source_rejects_a_stale_rollout_version(monkeypatch, expect_
         next(iter(source))
 
 
-class _LoopbackContext:
-    """One rank's end of an in-memory two-rank communicator."""
-
-    def __init__(self, rank, queues):
-        self._rank = rank
-        self._queues = queues
-
-    def send(self, data, dest, tag):
-        self._queues[(dest, tag)].put(bytes(data))
-
-    def recv(self, nbytes, source, tag):
-        data = self._queues[(self._rank, tag)].get(timeout=30)
-        assert len(data) == nbytes
-        return data
-
-
 def _scored_batch(version):
     completions = [[7, 8], [9]]
     return ScoredRolloutBatch(
@@ -1563,8 +1563,7 @@ def _scored_batch(version):
 
 def test_rollout_queue_loopback(monkeypatch):
     queues = collections.defaultdict(queue.Queue)
-    contexts = iter([_LoopbackContext(TTT_RANK, queues), _LoopbackContext(TTML_RANK, queues)])
-    monkeypatch.setattr(rollout_queue, "duplicate_distributed_context", lambda: next(contexts))
+    monkeypatch.setattr(rollout_queue, "duplicate_distributed_context", lambda: _LoopbackContext(queues))
     monkeypatch.setattr(rollout_queue, "exit_on_error", contextlib.nullcontext)
     producer = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=2)
     consumer = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=2)
@@ -1618,8 +1617,7 @@ def test_threaded_weight_bridge_receiver_locks_trace_capture_until_close(monkeyp
     monkeypatch.setattr(ttnn, "end_trace_capture", threaded_weight_bridge._end_trace_capture)
     monkeypatch.setattr(threaded_weight_bridge, "exit_on_error", contextlib.nullcontext)
     queues = collections.defaultdict(queue.Queue)
-    contexts = iter([_LoopbackContext(TTML_RANK, queues), _LoopbackContext(TTT_RANK, queues)])
-    monkeypatch.setattr(threaded_weight_bridge, "duplicate_distributed_context", lambda: next(contexts))
+    monkeypatch.setattr(threaded_weight_bridge, "duplicate_distributed_context", lambda: _LoopbackContext(queues))
     bridge = threaded_weight_bridge.ThreadedWeightBridge
 
     sender = bridge.sender(peer_rank=TTT_RANK, mesh_device=None)
@@ -1647,10 +1645,8 @@ def test_threaded_weight_bridge_receiver_waits_for_the_cq0_reads_before_the_next
     monkeypatch.setattr(ttnn, "wait_for_event", lambda cq_id, event: calls.append(("wait", cq_id, event)))
     monkeypatch.setattr(threaded_weight_bridge, "exit_on_error", contextlib.nullcontext)
     queues = collections.defaultdict(queue.Queue)
-    monkeypatch.setattr(
-        threaded_weight_bridge, "duplicate_distributed_context", lambda: _LoopbackContext(TTT_RANK, queues)
-    )
-    trainer = _LoopbackContext(TTML_RANK, queues)
+    monkeypatch.setattr(threaded_weight_bridge, "duplicate_distributed_context", lambda: _LoopbackContext(queues))
+    trainer = _LoopbackContext(queues)
     receiver = threaded_weight_bridge.ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, submeshes=["submesh"])
     receiver.connect()
 
