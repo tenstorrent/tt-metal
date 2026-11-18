@@ -168,8 +168,8 @@ struct AllGatherMinimalMatmulAsyncParams {
     }
 };
 
-// The orientation the program is built with. M and N are the matmul's padded row count and weight width. Fabric2D
-// only runs the untransposed grid, so it is not picked there automatically.
+// The orientation the program is built with. M and N are the matmul's padded row count and weight width. On Fabric2D
+// the transposed grid keeps the core-to-core relay instead of the multicast, so it runs only when asked for.
 inline bool resolve_transpose_core_grid(
     const AllGatherMinimalMatmulAsyncParams& params, uint32_t M, uint32_t N, bool fabric_2d) {
     return params.transpose_core_grid.value_or(params.force_transpose || (M > N && !fabric_2d));

@@ -41,14 +41,17 @@ def _run(
     subblock_w,
     rows_per_call=None,
     gelu=False,
+    transpose=False,
 ):
     """Runs the calls (rows per device of each in rows_per_call) and returns how many programs they added."""
     rows_per_call = rows_per_call or [rows_per_device] * NUM_CALLS
     other_axis = 1 - gather_axis
     ring, others = mesh_device.shape[gather_axis], mesh_device.shape[other_axis]
     full_grid = mesh_device.compute_with_storage_grid_size()
-    grid = ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
-    assert grid.y % NUM_LINKS == 0
+    # The in0 muxes take the axis the grid leaves free: a column, or a row when transposed (M over the columns).
+    grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1) if transpose else ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
+    in0_axis = grid.x if transpose else grid.y
+    assert in0_axis % NUM_LINKS == 0
 
     torch.manual_seed(0)
     torch_inputs = [torch.randn(others * rows, K) for rows in rows_per_call]
@@ -118,9 +121,9 @@ def _run(
             topology=topology,
             cluster_axis=gather_axis,
             num_links=NUM_LINKS,
-            num_workers_per_link=grid.y // NUM_LINKS,
+            num_workers_per_link=in0_axis // NUM_LINKS,
             num_buffers_per_channel=24,
-            force_transpose=False,
+            force_transpose=transpose,
             fused_activation=(ttnn.UnaryOpType.GELU, False) if gelu else None,
         )[0]
         for tt_input in tt_inputs
@@ -250,3 +253,42 @@ def test_all_gather_minimal_matmul_fabric2d_linear_tp(mesh_device, case):
 def test_all_gather_minimal_matmul_fabric2d_linear_sp(mesh_device):
     # The SP axis (0) of 8 as a line: Torus X does not wrap it.
     _run(mesh_device, **dict(_LINEAR, gather_axis=0, rows_per_device=320, n_per_device=11 * 20 * 32, N_block=20))
+
+
+# The transposed grid (12 x 9: M over the core columns, N over the rows) keeps the core-to-core relay on Fabric2D.
+_TRANSPOSED = dict(_KDA, transpose=True, rows_per_device=12 * 2 * 32, n_per_device=9 * 36 * 32)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "SP8xTP4-torus-xy")], indirect=True
+)
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(_TRANSPOSED, id="ring_tp"),
+        pytest.param(dict(_TRANSPOSED, K=1024), id="ring_tp_one_k_block_per_device"),
+        pytest.param(dict(_TRANSPOSED, gelu=True), id="ring_tp_fused_gelu"),
+        pytest.param(dict(_TRANSPOSED, gather_axis=0, n_per_device=9 * 20 * 32, N_block=20), id="ring_sp_8"),
+    ],
+)
+def test_all_gather_minimal_matmul_fabric2d_transposed(mesh_device, case):
+    _run(mesh_device, **case)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        _galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_Y, "SP8xTP4-torus-y"),
+        _galaxy(ttnn.FabricConfig.FABRIC_2D, "SP8xTP4-mesh"),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(dict(_TRANSPOSED, topology=ttnn.Topology.Linear), id="linear_tp"),
+        pytest.param(dict(_TRANSPOSED, topology=ttnn.Topology.Linear, K=4 * 36 * 32), id="linear_tp_k_tail_block"),
+    ],
+)
+def test_all_gather_minimal_matmul_fabric2d_transposed_linear(mesh_device, case):
+    _run(mesh_device, **case)
