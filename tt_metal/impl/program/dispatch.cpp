@@ -3253,8 +3253,7 @@ uint32_t packed_offset_of(const std::vector<PackedCommandChunk>& chunks, const v
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
-    SystemMemoryManager& manager,
-    uint32_t command_queue_id,
+    CommandSink& sink,
     bool stall_first,
     bool stall_before_program,
     bool send_binary,
@@ -3265,9 +3264,9 @@ void write_program_command_sequence(
         program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
     const bool one_shot = one_shot_fetch_size <= metal_ctx.dispatch_mem_map().max_prefetch_command_size();
     if (one_shot) {
-        manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
+        sink.issue_queue_reserve(one_shot_fetch_size);
     }
-    uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+    uint32_t one_shot_write_ptr = sink.issue_queue_write_ptr();
     if (patch_write_offsets) {
         patch_write_offsets->assign(patches.size(), UINT32_MAX);
     }
@@ -3280,10 +3279,10 @@ void write_program_command_sequence(
         const auto* chunk = static_cast<const uint8_t*>(data);
         if (!one_shot) {
             // Reserve first: it may wrap the issue queue, which moves the write pointer. (Only trace capture reads
-            // the recorded offsets today, and its bypass reserve never wraps.)
-            manager.issue_queue_reserve(size_bytes, command_queue_id);
+            // the recorded offsets today, and a TraceCaptureBuffer never wraps.)
+            sink.issue_queue_reserve(size_bytes);
         }
-        const uint32_t write_ptr = one_shot ? one_shot_write_ptr : manager.get_issue_queue_write_ptr(command_queue_id);
+        const uint32_t write_ptr = one_shot ? one_shot_write_ptr : sink.issue_queue_write_ptr();
         // Copy the chunk and patch it if it holds any patch.
         const void* out = data;
         for (size_t i = 0; i < patches.size(); ++i) {
@@ -3302,21 +3301,17 @@ void write_program_command_sequence(
             }
         }
         if (one_shot) {
-            manager.cq_write(out, size_bytes, one_shot_write_ptr);
+            sink.cq_write(out, size_bytes, one_shot_write_ptr);
             one_shot_write_ptr += size_bytes;
         } else {
-            manager.cq_write(out, size_bytes, write_ptr);
-            manager.issue_queue_push_back(size_bytes, command_queue_id);
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(size_bytes, command_queue_id);
+            sink.cq_write(out, size_bytes, write_ptr);
+            sink.publish(size_bytes);
         }
     };
     for_each_program_command_sequence_chunk_impl(
         program_command_sequence, stall_first, stall_before_program, send_binary, write_chunk);
     if (one_shot) {
-        manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
-        manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
+        sink.publish(one_shot_fetch_size);
     }
     if (patch_write_offsets) {
         for (const uint32_t write_offset : *patch_write_offsets) {
@@ -3329,16 +3324,14 @@ void write_program_command_sequence(
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
-    SystemMemoryManager& manager,
-    uint32_t command_queue_id,
+    CommandSink& sink,
     bool stall_first,
     bool stall_before_program,
     bool send_binary) {
     TT_ASSERT(program_command_sequence.ctx != nullptr);
     const MetalContext& metal_ctx = *program_command_sequence.ctx;
     LOG_TRACE_LAZY(tt::LogDispatch, "");
-    LOG_TRACE_LAZY(
-        tt::LogDispatch, "========== Writing Program Command Sequence to CQ {} ==========", command_queue_id);
+    LOG_TRACE_LAZY(tt::LogDispatch, "========== Writing Program Command Sequence ==========");
     LOG_TRACE_LAZY(
         tt::LogDispatch,
         "Stall First: {}, Stall Before Program: {}, Send Binary: {}",
@@ -3353,9 +3346,9 @@ void write_program_command_sequence(
 
     LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
     if (one_shot) {
-        manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
+        sink.issue_queue_reserve(one_shot_fetch_size);
     }
-    uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+    uint32_t one_shot_write_ptr = sink.issue_queue_write_ptr();
 
     auto write_data_to_cq = [&](const void* data, uint32_t size_bytes) {
         if (!size_bytes) {
@@ -3364,14 +3357,12 @@ void write_program_command_sequence(
 
         if (one_shot) {
             // Already reserved. Write only. Defer push back until all commands are written
-            manager.cq_write(data, size_bytes, one_shot_write_ptr);
+            sink.cq_write(data, size_bytes, one_shot_write_ptr);
             one_shot_write_ptr += size_bytes;
         } else {
-            manager.issue_queue_reserve(size_bytes, command_queue_id);
-            manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
-            manager.issue_queue_push_back(size_bytes, command_queue_id);
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(size_bytes, command_queue_id);
+            sink.issue_queue_reserve(size_bytes);
+            sink.cq_write(data, size_bytes, sink.issue_queue_write_ptr());
+            sink.publish(size_bytes);
         }
     };
 
@@ -3379,9 +3370,7 @@ void write_program_command_sequence(
         program_command_sequence, stall_first, stall_before_program, send_binary, write_data_to_cq);
 
     if (one_shot) {
-        manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
-        manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
+        sink.publish(one_shot_fetch_size);
     }
 
     LOG_TRACE_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
