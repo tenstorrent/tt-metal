@@ -137,17 +137,10 @@ void kernel_main() {
             unit_bytes);
     };
     for (uint32_t u = 0; u < relay_units; ++u) {
-        // Issue every read the free slots allow, waiting only for unit u itself.
-        while (fetched < relay_units && fetched < u + slots && (fetched == u || ready(fetched))) {
-            if (fetched == u) {
-                while (!ready(u)) {
-                }
+        if (fetched == u) {
+            while (!ready(u)) {
             }
-            if (fetched >= slots) {
-                // Unit fetched - slots last used this slot: its packets must have left L1.
-                noc_async_writes_flushed();
-            }
-            fetch(fetched);
+            fetch(u);
             ++fetched;
         }
         noc_async_read_barrier();
@@ -179,8 +172,15 @@ void kernel_main() {
                     to_successor, hdr, buffer + offset, bytes, NocUnicastCommandHeader{dst}, successor_hops);
             }
         }
+        // While unit u's packets leave L1, read the next ready units into the other slots: every earlier unit's packets
+        // have left (flushed below in its own iteration), so only u's slot is still in use. Flushing before these reads
+        // instead would serialize each unit's read behind the previous unit's send.
+        while (fetched < relay_units && fetched < u + slots && ready(fetched)) {
+            fetch(fetched);
+            ++fetched;
+        }
+        noc_async_writes_flushed();
     }
-    noc_async_writes_flushed();
 
     if (position == 0 && carry_range != 0) {
         // The relay's packets have left, so its headers carry the final state now: one per tile of a column, then

@@ -50,7 +50,9 @@ constexpr uint32_t slab_offset = get_compile_time_arg_val(27);
 constexpr uint32_t entry_tiles = get_compile_time_arg_val(28);
 // cb_chron's second DRAM-aligned slot, where the slab index lands (the writer reads it there too).
 constexpr uint32_t slab_index_word = get_compile_time_arg_val(29);
-constexpr auto packed_args = TensorAccessorArgs<30>();
+// The head core's count of the sender's releases: 1 once the relay's last column has left, 2 once the carry's has.
+constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(30);
+constexpr auto packed_args = TensorAccessorArgs<31>();
 constexpr auto init_args = TensorAccessorArgs<packed_args.next_compile_time_args_offset()>();
 constexpr auto start_args = TensorAccessorArgs<init_args.next_compile_time_args_offset()>();
 constexpr auto fe_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
@@ -153,16 +155,32 @@ void kernel_main() {
     const uint32_t state_tile = get_tile_size(cb_seed);
     const uint32_t column_bytes = kt * state_tile;
     const uint32_t landed = get_semaphore(landed_semaphore_id);
-    const auto distribute = [&](uint32_t source, uint32_t seed, uint32_t j) {
-        for (uint32_t d = 0; d < cores_per_head; ++d) {
+    // The landing buffer's slots on the head core: the entry state (cb_ein's storage), then the relayed final state.
+    const uint32_t landing = relay_head ? get_write_ptr(cb_ein) : 0;
+    // Cores [d_begin, d_end) of the head.
+    const auto distribute = [&](uint32_t source, uint32_t seed, uint32_t j, uint32_t d_begin, uint32_t d_end) {
+        for (uint32_t d = d_begin; d < d_end; ++d) {
             const uint32_t xy = get_common_arg_val<uint32_t>(head_core_args + d);
             noc_async_write(
                 source + j * column_bytes, get_noc_addr(xy & 0xFFFF, xy >> 16, seed + j * column_bytes), column_bytes);
         }
         noc_async_write_barrier();
-        for (uint32_t d = 0; d < cores_per_head; ++d) {
+        for (uint32_t d = d_begin; d < d_end; ++d) {
             const uint32_t xy = get_common_arg_val<uint32_t>(head_core_args + d);
             noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, landed), 1);
+        }
+    };
+    // The seeds leave the head core only once the relay is done with it: the copies would otherwise share its NoC with
+    // the sender's reads of the next state, and hold up the relay at every hop. The correction has the time: a rank's
+    // call ends when the final carry has reached it, well after its own hop.
+    volatile tt_l1_ptr uint32_t* released =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_semaphore_id));
+    const auto distribute_entry = [&]() {
+        if (valid != 0) {
+            noc_semaphore_wait_min(released, 1);
+            for (uint32_t j = 0; j < kt; ++j) {
+                distribute(landing, get_write_ptr(cb_seed), j, 0, cores_per_head);
+            }
         }
     };
     // A seed's columns, as they land: the entry state's are counts 1..kt, the tail's kt + 1..2 kt.
@@ -174,25 +192,9 @@ void kernel_main() {
         }
     };
 
-    // The landing buffer's slots on the head core: the entry state (cb_ein's storage), then the relayed final state.
-    const uint32_t landing = relay_head ? get_write_ptr(cb_ein) : 0;
     if (relay_head) {
         cb_push_back(cb_e, state_tiles);
         cb_push_back(cb_b, state_tiles);
-        // The first rank applies its final transition to P when the interval ends in a separated tail.
-        if (holder && interval.split) {
-            const auto fe = TensorAccessor(fe_args, get_common_arg_val<uint32_t>(3));
-            const auto fb = TensorAccessor(fb_args, get_common_arg_val<uint32_t>(4));
-            cb_reserve_back(cb_fe, state_tiles);
-            cb_reserve_back(cb_fb, state_tiles);
-            for (uint32_t i = 0; i < state_tiles; ++i) {
-                noc_async_read_page(head * state_tiles + i, fe, get_write_ptr(cb_fe) + i * state_tile);
-                noc_async_read_page(head * state_tiles + i, fb, get_write_ptr(cb_fb) + i * state_tile);
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_fe, state_tiles);
-            cb_push_back(cb_fb, state_tiles);
-        }
         // The entry state is stored column-major by tile, so each tile column (all the next state's column needs) can
         // land, be computed and leave on its own.
         cb_reserve_back(cb_ein, state_tiles);
@@ -217,9 +219,23 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_ein, state_tiles);
             cb_push_back(cb_ein_exact, state_tiles);
-            for (uint32_t j = 0; j < kt && valid != 0; ++j) {
-                distribute(landing, get_write_ptr(cb_seed), j);
+            // The first rank applies its final transition to P when the interval ends in a separated tail. P lands only
+            // after the whole lap, so E and B are read after the entry state: the relay starts from the first rank, and
+            // every rank waits for it.
+            if (interval.split) {
+                const auto fe = TensorAccessor(fe_args, get_common_arg_val<uint32_t>(3));
+                const auto fb = TensorAccessor(fb_args, get_common_arg_val<uint32_t>(4));
+                cb_reserve_back(cb_fe, state_tiles);
+                cb_reserve_back(cb_fb, state_tiles);
+                for (uint32_t i = 0; i < state_tiles; ++i) {
+                    noc_async_read_page(head * state_tiles + i, fe, get_write_ptr(cb_fe) + i * state_tile);
+                    noc_async_read_page(head * state_tiles + i, fb, get_write_ptr(cb_fb) + i * state_tile);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_fe, state_tiles);
+                cb_push_back(cb_fb, state_tiles);
             }
+            distribute_entry();
         } else {
             // The predecessor's sender writes each tile column of this head's entry state into cb_ein's storage, then
             // counts it.
@@ -227,11 +243,9 @@ void kernel_main() {
                 kda_counter::wait(arrival_semaphore, j + 1);
                 cb_push_back(cb_ein, kt);
                 cb_push_back(cb_ein_exact, kt);
-                if (valid != 0) {
-                    distribute(landing, get_write_ptr(cb_seed), j);
-                }
             }
             kda_counter::consume(arrival_semaphore, kt);
+            distribute_entry();
         }
     }
 
@@ -271,11 +285,17 @@ void kernel_main() {
             kda_counter::wait(final_semaphore, j + 1);
             cb_push_back(cb_p, kt);
             cb_push_back(cb_p_exact, kt);
-            if (need_tail) {
-                distribute(landing + state_tiles * state_tile, get_write_ptr(cb_tail), j);
-            }
         }
         kda_counter::consume(final_semaphore, kt);
+        // P seeds the tail's chunks [reset, valid), on the cores that hold them, once the carry formed from P has left.
+        if (need_tail) {
+            const uint32_t d_begin = reset / core_chunks;
+            const uint32_t d_end = (valid + core_chunks - 1) / core_chunks;
+            noc_semaphore_wait_min(released, 2);
+            for (uint32_t j = 0; j < kt; ++j) {
+                distribute(landing + state_tiles * state_tile, get_write_ptr(cb_tail), j, d_begin, d_end);
+            }
+        }
     }
 
     // The separated tail's chunks start from P.

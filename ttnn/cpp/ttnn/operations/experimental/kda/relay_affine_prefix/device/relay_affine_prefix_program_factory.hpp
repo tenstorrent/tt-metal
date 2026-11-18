@@ -16,11 +16,14 @@
 
 namespace ttnn::experimental::prim {
 
-// A fabric packet of whole FP32 tiles, up to three.
+// A fabric packet: as much of the fabric's payload as fits, up to three FP32 tiles. A relay unit is one contiguous tile
+// column in the successor's L1 and its packets arrive in order, so a packet may end mid-tile: on a 7168-byte payload a
+// column takes 3 packets instead of 4 whole-tile ones, and the link carries a third fewer per-packet costs.
 inline uint32_t relay_affine_prefix_packet_bytes() {
     constexpr uint32_t state_tile = tt::constants::TILE_HW * sizeof(float);
+    constexpr uint32_t alignment = 64;
     const uint32_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    return std::min(3 * state_tile, payload / state_tile * state_tile);
+    return std::min(3 * state_tile, payload / alignment * alignment);
 }
 
 // The packets of one tile column of a head's state.

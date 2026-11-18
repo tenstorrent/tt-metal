@@ -215,6 +215,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     slab_ct.push_back(batch_heads * state_tiles);
     slab_ct.push_back(chron_slot_bytes / sizeof(uint32_t));
     reader_ct.insert(reader_ct.end(), slab_ct.begin(), slab_ct.end());
+    reader_ct.push_back(ack_semaphore_id);
     const auto& slab_index = slab ? *in.slab_index : in.actual_start;
     for (const auto* tensor :
          {&in.packed,
