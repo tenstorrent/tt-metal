@@ -495,6 +495,107 @@ class Hy4Engine:
         )
         ttnn.deallocate(pr)
 
+    # B39 (RESULT_B39.md): the Fabric Mux V2 of selective_reduce_combine / moe_compute carves RAW L1 from the allocator base upward and fits its buffers-per-channel to mesh.lowest_occupied_compute_l1_address() AT PROGRAM-BUILD
+    # time (the program cache does not key on it). Any L1 buffer that is created later and sits BELOW that address (lazily created persistent global semaphores, trace scratch moved down by a stash) shifts every later
+    # eager transient down by its size and, when it is larger than the slack of that program's mux map, the transients overwrite the map tail: first long prompt hangs in the MoE combine (mux free slots).
+    # (superseded, negative result: HY4_L1_GUARD_HOLD=N) hold N bytes/bank of L1 from the start of warm() (before any program is built) until after the captures, then free it: every build sees a floor N lower than the later steady state, so a later
+    # persistent buffer of up to N bytes lands in the freed hole and no later transient is lower than the build snapshot. HY4_L1_MAP=1: log the L1 allocator probe at every warm-up milestone (default off).
+    def _l1_probe(self, tag):
+        if os.environ.get("HY4_L1_MAP", "0") != "1":
+            return
+        try:
+            pr = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.md, ttnn.L1_MEMORY_CONFIG
+            )
+            a = pr.buffer_address()
+            ttnn.deallocate(pr)
+            v = ttnn.get_memory_view(self.md, ttnn.BufferType.L1)
+            logger.info(
+                f"HY4 L1MAP[{tag}]: probe {a} alloc/bank {v.total_bytes_allocated_per_bank} free/bank {v.total_bytes_free_per_bank} largest_free {v.largest_contiguous_bytes_free_per_bank} guard {getattr(self, '_l1_guard_addr', None)}"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.info(f"HY4 L1MAP[{tag}]: failed {e!r}")
+
+    def _l1_wrap_moe(self):
+        """HY4_L1_GUARD_PAD=N (bytes per bank): the first call of every distinct moe_compute signature (= the program build, where the fabric-mux map is fitted under the lowest occupied L1 address, which at that moment is
+        the bottom of the op's own transient L1 outputs) runs with an N-byte L1 pad held on top, so the build sees a floor N lower than every later call: N bytes of slack for persistent L1 buffers created after the build
+        (global semaphores, eager-path constants) - the failure mode of RESULT_B39.md. The pad is freed right after the call (never persistent). HY4_L1_MAP=1: also log the allocator probe at every distinct call.
+        """
+        pad = int(os.environ.get("HY4_L1_GUARD_PAD", "0"))
+        mp = os.environ.get("HY4_L1_MAP", "0") == "1"
+        if (pad <= 0 and not mp) or getattr(self, "_moe_wrapped", False):
+            return
+        self._moe_wrapped = True
+        pad = (pad + 31) // 32 * 32
+        orig = ttnn.experimental.moe_compute
+        seen = {}
+        eng = self
+        nb = ttnn.get_memory_view(self.md, ttnn.BufferType.L1).num_banks
+
+        def key_of(a, k):
+            sh = tuple(tuple(x.shape) if hasattr(x, "shape") else repr(x) for x in a)
+            kk = tuple(sorted((n, tuple(v.shape) if hasattr(v, "shape") else repr(v)) for n, v in k.items()))
+            return (sh, kk)
+
+        def probe():
+            pr = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, eng.md, ttnn.L1_MEMORY_CONFIG
+            )
+            addr = pr.buffer_address()
+            ttnn.deallocate(pr)
+            return addr
+
+        def wrapped(*a, **k):
+            if getattr(eng, "_capturing", False):
+                return orig(*a, **k)
+            key = key_of(a, k)
+            first = key not in seen
+            seen[key] = seen.get(key, 0) + 1
+            padt = None
+            try:
+                if mp and (first or seen[key] <= 2):
+                    logger.info(
+                        f"HY4 L1MAP moe_compute call #{sum(seen.values())}: in0 {tuple(a[0].shape)} layer {k.get('layer_id')} first={first} probe {probe()} (distinct keys {len(seen)})"
+                    )
+                if first and pad > 0:
+                    padt = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape([1, 1, nb, pad // 2]),
+                        ttnn.bfloat16,
+                        ttnn.ROW_MAJOR_LAYOUT,
+                        eng.md,
+                        ttnn.L1_MEMORY_CONFIG,
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.info(f"HY4 L1 guard moe wrap failed {e!r}")
+            try:
+                return orig(*a, **k)
+            finally:
+                if padt is not None:
+                    ttnn.deallocate(padt)
+
+        ttnn.experimental.moe_compute = wrapped
+
+    def _l1_guard_hold(self):
+        n = int(
+            os.environ.get("HY4_L1_GUARD_HOLD", "0")
+        )  # NEGATIVE RESULT (b39 d1: hangs the first warm prefill); kept for the record, default off
+        self._l1_guard = None
+        if n <= 0:
+            return
+        n = (n + 31) // 32 * 32
+        nb = ttnn.get_memory_view(self.md, ttnn.BufferType.L1).num_banks
+        self._l1_guard = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, nb, n // 2]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.md, ttnn.L1_MEMORY_CONFIG
+        )
+        self._l1_guard_addr = self._l1_guard.buffer_address()
+        logger.info(f"HY4 L1 guard pad: holding {n} B/bank x {nb} banks at addr {self._l1_guard_addr}")
+
+    def _l1_guard_release(self):
+        if getattr(self, "_l1_guard", None) is not None and os.environ.get("HY4_L1_GUARD_KEEP", "0") != "1":
+            ttnn.deallocate(self._l1_guard)
+            self._l1_guard = None
+            logger.info("HY4 L1 guard pad: released (after the captures)")
+
     def _l1_peak(self, fn, tag):
         """run fn (an eager round body) while a sampler thread polls the L1 allocator: the peak per-bank L1 use of the body (= the extent of its trace scratch, a lower bound: the polling can miss short peaks)."""
         import threading
@@ -542,6 +643,9 @@ class Hy4Engine:
             return
         self.warm_done = True
         t0 = time.time()
+        self._l1_guard_hold()
+        self._l1_wrap_moe()
+        self._l1_probe("warm start")
         g = torch.Generator().manual_seed(0)
         n = min(3072, self.max_seq_len - 8)
         prompts = {r: torch.randint(1000, 100000, (n,), generator=g).tolist() for r in range(ROWS)}
@@ -553,6 +657,7 @@ class Hy4Engine:
         first = self.prefill(prompts)
         self.hybrid_cap = cap
         self._dram("after warm prefill")
+        self._l1_probe("after warm prefill")
         if (
             self.hybrid_cap > 0
         ):  # chain prefill + hand-off once before any capture: every lazily created persistent tensor of that path exists before the traces (D75-1)
@@ -561,6 +666,19 @@ class Hy4Engine:
             self.prefill(ch_prompts)
             self._dram("after warm chain prefill")
             logger.info(f"HY4 warm-up: chain prefill 4 x 1024 {time.time() - tw:.1f} s (hybrid cap {self.hybrid_cap})")
+            # B38: HY4_WARM_CHAIN_LENS=n1,n2,..: extra chain prefills (4 rows each) BEFORE the captures, so the persistent L1 buffers (CCL global semaphores) that new chunk shapes create lazily exist before the trace
+            # scratch is laid out (see _l1_report / RESULT_B22FIX.md: a buffer created after the captures lands in the trace scratch and a replay clobbers it)
+            for ln in [int(x) for x in os.environ.get("HY4_WARM_CHAIN_LENS", "").split(",") if x.strip()]:
+                tw = time.time()
+                g2 = torch.Generator().manual_seed(ln)
+                self.prefill(
+                    {
+                        r: torch.randint(1000, 100000, (min(ln, self.hybrid_cap),), generator=g2).tolist()
+                        for r in range(ROWS)
+                    }
+                )
+                self._dram(f"after warm chain prefill {ln}")
+                logger.info(f"HY4 warm-up: chain prefill 4 x {ln} {time.time() - tw:.1f} s")
         t1 = time.time()
         if self.spec:
             # D75-1: EVERY lazily created persistent tensor of EVERY variant must exist before the FIRST capture (one allocated between two captures can sit in the first trace's scratch and is clobbered by its
@@ -579,12 +697,18 @@ class Hy4Engine:
                 self._l1_peak(lambda: self.runner.body("S"), "S")
                 ttnn.synchronize_device(self.md)
             self._dram("after eager bodies")
+            self._l1_probe("after eager bodies")
+            self._capturing = True
             self.runner.capture("G")
             self._dram("after G capture")
             if self.sampled:
                 self.runner.capture("S")
                 self._dram("after S capture")
+            self._capturing = False
+            self._l1_probe("after captures (guard held)")
+            self._l1_guard_release()
             self._l1_report()
+            self._l1_probe("after captures (guard released)")
             logger.info(f"HY4 warm-up: spec traces captured ({list(self.runner.traces)})")
         else:
             self.dl.capture(self.loop_variants)

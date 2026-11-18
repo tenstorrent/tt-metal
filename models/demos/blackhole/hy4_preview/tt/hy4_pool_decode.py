@@ -378,6 +378,30 @@ def select_global(ctx, qh, w32, key_view, fin_out=None):
         qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n, kvt_rows=ctx.perrow, blocks=B if blk else 1
     )  # [1,1,S,n]
     fin = None
+    _nd = int(os.environ.get("HY4_B38_DUMMY_SEM", "0"))
+    if (
+        _nd > 0 and "_dsem" not in ctx.__dict__
+    ):  # B38 control experiment: same persistent L1 footprint as a Push (global semaphores at the same point in time), no protocol
+        _g = ctx.md.compute_with_storage_grid_size()
+        _cr = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_g.x - 1, _g.y - 1))])
+        _kind = os.environ.get(
+            "HY4_B39_DUMMY_KIND", "sem_l1"
+        )  # B39: sem_l1 (B38 control) | sem_small (same semaphores in L1_SMALL) | tensor (a plain persistent L1 tensor of 64 B/bank per dummy semaphore)
+        if _kind == "sem_small":
+            ctx._dsem = [ttnn.create_global_semaphore(ctx.md, _cr, 0, ttnn.BufferType.L1_SMALL) for _ in range(_nd)]
+        elif _kind == "tensor":
+            _nb = _g.x * _g.y
+            ctx._dsem = [
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, 1, _nb, 32 * _nd]),
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    ctx.md,
+                    ttnn.L1_MEMORY_CONFIG,
+                )
+            ]
+        else:
+            ctx._dsem = [ttnn.create_global_semaphore(ctx.md, _cr, 0) for _ in range(_nd)]
     if (
         fin_out is not None
     ):  # B35: gather + id_filter fused (HY4_B35_GFILT=1), optionally with the id all-gather replaced by a push (HY4_B35_IDPUSH=1)

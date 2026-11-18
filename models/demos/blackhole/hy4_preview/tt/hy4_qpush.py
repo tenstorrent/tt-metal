@@ -35,6 +35,10 @@ class Push:
         self.lanes = lanes or int(os.environ.get("HY4_B29_QLANES", str(links)))
         self.rp = rp
         self.np = -(-nr // self.rp)  # packets (landing pages) per source
+        if os.environ.get("HY4_PUSH_LANES_CLAMP", "1") == "1":
+            self.lanes = max(
+                1, min(self.lanes, self.np)
+            )  # B38: a lane without a packet must not open/close a fabric connection (see RESULT_B38)
         self.nh = min(8, int(os.environ.get("HY4_B29_NH", "8")))
         grid = md.compute_with_storage_grid_size()
         self.grid = grid
