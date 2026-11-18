@@ -246,6 +246,9 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+        # The base `encode_prompt` frees this manager's transient ping-pong pairs after every encode (on video it is
+        # shared by the VAE and the vision tower); here nothing else allocates through it, so the scope is a no-op.
+        self.vae_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.dit_parallel_config = DiTParallelConfig(
             tensor_parallel=ParallelFactor(mesh_axis=self.tp_axis, factor=self.tp_factor),
             sequence_parallel=ParallelFactor(mesh_axis=self.sp_axis, factor=self.sp_factor),

@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.minimax_h3.pipeline_minimax_h3_image import MiniMaxH3ImagePipeline
+from ....utils.test import line_params_8k_req_exact_devices, ring_params_8k_req_exact_devices
 from .common import MESH_4X8_RING
 
 PROMPT = (
@@ -140,4 +141,83 @@ def test_dp_throughput(mesh_device, submesh, size, requests_per_replica=3):
     logger.info(
         f"RESULT {tag}: {n} images in {wall:.2f}s -> {n / wall:.3f} img/s | per-request latency "
         f"mean {sum(latencies) / n:.2f}s min {min(latencies):.2f}s max {max(latencies):.2f}s"
+    )
+
+
+# One DP replica per process: a launcher starts one pytest process per replica, each restricted to its chips with
+# TT_VISIBLE_DEVICES and given its submesh's fabric with TT_MESH_GRAPH_DESC_PATH, so replicas share no host thread,
+# GIL or dispatch queue. The replica runs like the 4x8 (ring, 2 links, dynamic length) where its fabric is a ring.
+_L1_SMALL_DP = 65536
+_DP_RING = {**ring_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL_DP}
+_DP_LINE = {**line_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL_DP}
+
+
+@pytest.mark.timeout(4 * 3600)
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [
+        pytest.param((4, 8), _DP_RING, id="replica_4x8_ring"),
+        pytest.param((4, 4), _DP_RING, id="replica_4x4_ring"),
+        pytest.param((4, 4), _DP_LINE, id="replica_4x4_line"),
+        pytest.param((4, 2), _DP_RING, id="replica_4x2_ring"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_dp_replica_process(mesh_device):
+    """One replica of a multi-process DP run. Env: H3_DP_SIZE (2048 / 4096), H3_DP_REQUESTS, H3_DP_RANK, H3_DP_SYNC (a
+    directory shared with the launcher: the replica writes `ready_<rank>` once warm, waits for `go`, serves its
+    requests back to back with the host tail deferred to a thread (as the server does), then writes
+    `result_<rank>.json`). Without H3_DP_SYNC it runs alone, which gives the contention-free per-replica number."""
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .common import fabric_topology
+
+    weights = os.environ.get("MINIMAX_H3_IMAGE_MODEL_PATH")
+    if not weights:
+        pytest.skip("set MINIMAX_H3_IMAGE_MODEL_PATH")
+    size = int(os.environ.get("H3_DP_SIZE", 4096))
+    n = int(os.environ.get("H3_DP_REQUESTS", 6))
+    rank = int(os.environ.get("H3_DP_RANK", 0))
+    sync = os.environ.get("H3_DP_SYNC")
+    topology = fabric_topology()
+    shape = tuple(mesh_device.shape)
+    pipe = MiniMaxH3ImagePipeline(
+        mesh_device=mesh_device, weights_dir=weights, tp_axis=0, sp_axis=1, num_links=2, topology=topology
+    )
+    tag = f"replica{rank}_{shape[0]}x{shape[1]}_{size}"
+    logger.info(f"RESULT {tag}: topology {topology}, dynamic_length {pipe.dynamic_length}")
+    for seed in (0, 1):  # warm: compile, then one warm request
+        pipe(PROMPT, width=size, height=size, seed=seed)
+    if sync:
+        open(os.path.join(sync, f"ready_{rank}"), "w").close()
+        deadline = time.time() + 3 * 3600
+        while not os.path.exists(os.path.join(sync, "go")):
+            if time.time() > deadline:
+                raise TimeoutError("no go signal")
+            time.sleep(0.05)
+    finisher = ThreadPoolExecutor(1)
+    pending, records = [], []
+    start = time.time()
+    for i in range(n):
+        result = pipe(PROMPT, width=size, height=size, seed=100 + 10 * rank + i, defer_finish=True)
+        t = result.timings
+        records.append(
+            {"total": t.total, "prompt": t.encode_prompt, "denoise": t.denoise, "steps": t.denoise_steps, "decode": t.decode}
+        )
+        pending.append(finisher.submit(result.finish))
+    for f in pending:
+        f.result()
+    end = time.time()
+    finisher.shutdown()
+    out = {"rank": rank, "shape": shape, "size": size, "n": n, "start": start, "end": end, "requests": records}
+    if sync:
+        with open(os.path.join(sync, f"result_{rank}.json"), "w") as f:
+            json.dump(out, f)
+    mean = sum(r["total"] for r in records) / n
+    steps = ", ".join(f"{s:.2f}" for s in records[-1]["steps"])
+    logger.info(
+        f"RESULT {tag}: {n} images in {end - start:.2f}s -> {n / (end - start):.3f} img/s | mean pipeline "
+        f"{mean:.2f}s (prompt {records[-1]['prompt']:.2f}, denoise {records[-1]['denoise']:.2f} [{steps}], decode "
+        f"{records[-1]['decode']:.2f})"
     )
