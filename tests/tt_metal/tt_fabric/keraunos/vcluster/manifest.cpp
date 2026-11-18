@@ -307,21 +307,24 @@ const Device* find_device(const Manifest& manifest, const std::string& name) {
     return it == manifest.devices.end() ? nullptr : &*it;
 }
 
-// The router slot `end` names: the slot of that device with role router and that port. Null when the device or the
-// port does not exist.
+// The router slot `end` names: the slot of that device with role router and that port, or with RouterKind::Harness
+// the device's first router slot, whose port says nothing (SPEC-0012 § Manifest). Null when the device or the slot
+// does not exist.
 const Slot* find_router(const Manifest& manifest, const LinkEnd& end) {
     const Device* device = find_device(manifest, end.device);
     if (device == nullptr) {
         return nullptr;
     }
+    const bool harness = manifest.router == RouterKind::Harness;
     const auto it = std::find_if(device->slots.begin(), device->slots.end(), [&](const Slot& s) {
-        return s.role == SlotRole::Router && s.port == end.port;
+        return s.role == SlotRole::Router && (harness || s.port == end.port);
     });
     return it == device->slots.end() ? nullptr : &*it;
 }
 
-// Row 1.
+// Row 1. With RouterKind::Harness only `cce` 1 is reserved (SPEC-0012 § Manifest).
 void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, Findings& findings) {
+    const bool harness = manifest.router == RouterKind::Harness;
     for (const Device& device : manifest.devices) {
         for (std::size_t i = 0; i < device.slots.size(); i++) {
             const Slot& slot = device.slots[i];
@@ -330,7 +333,7 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
                     ManifestCheck::ReservedValue,
                     fmt::format("{}: cce {} is reserved for Phase 3", slot_label(device, i), slot.cce));
             }
-            if (slot.role == SlotRole::Router && slot.hart != kRouterHart) {
+            if (!harness && slot.role == SlotRole::Router && slot.hart != kRouterHart) {
                 add(findings,
                     ManifestCheck::ReservedValue,
                     fmt::format(
@@ -347,7 +350,7 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
                     fmt::format("{}: cce {} is reserved for Phase 3", region_label(device, i), region.cce));
             }
             const bool whole = region.base == 0 && region.size == facts.sram_bytes_per_cce;
-            if (!whole && !beyond_sram(region, facts.sram_bytes_per_cce)) {
+            if (!harness && !whole && !beyond_sram(region, facts.sram_bytes_per_cce)) {
                 add(findings,
                     ManifestCheck::ReservedValue,
                     fmt::format(
@@ -358,7 +361,7 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
         }
     }
     for (std::size_t i = 0; i < manifest.links.size(); i++) {
-        if (manifest.links[i].backend == LinkBackend::Local) {
+        if (!harness && manifest.links[i].backend == LinkBackend::Local) {
             add(findings,
                 ManifestCheck::ReservedValue,
                 fmt::format("links[{}]: backend local is reserved for Phase 3", i));
@@ -536,14 +539,18 @@ void check_worker_placement(const Manifest& manifest, Findings& findings) {
     }
 }
 
-// Row 7.
+// Row 7. With RouterKind::Harness its clauses on ports are H6's (SPEC-0012 § Manifest).
 void check_links(const Manifest& manifest, Findings& findings) {
+    const bool harness = manifest.router == RouterKind::Harness;
     std::map<std::pair<std::string, uint32_t>, std::size_t> uses;
     for (std::size_t i = 0; i < manifest.links.size(); i++) {
         const Link& link = manifest.links[i];
         const auto check_end = [&](char side, const LinkEnd& end) {
             if (find_device(manifest, end.device) == nullptr) {
                 add(findings, ManifestCheck::Link, fmt::format("{}: no such device", end_label(i, side, end)));
+                return;
+            }
+            if (harness) {
                 return;
             }
             if (find_router(manifest, end) == nullptr) {
@@ -562,6 +569,9 @@ void check_links(const Manifest& manifest, Findings& findings) {
         if (link.a.device == link.b.device) {
             add(findings, ManifestCheck::Link, fmt::format("links[{}]: device {} is at both ends", i, link.a.device));
         }
+    }
+    if (harness) {
+        return;
     }
     for (const Device& device : manifest.devices) {
         for (std::size_t i = 0; i < device.slots.size(); i++) {
@@ -645,7 +655,16 @@ Manifest parse_manifest(std::string_view yaml_text) {
     Errors errors;
     Manifest manifest;
     manifest.version = *version_value;
-    check_keys(root, {"version", "capture", "devices", "links"}, "manifest", errors);
+    check_keys(root, {"version", "router", "capture", "devices", "links"}, "manifest", errors);
+    if (root["router"]) {
+        if (const auto router = read_value<std::string>(root, "router", "manifest", errors)) {
+            if (*router == "harness") {
+                manifest.router = RouterKind::Harness;
+            } else {
+                errors.push_back(fmt::format("manifest: unknown router '{}'", *router));
+            }
+        }
+    }
     if (root["capture"]) {
         if (const auto capture = read_value<std::string>(root, "capture", "manifest", errors)) {
             if (capture->empty()) {
