@@ -481,9 +481,8 @@ DAMAGED_RNG = [
 
 
 @pytest.mark.parametrize("damage", DAMAGED_RNG)
-def test_a_load_asking_for_damaged_rng_state_changes_nothing_and_one_without_rng_goes_ahead(
-    tp_mesh, tmp_path, damage, expect_error
-):
+def test_damaged_rng_state_changes_nothing(tp_mesh, tmp_path, damage, expect_error):
+    """A load asking for damaged RNG state changes nothing, and one that does not ask for RNG state goes ahead."""
     ctx = ttml.autograd.AutoContext.get_instance()
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
