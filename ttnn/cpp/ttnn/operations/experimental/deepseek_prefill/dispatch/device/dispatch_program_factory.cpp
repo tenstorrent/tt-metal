@@ -113,7 +113,7 @@ std::vector<uint32_t> compute_per_neighbor_forwarding_links(
             axis_label,
             src_fabric_node_id,
             dst_node,
-            tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node).value(),
+            tt::tt_fabric::get_eth_forwarding_direction(mesh_device, src_fabric_node_id, dst_node).value(),
             core_link,
             links.size(),
             links[core_link % links.size()]);
@@ -1073,7 +1073,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
                         continue;
                     }
                     const auto peer_node = mesh_device->get_fabric_node_id(peer_coordinate);
-                    const auto direction = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, peer_node);
+                    const auto direction =
+                        tt::tt_fabric::get_eth_forwarding_direction(*mesh_device, src_fabric_node_id, peer_node);
                     TT_FATAL(
                         direction.has_value(),
                         "No Fabric2D forwarding direction from dispatch source {} to peer {}",

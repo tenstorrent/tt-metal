@@ -10,11 +10,13 @@ class CheckpointError(RuntimeError):
 
 
 class IncompleteCheckpointError(CheckpointError):
-    """The directory is a staging directory, or has no readable ``index.json`` (missing, truncated or malformed)."""
+    """The directory is a staging directory, or its ``index.json`` or ``header.json`` is missing, truncated or
+    malformed."""
 
 
 class VersionError(CheckpointError):
-    """The checkpoint was written by a newer schema version than this reader knows."""
+    """The index or header is not in this format (another ``format`` name), or was written by a newer ``VERSION``
+    than this reader knows."""
 
 
 class LayoutError(CheckpointError):
@@ -38,8 +40,8 @@ class UnexpectedKeyError(CheckpointError):
 
 
 class CoverageError(CheckpointError):
-    """Boxes that must tile a shape exactly do not: a key's chunks on save, the saved chunks of a checkpoint entry,
-    or the planned reads of a destination shard on load."""
+    """Boxes that must tile a shape exactly do not: the saved chunks of a checkpoint entry, or the planned reads of a
+    destination shard on load."""
 
 
 class RoleMismatchError(CheckpointError):

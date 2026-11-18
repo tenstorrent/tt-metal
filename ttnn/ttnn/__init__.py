@@ -207,6 +207,9 @@ from ttnn._ttnn.hd_socket import (
 
 from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
+    StreamCounter,
+    StreamInputCounters,
+    StreamOutputCounters,
 )
 
 from ttnn._ttnn.d2h_stream_service import (
@@ -646,6 +649,14 @@ from ttnn._ttnn.operations import command_list as _command_list
 
 experimental.CommandListBuilder = _command_list.CommandListBuilder
 experimental.CommandList = _command_list.CommandList
+
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use. Experimental-only surface.
+from ttnn._ttnn import program_spec as _program_spec
+
+for _name in dir(_program_spec):
+    if not _name.startswith("_"):
+        setattr(experimental, _name, getattr(_program_spec, _name))
+del _name
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 

@@ -4,9 +4,11 @@
 
 """index.json round trip, directory naming, completeness and the staging directory."""
 
+import gc
 import json
 import os
 import shutil
+import warnings
 
 import numpy as np
 import pytest
@@ -132,12 +134,67 @@ def test_index_round_trips_through_json_with_columnar_chunks():
     assert decoded.scalars == index.scalars and type(decoded.scalars["optimizer/amsgrad"]) is bool
     assert decoded.live_key_map()["model/Llama/tok_emb/weight"] == "model/Llama/fc/weight"
     assert all(entry["tp_split"] == [1, 1, 2, 1] for entry in encoded["state"].values()), "every entry records it"
+    # The three entries share one label: the index holds it once and the entries point at it.
+    assert len(encoded["labels"]) == 1 and all(entry["label"] == 0 for entry in encoded["state"].values())
+    assert len({id(entry.label) for entry in decoded.entries.values()}) == 1, "decoded once, shared"
+
+
+def test_entries_point_at_the_label_table_by_position(expect_error):
+    index = _index()
+    other = Label((Placement.shard(2),), (4,), tuple(dist_coords((2, 2))))
+    index.entries["optimizer/exp_avg/model/Llama/fc/weight"].label = other
+    encoded = json.loads(json.dumps(index.to_json()))
+    assert encoded["labels"] == [index.entries["model/Llama/fc/weight"].label.to_json(), other.to_json()]
+    assert [entry["label"] for entry in encoded["state"].values()] == [0, 1, 0], "in order of first use"
+    assert Index.from_json(encoded).entries == index.entries
+    for bad in (2, -1, "0", None):
+        encoded["state"]["model/Llama/fc/weight"]["label"] = bad
+        with expect_error(CheckpointError, f"'model/Llama/fc/weight': label {bad!r} is not a position in the index's"):
+            Index.from_json(encoded)
+
+
+def test_index_is_written_compact(tmp_path):
+    """index.json is compact JSON, and writing or reading it pauses the GC only while it runs: a GC the caller
+    paused stays paused."""
+    directory = str(tmp_path)
+    write_index(directory, _index())
+    text = (tmp_path / "index.json").read_text()
+    assert "\n" not in text and '": ' not in text, "no indentation and no spaces after separators"
+    assert read_index(directory).entries == _index().entries
+    assert gc.isenabled(), "writing and reading pause the GC only while they run"
+    gc.disable()
+    try:
+        write_index(directory, _index())
+        read_index(directory)
+        assert not gc.isenabled(), "a GC the caller paused stays paused"
+    finally:
+        gc.enable()
 
 
 def test_a_malformed_tp_split_is_refused(expect_error):
     encoded = json.loads(json.dumps(_index().to_json()))
     encoded["state"]["model/Llama/blocks/0/attention/qkv_linear/weight"]["tp_split"] = [1, 2, 1]
     with expect_error(CheckpointError, r"qkv_linear/weight': malformed tp_split \[1, 2, 1\]"):
+        Index.from_json(encoded)
+
+
+@pytest.mark.parametrize(
+    "field, value, message",
+    [
+        ("offsets", [[0, 0, 0, 0], [0, 0, -96, 0]], r"malformed chunk offsets \[0, 0, -96, 0\]"),
+        ("offsets", [[0, 0, 0, 0], [0, 0, 96]], r"malformed chunk offsets \[0, 0, 96\]"),
+        ("offsets", [[0, 0, 0, 0], [0, 0, 96.0, 0]], r"malformed chunk offsets \[0, 0, 96.0, 0\]"),
+        ("sizes", [[1, 1, 96, "16"]], r"malformed chunk sizes \[1, 1, 96, '16'\]"),
+        ("global_shape", [1, 1, 192, -16], r"malformed global_shape \[1, 1, 192, -16\]"),
+        ("canonical_shape", [1, 130, 16], r"malformed canonical_shape \[1, 130, 16\]"),
+    ],
+)
+def test_malformed_shapes_and_chunk_boxes_are_refused(field, value, message, expect_error):
+    # Boxes are built unchecked, so decoding the index is where a bad shape or box must be caught.
+    encoded = json.loads(json.dumps(_index().to_json()))
+    entry = encoded["state"]["model/Llama/fc/weight"]
+    (entry["chunks"] if field in ("offsets", "sizes") else entry)[field] = value
+    with expect_error(CheckpointError, "index entry 'model/Llama/fc/weight': " + message):
         Index.from_json(encoded)
 
 
@@ -162,7 +219,10 @@ def test_a_bad_index_names_its_file(tmp_path, expect_error):
         return ckpt
 
     def placement(value):
-        return lambda encoded: encoded["state"]["model/Llama/fc/weight"]["label"]["placements"].__setitem__(1, value)
+        def change(encoded):
+            encoded["labels"][encoded["state"]["model/Llama/fc/weight"]["label"]]["placements"][1] = value
+
+        return change
 
     newer = written(lambda encoded: encoded.update(version=2))
     with expect_error(VersionError, f"{newer}/index.json: index version 2 is newer"):
@@ -187,6 +247,7 @@ def test_naming(expect_error):
         step_dir_name(-1)  # "step_-000001" would never parse back, so find_latest would not find it
 
 
+@pytest.mark.filterwarnings("ignore:.*left by saves that did not finish")
 def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     for name in [
         "step_0000005",
@@ -212,6 +273,28 @@ def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     assert not is_complete(str(tmp_path / "step_0000100.partial-123"))
     assert not is_complete(str(tmp_path / "step_0000050.replaced-9")), "renamed back to its final name first"
     assert not is_complete(str(tmp_path / "step_0000040"))
+
+
+def test_find_latest_warns_about_leftovers(tmp_path):
+    """find_latest warns about the .partial- and .replaced- directories of its prefix, naming each, and removes
+    none of them."""
+    names = ["step_0000005", "step_0000010.partial-7", "step_0000005.replaced-3", "other_step_0000020.partial-1"]
+    for name in names:
+        (tmp_path / name).mkdir()
+    (tmp_path / "step_0000005" / "index.json").write_text("{}")
+    leftovers = r"2 directories left by saves that did not finish: step_0000005\.replaced-3, step_0000010\.partial-7\. "
+    with pytest.warns(UserWarning, match=leftovers):
+        assert find_latest(str(tmp_path)) == str(tmp_path / "step_0000005")
+    with pytest.warns(
+        UserWarning, match=r"1 directory left by saves that did not finish: other_step_0000020\.partial-1"
+    ):
+        assert find_latest(str(tmp_path), prefix="other") is None
+    assert sorted(os.listdir(tmp_path)) == sorted(names), "nothing is removed: a .partial- save may still be running"
+    clean = tmp_path / "clean"
+    (clean / "step_0000001").mkdir(parents=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert find_latest(str(clean)) is None, "no leftovers, no warning"
 
 
 def test_read_user_header_returns_only_the_dict_passed_to_save(tmp_path):
@@ -254,7 +337,8 @@ def test_a_header_save_would_not_write_is_refused(tmp_path, expect_error):
             read_user_header(ckpt)
 
 
-def test_a_staging_directory_is_named_by_its_nonce_and_only_a_shared_one_may_exist(tmp_path, expect_error):
+def test_staging_directory_naming(tmp_path, expect_error):
+    """A staging directory is named by its nonce, and only a shared one (a multi-rank save's) may already exist."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=42, shared=False)
     assert staging == staging_dir(final, 42) == final + ".partial-42" and os.path.isdir(os.path.join(staging, "data"))
@@ -270,7 +354,10 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     assert ".partial-" in staging and os.path.isdir(os.path.join(staging, "data"))
     write_header(staging, {"step": 10})
     write_index(staging, _index())
-    assert not is_complete(staging) and find_latest(str(tmp_path)) is None
+    assert not is_complete(staging)
+    # A save still running looks like one that died: find_latest names its staging directory and finds nothing.
+    with pytest.warns(UserWarning, match=r"left by saves that did not finish: step_0000010\.partial-100\. "):
+        assert find_latest(str(tmp_path)) is None
     with expect_error(IncompleteCheckpointError, "is a staging directory"):
         read_index(staging)
     with expect_error(IncompleteCheckpointError, "is a staging directory"):
@@ -309,7 +396,8 @@ def test_the_crc_column_is_validated(expect_error):
         Index.from_json(unchecked)  # every chunk has a checksum
 
 
-def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, expect_error):
+def test_unreadable_index_or_header_is_incomplete(tmp_path, expect_error):
+    """An index or header that is missing, truncated or malformed is an IncompleteCheckpointError."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=2, shared=False)
     write_index(staging, _index())
@@ -356,9 +444,9 @@ def test_only_bool_int_float_and_str_scalars_are_stored(expect_error):
         index.to_json()
 
 
-def test_without_overwrite_a_checkpoint_committed_during_finalize_is_refused_not_replaced(
-    tmp_path, monkeypatch, expect_error
-):
+def test_finalize_keeps_a_checkpoint_committed_meanwhile(tmp_path, monkeypatch, expect_error):
+    """Without overwrite, a checkpoint another save commits while this one finalizes is kept, and this save is
+    refused rather than moving it aside."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=9, shared=False)
     write_index(staging, _index())
@@ -410,9 +498,8 @@ def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypa
     assert os.path.isdir(staging2), "the new checkpoint is untouched for the caller to retry or delete"
 
 
-def test_a_failed_overwrite_that_cannot_roll_back_says_where_the_previous_checkpoint_is(
-    tmp_path, monkeypatch, expect_error
-):
+def test_failed_rollback_names_the_previous_checkpoint(tmp_path, monkeypatch, expect_error):
+    """An overwrite that fails and cannot roll back says where the previous checkpoint is."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=5, shared=False)
     write_index(staging, _index())
@@ -436,7 +523,8 @@ def test_a_failed_overwrite_that_cannot_roll_back_says_where_the_previous_checkp
     assert [n for n in os.listdir(tmp_path) if ".replaced-" in n], "the previous checkpoint is still aside"
 
 
-def test_an_overwrite_warns_when_the_previous_checkpoint_cannot_be_removed(tmp_path, monkeypatch):
+def test_overwrite_warns_if_old_checkpoint_stays(tmp_path, monkeypatch):
+    """An overwrite warns when the previous checkpoint, moved aside, cannot be removed."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=7, shared=False)
     write_index(staging, _index())
@@ -453,7 +541,8 @@ def test_an_overwrite_warns_when_the_previous_checkpoint_cannot_be_removed(tmp_p
     assert is_complete(final), "the new checkpoint is in place"
 
 
-def test_check_json_returns_plain_json_and_names_what_would_not_read_back(expect_error):
+def test_check_json(expect_error):
+    """check_json returns plain JSON types and names the first value that would not read back as written."""
     assert check_json("header", {"step": 3, "lr": 1e-3, "shape": (1, 2), "tags": ["a"], "none": None}) == {
         "step": 3,
         "lr": 1e-3,
