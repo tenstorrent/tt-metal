@@ -31,7 +31,7 @@ static volatile Heartbeat* g_heartbeat = (volatile Heartbeat*)X280_STANDALONE_HE
 
 const uint64_t g_ticks_per_ms = X280_MTIME_HZ / 1000;
 const uint64_t g_ticks_per_2s = g_ticks_per_ms * 2000;
-uint64_t g_next_heartbeat;
+uint64_t g_next_heartbeat = 1867;
 
 const char* TT_FIRMWARE_VERSION_STR = "tt_firmware_version";
 const char* FIRMWARE_VERSION_STR = "0.0.1-alpha";
