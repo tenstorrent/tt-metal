@@ -80,7 +80,8 @@ class MediaSpliceBuffers:
     def table_for(self, height: int) -> tuple:
         """(device table, host table, {(sp_row, tp_col): [h, hidden/tp] view of that chip's host shard}) of
         this height, allocated on first use. Only row 0 of each shard is zeroed: runs start at slot 1, and
-        lookup never points above the slots a forward fills."""
+        lookup never points above the slots a forward fills. The device table is allocated without data; refill's
+        upload writes all of it, row 0 included."""
         entry = self._tables.get(height)
         if entry is None:
             empty = torch.empty(self.sp, self.tp * height, self.hidden // self.tp, dtype=torch.bfloat16)
@@ -92,7 +93,13 @@ class MediaSpliceBuffers:
                 view = shard.view(torch.int16).view(height, -1).numpy()
                 view[0] = 0
                 views[coord[self._axes[0]], coord[self._axes[1]]] = view
-            device = ttnn.to_device(host, self._mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            device = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, height, self.hidden // self.tp]),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self._mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
             entry = self._tables[height] = (device, host, views)
         return entry
 

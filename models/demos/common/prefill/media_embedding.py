@@ -65,7 +65,7 @@ class Run(NamedTuple):
 @dataclass(frozen=True)
 class SplicePlan:
     height: int
-    lookup: torch.Tensor  # [sp, s_total] (2D) or [sp, s_local] (1D) uint32, 0 = keep the token
+    lookup: torch.Tensor  # [sp, s_total] (2D) or [sp, s_local] (1D) int32, uploaded as uint32; 0 = keep the token
     is_img: torch.Tensor  # [s_total] bool
     runs: list[Run]
 
