@@ -31,15 +31,13 @@ namespace {
 
 constexpr uint32_t kLocalL1Size = 3200;
 
-std::vector<experimental::NodeCoord> worker_nodes(const CoreCoord& worker_grid) {
-    return experimental::grid_to_nodes(
-        experimental::NodeCoord{0, 0}, experimental::NodeCoord{worker_grid.x - 1, worker_grid.y - 1});
+std::vector<NodeCoord> worker_nodes(const CoreCoord& worker_grid) {
+    return grid_to_nodes(NodeCoord{0, 0}, NodeCoord{worker_grid.x - 1, worker_grid.y - 1});
 }
 
-std::vector<std::vector<experimental::NodeCoord>> partition_worker_nodes(
-    const std::vector<experimental::NodeCoord>& nodes) {
+std::vector<std::vector<NodeCoord>> partition_worker_nodes(const std::vector<NodeCoord>& nodes) {
     const size_t num_partitions = std::min(nodes.size(), static_cast<size_t>(DISPATCH_MAX_MESSAGE_ENTRIES));
-    std::vector<std::vector<experimental::NodeCoord>> partitions;
+    std::vector<std::vector<NodeCoord>> partitions;
     partitions.reserve(num_partitions);
     for (size_t i = 0; i < num_partitions; ++i) {
         const auto begin = nodes.begin() + nodes.size() * i / num_partitions;
@@ -49,7 +47,7 @@ std::vector<std::vector<experimental::NodeCoord>> partition_worker_nodes(
     return partitions;
 }
 
-CoreRangeSet node_set(const std::vector<experimental::NodeCoord>& nodes) {
+CoreRangeSet node_set(const std::vector<NodeCoord>& nodes) {
     CoreRangeSet cores;
     for (const auto& node : nodes) {
         cores = cores.merge(CoreRangeSet(CoreRange(node, node)));
@@ -61,9 +59,7 @@ SubDevice single_node_sub_device(const CoreCoord& node) {
     return SubDevice(std::array{CoreRangeSet(CoreRange(node, node))});
 }
 
-SubDevice sub_device_from_nodes(const std::vector<experimental::NodeCoord>& nodes) {
-    return SubDevice(std::array{node_set(nodes)});
-}
+SubDevice sub_device_from_nodes(const std::vector<NodeCoord>& nodes) { return SubDevice(std::array{node_set(nodes)}); }
 
 SubDevice full_grid_sub_device(const CoreCoord& worker_grid) {
     return SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {worker_grid.x - 1, worker_grid.y - 1}))});
@@ -73,35 +69,33 @@ template <typename TargetNodes>
 distributed::MeshWorkload create_l1_write_workload(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const TargetNodes& target_nodes,
-    const std::vector<std::pair<experimental::NodeCoord, uint32_t>>& node_addresses,
+    const std::vector<std::pair<NodeCoord, uint32_t>>& node_addresses,
     uint32_t value,
     const std::string& id) {
-    const experimental::KernelSpecName kernel_name{"l1_writer_" + id};
-    experimental::ProgramSpec spec{
+    const KernelSpecName kernel_name{"l1_writer_" + id};
+    ProgramSpec spec{
         .name = "sub_device_l1_write_" + id,
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = kernel_name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config = experimental::DataMovementHardwareConfig{}}},
-        .work_units = {experimental::WorkUnitSpec{
-            .name = "writer_" + id, .kernels = {kernel_name}, .target_nodes = target_nodes}},
+            .hw_config = DataMovementHardwareConfig{}}},
+        .work_units = {WorkUnitSpec{.name = "writer_" + id, .kernels = {kernel_name}, .target_nodes = target_nodes}},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-    experimental::ProgramRunArgs::KernelRunArgs kernel_args{
-        .kernel = kernel_name, .common_runtime_arg_values = {{"value", value}}};
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    ProgramRunArgs::KernelRunArgs kernel_args{.kernel = kernel_name, .common_runtime_arg_values = {{"value", value}}};
     for (const auto& [node, address] : node_addresses) {
-        experimental::AddRuntimeArgsForNode(kernel_args.runtime_arg_values, node, {{"address", address}});
+        AddRuntimeArgsForNode(kernel_args.runtime_arg_values, node, {{"address", address}});
     }
-    experimental::SetProgramRunArgs(program, experimental::ProgramRunArgs{.kernel_run_args = {kernel_args}});
+    tt_metal::experimental::SetProgramRunArgs(program, ProgramRunArgs{.kernel_run_args = {kernel_args}});
 
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     return workload;
 }
 
-uint32_t read_l1_word(distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, uint32_t address) {
+uint32_t read_l1_word(distributed::MeshDevice& mesh_device, const NodeCoord& node, uint32_t address) {
     std::vector<uint32_t> output(1, 0);
     slow_dispatch::ReadFromL1(mesh_device, node, address, sizeof(uint32_t), output);
     return output[0];
@@ -129,76 +123,76 @@ SyncWorkloads create_sync_workloads(
                                .merge(CoreRangeSet(CoreRange(syncer_node, syncer_node)));
     auto semaphore = CreateGlobalSemaphore(*mesh_device, all_nodes, 0);
 
-    const experimental::KernelSpecName waiter_kernel{"quasar_sub_device_waiter"};
-    experimental::ProgramSpec waiter_spec{
+    const KernelSpecName waiter_kernel{"quasar_sub_device_waiter"};
+    ProgramSpec waiter_spec{
         .name = "quasar_sub_device_waiter",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = waiter_kernel,
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/persistent_waiter.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "num_inc", "sync_core_x", "sync_core_y"}},
-            .hw_config = experimental::DataMovementHardwareConfig{}}},
-        .work_units = {experimental::WorkUnitSpec{
-            .name = "waiter", .kernels = {waiter_kernel}, .target_nodes = experimental::NodeCoord(waiter_node)}},
+            .hw_config = DataMovementHardwareConfig{}}},
+        .work_units = {WorkUnitSpec{
+            .name = "waiter", .kernels = {waiter_kernel}, .target_nodes = NodeCoord(waiter_node)}},
     };
-    Program waiter_program = experimental::MakeProgramFromSpec(*mesh_device, waiter_spec);
-    experimental::SetProgramRunArgs(
+    Program waiter_program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, waiter_spec);
+    tt_metal::experimental::SetProgramRunArgs(
         waiter_program,
-        experimental::ProgramRunArgs{
-            .kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs{
+            .kernel_run_args = {ProgramRunArgs::KernelRunArgs{
                 .kernel = waiter_kernel,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                    experimental::NodeCoord(waiter_node),
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                    NodeCoord(waiter_node),
                     {{"sem_addr", semaphore.address()},
                      {"num_inc", incrementer_nodes.num_cores()},
                      {"sync_core_x", syncer_physical.x},
                      {"sync_core_y", syncer_physical.y}})}}});
 
-    const experimental::KernelSpecName syncer_kernel{"quasar_sub_device_syncer"};
-    experimental::ProgramSpec syncer_spec{
+    const KernelSpecName syncer_kernel{"quasar_sub_device_syncer"};
+    ProgramSpec syncer_spec{
         .name = "quasar_sub_device_syncer",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = syncer_kernel,
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr"}},
-            .hw_config = experimental::DataMovementHardwareConfig{}}},
-        .work_units = {experimental::WorkUnitSpec{
-            .name = "syncer", .kernels = {syncer_kernel}, .target_nodes = experimental::NodeCoord(syncer_node)}},
+            .hw_config = DataMovementHardwareConfig{}}},
+        .work_units = {WorkUnitSpec{
+            .name = "syncer", .kernels = {syncer_kernel}, .target_nodes = NodeCoord(syncer_node)}},
     };
-    Program syncer_program = experimental::MakeProgramFromSpec(*mesh_device, syncer_spec);
-    experimental::SetProgramRunArgs(
+    Program syncer_program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, syncer_spec);
+    tt_metal::experimental::SetProgramRunArgs(
         syncer_program,
-        experimental::ProgramRunArgs{
-            .kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs{
+            .kernel_run_args = {ProgramRunArgs::KernelRunArgs{
                 .kernel = syncer_kernel,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                    experimental::NodeCoord(syncer_node), {{"sem_addr", semaphore.address()}})}}});
+                .runtime_arg_values =
+                    MakeRuntimeArgsForSingleNode(NodeCoord(syncer_node), {{"sem_addr", semaphore.address()}})}}});
 
-    const experimental::KernelSpecName incrementer_kernel{"quasar_sub_device_incrementer"};
-    experimental::ProgramSpec incrementer_spec{
+    const KernelSpecName incrementer_kernel{"quasar_sub_device_incrementer"};
+    ProgramSpec incrementer_spec{
         .name = "quasar_sub_device_incrementer",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = incrementer_kernel,
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/incrementer.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "waiter_core_x", "waiter_core_y"}},
-            .hw_config = experimental::DataMovementHardwareConfig{}}},
-        .work_units = {experimental::WorkUnitSpec{
+            .hw_config = DataMovementHardwareConfig{}}},
+        .work_units = {WorkUnitSpec{
             .name = "incrementer", .kernels = {incrementer_kernel}, .target_nodes = incrementer_nodes}},
     };
-    Program incrementer_program = experimental::MakeProgramFromSpec(*mesh_device, incrementer_spec);
-    experimental::ProgramRunArgs::KernelRunArgs incrementer_args{.kernel = incrementer_kernel};
-    for (const auto& node : experimental::node_range_to_nodes(incrementer_nodes)) {
-        experimental::AddRuntimeArgsForNode(
+    Program incrementer_program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, incrementer_spec);
+    ProgramRunArgs::KernelRunArgs incrementer_args{.kernel = incrementer_kernel};
+    for (const auto& node : node_range_to_nodes(incrementer_nodes)) {
+        AddRuntimeArgsForNode(
             incrementer_args.runtime_arg_values,
             node,
             {{"sem_addr", semaphore.address()},
              {"waiter_core_x", waiter_physical.x},
              {"waiter_core_y", waiter_physical.y}});
     }
-    experimental::SetProgramRunArgs(
-        incrementer_program, experimental::ProgramRunArgs{.kernel_run_args = {std::move(incrementer_args)}});
+    tt_metal::experimental::SetProgramRunArgs(
+        incrementer_program, ProgramRunArgs{.kernel_run_args = {std::move(incrementer_args)}});
 
     const distributed::MeshCoordinateRange device_range(mesh_device->shape());
     SyncWorkloads result{.semaphore = std::move(semaphore)};
@@ -241,14 +235,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDevicePartitionsWorkerGrid) {
     workloads.reserve(partitions.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
         const uint32_t value = 0x11110000u + (static_cast<uint32_t>(i) << 16);
-        std::vector<std::pair<experimental::NodeCoord, uint32_t>> node_addresses;
+        std::vector<std::pair<NodeCoord, uint32_t>> node_addresses;
         node_addresses.reserve(partitions[i].size());
         for (const auto& node : partitions[i]) {
             node_addresses.emplace_back(node, address);
         }
         workloads.push_back(create_l1_write_workload(
             mesh_device,
-            experimental::NodeRangeSet{node_set(partitions[i])},
+            NodeRangeSet{node_set(partitions[i])},
             node_addresses,
             value,
             "partition_" + std::to_string(i)));
@@ -289,7 +283,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation
     const auto manager = mesh_device->create_sub_device_manager(sub_devices, kLocalL1Size);
     mesh_device->load_sub_device_manager(manager);
 
-    auto make_buffer = [&](const std::vector<experimental::NodeCoord>& partition, SubDeviceId sub_device_id) {
+    auto make_buffer = [&](const std::vector<NodeCoord>& partition, SubDeviceId sub_device_id) {
         const CoreRangeSet grid = node_set(partition);
         ShardSpecBuffer shard_spec(
             grid, {1, 16}, ShardOrientation::ROW_MAJOR, {1, 16}, {static_cast<uint32_t>(partition.size()), 1});
@@ -357,8 +351,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceStallGroup) {
 
     const auto nodes = worker_nodes(worker_grid);
     // Waiter on the last node; all other worker nodes form the incrementer sub-device.
-    const experimental::NodeCoord waiter_node = nodes.back();
-    std::vector<experimental::NodeCoord> incrementer_node_list(nodes.begin(), nodes.end() - 1);
+    const NodeCoord waiter_node = nodes.back();
+    std::vector<NodeCoord> incrementer_node_list(nodes.begin(), nodes.end() - 1);
     const auto incrementer_sub_device = sub_device_from_nodes(incrementer_node_list);
     const auto waiter_sub_device = single_node_sub_device(waiter_node);
     const auto manager =
@@ -404,14 +398,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
     auto& cq = mesh_device->mesh_command_queue();
 
     mesh_device->load_sub_device_manager(combined_manager);
-    std::vector<std::pair<experimental::NodeCoord, uint32_t>> combined_addresses;
+    std::vector<std::pair<NodeCoord, uint32_t>> combined_addresses;
     combined_addresses.reserve(nodes.size());
     for (const auto& node : nodes) {
         combined_addresses.emplace_back(node, address);
     }
     auto combined_workload = create_l1_write_workload(
         mesh_device,
-        experimental::NodeRange{{0, 0}, {worker_grid.x - 1, worker_grid.y - 1}},
+        NodeRange{{0, 0}, {worker_grid.x - 1, worker_grid.y - 1}},
         combined_addresses,
         0x33330000,
         "combined_manager");
@@ -425,14 +419,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
     split_workloads.reserve(partitions.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
         const uint32_t value = 0x44440000u + (static_cast<uint32_t>(i) << 16);
-        std::vector<std::pair<experimental::NodeCoord, uint32_t>> node_addresses;
+        std::vector<std::pair<NodeCoord, uint32_t>> node_addresses;
         node_addresses.reserve(partitions[i].size());
         for (const auto& node : partitions[i]) {
             node_addresses.emplace_back(node, address);
         }
         split_workloads.push_back(create_l1_write_workload(
             mesh_device,
-            experimental::NodeRangeSet{node_set(partitions[i])},
+            NodeRangeSet{node_set(partitions[i])},
             node_addresses,
             value,
             "split_manager_" + std::to_string(i)));

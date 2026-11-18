@@ -16,7 +16,7 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
-namespace tt::tt_metal::experimental::test_helpers {
+namespace tt::tt_metal::test_helpers {
 
 // One 1x1 MeshDevice on a mock cluster of the given architecture.
 //
@@ -50,4 +50,4 @@ class ProgramSpecTestBlackhole : public MockMeshDeviceFixture<tt::ARCH::BLACKHOL
 class ProgramRunArgsTestQuasar : public MockMeshDeviceFixture<tt::ARCH::QUASAR> {};
 class ProgramRunArgsTestGen1 : public MockMeshDeviceFixture<tt::ARCH::WORMHOLE_B0> {};
 
-}  // namespace tt::tt_metal::experimental::test_helpers
+}  // namespace tt::tt_metal::test_helpers
