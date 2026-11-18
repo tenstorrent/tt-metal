@@ -53,6 +53,11 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
+    marker_chips,
+    merge_device_mismatch_markers,
+    mismatch_report,
+)
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
@@ -73,7 +78,12 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, 
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCache,
+    MlaKvCacheFormat,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+)
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.deepseek_v3_d_p.utils.stage_4x4_params import is_4x4
@@ -2209,6 +2219,17 @@ def run_chunked_transformer_updated(
         logger.info("[profile] warmup chunk 0 complete (kernels JITted); measured region begins")
         signpost("PROFILE_MEASURE_START")
 
+    det_copies = []
+    if determinism_check:
+        if num_iters < 2:
+            pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
+        det_storage = tt_kvpe_cache.storage if isinstance(tt_kvpe_cache, MlaKvCache) else tt_kvpe_cache
+        # ne compares values: a packed scaled-FP8 cache holds bf16 fields in FP8 bytes, which it would misread.
+        assert det_storage.dtype != ttnn.DataType.FP8_E4M3, "on-device determinism needs a bf16/bfp8 KV cache"
+        # One copy of the KV cache per iteration, allocated before any capture: a buffer allocated while a trace is
+        # live can land on its scratch and be overwritten by the next replay. Compared after the last iteration.
+        det_copies = [ttnn.allocate_tensor_on_device(det_storage.spec, mesh_device) for _ in range(num_iters)]
+
     # use_trace: capture the chunk forward ONCE, then replay it per chunk. The per-chunk scalars
     # (slot_id / actual_start / actual_end) cannot be host arguments on a captured program, so they move
     # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
@@ -2287,11 +2308,6 @@ def run_chunked_transformer_updated(
         # A zero-segment capture would make every replay a no-op: the timings would collapse and any
         # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
         assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
-
-    if determinism_check and num_iters < 2:
-        pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
-    det_baseline = None
-    det_failures = []
 
     profiler.start("tt_forward")
     for it in range(num_iters):
@@ -2387,32 +2403,34 @@ def run_chunked_transformer_updated(
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
         if determinism_check:
-            # Compare the whole cache the iteration just wrote, bit-exactly. PCC rounds away a single
-            # flipped element in num_layers x seq x kvpe; torch.equal does not. The cache is the right
-            # surface because it is what every later chunk attends to, so a write landing out of order
-            # inside the replay shows up here even when the final hidden state looks fine.
-            cache_now, _ = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv, sp_axis=sp_axis)
-            if det_baseline is None:
-                det_baseline = cache_now
-                logger.info(f"[determinism] iter {it} baseline KV cache {tuple(cache_now.shape)}")
-            elif torch.equal(det_baseline, cache_now):
-                logger.info(f"[determinism] iter {it} KV cache bit-identical to iter 0")
-            else:
-                diff = (det_baseline - cache_now).abs()
-                det_failures.append((it, int((diff > 0).sum()), float(diff.max())))
-                logger.error(
-                    f"[determinism] iter {it} KV cache DIFFERS from iter 0: "
-                    f"{det_failures[-1][1]} element(s), max abs delta {det_failures[-1][2]:.3e}"
-                )
+            # Compare the whole cache the iteration just wrote, exactly. PCC rounds away a single flipped element
+            # in num_layers x seq x kvpe; an exact compare does not. The cache is the right surface because it is
+            # what every later chunk attends to, so a write landing out of order inside the replay shows up here
+            # even when the final hidden state looks fine. On device (tests/measure/determinism.py): each iteration's
+            # cache is copied into its own buffer, and every copy is compared with iteration 0's after the last one.
+            ttnn.copy(det_storage, det_copies[it])
         # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
 
     if determinism_check:
-        assert not det_failures, "captured-trace replay is not deterministic: " + "; ".join(
-            f"iter {it}: {n} element(s), max abs delta {mx:.3e}" for it, n, mx in det_failures
-        )
+        det_marker = None
+        try:
+            for det_copy in det_copies[1:]:
+                # The mismatch in DRAM interleaved: max cannot reduce the cache's ND sharding.
+                mismatch = ttnn.ne(det_copies[0], det_copy, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                det_marker = merge_device_mismatch_markers(det_marker, ttnn.max(mismatch))
+                ttnn.deallocate(mismatch)
+            chips = marker_chips(det_marker)
+            detail = mismatch_report(["KV cache, last iteration"], [det_copies[0]], [det_copies[-1]]) if chips else ""
+        finally:
+            for t in [det_marker, *det_copies]:
+                if t is not None:
+                    ttnn.deallocate(t)
+        assert (
+            not chips
+        ), f"captured-trace replay is not deterministic: KV cache differs from iteration 0 on chips {chips}\n{detail}"
         logger.success(
             f"[determinism] replay bit-identical across {num_iters} iterations "
             f"(num_layers={num_layers}, n_chunks={n_chunks}, use_trace={use_trace})"

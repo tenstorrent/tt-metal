@@ -14,10 +14,10 @@ Boxes and gate cases: perf_cases.py.
 
 test_sparse_mla_perf: the CI gate. Warm and long with the production scaled-FP8 KVPE cache (SPxTP-sharded), for
 GATE_CASES, each at its model's fabric packet size: K3.1 (last DSA layer's slot of 24), GLM-5.3 (last full indexer
-layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's top-k). Untraced: fastest of UNTRACED_SAMPLES calls
-after UNTRACED_WARMUP discarded ones. Traced: one timed replay of the captured trace. Each (case, box, scenario, mode)
-is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode] (a case without targets only reports), and the traced
-output must match the untraced one (one extra untimed run of each, for triage). Each layer runs standalone (no
+layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's top-k). Untraced: fastest of 10 after 10 warm-up
+(tests/measure). Traced: one timed replay of the captured trace. Each (case, box, scenario, mode) is gated two-sided
+against PERF_TARGETS_MS ± MARGIN[mode] (a case without targets only reports), and the traced output must match the
+untraced one (one extra untimed run of each, for triage). Each layer runs standalone (no
 next-layer KV prefetch overlapped with its attention); the shared layer reuses its push plan, as it would inside a
 stage.
 
@@ -34,6 +34,9 @@ import pytest
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import model_fabric_payload
+from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, band_failure, gate
+from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.perf_cases import (
     BOX,
     GATE_CASES,
@@ -49,23 +52,19 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
-from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 
-# Untraced: discarded calls (the first compiles), then timed calls, each through sync; the gate takes the fastest.
-UNTRACED_WARMUP = 10
-UNTRACED_SAMPLES = 10
 MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
-# process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox: CI hosts. Galaxy (3 runs) and
-# Galaxy 4x4 (2 runs): one local Galaxy, unscaled, as their CI leg has no recent run; recheck once it runs. Galaxy 4x4
-# subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
+# process per model). LoudBox: CI hosts. Galaxy: the mean of 3 runs on one Galaxy, after #65125, unscaled. Galaxy 4x4
+# (2 runs): one local Galaxy, unscaled, as its CI leg has no recent run; recheck once it runs. Galaxy 4x4 subtorus has
+# no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (4.08, 3.23, 7.50, 6.91),
-        "glm_5_3": (3.79, 2.82, 7.12, 6.43),
-        "glm_5_3-no_indexer": (2.80, 2.21, 2.88, 2.28),
+        "kimi_k3_1": (3.53, 3.18, 7.64, 7.28),
+        "glm_5_3": (3.28, 2.82, 7.20, 6.79),
+        "glm_5_3-no_indexer": (2.54, 2.22, 2.59, 2.28),
     },
     "Galaxy 4x4": {
         "kimi_k3_1": (3.87, 3.56, 7.98, 7.58),
@@ -89,9 +88,6 @@ PERF_TARGETS_MS = {
     for case, row in rows.items()
     for (scenario, mode), ms in zip([(s, m) for s in SCENARIO_CACHE_TOKENS for m in MODES], row)
 }
-# Both modes are gated two-sided. Untraced is host-bound and takes the fastest of UNTRACED_SAMPLES calls, so it gets the
-# wider band.
-PERF_MARGIN = {"untraced": 0.05, "traced": 0.03}
 # Traced output must match the untraced output of the same forward.
 TRACE_PCC = 0.9999
 CI_RUN = os.environ.get("CI") == "true"
@@ -102,20 +98,11 @@ def _device_tensors(tensor):
 
 
 def _time_untraced(mesh_device, case, start, repeat=None):
-    """Host ms of each timed eager forward through sync, and the last timed forward's per-device output; appends one
-    more, untimed forward's output to `repeat`, if given."""
-    for _ in range(UNTRACED_WARMUP):  # the first call compiles
-        ttnn.deallocate(case.forward(start))
-        ttnn.synchronize_device(mesh_device)
-    samples = []
-    for i in range(UNTRACED_SAMPLES):
-        t0 = time.perf_counter()
-        out = case.forward(start)
-        ttnn.synchronize_device(mesh_device)
-        samples.append((time.perf_counter() - t0) * 1e3)
-        if i == UNTRACED_SAMPLES - 1:
-            reference = _device_tensors(out)
-        ttnn.deallocate(out)
+    """Untraced samples (ms) and the last timed forward's per-device output; appends one more, untimed forward's
+    output to `repeat`, if given."""
+    samples, out = time_untraced(lambda: case.forward(start), lambda: ttnn.synchronize_device(mesh_device))
+    reference = _device_tensors(out)
+    ttnn.deallocate(out)
     if repeat is not None:
         out = case.forward(start)
         repeat.append(_device_tensors(out))
@@ -124,40 +111,20 @@ def _time_untraced(mesh_device, case, start, repeat=None):
 
 
 def _time_traced(mesh_device, case, start, repeat=None):
-    """Host ms of one segmented trace replay (it ends in a device sync), and the trace's output. If `repeat` is given,
-    replays once more, untimed, and appends that replay's output to it."""
-    controller = SubDeviceTraceController(mesh_device)
-    case.mla.set_trace_controller(controller)
-    capture_out, capturing = None, False
-    try:
-        ttnn.deallocate(case.forward(start))  # compile under the controller
-        ttnn.synchronize_device(mesh_device)
-        controller.begin_capture()
-        capturing = True
-        capture_out = case.forward(start)
-        controller.end_capture()
-        capturing = False
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.perf_counter()
-        controller.replay()
-        elapsed_ms = (time.perf_counter() - t0) * 1e3
-        out = _device_tensors(capture_out)
+    """One timed replay (ms) and the trace's per-device output; replays once more, untimed, into `repeat`, if given."""
+    with TracedStep(
+        mesh_device,
+        lambda: case.forward(start),
+        attach=case.mla.set_trace_controller,
+        detach=lambda: case.mla.set_trace_controller(None),
+    ) as traced:
+        traced.capture()
+        samples = time_traced(traced)
+        out = _device_tensors(traced.output)
         if repeat is not None:
-            controller.replay()
-            repeat.append(_device_tensors(capture_out))
-        return [elapsed_ms], out
-    finally:
-        if capturing:
-            try:
-                controller.end_capture()
-            except Exception:
-                pass
-        try:
-            controller.release()
-        finally:
-            case.mla.set_trace_controller(None)
-            if capture_out is not None:
-                ttnn.deallocate(capture_out)
+            traced.replay()
+            repeat.append(_device_tensors(traced.output))
+        return samples, out
 
 
 @skip_with_llk_assert("LLK assertions perturb kernel timing")
@@ -200,18 +167,10 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
         return min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(xs, ys))
 
     trace_pcc = min_pcc(eager_out, traced_out)
-
-    failures, unmeasured = [], []
+    results = {}
     for mode in MODES:
-        measured_ms = min(samples[mode])
-        target_ms = PERF_TARGETS_MS.get((case_name, box, scenario, mode))
-        margin = PERF_MARGIN[mode]
-        within = target_ms is not None and abs(measured_ms - target_ms) <= target_ms * margin
-        print(  # print, not logger: CI runs perf jobs at LOGURU_LEVEL=ERROR
-            f"{label} {mode}: {measured_ms:.3f} ms "
-            f"(max {max(samples[mode]):.3f}); target {target_ms} ms ±{margin:.0%}; "
-            f"samples {' '.join(f'{x:.3f}' for x in samples[mode])}"
-        )
+        measured, target = min(samples[mode]), PERF_TARGETS_MS.get((case_name, box, scenario, mode))
+        results[mode] = (samples[mode], measured, target, MARGIN[mode])
         emit_perf_metrics(
             f"{case_name.replace('-', '_')}_sparse_mla_{box.lower().replace(' ', '_')}_{scenario}_{mode}",
             f"{label} ({mode})",
@@ -228,31 +187,21 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
                 "kv_cache_format": "scaled_fp8",
                 "weights": "random",
                 "samples_ms": samples[mode],
-                "measured_ms": measured_ms,
-                "target_ms": target_ms,
-                "margin_pct": margin * 100.0,
-                "within_band": within,
+                "measured_ms": measured,
+                "target_ms": target,
+                "margin_pct": MARGIN[mode] * 100.0,
+                "within_band": target is not None and band_failure(mode, measured, target, MARGIN[mode]) is None,
             },
         )
-        if target_ms is None:
-            unmeasured.append(f"{mode} {measured_ms:.3f} ms")
-        elif not within:
-            lower, upper = target_ms * (1 - margin), target_ms * (1 + margin)
-            direction = "faster than the target, re-centre it" if measured_ms < lower else "slower than the target"
-            failures.append(
-                f"{mode}: {measured_ms:.3f} ms outside [{lower:.3f}, {upper:.3f}] "
-                f"(target {target_ms:.3f} ms ±{margin:.0%}); {direction}"
-            )
+    correctness = []
     if trace_pcc < TRACE_PCC:
         # Within-mode repeatability, for triage: if both pairs match, that suggests a consistent eager/trace
         # discrepancy; a pair that does not match means that mode failed this repeatability check.
-        failures.append(
+        correctness.append(
             f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f} (eager vs eager "
             f"{min_pcc(eager_repeat[0], eager_out):.6f}, replay vs replay {min_pcc(traced_repeat[0], traced_out):.6f})"
         )
-    assert not failures, f"{label}: " + "; ".join(failures)
-    if unmeasured:  # report-only until this case has targets on this box
-        pytest.skip(f"{label}: no targets yet; measured " + ", ".join(unmeasured))
+    gate(label, results, correctness=correctness)
 
 
 # ============================================================================

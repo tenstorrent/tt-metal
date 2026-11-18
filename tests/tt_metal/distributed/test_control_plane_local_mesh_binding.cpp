@@ -78,7 +78,7 @@ protected:
     std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
         const std::filesystem::path& graph_desc,
         const std::map<tt::tt_fabric::FabricNodeId, tt::ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        const tt::tt_metal::FabricConfigDescriptor& config = {}) {
+        const tt::tt_metal::FabricSettings& config = {}) {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();

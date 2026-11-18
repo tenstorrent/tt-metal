@@ -119,10 +119,6 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-bool d2h_uses_hugepage_fallback(const MetalContext& ctx) {
-    return !ctx.hal().get_supports_64_bit_pcie_addressing() && !ctx.get_cluster().is_iommu_enabled();
-}
-
 SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs) :
     env_(env),
     ctx_(ctx),
@@ -181,19 +177,15 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
         this->channel_offset = 0;
 
-        // Carve out the hugepage "auxiliary" tail (same layout as the MMIO path below).
-        // Per HW CQ we reserve two TRANSFER_PAGE_SIZE (4 KiB) pages outside the issue/completion
-        // fifo layout; they are pooled after all CQ slots in free_region_* and allocated via
-        // allocate_region() when host code needs extra device-visible sysmem (e.g. D2H socket
-        // hugepage fallback for fifo data and bytes-sent counters).
-        static constexpr uint32_t AUX_PAGES_PER_CQ_SIM = 2;
-        uint32_t per_cq_reduction_sim = AUX_PAGES_PER_CQ_SIM * DispatchSettings::TRANSFER_PAGE_SIZE;
-        this->cq_size -= per_cq_reduction_sim;
-        uint32_t total_cq_space_sim = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
-        this->free_region_start_ = this->channel_offset + total_cq_space_sim;
-        this->free_region_size_ = static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction_sim;
-        this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space_sim;
-        this->free_region_bump_ = 0;
+        // No D2H fallback reserve: that fallback needs a hugepage, and DRAM-backed CQs have none.
+        const uint32_t per_cq_reduction = AuxRegionAllocator::reserved_bytes_per_cq(num_hw_cqs, false);
+        this->cq_size -= per_cq_reduction;
+        const uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
+        this->aux_region_allocator_ = AuxRegionAllocator(
+            this->cq_sysmem_start + total_cq_space,
+            this->channel_offset + total_cq_space,
+            static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction,
+            /*has_d2h_fallback_reserve=*/false);
         this->init_dispatch_core_interfaces(num_hw_cqs, 0);
         return;
     }
@@ -221,13 +213,8 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
-    static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
-    uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
-    if (d2h_uses_hugepage_fallback(ctx_)) {
-        per_cq_reduction += tt::align(
-            (DispatchSettings::HUGEPAGE_D2H_FALLBACK_RESERVE_BYTES + num_hw_cqs - 1) / num_hw_cqs,
-            DispatchSettings::TRANSFER_PAGE_SIZE);
-    }
+    const bool d2h_fallback = env_.get_cluster().needs_d2h_hugepage_fallback();
+    const uint32_t per_cq_reduction = AuxRegionAllocator::reserved_bytes_per_cq(num_hw_cqs, d2h_fallback);
     TT_FATAL(
         this->cq_size > per_cq_reduction,
         "Command queue size {} B is too small for the {} B aux reservation",
@@ -235,11 +222,12 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
         per_cq_reduction);
     this->cq_size -= per_cq_reduction;
 
-    uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
-    this->free_region_start_ = this->channel_offset + total_cq_space;
-    this->free_region_size_ = static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction;
-    this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space;
-    this->free_region_bump_ = 0;
+    const uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
+    this->aux_region_allocator_ = AuxRegionAllocator(
+        this->cq_sysmem_start + total_cq_space,
+        this->channel_offset + total_cq_space,
+        static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction,
+        d2h_fallback);
 
     this->init_dispatch_core_interfaces(num_hw_cqs, channel);
 }
@@ -860,29 +848,6 @@ uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
 uint32_t SystemMemoryManager::get_dram_region_bank_id() const {
     TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
     return 0;
-}
-
-std::pair<void*, uint32_t> SystemMemoryManager::allocate_region(uint32_t size) {
-    if (free_region_host_ptr_ == nullptr || free_region_size_ == 0) {
-        return {nullptr, 0};
-    }
-
-    static constexpr uint32_t kMinAlignment = 64;
-    uint32_t aligned_size = tt::align(size, kMinAlignment);
-    TT_FATAL(
-        free_region_bump_ + aligned_size <= free_region_size_,
-        "Hugepage auxiliary region exhausted: requested {} bytes ({} aligned), {} of {} used",
-        size,
-        aligned_size,
-        free_region_bump_,
-        free_region_size_);
-
-    void* host_ptr = free_region_host_ptr_ + free_region_bump_;
-    uint32_t device_addr = free_region_start_ + free_region_bump_;
-    free_region_bump_ += aligned_size;
-
-    std::memset(host_ptr, 0, aligned_size);
-    return {host_ptr, device_addr};
 }
 
 }  // namespace tt::tt_metal
