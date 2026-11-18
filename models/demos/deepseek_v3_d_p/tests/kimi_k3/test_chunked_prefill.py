@@ -413,8 +413,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, sp_axis, 
 # Layers 0-3: three KDA layers, then the first full-attention layer.
 SYNTHETIC_LAYERS = 4
 SYNTHETIC_CHUNKS = 4
-# Real tokens in the last chunk: short of every layout's chunk, and off the tile grid (2001 = 62 * 32 + 17).
-SYNTHETIC_LAST_CHUNK_TOKENS = 2001
+# Real tokens in the last chunk, off the tile grid (1001 = 31 * 32 + 9). Both layouts put 640 tokens on each SP
+# shard, so the last chunk has one full shard, one partial one (361 real tokens) and at least two of padding only.
+SYNTHETIC_LAST_CHUNK_TOKENS = 1001
 
 
 def _carries(mesh_device, slabs) -> dict:
@@ -477,13 +478,13 @@ def test_synthetic_chunked_prefill_carries_state(mesh_device, device_params):
     finally:
         release(stack, caches)
 
-    for chunk, (out, chunk_carries) in enumerate(zip(outputs, carries)):
-        assert torch.isfinite(out).all() and out.std() > 0, f"chunk {chunk}: non-finite or constant output"
+    for chunk_idx, (out, chunk_carries) in enumerate(zip(outputs, carries)):
+        assert torch.isfinite(out).all() and out.std() > 0, f"chunk {chunk_idx}: non-finite or constant output"
         for (layer_idx, name), shards in chunk_carries.items():
             for dev, values in enumerate(shards):
                 assert (
                     torch.isfinite(values).all() and values.any()
-                ), f"chunk {chunk}: KDA layer {layer_idx} {name} carry not stored on device {dev}"
+                ), f"chunk {chunk_idx}: KDA layer {layer_idx} {name} carry not stored on device {dev}"
     growth = max(footprints[1:]) - min(footprints[1:])
     logger.info(f"  DRAM drift over chunks 1..{SYNTHETIC_CHUNKS - 1}: {growth} B")
     assert growth == 0, f"device DRAM grew {growth} bytes across chunks 1..{SYNTHETIC_CHUNKS - 1}: {footprints}"
@@ -495,11 +496,13 @@ def test_synthetic_chunked_prefill_carries_state(mesh_device, device_params):
         assert not slots[:, padded_end:].any(), f"{name} rows past the last chunk were written"
         logger.info(f"  {name}: rows [0, {real_end}) written in every slot, nothing past the last chunk")
 
-    for chunk, (out, again) in enumerate(zip(outputs, outputs_again)):
-        assert torch.equal(out, again), f"chunk {chunk}: output depends on the padding"
-    for chunk, (chunk_carries, again) in enumerate(zip(carries, carries_again)):
+    for chunk_idx, (out, again) in enumerate(zip(outputs, outputs_again)):
+        assert torch.equal(out, again), f"chunk {chunk_idx}: output depends on the padding"
+    for chunk_idx, (chunk_carries, again) in enumerate(zip(carries, carries_again)):
         for key, shards in chunk_carries.items():
-            assert all(map(torch.equal, shards, again[key])), f"chunk {chunk}: KDA {key} carry depends on the padding"
+            assert all(
+                map(torch.equal, shards, again[key])
+            ), f"chunk {chunk_idx}: KDA {key} carry depends on the padding"
     for name in kv:
         real = slice(0, real_end)
         assert torch.equal(
