@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,12 @@ namespace tt::tt_fabric::fabric_router_tests {
 
 // Links of the line backed by the NOC, each by its two ends' fabric chip ids. Empty: every link is Ethernet.
 using NocLinks = std::vector<std::pair<uint32_t, uint32_t>>;
+
+// Called once by run_line_unicast(), on the test's thread, after the devices are open with fabric and before any
+// traffic. It reads the open cluster through MetalContext::instance() (get_control_plane(), get_cluster()) and may use
+// gtest assertions; after a fatal failure in it, run_line_unicast() returns and the fixture's TearDown closes the
+// devices. Called on Mock too, before the Mock skip; not called when the run skips before opening.
+using AfterOpen = std::function<void()>;
 
 // A worker beside a router: the router's Ethernet channel, and the worker's core, CCE1 of the router's tile
 // (BaseFabricFixture::get_worker_beside_router).
@@ -47,9 +54,10 @@ class KeraunosCoLaunchedWorkers : public BaseFabricFixture {
 protected:
     // Opens the devices with 1D fabric, sends kNumPackets from the line's first chip to its last with the links in
     // `noc_links` on the NOC and the rest on Ethernet, then checks the link records, both workers' results and that
-    // every router terminates, and the path each link took from the routers' NOC staging words. Skips off Quasar,
-    // when a link in `noc_links` is not on the open line, and on Mock after compiling the workers' kernels.
-    void run_line_unicast(const NocLinks& noc_links);
+    // every router terminates, and the path each link took from the routers' NOC staging words. `after_open`, when
+    // set, runs between the open and the first check (AfterOpen). Skips off Quasar, when a link in `noc_links` is not
+    // on the open line, and on Mock after compiling the workers' kernels.
+    void run_line_unicast(const NocLinks& noc_links, const AfterOpen& after_open = {});
 
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
