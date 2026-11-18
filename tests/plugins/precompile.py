@@ -31,8 +31,6 @@ Knobs (environment):
   PRECOMPILE_DECIDE=auto|on       auto (default): on only for more than PRECOMPILE_NARROW_MAX_IDS (default 3) collected
                                   tests outside _SKIP_PATHS; on: always, still without those
   PRECOMPILE_WORKERS=N            child build threads (0 = all cores)
-  PRECOMPILE_HANDOFF=kernel|program  what the child's session queues and builds as one unit: each kernel on its own
-                                  (default), or a program's kernels together (one compile-server batch per program)
   PRECOMPILE_JIT_SERVER=h:p[,h:p] child builds go to JIT compile server(s); after the first refused or lost connection,
                                   or a reply slower than TT_METAL_JIT_SERVER_TIMEOUT_S (default 240), the rest build
                                   locally. The child then sets TT_METAL_JIT_PREPROCESS=1 so the real run can reuse what
@@ -100,7 +98,6 @@ _WAIT = os.environ.get("PRECOMPILE_WAIT", "0") == "1"
 _DECIDE = os.environ.get("PRECOMPILE_DECIDE", "auto")
 _NARROW_MAX_IDS = int(os.environ.get("PRECOMPILE_NARROW_MAX_IDS", "3"))
 _WORKERS = int(os.environ.get("PRECOMPILE_WORKERS", "0"))
-_HANDOFF = os.environ.get("PRECOMPILE_HANDOFF", "kernel")
 _JIT_SERVER = [e for e in os.environ.get("PRECOMPILE_JIT_SERVER", "").split(",") if e]
 _REMOTE_MIN_KERNELS = int(os.environ.get("PRECOMPILE_REMOTE_MIN_KERNELS", "10"))
 _STALL_S = float(os.environ.get("PRECOMPILE_CHILD_STALL_S", "900"))
@@ -585,7 +582,7 @@ def _emit_result(**fields):
 def _stats_dict(stats):
     return {
         "programs_added": stats.programs_added,
-        "units_built": stats.units_built,
+        "programs_built": stats.programs_built,
         "kernels_queued": stats.kernels_queued,
         "kernels_built": stats.kernels_built,
         "kernels_preempted": stats.kernels_preempted,
@@ -829,7 +826,7 @@ def _child_runtestloop_before(session):
         _guard_native_writers(ttnn._ttnn.tensor, [("dump_tensor_flatbuffer", 0), ("dump_overlapped_tensors", 0)])
 
     _SESSION = ttnn.graph.CompileSession(
-        workers=_WORKERS, remote_endpoints=_JIT_SERVER, remote_min_kernels=_REMOTE_MIN_KERNELS, handoff=_HANDOFF
+        workers=_WORKERS, remote_endpoints=_JIT_SERVER, remote_min_kernels=_REMOTE_MIN_KERNELS
     )
     _SESSION.set_build_sink(True)
     session.config._precompile_t0 = time.monotonic()

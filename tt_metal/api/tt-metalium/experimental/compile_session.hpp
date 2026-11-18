@@ -19,17 +19,8 @@ struct KernelBuild;
 
 namespace tt::tt_metal::experimental {
 
-// What a CompileSession queues and builds as one unit.
-enum class CompileSessionHandoff {
-    // Each kernel on its own: one queue entry, and one compile-server request and reply, per kernel.
-    Kernel,
-    // A program's kernels together, as ProgramImpl::compile builds them: one queue entry per program, whose kernels
-    // build in parallel locally or go to the compile server as one batch.
-    Program,
-};
-
 struct CompileSessionOptions {
-    // Threads that take queued units and build them. A local build runs its kernels on the JIT build threads, so
+    // Threads that take queued programs and build them. A local build runs its kernels on the JIT build threads, so
     // more workers than cores only helps when the builds wait on the compile server. 0 uses the hardware concurrency.
     std::size_t workers = 0;
     // JIT compile-server endpoints ("host:port"). Empty means every kernel builds locally. If a server cannot be
@@ -38,12 +29,11 @@ struct CompileSessionOptions {
     // Kernels go to the compile server only once the session has queued at least this many;
     // below that, the round trips cost more than they save.
     std::size_t remote_min_kernels = 10;
-    CompileSessionHandoff handoff = CompileSessionHandoff::Kernel;
 };
 
 struct CompileSessionStats {
     std::size_t programs_added = 0;           // programs that queued at least one kernel
-    std::size_t units_built = 0;              // queue entries built (kernels or programs, see handoff)
+    std::size_t programs_built = 0;           // programs whose queued kernels a worker built
     std::size_t kernels_queued = 0;           // distinct kernels queued
     std::size_t kernels_built = 0;            // built by a session worker (on-disk cache hits included)
     std::size_t kernels_preempted = 0;        // built or being built by another thread when a worker reached them
@@ -63,8 +53,9 @@ struct CompileSessionStats {
 // compiled as usual up to the build: ProgramImpl::compile resolves each kernel's build inputs on that thread, then
 // hands them to this session instead of building them, and the program counts as compiled; a mock device never loads
 // binaries. Programs compiled any other way (a direct CompileProgram) build normally, since their callers read the
-// binaries. Each kernel is queued once, and workers build the queued units in order with the same code
-// ProgramImpl::compile uses, without touching the device again; the device may be closed and reopened meanwhile. A
+// binaries. Each kernel is queued once, with the program that first compiled it, and workers build the queued programs
+// in order with the same code ProgramImpl::compile uses: a program's kernels build in parallel locally, or go to the
+// compile server as one batch. Workers never touch the device again; the device may be closed and reopened meanwhile. A
 // normal compile of the same kernel later in this process waits for a build that is running, and builds the kernel
 // itself if no worker has reached it yet.
 //

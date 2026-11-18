@@ -24,7 +24,6 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <internal/graph_function_abort.hpp>
 #include <tt-metalium/experimental/compile_session.hpp>
-#include <tt_stl/assert.hpp>
 
 namespace ttnn::graph {
 
@@ -63,7 +62,7 @@ void py_graph_module(nb::module_& m) {
 
         nb::class_<CompileSessionStats>(m, "CompileSessionStats")
             .def_ro("programs_added", &CompileSessionStats::programs_added)
-            .def_ro("units_built", &CompileSessionStats::units_built)
+            .def_ro("programs_built", &CompileSessionStats::programs_built)
             .def_ro("kernels_queued", &CompileSessionStats::kernels_queued)
             .def_ro("kernels_built", &CompileSessionStats::kernels_built)
             .def_ro("kernels_preempted", &CompileSessionStats::kernels_preempted)
@@ -88,31 +87,21 @@ void py_graph_module(nb::module_& m) {
                 workers (int): build threads; 0 uses every core.
                 remote_endpoints (list[str]): JIT compile server endpoints ("host:port").
                 remote_min_kernels (int): use the server only once this many kernels are queued.
-                handoff (str): "kernel" queues and builds each kernel on its own (one server request each);
-                    "program" queues and builds a program's kernels together (one server batch per program).
         )doc")
             .def(
                 "__init__",
                 [](CompileSession* self,
                    std::size_t workers,
                    std::vector<std::string> remote_endpoints,
-                   std::size_t remote_min_kernels,
-                   const std::string& handoff) {
-                    TT_FATAL(
-                        handoff == "kernel" || handoff == "program",
-                        "CompileSession handoff must be \"kernel\" or \"program\", not \"{}\"",
-                        handoff);
+                   std::size_t remote_min_kernels) {
                     new (self) CompileSession(CompileSessionOptions{
                         .workers = workers,
                         .remote_endpoints = std::move(remote_endpoints),
-                        .remote_min_kernels = remote_min_kernels,
-                        .handoff = handoff == "program" ? tt::tt_metal::experimental::CompileSessionHandoff::Program
-                                                        : tt::tt_metal::experimental::CompileSessionHandoff::Kernel});
+                        .remote_min_kernels = remote_min_kernels});
                 },
                 nb::arg("workers") = 0,
                 nb::arg("remote_endpoints") = std::vector<std::string>{},
-                nb::arg("remote_min_kernels") = 10,
-                nb::arg("handoff") = "kernel")
+                nb::arg("remote_min_kernels") = 10)
             .def(
                 "set_build_sink",
                 &CompileSession::set_build_sink,

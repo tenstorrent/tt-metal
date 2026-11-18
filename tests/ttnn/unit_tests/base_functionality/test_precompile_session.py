@@ -110,15 +110,14 @@ def _descriptor():
         pytest.skip(f"no mock cluster descriptor at {_DESCRIPTOR}")
 
 
-@pytest.mark.parametrize("handoff", ["kernel", "program"])
-def test_sink_builds_what_a_normal_compile_builds(tmp_path, handoff):
+def test_sink_builds_what_a_normal_compile_builds(tmp_path):
     # The sink queues every kernel of the programs a mock run compiles, and the workers build exactly the binaries
     # a normal compile of the same run builds: a second, ordinary run finds them all and builds nothing new.
     result = _run(
         tmp_path,
-        f"""
+        """
         device = ttnn.open_device(device_id=0)
-        session = ttnn.graph.CompileSession(workers=2, handoff="{handoff}")
+        session = ttnn.graph.CompileSession(workers=2)
         session.set_build_sink(True)
         chain(device)
         session.set_build_sink(False)
@@ -132,7 +131,8 @@ def test_sink_builds_what_a_normal_compile_builds(tmp_path, handoff):
     assert result["kernels_queued"] > 0
     assert result["kernels_failed"] == 0
     assert result["kernels_built"] + result["kernels_preempted"] == result["kernels_queued"]
-    assert result["units_built"] == (result["kernels_queued"] if handoff == "kernel" else result["programs_added"])
+    # A program whose kernels were all queued by earlier programs adds nothing to build.
+    assert 1 <= result["programs_built"] <= result["programs_added"]
     built = _kernel_binaries(tmp_path)
     assert len(built) == result["kernels_queued"]
 
@@ -140,13 +140,12 @@ def test_sink_builds_what_a_normal_compile_builds(tmp_path, handoff):
     assert _kernel_binaries(tmp_path) == built
 
 
-@pytest.mark.parametrize("handoff", ["kernel", "program"])
-def test_builds_survive_device_close_and_reopen(tmp_path, handoff):
+def test_builds_survive_device_close_and_reopen(tmp_path):
     # Workers keep building after the device that queued the kernels is closed and while it is open again.
     result = _run(
         tmp_path,
-        f"""
-        session = ttnn.graph.CompileSession(workers=1, handoff="{handoff}")
+        """
+        session = ttnn.graph.CompileSession(workers=1)
         device = ttnn.open_device(device_id=0)
         session.set_build_sink(True)
         chain(device, (1, 1, 64, 64))
@@ -187,9 +186,8 @@ def test_close_drops_queued_kernels(tmp_path):
     assert accounted == result["kernels_queued"]
 
 
-@pytest.mark.parametrize("handoff", ["kernel", "program"])
-def test_sink_builds_through_the_jit_server(tmp_path, jit_server, handoff):
-    # The session sends the kernels to the compile server, kernel by kernel or program by program. With
+def test_sink_builds_through_the_jit_server(tmp_path, jit_server):
+    # The session sends each program's kernels to the compile server as one batch. With
     # TT_METAL_JIT_PREPROCESS it leaves the reuse sidecars, so an ordinary local run reuses every server-built ELF:
     # it compiles nothing, so no object file appears.
     result = _run(
@@ -197,7 +195,7 @@ def test_sink_builds_through_the_jit_server(tmp_path, jit_server, handoff):
         f"""
         device = ttnn.open_device(device_id=0)
         session = ttnn.graph.CompileSession(
-            workers=2, remote_endpoints=["{jit_server}"], remote_min_kernels=0, handoff="{handoff}"
+            workers=2, remote_endpoints=["{jit_server}"], remote_min_kernels=0
         )
         session.set_build_sink(True)
         chain(device)
@@ -221,8 +219,7 @@ def test_sink_builds_through_the_jit_server(tmp_path, jit_server, handoff):
     assert _object_files(tmp_path) == []
 
 
-@pytest.mark.parametrize("handoff", ["kernel", "program"])
-def test_unreachable_jit_server_falls_back_to_local_builds(tmp_path, handoff):
+def test_unreachable_jit_server_falls_back_to_local_builds(tmp_path):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         refused = f"127.0.0.1:{s.getsockname()[1]}"  # closed again once the block ends: connections are refused
@@ -231,7 +228,7 @@ def test_unreachable_jit_server_falls_back_to_local_builds(tmp_path, handoff):
         f"""
         device = ttnn.open_device(device_id=0)
         session = ttnn.graph.CompileSession(
-            workers=1, remote_endpoints=["{refused}"], remote_min_kernels=0, handoff="{handoff}"
+            workers=1, remote_endpoints=["{refused}"], remote_min_kernels=0
         )
         session.set_build_sink(True)
         chain(device)

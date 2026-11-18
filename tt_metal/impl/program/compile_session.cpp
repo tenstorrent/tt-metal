@@ -34,10 +34,10 @@ bool detail::BuildSinkScope::active() { return t_build_sink_scope; }
 namespace experimental {
 
 struct CompileSession::Impl {
-    // One queue entry: a single kernel, or the not yet queued kernels of one program (see CompileSessionHandoff).
+    // One queue entry: the kernels of one program that were not queued before.
     using Unit = std::vector<detail::KernelBuild>;
 
-    // Queues the builds whose kernels were not queued before.
+    // Queues the program's builds whose kernels were not queued before, as one entry.
     void enqueue(std::vector<detail::KernelBuild> builds) {
         std::size_t queued = 0;
         {
@@ -45,23 +45,18 @@ struct CompileSession::Impl {
             if (closing) {
                 return;
             }
-            Unit program_unit;
-            for (auto& build : builds) {
-                if (!queued_kernels.insert(build.kernel_hash).second) {
-                    continue;
-                }
-                ++queued;
-                if (options.handoff == CompileSessionHandoff::Kernel) {
-                    queue.emplace_back().push_back(std::move(build));
-                } else {
-                    program_unit.push_back(std::move(build));
-                }
-            }
-            if (!program_unit.empty()) {
-                queue.push_back(std::move(program_unit));
-            }
             if (!builds.empty()) {
                 ++stats.programs_added;
+            }
+            Unit unit;  // KernelBuild is not assignable, so the new kernels move into a fresh vector
+            for (auto& build : builds) {
+                if (queued_kernels.insert(build.kernel_hash).second) {
+                    unit.push_back(std::move(build));
+                }
+            }
+            queued = unit.size();
+            if (queued != 0) {
+                queue.push_back(std::move(unit));
             }
             stats.kernels_queued += queued;
             stats.kernels_pending += queued;
@@ -207,7 +202,7 @@ struct CompileSession::Impl {
                 std::lock_guard lock(mutex);
                 stats.kernels_running -= size;
                 stats.busy_seconds += seconds;
-                ++stats.units_built;
+                ++stats.programs_built;
                 stats.kernels_remote_fallback += remote_fallbacks;
                 for (const auto& status : statuses) {
                     switch (status.result) {
