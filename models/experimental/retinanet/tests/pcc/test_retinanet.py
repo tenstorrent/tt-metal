@@ -58,8 +58,6 @@ class RetinaNetTestInfra:
         self.torch_regression_head = retinanet.head.regression_head
         self.torch_classification_head = retinanet.head.classification_head
 
-        # Torch input preprocessing
-
         self.torch_input_tensor = synthetic_image()
 
         # Get backbone features
