@@ -7,26 +7,28 @@
 #include "api/tensor/noc_traits.h"
 #include "matmul_chain.hpp"
 
-template <typename Accessor>
-void read_in1_block(
-    const Noc& noc,
-    const MatmulShape& s,
-    const Accessor& in1,
-    uint32_t tile_bytes,
-    uint32_t dst,
-    uint32_t k_tile,
-    uint32_t n_tile) {
-    for (uint32_t i = 0; i < s.K_block; i++) {
-        for (uint32_t j = 0; j < s.N_block && n_tile + j < s.N_logical; j++) {
-            noc.async_read(
-                in1,
-                CoreLocalMem<uint32_t>(dst + (i * s.N_block + j) * tile_bytes),
-                tile_bytes,
-                {.page_id = (k_tile + i) * s.in1_row_tiles + n_tile + j},
-                {});
+// The weight tiles of a bank are issued back to back from one programmed read state. Tile pages are interleaved over
+// the DRAM banks, so a page's bank is its id modulo the bank count and the row stride must be a multiple of it.
+inline void read_in1_block(
+    const MatmulShape& s, uint32_t base_address, uint32_t tile_bytes, uint32_t dst, uint32_t k_tile, uint32_t n_tile) {
+    constexpr uint32_t banks = NUM_DRAM_BANKS;
+    const uint32_t first_page = n_tile;
+    for (uint32_t bank = 0; bank < banks; bank++) {
+        const uint32_t first_j = (bank + banks - first_page % banks) % banks;
+        if (first_j >= s.N_block) {
+            continue;
+        }
+        noc_async_read_one_packet_set_state(get_noc_addr_from_bank_id<true>(bank, base_address), tile_bytes);
+        for (uint32_t i = 0; i < s.K_block; i++) {
+            const uint32_t row_page = (k_tile + i) * s.in1_row_tiles;
+            for (uint32_t j = first_j; j < s.N_block && n_tile + j < s.N_logical; j += banks) {
+                noc_async_read_one_packet_with_state(
+                    base_address + ((row_page + n_tile + j) / banks) * tile_bytes,
+                    dst + (i * s.N_block + j) * tile_bytes);
+            }
         }
     }
-    noc.async_read_barrier();
+    noc_async_read_barrier();
 }
 
 template <typename Accessor>
@@ -59,13 +61,13 @@ inline void retire_out_block(const Noc& noc, const MatmulShape& s, CircularBuffe
     cb_out.pop_front(s.M_block * (s.swiglu ? s.N_block / 2 : s.N_block));
 }
 
-template <typename InAccessor, typename OutAccessor>
+template <typename OutAccessor>
 void in1_matmul_phase(
     const Noc& noc,
     const MatmulShape& s,
     const MatmulRange& range,
     Chain& chain,
-    const InAccessor& in1,
+    uint32_t in1_address,
     const OutAccessor& out,
     uint32_t tile_bytes,
     uint32_t out_tile_bytes,
@@ -97,7 +99,7 @@ void in1_matmul_phase(
                 cb_in1.reserve_back(block_tiles);
                 const uint32_t addr = cb_in1.get_write_ptr();
                 if (chain.is_injector) {
-                    read_in1_block(noc, s, in1, tile_bytes, addr, k_block * s.K_block, n_tile);
+                    read_in1_block(s, in1_address, tile_bytes, addr, k_block * s.K_block, n_tile);
                 } else {
                     chain.receive(noc);
                 }
