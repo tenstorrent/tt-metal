@@ -621,7 +621,7 @@ UNSUPPORTED = [
     ids=[case[0] for case in UNSUPPORTED],
     indirect=["device_params", "mesh_device"],
 )
-def test_sparse_kv_push_unsupported(mesh_device, submesh, links, error):
+def test_sparse_kv_push_unsupported(mesh_device, submesh, links, error, expect_error):
     mesh = _mesh(mesh_device, submesh)
     sc, page_bytes = 160, 704
     max_rows = sc * mesh.get_num_devices() * 4
@@ -629,7 +629,7 @@ def test_sparse_kv_push_unsupported(mesh_device, submesh, links, error):
     # The routing checks run before the table's, so a placeholder table reaches them.
     width = page_bytes // 4
     sems = _semaphores(mesh)
-    with pytest.raises(RuntimeError, match=error):
+    with expect_error(RuntimeError, error):
         ttnn.experimental.sparse_kv_push(
             _cache(mesh, 1, max_rows, sc, width),
             output_tensor=_filled_buffer(mesh, 64, width),
