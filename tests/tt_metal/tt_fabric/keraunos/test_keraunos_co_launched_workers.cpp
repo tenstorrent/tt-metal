@@ -15,6 +15,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <random>
@@ -28,6 +29,7 @@
 
 #include "fabric_fixture.hpp"
 #include "hostdev/eth_link.h"
+#include "internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
@@ -319,6 +321,15 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
             << "chip " << router.chip << " router " << router.logical.str() << " reads TERMINATED as fabric comes up";
     }
 
+    // Fabric is up, so this run launched every router, and none has been told to terminate. A router's status word
+    // survives from the case before on the same server, so TERMINATED here is that case's, and without this check the
+    // TERMINATED after close below could be too.
+    const auto routers = all_routers();
+    for (const auto& router : routers) {
+        EXPECT_NE(read_edm_status(router), static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED))
+            << "chip " << router.chip << " router " << router.logical.str() << " reads TERMINATED as fabric comes up";
+    }
+
     // Each record the extension set was valid when it found it, so device init had written it, and still holds the NOC
     // kind after launch. Every other record holds the Ethernet kind device init writes. One router per end of
     // each chosen link: the mesh descriptors have one channel between neighbours.
@@ -355,6 +366,23 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
         const auto results = read_results(worker, map);
         EXPECT_EQ(results[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS) << role;
         EXPECT_EQ(bytes_of(results), expected_bytes) << role;
+    }
+
+    // The path each link took. The extension zeroed every staging word before launch. A
+    // router on an Ethernet link never writes them. A router that sends the line's packets on a NOC link stages one
+    // word a packet, and one word then holds the packet count. Whether the router at the other end of a NOC link
+    // returns its credits through a staging word is not established, so its words are logged, not asserted.
+    for (const auto& router : routers) {
+        const PreparedRouter& prep = prepared_router(router);
+        const NocStage stage = read_noc_stage(router.chip, router.virtual_core);
+        const std::string where = fmt::format("chip {} router {}", router.chip, router.logical.str());
+        log_info(tt::LogTest, "{} NOC staging words {:#x}", where, fmt::join(stage, " "));
+        if (!prep.noc) {
+            EXPECT_EQ(stage, NocStage{}) << where << ": Ethernet link, yet a staging word was written";
+        } else if (prep.downstream) {
+            EXPECT_EQ(*std::max_element(stage.begin(), stage.end()), uint64_t{kNumPackets})
+                << where << ": sends the line's " << kNumPackets << " packets on a NOC link";
+        }
     }
 
     DoTearDownTestSuite();
