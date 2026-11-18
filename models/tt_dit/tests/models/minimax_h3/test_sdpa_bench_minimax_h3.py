@@ -82,6 +82,7 @@ def test_h3_ring_sdpa_bench(mesh_device):
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
         exp_approx_mode=False,
+        min_blocked_pack_tiles=2,
     )
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
