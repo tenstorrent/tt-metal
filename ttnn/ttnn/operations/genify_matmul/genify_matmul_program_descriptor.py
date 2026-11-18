@@ -393,14 +393,23 @@ SHARDED_B_GROUP_ROWS = None
 # B rounds overlap its row's A rounds instead of queueing behind them on one RISC. False: one reader (R10).
 BS_B_ON_WRITER = True
 # ... and on that split's per-core B path (no weight channel), cb_weight_tiles holds up to this many K-blocks
-# (clamped to the walk and to the L1 budget) so the B RISC reads ahead of compute instead of one K-block at a time.
-# 2 = DEPTH_WEIGHT (the Refinement 10 ring).
+# (clamped to the walk and to the L1 budget) so the B RISC reads ahead of compute instead of one K-block at a time;
+# a ring holding a whole single-block walk of <= 14 K-blocks issues every K-block's reads up front under its own
+# transaction id (GM_BS_B_AHEAD). 2 = DEPTH_WEIGHT (the Refinement 10 ring).
+# Parked at 2 / 0 (byte-identical): on ASPP pool (the one PDL walk on this path) depth 8 / 16 with lookahead 1 / 2 /
+# 3 measured 8.8-9.3 us vs 9.0-9.2 -- noise. Its B half is not the binder: with B stubbed the A rounds alone run
+# 6.5 us, with B traffic in flight they stretch from ~0.6 to ~1.0 us each (contention, not B latency).
 BS_SPLIT_B_DEPTH = 2
+BS_SPLIT_B_LOOKAHEAD = 0  # K-blocks kept in flight on that path (GM_BS_B_AHEAD); 0 = read, barrier, push
 # ... and its B rounds carry this many bytes (SHARDED_B_ROUND_BYTES' role, for the split): with B off the A chain a
 # round per K-block feeds compute earliest. Measured (device us, 1 B / 32 KB / 64 KB / all K): ASPP 1x1 13.9 / 15.1 /
 # 17.3 / 17.2, res4 shortcut 14.1 / 15.1 / 17.0 / 17.0, res5 expand 22.7 / 23.6 / 25.2 / 28.7, res5 reduce 11.7 /
 # 11.9 / 13.9 / 13.8, res5 reduce 2 and res5 shortcut flat.
 BS_SPLIT_B_ROUND_BYTES = 1
+# ... and the R3 traffic gate (BS_B_MCAST_MIN_SAVED_BYTES' role) under the split: with B off the A chain the B
+# multicast no longer competes with the A rounds. Measured gate 3 MiB vs 0 (device us): res4 reduce 1024 -> 256
+# 12.2 vs 9.7, res4 reduce 18.4 / 18.4, res4 expand 13.1 / 13.0, ASPP projection 16.8 / 16.9.
+BS_SPLIT_B_MCAST_MIN_SAVED_BYTES = 0
 # ... and without a weight channel (per-core B reads on NoC1) the split pays only when the A rounds are heavy
 # enough to hide the B half's read latency: A round bytes (block_m x block_k tiles) >= this. Measured (device us,
 # split vs one reader): aspp_proj 87 KB 16.8 vs 18.6, res4_reduce 70 KB 18.4 vs 18.8, res4_reduce5 35 KB 12.7 vs
@@ -2712,7 +2721,7 @@ def sharded_b_groups(topo: BlockShardedTopology):
 
 
 def _sharded_b_channel(
-    device, geom: Geometry, topo: BlockShardedTopology, one_shot=False, cores=None, noc=ttnn.NOC.NOC_0
+    device, geom: Geometry, topo: BlockShardedTopology, one_shot=False, cores=None, noc=ttnn.NOC.NOC_0, min_saved=None
 ):
     """R2a / R3a: the weight channel (an unattached ttnn.Mcast), or None where the per-core reads stay: the
     knob is off, B is batched (it varies along the rows), a group is a single core, R3 saves less than
@@ -2722,7 +2731,7 @@ def _sharded_b_channel(
     if not SHARDED_B_MCAST or geom.tensor_batches != 1 or topo.rows < 2 or (cores is not None and len(cores) < 2):
         return None
     saved = (topo.rows - 1) * geom.tensor_k_tiles * geom.tensor_n_tiles * geom.b_tile_bytes
-    if topo.cols > 1 and saved < BS_B_MCAST_MIN_SAVED_BYTES:
+    if topo.cols > 1 and saved < (BS_B_MCAST_MIN_SAVED_BYTES if min_saved is None else min_saved):
         return None
     staggered = ttnn.McastFixedSenderConfig(
         sender_index=SHARDED_B_INJECTOR, placement=ttnn.McastSenderPlacement.Staggered
@@ -2832,7 +2841,10 @@ def create_block_sharded_program_descriptor(
     b_noc = ttnn.NOC.NOC_1 if split_roles else ttnn.NOC.NOC_0
     # One weight channel per B group (R3 / single-group R2: one channel over the whole core set).
     b_groups = sharded_b_groups(topo)
-    b_channels = [_sharded_b_channel(device, geom, topo, one_shot=one_shot, cores=g, noc=b_noc) for g in b_groups]
+    gate = BS_SPLIT_B_MCAST_MIN_SAVED_BYTES if split_roles else None
+    b_channels = [
+        _sharded_b_channel(device, geom, topo, one_shot=one_shot, cores=g, noc=b_noc, min_saved=gate) for g in b_groups
+    ]
     mc_weight = next((ch for ch in b_channels if ch is not None), None)
     a_round_bytes = blk.block_m_tiles * blk.block_k_tiles * geom.a_tile_bytes
     single_row = BS_SPLIT_SINGLE_ROW and topo.rows == 1
@@ -2989,6 +3001,14 @@ def create_block_sharded_program_descriptor(
             k.defines = list(k.defines) + [("GM_BS_ROLE", str(role))]
         if a_one_shot and role != 2:
             k.defines = list(k.defines) + [("GM_BS_A_ONE_SHOT", "1")]
+        if (
+            role == 2
+            and mc is None
+            and BS_SPLIT_B_LOOKAHEAD
+            and depth_weight >= walk_k_blocks == blk.num_k_blocks <= 14
+        ):
+            # (b_round is 1 without a channel)
+            k.defines = list(k.defines) + [("GM_BS_B_AHEAD", str(BS_SPLIT_B_LOOKAHEAD))]
         return k
 
     if split_roles:

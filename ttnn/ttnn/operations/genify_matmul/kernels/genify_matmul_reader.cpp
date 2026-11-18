@@ -192,6 +192,13 @@
 #ifndef GM_BS_B_HELPER_SEM
 #define GM_BS_B_HELPER_SEM -1
 #endif
+// R3 split roles' per-core B path (Refinement 18, host BS_SPLIT_B_DEPTH / BS_SPLIT_B_LOOKAHEAD): cb_weight_tiles holds
+// the whole single-block walk, so the B half keeps GM_BS_B_AHEAD K-blocks' reads in flight (K-block j under
+// transaction id j + 1: issue kb + GM_BS_B_AHEAD, then retire kb) -- the per-K-block DRAM latency hides under the
+// issue of the next ones. 0 = read, barrier, push per K-block.
+#ifndef GM_BS_B_AHEAD
+#define GM_BS_B_AHEAD 0
+#endif
 
 namespace {
 
@@ -509,6 +516,9 @@ void kernel_main() {
     static_assert(bs_role <= 3 && (bs_role == 0 || block_sharded));  // (3: the R2a B-read helper)
     static_assert(bs_does_b || !bs_b_mcast);
     static_assert(bs_does_a || !bs_mcast);
+    constexpr uint32_t b_ahead_n = GM_BS_B_AHEAD;
+    constexpr bool b_ahead = b_ahead_n != 0;
+    static_assert(!b_ahead || (bs_role == 2 && !bs_b_mcast && b_round_kblocks == 1 && num_k_blocks <= 14));
     constexpr bool a_one_shot = GM_BS_A_ONE_SHOT != 0;
     static_assert(!a_one_shot || bs_mcast);
     constexpr bool row_tail = GM_BS_ROW_TAIL != 0;
@@ -767,7 +777,10 @@ void kernel_main() {
                             // (cb_act_shard / cb_act_tiles, cb_residual_tiles) may run on two RISCs.
                             const bool b_round = bs_does_b && (kb % b_round_kblocks) == 0;
                             if (b_round) {
-                                cb_reserve_back(cb_weight_tiles, b_round_kblocks * weight_block_tiles);
+                                // (b_ahead: the whole walk's slots on its first K-block)
+                                cb_reserve_back(
+                                    cb_weight_tiles,
+                                    (b_ahead ? num_k_blocks - kb : b_round_kblocks) * weight_block_tiles);
                             }
                             const uint32_t weight_l1 = get_write_ptr(cb_weight_tiles);
                             constexpr uint32_t chunk_row_bytes = block_n_tiles * b_tile_bytes;
@@ -807,6 +820,28 @@ void kernel_main() {
                                     }
                                     dataflow_kernel_lib::set_read_trid(noc, 0);  // the A round's reads stay untagged
                                 }
+                            } else if (b_ahead) {
+                                // The walk's only block (the ring holds all of it): K-block j at slot j, trid j + 1.
+                                MaybeDeviceZoneScope("rd_b_ahead");
+                                const uint32_t ring = weight_l1 - kb * weight_block_bytes;
+                                auto issue = [&](uint32_t j) {
+                                    if (j < num_k_blocks) {
+                                        dataflow_kernel_lib::set_read_trid(noc, j + 1);
+                                        read_weight(
+                                            ring + j * weight_block_bytes, b_base, KS::k0(j), KS::kv(j), blk_cols);
+                                        dataflow_kernel_lib::set_read_trid(noc, 0);
+                                    }
+                                };
+                                if (kb == 0) {
+                                    for (uint32_t j = 0; j < b_ahead_n; ++j) {
+                                        issue(j);
+                                    }
+                                    if (row_early) {
+                                        issue_row();  // (untagged: retired by the row's own barrier)
+                                    }
+                                }
+                                issue(kb + b_ahead_n);
+                                dataflow_kernel_lib::async_read_barrier_with_trid(noc, kb + 1);
                             } else if (bs_does_b && batch_valid) {  // padded batch slots (batched B) read no weight
                                 read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
                                 if (row_early && kb == 0 && bi == 0) {
@@ -883,7 +918,7 @@ void kernel_main() {
                             }
                             // One barrier per K-block, both operands. Under the B multicast B's reads are retired
                             // by their transaction ids, so only the unicast A stepping stone still needs it.
-                            if ((bs_does_b && !bs_b_mcast) || a_pending) {
+                            if ((bs_does_b && !bs_b_mcast && !b_ahead) || a_pending) {
                                 noc_async_read_barrier();
                             }
                             if (!early_push) {
@@ -1038,6 +1073,9 @@ void kernel_main() {
                             MaybeDeviceZoneScope("rd_row");
                             if (row_early) {
                                 // (issued with the walk's first K-block)
+                                if constexpr (b_ahead) {
+                                    noc_async_read_barrier();
+                                }
                             } else if (!row_mcast) {  // (the multicast row already landed in the row round)
                                 issue_row();
                                 noc_async_read_barrier();

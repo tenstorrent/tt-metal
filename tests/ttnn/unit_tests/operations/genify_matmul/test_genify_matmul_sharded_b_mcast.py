@@ -113,9 +113,16 @@ def test_bs_multi_kblock_rounds(device, monkeypatch):
 
 
 def test_bs_traffic_gate(device, monkeypatch):
-    """R3 keeps the per-core B reads when the multicast would save less than BS_B_MCAST_MIN_SAVED_BYTES (PDL
-    res4 reduce: 0.97 MB, measured slower with the multicast) and multicasts above it (res5 reduce, 5 MB)."""
+    """R3 on one reader keeps the per-core B reads when the multicast would save less than
+    BS_B_MCAST_MIN_SAVED_BYTES (PDL res4 reduce: 0.97 MB, measured slower with the multicast) and multicasts above
+    it (res5 reduce, 5 MB). Under the Refinement 18 split roles (B on its own RISC) the gate is
+    BS_SPLIT_B_MCAST_MIN_SAVED_BYTES (0: res4 reduce multicasts too)."""
+    monkeypatch.setattr(pd, "BS_B_ON_WRITER", False)
     assert not _run_both(device, monkeypatch, 8192, 512, 256, _rect(8, 8), [1024, 64], _BS, "bias_relu", r3_gate=True)[
+        "mcast"
+    ]
+    monkeypatch.setattr(pd, "BS_B_ON_WRITER", True)
+    assert _run_both(device, monkeypatch, 8192, 512, 256, _rect(8, 8), [1024, 64], _BS, "bias_relu", r3_gate=True)[
         "mcast"
     ]
     assert _run_both(device, monkeypatch, 2048, 1024, 512, _rect(8, 10), [224, 128], _BS, "bias_relu", r3_gate=True)[
@@ -211,19 +218,24 @@ def test_hs_one_shot_rect_groups(device, monkeypatch, case):
 @pytest.mark.parametrize(
     "case",
     [
-        # (m, k, n, grid x, grid y, shard, epilogue, channel): PDL res5 reduce (multicast B, rounds of 2 K-blocks),
-        # ASPP projection (per-core B, 87 KB A rounds), addcmul on the res5 grid (per-core residual on NCRISC).
+        # (m, k, n, grid x, grid y, shard, epilogue, channel): PDL res5 reduce (multicast B, one K-block per round),
+        # ASPP pool's one grid row (no B group: per-core B on BRISC), addcmul on the res5 grid (per-core residual
+        # on NCRISC).
         (2048, 1024, 512, 8, 10, [224, 128], "bias_relu", True),
-        (2048, 1280, 256, 8, 4, [512, 160], "bias_relu", False),
+        (32, 2048, 256, 8, 1, [32, 256], "bias_relu", False),
         (2048, 1024, 512, 8, 10, [224, 128], "addcmul", True),
     ],
-    ids=["res5_reduce", "aspp_proj", "addcmul"],
+    ids=["res5_reduce", "aspp_pool", "addcmul"],
 )
-def test_bs_split_roles(device, monkeypatch, case):
+@pytest.mark.parametrize("lookahead", [0, 2], ids=["ahead0", "ahead2"])
+def test_bs_split_roles(device, monkeypatch, case, lookahead):
     """Refinement 18 (BS_B_ON_WRITER): an in-place R3 walk runs its B half (B rounds / reads, the bias / gate row)
     on BRISC as a second reader instance (GM_BS_ROLE 2) and its A half on NCRISC (GM_BS_ROLE 1), with no writer.
     Bit-identical to the single-reader walk."""
     m, k, n, gx, gy, shard, epilogue, channel = case
+    # (the parked per-core B lookahead, BS_SPLIT_B_LOOKAHEAD / BS_SPLIT_B_DEPTH: the ASPP pool case runs it at 2)
+    monkeypatch.setattr(pd, "BS_SPLIT_B_LOOKAHEAD", lookahead)
+    monkeypatch.setattr(pd, "BS_SPLIT_B_DEPTH", 16 if lookahead else 2)
     real = pd.create_block_sharded_program_descriptor
     roles = []
 
