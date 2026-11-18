@@ -155,6 +155,8 @@ DFLASH_MODEL = os.environ.get("DFLASH_HF_MODEL") or ADAPTER.dflash_model_default
 DFLASH_ENABLED = ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(DFLASH_MODEL)
 
 MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0)) if ADAPTER.supports_mtp else 0
+# The cross-rank activation's dtype: bf16, or fp32 for a model whose residual is fp32 streams (Hy4 iHC).
+D2D_ACTIVATION_DTYPE = getattr(ttnn, ADAPTER.pipeline_activation_dtype)
 assert MTP_LEVELS >= 0, f"PREFILL_MTP_LEVELS must be >= 0, got {MTP_LEVELS}"
 # Decode runs this many MTP levels on ONE shared KV cache, so prefill computes only the first (MTP_LEVELS = 1)
 # and the KV table publishes the rest as aliases of its rows, acked with it.
@@ -418,7 +420,7 @@ def build_d2d_pipeline_endpoints(
     def _common(planes, tail):
         extras = [(spec, H2D_MAPPER_CONFIG) for spec in extra_specs] + list(tail)
         return dict(
-            global_spec=activation_global_spec(d2d_rows, d2d_width, planes),
+            global_spec=activation_global_spec(d2d_rows, d2d_width, planes, D2D_ACTIVATION_DTYPE),
             mapper=ttnn.create_mesh_mapper(mesh_device, D2D_MAPPER_CONFIG),
             extra_tensors=[(spec, ttnn.create_mesh_mapper(mesh_device, cfg)) for spec, cfg in extras],
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
@@ -575,7 +577,7 @@ def _forward_shutdown(
     dev = d2d_out.get_backing_tensor().device()
     dummy = ttnn.from_torch(
         torch.zeros(1, planes, d2d_rows, d2d_width),
-        dtype=ttnn.bfloat16,
+        dtype=D2D_ACTIVATION_DTYPE,
         layout=ttnn.TILE_LAYOUT,
         device=dev,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1272,7 +1274,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2d_activation_rows = FORWARD_TOKENS_BUDGET
     # The drafter partial rides beside the hidden, as a 2H width or as its own plane (the adapter's choice).
     dflash_plane = int(DFLASH_ENABLED and ADAPTER.dflash_partial_separate_plane)
-    d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED and not dflash_plane)
+    if ADAPTER.pipeline_activation_streams > 1 and DFLASH_ENABLED:
+        raise NotImplementedError(
+            f"{ADAPTER.name}: DFlash with a {ADAPTER.pipeline_activation_streams}-stream residual is not supported: the "
+            "drafter partial is a bf16 hidden beside a single-stream residual"
+        )
+    d2d_activation_width = d2d_width(
+        hf_config.hidden_size,
+        dflash=DFLASH_ENABLED and not dflash_plane,
+        streams=ADAPTER.pipeline_activation_streams,
+    )
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
     # receives and what it sends on. Read off the runtime's own config rather than recomputing the
     # split, so the socket cannot be sized for a range the model was not built with.

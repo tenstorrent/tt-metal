@@ -207,10 +207,11 @@ def build_h2d_service(
     return service
 
 
-def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn.TensorSpec:
+def activation_global_spec(rows: int, hidden_size: int, planes: int = 1, dtype=None) -> ttnn.TensorSpec:
+    """``hidden_size`` is the activation's full width (``d2d_activation_width``); ``dtype`` defaults to bf16."""
     return ttnn.TensorSpec(
         shape=ttnn.Shape([1, planes, rows, hidden_size]),
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat16 if dtype is None else dtype,
         layout=ttnn.TILE_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
     )
@@ -229,8 +230,11 @@ def mtp_id_segment_specs(mesh_shape: tuple, chunk_size: int, mtp_levels: int, sp
     ]
 
 
-def d2d_activation_width(hidden_size: int, *, dflash: bool = False) -> int:
-    return hidden_size * (2 if dflash else 1)
+def d2d_activation_width(hidden_size: int, *, dflash: bool = False, streams: int = 1) -> int:
+    """Width of the cross-rank activation: ``streams`` packed hidden-size residual streams (iHC), or the hidden
+    widened to 2H for the DFlash partial. The two do not combine (the runner refuses DFlash with streams > 1)."""
+    assert not (dflash and streams > 1), "a DFlash partial cannot ride beside a multi-stream (iHC) residual"
+    return hidden_size * (2 if dflash else streams)
 
 
 def indexer_indices_global_spec(per_chip_shape, mesh_shape) -> ttnn.TensorSpec:

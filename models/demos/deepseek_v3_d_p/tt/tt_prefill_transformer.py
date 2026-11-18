@@ -332,9 +332,8 @@ class TtPrefillTransformer(LightweightModule):
         self.ihc = hy4_ihc.ihc_enabled(model_cfg)
         self.ihc_head = None
         if self.ihc:
-            assert mtp_predictor is None, "MTP with iHC streams is not wired (Hy4 MTP: #65925)"
-            # The host snapshots of the streams are [S, n, emb]; the balanced reorder assumes the sequence on dim -2.
-            assert not is_balanced, "iHC streams are not wired for balanced (zigzag) SP"
+            # MTP (Hy4: vLLM hy_v4) is seeded by norm(hc_head(streams)): the head below runs before self.norm on a
+            # last rank with a tail, and the MTP block itself is built without iHC (tt/hy4/ihc.py without_ihc).
             self.ihc_n = int(model_cfg.HC_MULT)
             if is_last_rank and not kv_only_last_layer:
                 ihc_cfg = hy4_ihc.ihc_config(config, model_cfg)
@@ -755,7 +754,12 @@ class TtPrefillTransformer(LightweightModule):
             for key, tensor in intermediates.items():
                 if isinstance(tensor, torch.Tensor):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
-                    intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
+                    # iHC stream snapshots are [S, n, emb], the sequence on dim -3. iHC itself is per token, so the
+                    # zigzag order never reaches it on device.
+                    if self.ihc and key.startswith("layer_"):
+                        intermediates[key] = hy4_ihc.unbalance_streams(tensor, self.chunk_order)
+                    else:
+                        intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
 
         if mtp_union is not None and mtp_geometry is not None:
             self.run_mtp_traced(

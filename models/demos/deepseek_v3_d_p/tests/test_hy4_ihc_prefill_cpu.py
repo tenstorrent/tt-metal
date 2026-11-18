@@ -82,3 +82,33 @@ def test_ihc_config_from_model_config():
     assert keys["attn"]["fn"] == "model.layers.7.hc_attn_layer.hc_pre.hc_fn"
     assert keys["ffn"]["scale"] == "model.layers.7.hc_mlp_layer.hc_pre.hc_scale"
     assert hy4_ihc.HEAD_KEYS["base"] == "model.hc_head.hc_head_base"
+
+
+def test_balanced_reorder_of_stream_snapshots():
+    """Balanced (zigzag) SP: TtPrefillTransformer restores natural order on its host snapshots. iHC stream snapshots are
+    [S, n, C] (sequence on dim -3), so reordering them there must equal reordering each stream on its own sequence."""
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
+
+    order = create_balanced_chunk_order(8)
+    streams = torch.randn(256, 4, 32)
+    got = hy4_ihc.unbalance_streams(streams, order)
+    for j in range(4):
+        assert torch.equal(got[:, j], reverse_reorder_tensor_chunks(streams[:, j], order, seq_dim=-2))
+
+
+def test_without_ihc_and_residual_layout():
+    import ttnn
+
+    noihc = hy4_ihc.without_ihc(Hy4Config)
+    assert not hy4_ihc.ihc_enabled(noihc) and issubclass(noihc, Hy4Config) and hy4_ihc.ihc_enabled(Hy4Config)
+    assert hy4_ihc.without_ihc(GLM53Config) is GLM53Config
+    assert hy4_ihc.residual_layout(Hy4Config) == (4, ttnn.float32)
+    assert hy4_ihc.residual_layout(GLM53Config) == (1, ttnn.bfloat16)
+
+
+def test_d2d_activation_width():
+    from models.demos.common.prefill.runners.runner_utils import d2d_activation_width
+
+    assert d2d_activation_width(6144) == 6144
+    assert d2d_activation_width(6144, dflash=True) == 2 * 6144
+    assert d2d_activation_width(6144, streams=4) == 4 * 6144

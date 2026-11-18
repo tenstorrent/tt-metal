@@ -139,6 +139,11 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
+    # The cross-rank residual, per token: ``pipeline_activation_streams`` hidden-size streams packed on the last dim,
+    # in ``pipeline_activation_dtype`` (a ttnn dtype name). One bf16 hidden for every model except one whose residual
+    # is several streams: Hy4-preview's iHC hands the next rank 4 fp32 streams ([T, 4 * hidden / tp] per chip).
+    pipeline_activation_streams: int = 1
+    pipeline_activation_dtype: str = "bfloat16"
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
     # The drafter checkpoint trained against THIS verifier, and the context-KV golden for it. A drafter has

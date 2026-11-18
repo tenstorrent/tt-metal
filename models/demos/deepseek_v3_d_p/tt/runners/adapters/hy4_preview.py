@@ -66,8 +66,12 @@ class Hy4Adapter(GLM53Adapter):
     ttnn_cache_default = "/mnt/tt-data/Hy4-Preview-Cache/prefill"
     # Golden traces come from #65919 (HF hy_v4); PREFILL_TRACE_DIR points the producer at one.
     prefill_trace_default = "/mnt/tt-data/Hy4-Preview-Cache/golden_traces/hy4-prefill"
-    # GLM-5.3's MTP predictor reads DeepSeek-layout model.layers.78; Hy4's MTP layer is model.mtp_layers.0 (#65925).
-    supports_mtp = False
+    # MTP: Hy4's layer is model.mtp_layers.0, read by hy4_checkpoint.load_hy4_mtp_state_dict (TtHy4Runtime); it has no
+    # iHC and is seeded by norm(hc_head(streams)).
+    supports_mtp = True
+    # iHC: the residual a pipeline stage hands the next is the 4 packed fp32 streams.
+    pipeline_activation_streams = Hy4Config.HC_MULT
+    pipeline_activation_dtype = "float32"
 
     # --- test metadata ---
     hf_repo_id = "tencent/Hy4-preview"

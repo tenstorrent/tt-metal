@@ -420,7 +420,9 @@ def test_adapter_identity(adapter):
     assert isinstance(adapter, GLM53Adapter)
     assert adapter.name == "hy4_preview"
     assert adapter.model_config is Hy4Config
-    assert adapter.supports_mtp is False
+    assert adapter.supports_mtp is True  # model.mtp_layers.0 via TtHy4Runtime (no iHC in the MTP layer)
+    # iHC: a pipeline stage hands the next the 4 packed fp32 streams, not one bf16 hidden.
+    assert (adapter.pipeline_activation_streams, adapter.pipeline_activation_dtype) == (4, "float32")
     assert adapter.builds_missing_weight_cache is True
     assert adapter.supports_tp_shard_kv and adapter.tp_shard_kv_default
     # Must not inherit GLM-5.3's golden trace or checkpoint.

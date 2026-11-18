@@ -47,6 +47,24 @@ def ihc_enabled(model_cfg) -> bool:
     return bool(getattr(model_cfg, "ENABLE_IHC", False))
 
 
+def without_ihc(model_cfg):
+    """``model_cfg`` with iHC off, for Hy4's MTP layer: it is a plain-residual decoder layer (the checkpoint's
+    ``model.mtp_layers.*`` carry no ``hc_*`` tensors; vLLM hy_v4 builds it with ``enable_ihc=False``) fed the main
+    model's ``norm(hc_head(streams))``. Returns ``model_cfg`` itself when it has no iHC, so other models are unchanged.
+    """
+    if not ihc_enabled(model_cfg):
+        return model_cfg
+    return type(f"{model_cfg.__name__}NoIHC", (model_cfg,), {"ENABLE_IHC": False})
+
+
+def residual_layout(model_cfg) -> tuple:
+    """``(streams, dtype)`` of the residual a block hands the next one (and a pipeline stage the next stage):
+    ``(1, bf16)`` without iHC, ``(HC_MULT, fp32)`` with it."""
+    if ihc_enabled(model_cfg):
+        return int(model_cfg.HC_MULT), STREAM_DTYPE
+    return 1, ttnn.bfloat16
+
+
 def ihc_config(config, model_cfg) -> IHCConfig:
     """iHC hyperparameters: hidden and the RMS eps from the HF config, the rest from the model config."""
     return IHCConfig(
@@ -163,6 +181,14 @@ def _fp32(d):
 
 
 # ----------------------------------------------------------------------------------------------- host readback
+def unbalance_streams(streams: torch.Tensor, chunk_order) -> torch.Tensor:
+    """Balanced (zigzag) SP: natural token order for a host ``[S, n, C]`` stream snapshot. The chunk reorder works on
+    the sequence at dim -2, so the stream axis goes first for it."""
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import reverse_reorder_tensor_chunks
+
+    return reverse_reorder_tensor_chunks(streams.transpose(0, 1), chunk_order, seq_dim=-2).transpose(0, 1).contiguous()
+
+
 def streams_to_host(t: ttnn.Tensor, mesh_device, *, sp_axis: int, tp_axis: int, n: int) -> torch.Tensor:
     """Packed device streams ``[1, 1, S / sp, n * C / tp]`` -> ``[S, n, C]`` fp32 in the reference order."""
     dims = [None, None]

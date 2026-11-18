@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.hy4.ihc import without_ihc
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import COMPUTE_KERNEL_CONFIG_HIFI2
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
@@ -271,10 +272,11 @@ class TtMTPModule(LightweightModule):
             use_fused_rmsnorm=use_fused_rmsnorm,
         )
 
+        # Hy4: the MTP layer has no iHC (plain residual) even though the trunk does; a no-op for other models.
         self.layer = TtPrefillBlock(
             mesh_device=mesh_device,
             config=config,
-            model_cfg=model_cfg,
+            model_cfg=without_ihc(model_cfg),
             state_dict=state_dict["layer"],
             layer_idx=self.layer_idx,
             seq_len=seq_len,
@@ -313,7 +315,7 @@ class TtMTPModule(LightweightModule):
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.shared_head_norm"):
             return False
         return TtPrefillBlock.check_cache_complete(
-            cache_path, layer_idx, is_dense=False, experts_per_chip=experts_per_chip, model_cfg=model_cfg
+            cache_path, layer_idx, is_dense=False, experts_per_chip=experts_per_chip, model_cfg=without_ihc(model_cfg)
         )
 
     def forward(self, embed: ttnn.Tensor, hidden: ttnn.Tensor, rope_tensors: dict, kvpe_cache, **fwd_kwargs):

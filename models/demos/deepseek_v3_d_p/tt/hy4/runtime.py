@@ -12,8 +12,8 @@ on Hy4's full/shared layer map, and the prefill MoE. Everything Hy4 changes ther
 * MLA / indexer caches built before the RoPE frame reorder (``hy4_checkpoint.HY4_MLA_CACHE_FORMAT``) are stale:
   their layers carry no format stamp, so their files are deleted and rebuilt from the checkpoint, and every layer
   is stamped once the model has built;
-* there is no MTP predictor yet: the shared build would start GLM-5.3's, which reads the DeepSeek
-  ``model.layers.78`` keys; Hy4 stores its MTP layer as ``model.mtp_layers.0`` (#65925).
+* MTP: Hy4 stores its MTP layer as ``model.mtp_layers.0`` (not DeepSeek's ``model.layers.78``), read by
+  ``hy4_checkpoint.load_hy4_mtp_state_dict``; it has no iHC and is fed ``norm(hc_head(streams))`` (vLLM hy_v4).
 
 The mesh layout is checked by the adapter, not here: ``Hy4Adapter`` resolves it (``tt/hy4/layout.py``) when the
 runner asks for the weight-cache path, before the mesh opens, so the TP32 / DP1 layout fails there with its
@@ -34,7 +34,7 @@ from __future__ import annotations
 from loguru import logger
 
 from models.demos.deepseek_v3_d_p.tt.runners import hy4_checkpoint as hc
-from models.demos.deepseek_v3_d_p.tt.runners.hy4_checkpoint import load_hy4_trunk_state_dict
+from models.demos.deepseek_v3_d_p.tt.runners.hy4_checkpoint import load_hy4_mtp_state_dict, load_hy4_trunk_state_dict
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
 
@@ -42,12 +42,17 @@ class TtHy4Runtime(TtPrefillRuntime):
     # MODEL_CLS stays TtPrefillTransformer: iHC (#65891) is gated inside it by ENABLE_IHC.
 
     _load_trunk_state_dict = staticmethod(load_hy4_trunk_state_dict)
+    _load_mtp_state_dict = staticmethod(load_hy4_mtp_state_dict)
+    _mtp_cache_dirname = "hy4_mtp_ttnn_cache"
+
+    def _mtp_config(self, num_levels: int):
+        # MTPConfig.from_pretrained checks for DeepSeek's model.layers.{N}.eh_proj, which Hy4 does not have; the
+        # layer index (num_hidden_layers) and the rest come from the loaded HF config.
+        from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
+
+        return MTPConfig.from_hf_config(self.hf_config, num_levels=num_levels)
 
     def _build_model(self, state_dict: dict) -> None:
-        if self.config.mtp_levels:
-            raise NotImplementedError(
-                f"Hy4-preview prefill has no MTP predictor yet (#65925); got mtp_levels={self.config.mtp_levels}"
-            )
         cache = self.config.weight_cache_path
         layers = range(self.config.first_layer_idx, self.config.first_layer_idx + self.config.num_layers)
         if cache:

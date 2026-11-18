@@ -370,3 +370,58 @@ def load_hy4_trunk_state_dict(
 
         sd["ihc_head_weights"] = read_head_ihc(ckpt)
     return sd
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# MTP (#65925): the checkpoint stores the layer as model.mtp_layers.0.*, not DeepSeek's model.layers.{N}.*
+# ---------------------------------------------------------------------------------------------------------------
+HY4_MTP_PREFIX = "model.mtp_layers.0."
+# model.mtp_layers.0.<key> -> TtFusedMTP / TtMTPModule weight name. HYV4SharedHead is the identity, so the MTP
+# layer's own final_layernorm is the norm the LM head reads: TtMTPModule's ``shared_head_norm`` slot.
+HY4_MTP_KEYS = {
+    "enorm.weight": "enorm",
+    "hnorm.weight": "hnorm",
+    "eh_proj.weight": "eh_proj",
+    "final_layernorm.weight": "shared_head_norm",
+}
+
+
+class _Hy4MtpCheckpoint(Hy4Checkpoint):
+    """``Hy4Checkpoint`` that answers ``model.layers.{layer_idx}.*`` from ``model.mtp_layers.0.*``, so the trunk's
+    per-layer reader (``hy4_layer_state_dict``) reads the MTP decoder layer unchanged."""
+
+    def __init__(self, path, layer_idx: int):
+        super().__init__(path)
+        self._alias = f"model.layers.{layer_idx}."
+        for k, v in list(self.weight_map.items()):
+            if k.startswith(HY4_MTP_PREFIX):
+                self.weight_map[self._alias + k[len(HY4_MTP_PREFIX) :]] = v
+
+    def _real(self, key: str) -> str:
+        return HY4_MTP_PREFIX + key[len(self._alias) :] if key.startswith(self._alias) else key
+
+    def get(self, key: str) -> torch.Tensor:
+        return super().get(self._real(key))
+
+    def _get_slice(self, key: str, index) -> torch.Tensor:
+        return super()._get_slice(self._real(key), index)
+
+    def _last_dim(self, key: str) -> int:
+        return super()._last_dim(self._real(key))
+
+
+def load_hy4_mtp_state_dict(checkpoint_path, config, model_cfg: type, mtp_layer_idx: int) -> dict:
+    """``{"mtp": {enorm, hnorm, eh_proj, shared_head_norm}, "layer": {...}}`` for ``TtMTPPredictor``, from Hy4's
+    ``model.mtp_layers.0``. ``mtp_layer_idx`` is the index the block is built at (its cache keys; ``config``'s
+    indexer map must already cover it, ``enable_mtp_indexer_slot``). The layer has no iHC tensors: it is a
+    plain-residual MoE decoder layer with its own (full) indexer, the learnable sink and the output gate."""
+    from models.demos.deepseek_v3_d_p.tt.hy4.ihc import without_ihc
+
+    ckpt = _Hy4MtpCheckpoint(checkpoint_path, mtp_layer_idx)
+    mtp = {}
+    for src, name in HY4_MTP_KEYS.items():
+        t = ckpt.get(HY4_MTP_PREFIX + src)
+        mtp[name] = t.to(torch.bfloat16)
+    cats = {wc.NORMS, wc.MLA, wc.MOE_GATE, wc.SHARED_EXPERTS, wc.ROUTED_EXPERTS}
+    layer = hy4_layer_state_dict(ckpt, config, without_ihc(model_cfg), mtp_layer_idx, cats)
+    return {"mtp": mtp, "layer": layer}
