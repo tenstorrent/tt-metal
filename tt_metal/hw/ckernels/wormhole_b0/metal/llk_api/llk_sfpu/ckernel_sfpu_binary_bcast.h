@@ -485,7 +485,9 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
             _col_next_face_pair_();
         }
     }
-    _col_tile_end_();
+    // Like the ROW path, leave the dest base at the data tile: the enclosing
+    // _llk_math_eltwise_sfpu_done_ drains the SFPU and every consumer
+    // reprograms the base before use.
 }
 
 // ============================================================================
