@@ -162,6 +162,9 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2  # SDPA + all prefill matmuls
+        # prefill q / k RMSNorm compute config (args.prefill_options.exact_norms); empty = the ttnn default
+        _ncfg = tpc.norm_compute_cfg(args)
+        self._norm_kw = {} if _ncfg is None else {"compute_kernel_config": _ncfg}
         # DECODE-only QKV / wo matmul configs: LoFi with BFP4 weights (QWEN36_BFP4_ATTN), else unchanged.
         self.qkv_cfg = tpc.COMPUTE_LOFI if tpc.bfp4_attn_enabled() else self.compute_cfg
         self.wo_cfg = tpc.COMPUTE_LOFI if tpc.bfp4_attn_enabled() else self.compute_cfg
@@ -536,12 +539,12 @@ class TPAttention:
 
         _qk_mc = tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG)  # DRAM above S=2048
         q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=_qk_mc),
+            ttnn.rms_norm(q, epsilon=1e-6, memory_config=_qk_mc, **self._norm_kw),
             tw["q_norm"],
             memory_config=_qk_mc,
         )
         k = ttnn.multiply(
-            ttnn.rms_norm(k, epsilon=1e-6, memory_config=_qk_mc),
+            ttnn.rms_norm(k, epsilon=1e-6, memory_config=_qk_mc, **self._norm_kw),
             tw["k_norm"],
             memory_config=_qk_mc,
         )
@@ -1270,12 +1273,12 @@ class TPAttention:
 
         _qk_mc = tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG)  # DRAM above S=2048
         q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=_qk_mc),
+            ttnn.rms_norm(q, epsilon=1e-6, memory_config=_qk_mc, **self._norm_kw),
             tw["q_norm"],
             memory_config=_qk_mc,
         )
         k = ttnn.multiply(
-            ttnn.rms_norm(k, epsilon=1e-6, memory_config=_qk_mc),
+            ttnn.rms_norm(k, epsilon=1e-6, memory_config=_qk_mc, **self._norm_kw),
             tw["k_norm"],
             memory_config=_qk_mc,
         )

@@ -1086,7 +1086,10 @@ class Qwen36Model:
         hf_model=None,
         enable_mtp=None,
         state_dict=None,
+        prefill_profile=None,
     ):
+        # prefill_profile: None (stock prefill) or "column" (Qwen36ModelArgs.set_column_prefill_profile: Qwen3.5-9B on
+        # one (1, 4) column). Applied before the layers are built (it selects converted weights).
         # HF_MODEL env var (hub or local path) is canonical; hf_model sets it for back-compat.
         if hf_model is not None:
             import os
@@ -1125,6 +1128,10 @@ class Qwen36Model:
         # feeds those layers garbage while the HF load is skipped. This is the same failure that made
         # the vision demo emit token soup, on the text path. Re-enabling needs those conv weights either
         # cache-backed or captured to the sidecar via an is_host_weight predicate. (#45400 review)
+        if prefill_profile == "column":
+            args.set_column_prefill_profile()
+        else:
+            assert prefill_profile is None, f"unknown prefill_profile {prefill_profile!r}"
         cache_path = args.weight_cache_path()
         if state_dict is None:
             logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
@@ -2778,7 +2785,9 @@ class Qwen36Model:
         ttnn.deallocate(hidden)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = ttnn.linear(x_last, self.lm_head_weight, **_lm_head_kwargs())  # [1, 1, 1, vocab/TP], pre-gather
+        logits = ttnn.linear(
+            x_last, self.lm_head_weight, **_lm_head_kwargs(self.args)
+        )  # [1, 1, 1, vocab/TP], pre-gather
         ttnn.deallocate(x_last)
         idx, val = self.shard_argmax_max(logits)
         return idx, val, logits
@@ -3547,7 +3556,7 @@ class Qwen36Model:
         x_last = ttnn.reshape(x_last, (1, 1, Bg, x_last.shape[-1]))
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = ttnn.linear(x_last, self.lm_head_weight, **_lm_head_kwargs())  # [1, 1, Bg, vocab/TP]
+        logits = ttnn.linear(x_last, self.lm_head_weight, **_lm_head_kwargs(self.args))  # [1, 1, Bg, vocab/TP]
         ttnn.deallocate(x_last)
         return logits
 
@@ -6172,7 +6181,7 @@ class Qwen36Model:
                 xn_b = ttnn.reshape(xn, (1, Bg, bucket, xn.shape[-1]))
                 for i, u in enumerate(grp):
                     x_last = xn_b[:, i : i + 1, vlens[u] - 1 : vlens[u], :]  # [1,1,1,full] (slice copy)
-                    lg = ttnn.linear(x_last, self.lm_head_weight, **_lm_head_kwargs())
+                    lg = ttnn.linear(x_last, self.lm_head_weight, **_lm_head_kwargs(self.args))
                     ttnn.deallocate(x_last)
                     host_logits[u] = (
                         ttnn.to_torch(lg, mesh_composer=comp).reshape(1, 1, -1)[:, :, : self.args.vocab_size].clone()

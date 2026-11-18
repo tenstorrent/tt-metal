@@ -20,8 +20,10 @@ class _FusedDistRMSNorm(RMSNorm):
     """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
     (args.prefill_fused_dist_norm, see tpc.fused_distributed_rmsnorm). Decode keeps the replicated-weight rms_norm."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, out_dtype=None, compute_cfg=None, **kwargs):
         super().__init__(**kwargs)
+        self.out_dtype = out_dtype  # None = the input's dtype
+        self.compute_cfg = compute_cfg  # None = the caller's
         # The fused op wants gamma TILE [1,1,dim] sharded on dim 2 (weight_distributed is ROW_MAJOR [1,1,dim/32,32]).
         dim, device, cache = kwargs["dim"], kwargs["device"], kwargs.get("weight_cache_path")
         name = f"{kwargs['state_dict_prefix']}{kwargs['weight_key']}.weight"
@@ -50,7 +52,14 @@ class _FusedDistRMSNorm(RMSNorm):
         shape = tuple(inp.shape)
         x = inp if len(shape) == 4 else ttnn.reshape(inp, (1,) * (4 - len(shape)) + shape)  # the op needs rank 4
         out = tpc.fused_distributed_rmsnorm(
-            x, self.weight_fused, epsilon, self.tt_ccl, self.ccl_topology, compute_kernel_config, mc
+            x,
+            self.weight_fused,
+            epsilon,
+            self.tt_ccl,
+            self.ccl_topology,
+            self.compute_cfg or compute_kernel_config,
+            mc,
+            dtype=self.out_dtype,
         )
         return out if len(shape) == 4 else ttnn.reshape(out, shape)
 
@@ -189,8 +198,14 @@ class Qwen36DecoderLayer:
         # 2D (rows, tp) mesh that mixes the rows' tokens, so only the fused norm (TP-axis gather) is correct there.
         if tpc.is_2d_mesh(mesh_device) and not fused:
             raise ValueError("2D meshes need the fused distributed RMSNorm (QWEN36_FUSED_DIST_NORM=1)")
+        fused_kw = {}
+        if fused:
+            # bf8 out: every prefill consumer (bf8 AGMM / all-gather) casts to bf8 anyway
+            bf8 = tpc.prefill_options(args).fused_norm_bf8 and getattr(args, "prefill_agmm_bf8", False)
+            fused_kw = dict(out_dtype=ttnn.bfloat8_b if bf8 else None, compute_cfg=tpc.norm_compute_cfg(args))
         norm_cls = _FusedDistRMSNorm if fused else RMSNorm
         norm = norm_cls(
+            **fused_kw,
             device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
@@ -247,7 +262,8 @@ class Qwen36DecoderLayer:
         # prefill_group (TP prefill only): dict for a GROUPED short prefill of Bg users x Tb bucket rows laid out
         # user-major in x [1,1,Bg*Tb,dim]: keys Bg, Tb, cos, sin, csi, full_pts / chunk_pts (per-user device page
         # tables), gdn_masks, gdn_scratch ({id(gdn layer): alloc_group_scratch(Bg)}). Full attention runs per user on
-        # its row slice (own KV pages), GDN runs once for the whole group (forward_prefill_group).
+        # its row slice (own KV pages), GDN runs once for the whole group (forward_prefill_group). Optional keys (Bg = 1):
+        # gdn_init (per GDN layer {"rec", "hist"}: the row resumed from a prefix state).
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
@@ -315,7 +331,12 @@ class Qwen36DecoderLayer:
                     D = attn_input.shape[-1]
                     outs = []
                     for i in range(Bg):
-                        xi = ttnn.slice(attn_input, (0, 0, i * Tb, 0), (1, 1, (i + 1) * Tb, D))
+                        # Bg == 1: the row is the whole input, no slice copy
+                        xi = (
+                            attn_input
+                            if Bg == 1
+                            else ttnn.slice(attn_input, (0, 0, i * Tb, 0), (1, 1, (i + 1) * Tb, D))
+                        )
                         oi = self.attention.forward_prefill_paged(
                             xi,
                             pg["cos"],
@@ -325,11 +346,15 @@ class Qwen36DecoderLayer:
                             chunk_start_idx=0,
                             chunk_start_idx_tensor=pg["csi"],
                         )
-                        ttnn.deallocate(xi)
+                        if xi is not attn_input:
+                            ttnn.deallocate(xi)
                         outs.append(oi)
-                    attn_output = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                    for oi in outs:
-                        ttnn.deallocate(oi)
+                    if Bg == 1:
+                        attn_output = outs[0]
+                    else:
+                        attn_output = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                        for oi in outs:
+                            ttnn.deallocate(oi)
                 elif mode == "prefill":
                     # Contract/vLLM path supplies a page_table → paged KV prefill; the
                     # demo path (no page_table) uses the internal concat caches.
@@ -377,6 +402,7 @@ class Qwen36DecoderLayer:
                         pg["gdn_masks"],
                         pg["gdn_scratch"][id(self.attention)],
                         chunk_size=chunk_size,
+                        init=(pg.get("gdn_init") or {}).get(id(self.attention)),
                     )
                 elif mode == "prefill":
                     if gdn_recurrent and gdn_seed:

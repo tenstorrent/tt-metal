@@ -1695,6 +1695,7 @@ def test_kda_conv_group_matches_b1(mesh_device, Bg, Tb, reset_seeds, ensure_gc, 
     gdn.mesh, gdn.K = mesh, CONV_K
     gdn.qkv_dim_tp, gdn.key_dim_tp, gdn.value_dim_tp = C, kd, vd
     gdn.tw = {"conv_taps": taps}
+    gdn._conv_out_mc = ttnn.DRAM_MEMORY_CONFIG
     gdn._kda_actual_start = gdn._kda_zero_history = None
     gdn._ensure_kda_consts()
 
