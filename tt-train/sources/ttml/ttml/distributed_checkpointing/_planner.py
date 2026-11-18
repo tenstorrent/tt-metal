@@ -8,8 +8,8 @@ Both plans are pure functions of labels, shapes and transforms, so the reshardin
 
 Save: every key's label gives one box per device; devices that hold the same box form a replica group, and one of
 them, elected by a hash of the key, writes it. A file per device collects the chunks its device owns, largest first,
-at offsets fixed before any byte moves. Before that, every key's unique boxes must tile its global shape: a label that
-does not (a shard dim out of range, say) is refused at save instead of producing a checkpoint every load rejects.
+at offsets fixed before any byte moves. Before that, a label that shards a dim the tensor does not have is refused at
+save instead of producing a checkpoint every load rejects; any other label's unique boxes tile the global shape.
 
 Load: every destination shard's box is taken to canonical coordinates through the destination transform, back to
 the checkpoint's device layout through the inverse of the saved transform, and intersected with the saved chunks.
@@ -156,12 +156,12 @@ def _replica_layout(
     label: Label, local_shape: tuple[int, ...]
 ) -> tuple[Mapping[tuple[int, ...], tuple[Chunk, ...]], CheckpointError | None]:
     """The replica groups a label gives a tensor of ``local_shape``, read-only so the cached value cannot be changed
-    through it, and the error that is wrong with them (``None`` when nothing is). The error is returned rather than
-    raised so that a failure is cached too; callers raise it with the key prefixed.
+    through it, and the error that is wrong with the label (``None`` when nothing is). The error is returned rather
+    than raised so that a failure is cached too; callers raise it with the key prefixed.
 
     A key's groups depend only on its label and shape, which do not change during training, and most keys of a model
     share a handful of them; caching here makes every save after the first, and every key after the first of each
-    kind, skip the enumeration and the tiling check."""
+    kind, skip the enumeration."""
     rank = len(local_shape)
     for axis, placement in enumerate(label.placements):
         if placement.kind == "shard" and not 0 <= placement.dim < rank:
@@ -169,22 +169,13 @@ def _replica_layout(
                 f"distribution axis {axis} shards dim {placement.dim}, out of range for a rank-{rank} tensor"
             )
     groups = {group: tuple(chunks) for group, chunks in replica_groups(chunk_boxes(label, local_shape)).items()}
-    boxes = [chunks[0].box for chunks in groups.values()]
-    global_shape = label_global_shape(label, local_shape)
-    if not boxes_tile(boxes, Box.whole(global_shape)):
-        return MappingProxyType(groups), CoverageError(
-            f"the {len(boxes)} boxes of its label {label.to_json()} do not tile its global shape {list(global_shape)}"
-        )
     return MappingProxyType(groups), None
 
 
 def _checked_groups(info: TensorInfo) -> Mapping[tuple[int, ...], tuple[Chunk, ...]]:
-    """The replica groups of a live tensor, after checking that their boxes tile its global shape.
-
-    Save checks two things: every shard dim lies within the tensor's rank (a ``TopologyError`` otherwise), and the
-    unique boxes (one per replica group, duplicates kept) tile the global shape exactly (a ``CoverageError``). A label
-    whose shard dims are in range always tiles, so the second check only guards against a malformed label. The boxes
-    are cells of one grid, so the check is linear in the device count, and it is cached per label and shape
+    """The replica groups of a live tensor, after checking that every shard dim of its label lies within the tensor's
+    rank (a ``TopologyError`` otherwise). With the dims in range, the unique boxes (one per replica group) tile the
+    global shape by construction, which the topology tests check over random labels. Cached per label and shape
     (``_replica_layout``).
     """
     groups, problem = _replica_layout(info.label, tuple(info.local_shape))

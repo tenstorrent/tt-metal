@@ -40,8 +40,8 @@ class UnexpectedKeyError(CheckpointError):
 
 
 class CoverageError(CheckpointError):
-    """Boxes that must tile a shape exactly do not: a key's chunks on save, the saved chunks of a checkpoint entry,
-    or the planned reads of a destination shard on load."""
+    """Boxes that must tile a shape exactly do not: the saved chunks of a checkpoint entry, or the planned reads of a
+    destination shard on load."""
 
 
 class RoleMismatchError(CheckpointError):

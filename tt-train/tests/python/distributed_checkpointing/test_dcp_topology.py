@@ -158,6 +158,23 @@ def test_boxes_tile_grid_fast_path_agrees_with_the_pairwise_definition():
     assert pairwise_cases > 200, "the pairwise path was exercised"
 
 
+def test_every_label_with_dims_in_range_tiles_and_its_replicas_share_a_box():
+    """The save planner checks only that a label's shard dims are in range and relies on the rest, so it is checked
+    here over random labels: one box per replica group, the boxes tiling the global shape (by the pairwise
+    definition), and every replica of a group holding the same box."""
+    rng = np.random.default_rng(11)
+    for _ in range(1000):
+        rank = int(rng.integers(1, 5))
+        dist_shape = tuple(int(rng.integers(1, 4)) for _ in range(int(rng.integers(1, 4))))
+        placements = [R() if rng.integers(0, 3) == 0 else S(int(rng.integers(0, rank))) for _ in dist_shape]
+        label = world(placements, dist_shape)
+        local = tuple(int(rng.integers(1, 4)) for _ in range(rank))
+        groups = replica_groups(chunk_boxes(label, local))
+        assert all(c.box == chunks[0].box for chunks in groups.values() for c in chunks), label
+        boxes = [chunks[0].box for chunks in groups.values()]
+        assert _pairwise_tile(boxes, Box.whole(global_shape(label, local))), (label, local)
+
+
 def test_tp_split_counts_every_mesh_axis_but_fsdps():
     # Distribution axis 0 shards dim 3 (an FSDP axis), axis 1 shards dim 2 (tensor parallel).
     fsdp_tp = world([S(3), S(2)], (4, 8))
