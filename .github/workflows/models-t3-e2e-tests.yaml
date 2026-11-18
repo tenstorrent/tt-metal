@@ -56,6 +56,7 @@ on:
           - "[tt-train] llama_8b_tp4_ddp8"
           - "[tt-train] llama_70b_tp8_fsdp4"
           - "[tt-train] llama_8b_tp4_fsdp8"
+          - "[tt-train] llama_8b_cp8_tp4"
           - xtts-v2
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"

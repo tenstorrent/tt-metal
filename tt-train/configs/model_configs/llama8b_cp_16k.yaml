@@ -1,0 +1,15 @@
+# Llama 3 8B for the context-parallel (CP=8 x TP=4) Galaxy e2e test: 16k context, per-block activation
+# checkpointing (memory_efficient) so the activations of all 32 layers do not have to fit at once.
+transformer_config:
+  model_type: "llama"
+  num_heads: 32
+  num_groups: 8
+  embedding_dim: 4096
+  intermediate_dim: 14336
+  dropout_prob: 0.0
+  num_blocks: 32
+  vocab_size: 128256
+  weight_tying: "disabled"
+  max_sequence_length: 16384
+  runner_type: memory_efficient
+  theta: 500000.0

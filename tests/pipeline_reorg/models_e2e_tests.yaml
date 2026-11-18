@@ -2150,6 +2150,20 @@
   team: train
   budget_type: e2e
 
+# Context parallelism (ring attention) end to end: Llama 3 8B, CP=8 x TP=4, 16k sequence, C++ nano_gpt.
+- name: Galaxy Llama 8B CP=8 TP=4 16k train e2e tests
+  cmd: |
+    tt-train/scripts/ci/run_galaxy_e2e.sh llama_8b_cp8_tp4_shakespeare
+  model: "[tt-train] llama_8b_cp8_tp4"
+  skus:
+    bh_sc1_high_power:
+      timeout: 25
+      tier: 3
+      release_ready: false
+  owner_id: U0C7X8SAAV7 # Grzegorz Dolanowski
+  team: train
+  budget_type: e2e
+
 # ── VibeVoice ──────────────────────────────────────────────────────
 - name: VibeVoice-1.5B e2e accuracy tests (P150 1x1)
   cmd: |
