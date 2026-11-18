@@ -110,6 +110,54 @@ _PERF_RUN_TOOL = "mcp__perftest-mcp__run_perf_test"
 _AGENT_REAP_POLL_S = float(os.environ.get("PERF_MCP_AGENT_REAP_POLL_S", "5"))
 
 
+class _AgentBudget:
+    """The agent's overall budget, which a tree that is still moving may outlive up to the hard ceiling.
+
+    "Moving" is probes.ProgressWatch's answer (log growth, syscalls and bytes anywhere in the agent's
+    tree, MCP server and test run included) -- the same rule every other supervised loop uses. The
+    stall window is the one _run_perf_node applies to the runs the agent starts.
+    """
+
+    def __init__(self, pid, log_path, budget_s):
+        import time
+
+        self._t0 = self._last = time.monotonic()
+        self._budget = float(budget_s or 0)
+        self._announced = False
+        try:
+            from .probes import _HARD_CEILING_MULT, ProgressWatch
+
+            stall = int(os.environ.get("PERF_MCP_VALIDATE_STALL_SEC", "300") or "300")
+            self._watch = ProgressWatch(pid, log_path, stall)
+            self._mult = max(1, int(_HARD_CEILING_MULT))
+        except Exception:  # noqa: BLE001 -- no progress signal: the plain budget, as before
+            self._watch, self._mult = None, 1
+
+    def expired(self) -> bool:
+        import sys
+        import time
+
+        now = time.monotonic()
+        if self._watch is not None and self._watch.moved(now, self._last):
+            self._watch.note_progress(now, self._last)
+            self._last = now
+        if now - self._t0 < self._budget:
+            return False
+        if self._watch is None or now - self._t0 >= self._budget * self._mult:
+            return True
+        if now - self._last >= self._watch.limit():
+            return True
+        if not self._announced:
+            self._announced = True
+            print(
+                "      · agent is over its %ds budget but its tree is still making progress -- not killing it"
+                % self._budget,
+                file=sys.stderr,
+                flush=True,
+            )
+        return False
+
+
 def _repo_root() -> Path:
     # .../models/experimental/perf_automation/agent/perf_test_agent.py -> repo root is parents[4]
     return Path(__file__).resolve().parents[4]
@@ -148,7 +196,6 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
     import subprocess
     import subprocess as _sp
     import tempfile
-    import time
 
     root = Path(root)
     node_abs = f"{root / out_rel}::test_{task}_perf"
@@ -272,14 +319,14 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
     except Exception:  # noqa: BLE001 -- reaping is best-effort; never fail the build over it
         _desc, _reap = (lambda _p: []), (lambda _p, extra=(): None)
     try:
-        _deadline = time.monotonic() + float(overall_timeout or 0)
+        _budget = _AgentBudget(proc.pid, log_path, overall_timeout)
         while True:
             try:
                 proc.wait(timeout=_AGENT_REAP_POLL_S)
                 break
             except subprocess.TimeoutExpired:
                 _seen.update(_desc(proc.pid))
-                if overall_timeout and time.monotonic() >= _deadline:
+                if overall_timeout and _budget.expired():
                     _timed_out = True
                     break
     except Exception:  # noqa: BLE001
