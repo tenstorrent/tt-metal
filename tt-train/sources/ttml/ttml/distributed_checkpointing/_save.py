@@ -291,15 +291,30 @@ def save(
     group.agree("the optimizer's scalars (steps, learning rates, ...)", state_hash(progress), shown=progress)
     nonce = group.allgather(secrets.randbits(31))[0]
     staging = staging_dir(ckpt_dir, nonce)
+    created_staging = False  # whether the coordinator made the staging directory, and so may remove it
 
     def check_target() -> None:
-        if group.is_coordinator and os.path.exists(ckpt_dir) and not overwrite:
+        # The coordinator alone creates the staging directory, and only a new one: an existing one is another save's
+        # (of the same step, with the same random nonce) or one a dead save left, and writing into it would mix two
+        # saves' files. The other ranks join it in the next phase.
+        nonlocal created_staging
+        if not group.is_coordinator:
+            return
+        if os.path.exists(ckpt_dir) and not overwrite:
             raise CheckpointError(f"{ckpt_dir} already exists; pass overwrite=True to replace it")
         os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
-        begin_staging(ckpt_dir, nonce)  # every rank creates the same directory
+        try:
+            os.mkdir(staging)
+        except FileExistsError:
+            raise CheckpointError(
+                f"{staging} already exists: another save of this step drew the same nonce, or a save that died left "
+                f"it behind. Nothing was written, and the directory is left as it is; a new save draws a new nonce."
+            ) from None
+        created_staging = True
 
     try:
         group.phase("checking the target directory", check_target)
+        group.phase("creating the staging directory", lambda: begin_staging(ckpt_dir, nonce))
         t1 = time.perf_counter()
         gathered = group.gather(part)
 
@@ -364,7 +379,7 @@ def save(
     except CheckpointFatalError:
         raise  # the staging directory is left in place; nothing else can be agreed on
     except BaseException:
-        if group.is_coordinator:
+        if group.is_coordinator and created_staging:  # never another save's directory
             shutil.rmtree(staging, ignore_errors=True)
         raise
     stats["total_s"] = time.perf_counter() - t0
