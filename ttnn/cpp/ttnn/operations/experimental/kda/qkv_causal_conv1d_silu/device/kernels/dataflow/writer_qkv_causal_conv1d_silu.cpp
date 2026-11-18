@@ -39,8 +39,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
     DataflowBuffer output(dfb::output);
     Noc noc;
 
-    // The reader's order of work items: a split rank's tail-start row waits for the predecessor (see
-    // for_each_work_item).
+    // The reader's work order: a split rank defers its tail's first row (see for_each_work_item).
     uint32_t split_row = 0;
     // With the fabric exchange, stage this core's share of the rows the exchange core sends, channel tiles
     // [ct_start, ct_start + ct_count) of this rank's outgoing rows and, on the final segment's owner, its end rows.
