@@ -497,8 +497,8 @@ class MiniMaxH3Vae:
     def _ensure_loaded(self, module, subfolder: str) -> None:
         if module.is_loaded():
             return
-        if module.is_parked():
-            module.unpark_weights()
+        if module.is_sharded():
+            module.gather(self.ccl_manager)
             return
         state = dict(self._state_for(module))
         if self._weight_loader is not None:

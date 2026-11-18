@@ -289,58 +289,56 @@ class Module(ABC):
         for _, parameter in self.named_parameters():
             parameter.deallocate()
 
-        self._is_loaded = False
-        for hook in self._eviction_hooks:
-            hook()
+        self._set_evicted()
 
-    def park_weights(self, ccl_manager: Any, mesh_axis: int) -> None:  # noqa: ANN401
-        """Evict to 1/n of the weights: each replicated parameter keeps only this device's 1/n slice (n devices along
-        `mesh_axis`; parameters with no evenly divisible dim stay whole), `unpark_weights` all-gathers them back.
+    def shard(self, mesh_axis: int) -> None:
+        """Evict to 1/n of the weights, n being the device count along `mesh_axis`: each parameter keeps only this
+        device's slice of one dim it does not already split, and declares that dim split over `mesh_axis` (a
+        parameter with no such dim that divides evenly stays whole). `gather` reverses it, bit-identically.
 
         For a module that has to make room for a while but would otherwise reload from the host: on a Wormhole
         Galaxy a replicated multi-GB module reloads at PCIe speed (seconds), while the gather runs on the fabric.
-        The module counts as unloaded while parked; the eviction hooks run as for `deallocate_weights`.
+        The module counts as unloaded while sharded; the eviction hooks run as for `deallocate_weights`.
 
         Every slice is cut before any full weight is freed, so the slices pack together instead of each one filling
-        the hole its predecessor's full weight left; `unpark_weights` then frees them as one block, not as holes
-        scattered between the gathered weights.
+        the hole its predecessor's full weight left; `gather` then frees them as one block, not as holes scattered
+        between the gathered weights.
         """
+        retired: list[ttnn.Tensor] = []
         for parameter in self._all_parameters():
-            parameter.cut_park_slice(ccl_manager, mesh_axis)
+            parameter.shard(mesh_axis, retired=retired)
+        for t in retired:
+            ttnn.deallocate(t)
+        for module in self._all_modules():
+            module._set_evicted()  # noqa: SLF001
+
+    def gather(self, ccl_manager: Any) -> None:  # noqa: ANN401
+        """Undo `shard`: all-gather every sliced parameter; the module is loaded again."""
+        retired: list[ttnn.Tensor] = []
         for parameter in self._all_parameters():
-            parameter.drop_parked_full()
-        self._mark_evicted()
+            parameter.gather(ccl_manager, retired=retired)
+        for t in retired:
+            ttnn.deallocate(t)
+        self._mark_loaded()
+
+    def is_sharded(self) -> bool:
+        """Whether `shard` sliced any parameter that `gather` has not restored."""
+        return any(p.is_sharded() for p in self._all_parameters())
+
+    def _all_modules(self) -> Iterator[Module]:
+        for _, child in self.named_children():
+            yield from child._all_modules()  # noqa: SLF001
+        yield self
 
     def _all_parameters(self) -> Iterator[Parameter]:
-        for _, child in self.named_children():
-            yield from child._all_parameters()
-        for _, parameter in self.named_parameters():
-            yield parameter
+        for module in self._all_modules():
+            for _, parameter in module.named_parameters():
+                yield parameter
 
-    def _mark_evicted(self) -> None:
-        for _, child in self.named_children():
-            child._mark_evicted()
+    def _set_evicted(self) -> None:
         self._is_loaded = False
         for hook in self._eviction_hooks:
             hook()
-
-    def _mark_loaded(self) -> None:
-        for _, child in self.named_children():
-            child._mark_loaded()
-        self._is_loaded = True
-
-    def is_parked(self) -> bool:
-        return any(p.is_parked() for _, p in self.named_parameters()) or any(
-            c.is_parked() for _, c in self.named_children()
-        )
-
-    def unpark_weights(self) -> None:
-        """Gather back what `park_weights` sliced; the module is loaded again (bit-identical weights)."""
-        for parameter in self._all_parameters():
-            parameter.gather_parked()
-        for parameter in self._all_parameters():
-            parameter.free_parked_slice()
-        self._mark_loaded()
 
     def register_eviction_hook(self, hook: Callable[[], None]) -> None:
         """Run `hook` whenever this module's weights are deallocated.
@@ -500,21 +498,15 @@ class Parameter:
 
         tensor.verify_tensor_mesh_axes(mesh_axes, tensor_rank=len(total_shape), mesh_rank=len(list(device.shape)))
 
-        local_shape = list(total_shape)
         for tensor_dim, mesh_axis in enumerate(mesh_axes):
-            if mesh_axis is not None:
-                n = device.shape[mesh_axis]
-                if local_shape[tensor_dim] % n != 0:
-                    msg = (
-                        f"tensor with shape {total_shape} cannot be evenly distributed over mesh with shape "
-                        f"{tuple(device.shape)} along mesh axis {mesh_axis} and tensor dimension {tensor_dim} "
-                    )
-                    raise ValueError(msg)
-                local_shape[tensor_dim] //= n
-        local_shape = tuple(local_shape)
+            if mesh_axis is not None and total_shape[tensor_dim] % device.shape[mesh_axis] != 0:
+                msg = (
+                    f"tensor with shape {total_shape} cannot be evenly distributed over mesh with shape "
+                    f"{tuple(device.shape)} along mesh axis {mesh_axis} and tensor dimension {tensor_dim} "
+                )
+                raise ValueError(msg)
 
         self.total_shape = total_shape
-        self.local_shape = local_shape
         self.device = device
         self.layout = layout
         self.dtype = dtype
@@ -523,10 +515,19 @@ class Parameter:
         self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
-        # `park`: (this device's slice, its 4D dim, the full shape, CCL manager, mesh axis) while parked.
-        self._parked: tuple | None = None
+        self._sharded_dim: int | None = None
+
+    @property
+    def local_shape(self) -> tuple[int, ...]:
+        """Each device's shape of the tensor under the current `mesh_axes`."""
+        return tuple(
+            size if axis is None else size // self.device.shape[axis]
+            for size, axis in zip(self.total_shape, self.mesh_axes, strict=True)
+        )
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
+        if self.is_sharded():
+            self.deallocate()
         shape = tuple(torch_tensor.shape)
         if shape != self.total_shape:
             msg = f"expected tensor shape {self.total_shape}, got {shape}"
@@ -547,6 +548,8 @@ class Parameter:
         ttnn.dump_tensor(path, self.data, mode=ttnn.DumpTensorMode.LOCAL)
 
     def load(self, path: str | Path, /) -> None:
+        if self.is_sharded():
+            self.deallocate()
         try:
             tensor = ttnn.load_tensor(path, device=None if self.on_host else self.device)
         except RuntimeError as err:
@@ -558,6 +561,9 @@ class Parameter:
     def data(self) -> ttnn.Tensor:
         if self._data is None:
             msg = "parameter has no data"
+            raise RuntimeError(msg)
+        if self._sharded_dim is not None:
+            msg = f"parameter is sharded over mesh axis {self.mesh_axes[self._sharded_dim]}; gather it first"
             raise RuntimeError(msg)
         return self._data
 
@@ -571,63 +577,86 @@ class Parameter:
         if self._data is not None:
             ttnn.deallocate(self._data)
             self._data = None
-        if self._parked is not None:
-            ttnn.deallocate(self._parked[0])
-            self._parked = None
+        if self._sharded_dim is not None:
+            self._set_mesh_axis(self._sharded_dim, None)
+            self._sharded_dim = None
 
-    def _park_dim(self, shape4: Sequence[int], n: int) -> int | None:
-        """The 4D dim to slice a replicated tensor along for `park`: an outer dim first, then (tile layout) the last
-        two if each slice stays whole tiles; None if no dim divides evenly."""
-        for d in (0, 1):
-            if shape4[d] % n == 0:
-                return d
-        if self.layout == ttnn.Layout.TILE:
-            for d in (2, 3):
-                if shape4[d] % (n * ttnn.TILE_SIZE) == 0:
-                    return d
-        elif shape4[2] % n == 0:
-            return 2
-        return None
+    def is_sharded(self) -> bool:
+        """Whether `shard` sliced this parameter and `gather` has not restored it."""
+        return self._sharded_dim is not None
 
-    def cut_park_slice(self, ccl_manager: Any, mesh_axis: int) -> None:  # noqa: ANN401
-        """`Module.park_weights`' first pass: cut this device's slice, keeping the full weight until
-        `drop_parked_full`. Only a replicated device parameter parks; anything else is left as is."""
-        if self._data is None or self.on_host or any(a is not None for a in self.mesh_axes):
+    def shard(self, mesh_axis: int, /, *, retired: list[ttnn.Tensor] | None = None) -> None:
+        """Keep only this device's slice of one dim not yet split over the mesh, and declare that dim split over
+        `mesh_axis`. Does nothing without device data, if `mesh_axis` is in use or has one device, or if no dim
+        divides evenly (whole tiles, for the last two dims of a tiled tensor).
+
+        The full tensor is deallocated, or appended to `retired` for the caller to free.
+        """
+        if self._data is None or self.on_host or mesh_axis in self.mesh_axes or self._sharded_dim is not None:
             return
         n = self.device.shape[mesh_axis]
-        shape = tuple(self._data.shape)
-        shape4 = (1,) * (4 - len(shape)) + shape
-        dim = self._park_dim(shape4, n) if len(shape) <= 4 and n > 1 else None
+        dim = self._shard_dim(n) if n > 1 and len(self.total_shape) <= 4 else None
         if dim is None:
             return
-        full = ttnn.reshape(self._data, shape4)
-        shard = ttnn.mesh_partition(full, dim, cluster_axis=mesh_axis, memory_config=self.memory_config)
-        self._parked = (shard, dim, shape, ccl_manager, mesh_axis)
+        full = self._data
+        offset = 4 - len(self.total_shape)
+        piece = ttnn.mesh_partition(
+            ttnn.reshape(full, (1,) * offset + self.local_shape),
+            dim + offset,
+            cluster_axis=mesh_axis,
+            memory_config=self.memory_config,
+        )
+        self._set_mesh_axis(dim, mesh_axis)
+        self.data = ttnn.reshape(piece, self.local_shape)
+        self._sharded_dim = dim
+        self._retire(full, retired)
 
-    def drop_parked_full(self) -> None:
-        if self._parked is not None and self._data is not None:
-            ttnn.deallocate(self._data)
-            self._data = None
+    def gather(self, ccl_manager: Any, /, *, retired: list[ttnn.Tensor] | None = None) -> None:  # noqa: ANN401
+        """Undo `shard`: all-gather the sliced dim and declare it unsplit again.
 
-    def is_parked(self) -> bool:
-        return self._parked is not None
-
-    def gather_parked(self) -> None:
-        """`Module.unpark_weights`' first pass: gather the full weight back, keeping the slice until
-        `free_parked_slice`."""
-        if self._parked is None or self._data is not None:
+        The slice is deallocated, or appended to `retired` for the caller to free.
+        """
+        if self._sharded_dim is None or self._data is None:
             return
-        shard, dim, shape, ccl_manager, mesh_axis = self._parked
-        full = ccl_manager.all_gather(shard, dim=dim, mesh_axis=mesh_axis, use_hyperparams=False)
-        full = ttnn.reshape(full, shape)
+        dim, piece = self._sharded_dim, self._data
+        offset = 4 - len(self.total_shape)
+        full = ccl_manager.all_gather(
+            ttnn.reshape(piece, (1,) * offset + self.local_shape),
+            dim=dim + offset,
+            mesh_axis=self.mesh_axes[dim],
+            use_hyperparams=False,
+        )
+        self._set_mesh_axis(dim, None)
+        self._sharded_dim = None
+        full = ttnn.reshape(full, self.local_shape)
         if full.memory_config() != self.memory_config:
             full = ttnn.to_memory_config(full, self.memory_config)
         self.data = full
+        self._retire(piece, retired)
 
-    def free_parked_slice(self) -> None:
-        if self._parked is not None:
-            ttnn.deallocate(self._parked[0])
-            self._parked = None
+    def _shard_dim(self, n: int) -> int | None:
+        """The first unsplit dim that splits n ways: whole tiles for the last two dims of a tiled tensor, never the
+        last dim of a row-major one."""
+        rank = len(self.total_shape)
+        tiled = self.layout == ttnn.Layout.TILE
+        for d, (size, axis) in enumerate(zip(self.local_shape, self.mesh_axes, strict=True)):
+            if axis is not None or (d == rank - 1 and not tiled):
+                continue
+            if size % (n * ttnn.TILE_SIZE if tiled and d >= rank - 2 else n) == 0:
+                return d
+        return None
+
+    def _set_mesh_axis(self, dim: int, mesh_axis: int | None) -> None:
+        axes = list(self.mesh_axes)
+        axes[dim] = mesh_axis
+        self.mesh_axes = tuple(axes)
+
+    @staticmethod
+    def _retire(t: ttnn.Tensor, retired: list[ttnn.Tensor] | None) -> None:
+        if retired is None:
+            ttnn.deallocate(t)
+        else:
+            retired.append(t)
 
     def _check_data(self, value: ttnn.Tensor) -> None:
         if self.on_host:

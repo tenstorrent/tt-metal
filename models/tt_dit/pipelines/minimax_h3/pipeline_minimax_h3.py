@@ -1852,10 +1852,10 @@ class MiniMaxH3Pipeline:
             get_torch_state_dict=lambda: state,
         )
         if self.park_vae_decoder and module is self._vae.decoder:
-            # Park and unpark once at each host load, so the slice and gather programs compile with the load (the
+            # Shard and gather once at each host load, so the slice and gather programs compile with the load (the
             # warmup) rather than at the first request's decode.
-            module.park_weights(self.ccl_manager, self.sp_axis)
-            module.unpark_weights()
+            module.shard(self.sp_axis)
+            module.gather(self.ccl_manager)
 
     @property
     def vae(self) -> MiniMaxH3Vae:
@@ -2441,7 +2441,7 @@ class MiniMaxH3Pipeline:
                 if not module.is_loaded():
                     continue
                 if self.park_vae_decoder and module is self._vae.decoder:
-                    module.park_weights(self.ccl_manager, self.sp_axis)
+                    module.shard(self.sp_axis)
                 else:
                     module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
