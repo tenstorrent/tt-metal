@@ -7,10 +7,10 @@
 
 import pytest
 import torch
-from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
+    DestAccumulation,
     DestSync,
     ReduceDimension,
     ReducePool,
@@ -50,7 +50,8 @@ TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
     block_ct_dim=runtime(BLOCK_CT_DIMS),
     tile_dimensions=runtime(TILE_DIMENSIONS),
     dest_sync=[DestSync.Half, DestSync.Full],
-    dest_acc=lambda formats: [dest_acc_for(formats.output_format)],
+    # The block max-row LLK static_asserts against a 32-bit Dest.
+    dest_acc=[DestAccumulation.No],
 )
 def test_reduce_block_max_row_quasar(
     formats,
@@ -164,6 +165,6 @@ def test_reduce_block_max_row_dest_depth_quasar(
         block_ct_dim,
         (32, 32),
         dest_sync,
-        dest_acc_for(formats.output_format),
+        DestAccumulation.No,
         num_rows=num_rows,
     )

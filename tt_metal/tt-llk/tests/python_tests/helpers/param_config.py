@@ -73,13 +73,17 @@ def flat_axes(names: Tuple[str, ...], combinations: List[tuple]) -> dict:
     def plain(value):
         return value.value if isinstance(value, _RuntimeMarker) else value
 
+    def _same_value(a, b):
+        # Same type too, so 0/False and 1/1.0 stay separate cases.
+        return type(a) is type(b) and a == b
+
     # Prefix tree: node = [(value, child_node), ...] in first-seen order.
     root: list = []
     for combo in combinations:
         node = root
         for value in (plain(item) for item in combo):
             for seen, child in node:
-                if seen == value:
+                if _same_value(seen, value):
                     node = child
                     break
             else:
@@ -91,7 +95,7 @@ def flat_axes(names: Tuple[str, ...], combinations: List[tuple]) -> dict:
         def axis(*prefix):
             node = root
             for value in prefix:
-                node = next(child for seen, child in node if seen == value)
+                node = next(child for seen, child in node if _same_value(seen, value))
             return [value for value, _ in node]
 
         axis.__signature__ = inspect.Signature(

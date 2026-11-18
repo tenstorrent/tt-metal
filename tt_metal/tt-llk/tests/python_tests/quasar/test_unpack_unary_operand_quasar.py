@@ -187,7 +187,6 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
-# Int16 only pairs with itself; it is kept out of the perf sweep below.
 # Column names of the tuples ``generate_unpack_unary_operand_combinations`` returns.
 UNPACK_UNARY_OPERAND_FLAT_NAMES = (
     "formats",
@@ -198,6 +197,7 @@ UNPACK_UNARY_OPERAND_FLAT_NAMES = (
     "input_dimensions",
     "tile_dimensions",
 )
+# Int16 only pairs with itself; it is kept out of the perf sweep below.
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS + input_output_formats([DataFormat.Int16])
 )

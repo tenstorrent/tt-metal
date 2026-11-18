@@ -154,8 +154,6 @@ def generate_parallel_matmul_exp_combinations(
     return combinations
 
 
-# Regular run: SFPI only. The SFPLOADMACRO variant is nightly-marked; no repo CI job runs it on
-# Quasar yet (ttsim has no SFPLOADMACRO), so it runs only in manual hardware/emulator sessions.
 # Column names of the tuples ``generate_parallel_matmul_exp_combinations`` returns.
 PARALLEL_MATMUL_EXP_FLAT_NAMES = (
     "formats",
@@ -167,6 +165,8 @@ PARALLEL_MATMUL_EXP_FLAT_NAMES = (
     "input_A_dimensions",
     "input_B_dimensions",
 )
+# Regular run: SFPI only. The SFPLOADMACRO variant is nightly-marked; no repo CI job runs it on
+# Quasar yet (ttsim has no SFPLOADMACRO), so it runs only in manual hardware/emulator sessions.
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
     SFPU_UNARY_FORMATS, impls=(SfpuImpl.Sfpi,)
 )

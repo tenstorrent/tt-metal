@@ -546,9 +546,8 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
 GATHERING_BUILD_VARIANTS = [
     (
         "transpose_dest 32-bit",
-        "test_transpose_dest.py::test_transpose_dest_float[fmt_dest_acc_math_transp_unpack_to_dest:"
-        "(InputOutputFormat[A:Float32,B:Float32,out:Float32], <DestAccumulation.Yes: True>, "
-        "<Transpose.Yes: True>, True)]",
+        "test_transpose_dest.py::test_transpose_dest_float[formats:Float32->Float32-dest_acc:Yes-"
+        "math_transpose_faces:Yes-unpack_to_dest:True]",
         "math",
     ),
     (
