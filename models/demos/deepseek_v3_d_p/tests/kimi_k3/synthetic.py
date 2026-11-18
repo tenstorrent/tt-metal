@@ -81,7 +81,7 @@ def hf_config():
 
 def placements(**device_params) -> list:
     """`(mesh_device, device_params)` for each `STAGE_LAYOUTS` mesh at K3.1's L1_SMALL; extra `device_params`
-    (e.g. a trace test's `trace_region_size`) are added.
+    (e.g. a trace test's `trace_region_size`) are added or override (a test's own `l1_small_size`).
 
     8x4 on Fabric2D. 4x4 on the stage's Linear/Ring fabric; it needs the Galaxy narrowed to one tray half
     (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by tests/run_4x4_stage_tests.sh). Unnarrowed, the system
@@ -103,8 +103,7 @@ def placements(**device_params) -> list:
             # (all_gather_minimal_matmul_async, on the Linear axis 0 here) overflows L1 with its mux buffers.
             torus_x_device_params(
                 fabric_payload_size=get_adapter("kimi_k3_1").fabric_payload_size(),
-                l1_small_size=KimiK31Config.L1_SMALL_SIZE,
-                **device_params,
+                **{"l1_small_size": KimiK31Config.L1_SMALL_SIZE, **device_params},
             ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="4x4-sp1",
