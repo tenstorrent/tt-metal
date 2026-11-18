@@ -49,6 +49,9 @@ GATHER_COL_FACES = True  # L4: gather only faces 0 + 2 of each column-0-valid pa
 # after its normalize(b) consumed cb_rinv(b) (and its reader cleared round b's data-ready flag), and the root sends
 # rinv(b+1) only after every partial(b+1) landed — so the landing slot and the flag are always free.
 RINV_MCAST_HANDSHAKE = False
+# x·γ prescale into cb_xg before the rinv wait (W_SPLIT TILE γ; per-shape gate in _xg_prescale). False: the fused
+# normalize (x·γ)·rinv after the rendezvous (pre-Refinement-3 schedule).
+XG_PRESCALE = True
 
 # ---- CB indices (semantic names) ----
 CB_X_RM = 0
@@ -65,6 +68,7 @@ CB_Y = 10
 CB_OUT_RM = 11
 CB_WMASK = 12  # sharded TILE + non-aligned W: 0/1 lane mask for the partial-W tile (collapse reduce scaler slot)
 CB_GAMMA_STAGE = 13  # RM γ whose slice offset is not DRAM-aligned (RM shards): aligned DRAM window staging
+CB_XG = 14  # W_SPLIT TILE γ: x·γ of the block, computed while waiting for rinv (Blocking.xg_prescale)
 
 # ---- semaphore ids ----
 SEM_PARTIALS = 0  # root: count of partials landed in cb_gathered (cumulative)
@@ -115,6 +119,10 @@ class Blocking:
     # (no chunking) unless a sharded row is too wide to stage whole next to its resident shards; then γ streams in
     # chunks per block and RM tilize / untilize run chunk by chunk (core_w_tiles is padded to a chunk multiple).
     w_chunk_tiles: int = 0
+    # W_SPLIT stall shadow (Refinement 3): compute x·γ into cb_xg (one block, intermediate format) before the rinv
+    # wait, so only y = xg·rinv is left after the rendezvous. Enabled only where cb_xg fits next to the chosen
+    # block (it never shrinks block_rows).
+    xg_prescale: bool = False
 
     @property
     def gamma_streams(self) -> bool:
@@ -180,6 +188,13 @@ def _round_up(a, b):
     return _div_up(a, b) * b
 
 
+def _xg_prescale(g: OpGeometry, br: int, cw: int, wc: int, k: int, budget: int) -> bool:
+    """x·γ prescale (cb_xg, br·cw intermediate tiles) for a W_SPLIT TILE line with resident γ, if it fits."""
+    if not (XG_PRESCALE and k > 1 and g.is_tile and g.has_gamma and wc >= cw):
+        return False
+    return br * _per_row_bytes(g, cw, k) + _fixed_bytes(g, cw, wc) + br * cw * g.t_int <= budget
+
+
 def select_blocking(
     g: OpGeometry, R: int, Wt: int, C: int, shard: ShardPlacement = None, budget: int = L1_CB_BUDGET_BYTES
 ) -> Blocking:
@@ -210,7 +225,8 @@ def select_blocking(
         line_rows_max = max(_div_up(n, rows_unit) for (_, n) in shard.line_units)
         block_rows = max(1, min(line_rows_max, br_fit))
         regime = "LOCAL" if k == 1 else "W_SPLIT"
-        return Blocking(regime, k, cw, len(shard.lines), block_rows, wc)
+        xg = _xg_prescale(g, block_rows, cw, wc, k, budget)
+        return Blocking(regime, k, cw, len(shard.lines), block_rows, wc, xg)
 
     k_fit = None
     for k in range(1, C + 1):
@@ -228,7 +244,8 @@ def select_blocking(
     br_fit = (L1_CB_BUDGET_BYTES - _fixed_bytes(g, cw)) // _per_row_bytes(g, cw, w_split)
     block_rows = max(1, min(line_rows_tiles_max, br_fit))
     regime = "LOCAL" if w_split == 1 else "W_SPLIT"
-    return Blocking(regime, w_split, cw, num_lines, block_rows, cw)
+    xg = _xg_prescale(g, block_rows, cw, cw, w_split, L1_CB_BUDGET_BYTES)
+    return Blocking(regime, w_split, cw, num_lines, block_rows, cw, xg)
 
 
 def _core_range_set(cores):
@@ -497,6 +514,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         cbs.append(_cb(CB_PARTIAL, br, t_int, int_fmt, crs))
         cbs.append(_cb(CB_GATHERED, k * br, t_int, int_fmt, crs))
         cbs.append(_cb(CB_RINV_BCAST, br, t_int, int_fmt, crs))
+    if blk.xg_prescale:
+        cbs.append(_cb(CB_XG, br * cw, t_int, int_fmt, crs))
     cbs.append(_cb(CB_RINV_COL, br, t_int, int_fmt, crs))
     cbs.append(_cb(CB_RINV, br, t_int, int_fmt, crs))
     if is_tile:
@@ -670,6 +689,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         int(mask_partial),  # 9 partial-W tile squared apart and masked in the collapse
         wc,  # 10 w_chunk_tiles (RM tilize / untilize chunk, γ chunk)
         int(gamma_streams),  # 11 γ streamed per block in w_chunk_tiles chunks
+        int(blk.xg_prescale),  # 12 x·γ into cb_xg before the rinv wait
     ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),

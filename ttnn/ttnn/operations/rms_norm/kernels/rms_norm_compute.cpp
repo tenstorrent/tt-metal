@@ -20,6 +20,9 @@
 //                                                          (2) bcast col -> cb_rinv (LOCAL) | cb_rinv_bcast (root)
 //   normalize_block                        eltwise_chain   y = (x * γ[row bcast]) * rinv  -> cb_y (TILE)
 //                                                          | in place into cb_x (RM, per-tile credit)
+//   prescale_block       (xg_prescale)     eltwise_chain   xg = x * γ[row bcast] -> cb_xg, issued BEFORE the rinv
+//                                                          wait (W_SPLIT stall shadow; lamp L6/L7): normalize is
+//                                                          then one FPU mul y = xg * rinv -> cb_y. Same FP order.
 //   untilize_y_block     (RM)              untilize        cb_x (y) -> cb_out_rm
 //
 // AccumulateViaAdd reduces never read their scaler CB on the tile-aligned path (their inputs are already whole
@@ -58,6 +61,7 @@ constexpr uint32_t cb_rinv = 9;
 constexpr uint32_t cb_y = 10;
 constexpr uint32_t cb_out_rm = 11;
 constexpr uint32_t cb_wmask = 12;
+constexpr uint32_t cb_xg = 14;
 
 using namespace compute_kernel_lib;
 
@@ -79,6 +83,9 @@ constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(10);
 constexpr bool gamma_streams = get_compile_time_arg_val(11) != 0;
 constexpr uint32_t num_w_chunks = core_w_tiles / w_chunk_tiles;  // RM: the pitch is a chunk multiple
 constexpr uint32_t num_g_chunks = (core_w_tiles + w_chunk_tiles - 1) / w_chunk_tiles;
+// x·γ computed into cb_xg while the core waits for rinv (W_SPLIT, TILE, resident γ; select_blocking().xg_prescale).
+constexpr bool xg_prescale = get_compile_time_arg_val(12) != 0;
+static_assert(!xg_prescale || (is_wsplit && has_gamma && !is_rm && !gamma_streams), "xg_prescale: W_SPLIT TILE γ");
 
 // Normalize output: TILE -> separate cb_y window; RM -> in place into cb_x (compute is its only producer/consumer).
 constexpr uint32_t cb_norm_out = is_rm ? cb_x : cb_y;
@@ -223,12 +230,33 @@ ALWI void finalize_rinv_block(uint32_t rows, uint32_t inv_w_bits, uint32_t eps_b
         IterationShape::tiles(rows), UnaryBcast<BroadcastDim::Col, input(cb_rinv_col)>{}, PackTile<output(out_cb)>{});
 }
 
+// TILE: cb_x was waited by sumsq; pop the whole block at the end (frees the slot for block b+2).
+// RM:   in place on cb_x with real per-tile credit (pop 1 -> reserve 1 into the slot just freed).
+constexpr InputSpec x_in = is_rm ? input(cb_x, WaitPolicy::PerTile, PopPolicy::PerTile)
+                                 : input(cb_x, WaitPolicy::None, PopPolicy::AtEnd, InputTileMapping::Block);
+
+// xg = x * γ[row bcast] -> cb_xg (pops the x block). Nothing here depends on rinv.
+ALWI void prescale_block(uint32_t rows) {
+    eltwise_chain(
+        IterationShape::grid(rows, core_w_tiles),
+        BinaryFpu<
+            BinaryFpuOp::Mul,
+            x_in,
+            input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row)>{},
+        PackTile<output(cb_xg)>{});
+}
+
 ALWI void normalize_block(uint32_t rows) {
-    // TILE: cb_x was waited by sumsq; pop the whole block at the end (frees the slot for block b+2).
-    // RM:   in place on cb_x with real per-tile credit (pop 1 -> reserve 1 into the slot just freed).
-    constexpr InputSpec x_in = is_rm ? input(cb_x, WaitPolicy::PerTile, PopPolicy::PerTile)
-                                     : input(cb_x, WaitPolicy::None, PopPolicy::AtEnd, InputTileMapping::Block);
-    if constexpr (has_gamma) {
+    if constexpr (xg_prescale) {
+        // y = xg * rinv: the only work left after the rendezvous.
+        eltwise_chain(
+            IterationShape::grid(rows, core_w_tiles),
+            BinaryFpu<
+                BinaryFpuOp::Mul,
+                input(cb_xg),
+                input(cb_rinv, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{},
+            PackTile<output(cb_y)>{});
+    } else if constexpr (has_gamma) {
         eltwise_chain(
             IterationShape::grid(rows, core_w_tiles),
             BinaryFpu<
@@ -372,24 +400,40 @@ void kernel_main() {
         }
         const bool masked = mask_partial && has_partial;
 
+        auto gamma_ready = [&]() {
+            if constexpr (has_gamma && !gamma_streams) {
+                if (b == 0) {
+                    if constexpr (gamma_is_rm) {
+                        tilize<core_w_tiles, cb_gamma_rm, cb_gamma>(1, 1);  // tilize_gamma (1 valid row page)
+                    }
+                    cb_wait_front(cb_gamma, core_w_tiles);  // resident for the whole kernel
+                }
+            }
+        };
+
         if constexpr (is_wsplit) {
             collapse_block<cb_partial>(rows, parts, masked);
+            if constexpr (xg_prescale) {
+                if (!is_root) {  // non-root: fills the whole gather -> combine -> multicast wait
+                    gamma_ready();
+                    prescale_block(rows);
+                }
+            }
             if (is_root) {
                 combine_block(rows);
                 finalize_rinv_block<cb_rinv_bcast>(rows, inv_w_bits, eps_bits);
+                if constexpr (xg_prescale) {  // root: overlaps its own multicast (combine stays first)
+                    gamma_ready();
+                    prescale_block(rows);
+                }
             }
         } else {
             collapse_block<cb_rinv_col>(rows, parts, masked);
             finalize_rinv_block<cb_rinv>(rows, inv_w_bits, eps_bits);
         }
 
-        if constexpr (has_gamma && !gamma_streams) {
-            if (b == 0) {
-                if constexpr (gamma_is_rm) {
-                    tilize<core_w_tiles, cb_gamma_rm, cb_gamma>(1, 1);  // tilize_gamma (1 valid row page)
-                }
-                cb_wait_front(cb_gamma, core_w_tiles);  // resident for the whole kernel
-            }
+        if constexpr (!xg_prescale) {
+            gamma_ready();  // (the prescale already made γ resident: RM γ must be tilized exactly once)
         }
 
         if constexpr (gamma_streams) {
