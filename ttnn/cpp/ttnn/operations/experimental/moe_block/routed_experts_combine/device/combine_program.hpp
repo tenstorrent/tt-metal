@@ -81,9 +81,9 @@ struct CombinePlan {
     MeshPlan mesh;              // ports: peers and fabric link ids
     FirstHops hops;             // the fabric's first hop between every pair of chips: the port a row / credit leaves by
     uint32_t fabric_links = 0;  // fabric links between neighbor chips (L)
-    uint32_t snap_bits = 0;
-    uint32_t home_tokens = 0;   // home tokens a chip (S)
-    uint32_t row_elements = 0;  // row width, bf16 elements (W)
+    uint32_t snap_step_bits = 0;  // fp32 bits of the combine's snap step q (0: off)
+    uint32_t home_tokens = 0;     // home tokens a chip (S)
+    uint32_t row_elements = 0;    // row width, bf16 elements (W)
     RowSlot row_slot;
     StateLayout state;
     uint32_t accumulator_count = 0;              // accumulators a chip (A)
@@ -117,7 +117,8 @@ struct CombinePlan {
     uint32_t injection_ring_offset = 0;
     uint32_t accumulator_table_offset = 0, accumulator_table_bytes = 0;  // the per-chip accumulator table's staging
     uint32_t port_table_cb_offset = 0, accumulator_table_cb_offset = 0;  // CB_TAB on the ports / accumulators
-    // the accumulators' CBs: rows (CB_ROW), meta (CB_META), the fp32 sums (CB_ACC), output (CB_OUT), weights (CB_W)
+    // the accumulators' CBs: rows (CB_ROW), meta (CB_META), the sums (CB_ACC: int32 with the snap, else fp32), output
+    // (CB_OUT), weights (CB_W)
     uint32_t row_cb_offset = 0, meta_cb_offset = 0, accumulator_fp32_offset = 0, output_cb_offset = 0,
              weight_cb_offset = 0;
     uint32_t local_ring_offset = 0;  // the accumulators' local ring

@@ -66,8 +66,9 @@ def release_blocks(mesh_device=None):
 class MoEBlockFfnOptions:
     """The MoE block's choices a caller may change; None / the defaults are production's.
 
-    combine_snap: the combine's snap q (a power of two: every routed term rounded to a multiple of q, so the sum is
-        bit-identical in any landing order); None: the MoEBlockConfig default (2^-14); 0: off.
+    combine_snap: the combine's snap q (a power of two: every routed term rounded to a whole number of q and summed as
+        an int32 count of q, so the sum is bit-identical in any landing order, saturating at (2^31 - 1) q); None: the
+        MoEBlockConfig default (2^-14); 0: off.
     combine_landing: the combine's landing pool (CombineLanding): "rings" (one ring a source chip, in the accumulators'
         L1), "shared" (slot grants from one free list), "flat_cores" (rings in the flat expert cores' free L1),
         "shared_flat_cores" (shared's grants on flat_cores' slots); None: the planner's (rings or flat_cores, ranked).
