@@ -192,8 +192,7 @@ With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users, 4 per row), af
 Where one MoE decode layer's ~650 us go (device, per chip): expert `sparse_matmul` gate|up 282 us
 (16 cores) and down 118 us, fp32 top-k 44 us and gather 33 us, row all-reduce 34 us, the rest in
 small ops. The expert matmuls read ~57 MB of BFP4 weights per call, so they run at about half of the
-bandwidth a DRAM-sharded matmul reaches. `tests/perf/kagent_moe_decode_{bench,check}.py` are the
-tt-kernel-agent perf and correctness commands for this layer (baseline 653 us, spread 0.04 %).
+bandwidth a DRAM-sharded matmul reaches (baseline 653 us, spread 0.04 %).
 
 ## Decode DRAM utilization, 2026-10-16 (branch `mimo-v2.6/decode-perf`, MOPD)
 
@@ -261,7 +260,7 @@ top-8, the token mask applied to the weights) and hands the indices and weights 
   columns (gate|up, SwiGLU x routing weight), swaps h tiles with the team, and writes its 32 down columns of every
   row straight to row k * T + t of a k-major output. `CombineK` sums the 8 rows of every token and tilizes.
 
-One MoE layer, 4096-token chunk, one row (`tests/perf/kagent_moe_prefill_bench.py`). The steps were measured on
+One MoE layer, 4096-token chunk, one row. The steps were measured on
 `mimo-v2.6/decode-perf-chunked`; the last row is this branch:
 
 | Change | ms |
@@ -275,7 +274,7 @@ One MoE layer, 4096-token chunk, one row (`tests/perf/kagent_moe_prefill_bench.p
 | Plan on 16 cores | 9.7 |
 | This branch (median of 5) | 9.65 |
 
-`tests/perf/kagent_moe_prefill_check.py` on this branch: output vs the saved `sparse_matmul` outputs PCC
+Correctness on this branch: output vs the saved `sparse_matmul` outputs PCC
 0.999990-0.999993 (worst token 0.999980) on the golden layer-1 inputs and on 32, 1056 and 4096 random tokens; every
 chip identical, all finite; a second 4096-token call bitwise identical.
 

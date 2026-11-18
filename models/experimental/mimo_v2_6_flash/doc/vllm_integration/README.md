@@ -367,7 +367,7 @@ sampling, no speculation; the same build with `MIMO_KV_PAIR_SPLIT=0` as the base
 | plugin HTTP suite (tests/tt) | 76 passed, 2 failed | 74 passed, 4 failed |
 
 The table's split column ran the first merge (the LSE all_gather and seven ttnn ops, 41.1 us per global layer, about
-0.5 ms per step). The fused merge (`tests/perf/kagent_pair_merge_bench.py`: 8.4-8.6 us per call at 4 users, found with
+0.5 ms per step). The fused merge (8.4-8.6 us per call at 4 users, found with
 tt-kernel-agent) brings the split back to the baseline's speed: c=16 128 / 128 955.6 tok/s, TPOT 14.50 ms, median ITL
 12.99 ms; c=1 TPOT 9.33 ms, median ITL 9.25 ms; c=16 32K / 256 median ITL 13.84 ms; APC check exact (48/48, warm ==
 cold 32/32); HTTP suite 76 passed, the same 2 seed tests failed. At long context the step reads the same KV bytes as

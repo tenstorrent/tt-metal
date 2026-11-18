@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Where the time of the deduplicated MoE streams goes: the MOE_MARK points of tt/kernels/moe_*_uniq_* (reader,
-writer, compute of GateUpStream and DownStream) at the speculative-verify shapes of kagent_moe_verify_bench.py, from
-the device profiler.
+writer, compute of GateUpStream and DownStream) at the speculative-verify shapes, from the device profiler.
 
     TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR=<dir> python moe_zone_profile.py
     python moe_zone_profile.py --parse <dir>
